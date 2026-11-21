@@ -1119,6 +1119,7 @@ type Spec struct {
 	Name           string  // "books"; on disk <db parent>/index/<module>/<name>.bleve
 	MappingVersion string  // a change triggers drop + rebuild (today's bookMappingVersion, bleve_index.go:104)
 	Fields         []Field
+	Analyzers      []Analyzer // the index's own analyzers, named by Field.Analyzer
 	Rebuild        func(ctx context.Context, w RebuildWriter) error // full rebuild from the module's storage
 	Document       func(ctx context.Context, id string) (Doc, bool, error) // reconciler: load one doc, false = delete
 }
@@ -1126,9 +1127,18 @@ type Spec struct {
 type Field struct {
 	Name     string
 	Kind     FieldKind // Text, Keyword, Number, Date, Bool
-	Analyzer string    // "standard", "keyword", or a module-registered analyzer name
+	Analyzer string    // "standard", "keyword", "keyword_lowercase", or the Name of one of Spec.Analyzers
 	Store    bool
 	Facet    bool
+	Boost    float64   // query-time weight of a Match on the field (Text, Keyword); 0 = 1
+}
+
+// Analyzer is built from core's closed component set; engines refuse what they cannot build.
+type Analyzer struct {
+	Name         string
+	CharFilters  []CharFilter  // CharUnderscoreToSpace
+	Tokenizer    Tokenizer     // TokenizeUnicodeWords, TokenizeWholeValue
+	TokenFilters []TokenFilter // FilterLowercase, FilterEnglishPossessive, FilterPorterStem
 }
 
 type Doc map[string]any
@@ -1155,6 +1165,7 @@ type Query interface{ isQuery() }
 func Match(field, text string) Query
 func Term(field, value string) Query
 func Prefix(field, prefix string) Query
+func Wildcard(field, pattern string) Query // * and ?, a leading one allowed; bounded, see below
 func Range[T int64 | float64 | time.Time](field string, min, max *T) Query
 func And(qs ...Query) Query
 func Or(qs ...Query) Query
@@ -1196,6 +1207,23 @@ bounded pool of `core.index.reconcile.workers`. A full rebuild is a `tasks` defi
 under the generation rule of §5S.3.9 ([05-backup](05-backup.md)). ABO's query parser and per-user field
 routing (`internal/search/query_*.go`, `per_user_*.go`) are books code that compiles to `index.Query` or
 to `QueryString`.
+
+**Analysis, weighting and wildcards** (added for F7-09 T6, `seams.d/F7-09-T6-core.md`). A Spec declares
+its own analyzers from core's closed component set, so books declares HEAD's `book_en_nostop`
+(`bleve_index.go`: '_' to space, Unicode words, possessive, lowercase, Porter, no stop filter) without an
+engine type in the SDK (I5); the analyzer definitions are part of the mapping fingerprint, so an edit
+recreates and rebuilds the index, and a Spec that declares none keeps the fingerprint it had. The built-in
+`keyword_lowercase` is a case-insensitive whole-value term. `Term`, `Prefix` and `Wildcard` match index terms
+without analysis, so the engine lowercases their text on a field whose analyzer lowercases (HEAD's
+`patternTerm`, `bleve_translator.go`), and stems nothing. `Field.Boost` weights `Match` nodes only and is not
+part of the fingerprint; HEAD's free-text fan-out (`translateFreeText`, `textFieldBoosts`) becomes an `Or` of
+per-field `Match` nodes. `QueryString` still refuses a wildcard that starts with `*` or `?` and every regular
+expression; `Wildcard` is the explicit opt-in. A leading wildcard walks the field's whole term dictionary
+(linear in its distinct terms) and every term it matches counts against the engine's term-searcher cap
+(default 1024 per search); past the cap a search fails with `ErrTooBroad` instead of running, and each
+`Wildcard` node counts 32 of a query's 1024-node budget. HEAD runs with no term-searcher cap, so a pattern
+that matches more than 1024 distinct terms answers today and is `ErrTooBroad` after the flip unless F7-09
+raises the cap.
 
 ### 5S.3.9 Derived indexes and storage generations (memdb, hnsw, chromem stay in books)
 
