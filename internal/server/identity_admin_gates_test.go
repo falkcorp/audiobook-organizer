@@ -63,7 +63,13 @@ func newAdminGateWorld(t *testing.T, authOn bool) *adminGateWorld {
 		alfred: &database.User{ID: "u-alfred", Username: "alfred", Roles: []string{auth.SeedRoleAdmin}, Status: "active"},
 		bruce:  &database.User{ID: "u-bruce", Username: "bruce", Roles: []string{auth.SeedRoleViewer}, Status: "active"},
 	}
-	id := adoptIdentity(t, []string{"users.manage", "library.view"}, nil, nil, w.alfred, w.bruce)
+	// The table maps every legacy atom, as books' does: an API key is judged by
+	// whether it holds all of them.
+	var atoms []string
+	for _, p := range auth.All() {
+		atoms = append(atoms, string(p))
+	}
+	id := adoptIdentity(t, atoms, nil, nil, w.alfred, w.bruce)
 	w.head = newTestServer(t, store)
 	w.core = newTestServerWith(t, store, WithIdentity(id))
 	return w
