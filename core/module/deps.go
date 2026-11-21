@@ -105,20 +105,24 @@ type Deps struct {
 	// until the kernel hands compat methods to auth at P7 (F4-08, B3).
 	AuthCompat auth.Compat
 
-	// AuthRefresh is auth.Service.Refresh as a plain func, the one auth
-	// operation besides the read-only Auth view that a request-bound module
-	// (a legacy-auth bridge that must re-derive the principal stage 12 bound,
-	// after a password reset or a role change) needs. It is a func, not a
-	// widened Identities: auth.Identities is fixed at four methods (05-authn
-	// §3.1) and a module that does not refresh holds no handle to the rest of
-	// the service. It never widens: the answer is built from the stored user and
-	// at most the scopes p was built with that its stored key still holds, p's
-	// credential, AuthTime, Assurance, ClientAddr and extension expiry are
-	// carried (the expiry is never extended), a disabled or reset-required
-	// user is refused, and a principal auth did not build (a literal) is
-	// refused with auth.ErrInvalidCredentials. Pass the request's own
-	// principal. Nil until the kernel builds the auth service (F4-08, B3),
-	// like Auth and AuthAdmin: nil on a boot without IdentityBoot.
+	// AuthRefresh is auth.Service.Refresh as a plain func, for a module whose
+	// manifest declares Manifest.AuthRefresh and for no other (nil for every
+	// module that did not): a request-bound module (a legacy-auth bridge) that
+	// must re-derive the principal stage 12 bound after a password reset or a
+	// role change. It is a func, not a widened Identities: auth.Identities is
+	// fixed at four methods (05-authn §3.1) and the module holds no handle to
+	// the rest of the service. Refresh rebuilds a principal from the stored user
+	// and at most the scopes it was built with that its stored key still
+	// holds; the credential, AuthTime, Assurance, ClientAddr and extension
+	// expiry are carried (the expiry is never extended), and a disabled or
+	// reset-required user is refused. It trusts nothing the caller can write:
+	// a principal auth did not build (a literal), and one whose User, Method,
+	// CredentialID, Assurance, AuthTime or ClientAddr differs from what auth
+	// recorded when it finished the principal, is refused with
+	// auth.ErrInvalidCredentials, so the handle cannot be used to mint a
+	// principal for another identity. Pass the request's own principal. Nil
+	// until the kernel builds the auth service (F4-08, B3): also nil on a boot
+	// without IdentityBoot.
 	AuthRefresh RefreshFunc
 
 	// Audit records audit events, the actor taken from the ctx (05-rbac §3.5:

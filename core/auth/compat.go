@@ -141,6 +141,7 @@ func (c *compat) AuthenticateKey(ctx context.Context, raw string, client ClientI
 		return nil, refusal
 	}
 	p.ClientAddr = client.Addr
+	p.sealIdentity()
 	return p, nil
 }
 
@@ -169,6 +170,7 @@ func (c *compat) PrincipalFor(ctx context.Context, u *User, scopes []rbac.Permis
 		return nil, err
 	}
 	p.ClientAddr = client.Addr
+	p.sealIdentity()
 	return p, nil
 }
 

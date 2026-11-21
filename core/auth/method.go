@@ -7,6 +7,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"strings"
 	"time"
@@ -78,11 +79,13 @@ type Principal struct {
 	// narrowing (an identity extension's Assertion.Scopes, a compat
 	// surface's own, a key's). Refresh rebuilds over them, so a narrowed
 	// credential stays narrowed; a key principal is rebuilt over the key's
-	// current scopes instead. built marks a principal PrincipalFor made:
-	// one assembled elsewhere carries no record of its narrowing, so Refresh
-	// refuses it rather than guess.
+	// current scopes instead. seal marks a principal core built and records
+	// who it was built for (see principalSeal): one assembled elsewhere
+	// carries no record of its narrowing, so Refresh refuses it rather than
+	// guess, and so does one whose exported fields no longer say what the
+	// seal does.
 	scopes []rbac.Permission
-	built  bool
+	seal   principalSeal
 	// notAfter is when an identity extension's principal stops standing
 	// (Assertion.ExpiresAt, or core.auth.extension_max_age after AuthTime);
 	// zero for every other method, whose credential record carries its own
@@ -90,6 +93,66 @@ type Principal struct {
 	// principal that has none (one PrincipalFor built, which only stage 12
 	// bounds); Refresh copies it, never extends it.
 	notAfter time.Time
+}
+
+// principalSeal is core's own record of the identity of a principal it built:
+// the values of every exported field Refresh trusts to decide whom to rebuild
+// and what to carry over, taken as copies when core finished the principal
+// (never the *User, whose contents a holder can edit through the shared
+// pointer). A holder of a principal can write its exported fields, so Refresh
+// compares them with this before it believes any: a principal whose User.ID,
+// Method, CredentialID, Assurance, AuthTime or ClientAddr was edited after core
+// finished it is refused, and one core did not build has no seal and is
+// refused. It is unexported, so nothing outside this package can set it.
+type principalSeal struct {
+	set          bool
+	user         UserID
+	method       Method
+	credentialID string
+	assurance    Assurance
+	authTime     time.Time
+	clientAddr   netip.Addr
+}
+
+// sealIdentity records p's exported identity as it stands now. Core calls it as
+// the last step of finishing a principal: PrincipalFor, and again after each
+// in-package step that sets a field afterwards (the client address, the
+// credential and its time), so a legitimate edit is always sealed and only a
+// holder's edit disagrees. It must never run on a principal a module holds.
+func (p *Principal) sealIdentity() {
+	s := principalSeal{set: true, method: p.Method, credentialID: p.CredentialID,
+		assurance: p.Assurance, authTime: p.AuthTime, clientAddr: p.ClientAddr}
+	if p.User != nil {
+		s.user = p.User.ID // a copy of the string, not the pointer
+	}
+	p.seal = s
+}
+
+// checkSeal is nil when p is a principal core built whose exported identity
+// still matches its seal, and otherwise names the first field that disagrees
+// (ErrInvalidCredentials). It reads p once and mutates nothing.
+func (p *Principal) checkSeal() error {
+	bad := func(what string) error {
+		return fmt.Errorf("%w: the principal's %s is not what auth built", ErrInvalidCredentials, what)
+	}
+	if p == nil || !p.seal.set {
+		return fmt.Errorf("%w: a principal auth did not build cannot be refreshed", ErrInvalidCredentials)
+	}
+	switch s := p.seal; {
+	case p.User == nil || p.User.ID != s.user:
+		return bad("user")
+	case p.Method != s.method:
+		return bad("method")
+	case p.CredentialID != s.credentialID:
+		return bad("credential")
+	case p.Assurance != s.assurance:
+		return bad("assurance")
+	case !p.AuthTime.Equal(s.authTime):
+		return bad("auth time")
+	case p.ClientAddr != s.clientAddr:
+		return bad("client address")
+	}
+	return nil
 }
 
 // keyRef is the API key p was authenticated by, and false when p was not

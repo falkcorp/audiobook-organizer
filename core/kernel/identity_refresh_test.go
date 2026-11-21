@@ -21,10 +21,11 @@ import (
 // Batman names only.
 
 // refreshHandle boots an identity-switch-on kernel and returns the AuthRefresh
-// the probe module was handed in Register, with the fixture that stores users.
+// the probe module (which declares Manifest.AuthRefresh) was handed in
+// Register, with the fixture that stores users.
 func refreshHandle(t *testing.T) (module.RefreshFunc, *mountFx) {
 	t.Helper()
-	h, c, p := probeHost(t, true)
+	h, c, p := probeHostDeclaring(t, true, true)
 	k := h.mustBoot(c)
 	t.Cleanup(func() { h.close(k) })
 	if p.deps.AuthRefresh == nil {
@@ -71,7 +72,8 @@ func putUser(t *testing.T, fx *mountFx, u *auth.User) {
 // keeps its refusals. A refreshed principal is the same user's, a demotion
 // since the principal was built narrows the checker, a disabled or
 // reset-required user and a principal auth never built are refused, and
-// nothing a module passes widens it.
+// nothing a module passes widens it (the principal's own forgery matrix is
+// auth's TestRefresh_RefusesAnEditedPrincipal).
 func TestIdentityP5_AuthRefreshHandle(t *testing.T) {
 	refresh, fx := refreshHandle(t)
 
@@ -135,6 +137,33 @@ func TestIdentityP5_AuthRefreshHandle(t *testing.T) {
 			t.Errorf("refresh of nil = %v, want ErrInvalidCredentials", err)
 		}
 	})
+}
+
+// TestIdentityP5_AuthRefreshOnlyForADeclaringModule: Refresh re-resolves a
+// principal into a fresh one, so it is a reviewed manifest line like AppConfig.
+// In one boot the module that declares it holds the handle and a module that
+// does not holds nil, and a declaring module in a switch-off boot holds nil.
+func TestIdentityP5_AuthRefreshOnlyForADeclaringModule(t *testing.T) {
+	h, c, p := probeHostDeclaring(t, true, true)
+	k := h.mustBoot(c)
+	defer h.close(k)
+	if p.deps.AuthRefresh == nil {
+		t.Error("a module that declares AuthRefresh was handed nil")
+	}
+	if p.sibling.AuthRefresh != nil {
+		t.Error("a module that does not declare AuthRefresh was handed auth's Refresh")
+	}
+	if p.sibling.Auth == nil {
+		t.Error("fixture: the sibling got no identity handles at all, so its nil AuthRefresh proves nothing")
+	}
+
+	// Declared, but the identity switch is off: there is no auth service.
+	h2, c2, p2 := probeHostDeclaring(t, false, true)
+	k2 := h2.mustBoot(c2)
+	defer h2.close(k2)
+	if p2.deps.AuthRefresh != nil {
+		t.Error("a declaring module in a switch-off boot was handed an AuthRefresh")
+	}
 }
 
 // TestIdentityP5_SwitchOffGivesNoAuthRefresh: a boot without IdentityBoot has no

@@ -30,6 +30,7 @@ import (
 // and the identity events it saw.
 type depsProbe struct {
 	deps     module.Deps
+	sibling  module.Deps // a second module in the boot, declaring nothing
 	rbacEv   chan rbacChangedPayload
 	invalEv  chan principalInvalidatedPayload
 	signalEv chan signalLit
@@ -49,11 +50,23 @@ func signalTopic() events.Topic[signalLit] {
 // what reaches the bus.
 func probeHost(t *testing.T, switchOn bool) (*swapHost, Config, *depsProbe) {
 	t.Helper()
+	return probeHostDeclaring(t, switchOn, false)
+}
+
+// probeHostDeclaring is probeHost whose probe module declares AuthRefresh in
+// its manifest when authRefresh is set. A second module, "batcave", always
+// joins the boot and declares nothing, so a test sees both hand-outs from one
+// kernel.
+func probeHostDeclaring(t *testing.T, switchOn, authRefresh bool) (*swapHost, Config, *depsProbe) {
+	t.Helper()
 	h := newSwapHost(t)
 	c := h.envConfig(nil)
 	c.IdentityBoot = switchOn
 	p := &depsProbe{rbacEv: make(chan rbacChangedPayload, 8), invalEv: make(chan principalInvalidatedPayload, 8), signalEv: make(chan signalLit, 8)}
-	c.Modules = []module.Module{storageMod("alfred", func(r *module.Registrar) error {
+	c.Modules = []module.Module{mod("batcave", func(r *module.Registrar) error {
+		p.sibling = r.Deps()
+		return nil
+	}), storageMod("alfred", func(r *module.Registrar) error {
 		p.deps = r.Deps()
 		if switchOn {
 			r.Topics(signalTopic().Spec(events.TopicSpec{Permission: rbac.Need("alfred:signal")}))
@@ -68,6 +81,7 @@ func probeHost(t *testing.T, switchOn bool) (*swapHost, Config, *depsProbe) {
 		m.Permissions = []rbac.PermissionSpec{{Name: "alfred:signal", Title: "Signal"}}
 		m.Roles = []rbac.RoleSeed{{Name: "relay-worker", Title: "Relay worker", Permissions: []rbac.Permission{"alfred:signal"}}}
 		m.ImportedRoleIDs = []rbac.RoleName{"relay-worker"}
+		m.AuthRefresh = authRefresh
 	})}
 	return h, c, p
 }

@@ -172,6 +172,9 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 // bind binds p into ctx for every later stage.
 func (s *Service) bind(ctx context.Context, p *Principal, c ClientInfo) context.Context {
 	p.ClientAddr = c.Addr
+	if p.seal.set {
+		p.sealIdentity() // core's own edit, before any holder sees p
+	}
 	ctx = WithPrincipal(ctx, p)
 	ctx = s.d.RBAC.Bind(ctx, p.Perms)
 	a := audit.Actor{
@@ -407,6 +410,7 @@ func (s *Service) resolveKey(ctx context.Context, raw string, c ClientInfo, m Me
 	if m != MethodAPIKey {
 		p.keyID = k.ID
 	}
+	p.sealIdentity()
 	s.touch(ctx, "k:"+k.ID, now, func(b *storage.Batch) error { return s.d.Store.TouchAPIKey(b, k.ID, now, c.Addr) })
 	return p, nil, nil
 }
@@ -456,6 +460,7 @@ func (s *Service) authenticateSession(r *http.Request, c ClientInfo) (*Principal
 		return fail(failureCode(err))
 	}
 	p.CredentialID, p.AuthTime = rec.PublicID, rec.CreatedAt
+	p.sealIdentity()
 	if s.coalesce("s:"+rec.PublicID, now) {
 		s.stageTouch(ctx, func(b *storage.Batch) error { return s.d.Store.TouchSession(b, rec.PublicID, now) })
 	}
@@ -516,6 +521,7 @@ func (s *Service) extensionStage(e Extension) func(*http.Request, ClientInfo) (*
 		if a.Owner && e.Spec.OwnerVerifier {
 			p.Assurance |= AssuranceOwner
 		}
+		p.sealIdentity()
 		return p, nil, nil
 	}
 }

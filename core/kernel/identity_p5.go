@@ -277,16 +277,20 @@ func (k *Kernel) compatFor(id module.ID) func(auth.MethodSpec) auth.Compat {
 
 // applyIdentityDeps fills the identity handles of module id's Deps (P6): the
 // read-only identity view, the actor-checked admin participant, the module's
-// audit logger and its event scope. AuthCompat is not set here: it is the
+// audit logger and its event scope, and Refresh for the module whose manifest
+// declares AuthRefresh. AuthCompat is not set here: it is the
 // Registrar's, set when the module registers a method (compatFor). Nothing is
 // set for an app that did not declare the flip, or in Describe.
-func (k *Kernel) applyIdentityDeps(d *module.Deps, id module.ID) {
+func (k *Kernel) applyIdentityDeps(d *module.Deps, man module.Manifest) {
+	id := man.ID
 	if k.ident == nil || k.ident.svc.Auth == nil || k.events == nil {
 		return
 	}
 	d.Auth = identitiesOnly{k.ident.svc.Auth}
 	d.AuthAdmin = adminOnly{k.ident.svc.Auth}
-	d.AuthRefresh = k.ident.svc.Auth.Refresh
+	if man.AuthRefresh {
+		d.AuthRefresh = k.ident.svc.Auth.Refresh
+	}
 	d.Audit = newModuleAudit(id, k.audit, k.coreLog("audit"))
 	d.Events = k.events.scope(id)
 }
