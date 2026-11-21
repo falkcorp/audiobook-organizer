@@ -41,8 +41,11 @@ import (
 // errRestoreSourceUnreadable refuses an identity boot whose restore source
 // cannot be read: the boundary, the provenance and the audit high-water mark all
 // come from it, and a guess at any of them lets a hook overwrite audit records or
-// re-apply the wrong journal lines. The restored store stays swapped in; the
-// next boot reads the source again.
+// re-apply the wrong journal lines. The restored store stays swapped in and
+// journaled applied (P4b did that before P4d), and the intent is gone, so the
+// next boot does not derive again: it is an ordinary boot of that store, which
+// re-applies any journaled revocation the store lacks and runs the hooks
+// fail-closed on a replaced store (TestIdentityBoot_ARefusedRestoreIsNotServedByTheNextBoot).
 var errRestoreSourceUnreadable = errors.New("kernel: the restore source cannot be read")
 
 // deriveRestoreBoot builds the restoreBoot of this boot's restore.
