@@ -61,7 +61,7 @@ func TestRetiredDatabasePathRefusesStoreCreate(t *testing.T) {
 		return bootOnce(t, in.state, edit, func(o *app.Options) {
 			o.StorageFS = storage.FS{} // the real filesystem: the store is on disk, not in memory
 			o.StateDir = in.state
-			o.Env = append([]string{}, env...) // nil would fall back to the process environment
+			o.Env = append([]string{listenEnv}, env...) // nil would fall back to the process environment
 			o.ConfigFile = file
 		}, func() {
 			require.NoError(t, os.RemoveAll(in.storeDir))

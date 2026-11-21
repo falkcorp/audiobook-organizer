@@ -224,7 +224,7 @@ func TestClaimsModeIsStrictOnABOsBoot(t *testing.T) {
 // never scans, because iterators stay clipped to books' claims.
 func TestShadowModeBootsABO(t *testing.T) {
 	c := bootComposedWith(t, false, "", nil, nil, func(o *app.Options) {
-		o.Env = []string{storageEnv(), "ABO_CORE_STORAGE_CLAIMS_MODE=shadow"}
+		o.Env = bootEnv("ABO_CORE_STORAGE_CLAIMS_MODE=shadow")
 	})
 	c.expectClaimViolations()
 	db := c.store.DB()
