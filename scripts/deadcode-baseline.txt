@@ -326,6 +326,7 @@ core/kernel.startHealthLoops
 core/kernel.syncDirOf
 core/kernel.tasksProbe
 core/kernel.userIDs
+core/kernel.verifiedMethodRule
 core/kernel.withJournalCounters
 core/kernel.writeStoreMarkers
 internal/ai.NewEmbeddingClient
