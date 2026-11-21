@@ -7,6 +7,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
+	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
@@ -152,5 +156,152 @@ func TestPerimeter_RateLimitSwitchEndToEnd(t *testing.T) {
 				t.Fatalf("Run = %v", err)
 			}
 		})
+	}
+}
+
+// echoClientMount is a legacy mount whose one route answers with the client
+// address stage 0 resolved and whether a trusted proxy attributed it.
+func echoClientMount() testModule {
+	return mod("gcpd", func(r *module.Registrar) error {
+		r.MountLegacy(httpapi.LegacyMount{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				addr, attributed := httpapi.ClientAddrFrom(req.Context())
+				_, _ = w.Write([]byte(addr.String() + " " + strconv.FormatBool(attributed)))
+			}),
+			Auth: httpapi.LegacyAuthGin,
+			Routes: func(yield func(httpapi.LegacyRoute) bool) {
+				yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateExempt})
+			},
+		})
+		return nil
+	}).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/api/v1/"} })
+}
+
+// TestPerimeter_BadTrustedProxyIsLoggedAndLeftOut: a core.http.trusted_proxies
+// entry that is neither a prefix nor an address does not stop the boot (HEAD's
+// TUNNEL_CONNECTOR_ADDRS rule): it is logged, naming the key, and left out,
+// and the entries that parse still attribute the client-IP header.
+func TestPerimeter_BadTrustedProxyIsLoggedAndLeftOut(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{}
+		capture := logcapture.New(t)
+		c := supervised(t, rec, echoClientMount())
+		c.Logger = capture.Logger()
+		c.LegacyAuthGinUntil = "gcpd"
+		withCore(&c, "core.http.trusted_proxies", `["arkham-asylum","192.0.2.10"]`, "core.http.client_ip_header", "CF-Connecting-IP")
+		var served atomic.Pointer[http.Handler]
+		c.Listen = func(_ httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (Server, error) {
+			served.Store(&h)
+			return &fakeServer{rec: rec, stopped: make(chan struct{})}, nil
+		}
+		k := mustNew(t, c)
+		ctx, cancel := context.WithCancel(t.Context())
+		done := run(ctx, k)
+		synctest.Wait()
+		hp := served.Load()
+		if hp == nil {
+			t.Fatal("the listener never opened despite only a trusted-proxy entry being bad")
+		}
+		get := func(peer string) string {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/cases/42", nil)
+			req.RemoteAddr = peer
+			req.Header.Set("CF-Connecting-IP", "198.51.100.7")
+			w := httptest.NewRecorder()
+			(*hp).ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("GET from %s = %d, want 200", peer, w.Code)
+			}
+			return w.Body.String()
+		}
+		if got := get("192.0.2.10:1000"); got != "198.51.100.7 true" {
+			t.Errorf("through the trusted proxy the client is %q, want the header's address, attributed", got)
+		}
+		if got := get("192.0.2.11:1000"); got != "192.0.2.11 false" {
+			t.Errorf("from an untrusted peer the client is %q, want the peer, not attributed", got)
+		}
+		var warned bool
+		for _, r := range capture.Records() {
+			if r.Level == slog.LevelWarn && strings.Contains(r.Message, "core.http.trusted_proxies entry ignored") {
+				warned = true
+			}
+		}
+		if !warned {
+			t.Errorf("no warning names the ignored trusted-proxy entry: %v", capture.Messages())
+		}
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+	})
+}
+
+// TestPerimeter_HotReloadsThroughApply: core.http is live (05-http-api §10). A
+// peer allow-list committed through the store after the listener opened
+// reaches stage 0 without a restart (followPerimeter's OnChange), and a bad
+// entry is refused at Apply, so the perimeter in force stays the committed one.
+// The boot has a store: only an attached config store commits an Apply.
+func TestPerimeter_HotReloadsThroughApply(t *testing.T) {
+	rec := &recorder{}
+	h := newSwapHost(t)
+	c := h.envConfig(nil)
+	c.Notifier = notifier{rec}
+	c.Exit = func(code int) { rec.add("exit:%d", code) }
+	var served atomic.Pointer[http.Handler]
+	c.Listen = func(_ httpapi.ListenOptions, hd http.Handler, _ *slog.Logger) (Server, error) {
+		served.Store(&hd)
+		return &fakeServer{rec: rec, stopped: make(chan struct{})}, nil
+	}
+	withCore(&c, "core.http.listen", "localhost:0")
+	k := h.mustBoot(c)
+	ctx, cancel := context.WithCancel(h.ctx)
+	done := run(ctx, k)
+	deadline := time.Now().Add(30 * time.Second)
+	for served.Load() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the listener never opened")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	hp := served.Load()
+	get := func(peer string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/batcave/v1/gadgets", nil)
+		req.RemoteAddr = peer
+		w := httptest.NewRecorder()
+		(*hp).ServeHTTP(w, req)
+		return w.Code
+	}
+	if got := get("198.51.100.4:1000"); got != http.StatusNotFound {
+		t.Fatalf("with no allow-list, a peer = %d, want the router's 404", got)
+	}
+	admin := config.Actor{Subject: "user:alfred", Interactive: true, Can: func(string) bool { return true }}
+	apply := func(v string) error {
+		_, err := k.cfgBoot.store.Apply(h.ctx, config.Patch{Set: map[config.Path]json.RawMessage{"core.http.peer_allowlist": json.RawMessage(v)}}, admin)
+		return err
+	}
+	if err := apply(`["192.0.2.0/24"]`); err != nil {
+		t.Fatalf("Apply allow-list: %v", err)
+	}
+	// OnChange runs after the commit; wait for stage 0 to see it.
+	for get("198.51.100.4:1000") != http.StatusForbidden {
+		if time.Now().After(deadline) {
+			t.Fatal("after the change, a peer outside the allow-list is still served")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := get("192.0.2.4:1000"); got != http.StatusNotFound {
+		t.Errorf("after the change, a peer inside the allow-list = %d, want the router's 404", got)
+	}
+	if err := apply(`["192.0.2.0/24","arkham-asylum"]`); err == nil || !strings.Contains(err.Error(), "core.http.peer_allowlist") {
+		t.Fatalf("Apply of a bad entry = %v, want a refusal naming core.http.peer_allowlist", err)
+	}
+	if got := get("198.51.100.4:1000"); got != http.StatusForbidden {
+		t.Errorf("after a refused change, a peer outside the committed allow-list = %d, want 403", got)
+	}
+	if got := get("192.0.2.4:1000"); got != http.StatusNotFound {
+		t.Errorf("after a refused change, a peer inside the committed allow-list = %d, want the router's 404", got)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run = %v", err)
 	}
 }
