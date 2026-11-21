@@ -7,6 +7,7 @@ package books
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
@@ -49,11 +50,10 @@ const booksLevelStepVersion = database.LegacyCap + 3
 // (cutover.Flip.Spec). Without it those opens refuse a flipped store as written
 // by a newer build.
 func StandaloneSpec(base storage.Spec) storage.Spec {
-	// Only the level step and the claims are applied (Flip.Spec reads nothing
+	// Only the level steps and the claims are applied (Flip.Spec reads nothing
 	// else): the data steps need M2's inputs, which a standalone open has none
-	// of and never runs.
-	level := cutover.BooksLevelStep(booksLevelStepVersion, cutover.BooksCutoverLevel)
-	return cutover.Flip{Level: level}.Spec(base)
+	// of and never runs, so this is the shape alone (cutover.NewFlipShape).
+	return cutover.NewFlipShape(flipShapeOptions()).Spec(base)
 }
 
 // StandaloneOptions is o with the flip's storage declarations added for an open
@@ -93,7 +93,7 @@ func (m *booksModule) declaresFlip() bool { return m.dbPath != "" }
 func (m *booksModule) storageSpec() storage.Spec {
 	spec := database.BooksSpec(m.beforeMigration)
 	if m.declaresFlip() {
-		spec = m.flipSteps(module.Importers{}).Spec(spec)
+		spec = cutover.NewFlipShape(flipShapeOptions()).Spec(spec)
 	}
 	return spec
 }
@@ -105,7 +105,20 @@ func (m *booksModule) cutoverSteps() func(module.Importers) []datamigrate.DataMi
 	if !m.declaresFlip() {
 		return nil
 	}
-	return func(imp module.Importers) []datamigrate.DataMigration { return m.flipSteps(imp).Data }
+	return func(imp module.Importers) []datamigrate.DataMigration {
+		f, err := m.flipSteps(imp)
+		if err != nil {
+			// Manifest.Cutover has no error return, and the only error NewFlip
+			// has is IdentityStep's, which needs FlipOptions.Identity: flipOptions
+			// sets none, so this is unreachable until the release that turns the
+			// identity cutover on (F4-08 B10), which must give this func an error
+			// path before it sets the option. Until then a refusal is a programming
+			// error and fails loudly, as ConfigStep does on its own misuse, rather
+			// than registering a list with M3 missing.
+			panic(fmt.Sprintf("books: building the cutover list: %v", err))
+		}
+		return f.Data
+	}
 }
 
 // rewriteStep is Manifest.Rewrite (M8): nil unless the flip is declared.
@@ -113,15 +126,23 @@ func (m *booksModule) rewriteStep() *storage.RewriteStep {
 	if !m.declaresFlip() {
 		return nil
 	}
-	r := m.flipSteps(module.Importers{}).Rewrite
+	r := cutover.NewFlipShape(flipShapeOptions()).Rewrite
 	return &r
 }
 
-// flipSteps is F3's list over imp: the one value the manifest registers and the
-// cutover-list cell validates. Zero importers are for the parts that carry no
-// importer (the level step, M8).
-func (m *booksModule) flipSteps(imp module.Importers) cutover.Flip {
+// flipSteps is the cutover list over imp: the one value the manifest registers
+// and the cutover-list cell validates. The parts that carry no importer (the
+// level steps, M8) come from the same value's pure shape, flipShapeOptions, so the
+// manifest can build them with zero importers.
+func (m *booksModule) flipSteps(imp module.Importers) (cutover.Flip, error) {
 	return cutover.NewFlip(imp.Config, imp.Secrets, m.flipOptions(imp))
+}
+
+// flipShapeOptions is the part of flipOptions the shape reads: the level step's
+// version and the identity switch. ABO leaves Identity nil until B10 turns the
+// identity cutover on, so the list is F3's flip alone (books.level-1, M2, M8).
+func flipShapeOptions() cutover.FlipOptions {
+	return cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion}
 }
 
 // flipOptions are M2's inputs: HEAD's state directory, database path and
@@ -141,5 +162,7 @@ func (m *booksModule) flipOptions(imp module.Importers) cutover.FlipOptions {
 	if imp.OperatorSet != nil {
 		opts.OperatorSet = func(p string) (string, bool) { return imp.OperatorSet(coreconfig.Path(p)) }
 	}
-	return cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion, Config: opts}
+	fo := flipShapeOptions()
+	fo.Config = opts
+	return fo
 }
