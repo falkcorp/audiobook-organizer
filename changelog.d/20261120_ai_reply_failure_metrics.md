@@ -1,0 +1,3 @@
+### Fixed
+
+- Unusable model replies now count in `ai_failures_total{reason="reply_parse"}` for author review, author discovery, metadata review and cover text, so the "Reply-quality failures by task" panel no longer reads zero for them. An answer with no choices is counted for every task (filename, audiobook, batch, cover art, author review, author discovery, metadata review, cover text). These replies are now typed `*ReplyParseError`: they are still retried and never permanent, but a routed batch filename parse treats an empty answer as a quality failure instead of failing over to a peer endpoint, and the retry log for author review and metadata review now carries the same short, sanitized reply excerpt the other tasks already log.

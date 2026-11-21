@@ -173,6 +173,8 @@ func (r *RoutedCoverTextReader) coverTextAttempt(dataURL string) func(context.Co
 		}
 		raw, err := p.readCoverTextImage(ctx, dataURL)
 		if errors.Is(err, errNoCoverTextChoices) {
+			// The request was ok (observe counted it); the reply was empty.
+			recordReplyFailure(ctx, p.callMeta(TaskCoverText, p.defaultModelOverride), err)
 			return nil, aidispatch.Quality(fmt.Errorf("cover text on %s: %w", t.Endpoint.ID, err))
 		}
 		if err != nil {
