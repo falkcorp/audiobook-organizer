@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/internal/authstore"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/rbacstore"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -96,6 +97,10 @@ type rxFx struct {
 	keys   journal.Keys
 	clock  *rxClock
 
+	// labels records the crash-matrix regions the boots enter (tryBoot puts it
+	// in their context; restore_labels_test.go reads it).
+	labels *labelLog
+
 	install string
 	comp    *journal.Component
 	auth    *authstore.Store
@@ -114,7 +119,7 @@ func newRxFx(t *testing.T, keys journal.Keys) *rxFx {
 	fx := &rxFx{
 		t: t, ctx: context.Background(), vfs: mem, fs: storage.FSOf(mem), dbPath: "/gotham/main.pebble",
 		state: t.TempDir(), backup: filepath.Join(t.TempDir(), "backups"), keys: keys,
-		clock: &rxClock{t: time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)},
+		clock: &rxClock{t: time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)}, labels: &labelLog{},
 	}
 	if err := os.MkdirAll(fx.backup, 0o700); err != nil {
 		t.Fatal(err)
@@ -240,14 +245,15 @@ func (fx *rxFx) tryBoot(rb *restoreBoot, mut func(*reapplyInput), hooks func(env
 	fx.t.Helper()
 	in := fx.input(mut)
 	in.Restore = rb
-	res, err := reapplyRevocations(fx.ctx, in)
+	ctx := bootseam.With(fx.ctx, &bootseam.Seams{Labels: fx.labels})
+	res, err := reapplyRevocations(ctx, in)
 	if err != nil {
 		return res, restoreHooksResult{}, err
 	}
 	if hooks == nil {
 		hooks = restoreHookList(fx.stores())
 	}
-	hres, err := runRestoreHooks(fx.ctx, restoreHooksInput{
+	hres, err := runRestoreHooks(ctx, restoreHooksInput{
 		Journal: fx.comp, KS: fx.bks(), Install: fx.install, Identity: in.Identity, Result: res, Restore: rb,
 		SwappedBack: in.SwappedBack, OpenPrevious: fx.openPrevious, Hooks: hooks, Clock: fx.clock.now,
 		Log: slog.New(slog.DiscardHandler),
@@ -531,7 +537,7 @@ func newRxFxSecrets(t *testing.T) *rxFx {
 	fx := &rxFx{
 		t: t, ctx: context.Background(), vfs: mem, fs: storage.FSOf(mem), dbPath: "/gotham/main.pebble", secret: true,
 		state: t.TempDir(), backup: filepath.Join(t.TempDir(), "backups"),
-		clock: &rxClock{t: time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)},
+		clock: &rxClock{t: time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)}, labels: &labelLog{},
 	}
 	if err := os.MkdirAll(fx.backup, 0o700); err != nil {
 		t.Fatal(err)

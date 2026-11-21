@@ -6,9 +6,12 @@
 package crashmatrix
 
 import (
+	"github.com/falkcorp/mediacore/auth"
 	backupjournal "github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
+	"github.com/falkcorp/mediacore/kernel"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -125,8 +128,20 @@ func Rows() []Row {
 			"storage.checkpoint.ready",
 		}},
 		{Phase: "After readiness (05-storage §5S.4 step 15)", Writer: "the checkpoint sweeper's first sweep: delete_after on a checkpoint that stopped being needed, deletion of every checkpoint past it (record, copy, pointer), garbage (record-less directories, dangling records, a dangling pointer) and expired scratch entries ((*DB).SweepCheckpoints, 05-storage §5S.3.12)", Labels: storage.SweepLabels(), Retried: true},
+
+		// F4-08 A5: the identity boot's store commits (P4d steps 2-4, P7's
+		// seeds), one block so a re-cut of another PR's edits to this table
+		// conflicts trivially. Unbound until F4-08 wires them.
+		{Phase: "P4d 2", Writer: "the kernel: the re-apply's store commits: each tail chunk's two batches (auth's revocations, then rbac's with the head), each drained chunk's two (the second with the dequeue of its entries), the head of the boot's own line committed alone, a restore boot's restore line with its head, the unapplied queue's batches, the dequeue of the entries a kept admin held, the kept admins' restriction, the withheld head, MarkUnappliedClosed, and served_boot (on a restore boot after the hooks) (restore_reapply.go; 05-backup §5B.3.6 \"Boot re-apply\")", Labels: kernel.ReapplyLabels(), Unbound: unboundIdentityBoot},
+		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (restore_hooks.go; journal.EnsureHookRun, journal.ClearHookRun)", Labels: kernel.HookRunLabels(), Unbound: unboundIdentityBoot},
+		{Phase: "P4d 4", Writer: "auth: BootWrites' commits: the _system user's seed, the bootstrap token's mint or the deletion of the stored ones, and the start-up key's revoke and mint (05-authn §3.2, §4.6)", Labels: auth.BootWritesLabels(), Unbound: unboundIdentityBoot},
+		{Phase: "P7", Writer: "rbac: the seed roles' batch (CommitSeeds; 05-rbac §5)", Labels: []string{rbac.LabelCommitSeeds}, Unbound: unboundIdentityBoot},
 	}
 }
+
+// unboundIdentityBoot is the Unbound reason of the identity boot's rows (F4-08
+// A5): the writers carry their labels, and no boot runs them yet.
+const unboundIdentityBoot = "no boot runs P4d steps 2-4 or P7's seed commit until F4-08 wires them (the kernel builds rbac, auth and audit only once the app declares Options.Auth)"
 
 // unboundJournal is the Unbound reason of the journal's file-writer rows that
 // the first boot with a revocation in it reaches (open, append, location).

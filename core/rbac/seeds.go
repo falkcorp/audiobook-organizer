@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/backup/journal"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -253,6 +254,11 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 	return r, delta, true, nil
 }
 
+// LabelCommitSeeds is the crash-matrix label of CommitSeeds' batch (06 §6.5.1
+// P7). No boot calls CommitSeeds until F4-08 wires P7; the row in
+// core/coretest/crashmatrix is Unbound until then.
+const LabelCommitSeeds = "rbac.seeds.commit"
+
 // CommitSeeds writes the seed roles computed at Freeze into the store (§4.8
 // table; 06 §6.5.1 P7, "seed roles reconciled through rbac's store"). It is
 // coined by F4-01: 05-rbac §5 commits the seed batch at P7, and the spec's
@@ -262,11 +268,16 @@ func mergeSeed(cat *Catalog, def seedDef, cur *Role, now time.Time) (*Role, seed
 // journalled role.narrowed. An unchanged role is not written, so a second
 // call writes nothing. A stored seed role that does not decode, or a role
 // under a seed name that is not a seed role, fails the call (and the boot).
+//
+// The commit runs inside the crash-matrix region LabelCommitSeeds (a no-op in
+// production: no boot carries a Labeler).
 func (s *Service) CommitSeeds(ctx context.Context) error {
 	st, err := s.frozen()
 	if err != nil {
 		return err
 	}
+	exit := bootseam.Region(ctx, LabelCommitSeeds)
+	defer exit()
 	return s.write(ctx, func(b *storage.Batch) ([]*roleChange, error) {
 		now := s.now().UTC()
 		var changes []*roleChange

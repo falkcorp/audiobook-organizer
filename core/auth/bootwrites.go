@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -34,6 +35,37 @@ const (
 	ReadOnlyKeyFile  = "readonly-key"
 	ReadOnlyKeyLabel = "auth.readonly_key"
 )
+
+// The crash-matrix labels of BootWrites' store commits, a bootseam.Region
+// around each (06 §6.5.1 P4d step 4). A region is a no-op in production (no
+// boot carries a Labeler). The token and key files keep their own state
+// filesystem labels (BootstrapTokenLabel, ReadOnlyKeyLabel): the regions wrap
+// the commits only. No boot calls BootWrites until F4-08 wires P4d step 4; the
+// row in core/coretest/crashmatrix is Unbound until then.
+const (
+	// LabelBootSystemUser is the _system user's seed.
+	LabelBootSystemUser = "auth.boot.system_user"
+	// LabelBootBootstrapMint is the batch that deletes the stored bootstrap
+	// tokens and mints the new one.
+	LabelBootBootstrapMint = "auth.boot.bootstrap_mint"
+	// LabelBootBootstrapDelete is the deletion of every stored bootstrap token,
+	// alone (bootstrap disabled, or no state filesystem to deliver a new one).
+	LabelBootBootstrapDelete = "auth.boot.bootstrap_delete"
+	// LabelBootStartupKey is the batch that revokes the previous start-up key
+	// (journaled) and mints the new one.
+	LabelBootStartupKey = "auth.boot.startup_key"
+)
+
+// BootWritesLabels is every label of BootWrites' store commits, for the crash
+// matrix's writer table.
+func BootWritesLabels() []string {
+	return []string{LabelBootSystemUser, LabelBootBootstrapMint, LabelBootBootstrapDelete, LabelBootStartupKey}
+}
+
+// commitAt is commit inside label's crash-matrix region.
+func (d RestoreDeps) commitAt(ctx context.Context, label string, stage func(b *storage.Batch) error) error {
+	return bootseam.Labelled(bootseam.From(ctx), label, func() error { return d.commit(ctx, stage) })
+}
 
 // defaultReadOnlyScopes is core.auth.bootstrap.readonly_key.scopes's default.
 func defaultReadOnlyScopes() []rbac.Permission { return []rbac.Permission{"core:system.view"} }
@@ -67,7 +99,7 @@ func BootWrites(ctx context.Context, d RestoreDeps) error {
 	if err := d.check("Revocations"); err != nil {
 		return err
 	}
-	if err := d.commit(ctx, func(b *storage.Batch) error { return stageSystemUser(ctx, d, b) }); err != nil {
+	if err := d.commitAt(ctx, LabelBootSystemUser, func(b *storage.Batch) error { return stageSystemUser(ctx, d, b) }); err != nil {
 		return fmt.Errorf("auth: boot writes: seed %s: %w", SystemUserID, err)
 	}
 	st := d.settings()
@@ -114,7 +146,7 @@ func bootstrapToken(ctx context.Context, d RestoreDeps) error {
 	}
 	var raw Token
 	expires := d.now().Add(DefaultBootstrapTokenTTL)
-	err := d.commit(ctx, func(b *storage.Batch) error {
+	err := d.commitAt(ctx, LabelBootBootstrapMint, func(b *storage.Batch) error {
 		if err := stageDeleteBootstrapTokens(ctx, d, b); err != nil {
 			return err
 		}
@@ -154,7 +186,7 @@ func stageDeleteBootstrapTokens(ctx context.Context, d RestoreDeps, b *storage.B
 // deleteStoredBootstrapTokens deletes every stored bootstrap token in one
 // batch.
 func deleteStoredBootstrapTokens(ctx context.Context, d RestoreDeps) error {
-	return d.commit(ctx, func(b *storage.Batch) error { return stageDeleteBootstrapTokens(ctx, d, b) })
+	return d.commitAt(ctx, LabelBootBootstrapDelete, func(b *storage.Batch) error { return stageDeleteBootstrapTokens(ctx, d, b) })
 }
 
 // retireBootstrapToken is BootWrites' answer to core.auth.bootstrap.enabled
@@ -192,7 +224,7 @@ func startupKey(ctx context.Context, d RestoreDeps, st Settings) error {
 		expires time.Time
 		minted  bool
 	)
-	err := d.commit(ctx, func(b *storage.Batch) error {
+	err := d.commitAt(ctx, LabelBootStartupKey, func(b *storage.Batch) error {
 		minted = false
 		for k, err := range d.Store.ScanAPIKeys(ctx, "") {
 			if err != nil {
