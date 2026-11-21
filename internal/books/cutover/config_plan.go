@@ -180,6 +180,9 @@ type plan struct {
 	Dropped     []string
 	Reported    []string // notes for the report: names, never values
 	Counts      map[string]int
+	// OAuthEmptyAllowList: the fold writes at least one enabled provider entry
+	// whose allowed_emails is empty (configStep.oauthBlocker).
+	OAuthEmptyAllowList bool
 }
 
 func (p *plan) count(outcome string) { p.Counts[outcome]++ }
@@ -1051,6 +1054,8 @@ func (pl *planner) fold() {
 		}
 		if len(emails) > 0 {
 			entry["allowed_emails"] = emails
+		} else {
+			pl.p.OAuthEmptyAllowList = true
 		}
 		if f.role != "" {
 			entry["default_role"] = f.role

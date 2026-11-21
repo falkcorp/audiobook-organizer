@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -542,6 +544,9 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 			return nil, "", readUnset, nil
 		}
 		out, err := cutover.Unconvert(t.Convert, ov.Value)
+		if err == nil {
+			out, err = passthroughTyped(p.row.Head, t.Path, ov.By, out)
+		}
 		return out, ov.By, readOK, err
 	case cutover.TargetMember:
 		st, ok := e.acc.Lookup(coreconfig.Path(t.Map))
@@ -759,4 +764,46 @@ func scalarText(raw json.RawMessage) (string, bool) {
 		return string(bytes.TrimSpace(raw)), true
 	}
 	return "", false
+}
+
+// passthroughTyped types a passthrough value for HEAD's field. Config owns no
+// type for a passthrough path, so an environment value reaches the projection
+// as the text it was given, a JSON string ("587" for
+// ABO_INTEGRATIONS_NOTIFY_EMAIL_PORT). The integration that owns the field
+// types it by its schema (core/integrations coerce); the projection applies
+// the same rule to HEAD's field: a JSON string bound for an int, float or bool
+// field is read as that number or boolean, and text that is neither refuses,
+// naming the row, the key and the layer, never the value. Any other value is
+// returned as given.
+func passthroughTyped(head, path, by string, raw json.RawMessage) (json.RawMessage, error) {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return raw, nil
+	}
+	f, ok := fieldAt(&config.Config{}, strings.Split(head, "."))
+	if !ok {
+		return raw, nil
+	}
+	text = strings.TrimSpace(text)
+	switch f.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("%s (%s, set by %s) is not a whole number", path, head, by)
+		}
+		return json.RawMessage(strconv.FormatInt(n, 10)), nil
+	case reflect.Float32, reflect.Float64:
+		n, err := strconv.ParseFloat(text, 64)
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return nil, fmt.Errorf("%s (%s, set by %s) is not a number", path, head, by)
+		}
+		return json.RawMessage(strconv.FormatFloat(n, 'g', -1, 64)), nil
+	case reflect.Bool:
+		b, err := strconv.ParseBool(text)
+		if err != nil {
+			return nil, fmt.Errorf("%s (%s, set by %s) is not true or false", path, head, by)
+		}
+		return json.RawMessage(strconv.FormatBool(b)), nil
+	}
+	return raw, nil
 }
