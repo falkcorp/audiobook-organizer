@@ -341,10 +341,13 @@ type icRunner struct {
 	cloner LibraryCloner
 	// reflink clones one file for the mixed kind (see Plugin.reflinkFile).
 	reflink func(src, dst string) error
-	rootDir string
-	opID    string
-	apply   bool
-	library *icLibraryIndex
+	// removePath removes a clone file, or an emptied clone directory, through
+	// the run's writer (icCloneWriter.RemoveClonePath).
+	removePath func(path string) error
+	rootDir    string
+	opID       string
+	apply      bool
+	library    *icLibraryIndex
 	// chapters copies the source's chapter table onto a version clone and
 	// removes it on undo. Resolved with database.AsCapability: the chapter
 	// methods are not on database.Store, so a bare assertion fails behind a
@@ -441,6 +444,10 @@ type icCloneWriter interface {
 	CloneBookIntoLibrary(book *database.Book, files []database.BookFile, opID string) (string, error)
 	// Reflink clones one file for the mixed kind (Plugin.reflinkFile).
 	Reflink(src, dst string) error
+	// RemoveClonePath removes one file, or one empty directory, the clone put
+	// in the library tree (os.Remove). It changes bytes on disk, so it is a
+	// `files` write the run's fence sees, not a plain os call beside it.
+	RemoveClonePath(path string) error
 }
 
 // icChapterWriter is the chapter-table write.
@@ -522,7 +529,7 @@ func (p *Plugin) itunesCloneIntoLibrary(ctx context.Context, params icParams, ro
 			if reflink == nil {
 				reflink = fileops.Reflink
 			}
-			run := &icRunner{store: icStore{OpsStore: opsStore, ChapterReader: vps}, reads: opsStore, cloner: p.deps, reflink: reflink, tags: p.deps.BookTagReader()}
+			run := &icRunner{store: icStore{OpsStore: opsStore, ChapterReader: vps}, reads: opsStore, cloner: p.deps, reflink: reflink, removePath: base.Writer.RemoveClonePath, tags: p.deps.BookTagReader()}
 			if um := p.deps.MergeUserStateStore(); um != nil {
 				run.userState = um
 			}
@@ -597,12 +604,13 @@ func (p *Plugin) itunesCloneIntoLibraryKind(deps t6g5Deps, sched func(tasks.Kind
 				RootDir: base.Store.RootDir(), Reads: base.Store,
 				NewRunner: func(writes bool) (*icRunner, error) {
 					run := &icRunner{
-						store:    icStore{OpsStore: icOpsJoin{base.Store, base.Writer}, ChapterReader: base.Store},
-						cloner:   icClonerJoin{base.Store, base.Writer},
-						reflink:  base.Writer.Reflink,
-						tags:     base.Store,
-						userOps:  base.Writer,
-						pathRows: base.Store.BookFileRowsAtPathStrict,
+						store:      icStore{OpsStore: icOpsJoin{base.Store, base.Writer}, ChapterReader: base.Store},
+						cloner:     icClonerJoin{base.Store, base.Writer},
+						reflink:    base.Writer.Reflink,
+						removePath: base.Writer.RemoveClonePath,
+						tags:       base.Store,
+						userOps:    base.Writer,
+						pathRows:   base.Store.BookFileRowsAtPathStrict,
 						// The rollback's retired-shell guard reads the run's store for
 						// the retired rows (database.RefuseRetiredShell); without it
 						// every rollback is refused.
@@ -1259,7 +1267,7 @@ func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) i
 	var made []string
 	cleanup := func() {
 		for _, m := range made {
-			_ = os.Remove(m)
+			_ = r.removePath(m)
 		}
 	}
 	for i, f := range p.files {
@@ -1494,13 +1502,13 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 			kept = append(kept, pr.ClonePath+" ("+claim+")")
 			continue
 		}
-		if err := os.Remove(pr.ClonePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := r.removePath(pr.ClonePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			// Reported in the group result, not just logged: a clone left on
 			// disk with no row is picked up by the next scan as a new book.
 			leftover = append(leftover, pr.ClonePath+" ("+err.Error()+")")
 		}
 		if rec.Kind == icKindVersion {
-			_ = os.Remove(filepath.Dir(pr.ClonePath)) // only if now empty
+			_ = r.removePath(filepath.Dir(pr.ClonePath)) // only if now empty
 		}
 	}
 	if len(leftover) > 0 {

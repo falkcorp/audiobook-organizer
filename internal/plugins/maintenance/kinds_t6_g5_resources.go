@@ -60,11 +60,10 @@ type t6g5OutsideWrite struct {
 // core writes OUTSIDE t6g5Writer. The kind still declares them: its Effects are
 // the union of t6g5WriterResources over the methods it can call, this list, and
 // t6g5HeadParityDeclared.
-var t6g5OutsideWriterWrites = map[string][]t6g5OutsideWrite{
-	"itunes.clone-into-library": {
-		{ops.ResFiles, "the mixed-cleanup, rollback and rmdir steps call os.Remove directly; F5-18 should route them through a writer method stamped files, or accept that they run after the last fenced write"},
-	},
-}
+//
+// Empty since F5-18g: the clone's mixed-cleanup, rollback and rmdir removals
+// were its only entry, and they now go through t6g5Writer.RemoveClonePath.
+var t6g5OutsideWriterWrites = map[string][]t6g5OutsideWrite{}
 
 // t6g5HeadParityDeclared lists, per kind (keyed by HEAD ID), a resource the kind
 // declares only because HEAD's own definition did, and which nothing on its path

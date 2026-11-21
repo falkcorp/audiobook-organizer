@@ -100,6 +100,7 @@ var rowsPinned = map[string]string{
 	"RebuildReviewStatusIndex":            "review_items",
 	"RunBulkWriteBack":                    "activity book_files books file_provenance files indexes metadata_cache operations user_state",
 	"Reflink":                             "files",
+	"RemoveClonePath":                     "files",
 	"RemoveOldBackupFiles":                "files",
 	"RemuxMalformedM4BFiles":              "book_files books files indexes metadata_cache settings",
 	"RenameAuthorJournaled":               "authors operations",
