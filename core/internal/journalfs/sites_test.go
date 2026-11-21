@@ -6,6 +6,7 @@
 package journalfs_test
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"slices"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // site is one journal write site run on the recording filesystem: its setup
@@ -52,6 +54,46 @@ func primed(e *env) {
 	}
 	if err := j.Close(); err != nil {
 		e.t.Fatal(err)
+	}
+}
+
+// committedLines writes n revocation lines to the journal at journalAt over e's
+// filesystem, each in a batch that commits (so the store's head is n), and
+// closes it. A trim keeps what the store's head has not reached, so a site or
+// cell that trims needs the head, which the recorded filesystem alone does not
+// hold: it lives in e.st, whose head a later site over the same store would
+// find ahead of its own, shorter journal. Such a site starts with trimmable.
+func committedLines(e *env, n int) {
+	e.t.Helper()
+	j := e.mustOpen(journalAt)
+	for range n {
+		b := e.st.auth.NewBatch()
+		err := j.Append(context.Background(), b, journal.Revocation{Kind: journal.UserDeleted, At: fixedClock()})
+		if err == nil {
+			err = b.Commit(context.Background(), storage.Sync)
+		}
+		if err != nil {
+			e.t.Fatal(err)
+		}
+	}
+	if err := j.Close(); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// trimmable is a site's setup: a store of its own (the others share one) and a
+// journal of five committed lines, held open.
+func trimmable(e *env) {
+	e.st = newStore(e.t)
+	committedLines(e, 5)
+	e.holdOpen(journalAt)
+}
+
+// trimTo is the call of a trim site: Trim to seq on the held journal.
+func trimTo(seq uint64) func(e *env) error {
+	return func(e *env) error {
+		_, err := e.held.Trim(context.Background(), seq)
+		return err
 	}
 }
 
@@ -215,6 +257,51 @@ func sites() []site {
 			want: []string{
 				"journal.move.copy:create", "journal.move.copy:write", "journal.move.copy:sync",
 				"journal.move.rename:rename", "journal.move.cleanup:remove",
+			}},
+		{name: "Trim writes the kept lines to a locked temporary file, renames it over the journal and syncs the directory",
+			setup: trimmable,
+			run:   trimTo(3),
+			want: []string{
+				"journal.trim.copy:create", "journal.trim.copy:writeat", "journal.trim.copy:sync",
+				"journal.trim.rename:rename", "journal.trim.dirsync:sync",
+			}},
+		{name: "Trim clears a temporary file an earlier attempt left",
+			setup: func(e *env) { trimmable(e); e.plant(journalAt+".trimming", "a torn copy") },
+			run:   trimTo(3),
+			want: []string{
+				"journal.trim.clear:remove", "journal.trim.copy:create", "journal.trim.copy:writeat", "journal.trim.copy:sync",
+				"journal.trim.rename:rename", "journal.trim.dirsync:sync",
+			}},
+		{name: "Trim that drops nothing writes nothing",
+			setup: trimmable,
+			run:   trimTo(0),
+			want:  nil},
+		{name: "Trim removes a temporary file whose fsync failed",
+			setup:   trimmable,
+			fail:    failAt(journal.LabelTrimCopy, errorfs.OpFileSync),
+			run:     trimTo(3),
+			wantErr: true,
+			want: []string{
+				"journal.trim.copy:create", "journal.trim.copy:writeat", "journal.trim.copy:sync",
+				"journal.trim.cleanup:remove",
+			}},
+		{name: "Trim removes a temporary file whose rename failed",
+			setup:   trimmable,
+			fail:    failAt(journal.LabelTrimRename, errorfs.OpRename),
+			run:     trimTo(3),
+			wantErr: true,
+			want: []string{
+				"journal.trim.copy:create", "journal.trim.copy:writeat", "journal.trim.copy:sync",
+				"journal.trim.rename:rename", "journal.trim.cleanup:remove",
+			}},
+		{name: "Trim whose directory fsync failed has renamed already and removes nothing",
+			setup:   trimmable,
+			fail:    failAt(journal.LabelTrimDirSync, errorfs.OpFileSync),
+			run:     trimTo(3),
+			wantErr: true,
+			want: []string{
+				"journal.trim.copy:create", "journal.trim.copy:writeat", "journal.trim.copy:sync",
+				"journal.trim.rename:rename", "journal.trim.dirsync:sync",
 			}},
 		{name: "RemoveMoved removes the old journal",
 			setup: primed,

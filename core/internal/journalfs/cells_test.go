@@ -562,3 +562,79 @@ func TestMemFS_RefusesNonRegularJournals(t *testing.T) {
 		t.Fatalf("MoveFile onto a directory: err = %v, want ErrMoveRefused wrapping ErrNotRegular", err)
 	}
 }
+
+// TestKill_TrimLeavesAWholeJournal: a crash before any single durable step of
+// File.Trim, or just after it returned, leaves the journal at its name either as
+// it was or trimmed, whole in both cases: an intact chain to the same last
+// line (5, which is the store's committed head, so OpenFile accepts it), never
+// a torn or half-replaced file. A temporary file the crash left is cleared by the
+// next trim, which then finishes the cut, and the journal takes a line after it.
+// The cell fails unless every outcome it is written for was reached: the old
+// journal and the trimmed one (the rename seen to outlive a crash, with its data),
+// a temporary file left, and the settled state.
+func TestKill_TrimLeavesAWholeJournal(t *testing.T) {
+	st := newStore(t) // its head is 5 and no other test's journal shares it
+	got := reached{}
+	_, clones := crashRun(t, st, func(e *env) { committedLines(e, 5) }, func(e *env) {
+		j := e.mustOpen(journalAt)
+		res, err := j.Trim(context.Background(), 3)
+		if err != nil || res.Base != 3 || res.Dropped != 3 || res.Kept != 2 {
+			t.Fatalf("Trim = %+v, %v", res, err)
+		}
+	})
+	if killPoints(clones) < 4*(1+len(mixedSeeds)) {
+		t.Fatalf("Trim took %d crash states, want at least %d (the copy's write and fsync, the rename, the directory fsync)", killPoints(clones), 4*(1+len(mixedSeeds)))
+	}
+	for _, c := range clones {
+		t.Run(cloneName(c), func(t *testing.T) {
+			e := (&env{t: t, st: st}).after(c)
+			e.intactTo(journalAt, 5)
+			ch, err := journal.ReadFile(journalAt, keys{}, journal.WithFS(e.fsys))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch ch.Header.BaseSeq {
+			case 0:
+				if len(ch.Lines) != 5 || ch.Header.ChainBase {
+					t.Fatalf("the old journal reads as %d lines, chain_base %v", len(ch.Lines), ch.Header.ChainBase)
+				}
+				if isSettled(c) {
+					t.Fatal("after Trim returned, a crash brought the old journal back")
+				}
+				got["old journal"]++
+			case 3:
+				if len(ch.Lines) != 2 || ch.Lines[0].Seq != 4 || !ch.Header.ChainBase {
+					t.Fatalf("the trimmed journal reads as %d lines from seq %d, chain_base %v", len(ch.Lines), ch.Lines[0].Seq, ch.Header.ChainBase)
+				}
+				if !isSettled(c) {
+					got["trimmed journal"]++
+				}
+			default:
+				t.Fatalf("base_seq %d is neither 0 (old) nor 3 (trimmed)", ch.Header.BaseSeq)
+			}
+			if isSettled(c) {
+				got["settled"]++
+			} else if exists(t, e.rec.FS(), journalAt+".trimming") {
+				got["temp left"]++
+			}
+
+			j, err := e.open(journalAt)
+			if err != nil {
+				t.Fatalf("OpenFile after the crash: %v", err)
+			}
+			t.Cleanup(func() { _ = j.Close() })
+			res, err := j.Trim(context.Background(), 3)
+			if err != nil || res.Base != 3 || res.Kept != 2 {
+				t.Fatalf("the rerun of Trim = %+v, %v", res, err)
+			}
+			if exists(t, e.rec.FS(), journalAt+".trimming") {
+				t.Fatal("a temporary file survived the rerun")
+			}
+			if err := e.appendUncommitted(j); err != nil {
+				t.Fatalf("a line after the rerun: %v", err)
+			}
+			e.intactTo(journalAt, 6)
+		})
+	}
+	got.require(t, "old journal", "trimmed journal", "temp left", "settled")
+}
