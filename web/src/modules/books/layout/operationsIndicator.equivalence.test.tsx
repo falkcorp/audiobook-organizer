@@ -13,9 +13,15 @@
 // Review and Undo row actions, and the navigation. Expected values are written
 // out by hand from the component as it was before the cut.
 
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, type Mock } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { storageKey } from '@mediacore/shell';
+// The shell does not export its app-ID setter (createShell and renderInShell are
+// its only callers, and renderInShell renders with core/web's own React copy, which
+// cannot mount beside web's). Reaching the source module is the same instance the
+// package's `development` entry resolves to.
+import { setShellAppId } from '../../../../../core/web/packages/shell/src/app/appId';
 import { OperationsIndicator } from '../../../components/layout/OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../../stores/useOperationsStore';
 import { cancelOperation } from '../../../services/api';
@@ -39,7 +45,9 @@ vi.mock('../../../components/OperationActivityPanel', () => ({
 }));
 
 const NOW = Date.UTC(2026, 9, 26, 12, 0, 0);
-const COLLAPSE_ITEM = 'ops-indicator-collapse-v1';
+// The shell frame keeps the collapse state under the app-scoped key; derive it
+// (the app ID is set once in beforeAll) so a key rename cannot drift from this file.
+const collapseItem = () => storageKey('operations', 'indicatorCollapse');
 
 function op(over: Partial<ActiveOperation> & { id: string }): ActiveOperation {
   return {
@@ -76,6 +84,12 @@ function openBell() {
   fireEvent.click(bell());
 }
 const popover = () => screen.getByRole('presentation');
+
+beforeAll(() => {
+  // storageKey() throws until createShell sets the app ID, and the frame swallows
+  // that throw, so without this the collapse state is silently never saved.
+  setShellAppId('test');
+});
 
 beforeEach(() => {
   navigateSpy.mockReset();
@@ -273,7 +287,7 @@ describe('operations bell equivalence: section collapse', () => {
     openBell();
     fireEvent.click(within(popover()).getByText('Completed (1)'));
     expect(within(popover()).getByText('Metadata Fetch')).toBeInTheDocument();
-    expect(JSON.parse(localStorage.getItem(COLLAPSE_ITEM) ?? 'null')).toEqual({
+    expect(JSON.parse(localStorage.getItem(collapseItem()) ?? 'null')).toEqual({
       running: true,
       pending: true,
       completed: true,
@@ -281,7 +295,7 @@ describe('operations bell equivalence: section collapse', () => {
   });
 
   it('starts from the saved state', () => {
-    localStorage.setItem(COLLAPSE_ITEM, JSON.stringify({ running: false, completed: true }));
+    localStorage.setItem(collapseItem(), JSON.stringify({ running: false, completed: true }));
     seed(all());
     openBell();
     const pop = popover();
@@ -291,7 +305,7 @@ describe('operations bell equivalence: section collapse', () => {
   });
 
   it('falls back to the defaults for an unreadable saved value', () => {
-    localStorage.setItem(COLLAPSE_ITEM, '{not json');
+    localStorage.setItem(collapseItem(), '{not json');
     seed(all());
     openBell();
     expect(within(popover()).getByText('Library Scan')).toBeInTheDocument();
