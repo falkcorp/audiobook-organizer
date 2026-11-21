@@ -155,8 +155,8 @@ func (p *pending) secretRefs(set secretSet, ref integrations.Ref, headID string,
 // droppedValue is a value M6 leaves out of an instance that is quarantined
 // under KeyBlob#<member>.<path>.
 type droppedValue struct {
-	path string
-	raw  []byte
+	path  string
+	value any // JSON-encoded where it is quarantined, so an encode error is returned
 }
 
 // unreadableCarried is the marker reason of a credential carried unreadable:
@@ -449,7 +449,11 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is not carried: a secret is already stored under " + string(cs.to) + ", the name M2 gave the credential of the entry whose HEAD id is " + string(ref.Instance) + " (or of none), so neither is bound: re-enter it (" + string(cs.from) + " stays in the store, unreferenced)"})
 	}
 	for _, dv := range p.droppedValues {
-		if err := c.quarantine(KeyBlob+"#"+p.member+"."+dv.path, dv.raw, reasonDroppedValue); err != nil {
+		raw, err := json.Marshal(dv.value)
+		if err != nil {
+			return false, fmt.Errorf("m6: encode the dropped value %s of %s: %w", dv.path, p.member, err)
+		}
+		if err := c.quarantine(KeyBlob+"#"+p.member+"."+dv.path, raw, reasonDroppedValue); err != nil {
 			return false, err
 		}
 	}
@@ -660,8 +664,7 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	for _, k := range slices.Sorted(maps.Keys(ep.CapabilityModels)) {
 		if strings.Contains(k, "*") || !headCapabilities[k] {
 			p.dropped = append(p.dropped, "capability_models entry "+strconv.Quote(k)+" is not for a capability HEAD registers (its model is quarantined)")
-			v, _ := json.Marshal(ep.CapabilityModels[k])
-			p.droppedValues = append(p.droppedValues, droppedValue{path: "capability_models." + k, raw: v})
+			p.droppedValues = append(p.droppedValues, droppedValue{path: "capability_models." + k, value: ep.CapabilityModels[k]})
 			continue
 		}
 		cm[capabilityID(k)] = ep.CapabilityModels[k]

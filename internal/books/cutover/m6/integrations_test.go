@@ -653,6 +653,30 @@ func TestIntegrationsMigration_ExactIDEntryNotWrittenRenamedTakesTheID(t *testin
 	}
 }
 
+// TestIntegrationsMigration_TwoRenamedOnUnwrittenExactIDNamesTheRealHolder: when
+// the exact entry is not written and two renamed entries land on its ID, the
+// second one's conflict report names the first renamed entry, which holds the
+// ID, not the exact entry that holds nothing.
+func TestIntegrationsMigration_TwoRenamedOnUnwrittenExactIDNamesTheRealHolder(t *testing.T) {
+	undecodable := map[string]any{"id": "batcave-db", "name": "Batcave DB (exact)", "priority": "high"}
+	first := map[string]any{"id": "batcave_db", "name": "Batcave DB (first)", "enabled": true, "priority": 4}
+	second := map[string]any{"id": "BATCAVE-DB", "name": "Batcave DB (second)", "enabled": true, "priority": 3}
+	r, s := runFixture(t, func(r *rig) {
+		tree := blobTree()
+		tree["metadata_sources"] = append(tree["metadata_sources"].([]any), undecodable, first, second)
+		withRows(map[string][]byte{m6.KeyBlob: blobRow(r.t, tree)})(r)
+	})
+	if row := instances(t, s)["metadata/batcave-db"]; row["name"] != "Batcave DB (first)" {
+		t.Fatalf("metadata/batcave-db is %v, want the first renamed entry", row["name"])
+	}
+	if !reportHas(r, "instance", "metadata/batcave-db", "id already taken by metadata_sources.") {
+		t.Error("the conflict does not name the entry that holds the ID")
+	}
+	if reportHas(r, "instance", "metadata/batcave-db", "whose HEAD id it is") {
+		t.Error("the conflict names the exact entry, which holds nothing, as the holder")
+	}
+}
+
 // TestMetadataMigration_RenamedProviderGetsNoOperatorKey: HEAD's provider switch
 // was exact, so a source whose ID M6 lowers to google-books was an inert unknown
 // source at HEAD. It gets no operator-key pairing: the operator key is never
