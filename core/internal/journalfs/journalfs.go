@@ -21,10 +21,11 @@
 //
 // The in-memory filesystem has no append mode, no ftruncate, no file lock and
 // no symbolic links, so this package models what the journal needs of them:
-// an append is a write at the end offset, the lock is a set of locked paths
-// shared by every adapter of one boot (the Seams.Shared they are built over; flock(2)
-// conflicts between open file descriptions, so two opens in one boot exclude
-// each other whichever adapter made them), and a truncation, or an O_TRUNC
+// an append is a write at the end offset, the lock is held by an open file
+// and shared by every adapter of one boot (the Seams.Shared they are built over;
+// flock(2) conflicts between open file descriptions, so two opens in one boot
+// exclude each other whichever adapter made them, and the lock goes with the
+// file through a rename), and a truncation, or an O_TRUNC
 // open of an existing file, replaces the file with a fresh one at the same
 // name (Pebble's MemFS has no in-place truncate).
 //
@@ -81,12 +82,21 @@ func From(ctx context.Context) (journal.FS, error) {
 	return &memFS{mem: seams.FS, base: base, seams: seams, state: stateOf(seams)}, nil
 }
 
-// fsState is what the adapters over one in-memory filesystem share: the paths
-// of the open, locked files, and the paths of the files and renames they made
-// whose directory entry no SyncDir has made durable yet.
+// fsState is what the adapters over one in-memory filesystem share: the open
+// files, and the paths of the files and renames they made whose directory entry
+// no SyncDir has made durable yet.
+//
+// The open files are what the lock is kept on. flock(2) belongs to the file an
+// open file description names, not to a path, so a lock follows its file through
+// a rename (the journal's trim renames a file it holds locked over the journal
+// it also holds locked, and the new file is the one that stays locked) and is
+// gone from the path of a file a rename or a remove unlinked. Each open file
+// therefore carries its current path (memFile.path, guarded by mu), which
+// Rename and Remove keep up to date, and a path is locked when an open file at
+// it holds the lock.
 type fsState struct {
 	mu    sync.Mutex
-	held  map[string]bool
+	files map[*memFile]struct{}
 	fresh map[string]bool
 }
 
@@ -98,7 +108,7 @@ type fsState struct {
 // refuses a seam with an in-memory filesystem and no Shared, so a boot cannot
 // end up with a private state per adapter.
 func stateOf(seams *bootseam.Seams) *fsState {
-	st := &fsState{held: map[string]bool{}, fresh: map[string]bool{}}
+	st := &fsState{files: map[*memFile]struct{}{}, fresh: map[string]bool{}}
 	got, _ := seams.Shared.LoadOrStore(stateKey{}, st)
 	return got.(*fsState)
 }
@@ -125,6 +135,27 @@ func (s *fsState) isFresh(path string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.fresh[path]
+}
+
+// unlinked marks every open file at path as no longer at any path: the name it
+// had now belongs to another file, or to none.
+func (s *fsState) unlinked(path string) {
+	for f := range s.files {
+		if f.path == path {
+			f.path = ""
+		}
+	}
+}
+
+// moved makes every open file at oldpath be at newpath, after the files that were
+// at newpath were unlinked. s.mu is held.
+func (s *fsState) moved(oldpath, newpath string) {
+	s.unlinked(newpath)
+	for f := range s.files {
+		if f.path == oldpath {
+			f.path = newpath
+		}
+	}
 }
 
 // synced drops every entry of dir from the unsynced ones: a directory fsync
@@ -182,6 +213,9 @@ func (m *memFS) Rename(oldpath, newpath string) error {
 	}
 	m.state.forget(oldpath)
 	m.state.markFresh(newpath) // the renamed entry is durable at the directory's fsync
+	m.state.mu.Lock()
+	m.state.moved(oldpath, newpath)
+	m.state.mu.Unlock()
 	return nil
 }
 
@@ -197,6 +231,9 @@ func (m *memFS) Remove(path string) error {
 		return err
 	}
 	m.state.forget(path)
+	m.state.mu.Lock()
+	m.state.unlinked(path)
+	m.state.mu.Unlock()
 	return nil
 }
 
@@ -232,7 +269,7 @@ func (m *memFS) Open(path string, flag int, _ fs.FileMode) (journal.FSFile, erro
 		if err != nil {
 			return nil, err
 		}
-		return &memFile{fs: m, path: path, f: f, dir: true}, nil
+		return m.track(&memFile{fs: m, path: path, f: f, dir: true}), nil
 	case exists && flag&os.O_CREATE != 0 && flag&os.O_EXCL != 0:
 		return nil, &fs.PathError{Op: "open", Path: path, Err: fs.ErrExist}
 	case !exists && flag&os.O_CREATE == 0:
@@ -260,13 +297,21 @@ func (m *memFS) Open(path string, flag int, _ fs.FileMode) (journal.FSFile, erro
 	if fi, err := f.Stat(); err == nil {
 		mf.end = fi.Size()
 	}
-	return mf, nil
+	return m.track(mf), nil
+}
+
+// track registers f as an open file of the boot and returns it.
+func (m *memFS) track(f *memFile) *memFile {
+	m.state.mu.Lock()
+	m.state.files[f] = struct{}{}
+	m.state.mu.Unlock()
+	return f
 }
 
 // memFile is a journal.FSFile over a vfs.File.
 type memFile struct {
 	fs     *memFS
-	path   string
+	path   string // where the file is now ("" once unlinked); fsState.mu guards it
 	f      vfs.File
 	write  bool
 	append bool
@@ -279,11 +324,18 @@ type memFile struct {
 	pending bool
 }
 
-func (f *memFile) Name() string { return f.path }
+// where is the file's current path ("" once a rename or a remove unlinked it).
+func (f *memFile) where() string {
+	f.fs.state.mu.Lock()
+	defer f.fs.state.mu.Unlock()
+	return f.path
+}
+
+func (f *memFile) Name() string { return f.where() }
 
 func (f *memFile) Read(p []byte) (int, error) {
 	if f.dir {
-		return 0, &fs.PathError{Op: "read", Path: f.path, Err: errors.New("is a directory")}
+		return 0, &fs.PathError{Op: "read", Path: f.where(), Err: errors.New("is a directory")}
 	}
 	return f.f.Read(p)
 }
@@ -293,7 +345,7 @@ func (f *memFile) Stat() (fs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return memInfo{name: filepath.Base(f.path), fi: fi}, nil
+	return memInfo{name: filepath.Base(f.where()), fi: fi}, nil
 }
 
 // Write writes at the end of an O_APPEND file and at the file's position
@@ -301,7 +353,7 @@ func (f *memFile) Stat() (fs.FileInfo, error) {
 // handed when its invariants are on (-race).
 func (f *memFile) Write(p []byte) (int, error) {
 	if !f.write {
-		return 0, &fs.PathError{Op: "write", Path: f.path, Err: errors.New("bad file descriptor")}
+		return 0, &fs.PathError{Op: "write", Path: f.where(), Err: errors.New("bad file descriptor")}
 	}
 	buf := append([]byte(nil), p...)
 	if !f.append {
@@ -326,10 +378,11 @@ func (f *memFile) Sync() error {
 		return nil
 	}
 	f.pending = false
-	if f.fs.state.isFresh(f.path) {
-		return nil // the name is unsynced: the journal's own directory fsync makes it durable
+	path := f.where()
+	if path == "" || f.fs.state.isFresh(path) {
+		return nil // unlinked, or the name is unsynced: the journal's own directory fsync makes it durable
 	}
-	dir := filepath.Dir(f.path)
+	dir := filepath.Dir(path)
 	d, err := f.fs.base.OpenDir(dir)
 	if err != nil {
 		return err
@@ -350,7 +403,8 @@ func (f *memFile) Truncate(size int64) error {
 	if _, err := f.f.ReadAt(data, 0); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
-	tmp := f.path + ".truncating"
+	path := f.where()
+	tmp := path + ".truncating"
 	nf, err := f.fs.mem.Create(tmp, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return err
@@ -361,10 +415,10 @@ func (f *memFile) Truncate(size int64) error {
 	if err := errors.Join(nf.Sync(), nf.Close()); err != nil {
 		return errors.Join(err, f.fs.mem.Remove(tmp))
 	}
-	if err := f.fs.mem.Rename(tmp, f.path); err != nil {
+	if err := f.fs.mem.Rename(tmp, path); err != nil {
 		return errors.Join(err, f.fs.mem.Remove(tmp))
 	}
-	nf2, err := f.fs.mem.OpenReadWrite(f.path, vfs.WriteCategoryUnspecified)
+	nf2, err := f.fs.mem.OpenReadWrite(path, vfs.WriteCategoryUnspecified)
 	if err != nil {
 		return err
 	}
@@ -373,17 +427,25 @@ func (f *memFile) Truncate(size int64) error {
 	return old.Close()
 }
 
-// Lock takes the file's exclusive lock: a second Lock of a path another open
-// file holds is journal.ErrLocked, as flock(2) refuses a second open file
-// description.
+// Lock takes the file's exclusive lock: a second Lock of a file another open
+// file holds locked is journal.ErrLocked, as flock(2) refuses a second open file
+// description. The file is its path at the moment (fsState), so the lock
+// follows a rename and a file a rename unlinked no longer excludes the path.
 func (f *memFile) Lock() error {
 	st := f.fs.state
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.held[f.path] && !f.locked {
-		return fmt.Errorf("%w (%s)", journal.ErrLocked, f.path)
+	if f.locked {
+		return nil
 	}
-	st.held[f.path], f.locked = true, true
+	if f.path != "" {
+		for o := range st.files {
+			if o != f && o.locked && o.path == f.path {
+				return fmt.Errorf("%w (%s)", journal.ErrLocked, f.path)
+			}
+		}
+	}
+	f.locked = true
 	return nil
 }
 
@@ -392,12 +454,10 @@ func (f *memFile) Close() error {
 		return fs.ErrClosed
 	}
 	f.closed = true
-	if f.locked {
-		st := f.fs.state
-		st.mu.Lock()
-		delete(st.held, f.path)
-		st.mu.Unlock()
-	}
+	st := f.fs.state
+	st.mu.Lock()
+	delete(st.files, f)
+	st.mu.Unlock()
 	return f.f.Close()
 }
 

@@ -196,6 +196,34 @@ func (c *Component) Append(ctx context.Context, b *storage.Batch, r Revocation) 
 	return f.Append(ctx, b, r)
 }
 
+// ErrTrimRefused reports a trim the component declined: the journal is held or
+// frozen for a restore, whose boundaries (an undo point, the lines its hooks
+// still owe) the journal cannot see.
+var ErrTrimRefused = errors.New("journal: the journal is not trimmed while a restore is in flight")
+
+// Trim drops the bound journal's lines at or below seq (File.Trim). It is what
+// backup.Options.PruneJournal is bound to: retention calls it with the smallest
+// boundary any retained archive records. It refuses (ErrTrimRefused) while the
+// component is held (Hold) or frozen (SetFrozen), the two states of a restore
+// that has not finished, and before Bind (ErrNotBound).
+func (c *Component) Trim(ctx context.Context, seq uint64) (TrimResult, error) {
+	f := c.current()
+	if f == nil {
+		return TrimResult{Requested: seq}, ErrNotBound
+	}
+	// A broken file answers with its own error, as Append does (holding).
+	if held := c.holding(f); held != nil {
+		return TrimResult{Requested: seq}, fmt.Errorf("%w: %w", ErrTrimRefused, held)
+	}
+	c.mu.Lock()
+	frozen := c.frozen
+	c.mu.Unlock()
+	if frozen && f.Status().Broken == nil {
+		return TrimResult{Requested: seq}, fmt.Errorf("%w: the location file is frozen", ErrTrimRefused)
+	}
+	return f.Trim(ctx, seq)
+}
+
 // Gap stages journal_gap/<since> into b. It needs no file, so it works before
 // Bind and on a broken journal.
 func (c *Component) Gap(b *storage.Batch, since time.Time) error {
