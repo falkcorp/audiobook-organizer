@@ -254,7 +254,9 @@ func (s *Service) keptSession(ctx context.Context, u *User, except string, now t
 // core.auth.extension_max_age after its AuthTime: ErrExpired at or after
 // it; one with no notAfter, which only PrincipalFor can build, is ErrExpired
 // at once); a principal of any other method stands while the user's epoch is the
-// one it was built at. It returns nil,
+// one it was built at; and a compat surface's own principal or an identity
+// extension's does not stand while its user must reset a password
+// (ErrResetRequired, surfaceStanding; F4-08 A14). It returns nil,
 // the refusal (ErrRevoked, ErrExpired, ErrStaleEpoch, ErrInactiveUser,
 // ErrResetRequired, ErrInvalidCredentials), or ErrStoreUnavailable.
 //
@@ -303,8 +305,16 @@ func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, err
 	if err := standing(u); err != nil {
 		return nil, nil, err
 	}
-	now := s.now()
 	keyID, isKey := p.keyRef()
+	if !isKey && s.surfaceMethod(p.Method) {
+		// A credential the app verified itself (a compat surface's own, an
+		// identity extension's) ends while its user must reset a password, as
+		// stage 12 and Compat.PrincipalFor refuse to build it (F4-08 A14).
+		if err := surfaceStanding(u); err != nil {
+			return nil, nil, err
+		}
+	}
+	now := s.now()
 	switch {
 	case isKey:
 		k, err := s.d.Store.APIKeyByID(ctx, keyID)
@@ -344,9 +354,9 @@ func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, err
 // still stand, exactly as Revalidate decides (its user active and
 // unrestricted; its session alive and at the user's epoch; its key active,
 // unexpired and its user's; an identity extension's principal before its
-// notAfter; any other method at the epoch it was built at), and a compat
-// surface's own principal is refused while its user must reset a password,
-// as Compat.PrincipalFor refuses to build it. The answer is built through
+// notAfter; any other method at the epoch it was built at; a compat
+// surface's own principal and an identity extension's not while its user must
+// reset a password, surfaceStanding). The answer is built through
 // PrincipalFor with p's own Method, over the scopes p was built with that
 // the stored key still holds for a key principal (core's or a compat
 // surface's), and otherwise over the scopes p was built with: a narrowed
@@ -381,13 +391,6 @@ func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error)
 			return nil, fmt.Errorf("%w: key %s has no scope", ErrInvalidCredentials, k.ID)
 		}
 		if scopes, err = keyScopes(p.scopes, k); err != nil {
-			return nil, err
-		}
-	case s.compatMethod(p.Method):
-		// A compat surface's own principal (an ABS JWT or refresh session)
-		// is refused while a reset is required, as Compat.PrincipalFor
-		// refuses to build it; standing alone does not check that.
-		if err := compatSurfaceStanding(u); err != nil {
 			return nil, err
 		}
 	}
@@ -435,11 +438,16 @@ func revalidateErr(what string, err error) error {
 	return fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 }
 
-// compatSurfaceStanding is the extra user rule of a compat surface's own
-// principal (Compat.PrincipalFor; not its key principal, which follows
-// stage 12's key rules): a user whose password must be reset is refused,
-// because the surface verified a credential that predates the reset.
-func compatSurfaceStanding(u *User) error {
+// surfaceStanding is the extra user rule of a credential the app verified
+// itself rather than core: a compat surface's own principal
+// (Compat.PrincipalFor; not its key principal, which follows stage 12's key
+// rules) and an identity extension's (stage 12's extension stage; owner ruling
+// 2026-11-20, F4-08 A14). A user whose password must be reset is refused:
+// core cannot tell whether the outside credential predates the reset, and the
+// reset is the admin's statement that the account's credentials are not to be
+// trusted until it is done. stands applies it on every Revalidate and Refresh,
+// so a stream of such a principal ends at its next beat.
+func surfaceStanding(u *User) error {
 	if u.PasswordResetRequired {
 		return fmt.Errorf("%w: %s", ErrResetRequired, u.ID)
 	}

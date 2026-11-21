@@ -196,6 +196,13 @@ func TestRefresh_CompatPrincipals(t *testing.T) {
 	f.edit(dick, func(u *auth.User) { u.PasswordResetRequired = true })
 	_, err = f.svc.Refresh(ctx, whole)
 	wantErr(t, "a compat surface principal whose user must reset", err, auth.ErrResetRequired)
+	// Revalidate agrees with Refresh (F4-08 A14: the rule lives in stands), so
+	// the surface principal's stream ends at its next beat, and the key
+	// principal's does not.
+	wantErr(t, "Revalidate of a compat surface principal whose user must reset", f.svc.Revalidate(ctx, whole), auth.ErrResetRequired)
+	if err := f.svc.Revalidate(ctx, kp2); err != nil {
+		t.Errorf("Revalidate of a compat key principal whose user must reset: %v", err)
+	}
 	_, err = c.PrincipalFor(ctx, dick, nil, dick.CredentialEpoch, cl)
 	wantErr(t, "Compat.PrincipalFor for a user who must reset", err, auth.ErrResetRequired)
 	refreshed(t, f.svc, kp2)
@@ -409,24 +416,37 @@ func TestRefresh_StoreFailureIsTransient(t *testing.T) {
 	}
 }
 
-// TestRefresh_ExtensionPrincipalIsNotACompatSurface: the password-reset rule
-// is a compat surface's own (compatSurfaceStanding). An identity extension's
-// principal is not one, and stage 12 binds it for a user who must reset (only
-// SignInRestricted refuses), so Refresh follows stage 12 and answers it; a
-// ext: method that read as a compat one would end its stream at the next beat.
-func TestRefresh_ExtensionPrincipalIsNotACompatSurface(t *testing.T) {
+// TestSurfaceStanding_ExtensionPrincipalEndsOnPasswordReset (owner ruling
+// 2026-11-20, F4-08 A14): an identity extension's credential is one core did
+// not verify, like a compat surface's, so a user who must reset a password is
+// refused it. Stage 12 binds no ext: principal for such a user, and one bound
+// before the reset is refused by Revalidate and Refresh, so its stream ends at
+// the next beat. Clearing the flag admits the user again, and a session of the
+// same user is not refused by the rule (a session is core's own credential).
+func TestSurfaceStanding_ExtensionPrincipalEndsOnPasswordReset(t *testing.T) {
 	f := newFx(t)
 	ctx := context.Background()
 	dick := f.user("dick-grayson", rbac.RoleViewer)
 	svc, p := extPrincipal(t, f, &auth.Assertion{User: dick.ID, CredentialID: "cf-perch"}, false)
+	sess := f.signedIn(dick)
 
-	f.edit(dick, func(u *auth.User) { u.PasswordResetRequired = true })
+	f.edit(f.reload(dick.ID), func(u *auth.User) { u.PasswordResetRequired = true })
 	_, got := serve(t, svc, request("", ""))
-	if got.p == nil || got.p.Method != "ext:oracle" {
-		t.Fatalf("stage 12 for a user who must reset bound %+v (refusal %+v), want an ext:oracle principal", got.p, got.fail)
+	if got.p != nil || !got.failed || got.fail.Code != auth.CodeResetRequired {
+		t.Fatalf("stage 12 for a user who must reset: bound %+v, refusal %+v; want %s", got.p, got.fail, auth.CodeResetRequired)
 	}
-	refreshed(t, svc, p)
+	wantErr(t, "Revalidate of an extension principal whose user must reset", svc.Revalidate(ctx, p), auth.ErrResetRequired)
+	_, err := svc.Refresh(ctx, p)
+	wantErr(t, "Refresh of an extension principal whose user must reset", err, auth.ErrResetRequired)
+	if err := svc.Revalidate(ctx, sess); err != nil {
+		t.Errorf("the rule refused a session principal: %v", err)
+	}
+
+	f.edit(f.reload(dick.ID), func(u *auth.User) { u.PasswordResetRequired = false })
+	if _, got = serve(t, svc, request("", "")); got.p == nil || got.p.Method != "ext:oracle" {
+		t.Fatalf("stage 12 after the reset cleared: bound %+v (refusal %+v)", got.p, got.fail)
+	}
 	if err := svc.Revalidate(ctx, p); err != nil {
-		t.Fatalf("Revalidate of an extension principal whose user must reset: %v", err)
+		t.Errorf("Revalidate after the reset cleared: %v", err)
 	}
 }

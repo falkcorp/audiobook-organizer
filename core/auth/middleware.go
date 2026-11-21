@@ -486,6 +486,11 @@ func (s *Service) extensionStage(e Extension) func(*http.Request, ClientInfo) (*
 		if err != nil {
 			return nil, &Failure{Code: failureCode(err)}, nil
 		}
+		// An outside credential for a user who must reset a password is not
+		// bound (surfaceStanding; F4-08 A14), as a compat surface's is not.
+		if err := surfaceStanding(u); err != nil {
+			return nil, &Failure{Code: failureCode(err)}, nil
+		}
 		p.CredentialID, p.AuthTime = a.CredentialID, a.AuthTime
 		p.notAfter = s.extensionNotAfter(a)
 		if !s.now().Before(p.notAfter) {

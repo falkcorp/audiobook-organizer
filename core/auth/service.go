@@ -442,6 +442,12 @@ func (s *Service) knownMethod(m Method) bool {
 	return ok
 }
 
+// surfaceMethod reports whether m's credential is one the app verified
+// itself: an identity extension's "ext:" method or a registered compat method.
+// Such a principal is refused while its user must reset a password
+// (surfaceStanding).
+func (s *Service) surfaceMethod(m Method) bool { return m.isExtension() || s.compatMethod(m) }
+
 // compatMethod reports whether m is a registered app compatibility method
 // (RegisterCompat): registered, and not an identity extension's "ext:" one.
 func (s *Service) compatMethod(m Method) bool {
