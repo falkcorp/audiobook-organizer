@@ -21,19 +21,14 @@ vi.mock('../components/toast/ToastProvider', () => ({
   ToastProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
-vi.mock('../services/api', () => {
-  class ApiError extends Error {
-    status: number;
-    data?: unknown;
-    constructor(message: string, status: number, data?: unknown) {
-      super(message);
-      this.name = 'ApiError';
-      this.status = status;
-      this.data = data;
-    }
-  }
+// A partial mock: every export of the real module stays, and only the calls this
+// test drives are replaced. The page renders components that read other exports
+// (ServerFileBrowser reads includeFilesystemPath), and a hand-written full
+// replacement breaks each time one of them gains a new export.
+vi.mock('../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/api')>();
   return {
-    ApiError,
+    ...actual,
     getOperationLogsTail: vi.fn().mockResolvedValue([]),
     getOperationTimeline: vi.fn().mockResolvedValue([]),
     getBooks: vi.fn().mockResolvedValue({
