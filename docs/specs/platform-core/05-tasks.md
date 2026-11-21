@@ -751,7 +751,9 @@ type ScheduleConfig struct {
 func Every(d time.Duration) *Schedule
 
 func (s *Schedule) OnStart() *Schedule
-func (s *Schedule) When(gate func() bool) *Schedule // a non-timing gate re-read each poll (e.g. updater mode)
+func (s *Schedule) When(gate func() bool) *Schedule // a non-timing gate re-read each poll (e.g. updater mode); closes every trigger
+func (s *Schedule) OnStartWhen(gate func() bool) *Schedule // the start trigger fires on gate alone, whatever enabled and When say (F5-14)
+func (s *Schedule) WindowWhen(gate func() bool) *Schedule  // closes window membership only; the interval keeps running (F5-14)
 func (s *Schedule) Params(p any) *Schedule
 func (s *Schedule) Live() *Schedule
 func (s *Schedule) Preview() *Schedule
@@ -823,8 +825,13 @@ of them and that definition becomes their `ScheduleFromConfig` below; `deluge.pr
 the one def no `TaskDefinition` fires, stays a manual task with no schedule (its cache refreshes on read).
 The 38 `TaskDefinition`s become
 `ScheduleFromConfig` on their target def, with today's interval and enable flag as the key's
-default; `RunOnStart` → `.OnStart()`; `IsEnabled` → the key's `enabled` (or `.When` for gates that
-are not schedule settings); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
+default; `RunOnStart` → `.OnStart()`, or `.OnStartWhen(gate)` when it reads a setting other than the
+schedule's own enable flag (HEAD's `library_scan` on `scan_on_startup`: an open gate fires at boot on a
+disabled key and writes no clock, a closed one writes nothing); `IsEnabled` → the key's `enabled` (or `.When` for gates that
+are not schedule settings); a `RunInMaintenanceWindow` toggle → `.When` on a window-only definition and
+`.WindowWhen` on one that also has an interval, which leaves the interval running (the window's opening
+lists, and its run starts, only members whose `When` and `WindowWhen` gates are open; the executor's
+window-start permission check reads the members before the gates); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
 → `Window: "nightly", Order: idx`, and a definition that also has an interval keeps it beside the slot
 (`Every: d, Window: "nightly", Order: idx`; owner ruling 2026-11-20, "Allow both in core"). Under HEAD's
 shipped defaults six definitions tick on an interval and sit in `maintenanceOrder` (`tombstone_cleanup`,

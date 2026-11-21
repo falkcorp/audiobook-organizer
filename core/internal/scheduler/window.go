@@ -179,7 +179,10 @@ func (s *Scheduler) members(name string) []member {
 
 // Members are the kinds window name's run would start now, in order: the
 // window's reachability, which the schedule-parity harness compares with
-// HEAD's maintenance order.
+// HEAD's maintenance order. It is read before the When and WindowWhen
+// gates, so a member whose gate is closed is listed: the executor's
+// window-start permission check reads it, and a gate may open before the
+// run reaches that member. The WindowOpened observation is post-gate.
 func (s *Scheduler) Members(name string) []tasks.Kind {
 	ms := s.members(name)
 	out := make([]tasks.Kind, len(ms))
@@ -202,7 +205,7 @@ type windowHost interface {
 // RunWindow is the body of a window kind's run (WindowDefinition): it starts
 // the window's members one after another in order and waits for each, as
 // HEAD's maintenance.window op did. A member is skipped when its When gate
-// is closed or a run of it is already active (HEAD: "already running,
+// or its WindowWhen gate is closed or a run of it is already active (HEAD: "already running,
 // skipping"); a scheduled run stops starting members once the window has
 // closed (a manual start, HEAD's ignore_window, runs them all). Each member is
 // started through the executor's StartIn, so it runs as its own module's
@@ -235,7 +238,7 @@ func (s *Scheduler) runWindow(h windowHost) error {
 				break
 			}
 		}
-		if !m.e.sched.Open() {
+		if !m.e.sched.WindowOpen() {
 			h.Log().Info("window member gated off; skipped", "kind", string(m.e.kind))
 			continue
 		}
@@ -312,9 +315,16 @@ type windowObserver struct {
 
 func (w *windowObserver) Fired(f Fire) {
 	if f.Err == nil && !f.Folded {
-		ks := make([]tasks.Kind, len(w.members))
-		for i, m := range w.members {
-			ks[i] = m.e.kind
+		// The members the run will start: those whose When and WindowWhen
+		// gates are open now (runWindow re-reads each when it reaches it).
+		// Members(), which the executor's window-start permission check
+		// reads, stays pre-gate: a gate may open before the run reaches
+		// the member, so the check must cover it.
+		ks := make([]tasks.Kind, 0, len(w.members))
+		for _, m := range w.members {
+			if m.e.sched.WindowOpen() {
+				ks = append(ks, m.e.kind)
+			}
 		}
 		w.Observer.WindowOpened(w.name, ks)
 	}

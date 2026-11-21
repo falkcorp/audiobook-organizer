@@ -78,7 +78,8 @@ type Observer interface {
 	// folded into (Folded); zero when the When gate closed or the start
 	// failed (Err).
 	Fired(f Fire)
-	// WindowOpened: a window fired, with the members its run will start.
+	// WindowOpened: a window fired, with the members its run will start
+	// (their When and WindowWhen gates read at the opening).
 	WindowOpened(name string, members []tasks.Kind)
 }
 
@@ -307,6 +308,14 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 // temp_file_cleanup (a window member with no interval) and purge_deleted
 // (an interval and a window slot). Run calls it once; tests and the harness
 // call it directly.
+//
+// A kind with OnStartWhen fires on that gate alone (HEAD's library_scan ran
+// at boot when scan_on_startup was set, its interval enabled or not): a
+// closed gate is no start and touches no clock, so an imported clock keeps
+// its next due instant; an open gate on an enabled key fires and stamps as
+// above; an open gate on a disabled key fires and writes no clock, so the
+// kind is seeded by the first poll that finds it enabled (first sight of a
+// disabled kind writes nothing).
 func (s *Scheduler) Boot(ctx context.Context) {
 	now := s.opts.Now()
 	s.pollMu.Lock()
@@ -316,15 +325,23 @@ func (s *Scheduler) Boot(ctx context.Context) {
 		if !e.sched.RunsOnStart() || s.held(e.kind) {
 			continue
 		}
+		gated := e.sched.HasStartGate()
+		if gated && !e.sched.StartOpen() {
+			continue
+		}
 		eff, err := s.effective(e)
 		if err != nil {
 			s.scheduleError(e.kind, err)
 			continue
 		}
-		if !eff.enabled {
+		if !eff.enabled && !gated {
 			continue
 		}
+		enabled := eff.enabled
 		s.commitFire(ctx, e.kind, tasks.TriggerOnStart, func(prev tasks.Clock, had bool) (decision, error) {
+			if !enabled {
+				return decision{fire: true, at: now}, nil
+			}
 			next := prev
 			if !had {
 				next = tasks.Clock{}
@@ -438,7 +455,11 @@ var errNoChange = errors.New("scheduler: no change")
 // fire is one storage batch"): inside the executor's WriteRuns it reads the
 // kind's clock, lets decide choose from that read, stages
 // ClockStore.Advance (checked at commit against the read) and, for a fire
-// whose When gate is open, the run's StartIn, and commits both or neither.
+// whose gate is open (fireGateOpen: the When gate, or for an on_start fire
+// of an OnStartWhen schedule the start gate Boot already read), the run's
+// StartIn, and commits both or neither. A decision that fires without a
+// write (Boot's start-gated run on a disabled key) stages the run alone and
+// leaves the clock absent or as it was.
 // A retry re-reads the clock, so a poll that lost the race to another
 // writer sees the advanced clock and does not fire; ErrClockConflict at
 // staging is the same "another poll won", and is not an error.
@@ -477,14 +498,14 @@ func (s *Scheduler) commitFire(ctx context.Context, kind tasks.Kind, tr tasks.Tr
 				return err
 			}
 			res.prev, res.had, res.d = prev, had, d
-			if !d.write {
+			if !d.write && !d.fire {
 				return errNoChange
 			}
 			fire := d.fire && withStart
 			if d.fire {
-				if !s.gateOpen(kind) {
+				if !s.fireGateOpen(kind, tr) {
 					res.gated, fire = true, false
-				} else if withStart {
+				} else if withStart && d.write {
 					d.next.LastFire = d.dueAt
 					if tr == tasks.TriggerOnStart {
 						d.next.LastFire = d.at
@@ -493,7 +514,12 @@ func (s *Scheduler) commitFire(ctx context.Context, kind tasks.Kind, tr tasks.Tr
 					res.d = d
 				}
 			}
-			if err := s.opts.Stores.Clocks.Advance(ctx, b, kind, prev, had, d.next); err != nil {
+			if !d.write {
+				// A start-gated run on a disabled key (Boot): the run alone.
+				if !fire {
+					return errNoChange
+				}
+			} else if err := s.opts.Stores.Clocks.Advance(ctx, b, kind, prev, had, d.next); err != nil {
 				return err
 			}
 			if !fire {
@@ -517,7 +543,7 @@ func (s *Scheduler) commitFire(ctx context.Context, kind tasks.Kind, tr tasks.Tr
 	res, err := run(true)
 	if startErr, ok := errors.AsType[*startError](err); ok {
 		res, err = run(false)
-		if err == nil {
+		if err == nil || res.d.fire && !res.d.write && errors.Is(err, errNoChange) {
 			s.commitObserved(obs, kind, tr, res.prev, res.had, res.d, tasks.RunRef{}, false, false, startErr.err)
 			s.scheduleError(kind, fmt.Errorf("scheduler: %s: start: %w", kind, startErr.err))
 			return
@@ -536,7 +562,7 @@ func (s *Scheduler) commitFire(ctx context.Context, kind tasks.Kind, tr tasks.Tr
 // commitObserved records a committed fire: the metrics and the Observer.
 func (s *Scheduler) commitObserved(obs Observer, kind tasks.Kind, tr tasks.Trigger, prev tasks.Clock, had bool, d decision,
 	ref tasks.RunRef, folded, gated bool, startErr error) {
-	if obs != nil {
+	if obs != nil && d.write {
 		obs.Advanced(kind, prev, had, d.next)
 	}
 	if d.missed > 0 && s.opts.Metrics != nil {
@@ -557,10 +583,20 @@ func (s *Scheduler) commitObserved(obs Observer, kind tasks.Kind, tr tasks.Trigg
 	}
 }
 
-// gateOpen reads kind's When gate (true without one, and for a window kind).
-func (s *Scheduler) gateOpen(kind tasks.Kind) bool {
+// fireGateOpen reads the gate of a fire of kind with trigger tr: the When
+// gate (true without one, and for a window kind), except for an on_start
+// fire of an OnStartWhen schedule, whose own gate Boot read once before it
+// asked for the fire; it is not read again, so a gate that flips between
+// the two reads cannot stamp the clock and then report the fire gated.
+func (s *Scheduler) fireGateOpen(kind tasks.Kind, tr tasks.Trigger) bool {
 	e, ok := s.byKind[kind]
-	return !ok || e.sched.Open()
+	if !ok {
+		return true
+	}
+	if tr == tasks.TriggerOnStart && e.sched.HasStartGate() {
+		return true
+	}
+	return e.sched.Open()
 }
 
 // clockReadError: the poll's clock read failed.
