@@ -49,8 +49,11 @@ type Options struct {
 	// them (03 §3.6). Unprefixed top-level segments come from
 	// Manifest.LegacyPrefixes instead (FE2-11).
 	ReservedAPINamespaces []string
-	DisplayName           string // e.g. "Audiobook Organizer"
-	Version               string // the app's release version (the resource's service.version)
+	// DisplayName is the app's human name, e.g. "Audiobook Organizer". The
+	// kernel reports it as the app's name in GET /api/core/v1/modules; read
+	// only by an identity boot (IdentityBoot).
+	DisplayName string
+	Version     string // the app's release version (the resource's service.version)
 
 	// EnvPrefix is the prefix of every env name (05-config §1.3,
 	// [A-Z][A-Z0-9]{1,15}); default strings.ToUpper(AppID) (ABO: "ABO").
@@ -144,6 +147,15 @@ type Options struct {
 	// flip. Temporary like the F3 config gate it follows: B10 (the ABO switch)
 	// makes identity unconditional and deletes the field.
 	IdentityBoot bool
+
+	// ResolveAtom is the app's atom table for stage 13: it resolves the
+	// rbac.LegacyAtom and rbac.LegacyCheck requirements of the routes it
+	// mounts through a legacy mount (ABO: books.AtomTable().Route, and its
+	// .ReadSide for the read-side entries). It is kernel.Config.ResolveAtom,
+	// read only by an identity boot (IdentityBoot); nil, the default, makes
+	// stage 13 refuse every such requirement, so an app that mounts no legacy
+	// atom route sets nothing.
+	ResolveAtom httpapi.AtomResolver
 
 	// ArchivePrefix is the prefix of the app's backup archive names and of the
 	// revocation journal's file name and header (05-backup §5B.3.6 row "Where":
