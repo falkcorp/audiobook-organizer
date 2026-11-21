@@ -369,6 +369,7 @@ core/internal/logjournal.msOf
 core/internal/logjournal.parseCursor
 core/internal/logjournal.parseULID
 core/internal/logjournal.pruneJournal
+core/internal/logjournal.pruneSchedule
 core/internal/logjournal.retentionCutoff
 core/internal/logjournal.row.record
 core/internal/logjournal.rowCodec
