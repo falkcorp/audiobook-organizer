@@ -142,6 +142,8 @@ func unreachedLabels() map[string]string {
 	// fixture reaches them before F4-08 binds the journal (and then only the
 	// scenarios F4-08 adds); each entry goes when a scenario reaches its label.
 	out := crashmatrix.JournalUnreachedLabels()
+	// The identity boot's writers (F4-08 B3): hello declares the flip at B9.
+	maps.Copy(out, crashmatrix.IdentityUnreachedLabels())
 	maps.Copy(out, map[string]string{
 		// storage/levels.go: the rollback rewrites the sidecars from the
 		// committed stamps only after a level step's sidecar write fails

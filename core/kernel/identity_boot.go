@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/authstore"
 	"github.com/falkcorp/mediacore/internal/rbacstore"
@@ -53,6 +54,16 @@ func identityOwners() []storage.OwnerSpec {
 type identityBoot struct {
 	users *authstore.Store
 	roles *rbacstore.Store
+
+	// The rest is set by P4d (runIdentityP4d): the revocation journal component
+	// and the filesystem it and the re-apply's file writes go through, the live
+	// core.auth reader, the labelled state-file writer, and what steps 2 and 3
+	// did (the hook report feeds core.backup's probe).
+	journal    *journal.Component
+	jfs        journal.FS
+	settings   func() auth.Settings
+	stateFiles auth.StateFiles
+	p4d        p4dStepsResult
 }
 
 // identityModules are the RBAC declarations fed to rbac's Declarer at P5 and
@@ -136,4 +147,18 @@ func (k *Kernel) buildIdentityStores(ctx context.Context) error {
 	k.ident = &identityBoot{users: users, roles: roles}
 	k.importers().bindIdentity(users, roles, k.audit)
 	return nil
+}
+
+// p4d is the boot's P4d: the config store reads its DB layer once (step 1,
+// attachCoreConfig), then, for an app that declared the identity flip, steps 2
+// to 4 (runIdentityP4d), which read the effective core.backup.dir that step
+// attached.
+func (k *Kernel) p4d(ctx context.Context) error {
+	if err := k.attachCoreConfig(ctx); err != nil {
+		return err
+	}
+	if !k.identityBootDeclared() {
+		return nil
+	}
+	return k.runIdentityP4d(ctx)
 }

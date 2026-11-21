@@ -376,6 +376,7 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		UIOptions:             opts.UIOptions,
 		FromRelease:           opts.FromRelease,
 		IdentityBoot:          opts.IdentityBoot,
+		ArchivePrefix:         opts.ArchivePrefix,
 	}
 	// The config boot's operator layers and the state directory's compiled
 	// default; the store path and the state directory are P0's.
