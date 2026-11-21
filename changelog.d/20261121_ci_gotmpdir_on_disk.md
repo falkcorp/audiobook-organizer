@@ -1,0 +1,3 @@
+### Fixed
+
+- The native-agent CI steps no longer fail with `final link failed: No space left on device` (Woodpecker pipeline 4897, `test-native-taglib` on the u0-local agent, at the link of `internal/tagger.test`). The Go linker and `go build` write to TMPDIR/GOTMPDIR, which on that host is a RAM-backed tmpfs. `scripts/ci/cache_env.sh` now exports both to a per-pipeline, per-workflow directory under the CI cache root (`$CI_CACHE_ROOT/tmp/<pipeline>-<workflow>`), sweeps directories there older than six hours, and the `test-native-taglib` and `race-nightly` cleanup steps remove their directory. Behaviour is unchanged when no cache root exists.
