@@ -1022,8 +1022,23 @@ type RunPayload struct {
 }
 
 func NewRunPayload(v RunView) RunPayload
-// RedactRunPayload is RedactRunView's rule on the wire form (it calls it).
+// RedactRunPayload is RedactRunView's rule on the wire form. It turns p back into
+// the RunView NewRunPayload made it from (a mode word it never writes reads as
+// unset), passes the whole view through RedactRunView and re-encodes it with
+// NewRunPayload, so every field the rule blanks is blanked on the stream exactly
+// as GET /runs[/{id}] blanks it.
 func RedactRunPayload(who rbac.Checker, p RunPayload) RunPayload
+
+// ActorPayload is the wire form of Actor, RunPayload's actor: lower-case keys,
+// each omitted when empty. The REST DTO's actor is an alias of it.
+type ActorPayload struct {
+	UserID     string `json:"user_id,omitempty"`
+	AuthMethod string `json:"auth_method,omitempty"`
+	System     string `json:"system,omitempty"`
+}
+
+// NewActorPayload is the wire form of a.
+func NewActorPayload(a Actor) ActorPayload
 
 // core.task.log-appended.v1 carries LogAppended, one log line spelled as
 // GET /runs/{id}/log spells it: {at, level, message, fields (omitted when empty)};

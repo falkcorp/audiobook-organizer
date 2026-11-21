@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestTaskTopics_VisibleFailsClosed(t *testing.T) {
 }
 
 // TestTaskTopics_SchemaCarriesThePayload: each Schema is the payload type's
-// (a RunView for run-changed and finished, a LogAppended for log-appended).
+// (a RunPayload for run-changed and finished, a LogAppended for log-appended).
 func TestTaskTopics_SchemaCarriesThePayload(t *testing.T) {
 	for name, field := range map[string]string{
 		"core.task.run-changed.v1":  "current",
@@ -361,14 +362,20 @@ func TestTaskTopics_SpecRedactIsARedactor(t *testing.T) {
 	}
 }
 
-// TestRunPayload_WireKeys pins the run payload's keys to what the SPA's
-// coreEvents client reads (id, kind, state, done, total, current; web/src/
-// services/coreEvents/types.ts) and REST serves, with the mode as a word.
+// TestRunPayload_WireKeys pins the run payload's keys, as literals, to what the
+// SPA's coreEvents client reads (id, kind, state, done, total, current; web/src/
+// services/coreEvents/types.ts) and REST serves, with the mode as a word: the
+// exact key set of a payload with every field set, the actor's own keys, and
+// the times' spelling. A renamed tag fails here rather than renaming the wire
+// on both REST and the stream at once.
 func TestRunPayload_WireKeys(t *testing.T) {
+	created := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	started, finished := created.Add(time.Minute), created.Add(time.Hour)
 	b, err := json.Marshal(tasks.NewRunPayload(tasks.RunView{
-		ID: "run-robin-1", Kind: "batcave.sweep", Mode: tasks.ModePreview, State: tasks.StateRunning,
-		Done: 2, Total: 5, Current: "the cowl", Reason: "r", Parent: "p", PlanRef: "pl",
-		Created: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC),
+		ID: "run-robin-1", Kind: "batcave.sweep", Mode: tasks.ModePreview, State: tasks.StateSucceeded, Held: true,
+		Done: 2, Total: 5, Current: "the cowl", Reason: "r", Parent: "p", PlanRef: "pl", Trigger: tasks.TriggerManual,
+		Actor:   tasks.Actor{UserID: "bruce", AuthMethod: "session", System: "core.scheduler"},
+		Created: created, Started: started, Finished: finished,
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -377,18 +384,28 @@ func TestRunPayload_WireKeys(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	for k, want := range map[string]any{"id": "run-robin-1", "kind": "batcave.sweep", "mode": "preview", "state": "running",
-		"done": 2.0, "total": 5.0, "current": "the cowl", "reason": "r", "parent": "p", "plan_ref": "pl", "held": false, "trigger": ""} {
-		if m[k] != want {
-			t.Errorf("%s = %v (%T), want %v", k, m[k], m[k], want)
+	want := map[string]any{"id": "run-robin-1", "kind": "batcave.sweep", "mode": "preview", "state": "succeeded", "held": true,
+		"done": 2.0, "total": 5.0, "current": "the cowl", "reason": "r", "parent": "p", "plan_ref": "pl", "trigger": "manual",
+		"created": "2026-11-20T09:00:00Z", "started": "2026-11-20T09:01:00Z", "finished": "2026-11-20T10:00:00Z",
+		"actor": map[string]any{"user_id": "bruce", "auth_method": "session", "system": "core.scheduler"}}
+	if !reflect.DeepEqual(m, want) {
+		t.Errorf("wire form =\n%v\nwant exactly\n%v", m, want)
+	}
+	// Zero times and empty optional fields stay off the wire.
+	b, err = json.Marshal(tasks.NewRunPayload(tasks.RunView{ID: "run-robin-2", Created: created}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m = nil
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"started", "finished", "reason", "parent", "plan_ref", "current"} {
+		if _, ok := m[k]; ok {
+			t.Errorf("an empty %s is on the wire: %s", k, b)
 		}
 	}
-	if _, ok := m["started"]; ok {
-		t.Errorf("a zero started time is on the wire: %s", b)
-	}
-	for _, pascal := range []string{"ID", "Current", "Mode"} {
-		if _, ok := m[pascal]; ok {
-			t.Errorf("PascalCase key %s on the wire: %s", pascal, b)
-		}
+	if a, ok := m["actor"].(map[string]any); !ok || len(a) != 0 {
+		t.Errorf("an empty actor = %v, want {}: %s", m["actor"], b)
 	}
 }
