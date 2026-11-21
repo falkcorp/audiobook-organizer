@@ -1,0 +1,3 @@
+### Fixed
+
+- The activity bell and the Activity page now name an operation by its full def id instead of the part after the first dot. `acoustid.scan` and `reconcile.scan` no longer both read "Library Scan", `openlibrary.import` and `dedup.full-scan` have labels (the old table keyed them by names no def has, `ol_dump_import` and `dedup-scan`), and every def the kind-rename table knows (registered, retired and former ids, 271 in all) has a distinct label. A test parses the kind-rename table and fails if a def has no label, two defs share one, or a label names a def that is not there. The server's own display name still wins when it sends one.
