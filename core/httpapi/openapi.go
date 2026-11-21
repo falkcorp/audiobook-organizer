@@ -99,6 +99,9 @@ func guardNames(g Guards) []string {
 	if g.Interactive {
 		out = append(out, "interactive")
 	}
+	if g.Session {
+		out = append(out, "session")
+	}
 	if g.Owner {
 		out = append(out, "owner")
 	}

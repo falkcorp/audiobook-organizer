@@ -206,6 +206,26 @@ func TestUpdaterRoutes_Permissions(t *testing.T) {
 				if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
 					t.Errorf("an API key: %d %s, want 403 interactive_required", rep.status, rep.body)
 				}
+				// Stage 13's order: a key lacking the scope fails the
+				// interactive guard before its scopes are read.
+				rep = r.do(uhAs(auth.MethodAPIKey, "core:users.view"), c.method, c.path, "", c.body)
+				if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+					t.Errorf("an API key lacking the scope: %d %s, want 403 interactive_required", rep.status, rep.body)
+				}
+			}
+			// The auth-disabled principal holding the scope: a guarded route
+			// refuses it as the router does; an unguarded one, which the
+			// router admits, meets authorise's own rule that a route names an
+			// actor (401).
+			off := uhAs(auth.MethodAuthDisabled, rbac.Permission(c.perm))
+			off.User = nil // the auth-disabled principal has no user
+			rep = r.do(off, c.method, c.path, "", c.body)
+			if c.interactive {
+				if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+					t.Errorf("auth disabled: %d %s, want 403 interactive_required", rep.status, rep.body)
+				}
+			} else if rep.status != 401 {
+				t.Errorf("auth disabled: %d %s, want 401", rep.status, rep.body)
 			}
 			if n := r.st.n(); n != 0 || len(r.upd.prepped) != 0 {
 				t.Errorf("a refused request enqueued %d tasks and asked Prepare %d times", n, len(r.upd.prepped))
@@ -446,11 +466,17 @@ func TestUpdaterRoutes_AuthorisationReadsBothCheckerAnswers(t *testing.T) {
 		if rep := r.do(p, c.method, c.path, "", c.body); rep.status != 403 {
 			t.Errorf("%s with a scope held but its requirement unsatisfied: %d, want 403", c.name, rep.status)
 		}
-		// The auth-disabled principal has no user to name as the actor.
+		// The auth-disabled principal has no user to name as the actor: 401,
+		// unless the route's interactive guard refuses it first (403), as at
+		// stage 13.
 		p = uhAs(auth.MethodAuthDisabled, rbac.CoreAdmin)
 		p.User = nil
-		if rep := r.do(p, c.method, c.path, "", c.body); rep.status != 401 {
-			t.Errorf("%s with no user: %d, want 401", c.name, rep.status)
+		want := 401
+		if c.interactive {
+			want = 403
+		}
+		if rep := r.do(p, c.method, c.path, "", c.body); rep.status != want {
+			t.Errorf("%s with no user: %d, want %d", c.name, rep.status, want)
 		}
 		if r.st.n() != 0 {
 			t.Errorf("%s: a refused request enqueued a task", c.name)

@@ -165,26 +165,28 @@ func (a *api) factoryReset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(ctx, w, http.StatusOK, "application/json", res, a.log)
 }
 
-// guard is the handler's repetition of the route's permission and guards, in
-// the order stage 13 would refuse them: a principal that names a user (401),
-// core:admin (403), an interactive credential (403) and, while the owner is
-// required, the owner assurance (403); only then, so an unauthorised caller
-// learns nothing about availability, a missing Stager or Audit (503). It returns the subject the reset is
-// requested by, the user's ID.
+// guard repeats stage 13's judgement of the route's permission and guards
+// (httpapi.Authorize over core:admin, Guards.Interactive and Guards.Owner, the
+// route Register declares), so a handler mounted without the router refuses
+// exactly what the router would, in the same order: a principal (401), the
+// interactive guard (403 interactive_required), the owner guard (403
+// owner_required while the owner is required, else core:admin), then
+// core:admin (403 permission_denied). Only then, so an unauthorised caller
+// learns nothing about availability, a missing Stager or Audit (503). It
+// returns the subject the reset is requested by, the user's ID.
 //
-// The auth-disabled principal has no user and is refused here: Guards.Interactive
-// refuses it at stage 13 (05-authn §4.11), and a reset with no one to name must
-// not be staged.
+// The auth-disabled principal has no user: Guards.Interactive refuses it (as
+// at stage 13, 05-authn §4.11), and a reset with no one to name is refused
+// 401 by the rule after Authorize all the same.
 func (a *api) guard(p *auth.Principal) (string, error) {
+	d := httpapi.Authorize(httpapi.AuthzRequest{
+		Perm: rbac.Need(rbac.CoreAdmin), Guards: httpapi.Guards{Interactive: true, Owner: true}, Principal: p,
+	}, httpapi.AuthzOptions{OwnerRequired: a.ownerRequired == nil || a.ownerRequired()})
 	switch {
-	case p == nil || p.User == nil || p.User.ID == "":
+	case d.Refusal != nil:
+		return "", d.Refusal
+	case p.User == nil || p.User.ID == "":
 		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
-	case p.Perms == nil || !p.Perms.Has(rbac.CoreAdmin):
-		return "", httpapi.Forbidden(rbac.CoreAdmin)
-	case !p.Method.MayChangeCredentials():
-		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive session"}
-	case (a.ownerRequired == nil || a.ownerRequired()) && p.Assurance&auth.AssuranceOwner == 0:
-		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "owner_required", Detail: "this route needs the deployment owner"}
 	case a.stager == nil || a.audit == nil:
 		return "", httpapi.Unavailable("factory reset is not available", 5*time.Second)
 	}

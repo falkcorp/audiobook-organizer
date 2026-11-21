@@ -166,21 +166,29 @@ func (a *api) wrap(g gate, h func(http.ResponseWriter, *http.Request, caller)) h
 	}
 }
 
-// authorise is the repetition of the route's permission and guards, in the
-// order stage 13 refuses them: a principal (401), the permission (403) and an
-// interactive credential (403).
+// authorise repeats stage 13's judgement of the route's permission and guards
+// (httpapi.Authorize, over the same Perm and Guards Register declares), so a
+// handler mounted without the router refuses exactly what the router would,
+// in the same order: a principal (401), the interactive guard (403
+// interactive_required), then the permission (403 permission_denied). The one
+// rule of its own comes after Authorize admits: every route names an actor, so
+// a principal with no user (the auth-disabled one) is answered 401. It passes
+// no rbac catalog, so a non-interactive principal missing a Sensitive scope is
+// told permission_denied where the router says interactive_required; the
+// router judges first, so a caller never sees the difference.
 func authorise(p *auth.Principal, g gate) (string, error) {
 	subject := ""
 	if p != nil && p.User != nil {
 		subject = string(p.User.ID)
 	}
-	switch {
-	case p == nil || subject == "":
+	d := httpapi.Authorize(httpapi.AuthzRequest{
+		Perm: rbac.Need(g.perm), Guards: httpapi.Guards{Interactive: g.interactive}, Principal: p,
+	}, httpapi.AuthzOptions{OwnerRequired: true})
+	if d.Refusal != nil {
+		return "", d.Refusal
+	}
+	if subject == "" {
 		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
-	case p.Perms == nil || !p.Perms.Has(g.perm) || !p.Perms.Satisfies(rbac.Need(g.perm)):
-		return "", httpapi.Forbidden(g.perm)
-	case g.interactive && !p.Method.MayChangeCredentials():
-		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive session"}
 	}
 	return subject, nil
 }

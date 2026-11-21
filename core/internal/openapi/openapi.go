@@ -66,7 +66,7 @@ type Operation struct {
 	// Public marks a route that needs no credential: its security is the
 	// empty list, which overrides the document default.
 	Public bool
-	// Guards is x-mediacore-guards ("interactive", "owner"); empty omits it.
+	// Guards is x-mediacore-guards ("interactive", "session", "owner"); empty omits it.
 	Guards     []string
 	Parameters []Parameter
 	// RequestBody is the component name of the JSON request body; "" = none.

@@ -374,6 +374,7 @@ func TestFactoryResetCoreRouteRecordsHookArgs(t *testing.T) {
 // reading the body, staging or recording.
 func TestFactoryReset_GuardsRefuseBeforeAnythingIsRead(t *testing.T) {
 	admin := func(m auth.Method) *auth.Principal { return as(m, rbac.CoreAdmin) }
+	notRequired := func() bool { return false }
 	cases := []struct {
 		name         string
 		p            *auth.Principal
@@ -383,13 +384,19 @@ func TestFactoryReset_GuardsRefuseBeforeAnythingIsRead(t *testing.T) {
 		wantRequired string
 	}{
 		{"no principal", nil, nil, 401, "authentication_required", ""},
-		{"auth disabled", as(auth.MethodAuthDisabled, rbac.CoreAdmin), nil, 401, "authentication_required", ""},
-		{"no user id", &auth.Principal{Method: auth.MethodSession, User: &auth.User{}, Perms: checker{rbac.CoreAdmin}}, nil, 401, "authentication_required", ""},
-		{"no checker", &auth.Principal{Method: auth.MethodSession, User: &auth.User{ID: bruceID}}, nil, 403, "permission_denied", string(rbac.CoreAdmin)},
-		{"not an admin", as(auth.MethodSession, "core:settings.manage"), nil, 403, "permission_denied", string(rbac.CoreAdmin)},
-		{"api key", admin(auth.MethodAPIKey), func() bool { return false }, 403, "interactive_required", ""},
+		// The auth-disabled principal fails the interactive guard first, as
+		// at stage 13 (05-authn §4.11).
+		{"auth disabled", as(auth.MethodAuthDisabled, rbac.CoreAdmin), nil, 403, "interactive_required", ""},
+		{"no user id", &auth.Principal{Method: auth.MethodSession, User: &auth.User{}, Perms: checker{rbac.CoreAdmin}}, notRequired, 401, "authentication_required", ""},
+		{"no checker", &auth.Principal{Method: auth.MethodSession, User: &auth.User{ID: bruceID}}, notRequired, 403, "permission_denied", string(rbac.CoreAdmin)},
+		{"not an admin", as(auth.MethodSession, "core:settings.manage"), notRequired, 403, "permission_denied", string(rbac.CoreAdmin)},
+		{"api key", admin(auth.MethodAPIKey), notRequired, 403, "interactive_required", ""},
 		{"admin without the owner", admin(auth.MethodSession), nil, 403, "owner_required", ""},
 		{"owner required explicitly", admin(auth.MethodSession), func() bool { return true }, 403, "owner_required", ""},
+		// Stage 13's order, for callers failing more than one leg: the
+		// interactive guard, then the owner guard, then core:admin.
+		{"api key, not an admin", as(auth.MethodAPIKey, "core:settings.manage"), nil, 403, "interactive_required", ""},
+		{"session, not an admin, not the owner", as(auth.MethodSession, "core:settings.manage"), nil, 403, "owner_required", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
