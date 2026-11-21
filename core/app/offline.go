@@ -43,8 +43,11 @@ type Command struct {
 // storage cutover-blockers list, fix and delete (05-storage §5S.3.6), with
 // the service stopped, one command whose first argument is the verb; and
 // F8-02's updater fetch-release (05-updater §5U.4), which opens no store and
-// reads Options.Updater's release source. R2's other flips add theirs (06
-// §6.4.10).
+// reads Options.Updater's release source; and F4-08's users reset-password
+// (05-authn §4.14) and storage journal-queue list and clear (F4-08 Q6a),
+// both with the service stopped and both refused by an app that has not
+// declared the core identity (Options.IdentityBoot). R2's other flips add
+// theirs (06 §6.4.10).
 func OfflineCommands(opts Options, mods ...module.Module) []Command {
 	return []Command{
 		pruneCheckpointsCommand(opts, mods), restoreOfflineCommand(opts, mods), resetCommand(opts, mods),
@@ -53,5 +56,6 @@ func OfflineCommands(opts Options, mods ...module.Module) []Command {
 		migrateCommand(opts, mods), quarantineListCommand(opts, mods), quarantineExportCommand(opts, mods),
 		quarantinePurgeCommand(opts, mods), cutoverBlockersCommand(opts, mods),
 		fetchReleaseCommand(opts, mods),
+		resetPasswordCommand(opts, mods), journalQueueCommand(opts, mods),
 	}
 }
