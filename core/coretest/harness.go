@@ -40,14 +40,15 @@ const harnessAppID = "coretest"
 // Harness is an in-process App (06 §6.4.8): a temp state directory
 // (Options.StateDir), no listeners; requests go straight to App.Handler().
 //
-// An App with a storage-declaring module boots with the identity boot (core
-// auth, rbac and stages 12 and 13; identity.go), which WithUser, As and
-// AssertPermission need. app.New starts no hook, worker or listener (06
-// §6.5.2's start order is Run's, and Run opens a listener). A module that
-// declares storage (hello's keyspace) gets an in-memory Pebble store
-// (Options.StorageFS = storage.MemFS(), 06 §6.4.8), so no store lands under
-// the temp state directory; the identity boot's revocation journal is a plain
-// file there. A harness therefore boots P1 to P8 and serves requests; nothing
+// Every App boots with the identity boot (core auth, rbac and stages 12 and 13;
+// identity.go), which WithUser, As and AssertPermission need, a zero-module App
+// included: the identity boot makes the app have a store (kernel.Config.WantsStore).
+// app.New starts no hook, worker or listener (06
+// §6.5.2's start order is Run's, and Run opens a listener). The store, which a
+// module that declares storage (hello's keyspace) shares with core, is an
+// in-memory Pebble store (Options.StorageFS = storage.MemFS(), 06 §6.4.8), so
+// no store lands under the temp state directory; the identity boot's
+// revocation journal is a plain file there. A harness therefore boots P1 to P8 and serves requests; nothing
 // it boots runs on its own, and its cleanup closes the App. Each harness owns
 // its logger (a logcapture.Capture handed to the App as Options.Logger), its
 // state directory and its App: it never touches slog.Default or any other
@@ -235,21 +236,15 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 		// In-memory Pebble (06 §6.4.8): a store hello's keyspace opens
 		// leaves nothing under the state directory.
 		StorageFS: h.fs,
-		// The identity boot is on whenever the App will have a store (see
-		// identityWanted): stages 12 and 13 then stand in front of every
-		// route, a route that needs a permission is judged by one, and
+		// The identity boot is always on: stages 12 and 13 stand in front of
+		// every route, a route that needs a permission is judged by one, and
 		// WithUser, As and AssertPermission have a real principal to be.
 		// Core at R2 has identity unconditionally (06 §6.5.1 P5) and this is
-		// the closest a harness gets to a shipped boot. It is not always on
-		// because the identity boot needs core's store, and P0 opens a store
-		// only for an App one of whose modules declares storage (or that
-		// compiled in a path), so an App of zero or storage-less modules
-		// cannot honour it yet: B3 left that gap (a declared identity boot
-		// does not make the kernel want a store) and a boot with the switch
-		// on fails there with "P5 needs the stores". Such a harness boots as
-		// it did before F4-08, with no identity, and says so to As,
-		// AssertPermission and WithUser instead of pretending.
-		IdentityBoot: identityWanted(s.mods),
+		// the closest a harness gets to a shipped boot. The identity boot
+		// needs core's store and a declared identity boot makes the kernel
+		// want one (kernel.Config.WantsStore), so an App of zero or
+		// storage-less modules gets the in-memory store too.
+		IdentityBoot: true,
 	}
 	// TaskRuns (WithRuns): the kernel inserts them at P4c, before the tasks
 	// start rule looks for stored runs. Built hands the harness the kernel,
@@ -281,28 +276,13 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 		return nil, errors.Join(fmt.Errorf("coretest: start tasks: %w", err), a.Close(context.Background()))
 	}
 	// WithUser's principals, through the services the identity boot built.
-	switch {
-	case appOpts.IdentityBoot:
-		if h.id, err = newIdentity(h.k); err != nil {
-			return nil, errors.Join(err, a.Close(context.Background()))
-		}
-		if err := h.seedAll(); err != nil {
-			return nil, errors.Join(fmt.Errorf("coretest: %w", err), a.Close(context.Background()))
-		}
-	case len(h.users) > 0:
-		return nil, errors.Join(fmt.Errorf("coretest: WithUser (%s) needs the identity boot, which the harness declares when a module declares storage; none does", strings.Join(sortedKeys(h.users), ", ")), a.Close(context.Background()))
+	if h.id, err = newIdentity(h.k); err != nil {
+		return nil, errors.Join(err, a.Close(context.Background()))
+	}
+	if err := h.seedAll(); err != nil {
+		return nil, errors.Join(fmt.Errorf("coretest: %w", err), a.Close(context.Background()))
 	}
 	return h, nil
-}
-
-// identityWanted reports whether the harness declares the identity boot for
-// mods: when the kernel will open core's store for them, which it does for an
-// App one of whose modules declares storage (kernel.DeclaresStorage, the rule
-// P0 applies). A nil module is the kernel's to refuse and declares nothing.
-func identityWanted(mods []module.Module) bool {
-	return slices.ContainsFunc(mods, func(m module.Module) bool {
-		return m != nil && kernel.DeclaresStorage(m.Manifest())
-	})
 }
 
 // memFS is an in-memory filesystem that reports ample free space. Pebble's

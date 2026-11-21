@@ -29,10 +29,6 @@ import (
 // answers 4xx other than 401 and 403 to the holding user, which passes.
 func AssertPermission(t testing.TB, h *Harness, method, path string, perm rbac.Permission) {
 	t.Helper()
-	if h.id == nil {
-		t.Fatalf("coretest: AssertPermission needs the identity boot, which the harness declares when a module declares storage; none does (%s %s, %s)", method, path, perm)
-		return
-	}
 	lacking := h.ephemeral(t, lackingName)
 	holding := h.ephemeral(t, holdingName(perm), perm)
 	status := func(c *Client) int {
