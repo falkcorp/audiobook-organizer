@@ -298,7 +298,10 @@ func (m *Migration) stepClock(ctx context.Context, kv storage.KV, w *datamigrate
 	// one snapshot: the group's driver may have committed between them, taking
 	// every row of the group, and a later read would then see a group missing
 	// its driver's rows. Its commit is atomic, so my own row still being here
-	// after the last read proves no such commit came first.
+	// after the last read proves no such commit came first. No group of HEAD's
+	// rows reaches this today (its only exact-key + interval pair, the scan-full
+	// tick, is dropped); it stays for a later mapping that adds one, and
+	// TestCutover_ClockGroupDriverCommitsBetweenReads drives it.
 	if _, err := m.legacy().Get(ctx, kv.Key); errors.Is(err, storage.ErrNotFound) {
 		m.deferred.Add(1)
 		w.Count(OutcomeDeferred)
