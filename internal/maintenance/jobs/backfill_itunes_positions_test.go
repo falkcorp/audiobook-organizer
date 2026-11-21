@@ -375,8 +375,7 @@ func TestResolveITunesPositionBackfillUser_EnvOverrideWins(t *testing.T) {
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})
-	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, second.ID)
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = second.ID })
 	got, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.NoError(t, err)
 	require.Equal(t, second.ID, got)
@@ -390,8 +389,7 @@ func TestResolveITunesPositionBackfillUser_RejectsUnknownOverride(t *testing.T) 
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})
-	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, "no-such-user")
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = "no-such-user" })
 	_, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.Error(t, err, "an unknown override must fail loudly, not silently fall back")
 }
@@ -404,8 +402,7 @@ func TestResolveITunesPositionBackfillUser_SingleUser(t *testing.T) {
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})
-	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, "")
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = "" })
 	got, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.NoError(t, err)
 	require.Equal(t, only.ID, got)
@@ -416,7 +413,11 @@ func TestResolveITunesPositionBackfillUser_MultiUserIsDeterministic(t *testing.T
 	a := newPositionUser(t, store, "alpha")
 	b := newPositionUser(t, store, "bravo")
 
-	t.Setenv(jobs.ITunesPositionBackfillUserIDEnv, "")
+	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	t.Cleanup(func() {
+		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
+	})
+	config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = "" })
 	first, err := jobs.ResolveITunesPositionBackfillUser(store)
 	require.NoError(t, err)
 	require.Contains(t, []string{a.ID, b.ID}, first)

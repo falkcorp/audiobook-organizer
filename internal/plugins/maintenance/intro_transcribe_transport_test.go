@@ -31,14 +31,14 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 
 	cacheDir := t.TempDir()
 	origCacheDir := config.AppConfig.WhisperClipCacheDir
-	// InitConfig loads every viper default, including the itunes.* block.
-	// Until 2026-10-08 that included itunes.sync_enabled=true with no library
-	// paths, which made the merge iTunes guard refuse every merge in later
-	// tests of this package. The key is gone; the iTunes block is still
+	// The reset below loads every factory default, including the itunes.*
+	// block. Until 2026-10-08 that included itunes.sync_enabled=true with no
+	// library paths, which made the merge iTunes guard refuse every merge in
+	// later tests of this package. The key is gone; the iTunes block is still
 	// restored so no other default leaks into later tests.
 	origITunes := config.Snapshot().ITunes
-	t.Setenv("WHISPER_CLIP_CACHE_DIR", cacheDir)
-	config.InitConfig()
+	config.ResetToDefaultsForTest()
+	config.Mutate(func(c *config.Config) { c.WhisperClipCacheDir = cacheDir })
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) {
 			c.WhisperClipCacheDir = origCacheDir
