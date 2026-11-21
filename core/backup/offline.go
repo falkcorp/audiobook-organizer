@@ -55,7 +55,14 @@ const dbPrefix = "db"
 //
 // A checksum sidecar (<archive>.sha256), when there is one, must match the
 // archive's SHA-256 before anything is read as an archive; one that is
-// unreadable or malformed refuses too. An archive with no sidecar is
+// unreadable or malformed refuses too. The check and the extraction open the
+// path separately, so the extraction is bound to the check: the bytes it reads
+// (the whole file for a mediacore-backup/1 archive, hashed as it streams; the
+// legacy scan's digest, which ExtractLegacy holds the extraction to) must hash
+// to the digest the check matched, else the extraction refuses with
+// ErrChecksumMismatch and backuparchive.ErrChanged, the staged restore's
+// refusal for the same swap, and the kernel never stages the store. An
+// archive with no sidecar is
 // extracted as an operator naming the file by hand intends: the kernel then
 // opens the extracted store read-only with this build's guard before it
 // stages anything, so a store this build cannot open is never swapped in.
@@ -91,8 +98,11 @@ func extractStore(ctx context.Context, archive, storeDir string, disk Disk) (id 
 		return "", err
 	}
 	lim := backuparchive.Limits{}
+	// verified is the digest the sidecar check matched, the one the extraction
+	// is bound to; "" when there is no sidecar, so nothing was checked.
+	verified := ""
 	if _, err := os.Lstat(archive + ChecksumSidecar); err == nil {
-		if _, err := checkSumFile(ctx, archive); err != nil {
+		if verified, err = checkSumFile(ctx, archive); err != nil {
 			return "", fmt.Errorf("backup: extract store: %w", err)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -106,9 +116,9 @@ func extractStore(ctx context.Context, archive, storeDir string, disk Disk) (id 
 				id, err = "", errors.Join(err, fmt.Errorf("backup: extract store: %w", cerr))
 			}
 		}()
-		return extractCoreStore(ctx, archive, a, storeDir, disk)
+		return extractCoreStore(ctx, archive, a, storeDir, disk, verified)
 	case errors.Is(err, ErrManifest):
-		return extractLegacyStore(ctx, archive, storeDir, lim, disk, err)
+		return extractLegacyStore(ctx, archive, storeDir, lim, disk, err, verified)
 	default:
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
@@ -137,7 +147,12 @@ func requireEmptyDir(dir string) (err error) {
 	return nil
 }
 
-func extractCoreStore(ctx context.Context, archive string, a *openedArchive, storeDir string, disk Disk) (string, error) {
+// extractCoreStore writes a's store entries into storeDir. consume reads the
+// archive to its end, so the digest of what it read is the whole file's, and
+// bindVerified holds it to verified (the sidecar check's digest): an archive
+// renamed over the path after the check is refused here, with every entry it
+// streamed already checked against its own manifest but none of it used.
+func extractCoreStore(ctx context.Context, archive string, a *openedArchive, storeDir string, disk Disk, verified string) (string, error) {
 	if side, err := readBounded(archive+ManifestSidecar, MaxManifestBytes); err == nil {
 		if !bytes.Equal(side, a.ManifestBytes) {
 			return "", fmt.Errorf("backup: extract store: %w: the manifest sidecar differs from the archive's manifest", ErrManifest)
@@ -170,6 +185,9 @@ func extractCoreStore(ctx context.Context, archive string, a *openedArchive, sto
 	}
 	ex.SetBudget(budgetOf(declared))
 	cerr := a.consume(ctx, ex, dbPrefix)
+	if cerr == nil {
+		cerr = bindVerified(a, verified)
+	}
 	if serr := errors.Join(ex.Sync(), ex.Close()); cerr == nil {
 		cerr = serr
 	}
@@ -179,10 +197,17 @@ func extractCoreStore(ctx context.Context, archive string, a *openedArchive, sto
 	return string(a.Manifest.ArchiveID), nil
 }
 
-func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backuparchive.Limits, disk Disk, why error) (string, error) {
+// extractLegacyStore scans a legacy archive end to end, holds the scan's
+// digest to verified (the sidecar check's) before one byte is written, and
+// extracts it; ExtractLegacy in turn refuses bytes other than the scan's, so
+// the extraction is bound to the check through the scan.
+func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backuparchive.Limits, disk Disk, why error, verified string) (string, error) {
 	info, err := backuparchive.ScanLegacy(ctx, archive, lim)
 	if err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", errors.Join(err, why))
+	}
+	if verified != "" && !strings.EqualFold(info.SHA256, verified) {
+		return "", fmt.Errorf("backup: extract store: %w: %w: the archive is not the one the checksum check accepted", ErrChecksumMismatch, backuparchive.ErrChanged)
 	}
 	if err := requireSpace(disk, 0, spaceClaim{dir: storeDir, bytes: uint64(info.Bytes)}); err != nil {
 		return "", fmt.Errorf("backup: extract store: %w", err)
