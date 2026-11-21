@@ -71,6 +71,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -566,6 +567,11 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		httputil.RespondWithForbidden(c, "owner apply needs a signed-in user")
 		return
 	case !slices.Contains(user.Roles, auth.SeedRoleAdmin):
+		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
+		return
+	case legacyauth.AdminRefused(ctx):
+		// Under core identity (F4-08 B7) the caller must also hold core:admin;
+		// the role test above stays as HEAD's.
 		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
 		return
 	}
