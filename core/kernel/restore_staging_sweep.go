@@ -42,11 +42,33 @@ import (
 // anything it cannot read, is left in place and named in a returned
 // warning; it never stops the restore. A directory with no staging/ (an
 // applied restore's previous/, a failed one's failed/) is the swap's own
-// and is passed over without a word. A target outside the state directory
+// and is passed over without a word, and so is one whose intent was linked:
+// restore/<id> holds the journal, or the slot names <id>. A restore/<id>
+// with neither (Stage stopped between creating it and linking the intent)
+// links nothing, but it is not the shape above, so both are left and named. A target outside the state directory
 // and the DB's parent that the current config and request do not name is
 // not visited.
 func (k *Kernel) sweepOrphanStaging(fsys vfs.FS, req RestoreOfflineRequest) []string {
 	var warnings []string
+	slot, slotErr := restorejournal.ReadSlot(fsys, k.cfg.StateDir)
+	linked := func(id string) (bool, error) {
+		switch _, err := fsys.Stat(filepath.Join(restorejournal.JournalDir(k.cfg.StateDir, id), restorejournal.JournalName)); {
+		case err == nil:
+			return true, nil
+		case !errors.Is(err, os.ErrNotExist):
+			return false, err
+		case slotErr != nil:
+			return false, fmt.Errorf("the restore slot: %w", slotErr)
+		case slot.Pending != nil && slot.Pending.ID == id:
+			return true, nil
+		}
+		for _, e := range slot.InFlight {
+			if e.ID == id {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
 	for _, parent := range k.stagingParents(req) {
 		dir := filepath.Join(parent, restorejournal.AsideDirName)
 		fi, err := lstatFS(fsys, dir)
@@ -68,7 +90,7 @@ func (k *Kernel) sweepOrphanStaging(fsys vfs.FS, req RestoreOfflineRequest) []st
 		slices.Sort(names)
 		for _, n := range names {
 			root := filepath.Join(dir, n)
-			orphan, why, err := k.orphanStaging(fsys, root, n)
+			orphan, why, err := k.orphanStaging(fsys, root, n, linked)
 			switch {
 			case err != nil:
 				warnings = append(warnings, fmt.Sprintf("left in place: %s could not be checked: %v", root, err))
@@ -118,9 +140,9 @@ func (k *Kernel) stagingParents(req RestoreOfflineRequest) []string {
 // orphanStaging decides one entry root (named name) of a .mediacore-restore
 // directory: orphan when sweepOrphanStaging's conditions all hold; a
 // non-empty why, the reason it is left in place, when it holds staging/ but
-// misses one; neither when it is the swap's own (no staging/, or an intent
-// was linked for it).
-func (k *Kernel) orphanStaging(fsys vfs.FS, root, name string) (orphan bool, why string, err error) {
+// misses one; neither when it is the swap's own (no staging/, or linked
+// reports an intent linked for it).
+func (k *Kernel) orphanStaging(fsys vfs.FS, root, name string, linked func(id string) (bool, error)) (orphan bool, why string, err error) {
 	fi, err := lstatFS(fsys, root)
 	switch {
 	case err != nil:
@@ -142,7 +164,14 @@ func (k *Kernel) orphanStaging(fsys vfs.FS, root, name string) (orphan bool, why
 	}
 	switch _, err := fsys.Stat(restorejournal.JournalDir(k.cfg.StateDir, name)); {
 	case err == nil:
-		return false, "", nil // an intent was linked: the swap's
+		ok, err := linked(name)
+		switch {
+		case err != nil:
+			return false, "", fmt.Errorf("the journal of %s: %w", name, err)
+		case ok:
+			return false, "", nil // an intent was linked: the swap's
+		}
+		return false, fmt.Sprintf("has restore/%s with no journal and the slot does not name it (Stage stopped before it linked the intent)", name), nil
 	case !errors.Is(err, os.ErrNotExist):
 		return false, "", fmt.Errorf("the journal of %s: %w", name, err)
 	}
