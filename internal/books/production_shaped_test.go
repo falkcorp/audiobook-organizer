@@ -177,6 +177,23 @@ func pointConfigAtStore(c *config.Config, work string) {
 	c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
 }
 
+// pointEnvAtStore is pointConfigAtStore for a flipped boot. The flip is always
+// declared, so the first boot imports the corpus' stored settings into core
+// config, where the config.Config edit no longer outranks them: the stored
+// path settings name the builder's scratch checkout of stage 1, and only the
+// environment layer outranks the store. Each class-k path setting
+// pointConfigAtStore names goes through its environment name
+// (cutover/testdata/rename_table.golden), to the same place. The store itself
+// is not edited. root_dir has no such name: it is class i, M2 leaves it in the
+// blob for M6, and the booted projection reads it from core.library.roots.
+func pointEnvAtStore(t *testing.T, work string) {
+	t.Helper()
+	var c config.Config
+	pointConfigAtStore(&c, work)
+	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", c.PlaylistDir)
+	t.Setenv("ABO_BOOKS_OPENLIBRARY_DUMP_DIR", c.OpenLibraryDumpDir)
+}
+
 // shapedBootEnv is the shaped boot's environment-authoritative config: the
 // corpus was written by an R0 that served the ABS surface (the boot spec's
 // ABS_API_ENABLED, ABS_AUTH_MODES and ABS_JWT_SECRET), the stored settings
@@ -196,12 +213,9 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	stateDir := filepath.Join(work, "state")
 	// The corpus' stored path settings name the directories its builder ran
 	// in (a scratch checkout of stage 1): point each at the copy's real
-	// location, so the boot never touches, or depends on, the builder's.
-	// The flip is always declared, so the first boot imports the stored
-	// settings into core config, whose environment layer is the one that
-	// outranks them: playlist_dir goes through it, as the cutover suite's
-	// boot does (cutoverBootConfig). The store itself is not edited.
-	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", filepath.Join(work, "playlists"))
+	// location, so the boot never touches, or depends on, the builder's
+	// (pointEnvAtStore, as the cutover suite's boot does).
+	pointEnvAtStore(t, work)
 	edit := func(c *config.Config) {
 		pointConfigAtStore(c, work)
 		shapedBootEnv(c)
@@ -226,7 +240,8 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	}
 	seconds := time.Since(start).Seconds()
 	snap := config.Snapshot()
-	for name, path := range map[string]string{"database_path": snap.DatabasePath, "root_dir": snap.RootDir, "playlist_dir": snap.PlaylistDir} {
+	for name, path := range map[string]string{"database_path": snap.DatabasePath, "root_dir": snap.RootDir, "playlist_dir": snap.PlaylistDir,
+		"openlibrary_dump_dir": snap.OpenLibraryDumpDir} {
 		require.Truef(t, strings.HasPrefix(path, work+string(filepath.Separator)), "%s %q is outside the store copy %q", name, path, work)
 	}
 	phases := shapedBootPhases(t, r.app)
