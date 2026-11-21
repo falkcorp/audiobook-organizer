@@ -9,7 +9,6 @@ import (
 	"context"
 	"net/http"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/httpapi"
@@ -225,22 +224,41 @@ func TestHarness_RebootKeepsItsUsers(t *testing.T) {
 	AssertPermission(t, h2, http.MethodGet, "/api/hello/v1/greeting", permRead)
 }
 
-// TestIdentity_NeedsAStore: the identity boot is declared when a module
-// declares storage, which is when the kernel opens the store it needs. An App
-// of zero modules has neither, boots as before, and tells WithUser and
-// AssertPermission so instead of passing for the wrong reason.
-func TestIdentity_NeedsAStore(t *testing.T) {
-	h := New(t)
-	if h.id != nil {
-		t.Fatal("a zero-module harness declared the identity boot")
+// TestIdentity_ZeroModuleHarnessHasIdentity: the identity boot is always
+// declared (F4-08 B5b), so an App of no module at all has the store it needs and
+// working WithUser, As and AssertPermission over a core route: core's user list
+// needs core:users.view.
+func TestIdentity_ZeroModuleHarnessHasIdentity(t *testing.T) {
+	const usersPath = "/api/core/v1/users"
+	const usersView rbac.Permission = "core:users.view"
+	h := New(t, WithUser("alfred", usersView), WithUser("lucius"))
+	if h.id == nil {
+		t.Fatal("a zero-module harness declared no identity boot")
 	}
-	rec := runRecording(t, func(tb testing.TB) {
-		AssertPermission(tb, h, http.MethodGet, "/api/hello/v1/greeting", permRead)
-	})
-	if !rec.failed || !rec.contains("AssertPermission needs the identity boot") {
-		t.Errorf("AssertPermission on a harness without identity did not say so:\n%s", rec.text())
+	if _, _, ok := h.k.IdentityServices(); !ok {
+		t.Fatal("a zero-module harness built no identity services")
 	}
-	if _, err := Boot(t, WithUser("alfred", permRead)); err == nil || !strings.Contains(err.Error(), "WithUser (alfred) needs the identity boot") {
-		t.Errorf("Boot with WithUser and no store = %v, want one saying WithUser needs the identity boot", err)
+	if st := get(t, h.As("alfred"), usersPath); st != http.StatusOK {
+		t.Errorf("alfred (core:users.view) GET %s = %d, want 200", usersPath, st)
+	}
+	if st := get(t, h.As("lucius"), usersPath); st != http.StatusForbidden {
+		t.Errorf("lucius (no permission) GET %s = %d, want 403", usersPath, st)
+	}
+	if st := get(t, h.Anonymous(), usersPath); st != http.StatusUnauthorized {
+		t.Errorf("anonymous GET %s = %d, want 401", usersPath, st)
+	}
+	AssertPermission(t, h, http.MethodGet, usersPath, usersView)
+	// A storage-less module is no different: the store is the app's, not the module's.
+	h2 := New(t, WithModules(plainMod{}), WithUser("alfred", usersView))
+	if st := get(t, h2.As("alfred"), usersPath); st != http.StatusOK {
+		t.Errorf("storage-less app: alfred GET %s = %d, want 200", usersPath, st)
 	}
 }
+
+// plainMod is a module that declares no storage and no route.
+type plainMod struct{}
+
+func (plainMod) Manifest() module.Manifest {
+	return module.Manifest{ID: "lucius", Version: "1.0.0", DisplayName: "Lucius", MinCoreVersion: "0.1.0", DefaultEnabled: true}
+}
+func (plainMod) Register(*module.Registrar) error { return nil }
