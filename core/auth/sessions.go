@@ -252,7 +252,8 @@ func (s *Service) keptSession(ctx context.Context, u *User, except string, now t
 // epoch (keys are not epoch-bound, §4.12); an identity extension's principal
 // stands until its notAfter (Assertion.ExpiresAt, or
 // core.auth.extension_max_age after its AuthTime: ErrExpired at or after
-// it); a principal of any other method stands while the user's epoch is the
+// it; one with no notAfter, which only PrincipalFor can build, is ErrExpired
+// at once); a principal of any other method stands while the user's epoch is the
 // one it was built at. It returns nil,
 // the refusal (ErrRevoked, ErrExpired, ErrStaleEpoch, ErrInactiveUser,
 // ErrResetRequired, ErrInvalidCredentials), or ErrStoreUnavailable.
@@ -287,10 +288,12 @@ func (s *Service) stands(ctx context.Context, p *Principal) (*User, *APIKey, err
 	if p == nil || p.User == nil || p.User.ID == "" {
 		return nil, nil, fmt.Errorf("%w: no principal", ErrInvalidCredentials)
 	}
-	if !p.notAfter.IsZero() && !s.now().Before(p.notAfter) {
-		// An identity extension's credential has its own end (its token's
-		// exp, or core.auth.extension_max_age after AuthTime), which no
-		// store record carries: without this a stream outlives it.
+	// An identity extension's credential has its own end (its token's exp, or
+	// core.auth.extension_max_age after AuthTime), which no store record
+	// carries: without this a stream outlives it. Only stage 12 sets it, so an
+	// extension principal with none (PrincipalFor is exported and builds one
+	// for any registered ext: method) has no end at all and is refused too.
+	if bounded := !p.notAfter.IsZero(); (bounded && !s.now().Before(p.notAfter)) || (!bounded && p.Method.isExtension()) {
 		return nil, nil, fmt.Errorf("%w: %s credential %s", ErrExpired, p.Method, p.CredentialID)
 	}
 	u, err := s.d.Store.GetUser(ctx, p.User.ID)

@@ -134,3 +134,44 @@ func TestExtensionExpiry_NoExpTakesTheCap(t *testing.T) {
 	expiredBoth(t, "a no-exp principal with no AuthTime, a cap later", svc, none)
 	expiredBoth(t, "a no-exp principal with a future AuthTime, a cap later", asvc, ahead)
 }
+
+// TestExtensionExpiry_PrincipalForWithoutABoundIsRefused: Service.PrincipalFor
+// is exported and takes any registered ext: method, but only stage 12 sets an
+// extension principal's bound. One built through PrincipalFor has none, and a
+// principal with no end would hold a stream open past its credential, so
+// Revalidate and Refresh both refuse it as expired, narrowed or not.
+func TestExtensionExpiry_PrincipalForWithoutABoundIsRefused(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	oliver := f.user("lucius-fox", rbac.RoleViewer)
+	svc, err := f.withExtensions(t, auth.Extension{Authenticator: oracleExt{a: &auth.Assertion{User: oliver.ID}}, Order: 150,
+		Spec: auth.MethodSpec{Method: "ext:oracle", Interactive: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, scopes := range map[string][]rbac.Permission{
+		"the method's own rule": nil,
+		"a narrowing":           {"gotham:patrol"},
+	} {
+		p, err := svc.PrincipalFor(ctx, oliver, "ext:oracle", scopes, oliver.CredentialEpoch)
+		if err != nil {
+			t.Fatalf("PrincipalFor ext:oracle over %s: %v", name, err)
+		}
+		expiredBoth(t, "an ext:oracle principal PrincipalFor built over "+name, svc, p)
+	}
+}
+
+// TestExtensionExpiry_NegativeMaxAgeTakesTheDefault: a configured
+// extension_max_age at or below zero is the default (24 h), not a bound that
+// is already past (which would refuse every extension sign-in) nor none.
+func TestExtensionExpiry_NegativeMaxAgeTakesTheDefault(t *testing.T) {
+	f := newFx(t)
+	jason := f.user("jason-todd", rbac.RoleViewer)
+
+	f.setSettings(auth.Settings{ExtensionMaxAge: -time.Hour})
+	svc, p := mustBindExt(t, f, &auth.Assertion{User: jason.ID, CredentialID: "cf-alley", AuthTime: f.clock().Add(-23 * time.Hour)})
+	f.advance(time.Hour - time.Second)
+	refreshed(t, svc, p)
+	f.advance(time.Second) // AuthTime + 24 h
+	expiredBoth(t, "a no-exp principal under a negative setting, at the default cap", svc, p)
+}

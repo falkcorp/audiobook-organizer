@@ -157,7 +157,9 @@ func TestRevalidate_FollowsTheCredentialAndTheUser(t *testing.T) {
 	stream := f.signedIn(barbara)
 	_, k := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
 	keyed := f.keyPrincipal(barbara, k)
-	ext := &auth.Principal{User: barbara, Method: "ext:oracle", Perms: stream.Perms}
+	// An extension principal as stage 12 binds it, with the bound it sets: a
+	// hand-assembled one has none and is refused as expired.
+	extSvc, ext := mustBindExt(t, f, &auth.Assertion{User: barbara.ID, CredentialID: "cf-belfry"})
 	stands := func(what string, p *auth.Principal) {
 		t.Helper()
 		if err := f.svc.Revalidate(ctx, p); err != nil {
@@ -166,7 +168,9 @@ func TestRevalidate_FollowsTheCredentialAndTheUser(t *testing.T) {
 	}
 	stands("a fresh session", stream)
 	stands("a fresh key", keyed)
-	stands("a fresh extension principal", ext)
+	if err := extSvc.Revalidate(ctx, ext); err != nil {
+		t.Fatalf("a fresh extension principal: %v", err)
+	}
 
 	// Her own password change re-stamps her session: its stream stands; the
 	// key is not epoch-bound; the extension principal's epoch is gone.
@@ -175,7 +179,7 @@ func TestRevalidate_FollowsTheCredentialAndTheUser(t *testing.T) {
 	}
 	stands("the session that changed the password", stream)
 	stands("the key after a password change", keyed)
-	wantErr(t, "an extension principal after a password change", f.svc.Revalidate(ctx, ext), auth.ErrStaleEpoch)
+	wantErr(t, "an extension principal after a password change", extSvc.Revalidate(ctx, ext), auth.ErrStaleEpoch)
 
 	// Disabled: everything falls; re-enabled: the key stands again, the
 	// session (two bumps behind) does not.

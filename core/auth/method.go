@@ -8,6 +8,7 @@ package auth
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/rbac"
@@ -24,6 +25,11 @@ const (
 	MethodAPIKey           Method = "api_key"
 	MethodAuthDisabled     Method = "auth_disabled" // synthetic principal in auth-off mode (§4.11)
 )
+
+// isExtension reports whether m is an identity extension's method ("ext:<name>",
+// see extensionPrefix), the one class of method whose principal carries a
+// notAfter bound.
+func (m Method) isExtension() bool { return strings.HasPrefix(string(m), extensionPrefix) }
 
 // Interactive and MayChangeCredentials keep today's allowlist semantics
 // (internal/auth/context.go): among core methods only MethodSession is
@@ -80,8 +86,9 @@ type Principal struct {
 	// notAfter is when an identity extension's principal stops standing
 	// (Assertion.ExpiresAt, or core.auth.extension_max_age after AuthTime);
 	// zero for every other method, whose credential record carries its own
-	// expiry. stands refuses at or after it; Refresh copies it, never
-	// extends it.
+	// expiry. stands refuses at or after it, and refuses an extension
+	// principal that has none (one PrincipalFor built, which only stage 12
+	// bounds); Refresh copies it, never extends it.
 	notAfter time.Time
 }
 
