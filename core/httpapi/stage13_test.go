@@ -42,7 +42,7 @@ func batman() *auth.User { return &auth.User{ID: "u-batman", Username: "batman"}
 // s13Session is an interactive session over role patterns.
 func s13Session(cat *rbac.Catalog, patterns ...rbac.Permission) *auth.Principal {
 	return &auth.Principal{User: batman(), Method: auth.MethodSession, CredentialID: "s-cave",
-		Perms: authz.Compile(rbac.CompileInput{CheckerInput: rbac.CheckerInput{Interactive: true}, RolePatterns: patterns}, cat)}
+		Perms: authz.Compile(rbac.CompileInput{Interactive: true, RolePatterns: patterns}, cat)}
 }
 
 // s13Delegated is a temp-login session: may change credentials, not interactive.
@@ -56,13 +56,13 @@ func s13Delegated(cat *rbac.Catalog, patterns ...rbac.Permission) *auth.Principa
 // s13Key is an API key: the owner's role patterns narrowed to scopes.
 func s13Key(cat *rbac.Catalog, roles []rbac.Permission, scopes ...rbac.Permission) *auth.Principal {
 	return &auth.Principal{User: batman(), Method: auth.MethodAPIKey, CredentialID: "k-belt",
-		Perms: authz.Compile(rbac.CompileInput{CheckerInput: rbac.CheckerInput{Scopes: scopes}, RolePatterns: roles}, cat)}
+		Perms: authz.Compile(rbac.CompileInput{Scopes: scopes, RolePatterns: roles}, cat)}
 }
 
 // s13Owner is an identity-extension sign-in carrying the owner assurance.
 func s13Owner(cat *rbac.Catalog, patterns ...rbac.Permission) *auth.Principal {
 	return &auth.Principal{User: batman(), Method: "ext:belfry", Assurance: auth.AssuranceOwner,
-		Perms: authz.Compile(rbac.CompileInput{CheckerInput: rbac.CheckerInput{Interactive: true}, RolePatterns: patterns}, cat)}
+		Perms: authz.Compile(rbac.CompileInput{Interactive: true, RolePatterns: patterns}, cat)}
 }
 
 func s13AuthOff(cat *rbac.Catalog) *auth.Principal {
