@@ -192,7 +192,12 @@ func (c *Config) ResolveBootstrapKeyTTL() (time.Duration, string) {
 		case d > coreauth.MaxBootstrapKeyTTL:
 			return coreauth.MaxBootstrapKeyTTL, fmt.Sprintf("bootstrap_key_ttl %q is over the %s cap; using %s", raw, coreauth.MaxBootstrapKeyTTL, coreauth.MaxBootstrapKeyTTL)
 		}
-		if c.BootstrapKeyTTLDays > 0 {
+		// A days value equal to the duration is ignored to no effect, so it is
+		// not warned about. That is every flipped boot at 24h: the projection
+		// fills both rows from core.auth.bootstrap.key_ttl, and an operator has
+		// no setting to remove to quiet it. Compared in float hours: days*24h
+		// as a Duration wraps, and 1+2^48 days wraps to exactly 24h.
+		if c.BootstrapKeyTTLDays > 0 && d.Hours() != 24*float64(c.BootstrapKeyTTLDays) {
 			return d, fmt.Sprintf("bootstrap_key_ttl_days is deprecated and ignored because bootstrap_key_ttl is set; remove bootstrap_key_ttl_days=%d", c.BootstrapKeyTTLDays)
 		}
 		return d, ""

@@ -28,6 +28,13 @@ func TestResolveBootstrapKeyTTL(t *testing.T) {
 		{"legacy days honoured and warned", "", 1, 24 * time.Hour, true},
 		{"legacy old default 30 capped at 24h", "", 30, 24 * time.Hour, true},
 		{"new setting wins over legacy, with a warning", "4h", 30, 4 * time.Hour, true},
+		// A flipped boot fills both from core.auth.bootstrap.key_ttl: equal
+		// values ignore nothing, so they are not warned about. Unequal whole
+		// days still are.
+		{"legacy days equal to the duration: no warning", "24h", 1, 24 * time.Hour, false},
+		{"legacy days unequal to a whole-day duration warn", "24h", 2, 24 * time.Hour, true},
+		{"legacy days against a part-day duration warn", "12h", 1, 12 * time.Hour, true},
+		{"a days value whose days*24h wraps to 24h warns", "24h", 1 + 1<<48, 24 * time.Hour, true},
 		{"non-positive legacy is unset", "", -5, 8 * time.Hour, false},
 	}
 	for _, tc := range cases {
