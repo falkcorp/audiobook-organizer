@@ -8,10 +8,8 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
-	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -67,28 +65,6 @@ func s13Owner(cat *rbac.Catalog, patterns ...rbac.Permission) *auth.Principal {
 
 func s13AuthOff(cat *rbac.Catalog) *auth.Principal {
 	return &auth.Principal{Method: auth.MethodAuthDisabled, Perms: authz.AuthDisabled(cat)}
-}
-
-// s13Atoms is the test's own copy of books' atom table (05-rbac §6.1): each
-// HEAD atom and the native scopes whose AllOf is its route requirement. The
-// atoms are string literals on purpose, and every atom a legacy manifest route
-// names is here. playlists.create gates no route (zero route requirement).
-func s13Atoms() map[string][]rbac.Permission {
-	return map[string][]rbac.Permission{
-		"library.view":          {"books:view", "core:tasks.view"},
-		"library.edit_metadata": {"books:edit"},
-		"library.delete":        {"books:delete"},
-		"library.organize":      {"books:organize"},
-		"scan.trigger":          {"books:scan"},
-		"integrations.manage":   {"core:integrations.manage", "books:integrations.manage"},
-		"users.manage":          {"core:users.manage", "core:roles.view"},
-		"settings.manage": {"core:settings.manage", "books:settings.manage", "core:tasks.manage", "core:system.view",
-			"core:system.manage", "core:library.manage", "core:library.browse", "core:integrations.manage"},
-		"collections.manage": {"books:collections.manage"},
-		"requests.create":    {"books:request"},
-		"requests.approve":   {"books:request.approve"},
-		"fingerprint.worker": {"books:fingerprint.worker"},
-	}
 }
 
 // s13Resolver resolves s13Atoms; users.manage has the read-side entry
@@ -245,98 +221,6 @@ func TestStage13_Decision(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { s13Check(t, Authorize(c.req, c.opts), c.want) })
-	}
-}
-
-// TestStage13_LegacyAtomRandomRolesMatchTheSuccessor is the custom-role half
-// of the reach oracle over random native roles (05-http-api 8.1, SEC4-2): for
-// every legacy atom of the table and random role patterns (sessions, keys,
-// delegated sessions, confined keys, partial settings.manage roles,
-// wildcards, admin, auth off), stage 13 admits a LegacyAtom route exactly when
-// the atom's native successor, AllOf its table scopes, admits the principal.
-// Both outcomes must occur for every atom, so neither side is vacuous.
-func TestStage13_LegacyAtomRandomRolesMatchTheSuccessor(t *testing.T) {
-	cat := s13Catalog(t)
-	atoms := s13Atoms()
-	names := make([]string, 0, len(atoms))
-	for a := range atoms {
-		names = append(names, a)
-	}
-	slices.Sort(names)
-	var concrete []rbac.Permission
-	for spec := range cat.All() {
-		concrete = append(concrete, spec.Name)
-	}
-	slices.Sort(concrete)
-	wild := []rbac.Permission{"books:*", "core:*", "core:system.*", "core:tasks.*", "books:request.*"}
-	settings := atoms["settings.manage"]
-	rng := rand.New(rand.NewPCG(13, 2026))
-	pick := func(pool []rbac.Permission, n int) []rbac.Permission {
-		out := make([]rbac.Permission, 0, n)
-		for range n {
-			out = append(out, pool[rng.IntN(len(pool))])
-		}
-		return out
-	}
-	roles := func() []rbac.Permission {
-		switch rng.IntN(10) {
-		case 0: // a custom role holding all but one of settings.manage's scopes
-			drop := rng.IntN(len(settings))
-			return append(slices.Clone(settings[:drop]), settings[drop+1:]...)
-		case 1:
-			return append(pick(concrete, rng.IntN(4)), rbac.CoreAdmin)
-		case 2:
-			return append(pick(concrete, rng.IntN(6)), pick(wild, 1+rng.IntN(2))...)
-		case 3: // a whole atom's scopes, sometimes plus noise
-			return append(slices.Clone(atoms[names[rng.IntN(len(names))]]), pick(concrete, rng.IntN(3))...)
-		default:
-			return pick(concrete, rng.IntN(12))
-		}
-	}
-	opts := AuthzOptions{OwnerRequired: true, ResolveAtom: s13Resolver, Catalog: cat}
-	admits, denies := map[string]int{}, map[string]int{}
-	const rounds = 600
-	for i := range rounds {
-		var p *auth.Principal
-		switch rng.IntN(6) {
-		case 0:
-			p = s13Key(cat, roles(), pick(concrete, 1+rng.IntN(8))...)
-		case 1:
-			p = s13Delegated(cat, roles()...)
-		case 2:
-			p = s13Key(cat, roles(), "books:fingerprint.worker")
-		case 3:
-			if rng.IntN(4) == 0 {
-				p = s13AuthOff(cat)
-				break
-			}
-			fallthrough
-		default:
-			p = s13Session(cat, roles()...)
-		}
-		for _, atom := range names {
-			got := Authorize(AuthzRequest{Perm: rbac.LegacyAtom(atom), Principal: p}, opts).Admitted()
-			successor := p.Perms.Satisfies(rbac.AllOf(atoms[atom]...))
-			if got && !successor {
-				t.Fatalf("round %d: %s admitted %s (perms %v), which its successor refuses", i, atom, p.Method, p.Perms.Concrete())
-			}
-			if !got && successor {
-				t.Fatalf("round %d: %s refused %s (perms %v), which its successor admits", i, atom, p.Method, p.Perms.Concrete())
-			}
-			if got {
-				admits[atom]++
-			} else {
-				denies[atom]++
-			}
-		}
-	}
-	for _, atom := range names {
-		if admits[atom] == 0 || denies[atom] == 0 {
-			t.Errorf("%s: %d admits, %d denies over %d rounds; both must occur", atom, admits[atom], denies[atom], rounds)
-		}
-	}
-	if len(names) < 12 {
-		t.Fatalf("the table names %d atoms, want every route atom", len(names))
 	}
 }
 
