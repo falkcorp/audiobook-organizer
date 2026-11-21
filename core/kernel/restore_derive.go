@@ -60,6 +60,11 @@ func (k *Kernel) deriveRestoreBoot(ctx context.Context) (*restoreBoot, error) {
 		return nil, fmt.Errorf("%w: restore journal %s: %w", errRestoreSourceUnreadable, out.ID, err)
 	}
 	rb := &restoreBoot{ID: out.ID, Owed: true, Records: recs}
+	if bootseam.RestoreWalk(ctx) {
+		// The crash-matrix cell's walk (F4-08 B10j): swapAfter journaled nothing at
+		// P4b, so P4d's steps 2 and 3 walk the journal's edges themselves.
+		rb.Owed, rb.Steps = false, k.swap.s
+	}
 
 	// The pre-swap store: the DB directory's set-aside, absent on a host loss
 	// (nothing was live to set aside).
