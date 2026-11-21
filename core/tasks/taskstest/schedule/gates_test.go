@@ -44,7 +44,7 @@ func TestScheduleHarness_TriggerGates(t *testing.T) {
 		{At: at(1, 12, 0)}, // boot: the start gate fires on the disabled key; tombstone seeds
 		{At: at(2, 1, 0), Finish: []tasks.Kind{"gotham.cave-scan"}}, // window opens without tombstone
 		{At: at(2, 12, 0), Finish: []tasks.Kind{tasks.WindowNightly}, Edit: func(*schedule.Config) { toggle = true }},
-		{At: at(3, 1, 0), Finish: []tasks.Kind{"gotham.tombstone"}}, // next opening lists it
+		{At: at(3, 1, 0), Finish: []tasks.Kind{"gotham.tombstone"}},                           // next opening lists it
 		{At: at(3, 6, 0), Boot: true, Edit: func(*schedule.Config) { scanOnStartup = false }}, // restart, start gate closed: nothing
 	}
 	got := schedule.Strings(schedule.Run(t, defs, cfg, steps))

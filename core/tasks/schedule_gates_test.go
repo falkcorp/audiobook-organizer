@@ -86,3 +86,33 @@ func TestSchedule_TriggerGatesNilIsProblem(t *testing.T) {
 		t.Fatalf("both gates set: %q", p)
 	}
 }
+
+// TestSchedule_IntervalWhen (F5-14): IntervalWhen gates the timing trigger
+// only. IntervalEnabled reads that gate alone (not When), and the start and
+// window accessors ignore it.
+func TestSchedule_IntervalWhen(t *testing.T) {
+	on := false
+	base := tasks.ScheduleFromConfig("modules.gotham.cave.schedules.scan")
+	s := base.IntervalWhen(func() bool { return on })
+	if !s.HasIntervalGate() || s.IntervalEnabled() || !s.Open() || !s.StartOpen() || !s.WindowOpen() {
+		t.Fatal("a closed IntervalWhen leaked into another trigger, or did not close the interval")
+	}
+	on = true
+	if !s.IntervalEnabled() {
+		t.Fatal("the interval gate was captured at build time")
+	}
+	if !s.When(func() bool { return false }).IntervalEnabled() {
+		t.Fatal("IntervalEnabled read the When gate")
+	}
+	if base.HasIntervalGate() || !base.IntervalEnabled() {
+		t.Fatal("IntervalWhen changed its receiver, or no gate reads closed")
+	}
+	c := validCommon()
+	c.Schedule = base.IntervalWhen(nil)
+	p := problemText(tasks.Task("gotham.cases.review", tasks.TaskSpec[struct{}, struct{}]{
+		Common: c, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
+	}))
+	if !strings.Contains(p, "IntervalWhen: nil gate") {
+		t.Fatalf("IntervalWhen(nil) accepted: %q", p)
+	}
+}

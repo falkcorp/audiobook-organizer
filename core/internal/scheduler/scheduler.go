@@ -418,6 +418,12 @@ func (s *Scheduler) pollEntry(ctx context.Context, e entry, now, since time.Time
 	if eff.window != "" && eff.t == nil {
 		return // a window-only member: the window runs it; its own clock is not polled
 	}
+	if !e.sched.IntervalEnabled() {
+		// IntervalWhen closed: the timing is disabled as the key's enabled
+		// flag would disable it (decide's disabled path), and only the
+		// timing: the key stays enabled, so window membership is unchanged.
+		eff.enabled = false
+	}
 	in := pollInput{now: now, since: since, poll: s.opts.Poll, loc: s.opts.Location, eff: eff, missed: e.sched.OnMissed()}
 	s.commitFire(ctx, e.kind, tasks.TriggerSchedule, func(prev tasks.Clock, had bool) (decision, error) {
 		return decide(prev, had, in), nil

@@ -32,11 +32,13 @@ type Schedule struct {
 	startWhen func() bool
 	// windowWhen is WindowWhen's gate: it closes window membership only.
 	windowWhen func() bool
-	params     json.RawMessage
-	live       bool
-	preview    bool
-	missed     MissedPolicy
-	problems   []string
+	// intervalWhen is IntervalWhen's gate: it closes the timing trigger only.
+	intervalWhen func() bool
+	params       json.RawMessage
+	live         bool
+	preview      bool
+	missed       MissedPolicy
+	problems     []string
 }
 
 // ScheduleFromConfig is the standard schedule (SIMP-6). Its timing is a config
@@ -218,6 +220,30 @@ func (s *Schedule) WindowWhen(gate func() bool) *Schedule {
 	return c
 }
 
+// IntervalWhen returns a copy whose timing trigger (the key's Every, DailyAt
+// or Cron) is also gated by gate, re-read at each poll; window membership and
+// the start trigger keep running whatever it says. A closed gate acts as the
+// key's enabled flag does for the timing alone: first sight writes no clock,
+// an existing clock is stamped GateClosedAt once and nothing fires, and the
+// poll that finds the gate open again is the re-open edge (the Missed policy
+// applies, nothing counts as missed). It is not the When gate, which lets the
+// clock advance and records each closed fire as gated.
+//
+// It is for a kind whose HEAD timer and HEAD window eligibility read
+// different enable flags (F5-14, library_scan: the timer ran on
+// scheduled.library_scan.enabled, the window on that flag or
+// scan_on_startup): the key stays enabled so the kind can be a window
+// member, and the timer's own switch is this gate. A nil gate is a problem.
+func (s *Schedule) IntervalWhen(gate func() bool) *Schedule {
+	c := s.clone()
+	if gate == nil {
+		c.problems = append(c.problems, "Schedule.IntervalWhen: nil gate")
+		return c
+	}
+	c.intervalWhen = gate
+	return c
+}
+
 // Params returns a copy whose scheduled runs get params p, JSON-encoded now;
 // an encoding error is recorded as a problem.
 func (s *Schedule) Params(p any) *Schedule {
@@ -266,6 +292,15 @@ func (s *Schedule) StartOpen() bool {
 	}
 	return s.Open()
 }
+
+// HasIntervalGate reports whether the timing trigger has its own gate
+// (IntervalWhen). Accessor coined by F5-14.
+func (s *Schedule) HasIntervalGate() bool { return s.intervalWhen != nil }
+
+// IntervalEnabled reports IntervalWhen's gate (true without one). It does not
+// read the When gate, which the scheduler applies to the fire separately.
+// Accessor coined by F5-14.
+func (s *Schedule) IntervalEnabled() bool { return s.intervalWhen == nil || s.intervalWhen() }
 
 // WindowOpen reports whether a window may start the kind now: the When gate
 // and WindowWhen's gate both open (true without either). Accessor coined by
