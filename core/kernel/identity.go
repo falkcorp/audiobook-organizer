@@ -43,9 +43,8 @@ import (
 // Bind and the events bus behind OnRoleChange.
 
 // identityModule is one module's RBAC declarations, as 06 §6.4.2's
-// Manifest.Permissions, Roles and ImportedRoleIDs will carry them. Those
-// manifest fields are not in core/module yet (F4-08 B1 adds them), so the
-// boot copies them into this struct.
+// Manifest.Permissions, Roles and ImportedRoleIDs carry them (the fields
+// landed with F4-08 B1). The boot copies them into this struct (B3).
 type identityModule struct {
 	ID              string
 	Permissions     []rbac.PermissionSpec

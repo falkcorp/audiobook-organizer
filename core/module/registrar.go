@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/tasks"
@@ -23,9 +24,10 @@ import (
 // goroutine-safe and is closed when Register returns; calls after that record
 // ProblemRegistrarClosed and take no effect. Methods record problems rather
 // than return errors (A4); Err reports them. Nothing recorded here takes
-// effect before P7 (A8). These are the R1 members and Tasks and Resources (F2);
-// Lanes, ChangeSink, Topics, Health and the rest arrive with their packages
-// (06 §6.4.10).
+// effect before P7 (A8). These are the R1 members, Tasks and Resources (F2),
+// and Topics and Subscribe (the identity flip's events surface, recorded
+// only until F4-08's boot wiring reads them); Lanes, ChangeSink, Health and
+// the rest arrive with their packages (06 §6.4.10).
 type Registrar struct {
 	id            ID
 	ctx           context.Context
@@ -74,6 +76,13 @@ type Registrations struct {
 	// at P7 (kernel/tasks.go).
 	Tasks     []tasks.Definition
 	Resources []string
+	// Topics are the catalog entries the module declared and Subscriptions
+	// its bus subscriptions, each in call order (Registrar.Topics,
+	// Registrar.Subscribe). Recorded as declared: the kernel declares the
+	// topics and then the subscriptions on the events bus at P7, which
+	// refuses a bad entry (kernelEvents.declare, kernelEvents.subscribe).
+	Topics        []events.TopicSpec
+	Subscriptions []events.Subscription
 }
 
 // NewRegistrar returns the registrar of one module's Register call.
@@ -105,6 +114,8 @@ func (r *Registrar) Close() Registrations {
 	rec.Workers = slices.Clone(rec.Workers)
 	rec.Tasks = slices.Clone(rec.Tasks)
 	rec.Resources = slices.Clone(rec.Resources)
+	rec.Topics = slices.Clone(rec.Topics)
+	rec.Subscriptions = slices.Clone(rec.Subscriptions)
 	return rec
 }
 
@@ -135,7 +146,9 @@ func (r *Registrar) problem(kind ProblemKind, format string, args ...any) {
 // or returns. Register uses it for its own reads (COR-24).
 func (r *Registrar) Context() context.Context { return r.ctx }
 
-// Deps returns the module-scoped dependency handles. Every field is non-nil.
+// Deps returns the module-scoped dependency handles (see Deps for which are
+// nil: Config, AuthCompat and, until F4-08 wires the identity services, Auth,
+// AuthAdmin and Audit).
 func (r *Registrar) Deps() Deps { return r.deps }
 
 // HTTP returns the module's route group rooted at /api/<ID>/v1 (05-http-api
@@ -296,6 +309,27 @@ func (r *Registrar) Resources(kinds ...string) {
 			}
 		}
 	})
+}
+
+// Topics declares the module's entries in the ONE topic catalog (05-events
+// §5E.3.1, SIMP-5): every bus or durable topic it publishes, with its schema,
+// its read Permission, optional Visible filter and Durable, Notify and
+// Realtime metadata. Build entries with events.NewTopic[T](name).Spec(...) or
+// the outbox topic's Spec. Names are "<ID>.<noun>.<verb-past>.v<N>". It only
+// records (06 §6.5.1 P6): the bus checks every name, permission and schema when
+// the kernel declares the catalog at P7, and notify and realtime read the same
+// catalog.
+func (r *Registrar) Topics(t ...events.TopicSpec) {
+	r.record("Topics", func() { r.rec.Topics = append(r.rec.Topics, t...) })
+}
+
+// Subscribe declares bus subscriptions built with events.On (the module's own
+// topics or core.* topics, typed) or events.OnRaw (another module's topic by
+// name, R3). They are frozen when Register returns and delivery begins at
+// Bus.Open (06 §6.5.2, COR-8). It only records: the bus checks each one at P7,
+// after every topic is declared.
+func (r *Registrar) Subscribe(s ...events.Subscription) {
+	r.record("Subscribe", func() { r.rec.Subscriptions = append(r.rec.Subscriptions, s...) })
 }
 
 // Err returns the problems recorded so far, as a *ValidationError; nil if

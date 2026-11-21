@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
@@ -24,8 +25,9 @@ import (
 
 // Options configure one process (06 §6.4.5). Zero values are valid defaults
 // unless noted. These are the R1 fields that need no storage (06 §6.4.10)
-// and F3's config lists, plus the shell's UI and UIOptions (F9-01); a field
-// whose package lands later (Authenticators, Auth, Adapters,
+// and F3's config lists, plus the shell's UI and UIOptions (F9-01) and the
+// identity flip's Authenticators and Auth (recorded here, read by no boot
+// phase until F4-08's wiring); a field whose package lands later (Adapters,
 // InterimBackends) arrives with it.
 type Options struct {
 	AppID string // app identifier, [a-z][a-z0-9]{1,15} (03 §3.6), e.g. "abo"
@@ -110,6 +112,27 @@ type Options struct {
 	// httpapi.LegacyAuthGin (ABO: "books" in R1). R2's identity flip clears it
 	// and deletes the field. "" = no module may (SEC2-17).
 	LegacyAuthGinUntil module.ID
+
+	// Authenticators are the app's identity extensions (05-authn §3.3; ABO:
+	// internal/cfaccess), wired by the kernel with auth's extension
+	// registration. This compile-time list is the ONLY place a MethodSpec may
+	// be Interactive or set MayChangeCredentials, and the only place an
+	// OwnerVerifier may come from; modules register their methods with
+	// Registrar.AuthMethod, which refuses all three (SEC2-16). nil = none.
+	// Not read until F4-08's boot wiring.
+	Authenticators []auth.Extension // {Authenticator, Spec auth.MethodSpec, Order}
+
+	// Auth is the app's compile-time auth configuration (05-authn §3.2
+	// auth.Options): accepted API-key prefixes and the defaults of the app's
+	// auth keys. ABO sets ImportedKeyPrefixes ["abk_"], because existing abk_
+	// keys survive R2's identity step and keep verifying by their SHA-256 hash
+	// beside new mck_ keys (D12 (b)), DefaultDisabledAllowRemote true (SEC4-8:
+	// every Docker install listens on a non-loopback address, so auth-off
+	// installs would otherwise refuse to boot from R2) and OIDCCallbackBase
+	// "/api/v1/auth/oauth", HEAD's callback path, which core serves from F4
+	// (05-authn §4.13). The zero value is what hello and new apps pass. Not
+	// read until F4-08's boot wiring.
+	Auth auth.Options
 
 	// Logger overrides the default slog handler construction (tests); nil =
 	// from config (05-logging §4).
