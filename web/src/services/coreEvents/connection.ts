@@ -19,14 +19,19 @@
 //  - core.stream.reset.v1 -> resync handlers, every one: a reset can follow the open (owed
 //    by the subscribe) or come mid-stream (a gap after withheld events), and only the
 //    manager's coalescing may merge them; core.stream.closed.v1 -> reconnect.
-//  - Waits are measured on a monotonic clock (deps.now), so a wall-clock step never
-//    stretches a backoff or a server hold.
+//  - Waits are measured on deps.now, by default clock.ts's awake clock: monotonic, so a
+//    wall-clock step back never stretches a backoff or a server hold, and counting the time
+//    a sleeping machine missed, so a wait that elapsed under a closed lid is spent on wake.
+//    A hold is checked against it every time it is read (a reopen, a restart, each loop
+//    pass); a wait timer that is already sleeping is woken by restart() (the manager does it
+//    when the browser reports the network back).
 //  - Every wait on the network has a deadline (connect and idle), so a hung server is a
 //    visible reconnect, not an infinite 'connecting'.
 
 import { ApiAuthRedirectError, decodeProblem } from '@mediacore/api-client';
 
 import { clampRetryAfter, parseRetryAfter, reconnectDelay } from './backoff';
+import { createAwakeClock } from './clock';
 import { createSseParser } from './sseParser';
 import {
   StreamProtocolError,
@@ -50,12 +55,13 @@ export const DEFAULT_IDLE_TIMEOUT_MS = 45000;
 export interface ConnectionDeps {
   fetch: typeof fetch;
   random: () => number;
-  /** A monotonic clock in ms (performance.now): backoff and hold deadlines are on it. */
+  /**
+   * A clock in ms that backoff and hold deadlines are recorded and read on. Default: a
+   * new createAwakeClock(), which never steps back and counts a sleep as elapsed time.
+   * Connections that share holds (one manager) must share one clock.
+   */
   now: () => number;
 }
-
-/** The default clock: monotonic, so an NTP step or a resumed laptop moves no deadline. */
-export const monotonicNow = (): number => performance.now();
 
 /**
  * Reconnect state that outlives one connection object. The manager keeps one per
@@ -168,7 +174,7 @@ export function createStreamConnection(opts: ConnectionOptions): StreamConnectio
   // eslint-disable-next-line no-restricted-properties
   const doFetch: typeof fetch = opts.deps?.fetch ?? ((...a) => globalThis.fetch(...a));
   const random = opts.deps?.random ?? Math.random;
-  const now = opts.deps?.now ?? monotonicNow;
+  const now = opts.deps?.now ?? createAwakeClock();
   const baseUrl = opts.baseUrl ?? '';
   const connectTimeoutMs = opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;

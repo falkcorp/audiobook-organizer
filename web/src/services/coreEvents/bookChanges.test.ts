@@ -134,6 +134,29 @@ describe('createBookChangeBatcher', () => {
     expect(batches).toEqual([{ kind: 'created', ids: ['bk-2'] }]);
   });
 
+  // #4813 r2 n-d: the consumer issues its refetch (and so clears) from inside onBatch.
+  it('a handler that clears the batcher drops the rest of that flush, but not what is added afterwards', async () => {
+    const seen: string[] = [];
+    const b: { current?: ReturnType<typeof createBookChangeBatcher> } = {};
+    b.current = createBookChangeBatcher(
+      (x) => {
+        seen.push(`${x.kind}:${x.ids.join(',')}`);
+        if (x.kind === 'deleted') {
+          b.current!.clear();
+          b.current!.add('created', 'bk-9'); // a change after the refetch was issued
+        }
+      },
+      { maxIds: 1 },
+    );
+    b.current.add('deleted', 'bk-1');
+    b.current.add('created', 'bk-2');
+    b.current.add('updated', 'bk-3');
+    b.current.flush();
+    expect(seen).toEqual(['deleted:bk-1']);
+    await tick(BOOK_CHANGE_WINDOW_MS);
+    expect(seen).toEqual(['deleted:bk-1', 'created:bk-9']);
+  });
+
   it('a handler that disposes the batcher stops the rest of that flush', () => {
     const seen: string[] = [];
     const b: { current?: ReturnType<typeof createBookChangeBatcher> } = {};

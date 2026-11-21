@@ -51,7 +51,10 @@ export interface BookChangeBatcher {
   add(kind: BookChangeKind, id: string): void;
   /** Deliver everything pending now and re-open the window. */
   flush(): void;
-  /** Drop everything pending without delivering it (a refetch now covers it). */
+  /**
+   * Drop everything pending without delivering it (a refetch now covers it). Called from
+   * inside the batch handler, it also drops the rest of the flush that is delivering.
+   */
   clear(): void;
   /** clear() and stop: later adds are ignored and no timer is left behind. */
   dispose(): void;
@@ -73,6 +76,10 @@ export function createBookChangeBatcher(
   let pending = new Map<BookChangeKind, Set<string>>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  // Bumped by clear(): a flush that is still delivering when its handler clears (the
+  // consumer issued its refetch from inside onBatch) stops, because what it has not
+  // delivered yet is covered by that refetch too (#4813 r2 n-d).
+  let epoch = 0;
 
   const setOf = (kind: BookChangeKind) => {
     let set = pending.get(kind);
@@ -92,10 +99,12 @@ export function createBookChangeBatcher(
     cancelTimer();
     const batch = pending;
     pending = new Map();
+    const mine = epoch;
     for (const kind of FLUSH_ORDER) {
       const ids = [...(batch.get(kind) ?? [])].sort();
       for (let start = 0; start < ids.length; start += maxIds) {
-        if (disposed) return; // a handler disposed it: deliver nothing more
+        // A handler disposed or cleared it: deliver nothing more of this flush.
+        if (disposed || epoch !== mine) return;
         const b: BookChangeBatch = { kind, ids: ids.slice(start, start + maxIds) };
         try {
           onBatch(b);
@@ -120,6 +129,7 @@ export function createBookChangeBatcher(
     },
     flush,
     clear() {
+      epoch++;
       cancelTimer();
       pending = new Map();
     },

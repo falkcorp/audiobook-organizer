@@ -329,15 +329,61 @@ describe('mockCoreEvents(page)', () => {
     await expect(mock.event(RUN, {})).rejects.toThrow(/got past the shim/);
   });
 
-  it('a second call on the same page throws, and the first call stays the only one installed', async () => {
+  // #4813 r2 m-c: scan-import-organize.spec.ts and setup-modes.spec.ts call mockEventSource twice
+  // per page, so the helper that installs this mock runs twice on one Page.
+  it('is safe to call twice per page: the second call returns the first handle and installs nothing', async () => {
     const { page, routes, initScripts } = fakePage();
-    await mockCoreEvents(page);
-    await expect(mockCoreEvents(page)).rejects.toThrow(/already mocked/);
+    const first = await mockCoreEvents(page, { refusals: [{ status: 429, retryAfterSeconds: 9 }] });
+    const second = await mockCoreEvents(page);
+    const third = await mockCoreEvents(page, { refusals: [{ status: 429, retryAfterSeconds: 9 }] });
+    expect(second).toBe(first);
+    expect(third).toBe(first);
     expect(routes).toHaveLength(1);
     expect(initScripts).toHaveLength(1);
+    const stream = client();
+    stream.subscribe(BOOK, () => {});
+    await tick();
+    expect(await second.requests()).toMatchObject([{ answer: 429 }]); // the first call's refusals
+  });
+
+  it('two calls that race share one setup', async () => {
+    const { page, routes, initScripts } = fakePage();
+    const [a, b] = await Promise.all([mockCoreEvents(page), mockCoreEvents(page)]);
+    expect(a).toBe(b);
+    expect(routes).toHaveLength(1);
+    expect(initScripts).toHaveLength(1);
+  });
+
+  it('a second call that names different options throws, and the first setup stands', async () => {
+    const { page, routes, initScripts } = fakePage();
+    const first = await mockCoreEvents(page, { heartbeatMs: 0 });
+    await expect(mockCoreEvents(page, { heartbeatMs: 5000 })).rejects.toThrow(/already mocked with different options/);
+    await expect(mockCoreEvents(page, { autoOpened: false })).rejects.toThrow(/different options/);
+    await expect(mockCoreEvents(page)).resolves.toBe(first);
+    expect(routes).toHaveLength(1);
+    expect(initScripts).toHaveLength(1);
+    // Another Page is neither shimmed nor guarded: it gets its own handle.
     const other = fakePage();
     delete w.__coreEventsMock;
-    await expect(mockCoreEvents(other.page)).resolves.toBeDefined();
+    const otherMock = await mockCoreEvents(other.page);
+    expect(otherMock).not.toBe(first);
+  });
+
+  it('a failed setup stays failed for every later call instead of adding a second init script', async () => {
+    const calls: string[] = [];
+    const page = {
+      addInitScript: async () => {
+        calls.push('init');
+      },
+      route: async () => {
+        calls.push('route');
+        throw new Error('route refused');
+      },
+      evaluate: async () => undefined,
+    } as unknown as Page;
+    await expect(mockCoreEvents(page)).rejects.toThrow(/route refused/);
+    await expect(mockCoreEvents(page)).rejects.toThrow(/route refused/);
+    expect(calls).toEqual(['init', 'route']);
   });
 
   it('a call before the shim exists in the page says so', async () => {
