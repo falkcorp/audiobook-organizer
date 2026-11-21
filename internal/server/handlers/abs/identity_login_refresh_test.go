@@ -120,6 +120,9 @@ func TestIdentityLogin_PasswordIsCores(t *testing.T) {
 	if u["id"] != "u1" || u["username"] != "bruce" || u["email"] != "bruce@example.com" {
 		t.Fatalf("response user is not core's record: %v", u)
 	}
+	if u["createdAt"] != float64(batmanCreated.UnixMilli()) || u["isActive"] != true {
+		t.Fatalf("response user does not carry core's creation time and standing: %v", u)
+	}
 	if got := h.sessionEpochs(); len(got) != 1 || got[0] != 4 {
 		t.Fatalf("session epochs %v, want [4]: the stamp is core's epoch", got)
 	}
