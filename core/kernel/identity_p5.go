@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -65,12 +66,13 @@ func (k *Kernel) buildIdentityServices(ctx context.Context) error {
 		Settings:      id.settings,
 		OnRoleChange:  publishRBACChanged(ke.bus),
 		OnInvalidated: publishPrincipalInvalidated(ke.bus),
-		// Client is nil on purpose: auth then builds the connection from the TCP
-		// peer and treats every forwarding header as not-direct, so the loopback
-		// exceptions fail closed. httpapi's trusted-proxy-aware resolver is the
-		// route wiring's (B4), and a resolver looser than that fallback would
-		// widen them.
-		Reach: k.reach, StateFiles: id.stateFiles,
+		// Client is httpapi's resolver, the one the routes and stage 13 use, so
+		// the connection auth judges is the connection the request was throttled
+		// and audited under. It is built on auth.DirectClient and only adds to it
+		// (trusted proxy, address, https, link), so it is never more local than
+		// the fallback auth uses when this is nil (httpapi.ClientInfoFrom).
+		Client: httpapi.ClientInfoFrom,
+		Reach:  k.reach, StateFiles: id.stateFiles,
 		Clock:   bootClock(ctx),
 		RBACLog: k.coreLog("rbac"), AuthLog: k.coreLog("auth"),
 		RBACMetrics: rbacSc, AuthMetrics: authSc,

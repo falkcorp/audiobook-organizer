@@ -44,6 +44,8 @@ func (f *raFakeAuthn) principal(name string) *auth.Principal {
 		return s13Key(f.cat, []rbac.Permission{"core:users.view"}, "core:users.view")
 	case "admin":
 		return s13Session(f.cat, rbac.CoreAdmin)
+	case "editor":
+		return s13Session(f.cat, "books:edit")
 	case "owner":
 		return s13Owner(f.cat, rbac.CoreAdmin)
 	}
@@ -335,7 +337,7 @@ func TestRouterAuth_AuditsEach403(t *testing.T) {
 // 12 and 13, an OwnAuth route meets neither, and a LegacyAuthGin mount's routes
 // meet neither.
 func TestRouterAuth_Legacy(t *testing.T) {
-	build := func(t *testing.T, mode LegacyAuth) (http.Handler, *raFakeAuthn) {
+	build := func(t *testing.T, mode LegacyAuth) (http.Handler, *raFakeAuthn, *atomic.Int64) {
 		t.Helper()
 		a := &raFakeAuthn{cat: s13Catalog(t)}
 		r := NewRouter(Options{}, Deps{})
@@ -354,7 +356,8 @@ func TestRouterAuth_Legacy(t *testing.T) {
 			routes = append(routes, LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/signal", Perm: rbac.Delegated("gcpd.signal"),
 				OwnAuth: true, AuthMethod: "gcpd.signal"})
 		}
-		ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		handled := new(atomic.Int64)
+		ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { handled.Add(1); w.WriteHeader(http.StatusOK) })
 		if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: ok, Auth: mode, Routes: manifestOf(routes...)}); err != nil {
 			t.Fatal(err)
 		}
@@ -362,7 +365,7 @@ func TestRouterAuth_Legacy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Build: %v", err)
 		}
-		return h, a
+		return h, a, handled
 	}
 	serve := func(h http.Handler, path, as string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodGet, path, nil)
@@ -375,15 +378,25 @@ func TestRouterAuth_Legacy(t *testing.T) {
 		return rec
 	}
 	t.Run("LegacyAuthCore", func(t *testing.T) {
-		h, a := build(t, LegacyAuthCore)
-		if rec := serve(h, "/api/v1/cases", ""); rec.Code != http.StatusUnauthorized {
+		h, a, handled := build(t, LegacyAuthCore)
+		rec := serve(h, "/api/v1/cases", "")
+		if rec.Code != http.StatusUnauthorized || s13Problem(t, rec).Code != "authentication_required" {
 			t.Fatalf("anonymous: %d %s", rec.Code, rec.Body)
 		}
-		if rec := serve(h, "/api/v1/cases", "viewer"); rec.Code != http.StatusForbidden {
-			t.Fatalf("wrong scope for the atom: %d %s", rec.Code, rec.Body)
+		rec = serve(h, "/api/v1/cases", "viewer")
+		if rec.Code != http.StatusForbidden || s13Problem(t, rec).Code != "permission_denied" {
+			t.Fatalf("a principal without the atom's scope: %d %s", rec.Code, rec.Body)
 		}
-		if rec := serve(h, "/api/v1/cases", "admin"); rec.Code != http.StatusOK {
-			t.Fatalf("core:admin holds every scope an atom resolves to: %d %s", rec.Code, rec.Body)
+		if n := handled.Load(); n != 0 {
+			t.Fatalf("a refused request reached the legacy handler %d times", n)
+		}
+		// core:admin implies every scope in the catalog, so it holds the atom's
+		// books:edit; the exact-scope principal is the one that proves the
+		// atom resolves to that scope and nothing narrower or wider.
+		for _, as := range []string{"admin", "editor"} {
+			if rec := serve(h, "/api/v1/cases", as); rec.Code != http.StatusOK {
+				t.Fatalf("%s holds books:edit: %d %s", as, rec.Code, rec.Body)
+			}
 		}
 		if rec := serve(h, "/api/v1/status", ""); rec.Code != http.StatusOK {
 			t.Fatalf("Public legacy route: %d %s", rec.Code, rec.Body)
@@ -395,9 +408,20 @@ func TestRouterAuth_Legacy(t *testing.T) {
 		if a.calls.Load() != before {
 			t.Fatal("stage 12 ran on an OwnAuth route")
 		}
+		// A path under the claim that the manifest does not list is not
+		// registered: the mount's handler never sees it, signed in or not.
+		handledBefore := handled.Load()
+		for _, as := range []string{"", "admin"} {
+			if rec := serve(h, "/api/v1/unlisted", as); rec.Code != http.StatusNotFound {
+				t.Fatalf("an unlisted path under the claim as %q: %d %s", as, rec.Code, rec.Body)
+			}
+		}
+		if handled.Load() != handledBefore {
+			t.Fatal("an unlisted path under a LegacyAuthCore claim reached the mount's handler")
+		}
 	})
 	t.Run("LegacyAuthGin", func(t *testing.T) {
-		h, a := build(t, LegacyAuthGin)
+		h, a, _ := build(t, LegacyAuthGin)
 		if rec := serve(h, "/api/v1/cases", ""); rec.Code != http.StatusOK {
 			t.Fatalf("a LegacyAuthGin route authenticates in gin, not here: %d %s", rec.Code, rec.Body)
 		}
