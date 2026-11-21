@@ -11,6 +11,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -23,9 +25,12 @@ import (
 // apply (c/backup/journal_unapplied/<seq>). A row of it that does not decode
 // fails every boot, and a row for a line the journal no longer holds sits in
 // the queue for good; `list` shows each row and what it is, `clear <seq>
-// --confirm` removes one that is poison or provably orphaned, audited, and
+// --confirm` acts on one that is poison or provably orphaned, audited, and
 // refuses every other, because an entry the journal still holds is a
-// revocation the store is owed.
+// revocation the store is owed. A poison row is never just deleted: its
+// pointer to a revocation is lost with it, so clear either rebuilds the row from
+// the journal line it named, or, when the journal cannot name it, fails the
+// whole store closed before deleting it.
 
 const journalQueueName = "storage journal-queue"
 
@@ -50,17 +55,24 @@ states are
   orphan      the journal verified clean and holds no such line, so nothing can
               ever apply the entry. Can be cleared.
   poison      the row does not decode; every boot that reads the queue fails
-              on it. Can be cleared.
+              on it. Can be cleared, and the line says how: either clear
+              replaces the row with an entry for the journal line at its seq (a
+              build that knows the kind then applies it; nothing is lost), or,
+              when the journal cannot name that line, clear first fails closed
+              (every API key needs_confirmation, every credential epoch bumped,
+              every session deleted) and then removes the row.
   unverified  the journal is missing, unreadable, broken, another install's or
               disagrees with the store, so it cannot be shown whether the entry
               is owed. Cannot be cleared.
   malformed_key  the key names no seq; listed only.
 
-clear removes the one entry at <seq> when it is orphan or poison, in one batch
+clear acts on the one entry at <seq> when it is orphan or poison, in one batch
 with an audit record (core.storage.journal_queue_clear, method offline), and refuses
-any other state, changing nothing. It requires --confirm: the entry is gone
-afterwards. A pending entry is never cleared by this command: boot a build that
-knows the kind, or restore the journal.`
+any other state, changing nothing. It requires --confirm. An orphan is removed. A
+poison row is repaired or removed after failing closed, as list says; a
+fail-closed clear signs every user in again and every API key must be confirmed
+again by an administrator. A pending entry is never cleared by this command: boot
+a build that knows the kind, or restore the journal.`
 
 // journalQueueCommand is storage journal-queue: one command whose first
 // argument is the verb, as storage cutover-blockers is.
@@ -151,8 +163,27 @@ func runJournalQueueClear(ctx context.Context, opts Options, mods []module.Modul
 		}
 		return fmt.Errorf("%s clear: %w", journalQueueName, err)
 	}
-	_, err = fmt.Fprintf(stdout, "Cleared the %s entry at seq %d.\n", e.State, e.Seq)
+	switch e.Clear {
+	case kernel.ClearRepair:
+		_, err = fmt.Fprintf(stdout, "Repaired the %s entry at seq %d: it now names the journal's line (kind %s) and the next plain boot answers it.\n", e.State, e.Seq, e.Kind)
+	case kernel.ClearFailClosed:
+		_, err = fmt.Fprintf(stdout, "Failed closed and cleared the %s entry at seq %d: every API key needs confirmation, every credential epoch was bumped, every session was deleted (%s).\n", e.State, e.Seq, countsText(e.FailClosedCounts))
+	default:
+		_, err = fmt.Fprintf(stdout, "Cleared the %s entry at seq %d.\n", e.State, e.Seq)
+	}
 	return err
+}
+
+// countsText is the fallback's counts as sorted name=count pairs.
+func countsText(m map[string]int) string {
+	if len(m) == 0 {
+		return "no rows changed"
+	}
+	parts := make([]string, 0, len(m))
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, m[k]))
+	}
+	return strings.Join(parts, " ")
 }
 
 func plural(n int, one, many string) string {

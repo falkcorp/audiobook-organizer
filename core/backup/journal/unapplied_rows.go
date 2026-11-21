@@ -7,6 +7,7 @@ package journal
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -73,4 +74,30 @@ func StageUnappliedRowDelete(b *storage.Batch, ks storage.Keyspace, r UnappliedR
 		return err
 	}
 	return b.In(ks).Delete([]byte(r.Key))
+}
+
+// StageUnappliedRowRepair stages the replacement of the undecodable row r by
+// the entry for the verified journal line l, Closed false, so the next plain
+// boot answers it (fails closed once, then applies the line when it knows the
+// kind). It is for the operator's tool only. It refuses a row that decodes
+// (its Closed is evidence and is never rewritten here), a malformed key, and a
+// line whose seq is not the one the row's key names, so a repair can only put
+// back the pointer the poison row was.
+func StageUnappliedRowRepair(b *storage.Batch, ks storage.Keyspace, r UnappliedRow, l Line) error {
+	switch {
+	case r.Err == nil || r.Entry != nil:
+		return fmt.Errorf("journal: %q decodes, so it is not repaired", r.Key)
+	case r.Malformed:
+		return fmt.Errorf("journal: %q names no seq, so no line can replace it", r.Key)
+	case l.Seq != r.Seq:
+		return fmt.Errorf("journal: the line at seq %d cannot replace the row for seq %d", l.Seq, r.Seq)
+	}
+	if err := bind(b, ks); err != nil {
+		return err
+	}
+	val, err := json.Marshal(UnappliedOf(l, false))
+	if err != nil {
+		return err
+	}
+	return b.In(ks).Set([]byte(r.Key), val)
 }

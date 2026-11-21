@@ -84,3 +84,52 @@ func TestStageUnappliedRowDelete_RemovesPoisonAndRefusesForeignKeys(t *testing.T
 		t.Errorf("the poison row survived: %+v", left)
 	}
 }
+
+// TestStageUnappliedRowRepair_ReplacesOnlyAPoisonRowWithItsOwnLine: a poison
+// row becomes the entry for the line at its seq with Closed false, and nothing
+// else can be repaired: a row that decodes (its Closed is evidence), a malformed
+// key, a line of another seq.
+func TestStageUnappliedRowRepair_ReplacesOnlyAPoisonRowWithItsOwnLine(t *testing.T) {
+	ctx := context.Background()
+	fx := newFixture(t)
+	b := fx.ks.NewBatch()
+	must(t, b.Set([]byte("journal_unapplied/00000000000000000005"), []byte("{broken")))
+	must(t, b.Set([]byte("journal_unapplied/00000000000000000007"), []byte(`{"seq":7,"mac":"c0","kind":"batcave.future","closed":true}`)))
+	must(t, b.Set([]byte("journal_unapplied/not-a-seq"), []byte("{broken")))
+	must(t, b.Commit(ctx, storage.Sync))
+	_ = b.Close()
+	rows, err := ScanUnapplied(ctx, fx.ks)
+	must(t, err)
+	byKey := map[string]UnappliedRow{}
+	for _, r := range rows {
+		byKey[r.Key] = r
+	}
+	line := futureLine(5, "a0")
+	rep := fx.ks.NewBatch()
+	defer func() { _ = rep.Close() }()
+	if err := StageUnappliedRowRepair(rep, fx.ks, byKey["journal_unapplied/00000000000000000007"], futureLine(7, "c0")); err == nil {
+		t.Error("a row that decodes was repaired")
+	}
+	if err := StageUnappliedRowRepair(rep, fx.ks, byKey["journal_unapplied/not-a-seq"], line); err == nil {
+		t.Error("a malformed key was repaired")
+	}
+	if err := StageUnappliedRowRepair(rep, fx.ks, byKey["journal_unapplied/00000000000000000005"], futureLine(6, "a0")); err == nil {
+		t.Error("a line of another seq repaired the row")
+	}
+	if rep.Count() != 0 {
+		t.Fatalf("refused repairs staged %d write(s)", rep.Count())
+	}
+	must(t, StageUnappliedRowRepair(rep, fx.ks, byKey["journal_unapplied/00000000000000000005"], line))
+	must(t, rep.Commit(ctx, storage.Sync))
+	got, err := ScanUnapplied(ctx, fx.ks)
+	must(t, err)
+	var fixed *Unapplied
+	for _, r := range got {
+		if r.Seq == 5 {
+			fixed = r.Entry
+		}
+	}
+	if fixed == nil || *fixed != UnappliedOf(line, false) {
+		t.Errorf("row 5 = %+v, want %+v", fixed, UnappliedOf(line, false))
+	}
+}
