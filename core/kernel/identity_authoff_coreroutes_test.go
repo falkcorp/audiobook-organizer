@@ -106,6 +106,7 @@ func offConfig(t *testing.T, p offPosture) (*swapHost, Config) {
 		httpapi.Handle(g, httpapi.Route{Method: http.MethodPost, Path: "/relay-owner", Name: "ownerRelay", Perm: rbac.Need(offSignal),
 			Guards: httpapi.Guards{Owner: true}}, ok)
 		httpapi.Handle(g, httpapi.Route{Method: http.MethodGet, Path: "/vault", Name: "getVault", Perm: rbac.Need(offVault)}, ok)
+		httpapi.Handle(g, httpapi.Route{Method: http.MethodGet, Path: "/vault-any", Name: "getVaultAny", Perm: rbac.AnyOf(offVault)}, ok)
 		return nil
 	}, seedStep(1, "cave")).with(func(m *module.Manifest) {
 		m.Permissions = []rbac.PermissionSpec{
@@ -236,7 +237,9 @@ func (c offCell) String() string {
 
 // denied is the brief's letter rule: 401 and 403 are a denial, any other status
 // below 500 is an allow.
-func (c offCell) denied() bool { return c.status == http.StatusUnauthorized || c.status == http.StatusForbidden }
+func (c offCell) denied() bool {
+	return c.status == http.StatusUnauthorized || c.status == http.StatusForbidden
+}
 
 // send makes one probe from its own source address.
 func (fx *offFx) send(method, path, body string) offCell {
