@@ -47,9 +47,6 @@ var journalDirectAllowed = map[string]string{
 	"internal/operations/opswriter/writer.go": "records the op-history rows AFTER the write committed, so an " +
 		"unclassified type must be logged and counted (History.failed), not refused; its types are the opswriter's " +
 		"own (book_file_modify, book_authors_modify, effect:<name>)",
-	"internal/plugins/maintenance/kinds_t6_g3.go": "the group-3 maintenance writer forwards a row the credits backfill already " +
-		"passed through database.RecordOperationChange (its store view's CreateOperationChange is called by that helper only); " +
-		"it creates no row of its own",
 	"pkg/ops/opstest/world.go": "the in-memory test world forwards the store method it implements; it creates no row of its own",
 	"internal/books/writer/metafetchgate/store.go": "the gated metafetch store decorator forwards the one store method it gates " +
 		"(CreateOperationChange) inside a tasks.Writer.Do; the row was already built, and classified, by the caller's " +

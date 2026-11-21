@@ -327,16 +327,17 @@ func (w headT6g3Writer) CreateOperationChange(change *database.OperationChange) 
 	if store == nil {
 		return errT6g3NoStore
 	}
-	return store.CreateOperationChange(change)
+	return database.RecordOperationChange(store, change)
 }
 
-// CreateOperationChange forwards the row to the writer. It sits here, with the
-// other forwarder of the journal method, so the journal-writer guard
-// (internal/arch) allowlists this file alone: credits_backfill.go calls
-// database.RecordOperationChange, which checks the row's type before it reaches
-// this method.
+// CreateOperationChange creates the row through the writer, behind the
+// classification check (database.RecordOperationChange refuses an unclassified
+// change type). Neither this view nor the HEAD writer selects the store's own
+// journal method, so the journal-writer guard (internal/arch) allowlists
+// neither file; the check also runs in credits_backfill.go before it reaches
+// here, and running it again is harmless.
 func (v t6g3CBStoreView) CreateOperationChange(change *database.OperationChange) error {
-	return v.w.CreateOperationChange(change)
+	return database.RecordOperationChange(v.w, change)
 }
 
 func (w headT6g3Writer) InvalidateAuthorsCache() { w.p.deps.InvalidateAuthorsCache() }
