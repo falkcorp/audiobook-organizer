@@ -165,13 +165,13 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **TODO-ORGANIZE-TRASHED-ONLY-LIBRARY-COPY** A protected book (files in the iTunes folder) whose only library copy is in the trash (`MarkedForDeletion`, not merged) still gets a fresh organized copy made beside it, and `resolveLibraryCopy` / `ExistingLibraryCopyOfFile` do the same for file work. The lookup reads `GetBooksByVersionGroup`, which omits trashed rows, so `retiredLibrarySiblingIn` (`internal/metafetch/service_apply.go`) can only ever find a MERGED copy, and the round-5 `library_copy_retired` refusal never fires for a trashed one; the trashed copy's files stay on disk until purge, so a second copy can duplicate them. Pre-existing, outside the retired-books PR. Decide explicitly: extend the lookup to see trashed siblings (a store call that includes them) and refuse the same way, or document that a trashed copy is treated as gone.
 
-- [ ] **RECONCILE-APPLY-ATOMIC-HOLDER-CHECK** `reconcile.apply` checks who holds the matched file inside the row's compare-and-swap (`fileRowMove.checkTarget`), but the store has no atomic "repoint unless the path is held": the repoint writes the single-owner `book_file_path` key with a plain `batch.Set`, so a row created between that read and the commit is still not seen. The window is the callback's own length. Close it in the store: a repoint variant that reads the path key inside the same batch and refuses when another row holds it, and use it from `reconcile.apply` and `repairs.Writer.RepointBookFile`. Found while closing RECONCILE-HOLDER-CHECK-AT-WRITE (#4719 round 1, m3).
+- [x] **RECONCILE-APPLY-ATOMIC-HOLDER-CHECK** (done 2026-11-19, #4821: `PebbleStore.ModifyBookFileUnlessPathHeld` re-checks the path key at the commit under the single-owner index mutex and refuses with `ErrBookFilePathHeld`; `reconcile.apply`'s forward repoint uses it) `reconcile.apply` checks who holds the matched file inside the row's compare-and-swap (`fileRowMove.checkTarget`), but the store has no atomic "repoint unless the path is held": the repoint writes the single-owner `book_file_path` key with a plain `batch.Set`, so a row created between that read and the commit is still not seen. The window is the callback's own length. Close it in the store: a repoint variant that reads the path key inside the same batch and refuses when another row holds it, and use it from `reconcile.apply` and `repairs.Writer.RepointBookFile`. Found while closing RECONCILE-HOLDER-CHECK-AT-WRITE (#4719 round 1, m3).
 
 - [ ] **RECONCILE-APPLY-CRASH-RESIDUAL** `reconcile.apply` journals its change rows BEFORE the writes they describe, and `reconcile.apply` is `ResumeDrop`. A process that dies between the journal and the writes leaves live, reversible rows for writes that never landed, and nothing voids them. Reverting such an operation after a later successful apply of the same match undoes that apply (the revert reads the later write's values as current): apply, crash, apply again, revert the crashed operation. The stranded-match hand-off (`handOff` in `internal/reconcile/apply_file_rows.go`) closes this only for a match whose row landed; a crash before any write leaves rows nothing hands over. Close it by making the journal rows and the writes land together, or by a startup sweep that voids the rows of a dropped `reconcile.apply` whose values are not current, or by running the hand-off after EVERY successful apply (not just a stranded finish). Found in the #4719 round 2 review (r2-m2).
 
-- [ ] **RECONCILE-APPLY-OP-DESCRIPTION-MOVES-FILES** The `reconcile.apply` operation `Description` in `internal/server/reconcile_ops.go` ("moving files and updating the database") and the applycap comment just below it ("each match moves a file") are wrong: the apply repoints a book and its file row at a file that already exists and moves nothing on disk. Reword both. `reconcile_ops.go` was off limits to #4719 (platform row F5-13), so this is filed instead of edited. Found in the #4719 round 1 review (n2).
+- [x] **RECONCILE-APPLY-OP-DESCRIPTION-MOVES-FILES** (done 2026-11-19, #4821: the operation description and the applycap comment are both reworded) The `reconcile.apply` operation `Description` in `internal/server/reconcile_ops.go` ("moving files and updating the database") and the applycap comment just below it ("each match moves a file") are wrong: the apply repoints a book and its file row at a file that already exists and moves nothing on disk. Reword both. `reconcile_ops.go` was off limits to #4719 (platform row F5-13), so this is filed instead of edited. Found in the #4719 round 1 review (n2).
 
-- [ ] **RECONCILE-SCAN-READS-FILE-ROWS** The reconcile scan still decides "missing" and "untracked" from `book.file_path`, not from the book's `book_file` rows. `reconcile.apply` now repoints the row with the book (#4719), but a book the old apply damaged (book repointed, row left at the old path flagged Missing) is no longer "missing" by `book.file_path`, so the scan never offers it again and its row stays stale. Decide whether the scan (and the Missing files Repairs fixer) should read the rows, and add a repair for books whose `book.file_path` exists on disk while their one row points at a missing path (REPOINT the row, never delete it). Also open: `ReconcileApplyItem` carries no match type, so the apply clears the row hash even for a hash match, where the Missing files fixer would keep it.
+- [ ] **RECONCILE-SCAN-READS-FILE-ROWS** The reconcile scan still decides "missing" and "untracked" from `book.file_path`, not from the book's `book_file` rows. `reconcile.apply` now repoints the row with the book (#4719), but a book the old apply damaged (book repointed, row left at the old path flagged Missing) is no longer "missing" by `book.file_path`, so the scan never offers it again and its row stays stale. Decide whether the scan (and the Missing files Repairs fixer) should read the rows, and add a repair for books whose `book.file_path` exists on disk while their one row points at a missing path (REPOINT the row, never delete it).
 
 - [ ] **SCRUB-REAL-STRINGS-FROM-AUTHOR-MERGE-FIXTURES** Older maintenance test fixtures carry real author names and real book titles, which the public-repo rule says to keep out: `newRelinkFixture` and `relinkFixture.run`'s author list in `internal/plugins/maintenance/author_strip_merge_relink_test.go` (a real author and a series title), `stripFixture` in `author_strip_merge_test.go`, and the conjunction-repair and duplicate-merge fixtures (`author_conjunction_repair_test.go`, `author_duplicate_merge_test.go`, which also repeat a real name in their params). PR 4756 round 2 gave its own new lock tests a Batman fixture (`batmanRelinkFixture`) and left these alone. Replace every real person with a Batman character and every real title with a Batman storyline, keeping the shapes the tests rely on (a numbered twin that strips to the real author's name, a title-as-author row, a case-variant duplicate), then scan the diff before pushing.
 
@@ -322,7 +322,7 @@ into one of the curated sections below, is a normal direct edit.
       this changes behaviour today). Two oracle gaps in
       `internal/maintenance/jobs/writes_oracle_test.go` and
       `writes_trace_test.go`, and three F5-18 preparation items.
-      - Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` (or
+      - [x] (Done 2026-11-19, F5-18m, #4832: default-deny, with `UNRESOLVED` recording) Rewrite the SSA walk on `golang.org/x/tools/go/callgraph/vta` (or
         `cha`) over the same program. It follows an interface call into its
         implementations, which removes the hand alias for
         `tagger.LibraryImporter.ImportPath`, and it follows functions passed as
@@ -330,7 +330,7 @@ into one of the curated sections below, is a normal direct edit.
         through a non-store name (for example `dedup.dedupBookWriter.RevertBookToVersion`)
         is dropped silently, because only names that start with a write verb or
         have a table row are classified.
-      - Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
+      - [x] (Done 2026-11-19, F5-18m, #4832) Key `traceInert` by `"<receiver>.<method>"`, as `traceAliases` already is.
         It matches a bare method name on any receiver, so a future write named
         `Move` or `Locked` on another type would be ignored.
       - Make write-set deferral visible before the flip: surface the deferral
@@ -347,12 +347,21 @@ into one of the curated sections below, is a normal direct edit.
         locking (a per-book resource ID through `RunItems`) instead of a
         whole-kind write set, so a scheduled kind waits for one batch and not for
         a job's 4h timeout.
-      - No test checks that `taglib_cgo.go` and `taglib_support.go` reach the
+      - [x] (Done 2026-11-19, F5-18m, #4832: `TestTaglibVariants_ReachTheSameWriteHelpers`) No test checks that `taglib_cgo.go` and `taglib_support.go` reach the
         same write helpers. The write-set oracle walks the non-cgo variant;
         production ships the cgo one (`native_taglib`), which cannot be loaded
         without cgo and the vendored libraries.
-      - `FailJobWritesWith` (in `export_writes_test.go`) swaps a package
+      - [x] (Done 2026-11-19, F5-18m, #4832: replaced by `KindsWithFailingWrites` over `KindDeps.writes`) `FailJobWritesWith` (in `export_writes_test.go`) swaps a package
         variable, so it is unsafe under `t.Parallel`.
+      - Follow calls that leave the module in the write-set oracle: a module
+        value converted to an interface declared outside the module and handed
+        to outside code (a module `io.Writer` under `slog.NewJSONHandler`, a
+        `RoundTripper` in an `http.Client`) is not recorded, and outside code can
+        call its methods back (`docs/agent-tasks/platform-core/seams.d/F5-18m.md`).
+      - `containerEscapes` opens a local slice or map only when a call receives
+        it: one stored into a field or variable and filled through that alias is
+        read from the local's own stores and records nothing. No in-tree instance
+        is known (same seams note).
 
 - [ ] **TODO-CHECKTITLE-SHARED-SEGMENT** `applygate.checkTitle` (`internal/applygate/evidence.go`, the variant loop at lines 335-366) agrees on a SHARED TITLE SEGMENT: it compares the candidate's whole title and its part before ":" or a spaced dash against the book's whole title and each of the book's segments, and `best >= 0.85` is an agree. Two volumes of one storyline share the segment before the colon, so the title check agrees for the wrong volume. Measured against `origin/main` (not the sequence work): with the leading list number stripped from the stored title and file name and a stale stored position, main APPLIES four of five pairs: stored "Hush: Part 1" with file "Hush: Part 1.m4b" and stale position 2 against candidate "Hush: Part 2" #2; stored "Hush: Part 2" and stale position 1 against "Hush: Part 1" #1; stored "Hush: Part I" with file "Hush Part I.m4b" and stale position 2 against "Hush: Part II" #2; stored "Batman: Dark Victory" and stale position 1 against "Batman: The Long Halloween" with subtitle "The Prelude to Dark Victory" #1 (runtime within 5% on every pair). The fifth, stored "Batman: Year 2" and position 1 against "Batman: Year One" #1, is refused by main as a book sequence conflict (the title's own 2 against position 1). The fix belongs to its own PR: a title check that also requires the candidate's whole `Title` field (not only its main part, and not the subtitle) to be covered by the book's title, with roman numerals, digits and number words folded and single-letter numerals kept. Related gap, also on main: the `already_applied` skip exists only in `planCachedApply` (`internal/server/batch_apply_one.go:444-447`); `planOpResultApply` (same file, lines 568-615, used by the candidate-batch route and `apply_when_scanned_op.go`) has no `MetadataApplied` check, so an applied book gets a fresh fetch and is gated again on that path.
 
@@ -592,7 +601,7 @@ into one of the curated sections below, is a normal direct edit.
       before flushing the tap on shutdown, and adds the `log_journal_degraded` health
       token.
 
-- [ ] **TODO-F7-05-SMTP-DIAL-GUARD** (hard precondition of the F7-09 flip) The `core.email` channel is admitted by the
+- [x] **TODO-F7-05-SMTP-DIAL-GUARD** (done 2026-11-19, F7-09 T2, #4831: `integrations.GuardedDial` and the `providerhttp` gate's `DialContext`; seams in `docs/agent-tasks/platform-core/seams.d/F7-09-T2.md`) (hard precondition of the F7-09 flip) The `core.email` channel is admitted by the
       integrations gate but its SMTP dial has no egress guard: providerhttp's guard
       wraps HTTP only, so an SMTP host that resolves to a private address is not
       refused. Add a dial hook an adapter can use (F7-01 or providerhttp) and use it
@@ -674,7 +683,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Settle `stopping{watchdog}`: `failed` (reason watchdog) or `timed_out`** 05-tasks §5T.8.3 maps a run left stopping with StopReason watchdog to `failed` with reason watchdog; R0's own `StopTerminal` ends it `timed_out`. F2-13's `run-stopping-watchdog` records the spec's mapping (`expected` and `imported_as: {"state": "failed", "reason": "watchdog"}` in `internal/books/testdata/r2corpus/manifest.json`). Confirm the spec or change it; if it changes, update `IMPORTED_AS` in `scripts/r2corpus/overlay/build_overlay.py` and its pinned table in `scripts/tests/test_build_overlay.py` (seams.d/F2-13.md).
   - Owner: 05-tasks' owner, before F5's M4 lands.
 
-- [ ] **F4-02-ROLE-GUARD** Guard role definitions in core auth's last-admin rule
+- [x] **F4-02-ROLE-GUARD** (done 2026-11-19, #4771 rounds 1 to 3, merged as #4825: a role-set generation guards all three exits of `keepAnAdmin`, `DeleteRole` applies the last-admin rule, and every role-giving write claims the role-claim counter) Guard role definitions in core auth's last-admin rule
       before anything implements `rbac.Holders`. `core/auth`'s `keepAnAdmin`
       guards the other admin holder's user record but only reads the role
       definitions: `rbac.Store` cannot stage an Expect on a role into auth's
@@ -2665,7 +2674,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **REPAIRS-LANE-NO-APPLY-CAP** The Repairs lane has no `applycap` / `BulkApplyMaxItems` limit: `repairs.apply` writes every selected row (Apply all applicable included). `reconcile.apply` refuses a selection over that cap (`internal/server/reconcile_ops.go` around :143), and the Missing files fixer (03-PR9b) used to inherit it through that op; since it now writes directly, a Missing files apply of thousands of rows is not capped. Owner question: should `repairs.apply` enforce `BulkApplyMaxItems` for every fixer, only for fixers that ask for it, or not at all (the lane already re-plans each row, journals every write and is revertible)?
 
-- [ ] **MISSING-FILES-SKIP-LABELS** The Missing files Repairs fixer (`reconcile.missing-files`, 03-PR9b) adds skip kinds `no_candidate`, `book_gone`, `path_changed`, `not_missing`, `file_gone`, `file_tracked`, `no_file_row`, `own_row_at_match`, `shared_match`, `index_warming` and `error` that `SKIP_KIND_LABEL` in `web/src/components/review/RepairsPanel.tsx` has no words for, so their chips show the raw kind (`no_candidate (12)`). 03-PR9b's brief allowed no frontend source edit beyond one command description; add the labels in 03-PR10 or after it.
+- [x] **MISSING-FILES-SKIP-LABELS** (done 2026-11-20, #4842: `SKIP_KIND_LABEL` and the fixer's row-class labels now have words) The Missing files Repairs fixer (`reconcile.missing-files`, 03-PR9b) adds skip kinds `no_candidate`, `book_gone`, `path_changed`, `not_missing`, `file_gone`, `file_tracked`, `no_file_row`, `own_row_at_match`, `shared_match`, `index_warming` and `error` that `SKIP_KIND_LABEL` in `web/src/components/review/RepairsPanel.tsx` has no words for, so their chips show the raw kind (`no_candidate (12)`). 03-PR9b's brief allowed no frontend source edit beyond one command description; add the labels in 03-PR10 or after it.
 
 - [ ] **Owner question: a `library.bulk-metadata-fetch` selection that resolves to zero books falls through to a whole-library fetch.** A filter that matches nothing, or `book_ids: []`, leaves `bookIDs` empty, and the op then runs the whole-library path (`internal/server/metadata_ops.go`, around the `len(bookIDs) > 0` branch); `resolveFilterToBookIDs` only refuses filters with an empty value. Recommended fix: treat a given-but-empty selection as nothing to do (finish with a "0 books selected" summary) and keep the whole-library fetch for a genuinely absent selection. Pre-existing, found in the 04-P14f review; the owner decides whether any caller relies on the fall-through.
 
