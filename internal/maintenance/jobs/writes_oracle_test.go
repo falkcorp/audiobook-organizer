@@ -1839,9 +1839,11 @@ func checkProductionBuild(pkgs []*packages.Package) error {
 }
 
 // loadOracleProgram loads the patterns with their dependencies' syntax and
-// builds the SSA program and call graph. checkBuild asks for the production
-// build check (the jobs package's import graph has internal/fileops; a fixture's
-// does not). overlay is extra source files, by absolute path, that the load sees
+// builds the SSA program and call graph. checkBuild asks for the checks that
+// belong to the jobs package's own import graph: the production build check
+// (the graph has internal/fileops) and the file-writer table check
+// (checkOutsideFileWriters, whose packages the graph reaches). A fixture's graph
+// has neither, so it passes false. overlay is extra source files, by absolute path, that the load sees
 // as if they were in the tree: the probe test uses it to add a function whose
 // only effect is one call, which the real jobs do not isolate.
 func loadOracleProgram(checkBuild bool, overlay map[string][]byte, patterns ...string) (*oracleProgram, error) {
@@ -1864,8 +1866,10 @@ func loadOracleProgram(checkBuild bool, overlay map[string][]byte, patterns ...s
 		}
 	}
 	prog, ssapkgs := ssautil.AllPackages(pkgs, ssa.InstantiateGenerics)
-	if err := checkOutsideFileWriters(prog); err != nil {
-		return nil, err
+	if checkBuild {
+		if err := checkOutsideFileWriters(prog); err != nil {
+			return nil, err
+		}
 	}
 	for _, p := range ssapkgs {
 		if p != nil && strings.HasPrefix(p.Pkg.Path(), oracleModule) {
