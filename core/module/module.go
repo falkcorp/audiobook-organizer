@@ -8,9 +8,12 @@
 // the Registrar of Register and the module-scoped Deps. It is layer L7.
 //
 // This is the surface of 06 §6.4.10 up to the config flip (F3: Manifest.Settings,
-// Cutover and Rewrite, Importers, Deps.Secrets), minus the members whose
-// package lands later, which are absent, not stubbed (Permissions and Roles,
-// Library, Requires and the rest). Every later member is added additively.
+// Cutover and Rewrite, Importers, Deps.Secrets) and the declaration half of
+// the identity flip (F4: Manifest.Permissions, Roles and ImportedRoleIDs,
+// Registrar.Topics and Subscribe, Deps.Auth, AuthAdmin, AuthCompat, Audit and
+// Events, Importers.Auth, Roles and Audit), recorded and unread until F4-08's
+// boot wiring. Members whose package lands later are absent, not stubbed
+// (Library, Requires and the rest). Every later member is added additively.
 package module
 
 import (
