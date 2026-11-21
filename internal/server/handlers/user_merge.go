@@ -33,6 +33,10 @@ type UserMergeService interface {
 	// merges permanent (usermerge.ErrMergePermanent); the journal routes ask it
 	// before they read a journal.
 	CheckAction(action usermerge.Action, journalID string) error
+	// CheckAvailable refuses (usermerge.ErrUnavailableUnderIdentity) while the
+	// merge cannot run against core's account store; preview and apply ask it
+	// before they resolve an account or build a plan.
+	CheckAvailable() error
 	BuildPlan(ctx context.Context, req usermerge.PlanRequest) (*usermerge.Plan, error)
 	LoadJournal(id string) (*usermerge.Journal, error)
 	ListJournals() ([]usermerge.JournalSummary, error)
@@ -92,6 +96,18 @@ func (h *UserHandler) mergeActor(c *gin.Context) (id string, ok bool) {
 	return actor.ID, true
 }
 
+// mergeAvailable answers 409 merge_unavailable_under_identity, and false, while
+// the merge cannot run against core's account store (F4-08 B10l guard). It runs
+// right after the actor check and before any account is resolved, any body is
+// read or any plan is built.
+func (h *UserHandler) mergeAvailable(c *gin.Context) bool {
+	if err := h.merge.CheckAvailable(); err != nil {
+		h.mergeError(c, "check merge availability", err)
+		return false
+	}
+	return true
+}
+
 // accountID resolves a user id taken from the URL to the id of the stored
 // account, answering 404 when there is none. The merge services only ever see
 // the stored id, never the request's text: a path parameter is request input
@@ -146,6 +162,9 @@ func (h *UserHandler) PreviewUserMerge(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !h.mergeAvailable(c) {
+		return
+	}
 	survivorID, absorbedID, ok := h.mergeAccounts(c)
 	if !ok {
 		return
@@ -167,6 +186,9 @@ func (h *UserHandler) PreviewUserMerge(c *gin.Context) {
 func (h *UserHandler) ApplyUserMerge(c *gin.Context) {
 	actorID, ok := h.mergeActor(c)
 	if !ok {
+		return
+	}
+	if !h.mergeAvailable(c) {
 		return
 	}
 	var req struct {
@@ -235,6 +257,12 @@ func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, all
 	if !ok {
 		return
 	}
+	// F4-08 B10l guard: a resume writes through the merge service, which cannot
+	// run against core's account store, so it answers before the permanence
+	// check below reads any journal. An undo is only ever refused as permanent.
+	if action == usermerge.ActionResume && !h.mergeAvailable(c) {
+		return
+	}
 	jid := c.Param("jid")
 	// First, before any journal is read: after the identity flip every journal
 	// is permanent (F4-08 A9), whatever its content, so an undecodable one is
@@ -298,6 +326,8 @@ func (h *UserHandler) mergeError(c *gin.Context, what string, err error) {
 	switch {
 	case errors.Is(err, usermerge.ErrMergePermanent):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), usermerge.ProblemMergePermanent)
+	case errors.Is(err, usermerge.ErrUnavailableUnderIdentity):
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), usermerge.ProblemUnavailableUnderIdentity)
 	case errors.Is(err, usermerge.ErrJournalNotFound):
 		httputil.RespondWithNotFound(c, "merge journal", c.Param("jid"))
 	case errors.Is(err, usermerge.ErrUnsupported):
