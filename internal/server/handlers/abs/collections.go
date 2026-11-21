@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -572,7 +573,14 @@ func (h *Handler) canManageCollections(c *gin.Context) bool {
 	// ABSRequireAuth's Bind() loads the caller's effective permissions into the
 	// request context (narrowed by API-key scope), so auth.Can is meaningful on
 	// this surface — it is not a no-op the way a bare c.Get would be.
-	if !auth.Can(c.Request.Context(), auth.PermCollectionsManage) {
+	//
+	// Under core identity (F4-08 B7) the atom's table entry is judged through
+	// the principal stage 12 bound instead.
+	held, bridged := legacyauth.Held(c.Request.Context(), string(auth.PermCollectionsManage))
+	if !bridged {
+		held = auth.Can(c.Request.Context(), auth.PermCollectionsManage)
+	}
+	if !held {
 		respondError(c, http.StatusForbidden,
 			"permission denied: "+string(auth.PermCollectionsManage))
 		return false
