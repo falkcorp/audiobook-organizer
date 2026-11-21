@@ -83,6 +83,29 @@ func TestAdminHeld(t *testing.T) {
 	}
 }
 
+// TestAdminRefused: the role-name sites' core-identity leg refuses only under
+// core identity, and only a caller without core:admin. With no Identity bound
+// (LegacyAuthGin) nothing is refused whatever principal the context carries.
+func TestAdminRefused(t *testing.T) {
+	b := newBridge(t, nil)
+	id := &Identity{Bridge: b}
+	for name, tc := range map[string]struct {
+		ctx  context.Context
+		want bool
+	}{
+		"no identity, a principal without core:admin": {as(coreauth.MethodSession, setChecker{"books:view"}), false},
+		"no identity, no principal":                   {context.Background(), false},
+		"identity, core:admin held":                   {WithIdentity(as(coreauth.MethodSession, setChecker{rbac.CoreAdmin}), id), false},
+		"identity, core:admin not held":               {WithIdentity(as(coreauth.MethodSession, setChecker{"books:view"}), id), true},
+		"identity, no principal":                      {WithIdentity(context.Background(), id), true},
+		"identity, the auth-disabled principal":       {WithIdentity(as(coreauth.MethodAuthDisabled, laxChecker{}), id), true},
+	} {
+		if got := AdminRefused(tc.ctx); got != tc.want {
+			t.Errorf("%s: AdminRefused = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
 // TestAuthenticate (05-http-api §8.3 RequireAuth row): the principal's user
 // and permissions become HEAD's context values and the gin user.
 func TestAuthenticate(t *testing.T) {

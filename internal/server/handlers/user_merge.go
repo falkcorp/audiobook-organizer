@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	"github.com/gin-gonic/gin"
@@ -73,6 +74,15 @@ func (h *UserHandler) mergeActor(c *gin.Context) (id string, ok bool) {
 	}
 	if h.merge == nil {
 		httputil.RespondWithServiceUnavailable(c, "user merge is not available on this server")
+		return "", false
+	}
+	// Under core identity (F4-08 B7) the actor must also hold core:admin through
+	// the checker stage 12 bound (05-rbac §4.6): the role test above stays as
+	// HEAD's, and this is a further refusal, never a replacement (the pin on
+	// the statement above is B6's to discharge). It follows the capability check
+	// only because the pin test's anchor text runs through it.
+	if legacyauth.AdminRefused(c.Request.Context()) {
+		httputil.RespondWithForbidden(c, "merging accounts needs the admin role")
 		return "", false
 	}
 	return actor.ID, true
