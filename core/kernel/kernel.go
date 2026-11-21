@@ -172,24 +172,16 @@ type Config struct {
 	// UIOptions is app.Options.UIOptions, merged into the ui.Options P8
 	// builds (FE3-4). Ignored with a zero UI.
 	UIOptions ui.AppOptions
-	// CoreConfigBoot turns on core's own config and secrets boot (F3-07 slice
-	// a5; 06 §6.5.1 P0, P3, P4b and P4d): the layered config store built from
-	// ConfigOptions, the secrets store opened at the start of P4b, and both
-	// owners claimed in the store. false, the default, boots as before: no
-	// config layer is read through core, no keyring is created and no
-	// c/config/ or c/secrets/ row is written. It is one explicit bool, not
-	// the presence of the wiring, so a build without it is byte-for-byte the
-	// old boot; slice (e) of F3-07 deletes it with R1Values. ABO leaves it
-	// off.
-	CoreConfigBoot bool
 	// ConfigOptions are the operator layers of the config boot: the app's
 	// Environ, FilePath, Flags, Passthrough, EnvBindings and Retired
 	// (app.Options.configOptions); the kernel adds AppID, the logger, the
-	// clock, the boot-record root and the secrets. Read only when
-	// CoreConfigBoot is set.
+	// clock, the boot-record root and the secrets. A boot that is not a
+	// Describe builds core's layered config store from them at P0 (06
+	// section 6.5.1), the secrets store at the start of P4b, and claims both
+	// owners in the store.
 	ConfigOptions config.Options
 	// StateDirDefault is app.Options.StateDir: the compiled default of
-	// core.paths.state_dir. Read only when CoreConfigBoot is set.
+	// core.paths.state_dir.
 	StateDirDefault string
 	// CoreDefaults are the app's compiled defaults of the core keys whose
 	// default is the app's to name (app.Options.CoreDefaults).
@@ -271,8 +263,8 @@ type Kernel struct {
 	// before start step 7.
 	perimeterStop func()
 	// sectionCache is the section cache a test handed the boot in its
-	// bootseam.Seams (read at P5), for the core config built at P7; nil in
-	// every production boot.
+	// bootseam.Seams (read at the start of the boot), for the layered store
+	// P0 builds and the core config built at P7; nil in every production boot.
 	sectionCache *config.SectionCache
 	audit        *audit.Store
 	auditSc      *metrics.Scope // "<namespace>.audit"
@@ -292,11 +284,11 @@ type Kernel struct {
 	// it; false until then. P4b binds it, with the Legacy reader, into the
 	// Importers a Cutover func holds (Importers.AllowKeyRegen).
 	importerAllowRegen bool
-	// cfgBoot is the layered config store (Config.CoreConfigBoot): built at
-	// P0, loaded at P3, bound to the DB layer at P4b and attached at P4d. nil
-	// when the gate is off, which is every boot of ABO.
+	// cfgBoot is the layered config store: built at P0, loaded at P3, bound to
+	// the DB layer at P4b and attached at P4d. nil for Describe, which does no
+	// I/O and so has no boot.
 	cfgBoot *configBoot
-	// sec is the open secret store (Config.CoreConfigBoot, a store open): opened
+	// sec is the open secret store (a store open): opened
 	// at the start of P4b, closed before the store (storage.go closeStorage).
 	sec *kernelSecrets
 	// settingHandles are the live handles of the enabled modules' declared

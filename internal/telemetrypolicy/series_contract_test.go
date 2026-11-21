@@ -77,8 +77,11 @@ var inScopePrefixes = []string{"audiobook_organizer_", "ai_dispatch_", "ai_", "h
 // <namespace>_<core subsystem>_* (05-metrics §2). Since R1-15 /metrics serves
 // the App's Provider, so the kernel's own series (boot_phase at R1) share the
 // namespace; core's tests contract them, so this contract skips them rather
-// than pinning core's names in ABO's golden.
-var coreOwnedPrefixes = []string{"audiobook_organizer_kernel_"}
+// than pinning core's names in ABO's golden. Since F3-07 every boot runs the
+// config boot, so the layered store's <namespace>_config_* families
+// (core/config/metrics.go, contracted by core/config/metrics_test.go) are
+// served too.
+var coreOwnedPrefixes = []string{"audiobook_organizer_kernel_", "audiobook_organizer_config_"}
 
 // targetInfo is the OTel exporter's resource family; it is in scope but not in
 // the golden (it carries the resource, not an instrument).
@@ -468,32 +471,45 @@ func aboMetricIdentity() app.Options {
 	return app.Options{AppID: "abo", MetricNamespace: "audiobook_organizer", ServiceName: "audiobook-organizer"}
 }
 
-func TestMain(m *testing.M) {
+func TestMain(m *testing.M) { os.Exit(runMain(m)) }
+
+// runMain is TestMain's body with deferred cleanup: the state directory the
+// boot writes its keyring and boot record into is removed on every path.
+func runMain(m *testing.M) int {
 	ctx := context.Background()
-	p, err := coretest.NewMetricsProvider(ctx, aboMetricIdentity())
+	stateDir, err := os.MkdirTemp("", "telemetrypolicy-state-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "state directory:", err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(stateDir) }()
+	opts := aboMetricIdentity()
+	opts.StateDir = stateDir
+	p, err := coretest.NewMetricsProvider(ctx, opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "coretest.NewMetricsProvider:", err)
-		os.Exit(1)
+		return 1
 	}
+	defer func() {
+		sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = p.Shutdown(sctx)
+		cancel()
+	}()
 	otel.SetMeterProvider(p.MeterProvider())
 	srv := new(server.Server)
 	if err := srv.AttachMetrics(p.Registerer(), p.Gatherer(), p.Handler()); err != nil {
 		fmt.Fprintln(os.Stderr, "AttachMetrics:", err)
-		os.Exit(1)
+		return 1
 	}
 	servedProvider, servedHandler = p, srv.MetricsHandler()
 	aidispatch.RegisterMetrics()
 	for _, row := range seedingTable {
 		if err := row.seed(); err != nil {
 			fmt.Fprintf(os.Stderr, "seeding %s via %s: %v\n", row.family, row.via, err)
-			os.Exit(1)
+			return 1
 		}
 	}
-	code := m.Run()
-	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	_ = p.Shutdown(sctx)
-	cancel()
-	os.Exit(code)
+	return m.Run()
 }
 
 // ---------------------------------------------------------------------------

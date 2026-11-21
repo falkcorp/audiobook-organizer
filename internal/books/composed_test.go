@@ -641,17 +641,26 @@ func TestComposedApp_SystemdSignals(t *testing.T) {
 	}
 }
 
-// ServeInputs.ShutdownBudget (serve's ABO_CORE_SHUTDOWN_BUDGET reading) reaches
-// R1Values.ShutdownBudget, which the kernel reads as core.shutdown.budget; zero
-// stays zero so core's default applies (R1-33).
-func TestOptions_ShutdownBudgetReachesR1Values(t *testing.T) {
-	c := bootComposed(t, false, nil, nil)
-	snap := config.Snapshot()
-	for _, want := range []time.Duration{0, 40 * time.Second} {
-		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, ShutdownBudget: want})
-		require.NoError(t, err)
-		assert.Equal(t, want, opts.R1Values().ShutdownBudget)
-	}
+// ABO_CORE_SHUTDOWN_BUDGET is core's own name for core.shutdown.budget: serve
+// no longer reads it and hands the value on (R1-33), the config boot does, so
+// a value that is not a positive duration refuses the boot naming the key, and
+// a good one boots.
+func TestOptions_ShutdownBudgetEnvIsCoreConfig(t *testing.T) {
+	t.Run("a bad value is refused naming the key", func(t *testing.T) {
+		mod, opts, _ := composedOptions(t, false, "", nil, nil)
+		t.Cleanup(func() { Release(mod) })
+		t.Setenv("ABO_CORE_SHUTDOWN_BUDGET", "after-the-batsignal")
+		a, err := app.New(t.Context(), opts, mod)
+		if a != nil {
+			t.Cleanup(func() { _ = a.Close(context.Background()) })
+		}
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "core.shutdown.budget")
+	})
+	t.Run("a good value boots", func(t *testing.T) {
+		t.Setenv("ABO_CORE_SHUTDOWN_BUDGET", "40s")
+		bootComposed(t, false, nil, nil)
+	})
 }
 
 // ServeInputs.FromRelease (the pre-freeze tag main embeds) becomes

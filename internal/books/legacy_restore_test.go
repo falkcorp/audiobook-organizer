@@ -89,7 +89,7 @@ func restoreOfflineWithCoreExtractor(t *testing.T, work string, args ...string) 
 		AppID:             AppID,
 		Version:           telemetry.Version(),
 		StateDir:          stateDir,
-		R1StoragePath:     storeDB(work),
+		Env:               []string{storagePathEnv + "=" + storeDB(work)},
 		StorageStateFiles: StateFiles(stateDir, storeDB(work)),
 		R1BeforeSwap:      database.DiscardHNSWCleanStop,
 		StorageFS:         storage.FS{},

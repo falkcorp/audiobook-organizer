@@ -28,11 +28,8 @@ import (
 )
 
 // The kernel's config wiring (05-config §1.4, 06 P0/P3/P4b-d), run by boot.go
-// behind Config.CoreConfigBoot (config_boot.go: P0 bootCoreConfig, P3
-// loadCoreConfig, P4b bindCoreStores, P4d attachCoreConfig). The gate is off
-// for ABO, so its boot reads no DB layer through core and writes no c/config/
-// row; slice (e) of F3-07 deletes the gate with R1Values (09 §9.2.8). The
-// operator layers that reach it are the file, the environment and the
+// (config_boot.go: P0 bootCoreConfig, P3 loadCoreConfig, P4b bindCoreStores,
+// P4d attachCoreConfig). The operator layers that reach it are the file, the environment and the
 // explicitly set flags (F3-02). CheckConfig, the engine of the offline config
 // check, is the one exported entry: it registers the same core sections and
 // reads only the operator layers.
@@ -71,6 +68,9 @@ type configInput struct {
 	Passthrough func(config.Path) bool
 	EnvBindings []config.EnvName
 	Retired     []config.RetiredName
+	// SectionCache is the section cache a test handed the boot; nil in every
+	// production boot.
+	SectionCache *config.SectionCache
 	// OwnerVerifier is true when the app configured an owner-proof verifier
 	// (F4's app.Options.Authenticators; nothing sets it before then). OwnerSet
 	// is then required: config checks ProtectOwner with Actor.Owner only once an
@@ -182,7 +182,7 @@ func newStep0Store(in configInput, bootRecord func(string) (config.StateFiles, e
 		AppID: in.AppID, EnvPrefix: in.EnvPrefix, Environ: in.Environ, FilePath: in.FilePath, Flags: in.Flags,
 		Passthrough: in.Passthrough, EnvBindings: in.EnvBindings, Retired: in.Retired,
 		Logger: in.logger(), Now: in.Now, OwnerSet: in.OwnerSet,
-		BootRecordRoot: bootRecord,
+		BootRecordRoot: bootRecord, SectionCache: in.SectionCache,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel: config store: %w", err)

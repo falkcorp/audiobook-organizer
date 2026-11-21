@@ -659,7 +659,7 @@ func (s *Server) Start(cfg ServerConfig) error {
 }
 
 // listenOptionsFor is the listener address and TLS files of cfg, the values
-// books' R1Values hands the kernel in production.
+// the kernel resolves from core.http.listen and core.http.tls.* in production.
 func listenOptionsFor(cfg ServerConfig) httpapi.ListenOptions {
 	return httpapi.ListenOptions{Addr: net.JoinHostPort(cfg.Host, cfg.Port), TLSCertFile: cfg.TLSCertFile, TLSKeyFile: cfg.TLSKeyFile}
 }
@@ -1538,7 +1538,7 @@ type R1Listener struct {
 }
 
 // R1Listen returns books' app.Options.R1Listen for cfg (HEAD's --http3-port,
-// timeouts and external URL): o carries R1Values' address and TLS files, and h
+// timeouts and external URL): o carries core.http's address and TLS files, and h
 // is the kernel's root handler, which the listener serves behind the
 // perimeter shim and the peer allow-list.
 func (s *Server) R1Listen(cfg ServerConfig) func(o httpapi.ListenOptions, h http.Handler, log *slog.Logger) (*R1Listener, error) {
@@ -2868,9 +2868,10 @@ func (s *Server) setupRoutes() {
 	jsonLimitBytes := int64(config.AppConfig.JSONBodyLimitMB) * 1024 * 1024
 	uploadLimitBytes := int64(config.AppConfig.UploadBodyLimitMB) * 1024 * 1024
 
-	// The /api rate limit is core's stage 10 (R1-17): books' r1Values hands it
-	// EnableRateLimit and APIRateLimitPerMinute, with HEAD's rule that both
-	// must hold, and each legacy route's RateClass says whether it is limited.
+	// The /api rate limit is core's stage 10 (R1-17): core.http.rate_limit.*
+	// carries EnableRateLimit and APIRateLimitPerMinute, with HEAD's rule that
+	// both must hold (cutover/perimeter_rules.go), and each legacy route's
+	// RateClass says whether it is limited.
 	// The body limits stay here until F3: HEAD's per-path limits (the
 	// fingerprint worker's, the 20 GB Open Library upload) and its 413
 	// envelope are not stage 11's content-type classes.

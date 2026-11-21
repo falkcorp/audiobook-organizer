@@ -226,12 +226,6 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 		// In-memory Pebble (06 §6.4.8): a store hello's keyspace opens
 		// leaves nothing under the state directory.
 		StorageFS: h.fs,
-		// The config boot (F3-07): P0 resolves the state directory and the
-		// store path from the config layers, P4b opens the secret store and
-		// the keyring (in the state directory, not in StorageFS), P4d
-		// attaches core config. Deleted with R1Values in F3-07's slice (e),
-		// when every boot runs it.
-		CoreConfigBoot: true,
 	}
 	// TaskRuns (WithRuns): the kernel inserts them at P4c, before the tasks
 	// start rule looks for stored runs. Built hands the harness the kernel,

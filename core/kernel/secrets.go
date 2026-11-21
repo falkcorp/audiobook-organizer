@@ -24,10 +24,9 @@ import (
 )
 
 // This file is the kernel's handling of the secret store (05-config Part 2;
-// 06 P4b). It is wired behind Config.CoreConfigBoot (config_boot.go), off for
-// ABO, whose boot opens no keyring and writes no c/secrets/ row; the flip that
-// turns it on for every app (hello included) carries the boot-writer rows of
-// 06 §6.5.1 and the crash-matrix cells with it (09 §9.3). With the gate on:
+// 06 P4b). It is wired in every boot (config_boot.go), which opens the keyring
+// and writes the c/secrets/ rows; the boot-writer rows of 06 §6.5.1 and the
+// crash-matrix cells cover them (09 §9.3):
 //
 //  1. storageOwners appends secretsOwnerSpec() (P2 Open and P4a Prepare read
 //     the owners, so the keyspace exists once Prepare returns);
@@ -61,8 +60,7 @@ const (
 // keyspace, Serialized as a whole, so every record write carries an Expect
 // (Put and Stage read the record with GetForUpdate; c/secrets/meta is written
 // expecting it absent). No claims, no migrations. Registering it takes the
-// claim ledger's one-time write at P4b: storageOwners appends it under
-// Config.CoreConfigBoot.
+// claim ledger's one-time write at P4b: storageOwners appends it.
 func secretsOwnerSpec() storage.OwnerSpec {
 	return storage.OwnerSpec{Owner: secretsOwnerID, Spec: storage.Spec{Keyspace: true, Serialized: []string{""}}, Enabled: true}
 }

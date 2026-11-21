@@ -24,8 +24,7 @@ const (
 )
 
 // ListenOptions are the listener keys of 05-http-api §10, resolved by the
-// kernel at 06 §6.5.2 start step (7) (in release R1 from
-// app.Options.R1Values, 05-config §1.12.1).
+// kernel at 06 §6.5.2 start step (7) from core.http.* (05-config §1.12.1).
 type ListenOptions struct {
 	Addr                    string        // core.http.listen; "" = DefaultListen
 	TLSCertFile, TLSKeyFile string        // both or neither

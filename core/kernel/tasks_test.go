@@ -241,7 +241,7 @@ func TestKernelTasks_SnapshotWrittenOncePerChange(t *testing.T) {
 	c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
 	writes := &regionCount{label: labelDefUpsert}
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{Labels: writes})
-	k, err := New(ctx, c)
+	k, err := newKCtx(t, ctx, c)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestKernelTasks_StartsWhenRunsAreHeld(t *testing.T) {
 	m := gotham([]tasks.Kind{patrolKind}, patrol()).with(func(m *module.Manifest) { m.DefaultEnabled = false })
 	c, _ := taskConfig(t, m)
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{TaskRuns: []bootseam.TaskRunSeed{{Kind: string(patrolKind), N: 3}}})
-	k, err := New(ctx, c)
+	k, err := newKCtx(t, ctx, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestKernelTasks_StartsWhenRunsAreHeld(t *testing.T) {
 // the module's TaskLedger is a ProblemTaskLedger.
 func TestKernelTasks_LedgerMissingKindRefused(t *testing.T) {
 	c, _ := taskConfig(t, gotham(nil, patrol()))
-	_, err := New(t.Context(), c)
+	_, err := newK(t, c)
 	if !hasKind(err, module.ProblemTaskLedger) {
 		t.Fatalf("New = %v, want ProblemTaskLedger", err)
 	}
@@ -409,35 +409,35 @@ func TestKernelTasks_ForeignKindRefused(t *testing.T) {
 	})
 	t.Run("registered", func(t *testing.T) {
 		c, _ := taskConfig(t, gotham([]tasks.Kind{"joker.laugh"}, joker))
-		_, err := New(t.Context(), c)
+		_, err := newK(t, c)
 		if !hasKind(err, module.ProblemTaskKindNamespace) {
 			t.Fatalf("New = %v, want ProblemTaskKindNamespace", err)
 		}
 	})
 	t.Run("ledger entry", func(t *testing.T) {
 		c, _ := taskConfig(t, gotham([]tasks.Kind{"joker.laugh"}))
-		_, err := New(t.Context(), c)
+		_, err := newK(t, c)
 		if !hasKind(err, module.ProblemTaskKindNamespace) {
 			t.Fatalf("New = %v, want ProblemTaskKindNamespace", err)
 		}
 	})
 	t.Run("not a kind", func(t *testing.T) {
 		c, _ := taskConfig(t, gotham([]tasks.Kind{"gotham"}))
-		_, err := New(t.Context(), c)
+		_, err := newK(t, c)
 		if !hasKind(err, module.ProblemTaskKindNamespace) {
 			t.Fatalf("New = %v, want ProblemTaskKindNamespace", err)
 		}
 	})
 	t.Run("the same ledger twice", func(t *testing.T) {
 		c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind, patrolKind}))
-		_, err := New(t.Context(), c)
+		_, err := newK(t, c)
 		if !hasKind(err, module.ProblemDuplicateTaskKind) {
 			t.Fatalf("New = %v, want ProblemDuplicateTaskKind", err)
 		}
 	})
 	t.Run("registered twice", func(t *testing.T) {
 		c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol(), patrol()))
-		_, err := New(t.Context(), c)
+		_, err := newK(t, c)
 		if !hasKind(err, module.ProblemDuplicateTaskKind) {
 			t.Fatalf("New = %v, want ProblemDuplicateTaskKind", err)
 		}
@@ -468,7 +468,7 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, tc.def))
-			if _, err := New(t.Context(), c); !hasKind(err, tc.kind) {
+			if _, err := newK(t, c); !hasKind(err, tc.kind) {
 				t.Fatalf("New = %v, want a %v problem", err, tc.kind)
 			}
 		})
@@ -486,7 +486,7 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 	})
 	t.Run("kinds with no store open", func(t *testing.T) {
 		cfg := testConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
-		if _, err := New(t.Context(), cfg); err == nil || !strings.Contains(err.Error(), "no store is open") {
+		if _, err := newK(t, cfg); err == nil || !strings.Contains(err.Error(), "no store is open") {
 			t.Fatalf("New = %v, want a refusal naming the missing store", err)
 		}
 	})
@@ -504,7 +504,7 @@ func TestBatch_ZeroParallelismRefusedAtRegister(t *testing.T) {
 		Item: func(*tasks.ItemRC, struct{}, string) error { return nil },
 	})
 	c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, batch))
-	_, err := New(t.Context(), c)
+	_, err := newK(t, c)
 	if !hasKind(err, module.ProblemInvalidRegistration) || !errors.Is(err, tasks.ErrNoParallelism) {
 		t.Fatalf("New = %v, want an invalid registration wrapping ErrNoParallelism", err)
 	}
@@ -517,7 +517,7 @@ func TestBatch_ZeroParallelismRefusedAtRegister(t *testing.T) {
 func TestStart_ViewOnlyDefRefusedAtRegister(t *testing.T) {
 	viewOnly := func(s *tasks.TaskSpec[struct{}, struct{}]) { s.Perms.Start = rbac.Need("core:tasks.view") }
 	c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol(viewOnly)))
-	_, err := New(t.Context(), c)
+	_, err := newK(t, c)
 	if !hasKind(err, module.ProblemInvalidRegistration) || !strings.Contains(err.Error(), "view-class") {
 		t.Fatalf("New = %v, want a view-class refusal", err)
 	}
@@ -573,7 +573,7 @@ func TestKernelBoot_F2CallsInOrder(t *testing.T) {
 		m.Storage = storage.Spec{Keyspace: true}
 	}))
 	first.StorageFS = storage.FSOf(mem)
-	k1, err := New(t.Context(), first)
+	k1, err := newK(t, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,10 +644,12 @@ func TestKernelBoot_F2CallsInOrder(t *testing.T) {
 		}
 	}
 	got := states(k.healthReg)
-	for _, id := range []health.ComponentID{componentStorage, componentSecrets} {
-		if s, ok := got[id]; !ok || s.Result.Status != health.StatusUp {
-			t.Errorf("health component %s = %+v (present %v), want Up", id, s, ok)
-		}
+	if s, ok := got[componentStorage]; !ok || s.Result.Status != health.StatusUp {
+		t.Errorf("health component %s = %+v (present %v), want Up", componentStorage, s, ok)
+	}
+	// Every boot creates the keyring, and a fresh one is in no export yet.
+	if s, ok := got[componentSecrets]; !ok || s.Result.Status != health.StatusDegraded || s.Result.Reason != "secrets_keyring_not_exported" {
+		t.Errorf("health component %s = %+v (present %v), want degraded: secrets_keyring_not_exported", componentSecrets, s, ok)
 	}
 	if k.reporters.Storage == nil || k.reporters.Secrets == nil {
 		t.Error("the kernel dropped its health reporters")
@@ -662,7 +664,7 @@ func TestKernelBoot_F2CallsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"P1", "P2", "P4a", "P4b", "P4c", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
+	if want := []string{"P0", "P0a", "P1", "P2", "P3", "P4a", "P4b", "P4c", "P4d", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
 		t.Errorf("phases = %v, want %v", phases, want)
 	}
 	// The owners the boot registered include core's own two.

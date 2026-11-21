@@ -27,16 +27,12 @@ import (
 // boot sees only its own.
 func flippedOfflineABO(t *testing.T, env *[]string) *offlineABO {
 	t.Helper()
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	h := &offlineABO{t: t, state: filepath.Join(t.TempDir(), "state")}
 	h.path = filepath.Join(tempDir(t), "gotham.pebble")
 	h.root, h.dump = gotham(t)
 	h.edit = func(c *config.Config) { c.DatabasePath, c.RootDir = h.path, h.root }
 	h.disk = func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		o.CoreConfigBoot = true
 		o.StateDir = h.state
 		o.Env = append([]string{storageEnv()}, *env...)
 	}

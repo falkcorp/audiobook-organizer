@@ -41,7 +41,7 @@ func TestCoreLevel_RegisteredWhenAManifestDeclaresACutover(t *testing.T) {
 	owners := func(c Config) []storage.OwnerSpec {
 		t.Helper()
 		c.StoragePath, c.StateDir = h.db, h.state
-		k, err := New(h.ctx, c)
+		k, err := newKCtx(h.t, h.ctx, c)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,6 @@ func TestCoreLevel_RaisesCoreOnABootThatDeclaresACutover(t *testing.T) {
 	h := newSwapHost(t)
 	gated := func(c Config) Config {
 		c.StoragePath, c.StateDir = h.db, h.state
-		c.CoreConfigBoot = true
 		c.ConfigOptions = config.Options{Environ: []string{}}
 		c.StateDirDefault = h.state
 		return c

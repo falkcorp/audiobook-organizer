@@ -28,8 +28,8 @@ import (
 )
 
 // The config phases of 06 section 6.5.1 as labels on
-// <namespace>_kernel_boot_phase_seconds. They exist only when
-// Config.CoreConfigBoot is set (06 section 6.9's one label set lists them).
+// <namespace>_kernel_boot_phase_seconds (06 section 6.9's one label set lists
+// them).
 const (
 	phaseP0  = "P0"
 	phaseP3  = "P3"
@@ -41,32 +41,35 @@ const (
 // environment, a flag, the file or the boot record.
 const disabledByConfig = "config"
 
-// bootCoreConfig is P0 (06 section 6.5.1), run when Config.CoreConfigBoot is
-// set and not for Describe, which performs no I/O: bootConfig's step 0 resolves
+// bootCoreConfig is P0 (06 section 6.5.1), run for every boot but Describe,
+// which performs no I/O: bootConfig's step 0 resolves
 // the state directory and core.storage.path from the pre-boot layers, the
 // store reads the boot record from that directory, and what it found replaces
-// the app's own resolution (app.storagePath reads the environment only):
+// the app's own resolution (none: app.New hands the kernel no store path):
 //
 //   - Config.StateDir is the directory step 0 chose; an app that resolved a
 //     different one fails the boot, because two resolvers disagreeing about
 //     where state lives is the one thing step 0 exists to prevent;
 //   - Config.StoragePath is core.storage.path as the layers give it. It is
 //     the compiled default only when no layer names one, and an app whose
-//     compiled path and a layer's path name two stores fails the boot (the
-//     rule app.storagePath applies to the environment and R1StoragePath);
+//     compiled path and a layer's path name two stores fails the boot;
 //   - core.modules.<id>.enabled from the boot view decides which modules are
 //     enabled, so P3 registers the sections of the modules that run.
 //
-// An app that declares no storage keeps Config.StoragePath and StateDir as
-// they are: with no store there is nothing to swap and no keyring to keep, and
-// the config store is the operator layers and the boot record.
+// An app that declares no storage and compiles in no path keeps
+// Config.StoragePath and StateDir as they are: with no store there is nothing
+// to swap and no keyring to keep, and the config store is the operator layers
+// and the boot record.
 func (k *Kernel) bootCoreConfig(ctx context.Context) error {
 	cb, err := bootConfig(ctx, k.configInput(ctx))
 	if err != nil {
 		return err
 	}
 	k.cfgBoot = cb
-	if k.declaresStorage() {
+	// A store is opened when a module declares storage or the app compiled in
+	// a path (Config.StoragePath); either way it keeps its state, the keyring
+	// first, in the directory step 0 chose.
+	if k.declaresStorage() || k.cfg.StoragePath != "" {
 		path, stateDir, err := k.storagePaths(cb.dbPath, cb.stateDir)
 		if err != nil {
 			return err
@@ -84,7 +87,7 @@ func (k *Kernel) configInput(ctx context.Context) configInput {
 		AppID: k.cfg.AppID, EnvPrefix: o.EnvPrefix, Environ: o.Environ, FilePath: o.FilePath, Flags: o.Flags,
 		StateDirDefault: k.cfg.StateDirDefault, Defaults: k.cfg.CoreDefaults, Modules: k.cfg.Modules, Passthrough: o.Passthrough,
 		EnvBindings: o.EnvBindings, Retired: o.Retired, OwnerSet: o.OwnerSet,
-		Logger: k.coreLog("config"), Now: bootClock(ctx),
+		Logger: k.coreLog("config"), Now: bootClock(ctx), SectionCache: k.sectionCache,
 	}
 }
 
@@ -106,11 +109,10 @@ func (k *Kernel) storagePaths(layer, stateDir string) (dbPath, dir string, err e
 // ResolveStorage is P0's resolution of the store path and the state directory
 // for a caller that has no kernel to boot: an offline command (the app's
 // storage, restore, reset and secrets commands, prune-checkpoints and the
-// keyring export). With Config.CoreConfigBoot set it runs step 0 alone over
-// the operator layers a serve boot reads, so serve and every offline command
-// open one store and one state directory; with the gate off it returns
-// c.StoragePath and c.StateDir as they are. An app with no storage resolves
-// nothing and gets them back too ("" and "" from the app).
+// keyring export). It runs step 0 alone over the operator layers a serve boot
+// reads, so serve and every offline command open one store and one state
+// directory. An app with no storage resolves nothing and gets c.StoragePath
+// and c.StateDir back ("" and "" from the app).
 //
 // It reads no boot record (so it never sets one aside as .bad) and creates
 // nothing before owner, when set, has been checked: owner names the command
@@ -126,9 +128,6 @@ func (k *Kernel) storagePaths(layer, stateDir string) (dbPath, dir string, err e
 // Its warnings (the fallback beside the store) go to Config.Logger, else to
 // a text logger on Config.LogOutput, else on standard error.
 func ResolveStorage(ctx context.Context, c Config, owner string) (dbPath, stateDir string, err error) {
-	if !c.CoreConfigBoot {
-		return c.StoragePath, c.StateDir, nil
-	}
 	if c.Logger == nil {
 		w := c.LogOutput
 		if w == nil {
@@ -289,7 +288,7 @@ func (cb *configBoot) close(ctx context.Context) error {
 	return cb.store.Close(ctx)
 }
 
-// bindCoreStores is the start of P4b under Config.CoreConfigBoot (06 section
+// bindCoreStores is the start of P4b (06 section
 // 6.5.1), before the migration list can run a Cutover step:
 //
 //  1. secrets.Open (05-config 2.4 step 1): the keyring is read or created beside

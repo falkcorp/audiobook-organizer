@@ -27,7 +27,7 @@ import (
 //     func returns, enabled or not (dataSteps' rule), built over one
 //     late-bound importers value; Rewrite is the first manifest's M8
 //     (rewriteStep). They replace opt's own.
-//   - With Config.CoreConfigBoot on, the dry run mirrors bindCoreStores: Bind
+//   - The dry run mirrors bindCoreStores: Bind
 //     builds a layered config store over the operator layers only (no boot
 //     record is read, so none can be set aside, and no directory is created),
 //     opens the secret store over the scratch copy with its keyring in the
@@ -64,12 +64,8 @@ func WireDryRun(ctx context.Context, c Config, opt DryRunOptions) (DryRunOptions
 		migs = append(migs, manifestMigrations(e.man, w.imp.values())...)
 	}
 	opt.Migrations, opt.Rewrite = migs, k.rewriteStep()
-	opt.Sealer, opt.Bind, opt.Release = nil, w.bind(ctx), w.release
-	if c.CoreConfigBoot {
-		// The live boot seals into the secret store only under the gate
-		// (storageOptions); gate off it has no quarantine writer.
-		opt.Sealer = w.sealer
-	}
+	// The live boot seals into the secret store (storageOptions).
+	opt.Sealer, opt.Bind, opt.Release = w.sealer, w.bind(ctx), w.release
 	return opt, nil
 }
 
@@ -99,16 +95,13 @@ func (w *dryRunWiring) sealer(scratch string) (storage.QuarantineSealer, error) 
 	return quarantineSealer{w.k}, nil
 }
 
-// bind is DryRun's Options.Bind: bindCoreStores over the scratch store (under
-// the gate), then migrateStorage's bind of the importers.
+// bind is DryRun's Options.Bind: bindCoreStores over the scratch store, then
+// migrateStorage's bind of the importers.
 func (w *dryRunWiring) bind(ctx context.Context) func(*storage.DB) error {
 	return func(db *storage.DB) error {
-		allowRegen := false
-		if w.k.cfg.CoreConfigBoot {
-			var err error
-			if allowRegen, err = w.bindCoreStores(ctx, db); err != nil {
-				return err
-			}
+		allowRegen, err := w.bindCoreStores(ctx, db)
+		if err != nil {
+			return err
 		}
 		w.imp.bindLegacy(db, allowRegen)
 		return nil

@@ -64,7 +64,7 @@ type Deps struct {
 	// core and of every module, read and written as the caller's Actor, plus
 	// the secrets Manifest.AppConfig names. It is nil unless the module
 	// declares Manifest.AppConfig and a core config boot ran (not in
-	// app.Describe, nor without kernel.Config.CoreConfigBoot), so it is the one
+	// app.Describe), so it is the one
 	// Deps handle a module must nil-check. Apply authorizes per key against the
 	// Actor the caller passes, so the handle grants no authority the Actor
 	// lacks; it does let the module name any Actor, which is why only a module
