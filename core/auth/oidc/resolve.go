@@ -102,7 +102,7 @@ const (
 //
 //  1. The provider must have verified the address (never trust an unverified
 //     one), the address must be plain ASCII that NormalizeEmail leaves alone
-//     but for case (ErrEmailNotPlain: a Kelvin-sign or fullwidth look-alike is
+//     but for case (auth.ErrEmailNotPlain: a Kelvin-sign or fullwidth look-alike is
 //     another person's address and must never link, displace or be admitted
 //     as the ASCII one), and it must be admitted: on the policy's allowlist
 //     (an address or a domain), invited, or approved by ExtraAllowed. Verified
@@ -132,7 +132,7 @@ func (r *Resolver) Resolve(ctx context.Context, pol Policy, c Claims) (*auth.Use
 		return nil, ErrEmailNotVerified
 	}
 	if !plain {
-		return nil, ErrEmailNotPlain
+		return nil, auth.ErrEmailNotPlain
 	}
 	if email == "" {
 		return nil, ErrEmailNotVerified
@@ -183,28 +183,10 @@ func (r *Resolver) Resolve(ctx context.Context, pol Policy, c Claims) (*auth.Use
 	return u, nil
 }
 
-// plainEmail is the claim's address in the one form this package compares: it
-// must be printable ASCII (no byte <= ' ' or > '~', IsOwnerEmail's rule) and
-// equal to NormalizeEmail(claim) after ASCII lowercasing. NormalizeEmail folds
-// compatibility characters onto ASCII (the Kelvin sign, the long s, fullwidth
-// letters), so without this a different account at the provider reads as
-// another person's address and could link, displace or be admitted as them.
-// An empty claim is ("", true) and is the caller's to refuse.
-func plainEmail(raw string) (string, bool) {
-	if raw == "" {
-		return "", true
-	}
-	for i := 0; i < len(raw); i++ {
-		if raw[i] <= ' ' || raw[i] > '~' {
-			return "", false
-		}
-	}
-	lower := strings.ToLower(raw)
-	if lower != auth.NormalizeEmail(raw) {
-		return "", false
-	}
-	return lower, true
-}
+// plainEmail is auth.PlainEmail: the claim's address in the one form this
+// package compares. An empty claim is ("", true) and is the caller's to
+// refuse.
+func plainEmail(raw string) (string, bool) { return auth.PlainEmail(raw) }
 
 // admitted reports whether email may sign in through pol.
 func (r *Resolver) admitted(ctx context.Context, pol Policy, email string) (bool, error) {

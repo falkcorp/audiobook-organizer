@@ -449,7 +449,7 @@ func (f *Flow) failed(ctx context.Context, provider string, err error) {
 		reason = "exchange_failed"
 	case errors.Is(err, ErrEmailNotVerified):
 		reason = "email_not_verified"
-	case errors.Is(err, ErrEmailNotPlain):
+	case errors.Is(err, auth.ErrEmailNotPlain):
 		reason = "email_not_plain"
 	case errors.Is(err, ErrEmailNotAllowed):
 		reason = "email_not_allowed"

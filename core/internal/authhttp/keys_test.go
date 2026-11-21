@@ -274,7 +274,7 @@ func TestUserKeyCreate_ValidateRefusesWhatMeRefuses(t *testing.T) {
 	if (&userKeyCreateReq{ID: "u-dick"}).Validate() == nil {
 		t.Fatal("a key with no name and no scopes validates")
 	}
-	if err := (&userKeyCreateReq{ID: "u-dick", Body: KeyCreate{Name: "n", Scopes: []string{"gotham:patrol"}, ExpiresIn: "24h"}}).Validate(); err != nil {
+	if err := (&userKeyCreateReq{ID: "u-dick", Body: KeyCreate{Name: "n", Scopes: []string{"gotham:patrol"}, ExpiresIn: new("24h")}}).Validate(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -284,12 +284,12 @@ func TestUserKeyCreate_ValidateRefusesWhatMeRefuses(t *testing.T) {
 // default lifetime"; it answers the same 422 on its own.
 func TestKeySpec_RefusesABadExpiryItself(t *testing.T) {
 	for _, bad := range []string{"soon", "-1h", "0s"} {
-		_, err := KeyCreate{Name: "batphone", Scopes: []string{"core:self"}, ExpiresIn: bad}.keySpec("u-bruce")
+		_, err := KeyCreate{Name: "batphone", Scopes: []string{"core:self"}, ExpiresIn: &bad}.keySpec("u-bruce")
 		if _, ok := errors.AsType[*httpapi.Error](err); !ok {
 			t.Errorf("expires_in %q: err = %v, want a validation problem", bad, err)
 		}
 	}
-	ks, err := KeyCreate{Name: "batphone", Scopes: []string{"core:self"}, ExpiresIn: "720h"}.keySpec("u-bruce")
+	ks, err := KeyCreate{Name: "batphone", Scopes: []string{"core:self"}, ExpiresIn: new("720h")}.keySpec("u-bruce")
 	if err != nil || ks.ExpiresIn != 720*time.Hour || ks.Owner != "u-bruce" {
 		t.Fatalf("keySpec = %+v, %v", ks, err)
 	}

@@ -210,12 +210,20 @@ func when(t time.Time) *time.Time {
 	return &t
 }
 
-// KeyCreate is POST /me/api-keys and POST /users/{id}/api-keys. ExpiresIn is a
-// duration string ("720h"); empty is the default lifetime.
+// KeyCreate is POST /me/api-keys and POST /users/{id}/api-keys. The expiry is
+// expires_in or expires_at, never both; with neither the key gets the default
+// lifetime.
+//
+// ExpiresIn is a duration string ("720h"). ExpiresAt is an RFC 3339 instant
+// that must be after the request and no more than 1096 x 24h after it (the
+// same ceiling as expires_in, counted on the Service's clock). Both are
+// pointers so that a body sending both is refused even when one of them is
+// empty or zero: presence is what is refused, not value.
 type KeyCreate struct {
-	Name      string   `json:"name"`
-	Scopes    []string `json:"scopes"`
-	ExpiresIn string   `json:"expires_in,omitempty"`
+	Name      string     `json:"name"`
+	Scopes    []string   `json:"scopes"`
+	ExpiresIn *string    `json:"expires_in,omitempty"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
 // KeyCreated is shown once: the key itself, which no later call returns.
