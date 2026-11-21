@@ -64,8 +64,8 @@ func TestProblemUnavailableUnderIdentity_IsTheSpecsCode(t *testing.T) {
 	}
 }
 
-// F4-08 B10l guard: with the identity flip wired, no entry point plans, applies
-// or resumes, and none calls into the store to find out. Each entry point is its
+// F4-08 B10l guard: with the identity flip wired, no entry point plans, applies,
+// resumes or reads a footprint, and none calls into the store to find out. Each entry point is its
 // own subtest so a guard dropped from one of them (the others still refuse, one
 // layer down) is caught by its own check.
 func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlipped(t *testing.T) {
@@ -81,6 +81,10 @@ func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlipped(t *testing.T) 
 		},
 		"Resume": func(svc *Service) error {
 			_, err := svc.Resume(ctx, "j1", nil)
+			return err
+		},
+		"Footprint": func(svc *Service) error {
+			_, err := svc.Footprint("bruce")
 			return err
 		},
 		"CheckAvailable": func(svc *Service) error { return svc.CheckAvailable() },

@@ -131,6 +131,12 @@ func (h *UserHandler) UserFootprint(c *gin.Context) {
 	if _, ok := h.mergeActor(c); !ok {
 		return
 	}
+	// The footprint reads books' own copy of the account's sign-ins and
+	// credentials, which hold nothing once the store is core's (F4-08 B10l):
+	// the same 409 as preview, before any account is resolved.
+	if !h.mergeAvailable(c) {
+		return
+	}
 	id, ok := h.accountID(c, c.Param("id"))
 	if !ok {
 		return
