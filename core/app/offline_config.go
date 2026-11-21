@@ -1,7 +1,7 @@
 // file: core/app/offline_config.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 7b488a2c-118e-4165-86e5-b2a58dbc34c5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package app
 
@@ -29,9 +29,11 @@ naming it; any other one is ignored with a warning. The command prints
 each name set, what it became (its canonical env name and its key in the
 operator file), and whether it would stop the service from starting.
 
-Module settings are not registered by this command yet, so a retired name
-of a module key is listed as NOT CHECKED: a start with that module enabled
-judges it and may refuse. Convert those names too.
+It judges a retired name of a module key from the settings sections of
+every module compiled into the binary, enabled or not, so a disabled
+module's names are judged too. A retired name of a module that declares no
+settings section is listed as NOT CHECKED: nothing here knows its class, and
+a start with that module enabled may refuse it. Convert those names too.
 
 It exits non-zero when a name would stop the service from starting, when
 one is not checked, or when a value in the operator layers does not
@@ -61,9 +63,8 @@ func (f setFlags) Set(v string) error {
 
 // configCheckCommand is config check (06 §6.4.5): kernel.CheckConfig over
 // the app's operator layers and retired list, opening no store (SEC10-9).
-// Seam for F3-07: kernel.ConfigCheck.ModuleSections is left nil until the
-// app hands the enabled modules' config sections to the kernel; F3-07 passes
-// them here so module keys are judged as a start judges them.
+// The check registers every compiled module's settings sections, enabled or
+// not (kernel.ConfigCheck), so module keys are judged as a start judges them.
 func configCheckCommand(opts Options, mods []module.Module) Command {
 	return Command{
 		Name:  "config check",

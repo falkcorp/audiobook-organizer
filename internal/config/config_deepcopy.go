@@ -14,7 +14,7 @@ import (
 // value reachable from an exported field is duplicated, so mutating the copy
 // (or unmarshalling JSON into it) can never touch c.
 //
-// WHY this exists (PR #3052 follow-up, D1): UpdateService.UpdateConfig used
+// WHY this exists (PR #3052 follow-up, D1): HEAD's UpdateService.UpdateConfig used
 // to take `prior = *c` and json.Unmarshal straight into the live config. Both
 // are SHALLOW for Go maps and slices — `prior` and the live struct shared the
 // same Dedup.Signals.Confidence map, and Unmarshal into the live struct wrote

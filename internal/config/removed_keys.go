@@ -7,7 +7,6 @@ package config
 
 import (
 	"log/slog"
-	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -135,49 +134,6 @@ var removedConfigKeys = []removedConfigKey{
 	// removal message.
 	{key: "invite_cf_access_client_id", message: guestServiceTokenRemovedMessage},
 	{key: "invite_cf_access_client_secret", message: guestServiceTokenRemovedMessage},
-}
-
-// removedKeyInUpdate returns the rejection text for the first removed key
-// present in a config-update payload, or ok=false when there is none. A
-// dotted key matches either the literal top-level key or the nested path, so
-// {"metadata_scoring":{"write_backup_before":true}} (what a stale Settings
-// page or an old settings export sends) gets the removed-setting message
-// rather than unknownConfigKeys' generic one.
-func removedKeyInUpdate(payload map[string]any) (string, bool) {
-	for _, rk := range removedConfigKeys {
-		if hasConfigKey(payload, rk.key) {
-			return rk.key + " cannot be set: " + rk.message + "; remove " + rk.key + " from the request", true
-		}
-	}
-	return "", false
-}
-
-// hasConfigKey reports whether m carries key, either literally at the top
-// level or, for a dotted key, as the nested path of objects it names.
-func hasConfigKey(m map[string]any, key string) bool {
-	if _, ok := m[key]; ok {
-		return true
-	}
-	parts := strings.Split(key, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	cur := m
-	for i, part := range parts {
-		v, ok := cur[part]
-		if !ok {
-			return false
-		}
-		if i == len(parts)-1 {
-			return true
-		}
-		next, ok := v.(map[string]any)
-		if !ok {
-			return false
-		}
-		cur = next
-	}
-	return false
 }
 
 // removedConfigKeyMessage reports whether key is a retired setting and, if so,

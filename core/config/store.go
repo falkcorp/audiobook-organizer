@@ -1,7 +1,7 @@
 // file: core/config/store.go
-// version: 1.1.8
+// version: 1.2.0
 // guid: 7ba3bd5f-b378-4795-8036-a466a5e1c750
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package config
 
@@ -107,6 +107,9 @@ type Store struct {
 	importSecrets SecretStager
 	resolver      secrets.Resolver
 	secretMeta    map[Path]*secrets.Meta
+
+	commitMu sync.Mutex
+	onCommit []func(gen uint64)
 
 	gen    atomic.Uint64
 	index  atomic.Pointer[keyIndex]

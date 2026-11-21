@@ -1,20 +1,18 @@
 // file: internal/config/config.go
-// version: 1.176.4
+// version: 1.178.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config
 
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,90 +57,6 @@ type PathAlias struct {
 	Windows string `json:"windows"` // "W:"            -> W:\Author\Title\
 	UNC     string `json:"unc"`     // `\\host\books`  -> \\host\books\Author\Title\
 	SMBURL  string `json:"smb_url"` // "smb://host/books"
-}
-
-// normalizeWindowsPrefix turns a raw iTunes path-mapping prefix into a Windows
-// path prefix. Mappings arrive in three shapes and only the first is already
-// usable: a bare drive letter ("W:"), a drive plus directories written with
-// forward slashes ("W:/audiobook-organizer"), and the percent-encoded URL that
-// extractPathPrefixes produces and the Settings UI auto-populates the From
-// field with ("file://localhost/W:/itunes/iTunes%20Media" -- see the
-// ITunesPathMap doc comment above). Copying a raw value of the latter two
-// shapes into PathAlias.Windows renders a path like
-// "file://localhost/W:/itunes/iTunes%20Media\Author\Title.m4b" on the review
-// page, presented with a label and a copy button as though it were valid.
-//
-// A prefix that cannot be percent-decoded is kept as-is rather than rejected:
-// an odd mapping must degrade to a wrong-looking path, never break config load.
-func normalizeWindowsPrefix(prefix string) string {
-	s := strings.TrimPrefix(prefix, "file://localhost/")
-	if s == prefix {
-		s = strings.TrimPrefix(prefix, "file:///")
-	}
-	// Decode per segment, after splitting on the real separators. Decoding the
-	// whole string first would turn an encoded literal slash (%2F) into a
-	// separator indistinguishable from a real one -- which would also make the
-	// drift guard read two genuinely different prefixes as agreement.
-	parts := strings.Split(s, "/")
-	for i, p := range parts {
-		if decoded, err := url.PathUnescape(p); err == nil {
-			parts[i] = decoded
-		}
-	}
-	return strings.TrimRight(strings.Join(parts, `\`), `\`)
-}
-
-// normalizeRoot trims trailing separators from a POSIX root so the two sides of
-// the drift guard compare the same way the frontend matches. trimRoot in
-// web/src/utils/pathAliases.ts does exactly this; keeping them symmetric is the
-// point, so a root configured either way behaves identically.
-func normalizeRoot(root string) string {
-	return strings.TrimRight(root, "/")
-}
-
-// SeedPathAliases returns aliases unchanged when any are configured. Otherwise
-// it derives one alias per complete ITunes path mapping, so the W: fact is
-// entered once and copied rather than retyped into a second config field.
-// Seeded aliases carry no UNC or SMBURL, so the Windows line appears while the
-// smb:// anchor and UNC line stay dark until a share is configured.
-func SeedPathAliases(aliases []PathAlias, mappings []ITunesPathMap) []PathAlias {
-	if len(aliases) > 0 {
-		return aliases
-	}
-	seeded := make([]PathAlias, 0, len(mappings))
-	for _, m := range mappings {
-		if m.From == "" || m.To == "" {
-			continue
-		}
-		seeded = append(seeded, PathAlias{Root: normalizeRoot(m.To), Windows: normalizeWindowsPrefix(m.From)})
-	}
-	return seeded
-}
-
-// ValidatePathAliases reports a contradiction between the two places the
-// Windows prefix for a root can be recorded. Seeding copies the fact once;
-// nothing stops a later edit to one field alone, so this turns that drift into
-// a failure rather than a silently wrong path in the review UI.
-func ValidatePathAliases(aliases []PathAlias, mappings []ITunesPathMap) error {
-	byRoot := make(map[string]string, len(mappings))
-	for _, m := range mappings {
-		if m.From != "" && m.To != "" {
-			byRoot[normalizeRoot(m.To)] = m.From
-		}
-	}
-	for _, a := range aliases {
-		want, ok := byRoot[normalizeRoot(a.Root)]
-		// Compare normalized: the same prefix written two ways (a file:// URL
-		// vs a backslashed path) is agreement, not drift. Comparing raw here
-		// would make every correctly-seeded install report a contradiction.
-		if ok && a.Windows != "" && normalizeWindowsPrefix(a.Windows) != normalizeWindowsPrefix(want) {
-			return fmt.Errorf(
-				"path alias for %q maps to %q but itunes.path_mappings maps it to %q; "+
-					"these must agree or the review page will render a path the importer disagrees with",
-				a.Root, a.Windows, want)
-		}
-	}
-	return nil
 }
 
 // MetadataSource represents a metadata provider configuration
@@ -308,9 +222,9 @@ type DedupSignalConfig struct {
 	// whether ComposeScore should start doing so). Since 2026-09-02 this map
 	// DOES reach the live engine's ScoreConfig.Signals — via
 	// DedupSignalConfig.ScoreConfig (dedup_score_config.go) → dedup.NewEngine
-	// at startup, and → Engine.SetScoreConfig through the UpdateService's
-	// dedup-score sink on every PUT /api/v1/config (which then queues the
-	// dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
+	// at startup, and → Engine.SetScoreConfig through the dedup plugin's
+	// config Facade UpdateHook on every PUT /api/v1/config (which then queues
+	// the dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
 	// on a calibrate apply, which is already inside an op and so re-bands
 	// inline — the same channel the band_*_min fields use. So once ComposeScore starts
 	// clamping there is nothing left to wire; until then the bounds are
@@ -1316,7 +1230,7 @@ type Config struct {
 
 	// WhisperRemoteURL points batch transcription at a remote faster-whisper
 	// server (e.g. "http://192.168.1.x:8000"); empty uses the local uv path.
-	// Environment-authoritative (WHISPER_REMOTE_URL) — see applyEnvAuthoritativeConfig.
+	// Bound to WHISPER_REMOTE_URL.
 	WhisperRemoteURL string `json:"whisper_remote_url" mapstructure:"whisper_remote_url"`
 
 	// WhisperEndpoints declares a pool of remote faster-whisper servers. When
@@ -1389,8 +1303,8 @@ type Config struct {
 	// off, and because 0 is also what any partially-populated Config carries, a
 	// stray zero silently stopped multi-file grouping for eleven days (12,525
 	// books imported without book_file rows). Read it through
-	// ResolveChapterConsolidationThresholdMin; Validate and SaveConfigToDatabase
-	// rewrite a stored zero to the default with a warning.
+	// ResolveChapterConsolidationThresholdMin, which maps a zero to the
+	// default with a warning.
 	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min" mapstructure:"chapter_consolidation_threshold_min"`
 	// RepairChapterMaxMin is the longest a single file may run (minutes) and
 	// still count as a chapter when a REPAIR JOB (the fragment consolidation
@@ -1616,8 +1530,7 @@ type Config struct {
 	// ── Audiobookshelf-compatible sync API (design spec Phase 1) ─────────────
 	//
 	// Environment-authoritative, like the OAuth/Cloudflare keys above: they are set
-	// from a systemd Environment= drop-in and re-applied on top of the DB config blob
-	// by applyEnvAuthoritativeConfig. The ABS secret must never live in the blob.
+	// from a systemd Environment= drop-in. The ABS secret must never live in the blob.
 	//
 	// ABSAPIEnabled is the master feature flag and defaults to FALSE: with it unset,
 	// no ABS route is registered at all and the server behaves exactly as it did
@@ -1667,8 +1580,7 @@ type Config struct {
 	// ── Invitation email and guest access (env_only_settings.go) ────────────
 	//
 	// ENVIRONMENT-ONLY and `json:"-"`: never in GET /config, never in the blob,
-	// refused by PUT /config. Re-applied after the blob load by
-	// applyEnvAuthoritativeConfig (applyInviteEnv).
+	// refused by PUT /config. Read from the environment by applyInviteEnv.
 	//
 	// SMTP transport for invitation email. Unconfigured (no host or no From)
 	// means no mail is sent and the admin copies the link by hand. A username
@@ -1891,9 +1803,7 @@ type Config struct {
 	// (default, config file or the ENABLED_SORT_INDEXES environment variable,
 	// space-separated) to SetEnabledSortIndexes BEFORE any store opens, then
 	// writes back the set that was actually built (unknown names dropped).
-	// That is the value for the life of the process: LoadConfigFromDatabase
-	// pins it over whatever the stored blob holds (pinBootOnlySettings), and
-	// UpdateConfig refuses a PUT that changes it. So GET /api/v1/config always
+	// That is the value for the life of the process. So GET /api/v1/config always
 	// reports the built set. To change it, edit the config file or the
 	// environment and restart. An explicit empty list in the config file
 	// means "no optional indexes".
@@ -2010,7 +1920,30 @@ func KeptSweepApplyEnabled() bool {
 
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
+//
+// With a Facade installed the change is a persisted write as the process's own
+// actor and it can be refused; Mutate has no error to return, so the refusal is
+// logged once. A caller that must tell its own caller whether the change took
+// uses MutateChecked or MutatePersist.
 func Mutate(fn func(*Config)) {
+	if err := MutateChecked(fn); err != nil {
+		mutateRefused(err)
+	}
+}
+
+// MutateChecked is Mutate that returns the Facade's refusal. With no Facade
+// installed it changes memory only and never fails.
+func MutateChecked(fn func(*Config)) error {
+	if f := Current(); f != nil {
+		return f.Mutate(fn)
+	}
+	mutateLocal(fn)
+	return nil
+}
+
+// mutateLocal is Mutate on the process-wide Config: what runs with no Facade
+// installed, and what Project uses to publish the Facade's projection.
+func mutateLocal(fn func(*Config)) {
 	mu.Lock()
 	defer mu.Unlock()
 	// Deferred after the Unlock defer so it runs first, still under the lock:
@@ -2036,36 +1969,6 @@ var generation atomic.Uint64
 // convention forbids) are not seen.
 func Generation() uint64 { return generation.Load() }
 
-// applyEnvAuthoritativeConfig re-applies the environment-authoritative config keys on
-// top of an already-populated Config, so a systemd Environment= value wins over a
-// persisted config_blob. It exists because LoadConfigFromDatabase restores the whole
-// Config from the DB blob (*c = loaded), which overwrites the env-derived values that
-// InitConfig set. Call it LAST in the DB-load path (after the blob and secret rows are
-// applied) via Mutate.
-//
-// There are TWO categories here and they need DIFFERENT tests. Do not collapse them.
-//
-//  1. AUTH-SURFACE keys (OAuth / Cloudflare Access / ABS): the blob must NEVER win,
-//     even when the environment is silent. These are externally-reachable auth
-//     switches, and the blob is untrusted input — it must not be able to enable an
-//     auth surface or supply its credentials. `viper.IsSet` is the right test
-//     precisely BECAUSE every one of these keys has a registered SetDefault, which
-//     makes IsSet permanently true and so makes the assignment unconditional. That
-//     is deliberate; TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI asserts it.
-//
-//  2. OPERATIONAL keys that the UI may also set (database_path): the environment
-//     wins only when it ACTUALLY supplies the key; otherwise the persisted blob
-//     value must survive. These need envSupplied(), NOT viper.IsSet.
-//
-// The comment that stood here until 2026-09-07 claimed "viper.IsSet is true only when
-// a real override layer supplied the key, NOT for SetDefault, so a UI-set value that
-// lives only in the blob is left untouched." That is FALSE — viper's IsSet is
-// Get(key) != nil and a registered default is a value, so IsSet is true with an empty
-// environment. Every category-2 key guarded by IsSet was therefore overwritten with
-// its default on EVERY boot, silently destroying the persisted value: a dead lever.
-//
-// UI-managed keys (itunes.*, scheduled.*, etc.) are excluded entirely — they belong
-// to the blob and must not appear in this function at all.
 // WhisperEndpoint declares one remote Whisper server for the dispatch pool.
 // Mirror of transcribe.Endpoint kept as a plain config struct so this package
 // never imports internal/transcribe.
@@ -2153,434 +2056,6 @@ func ValidateActivityBackend(v string) error {
 		return fmt.Errorf("activity_backend: %q is not a supported value; the only activity backend is pebble "+
 			"(remove activity_backend or set it to pebble)", v)
 	}
-}
-
-// envSupplied reports whether the process environment actually provided a value for
-// an environment variable bound via viper.BindEnv.
-//
-// viper.IsSet CANNOT answer this question. InitConfig registers a SetDefault for most
-// bound keys, and viper.IsSet is `Get(key) != nil` — a registered default is a value,
-// so IsSet stays true with a completely empty environment. Measured against this
-// repo's viper: SetDefault("<key>", "") alone yields IsSet=true, Get="".
-//
-// An empty value counts as "not supplied" on purpose: systemd `Environment=FOO=` and
-// an unset variable should not behave differently, and an empty override could only
-// ever blank a persisted setting.
-func envSupplied(envVar string) bool {
-	v, ok := os.LookupEnv(envVar)
-	return ok && v != ""
-}
-
-// explicitFlags records the config keys whose command-line flag was actually
-// typed by the operator, as opposed to sitting at its registered default.
-//
-// This exists because neither viper.IsSet nor viper.Get can answer the question
-// for a bound flag. Measured against this repo's viper, for a --db bound with
-// BindPFlag and NOT typed:
-//
-//	BindPFlag only:              IsSet=false  GetString="audiobooks.pebble"
-//	BindPFlag + SetDefault(""):  IsSet=true   GetString=""
-//
-// Read both rows before touching this. The first says IsSet and Get DISAGREE:
-// IsSet skips the "fall back to the flag's default" branch that Get takes, so a
-// guard derived from the VALUE is wrong even where IsSet happens to look right.
-// The second says a single SetDefault line -- of the kind InitConfig registers
-// for most keys -- flips IsSet permanently true AND
-// makes Get return the empty default instead of the flag's, because SetDefault
-// outranks a bound flag's default. Adding it would silently re-open this bug.
-//
-// cobra's Flags().Changed() is the only signal no later SetDefault can corrupt.
-//
-// Populated once from cmd/root.go after flag parsing, read only during
-// applyEnvAuthoritativeConfig. Guarded because tests may run parsing
-// concurrently with config reads.
-var (
-	explicitFlagsMu sync.RWMutex
-	explicitFlags   = map[string]bool{}
-)
-
-// MarkFlagExplicit records that the operator supplied the flag bound to this
-// config key. Call it from the command layer after flags are parsed, once per
-// key that was actually changed.
-func MarkFlagExplicit(configKey string) {
-	explicitFlagsMu.Lock()
-	defer explicitFlagsMu.Unlock()
-	explicitFlags[configKey] = true
-}
-
-// flagSupplied reports whether the operator explicitly passed the flag bound to
-// configKey on this invocation.
-func flagSupplied(configKey string) bool {
-	explicitFlagsMu.RLock()
-	defer explicitFlagsMu.RUnlock()
-	return explicitFlags[configKey]
-}
-
-// ResetExplicitFlagsForTest clears the explicit-flag registry. Test-only.
-func ResetExplicitFlagsForTest() {
-	explicitFlagsMu.Lock()
-	defer explicitFlagsMu.Unlock()
-	explicitFlags = map[string]bool{}
-}
-
-// envLockedSettings maps a config JSON key to the environment variable that makes it
-// read-only. When that variable is supplied, applyEnvAuthoritativeConfig re-applies
-// the environment's value over the persisted blob on every boot, so a value saved
-// from the UI is silently discarded.
-//
-// Only category-2 keys belong here — the operator-OR-UI settings the Settings page
-// actually renders. The category-1 auth keys (OAuth, CF Access, ABS secrets) are
-// deliberately absent: they have no UI control to annotate, and naming a secret's
-// environment variable in an API response buys nothing. The non-secret ABS keys
-// are absent for the same reason (no control renders them); their write refusal
-// lives in absEnvOnlySettings.
-//
-// The Deluge keys are the one secret-bearing exception, by owner decision
-// (2026-10-11): the Deluge tab renders them, so a locked one must say so.
-// deluge_web_password is listed with its variable NAME only — the name is public
-// documentation, and the value still reaches the client only masked
-// (UpdateService.MaskSecrets). Nothing in this file may log or return the value.
-var envLockedSettings = map[string]string{
-	"activity_backend": "ACTIVITY_BACKEND",
-	// The main database. Annotated read-only in the UI whenever the operator
-	// supplies DATABASE_PATH, so the Settings page cannot present a field that
-	// silently discards what you type on the next boot.
-	"database_path": "DATABASE_PATH",
-	// Deluge connection settings. Env-OR-config-file authoritative — see
-	// configFileLockedSettings for the second half.
-	"deluge_web_url":           "DELUGE_WEB_URL",
-	"deluge_web_password":      "DELUGE_WEB_PASSWORD",
-	"deluge_discovery_label":   "DELUGE_DISCOVERY_LABEL",
-	"deluge_discovery_enabled": "DELUGE_DISCOVERY_ENABLED",
-	"deluge_move_enabled":      "DELUGE_MOVE_ENABLED",
-}
-
-// absEnvOnlySettings are the Audiobookshelf API keys that only the environment (or
-// the registered default) can set. applyEnvAuthoritativeConfig re-applies viper's
-// value for each on every load, and because every one has a registered default,
-// viper ALWAYS has a value: a value written through PUT /api/v1/config is stored
-// in the blob and then discarded at the next boot, whether or not the variable is
-// set. That is deliberate (the ABS API is an externally reachable sign-in surface
-// and only the operator's environment may configure it), so UpdateService refuses
-// a PUT that changes one rather than accept a write that can never take effect.
-//
-// These keys are NOT reported in env_locked / setting_locks. That list tells the
-// Settings page "an environment variable is forcing this control", which is false
-// for a key whose variable is unset, and the Settings page renders no ABS key, so
-// there is no control to annotate either way. The PUT refusal is the enforcement.
-// abs_jwt_secret is absent because it is never serialized.
-var absEnvOnlySettings = map[string]string{
-	"abs_api_enabled":        "ABS_API_ENABLED",
-	"abs_auth_modes":         "ABS_AUTH_MODES",
-	"abs_access_token_ttl":   "ABS_ACCESS_TOKEN_TTL",
-	"abs_refresh_token_ttl":  "ABS_REFRESH_TOKEN_TTL",
-	"abs_refresh_grace":      "ABS_REFRESH_GRACE",
-	"abs_session_max_ttl":    "ABS_SESSION_MAX_TTL",
-	"abs_server_version":     "ABS_SERVER_VERSION",
-	"abs_default_library_id": "ABS_DEFAULT_LIBRARY_ID",
-}
-
-// EnvOnlySettingsRefusedMessage is the 400 for a PUT /config that changes a key
-// in absEnvOnlySettings.
-const EnvOnlySettingsRefusedMessage = "these settings can only be set through the server's environment; a value saved here would be discarded at the next restart, so nothing was saved"
-
-// LockedByConfigFile is the SettingLocks value for a key that the server's config
-// file locks, followed by " <path>" when viper knows which file it read. It is not
-// an environment variable name and does not start with "--", so a client can tell
-// the three mechanisms apart (it contains a space, which no variable name can).
-//
-// The file is the one viper loaded: the --config flag, else
-// $HOME/.audiobook-organizer.yaml. It is NOT the <database dir>/config.yaml that
-// SaveConfigToFile writes and LoadConfigFromFile reads; those never lock anything.
-const LockedByConfigFile = "config file"
-
-// configFileLockReason is the SettingLocks value for a config-file lock.
-func configFileLockReason() string {
-	if path := viper.ConfigFileUsed(); path != "" {
-		return LockedByConfigFile + " " + path
-	}
-	return LockedByConfigFile
-}
-
-// configFileLockedSettings is the set of locked keys that a value in the server's
-// config file ALSO locks, in addition to the environment variable named in
-// envLockedSettings. Same effect as the environment: applyEnvAuthoritativeConfig
-// re-applies the file's value over the persisted blob on every load, and the UI shows
-// the field read-only.
-//
-// Only the Deluge keys are here. The other envLockedSettings keys are
-// environment-only on purpose (a systemd unit is where an operator pins a path);
-// the Deluge keys were reachable from the config file before the owner decision of
-// 2026-10-11, and a stored blob silently outranked it.
-//
-// Precedence between the two sources is viper's own: environment over file.
-var configFileLockedSettings = map[string]bool{
-	"deluge_web_url":           true,
-	"deluge_web_password":      true,
-	"deluge_discovery_label":   true,
-	"deluge_discovery_enabled": true,
-	"deluge_move_enabled":      true,
-}
-
-// configFileSupplied reports whether the server's config file sets key to a real
-// value. Only the file layer counts: viper.IsSet and viper.Get are also true for a
-// registered default (see envSupplied), while viper.InConfig answers for the parsed
-// file alone.
-//
-// An empty string, or a key present with no value, is not a lock — the same rule as
-// an empty environment variable. A boolean false IS a lock: forcing a toggle off from
-// the file is a legitimate operator choice, as DELUGE_MOVE_ENABLED=false is.
-func configFileSupplied(key string) bool {
-	if !configFileLockedSettings[key] || !viper.InConfig(key) {
-		return false
-	}
-	switch v := viper.Get(key).(type) {
-	case nil:
-		return false
-	case string:
-		return v != ""
-	default:
-		return true
-	}
-}
-
-// flagLockedSettings maps a config JSON key to the command-line flag that, when
-// explicitly supplied, makes the key read-only for the same reason as
-// envLockedSettings: applyEnvAuthoritativeConfig re-applies the operator's value
-// over the persisted blob on every boot.
-//
-// Separate from envLockedSettings because the two are detected differently — an
-// environment variable is readable from the running process, an explicit flag is
-// only knowable at parse time and must be recorded via MarkFlagExplicit.
-var flagLockedSettings = map[string]string{
-	"database_path": "--db",
-}
-
-// EnvLockedSettings returns the JSON field names of the settings the operator is
-// currently forcing — through the environment, an explicit flag, or (for the Deluge
-// keys) the server's config file — sorted so the response is stable. The name is the
-// wire name of the API field ("env_locked") and was kept when the file source was
-// added.
-//
-// This exists so the UI cannot lie. Production sets DATABASE_PATH in its systemd
-// unit; without this list the path control renders as an ordinary editable field
-// whose saved value is overwritten on the next boot — the edit appears to take, and
-// then quietly does not. A control the operator cannot actually change must say so.
-func EnvLockedSettings() []string {
-	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
-	for key, envVar := range envLockedSettings {
-		if envSupplied(envVar) || configFileSupplied(key) {
-			locked = append(locked, key)
-		}
-	}
-	// A key can be locked by an explicit flag as well as by the environment, and
-	// a key locked by both must appear once, not twice — the UI renders this list
-	// directly.
-	for key := range flagLockedSettings {
-		if flagSupplied(key) && !slices.Contains(locked, key) {
-			locked = append(locked, key)
-		}
-	}
-	slices.Sort(locked)
-	return locked
-}
-
-// SettingLockedBy names what makes key read-only — the environment variable, the
-// command-line flag, or LockedByConfigFile (plus the file's path) — or "" when the key is freely settable
-// from the UI. When several apply the environment wins, then the flag, then the file.
-// The UI uses it to say WHY a field is disabled; "locked" with no reason is a
-// support ticket.
-func SettingLockedBy(key string) string {
-	if envVar, ok := envLockedSettings[key]; ok && envSupplied(envVar) {
-		return envVar
-	}
-	if flag, ok := flagLockedSettings[key]; ok && flagSupplied(key) {
-		return flag
-	}
-	if configFileSupplied(key) {
-		return configFileLockReason()
-	}
-	return ""
-}
-
-// SettingLocks returns every currently-locked setting mapped to what locks it.
-// Same membership as EnvLockedSettings, with the reason attached.
-//
-// EnvLockedSettings is kept as-is beside this: the UI's existing checks are
-// membership tests, and a bare list is the right shape for those. This map is
-// for the copy that has to name the mechanism — telling an operator to remove
-// an environment variable when the real cause is a --db on the ExecStart line
-// sends them to edit the wrong thing.
-func SettingLocks() map[string]string {
-	locks := make(map[string]string, len(envLockedSettings)+len(flagLockedSettings))
-	for _, key := range EnvLockedSettings() {
-		locks[key] = SettingLockedBy(key)
-	}
-	return locks
-}
-
-// lockedBool returns the boolean a locked key resolves to. viper turns a value that
-// is not a boolean ("yes", "maybe", a typo) into false without a word, so a locked
-// toggle would be silently forced off; this logs a Warn naming the source first.
-// The accepted spellings are strconv.ParseBool's. The value is a toggle, not a
-// secret, so it is safe to log.
-func lockedBool(key string) bool {
-	if raw, ok := viper.Get(key).(string); ok {
-		if _, err := strconv.ParseBool(raw); err != nil {
-			configLog.Warn("%s: %q from %s is not a boolean (true/false/1/0/t/f); treating it as false",
-				key, raw, SettingLockedBy(key))
-		}
-	}
-	return viper.GetBool(key)
-}
-
-func applyEnvAuthoritativeConfig(c *Config) {
-	if viper.IsSet("oauth_enabled") {
-		c.OAuthEnabled = viper.GetBool("oauth_enabled")
-	}
-	if viper.IsSet("oauth_github_client_id") {
-		c.OAuthGithubClientID = viper.GetString("oauth_github_client_id")
-	}
-	if viper.IsSet("oauth_github_client_secret") {
-		c.OAuthGithubClientSecret = viper.GetString("oauth_github_client_secret")
-	}
-	if viper.IsSet("oauth_google_client_id") {
-		c.OAuthGoogleClientID = viper.GetString("oauth_google_client_id")
-	}
-	if viper.IsSet("oauth_google_client_secret") {
-		c.OAuthGoogleClientSecret = viper.GetString("oauth_google_client_secret")
-	}
-	if viper.IsSet("oauth_redirect_base_url") {
-		c.OAuthRedirectBaseURL = viper.GetString("oauth_redirect_base_url")
-	}
-	if viper.IsSet("oauth_allowed_emails") {
-		c.OAuthAllowedEmails = viper.GetString("oauth_allowed_emails")
-	}
-	if viper.IsSet("oauth_default_role") {
-		c.OAuthDefaultRole = viper.GetString("oauth_default_role")
-	}
-	if viper.IsSet("cf_access_team_domain") {
-		c.CFAccessTeamDomain = viper.GetString("cf_access_team_domain")
-	}
-	if viper.IsSet("cf_access_aud") {
-		c.CFAccessAUD = viper.GetString("cf_access_aud")
-	}
-	if viper.IsSet("owner_email") {
-		c.OwnerEmail = viper.GetString("owner_email")
-	}
-	if viper.IsSet("whisper_remote_url") {
-		c.WhisperRemoteURL = viper.GetString("whisper_remote_url")
-	}
-	if viper.IsSet("whisper_endpoints") {
-		c.WhisperEndpoints = ParseWhisperEndpoints(viper.GetString("whisper_endpoints"))
-	}
-	// Audiobookshelf sync API. Env-authoritative for the same reason as the OAuth keys:
-	// LoadConfigFromDatabase replaces the whole struct with the blob, so without these
-	// a systemd Environment=ABS_JWT_SECRET would be silently dropped and the ABS API
-	// would fail closed at boot despite being configured.
-	if viper.IsSet("abs_api_enabled") {
-		c.ABSAPIEnabled = viper.GetBool("abs_api_enabled")
-	}
-	if viper.IsSet("abs_auth_modes") {
-		c.ABSAuthModes = viper.GetString("abs_auth_modes")
-	}
-	if viper.IsSet("abs_jwt_secret") {
-		c.ABSJWTSecret = viper.GetString("abs_jwt_secret")
-	}
-	if viper.IsSet("abs_access_token_ttl") {
-		c.ABSAccessTokenTTL = viper.GetString("abs_access_token_ttl")
-	}
-	if viper.IsSet("abs_refresh_token_ttl") {
-		c.ABSRefreshTokenTTL = viper.GetString("abs_refresh_token_ttl")
-	}
-	if viper.IsSet("abs_refresh_grace") {
-		c.ABSRefreshGrace = viper.GetString("abs_refresh_grace")
-	}
-	if viper.IsSet("abs_session_max_ttl") {
-		c.ABSSessionMaxTTL = viper.GetString("abs_session_max_ttl")
-	}
-	if viper.IsSet("abs_server_version") {
-		c.ABSServerVersion = viper.GetString("abs_server_version")
-	}
-	if viper.IsSet("abs_default_library_id") {
-		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
-	}
-	// Invitation email and guest access: environment-only, never in the blob.
-	applyInviteEnv(c, viper.GetViper())
-	// Activity-log backend name. Env-authoritative for the same reason as the
-	// ABS keys: LoadConfigFromDatabase replaces the whole struct with the persisted
-	// blob. The registered SetDefault keeps IsSet permanently true, so with the
-	// environment silent this writes the "pebble" default over whatever the blob
-	// holds, and production's Environment=ACTIVITY_BACKEND=pebble keeps working.
-	// A config file or environment value of "sqlite" reaches the field and is
-	// then refused by Validate (see ValidateActivityBackend).
-	if viper.IsSet("activity_backend") {
-		c.ActivityBackend = viper.GetString("activity_backend")
-	}
-	// The MAIN database path. Category 2 (see the doc comment): the UI may
-	// set it, but an explicit --db or DATABASE_PATH from the operator wins.
-	//
-	// This was missing entirely and it took production down on 2026-09-09. The
-	// databases were relocated off a full root pool onto NVMe; the unit was
-	// updated to pass --db <new path> and Environment=DATABASE_PATH=<new path>;
-	// and the app still refused to start with
-	//
-	//   invalid configuration: database_path parent directory
-	//   "/var/lib/audiobook-organizer" does not exist
-	//
-	// because LoadConfigFromDatabase replaces the whole struct with the persisted
-	// blob (persistence.go applySetting, case "database_path") and nothing here
-	// re-applied the operator's value on top. A path stored months ago silently
-	// outranked the one typed on the command line at boot.
-	//
-	// The failure mode that did NOT happen is the one that makes this urgent:
-	// the stale path pointed somewhere that no longer existed, so it failed
-	// loudly. Had it pointed at a directory that still existed, the app would
-	// have opened — or created — the WRONG database, quietly, with the operator
-	// looking at a --db flag saying otherwise.
-	//
-	// flagSupplied, not viper.IsSet: --db carries a default, and the guard has to
-	// survive someone later adding a SetDefault for this key. See the measured
-	// table on explicitFlags above.
-	if flagSupplied("database_path") || envSupplied("DATABASE_PATH") {
-		c.DatabasePath = viper.GetString("database_path")
-	}
-	// Deluge connection settings (owner decision 2026-10-11). Category 2 like
-	// database_path: with neither the environment nor the config file setting a
-	// key, the stored blob (the UI / PUT /config) wins unchanged. When one does, it
-	// beats the blob — INCLUDING a stored empty value, which the blob writes for
-	// every field it knows and which used to mask env and file on any install that
-	// had ever saved settings. SettingLockedBy is the single test, so the value the
-	// server applies and the lock the UI shows cannot disagree. viper.GetString
-	// resolves the environment-over-file order.
-	if SettingLockedBy("deluge_web_url") != "" {
-		c.DelugeWebURL = viper.GetString("deluge_web_url")
-	}
-	if SettingLockedBy("deluge_web_password") != "" {
-		c.DelugeWebPassword = viper.GetString("deluge_web_password")
-	}
-	if SettingLockedBy("deluge_discovery_label") != "" {
-		c.DelugeDiscoveryLabel = viper.GetString("deluge_discovery_label")
-	}
-	if SettingLockedBy("deluge_discovery_enabled") != "" {
-		c.DelugeDiscoveryEnabled = lockedBool("deluge_discovery_enabled")
-	}
-	if SettingLockedBy("deluge_move_enabled") != "" {
-		c.DelugeMoveEnabled = lockedBool("deluge_move_enabled")
-	}
-	// NOT root_dir, deliberately. It is the same shape and the same argument
-	// applies in the abstract, but the base unit ships a generic
-	// AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks that does NOT exist on the
-	// production host, where the correct value (/mnt/bigdata/books/…) lives in
-	// the database. Making the environment authoritative for root_dir would
-	// point the library at a non-existent directory on the next boot. If that is
-	// ever wanted, fix the unit first and change this second — in that order.
-}
-
-// ApplyEnvAuthoritativeConfig applies the environment-authoritative overrides to the
-// global AppConfig under the write lock. Exported for the DB-load path in persistence.go.
-func ApplyEnvAuthoritativeConfig() {
-	Mutate(applyEnvAuthoritativeConfig)
 }
 
 // InitConfig initializes the application configuration
@@ -2750,7 +2225,7 @@ func registerConfigDefaults(r defaultRegistrar) {
 	r.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
 	r.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
 	// Deluge: bound explicitly so the environment reaches viper where AutomaticEnv
-	// is off. The names are the ones SettingLocks reports (envLockedSettings).
+	// is off.
 	r.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
 	r.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
 	r.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck
@@ -3193,8 +2668,9 @@ func registerConfigDefaults(r defaultRegistrar) {
 	// Read by internal/dedup/unified.LoadScoreConfig via Viper as the layer
 	// under the persisted dedup.signals block; DedupSignalConfig.ScoreConfig
 	// (dedup_score_config.go) hands the merged result to the live engine
-	// (registry_wire.go at startup; the UpdateService dedup-score sink on
-	// PUT /api/v1/config and dedup.calibrate-composite apply at runtime).
+	// (registry_wire.go at startup; the dedup plugin's config Facade
+	// UpdateHook on PUT /api/v1/config and dedup.calibrate-composite apply at
+	// runtime).
 	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
 	r.SetDefault("dedup.signals.band_certain_min", 97.0)
 	r.SetDefault("dedup.signals.band_high_min", 90.0)
@@ -3290,9 +2766,7 @@ func configFromViper(v *viper.Viper) Config {
 		// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
 		// the field, and a leftover "sqlite" is refused by Validate rather
 		// than dropped — the mapstructure tag is inert because this config is
-		// built by explicit GetString calls, not viper.Unmarshal. Also
-		// re-applied in applyEnvAuthoritativeConfig so the env value survives
-		// the DB-blob config overlay (see the ABS keys there).
+		// built by explicit GetString calls, not viper.Unmarshal.
 		ActivityBackend: v.GetString("activity_backend"),
 
 		FPParallelWorkers:                    v.GetInt("fp_parallel_workers"),
@@ -3363,9 +2837,7 @@ func configFromViper(v *viper.Viper) Config {
 
 		// OAuth / Cloudflare Access. These are environment-authoritative in prod
 		// (systemd Environment= drop-in) but read here via viper like everything
-		// else — the BindEnv bindings above make viper.GetX honor the env. The DB
-		// config-blob load later overwrites this whole struct, so the env values are
-		// re-applied on top of the blob by applyEnvAuthoritativeConfig (persistence.go).
+		// else — the BindEnv bindings above make viper.GetX honor the env.
 		OAuthEnabled:            v.GetBool("oauth_enabled"),
 		OAuthGithubClientID:     v.GetString("oauth_github_client_id"),
 		OAuthGithubClientSecret: v.GetString("oauth_github_client_secret"),
@@ -3499,9 +2971,7 @@ func configFromViper(v *viper.Viper) Config {
 		ExcludePatterns:     excludePatterns,
 
 		// Deluge integration. Read here so the config file and environment
-		// reach it. A value they supply is locked and beats the stored blob
-		// on load (applyEnvAuthoritativeConfig); with neither set the blob
-		// wins, like every other UI-managed key.
+		// reach it.
 		DelugeWebURL:           v.GetString("deluge_web_url"),
 		DelugeWebPassword:      v.GetString("deluge_web_password"),
 		DelugeDiscoveryLabel:   v.GetString("deluge_discovery_label"),
@@ -3916,7 +3386,17 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	if errs := c.Problems(); len(errs) > 0 {
+		return fmt.Errorf("invalid configuration: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
 
+// Problems is every structural problem Validate would report, one message
+// each, and the same normalisations Validate makes (a zero that means "the
+// default" is replaced). The settings write path asks for the list so it can
+// name each setting; Validate is the boot and one-error form of the same checks.
+func (c *Config) Problems() []string {
 	var errs []string
 
 	// iTunes 4-state model: derive the legacy path shims, then run the fail-closed
@@ -4096,18 +3576,12 @@ func (c *Config) Validate() error {
 	// (written by PUT /api/v1/config — the Settings → Dedup page — and by the
 	// dedup.calibrate-composite apply op), and the blob wins. An operator
 	// told to "fix config.yaml" for a value the UI persisted cannot repair it
-	// by editing config.yaml; they need to know to re-PUT a valid ladder (the
-	// UpdateService now rejects an invalid one with 400 before persisting, so
-	// this path is reached only by blobs written before that guard existed,
-	// or by a config.yaml edit).
+	// by editing config.yaml; they need to know to re-PUT a valid ladder.
 	if _, err := c.Dedup.Signals.ScoreConfig(); err != nil {
 		errs = append(errs, fmt.Sprintf("%v (effective value = config.yaml dedup.signals overlaid by the settings blob persisted in the database via PUT /api/v1/config / Settings → Dedup / calibrate-composite apply — the persisted blob wins, so re-save a valid ladder there, or delete the blob's dedup.signals keys, if config.yaml already looks right)", err))
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("invalid configuration: %s", strings.Join(errs, "; "))
-	}
-	return nil
+	return errs
 }
 
 // factoryDefaultConfigForTest is the Config a fresh install gets from the shipped
@@ -4128,10 +3602,8 @@ func factoryDefaultConfigForTest() Config {
 // so the next boot reads the shipped defaults from an empty settings store.
 //
 // The defaults are the shipped viper defaults only (see factoryDefaultConfigForTest):
-// not the config file, and not the process environment. The few settings the
-// host owns through the environment are put back afterwards by
-// applyEnvAuthoritativeConfig, exactly as at database load. The library paths
-// and the boot-only sort indexes are carried over from the running config.
+// not the config file, and not the process environment. The library paths and
+// the boot-only sort indexes are carried over from the running config.
 //
 // WHY Mutate: whole-struct reset; concurrent readers must not see a torn state.
 func ResetToDefaultsForTest() {
@@ -4150,14 +3622,6 @@ func ResetToDefaultsForTest() {
 		// Boot-only: the indexes the store built at open stay built until
 		// restart, so GET must keep reporting them (pinBootOnlySettings).
 		c.EnabledSortIndexes = slices.Clone(cur.EnabledSortIndexes)
-
-		// Host-set values win over a reset exactly as they win over the
-		// database at load: without this a system/factory reset cleared a
-		// host-set OWNER_EMAIL / CF_ACCESS_* (and every other
-		// environment-authoritative setting) until the next restart. The
-		// owner is set only on the host (plan D15), so a reset must not
-		// unset it.
-		applyEnvAuthoritativeConfig(c)
 	}) // end Mutate
 }
 

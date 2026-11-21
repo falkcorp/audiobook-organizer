@@ -6,9 +6,6 @@
 package config
 
 import (
-	"context"
-	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -79,107 +76,5 @@ func TestABSConfig_EnvBindings(t *testing.T) {
 				t.Fatalf("%s=%q did not reach viper key %q (got %q) — check viper.BindEnv", tc.env, tc.value, tc.key, got)
 			}
 		})
-	}
-}
-
-// TestABSConfig_EnvIsAuthoritativeOverBlob is the trap this repo has hit twice: the
-// DB config blob is restored over the whole Config struct, so any env-driven key must
-// be re-applied afterwards by applyEnvAuthoritativeConfig or a systemd Environment=
-// value is silently lost.
-func TestABSConfig_EnvIsAuthoritativeOverBlob(t *testing.T) {
-	resetViper(t)
-	registerABSDefaults(viper.GetViper())
-	t.Setenv("ABS_API_ENABLED", "true")
-	t.Setenv("ABS_JWT_SECRET", "0123456789abcdef0123456789abcdef")
-	t.Setenv("ABS_AUTH_MODES", "cf")
-	t.Setenv("ABS_SESSION_MAX_TTL", "4320h")
-
-	// Simulate the blob overwriting the struct with stale/absent ABS values.
-	c := &Config{ABSAPIEnabled: false, ABSJWTSecret: "", ABSAuthModes: "jwt", ABSSessionMaxTTL: "1h"}
-	applyEnvAuthoritativeConfig(c)
-
-	if c.ABSSessionMaxTTL != "4320h" {
-		t.Errorf("ABSSessionMaxTTL must be restored from the environment, got %q", c.ABSSessionMaxTTL)
-	}
-
-	if !c.ABSAPIEnabled {
-		t.Error("ABSAPIEnabled must be restored from the environment after a blob load")
-	}
-	if c.ABSJWTSecret != "0123456789abcdef0123456789abcdef" {
-		t.Errorf("ABSJWTSecret must be restored from the environment, got %q", c.ABSJWTSecret)
-	}
-	if c.ABSAuthModes != "cf" {
-		t.Errorf("ABSAuthModes must be restored from the environment, got %q", c.ABSAuthModes)
-	}
-}
-
-// TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI is the security half of
-// "env-authoritative", and it matches how the existing OAuth/Cloudflare keys already
-// behave: because each ABS key has a registered default, viper always has a value for
-// it, so applyEnvAuthoritativeConfig always wins over whatever the DB config blob held.
-//
-// That is the property we want. The ABS API is an externally-reachable auth surface: it
-// must be switchable only by the operator's environment, never by a value that the UI
-// or a restored blob could have written. In particular a blob can neither turn the API
-// on nor supply its signing secret (ABSJWTSecret is `json:"-"`, so it is never
-// serialized into the blob in the first place).
-func TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI(t *testing.T) {
-	resetViper(t)
-	registerABSDefaults(viper.GetViper())
-
-	c := &Config{ABSAPIEnabled: true, ABSJWTSecret: "from-blob", ABSAuthModes: "jwt"}
-	applyEnvAuthoritativeConfig(c)
-
-	if c.ABSAPIEnabled {
-		t.Error("a config blob must not be able to enable the ABS API with no env var set")
-	}
-	if c.ABSJWTSecret != "" {
-		t.Errorf("a config blob must not be able to supply the ABS signing secret, got %q", c.ABSJWTSecret)
-	}
-	if c.ABSAuthModes != "cf,jwt" {
-		t.Errorf("auth modes must come from the environment/default, got %q", c.ABSAuthModes)
-	}
-}
-
-// TestABSConfig_UpdateRefusesEnvOnlyKeys: a config API write to an ABS key could
-// never take effect (the environment-or-default overlay replaces it at the next
-// boot), so it is refused with nothing saved instead of being accepted and then
-// silently discarded. Sending the current value back (a GET-then-PUT round trip)
-// is still accepted.
-func TestABSConfig_UpdateRefusesEnvOnlyKeys(t *testing.T) {
-	restoreAppConfig(t)
-	Mutate(func(c *Config) {
-		c.EnableAuth = false
-		c.ABSSessionMaxTTL = "0"
-		c.ABSRefreshTokenTTL = "1440h"
-	})
-	ms, blobs := ladderTestStore(t)
-	svc := NewUpdateService(ms)
-
-	status, resp := svc.UpdateConfig(context.Background(), map[string]any{
-		"abs_session_max_ttl": "2160h",
-		"log_level":           "warn",
-	})
-	if status != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; resp = %v", status, resp)
-	}
-	msg, _ := resp["error"].(string)
-	if !strings.Contains(msg, "abs_session_max_ttl (ABS_SESSION_MAX_TTL)") {
-		t.Fatalf("error must name the key and its variable: %q", msg)
-	}
-	if snap := Snapshot(); snap.ABSSessionMaxTTL != "0" || snap.LogLevel == "warn" {
-		t.Fatalf("refused PUT applied something: max=%q log_level=%q", snap.ABSSessionMaxTTL, snap.LogLevel)
-	}
-	if len(*blobs) != 0 {
-		t.Fatal("refused PUT persisted a blob")
-	}
-
-	status, resp = svc.UpdateConfig(context.Background(), map[string]any{
-		"abs_session_max_ttl":   "0",
-		"abs_refresh_token_ttl": "1440h",
-		"log_level":             "warn",
-	})
-	if status != http.StatusOK {
-		t.Fatalf("an unchanged ABS value must not block a save: %d %v", status, resp)
 	}
 }

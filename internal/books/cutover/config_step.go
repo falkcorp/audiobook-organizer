@@ -546,17 +546,24 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 	}
 	for _, st := range p.Stages {
 		err := s.cfg.Stage(b, st.Path, st.Value, by)
+		reason := ""
 		switch {
 		case err == nil:
 			w.Count("key-staged")
 		case errors.Is(err, config.ErrUnknownKey):
-			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reasonRefusedUnknown})
+			reason = reasonRefusedUnknown
 		case errors.Is(err, config.ErrInvalid) && !isFieldError(err):
-			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reasonRefusedStore})
+			reason = reasonRefusedStore
 		case isFieldError(err) || errors.Is(err, config.ErrInvalid):
-			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reasonRefusedValue})
+			reason = reasonRefusedValue
 		default:
 			return fmt.Errorf("%w: staging %s failed: %v", errConfigStep, st.Path, errClass(err))
+		}
+		if reason != "" {
+			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reason})
+			for _, m := range st.Also {
+				quarantine = append(quarantine, quarantined{Key: quarantineKey(m.Member), Raw: m.Original, Reason: reason})
+			}
 		}
 	}
 	moved := map[string]bool{} // quarantining a source key deletes it in the same batch

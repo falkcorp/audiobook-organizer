@@ -89,6 +89,10 @@ var reachHiddenSites = []reachHiddenSite{
 	{file: reachCfaccessDir + "/owner_guard.go", name: "RequireOwner", ownerRoutes: true},
 	{file: reachHandlersDir + "/user.go", recv: "UserHandler", name: "inviteTokenVisible", routes: []string{
 		"GET /api/v1/users/invites"}},
+	// The config Facade asks Actor.Can for every key's own permission, so a write
+	// to a key above settings:manage is judged here, not at the route.
+	{file: reachHandlersDir + "/system/config_handler.go", recv: "Handler", name: "configCan", routes: []string{
+		"PUT /api/v1/config"}},
 }
 
 // reachHiddenExcluded are functions that hold a permission check and are not sites

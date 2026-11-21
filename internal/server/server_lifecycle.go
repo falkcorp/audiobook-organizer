@@ -1,7 +1,7 @@
 // file: internal/server/server_lifecycle.go
-// version: 4.69.6
+// version: 4.71.0
 // guid: 2f98675b-61e1-45a0-94e9-e7fdeb8f273e
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -309,6 +309,34 @@ func (s *Server) currentPostureTokens() []systemhandlers.PostureToken {
 	return nil
 }
 
+// SetConfigAtoms installs the lookup the settings routes answer a section
+// permission with (05-rbac section 6.1): the HEAD atoms whose native scopes
+// include the permission. internal/books hands it its atom table once New has
+// returned; until then no section permission is held and such writes are refused.
+func (s *Server) SetConfigAtoms(f systemhandlers.ConfigPermissionAtoms) {
+	s.configAtoms.Store(&f)
+}
+
+// configAtomsFor is the system handler's lazy lookup: SetConfigAtoms' function,
+// none before.
+func (s *Server) configAtomsFor(perm string) []string {
+	if f := s.configAtoms.Load(); f != nil && *f != nil {
+		return (*f)(perm)
+	}
+	return nil
+}
+
+// configFirstRun reports the first-run window: no user exists and setup is not
+// complete. A store that cannot count users is not the window.
+func (s *Server) configFirstRun() bool {
+	store := s.storeForWiring()
+	if store == nil || config.Snapshot().SetupComplete {
+		return false
+	}
+	n, err := store.CountUsers()
+	return err == nil && n == 0
+}
+
 // SetRestoreStager installs POST /backup/restore's stager (05-backup
 // §5B.3.4; R1-25): internal/books hands it one over the App's state
 // directory, store path and restart request once New has returned. Until
@@ -335,7 +363,7 @@ func (s *Server) currentRestoreStager() systemhandlers.RestoreStager {
 // nil, so a nil *startup.Steps is never boxed into a non-nil interface.
 func (s *Server) startupDegradedSource() systemhandlers.DegradedSource {
 	st := s.startupSteps.Load()
-	noPassword := servermiddleware.BasicGateNoPassword()
+	noPassword := basicGateNoPassword()
 	if st == nil && !noPassword {
 		return nil
 	}
@@ -355,7 +383,7 @@ type healthTokenSource struct {
 func (h healthTokenSource) Tokens() []string {
 	tokens := h.steps.Tokens()
 	if h.basicGateNoPassword {
-		tokens = append(tokens, servermiddleware.BasicGateNoPasswordToken)
+		tokens = append(tokens, BasicGateNoPasswordToken)
 	}
 	return tokens
 }
@@ -371,10 +399,10 @@ const basicGateNoPasswordStartupError = "Basic authentication is on (basic_auth_
 // non-exempt route.
 func logBasicGateAtStartup() {
 	switch {
-	case servermiddleware.BasicGateNoPassword():
+	case basicGateNoPassword():
 		lifecycleLog.Error(basicGateNoPasswordStartupError)
-	case servermiddleware.BasicGateUsesEnvPassword():
-		lifecycleLog.Warn(servermiddleware.BasicGateEnvPasswordWarning)
+	case basicGateUsesEnvPassword():
+		lifecycleLog.Warn(BasicGateEnvPasswordWarning)
 	}
 }
 

@@ -1,7 +1,7 @@
 // file: core/kernel/dryrun.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: f63ab3a5-e55e-4498-a2d2-ffd73ac392be
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -36,19 +36,25 @@ type DryRunOptions struct {
 	// write discarded and no scratch copy (--estimate): the old in-batch
 	// discard mode, labelled an estimate.
 	Estimate bool
-	// Migrations are the build's data migrations; Rewrite its M8. Until
-	// F2-16 and F3-07 wire the boot's list, the command passes none.
+	// Migrations are the build's data migrations; Rewrite its M8. The
+	// command fills both, with Sealer, Bind and Release, through WireDryRun
+	// (F3-07 e1); a caller that sets none runs no step.
 	Migrations []datamigrate.DataMigration
 	Rewrite    *storage.RewriteStep
 	// Sealer builds the throw-away keyring's quarantine sealer in the
 	// scratch directory (05-config §2.4 step 1: secrets.Open with a KeyFile
-	// there; F3-07 wires it). nil: a sensitive row fails its step.
+	// there; WireDryRun builds it). nil: a sensitive row fails its step.
 	Sealer func(scratch string) (storage.QuarantineSealer, error)
 	// Bind receives the scratch store between Prepare and Migrate, so a
 	// cutover step's importer binds the scratch store's handles (the batch
 	// it stages into is the scratch store's), never the live boot's. nil: the
 	// steps reach no handle of their own.
 	Bind func(db *storage.DB) error
+	// Release closes what Bind opened (the throw-away keyring's secret store
+	// and the layered config store): dryRunMigrate calls it after the scratch
+	// store is closed and before the scratch directory is deleted, on every
+	// path, whether or not Bind ran. nil: Bind opened nothing to close.
+	Release func() error
 	// FirstN bounds the keys listed per outcome; 0 = 10.
 	FirstN int
 }
@@ -233,7 +239,12 @@ func (k *Kernel) dryRunCopy(ctx context.Context, opts storage.OpenOptions, archi
 // scratch store's quarantine.
 func (k *Kernel) dryRunMigrate(ctx context.Context, opts storage.OpenOptions, scratch, dbDir string,
 	migs []datamigrate.DataMigration, rewrite *storage.RewriteStep, opt DryRunOptions,
-	first int, rep *storage.DryRunReport) error {
+	first int, rep *storage.DryRunReport) (err error) {
+	if opt.Release != nil {
+		// The return expressions below close the scratch store first; what
+		// Bind opened over it closes after, before DryRun deletes the scratch.
+		defer func() { err = errors.Join(err, opt.Release()) }()
+	}
 	var sealer storage.QuarantineSealer
 	if opt.Sealer != nil {
 		s, err := opt.Sealer(scratch)

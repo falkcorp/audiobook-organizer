@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/health_tokens_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 06a9de9e-cc8c-4b3d-ae81-fafb45892f6f
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package system
 
@@ -26,7 +26,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	systemmocks "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system/mocks"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/mediacore/health"
@@ -109,7 +108,7 @@ var tokenCells = []tokenCell{
 			due := time.Date(2026, time.March, 21, 0, 0, 0, 0, time.UTC)
 			// A posture token fed through the fixed source as well, so a
 			// /health that stopped filtering would show it.
-			src := fixedTokens{"search_index", servermiddleware.BasicGateNoPasswordToken, DegradedStorageCheckpointMode}
+			src := fixedTokens{"search_index", DegradedBasicGateNoPassword, DegradedStorageCheckpointMode}
 			return tokenRaise{
 				store:       warmingTokenStore{m},
 				getDegraded: func() DegradedSource { return src },
@@ -159,7 +158,7 @@ func f2Cell(name string, raise map[health.ComponentID]string) tokenCell {
 					rep.Report(health.Result{Status: health.StatusDegraded, Reason: reason, Detail: "gotham/archive"})
 				}
 			}
-			src := fixedTokens{"search_index", servermiddleware.BasicGateNoPasswordToken}
+			src := fixedTokens{"search_index", DegradedBasicGateNoPassword}
 			return tokenRaise{
 				store:       warmingTokenStore{m},
 				getDegraded: func() DegradedSource { return src },
@@ -201,7 +200,7 @@ func statusHandler(t *testing.T, raised tokenRaise) *Handler {
 	svc.EXPECT().CollectSystemStatus(mock.Anything).Return(&sysinfo.SystemStatus{Status: "ok"}, nil).Maybe()
 	return New(
 		func() SystemStore { return raised.store },
-		svc, nil, nil, nil, nil, nil, nil, nil,
+		svc, nil, nil, nil, nil, nil, nil,
 		raised.getDegraded,
 	).WithPostureTokens(raised.posture)
 }

@@ -1,11 +1,12 @@
 // file: core/module/manifest.go
-// version: 1.2.0
+// version: 1.4.0
 // guid: f5448853-c265-4559-bf8c-4cb61f16fa24
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package module
 
 import (
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -13,8 +14,8 @@ import (
 
 // Manifest is everything the kernel validates before any storage is opened,
 // and everything that must stay known while the module is disabled (06
-// §6.4.2). These are the R1 fields; Settings arrives with config (06
-// §6.4.10).
+// §6.4.2). Later members arrive additively with their subsystems (06
+// §6.4.10); a member named in the spec and absent here has not landed.
 type Manifest struct {
 	ID          ID
 	Version     string // semver, e.g. "1.12.0"; reported by GET /api/core/v1/modules
@@ -85,6 +86,42 @@ type Manifest struct {
 	// migrates another owner's rows (ProblemMigrationOrder).
 	DataMigrations []datamigrate.DataMigration
 
+	// Cutover returns the module's R2 cutover steps (06 §6.4.2; books: 03
+	// §3.8 M2-M6): BootBlocking data migrations that decode HEAD's rows from
+	// the module's own Legacy range, stage them through the importers in imp
+	// into the step's batch, and delete them, one batch per chunk. The
+	// kernel calls it once per boot, while it builds the migration list
+	// (P2), with importers it binds to their stores at the start of P4b; the
+	// steps join the module's DataMigrations in the DAG and run in 03 §3.8's
+	// order, after the versioned steps (M1) and the level step (M7) and
+	// before the store rewrite (M8), whether the module is enabled or not
+	// (A5). nil for an app with no pre-core rows (hello, TV, Movies). A step
+	// names only the importers of the families it moves.
+	//
+	// The func must be pure: the offline commands and Describe call it too,
+	// with importers that refuse every call (ErrImporterNotBound), and a
+	// step it returns must do no work until it runs.
+	Cutover func(imp Importers) []datamigrate.DataMigration
+
+	// Rewrite declares M8, the store rewrite (05-storage §5S.3.13 "M8: the
+	// rewrite"; 03 §3.8), which runs last in the R2 cutover once, over
+	// everything the final R2 build migrated. At most one manifest of an App
+	// declares it (its ID is fixed for all of R2, D15); the kernel appends
+	// it after every registered migration and wires its swapper. nil = the
+	// module declares none. The spec's 06 §6.4.2 has no member for it (its
+	// F3 row lists M8 among the manifest's cutover members without naming
+	// one); this name is coined by F3-07.
+	Rewrite *storage.RewriteStep
+
+	// Settings are the typed config sections the module owns, wrapped with
+	// Settings(section) (06 §6.4.2). Paths must be "modules.<ID>" or below
+	// (ProblemSettingsNamespace). The kernel registers each of an enabled
+	// module's sections with config before the store loads (06 §6.5.1 P3,
+	// 05-config §1.3.2); a disabled module's are not registered and its
+	// stored values are kept, unvalidated. A module reads its own sections
+	// through Setting in Register.
+	Settings []SettingsSection
+
 	// ResetHook is the module's part of a factory reset (05-storage
 	// §5S.3.15 "The app's reset hook"): Plan runs when a reset is staged,
 	// Run on the reset boot at 06 §6.5.2 Run step 2, after the fresh
@@ -93,6 +130,25 @@ type Manifest struct {
 	// declares none, and a reset then deletes no file and refuses
 	// DeleteLibraryFiles. A ResetStore reset runs no hook.
 	ResetHook *storage.ResetHook
+
+	// AppConfig makes the module the App's own configuration surface: only a
+	// module that declares it receives Deps.Config (the layered store's reads,
+	// its one Apply and an OnCommit hook) and, through it, the secrets the
+	// declaration names. nil = the module gets neither (Deps.Config is nil).
+	// ABO's books module declares it for the Facade that projects HEAD's flat
+	// Config over core keys; a module that only reads its own sections has no
+	// use for it, so the access is a reviewed manifest line, never ambient.
+	AppConfig *AppConfigSpec
+}
+
+// AppConfigSpec is a module's declaration of App-wide config access.
+type AppConfigSpec struct {
+	// Secrets says which secret names Deps.Config.Secret, PutSecret and
+	// DeleteSecret may touch: names outside it are refused with
+	// secrets.ErrOutOfScope, so the module reaches exactly the secrets its
+	// own table maps (for books, derived from the rename table), not the
+	// whole store. nil = no secret access.
+	Secrets func(name secrets.Name) bool
 }
 
 // UIDescriptor lists the IDs of client-side contributions (07 §7.4.2).

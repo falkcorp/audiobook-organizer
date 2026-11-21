@@ -18,6 +18,7 @@ import (
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -64,10 +65,11 @@ func (s *fakeServer) Shutdown(context.Context) error {
 
 // TestRun_StopOrderThroughR1Listen is the R1-15 stop-order test (06 §6.5.2,
 // 05-health §5H.4) through app.Options.R1Listen, the seam ABO's listener
-// stack takes: hooks start in order, then workers, then R1Values once and the
-// listener; a cancelled ctx (main's SIGTERM) drains the listener first, then
-// cancels the workers, then stops the hooks in exact reverse, all within the
-// budget. The listener receives R1Values' address and TLS files.
+// stack takes: hooks start in order, then workers, then the listener; a
+// cancelled ctx (main's SIGTERM) drains the listener first, then cancels the
+// workers, then stops the hooks in exact reverse, all within core.shutdown.budget.
+// The listener receives core.http.listen and core.http.tls.* as the layered
+// config holds them.
 func TestRun_StopOrderThroughR1Listen(t *testing.T) {
 	rec := &recorder{}
 	hook := func(name string) module.Hook {
@@ -96,10 +98,10 @@ func TestRun_StopOrderThroughR1Listen(t *testing.T) {
 	listening := make(chan struct{})
 	a, err := New(t.Context(), Options{
 		AppID: "gotham", LogOutput: &syncBuffer{}, Env: []string{},
-		R1Values: func() R1Values {
-			rec.add("r1values")
-			return R1Values{Listen: "192.0.2.1:8484", TLSCertFile: "batcave.crt", TLSKeyFile: "batcave.key",
-				ShutdownBudget: 5 * time.Second}
+		CoreConfigBoot: true,
+		ConfigFlags: map[config.Path]string{
+			"core.http.listen": "192.0.2.1:8484", "core.http.tls.cert_file": "batcave.crt", "core.http.tls.key_file": "batcave.key",
+			"core.shutdown.budget": "5s",
 		},
 		R1Listen: func(o httpapi.ListenOptions, h http.Handler, _ *slog.Logger) (R1Server, error) {
 			if h == nil {
@@ -146,14 +148,14 @@ func TestRun_StopOrderThroughR1Listen(t *testing.T) {
 		t.Fatalf("the stop took %s, over the 5s budget", took)
 	}
 	if gotOpts.Addr != "192.0.2.1:8484" || gotOpts.TLSCertFile != "batcave.crt" || gotOpts.TLSKeyFile != "batcave.key" {
-		t.Fatalf("R1Listen got %+v, want R1Values' address and TLS files", gotOpts)
+		t.Fatalf("R1Listen got %+v, want core.http's address and TLS files", gotOpts)
 	}
 
 	got := rec.list()
-	// The worker goroutine's first line races R1Values and Serve (the
+	// The worker goroutine's first line races the listener and Serve (the
 	// supervisor launches it before step 7 and does not wait); everything else
 	// is ordered.
-	want := []string{"wayne.manor start", "wayne.cave start", "r1values", "listen",
+	want := []string{"wayne.manor start", "wayne.cave start", "listen",
 		"listener drain", "worker stop", "wayne.cave stop", "wayne.manor stop"}
 	var ordered []string
 	for _, e := range got {

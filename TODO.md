@@ -2,6 +2,7 @@
 <!-- version: 10.78.59 -->
 <!-- version: 10.78.57 -->
 <!-- version: 10.78.56 -->
+<!-- version: 10.78.49 -->
 <!-- version: 10.78.31 -->
 <!-- version: 10.78.32 -->
 <!-- version: 10.78.30 -->
@@ -719,7 +720,7 @@ into one of the curated sections below, is a normal direct edit.
       Service after it. Acceptance: a rule imported while a Service runs routes the
       next notification without a restart, with a test.
 
-- [ ] **Assert the rename table's `refuse` verdicts against `config`'s real ones (F3-07)** F3-06's golden generates each retired name's `refuse`/`warn` from the rows' admin flag and the two registered `FailClosed` keys' tags; it cannot compare with core's real verdict because `coreSections()` is unexported in `core/kernel` and F3-06 leaves `core/` alone. In F3-07's `TestRenameTable_EveryKeyRegistered`, add: for every key the real registry has, the golden's verdict equals `config`'s verdict for that path.
+- [x] **Assert the rename table's `refuse` verdicts against `config`'s real ones (F3-07)** F3-06's golden generates each retired name's `refuse`/`warn` from the rows' admin flag and the two registered `FailClosed` keys' tags; it cannot compare with core's real verdict because `coreSections()` is unexported in `core/kernel` and F3-06 leaves `core/` alone. In F3-07's `TestRenameTable_EveryKeyRegistered`, add: for every key the real registry has, the golden's verdict equals `config`'s verdict for that path.
   - Owner: F3-07.
 
 - [ ] **Write F3-06's rulings into 05-config §1.12.2 and §1.12.3, and fix the spec's counts** The M2 PR took the spec-implied option wherever the text is silent and kept HEAD's behaviour where the text disagrees (seams.d/F3-06.md lists each). Write down: (1) §1.12.2 says an undecryptable secret row is quarantined and its secret marked unreadable; HEAD gap-fills it from `config.yaml` and M2 keeps that (parity), so amend the text: the file's value is imported where there is one, the ciphertext is quarantined sealed, and the secret is marked unreadable only when no other source has a value (this closes the open gap-fill question above), with a distinct count and log line for "recovered from config.yaml after an undecryptable row"; (2) a gap-fill value that meets a name which already holds content is skipped, not quarantined, so a rerun after M2a's commit is a no-op; (3) disabled OAuth creates no provider entry, quarantines the client ids paired with the name their secret moved to, and quarantines the default role and allowed emails when no entry carries them; (4) `FailClosed` keys are staged at their defaults; (5) the key is searched in the state directory, then the database's directory (HEAD's order), then `<root_dir>/.appdata`, not `<root_dir>/.appdata` alone; (6) a URL whose userinfo cannot be proven absent or split is quarantined sealed, never staged; (7) M2b strips a gap-fill key only after its destination holds the value, always keeps `database_path` (M2 never stores it and no blob shadows it, so nothing can be shown to hold it) and lists it in the report until the operator layer reads `core.storage.path`, and the upgrade is blocked when no source row would make M2 run; (8) that census also covers the ten managed keys HEAD reads from `config.yaml` through viper (`playlist_dir`, `setup_complete`, `organization_strategy`, `scan_on_startup`, `auto_organize`, `folder_naming_pattern`, `file_naming_pattern`, `enable_ai_parsing`, `concurrent_scans`, `log_level`): with no settings blob, a value that differs from HEAD's default blocks (so `enable_ai_parsing: true` is a no-op and `false` blocks), and `database_path` is left out because M2 never stores it (convert `never-stored`); (9) a secret whose record is an unreadable marker or fails to decrypt holds no value for M2b's purposes, so a file value added afterwards is kept and listed, and `ConfigStepOptions.DatabasePath` (HEAD's database path) is required. Fix §1.12.3's counts (the body lists 18 `o` and 9 `s` rows, the header says 16 and 11; HEAD binds 155 env names, not 142; `abs_jwt_secret` and `cf_policy_api_token` are `o` in the body and `s` in the golden, which keeps `s`) and §1.12.4's `LOGIN_SATURATED_RATE` example, which says warn although `core.auth.login.saturated_rate` is `protect:"admin"` and so refuses.
@@ -888,7 +889,7 @@ into one of the curated sections below, is a normal direct edit.
 - [ ] **Vet `./kernel/` with `-tags unitlifecycle` in core's `ci` target** 03 §3.5.1 item 4 says core's `ci` target vets `./kernel/` with the `unitlifecycle` tag so every PR compiles the fake-migration hook. R1-28 added the hook (`core/kernel/fakemigration_hook.go`) and the tag-set entry, but `core/Makefile` is R1-30's file in the same wave, so the one `go vet -tags unitlifecycle ./kernel/` line was left out. Until it lands only the `unit-lifecycle` job (when its triggers fire, and `core/kernel/**` is one) compiles the tagged build.
   - Owner: whoever lands R1-30 (`core/Makefile`), or a follow-up row after it.
 
-- [ ] **No platform-core row owns five core identifiers 06's hello blocks need** `TestSpecGoBlocksCompile` (`core/examples/hello/specblocks_test.go`) pins what 06's hello blocks are still missing from core. Five pinned identifiers have no owning row: `module.Setting`, `module.Settings`, `module.SettingsSection`, `module.Manifest.Permissions` and `module.Manifest.Settings`. Assign each one to a row, or amend 06 so the hello blocks stop using it. Until then the hello blocks cannot compile or boot, whatever else lands. The row that adds an identifier also removes it from `helloMissing` in the same PR.
+- [ ] **No platform-core row owns `module.Manifest.Permissions`, which 06's hello blocks need** `TestSpecGoBlocksCompile` (`core/examples/hello/specblocks_test.go`) pins what 06's hello blocks are still missing from core. F3-07 landed `module.Setting`, `module.Settings`, `module.SettingsSection` and `module.Manifest.Settings` (slice a1) and removed them from `helloMissing`; `module.Manifest.Permissions` still has no owning row. Assign it to a row, or amend 06 so the hello blocks stop using it. Until then (and until `ui.Bundle`, F9-03, lands) the hello blocks cannot compile or boot. The row that adds an identifier also removes it from `helloMissing` in the same PR.
   - Owner: coordinator (assign rows). Found by the F2-01 review (#4547).
 
 - [ ] **PLATFORM-CORE-F3-GATE-STATUS** When F3 moves the Basic gate into
@@ -4395,7 +4396,7 @@ into one of the curated sections below, is a normal direct edit.
 - [x] **ABS-SYNC: let ABS clients through BasicAuth on the 9 routes that have no — ✅ 2026-10-03: internal/server/handlers/abs/basicauth_exempt_test.go pins the exempt table (GET/HEAD cover, /login, /ping, openid)
       token check.** #3296 exempts only the ABS routes whose handler chain contains
       `ABSRequireAuth`. The nine below still sit behind the global
-      `servermiddleware.BasicAuth()`, so with `basic_auth_enabled` on (off in prod
+      `servermiddleware.BasicAuth()` (since replaced by core's stage-8 Basic gate, F3-07), so with `basic_auth_enabled` on (off in prod
       today) ABS clients still break: a client can't send Basic credentials and its
       ABS token together, because both use the `Authorization` header.
       - `POST /login`: new or logged-out clients can't get a token.
@@ -4779,7 +4780,7 @@ Do it properly: `state_dir` as an ordinary setting, resolved the same way the re
   start-up, which is the bug #3168 was about — and this setting is *more* dangerous to
   get wrong than `database_path`, because the blob lives in the database whose secrets
   the setting governs.
-- An entry in `envLockedSettings`/`flagLockedSettings` so `SettingLocks()` reports it
+- An entry in `envLockedSettings`/`flagLockedSettings` so `SettingLockedBy()` reports it
   and the UI can grey it out with a reason.
 - Keep `ABK_STATE_DIR` working as an alias, or migrate it and say so in the changelog.
 
@@ -21788,7 +21789,8 @@ condition, not a regression. Verify through `books.jdfalk.com` instead.
   `servermiddleware.BasicAuth()`. With basic auth enabled (off by default) every ABS
   client would need to send `Authorization: Basic …`, which collides with the ABS
   bearer token on the same header — the clients would be unable to connect and the
-  cause would be invisible. Either exempt the ABS paths in `basicauth.go` or document
+  cause would be invisible. Either exempt the ABS paths in `basicauth.go` (deleted by F3-07;
+  the exemption now lives in `internal/server/legacy_manifest.go` and core's stage 8) or document
   that the two features are mutually exclusive.
 
 - [x] **ABS-SYNC: prune expired `abs_sess:` records on a schedule.** (done in #2737, TASK-139)

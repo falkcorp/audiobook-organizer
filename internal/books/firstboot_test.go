@@ -37,8 +37,12 @@ type headSeed struct {
 	bookID string
 }
 
+// flatEmbeddingBlob is a config_blob in the shape before the nested
+// embedding object, as an older HEAD left it.
+const flatEmbeddingBlob = `{"embedding_enabled":true,"embedding_model":"batcomputer"}`
+
 // headStoreAt writes a store at path as HEAD (R0) leaves a production store:
-// library rows, a config_blob in a shape the settings load migrates, books'
+// library rows, a config_blob in an older HEAD shape, books'
 // schema at LegacyCap, and no core key, sidecar or checkpoint. It writes the
 // rows with this build's standalone opener and then removes what a core
 // build adds, as internal/books/store's rewindToR0 does for that package's
@@ -161,8 +165,8 @@ func checkpointName(t *testing.T, path string) string {
 // TestCheckpointPrecedesEveryWrite on ABO's boot (05-storage §5S.10, §5S.4):
 // release R1's first boot of a HEAD store takes its checkpoint before any
 // write. The copy holds exactly the rows HEAD left, byte for byte, although
-// the boot then wrote core's rows, books' R1 migrations, the settings
-// load's writes and the boot repairs; and it holds the state files serve
+// the boot then wrote core's rows, books' R1 migrations and the boot
+// repairs; and it holds the state files serve
 // names (the encryption key).
 func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 	path := filepath.Join(tempDir(t), "gotham.pebble")
@@ -170,10 +174,7 @@ func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 	before := rawKVs(t, path)
 
 	edit, disk := onDisk(path)
-	r := runComposedWith(t, edit, nil, func(o *app.Options) {
-		disk(o)
-		loadConfigFromDB = config.LoadConfigFromDatabase
-	}, nil)
+	r := runComposedWith(t, edit, nil, disk, nil)
 	require.NoError(t, r.stop())
 
 	name := checkpointName(t, path)
@@ -183,7 +184,6 @@ func TestCheckpointPrecedesEveryWrite(t *testing.T) {
 
 	after := rawKVs(t, path)
 	assert.NotEmpty(t, keysWithPrefix(after, "c/"), "the boot wrote no core row: the test proves nothing")
-	assert.NotEqual(t, before["setting:config_blob"], after["setting:config_blob"], "the settings load's blob migration was not committed")
 
 	var rec struct {
 		StateFiles []struct {
@@ -224,7 +224,7 @@ func TestClaimsModeIsStrictOnABOsBoot(t *testing.T) {
 // never scans, because iterators stay clipped to books' claims.
 func TestShadowModeBootsABO(t *testing.T) {
 	c := bootComposedWith(t, false, "", nil, nil, func(o *app.Options) {
-		o.Env = []string{"ABO_CORE_STORAGE_CLAIMS_MODE=shadow"}
+		o.Env = []string{storageEnv(), "ABO_CORE_STORAGE_CLAIMS_MODE=shadow"}
 	})
 	c.expectClaimViolations()
 	db := c.store.DB()
@@ -277,21 +277,33 @@ func TestProjectionKeepsRecordIDOnABOsBoot(t *testing.T) {
 	require.NotNil(t, dvAfter.Value)
 	var version database.DatabaseVersion
 	require.NoError(t, json.Unmarshal([]byte(*dvAfter.Value), &version))
-	assert.Equal(t, database.LatestMigrationVersion(), version.Version)
+	// The flip's level step is the version after HEAD's last (books.level-1).
+	assert.Equal(t, booksLevelStepVersion, version.Version)
+	assert.Equal(t, database.LatestMigrationVersion()+1, version.Version)
+	// The level step rewrites the stamp's value (version 2, asserted above) but
+	// never takes a new row ID for either bookkeeping row.
 	for _, k := range []string{"preference:storage_format", "preference:storage_migration"} {
-		assert.Equal(t, before[k], after[k], "%s changed", k)
+		var b, a database.UserPreference
+		if raw, ok := before[k]; ok {
+			require.NoError(t, json.Unmarshal([]byte(raw), &b))
+			require.NoError(t, json.Unmarshal([]byte(after[k]), &a))
+			assert.Equal(t, b.ID, a.ID, "%s took a new row ID", k)
+		}
 	}
 	sidecar, err := os.ReadFile(database.StorageFormatSidecarPath(path))
 	require.NoError(t, err)
-	assert.Equal(t, fmt.Sprint(database.SupportedStorageFormat), strings.TrimSpace(string(sidecar)))
+	// The sidecar R0 and `make rollback` read is the stamp: once the level step
+	// has run it is above R0's supported format, which refuses the store.
+	assert.Equal(t, fmt.Sprint(database.SupportedStorageFormat+1), strings.TrimSpace(string(sidecar)))
 	assert.Equal(t, 1, database.SupportedStorageFormat, "R1 raised the legacy projection")
 }
 
 // TestStampWrittenAfterTheCheckpoint (R1-23 review B2): a HEAD store without
-// the storage_format stamp gets it at 1 from books' boot repairs, after the
+// the storage_format stamp gets it from books' boot repairs, after the
 // pre-migration checkpoint: the checkpoint holds no stamp and the store holds
-// 1 in HEAD's row format. A present stamp is never rewritten
-// (TestProjectionKeepsRecordIDOnABOsBoot).
+// one, in HEAD's row format, at the flip's raised level (version 2: 1 is the
+// legacy projection, and the level step this boot runs raises it). A present
+// stamp is never rewritten (TestProjectionKeepsRecordIDOnABOsBoot).
 func TestStampWrittenAfterTheCheckpoint(t *testing.T) {
 	path := filepath.Join(tempDir(t), "blackgate.pebble")
 	headStoreAt(t, path, nil)
@@ -315,7 +327,10 @@ func TestStampWrittenAfterTheCheckpoint(t *testing.T) {
 	assert.NotZero(t, pref.ID, "the stamp has no preference ID")
 	var v database.DatabaseVersion
 	require.NoError(t, json.Unmarshal([]byte(*pref.Value), &v))
-	assert.Equal(t, 1, v.Version)
+	// 1 is the legacy projection before a level step has run; once one has (the
+	// flip's books.level-1) the stamp is LegacyMaxFormat+1, which every
+	// pre-guard build refuses (05-storage 5S.3.7).
+	assert.Equal(t, 2, v.Version)
 }
 
 // TestFirstBootRefusesForeignKeys on ABO's boot (05-storage §5S.10): a HEAD

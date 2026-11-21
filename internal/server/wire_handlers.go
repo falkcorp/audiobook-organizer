@@ -1,5 +1,5 @@
 // file: internal/server/wire_handlers.go
-// version: 2.64.13
+// version: 2.65.0
 // guid: f7a8b9c0-d1e2-3456-7890-abcdef012345
 // last-edited: 2026-11-18
 
@@ -314,10 +314,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// operations.Scheduler are distinct (structurally identical) types, so a
 	// func() operations.Scheduler value cannot be passed where
 	// func() handlers.Scheduler is expected.
-	schedulerH := handlers.NewSchedulerHandler(
-		s.storeForWiring(),
-		s.handlersSchedulerProvider(),
-	)
+	schedulerH := handlers.NewSchedulerHandler(s.handlersSchedulerProvider())
 
 	// System domain handler (health/status/announcements/storage/logs/
 	// activity-log/config/SSE events/backups/dashboard/
@@ -326,7 +323,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	// in-method nil guards (which mirror the old `s.X == nil` / `s.X != nil`
 	// checks on the concrete pointers) are preserved: boxing a nil concrete
 	// pointer into an interface yields a non-nil interface and would defeat them.
-	// s.systemService / s.configUpdateService are concrete *struct pointers always
+	// s.systemService is a concrete *struct pointer always
 	// constructed in NewServer, but the guards keep parity with the established
 	// pattern and are harmless. s.pluginRegistry can legitimately be nil
 	// (HealthCheckAll skipped). s.hub is passed as a LAZY provider closure (not a
@@ -342,10 +339,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	var sysSvc system.SystemService
 	if s.systemService != nil {
 		sysSvc = s.systemService
-	}
-	var sysConfigUpdate system.ConfigUpdateService
-	if s.configUpdateService != nil {
-		sysConfigUpdate = s.configUpdateService
 	}
 	var sysPlugins system.PluginHealthChecker
 	if s.pluginRegistry != nil {
@@ -366,7 +359,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		// hold.
 		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
-		sysConfigUpdate,
 		sysPlugins,
 		// Lazy hub provider: resolve s.hub at request time with a typed-nil guard
 		// so a nil *realtime.EventHub is never boxed into a non-nil interface.
@@ -387,7 +379,10 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		WithPostureTokens(s.currentPostureTokens).
 		WithANNSnapshotDivergence(s.markHNSWSnapshotDiverged).
 		// Lazy: books installs the stager after wiring (SetRestoreStager).
-		WithRestoreStager(s.currentRestoreStager)
+		WithRestoreStager(s.currentRestoreStager).
+		// Lazy: books installs its atom table after wiring (SetConfigAtoms).
+		WithConfigAtoms(s.configAtomsFor).
+		WithConfigFirstRun(s.configFirstRun)
 	s.systemHandler = systemH
 
 	// Dedup domain handler (candidate / cluster / series listing, merge /

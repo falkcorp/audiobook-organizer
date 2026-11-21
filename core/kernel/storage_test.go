@@ -1,7 +1,7 @@
 // file: core/kernel/storage_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 36b3a2eb-1f55-4a42-83bc-47c859649615
-// last-edited: 2026-11-08
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -266,7 +266,7 @@ func lateStopKernel(t *testing.T, path string, budget time.Duration, hold func()
 	c.Logger = capture.Logger()
 	ready := make(chan struct{})
 	c.Notifier = readySignal{notifier: notifier{rec}, ready: ready}
-	c.R1Values = func() R1Values { return R1Values{Listen: "localhost:0", ShutdownBudget: budget} }
+	withCore(&c, "core.http.listen", "localhost:0", "core.shutdown.budget", budget.String())
 	c.StoragePath = path
 	return mustNew(t, c), deps, capture, ready
 }
@@ -600,7 +600,7 @@ func TestCloseWithoutRun(t *testing.T) {
 		const budget = 1500 * time.Millisecond
 		c := testConfig(t, storageMod("alfred", nil))
 		c.StoragePath = tempStoragePath(t)
-		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: budget} }
+		withCore(&c, "core.shutdown.budget", budget.String())
 		k := mustNew(t, c)
 		k.lateMu.Lock()
 		k.lateStops = append(k.lateStops, make(chan struct{}))
@@ -613,20 +613,62 @@ func TestCloseWithoutRun(t *testing.T) {
 			t.Fatalf("Close took %s, want the configured budget %s (the default is %s)", took, budget, defaultShutdownBudget)
 		}
 	})
-	t.Run("negative-budget", func(t *testing.T) {
-		capture := logcapture.New(t)
-		c := testConfig(t, storageMod("alfred", nil))
-		c.Logger = capture.Logger()
-		c.StoragePath = tempStoragePath(t)
-		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: -time.Second} }
-		k := mustNew(t, c)
-		if err := k.Close(t.Context()); err != nil {
-			t.Fatalf("Close with a negative budget = %v, want nil: the close still runs", err)
-		}
-		if !slices.ContainsFunc(capture.Records(), func(r slog.Record) bool {
-			return r.Level == slog.LevelWarn && strings.Contains(r.Message, "default shutdown budget")
-		}) {
-			t.Fatalf("no WARN for the negative budget: %v", capture.Messages())
+	// A budget that is not positive never reaches the stop order: core.shutdown
+	// refuses it when the config loads, naming the key.
+	t.Run("non-positive-budget-refused", func(t *testing.T) {
+		for _, v := range []string{"-1s", "0s"} {
+			c := testConfig(t, storageMod("alfred", nil))
+			c.StoragePath = tempStoragePath(t)
+			withCore(&c, "core.shutdown.budget", v)
+			if _, err := New(t.Context(), c); err == nil || !strings.Contains(err.Error(), "core.shutdown") {
+				t.Fatalf("New with core.shutdown.budget %s = %v, want a refusal naming core.shutdown", v, err)
+			}
 		}
 	})
+}
+
+// TestCheckpointRecordsFromRelease (05-storage §5S.3.12 "How"): the open
+// checkpoint a failing upgrade leaves carries Config.FromRelease as its
+// from_release, the pre-freeze tag `make rollback-restore` names; a build that
+// embeds none writes it empty.
+func TestCheckpointRecordsFromRelease(t *testing.T) {
+	for _, tag := range []string{"v0.232.0", ""} {
+		path := tempStoragePath(t)
+		c := testConfig(t, storageMod("alfred", nil, seedStep(1, "cave")))
+		c.StoragePath = path
+		k := mustNew(t, c)
+		if err := k.closeCore(t.Context(), time.Now().Add(defaultShutdownBudget)); err != nil {
+			t.Fatal(err)
+		}
+		c.FromRelease = tag
+		c.Modules = []module.Module{storageMod("alfred", nil, seedStep(1, "cave"), storage.Migration{
+			Version: 2, Name: "broken", Compat: storage.Additive,
+			Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }})}
+		if _, err := New(t.Context(), c); err == nil {
+			t.Fatal("the failing upgrade booted")
+		}
+		raw, err := os.ReadFile(path + ".migration-checkpoint")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var p struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &p); err != nil || p.Name == "" {
+			t.Fatalf("pointer = %s (%v)", raw, err)
+		}
+		raw, err = os.ReadFile(filepath.Join(filepath.Dir(path), ".mediacore-checkpoints", p.Name+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rec struct {
+			FromRelease string `json:"from_release"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec.FromRelease != tag {
+			t.Errorf("checkpoint from_release = %q, want %q", rec.FromRelease, tag)
+		}
+	}
 }

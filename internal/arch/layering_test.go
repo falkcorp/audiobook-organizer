@@ -170,6 +170,7 @@ var layerOf = map[string]int{
 	"internal/books/searchindex":                 3, // computed: max of imports=2 (search, books/store), floored at 3
 	"internal/books/searchindex/searchindextest": 3, // computed: max of imports=3 (searchindex), floored at 3
 
+	"internal/books/appconfig":          3, // computed: the config Facade's projection engine; imports internal/config (1), the layer-0 cutover table and logger, and core only; internal/books wires it
 	"internal/activity":                 3, // computed: max of imports=3, floored at 3
 	"internal/ai":                       3, // computed: max of imports=3, floored at 3
 	"internal/ai/aijobs":                3, // computed: max of imports=2, floored at 3
@@ -330,9 +331,7 @@ var layerOf = map[string]int{
 // imported) with a one-line reason. See the package comment for the ratchet.
 var allowed = map[edge]string{
 	{"internal/config", "internal/aidispatch"}:                  "config reaches a package that floors at domain; 07-M1 makes config a leaf",
-	{"internal/config", "internal/auth"}:                        "config imports auth (which imports database); 07-M1",
 	{"internal/config", "internal/backup"}:                      "config reaches a package that floors at domain; 07-M1",
-	{"internal/config", "internal/books/store"}:                 "config reads the store directly; 07-M1",
 	{"internal/config", "internal/dedup/unified"}:               "config reaches a package that floors at domain; 07-M1",
 	{"internal/dedup", "internal/operations/registry"}:          "domain package registers operations itself; move registration into plugins/dedup",
 	{"internal/metadata", "internal/operations/registry"}:       "provider clients import the operations registry; 07-M4",

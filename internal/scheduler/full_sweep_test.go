@@ -104,9 +104,11 @@ func TestLibraryScanFullTickerIsNotTheSweepPeriod(t *testing.T) {
 		"the due-check cadence must stay far below any realistic process uptime")
 }
 
-// TestLibraryScanFullIntervalIsConfigurable proves both knobs are read from
-// config rather than hard-coded, and that disabling the task stops the ticker.
-func TestLibraryScanFullIntervalIsConfigurable(t *testing.T) {
+// TestLibraryScanFullDueCheckIsFixedAndIgnoresTheDroppedInterval pins the due-check
+// cadence at fullSweepDueCheck regardless of scheduled.library_scan_full.interval,
+// the field a flipped Config holds at zero (core's schedule value carries only the
+// sweep period), and that disabling the task stops the ticker.
+func TestLibraryScanFullDueCheckIsFixedAndIgnoresTheDroppedInterval(t *testing.T) {
 	restore := config.Snapshot()
 	t.Cleanup(func() { config.AppConfig = restore })
 	config.ResetToDefaultsForTest()
@@ -115,17 +117,15 @@ func TestLibraryScanFullIntervalIsConfigurable(t *testing.T) {
 	task, ok := ts.GetTask("library_scan_full")
 	require.True(t, ok)
 
-	config.AppConfig.Scheduled.LibraryScanFull.Interval = 15
-	assert.Equal(t, 15*time.Minute, task.GetInterval())
+	for _, interval := range []int{0, 15, 60} {
+		config.AppConfig.Scheduled.LibraryScanFull.Interval = interval
+		assert.Equal(t, fullSweepDueCheck, task.GetInterval(),
+			"interval=%d: the cadence must not depend on a field the flip zeroes", interval)
+	}
 
-	config.AppConfig.Scheduled.LibraryScanFull.Interval = 0
-	assert.Equal(t, time.Duration(0), task.GetInterval(), "a zero interval must disable the ticker")
-
-	config.AppConfig.Scheduled.LibraryScanFull.Interval = 60
 	config.AppConfig.Scheduled.LibraryScanFull.Enabled = false
 	assert.False(t, task.IsEnabled())
-	assert.Equal(t, time.Duration(0), task.GetInterval(),
-		"a disabled sweep must report no interval even when one is configured")
+	assert.Equal(t, time.Duration(0), task.GetInterval(), "a disabled sweep must report no interval")
 }
 
 // fullSweepHarness wires a mock store and a registry holding a stub

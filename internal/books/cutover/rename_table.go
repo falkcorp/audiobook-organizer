@@ -1,7 +1,7 @@
 // file: internal/books/cutover/rename_table.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 5f0dc15e-6a07-4d86-8d7f-28b5bd6aa771
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package cutover
 
@@ -55,6 +55,14 @@ const (
 	TargetEntry       TargetKind = "entry"       // an entry of a list-valued key, built from several rows
 	TargetFold        TargetKind = "fold"        // one of several rows folded into one key's list
 	TargetPassthrough TargetKind = "passthrough" // an integrations passthrough path (operator layer only)
+	// TargetMember is a member of a registered MAP-valued key
+	// (core.tasks.windows.<name>.{enabled,start,end}): core registers the map as
+	// one key, so Path (the member's dotted path) is not itself a key. Map is the
+	// registered key; M2 stages, and the Engine reads and writes, the whole map
+	// with the member merged in (MemberOf, WithMember). Without this kind the
+	// path is an unknown key: M2 quarantines the value and the projection reads
+	// nothing (found by the differential oracle, F3-07).
+	TargetMember TargetKind = "member"
 )
 
 // Target is one place a row's value goes.
@@ -63,6 +71,7 @@ type Target struct {
 	Path    string // the key or secret name; a description for an instance, entry or fold
 	List    string // the list-valued key an entry or fold belongs to
 	Convert string // the converter name, "" for identity
+	Map     string // TargetMember: the registered map-valued key the member lives in
 	Coined  bool   // the spec coins the name (no owner declares it yet)
 	// Dest marks a passthrough destination (a host or URL), whose retired name
 	// refuses; Passthrough marks a secret under an integrations path.
@@ -387,6 +396,9 @@ func (g *generator) addSub(top, head string, s subRow) {
 		Admin: adminClass(head, s.admin, s.targets)})
 }
 
+// onStartupDroppedNote is the note of every scheduled.<task>.on_startup row.
+const onStartupDroppedNote = "not carried: a task's start trigger is part of its definition (05-tasks 5T.8.2); scan_on_startup is the one that stays"
+
 // scheduledRows generates one row per entry of the scheduled block.
 func (g *generator) scheduledRows(t reflect.Type) {
 	for i := 0; i < t.NumField(); i++ {
@@ -409,6 +421,17 @@ func (g *generator) scheduledRows(t reflect.Type) {
 			r.Note = "a second target: the same ScheduleConfig also seeds the core kind core.storage.compact's key"
 		}
 		g.add(r)
+		// What core's schedule value has no place for are their own dropped rows,
+		// so the retired names say so (no replacement) instead of pointing at the
+		// schedule key that does not carry them, and the R2 release note lists them.
+		if _, ok := sf.Type.FieldByNameFunc(func(n string) bool { return n == "OnStartup" }); ok {
+			g.add(Row{Head: "scheduled." + name + ".on_startup", Class: ClassDropped, Stored: StoredBlob, BlobField: "scheduled",
+				Note: onStartupDroppedNote})
+		}
+		if name == "library_scan_full" {
+			g.add(Row{Head: "scheduled.library_scan_full.interval", Class: ClassDropped, Stored: StoredBlob, BlobField: "scheduled",
+				Note: "the due-check cadence is fixed at one hour; the sweep period is period_hours (every)"})
+		}
 	}
 }
 
@@ -454,7 +477,7 @@ func (g *generator) checkTargets() {
 			if t.Convert != "" && !knownConvert(t.Convert) {
 				g.fail("row %s: unknown converter %q", g.rows[i].Head, t.Convert)
 			}
-			if t.Kind != TargetKey && t.Kind != TargetSecret && t.Kind != TargetPassthrough {
+			if t.Kind != TargetKey && t.Kind != TargetSecret && t.Kind != TargetPassthrough && t.Kind != TargetMember {
 				continue
 			}
 			p := strings.TrimSuffix(t.Path, ".*")
@@ -582,7 +605,7 @@ func isConcretePath(p string) bool {
 // where the value becomes an instance field (a later step's) or nothing.
 func (t Target) ConfigPath() config.Path {
 	switch t.Kind {
-	case TargetKey, TargetSecret, TargetPassthrough:
+	case TargetKey, TargetSecret, TargetPassthrough, TargetMember:
 		p := strings.TrimSuffix(t.Path, ".*")
 		if isConcretePath(p) {
 			return config.Path(p)
@@ -803,6 +826,17 @@ func RetiredConfigNames() []config.RetiredName {
 		}
 	}
 	return out
+}
+
+// ConfigEnvBindings is the list app.Options.ConfigEnvBindings takes (F3-07
+// wires it): the two OPENAI ecosystem names the app binds onto the ai/openai
+// instance's passthrough paths (05-config section 1.12.4). The four OTEL names
+// are bound by core's own metrics and tracing sections, so they are not here.
+func ConfigEnvBindings() []config.EnvName {
+	return []config.EnvName{
+		{Name: "OPENAI_API_KEY", Path: "integrations.ai.openai.api_key"},
+		{Name: "OPENAI_BASE_URL", Path: "integrations.ai.openai.base_url"},
+	}
 }
 
 // CanonicalEnvNames is every canonical env name the deploy files may set

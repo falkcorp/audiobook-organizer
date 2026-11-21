@@ -13,9 +13,11 @@
 package bootseamtest
 
 import (
+	"io"
 	"math/rand/v2"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -58,10 +60,48 @@ type Event struct {
 	// point only (decision D12): Pebble fails a WAL or MANIFEST write
 	// fatally, in goroutines no recover reaches.
 	Engine bool
+	// PebbleFatal is an operation Pebble issues from inside its WAL rotation
+	// (DB.rotateWAL: closing the old log, creating the new one, syncing the
+	// directory), which a Flush or a full memtable runs. The log's own files
+	// are Engine already; this catches the rest, the directory sync of a store
+	// that is not in Options.Stores (M8's copy store), which carries the
+	// region's label. Pebble treats an
+	// I/O error there as fatal and panics, in a goroutine no recover
+	// reaches, so in production an ENOSPC at that point behaves like a
+	// process kill and recovery from it is the kill's. The matrix therefore
+	// does not inject an error into it (Fatal); a kill before it is still
+	// taken, so the crash is still covered.
+	PebbleFatal bool
 }
 
 // Pebble reports an operation of Pebble's engine (Engine).
 func (e Event) Pebble() bool { return e.Engine }
+
+// Fatal reports an operation whose error Pebble escalates to a panic
+// (PebbleFatal): a kill point only, never an error injection.
+func (e Event) Fatal() bool { return e.PebbleFatal }
+
+// rotateWALFrame is the function whose I/O errors Pebble panics on (db.go
+// rotateWAL: "panic(err)" after the old log's Close and after the new log's
+// Create). The match is on the call stack of the operation: the injector runs
+// in the goroutine that issued it.
+const rotateWALFrame = "pebble/v2.(*DB).rotateWAL"
+
+// inRotateWAL reports whether the calling goroutine is inside Pebble's WAL
+// rotation.
+func inRotateWAL() bool {
+	var pcs [48]uintptr
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs[:])])
+	for {
+		f, more := frames.Next()
+		if strings.HasSuffix(f.Function, rotateWALFrame) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
 
 // Kill reports a kill point: an operation whose effect a crash can cut
 // (a create, link, remove, rename, mkdir or sync). A write collapses into
@@ -130,6 +170,15 @@ type Recorder struct {
 
 	// shared is the per-boot state every Seams this recorder makes carries.
 	shared bootseam.Shared
+	// cloneGate keeps a CrashClone out of every MemFS.Lock. Pebble's crashable
+	// MemFS takes its clone mutex for reading in Lock and again, inside it, in
+	// Create; a CrashClone (the writer) that arrives between the two parks the
+	// second read lock behind it, and Lock, the clone and everything that
+	// follows deadlock. The kill points of Pebble's own goroutines (the
+	// cleanup manager removing obsolete files) clone while a boot opens a
+	// store, so the window is real: Lock holds the gate for reading, a clone
+	// takes it for writing.
+	cloneGate sync.RWMutex
 
 	pebbleRE *regexp.Regexp
 
@@ -145,8 +194,37 @@ type Recorder struct {
 // New wraps mem, which must be crashable when opts.Clones is set.
 func New(mem *vfs.MemFS, opts Options) *Recorder {
 	r := &Recorder{mem: mem, opts: opts, ordinals: map[string]int{}, pebbleRE: pebbleName()}
-	r.fs = errorfs.Wrap(mem, r)
+	r.fs = errorfs.Wrap(&gatedMem{MemFS: mem, gate: &r.cloneGate}, r)
 	return r
+}
+
+// gatedMem is the in-memory filesystem under the injector, with the two calls
+// that re-enter MemFS's clone mutex excluded from CrashClone
+// (Recorder.cloneGate): Lock calls Create, and ReuseForWrite calls Rename,
+// each while holding that mutex for reading. The gate sits below the
+// injector, not around it: the injector's own hook for ReuseForWrite is a kill
+// point that takes the gate for writing.
+type gatedMem struct {
+	*vfs.MemFS
+	gate *sync.RWMutex
+}
+
+// Unwrap lets vfs.Root see the MemFS underneath: the boot's state-directory
+// logic tells the in-memory filesystem from the real one by its root type.
+func (g *gatedMem) Unwrap() vfs.FS { return g.MemFS }
+
+// Lock implements vfs.FS.
+func (g *gatedMem) Lock(name string) (io.Closer, error) {
+	g.gate.RLock()
+	defer g.gate.RUnlock()
+	return g.MemFS.Lock(name)
+}
+
+// ReuseForWrite implements vfs.FS.
+func (g *gatedMem) ReuseForWrite(oldname, newname string, category vfs.DiskWriteCategory) (vfs.File, error) {
+	g.gate.RLock()
+	defer g.gate.RUnlock()
+	return g.MemFS.ReuseForWrite(oldname, newname, category)
 }
 
 // FS is the recording filesystem.
@@ -229,13 +307,19 @@ func (r *Recorder) MaybeError(op errorfs.Op) error {
 	if !ev.Engine {
 		ev.Ordinal = r.ordinals[ev.Label]
 		r.ordinals[ev.Label]++
+		ev.PebbleFatal = inRotateWAL()
 	}
 	r.events = append(r.events, ev)
 	if ev.Kill() && (r.opts.Clones || r.opts.CloneIf != nil && r.opts.CloneIf(ev)) {
-		r.clones = append(r.clones, Clone{Event: ev, FS: r.mem.CrashClone(vfs.CrashCloneCfg{})})
+		r.cloneGate.Lock()
+		clone := r.mem.CrashClone(vfs.CrashCloneCfg{})
+		mixed := make([]Clone, 0, len(r.opts.MixedSeeds))
 		for _, seed := range r.opts.MixedSeeds {
-			r.clones = append(r.clones, Clone{Event: ev, FS: r.mixedClone(seed, ev.Seq), Mixed: true, Seed: seed})
+			mixed = append(mixed, Clone{Event: ev, FS: r.mixedClone(seed, ev.Seq), Mixed: true, Seed: seed})
 		}
+		r.cloneGate.Unlock()
+		r.clones = append(r.clones, Clone{Event: ev, FS: clone})
+		r.clones = append(r.clones, mixed...)
 	}
 	fail := r.opts.Fail
 	r.mu.Unlock()

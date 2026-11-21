@@ -74,8 +74,9 @@ func (s *fakeServer) Shutdown(context.Context) error {
 	return nil
 }
 
-// supervised is a Config whose listener, notifier, R1Values and exit record
-// into rec.
+// supervised is a Config whose listener, notifier and exit record into rec,
+// and whose core.http.listen is localhost:0 (a flag layer, so the config boot
+// is on).
 func supervised(t *testing.T, rec *recorder, mods ...module.Module) Config {
 	c := testConfig(t, mods...)
 	c.Notifier = notifier{rec}
@@ -83,7 +84,7 @@ func supervised(t *testing.T, rec *recorder, mods ...module.Module) Config {
 		rec.add("listen:%s", o.Addr)
 		return &fakeServer{rec: rec, stopped: make(chan struct{})}, nil
 	}
-	c.R1Values = func() R1Values { rec.add("r1values"); return R1Values{Listen: "localhost:0"} }
+	withCore(&c, "core.http.listen", "localhost:0")
 	c.Exit = func(code int) { rec.add("exit:%d", code) }
 	return c
 }
@@ -134,14 +135,14 @@ func TestStartOrder(t *testing.T) {
 				t.Errorf("%s at %d ran before the last hook start (%d): a module callback before its Start hook", w, i, lastStart)
 			}
 		}
-		order := []string{"status:starting", "start:alfred.cowl", "r1values", "listen:localhost:0", "ready"}
+		order := []string{"status:starting", "start:alfred.cowl", "listen:localhost:0", "ready"}
 		for i := 1; i < len(order); i++ {
 			if rec.index(order[i-1]) >= rec.index(order[i]) {
 				t.Fatalf("%s is not before %s: %v", order[i-1], order[i], rec.list())
 			}
 		}
-		if rec.index("r1values") < lastStart {
-			t.Fatal("R1Values was called before the module start hooks (05-config §1.12.1)")
+		if rec.index("listen:localhost:0") < lastStart {
+			t.Fatal("the listener opened before the module start hooks (06 §6.5.2 step 7)")
 		}
 		cancel()
 		if err := <-done; err != nil {
@@ -240,7 +241,7 @@ func TestStartRollbackReverseOrder(t *testing.T) {
 				if got := rec.matching("stop:"); !slices.Equal(got, tc.stops) {
 					t.Fatalf("rollback stops = %v, want %v", got, tc.stops)
 				}
-				for _, never := range []string{"worker:alfred", "r1values", "ready"} {
+				for _, never := range []string{"worker:alfred", "ready"} {
 					if rec.index(never) >= 0 {
 						t.Errorf("%s happened after a failed start", never)
 					}
@@ -257,7 +258,7 @@ func TestStopTimeoutAbandons(t *testing.T) {
 		want   time.Duration
 	}{
 		{"default budget", 0, defaultShutdownBudget},
-		{"R1Values budget", 5 * time.Second, 5 * time.Second},
+		{"core.shutdown.budget", 5 * time.Second, 5 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -274,7 +275,9 @@ func TestStopTimeoutAbandons(t *testing.T) {
 				})
 				c := supervised(t, rec, hooked("alfred", rec), joker)
 				c.Logger = capture.Logger()
-				c.R1Values = func() R1Values { return R1Values{ShutdownBudget: tc.budget} }
+				if tc.budget != 0 {
+					withCore(&c, "core.shutdown.budget", tc.budget.String())
+				}
 				k := mustNew(t, c)
 				ctx, cancel := context.WithCancel(t.Context())
 				done := run(ctx, k)
@@ -445,7 +448,7 @@ func TestStopBudget_LateHooksNotAwaited(t *testing.T) {
 			return nil
 		})
 		c := supervised(t, rec, gcpd)
-		c.R1Values = func() R1Values { return R1Values{ShutdownBudget: budget} }
+		withCore(&c, "core.shutdown.budget", budget.String())
 		k := mustNew(t, c)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := run(ctx, k)
@@ -463,33 +466,6 @@ func TestStopBudget_LateHooksNotAwaited(t *testing.T) {
 		}
 		if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "gcpd.montoya, gcpd.bullock, gcpd.gordon") {
 			t.Fatalf("Run = %v, want the hooks reached after the budget named", err)
-		}
-	})
-}
-
-// TestR1ValuesPanic_StopsInOrder is the review's m7: R1Values is module-free
-// app code, so a panic in it is an error like any other start failure, and
-// the hooks and workers already started are stopped.
-func TestR1ValuesPanic_StopsInOrder(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		rec := &recorder{}
-		c := supervised(t, rec, hooked("alfred", rec))
-		c.R1Values = func() R1Values { panic("Riddler swapped the config") }
-		k := mustNew(t, c)
-		err := k.Run(t.Context())
-		if err == nil || !strings.Contains(err.Error(), "panic: Riddler swapped the config") {
-			t.Fatalf("Run = %v, want the R1Values panic as an error", err)
-		}
-		if got, want := rec.matching("stop:"), []string{"stop:alfred.cape", "stop:alfred.cowl"}; !slices.Equal(got, want) {
-			t.Fatalf("stops = %v, want the started hooks stopped in reverse: %v", got, want)
-		}
-		if rec.index("worker-exit:alfred") < 0 {
-			t.Fatal("the started worker was not stopped")
-		}
-		for _, never := range rec.list() {
-			if strings.HasPrefix(never, "listen:") || never == "ready" {
-				t.Fatalf("%s happened after R1Values panicked: %v", never, rec.list())
-			}
 		}
 	})
 }

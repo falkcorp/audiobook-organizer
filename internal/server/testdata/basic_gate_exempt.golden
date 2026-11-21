@@ -1,0 +1,95 @@
+# file: internal/server/testdata/basic_gate_exempt.golden
+# version: 1.0.0
+# guid: 5d0f7a3c-81b6-4e29-a4c5-9e2b7f1d6038
+# last-edited: 2026-11-20
+# abs_off
+GET /api/health basic-exempt
+GET /api/v1/health basic-exempt
+# abs_on
+POST /api/authorize own-auth
+GET /api/authors/:id own-auth
+GET /api/authors/:id/image own-auth
+HEAD /api/authors/:id/image own-auth
+POST /api/collections own-auth
+DELETE /api/collections/:id own-auth
+GET /api/collections/:id own-auth
+PATCH /api/collections/:id own-auth
+POST /api/collections/:id/batch/add own-auth
+POST /api/collections/:id/batch/remove own-auth
+POST /api/collections/:id/book own-auth
+DELETE /api/collections/:id/book/:bookId own-auth
+POST /api/emails/send-ebook-to-device own-auth
+GET /api/health basic-exempt
+GET /api/items/:id own-auth
+GET /api/items/:id/file/:ino own-auth
+HEAD /api/items/:id/file/:ino own-auth
+GET /api/items/:id/file/:ino/download own-auth
+HEAD /api/items/:id/file/:ino/download own-auth
+POST /api/items/:id/play own-auth
+POST /api/items/batch/get own-auth
+GET /api/libraries own-auth
+GET /api/libraries/:libraryId own-auth
+GET /api/libraries/:libraryId/authors own-auth
+GET /api/libraries/:libraryId/collections own-auth
+GET /api/libraries/:libraryId/filterdata own-auth
+GET /api/libraries/:libraryId/items own-auth
+GET /api/libraries/:libraryId/narrators own-auth
+GET /api/libraries/:libraryId/personalized own-auth
+GET /api/libraries/:libraryId/playlists own-auth
+GET /api/libraries/:libraryId/recent-episodes own-auth
+GET /api/libraries/:libraryId/search own-auth
+GET /api/libraries/:libraryId/series own-auth
+GET /api/libraries/:libraryId/stats own-auth
+GET /api/me own-auth
+GET /api/me/bookmarks/:id own-auth
+PATCH /api/me/item/:id/bookmark own-auth
+POST /api/me/item/:id/bookmark own-auth
+DELETE /api/me/item/:id/bookmark/:time own-auth
+GET /api/me/item/:id/remove-from-continue-listening own-auth
+POST /api/me/item/:id/remove-from-continue-listening own-auth
+GET /api/me/item/listening-sessions/:id own-auth
+GET /api/me/listening-sessions own-auth
+GET /api/me/listening-stats own-auth
+GET /api/me/progress own-auth
+DELETE /api/me/progress/:id own-auth
+GET /api/me/progress/:id own-auth
+PATCH /api/me/progress/:id own-auth
+GET /api/me/progress/:id/remove-from-continue-listening own-auth
+POST /api/me/progress/:id/remove-from-continue-listening own-auth
+PATCH /api/me/progress/batch/update own-auth
+GET /api/me/sessions own-auth
+DELETE /api/me/sessions/:id own-auth
+GET /api/me/stats/year/:year own-auth
+GET /api/narrators/:id/image own-auth
+HEAD /api/narrators/:id/image own-auth
+POST /api/playlists own-auth
+DELETE /api/playlists/:id own-auth
+GET /api/playlists/:id own-auth
+PATCH /api/playlists/:id own-auth
+POST /api/playlists/:id/batch/add own-auth
+POST /api/playlists/:id/batch/remove own-auth
+DELETE /api/playlists/:id/item/:libraryItemId own-auth
+GET /api/series/:id own-auth
+POST /api/session/:id/close own-auth
+POST /api/session/:id/sync own-auth
+POST /api/session/local own-auth
+POST /api/session/local-all own-auth
+GET /api/v1/health basic-exempt
+POST /logout own-auth
+# static-asset rule on the / owner
+/assets/index-abc.js true
+/assets/logo.png true
+/favicon.ico true
+/app.js true
+/style.css true
+/mark.png true
+/mark.svg true
+/font.woff2 true
+/ false
+/index.html false
+/api/v1/books false
+/ping false
+/status false
+/login false
+/metrics false
+/sw.js.map false

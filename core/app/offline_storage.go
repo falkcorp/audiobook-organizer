@@ -1,7 +1,7 @@
 // file: core/app/offline_storage.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 8fbea565-1376-4d4b-a491-c6078aa8e4db
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package app
 
@@ -91,7 +91,7 @@ func migrateCommand(opts Options, mods []module.Module) Command {
 			if *estimate && *archive != "" {
 				return errors.New("storage migrate: --estimate counts over the live store; it does not take --from-archive")
 			}
-			c, err := offlineConfig(opts, mods)
+			c, err := offlineConfig(ctx, opts, mods, "") // kernel.DryRun checks no owner
 			if err != nil {
 				return err
 			}
@@ -99,7 +99,13 @@ func migrateCommand(opts Options, mods []module.Module) Command {
 			if err != nil {
 				return err
 			}
-			rep, runErr := kernel.DryRun(ctx, c, kernel.DryRunOptions{ID: *id, FromArchive: path, Estimate: *estimate})
+			// The manifest's cutover list, M8, the throw-away keyring's sealer and
+			// the scratch store's bind: what DryRun leaves to the app (F3-07 e1).
+			dopt, err := kernel.WireDryRun(ctx, c, kernel.DryRunOptions{ID: *id, FromArchive: path, Estimate: *estimate})
+			if err != nil {
+				return fmt.Errorf("storage migrate: %w", err)
+			}
+			rep, runErr := kernel.DryRun(ctx, c, dopt)
 			if rep != nil {
 				if _, err := io.WriteString(stdout, strings.Join(rep.Lines(), "\n")+"\n"); err != nil {
 					return errors.Join(runErr, err)
@@ -229,7 +235,7 @@ func quarantinePurgeCommand(opts Options, mods []module.Module) Command {
 
 // openKernelOffline is kernel.OpenOffline over the app's configuration.
 func openKernelOffline(ctx context.Context, opts Options, mods []module.Module, readOnly bool) (*kernel.Offline, error) {
-	c, err := offlineConfig(opts, mods)
+	c, err := offlineConfig(ctx, opts, mods, readWriteOwner(readOnly))
 	if err != nil {
 		return nil, err
 	}
