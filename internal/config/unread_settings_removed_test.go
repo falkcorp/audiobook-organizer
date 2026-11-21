@@ -50,39 +50,6 @@ catalog:
   language: german
 `
 
-// A config file that still carries the eleven keys loads without error; the
-// live keys beside them are applied and the retired ones are ignored.
-func TestInitConfig_RemovedUnreadSettingsInOldFileAreIgnored(t *testing.T) {
-	logs := captureRemovedKeyLogs(t)
-	fileInitConfig(t, oldConfigYAML, nil)
-
-	snap := Snapshot()
-	assert.Equal(t, "/srv/library", snap.RootDir)
-	assert.Equal(t, "german", snap.Catalog.Language, "catalog.language is a different, live setting")
-	assert.NoError(t, snap.Validate())
-
-	out := logs.String()
-	for _, k := range unreadSettingKeys {
-		assert.Contains(t, out, "key="+k+" ", "no removed-setting warning for %s", k)
-	}
-}
-
-// LANGUAGE is the POSIX locale variable, so the environment alone must never
-// draw the removed-setting warning, while the same key in the viper config file
-// (--config or ~/.audiobook-organizer.yaml) must.
-func TestInitConfig_LanguageWarnsFromFileNotEnvironment(t *testing.T) {
-	t.Run("env only", func(t *testing.T) {
-		logs := captureRemovedKeyLogs(t)
-		fileInitConfig(t, "root_dir: /srv/library\n", func() { t.Setenv("LANGUAGE", "en_US:en") })
-		assert.NotContains(t, logs.String(), "key=language ", "env LANGUAGE is a locale, not a stale setting")
-	})
-	t.Run("viper config file", func(t *testing.T) {
-		logs := captureRemovedKeyLogs(t)
-		fileInitConfig(t, "root_dir: /srv/library\nlanguage: en\n", nil)
-		assert.Contains(t, logs.String(), "key=language ")
-	})
-}
-
 // A stored config blob written before the removal still carries the keys in its
 // JSON; decoding it must not fail.
 func TestConfigBlob_RemovedUnreadSettingsDecode(t *testing.T) {

@@ -150,11 +150,11 @@ func TestStandaloneOpenerHonoursInflightSwap(t *testing.T) {
 	}
 }
 
-// TestVerifyStoreOpens (05-backup's VerifyOpen, R1's form; the restore
+// TestVerifyStoreOpensWith (05-backup's VerifyOpen, R1's form; the restore
 // stager's check of an extracted archive): a store books' guard admits opens
 // read-only and nothing under it changes; an empty directory and a missing
 // one are refused, and the missing one is not created.
-func TestVerifyStoreOpens(t *testing.T) {
+func TestVerifyStoreOpensWith(t *testing.T) {
 	ctx := context.Background()
 	dir := filepath.Join(t.TempDir(), "gotham.pebble")
 	s, err := NewPebbleStore(dir)
@@ -173,18 +173,18 @@ func TestVerifyStoreOpens(t *testing.T) {
 		return slices.DeleteFunc(s, func(e string) bool { return strings.HasPrefix(e, "LOCK ") })
 	}
 	before := unlocked(treeState(t, dir))
-	if err := VerifyStoreOpens(ctx, dir); err != nil {
+	if err := VerifyStoreOpensWith(StandaloneOptions{})(ctx, dir); err != nil {
 		t.Fatalf("a served store: %v", err)
 	}
 	if after := unlocked(treeState(t, dir)); !slices.Equal(before, after) {
 		t.Fatalf("the check wrote to the store:\nbefore %v\nafter  %v", before, after)
 	}
 	empty := t.TempDir()
-	if err := VerifyStoreOpens(ctx, empty); err == nil {
+	if err := VerifyStoreOpensWith(StandaloneOptions{})(ctx, empty); err == nil {
 		t.Fatal("an empty directory passed")
 	}
 	missing := filepath.Join(t.TempDir(), "arkham.pebble")
-	if err := VerifyStoreOpens(ctx, missing); err == nil {
+	if err := VerifyStoreOpensWith(StandaloneOptions{})(ctx, missing); err == nil {
 		t.Fatal("a missing directory passed")
 	}
 	if _, err := os.Stat(missing); !errors.Is(err, os.ErrNotExist) {
