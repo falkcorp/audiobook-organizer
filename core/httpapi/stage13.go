@@ -177,11 +177,17 @@ func permRefusal(p *auth.Principal, perm rbac.Requirement, opts AuthzOptions) *E
 // resolver, an unknown atom, or an answer that is not AllOf or AnyOf (Public,
 // AnyAuthenticated, Delegated, another legacy kind or the zero value would
 // each turn an atom route into something it is not).
+//
+// A Delegated or zero requirement is refused here as well, not left to the
+// checker: an OwnAuth route's permission is its own handler's to enforce, and
+// stage 13 never runs on it.
 func resolve(perm rbac.Requirement, r AtomResolver) (rbac.Requirement, bool) {
 	switch perm.Kind() {
+	case rbac.KindPublic, rbac.KindAuthenticated, rbac.KindAllOf, rbac.KindAnyOf:
+		return perm, true
 	case rbac.KindLegacyAtom, rbac.KindLegacyCheck:
 	default:
-		return perm, true
+		return rbac.Requirement{}, false
 	}
 	if r == nil {
 		return rbac.Requirement{}, false

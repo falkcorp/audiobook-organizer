@@ -458,3 +458,40 @@ func TestStage13_Middleware(t *testing.T) {
 		}
 	})
 }
+
+// s13Lax is a checker that satisfies every requirement of every kind, legacy
+// and Delegated included. No core checker does; it shows Authorize refuses
+// what it cannot resolve on its own, never because the checker happens to.
+type s13Lax struct{}
+
+func (s13Lax) Has(rbac.Permission) bool        { return true }
+func (s13Lax) Satisfies(rbac.Requirement) bool { return true }
+func (s13Lax) Confined() bool                  { return false }
+func (s13Lax) Concrete() []rbac.Permission     { return nil }
+
+// TestStage13_RefusesWhatItCannotResolveWhateverTheChecker: a legacy kind is
+// resolved before any checker sees it (COR6-1), so a nil resolver, an unknown
+// atom, an atom with no route requirement, a Delegated and the zero
+// requirement are refused even to a checker that would admit them.
+func TestStage13_RefusesWhatItCannotResolveWhateverTheChecker(t *testing.T) {
+	lax := &auth.Principal{User: batman(), Method: auth.MethodSession, Perms: s13Lax{}}
+	opts := AuthzOptions{OwnerRequired: true, ResolveAtom: s13Resolver}
+	for _, c := range []struct {
+		name string
+		perm rbac.Requirement
+		opts AuthzOptions
+	}{
+		{"nil resolver", rbac.LegacyAtom("library.view"), AuthzOptions{OwnerRequired: true}},
+		{"nil resolver, legacy check", rbac.LegacyCheck("users.manage", true), AuthzOptions{OwnerRequired: true}},
+		{"unknown atom", rbac.LegacyAtom("joker.laugh"), opts},
+		{"no route requirement", rbac.LegacyAtom("playlists.create"), opts},
+		{"resolver says not ok but answers", rbac.LegacyAtom("library.view"), AuthzOptions{OwnerRequired: true, ResolveAtom: func(string, bool) (rbac.Requirement, bool) { return rbac.Need("books:view"), false }}},
+		{"Delegated", rbac.Delegated("abs"), opts},
+		{"zero", rbac.Requirement{}, opts},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s13Check(t, Authorize(AuthzRequest{Perm: c.perm, Principal: lax}, c.opts), s13Want{403, "permission_denied", "", false})
+		})
+	}
+	s13Check(t, Authorize(AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: lax}, opts), s13Want{})
+}
