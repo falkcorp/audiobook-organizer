@@ -119,10 +119,21 @@ func newFixture(t *testing.T) *fixture {
 // component is a journal component over fx's store, not yet bound.
 func (fx *fixture) component(t *testing.T) *Component {
 	t.Helper()
-	c, err := NewComponent(ComponentOptions{StateDir: fx.dir, DBPath: fx.dbPath, Keyspace: fx.ks, Keys: fx.keys, InstallID: installID,
+	return fx.componentWith(t, nil)
+}
+
+// componentWith is component with its options adjusted by mut first (nil
+// adjusts nothing).
+func (fx *fixture) componentWith(t *testing.T, mut func(*ComponentOptions)) *Component {
+	t.Helper()
+	o := ComponentOptions{StateDir: fx.dir, DBPath: fx.dbPath, Keyspace: fx.ks, Keys: fx.keys, InstallID: installID,
 		App: "gotham", Source: "batcomputer-1", Tick: time.Hour,
 		Clock:  func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) },
-		DirDev: func(string) (uint64, error) { return 0, errors.New("unknown device") }})
+		DirDev: func(string) (uint64, error) { return 0, errors.New("unknown device") }}
+	if mut != nil {
+		mut(&o)
+	}
+	c, err := NewComponent(o)
 	if err != nil {
 		t.Fatal(err)
 	}

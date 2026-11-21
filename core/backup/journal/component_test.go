@@ -560,8 +560,8 @@ func TestComponent_Health(t *testing.T) {
 		if h, ok := hasHealth(hs, HealthReset); !ok || h.Severity != SeverityInfo {
 			t.Errorf("health = %+v, want %s info", hs, HealthReset)
 		}
-		if h, ok := hasHealth(hs, HealthBroken); !ok || !strings.Contains(h.Detail, "seq 3") {
-			t.Errorf("health = %+v, want %s naming the break", hs, HealthBroken)
+		if h, ok := hasHealth(hs, HealthBroken); !ok || h.Detail != detailBrokenNoted || strings.Contains(h.Detail, "seq 3") {
+			t.Errorf("health = %+v, want %s with its fixed Detail, not the break's text (the boot logs that)", hs, HealthBroken)
 		}
 	})
 	t.Run("colocation by device", func(t *testing.T) {
@@ -587,13 +587,14 @@ func TestComponent_Health(t *testing.T) {
 // the constructor does no file I/O.
 func TestNewComponent_RefusesMissingOptions(t *testing.T) {
 	fx := newFixture(t)
-	good := ComponentOptions{StateDir: fx.dir, DBPath: fx.dbPath, Keyspace: fx.ks, Keys: fx.keys, InstallID: installID}
+	good := ComponentOptions{StateDir: fx.dir, DBPath: fx.dbPath, Keyspace: fx.ks, Keys: fx.keys, InstallID: installID, App: "gotham"}
 	for name, mut := range map[string]func(*ComponentOptions){
 		"no state dir":     func(o *ComponentOptions) { o.StateDir = "" },
 		"no db path":       func(o *ComponentOptions) { o.DBPath = "" },
 		"another keyspace": func(o *ComponentOptions) { o.Keyspace = fx.auth },
 		"no keys":          func(o *ComponentOptions) { o.Keys = nil },
 		"no install ID":    func(o *ComponentOptions) { o.InstallID = "" },
+		"no app":           func(o *ComponentOptions) { o.App = "" },
 	} {
 		o := good
 		mut(&o)

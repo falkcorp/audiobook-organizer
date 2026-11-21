@@ -63,8 +63,8 @@ func TestComponentHold_ResumeLiftsItAndABreakOutlastsIt(t *testing.T) {
 		}
 	}
 	got := c.Health()
-	if len(got) == 0 || got[0].Token != HealthUnwritable || got[0].Detail != held.Error() {
-		t.Errorf("health while held = %+v, want unwritable naming the hold", got)
+	if len(got) == 0 || got[0].Token != HealthUnwritable || got[0].Detail != detailHeld {
+		t.Errorf("health while held = %+v, want unwritable with the hold's fixed Detail (never the error's text)", got)
 	}
 	c.Resume()
 	for i, err := range everyWriter(t, fx, c) {

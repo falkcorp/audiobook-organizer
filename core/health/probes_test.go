@@ -302,8 +302,8 @@ func TestPostureTokensGolden(t *testing.T) {
 		"derive_key_retire_blocked", "factory_reset_cleanup_incomplete", "factory_reset_failed",
 		"keyring_not_exported", "operator_secret_withheld", "restore_aborted", "restore_admins_review",
 		"restore_failed", "restore_inflight", "restore_last_admin_kept", "restore_pending", "restore_rejected",
-		"revocation_journal_broken", "revocation_journal_colocated", "revocation_journal_reset",
-		"revocation_journal_unwritable", "secrets_keyring_not_exported", "secrets_undecryptable",
+		"revocation_journal_broken", "revocation_journal_colocated", "revocation_journal_queued",
+		"revocation_journal_reset", "revocation_journal_unwritable", "secrets_keyring_not_exported", "secrets_undecryptable",
 		"storage_checkpoint_mode", "storage_checkpoint_open", "storage_checkpoint_retained",
 		"storage_extension_suspended", "storage_quarantine", "storage_step_pending",
 	}

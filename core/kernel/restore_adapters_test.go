@@ -80,7 +80,7 @@ func TestRestoreAborted(t *testing.T) {
 		t.Errorf("an unknown restore ID: err %v, %d lines", err, len(s.chain().Lines))
 	}
 
-	unbound, err := journal.NewComponent(journal.ComponentOptions{StateDir: t.TempDir(), DBPath: "/x", Keyspace: s.bks(), Keys: s.keys, InstallID: s.install})
+	unbound, err := journal.NewComponent(journal.ComponentOptions{StateDir: t.TempDir(), DBPath: "/x", Keyspace: s.bks(), Keys: s.keys, InstallID: s.install, App: rxApp})
 	if err != nil {
 		t.Fatal(err)
 	}
