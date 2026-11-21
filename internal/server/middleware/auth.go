@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -499,6 +500,13 @@ func CheckPermission(store UserCounter, c *gin.Context, p auth.Permission) bool 
 // request (a list that leaves out what the caller may not use). The first-run
 // bypass applies: with no users yet, every permission is held.
 func HoldsPermission(store UserCounter, c *gin.Context, p auth.Permission) bool {
+	// Under core identity (legacyauth.WithIdentity, F4-08 B7) the atom's table
+	// entry decides, through the principal stage 12 bound. HEAD's first-run
+	// bypass reads books' own user count, which is not the account record once
+	// core owns identity, so it is not applied.
+	if held, bridged := legacyauth.Held(c.Request.Context(), string(p)); bridged {
+		return held
+	}
 	// First-run bypass — RequireAuth uses the same pattern.
 	if store != nil {
 		if n, err := store.CountUsers(); err == nil && n == 0 {

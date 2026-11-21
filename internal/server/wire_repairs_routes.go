@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	repairshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -76,6 +77,22 @@ func (s *Server) permCheck() func(*gin.Context, auth.Permission) bool {
 // a refusal itself (the Repairs lane, which lists a fixer the caller may not
 // use without its last runs, and refuses a read with its own 403).
 func (s *Server) permHolds() repairshandler.PermissionCheck {
+	head := s.permHoldsHead()
+	return func(c *gin.Context, p auth.Permission) bool {
+		// Under core identity (F4-08 B7) auth off is the auth-disabled
+		// principal, not books' EnableAuth, and the atom is judged through the
+		// principal stage 12 bound; there is no first-run bypass.
+		if held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p)); bridged {
+			return held
+		}
+		return head(c, p)
+	}
+}
+
+// permHoldsHead is permHolds under HEAD's own chain (LegacyAuthGin): books'
+// EnableAuth read once when the server wires it, and HoldsPermission's
+// first-run bypass.
+func (s *Server) permHoldsHead() repairshandler.PermissionCheck {
 	if !config.AppConfig.EnableAuth {
 		return func(*gin.Context, auth.Permission) bool { return true }
 	}
@@ -96,11 +113,19 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // permHolds does.
 func (s *Server) permHoldsLive() repairshandler.PermissionCheck {
 	connected := s.permHolds()
-	if !config.Snapshot().EnableAuth {
-		return connected
-	}
+	authOn := config.Snapshot().EnableAuth
 	store := s.storeForWiring()
 	return func(c *gin.Context, p auth.Permission) bool {
+		// Under core identity (F4-08 B7) the recheck is core's: the principal is
+		// re-resolved (Identity.Refresh), so a disabled, removed or demoted
+		// account stops holding what it lost, as HEAD's recheck below did
+		// against books' store, which is no longer the account record.
+		if held, bridged := legacyauth.HeldLive(c.Request.Context(), string(p)); bridged {
+			return held
+		}
+		if !authOn {
+			return connected(c, p)
+		}
 		// The account count is read only for a request with no user on it (a
 		// first run): an authenticated request has users by definition, and the
 		// count walks the whole user keyspace.
