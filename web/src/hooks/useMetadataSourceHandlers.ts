@@ -5,7 +5,7 @@
 
 import type { Dispatch, SetStateAction } from 'react';
 import * as api from '../services/api';
-import type { SettingsState } from '../pages/Settings';
+import type { SettingsState } from '../modules/books/pages/settingsState';
 
 type SourceTestStatus = Record<
   string,

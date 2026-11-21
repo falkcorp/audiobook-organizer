@@ -6,7 +6,7 @@
 import { ChangeEvent, Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { NavigateFunction } from 'react-router';
 import * as api from '../services/api';
-import type { SettingsState } from '../pages/Settings';
+import type { SettingsState } from '../modules/books/pages/settingsState';
 import { useImportFolderHandlers } from './useImportFolderHandlers';
 import { useBackupHandlers } from './useBackupHandlers';
 import { useMetadataSourceHandlers } from './useMetadataSourceHandlers';

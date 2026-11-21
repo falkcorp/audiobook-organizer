@@ -6,7 +6,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { SettingsGeneral } from './SettingsGeneral';
-import type { SettingsState } from '../pages/Settings';
+import type { SettingsState } from '../modules/books/pages/settingsState';
 
 function renderGeneral(folderPattern: string, tokens?: string[]) {
   const settings = {
