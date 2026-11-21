@@ -32,11 +32,16 @@
 //	fixer.go       preview.go and the v3 apply path      Fixer: plan rows, approval, apply with marks
 //	budget.go      run_items.go's CPU budget and ref locks   the per-executor CPU semaphore, ref-lock table, lane leases
 //	instruments.go the opsmetrics package                the 19 <ns>.ops instruments
+//	publish.go     F5-18 E6b                                    core.task.run-changed / log-appended / finished, after each commit
 //
 // Every batch that carries a run-store write is built inside WriteRuns and
 // committed with storage.Sync under storage.RetryOnConflict; every in-process
 // lock (the executor's mu, the per-run writer, the ref-lock table, the CPU
 // budget) is taken before WriteRuns or after it returns, never inside a
-// stage (§5T.7). Nothing here is package-level state (R5): two executors in
-// one process share nothing.
+// stage (§5T.7). The one exception is publish.go's per-run sequencer gate, a
+// leaf lock a stage that emits a task event takes and holds across its own
+// Commit so that events leave in commit order; nothing is taken while holding
+// it and it is released before any retry. Nothing here is package-level state
+// (R5): two executors in one process share nothing.
+
 package executor

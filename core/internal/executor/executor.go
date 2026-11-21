@@ -142,6 +142,7 @@ type executor struct {
 	cpu      *cpuBudget
 	refs     *refTable
 	ins      *instruments
+	pub      *publisher // nil: Options.Events and the test sink are both unset
 
 	startMu sync.Mutex // serialises dedupe-folding starts (taken before WriteRuns)
 
@@ -217,6 +218,12 @@ func New(opts Options) (tasks.Executor, error) {
 	}
 	for _, l := range opts.Lanes {
 		e.lanes[l.ID] = newLane(l)
+	}
+	switch {
+	case opts.sink != nil:
+		e.pub = newPublisher(opts.sink, e.log)
+	case opts.Events != nil:
+		e.pub = newPublisher(busSink(opts.Events), e.log)
 	}
 	if !opts.InstrumentsOff {
 		ins, err := newInstruments(opts.Metrics, e)
@@ -300,10 +307,25 @@ func (e *executor) WriteRuns(ctx context.Context, open func() *storage.Batch, st
 			return errors.New("executor: WriteRuns: open returned a nil batch")
 		}
 		defer func() { err = errors.Join(err, b.Close()) }() // idempotent; a no-op after Commit
-		if err := stage(sctx, b); err != nil {
+		// Each attempt gets its own collector of the task events its stage
+		// emits (publish.go): they are published only if this attempt's batch
+		// commits, and a retry starts from none.
+		stageCtx := sctx
+		var pend *pending
+		if e.pub != nil {
+			pend = e.pub.newPending()
+			stageCtx = context.WithValue(sctx, pendingKey{}, pend)
+		}
+		if err := stage(stageCtx, b); err != nil {
+			pend.discardIf()
 			return err
 		}
-		return b.Commit(ctx, storage.Sync)
+		if err := b.Commit(ctx, storage.Sync); err != nil {
+			pend.discardIf()
+			return err
+		}
+		pend.commitIf()
+		return nil
 	})
 }
 
@@ -386,6 +408,7 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 					return notifyError{fmt.Errorf("executor: OnTerminal: %w", err)}
 				}
 			}
+			e.emitMove(ctx, next, terminal)
 			prev, out = cur, next
 			return nil
 		})
@@ -428,7 +451,12 @@ func (e *executor) stageNotifyFailed(ctx context.Context, b *storage.Batch, next
 		return err
 	}
 	line := tasks.LogLine{At: ev.At, Level: "error", Message: "the run's terminal notification was not sent: " + cause.Error()}
-	return e.runs.AppendLog(ctx, b, next.ID, uint64(next.Attempt)<<32|math.MaxUint32, line)
+	seq := uint64(next.Attempt)<<32 | math.MaxUint32
+	if err := e.runs.AppendLog(ctx, b, next.ID, seq, line); err != nil {
+		return err
+	}
+	e.emitLog(ctx, next.ID, line, seq)
+	return nil
 }
 
 // errStale is an edit's refusal: the fresh read is not a run this move

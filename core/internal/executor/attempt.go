@@ -271,7 +271,12 @@ func (a *attempt) Note(msg string) {
 	a.pmu.Unlock()
 	line := tasks.LogLine{At: a.e.now(), Level: "info", Message: msg}
 	if err := a.ledger(a.ctx, func(ctx context.Context, b *storage.Batch) error {
-		return a.e.runs.AppendLog(ctx, b, a.id, a.nextSeq(), line)
+		seq := a.nextSeq()
+		if err := a.e.runs.AppendLog(ctx, b, a.id, seq, line); err != nil {
+			return err
+		}
+		a.e.emitLog(ctx, a.id, line, seq)
+		return nil
 	}); err != nil && !errors.Is(err, tasks.ErrFenced) {
 		a.log.Warn("run log line not recorded", "err", err)
 	}
@@ -421,6 +426,13 @@ func (a *attempt) ledger(ctx context.Context, stage func(ctx context.Context, b 
 }
 
 func (a *attempt) ledgerLocked(ctx context.Context, stage func(ctx context.Context, b *storage.Batch) error) error {
+	return a.ledgerCur(ctx, func(ctx context.Context, b *storage.Batch, _ tasks.RunRecord) error { return stage(ctx, b) })
+}
+
+// ledgerCur is ledgerLocked for a stage that needs the fresh read the closed
+// ledger check made: the run as it stands in this batch, for a stage that
+// publishes its view (a progress write).
+func (a *attempt) ledgerCur(ctx context.Context, stage func(ctx context.Context, b *storage.Batch, cur tasks.RunRecord) error) error {
 	if a.fenced.Load() {
 		return tasks.ErrFenced
 	}
@@ -432,7 +444,7 @@ func (a *attempt) ledgerLocked(ctx context.Context, stage func(ctx context.Conte
 		if cur.State.Terminal() || cur.Attempt != a.n || cur.FenceEpoch != a.fence {
 			return errClosed
 		}
-		return stage(ctx, b)
+		return stage(ctx, b, cur)
 	})
 	if errors.Is(err, errClosed) || errors.Is(err, tasks.ErrRunConflict) {
 		return fmt.Errorf("%w: %v", tasks.ErrFenced, err)
@@ -473,7 +485,10 @@ func (a *attempt) tickLocked(ctx context.Context) {
 		if rec.Attempt != a.n || rec.FenceEpoch != a.fence {
 			return errDrop
 		}
-		return a.e.runs.Progress(ctx, b, a.id, done, total, cur)
+		if err := a.e.runs.Progress(ctx, b, a.id, done, total, cur); err != nil {
+			return err
+		}
+		return a.e.emitProgress(ctx, rec, done, total, cur)
 	})
 	if err != nil && !errors.Is(err, errDrop) && !errors.Is(err, tasks.ErrRunConflict) {
 		a.log.Warn("progress tick failed", "err", err)
@@ -495,13 +510,16 @@ func (a *attempt) flushLedger(ctx context.Context) error {
 	if len(pend) == 0 {
 		return nil
 	}
-	err := a.ledgerLocked(ctx, func(ctx context.Context, b *storage.Batch) error {
+	err := a.ledgerCur(ctx, func(ctx context.Context, b *storage.Batch, rec tasks.RunRecord) error {
 		for name, v := range pend {
 			if err := a.e.runs.SaveCheckpoint(ctx, b, a.id, name, v); err != nil {
 				return err
 			}
 		}
-		return a.e.runs.Progress(ctx, b, a.id, done, total, cur)
+		if err := a.e.runs.Progress(ctx, b, a.id, done, total, cur); err != nil {
+			return err
+		}
+		return a.e.emitProgress(ctx, rec, done, total, cur)
 	})
 	if err != nil {
 		a.pmu.Lock() // keep what did not land, unless a newer value replaced it

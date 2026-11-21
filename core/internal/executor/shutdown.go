@@ -83,6 +83,9 @@ func (e *executor) Shutdown(ctx context.Context) error {
 	e.mu.Unlock()
 	e.bgStop()
 	e.bg.Wait()
+	if e.pub != nil {
+		e.pub.close(ctx) // every attempt and the dispatcher are done: what they committed is in the FIFO
+	}
 	return nil
 }
 
