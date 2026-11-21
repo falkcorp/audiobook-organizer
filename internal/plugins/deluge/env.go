@@ -138,8 +138,7 @@ func nativeItems(rc *tasks.RC) kindItemsFunc {
 		_, err := tasks.RunItems(rc, par, idx, func(ic *tasks.ItemRC, i int) error {
 			return fn(ic.Context(), i)
 		}, tasks.ItemsOptions[int]{OnError: mode, ProgressBase: o.ProgressBase, ProgressTotal: o.ProgressTotal, Label: label})
-		var ie *tasks.ItemsError
-		if errors.As(err, &ie) {
+		if ie, ok := errors.AsType[*tasks.ItemsError](err); ok {
 			if o.Collect && len(ie.Errs) > 0 {
 				return errors.Join(ie.Errs...)
 			}

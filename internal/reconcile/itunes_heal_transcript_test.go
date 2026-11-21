@@ -54,8 +54,6 @@ func healTranscriptStore(a, b *string) *database.MockStore {
 	return m
 }
 
-func healStr(s string) *string { return &s }
-
 func healYearOneTrack() iTunesTrack {
 	return iTunesTrack{Album: "Year One", Artist: "Bruce Wayne"}
 }
@@ -73,7 +71,7 @@ func TestHealTranscription_StoredTranscriptUsedWithoutPool(t *testing.T) {
 		calls.Add(1)
 		return "", errors.New("pool must not be called")
 	})
-	m := healTranscriptStore(healStr(healYearOneIntro), healStr(healHalloweenIntro))
+	m := healTranscriptStore(new(healYearOneIntro), new(healHalloweenIntro))
 	var f resolverFailureCounters
 	got := resolveAmbiguousByTranscription(context.Background(), m, healYearOneTrack(), []string{"/a.m4b", "/b.m4b"}, &f, nil)
 	if got != "/a.m4b" {
@@ -93,7 +91,7 @@ func TestHealTranscription_SilenceSentinelIsNotTextAndSkipsPool(t *testing.T) {
 		calls.Add(1)
 		return healYearOneIntro, nil
 	})
-	m := healTranscriptStore(healStr(transcribe.SilenceSentinel), healStr(healHalloweenIntro))
+	m := healTranscriptStore(new(transcribe.SilenceSentinel), new(healHalloweenIntro))
 	var f resolverFailureCounters
 	got := resolveAmbiguousByTranscription(context.Background(), m, healYearOneTrack(), []string{"/a.m4b", "/b.m4b"}, &f, nil)
 	if got != "" {
@@ -105,7 +103,7 @@ func TestHealTranscription_SilenceSentinelIsNotTextAndSkipsPool(t *testing.T) {
 	if f.whisperFailed.Load() != 0 {
 		t.Fatalf("a known-silent candidate is not a pool failure; whisperFailed = %d", f.whisperFailed.Load())
 	}
-	if text, silent := storedIntroText(nil, &database.Book{IntroTranscription: healStr(transcribe.SilenceSentinel)}); text != "" || !silent {
+	if text, silent := storedIntroText(nil, &database.Book{IntroTranscription: new(transcribe.SilenceSentinel)}); text != "" || !silent {
 		t.Fatalf("storedIntroText(sentinel) = %q, %v", text, silent)
 	}
 }
@@ -118,7 +116,7 @@ func TestHealTranscription_NoStoredTranscriptCallsPool(t *testing.T) {
 		gotJournal = j
 		return healYearOneIntro, nil
 	})
-	m := healTranscriptStore(nil, healStr(""))
+	m := healTranscriptStore(nil, new(""))
 	var f resolverFailureCounters
 	got := resolveAmbiguousByTranscription(context.Background(), m, healYearOneTrack(), []string{"/a.m4b"}, &f, nil)
 	if got != "/a.m4b" {
@@ -148,7 +146,7 @@ func TestHealTranscription_PoolErrorCountsWhisperFailedAndSkips(t *testing.T) {
 }
 
 func TestStoredIntroText_FileRowNeedsMatchingHash(t *testing.T) {
-	row := &database.BookFile{FileHash: "h1", IntroSourceHash: "h0", IntroTranscription: healStr(healHalloweenIntro)}
+	row := &database.BookFile{FileHash: "h1", IntroSourceHash: "h0", IntroTranscription: new(healHalloweenIntro)}
 	if text, _ := storedIntroText(row, nil); text != "" {
 		t.Fatalf("stale file transcript used: %q", text)
 	}

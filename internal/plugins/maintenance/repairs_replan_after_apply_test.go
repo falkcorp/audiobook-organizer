@@ -216,7 +216,7 @@ func newRefreshFixture(t *testing.T) *refreshFixture {
 		planOps:  &planOps{MemOpRows: dbtest.NewMemOpRows(), rows: map[string]*database.OperationV2Row{}},
 		settings: map[string]string{},
 	}
-	fx.deps = &refreshDeps{fakeDeps: fakeDeps{store: st}, ops: ops}
+	fx.deps = &refreshDeps{store: st, ops: ops}
 	fx.p = &Plugin{deps: fx.deps, standDownWait: noWait}
 	require.NoError(t, fx.p.Repairs().Register(fx.fixer))
 	return fx

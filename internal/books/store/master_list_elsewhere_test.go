@@ -78,9 +78,7 @@ func TestMasterListElsewhere_ConcurrentCreateMakesOne(t *testing.T) {
 	var created, exists atomic.Int32
 	var wg sync.WaitGroup
 	for range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			switch err := st.CreateElsewhere(testElsewhere("same", "u1")); err {
 			case nil:
 				created.Add(1)
@@ -89,7 +87,7 @@ func TestMasterListElsewhere_ConcurrentCreateMakesOne(t *testing.T) {
 			default:
 				t.Errorf("unexpected: %v", err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	assert.EqualValues(t, 1, created.Load())

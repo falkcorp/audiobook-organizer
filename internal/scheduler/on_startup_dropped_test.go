@@ -21,8 +21,8 @@ func setEveryOnStartup(t *testing.T, v bool) int {
 	t.Helper()
 	sv := reflect.ValueOf(&config.AppConfig.Scheduled).Elem()
 	n := 0
-	for i := 0; i < sv.NumField(); i++ {
-		if f := sv.Field(i).FieldByName("OnStartup"); f.IsValid() && f.Kind() == reflect.Bool {
+	for _, field := range sv.Fields() {
+		if f := field.FieldByName("OnStartup"); f.IsValid() && f.Kind() == reflect.Bool {
 			f.SetBool(v)
 			n++
 		}

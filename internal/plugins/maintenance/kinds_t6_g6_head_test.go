@@ -142,7 +142,7 @@ func (d *t6g6OpsFetchSpy) OpsStore() OpsStore {
 // fetches the store, as HEAD did; the core refuses too, so only the fetch count
 // tells the shell's own guard from the core's.
 func TestT6G6Head_OrphanCleanupRefusesDeleteBeforeFetchingStore(t *testing.T) {
-	spy := &t6g6OpsFetchSpy{fakeDeps: fakeDeps{store: newRepairPebble(t)}}
+	spy := &t6g6OpsFetchSpy{store: newRepairPebble(t)}
 	p := &Plugin{deps: spy}
 	err := p.orphanBookFilesCleanupDef().Run(context.Background(), json.RawMessage(`{"delete":true}`), &fakeReporter{})
 	require.ErrorIs(t, err, errOrphanDeleteRemoved)

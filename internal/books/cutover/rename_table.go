@@ -7,6 +7,7 @@ package cutover
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -230,8 +231,8 @@ func generateTable() (*RenameTable, error) {
 	}
 
 	ct := reflect.TypeFor[headConfig]()
-	for i := 0; i < ct.NumField(); i++ {
-		g.topField(ct.Field(i))
+	for field := range ct.Fields() {
+		g.topField(field)
 	}
 	for _, e := range explicitRows {
 		if !g.used[e.head] {
@@ -351,8 +352,7 @@ func (g *generator) topField(sf reflect.StructField) {
 // a struct field a sub-key row names itself. rel is the leaf's name below
 // the top-level field.
 func (g *generator) leaves(t reflect.Type, top, prefix string, leaf func(head, rel string)) {
-	for i := 0; i < t.NumField(); i++ {
-		sf := t.Field(i)
+	for sf := range t.Fields() {
 		name, _ := fieldName(sf)
 		if name == "" {
 			continue
@@ -408,8 +408,7 @@ const onStartupDroppedNote = "not carried: a task's start trigger is part of its
 
 // scheduledRows generates one row per entry of the scheduled block.
 func (g *generator) scheduledRows(t reflect.Type) {
-	for i := 0; i < t.NumField(); i++ {
-		sf := t.Field(i)
+	for sf := range t.Fields() {
 		name, _ := fieldName(sf)
 		if name == "" || sf.Type.Kind() != reflect.Struct {
 			continue
@@ -611,7 +610,7 @@ func isConcretePath(p string) bool {
 	if p == "" || strings.ContainsAny(p, "*<>[] ,") {
 		return false
 	}
-	for _, seg := range strings.Split(p, ".") {
+	for seg := range strings.SplitSeq(p, ".") {
 		if seg == "" || seg[0] < 'a' || seg[0] > 'z' {
 			return false
 		}
@@ -693,8 +692,8 @@ func (g *generator) attachRetired() {
 		}
 		canon := r.canonical()
 		msg := ""
-		if strings.HasPrefix(r.Note, "removed: ") {
-			msg = strings.TrimPrefix(r.Note, "removed: ")
+		if after, ok := strings.CutPrefix(r.Note, "removed: "); ok {
+			msg = after
 		}
 		refuse := r.refuses(g.rows)
 		verdict := VerdictWarn
@@ -735,12 +734,8 @@ func (g *generator) attachRetired() {
 // URLs' env names are already the row's through BindEnv; push drops the repeat.
 func (g *generator) attachFlatAliasRetired(push func(*Row, RetiredEntry), eco map[string]bool) {
 	aliases := map[string]string{}
-	for key, head := range bindAlias {
-		aliases[key] = head
-	}
-	for key, head := range flatFileAlias {
-		aliases[key] = head
-	}
+	maps.Copy(aliases, bindAlias)
+	maps.Copy(aliases, flatFileAlias)
 	keys := make([]string, 0, len(aliases))
 	for key := range aliases {
 		keys = append(keys, key)

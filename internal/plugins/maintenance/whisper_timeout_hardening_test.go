@@ -705,7 +705,7 @@ func TestFileIntroWorker_TheTickerStopsWhenTheWhisperCallPanics(t *testing.T) {
 		time.Sleep(40 * time.Millisecond)
 		panic("transport blew up")
 	}
-	rep := &recordingRep{fileIntroRep: fileIntroRep{id: "run-panic"}}
+	rep := &recordingRep{id: "run-panic"}
 	w := &fileIntroWorker{reporter: rep}
 	func() {
 		defer func() { _ = recover() }()

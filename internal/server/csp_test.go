@@ -34,7 +34,7 @@ func setAccessTeam(t *testing.T, team string) {
 }
 
 func cspDirective(policy, name string) string {
-	for _, d := range strings.Split(policy, ";") {
+	for d := range strings.SplitSeq(policy, ";") {
 		d = strings.TrimSpace(d)
 		if d == name || strings.HasPrefix(d, name+" ") {
 			return d

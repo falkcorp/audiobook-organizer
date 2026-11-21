@@ -61,7 +61,7 @@ func kindRenameRegistryBody(registered map[string]bool, aliases map[string]strin
 // dumpBody is a golden file's body: every line that is not a "#" comment.
 func dumpBody(raw string) string {
 	var out []string
-	for _, l := range strings.Split(raw, "\n") {
+	for l := range strings.SplitSeq(raw, "\n") {
 		if strings.HasPrefix(l, "#") {
 			continue
 		}
@@ -79,7 +79,7 @@ func TestKindRenameInputs_RegistryDump(t *testing.T) {
 		header := kindRenameRegistryHeader
 		if prev, err := os.ReadFile(path); err == nil {
 			var keep []string
-			for _, l := range strings.Split(string(prev), "\n") {
+			for l := range strings.SplitSeq(string(prev), "\n") {
 				if !strings.HasPrefix(l, "#") {
 					break
 				}

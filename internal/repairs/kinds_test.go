@@ -1119,7 +1119,7 @@ func (f *pairFixer) ID() string { return "pairs" }
 
 func (f *pairFixer) Plan(context.Context, json.RawMessage, registry.Reporter) ([]Row, error) {
 	var rows []Row
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		// Row i names books i and i+1: neighbours overlap, so no two rows that
 		// share a book may run at once.
 		a, b := fmt.Sprintf("p%02d", i), fmt.Sprintf("p%02d", i+1)
@@ -1177,7 +1177,7 @@ func TestRepairsKinds_RowsSharingABookNeverApplyAtOnce(t *testing.T) {
 
 func TestRepairsKinds_ManyRowsApplyConcurrentlyUnderRace(t *testing.T) {
 	s := newMemStore()
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		s.add(fmt.Sprintf("c%02d", i), " Gotham ", fmt.Sprintf("/lib/Bat/C%02d/c.m4b", i), nil)
 	}
 	f := &trimFixer{s: s}

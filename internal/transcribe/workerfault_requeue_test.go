@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -113,9 +114,7 @@ func (p *faultPool) send(_ context.Context, g gatedEndpoint, sub map[string]stri
 			res[id] = p.answer(url, id)
 		}
 		kept, fault := splitWorkerFault(url, res)
-		for id, r := range kept {
-			out[id] = r
-		}
+		maps.Copy(out, kept)
 		if fault != nil {
 			return out, fault
 		}

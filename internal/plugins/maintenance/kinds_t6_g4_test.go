@@ -461,7 +461,7 @@ func fakeT6G4Deps(t *testing.T) (t6g4Deps, *t6g4Probe) {
 	rec := &t6g4Calls{}
 	pr := &t6g4Probe{
 		store:  &fakeT6G4Store{rec: rec, root: t.TempDir()},
-		writer: &fakeT6G4Writer{recT6G4Writer: recT6G4Writer{rec: rec}},
+		writer: &fakeT6G4Writer{rec: rec},
 	}
 	return t6g4Deps{
 		Store: pr.store,
@@ -1207,10 +1207,10 @@ func t6g4WriterCalls(name string) bool { _, ok := t6g4WriterResource[name]; retu
 // slipping past the recorded-writes check; every mapped name is a real method
 // and a pkg/ops resource.
 func TestT6G4Kinds_WriterSpyMapCoversInterface(t *testing.T) {
-	iface := reflect.TypeOf((*t6g4Writer)(nil)).Elem()
+	iface := reflect.TypeFor[t6g4Writer]()
 	seen := map[string]bool{}
-	for i := 0; i < iface.NumMethod(); i++ {
-		name := iface.Method(i).Name
+	for method := range iface.Methods() {
+		name := method.Name
 		seen[name] = true
 		if _, ok := t6g4WriterResource[name]; !ok {
 			t.Errorf("t6g4Writer.%s has no entry in t6g4WriterResource", name)

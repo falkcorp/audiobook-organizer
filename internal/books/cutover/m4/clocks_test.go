@@ -8,6 +8,7 @@ package m4_test
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -231,9 +232,7 @@ func TestCutover_SharedSettingFamilyOnlyRunKeysMove(t *testing.T) {
 	setting(other, "registry.operations_paused_note", "kept")
 	setting(other, "library_scan_full_last_run_note", "kept")
 	raw := map[string]string{}
-	for k, v := range other {
-		raw[k] = v
-	}
+	maps.Copy(raw, other)
 	setting(raw, "library_scan_full_last_run", time.Date(2026, 11, 3, 1, 0, 0, 0, time.UTC).Format(time.RFC3339))
 	setting(raw, "registry.operations_paused", `{"paused":false}`)
 	r := newRig(t, withRaw(raw))

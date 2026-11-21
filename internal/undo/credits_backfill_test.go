@@ -14,9 +14,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
-func cbIntPtr(v int) *int       { return &v }
-func cbStrPtr(v string) *string { return &v }
-
 // cbStates: before is a book whose join has the "A @0, B @0" shape and an
 // empty narrator junction; after is the backfilled state.
 func cbStates() (before, after CreditsBackfillState) {
@@ -25,8 +22,8 @@ func cbStates() (before, after CreditsBackfillState) {
 			{BookID: "b1", AuthorID: 2, Role: "author", Position: 0},
 			{BookID: "b1", AuthorID: 1, Role: "author", Position: 0},
 		},
-		AuthorID: cbIntPtr(1),
-		Narrator: cbStrPtr("Oswald Cobblepot"),
+		AuthorID: new(1),
+		Narrator: new("Oswald Cobblepot"),
 	}
 	after = CreditsBackfillState{
 		Authors: []database.BookAuthor{
@@ -34,9 +31,9 @@ func cbStates() (before, after CreditsBackfillState) {
 			{BookID: "b1", AuthorID: 2, Role: "author", Position: 1},
 		},
 		Narrators: []database.BookNarrator{{BookID: "b1", NarratorID: 7, Role: "narrator", Position: 0}},
-		AuthorID:  cbIntPtr(1),
+		AuthorID:  new(1),
 		Author:    &database.Author{ID: 1, Name: "Bruce Wayne"},
-		Narrator:  cbStrPtr("Oswald Cobblepot"),
+		Narrator:  new("Oswald Cobblepot"),
 	}
 	return before, after
 }
@@ -58,10 +55,10 @@ func TestCheckCreditsBackfillCurrent_ThreeWay(t *testing.T) {
 			s.Authors = append(s.Authors, database.BookAuthor{AuthorID: 3, Role: "author", Position: 2})
 		},
 		"narrator removed": func(s *CreditsBackfillState) { s.Narrators = nil },
-		"author_id moved":  func(s *CreditsBackfillState) { s.AuthorID = cbIntPtr(2) },
+		"author_id moved":  func(s *CreditsBackfillState) { s.AuthorID = new(2) },
 		"snapshot renamed": func(s *CreditsBackfillState) { s.Author = &database.Author{ID: 1, Name: "The Batman"} },
-		"column edited":    func(s *CreditsBackfillState) { s.Narrator = cbStrPtr("Edward Nygma") },
-		"json set":         func(s *CreditsBackfillState) { s.NarratorsJSON = cbStrPtr(`["Edward Nygma"]`) },
+		"column edited":    func(s *CreditsBackfillState) { s.Narrator = new("Edward Nygma") },
+		"json set":         func(s *CreditsBackfillState) { s.NarratorsJSON = new(`["Edward Nygma"]`) },
 		"position swapped": func(s *CreditsBackfillState) { s.Authors[1].Position = 5 },
 		"role changed":     func(s *CreditsBackfillState) { s.Narrators[0].Role = "co-narrator" },
 	} {
@@ -88,7 +85,7 @@ func TestCheckCreditsBackfillCurrent_RawPreImageIsAlreadyRestored(t *testing.T) 
 	}
 	// An edit on top of the raw pre-image is still a refusal.
 	cur := before
-	cur.Narrator = cbStrPtr("Edward Nygma")
+	cur.Narrator = new("Edward Nygma")
 	if err := CheckCreditsBackfillCurrent("b1", cur, before, after); errors.Is(err, ErrAlreadyRestored) || RefusalReason(err) != ReasonChangedSince {
 		t.Fatalf("edited raw pre-image: %v, want a %s refusal", err, ReasonChangedSince)
 	}
@@ -108,8 +105,8 @@ func TestSameCreditsBackfillState_IgnoresRowBookID(t *testing.T) {
 }
 
 func TestCreditsBackfillStateOf_DoesNotAlias(t *testing.T) {
-	book := &database.Book{ID: "b1", AuthorID: cbIntPtr(1), Author: &database.Author{ID: 1, Name: "Bruce Wayne"},
-		Narrator: cbStrPtr("Oswald Cobblepot"), NarratorsJSON: cbStrPtr(`["Oswald Cobblepot"]`)}
+	book := &database.Book{ID: "b1", AuthorID: new(1), Author: &database.Author{ID: 1, Name: "Bruce Wayne"},
+		Narrator: new("Oswald Cobblepot"), NarratorsJSON: new(`["Oswald Cobblepot"]`)}
 	rows := []database.BookAuthor{{BookID: "b1", AuthorID: 1, Role: "author"}}
 	s := CreditsBackfillStateOf(book, rows, nil)
 	*book.AuthorID, book.Author.Name, *book.Narrator, *book.NarratorsJSON = 9, "x", "x", "x"

@@ -43,6 +43,7 @@ import (
 	"net/http"
 	"net/mail"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -485,12 +486,7 @@ func includeList(policy map[string]any) ([]any, error) {
 }
 
 func hasRule(include []any, match func(any) bool) bool {
-	for _, rule := range include {
-		if match(rule) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(include, match)
 }
 
 // isServiceTokenRule reports whether rule is exactly

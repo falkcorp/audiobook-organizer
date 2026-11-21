@@ -262,7 +262,7 @@ func TestCSPLogField_StripsControlCharactersAndBoundsLength(t *testing.T) {
 
 // N1: the cut lands on a rune boundary, never inside a multi-byte character.
 func TestCSPLogField_TruncatesOnARuneBoundary(t *testing.T) {
-	for pad := 0; pad < 4; pad++ {
+	for pad := range 4 {
 		in := strings.Repeat("a", pad) + strings.Repeat("\u00e9", 300) // two bytes per rune
 		got := cspLogField(in)
 		require.True(t, utf8.ValidString(got), "pad %d: %q", pad, got)
@@ -358,7 +358,7 @@ func TestCSPReportHandler_FullBatchIsLoggedWithProductionLimits(t *testing.T) {
 		rep := newCSPReporter(rate.NewLimiter(rate.Every(2*time.Second), 30)) // the production limits
 		r := cspReportRouter(rep)
 		var items []string
-		for i := 0; i < n; i++ {
+		for i := range n {
 			items = append(items, fmt.Sprintf(`{"type":"csp-violation","body":{"effectiveDirective":"style-src-elem","blockedURL":"inline","lineNumber":%d}}`, i))
 		}
 		require.Equal(t, http.StatusNoContent, cspReportPost(r, "application/reports+json", "["+strings.Join(items, ",")+"]"))
@@ -393,7 +393,7 @@ func TestCSPReporter_RefusalSpendsNeitherBudget(t *testing.T) {
 	rep := newCSPReporter(svc)
 	rep.now = func() time.Time { return now }
 	require.Equal(t, 10, rep.admit("someone-else", 10)) // the service budget is gone
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		require.Equal(t, 0, rep.admit("198.51.100.1", 5), "refused by the service limiter")
 	}
 	svc.SetLimit(rate.Inf)
@@ -415,7 +415,7 @@ func TestCSPReporter_PerVisitorBucket(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	rep := newCSPReporter(rate.NewLimiter(rate.Inf, 1))
 	rep.now = func() time.Time { return now }
-	for i := 0; i < cspReportMaxPerRequest; i++ {
+	for i := range cspReportMaxPerRequest {
 		require.Equal(t, 1, rep.admit("198.51.100.1", 1), "burst of %d for one visitor: %d", cspReportMaxPerRequest, i)
 	}
 	require.Equal(t, 0, rep.admit("198.51.100.1", 1), "one past the burst from the same visitor")
@@ -428,7 +428,7 @@ func TestCSPReporter_VisitorTableIsBoundedAndSwept(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	rep := newCSPReporter(rate.NewLimiter(rate.Inf, 1))
 	rep.now = func() time.Time { return now }
-	for i := 0; i < maxCSPVisitors+500; i++ {
+	for i := range maxCSPVisitors + 500 {
 		rep.admit("v"+strconv.Itoa(i), 1)
 	}
 	require.LessOrEqual(t, len(rep.visitors.m), maxCSPVisitors)
@@ -460,11 +460,11 @@ func TestCSPReporter_ConcurrentRefusalsNeverMoveTheServiceBudget(t *testing.T) {
 	now := time.Unix(3_000_000, 0)
 	hammer := func(rep *cspReporter, visitor func(g, i int) string) {
 		var wg sync.WaitGroup
-		for g := 0; g < 32; g++ {
+		for g := range 32 {
 			wg.Add(1)
 			go func(g int) {
 				defer wg.Done()
-				for i := 0; i < 200; i++ {
+				for i := range 200 {
 					if got := rep.admit(visitor(g, i), 1+i%10); got != 0 {
 						t.Errorf("a refused visitor was admitted %d", got)
 					}

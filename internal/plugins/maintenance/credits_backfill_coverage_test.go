@@ -36,12 +36,12 @@ func cbCreatorRefusedFixture(t *testing.T) *cbFixture {
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Harvey Bullock")
 	f.book("y", "Gotham Central: Unresolved", func(b *database.Book) {
-		b.AuthorID = intp(renee)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(renee)
+		b.Narrator = new("Renee Montoya")
 	}, ba("y", [2]int{renee, 0}), nil)
 	f.book("x", "Gotham Central: Corrigan", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renée Montoya and Harvey Bullock")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renée Montoya and Harvey Bullock")
 	}, ba("x", [2]int{bruce, 0}), nil)
 	return f
 }
@@ -172,7 +172,7 @@ func TestCreditsBackfill_CreatorChangedSincePlanSendsTheSplitBookBackToReview(t 
 			t.Errorf("interleaved read: %v", err)
 			return
 		}
-		b.Narrator = strp("Selina Kyle")
+		b.Narrator = new("Selina Kyle")
 		if _, err := f.s.UpdateBook("z-solo", b); err != nil {
 			t.Errorf("interleaved edit: %v", err)
 		}
@@ -248,12 +248,12 @@ func TestCreditsBackfill_SplitBookKeepsItsAuthorWriteWhenItsCreatorDoesNotLand(t
 	lucius := f.author("Lucius Fox")
 	f.narrator("Harvey Bullock")
 	f.book("z-solo", "Gotham Central: In the Line of Duty", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("z-solo", [2]int{bruce, 0}), nil)
 	f.book("a-split", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(lucius)
-		b.Narrator = strp("Renee Montoya and Harvey Bullock")
+		b.AuthorID = new(lucius)
+		b.Narrator = new("Renee Montoya and Harvey Bullock")
 	}, ba("a-split", [2]int{bruce, 0}), nil)
 	env := creditsBackfillEnv{store: f.s, mod: cbFailOneMod{f.s, "z-solo"}, opID: cbTestOpID, workers: 2}
 	res, _ := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
@@ -274,7 +274,7 @@ func cbWaitingFixture(t *testing.T) *cbFixture {
 	t.Helper()
 	f := cbSplitFixture(t, "z-solo", "a-split")
 	bruce := f.author("Dick Grayson")
-	f.book("b-plain", "Arkham Asylum", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+	f.book("b-plain", "Arkham Asylum", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	return f
 }
 
@@ -391,8 +391,8 @@ func TestCreditsBackfill_BookIDsRunDoesNotListAnOutOfScopeReadError(t *testing.T
 	bruce := f.author("Bruce Wayne")
 	for _, id := range []string{"k-1", "k-2"} {
 		f.book(id, "Knightfall "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp("Renee Montoya")
+			b.AuthorID = new(bruce)
+			b.Narrator = new("Renee Montoya")
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	env := creditsBackfillEnv{store: failingReadStore{f.s, "k-2"}, workers: 2}
@@ -426,11 +426,11 @@ func TestCreditsBackfill_CanceledDryRunFilesThePendingSplitBooksUnderTheirPhaseO
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Harvey Bullock")
 	f.book("a-split", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Selina Kyle and Harvey Bullock")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Selina Kyle and Harvey Bullock")
 	}, ba("a-split", [2]int{bruce, 0}), nil)
 	for _, id := range []string{"b-1", "b-2", "b-3", "b-4", "b-5", "b-6"} {
-		f.book(id, "Arkham "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Arkham "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -457,8 +457,8 @@ func TestCreditsBackfill_ApplyTimeSpellingRefusalReportsTheRecordNobodyCredits(t
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	f.book("ap", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("ap", [2]int{bruce, 0}), nil)
 	env := creditsBackfillEnv{store: cbSpellingStore{f.s}, mod: f.s, opID: cbTestOpID, workers: 1}
 	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true}, &cbReporter{id: cbTestOpID})
@@ -498,19 +498,19 @@ func TestCreditsBackfill_InterruptedReplanFilesTheSplitBooksItNeverReached(t *te
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Harvey Bullock")
 	f.book("c-solo", "Batman: The Long Halloween", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Selina Kyle")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Selina Kyle")
 	}, ba("c-solo", [2]int{bruce, 0}), nil)
 	splits := []string{"a-split-1", "a-split-2", "a-split-3"}
 	for _, id := range splits {
 		f.book(id, "Batman: Dark Victory "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp("Selina Kyle and Harvey Bullock")
+			b.AuthorID = new(bruce)
+			b.Narrator = new("Selina Kyle and Harvey Bullock")
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rep := &cbCancelOnReplanReporter{cbReporter: cbReporter{id: cbTestOpID}, cancel: cancel}
+	rep := &cbCancelOnReplanReporter{id: cbTestOpID, cancel: cancel}
 	res, err := f.runEnv(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{}, rep)
 	if err == nil || res.Complete {
 		t.Fatalf("a canceled run must be incomplete: err=%v", err)

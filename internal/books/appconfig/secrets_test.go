@@ -27,7 +27,7 @@ func TestSecretAdmit_IsTheTableAndNothingElse(t *testing.T) {
 			}
 			n++
 			var segs []string
-			for _, s := range strings.Split(tg.Path, ".") {
+			for s := range strings.SplitSeq(tg.Path, ".") {
 				if strings.HasPrefix(s, "<") {
 					s = "robin"
 				}

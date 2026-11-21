@@ -205,8 +205,6 @@ func bn(bookID string, rows ...[2]int) []database.BookNarrator {
 	return out
 }
 
-func strp(v string) *string { return &v }
-
 func cbClassIDs(res *creditsBackfillResult, key string) []string {
 	for _, c := range res.Classes {
 		if c.Key == key {
@@ -256,7 +254,7 @@ func assertPositions01(t *testing.T, id string, n int, positions []int) {
 func TestCreditsBackfill_FillsAuthorFromAuthorID(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
-	f.book("cbf-01", "Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+	f.book("cbf-01", "Year One", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 
 	res, err := f.run(creditsBackfillParams{Apply: true}, 2)
 	if err != nil {
@@ -311,18 +309,18 @@ func TestCreditsBackfill_NarratorFromColumnThroughCleanNarratorCredit(t *testing
 	edward := f.narrator("Edward Nygma")
 	// Two existing people.
 	f.book("cbn-01", "Hush", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Oswald Cobblepot, Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Oswald Cobblepot, Edward Nygma")
 	}, ba("cbn-01", [2]int{bruce, 0}), nil)
 	// One new person: the credit is one name, so the record may be created.
 	f.book("cbn-02", "Knightfall", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Pamela Isley")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Pamela Isley")
 	}, ba("cbn-02", [2]int{bruce, 0}), nil)
 	// A translator credit is dropped by the cleaner.
 	f.book("cbn-03", "Gothic", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Edward Nygma, Lucius Fox - translator")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Edward Nygma, Lucius Fox - translator")
 	}, ba("cbn-03", [2]int{bruce, 0}), nil)
 
 	res, err := f.run(creditsBackfillParams{Apply: true}, 2)
@@ -364,13 +362,13 @@ func TestCreditsBackfill_SelfReadNarrators(t *testing.T) {
 	edward := f.narrator("Edward Nygma")
 	// A self-reading co-narrator: the cleaner drops the author, as the sync does.
 	f.book("cbs-01", "Zero Year", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Bruce Wayne, Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Bruce Wayne, Edward Nygma")
 	}, ba("cbs-01", [2]int{bruce, 0}), nil)
 	// The column names only the author: a self-read or a mis-tag.
 	f.book("cbs-02", "Haunted Knight", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Bruce Wayne")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Bruce Wayne")
 	}, ba("cbs-02", [2]int{bruce, 0}), nil)
 
 	res, err := f.run(creditsBackfillParams{Apply: true}, 2)
@@ -415,8 +413,8 @@ func TestCreditsBackfill_RenumbersPositionsWithAuthorIDTieBreaker(t *testing.T) 
 	edward := f.narrator("Edward Nygma")
 	// The "A @0, B @0" shape: every row at 0, AuthorID NOT first in stored order.
 	f.book("cbp-01", "The Killing Joke", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Oswald Cobblepot, Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Oswald Cobblepot, Edward Nygma")
 	}, ba("cbp-01", [2]int{selina, 0}, [2]int{bruce, 0}), bn("cbp-01", [2]int{oswald, 4}, [2]int{edward, 9}))
 
 	res, err := f.run(creditsBackfillParams{Apply: true}, 2)
@@ -443,7 +441,7 @@ func TestCreditsBackfill_PrependsAuthorIDMissingFromJoin(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	dick := f.author("Dick Grayson")
-	f.book("cba-01", "A Death in the Family", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cba-01", "A Death in the Family", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cba-01", [2]int{dick, 0}), nil)
 	// The join's first author-role row becomes AuthorID when it is unset.
 	f.book("cba-02", "Court of Owls", nil, ba("cba-02", [2]int{dick, 0}, [2]int{bruce, 1}), nil)
@@ -473,8 +471,8 @@ func TestCreditsBackfill_NeverCreatesAPersonFromASplit(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	f.book("cbx-01", "No Man's Land", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Jonathan Crane, Victor Fries")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Jonathan Crane, Victor Fries")
 	}, ba("cbx-01", [2]int{bruce, 0}), nil)
 	authorsBefore, _ := f.s.GetAllAuthors()
 
@@ -513,24 +511,24 @@ func TestCreditsBackfill_ReviewClassesAreListedNotWritten(t *testing.T) {
 	combined := f.author("Bruce Wayne, Selina Kyle")
 	oswald := f.narrator("Oswald Cobblepot")
 	edward := f.narrator("Edward Nygma")
-	f.book("cbr-dangling", "Arkham Asylum", func(b *database.Book) { b.AuthorID = intp(9999) }, nil, nil)
-	f.book("cbr-combined", "The Dark Knight Returns", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cbr-dangling", "Arkham Asylum", func(b *database.Book) { b.AuthorID = new(9999) }, nil, nil)
+	f.book("cbr-combined", "The Dark Knight Returns", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cbr-combined", [2]int{combined, 0}, [2]int{bruce, 1}), nil)
-	f.book("cbr-notprimary", "Night of the Owls", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cbr-notprimary", "Night of the Owls", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cbr-notprimary", [2]int{selina, 0}, [2]int{bruce, 1}), nil)
 	f.book("cbr-differs", "Death of the Family", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Oswald Cobblepot")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Oswald Cobblepot")
 	}, ba("cbr-differs", [2]int{bruce, 0}), bn("cbr-differs", [2]int{edward, 0}))
 	f.book("cbr-junk", "Batman: Earth One", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("https://gotham.example.invalid/narrator")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("https://gotham.example.invalid/narrator")
 	}, ba("cbr-junk", [2]int{bruce, 0}), nil)
-	f.book("cbr-nocolumn", "Batman: Black and White", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cbr-nocolumn", "Batman: Black and White", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cbr-nocolumn", [2]int{bruce, 0}), bn("cbr-nocolumn", [2]int{oswald, 0}))
 	f.book("cbr-dangling-narrator", "Batman: The Cult", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Oswald Cobblepot")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Oswald Cobblepot")
 	}, ba("cbr-dangling-narrator", [2]int{bruce, 0}), bn("cbr-dangling-narrator", [2]int{oswald, 0}, [2]int{8888, 1}))
 
 	ids := []string{"cbr-dangling", "cbr-combined", "cbr-notprimary", "cbr-differs", "cbr-junk", "cbr-nocolumn", "cbr-dangling-narrator"}
@@ -577,7 +575,7 @@ func TestCreditsBackfill_PlanReviewsTombstonedIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	book := &database.Book{ID: "cbt-01", Title: "Batman: Hush", AuthorID: intp(2)}
+	book := &database.Book{ID: "cbt-01", Title: "Batman: Hush", AuthorID: new(2)}
 	census, err := classifyCreditBook(idx, book, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -596,7 +594,7 @@ func TestCreditsBackfill_ITunesHeldUnlessAllowed(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	f.book("cbi-01", "Hush", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.FilePath = "/lib/Gotham/books/itunes/Hush/Hush.m4b"
 	}, nil, nil)
 
@@ -628,11 +626,11 @@ func TestCreditsBackfill_OwnerManualAndUserLockHeld(t *testing.T) {
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
 	f.book("cbh-01", "Batman: Gotham Knights", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Publisher = strp("Big Finish Productions")
+		b.AuthorID = new(bruce)
+		b.Publisher = new("Big Finish Productions")
 	}, nil, nil)
 	// User-locked author whose filing author would change: author side held.
-	f.book("cbh-02", "Batman: Year Two", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cbh-02", "Batman: Year Two", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cbh-02", [2]int{selina, 0}), nil)
 	if err := f.s.UpsertMetadataFieldState(&database.MetadataFieldState{BookID: "cbh-02", Field: database.FieldKeyAuthorName, OverrideLocked: true}); err != nil {
 		t.Fatal(err)
@@ -702,32 +700,32 @@ func seedCBCensusFixture(f *cbFixture) []string {
 	alfred := f.author("Alfred Pennyworth")
 	oswald := f.narrator("Oswald Cobblepot")
 	edward := f.narrator("Edward Nygma")
-	f.book("cbc-join-empty", "Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+	f.book("cbc-join-empty", "Year One", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	f.book("cbc-no-author-id", "Court of Owls", nil, ba("cbc-no-author-id", [2]int{selina, 0}), nil)
-	f.book("cbc-not-in-join", "Hush", func(b *database.Book) { b.AuthorID = intp(bruce) }, ba("cbc-not-in-join", [2]int{alfred, 0}), nil)
-	f.book("cbc-all-zero", "The Killing Joke", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cbc-not-in-join", "Hush", func(b *database.Book) { b.AuthorID = new(bruce) }, ba("cbc-not-in-join", [2]int{alfred, 0}), nil)
+	f.book("cbc-all-zero", "The Killing Joke", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cbc-all-zero", [2]int{selina, 0}, [2]int{bruce, 0}), nil)
-	f.book("cbc-gaps", "Knightfall", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("cbc-gaps", "Knightfall", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("cbc-gaps", [2]int{bruce, 2}, [2]int{selina, 7}), nil)
 	f.book("cbc-snapshot", "Dark Victory", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.Author = &database.Author{ID: bruce, Name: "B. Wayne"}
 	}, ba("cbc-snapshot", [2]int{bruce, 0}), nil)
 	f.book("cbc-narrator-column", "The Long Halloween", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Oswald Cobblepot, Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Oswald Cobblepot, Edward Nygma")
 	}, ba("cbc-narrator-column", [2]int{bruce, 0}), nil)
 	f.book("cbc-narrators-json", "Batman: Gothic", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.NarratorsJSON = strp(`["Edward Nygma","Pamela Isley"]`)
+		b.AuthorID = new(bruce)
+		b.NarratorsJSON = new(`["Edward Nygma","Pamela Isley"]`)
 	}, ba("cbc-narrators-json", [2]int{bruce, 0}), nil)
 	f.book("cbc-narrator-positions", "Zero Year", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Oswald Cobblepot, Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Oswald Cobblepot, Edward Nygma")
 	}, ba("cbc-narrator-positions", [2]int{bruce, 0}), bn("cbc-narrator-positions", [2]int{oswald, 3}, [2]int{edward, 8}))
 	f.book("cbc-clean", "No Man's Land", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Edward Nygma")
 	}, ba("cbc-clean", [2]int{bruce, 0}), bn("cbc-clean", [2]int{edward, 0}))
 	return []string{"cbc-join-empty", "cbc-no-author-id", "cbc-not-in-join", "cbc-all-zero", "cbc-gaps", "cbc-snapshot",
 		"cbc-narrator-column", "cbc-narrators-json", "cbc-narrator-positions", "cbc-clean"}
@@ -844,18 +842,18 @@ func TestCreditsBackfill_ConcurrentDisjointPartition(t *testing.T) {
 	f.narrator("Oswald Cobblepot")
 	const n = 120
 	var ids []string
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("cbq-%03d", i)
 		ids = append(ids, id)
 		title := fmt.Sprintf("Batman: Legends of the Dark Knight %d", i)
 		switch i % 3 {
 		case 0:
-			f.book(id, title, func(b *database.Book) { b.AuthorID = intp(bruce); b.Narrator = strp("Oswald Cobblepot") }, nil, nil)
+			f.book(id, title, func(b *database.Book) { b.AuthorID = new(bruce); b.Narrator = new("Oswald Cobblepot") }, nil, nil)
 		case 1:
-			f.book(id, title, func(b *database.Book) { b.AuthorID = intp(bruce) }, ba(id, [2]int{selina, 0}, [2]int{bruce, 0}), nil)
+			f.book(id, title, func(b *database.Book) { b.AuthorID = new(bruce) }, ba(id, [2]int{selina, 0}, [2]int{bruce, 0}), nil)
 		default:
 			// Every third book names the same NEW narrator: one record, many books.
-			f.book(id, title, func(b *database.Book) { b.AuthorID = intp(bruce); b.Narrator = strp("Victor Fries") },
+			f.book(id, title, func(b *database.Book) { b.AuthorID = new(bruce); b.Narrator = new("Victor Fries") },
 				ba(id, [2]int{bruce, 0}), nil)
 		}
 	}
@@ -935,8 +933,8 @@ func TestCreditsBackfill_BookChangedSincePlanIsNotOverwritten(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
-	f.book("cbe-01", "Batman: Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
-	f.book("cbe-02", "Batman: Hush", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+	f.book("cbe-01", "Batman: Year One", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
+	f.book("cbe-02", "Batman: Hush", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 
 	mod := &cbInterleavingModifier{BookCreditsModifier: f.s, bookID: "cbe-01", edit: func() {
 		if _, err := f.s.ModifyBookAuthors("cbe-01", func([]database.BookAuthor) ([]database.BookAuthor, error) {
@@ -1082,20 +1080,20 @@ func TestCreditsBackfill_CensusResidualIsHeldAndReviewBooks(t *testing.T) {
 	// Written, linked to the existing record by its fold key: the column
 	// follows the record's spelling, so the census does not count the book.
 	f.book("cbz-fold", "Batman: Hush Returns", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("cbz-fold", [2]int{bruce, 0}), nil)
 	f.book("cbz-split", "Batman: Venom", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Jonathan Crane, Victor Fries")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Jonathan Crane, Victor Fries")
 	}, ba("cbz-split", [2]int{bruce, 0}), nil)
 	f.book("cbz-itunes", "Batman: Prey", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.FilePath = "/lib/Gotham/books/itunes/Prey/Prey.m4b"
 	}, nil, nil)
 	f.book("cbz-manual", "Batman: Gothic Knights", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Publisher = strp("Big Finish Productions")
+		b.AuthorID = new(bruce)
+		b.Publisher = new("Big Finish Productions")
 	}, nil, nil)
 
 	if _, err := f.run(creditsBackfillParams{Apply: true}, 2); err != nil {
@@ -1164,8 +1162,8 @@ func cbRefusedWriteRun(t *testing.T, f *cbFixture) (bruce, selina int) {
 	t.Helper()
 	bruce = f.author("Bruce Wayne")
 	selina = f.author("Selina Kyle")
-	f.book("cbe-01", "Batman: Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
-	f.book("cbe-02", "Batman: Hush", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+	f.book("cbe-01", "Batman: Year One", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
+	f.book("cbe-02", "Batman: Hush", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	mod := &cbInterleavingModifier{BookCreditsModifier: f.s, bookID: "cbe-01", edit: func() {
 		if _, err := f.s.ModifyBookAuthors("cbe-01", func([]database.BookAuthor) ([]database.BookAuthor, error) {
 			return []database.BookAuthor{{BookID: "cbe-01", AuthorID: selina, Role: "author"}}, nil

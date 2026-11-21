@@ -419,7 +419,7 @@ func (r *configResidual) splitPluginSecrets(ctx context.Context, v any) (any, er
 func (r *configResidual) setWebhookSecrets(ctx context.Context, settings map[string]any, secret any, hasSecret bool) error {
 	n := 0
 	if urls, _ := settings["urls"].(string); urls != "" {
-		for _, u := range strings.Split(urls, ",") {
+		for u := range strings.SplitSeq(urls, ",") {
 			if strings.TrimSpace(u) != "" {
 				n++
 			}

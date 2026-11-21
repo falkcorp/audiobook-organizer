@@ -121,7 +121,7 @@ func DecodeFactoryDefaultsForTest(b []byte) (Config, error) {
 	root := reflect.ValueOf(&c).Elem()
 	for _, path := range slices.Sorted(maps.Keys(in)) {
 		f := root
-		for _, seg := range strings.Split(path, ".") {
+		for seg := range strings.SplitSeq(path, ".") {
 			if f.Kind() != reflect.Struct {
 				return Config{}, fmt.Errorf("%s: %s is not a struct", path, seg)
 			}

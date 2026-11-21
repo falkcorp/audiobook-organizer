@@ -101,8 +101,7 @@ func tagUnits(ops []database.UserMergeOp, tag string) {
 // merge routes serve: the error plus, for a storage conflict, the raw key that
 // the error itself leaves out (it reaches operation rows).
 func failText(err error) string {
-	var ce *database.UserMergeConflictError
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*database.UserMergeConflictError](err); ok {
 		return fmt.Sprintf("%s [%s]", err.Error(), ce.AdminDetail())
 	}
 	return err.Error()

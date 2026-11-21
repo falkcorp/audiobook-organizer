@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -104,7 +105,7 @@ func PickSwapTarget(store swapTargetStore, bookID, fromID string) (*database.Boo
 			passedOver = append(passedOver, fmt.Sprintf("version %s is %s", v.ID, v.Status))
 		}
 	}
-	sort.Slice(passedOver, func(i, j int) bool { return passedOver[i] < passedOver[j] })
+	slices.Sort(passedOver)
 
 	if len(cands) == 0 {
 		return nil, refused(passedOver...)

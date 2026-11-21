@@ -386,7 +386,7 @@ func TestWriteTagsSafe_VerifyAfterWrite_MP4NumericAtomsNormalise(t *testing.T) {
 // outcome no longer depends on map iteration order.
 func TestWriteTagsSafe_VerifyAfterWrite_CaseDuplicateKeysAreDeterministic(t *testing.T) {
 	setVerifyAfterWrite(t, true)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		path := makeVerifyAudio(t)
 		tags := map[string][]string{"title": {"lower"}, "TITLE": {"UPPER"}, "Title": {"Mixed"}}
 		if err := WriteTagsSafe(context.Background(), path, tags, 0, SafeWriteDeps{}); err != nil {

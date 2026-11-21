@@ -186,7 +186,7 @@ func TestBackfillFileHashes_RealStoreRecomputesEachBookOnce(t *testing.T) {
 		b, berr := ps.CreateBook(&database.Book{Title: title, FilePath: filepath.Join(root, "Gotham", title)})
 		require.NoError(t, berr)
 		books[title] = b
-		for i := 0; i < 6; i++ {
+		for i := range 6 {
 			name := fmt.Sprintf("%s %02d.m4b", title, i+1)
 			path := hbWrite(t, root, name, fmt.Sprintf("%s bytes %d", title, i))
 			f := &database.BookFile{BookID: b.ID, FilePath: path, Format: "m4b", Duration: database.Secs(100), FileSize: int64(len(title) + 10)}

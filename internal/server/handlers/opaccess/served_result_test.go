@@ -28,26 +28,26 @@ func TestReader_ServedResult(t *testing.T) {
 	settings := []auth.Permission{auth.PermLibraryView, auth.PermSettingsManage}
 
 	c, _ := ctxHolding()
-	got := NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(row("diagnostics.export", ptr(export)))
+	got := NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(row("diagnostics.export", new(export)))
 	require.NotNil(t, got)
 	require.NotContains(t, *got, "zip_path")
 	require.NotContains(t, *got, "hush.zip")
 	require.Contains(t, *got, `"narrowed_to":["library.view"]`, "the recorded scope stays")
 
 	c, _ = ctxHolding()
-	got = NewRepairs(fixers{}, noOps, holdsOnly(settings...)).For(c).ServedResult(row("diagnostics.export", ptr(export)))
+	got = NewRepairs(fixers{}, noOps, holdsOnly(settings...)).For(c).ServedResult(row("diagnostics.export", new(export)))
 	require.Equal(t, export, *got, "settings.manage reads it whole, as it may download it")
 
 	c, _ = ctxHolding()
-	scan := ptr(`{"zip_path":"kept","scanned":3}`)
+	scan := new(`{"zip_path":"kept","scanned":3}`)
 	require.Equal(t, scan, NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(row("library.scan", scan)),
 		"another operation's result is not touched")
 
 	c, _ = ctxHolding()
-	require.Nil(t, NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(row("diagnostics.export", ptr("{not json"))), "unparseable: withheld")
+	require.Nil(t, NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(row("diagnostics.export", new("{not json"))), "unparseable: withheld")
 	require.Nil(t, NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(row("diagnostics.export", nil)))
 	require.Nil(t, NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(nil))
-	unwired := NewRepairs(fixers{}, noOps, nil).For(c).ServedResult(row("diagnostics.export", ptr(export)))
+	unwired := NewRepairs(fixers{}, noOps, nil).For(c).ServedResult(row("diagnostics.export", new(export)))
 	require.NotNil(t, unwired)
 	require.NotContains(t, *unwired, "zip_path", "an unwired check holds nothing")
 }
@@ -66,7 +66,7 @@ const applyResultNamingUsers = `{"fixer_id":"hush.fix","plan_op_id":"01JPLANKNIG
 // to every other caller who may read it, without the owner's user id (top level
 // and per row) and with the fixer's free text read through UserText.
 func TestReader_ServedResult_RepairsApplyWithholdsUserData(t *testing.T) {
-	row := &database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, ResultData: ptr(applyResultNamingUsers)}
+	row := &database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, ResultData: new(applyResultNamingUsers)}
 	view := []auth.Permission{auth.PermLibraryView}
 	users := []auth.Permission{auth.PermLibraryView, auth.PermUsersManage}
 
@@ -118,21 +118,21 @@ func TestReader_ServedResult_RepairsApplyWithholdsUserData(t *testing.T) {
 	} {
 		c, _ = ctxHolding()
 		require.Nil(t, NewRepairs(fixers{}, noOps, holdsOnly(view...)).For(c).ServedResult(
-			&database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, ResultData: ptr(bad)}), name+": withheld whole")
+			&database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, ResultData: new(bad)}), name+": withheld whole")
 	}
 }
 
 // WithoutResult, which the diagnostics export runs every operation row through,
 // serves a readable result as ServedResult does.
 func TestReader_WithoutResult_ServesTheRedactedResult(t *testing.T) {
-	row := database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, ResultData: ptr(applyResultNamingUsers)}
+	row := database.OperationV2Row{ID: "op", DefID: repairs.ApplyOpID, ResultData: new(applyResultNamingUsers)}
 	c, _ := ctxHolding()
 	got := NewRepairs(fixers{}, noOps, holdsOnly(auth.PermLibraryView)).For(c).WithoutResult(row)
 	require.NotNil(t, got.ResultData)
 	require.NotContains(t, *got.ResultData, "01INVENTEDOWNER0000000000A")
 	require.Equal(t, applyResultNamingUsers, *row.ResultData, "the caller's row is not modified")
 
-	exp := database.OperationV2Row{ID: "op2", DefID: "diagnostics.export", ResultData: ptr(`{"zip_path":"/lib/Gotham/exports/hush.zip"}`)}
+	exp := database.OperationV2Row{ID: "op2", DefID: "diagnostics.export", ResultData: new(`{"zip_path":"/lib/Gotham/exports/hush.zip"}`)}
 	c, _ = ctxHolding()
 	got = NewRepairs(fixers{}, noOps, holdsOnly(auth.PermLibraryView)).For(c).WithoutResult(exp)
 	require.NotNil(t, got.ResultData)

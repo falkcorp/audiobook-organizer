@@ -56,7 +56,7 @@ func AuthorTombstoneResolver(store interface {
 		if err != nil {
 			return id, nil
 		}
-		for hop := 0; hop < maxTombstoneHops; hop++ {
+		for range maxTombstoneHops {
 			next, err := store.GetAuthorTombstone(n)
 			if err != nil {
 				return "", fmt.Errorf("decisions: resolve author %d: %w", n, err)
@@ -397,8 +397,7 @@ func (v *Vetoes) hold(entityType, family string, ends []resolvedEnd) {
 			continue
 		}
 		fp := footprint(e.id)
-		var ue *UnresolvableIDError
-		if errors.As(e.err, &ue) {
+		if ue, ok := errors.AsType[*UnresolvableIDError](e.err); ok {
 			for id := range footprint(append([]string{ue.ID}, ue.Related...)...) {
 				fp[id] = struct{}{}
 			}

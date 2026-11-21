@@ -119,7 +119,7 @@ func (d t6g3CBDeps) InvalidateAuthorsCache() { d.invalidations.Add(1) }
 func newT6G3CBHead(f *cbFixture, mod database.BookCreditsModifier) (*Plugin, *t6g3CBStore, *atomic.Int32) {
 	rec := &t6g3CBStore{PebbleStore: f.s, mod: mod}
 	inval := &atomic.Int32{}
-	return New(t6g3CBDeps{fakeDeps: fakeDeps{store: rec}, invalidations: inval}), rec, inval
+	return New(t6g3CBDeps{store: rec, invalidations: inval}), rec, inval
 }
 
 // --- the HEAD shell of the credits backfill (maintenance.credits-backfill) ---
@@ -184,8 +184,8 @@ func TestT6G3_CreditsBackfillHeadShellDoesNotInvalidateWhenNothingIsWritten(t *t
 	bruce := f.author("Bruce Wayne")
 	edward := f.narrator("Edward Nygma")
 	f.book("cbc-clean-only", "No Man's Land", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Edward Nygma")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Edward Nygma")
 	}, ba("cbc-clean-only", [2]int{bruce, 0}), bn("cbc-clean-only", [2]int{edward, 0}))
 	p, rec, inval := newT6G3CBHead(f, nil)
 	rep := &cbReporter{id: cbTestOpID}
@@ -788,7 +788,7 @@ func TestT6G3_CreditsBackfillHeadShellWarnsWhenClassListsAreNotCleared(t *testin
 	seedCBCensusFixture(f)
 	p, rec, _ := newT6G3CBHead(f, nil)
 	rec.failClear = errors.New("clear refused")
-	rep := &t6g3AttrReporter{cbReporter: cbReporter{id: cbTestOpID}, failResult: true}
+	rep := &t6g3AttrReporter{id: cbTestOpID, failResult: true}
 	err := p.creditsBackfillDef().Run(context.Background(), json.RawMessage(`{}`), rep)
 	require.Error(t, err, "the result write failed")
 	line, ok := t6g3FindLine(rep.snapshot(), "class lists not cleared")
@@ -804,7 +804,7 @@ func TestT6G3_CreditsBackfillHeadShellWarnsWhenAJudgedMarkerIsNotWritten(t *test
 	cbSeedOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", rec)
 	p, st, _ := newT6G3CBHead(f, nil)
 	st.failMark = errors.New("marker refused")
-	rep := &t6g3AttrReporter{cbReporter: cbReporter{id: cbLeftoverOp}}
+	rep := &t6g3AttrReporter{id: cbLeftoverOp}
 	require.NoError(t, p.creditsBackfillDef().Run(context.Background(), json.RawMessage(`{"apply":true}`), rep))
 	line, ok := t6g3FindLine(rep.snapshot(), "could not mark operation's leftovers judged")
 	require.True(t, ok, "no warning in %v", rep.snapshot())

@@ -99,8 +99,8 @@ func (x *mcFixture) rebuild() {
 	}
 }
 
-func mcTrue() *bool  { return retiredPtr(true) }
-func mcFalse() *bool { return retiredPtr(false) }
+func mcTrue() *bool  { return new(true) }
+func mcFalse() *bool { return new(false) }
 
 // one is a single present file of secs seconds at 64 kbps. The size matters:
 // the store's write chokepoint rewrites a duration as milliseconds when the
@@ -128,13 +128,13 @@ func (x *mcFixture) mk(name string, s mcSpec) string {
 	}
 	b := &database.Book{Title: s.title, FilePath: filepath.Join(x.root, "stale", name+".m4b"), LibraryState: &state}
 	if s.group != "" {
-		b.VersionGroupID = retiredPtr(s.group)
+		b.VersionGroupID = new(s.group)
 	}
 	if s.asin != "" {
-		b.ASIN = retiredPtr(s.asin)
+		b.ASIN = new(s.asin)
 	}
 	if s.msh != "" {
-		b.MetadataSourceHash = retiredPtr(s.msh)
+		b.MetadataSourceHash = new(s.msh)
 	}
 	if s.series != "" {
 		se, err := x.st.CreateSeries(s.series, nil)
@@ -150,8 +150,8 @@ func (x *mcFixture) mk(name string, s mcSpec) string {
 	_, err = x.st.ModifyBook(id, func(row *database.Book) error {
 		row.IsPrimaryVersion = s.primary
 		if s.trashed {
-			row.MarkedForDeletion = retiredPtr(true)
-			row.MarkedForDeletionAt = retiredPtr(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+			row.MarkedForDeletion = new(true)
+			row.MarkedForDeletionAt = new(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 		}
 		return nil
 	})
@@ -187,7 +187,7 @@ func (x *mcFixture) mk(name string, s mcSpec) string {
 func (x *mcFixture) point(from, to string) {
 	x.t.Helper()
 	_, err := x.st.ModifyBook(x.ids[from], func(b *database.Book) error {
-		b.MergedIntoBookID = retiredPtr(x.ids[to])
+		b.MergedIntoBookID = new(x.ids[to])
 		b.IsPrimaryVersion = mcFalse()
 		return nil
 	})
@@ -198,7 +198,7 @@ func (x *mcFixture) point(from, to string) {
 func (x *mcFixture) pointRaw(from, to string) {
 	x.t.Helper()
 	_, err := x.st.ModifyBook(x.ids[from], func(b *database.Book) error {
-		b.MergedIntoBookID = retiredPtr(x.ids[to])
+		b.MergedIntoBookID = new(x.ids[to])
 		return nil
 	})
 	require.NoError(x.t, err)
@@ -419,7 +419,7 @@ func TestMergeCleanupChainShapes(t *testing.T) {
 	for i := 0; i <= 11; i++ {
 		x.mk(fmt.Sprintf("long-%d", i), mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(1000 + i)})
 	}
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		x.point(fmt.Sprintf("long-%d", i), fmt.Sprintf("long-%d", i+1))
 	}
 
@@ -477,7 +477,7 @@ func TestMergeCleanupDeadEndChains(t *testing.T) {
 	// The pointer names a book that does not exist.
 	x.mk("e-loser", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
 	_, err := x.st.ModifyBook(x.ids["e-loser"], func(b *database.Book) error {
-		b.MergedIntoBookID = retiredPtr("01HZZZZZZZZZZZZZZZZZZZZZZZ")
+		b.MergedIntoBookID = new("01HZZZZZZZZZZZZZZZZZZZZZZZ")
 		b.IsPrimaryVersion = mcFalse()
 		return nil
 	})
@@ -862,8 +862,8 @@ func TestMergeCleanupReplan(t *testing.T) {
 	})
 	t.Run("a trashed loser is gone", func(t *testing.T) {
 		_, err := x.st.ModifyBook(x.ids["loser"], func(b *database.Book) error {
-			b.MarkedForDeletion = retiredPtr(true)
-			b.MarkedForDeletionAt = retiredPtr(time.Now())
+			b.MarkedForDeletion = new(true)
+			b.MarkedForDeletionAt = new(time.Now())
 			return nil
 		})
 		require.NoError(t, err)
@@ -890,7 +890,7 @@ func TestMergeCleanupIsPlanOnly(t *testing.T) {
 func TestMergeCleanupPlansInParallel(t *testing.T) {
 	x := newMCFixture(t)
 	const n = 40
-	for i := 0; i < n; i++ {
+	for i := range n {
 		x.wrongWork("l"+strconv.Itoa(i), "t"+strconv.Itoa(i))
 	}
 	x.f.concurrency = 4
@@ -992,7 +992,7 @@ func mcTSLabelKeys(t *testing.T, path, name string) map[string]bool {
 	end := strings.Index(body, "\n};")
 	require.Greater(t, end, 0)
 	keys := map[string]bool{}
-	for _, line := range strings.Split(body[:end], "\n") {
+	for line := range strings.SplitSeq(body[:end], "\n") {
 		line = strings.TrimSpace(line)
 		if i := strings.Index(line, ":"); i > 0 && !strings.HasPrefix(line, "//") {
 			keys[strings.Trim(line[:i], `'"`)] = true
@@ -1334,10 +1334,10 @@ func TestMergeCleanupPlanWritesNothing(t *testing.T) {
 func TestMergeCleanupPlansGroupedRowsInParallel(t *testing.T) {
 	x := newMCFixture(t)
 	const groups = 10
-	for g := 0; g < groups; g++ {
+	for g := range groups {
 		gid, id := "g"+strconv.Itoa(g), strconv.Itoa(g)
 		x.mk("gt-"+id, mcSpec{title: "Year One", authors: []string{"Bruce Wayne"}, files: one(9000), group: gid, primary: mcTrue()})
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			n := "gl-" + id + "-" + strconv.Itoa(i)
 			x.mk(n, mcSpec{title: "Year One", authors: []string{"Bruce Wayne"}, files: one(36000), group: gid})
 			x.point(n, "gt-"+id)
@@ -1431,8 +1431,8 @@ func TestMergeCleanupPopulationEdges(t *testing.T) {
 		x.mk("sd", mcSpec{title: "Knightfall", authors: []string{"Bruce Wayne"}, files: one(40000)})
 		x.point("sd", "sd-target")
 		_, err := x.st.ModifyBook(x.ids["sd"], func(b *database.Book) error {
-			b.MarkedForDeletion = retiredPtr(true)
-			b.MarkedForDeletionAt = retiredPtr(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+			b.MarkedForDeletion = new(true)
+			b.MarkedForDeletionAt = new(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 			return nil
 		})
 		require.NoError(t, err)
@@ -1494,8 +1494,8 @@ func TestMergeCleanupCycleHeadIsALiveBookWithFiles(t *testing.T) {
 		x.point("live", "dead")
 		x.point("dead", "live")
 		_, err := x.st.ModifyBook(x.ids["dead"], func(b *database.Book) error {
-			b.MarkedForDeletion = retiredPtr(true)
-			b.MarkedForDeletionAt = retiredPtr(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+			b.MarkedForDeletion = new(true)
+			b.MarkedForDeletionAt = new(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 			return nil
 		})
 		require.NoError(t, err)
@@ -1536,8 +1536,8 @@ func TestMergeCleanupDeadEndHolderIsFollowedToALiveBookOnly(t *testing.T) {
 	x.mk("t-holder", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, files: one(30000)})
 	retireRowOnto(t, x.st, x.ids["t-dead"], x.ids["t-holder"], "rt", filepath.Join(x.root, "retired", "t.m4b"))
 	_, err := x.st.ModifyBook(x.ids["t-holder"], func(b *database.Book) error {
-		b.MarkedForDeletion = retiredPtr(true)
-		b.MarkedForDeletionAt = retiredPtr(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+		b.MarkedForDeletion = new(true)
+		b.MarkedForDeletionAt = new(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 		return nil
 	})
 	require.NoError(t, err)
@@ -1583,7 +1583,7 @@ func TestMergeCleanupVersionGroupHoldNeedsTheRowsOwnBook(t *testing.T) {
 	x.setChapters("p2", 20)
 	x.wrongWork("loser", "target")
 	_, err := x.st.ModifyBook(x.ids["loser"], func(b *database.Book) error {
-		b.VersionGroupID = retiredPtr("g-vp")
+		b.VersionGroupID = new("g-vp")
 		return nil
 	})
 	require.NoError(t, err)
