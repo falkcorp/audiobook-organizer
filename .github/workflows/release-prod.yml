@@ -28,6 +28,11 @@ on:
         required: false
         type: string
         default: ''
+      skip-changelog-collect:
+        description: 'Do not collect changelog.d/ into CHANGELOG.md. Set it when dispatching from a tag ref (the R2 "Keep" from the deployed RC tag): the changelog job runs in the main-only ci-bot environment, which refuses a tag ref. Collect afterwards with a PR on main.'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -73,6 +78,9 @@ jobs:
       # separate decision because it can only be verified by a real release run.
       go-run-linters: false
       previous-version: ${{ github.event.inputs.previous-version }}
+      # 'false' is the reusable workflow's only disable value; empty keeps its
+      # auto-enable on changelog.d/scriv.ini, so a normal run is unchanged.
+      changelog-collect: ${{ github.event.inputs.skip-changelog-collect == 'true' && 'false' || '' }}
     secrets: inherit
 
   # Records the core checkpoint of this release (12 §12.4.1; script and its tests:
