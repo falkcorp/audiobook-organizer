@@ -44,9 +44,10 @@ export type BookChangeKind = 'created' | 'updated' | 'deleted';
  *
  * Shape provenance (be aware before trusting a field):
  *  - books.book.changed.v1 is specified: `{kind, id}`, Key = book ID (05-realtime 4.7).
- *  - core.task.run-changed.v1 is tasks.RunView (05-tasks 3). The declaring topic and its
- *    publisher land with F5-18, so the JSON field names below are the spec's, not
- *    observed. The index signature keeps an extra field from being a type error.
+ *  - core.task.run-changed.v1 is tasks.RunPayload, the wire form of tasks.RunView (05-tasks 3;
+ *    core/tasks/topics.go declares the topic). Its publisher lands with F5-18, so the JSON
+ *    field names below are the declaration's, not observed. The index signature keeps an
+ *    extra field from being a type error.
  *  - core.task.log-appended.v1, core.log.recorded.v1, books.book.relocated.v1 and
  *    core.system.status-changed.v1 have no declared payload shape yet: they are
  *    `Record<string, unknown>` until their owners land, and the flip PR tightens them.

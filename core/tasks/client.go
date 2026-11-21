@@ -118,8 +118,10 @@ type StartRequest struct {
 // (5T.3.7); automation always states its mode (COR2-5).
 var ErrModeUnset = errors.New("tasks: start mode not stated")
 
-// RunView is the read model of one run: what Client.Get/Runs return, what
-// GET /runs[/{id}] serialise, and the payload of core.task.run-changed.v1.
+// RunView is the read model of one run: what Client.Get/Runs return. GET
+// /runs[/{id}], core.task.run-changed.v1 and core.task.finished.v1 serialise
+// it through RunPayload, its wire form (topics.go); RunView itself carries no
+// JSON tags.
 type RunView struct {
 	ID       RunID
 	Kind     Kind

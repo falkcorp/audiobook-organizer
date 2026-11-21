@@ -87,11 +87,48 @@ func NewRunPayload(v RunView) RunPayload {
 	}
 }
 
-// RedactRunPayload is RedactRunView on the wire form: it blanks Current unless
-// who holds core:users.view. It calls RedactRunView so the rule is written once.
+// RedactRunPayload is RedactRunView on the wire form. It does not restate the
+// rule or pick the fields it covers: it turns p back into the RunView it was
+// made from, passes the whole view through RedactRunView and encodes the result
+// with NewRunPayload. Whatever RedactRunView blanks (Current today, any free
+// error text a later version adds) is therefore blanked on the stream exactly
+// as GET /runs[/{id}] blanks it (runView there is
+// NewRunPayload(RedactRunView(v))), and the two cannot diverge.
 func RedactRunPayload(who rbac.Checker, p RunPayload) RunPayload {
-	p.Current = RedactRunView(who, RunView{Current: p.Current}).Current
-	return p
+	return redactPayloadWith(p, func(v RunView) RunView { return RedactRunView(who, v) })
+}
+
+// redactPayloadWith is RedactRunPayload over any rule: p as a RunView, through
+// rule, back to the wire form. Every field takes the round trip, so a field
+// the rule blanks is blank in the result.
+func redactPayloadWith(p RunPayload, rule func(RunView) RunView) RunPayload {
+	return NewRunPayload(rule(p.runView()))
+}
+
+// runView is the RunView NewRunPayload made p from: its inverse for every value
+// NewRunPayload writes. A mode word NewRunPayload never writes reads as unset
+// and so leaves as "unset": the redacted payload carries no text the rule did
+// not see.
+func (p RunPayload) runView() RunView {
+	return RunView{
+		ID: RunID(p.ID), Kind: Kind(p.Kind), Mode: modeOf(p.Mode), State: RunState(p.State), Held: p.Held,
+		Reason: p.Reason, Actor: Actor(p.Actor), Trigger: Trigger(p.Trigger), Parent: RunID(p.Parent),
+		PlanRef: RunID(p.PlanRef), Created: p.Created, Started: p.Started, Finished: p.Finished,
+		Done: p.Done, Total: p.Total, Current: p.Current,
+	}
+}
+
+// modeOf is the Mode whose String is word; anything else is the zero Mode,
+// whose String is "unset".
+func modeOf(word string) Mode {
+	switch word {
+	case ModePreview.String():
+		return ModePreview
+	case ModeLive.String():
+		return ModeLive
+	default:
+		return 0
+	}
 }
 
 // RunChangedTopic is the typed run-changed topic. A function, not a package
@@ -184,7 +221,7 @@ func FinishedTopicSpec() events.TopicSpec {
 // visibleToAdmins is the Visible of the three task entries until the wiring
 // installs the definition's View rule: true only for a subscriber holding
 // rbac.CoreAdmin ("Perms.View or admin", the coordinator ruling of 2026-11-20;
-// core:admin has no custom-role spread the way core:admin does, so a
+// core:admin has no custom-role spread the way core:system.manage does, so a
 // forgotten swap cannot show every run to a role built for something else). A
 // nil checker, or any other signed-in user, gets false, so an unwired entry
 // delivers nothing to them (fail closed).

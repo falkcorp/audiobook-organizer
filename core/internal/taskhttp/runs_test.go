@@ -7,6 +7,7 @@ package taskhttp
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -128,11 +129,15 @@ func TestRunGet(t *testing.T) {
 	v.Parent, v.PlanRef, v.Held, v.Reason, v.Done, v.Total = "run-0", "run-p", true, "module missing", 3, 9
 	g.client.add(v)
 	rec := g.do(req{method: "GET", path: "/runs/run-1", as: session("alfred", scopeView)})
-	var got runDTO
+	// Decoded by literal keys, not into runDTO: an alias of the wire type would
+	// follow a renamed tag and still pass.
+	var got map[string]any
 	decode(t, rec, &got)
-	if got.ID != "run-1" || got.Kind != "batcave.sweep" || got.Mode != "live" || got.State != "succeeded" || !got.Held || got.Reason != "module missing" ||
-		got.Parent != "run-0" || got.PlanRef != "run-p" || got.Done != 3 || got.Total != 9 || got.Trigger != "manual" || got.Actor.UserID != "bruce" {
-		t.Fatalf("run = %+v", got)
+	want := map[string]any{"id": "run-1", "kind": "batcave.sweep", "mode": "live", "state": "succeeded", "held": true,
+		"reason": "module missing", "parent": "run-0", "plan_ref": "run-p", "done": 3.0, "total": 9.0, "trigger": "manual",
+		"created": "2026-11-11T01:00:00Z", "actor": map[string]any{"user_id": "bruce", "auth_method": "session"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("run =\n%v\nwant exactly\n%v", got, want)
 	}
 	wantProblem(t, g.do(req{method: "GET", path: "/runs/run-none", as: session("alfred", scopeView)}), 404, "tasks.run_not_found")
 }

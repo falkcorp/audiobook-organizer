@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -17,7 +18,9 @@ import (
 // TestGetRun_SameJSONAsTheTopicPayload: for one RunView and one caller, the
 // JSON GET /runs/{id} serves is the JSON core.task.run-changed.v1 delivers to
 // that subscriber after the topic's own Redact, key for key, so the SPA reads a
-// run one way over REST and over the stream.
+// run one way over REST and over the stream. The view sets every field (the
+// guard below fails when a new one is not), so whatever field the redaction
+// rule covers, now or later, is compared on both paths.
 func TestGetRun_SameJSONAsTheTopicPayload(t *testing.T) {
 	for _, c := range []struct {
 		who string
@@ -25,8 +28,13 @@ func TestGetRun_SameJSONAsTheTopicPayload(t *testing.T) {
 	}{{"without core:users.view", []rbac.Permission{scopeView}}, {"with core:users.view", []rbac.Permission{scopeView, scopeUsers}}} {
 		t.Run(c.who, func(t *testing.T) {
 			g := newRig(t)
-			v := view("run-1", kindSweep, tasks.StateRunning, "alfred")
-			v.Done, v.Total, v.Reason = 2, 5, "fixed_token"
+			v := view("run-1", kindSweep, tasks.StateFailed, "alfred")
+			v.Done, v.Total, v.Reason, v.Held = 2, 5, "fixed_token", true
+			v.Parent, v.PlanRef, v.Actor.System = "run-0", "run-plan", "core.scheduler"
+			v.Started, v.Finished = v.Created.Add(time.Minute), v.Created.Add(time.Hour)
+			if z := zeroFields(reflect.ValueOf(tasks.NewRunPayload(v)), ""); len(z) != 0 {
+				t.Fatalf("fixture: the run leaves %v zero, so the comparison would not cover them", z)
+			}
 			g.client.add(v)
 			p := session("alfred", c.as...)
 
@@ -53,4 +61,21 @@ func TestGetRun_SameJSONAsTheTopicPayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+// zeroFields lists the fields of v (a struct) that hold their zero value,
+// descending into nested structs other than time.Time, by dotted name.
+func zeroFields(v reflect.Value, prefix string) []string {
+	var out []string
+	for i := range v.NumField() {
+		f, name := v.Field(i), prefix+v.Type().Field(i).Name
+		if f.Kind() == reflect.Struct && f.Type() != reflect.TypeFor[time.Time]() {
+			out = append(out, zeroFields(f, name+".")...)
+			continue
+		}
+		if f.IsZero() {
+			out = append(out, name)
+		}
+	}
+	return out
 }
