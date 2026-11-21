@@ -84,14 +84,14 @@ func TestBridgeSites_CanManageCollections(t *testing.T) {
 	})
 	t.Run("core identity: the principal holds the scope", func(t *testing.T) {
 		h, store, tok := signIn(t, false)
-		h.serveWithCore(t, bridgeIdentity(t, string(auth.PermCollectionsManage)), scope)
+		h.serveWithCore(t, bridgeIdentityFor(t, h, string(auth.PermCollectionsManage)), scope)
 		if code := create(t, h, tok); code != http.StatusOK || store.creates != 1 {
 			t.Fatalf("create = %d (creates %d), want 200 and one create", code, store.creates)
 		}
 	})
 	t.Run("core identity: HEAD's permission set is not read", func(t *testing.T) {
 		h, store, tok := signIn(t, true)
-		h.serveWithCore(t, bridgeIdentity(t, string(auth.PermCollectionsManage)))
+		h.serveWithCore(t, bridgeIdentityFor(t, h, string(auth.PermCollectionsManage)))
 		if code := create(t, h, tok); code != http.StatusForbidden || store.creates != 0 {
 			t.Fatalf("create = %d (creates %d), want 403 and none", code, store.creates)
 		}

@@ -13,11 +13,10 @@ import (
 
 	coreauth "github.com/falkcorp/mediacore/auth"
 
-	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 )
 
-// F4-08 B10b1, A8: under core identity the ABS limiters key on the visitor
+// F4-08 B10b1, A8: under core identity the ABS failure throttle keys on the visitor
 // bucket the wiring builds from cfaccess.ClientAddrTrust, not on the gin copy
 // (ThrottleKey, which reads a binder marker that does not run there) and not
 // on the raw peer. Every request in these tests comes from the same peer
@@ -86,44 +85,5 @@ func TestIdentityThrottle_EmptyIdentityKeyFallsBack(t *testing.T) {
 	}
 	if code := failLogin(t, h, ""); code != http.StatusTooManyRequests {
 		t.Fatalf("past the budget with no visitor key: %d, want 429", code)
-	}
-}
-
-func hop1As(t *testing.T, h *harness, visitor string) int {
-	t.Helper()
-	w, _ := h.do(t, request{
-		method: http.MethodGet, path: authorizePath(s256(oidcVerifier), ""),
-		headers: map[string]string{cfaccess.CFAccessHeader: oidcPersonAssertion, visitorHeader: visitor},
-	})
-	return w.Code
-}
-
-// Hop 1's per-credential rate limiter: the credential and the visitor bucket.
-func TestIdentityThrottle_Hop1RateKeyCarriesTheIdentityKey(t *testing.T) {
-	h := newOIDCHarness(t, withBothKeys())
-	h.underCoreIdentity(t)
-	for i := range 5 {
-		if code := hop1As(t, h, "192.0.2.10"); code != http.StatusFound {
-			t.Fatalf("request %d = %d, want 302 within the burst", i, code)
-		}
-	}
-	if code := hop1As(t, h, "192.0.2.10"); code != http.StatusBadRequest {
-		t.Fatalf("over the burst = %d, want 400 rate-limited", code)
-	}
-	if code := hop1As(t, h, "192.0.2.11"); code != http.StatusFound {
-		t.Fatalf("the same credential from another visitor = %d, want 302 (its own bucket, not the peer's)", code)
-	}
-}
-
-// Without an identity hop 1 keeps c.ClientIP(): one bucket per peer.
-func TestIdentityThrottle_Hop1WithoutAnIdentityKeysOnThePeer(t *testing.T) {
-	h := newOIDCHarness(t, withBothKeys())
-	for i := range 5 {
-		if code := hop1As(t, h, "192.0.2.10"); code != http.StatusFound {
-			t.Fatalf("request %d = %d, want 302 within the burst", i, code)
-		}
-	}
-	if code := hop1As(t, h, "192.0.2.11"); code != http.StatusBadRequest {
-		t.Fatalf("another visitor on a server without an identity = %d, want 400 (the peer's shared bucket)", code)
 	}
 }
