@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/secrets"
@@ -147,6 +148,13 @@ type configStep struct {
 
 	mu   sync.Mutex
 	last *datamigrate.StepWriter
+
+	// This boot's accounting of the Source rows outside the Residual (the four
+	// encrypted rows), for Verify's report: read is every row present, and each
+	// lands in exactly one of written (its own value imported), quarantined
+	// (its bytes moved to quarantine) and deleted (removed by rule with nothing
+	// to import: an empty row).
+	read, written, quarantined, deleted atomic.Int64
 }
 
 // ConfigStep is M2. cfg and sec are core's importers (config.Store.Importer,
@@ -569,12 +577,29 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 	b := w.Batch()
 	var quarantine []quarantined
 	quarantine = append(quarantine, p.Quarantines...)
+	// The report's accounting of the four encrypted rows (Verify), each bucket
+	// counted on its own so Verify can check they add up to the rows read: a
+	// value imported from a row carries the row's key as its Source (written),
+	// a row quarantined under its own key (quarantined), and a row deleted
+	// with no value imported from it (deleted by rule: an empty row). Blob
+	// members (the Residual) are no rows of it, and the w.Count totals, which
+	// include them, are not used.
+	isRow := map[string]bool{}
+	for _, n := range headSecretRows() {
+		isRow[string(settingKey(n))] = true
+	}
+	importedFrom := map[string]bool{}
+	var written, quarantinedRows, deleted int64
 
 	for _, sw := range p.Secrets {
 		err := s.sec.ImportSecret(ctx, b, secrets.Write{Name: sw.Name, Value: secrets.NewValue(sw.Value), By: by})
 		switch {
 		case err == nil:
 			w.Count("secret-imported")
+			if isRow[string(sw.Source)] {
+				written++
+				importedFrom[string(sw.Source)] = true
+			}
 		case errors.Is(err, storage.ErrImportConflict) && sw.FromFile:
 			// config.yaml gap-fills only an empty value, and this name holds one.
 			s.log.Info("cutover: config.yaml's value was not applied: the name already holds a value", "step", ConfigCutoverID, "secret", string(sw.Name))
@@ -622,6 +647,9 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 		// second Count here counted each one twice, the second time under the
 		// chunk's source key with no member named.
 		moved[string(q.Key)] = true
+		if isRow[string(q.Key)] {
+			quarantinedRows++
+		}
 	}
 	for _, key := range p.DeleteRows {
 		if moved[string(key)] {
@@ -631,6 +659,9 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 			return fmt.Errorf("%w: delete failed: %v", errConfigStep, errClass(err))
 		}
 		w.Count("row-deleted")
+		if isRow[string(key)] && !importedFrom[string(key)] {
+			deleted++
+		}
 	}
 	if p.BlobNew != nil {
 		if err := w.SetIfUnchanged(p.BlobKey, p.BlobExpect, p.BlobNew); err != nil {
@@ -649,6 +680,10 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 	for _, note := range p.Reported {
 		s.log.Info("cutover: "+note, "step", ConfigCutoverID)
 	}
+	s.read.Add(int64(p.RowsRead))
+	s.written.Add(written)
+	s.quarantined.Add(quarantinedRows)
+	s.deleted.Add(deleted)
 	return nil
 }
 
@@ -660,12 +695,21 @@ func isFieldError(err error) bool {
 
 // ---- Verify ----
 
-// verify is the step's invariant gate, over the store alone: the four rows
-// are gone and the blob holds no member that moved. That the config oracle
-// holds (effective config before = after) is a test, not a runtime check: it
-// needs the registry the step does not have.
+// verify is the step's invariant gate, over the store: the four rows are gone
+// and the blob holds no member that moved. That the config oracle holds
+// (effective config before = after) is a test, not a runtime check: it needs
+// the registry the step does not have.
+//
+// Its counts are this boot's (apply's accounting of the four encrypted rows,
+// M5's rule): a boot that resumed after the chunk committed reads, writes and
+// quarantines nothing. Written + Quarantined + the rows deleted by rule must
+// equal Read: a row counted in no bucket, or in two, fails it.
 func (s *configStep) verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
-	var rep datamigrate.VerifyReport
+	rep := datamigrate.VerifyReport{Read: s.read.Load(), Written: s.written.Load(), Quarantined: s.quarantined.Load()}
+	if del := s.deleted.Load(); rep.Written+rep.Quarantined+del != rep.Read {
+		rep.Failures = append(rep.Failures, fmt.Sprintf("read %d rows but imported %d, quarantined %d and deleted %d by rule",
+			rep.Read, rep.Written, rep.Quarantined, del))
+	}
 	for _, name := range headSecretRows() {
 		v, err := get(ctx, r, settingKey(name))
 		if err != nil {

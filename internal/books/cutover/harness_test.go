@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/storage/keys"
 )
@@ -725,8 +726,20 @@ type snapshot struct {
 	Legacy     map[string][]byte
 	RawCore    map[string][]byte // every row of core's config, secrets and storage keyspaces, "<owner>/<key>"
 	State      string
-	Calls      []stageCall
-	cfg        *tableImporter
+	// Report is M2's stored VerifyReport (c/storage/dm/<id>/report, Verify's
+	// last report as the runner keeps it); Reported is false when no report
+	// record exists.
+	Report   datamigrate.VerifyReport
+	Reported bool
+	Calls    []stageCall
+	cfg      *tableImporter
+}
+
+// dmReportRecord is the stored shape of a data migration's report record
+// (core/internal/storagemigrate's reportRecord).
+type dmReportRecord struct {
+	State  string                   `json:"state"`
+	Report datamigrate.VerifyReport `json:"report"`
 }
 
 // Effective is the value of key path with no operator layer: staged, else its
@@ -803,6 +816,18 @@ func read(ctx context.Context, e *bootEnv) (*snapshot, error) {
 			return nil, err
 		}
 		s.State = rec.State
+	}
+	raw, err = sks.Get(ctx, append(storage.DataMigrationKey(ConfigCutoverID), keys.Join(keys.Str("report"))...))
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+	case err != nil:
+		return nil, err
+	default:
+		rec, err := codec.JSON[dmReportRecord](1).Decode(raw)
+		if err != nil {
+			return nil, fmt.Errorf("M2's report record does not decode: %w", err)
+		}
+		s.Report, s.Reported = rec.Report, true
 	}
 	s.Calls = e.cfg.staged()
 	s.cfg = e.cfg
