@@ -110,8 +110,7 @@ func ABSRequireAuthThen(compat coreauth.Compat, resolve ABSResolver, perm rbac.R
 		}
 		cred, err := resolve(c)
 		if err != nil {
-			var r *ABSRefusal
-			if errors.As(err, &r) {
+			if r, ok := errors.AsType[*ABSRefusal](err); ok {
 				refuse(c, r.Status, r.Message, err)
 				return
 			}
