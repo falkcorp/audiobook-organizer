@@ -61,7 +61,13 @@ const disabledByConfig = "config"
 // to swap and no keyring to keep, and the config store is the operator layers
 // and the boot record.
 func (k *Kernel) bootCoreConfig(ctx context.Context) error {
-	cb, err := bootConfig(ctx, k.configInput(ctx))
+	return k.bootCoreConfigOver(ctx, k.configInput(ctx))
+}
+
+// bootCoreConfigOver is bootCoreConfig over an input the caller adjusted
+// (offline_users.go sets SkipBootRecord).
+func (k *Kernel) bootCoreConfigOver(ctx context.Context, in configInput) error {
+	cb, err := bootConfig(ctx, in)
 	if err != nil {
 		return err
 	}

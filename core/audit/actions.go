@@ -85,6 +85,7 @@ func coreActionTable() []actionRow {
 		{"core.storage.cutover_blocker_delete", VisibleToAll},
 		{"core.storage.cutover_blocker_fix", VisibleToAll},
 		{"core.storage.cutover_step", VisibleToAll},
+		{"core.storage.journal_queue_clear", VisibleToAll},
 		{"core.storage.quarantine_purge", VisibleToAll},
 		{"core.system.factory_reset", VisibleToAll},
 		{"core.task.approve", VisibleToAll},
