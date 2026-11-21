@@ -8,17 +8,21 @@ package kernel
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup/journal"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/internal/authstore"
 	"github.com/falkcorp/mediacore/internal/rbacstore"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // TestIdentityBootDeclared_IsTheFlagAlone pins the switch: the kernel decides
@@ -161,5 +165,120 @@ func TestIdentityBoot_ImportersForwardToTheServiceStores(t *testing.T) {
 	}
 	if err := imp.Audit.Record(ctx, audit.Event{Action: "core.role.create", Outcome: audit.Success}); err != nil {
 		t.Errorf("Importers.Audit.Record after bind: %v", err)
+	}
+}
+
+// TestIdentityBoot_P4dBindsTheJournalAndRunsSteps2To4: the switch-on boot ran
+// P4d's steps. The journal component is bound to <backup dir>/<prefix>
+// revocations.journal (the backup directory beside the store, the prefix
+// <AppID>_), step 2 recorded where it is (backup.location.json), step 4 seeded
+// the _system user, and core.backup is registered with a probe that reads the
+// component.
+func TestIdentityBoot_P4dBindsTheJournalAndRunsSteps2To4(t *testing.T) {
+	h, c := identityHost(t)
+	k := h.mustBoot(c)
+	want := filepath.Join(filepath.Dir(h.db), "backups", c.AppID+"_revocations.journal")
+	if got := k.ident.journal.Path(); got != want {
+		t.Fatalf("the journal is bound to %q, want %q", got, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("the journal file is not on disk: %v", err)
+	}
+	if _, ok, err := journal.ReadLocation(h.state); err != nil || !ok {
+		t.Errorf("step 2 wrote no backup.location.json: ok=%v err=%v", ok, err)
+	}
+	if _, err := k.ident.users.GetUser(t.Context(), auth.SystemUserID); err != nil {
+		t.Errorf("step 4 did not seed the _system user: %v", err)
+	}
+	var found bool
+	for _, cs := range k.healthReg.Snapshot().Components {
+		if cs.ID == componentBackup {
+			found = true
+			if cs.Result.Status != health.StatusUp {
+				t.Errorf("core.backup on a clean boot is %v (%s)", cs.Result.Status, cs.Result.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Error("core.backup is not registered")
+	}
+}
+
+// TestIdentityBoot_ArchivePrefixNamesTheJournal: Config.ArchivePrefix is the
+// journal's file prefix (ABO: audiobooks_pebble_), and the default is <AppID>_.
+func TestIdentityBoot_ArchivePrefixNamesTheJournal(t *testing.T) {
+	h, c := identityHost(t)
+	c.ArchivePrefix = "gotham_pebble_"
+	k := h.mustBoot(c)
+	if got, want := filepath.Base(k.ident.journal.Path()), "gotham_pebble_revocations.journal"; got != want {
+		t.Fatalf("journal file = %q, want %q", got, want)
+	}
+	if got := k.ident.journal.App(); got != "gotham_pebble_" {
+		t.Errorf("journal header app = %q, want gotham_pebble_", got)
+	}
+}
+
+// TestIdentityBoot_SwitchOffRunsNoP4dSteps: the ABO-style boot has no journal,
+// no _system user path, and no core.backup component.
+func TestIdentityBoot_SwitchOffRunsNoP4dSteps(t *testing.T) {
+	h, c := identityHost(t)
+	c.IdentityBoot = false
+	k := h.mustBoot(c)
+	if k.ident != nil {
+		t.Fatalf("identity state on a switch-off boot: %+v", k.ident)
+	}
+	for _, cs := range k.healthReg.Snapshot().Components {
+		if cs.ID == componentBackup {
+			t.Error("a switch-off boot registered core.backup")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(h.db), "backups")); err == nil {
+		t.Error("a switch-off boot created the backup directory")
+	}
+}
+
+// TestIdentityBoot_ABackupDirUnderAnotherNameIsResolvedAgainstTheStore: a
+// relative core.backup.dir resolves against the store's parent, an absolute
+// one stands, an empty one is "backups" (resolveBackupDir).
+func TestResolveBackupDir(t *testing.T) {
+	db := filepath.Join(string(filepath.Separator), "var", "gotham", "main.pebble")
+	for _, tc := range []struct{ configured, want string }{
+		{"", filepath.Join(filepath.Dir(db), "backups")},
+		{"vault", filepath.Join(filepath.Dir(db), "vault")},
+		{filepath.Join(string(filepath.Separator), "srv", "cave"), filepath.Join(string(filepath.Separator), "srv", "cave")},
+	} {
+		if got := resolveBackupDir(tc.configured, db); got != tc.want {
+			t.Errorf("resolveBackupDir(%q) = %q, want %q", tc.configured, got, tc.want)
+		}
+	}
+}
+
+// TestIdentityBoot_ARestoreBootRefusesToServe: the identity boot's P4d steps
+// need a restore boot's derived inputs, which are not built, so a restore boot
+// with the switch on fails New with errP4dRefuse and serves nothing. The switch
+// off keeps today's behaviour for the same restore
+// (TestRestoreBootWithoutHooksReachesApplied).
+func TestIdentityBoot_ARestoreBootRefusesToServe(t *testing.T) {
+	h, c := identityHost(t)
+	h.close(h.mustBoot(c))
+	h.stage("r-archive", restorejournal.KindArchive, h.stagedCopy("r-archive", "robin"))
+	_, err := h.boot(c)
+	if !errors.Is(err, errP4dRefuse) || !errors.Is(err, errRestoreBootNeedsDerivation) {
+		t.Fatalf("restore boot with identity on = %v, want errP4dRefuse wrapping errRestoreBootNeedsDerivation", err)
+	}
+}
+
+// TestIdentityBoot_AFailedStepRefusesToServe: a P4d step that errors (here step
+// 2 reading the head of a store that is closed under it) returns an error
+// wrapping errP4dRefuse, so the boot that calls it fails.
+func TestIdentityBoot_AFailedStepRefusesToServe(t *testing.T) {
+	h, c := identityHost(t)
+	k := h.mustBoot(c)
+	if err := k.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := k.runIdentityP4d(t.Context())
+	if !errors.Is(err, errP4dRefuse) {
+		t.Fatalf("a failed step = %v, want errP4dRefuse", err)
 	}
 }

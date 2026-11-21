@@ -62,7 +62,7 @@ func runP4dSteps(ctx context.Context, in p4dStepsInput) (res p4dStepsResult, err
 	res.Hooks, err = runRestoreHooks(ctx, restoreHooksInput{
 		Journal: r.Journal, KS: r.KS, Install: r.Install, Identity: r.Identity,
 		Result: res.Reapply, Restore: r.Restore, SwappedBack: r.SwappedBack,
-		OpenPrevious: in.OpenPrevious, Hooks: in.Hooks, Clock: r.Clock, Log: r.Log,
+		OpenPrevious: in.OpenPrevious, Hooks: in.Hooks, Clock: r.Clock, Log: r.Log, FS: r.FS,
 	})
 	if err != nil {
 		return res, fmt.Errorf("%w: step 3 (restore hooks): %w", errP4dRefuse, err)

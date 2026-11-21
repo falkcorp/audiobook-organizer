@@ -7,7 +7,6 @@ package crashmatrix
 
 import (
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -15,14 +14,15 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// TestIdentityBootLabelsAreUnboundRowsNamingF408: every crash-matrix label the
-// identity boot's store commits carry (F4-08 A5: the re-apply, the restore
-// hooks' run ID, auth.BootWrites, rbac.CommitSeeds) is in a row of the writer
-// table, each such row is Unbound with a reason naming F4-08, and no label is
-// in two rows. A label left out of the table is a region the matrix never
-// kills; a bound row before F4-08 wires the boot is a cell that can never be
-// reached, which Unobserved would report as missing on every run.
-func TestIdentityBootLabelsAreUnboundRowsNamingF408(t *testing.T) {
+// TestIdentityBootLabelsAreBoundRowsAllowedUntilAFixtureDeclaresIdentity: every
+// crash-matrix label the identity boot's store commits carry (F4-08 A5: the
+// re-apply, the restore hooks' run ID, auth.BootWrites, rbac.CommitSeeds) is in
+// exactly one row of the writer table, the row is bound (F4-08 B3 wired the
+// boot, so no row is Unbound), and IdentityUnreachedLabels allows the label
+// until a fixture declares the flip. A label left out of the table is a region
+// the matrix never kills; one left out of the allow set fails every fixture's
+// coverage test.
+func TestIdentityBootLabelsAreBoundRowsAllowedUntilAFixtureDeclaresIdentity(t *testing.T) {
 	want := slices.Concat(kernel.ReapplyLabels(), kernel.HookRunLabels(), auth.BootWritesLabels(), []string{rbac.LabelCommitSeeds})
 	rowOf := map[string][]Row{}
 	for _, r := range Rows() {
@@ -37,8 +37,11 @@ func TestIdentityBootLabelsAreUnboundRowsNamingF408(t *testing.T) {
 			t.Errorf("label %q is in no row of the writer table", l)
 		case len(rows) > 1:
 			t.Errorf("label %q is in %d rows", l, len(rows))
-		case rows[0].Unbound == "" || !strings.Contains(rows[0].Unbound, "F4-08"):
-			t.Errorf("label %q is in row %q, Unbound %q: want Unbound naming F4-08 until F4-08 wires the boot", l, rows[0].Writer, rows[0].Unbound)
+		case rows[0].Unbound != "":
+			t.Errorf("label %q is in row %q, Unbound %q: the boot is wired, so the row is bound", l, rows[0].Writer, rows[0].Unbound)
+		}
+		if _, ok := IdentityUnreachedLabels()[l]; !ok {
+			t.Errorf("label %q is not in IdentityUnreachedLabels, so every fixture that does not declare identity fails its coverage test", l)
 		}
 	}
 	seen := map[string]bool{}

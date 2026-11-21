@@ -145,6 +145,13 @@ type Options struct {
 	// makes identity unconditional and deletes the field.
 	IdentityBoot bool
 
+	// ArchivePrefix is the prefix of the app's backup archive names and of the
+	// revocation journal's file name and header (05-backup §5B.3.6 row "Where":
+	// <backup dir>/<prefix>revocations.journal), so two apps sharing a backup
+	// directory never share a journal. "" is <AppID>_. ABO sets
+	// "audiobooks_pebble_", the prefix its archives have always had (B10).
+	ArchivePrefix string
+
 	// Logger overrides the default slog handler construction (tests); nil =
 	// from config (05-logging §4).
 	Logger *slog.Logger

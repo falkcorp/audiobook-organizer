@@ -288,6 +288,8 @@ func aboUnreachedLabels() map[string]string {
 		noBadBootRecord   = "no ABO fixture holds an unparsable config boot record to set aside; hello's boot-record-unparsable fixture breaks the quarantine"
 	)
 	out := crashmatrix.JournalUnreachedLabels()
+	// The identity boot's writers (F4-08 B3): ABO declares the flip at B10.
+	maps.Copy(out, crashmatrix.IdentityUnreachedLabels())
 	maps.Copy(out, map[string]string{
 		"config.statedir.mkdir":        noStateDirFixture,
 		"config.bootrecord.quarantine": noBadBootRecord,

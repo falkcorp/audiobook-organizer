@@ -377,32 +377,32 @@ func TestUnboundTripwireFires(t *testing.T) {
 	}
 }
 
-// TestJournalLabelsAreUnboundOrAllowedNeverBoth: every label of the journal's
-// writers and the kernel's set-aside is in a row that is Unbound (the first
-// boot with a revocation reaches it, once wired) or in JournalUnreachedLabels
-// (a non-default branch no fixture sets up yet), and never both: an allow entry
-// for an Unbound label would hide the stale report a reaching fixture owes.
-func TestJournalLabelsAreUnboundOrAllowedNeverBoth(t *testing.T) {
+// TestJournalLabelsAreAllowedByExactlyOneSet: the boot is wired (F4-08 B3), so
+// no row is Unbound, and every label of the journal's writers and the kernel's
+// set-aside is allowed with a reason by exactly one of JournalUnreachedLabels
+// (a non-default branch of the re-apply no fixture sets up) and
+// IdentityUnreachedLabels (reached only by a boot that declares the identity
+// flip): in neither, a fixture that never reaches it would fail Unobserved with
+// no reason; in both, one reason would hide the other's stale report.
+func TestJournalLabelsAreAllowedByExactlyOneSet(t *testing.T) {
 	t.Parallel()
-	unbound := map[string]bool{}
 	for _, r := range Rows() {
-		for _, l := range r.Labels {
-			if r.Unbound != "" {
-				unbound[l] = true
-			}
+		if r.Unbound != "" {
+			t.Errorf("row %q is Unbound (%q) although the boot is wired", r.Writer, r.Unbound)
 		}
 	}
-	allowed := JournalUnreachedLabels()
-	for _, l := range append(backupjournal.FSLabels(), LabelKernelJournalAside, LabelKernelJournalAsideSync) {
+	nondefault, identity := JournalUnreachedLabels(), IdentityUnreachedLabels()
+	all := append(backupjournal.FSLabels(), LabelKernelJournalAside, LabelKernelJournalAsideSync)
+	for _, l := range all {
 		switch {
-		case unbound[l] && allowed[l] != "":
-			t.Errorf("label %s is in an Unbound row and in JournalUnreachedLabels", l)
-		case !unbound[l] && allowed[l] == "":
-			t.Errorf("label %s is in no Unbound row and not in JournalUnreachedLabels: a fixture that never reaches it would fail Unobserved, and no reason says why", l)
+		case nondefault[l] != "" && identity[l] != "":
+			t.Errorf("label %s is in JournalUnreachedLabels and in IdentityUnreachedLabels", l)
+		case nondefault[l] == "" && identity[l] == "":
+			t.Errorf("label %s is in neither JournalUnreachedLabels nor IdentityUnreachedLabels: a fixture that never reaches it would fail Unobserved, and no reason says why", l)
 		}
 	}
-	for l := range allowed {
-		if !slices.Contains(append(backupjournal.FSLabels(), LabelKernelJournalAside, LabelKernelJournalAsideSync), l) {
+	for l := range nondefault {
+		if !slices.Contains(all, l) {
 			t.Errorf("JournalUnreachedLabels lists %s, which is no journal or kernel set-aside label", l)
 		}
 	}
