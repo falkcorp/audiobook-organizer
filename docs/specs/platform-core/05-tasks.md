@@ -751,6 +751,7 @@ func (s *Schedule) OnStart() *Schedule
 func (s *Schedule) When(gate func() bool) *Schedule // a non-timing gate re-read each poll (e.g. updater mode); closes every trigger
 func (s *Schedule) OnStartWhen(gate func() bool) *Schedule // the start trigger fires on gate alone, whatever enabled and When say (F5-14)
 func (s *Schedule) WindowWhen(gate func() bool) *Schedule  // closes window membership only; the interval keeps running (F5-14)
+func (s *Schedule) IntervalWhen(gate func() bool) *Schedule // closes the timing (Every/DailyAt/Cron) only, as a disabled key would; window and start keep running (F5-14)
 func (s *Schedule) Params(p any) *Schedule
 func (s *Schedule) Live() *Schedule
 func (s *Schedule) Preview() *Schedule
@@ -828,7 +829,14 @@ disabled key and writes no clock, a closed one writes nothing); `IsEnabled` → 
 are not schedule settings); a `RunInMaintenanceWindow` toggle → `.When` on a window-only definition and
 `.WindowWhen` on one that also has an interval, which leaves the interval running (the window's opening
 lists, and its run starts, only members whose `When` and `WindowWhen` gates are open; the executor's
-window-start permission check reads the members before the gates); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
+window-start permission check reads the members before the gates); and a timer whose enable flag differs
+from the window's → `.IntervalWhen(gate)` on a key that stays enabled. The one such kind is `library_scan`:
+HEAD ticked on `scheduled.library_scan.enabled` but admitted the task to the window on that flag or
+`scan_on_startup`, so `modules.books.scheduler.schedules.library_scan` stays `enabled: true` and
+`modules.books.scan.periodic_enabled` (M2's target for `scheduled.library_scan.enabled`) is the timer's switch:
+`.IntervalWhen(periodic_enabled)`, `.WindowWhen(maintenance.library_scan && (periodic_enabled || scan.on_startup))`,
+`.OnStartWhen(scan.on_startup)`. A closed `IntervalWhen` is decide's disabled path for the timing alone (no clock
+at first sight, `GateClosedAt` once, the re-open edge), not `When`'s gated fire; window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
 → `Window: "nightly", Order: idx`, and a definition that also has an interval keeps it beside the slot
 (`Every: d, Window: "nightly", Order: idx`; owner ruling 2026-11-20, "Allow both in core"). Under HEAD's
 shipped defaults five definitions tick on an interval and sit in `maintenanceOrder` (`tombstone_cleanup`,
