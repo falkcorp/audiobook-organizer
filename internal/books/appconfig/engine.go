@@ -359,7 +359,7 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 					continue
 				}
 				if ov, ok := pass[coreconfig.Path(t.Path)]; ok {
-					if op, err := cutover.Unconvert(t.Convert, ov.Value); err == nil {
+					if op, err := cutover.Unconvert(t, ov.Value); err == nil {
 						val, by, state = op, ov.By, readOK
 					}
 				}
@@ -543,7 +543,7 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 		if !ok {
 			return nil, "", readUnset, nil
 		}
-		out, err := cutover.Unconvert(t.Convert, ov.Value)
+		out, err := cutover.Unconvert(t, ov.Value)
 		if err == nil {
 			out, err = passthroughTyped(p.row.Head, t.Path, ov.By, out)
 		}
@@ -560,14 +560,14 @@ func (e *Engine) read(ctx context.Context, p projRow, pass map[coreconfig.Path]c
 		if !has {
 			return nil, "", readUnset, nil
 		}
-		out, err := cutover.Unconvert(t.Convert, raw)
+		out, err := cutover.Unconvert(t, raw)
 		return out, st.LockedBy, readOK, err
 	default:
 		st, ok := e.acc.Lookup(coreconfig.Path(t.Path))
 		if !ok {
 			return nil, "", readMissing, nil
 		}
-		out, err := cutover.Unconvert(t.Convert, st.Effective)
+		out, err := cutover.Unconvert(t, st.Effective)
 		return out, st.LockedBy, readOK, err
 	}
 }

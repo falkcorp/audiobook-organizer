@@ -6,7 +6,7 @@
 # Rename table (05-config §1.12.3), generated from the frozen HEAD Config by rename_table.go.
 # Regenerate: go test ./internal/books/cutover -run TestRenameTable_Golden -update
 # top-level rows: 173 (k=135 s=11 i=9 o=16 x=2); rows with two targets: 2
-# sub-key rows: 153; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 354
+# sub-key rows: 154; virtual rows: 3; removed-key rows: 23; process-name rows: 2; rows: 355
 # os.Getenv literals outside core/, internal/config/ and this package (05-config §1.12.4 "Not config at all"): 17
 #   getenv ABK_ALLOW_ENCRYPTION_KEY_REGEN
 #   getenv ABK_DISABLE_MEDIAINFO
@@ -1679,11 +1679,17 @@ note sub-key rows below
 retired file scheduled -> modules.books.scheduler.schedules warn
 retired env SCHEDULED -> modules.books.scheduler.schedules warn
 
+## scheduled.library_scan.enabled
+top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
+target key modules.books.scan.periodic_enabled convert=- env=ABO_BOOKS_SCAN_PERIODIC_ENABLED
+note library_scan's schedule stays enabled; this gates its timer and, with scan.on_startup, its window run
+retired env SCHEDULED.LIBRARY_SCAN.ENABLED -> modules.books.scan.periodic_enabled warn
+retired env SCHEDULED_LIBRARY_SCAN_ENABLED -> modules.books.scan.periodic_enabled warn
+
 ## scheduled.library_scan
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.library_scan convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_LIBRARY_SCAN
+target key modules.books.scheduler.schedules.library_scan convert=schedule-library-scan window=nightly order=19 env=ABO_BOOKS_SCHEDULER_SCHEDULES_LIBRARY_SCAN
 retired env SCHEDULED.LIBRARY_SCAN -> modules.books.scheduler.schedules.library_scan warn
-retired env SCHEDULED_LIBRARY_SCAN_ENABLED -> modules.books.scheduler.schedules.library_scan warn
 retired env SCHEDULED_LIBRARY_SCAN_INTERVAL -> modules.books.scheduler.schedules.library_scan warn
 
 ## scheduled.library_scan.on_startup
@@ -1707,7 +1713,7 @@ retired env SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL -> - warn
 
 ## scheduled.dedup_refresh
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.dedup_refresh convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_DEDUP_REFRESH
+target key modules.books.scheduler.schedules.dedup_refresh convert=schedule-standard window=nightly order=1 env=ABO_BOOKS_SCHEDULER_SCHEDULES_DEDUP_REFRESH
 retired env SCHEDULED.DEDUP_REFRESH -> modules.books.scheduler.schedules.dedup_refresh warn
 retired env SCHEDULED_DEDUP_REFRESH_ENABLED -> modules.books.scheduler.schedules.dedup_refresh warn
 retired env SCHEDULED_DEDUP_REFRESH_INTERVAL -> modules.books.scheduler.schedules.dedup_refresh warn
@@ -1746,7 +1752,7 @@ retired env SCHEDULED_LABEL_REFINEMENT_ON_STARTUP -> - warn
 
 ## scheduled.author_split
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.author_split convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_AUTHOR_SPLIT
+target key modules.books.scheduler.schedules.author_split convert=schedule-standard window=nightly order=3 env=ABO_BOOKS_SCHEDULER_SCHEDULES_AUTHOR_SPLIT
 retired env SCHEDULED.AUTHOR_SPLIT -> modules.books.scheduler.schedules.author_split warn
 retired env SCHEDULED_AUTHOR_SPLIT_ENABLED -> modules.books.scheduler.schedules.author_split warn
 retired env SCHEDULED_AUTHOR_SPLIT_INTERVAL -> modules.books.scheduler.schedules.author_split warn
@@ -1759,8 +1765,8 @@ retired env SCHEDULED_AUTHOR_SPLIT_ON_STARTUP -> - warn
 
 ## scheduled.db_optimize
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.db_optimize convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_DB_OPTIMIZE
-target key core.storage.schedules.compact convert=schedule-standard env=ABO_CORE_STORAGE_SCHEDULES_COMPACT
+target key modules.books.scheduler.schedules.db_optimize convert=schedule-standard window=nightly order=17 env=ABO_BOOKS_SCHEDULER_SCHEDULES_DB_OPTIMIZE
+target key core.storage.schedules.compact convert=schedule-standard window=nightly order=0 env=ABO_CORE_STORAGE_SCHEDULES_COMPACT
 note a second target: the same ScheduleConfig also seeds the core kind core.storage.compact's key
 retired env SCHEDULED.DB_OPTIMIZE -> modules.books.scheduler.schedules.db_optimize warn
 retired env SCHEDULED_DB_OPTIMIZE_ENABLED -> modules.books.scheduler.schedules.db_optimize warn
@@ -1799,7 +1805,7 @@ retired env SCHEDULED.RESOLVE_PRODUCTION_AUTHORS.ON_STARTUP -> - warn
 
 ## scheduled.series_prune
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.series_prune convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_SERIES_PRUNE
+target key modules.books.scheduler.schedules.series_prune convert=schedule-standard window=nightly order=4 env=ABO_BOOKS_SCHEDULER_SCHEDULES_SERIES_PRUNE
 retired env SCHEDULED.SERIES_PRUNE -> modules.books.scheduler.schedules.series_prune warn
 retired env SCHEDULED_SERIES_PRUNE_ENABLED -> modules.books.scheduler.schedules.series_prune warn
 retired env SCHEDULED_SERIES_PRUNE_INTERVAL -> modules.books.scheduler.schedules.series_prune warn
@@ -1812,7 +1818,7 @@ retired env SCHEDULED_SERIES_PRUNE_ON_STARTUP -> - warn
 
 ## scheduled.ai_dedup_batch
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.ai_dedup_batch convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_AI_DEDUP_BATCH
+target key modules.books.scheduler.schedules.ai_dedup_batch convert=schedule-zero-daily env=ABO_BOOKS_SCHEDULER_SCHEDULES_AI_DEDUP_BATCH
 retired env SCHEDULED.AI_DEDUP_BATCH -> modules.books.scheduler.schedules.ai_dedup_batch warn
 retired env SCHEDULED_AI_DEDUP_BATCH_ENABLED -> modules.books.scheduler.schedules.ai_dedup_batch warn
 retired env SCHEDULED_AI_DEDUP_BATCH_INTERVAL -> modules.books.scheduler.schedules.ai_dedup_batch warn
@@ -1825,7 +1831,7 @@ retired env SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP -> - warn
 
 ## scheduled.reconcile
 top=false stored=blob class=k blob=scheduled admin=false fail-closed=false url=false
-target key modules.books.scheduler.schedules.reconcile convert=schedule-standard env=ABO_BOOKS_SCHEDULER_SCHEDULES_RECONCILE
+target key modules.books.scheduler.schedules.reconcile convert=schedule-standard window=nightly order=0 env=ABO_BOOKS_SCHEDULER_SCHEDULES_RECONCILE
 retired env SCHEDULED.RECONCILE -> modules.books.scheduler.schedules.reconcile warn
 retired env SCHEDULED_RECONCILE_ENABLED -> modules.books.scheduler.schedules.reconcile warn
 retired env SCHEDULED_RECONCILE_INTERVAL -> modules.books.scheduler.schedules.reconcile warn

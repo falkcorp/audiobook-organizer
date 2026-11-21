@@ -618,8 +618,10 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 		if err := w.Quarantine(q.Key, q.Raw, q.Reason); err != nil {
 			return fmt.Errorf("%w: quarantine failed: %v", errConfigStep, errClass(err))
 		}
+		// Quarantine counts the row itself (its key in the report); a
+		// second Count here counted each one twice, the second time under the
+		// chunk's source key with no member named.
 		moved[string(q.Key)] = true
-		w.Count("quarantined")
 	}
 	for _, key := range p.DeleteRows {
 		if moved[string(key)] {
