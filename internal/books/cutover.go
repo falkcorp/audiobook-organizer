@@ -139,10 +139,16 @@ func (m *booksModule) flipSteps(imp module.Importers) (cutover.Flip, error) {
 }
 
 // flipShapeOptions is the part of flipOptions the shape reads: the level step's
-// version and the identity switch. ABO leaves Identity nil until B10 turns the
-// identity cutover on, so the list is F3's flip alone (books.level-1, M2, M8).
+// version and the identity switch. Identity is nil while identityOn is false (it
+// is, until B10g), so the list is F3's flip alone (books.level-1, M2, M8). With
+// it on the shape adds books.level-2 and the retired identity claims; M3's own
+// config is the manifest's (identityFlipOptions), which the shape does not read.
 func flipShapeOptions() cutover.FlipOptions {
-	return cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion}
+	fo := cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion}
+	if identityOn() {
+		fo.Identity = &cutover.IdentityFlipOptions{}
+	}
+	return fo
 }
 
 // flipOptions are M2's inputs: HEAD's state directory, database path and
