@@ -162,6 +162,43 @@ func (oi *offlineIdentity) reapply() reapplyInput {
 	return reapplyInput{Keys: oi.k.sec.store, Install: oi.install, Log: oi.k.coreLog("journal"), FS: oi.jfs, Clock: bootClock(context.Background())}
 }
 
+// openJournalComponent creates the backup directory when absent, builds the
+// journal component over the effective path and binds it, as the serve boot's
+// P4d does, and hands it to the kernel so every return path closes it (it holds
+// the journal file's lock and writes the last anchor) before the store closes.
+// A journal that cannot be bound is not an error: the component then holds the
+// broken file and every append records a gap, as a serving write does, so a
+// journal that cannot be appended to never blocks a security action. Only the
+// commands that write a revocation call this; a read, or the removal of an
+// orphan, creates nothing.
+func (oi *offlineIdentity) openJournalComponent(ctx context.Context, users *authstore.Store) (*journal.Component, error) {
+	k := oi.k
+	if err := ensureBackupDir(oi.jfs, oi.backupDir); err != nil {
+		return nil, err
+	}
+	bks, err := oi.keyspace()
+	if err != nil {
+		return nil, err
+	}
+	binary, err := k.binaryID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	log := k.coreLog("journal")
+	comp, err := journal.NewComponent(journal.ComponentOptions{
+		StateDir: k.cfg.StateDir, DBPath: k.cfg.StoragePath, Keyspace: bks, Keys: k.sec.store,
+		InstallID: oi.install, App: oi.prefix, Source: binary, Clock: bootClock(ctx), Log: log, FS: oi.jfs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("kernel: identity: the journal component: %w", err)
+	}
+	k.ident = &identityBoot{users: users, journal: comp, jfs: oi.jfs}
+	if err := comp.Bind(ctx, oi.journalPath()); err != nil {
+		log.Warn("kernel: the revocation journal is not usable for appends; writes will record a gap", "path", comp.Path(), "err", err)
+	}
+	return comp, nil
+}
+
 // ResetPasswordOffline is `<app> users reset-password <username>` (05-authn
 // §4.14): inside a read-write OpenOffline and only as the state directory's
 // owner, it generates a new password for the account, stores its hash,
@@ -193,35 +230,11 @@ func ResetPasswordOffline(ctx context.Context, c Config, username, by string) (r
 	if _, err := auth.LookupResetTarget(ctx, users, username); err != nil {
 		return res, err
 	}
-	if err := ensureBackupDir(oi.jfs, oi.backupDir); err != nil {
-		return res, err
-	}
-	bks, err := oi.keyspace()
-	if err != nil {
-		return res, err
-	}
-	binary, err := k.binaryID(ctx)
+	comp, err := oi.openJournalComponent(ctx, users)
 	if err != nil {
 		return res, err
 	}
 	log := k.coreLog("journal")
-	comp, err := journal.NewComponent(journal.ComponentOptions{
-		StateDir: k.cfg.StateDir, DBPath: k.cfg.StoragePath, Keyspace: bks, Keys: k.sec.store,
-		InstallID: oi.install, App: oi.prefix, Source: binary, Clock: bootClock(ctx), Log: log, FS: oi.jfs,
-	})
-	if err != nil {
-		return res, fmt.Errorf("kernel: identity: the journal component: %w", err)
-	}
-	// Held by the kernel from here on, so every return path closes it (it
-	// holds the journal file's lock and writes the last anchor) before the
-	// store closes.
-	k.ident = &identityBoot{users: users, journal: comp, jfs: oi.jfs}
-	if err := comp.Bind(ctx, oi.journalPath()); err != nil {
-		// The component then holds the broken file, so the reset below records a
-		// gap, as a serving write does: a journal that cannot be appended to
-		// never blocks an administrator's way back in.
-		log.Warn("kernel: the revocation journal is not usable for appends; the reset will record a gap", "path", comp.Path(), "err", err)
-	}
 	return auth.ResetPasswordOffline(ctx, auth.OfflineResetDeps{
 		Store: users, NewBatch: users.NewBatch, Audit: k.audit, By: by, Revocations: comp,
 		Settings: settings, Clock: bootClock(ctx), Log: log,
@@ -242,9 +255,11 @@ const (
 	// (the line is gone: retention dropped it, or the journal is another
 	// history). Clearable.
 	QueueOrphan JournalQueueState = "orphan"
-	// QueuePoison: the row does not decode, or its key and its entry name
-	// different seqs. Every boot that reads the queue fails on an undecodable
-	// row, and nothing can be recovered from it. Clearable.
+	// QueuePoison: the row does not decode. Every boot that reads the queue
+	// fails on it, and its Closed flag and mac are unknown, so it cannot just be
+	// deleted: the revocation it pointed at may not have been answered by the
+	// fail-closed pass. Clearable, by repair or by clearing and failing closed
+	// (JournalQueueEntry.Clear says which).
 	QueuePoison JournalQueueState = "poison"
 	// QueueUnverified: the entry decodes, but the journal cannot say whether it
 	// is pending or orphaned (missing, unreadable, broken, another install's,
@@ -254,6 +269,26 @@ const (
 	// QueueMalformedKey: the key is not journal_unapplied/<20-digit seq>, so
 	// the row cannot be named by a seq. Listed, never cleared by this tool.
 	QueueMalformedKey JournalQueueState = "malformed_key"
+)
+
+// JournalQueueAction is what `clear` does with a clearable entry.
+type JournalQueueAction string
+
+const (
+	// ClearRemove deletes an orphan: the verified journal holds no line it
+	// could ever apply, and the boot already treats it as inert.
+	ClearRemove JournalQueueAction = "remove"
+	// ClearRepair replaces a poison row with the entry for the line the
+	// verified journal holds at the row's seq, Closed false, so the next plain
+	// boot fails closed once for it and a build that knows the kind applies it.
+	// Nothing is lost.
+	ClearRepair JournalQueueAction = "repair"
+	// ClearFailClosed deletes a poison row the journal cannot speak for, after
+	// running auth's restore fallback with no coverage: every API key
+	// needs_confirmation, every credential epoch bumped, every session deleted.
+	// The revocation the row pointed at is unknowable, so everything it could
+	// have revoked is revoked.
+	ClearFailClosed JournalQueueAction = "fail_closed"
 )
 
 // JournalQueueEntry is one row of the unapplied-revocation queue as the
@@ -270,14 +305,21 @@ type JournalQueueEntry struct {
 	// Closed is the entry's: the boot that queued it already failed closed.
 	Closed bool
 	State  JournalQueueState
-	// Reason says why the state is what it is, in words with no secret.
+	// Reason says why the state is what it is, and for a clearable entry what
+	// clear would do, in words with no secret.
 	Reason string
+	// Clear is what `clear` does with the entry; empty when it is not clearable.
+	Clear JournalQueueAction
+	// FailClosedCounts is set only on the entry a ClearFailClosed returns: the
+	// rows the fallback changed (auth.RestoreCounts families).
+	FailClosedCounts map[string]int
 
-	row journal.UnappliedRow
+	row    journal.UnappliedRow
+	repair journal.Line // the line a ClearRepair puts back
 }
 
 // Clearable reports whether `clear` may remove the entry.
-func (e JournalQueueEntry) Clearable() bool { return e.State == QueueOrphan || e.State == QueuePoison }
+func (e JournalQueueEntry) Clearable() bool { return e.Clear != "" }
 
 // ErrJournalQueueNotClearable refuses to clear an entry that is not poison or
 // provably orphaned; the wrapped text says which and why.
@@ -297,12 +339,27 @@ func JournalQueueList(ctx context.Context, c Config) (out []JournalQueueEntry, e
 	return oi.classifyQueue(ctx)
 }
 
-// JournalQueueClear is `storage journal-queue clear <seq>`: it removes the one
-// entry at seq when it is poison or provably orphaned, in one batch with its
-// audit record (core.storage.journal_queue_clear, Actor.Method "offline"), and
-// refuses any other (ErrJournalQueueNotClearable) or an absent one
-// (ErrJournalQueueNoEntry), changing nothing. The state is re-judged here, over
-// the open the delete runs under, not taken from an earlier list.
+// JournalQueueClear is `storage journal-queue clear <seq>`: it acts on the one
+// entry at seq when it is clearable, in one batch with its audit record
+// (core.storage.journal_queue_clear, Actor.Method "offline"), and refuses any
+// other (ErrJournalQueueNotClearable) or an absent one (ErrJournalQueueNoEntry),
+// changing nothing. The state is re-judged here, over the open the write runs
+// under, not taken from an earlier list. What it does is the entry's Clear:
+//
+//   - ClearRemove (an orphan): delete the row. The boot already treats an entry
+//     the verified chain does not hold as inert, so no access changes.
+//   - ClearRepair (poison, the verified journal holds the line at its seq):
+//     replace the row with that line's entry, Closed false.
+//   - ClearFailClosed (poison, the journal cannot name the line): run auth's
+//     restore fallback with no coverage FIRST (every API key
+//     needs_confirmation, every credential epoch bumped, every session
+//     deleted, journaled as any offline revoking write is), and only then delete
+//     the row and audit it with the fallback's counts. The order matters: a
+//     crash between the two leaves the row to be cleared again (the fallback
+//     only restricts further, so a rerun is safe), never a deleted pointer with
+//     no fallback behind it. A fallback that cannot run (the journal component
+//     cannot be built, the store refuses) fails the command with the row kept;
+//     there is no path that deletes a poison row without it.
 func JournalQueueClear(ctx context.Context, c Config, seq uint64, by string) (cleared JournalQueueEntry, err error) {
 	oi, err := openOfflineIdentity(ctx, c, "storage journal-queue")
 	if err != nil {
@@ -326,18 +383,42 @@ func JournalQueueClear(ctx context.Context, c Config, seq uint64, by string) (cl
 	if !target.Clearable() {
 		return cleared, fmt.Errorf("%w: seq %d is %s: %s", ErrJournalQueueNotClearable, seq, target.State, target.Reason)
 	}
+	details := map[string]any{"seq": target.Seq, "state": string(target.State), "action": string(target.Clear)}
+	if target.Kind != "" {
+		details["kind"] = string(target.Kind)
+	}
+	if target.Clear == ClearFailClosed {
+		users, err := oi.users(ctx)
+		if err != nil {
+			return cleared, err
+		}
+		comp, err := oi.openJournalComponent(ctx, users)
+		if err != nil {
+			return cleared, err
+		}
+		authDeps := auth.RestoreDeps{Store: users, NewBatch: users.NewBatch, Revocations: comp, Clock: bootClock(ctx), Log: oi.k.coreLog("journal")}
+		counts, err := auth.PostRestore(ctx, authDeps, journal.RestoreContext{Kind: journal.KindExternal})
+		if err != nil {
+			return cleared, fmt.Errorf("kernel: fail closed before clearing journal queue entry %d (the entry is kept): %w", seq, err)
+		}
+		details["fallback"] = "fail_closed"
+		details["fallback_counts"] = map[string]int(counts)
+		target.FailClosedCounts = map[string]int(counts)
+	}
 	bks, err := oi.keyspace()
 	if err != nil {
 		return cleared, err
 	}
 	b := bks.NewBatch()
 	defer func() { err = errors.Join(err, b.Close()) }()
-	if err := journal.StageUnappliedRowDelete(b, bks, target.row); err != nil {
-		return cleared, err
+	switch target.Clear {
+	case ClearRepair:
+		err = journal.StageUnappliedRowRepair(b, bks, target.row, target.repair)
+	default:
+		err = journal.StageUnappliedRowDelete(b, bks, target.row)
 	}
-	details := map[string]any{"seq": target.Seq, "state": string(target.State)}
-	if target.Kind != "" {
-		details["kind"] = string(target.Kind)
+	if err != nil {
+		return cleared, err
 	}
 	if err := oi.k.audit.RecordIn(ctx, b, audit.Event{
 		Action:  "core.storage.journal_queue_clear",
@@ -447,6 +528,30 @@ func (oi *offlineIdentity) readProof(ctx context.Context, bks storage.Keyspace) 
 	return journalProof{chain: chain}
 }
 
+// classifyPoison decides what clearing an undecodable row does. A poison row
+// is a pointer whose Closed flag and mac are lost, and the revocation it
+// pointed at may never have been answered by the boot's fail-closed pass, so it
+// is never simply deleted: when the verified journal holds a line at the seq
+// the key names the row is rebuilt from that line (Closed false); when it does
+// not, or the journal cannot be trusted, clearing fails closed first.
+func classifyPoison(e JournalQueueEntry, r journal.UnappliedRow, proof journalProof) JournalQueueEntry {
+	e.State = QueuePoison
+	if proof.whyNot == "" {
+		if l, ok := proof.chain.LineAt(r.Seq); ok {
+			e.Clear, e.repair = ClearRepair, l
+			e.Kind, e.At = l.Kind, l.At
+			e.Reason = fmt.Sprintf("the row does not decode; the verified journal holds a line at seq %d (kind %s), so clear replaces the row with an entry for it (not yet failed closed for) and the next plain boot answers it; nothing is lost", r.Seq, l.Kind)
+			return e
+		}
+		e.Clear = ClearFailClosed
+		e.Reason = fmt.Sprintf("the row does not decode and the verified journal holds no line at seq %d, so the revocation it pointed at cannot be named; clear removes it after failing closed (every API key needs_confirmation, every credential epoch bumped, every session deleted)", r.Seq)
+		return e
+	}
+	e.Clear = ClearFailClosed
+	e.Reason = fmt.Sprintf("the row does not decode and the journal cannot name the line it pointed at (%s); clear removes it after failing closed (every API key needs_confirmation, every credential epoch bumped, every session deleted)", proof.whyNot)
+	return e
+}
+
 // classifyRow is the state of one row under proof.
 func classifyRow(r journal.UnappliedRow, proof journalProof) JournalQueueEntry {
 	e := JournalQueueEntry{Key: r.Key, Seq: r.Seq, row: r}
@@ -455,8 +560,7 @@ func classifyRow(r journal.UnappliedRow, proof journalProof) JournalQueueEntry {
 		e.State, e.Reason = QueueMalformedKey, "the key is not journal_unapplied/<seq>, so no seq names it"
 		return e
 	case r.Err != nil:
-		e.State, e.Reason = QueuePoison, "the row does not decode; every boot that reads the queue fails on it"
-		return e
+		return classifyPoison(e, r, proof)
 	}
 	e.Kind, e.At, e.Closed = r.Entry.Kind, r.Entry.At, r.Entry.Closed
 	// The boot reads an entry by its own seq and mac, never its key's, so that
@@ -473,6 +577,7 @@ func classifyRow(r journal.UnappliedRow, proof journalProof) JournalQueueEntry {
 		e.State, e.Reason = QueueUnverified, proof.whyNot+", so the entry cannot be shown to be unreachable"+note
 		return e
 	}
+	e.Clear = ClearRemove
 	e.State, e.Reason = QueueOrphan, "the verified journal holds no line at seq "+fmt.Sprint(r.Entry.Seq)+" with this mac (dropped by retention, or another history); nothing can ever apply it"+note
 	return e
 }

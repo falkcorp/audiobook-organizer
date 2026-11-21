@@ -8,6 +8,7 @@ package kernel
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -58,6 +59,12 @@ func seedIdentity(t *testing.T, extra func(k *Kernel, b *storage.Batch, jks stor
 	b := k.ident.users.NewBatch()
 	for _, u := range users {
 		if err := k.ident.users.PutUser(b, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, owner := range []auth.UserID{"u-bruce", "u-selina"} {
+		if _, err := k.ident.users.IssueKey(b, &auth.APIKey{Owner: owner, Name: "batsignal", Scopes: []rbac.Permission{"gotham:patrol"},
+			Status: auth.KeyActive, ExpiresAt: now.AddDate(1, 0, 0)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -150,12 +157,49 @@ func (fx *oiFx) auditRecords(t *testing.T, prefix string) (out []audit.Record) {
 	return out
 }
 
+// keyStatuses is every API key's status by its owner's user ID (one key each
+// in the fixture).
+func (fx *oiFx) keyStatuses(t *testing.T) map[string]auth.KeyStatus {
+	t.Helper()
+	out := map[string]auth.KeyStatus{}
+	fx.inspect(t, func(oi *offlineIdentity) {
+		users, err := oi.users(t.Context())
+		must(t, err)
+		for k, err := range users.ScanAPIKeys(t.Context(), "") {
+			must(t, err)
+			out[string(k.Owner)] = k.Status
+		}
+	})
+	return out
+}
+
+// epochs is every ordinary user's credential epoch by username.
+func (fx *oiFx) epochs(t *testing.T) map[string]int64 {
+	t.Helper()
+	out := map[string]int64{}
+	fx.inspect(t, func(oi *offlineIdentity) {
+		users, err := oi.users(t.Context())
+		must(t, err)
+		for u, err := range users.ScanUsers(t.Context()) {
+			must(t, err)
+			if u.Status != auth.StatusSystem {
+				out[u.Username] = u.CredentialEpoch
+			}
+		}
+	})
+	return out
+}
+
 func TestOfflineResetPassword_Effect(t *testing.T) {
 	fx := seedIdentity(t, nil)
 	before, oldHash := fx.user(t, "bruce")
+	keysBefore := fx.keyStatuses(t)
 	res, err := ResetPasswordOffline(t.Context(), fx.c, "  BRUCE ", "ops")
 	if err != nil {
 		t.Fatalf("ResetPasswordOffline: %v", err)
+	}
+	if !maps.Equal(fx.keyStatuses(t), keysBefore) {
+		t.Errorf("a reset changed API keys: %v -> %v", keysBefore, fx.keyStatuses(t))
 	}
 	if len(res.Password) < 24 {
 		t.Fatalf("the generated password has %d characters", len(res.Password))
@@ -519,25 +563,30 @@ func TestJournalQueue_ClearOnlyOrphanAndPoison(t *testing.T) {
 	if recs := fx.auditRecords(t, "core.storage.journal_queue_"); len(recs) != 0 {
 		t.Fatalf("refused clears audited %d record(s)", len(recs))
 	}
-	for _, seq := range []uint64{500, 7, 9} {
+	for _, seq := range []uint64{500, 9} {
 		cleared, err := JournalQueueClear(ctx, fx.c, seq, "ops")
 		if err != nil {
 			t.Fatalf("clear %d: %v", seq, err)
 		}
-		if !cleared.Clearable() {
-			t.Errorf("cleared a %s entry", cleared.State)
+		if cleared.State != QueueOrphan || cleared.Clear != ClearRemove {
+			t.Errorf("cleared a %s entry by %q, want an orphan removed", cleared.State, cleared.Clear)
 		}
 	}
 	es, err := JournalQueueList(ctx, fx.c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := entryStates(es); len(got) != 3 || got[keyOf(pending)] != QueuePending || got["00000000000000000011"] != QueuePending || got["zzz"] != QueueMalformedKey {
-		t.Errorf("rows left = %v, want the two pending entries and the malformed key", got)
+	if got := entryStates(es); len(got) != 4 || got[keyOf(pending)] != QueuePending || got["00000000000000000011"] != QueuePending ||
+		got["00000000000000000007"] != QueuePoison || got["zzz"] != QueueMalformedKey {
+		t.Errorf("rows left = %v, want the two pending entries, the poison row and the malformed key", got)
+	}
+	// Removing an orphan changes no access: no key and no epoch moves.
+	if keys := fx.keyStatuses(t); keys["u-bruce"] != auth.KeyActive || keys["u-selina"] != auth.KeyActive {
+		t.Errorf("clearing orphans changed API keys: %v", keys)
 	}
 	recs := fx.auditRecords(t, "core.storage.journal_queue_")
-	if len(recs) != 3 {
-		t.Fatalf("%d audit record(s), want 3", len(recs))
+	if len(recs) != 2 {
+		t.Fatalf("%d audit record(s), want 2", len(recs))
 	}
 	for _, r := range recs {
 		if r.Action != "core.storage.journal_queue_clear" || r.Actor.Method != "offline" || r.Actor.Username != "ops" || r.Outcome != audit.Success {
@@ -783,5 +832,177 @@ func TestJournalQueue_EmptyJournalUnderAnEmptyHeadProvesNothing(t *testing.T) {
 	}
 	if _, err := JournalQueueClear(t.Context(), fx.c, 500, "ops"); !errors.Is(err, ErrJournalQueueNotClearable) {
 		t.Errorf("clear = %v, want ErrJournalQueueNotClearable", err)
+	}
+}
+
+// --- poison rows: repair when the journal can speak, fail closed when it cannot ---
+
+// poisonFx is a store with one live journal line (seq returned), an
+// undecodable queue row at the seq the key names (poisonSeq), and API keys for
+// two users. damage runs on the closed store before the command.
+func poisonFx(t *testing.T, poisonAt func(live uint64) uint64) (fx *oiFx, live, poisonSeq uint64, line journal.Line) {
+	t.Helper()
+	fx = seedIdentity(t, func(k *Kernel, b *storage.Batch, jks storage.Keyspace) {
+		at := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+		must(t, k.ident.journal.Append(t.Context(), b, journal.Revocation{Kind: journal.CredentialEpochBumped, At: at, Epoch: 9, Subject: rxUserRef("u-selina")}))
+		raw, err := os.ReadFile(k.ident.journal.Path())
+		must(t, err)
+		lines := journal.ReadChain(raw, k.sec.store).Lines
+		line = lines[len(lines)-1]
+		live = line.Seq
+		poisonSeq = poisonAt(live)
+		must(t, b.In(jks).Set([]byte("journal_unapplied/"+fmt.Sprintf("%020d", poisonSeq)), []byte("{not json")))
+	})
+	return fx, live, poisonSeq, line
+}
+
+func (fx *oiFx) queueRows(t *testing.T) (rows []journal.UnappliedRow) {
+	t.Helper()
+	fx.inspect(t, func(oi *offlineIdentity) {
+		ks, err := oi.keyspace()
+		must(t, err)
+		rows, err = journal.ScanUnapplied(t.Context(), ks)
+		must(t, err)
+	})
+	return rows
+}
+
+func clearDetails(t *testing.T, fx *oiFx) map[string]any {
+	t.Helper()
+	recs := fx.auditRecords(t, "core.storage.journal_queue_")
+	if len(recs) != 1 {
+		t.Fatalf("%d clear audit records, want 1", len(recs))
+	}
+	return recs[0].Details
+}
+
+// TestJournalQueue_PoisonRepairedWhenTheJournalHoldsItsLine: the verified
+// journal holds the line at the seq the poison row's key names, so clear
+// replaces the row with that line's entry, not yet failed closed for, and no key
+// or epoch moves. The next plain boot's fail-closed pass and drain answer it.
+func TestJournalQueue_PoisonRepairedWhenTheJournalHoldsItsLine(t *testing.T) {
+	fx, live, seq, line := poisonFx(t, func(live uint64) uint64 { return live })
+	keysBefore, epochsBefore := fx.keyStatuses(t), fx.epochs(t)
+	es, err := JournalQueueList(t.Context(), fx.c)
+	must(t, err)
+	if len(es) != 1 || es[0].State != QueuePoison || es[0].Clear != ClearRepair || !strings.Contains(es[0].Reason, "replaces the row") {
+		t.Fatalf("list = %+v, want one poison row that a clear repairs", es)
+	}
+	got, err := JournalQueueClear(t.Context(), fx.c, seq, "ops")
+	must(t, err)
+	if got.Clear != ClearRepair {
+		t.Fatalf("clear did %q, want a repair", got.Clear)
+	}
+	rows := fx.queueRows(t)
+	if len(rows) != 1 || rows[0].Err != nil || rows[0].Entry == nil {
+		t.Fatalf("rows after clear = %+v, want one decodable entry", rows)
+	}
+	e := rows[0].Entry
+	if e.Seq != live || e.MAC != line.MAC || e.Kind != line.Kind || e.Closed {
+		t.Errorf("repaired entry = %+v, want seq %d, mac %s, kind %s, Closed false", *e, live, line.MAC, line.Kind)
+	}
+	if !maps.Equal(fx.keyStatuses(t), keysBefore) {
+		t.Errorf("a repair changed API keys: %v -> %v", keysBefore, fx.keyStatuses(t))
+	}
+	if !maps.Equal(fx.epochs(t), epochsBefore) {
+		t.Errorf("a repair changed credential epochs: %v -> %v", epochsBefore, fx.epochs(t))
+	}
+	if d := clearDetails(t, fx); d["action"] != "repair" || d["fallback"] != nil {
+		t.Errorf("audit details = %v, want action repair and no fallback", d)
+	}
+	// What list now says: a plain pending entry.
+	es, err = JournalQueueList(t.Context(), fx.c)
+	must(t, err)
+	if len(es) != 1 || es[0].State != QueuePending {
+		t.Errorf("list after a repair = %+v, want one pending entry", es)
+	}
+}
+
+// TestJournalQueue_PoisonFailsClosedWhenTheJournalCannotSpeak: when the verified
+// journal holds no line at the poison row's seq, or the journal cannot be
+// trusted at all, clear deletes the row only after failing the store closed:
+// every API key needs_confirmation and every credential epoch bumped. Each way
+// is asserted on its own.
+func TestJournalQueue_PoisonFailsClosedWhenTheJournalCannotSpeak(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		poisonAt func(live uint64) uint64
+		damage   func(t *testing.T, fx *oiFx)
+	}{
+		{"trusted journal with no line at the seq", func(live uint64) uint64 { return live + 40 }, func(*testing.T, *oiFx) {}},
+		{"journal file missing", func(live uint64) uint64 { return live }, func(t *testing.T, fx *oiFx) { must(t, os.Remove(fx.journalPath)) }},
+		{"journal line mac corrupted", func(live uint64) uint64 { return live }, func(t *testing.T, fx *oiFx) {
+			raw, err := os.ReadFile(fx.journalPath)
+			must(t, err)
+			i := bytes.LastIndex(raw, []byte(`"mac":"`))
+			if i < 0 {
+				t.Fatalf("no mac in the journal: %q", raw)
+			}
+			raw[i+len(`"mac":"`)] ^= 1
+			must(t, os.WriteFile(fx.journalPath, raw, 0o600))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx, _, seq, _ := poisonFx(t, tc.poisonAt)
+			tc.damage(t, fx)
+			epochsBefore := fx.epochs(t)
+			for owner, st := range fx.keyStatuses(t) {
+				if st != auth.KeyActive {
+					t.Fatalf("fixture key of %s is %s, want active", owner, st)
+				}
+			}
+			es, err := JournalQueueList(t.Context(), fx.c)
+			must(t, err)
+			if len(es) != 1 || es[0].State != QueuePoison || es[0].Clear != ClearFailClosed || !strings.Contains(es[0].Reason, "failing closed") {
+				t.Fatalf("list = %+v, want one poison row that a clear fails closed for", es)
+			}
+			got, err := JournalQueueClear(t.Context(), fx.c, seq, "ops")
+			must(t, err)
+			if got.Clear != ClearFailClosed || got.FailClosedCounts[auth.CountKeysUnconfirmed] != 2 {
+				t.Fatalf("clear = %+v, want a fail-closed clear that unconfirmed 2 keys", got)
+			}
+			if rows := fx.queueRows(t); len(rows) != 0 {
+				t.Errorf("rows after clear = %+v, want none", rows)
+			}
+			for owner, st := range fx.keyStatuses(t) {
+				if st != auth.KeyNeedsConfirmation {
+					t.Errorf("API key of %s is %s after the clear, want needs_confirmation", owner, st)
+				}
+			}
+			after := fx.epochs(t)
+			for name, before := range epochsBefore {
+				if after[name] != before+1 {
+					t.Errorf("epoch of %s = %d, want %d (bumped once)", name, after[name], before+1)
+				}
+			}
+			d := clearDetails(t, fx)
+			if d["action"] != "fail_closed" || d["fallback"] != "fail_closed" || d["fallback_counts"] == nil {
+				t.Errorf("audit details = %v, want the fallback and its counts named", d)
+			}
+		})
+	}
+}
+
+// TestJournalQueue_PoisonIsNeverDeletedWithoutTheFallback: a fail-closed clear
+// whose fallback cannot run (here the backup directory is a file, so the journal
+// component cannot be built) fails the command and keeps the row; no key or
+// epoch moves. There is no path that deletes a poison row bare.
+func TestJournalQueue_PoisonIsNeverDeletedWithoutTheFallback(t *testing.T) {
+	fx, _, seq, _ := poisonFx(t, func(live uint64) uint64 { return live + 40 })
+	dir := filepath.Dir(fx.journalPath)
+	must(t, os.RemoveAll(dir))
+	must(t, os.WriteFile(dir, []byte("the batcave is closed"), 0o600))
+	keysBefore, epochsBefore := fx.keyStatuses(t), fx.epochs(t)
+	if _, err := JournalQueueClear(t.Context(), fx.c, seq, "ops"); err == nil {
+		t.Fatal("a fail-closed clear whose fallback could not run succeeded")
+	}
+	if rows := fx.queueRows(t); len(rows) != 1 {
+		t.Errorf("rows after the failed clear = %+v, want the poison row kept", rows)
+	}
+	if !maps.Equal(fx.keyStatuses(t), keysBefore) || !maps.Equal(fx.epochs(t), epochsBefore) {
+		t.Errorf("a failed clear moved keys or epochs")
+	}
+	if recs := fx.auditRecords(t, "core.storage.journal_queue_"); len(recs) != 0 {
+		t.Errorf("a failed clear audited %d record(s)", len(recs))
 	}
 }
