@@ -721,6 +721,19 @@ func TestOptions_FromReleaseReachesCore(t *testing.T) {
 // composedOptions put in the process environment for ResolveBootPaths.
 func storageEnv() string { return storagePathEnv + "=" + os.Getenv(storagePathEnv) }
 
+// listenEnv puts the listener on a free loopback port. A harness that
+// replaces app.Options.Env drops the process environment, and with it the
+// ABO_CORE_HTTP_LISTEN runComposedIn sets, so the listener would bind ABO's
+// compiled default 127.0.0.1:8484 and fail wherever that port is taken (a
+// host running the service, or two packages testing at once).
+const listenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
+
+// bootEnv is the environment a harness that replaces app.Options.Env gives a
+// booting service: the storage path, the free listen port, then extra.
+func bootEnv(extra ...string) []string {
+	return append([]string{storageEnv(), listenEnv}, extra...)
+}
+
 // absEnv is the ABS layers (flag and signing secret, both operator-only) a
 // fixture that replaces app.Options.Env keeps when its config serves the ABS
 // surface: the module reads the flag from the process environment, and the

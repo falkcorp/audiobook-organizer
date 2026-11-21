@@ -348,7 +348,7 @@ func TestFlipPUTParity_DelugeEnvLockRefusesTheWrite(t *testing.T) {
 		o.StateDir = stateDir
 		// The boot sees only its own environment (the sandbox's retired
 		// ABK_STATE_DIR is not in it): the operator names the Deluge URL.
-		o.Env = []string{storageEnv(), "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_URL=http://192.0.2.9:8112"}
+		o.Env = bootEnv("ABO_INTEGRATIONS_DOWNLOAD_DELUGE_URL=http://192.0.2.9:8112")
 	})
 	f := config.Current()
 	err := mustRefuse(t, f, map[string]any{"deluge_web_url": "http://192.0.2.77:8112"})
@@ -380,7 +380,7 @@ func TestFlipPUTParity_DelugePasswordEnvLockRefusesTheWrite(t *testing.T) {
 		c.SetupComplete = false
 	}, nil, func(o *app.Options) {
 		o.StateDir = stateDir
-		o.Env = []string{storageEnv(), "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD=operator-secret"}
+		o.Env = bootEnv("ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD=operator-secret")
 	})
 	f := config.Current()
 	err := mustRefuse(t, f, map[string]any{"deluge_web_password": "another-secret"})
@@ -412,7 +412,7 @@ func TestFlipPUTParity_OpenAIKeyFromTheEcosystemEnvIsEffectiveAndLocked(t *testi
 		c.SetupComplete = false
 	}, nil, func(o *app.Options) {
 		o.StateDir = stateDir
-		o.Env = []string{storageEnv(), "OPENAI_API_KEY=bane"}
+		o.Env = bootEnv("OPENAI_API_KEY=bane")
 	})
 	f := config.Current()
 	if got := f.Snapshot().OpenAIAPIKey; got != "bane" {
