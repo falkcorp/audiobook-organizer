@@ -182,7 +182,7 @@ func aboRestoreFixture(t *testing.T, mk func(string, func(string)) crashmatrix.F
 	_, err = backup.StageRestore(context.Background(), backup.StageRestoreOptions{
 		BackupDir: backups, Filename: info.Filename, Verify: true,
 		StateDir: f.StateDir, DBPath: f.DBDir, BuildID: buildID, RequestedBy: "user:alfred",
-		LegacySuffixes: legacySidecarSuffixes(), VerifyStore: database.VerifyStoreOpens, BeforeStage: database.DiscardHNSWCleanStop,
+		LegacySuffixes: legacySidecarSuffixes(), VerifyStore: database.VerifyStoreOpensWith(StandaloneOptions(database.StandaloneOptions{})), BeforeStage: database.DiscardHNSWCleanStop,
 		Now: crashmatrix.Now,
 	})
 	require.NoError(t, err, "fixture %s: stage", name)
@@ -275,7 +275,7 @@ func (booksStorage) Register(*module.Registrar) error { return nil }
 func aboUnreachedLabels() map[string]string {
 	const (
 		noLocation = "ABO keeps no backup.location.json at R1 (05-backup §5B.3.6 lands with F8), so the swap has none to copy or put back"
-		swapBack   = "ABO's restore stager opens the extracted store with this build's guard before it stages (database.VerifyStoreOpens), " +
+		swapBack   = "ABO's restore stager opens the extracted store with this build's guard before it stages (database.VerifyStoreOpensWith), " +
 			"so no ABO-staged restore holds a store the next boot refuses after the swap; hello's restore-refused fixture breaks the swap-back"
 		badSlot         = "an unusable pending.json (moved aside at P0a); no ABO stager writes one, every one links a complete intent (restorejournal.CreateIntent)"
 		noDataMigration = "books declares no data migration until F3-06, and the boot call that runs one is F2-16's; " +

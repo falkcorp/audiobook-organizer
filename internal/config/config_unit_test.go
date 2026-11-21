@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -306,205 +305,127 @@ func TestConfigValidate(t *testing.T) {
 	})
 }
 
-func TestInitConfigDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
+func TestFactoryDefaultsShipped(t *testing.T) {
+	d := factoryDefaultConfigForTest()
 
 	t.Run("core defaults", func(t *testing.T) {
-		assert.Equal(t, "pebble", AppConfig.DatabaseType)
-		assert.False(t, AppConfig.SetupComplete)
+		assert.Equal(t, "pebble", d.DatabaseType)
+		assert.False(t, d.SetupComplete)
 	})
 
 	t.Run("library organization defaults", func(t *testing.T) {
-		assert.Equal(t, "auto", AppConfig.OrganizationStrategy)
-		assert.False(t, AppConfig.ScanOnStartup)
-		assert.True(t, AppConfig.AutoOrganize)
-		assert.False(t, AppConfig.AutoScanEnabled)
-		assert.Equal(t, 30, AppConfig.AutoScanDebounceSeconds)
-		assert.True(t, AppConfig.CreateBackups)
+		assert.Equal(t, "auto", d.OrganizationStrategy)
+		assert.False(t, d.ScanOnStartup)
+		assert.True(t, d.AutoOrganize)
+		assert.False(t, d.AutoScanEnabled)
+		assert.Equal(t, 30, d.AutoScanDebounceSeconds)
+		assert.True(t, d.CreateBackups)
 	})
 
 	t.Run("metadata defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.WriteBackMetadata)
-		assert.True(t, AppConfig.EmbedCoverArt)
+		assert.False(t, d.WriteBackMetadata)
+		assert.True(t, d.EmbedCoverArt)
 	})
 
 	t.Run("performance defaults", func(t *testing.T) {
 		expectedWorkers := max(runtime.NumCPU(), 4)
-		assert.Equal(t, expectedWorkers, AppConfig.ConcurrentScans)
-		assert.Equal(t, 30, AppConfig.OperationTimeoutMinutes)
+		assert.Equal(t, expectedWorkers, d.ConcurrentScans)
+		assert.Equal(t, 30, d.OperationTimeoutMinutes)
 	})
 
 	t.Run("embedding dedup defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.Embedding.Enabled)
-		assert.Equal(t, "text-embedding-3-large", AppConfig.Embedding.Model)
-		assert.InDelta(t, 0.95, AppConfig.Dedup.BookHighThreshold, 0.001)
-		assert.InDelta(t, 0.85, AppConfig.Dedup.BookLowThreshold, 0.001)
-		assert.InDelta(t, 0.92, AppConfig.Dedup.AuthorHighThreshold, 0.001)
-		assert.InDelta(t, 0.80, AppConfig.Dedup.AuthorLowThreshold, 0.001)
-		assert.True(t, AppConfig.Dedup.AutoMergeEnabled)
-		assert.False(t, AppConfig.Dedup.LLMAutoMergeHighConfidence)
+		assert.True(t, d.Embedding.Enabled)
+		assert.Equal(t, "text-embedding-3-large", d.Embedding.Model)
+		assert.InDelta(t, 0.95, d.Dedup.BookHighThreshold, 0.001)
+		assert.InDelta(t, 0.85, d.Dedup.BookLowThreshold, 0.001)
+		assert.InDelta(t, 0.92, d.Dedup.AuthorHighThreshold, 0.001)
+		assert.InDelta(t, 0.80, d.Dedup.AuthorLowThreshold, 0.001)
+		assert.True(t, d.Dedup.AutoMergeEnabled)
+		assert.False(t, d.Dedup.LLMAutoMergeHighConfidence)
 	})
 
 	t.Run("metadata scoring defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.MetadataScoring.EmbeddingEnabled)
-		assert.InDelta(t, 0.82, AppConfig.MetadataScoring.EmbeddingMinScore, 0.001)
-		assert.InDelta(t, 0.88, AppConfig.MetadataScoring.EmbeddingBestMatch, 0.001)
-		assert.False(t, AppConfig.MetadataScoring.LLMEnabled)
-		assert.InDelta(t, 0.05, AppConfig.MetadataScoring.LLMRerankEpsilon, 0.001)
-		assert.Equal(t, 5, AppConfig.MetadataScoring.LLMRerankTopK)
+		assert.False(t, d.MetadataScoring.EmbeddingEnabled)
+		assert.InDelta(t, 0.82, d.MetadataScoring.EmbeddingMinScore, 0.001)
+		assert.InDelta(t, 0.88, d.MetadataScoring.EmbeddingBestMatch, 0.001)
+		assert.False(t, d.MetadataScoring.LLMEnabled)
+		assert.InDelta(t, 0.05, d.MetadataScoring.LLMRerankEpsilon, 0.001)
+		assert.Equal(t, 5, d.MetadataScoring.LLMRerankTopK)
 	})
 
 	t.Run("API and auth defaults", func(t *testing.T) {
-		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)
-		assert.Equal(t, 1, AppConfig.JSONBodyLimitMB)
-		assert.Equal(t, 10, AppConfig.UploadBodyLimitMB)
-		assert.Equal(t, 10, AppConfig.MasterListRetention)
-		assert.True(t, AppConfig.EnableAuth)
-		assert.False(t, AppConfig.BasicAuthEnabled)
+		assert.Equal(t, 100, d.APIRateLimitPerMinute)
+		assert.Equal(t, 1, d.JSONBodyLimitMB)
+		assert.Equal(t, 10, d.UploadBodyLimitMB)
+		assert.Equal(t, 10, d.MasterListRetention)
+		assert.True(t, d.EnableAuth)
+		assert.False(t, d.BasicAuthEnabled)
 	})
 
 	t.Run("logging defaults", func(t *testing.T) {
-		assert.Equal(t, "info", AppConfig.LogLevel)
+		assert.Equal(t, "info", d.LogLevel)
 	})
 
 	t.Run("maintenance window defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.Maintenance.Enabled)
-		assert.Equal(t, 1, AppConfig.Maintenance.WindowStart)
-		assert.Equal(t, 4, AppConfig.Maintenance.WindowEnd)
-		assert.True(t, AppConfig.Maintenance.DedupRefresh)
-		assert.True(t, AppConfig.Maintenance.DbOptimize)
-		assert.False(t, AppConfig.Maintenance.LibraryScan)
-		assert.False(t, AppConfig.Maintenance.LibraryOrganize)
-		assert.False(t, AppConfig.Maintenance.MetadataRefresh)
+		assert.True(t, d.Maintenance.Enabled)
+		assert.Equal(t, 1, d.Maintenance.WindowStart)
+		assert.Equal(t, 4, d.Maintenance.WindowEnd)
+		assert.True(t, d.Maintenance.DedupRefresh)
+		assert.True(t, d.Maintenance.DbOptimize)
+		assert.False(t, d.Maintenance.LibraryScan)
+		assert.False(t, d.Maintenance.LibraryOrganize)
+		assert.False(t, d.Maintenance.MetadataRefresh)
 	})
 
 	t.Run("iTunes defaults", func(t *testing.T) {
-		assert.Equal(t, "", AppConfig.ITunes.LibraryReadPath)
-		assert.Equal(t, "", AppConfig.ITunes.LibraryITLPath)
+		assert.Equal(t, "", d.ITunes.LibraryReadPath)
+		assert.Equal(t, "", d.ITunes.LibraryITLPath)
 	})
 
 	t.Run("auto-update defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.AutoUpdate.Enabled)
-		assert.Equal(t, "stable", AppConfig.AutoUpdate.Channel)
-		assert.Equal(t, 60, AppConfig.AutoUpdate.CheckMinutes)
+		assert.False(t, d.AutoUpdate.Enabled)
+		assert.Equal(t, "stable", d.AutoUpdate.Channel)
+		assert.Equal(t, 60, d.AutoUpdate.CheckMinutes)
 	})
 
 	t.Run("default metadata sources", func(t *testing.T) {
-		assert.GreaterOrEqual(t, len(AppConfig.MetadataSources), 3)
-		assert.Equal(t, "audible", AppConfig.MetadataSources[0].ID)
-		assert.True(t, AppConfig.MetadataSources[0].Enabled)
-		assert.Equal(t, "openlibrary", AppConfig.MetadataSources[1].ID)
+		require.GreaterOrEqual(t, len(d.MetadataSources), 3)
+		assert.Equal(t, "audible", d.MetadataSources[0].ID)
+		assert.True(t, d.MetadataSources[0].Enabled)
+		assert.Equal(t, "openlibrary", d.MetadataSources[1].ID)
 	})
 
 	t.Run("supported extensions default", func(t *testing.T) {
-		assert.Contains(t, AppConfig.SupportedExtensions, ".m4b")
-		assert.Contains(t, AppConfig.SupportedExtensions, ".mp3")
-		assert.Contains(t, AppConfig.SupportedExtensions, ".flac")
+		assert.Contains(t, d.SupportedExtensions, ".m4b")
+		assert.Contains(t, d.SupportedExtensions, ".mp3")
+		assert.Contains(t, d.SupportedExtensions, ".flac")
 	})
 
 	t.Run("path formatting defaults", func(t *testing.T) {
 		// path_format is gone — folder_naming_pattern + file_naming_pattern are
 		// the only path configuration. The file default carries {track:02d},
 		// which the naming-pattern validator must accept.
-		assert.Equal(t, "{author}/{series}/{title} ({print_year})", AppConfig.FolderNamingPattern)
-		assert.Equal(t, "{title} - {track:02d}", AppConfig.FileNamingPattern)
-		assert.NoError(t, validateNamingPattern(AppConfig.FileNamingPattern))
-		assert.True(t, AppConfig.AutoRenameOnApply)
-		assert.True(t, AppConfig.AutoWriteTagsOnApply)
-		assert.True(t, AppConfig.VerifyAfterWrite)
+		assert.Equal(t, "{author}/{series}/{title} ({print_year})", d.FolderNamingPattern)
+		assert.Equal(t, "{title} - {track:02d}", d.FileNamingPattern)
+		assert.NoError(t, validateNamingPattern(d.FileNamingPattern))
+		assert.True(t, d.AutoRenameOnApply)
+		assert.True(t, d.AutoWriteTagsOnApply)
+		assert.True(t, d.VerifyAfterWrite)
 	})
 
 	t.Run("tools defaults", func(t *testing.T) {
-		assert.Equal(t, "/var/lib/audiobook-organizer/tools", AppConfig.Tools.ManagedDir)
-		assert.Equal(t, tools.ToolModeSystem, AppConfig.Tools.Ollama.Mode)
-		assert.Equal(t, tools.ToolModeSystem, AppConfig.Tools.Fpcalc.Mode)
-		assert.False(t, AppConfig.Tools.AllowPeriodicOllama)
-		assert.Equal(t, 10, AppConfig.Tools.OllamaDebounceMin)
+		assert.Equal(t, "/var/lib/audiobook-organizer/tools", d.Tools.ManagedDir)
+		assert.Equal(t, tools.ToolModeSystem, d.Tools.Ollama.Mode)
+		assert.Equal(t, tools.ToolModeSystem, d.Tools.Fpcalc.Mode)
+		assert.False(t, d.Tools.AllowPeriodicOllama)
+		assert.Equal(t, 10, d.Tools.OllamaDebounceMin)
 	})
 }
 
-func TestInitConfigDatabaseTypeNormalization(t *testing.T) {
-	t.Run("sqlite3 normalized to sqlite", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("database_type", "sqlite3")
-		InitConfig()
-		assert.Equal(t, "sqlite", AppConfig.DatabaseType)
-	})
-
-	t.Run("empty normalized to pebble", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("database_type", "")
-		InitConfig()
-		assert.Equal(t, "pebble", AppConfig.DatabaseType)
-	})
-}
-
-func TestInitConfigITunesBackwardCompat(t *testing.T) {
-	t.Run("old itunes_library_itl_path maps to write path", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("itunes_library_itl_path", "/old/path.itl")
-		InitConfig()
-		assert.Equal(t, "/old/path.itl", AppConfig.ITunes.LibraryITLPath)
-	})
-
-	t.Run("old itunes_library_xml_path maps to read path", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("itunes_library_xml_path", "/old/library.xml")
-		InitConfig()
-		assert.Equal(t, "/old/library.xml", AppConfig.ITunes.LibraryReadPath)
-	})
-
-	t.Run("new path takes precedence over old", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("itunes_library_write_path", "/new/path.itl")
-		viper.Set("itunes_library_itl_path", "/old/path.itl")
-		InitConfig()
-		assert.Equal(t, "/new/path.itl", AppConfig.ITunes.LibraryITLPath)
-	})
-}
-
-// A configured ITL path no longer turns anything on: iTunes write-back was
-// removed on 2026-10-07, and the old rule that auto-enabled it whenever
-// library_write_path was set (overriding ITUNES_WRITE_BACK_ENABLED=false in
-// prod) went with it. The removed keys still load without error.
-func TestInitConfigITLPathEnablesNoWriteBack(t *testing.T) {
-	viper.Reset()
-	t.Setenv("ITUNES_WRITE_BACK_ENABLED", "true")
-	t.Setenv("ITUNES_AUTO_WRITE_BACK", "true")
-	t.Setenv("ITUNES_WRITEBACK_DRYRUN", "true")
-	viper.Set("itunes_library_write_path", "/some/path.itl")
-	viper.Set("itl_write_back_enabled", true)
-	viper.Set("itunes.write_back_enabled", true)
-	viper.Set("itunes.auto_write_back", true)
-	viper.Set("itunes.write_back_dry_run", true)
-	InitConfig()
-	assert.Equal(t, "/some/path.itl", AppConfig.ITunes.LibraryITLPath)
+// iTunes write-back was removed on 2026-10-07; the config carries no switch for it.
+func TestITunesConfigHasNoWriteBackSwitch(t *testing.T) {
 	_, ok := reflect.TypeFor[ITunesConfig]().FieldByName("WriteBackEnabled")
 	assert.False(t, ok, "ITunesConfig must carry no write-back switch")
-}
-
-func TestInitConfigOpenLibraryDumpDir(t *testing.T) {
-	t.Run("auto-set when root_dir present", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("root_dir", "/media/audiobooks")
-		InitConfig()
-		assert.Equal(t, "/media/audiobooks/openlibrary-dumps", AppConfig.OpenLibraryDumpDir)
-	})
-
-	t.Run("not set when root_dir empty", func(t *testing.T) {
-		viper.Reset()
-		InitConfig()
-		assert.Equal(t, "", AppConfig.OpenLibraryDumpDir)
-	})
-
-	t.Run("explicit value preserved", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("root_dir", "/media/audiobooks")
-		viper.Set("openlibrary_dump_dir", "/custom/dumps")
-		InitConfig()
-		assert.Equal(t, "/custom/dumps", AppConfig.OpenLibraryDumpDir)
-	})
 }
 
 func TestResetToDefaultsPreservesPaths(t *testing.T) {

@@ -228,7 +228,7 @@ func newTableImporter(real config.Importer, target rowStore) *tableImporter {
 				ti.allowed[t.Path] = true
 				if def, ok := headDefault(r.Head); ok && !r.Container {
 					if raw, err := json.Marshal(def); err == nil {
-						if out, _, err := Convert(t.Convert, raw); err == nil {
+						if out, _, err := Convert(t, raw); err == nil {
 							ti.defaults[t.Path] = out
 						}
 					}

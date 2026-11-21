@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
-
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 )
 
@@ -62,49 +60,16 @@ func TestSupportedExtensionSetHonoursAConfiguredList(t *testing.T) {
 }
 
 // The shipped default must be the canonical list, not a copy that can drift.
-func TestInitConfigSeedsTheCanonicalDefault(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	got := Snapshot().SupportedExtensions
+func TestFactoryDefaultsSeedTheCanonicalExtensions(t *testing.T) {
+	got := factoryDefaultConfigForTest().SupportedExtensions
 	if len(got) != len(audioext.Default()) {
-		t.Fatalf("InitConfig seeded %d extensions, want %d",
+		t.Fatalf("factory defaults seeded %d extensions, want %d",
 			len(got), len(audioext.Default()))
 	}
 	joined := strings.Join(got, " ")
 	for _, ext := range []string{".aax", ".aaxc", ".aiff", ".mka", ".oga"} {
 		if !strings.Contains(joined, ext) {
-			t.Errorf("InitConfig default is missing %q", ext)
+			t.Errorf("factory default is missing %q", ext)
 		}
 	}
-}
-
-// 🔴 The viper hole this change closed. `supported_extensions: []` in
-// config.yaml makes viper.IsSet true and GetStringSlice empty, so the old
-// `if viper.IsSet(...)` guard wrote an empty list into AppConfig. Nothing
-// errored; the library simply stopped recognising files. The guard is now
-// len > 0, matching what internal/config/persistence.go already did.
-func TestInitConfigIgnoresAnExplicitlyEmptyExtensionList(t *testing.T) {
-	viper.Reset()
-	viper.Set("supported_extensions", []string{})
-	InitConfig()
-	got := Snapshot().SupportedExtensions
-	if len(got) == 0 {
-		t.Fatal("an empty supported_extensions was written straight into AppConfig; " +
-			"the len > 0 guard is gone")
-	}
-	if !audioext.NewSet(got)[".aax"] {
-		t.Fatalf("expected the compiled-in default after an empty list, got %v", got)
-	}
-	viper.Reset()
-}
-
-func TestInitConfigHonoursANonEmptyExtensionList(t *testing.T) {
-	viper.Reset()
-	viper.Set("supported_extensions", []string{".mp3", ".m4b"})
-	InitConfig()
-	got := Snapshot().SupportedExtensions
-	if len(got) != 2 {
-		t.Fatalf("expected the 2 configured extensions, got %v", got)
-	}
-	viper.Reset()
 }
