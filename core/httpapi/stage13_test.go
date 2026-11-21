@@ -192,6 +192,11 @@ func TestStage13_Decision(t *testing.T) {
 		{"Owner required refuses an admin without assurance", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Guards: owner, Principal: admin}, opts, s13Want{403, "owner_required", "", false}},
 		{"Owner required admits the owner", AuthzRequest{Perm: rbac.Need("books:view"), Guards: owner, Principal: s13Owner(cat, "books:view")}, opts, s13Want{}},
 		{"Owner required: the owner still needs Perm", AuthzRequest{Perm: rbac.Need("books:delete"), Guards: owner, Principal: s13Owner(cat, "books:view")}, opts, s13Want{403, "permission_denied", "books:delete", false}},
+		// Today an identity extension's method never passes MayChangeCredentials
+		// (core methods only; auth exposes no MethodSpec lookup), so the
+		// Access-verified owner is refused a route that is Interactive as well as
+		// Owner. Pinned so B4 sees it; reported in the PR, not widened here.
+		{"Interactive plus Owner refuses an extension owner", AuthzRequest{Perm: rbac.Need("books:view"), Guards: Guards{Interactive: true, Owner: true}, Principal: s13Owner(cat, "books:view")}, opts, s13Want{403, "interactive_required", "", false}},
 		{"Owner fallback refuses a key admin", AuthzRequest{Perm: rbac.Need("books:view"), Guards: owner, Principal: s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin)}, notRequired, s13Want{403, "interactive_required", "", false}},
 		{"Owner fallback refuses a non-admin session", AuthzRequest{Perm: rbac.Need("books:view"), Guards: owner, Principal: robin}, notRequired, s13Want{403, "permission_denied", "core:admin", false}},
 		{"Owner fallback refuses auth-disabled", AuthzRequest{Perm: rbac.Need("books:view"), Guards: owner, Principal: s13AuthOff(cat)}, notRequired, s13Want{403, "interactive_required", "", false}},
