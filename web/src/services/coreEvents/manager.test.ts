@@ -23,6 +23,7 @@ const LOG = 'core.task.log-appended.v1';
 function fakeVisibility() {
   let visible = true;
   const listeners = new Set<() => void>();
+  const resumeListeners = new Set<() => void>();
   const src: VisibilitySource = {
     get visible() {
       return visible;
@@ -31,6 +32,10 @@ function fakeVisibility() {
       listeners.add(l);
       return () => listeners.delete(l);
     },
+    onResume(l) {
+      resumeListeners.add(l);
+      return () => resumeListeners.delete(l);
+    },
   };
   return {
     src,
@@ -38,8 +43,17 @@ function fakeVisibility() {
       visible = v;
       listeners.forEach((l) => l());
     },
+    /** The browser's 'online' event. */
+    resume() {
+      [...resumeListeners].forEach((l) => l());
+    },
+    resumeListenerCount: () => resumeListeners.size,
   };
 }
+
+// The machine sleeps: the wall clock runs on, performance.now (and every fake timer) does
+// not. vi.setSystemTime moves Date alone, which is exactly that.
+const sleepFor = (ms: number) => vi.setSystemTime(Date.now() + ms);
 
 const tick = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
 
@@ -147,6 +161,95 @@ describe('connection lifecycle', () => {
     expect(server.calls).toHaveLength(1);
     await tick(29000);
     expect(server.calls).toHaveLength(2);
+  });
+
+  // #4813 r2 m-a: performance.now does not advance in sleep on macOS Chrome and Safari, so a
+  // hold recorded before a lid close would stand for its whole length after the wake. The
+  // awake clock (clock.ts) counts the sleep; holds are re-read, never dropped.
+  describe('a machine that slept through a hold', () => {
+    async function refused() {
+      const ctx = make();
+      ctx.server.answer(() => problemResponse(429, 'rate_limited', 'x', { 'Retry-After': '600' }));
+      ctx.server.openStream();
+      es.subscribe(RUN, () => {});
+      await tick();
+      expect(ctx.server.calls).toHaveLength(1);
+      return ctx;
+    }
+
+    it('a hidden tab that wakes after the wait connects at once', async () => {
+      const { server, vis } = await refused();
+      vis.set(false);
+      await tick();
+      sleepFor(11 * 60 * 1000);
+      vis.set(true);
+      await tick();
+      expect(server.calls).toHaveLength(2);
+    });
+
+    it('a visible tab waiting on a timer is woken by "online" and connects at once', async () => {
+      const { server, vis } = await refused();
+      sleepFor(11 * 60 * 1000);
+      await tick(1000); // the timer has barely run: it slept too
+      expect(server.calls).toHaveLength(1);
+      vis.resume();
+      await tick();
+      expect(server.calls).toHaveLength(2);
+    });
+
+    it('a sleep shorter than the hold only shortens it: "online" does not bypass a standing Retry-After', async () => {
+      const { server, vis } = await refused();
+      sleepFor(4 * 60 * 1000);
+      vis.resume();
+      await tick();
+      expect(server.calls).toHaveLength(1);
+      // 6 minutes of the 10 are left on the awake clock, however long the timers ran.
+      sleepFor(5 * 60 * 1000 + 59 * 1000);
+      vis.resume();
+      await tick();
+      expect(server.calls).toHaveLength(1);
+      await tick(1000);
+      expect(server.calls).toHaveLength(2);
+    });
+
+    it('"online" with no sleep and no elapsed wait changes nothing, and a hidden flip still honours the hold', async () => {
+      const { server, vis } = await refused();
+      vis.resume();
+      vis.set(false);
+      await tick();
+      vis.set(true);
+      vis.resume();
+      await tick(599000);
+      expect(server.calls).toHaveLength(1);
+      await tick(1000);
+      expect(server.calls).toHaveLength(2);
+    });
+
+    it('a sleep also spends the tab-wide hold that a refused stream put on a keyed one', async () => {
+      const { server } = await refused();
+      sleepFor(11 * 60 * 1000);
+      server.openStream();
+      es.subscribe(RUN, () => {}, { stream: 'keyed', key: 'run-1' });
+      await tick();
+      expect(server.calls.at(-1)!.url).toContain('key=run-1');
+    });
+
+    it('a wall-clock step back stretches nothing', async () => {
+      const { server, vis } = await refused();
+      vi.setSystemTime(Date.now() - 5 * 60 * 1000);
+      await tick(599000);
+      expect(server.calls).toHaveLength(1);
+      vis.resume();
+      await tick(1000);
+      expect(server.calls).toHaveLength(2);
+    });
+
+    it('dispose removes the resume listener', () => {
+      const { vis } = make();
+      expect(vis.resumeListenerCount()).toBe(1);
+      es.dispose();
+      expect(vis.resumeListenerCount()).toBe(0);
+    });
   });
 
   it('runs the resync handlers when a hidden tab reopens, and on a first open with no resume id', async () => {
@@ -683,6 +786,18 @@ describe('one refetch per reopen (manager coalescing)', () => {
       expect(seen).toEqual([reason]);
     });
   }
+
+  // #4813 r2 n-c: the tests above deliver the open and the reset in one task, so they also
+  // pass with a window of 0 (the first call's timer has not fired yet). The server can
+  // write the owed reset a read later: only the coalescing window merges that.
+  it('a reset that arrives a moment after the open, inside the window, is still one call', async () => {
+    const { seen, s2 } = await hiddenReopen();
+    s2.control(TOPIC_OPENED, {});
+    await tick(DEFAULT_RESYNC_COALESCE_MS - 100);
+    s2.control(TOPIC_RESET, { reason: 'gap' });
+    await tick(DEFAULT_RESYNC_MIN_INTERVAL_MS);
+    expect(seen).toEqual(['gap']);
+  });
 
   it('an overflow and a gap inside the window are still one call', async () => {
     const { seen, s2 } = await hiddenReopen();

@@ -160,6 +160,12 @@ tell the coordinator.
     EventSource mock and the health mocks at `:473,1837`); `legacy_manifest.go`; `toplevel_auth_chain.go`; the reach tests;
     every wiring file. Whichever lands second rebases these lines; neither PR may reformat them.
 
+16. **The Library consumer clears the book-change batcher when it refetches** *(new, #4813 r1/r2 m-b)*. `subscribeBookChanges` no
+    longer clears on a resync (a resync reaches the consumer up to 5 s after the reset, so the adapter cannot know the moment).
+    The Library consumer must call `useBookChanges().clear()` as it issues its own REST refetch, or what was pending in the
+    250 ms window is delivered again on top of the refetch. Calling it from inside the batch handler is supported: it also
+    drops the rest of the flush that is delivering (`web/src/services/coreEvents/bookChanges.ts`).
+
 **Smaller corrections.** The re-verify grep `OutboxConsumers\|OutboxHandler` expects 0 and gets 1 (a comment at
 `core/module/validation.go:94`): grep the type members. `TestJournal_RequiresSystemManage` is F5-19's
 (`core/internal/loghttp/permissions_test.go`), not F6-05's. The F6-04 cell bodies exist after each `t.Skip`

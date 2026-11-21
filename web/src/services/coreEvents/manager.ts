@@ -20,12 +20,12 @@
 
 import {
   createStreamConnection,
-  monotonicNow,
   type BackoffState,
   type ConnectionDeps,
   type ServerHold,
   type StreamConnection,
 } from './connection';
+import { createAwakeClock } from './clock';
 import {
   topicMatches,
   type ClosedListener,
@@ -79,6 +79,14 @@ export interface VisibilitySource {
   readonly visible: boolean;
   /** Subscribe to changes; returns the unsubscribe. */
   onChange(listener: () => void): () => void;
+  /**
+   * Subscribe to "the machine or its network is back" (the document source uses window
+   * 'online'); returns the unsubscribe. A stream that is waiting out a backoff or a hold
+   * on a timer is woken to re-read its deadlines, because the timer did not run while a
+   * laptop slept (a hidden tab needs no wake: becoming visible reopens it). The holds
+   * themselves are never dropped, only re-read on the awake clock (clock.ts).
+   */
+  onResume?(listener: () => void): () => void;
 }
 
 export interface EventStreamOptions {
@@ -147,13 +155,20 @@ function documentVisibility(): VisibilitySource {
       document.addEventListener('visibilitychange', listener);
       return () => document.removeEventListener('visibilitychange', listener);
     },
+    onResume(listener) {
+      if (typeof window === 'undefined') return () => {};
+      window.addEventListener('online', listener);
+      return () => window.removeEventListener('online', listener);
+    },
   };
 }
 
 export function createEventStream(options: EventStreamOptions = {}): EventStream {
   const keyedOnly = new Set(options.keyedOnlyTopics ?? DEFAULT_KEYED_ONLY_TOPICS);
-  // Monotonic, like the connections' deadlines: a wall-clock step moves no wait.
-  const now = options.deps?.now ?? monotonicNow;
+  // One awake clock for the manager and every connection it makes (clock.ts): the holds and
+  // backoffs below are recorded on it, so all of them must read it. A wall-clock step back
+  // moves no wait, and the time a laptop slept counts toward one.
+  const now = options.deps?.now ?? createAwakeClock();
   const visibility = options.visibility ?? documentVisibility();
   const subs = new Set<Sub>();
   const resyncSubs = new Set<ResyncSub>();
@@ -281,7 +296,7 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
       baseUrl: options.baseUrl,
       connectTimeoutMs: options.connectTimeoutMs,
       idleTimeoutMs: options.idleTimeoutMs,
-      deps: options.deps,
+      deps: { ...options.deps, now },
       backoff: backoffFor(streamKey),
       serverHold,
     });
@@ -334,6 +349,17 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
     for (const k of connections.keys()) signatures.delete(k);
     sync();
   });
+
+  // A wait timer that was sleeping while the machine slept fires late: restart every
+  // stream that is waiting so it re-reads its backoff and the tab's hold on the awake
+  // clock. Nothing is cleared, so a Retry-After that has not really elapsed still holds.
+  const stopResume =
+    visibility.onResume?.(() => {
+      if (disposed) return;
+      for (const c of connections.values()) {
+        if (c.status.state === 'reconnecting') c.restart();
+      }
+    }) ?? (() => {});
 
   return {
     subscribe(topic, handler, opts = {}) {
@@ -392,6 +418,7 @@ export function createEventStream(options: EventStreamOptions = {}): EventStream
     dispose() {
       disposed = true;
       stopVisibility();
+      stopResume();
       subs.clear();
       holds = 0;
       for (const r of [...resyncSubs]) stopResync(r);

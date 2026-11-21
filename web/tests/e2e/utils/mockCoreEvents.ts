@@ -19,8 +19,14 @@
 //    not tripped and other streams keep running). Once one has escaped, every call on the
 //    handle throws naming it, so the test fails on that message rather than a timeout.
 //
-// Call mockCoreEvents(page) once per Page, before the first page.goto; a second call on
-// the same Page throws. The shim's state is per DOCUMENT, not per Page: the init script
+// Call mockCoreEvents(page) before the first page.goto. It is safe to call more than once
+// per Page, which the flip needs: the helpers (mockEventSource and friends) install it from
+// several places and several specs call them twice per page. The first call installs; every
+// later call on the same Page, even one that races the first, returns the SAME handle. A
+// later call that names different options throws, because the shim is already configured;
+// one with no options, or the same ones, reuses it. If the first call's setup fails the page
+// is half mocked, so every later call rejects with that same error rather than adding a
+// second init script whose config the shim would ignore. The shim's state is per DOCUMENT, not per Page: the init script
 // runs again in every document the page loads, so after a navigation or reload the
 // configured refusals answer that document's first requests again, requests() lists only
 // the current document's requests, and any frame sent before is gone. A popup or another
@@ -277,18 +283,39 @@ export interface CoreEventsMock {
   assertNoUnmockedRequests(): void;
 }
 
-const mockedPages = new WeakSet<Page>();
+/** One entry per Page: the setup (shared by every call) and the options it was made with. */
+const mockedPages = new WeakMap<Page, { key: string; handle: Promise<CoreEventsMock> }>();
 
-export async function mockCoreEvents(page: Page, options: MockCoreEventsOptions = {}): Promise<CoreEventsMock> {
-  // A second init script would be ignored by the shim (installed once per document), and
-  // a second route would shadow the first handle's guard: refuse instead of half working.
-  if (mockedPages.has(page)) throw new Error('mockCoreEvents: this page is already mocked; call it once per Page');
-  mockedPages.add(page);
-  const config: CoreEventsShimConfig = {
+function configOf(options: MockCoreEventsOptions): CoreEventsShimConfig {
+  return {
     autoOpened: options.autoOpened ?? true,
     refusals: options.refusals ?? [],
     heartbeatMs: options.heartbeatMs ?? 15000,
   };
+}
+
+export function mockCoreEvents(page: Page, options: MockCoreEventsOptions = {}): Promise<CoreEventsMock> {
+  const config = configOf(options);
+  const key = JSON.stringify(config);
+  const prior = mockedPages.get(page);
+  if (prior) {
+    // The shim is installed once per document and ignores a second config: say so instead of
+    // letting the second caller think its refusals or heartbeat took effect.
+    if (Object.keys(options).length > 0 && key !== prior.key) {
+      return Promise.reject(
+        new Error('mockCoreEvents: this page is already mocked with different options; configure it in the first call'),
+      );
+    }
+    return prior.handle;
+  }
+  // Recorded before anything awaits, so two calls that race share one setup. A failed setup
+  // stays recorded: the page may hold an init script, and a retry would add a second.
+  const handle = setUp(page, config);
+  mockedPages.set(page, { key, handle });
+  return handle;
+}
+
+async function setUp(page: Page, config: CoreEventsShimConfig): Promise<CoreEventsMock> {
   await page.addInitScript(installCoreEventsShim, config);
 
   const unmocked: string[] = [];
