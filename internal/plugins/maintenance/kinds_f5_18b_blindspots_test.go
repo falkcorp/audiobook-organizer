@@ -111,9 +111,10 @@ func TestF518b_BlindSpot_KeyCreatedAndDeletedInOneWindow(t *testing.T) {
 }
 
 // The single-resource stamp the gate replaces: one tag per write admits a call
-// whose row is wider than the tag. ModifyBook writes books, authors, indexes and
-// metadata_cache (its shared row); stamped with books alone a kind that
-// declares only books is let through.
+// whose row is wider than the tag. ModifyBook writes books, indexes and
+// metadata_cache (its shared row; F5-18j narrowed it, authors left it when the
+// store stopped staging author_books_legacy rows); stamped with books alone a
+// kind that declares only books is let through.
 func TestF518b_OneTagPerWriteAdmitsWhatTheWholeRowRefuses(t *testing.T) {
 	declared := []entity.Ref{tasks.Res(writer.Module, string(ops.ResBooks))}
 	legacy := tasks.Write{Name: "books.ModifyBook", Resource: declared[0], Subject: tasks.ResID(writer.Module, "books", "bk")}
@@ -124,9 +125,10 @@ func TestF518b_OneTagPerWriteAdmitsWhatTheWholeRowRefuses(t *testing.T) {
 	g, w := f518bGated(t, s, ops.ResBooks)
 	_, err := g.ModifyBook("bk", nil)
 	require.ErrorIs(t, err, tasks.ErrOutsideEffects)
-	for _, missing := range []string{"authors", "indexes", "metadata_cache"} {
+	for _, missing := range []string{"indexes", "metadata_cache"} {
 		require.Contains(t, err.Error(), "books/"+missing)
 	}
+	require.NotContains(t, err.Error(), "books/authors", "F5-18j took authors out of the ModifyBook row")
 	require.Empty(t, w.Writes())
 }
 

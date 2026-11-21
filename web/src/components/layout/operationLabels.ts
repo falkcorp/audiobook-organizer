@@ -8,16 +8,22 @@
 // ID, because the def-id tail is not unique: acoustid.scan, reconcile.scan and
 // library.scan all end in "scan", and a table keyed on the tail gave all three the
 // label "Library Scan". operationLabels.core.test.ts checks this table against every
-// def id the kind-rename table (internal/books/cutover/kindrename) knows, registered,
-// retired and former alike: every def has a label, no two defs share one, and no key
+// def id the kind-rename table (internal/books/cutover/kindrename) knows that is
+// registered or retired: every such def has a label, no two defs share one, and no key
 // names a def that does not exist.
+//
+// A former id (a def renamed with a FormerIDs alias) has NO key here, on purpose: code
+// never names an alias (internal/server TestOpIDs_CodeNeverNamesAnAlias). A stored
+// operation row that carries a former id needs none, because the server resolves it
+// to the renamed def and sends that def's display_name, which operationDisplayName
+// prefers; the test pins that no former id is a key.
 //
 // A label is the registered def's DisplayName, which is what the server sends as
 // display_name, except where that name is shared with another def or where an older
 // label is also the books task-kind label (modules/books/layout/taskKinds.ts); those
 // keep the wording users already see.
 
-/** Def id to label: registered defs, retired defs, and former ids. */
+/** Def id to label: registered defs and retired defs (never a former id). */
 export const OPERATION_DEF_LABELS: Readonly<Record<string, string>> = {
   // Registered defs.
   'acoustid.backfill': 'AcoustID backfill',
@@ -279,29 +285,6 @@ export const OPERATION_DEF_LABELS: Readonly<Record<string, string>> = {
   'maintenance.repair-missing-files': 'Repair Missing Files',
   'maintenance.vacuum-activity-db': 'Vacuum Activity DB',
   'scheduler.isbn-enrichment': 'ISBN Enrichment (scheduled)',
-
-  // Former ids (FormerIDs aliases). The server resolves a stored former id to the
-  // renamed def's display_name, so these only matter where it cannot; each carries the
-  // label of the def it was renamed to.
-  'library.optimize': 'Library optimize sweep',
-  'maintenance.dedup-llm-review': 'Dedup AI Review',
-  'maintenance.itunes-clone-into-library': 'Clone iTunes-only books into the library',
-  'maintenance.itunes-heal': 'iTunes path heal',
-  'maintenance.itunes-playlist-import': 'Import iTunes smart (dynamic) playlists',
-  'maintenance.itunes-regroup': 'Re-group fragmented/over-merged iTunes books in place',
-  'maintenance.metadata-upgrade': 'Metadata Upgrade',
-  'maintenance.series-normalize': 'Series Name Normalization',
-  'maintenance.series-prune': 'Series Prune',
-  'scheduler.author-split-scan': 'Author split scan',
-  'scheduler.cleanup-old-backups': 'Clean old backup files',
-  'scheduler.db-optimize': 'Optimize database',
-  'scheduler.dedup-llm-review': 'Dedup AI Review',
-  'scheduler.metadata-refresh': 'Metadata refresh scan',
-  'scheduler.purge-deleted': 'Purge soft-deleted books past retention',
-  'scheduler.resolve-production-authors': 'Resolve production company authors',
-  'scheduler.temp-file-cleanup': 'Clean orphaned temp files',
-  'scheduler.tombstone-cleanup': 'Resolve author tombstone chains',
-  'scheduler.trash-cleanup': 'Purge trashed book versions',
 
   // No OperationDef is registered for the activity log's Pebble to SQLite migration on
   // purpose (a def would put a Run button on it, and a second concurrent backfill over

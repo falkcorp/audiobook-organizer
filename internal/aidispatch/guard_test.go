@@ -107,9 +107,21 @@ const guardAllowlistCeiling = 14
 //     subdirectory of it are exempt, a sibling such as openaix/ is not, and the
 //     rest of core/ stays under every rule here, so a raw .Chat.Completions
 //     call or an /api/tags literal anywhere else in core still fails.
+//   - internal/books/adapters/whisper is books' own pair of transcription
+//     adapters of core's ai kind (books.whisper_server, books.whisper_local;
+//     F7-09 T4). Like core's OpenAI adapter it is a transport beneath the
+//     router: it implements ai.Backend and ai.Transcriber, and the router (the
+//     dispatcher's successor) owns pacing, failover and the bench, while the
+//     adapter only speaks the worker's wire protocol, so it must hold the
+//     /transcribe path literals. It is the transport that replaces
+//     internal/transcribe/remote.go, which stays a ratchet entry until the F7
+//     flip deletes it. The exemption is the directory subtree, and
+//     TestGuard_NoAIBackendCallsOutsideTheDispatcher fails when an exempt
+//     directory stops bypassing anything, so it cannot go stale unnoticed.
 var guardExemptDirs = []string{
 	"internal/aidispatch/",
 	"core/integrations/ai/openai/",
+	"internal/books/adapters/whisper/",
 }
 
 var guardSkipDirs = map[string]bool{
@@ -163,8 +175,14 @@ func TestGuard_NoAIBackendCallsOutsideTheDispatcher(t *testing.T) {
 	}
 
 	var bad []string
+	exemptUsed := map[string]bool{}
 	for rel, v := range found {
 		if guardIsExempt(rel) {
+			for _, d := range guardExemptDirs {
+				if strings.HasPrefix(rel, d) {
+					exemptUsed[d] = true
+				}
+			}
 			continue
 		}
 		if _, ok := guardAllowlist[rel]; ok {
@@ -177,6 +195,14 @@ func TestGuard_NoAIBackendCallsOutsideTheDispatcher(t *testing.T) {
 		t.Errorf("%d file(s) call an AI backend without internal/aidispatch. Route the work through "+
 			"aidispatch.Call with a registered capability; do NOT add to guardAllowlist:\n\t%s",
 			len(bad), strings.Join(bad, "\n\t"))
+	}
+
+	// An exempt directory that no file in it bypasses through is a stale
+	// exemption: it would silently admit a future bypass added there.
+	for _, d := range guardExemptDirs {
+		if !exemptUsed[d] {
+			t.Errorf("guardExemptDirs entry %q no longer holds any backend call; delete the exemption", d)
+		}
 	}
 
 	// Ratchet: an entry whose file no longer bypasses anything must be removed
@@ -248,6 +274,11 @@ func TestGuard_ExemptDirsAreExact(t *testing.T) {
 		"core/archtest/ai_sdk.go":                      false,
 		"internal/ai/openai_batch.go":                  false, // ratchet entry, not an exemption
 		"internal/aidispatchx/dispatch.go":             false,
+		"internal/books/adapters/whisper/server.go":    true,
+		"internal/books/adapters/whisper/sub/x.go":     true,  // the directory subtree
+		"internal/books/adapters/whisperx/server.go":   false, // a look-alike sibling
+		"internal/books/adapters/metadata/x.go":        false, // the other adapters stay under every rule
+		"internal/transcribe/remote.go":                false, // ratchet entry, not an exemption
 		"cmd/dedup_bench.go":                           false,
 		"other/core/integrations/ai/openai/adapter.go": false, // anchored at the repo root
 	} {
