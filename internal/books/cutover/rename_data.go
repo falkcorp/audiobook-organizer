@@ -219,6 +219,7 @@ var subRows = []subRow{
 	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.enabled", "")}},
 	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.start", "")}},
 	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.end", "")}},
+	{head: "maintenance.purge_old_logs", class: ClassKey, targets: []Target{tkc("core.log.journal.prune_in_window", "")}, note: "HEAD's log purge is core's core.log.journal.prune, whose window run this gates (books has no key for it)"},
 	{head: "ai_backend.embedding_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
 	{head: "ai_backend.llm_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
 	{head: "ai_backend.local_base_url", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
@@ -269,7 +270,9 @@ const HeadMaintenanceWindow = "nightly"
 // Whether it runs there on a given night is still the maintenance toggle's
 // call. Six of them are HEAD scheduled.* entries, whose rename-table targets
 // carry the placement; books' section defaults place every key it declares
-// for one of them (purge_old_logs is core's, with no books key).
+// for one of them (purge_old_logs is core's, with no books key: kernel's
+// core.log.schedules.journal_prune default places it at position 9, and
+// maintenance.purge_old_logs carries into core.log.journal.prune_in_window).
 var headMaintenanceOrder = map[string]int{
 	"reconcile":                 0,
 	"dedup_refresh":             1,

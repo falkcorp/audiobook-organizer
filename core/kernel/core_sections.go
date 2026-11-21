@@ -269,8 +269,11 @@ func coreSectionsWith(d CoreDefaults) []any {
 			MinLevel:      "info",
 			RetentionDays: 90,
 			QueueSize:     4096,
+			PruneInWindow: true,
 		}),
-		config.Define("core.log.schedules", logjournal.Schedules{JournalPrune: scheduleEvery(24 * time.Hour)}),
+		config.Define("core.log.schedules", logjournal.Schedules{
+			JournalPrune: scheduleEveryInWindow(168*time.Hour, tasks.NightlyWindow().Name, journalPruneOrder),
+		}),
 
 		// 05-metadata M1.7 and M2.7
 		config.Define("core.integrations", integrationsSettings{

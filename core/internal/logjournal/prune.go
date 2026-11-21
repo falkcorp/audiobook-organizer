@@ -22,8 +22,9 @@ const (
 	KindPrune tasks.Kind = "core.log.journal.prune"
 
 	// PruneScheduleKey is core.log.schedules.journal_prune: the field
-	// Schedules.JournalPrune types, default every 24h, re-read every poll.
-	// This file only passes it to tasks.ScheduleFromConfig.
+	// Schedules.JournalPrune types, default every 168h and a member of the
+	// nightly window, re-read every poll. This file only passes it to
+	// tasks.ScheduleFromConfig.
 	PruneScheduleKey = string(SchedulesPath) + ".journal_prune"
 
 	// PruneTimeout bounds one pass. Each call is one bounded batch and stamps
@@ -58,6 +59,14 @@ type PruneResult struct {
 // settings yields a definition whose Run is nil, which tasks.Problems reports,
 // so registration fails closed. now is the clock (nil = time.Now).
 //
+// The schedule has two gates, both read at each poll and window opening (so
+// they are live). A non-positive retention_days closes the interval and the
+// window alike (IntervalWhen + WindowWhen): the clock freezes while closed
+// and the first poll after it reopens runs once, as HEAD's purge, whose
+// IsEnabled (retention above 0) decided at start whether it had a timer at
+// all. PruneInWindow off closes the window alone. A closed gate starts
+// nothing, where a run would only note "every record is kept".
+//
 // A pass calls store.Prune with the cutoff now minus retention_days until a
 // call reports no more records, each call one bounded batch of at most
 // MaxPruneBatch. retention_days 0 keeps everything, and a journal that is off
@@ -88,8 +97,23 @@ func PruneDefinition(store log.JournalStore, settings func() Settings, now func(
 		Resume:   tasks.ResumeFromZero,
 		Priority: tasks.PriorityLow,
 		Timeout:  PruneTimeout,
-		Schedule: tasks.ScheduleFromConfig(PruneScheduleKey).Live(),
+		Schedule: pruneSchedule(settings),
 		Run:      run,
+	})
+}
+
+// pruneSchedule is PruneDefinition's schedule: core.log.schedules.journal_prune,
+// Live, with the retention and window gates over settings (none without
+// settings, whose definition has no Run and fails registration).
+func pruneSchedule(settings func() Settings) *tasks.Schedule {
+	s := tasks.ScheduleFromConfig(PruneScheduleKey).Live()
+	if settings == nil {
+		return s
+	}
+	retained := func() bool { return settings().RetentionDays > 0 }
+	return s.IntervalWhen(retained).WindowWhen(func() bool {
+		st := settings()
+		return st.RetentionDays > 0 && st.PruneInWindow
 	})
 }
 

@@ -36,6 +36,7 @@ target core.http.trusted_proxies
 target core.library.mappings
 target core.library.protected_paths
 target core.library.roots
+target core.log.journal.prune_in_window
 target core.log.journal.retention_days
 target core.log.level
 target core.metrics.environment
@@ -62,6 +63,7 @@ coined core.auth.login.saturated_rate
 coined core.auth.oidc.github.client_secret
 coined core.auth.oidc.google.client_secret
 coined core.http.public_base_url
+coined core.log.journal.prune_in_window
 verdict core.ai.journal_retention warn
 verdict core.auth.bootstrap.key_ttl refuse
 verdict core.auth.bootstrap.readonly_key.enabled refuse
@@ -90,6 +92,7 @@ verdict core.http.trusted_proxies refuse
 verdict core.library.mappings warn
 verdict core.library.protected_paths refuse
 verdict core.library.roots refuse
+verdict core.log.journal.prune_in_window warn
 verdict core.log.journal.retention_days warn
 verdict core.log.level warn
 verdict core.metrics.environment warn

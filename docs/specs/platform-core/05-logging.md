@@ -381,6 +381,7 @@ type Settings struct { // section core.log.journal
 	MinLevel      string `json:"min_level" schema:"enum=debug|info|warn|error"`
 	RetentionDays int    `json:"retention_days" schema:"minimum=0"`
 	QueueSize     int    `json:"queue_size" reload:"restart" schema:"minimum=64"`
+	PruneInWindow bool   `json:"prune_in_window"` // the prune's window run (HEAD's maintenance.purge_old_logs)
 }
 
 type Schedules struct { // section core.log.schedules
@@ -397,8 +398,14 @@ type Schedules struct { // section core.log.schedules
   [05-realtime](05-realtime.md)'s permission filter.
 - Retention: task `core.log.journal.prune`, `tasks.Parallelism` sequential with reason "single range-delete per
   day bucket", scheduled by `tasks.ScheduleFromConfig("core.log.schedules.journal_prune")`. The key is
-  owner-declared with type `tasks.ScheduleConfig` and default `{"enabled":true,"every":"24h"}`
-  (R2-7; 05-config §1.6; [05-tasks](05-tasks.md)); there is no bespoke timer and no duration-typed interval key.
+  owner-declared with type `tasks.ScheduleConfig` and default
+  `{"enabled":true,"every":"168h","window":"nightly","order":9}` (R2-7; 05-config §1.6; [05-tasks](05-tasks.md)
+  §5T.3.8: HEAD's `purge_old_logs` is a weekly timer and position 9 of its nightly maintenance order, and fires
+  on either); there is no bespoke timer and no duration-typed interval key. Two gates, read at each poll and
+  window opening: `retention_days` 0 closes the interval and the window alike (`IntervalWhen` + `WindowWhen`, so
+  the clock freezes and the first poll after it reopens runs once, as HEAD's `IsEnabled` did), and
+  `core.log.journal.prune_in_window` off closes the window alone (HEAD's `maintenance.purge_old_logs`, which M2
+  carries into it).
 - Auth-off reach: `core:system.manage` is `AuthRequired` ([05-rbac](05-rbac.md)), so with auth off the query
   route and the live tail answer 401. HEAD's `GET /api/v1/system/logs` is open with auth off, because `s.perm`
   passes everything in that mode (`internal/server/wire_admin_role.go:18-22`, `wire_system_routes.go:31`).
@@ -482,7 +489,8 @@ swapped atomically when `redact_keys` changes). `Close` cancels and drains with 
 | `core.log.journal.enabled` | bool | `true` | no | none |
 | `core.log.journal.min_level` | enum | `info` | yes | none |
 | `core.log.journal.retention_days` | int (0 = keep) | `90` (M2 converts ABO's `log_retention_days` once: HEAD's `0` means the default 90 and a negative value means keep, `internal/config/config.go:1479-1488`, so they become `90` and `0`) | yes | none |
-| `core.log.schedules.journal_prune` | `tasks.ScheduleConfig` | `{"enabled":true,"every":"24h"}` | yes (re-read every poll) | none |
+| `core.log.schedules.journal_prune` | `tasks.ScheduleConfig` | `{"enabled":true,"every":"168h","window":"nightly","order":9}` | yes (re-read every poll) | none |
+| `core.log.journal.prune_in_window` | bool | `true` (M2 carries ABO's `maintenance.purge_old_logs`) | yes | none |
 | `core.log.journal.queue_size` | int | `4096` | no | none |
 
 The `core.log.*` rows except `core.log.journal.*` and `core.log.schedules.*` belong to the `core.log` section
