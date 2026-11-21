@@ -648,18 +648,38 @@ func TestBooksSettings_ReloadClasses(t *testing.T) {
 	}
 }
 
-// TestBooksSettings_ScheduleKeysAreScheduleConfig: the sixteen scheduled
-// entries are keys of type tasks.ScheduleConfig under the R2-7 form, so the
-// scheduler's declaration check accepts them (the kernel half is
-// core/kernel's TestScheduleKeys_ModuleKeysDeclared).
+// TestBooksSettings_ScheduleKeysAreScheduleConfig: every field of
+// schedulerDefaults().Schedules (config.go) is a tasks.ScheduleConfig key
+// under the R2-7 form, and the store declares exactly those keys under the
+// prefix, so the scheduler's declaration check accepts them (the kernel half is
+// core/kernel's TestScheduleKeys_ModuleKeysDeclared). The set is derived from
+// the struct, not counted, so a schedule key added there is checked here.
 func TestBooksSettings_ScheduleKeysAreScheduleConfig(t *testing.T) {
+	const prefix = "modules.books.scheduler.schedules."
 	b := newBooksStore(t)
-	n := 0
-	for p := range b.keys {
-		if !strings.HasPrefix(string(p), "modules.books.scheduler.schedules.") {
+	want := map[string]bool{}
+	st := reflect.TypeOf(schedulerDefaults().Schedules)
+	for i := range st.NumField() {
+		f := st.Field(i)
+		if f.Type != reflect.TypeFor[tasks.ScheduleConfig]() {
+			t.Errorf("Schedules.%s is %s, not tasks.ScheduleConfig", f.Name, f.Type)
 			continue
 		}
-		n++
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		want[prefix+name] = true
+	}
+	if len(want) == 0 {
+		t.Fatal("schedulerDefaults().Schedules has no fields")
+	}
+	got := map[string]bool{}
+	for p := range b.keys {
+		if !strings.HasPrefix(string(p), prefix) {
+			continue
+		}
+		got[string(p)] = true
+		if !want[string(p)] {
+			t.Errorf("%s is declared but is no field of schedulerDefaults().Schedules", p)
+		}
 		raw := b.keys[p].Effective
 		var sc map[string]any
 		if err := json.Unmarshal(raw, &sc); err != nil {
@@ -668,8 +688,10 @@ func TestBooksSettings_ScheduleKeysAreScheduleConfig(t *testing.T) {
 			t.Errorf("%s: %s is not a ScheduleConfig", p, raw)
 		}
 	}
-	if n != 16 {
-		t.Errorf("%d schedule keys, want the 16 scheduled entries", n)
+	for p := range want {
+		if !got[p] {
+			t.Errorf("schedulerDefaults().Schedules has %s, which the store does not declare", p)
+		}
 	}
 }
 
