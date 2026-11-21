@@ -183,6 +183,11 @@ if args == ["--print-storage-levels"]:
         with open(sys.argv[0], "w", encoding="utf-8") as f:
             f.write(IDENT["swap_to"])
     sys.exit(0)
+if args == ["--version-json"]:
+    if IDENT.get("version") is None:
+        unknown("--version-json")
+    print(json.dumps({{"version": IDENT["version"]}}))
+    sys.exit(0)
 if args == ["--print-storage-format"]:
     if IDENT.get("format") is None:
         unknown("--print-storage-format")
@@ -335,6 +340,7 @@ def write_fake_app(path: str | Path, ident: dict) -> None:
 
     ident keys: name (logged), log (the invocation log), levels (a dict the
     binary prints for --print-storage-levels, None for "unknown flag"),
+    version (the "version" `--version-json` prints, None for "unknown flag"),
     levels_exit (exit with this status and no output instead), swap_to (the
     text this file is overwritten with after --print-storage-levels printed),
     fetch_sleep (seconds `updater fetch-release` sleeps first), format (for

@@ -261,6 +261,10 @@ class FakeHost:
                 'RUN_DIR = "/run/audiobook-organizer-rollback"',
                 f"RUN_DIR = {str(self.root / 'run')!r}",
             ),
+            (
+                'LIBDIR = "/usr/local/libexec/audiobook-organizer/rollback"',
+                f"LIBDIR = {str(self.libexec)!r}",
+            ),
             ('"systemctl": "/usr/bin/systemctl"', f'"systemctl": {fakes["systemctl"]!r}'),
             ('"systemd-run": "/usr/bin/systemd-run"', f'"systemd-run": {fakes["systemd-run"]!r}'),
             ('"python3": "/usr/bin/python3"', f'"python3": {sys.executable!r}'),
@@ -322,6 +326,11 @@ class FakeHost:
             .replace("/usr/local/bin/audiobook-organizer", str(self.bin))
         )
         self.unit_text = unit
+        # The bundle's copy `install-staged unit` installs from (a deploy
+        # uploads nothing as a unit).
+        template = self.libexec / "audiobook-organizer.service"
+        template.write_text(unit)
+        template.chmod(0o644)
         self.unit_file = systemd / "audiobook-organizer.service"
         self.unit_file.write_text(unit)
         (dropins / "host.conf").write_text(
@@ -1044,6 +1053,191 @@ class RollbackRestoreTest(unittest.TestCase):
 
         self.assertEqual(probes(a), probes(b))
         self.assertEqual(probes(a), {f"sudo -n {guard.HELPER_DIR}/inflight-probe"})
+
+
+class DeployReleaseTest(unittest.TestCase):
+    """`make deploy-release RELEASE=<tag>` (R2-01t): a tagged release fetched
+    on the host and installed through the helpers, with no local build."""
+
+    TAG = "v0.232.1-rc.25"
+
+    def host(self, **kw) -> FakeHost:
+        releases = kw.pop("releases", {self.TAG: {"version": self.TAG, "levels": R2}})
+        return FakeHost(self, releases=releases, **kw)
+
+    def assert_order(self, host: FakeHost, *needles: str) -> None:
+        idx = [host.index(n) for n in needles]
+        self.assertNotIn(-1, idx, list(zip(needles, idx)))
+        self.assertEqual(
+            idx, sorted(idx), f"order {list(zip(needles, idx))}\n" + "\n".join(host.ssh())
+        )
+
+    def installs(self, host: FakeHost) -> list[str]:
+        return [c for c in host.ssh() if "install-staged binary" in c]
+
+    def test_fetches_checks_the_version_installs_and_keeps_the_replaced_environment(self) -> None:
+        host = self.host()
+        replaced = hashlib.sha256(host.bin.read_bytes()).hexdigest()
+        fetched = fake_ssh.fake_app_text(
+            {
+                "name": f"fetched-{self.TAG}",
+                "levels": R2,
+                "format": 1,
+                "capabilities": "sd_notify",
+                "version": self.TAG,
+                "log": str(host.log),
+            }
+        )
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assert_order(
+            host,
+            guard.HOST_CONFIG,
+            "inflight-probe",
+            f"updater fetch-release --version {self.TAG} --out {host.stage}",
+            f"{host.stage} --version-json",
+            "sha256sum",
+            "install-staged unit",
+            f"{host.stage} --print-capabilities",
+            "unit-type notify",
+            "systemctl show -p InvocationID",
+            "install-staged binary",
+            "systemctl restart",
+            "systemctl show -p ActiveState,SubState,NRestarts,ExecMainStatus",
+            f"{host.bin} --version-json",
+        )
+        words = self.installs(host)[0].split("install-staged binary ", 1)[1].split()
+        self.assertEqual(
+            words,
+            [hashlib.sha256(fetched.encode()).hexdigest(), self.TAG, "books=1,core=1", "-"],
+            "the hash is measured on the host; enforced is unknown, never read from this checkout",
+        )
+        fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
+        self.assertIn("ABK_STATE_DIR=", fetch)
+        self.assertEqual(host.installed(), f"fetched-{self.TAG}")
+        self.assertEqual(fake_ssh.fake_app_name(host.prev), "current", ".prev is the replaced one")
+        self.assertTrue(
+            (host.envgen / f"{replaced}.json").exists(),
+            "the replaced binary's environment is kept under its own hash",
+        )
+        self.assertFalse(host.stage.exists(), "the staged copy is deleted once installed")
+        self.assertIn(f"Deployed {self.TAG}", out(p))
+        self.assertEqual(
+            [
+                a["name"]
+                for a in host.calls()
+                if a["kind"] == "app" and a["args"][:1] == ["updater"]
+            ],
+            ["current"],
+            "the CURRENT binary fetches",
+        )
+
+    def test_a_rollback_after_a_deploy_release_puts_back_the_replaced_binary(self) -> None:
+        host = self.host(env_snapshot=False)
+        replaced = hashlib.sha256(host.bin.read_bytes()).hexdigest()
+        self.assertEqual(host.make("deploy-release", RELEASE=self.TAG).returncode, 0)
+        host.prev_sha = replaced
+        p = host.make("rollback")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.installed(), "current")
+        self.assertEqual(host.conf_lines(), host.CUR_CONF.splitlines()[1:])
+
+    def test_the_tag_without_its_v_is_the_same_release(self) -> None:
+        host = self.host(releases={"v0.232.1": {"version": "0.232.1"}})
+        p = host.make("deploy-release", RELEASE="v0.232.1")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.installed(), "fetched-v0.232.1")
+
+    def test_a_binary_that_reports_another_version_is_deleted_and_nothing_changes(self) -> None:
+        host = self.host(releases={self.TAG: {"version": "v0.231.0", "levels": R2}})
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("reports version v0.231.0", out(p))
+        self.assertEqual(self.installs(host), [])
+        self.assertEqual(host.changes(), [])
+        self.assertFalse(any("install-staged unit" in c for c in host.ssh()))
+        self.assertFalse(host.stage.exists())
+        self.assertEqual(host.installed(), "current")
+
+    def test_a_binary_that_cannot_report_its_version_is_refused(self) -> None:
+        host = self.host(releases={self.TAG: {"version": None}})
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("cannot read the version", out(p))
+        self.assertEqual(self.installs(host), [])
+        self.assertFalse(host.stage.exists())
+
+    def test_a_release_that_does_not_exist_changes_nothing(self) -> None:
+        host = self.host()
+        p = host.make("deploy-release", RELEASE="v9.9.9")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("fetch-release", out(p))
+        self.assertEqual(self.installs(host), [])
+        self.assertEqual(host.changes(), [])
+        self.assertEqual(host.installed(), "current")
+
+    def test_stage_bin_must_be_in_the_helpers_config(self) -> None:
+        host = self.host(config={"stage_bin": None})
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("stage_bin", out(p))
+        self.assertEqual(host.index("updater fetch-release"), -1)
+
+    def test_a_swap_in_flight_refuses_before_anything_is_fetched(self) -> None:
+        host = self.host()
+        host.inflight()
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.index("updater fetch-release"), -1)
+        self.assertEqual(host.changes(), [])
+
+    def test_a_release_that_is_not_a_tag_is_refused_before_any_ssh(self) -> None:
+        host = self.host()
+        p = host.make("deploy-release", RELEASE="latest")
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.ssh(), [])
+
+    def test_release_is_required(self) -> None:
+        host = self.host()
+        p = host.make("deploy-release")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("RELEASE is not set", out(p))
+        self.assertEqual(host.ssh(), [])
+
+    def test_a_restart_sudo_refuses_says_the_old_process_still_serves(self) -> None:
+        host = self.host(
+            rules=[
+                {
+                    "match": r"systemctl restart",
+                    "responses": [{"exit": 1, "stderr": "sudo: a password is required\n"}],
+                }
+            ]
+        )
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("OLD process is still the one serving", out(p))
+        self.assertEqual(host.installed(), f"fetched-{self.TAG}", "the binary is installed")
+
+    def test_an_installed_binary_that_reports_another_version_is_an_error(self) -> None:
+        host = self.host(
+            rules=[
+                {
+                    "match": r"/bin/audiobook-organizer --version-json",
+                    "responses": [{"stdout": '{"version": "v0.1.0"}\n'}],
+                }
+            ]
+        )
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("reports version v0.1.0", out(p))
+        self.assertNotIn("Deployed", out(p))
+
+    def test_a_server_that_never_restarted_is_not_called_ready(self) -> None:
+        host = self.host(shows=[fake_ssh.show("active", invocation=OLD_INVOCATION)])
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("not report ready", out(p))
+        self.assertNotIn("Deployed", out(p))
 
 
 class ReviewProbes(unittest.TestCase):

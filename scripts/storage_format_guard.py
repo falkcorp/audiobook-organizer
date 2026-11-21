@@ -231,6 +231,11 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         ),
         "discard_fetched": f"rm -f {o.stage_bin} {o.stage_bin}.part",
         "install_prev": f"sudo -n {h}/install-staged prev",
+        # `make deploy-release`: the fetched file's hash and version before it
+        # is installed, and the installed binary's version after.
+        "stage_sha256": f"sha256sum {o.stage_bin} | cut -d' ' -f1",
+        "stage_version": f"{o.stage_bin} --version-json",
+        "bin_version": f"{o.bin} --version-json",
         "current_format": f"{o.bin} --print-storage-format",
         "record": f"sudo -n -u {o.user} {h}/checkpoint-record {name}",
         "into": f"sudo -n {h}/restore-offline into-check {o.archive}",

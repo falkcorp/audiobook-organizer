@@ -1,0 +1,3 @@
+### Added
+
+- `make deploy-release RELEASE=<tag>` deploys a tagged release (an R2 release candidate) without a local build. The running binary fetches the tag on the host, the fetched file's own `--version-json` must name the tag, and the root-owned helpers then install the unit and the binary exactly as `make deploy` does: the replaced binary becomes `.prev` with the unit and `local.conf` it ran under, so `make rollback` puts them back together. The restart is waited on as for a rollback (an unchanged InvocationID is never "ready", exit 78 is passed through). `deploy/local.conf` is not uploaded by this target.
