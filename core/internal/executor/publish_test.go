@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"slices"
@@ -750,10 +752,18 @@ func TestExecutor_PerRunOrderUnderConcurrentWorkers(t *testing.T) {
 				t.Errorf("run %s: state stepped back from rank %d to %q at emission %d", id, rank, em.view.State, i)
 			case terminalAt >= 0:
 				t.Errorf("run %s: run-changed %d (%q) after the terminal one", id, i, em.view.State)
-			case em.view.Done < done:
+			case em.seq == seq && em.view.Done < done:
+				// Within one transition epoch ticks only advance. A move
+				// rewrites the row from the read it made before the CAS, so it
+				// can lose one concurrent tick (the stored row regresses, and
+				// the event matches the stored row); that is not an ordering
+				// fault, so the check restarts at each transition.
 				t.Errorf("run %s: progress stepped back from %d to %d at emission %d", id, done, em.view.Done, i)
 			case em.seq < seq:
 				t.Errorf("run %s: event sequence stepped back from %d to %d at emission %d", id, seq, em.seq, i)
+			}
+			if em.seq != seq {
+				done = 0
 			}
 			rank, done, seq = max(rank, r), max(done, em.view.Done), max(seq, em.seq)
 			if r == 3 && terminalAt < 0 {
@@ -828,5 +838,186 @@ func TestExecutor_SlowSubscriberDoesNotStallTheExecutor(t *testing.T) {
 		if n := len(p.of(emitFinished, id)); n != 1 {
 			t.Errorf("run %s: finished %d times after the sink returned, want 1", id, n)
 		}
+	}
+}
+
+// stuckSink is a sink that blocks every call until release is closed, and
+// records what it was handed once released.
+type stuckSink struct {
+	once    sync.Once
+	release chan struct{}
+	entered chan struct{} // receives once per call that has started
+	tape
+}
+
+func newStuckSink() *stuckSink {
+	return &stuckSink{release: make(chan struct{}), entered: make(chan struct{}, 1<<16)}
+}
+
+// unstick lets every blocked and later call through; safe to call twice.
+func (s *stuckSink) unstick() { s.once.Do(func() { close(s.release) }) }
+
+func (s *stuckSink) sink(em emission) {
+	s.entered <- struct{}{}
+	<-s.release
+	s.tape.sink(em)
+}
+
+func runEmission(run tasks.RunID, kind emitKind, state string, done int) emission {
+	return emission{kind: kind, run: run, view: tasks.RunPayload{ID: string(run), State: state, Done: done}}
+}
+
+// publishOne stages and commits one emission through the publisher the way
+// the executor does, and reports how long the committing goroutine took. The
+// committer must never wait on a stalled sink: a commit that has not returned
+// in 3s fails the test (the goroutine is left to the test's cleanup).
+func publishOne(t *testing.T, p *publisher, em emission) time.Duration {
+	t.Helper()
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c := p.newPending()
+		c.stage(em)
+		c.commit()
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("committing emission kind %d for run %s waited on the sink for 3s", em.kind, em.run)
+	}
+	return time.Since(start)
+}
+
+// TestPublisher_StalledSinkBoundsTheQueue pins what a full queue does. The
+// committer is never blocked. While the queue is full, superseded run-changed
+// are coalesced to each run's latest view; further run-changed for new runs
+// and log-appended lines are dropped and counted; finished and the terminal
+// run-changed are never shed, so every run that ends is still announced.
+func TestPublisher_StalledSinkBoundsTheQueue(t *testing.T) {
+	const bound = 8
+	s := newStuckSink()
+	p := newPublisher(s.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p.max = bound
+	t.Cleanup(func() { s.unstick(); p.close(context.Background()) })
+
+	// The drainer takes the first emission and sticks inside the sink, so what
+	// follows queues.
+	publishOne(t, p, runEmission("robin", emitRunChanged, "running", 0))
+	<-s.entered
+
+	var slowest time.Duration
+	note := func(d time.Duration) { slowest = max(slowest, d) }
+
+	// One run's progress ticks fill the queue; the bound makes them coalesce.
+	for i := 1; i <= 10*bound; i++ {
+		note(publishOne(t, p, runEmission("robin", emitRunChanged, "running", i)))
+	}
+	p.mu.Lock()
+	qlen, peak := len(p.q), p.peak
+	var latest int
+	for _, em := range p.q {
+		if em.run == "robin" && em.kind == emitRunChanged {
+			latest = em.view.Done
+		}
+	}
+	p.mu.Unlock()
+	if peak > bound || qlen > bound {
+		t.Errorf("queue grew to %d (peak %d) past the bound %d", qlen, peak, bound)
+	}
+	if latest != 10*bound {
+		t.Errorf("the queue's last run-changed for the run has Done=%d, want the latest view %d", latest, 10*bound)
+	}
+	if p.coalesced.Load() == 0 {
+		t.Error("no run-changed was coalesced while the queue was full")
+	}
+	if p.dropped.Load() != 0 {
+		t.Errorf("dropped = %d: coalescing a single run's ticks should have made room", p.dropped.Load())
+	}
+
+	// Offer distinct runs until a full queue has nothing left to coalesce: the
+	// run-changed that finds no room is dropped and counted.
+	for i := 0; p.dropped.Load() == 0; i++ {
+		if i > 4*bound {
+			t.Fatal("a full queue of distinct runs never dropped anything")
+		}
+		note(publishOne(t, p, runEmission(tasks.RunID(fmt.Sprintf("alfred-%d", i)), emitRunChanged, "running", 0)))
+	}
+	before := p.dropped.Load()
+	note(publishOne(t, p, runEmission("joker", emitRunChanged, "running", 0)))
+	note(publishOne(t, p, emission{kind: emitLogAppended, run: "robin", line: tasks.LogAppended{Message: "full"}}))
+	if got := p.dropped.Load() - before; got != 2 {
+		t.Errorf("dropped %d of the 2 emissions offered to a full queue", got)
+	}
+
+	// An outcome is never shed, even past the bound.
+	note(publishOne(t, p, runEmission("joker", emitRunChanged, string(tasks.StateSucceeded), 0)))
+	note(publishOne(t, p, emission{kind: emitFinished, run: "joker", view: tasks.RunPayload{ID: "joker", State: string(tasks.StateSucceeded)}}))
+	if slowest > time.Second {
+		t.Errorf("a commit waited %v on a stalled sink", slowest)
+	}
+
+	s.unstick()
+	p.close(context.Background())
+	if len(s.of(emitFinished, "joker")) != 1 || len(s.of(emitRunChanged, "joker")) != 1 || s.of(emitRunChanged, "joker")[0].view.State != string(tasks.StateSucceeded) {
+		t.Errorf("joker's outcome was shed: finished %d, run-changed %d", len(s.of(emitFinished, "joker")), len(s.of(emitRunChanged, "joker")))
+	}
+}
+
+// TestPublisher_ShutdownDrainsThenExits: with a working sink, close waits for
+// everything queued and the drainer returns (no goroutine is left behind).
+func TestPublisher_ShutdownDrainsThenExits(t *testing.T) {
+	var tp tape
+	p := newPublisher(tp.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for i := 0; i < 200; i++ {
+		publishOne(t, p, runEmission("robin", emitRunChanged, "running", i))
+	}
+	p.close(context.Background())
+	if got := tp.count(); got != 200 {
+		t.Errorf("close returned with %d of 200 emissions delivered", got)
+	}
+	select {
+	case <-p.done:
+	default:
+		t.Fatal("close returned but the drainer is still running")
+	}
+	// After close, an emission is dropped, not queued.
+	publishOne(t, p, runEmission("robin", emitRunChanged, "running", 201))
+	if got := tp.count(); got != 200 {
+		t.Errorf("an emission after close was delivered (%d)", got)
+	}
+}
+
+// TestPublisher_ShutdownAbandonsAStuckSink: when the sink does not return,
+// close gives up at the context deadline, discards the rest, and the drainer
+// exits as soon as the call it is inside returns.
+func TestPublisher_ShutdownAbandonsAStuckSink(t *testing.T) {
+	s := newStuckSink()
+	p := newPublisher(s.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(s.unstick)
+	for i := 0; i < 20; i++ {
+		publishOne(t, p, runEmission(tasks.RunID(fmt.Sprintf("robin-%d", i)), emitRunChanged, "running", 0))
+	}
+	<-s.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	p.close(ctx)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("close took %v against a stuck sink", d)
+	}
+	select {
+	case <-p.done:
+		t.Fatal("drainer exited while the sink was still blocked")
+	default:
+	}
+	s.unstick()
+	select {
+	case <-p.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("drainer did not exit after the stuck sink returned: goroutine leak")
+	}
+	if got := s.count(); got > 1 {
+		t.Errorf("%d emissions were delivered after the shutdown gave up, want only the in-flight one", got)
 	}
 }

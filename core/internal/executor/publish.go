@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,9 +89,15 @@ type emission struct {
 	seq uint64
 }
 
-// maxPendingEmissions bounds the FIFO. A subscriber that never returns would
-// otherwise grow it without bound; past the bound the newest emission is
-// dropped and counted (the bus drops the same way, with its own counter).
+// maxPendingEmissions is the FIFO's bound. events.Publish never blocks (each
+// subscription has its own bounded queue and counts what it drops), so the
+// FIFO only fills when the sink itself stops returning. Then the committer is
+// never made to wait; instead the queue sheds what a viewer can recover:
+// superseded run-changed first (the run's latest view in the queue stands in
+// for them, as the topic's own Coalesce window does), then new run-changed and
+// log-appended, counted. A finished and a terminal run-changed are never shed,
+// so a subscriber that returns finds every run's outcome; they can take the
+// queue past the bound by at most the number of runs that ended meanwhile.
 const maxPendingEmissions = 1 << 14
 
 // publishDrainTimeout bounds how long Shutdown waits for the FIFO to empty.
@@ -109,7 +116,12 @@ type publisher struct {
 	wake    chan struct{} // capacity 1: the FIFO has items or the publisher closed
 	done    chan struct{} // closed when the drainer has returned
 
-	dropped atomic.Int64
+	max       int          // the FIFO bound; maxPendingEmissions unless a test lowers it
+	peak      int          // the longest the FIFO has been (guarded by mu)
+	abandoned atomic.Bool  // close gave up waiting: the drainer discards what is left and returns
+	futile    bool         // the last shed freed nothing; reset when the drainer takes the queue (guarded by mu)
+	dropped   atomic.Int64 // new run-changed and log-appended shed while the FIFO was full
+	coalesced atomic.Int64 // superseded run-changed removed while the FIFO was full
 
 	// betweenCommitAndAppend is a test seam: it runs on the committing
 	// goroutine after Commit and before the append, with the gates held. A
@@ -125,7 +137,7 @@ type gate struct {
 }
 
 func newPublisher(sink func(emission), log *slog.Logger) *publisher {
-	return &publisher{sink: sink, log: log, gates: map[tasks.RunID]*gate{},
+	return &publisher{sink: sink, log: log, max: maxPendingEmissions, gates: map[tasks.RunID]*gate{},
 		wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
@@ -185,13 +197,19 @@ func (p *publisher) enqueue(ems []emission) {
 		return
 	}
 	for _, em := range ems {
-		if len(p.q) >= maxPendingEmissions {
+		if len(p.q) >= p.max && !p.futile {
+			if p.shed(); len(p.q) >= p.max {
+				p.futile = true // nothing more to coalesce: do not rescan until the drainer empties the queue
+			}
+		}
+		if len(p.q) >= p.max && !outcome(em) {
 			if n := p.dropped.Add(1); n == 1 || n%1000 == 0 {
 				p.log.Warn("task event dropped: the publish queue is full (a subscriber is not returning)", "dropped", n, "topic_kind", em.kind)
 			}
 			continue
 		}
 		p.q = append(p.q, em)
+		p.peak = max(p.peak, len(p.q))
 	}
 	if !p.started {
 		p.started = true
@@ -204,6 +222,34 @@ func (p *publisher) enqueue(ems []emission) {
 	}
 }
 
+// outcome reports whether em is a run's outcome, which is never shed: finished,
+// or the run-changed that carries a terminal state.
+func outcome(em emission) bool {
+	return em.kind == emitFinished || (em.kind == emitRunChanged && tasks.RunState(em.view.State).Terminal())
+}
+
+// shed removes every run-changed that a later run-changed for the same run
+// supersedes (each carries the whole view, so the later one says all the
+// earlier did and more), counting them as coalesced, not dropped. Order among
+// what is kept is unchanged. Called with p.mu held.
+func (p *publisher) shed() {
+	seen := map[tasks.RunID]bool{}
+	kept := p.q[:0:0]
+	for i := len(p.q) - 1; i >= 0; i-- {
+		em := p.q[i]
+		if em.kind == emitRunChanged {
+			if seen[em.run] {
+				p.coalesced.Add(1)
+				continue
+			}
+			seen[em.run] = true
+		}
+		kept = append(kept, em)
+	}
+	slices.Reverse(kept)
+	p.q = kept
+}
+
 // drain is the one goroutine that calls the sink, in FIFO order, with no lock
 // held. It returns after close once the FIFO is empty.
 func (p *publisher) drain() {
@@ -211,15 +257,18 @@ func (p *publisher) drain() {
 	for {
 		p.mu.Lock()
 		batch, closed := p.q, p.closed
-		p.q = nil
+		p.q, p.futile = nil, false
 		p.mu.Unlock()
 		for _, em := range batch {
+			if p.abandoned.Load() {
+				break
+			}
 			p.deliver(em)
 		}
 		if len(batch) > 0 {
 			continue
 		}
-		if closed {
+		if closed || p.abandoned.Load() {
 			return
 		}
 		<-p.wake
@@ -255,9 +304,22 @@ func (p *publisher) close(ctx context.Context) {
 	defer t.Stop()
 	select {
 	case <-p.done:
+		return
 	case <-ctx.Done():
 	case <-t.C:
 		p.log.Warn("task events still unpublished at shutdown", "timeout", publishDrainTimeout)
+	}
+	// The sink is not returning. Shutdown does not wait on it any longer:
+	// the drainer is told to discard the rest, and it returns as soon as the
+	// call it is inside does (a sink that never returns holds that one
+	// goroutine, and nothing else).
+	p.abandoned.Store(true)
+	p.mu.Lock()
+	p.q = nil
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -318,16 +380,14 @@ func stageEmit(ctx context.Context, em emission) {
 }
 
 // streamPayload is the wire form of r for the stream: the view the executor
-// builds with no caller, whose BlockedBy is blank. view never names a blocker
-// (viewAs does, for a caller who may see the blocker's kind), and the stream
-// has no caller kind to check, so BlockedBy is blanked here again: a payload
-// built from a view that had BlockedBy set would put another kind's run ID on
-// every subscriber's stream. The topic's Redact (tasks.RunViewRedactor,
-// applied per subscriber by realtime's stream.Deliver) blanks it a second time.
+// builds with no caller. view never names a blocker (viewAs does, for a caller
+// who may see the blocker's kind), and the stream has no caller kind to check,
+// so an event built from viewAs would put another kind's run ID on every
+// subscriber's stream (F5-18i). The topic's Redact (tasks.RunViewRedactor,
+// applied per subscriber by realtime's stream.Deliver) blanks blocked_by a
+// second time. TestExecutor_StreamPayloadHasBlockedByBlank pins both.
 func (e *executor) streamPayload(r tasks.RunRecord) tasks.RunPayload {
-	v := e.view(r)
-	v.BlockedBy = ""
-	return tasks.NewRunPayload(v)
+	return tasks.NewRunPayload(e.view(r))
 }
 
 // runChangedOf is the run-changed emission for r as it stands in the batch.
