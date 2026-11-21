@@ -50,6 +50,10 @@ type offPosture struct {
 	// (true, SEC4-8); the loopback posture leaves it false, the secure default
 	// the install boots under only because nothing remote can reach it.
 	allowRemote bool
+	// ownerRequired sets core.auth.owner.required, so Guards.Owner demands the
+	// owner assurance (403 owner_required) rather than falling back to
+	// Interactive plus core:admin (05-authn 4.8).
+	ownerRequired bool
 	// remote is auth.Posture.DisabledRemote (health's auth_disabled_remote);
 	// reach is what the kernel tells auth about who can connect.
 	remote bool
@@ -64,6 +68,9 @@ var (
 		header: "X-Forwarded-For", allowRemote: true, remote: true, reach: auth.Reach{TrustedProxy: true}}
 
 	offPostures = []offPosture{offLoopback, offRemote, offProxied}
+
+	// offOwnerRequired is the loopback boot with owner proof demanded.
+	offOwnerRequired = offPosture{name: "loopback-owner-required", listen: "127.0.0.1:0", ownerRequired: true}
 )
 
 // source attributes the n-th probe to its own client address.
@@ -117,6 +124,9 @@ func offConfig(t *testing.T, p offPosture) (*swapHost, Config) {
 		m.ImportedRoleIDs = []rbac.RoleName{"relay-worker"}
 	})}
 	withCore(&c, "core.auth.mode", "disabled", "core.http.listen", p.listen)
+	if p.ownerRequired {
+		withCore(&c, "core.auth.owner.required", "true")
+	}
 	if p.proxies != "" {
 		withCore(&c, "core.http.trusted_proxies", p.proxies)
 	}
@@ -387,6 +397,17 @@ func sweeps(t *testing.T) []*offSweep {
 	if offSweepErr != "" {
 		t.Fatal(offSweepErr)
 	}
+	// A -run pattern with a subtest part filters the boot subtests out and
+	// t.Run still reports true, which would leave every test below passing on
+	// nothing.
+	if len(offSweeps) != len(offPostures) {
+		t.Fatalf("%d of %d postures were swept: a -run pattern filtered the boot subtests out", len(offSweeps), len(offPostures))
+	}
+	for _, sw := range offSweeps {
+		if len(sw.probes) == 0 || len(sw.routes) == 0 {
+			t.Fatalf("[%s] swept %d routes and %d probes", sw.posture.name, len(sw.routes), len(sw.probes))
+		}
+	}
 	return offSweeps
 }
 
@@ -482,6 +503,7 @@ func TestAuthOffCoreRoutes_VerdictsMatchTheSpecTable(t *testing.T) {
 			}
 			if sw.posture.name == offRemote.name {
 				counts[p.row.Want]++
+				t.Logf("cell %-62s %-34s %v", p.row.key(), p.path, c)
 			}
 		}
 		if len(sw.probes) != len(offCoreRows)+len(offControlRows) {
@@ -606,7 +628,7 @@ func TestAuthOffCoreRoutes_RemoteWithoutAllowRefusesToBoot(t *testing.T) {
 // every route core now refuses that HEAD allowed names its tightening clause.
 // The cells that differ are logged: they are the report's HEAD comparison.
 func TestAuthOffCoreRoutes_NeverWiderThanHEAD(t *testing.T) {
-	var same, tightened, beyond int
+	var same, tightened, beyond, handler int
 	var lines []string
 	for _, sw := range sweeps(t) {
 		for _, p := range sw.probes {
@@ -628,6 +650,15 @@ func TestAuthOffCoreRoutes_NeverWiderThanHEAD(t *testing.T) {
 					}
 					lines = append(lines, fmt.Sprintf("tightened: %s (HEAD %s: A) now %v", p.row.key(), p.row.HeadRoute, p.cell))
 				}
+			case p.row.Head == "A" && p.row.Want == offHandler:
+				// A Public route: stage 13 admits it, as HEAD did (letter A), and
+				// the handler then refuses a probe that carries no valid token
+				// or state. By the status letter alone that is D against HEAD's
+				// A, so each is listed, never folded into "agree".
+				if sw.posture.name == offRemote.name {
+					handler++
+					lines = append(lines, fmt.Sprintf("handler-refusal: %s (HEAD %s: A) answers %v, the router admits it", p.row.key(), p.row.HeadRoute, p.cell))
+				}
 			default:
 				if sw.posture.name == offRemote.name {
 					same++
@@ -639,5 +670,26 @@ func TestAuthOffCoreRoutes_NeverWiderThanHEAD(t *testing.T) {
 	for _, l := range lines {
 		t.Log(l)
 	}
-	t.Logf("HEAD comparison: %d routes agree, %d tightened (%d of them beyond the spec text), 0 widened", same, tightened, beyond)
+	t.Logf("HEAD comparison: %d routes agree, %d tightened (%d of them beyond the spec text), %d Public routes whose handler refuses the probe (router admits, as HEAD), 0 widened", same, tightened, beyond, handler)
+}
+
+// TestAuthOffCoreRoutes_OwnerRequiredRefusesAuthOff: with core.auth.owner.
+// required the Guards.Owner branch of stage 13 asks for the owner assurance,
+// which the auth-disabled principal never carries (05-authn 4.8 and 4.11), so
+// an Owner-only route answers 403 owner_required rather than the fallback's
+// interactive_required, and factory-reset (Interactive first) still refuses.
+// The postures above run the fallback branch; this boot runs the other.
+func TestAuthOffCoreRoutes_OwnerRequiredRefusesAuthOff(t *testing.T) {
+	fx := newOffFx(t, offOwnerRequired)
+	for _, c := range []struct {
+		route, path, code string
+	}{
+		{http.MethodPost, "/api/alfred/v1/relay-owner", "owner_required"},
+		{http.MethodPost, "/api/core/v1/system/factory-reset", "interactive_required"},
+	} {
+		got := fx.send(c.route, c.path, "")
+		if !got.denied() || got.code != c.code {
+			t.Errorf("%s %s answered %v, want a refusal %s (05-authn 4.8, 4.11)", c.route, c.path, got, c.code)
+		}
+	}
 }
