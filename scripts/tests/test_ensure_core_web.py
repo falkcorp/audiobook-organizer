@@ -8,8 +8,13 @@ frontend job behind frontend-ci.yml) still finds a built @mediacore/api-client.
 
 Same method as test_build_web.py: a temp tree holding a copy of the script and a stub
 ``npm`` that logs its working directory and argv, so what is proved is whether npm is
-called, in which directory and in which order, and the exit status. File times are set
+called, in which directory and in which order, and the exit status. The stub's ``ci``
+writes ``node_modules/.package-lock.json`` as the real ``npm ci`` does, because the
+script reads that marker to install at most once. File times the tests compare are set
 explicitly, never left to the clock.
+
+The script builds three packages in order (api-client, ui-kit, shell: shell reads the
+other two's dist/), and a package it rebuilds makes every later one stale.
 
 Stdlib only; run with ``python3 -m unittest scripts.tests.test_ensure_core_web``.
 """
@@ -33,11 +38,22 @@ case "${NPM_STUB_FAIL_ON:-}" in
   "") ;;
   *) case "$*" in "$NPM_STUB_FAIL_ON"*) exit "${NPM_STUB_EXIT:-1}" ;; esac ;;
 esac
+case "$1" in ci) mkdir -p node_modules && : > node_modules/.package-lock.json ;; esac
 exit 0
 """
 
-BUILD = "run build -w @mediacore/api-client"
+# The packages the script builds, in its order.
+PACKAGES = ("api-client", "ui-kit", "shell")
+BUILDS = {name: f"run build -w @mediacore/{name}" for name in PACKAGES}
 INSTALL = "ci --no-audit --no-fund"
+
+
+def builds_from(name: str) -> list[tuple[str, str]]:
+    """The build calls when ``name`` is the first stale package: it and every later one."""
+    return [("core/web", BUILDS[n]) for n in PACKAGES[PACKAGES.index(name) :]]
+
+
+ALL_BUILDS = builds_from(PACKAGES[0])
 T0 = 1_700_000_000
 
 
@@ -54,33 +70,37 @@ class Tree:
         npm.chmod(0o755)
         self.log = self.root / "npm.log"
         self.core = self.root / "core" / "web"
-        self.pkg = self.core / "packages" / "api-client"
+        self.pkgs = {name: self.core / "packages" / name for name in PACKAGES}
+        self.pkg = self.pkgs["api-client"]
 
     def close(self) -> None:
         self._tmp.cleanup()
 
     def with_core_web(self) -> None:
-        (self.pkg / "src").mkdir(parents=True)
-        (self.pkg / "generator").mkdir()
+        (self.core).mkdir(parents=True)
         (self.core / "package.json").write_text("{}\n")
         (self.core / "package-lock.json").write_text("{}\n")
-        (self.pkg / "src" / "index.ts").write_text("export {}\n")
-        (self.pkg / "generator" / "cli.ts").write_text("export {}\n")
         self._stamp(self.core / "package.json", 0)
-        self._stamp(self.pkg / "src" / "index.ts", 0)
-        self._stamp(self.pkg / "generator" / "cli.ts", 0)
         self._stamp(self.core / "package-lock.json", 10)
+        for pkg in self.pkgs.values():
+            (pkg / "src").mkdir(parents=True)
+            (pkg / "src" / "index.ts").write_text("export {}\n")
+            self._stamp(pkg / "src" / "index.ts", 0)
+        (self.pkg / "generator").mkdir()
+        (self.pkg / "generator" / "cli.ts").write_text("export {}\n")
+        self._stamp(self.pkg / "generator" / "cli.ts", 0)
 
     def mark_built(self) -> None:
-        """What a finished `npm ci` and build leave: install marker, then dist/."""
+        """What a finished `npm ci` and build leave: install marker, then each dist/."""
         (self.core / "node_modules").mkdir()
         marker = self.core / "node_modules" / ".package-lock.json"
         marker.write_text("{}\n")
         self._stamp(marker, 20)
-        (self.pkg / "dist").mkdir()
-        for name in ("index.js", "index.d.ts"):
-            (self.pkg / "dist" / name).write_text("")
-            self._stamp(self.pkg / "dist" / name, 100)
+        for pkg in self.pkgs.values():
+            (pkg / "dist").mkdir()
+            for name in ("index.js", "index.d.ts"):
+                (pkg / "dist" / name).write_text("")
+                self._stamp(pkg / "dist" / name, 100)
 
     @staticmethod
     def _stamp(path: pathlib.Path, offset: int) -> None:
@@ -133,7 +153,7 @@ class EnsureCoreWebTest(unittest.TestCase):
         t.with_core_web()
         res = t.run()
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(t.calls(), [("core/web", INSTALL), ("core/web", BUILD)])
+        self.assertEqual(t.calls(), [("core/web", INSTALL), *ALL_BUILDS])
 
     def test_fresh_dist_calls_nothing(self) -> None:
         t = self.tree()
@@ -151,7 +171,25 @@ class EnsureCoreWebTest(unittest.TestCase):
                 t.mark_built()
                 t.touch_newer(t.pkg.joinpath(*rel))
                 self.assertEqual(t.run().returncode, 0)
-                self.assertEqual(t.calls(), [("core/web", BUILD)])
+                self.assertEqual(t.calls(), ALL_BUILDS)
+
+    def test_a_rebuilt_package_rebuilds_every_later_one_and_no_earlier_one(self) -> None:
+        for name in PACKAGES:
+            with self.subTest(changed=name):
+                t = self.tree()
+                t.with_core_web()
+                t.mark_built()
+                t.touch_newer(t.pkgs[name] / "src" / "index.ts")
+                self.assertEqual(t.run().returncode, 0)
+                self.assertEqual(t.calls(), builds_from(name))
+
+    def test_installs_at_most_once_however_many_packages_build(self) -> None:
+        # No install marker: the first build installs, and the marker npm ci writes
+        # keeps the later builds from installing again.
+        t = self.tree()
+        t.with_core_web()
+        self.assertEqual(t.run().returncode, 0)
+        self.assertEqual([argv for _, argv in t.calls()].count(INSTALL), 1)
 
     def test_a_new_file_in_a_source_directory_rebuilds(self) -> None:
         t = self.tree()
@@ -161,7 +199,7 @@ class EnsureCoreWebTest(unittest.TestCase):
         added.write_text("export {}\n")
         t.touch_newer(added)
         self.assertEqual(t.run().returncode, 0)
-        self.assertEqual(t.calls(), [("core/web", BUILD)])
+        self.assertEqual(t.calls(), ALL_BUILDS)
 
     def test_a_newer_manifest_or_lockfile_rebuilds(self) -> None:
         # The lockfile is also newer than the install marker, so it reinstalls first.
@@ -170,7 +208,7 @@ class EnsureCoreWebTest(unittest.TestCase):
         t.mark_built()
         t.touch_newer(t.core / "package-lock.json")
         self.assertEqual(t.run().returncode, 0)
-        self.assertEqual(t.calls(), [("core/web", INSTALL), ("core/web", BUILD)])
+        self.assertEqual(t.calls(), [("core/web", INSTALL), *ALL_BUILDS])
 
     def test_a_missing_declaration_file_rebuilds(self) -> None:
         t = self.tree()
@@ -178,7 +216,7 @@ class EnsureCoreWebTest(unittest.TestCase):
         t.mark_built()
         (t.pkg / "dist" / "index.d.ts").unlink()
         self.assertEqual(t.run().returncode, 0)
-        self.assertEqual(t.calls(), [("core/web", BUILD)])
+        self.assertEqual(t.calls(), ALL_BUILDS)
 
     def test_files_under_dist_and_node_modules_never_count_as_changed(self) -> None:
         t = self.tree()
@@ -214,7 +252,7 @@ class EnsureCoreWebTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(t.calls(), [("core/web", INSTALL), ("core/web", BUILD)])
+        self.assertEqual(t.calls(), [("core/web", INSTALL), *ALL_BUILDS])
 
     def test_runs_under_dash_when_present(self) -> None:
         dash = shutil.which("dash")
@@ -224,7 +262,7 @@ class EnsureCoreWebTest(unittest.TestCase):
         t.with_core_web()
         res = t.run(shell=dash)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(len(t.calls()), 2)
+        self.assertEqual(t.calls(), [("core/web", INSTALL), *ALL_BUILDS])
 
     def test_has_no_bashisms_and_sets_no_build_id(self) -> None:
         text = SCRIPT.read_text()
