@@ -13,11 +13,17 @@ and manage everything from your browser.
 
 ```bash
 cp .env.example .env          # edit values as needed
-# set AUDIOBOOK_ROOT_DIR in .env to your library path
+# set LIBRARY_HOST_DIR in .env to your library folder on the host; compose
+# mounts it read-only at /audiobooks inside the container
 docker compose up -d --build
 ```
 
 The app is available at `http://localhost:8484`.
+
+The library root is a setting, not an environment variable. On first run, set
+it to `/audiobooks` in the setup wizard (or later on the Settings page).
+Operators can instead pin it with `--dir` or `ABO_CORE_LIBRARY_ROOTS`.
+`AUDIOBOOK_ROOT_DIR` is retired: it is ignored with a warning.
 
 ### From Source
 
