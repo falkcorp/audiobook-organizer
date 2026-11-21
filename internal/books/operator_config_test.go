@@ -109,7 +109,7 @@ func TestOperatorAppConfig_RenameMapForms(t *testing.T) {
 		"ABSSessionMaxTTL":      cfg.ABSSessionMaxTTL == "96h",
 		"ActivityBackend":       cfg.ActivityBackend == "pebble",
 		"AllowedPeerCIDRs":      cfg.AllowedPeerCIDRs == "192.0.2.0/24,198.51.100.0/24",
-		"CFAccessAud":           cfg.CFAccessAud == "batcave-aud",
+		"CFAccessAUD":           cfg.CFAccessAUD == "batcave-aud",
 		"CFAccessTeamDomain":    cfg.CFAccessTeamDomain == "batcave.example",
 		"CFAccountID":           cfg.CFAccountID == "wayne-account",
 		"CFGuestsPolicyID":      cfg.CFGuestsPolicyID == "arkham-guests",
