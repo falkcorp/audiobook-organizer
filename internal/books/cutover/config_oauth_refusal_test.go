@@ -78,8 +78,8 @@ func TestConfigCutover_OAuthEmptyAllowListWithOperatorProvidersProceeds(t *testi
 		t.Fatalf("providers = %s (err %v), want two entries", raw, err)
 	}
 	for _, e := range entries {
-		if _, has := e["allowed_emails"]; has {
-			t.Errorf("%v: allowed_emails = %v, want none (the blob's list is empty)", e["id"], e["allowed_emails"])
+		if emails, _ := e["allowed_emails"].([]any); len(emails) != 0 {
+			t.Errorf("%v: allowed_emails = %v, want empty (the blob's list is empty)", e["id"], e["allowed_emails"])
 		}
 	}
 }
