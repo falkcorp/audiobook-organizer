@@ -100,6 +100,9 @@ type restoreHooksInput struct {
 	Hooks func(env hookEnv) ([]journal.RestoreHook, error)
 	Clock func() time.Time
 	Log   *slog.Logger
+	// FS is the filesystem of the journal's files (reapplyInput.FS, which step 3
+	// takes from step 2's input); nil is the real one.
+	FS journal.FS
 }
 
 func (in restoreHooksInput) now() time.Time {
@@ -240,7 +243,7 @@ func (in restoreHooksInput) hookedLines() []uint64 {
 
 // writeMarkers is step h's marker write.
 func (in restoreHooksInput) writeMarkers(ctx context.Context) error {
-	return writeStoreMarkers(ctx, in.Journal, in.Result.Path, in.Identity, in.Result.Moved, in.log())
+	return writeStoreMarkers(ctx, in.Journal, in.FS, in.Result.Path, in.Identity, in.Result.Moved, in.log())
 }
 
 // run builds the RestoreContext and runs the hooks in order.
@@ -360,12 +363,12 @@ func (s stampRestore) Append(ctx context.Context, b *storage.Batch, r journal.Re
 // as evidence. No restore line, or none this journal can take, is nothing to
 // close and is not an error: the swap back already restored the store and the
 // location file.
-func restoreAborted(ctx context.Context, comp *journal.Component, keys journal.Keys, restoreID string, at time.Time) error {
+func restoreAborted(ctx context.Context, comp *journal.Component, keys journal.Keys, restoreID string, at time.Time, fsOpts ...journal.FSOption) error {
 	path := comp.Path()
 	if path == "" {
 		return nil
 	}
-	chain, err := journal.ReadFile(path, keys)
+	chain, err := journal.ReadFile(path, keys, fsOpts...)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return nil // no journal, so no restore line to close

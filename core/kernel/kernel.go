@@ -192,6 +192,10 @@ type Config struct {
 	// the app boots as it did before F4-08. Temporary, as the F3 config gate
 	// was: B10 deletes it with the flip that makes identity unconditional.
 	IdentityBoot bool
+	// ArchivePrefix is app.Options.ArchivePrefix: the prefix of the app's
+	// backup archives and of its revocation journal's file name and header
+	// (<prefix>revocations.journal). "" is <AppID>_.
+	ArchivePrefix string
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
