@@ -128,13 +128,18 @@ type booksEmbeddingModelThresholds struct {
 	Low  float64 `json:"low"`
 }
 
+// booksWhisperEndpoint is one entry of modules.books.whisper.endpoints. Only
+// url is required: HEAD's WHISPER_ENDPOINTS JSON (config.ParseWhisperEndpoints)
+// accepted an entry with any other field left out, at its zero value, so the
+// schema must too or an operator's HEAD-form value refuses the boot (F3-07
+// rehearsal finding 2).
 type booksWhisperEndpoint struct {
 	URL          string   `json:"url"`
-	Concurrency  int      `json:"concurrency"`
-	Label        string   `json:"label"`
-	Priority     int      `json:"priority"`
-	RequireGPU   bool     `json:"require_gpu"`
-	Capabilities []string `json:"capabilities"`
+	Concurrency  int      `json:"concurrency,omitempty"`
+	Label        string   `json:"label,omitempty"`
+	Priority     int      `json:"priority,omitempty"`
+	RequireGPU   bool     `json:"require_gpu,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 type absSettings struct {

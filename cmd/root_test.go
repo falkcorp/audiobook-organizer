@@ -205,6 +205,37 @@ func TestConfigCheck_ReportsWhatInitConfigRefuses(t *testing.T) {
 	if _, serr := os.Stat(os.Getenv(config.SecureStateDirEnv)); !errors.Is(serr, os.ErrNotExist) {
 		t.Errorf("config check created the state directory (%v)", serr)
 	}
+	// No filesystem side effect at all: HEAD's initConfig made ./playlists
+	// (rehearsal finding 4).
+	ents, rerr := os.ReadDir(".")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range ents {
+		t.Errorf("config check created %q in the working directory", e.Name())
+	}
+}
+
+// TestConfigCheck_CleanLayersCreateNothing: with nothing retired set, config
+// check passes and still creates nothing in the working directory.
+func TestConfigCheck_CleanLayersCreateNothing(t *testing.T) {
+	isolateInitConfig(t)
+	playlistDir = "playlists"
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"config", "check"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config check = %v\n%s", err, out.String())
+	}
+	ents, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		t.Errorf("config check created %q in the working directory", e.Name())
+	}
 }
 
 // enabled_sort_indexes is boot-only, so what GET /api/v1/config reports must

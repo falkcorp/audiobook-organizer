@@ -68,6 +68,18 @@ func StandaloneOptions(o database.StandaloneOptions) database.StandaloneOptions 
 	return o
 }
 
+// FastExitModule is books' module as main's app.FastExit reads it
+// (--print-storage-levels, --print-capabilities): the manifest a serve boot
+// hands app.New, the flip's level step included. Module() alone names no
+// database and so declares no flip (declaresFlip); a level vector printed from
+// it would read books 0 for a build that raises the store to the cutover
+// level. Only the declaration is read: nothing opens the placeholder path.
+func FastExitModule() module.Module {
+	m := Module().(*booksModule)
+	m.dbPath = "fast-exit"
+	return m
+}
+
 // declaresFlip reports whether this manifest declares F3's cutover: Options
 // has named the database (the steps read HEAD's paths, and a module built
 // without one, the help listing's, plans no cutover, so a dry run over it never

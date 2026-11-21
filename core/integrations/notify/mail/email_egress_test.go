@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/notify"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -165,7 +166,7 @@ func newEgressRig(t *testing.T, o egressOpts) *egressRig {
 	}
 	t.Cleanup(func() { _ = root.Close() })
 	now := func() time.Time { return egressNoon }
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: ks(egressSecretsOwner), AppID: "gotham", Now: now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: ks(egressSecretsOwner), AppID: "gotham", Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
