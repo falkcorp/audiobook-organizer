@@ -49,10 +49,7 @@ func (c *countingLibraryImporter) ImportPath(context.Context, string, string) (s
 // The cleanup must refuse it: ErrProtectedPathWrite, the importer never
 // called, the seeding file byte-identical.
 func TestRemoveMovementAtomsFromFile_ProtectedPathRefusedNeverImported(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := requireUsableFFmpeg(t)
 	seeding := filepath.Join(t.TempDir(), "seeding")
 	path := filepath.Join(seeding, "book.m4a")
 	require.NoError(t, os.MkdirAll(seeding, 0o755))

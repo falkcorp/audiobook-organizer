@@ -244,10 +244,7 @@ func TestBackupOptOut_FileIOPoolReplays(t *testing.T) {
 // The startup movement-atom cleanup rewrites every m4b/m4a under RootDir. With
 // create_backups on it must still leave no .bak-* sibling.
 func TestBackupOptOut_MovementAtomCleanupLeavesNoBackup(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := requireUsableFFmpeg(t)
 	backupsOn(t)
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
