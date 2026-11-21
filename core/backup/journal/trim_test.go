@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,18 +62,6 @@ func seqs(c *Chain) []uint64 {
 	return out
 }
 
-func sameSeqs(got, want []uint64) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
 // TestTrim_ExactSurvivors pins what a trim to seq 3 of a journal of 6 keeps: the
 // lines 4, 5 and 6 as the bytes they were written with, a header that names line
 // 3 as its base, and nothing else.
@@ -104,7 +93,7 @@ func TestTrim_ExactSurvivors(t *testing.T) {
 	if c.Break != nil || c.Torn != 0 {
 		t.Fatalf("the trimmed journal does not verify: break %v, torn %d", c.Break, c.Torn)
 	}
-	if !sameSeqs(seqs(c), []uint64{4, 5, 6}) {
+	if !slices.Equal(seqs(c), []uint64{4, 5, 6}) {
 		t.Errorf("surviving seqs = %v, want [4 5 6]", seqs(c))
 	}
 	if c.Header.BaseSeq != 3 || c.Header.BaseMAC != baseMAC || !c.Header.ChainBase {
@@ -169,7 +158,7 @@ func TestTrim_ToTheHead(t *testing.T) {
 	}
 	fx.commitRevoke(t, j, trimCast[4])
 	c = fx.chain(t)
-	if c.Break != nil || !sameSeqs(seqs(c), []uint64{5}) {
+	if c.Break != nil || !slices.Equal(seqs(c), []uint64{5}) {
 		t.Fatalf("after one append: break %v seqs %v, want [5]", c.Break, seqs(c))
 	}
 	if got := fx.head(t).Seq; got != 5 {
@@ -188,7 +177,7 @@ func TestTrim_AppendsAfterTrimGoToTheNewFileAndReopen(t *testing.T) {
 	fx.commitRevoke(t, j, trimCast[5])
 	fx.commitRevoke(t, j, trimCast[6])
 	c := fx.chain(t)
-	if c.Break != nil || !sameSeqs(seqs(c), []uint64{3, 4, 5, 6, 7}) {
+	if c.Break != nil || !slices.Equal(seqs(c), []uint64{3, 4, 5, 6, 7}) {
 		t.Fatalf("after two appends: break %v seqs %v", c.Break, seqs(c))
 	}
 	if j2, err := OpenFile(context.Background(), fx.opts()); !errors.Is(err, ErrLocked) {
@@ -300,7 +289,7 @@ func TestTrim_Clamps(t *testing.T) {
 		if res.Limit != TrimLimitHead || res.Base != 3 || res.Kept != 2 {
 			t.Fatalf("result = %+v, want cut at the head (3), limit head, 2 kept", res)
 		}
-		if c := fx.chain(t); !sameSeqs(seqs(c), []uint64{4, 5}) {
+		if c := fx.chain(t); !slices.Equal(seqs(c), []uint64{4, 5}) {
 			t.Errorf("seqs = %v, want [4 5]", seqs(c))
 		}
 	})
@@ -473,7 +462,7 @@ func TestTrim_RetiredKeyAfterTheCut(t *testing.T) {
 	}
 	fx.keys.retire("d1")
 	c := fx.chain(t)
-	if c.Break != nil || !sameSeqs(seqs(c), []uint64{4, 5}) {
+	if c.Break != nil || !slices.Equal(seqs(c), []uint64{4, 5}) {
 		t.Fatalf("after the trim and retiring d1: break %v seqs %v", c.Break, seqs(c))
 	}
 	if c.Header.KID != "d2" || c.Lines[0].KID != "d2" {
@@ -592,7 +581,7 @@ type faultFS struct {
 	// back exists to catch.
 	flip string
 	seen []string
-	open  []FSFile
+	open []FSFile
 }
 
 type crashed struct{ at string }
@@ -678,12 +667,7 @@ func (f *faultFS) closeAll() {
 func (f *faultFS) saw(key string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for _, s := range f.seen {
-		if s == key {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(f.seen, key)
 }
 
 type faultFile struct {
@@ -814,7 +798,7 @@ func TestTrim_ADirSyncFailureBreaksTheFile(t *testing.T) {
 	if res.Base != 2 || res.Dropped != 2 {
 		t.Errorf("the rename happened, the result must say so: %+v", res)
 	}
-	if c := fx.chain(t); c.Break != nil || c.Header.BaseSeq != 2 || !sameSeqs(seqs(c), []uint64{3, 4}) {
+	if c := fx.chain(t); c.Break != nil || c.Header.BaseSeq != 2 || !slices.Equal(seqs(c), []uint64{3, 4}) {
 		t.Fatalf("the trimmed file: break %v base %d seqs %v", c.Break, c.Header.BaseSeq, seqs(c))
 	}
 	b := fx.auth.NewBatch()
@@ -904,7 +888,7 @@ func TestTrim_CrashAtEveryStepLeavesAWholeJournal(t *testing.T) {
 					t.Errorf("the old journal has %d lines, want 5", len(c.Lines))
 				}
 			case 3:
-				if !sameSeqs(seqs(c), []uint64{4, 5}) {
+				if !slices.Equal(seqs(c), []uint64{4, 5}) {
 					t.Errorf("the trimmed journal's seqs = %v, want [4 5]", seqs(c))
 				}
 			default:
@@ -946,9 +930,7 @@ func TestTrim_ConcurrentAppendsAreNotLost(t *testing.T) {
 	var appendMu sync.Mutex // concurrent revocations serialise at the head's commit, as callers' retries do
 	errs := make(chan error, n+5)
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			appendMu.Lock()
 			defer appendMu.Unlock()
 			b := fx.auth.NewBatch()
@@ -959,18 +941,16 @@ func TestTrim_ConcurrentAppendsAreNotLost(t *testing.T) {
 				return
 			}
 			errs <- b.Commit(ctx, storage.Sync)
-		}()
+		})
 	}
 	for range 5 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			h, err := ReadHead(ctx, fx.ks)
 			if err == nil {
 				_, err = j.Trim(ctx, h.Seq)
 			}
 			errs <- err
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
