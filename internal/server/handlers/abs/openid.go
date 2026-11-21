@@ -28,8 +28,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreaudit "github.com/falkcorp/mediacore/audit"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Single sign-on for Audiobookshelf clients, implemented against AudioBooth's
@@ -1165,6 +1167,15 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 		return
 	}
 
+	// Under core identity (F4-08 B7, legacyauth.WithIdentity) the account's
+	// epoch and standing are core's, not books' store's: once the identity
+	// cutover has run, an epoch bump or a disable lands in core's store only,
+	// and HEAD's read below would miss it (A7 flip gap).
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.openIDSessionThroughCore(c, id, pending, now)
+		return
+	}
+
 	user, err := h.store.GetUserByID(pending.UserID)
 	if err != nil {
 		// Transient store failure is a 500, never a 401: telling the client its
@@ -1208,6 +1219,73 @@ func (h *Handler) OpenIDCallback(c *gin.Context) {
 	// Same session-issuing path as POST /login, so the response shape, the audit
 	// record and the token lifetimes cannot drift between password and SSO login.
 	h.issueSession(c, user, nil, oidcAuthMethod, pending.Email, now)
+}
+
+// openIDSessionThroughCore is OpenIDCallback's tail under core identity: the
+// code's user and epoch go to core's Compat.PrincipalFor, which refuses a user
+// that is not active, whose epoch differs from the code's, or that core
+// restricts, and the session is issued for the user core resolved. The epoch
+// passed is the code's own (pending.CredentialEpoch), never a fresh read: a
+// fresh read would match by construction and defeat the check.
+//
+// Core answers standing before epoch, so a code minted before a deactivation
+// is 403 account-inactive here where HEAD's order (epoch first) answered 401
+// credentials-changed. Both refuse and neither issues a session; only the
+// status differs, and it is recorded in the F4-08 B7 report.
+func (h *Handler) openIDSessionThroughCore(c *gin.Context, id *legacyauth.Identity, pending oidcPendingCode, now time.Time) {
+	p, err := id.Compat.PrincipalFor(c.Request.Context(), &coreauth.User{ID: coreauth.UserID(pending.UserID)}, nil, pending.CredentialEpoch, id.Client(c.Request))
+	if err != nil {
+		h.refuseOpenIDCore(c, pending, err)
+		return
+	}
+	if p == nil || p.User == nil {
+		respondError(c, http.StatusInternalServerError, "could not load user")
+		return
+	}
+	u := p.User
+	h.issueSession(c, &database.User{
+		ID:              string(u.ID),
+		Username:        u.Username,
+		Email:           u.Email,
+		Status:          string(u.Status),
+		CredentialEpoch: u.CredentialEpoch,
+		CreatedAt:       u.CreatedAt,
+	}, nil, oidcAuthMethod, pending.Email, now)
+}
+
+// refuseOpenIDCore answers a PrincipalFor refusal: audited with a reason that
+// names no credential, and answered with the status HEAD's own check gave for
+// the same condition (a transient store failure stays 500, never 401: the
+// client's credential is not dead).
+func (h *Handler) refuseOpenIDCore(c *gin.Context, pending oidcPendingCode, err error) {
+	record := func(outcome coreaudit.Outcome, reason string) {
+		absauth.AttemptLog.Record(coreaudit.AuthAttempt{
+			Action: "openid-callback", Outcome: outcome, Mode: oidcAuthMethod,
+			SourceIP: strings.TrimSpace(c.ClientIP()), UserID: pending.UserID,
+			Reason: reason, Path: c.Request.URL.Path,
+		})
+	}
+	switch {
+	case errors.Is(err, coreauth.ErrThrottled):
+		record(coreaudit.Throttled, "core-throttled")
+		absauth.SetRetryAfter(c)
+		respondError(c, http.StatusTooManyRequests, "too many failed sign-in attempts from this source: try again later")
+	case errors.Is(err, coreauth.ErrStaleEpoch):
+		record(coreaudit.Denied, "credentials-changed")
+		respondError(c, http.StatusUnauthorized, "the account changed since this sign-in started; sign in again")
+	case errors.Is(err, coreauth.ErrInactiveUser):
+		record(coreaudit.Denied, "user-inactive")
+		respondError(c, http.StatusForbidden, "account is not active")
+	case errors.Is(err, coreauth.ErrResetRequired):
+		record(coreaudit.Denied, "reset-required")
+		respondError(c, http.StatusForbidden, "a password reset is required before this account can sign in")
+	case errors.Is(err, coreauth.ErrInvalidCredentials):
+		record(coreaudit.Denied, "user-unknown")
+		respondError(c, http.StatusUnauthorized, "user no longer exists")
+	default:
+		record(coreaudit.Error, "core-principal-failed")
+		respondError(c, http.StatusInternalServerError, "could not load user")
+	}
 }
 
 // oidcRateKey is hop 1's rate-limit key: the verified credential plus gin's
