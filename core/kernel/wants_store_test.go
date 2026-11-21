@@ -93,6 +93,13 @@ func TestWantsStore_IdentityBootWithNoStorageModuleBoots(t *testing.T) {
 			if _, _, ok := k.IdentityServices(); !ok {
 				t.Error("the boot built no identity services")
 			}
+			// A storage-less module is served, not held for "storage": the
+			// held check is module-level (DeclaresStorage), not the app's.
+			for _, e := range k.entries {
+				if !e.enabled || e.held != "" {
+					t.Errorf("module %s: enabled=%v held=%q after the boot, want enabled and not held", e.man.ID, e.enabled, e.held)
+				}
+			}
 			if !k.swapWanted(false) {
 				t.Error("P0a's swap is not wanted for an app with a store")
 			}
