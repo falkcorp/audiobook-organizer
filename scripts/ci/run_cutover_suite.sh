@@ -72,6 +72,7 @@ if [ "$shard" = r0 ]; then
     TestCutoverOnR0Corpus/selftest/answers TestCutoverOnR0Corpus/selftest/manifest
     TestCutoverOnR0Corpus/selftest/references TestCutoverOnR0Corpus/selftest/checkpoint-guard
     TestCutoverOnR0Corpus/selftest/id-resolution
+    TestCutoverOnR0Corpus/selftest/residual TestCutoverOnR0Corpus/selftest/completion
     TestPrefreezeTagResolver TestPrefreezeFetchVerifiesChecksum)
   python3 scripts/ci/gen_shared_family_lists.py --check
 fi

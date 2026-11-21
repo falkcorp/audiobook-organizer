@@ -33,7 +33,11 @@ Where each entry comes from:
   10 (``preference:storage_format``, ``preference:storage_migration``) and row
   16's migration bookkeeping (``preference:db_version``,
   ``preference:migration_<n>``, and ``counter:preference``, the ID counter the
-  preference writer bumps for each new ledger row).
+  preference writer bumps for each new ledger row). The storage_format stamp
+  is the legacy guard's projection: a level step (F3's M7) raises it to
+  LegacyMaxFormat+1 so every pre-guard build refuses the store, so it is
+  checked never to decrease, and the cutover suite's level check pins the
+  value a level step leaves (levelProblems).
 
 The census (``--check`` and ``--write``): every key of every committed corpus
 store must fall in a family ``keyfamilies.go`` registers, and every ``idx:``
@@ -164,7 +168,7 @@ BOOKKEEPING = (
         "exact",
         "preference:storage_format",
         "10",
-        "legacy guard projection; kept byte for byte",
+        "legacy guard projection (LegacyGuardProjection.Stage, 05-storage §5S.3.7); a level step raises it, never decreases",
     ),
     Entry(
         "bookkeeping",
@@ -303,8 +307,10 @@ def render(entries: list[Entry]) -> str:
         "# §5S.9.1 rows 1-10, 15, 16, 18, 19. Columns (TAB): class kind value row note.",
         "# TestCutoverLeavesOtherFamiliesByteIdentical skips every move and rewrite",
         "# entry, checks the bookkeeping entries grow-only (bookkeepingProblems: every",
-        "# row there before keeps its bytes, the schema version and the counter never",
-        "# decrease), and hashes keep entries like every other books key.",
+        "# row there before keeps its bytes, except that the schema version, the",
+        "# counter and the storage_format stamp may grow but never decrease; a level",
+        "# step raises the stamp to the legacy projection, levelProblems), and hashes",
+        "# keep entries like every other books key.",
     ]
     return "\n".join(head + [e.line() for e in entries]) + "\n"
 
