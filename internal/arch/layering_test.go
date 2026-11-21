@@ -299,6 +299,7 @@ var layerOf = map[string]int{
 	"internal/server/handlers/system":           5, // family: internal/server/** is transport
 	"internal/server/handlers/system/mocks":     5, // family: internal/server/** is transport
 	"internal/server/handlers/tools":            5, // family: internal/server/** is transport
+	"internal/server/legacyauth":                5, // family: internal/server/** is transport
 	"internal/server/middleware":                5, // family: internal/server/** is transport
 
 	// Layer 6: entry
