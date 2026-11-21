@@ -281,13 +281,18 @@ func (k *Kernel) registerBackupHealth() error {
 		return errors.New("kernel: identity: no health registry is built")
 	}
 	_, err := k.healthReg.Register(health.Check{
-		ID: componentBackup, Title: "Backup and restore",
-		Probe: backupProbe(id.journal.Health, func() hookReport { return id.p4d.Hooks.Report }),
+		ID: componentBackup, Title: "Backup and restore", Probe: id.backupProbe(),
 	})
 	if err != nil {
 		return fmt.Errorf("kernel: identity: health: %w", err)
 	}
 	return nil
+}
+
+// backupProbe is core.backup's probe over this boot's journal and hook report,
+// the one registerBackupHealth registers.
+func (id *identityBoot) backupProbe() func(context.Context) health.Result {
+	return backupProbe(id.journal.Health, func() hookReport { return id.p4d.Hooks.Report })
 }
 
 // closeIdentity closes the journal component (it stops the anchor, writes the
