@@ -104,7 +104,7 @@ func TestUIBundle_WithServesSPAMountIsP7Problem(t *testing.T) {
 		return nil
 	}))
 	c.UI = shellBundle(t)
-	k, err := New(t.Context(), c)
+	k, err := newK(t, c)
 	if k != nil || !hasKind(err, module.ProblemSPAOwner) {
 		t.Fatalf("New = %v, %v; want ProblemSPAOwner", k, err)
 	}
