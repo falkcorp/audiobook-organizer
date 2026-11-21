@@ -42,6 +42,13 @@ func reachStateOf(t *testing.T, in reachObligationInput, name string) reachOblig
 	return reachObligationState{}
 }
 
+// reachDischargedRows are the rows a test outside this package discharges
+// today (the guard finds it with go/ast in the row's directory, so no
+// registration is involved): every other row is open. F4-07-RANDOM-ROLES is
+// discharged by TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits
+// in core/httpapi (F4-08 B6a). A row joins this set when its discharge lands.
+var reachDischargedRows = map[string]bool{"F4-07-RANDOM-ROLES": true}
+
 func TestReachObligations_TheTableIsStatedInTheSeamsAndEveryRowIsOpenToday(t *testing.T) {
 	for _, p := range reachObligationProblemsNow(t) {
 		t.Error(p)
@@ -53,7 +60,10 @@ func TestReachObligations_TheTableIsStatedInTheSeamsAndEveryRowIsOpenToday(t *te
 	}
 	for _, st := range states {
 		t.Logf("%-28s %4d %s to cover; open=%v (%s)", st.row.name, len(st.bar), st.row.unit, st.open, st.why)
-		if !st.open {
+		switch {
+		case reachDischargedRows[st.row.name] && st.open:
+			t.Errorf("%s has its discharge test in %s and is still open: %s", st.row.name, st.row.dir, st.why)
+		case !reachDischargedRows[st.row.name] && !st.open:
 			t.Errorf("%s is closed and no discharge is registered: %s", st.row.name, st.why)
 		}
 	}
