@@ -63,12 +63,17 @@ func Classify(ex database.LabeledExample) (label, reason string, fires bool) {
 	return "", "", false
 }
 
+// ReasonWholeBookSignatureMatch is the reason wholeBookSignatureMatch writes.
+// Stored labelled examples carry this exact value, and the dedup.auto-resolve
+// label fallback matches on it, so it must stay byte-identical.
+const ReasonWholeBookSignatureMatch = "whole-book signatures match"
+
 // wholeBookSignatureMatch is the positive oracle: both sides have a computed
 // whole-book signature and signatureRelation is "match" (sim ≥ 0.95 per Task 6
 // wiring in builder.go). Returns true_dup.
 func wholeBookSignatureMatch(ex database.LabeledExample) (string, string, bool) {
 	if ex.A.WholeBookSigPresent && ex.B.WholeBookSigPresent && ex.SignatureRelation == "match" {
-		return "true_dup", "whole-book signatures match", true
+		return "true_dup", ReasonWholeBookSignatureMatch, true
 	}
 	return "", "", false
 }

@@ -1,0 +1,3 @@
+### Fixed
+
+- The `dedup.auto-resolve` label fallback now admits a pair only on a label the deterministic whole-book-signature rule wrote: the exact shared reason constant (`dataset.ReasonWholeBookSignatureMatch`), `LabelSource` "rule" and `SignatureRelation` "match". Before, a substring of the free-text reason was enough, so a human or LLM-judge label carrying the same words could justify a merge. Auto-resolve is still off by default; in the dry-run plan, pairs admitted only by a non-rule label now land under `corroboration_insufficient`, and stored rule labels written before those fields were populated no longer count.
