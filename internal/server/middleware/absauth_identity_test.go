@@ -7,6 +7,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -55,6 +56,24 @@ type coreFake struct {
 	keys     map[string]coreKey
 	asked    struct{ keys, users int }
 	epochs   []int64
+	// method, when set, is the method of the principals it builds (default
+	// books.abs); perms, when set, is the scopes it grants a user.
+	method coreauth.Method
+	perms  []rbac.Permission
+}
+
+func (f *coreFake) methodOrDefault() coreauth.Method {
+	if f.method != "" {
+		return f.method
+	}
+	return legacyauth.MethodBooksABS
+}
+
+func (f *coreFake) scopes() []rbac.Permission {
+	if f.perms != nil {
+		return f.perms
+	}
+	return []rbac.Permission{"books:view", "core:tasks.view"}
 }
 
 func newCoreFake() *coreFake {
@@ -109,9 +128,9 @@ func (f *coreFake) PrincipalFor(_ context.Context, u *coreauth.User, _ []rbac.Pe
 		return nil, coreauth.ErrStaleEpoch
 	}
 	return &coreauth.Principal{
-		Method: legacyauth.MethodBooksABS,
+		Method: f.methodOrDefault(),
 		User:   &coreauth.User{ID: u.ID, Username: "bruce", Status: coreauth.StatusActive},
-		Perms:  coreChecker{perms: []rbac.Permission{"books:view", "core:tasks.view"}},
+		Perms:  coreChecker{perms: f.scopes()},
 	}, nil
 }
 
@@ -147,7 +166,14 @@ func (a absAtoms) Requirement(atom string, _ bool) (rbac.Requirement, bool) {
 	r, ok := a[atom]
 	return r, ok
 }
-func (a absAtoms) Atoms() []string { return []string{"library.view"} }
+func (a absAtoms) Atoms() []string {
+	out := make([]string, 0, len(a))
+	for k := range a {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
 
 // idHarness is an ABS surface under core identity beside a books store the
 // tests keep deliberately out of step with core.
@@ -171,14 +197,19 @@ func newIdentityHarness(t *testing.T, allowed []string) *idHarness {
 	resolver := NewABSIdentityResolver(cfg, verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"}), books)
 	core := newCoreFake()
 
-	lookup := func(_ context.Context, id coreauth.UserID) (*database.User, error) { return books.GetUserByID(string(id)) }
-	bridge, err := legacyauth.New(absAtoms{"library.view": rbac.AllOf("books:view", "core:tasks.view")}, lookup, nil)
+	lookup := func(_ context.Context, id coreauth.UserID) (*database.User, error) {
+		return books.GetUserByID(string(id))
+	}
+	bridge, err := legacyauth.New(absAtoms{
+		"library.view":                     rbac.AllOf("books:view", "core:tasks.view"),
+		string(auth.PermFingerprintWorker): rbac.Need("books:fpworker"),
+	}, lookup, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	id := &legacyauth.Identity{
 		Bridge: bridge, Compat: core,
-		Client: func(r *http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: r.UserAgent()} },
+		Client:  func(r *http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: r.UserAgent()} },
 		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },
 	}
 	r := gin.New()
@@ -432,7 +463,7 @@ func TestABSIdentity_SessionExtendsOnlyAfterCoreAdmits(t *testing.T) {
 func TestABSIdentity_WithoutAnIdentityHeadDecides(t *testing.T) {
 	h := newIdentityHarness(t, nil)
 	bearer := h.signedIn(t, 0, 5, "disabled") // core would refuse; books is fine
-	r := gin.New()                           // no id.Bind()
+	r := gin.New()                            // no id.Bind()
 	r.GET("/api/me", ABSRequireAuth(h.resolver), func(c *gin.Context) { c.String(http.StatusOK, "reached") })
 	req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
 	req.Header.Set("Authorization", bearer)
@@ -440,5 +471,81 @@ func TestABSIdentity_WithoutAnIdentityHeadDecides(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusOK || h.core.asked.users != 0 {
 		t.Fatalf("status %d, core asked %d times: a server built without an identity must stay on HEAD's code", w.Code, h.core.asked.users)
+	}
+}
+
+// TestABSIdentity_WorkerOnlyUserStaysOnTheWorkerAPI: a user whose only grant is
+// the remote fingerprint worker's (a role, not a confined key) is refused 403
+// outside the worker API, as HEAD's post-Bind confinement refuses them.
+func TestABSIdentity_WorkerOnlyUserStaysOnTheWorkerAPI(t *testing.T) {
+	h := newIdentityHarness(t, nil)
+	bearer := h.signedIn(t, 0, 0, "active")
+	h.core.perms = []rbac.Permission{"books:fpworker"}
+	w := h.get(map[string]string{"Authorization": bearer})
+	if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), `"user"`) {
+		t.Fatalf("status %d (%s), want 403 limited to the fingerprint worker API", w.Code, w.Body.String())
+	}
+}
+
+// TestABSIdentity_AnAdmittedPrincipalTheBridgeCannotMapIsRefused: core admitted
+// the credential but its principal is of a method the bridge does not map (or
+// names a user books' lookup cannot find): the request is a 401, and the
+// handler is never reached with a half-bound identity.
+func TestABSIdentity_AnAdmittedPrincipalTheBridgeCannotMapIsRefused(t *testing.T) {
+	t.Run("an unmapped method", func(t *testing.T) {
+		h := newIdentityHarness(t, nil)
+		bearer := h.signedIn(t, 0, 0, "active")
+		h.core.method = "books.riddler"
+		w := h.get(map[string]string{"Authorization": bearer})
+		if w.Code != http.StatusUnauthorized || strings.Contains(w.Body.String(), `"user"`) {
+			t.Fatalf("status %d (%s), want 401", w.Code, w.Body.String())
+		}
+	})
+	t.Run("a user the bridge's lookup cannot find", func(t *testing.T) {
+		h := newIdentityHarness(t, nil)
+		bearer := h.signedIn(t, 0, 0, "active")
+		delete(h.store.users, idUser)
+		w := h.get(map[string]string{"Authorization": bearer})
+		if w.Code != http.StatusUnauthorized || strings.Contains(w.Body.String(), `"user"`) {
+			t.Fatalf("status %d (%s), want 401", w.Code, w.Body.String())
+		}
+	})
+}
+
+// TestABSIdentity_SessionRecordRefusalsEndBeforeCoreIsAsked: every check the
+// surface itself owns (HEAD's Resolve order) refuses with HEAD's status and
+// never reaches core, so a core that would admit cannot admit these.
+func TestABSIdentity_SessionRecordRefusalsEndBeforeCoreIsAsked(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(h *idHarness)
+		status int
+	}{
+		"a session recorded for another user": {func(h *idHarness) { h.store.sessions["s1"].UserID = "u-bane" }, http.StatusUnauthorized},
+		"an expired session":                  {func(h *idHarness) { h.store.sessions["s1"].ExpiresAt = time.Now().Add(-time.Minute) }, http.StatusUnauthorized},
+		"a session past the absolute cap": {func(h *idHarness) {
+			h.cfg.SessionMaxTTL = time.Hour
+			h.store.sessions["s1"].CreatedAt = time.Now().Add(-2 * time.Hour)
+		}, http.StatusUnauthorized},
+		"a session lookup that fails":       {func(h *idHarness) { h.store.sessionErr = errors.New("store down") }, http.StatusInternalServerError},
+		"a bearer when the JWT mode is off": {func(h *idHarness) { h.cfg.Modes.JWT = false }, http.StatusUnauthorized},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newIdentityHarness(t, nil)
+			bearer := h.signedIn(t, 0, 0, "active")
+			// Core agrees to everything, so only the surface's own check can refuse.
+			if w := h.get(map[string]string{"Authorization": bearer}); w.Code != http.StatusOK {
+				t.Fatalf("control: status %d (%s), want 200", w.Code, w.Body.String())
+			}
+			h.core.asked.users = 0
+			tc.mutate(h)
+			w := h.get(map[string]string{"Authorization": bearer})
+			if w.Code != tc.status || strings.Contains(w.Body.String(), `"user"`) {
+				t.Fatalf("status %d (%s), want %d", w.Code, w.Body.String(), tc.status)
+			}
+			if h.core.asked.users != 0 {
+				t.Error("core was asked about a credential the surface had already refused")
+			}
+		})
 	}
 }

@@ -646,7 +646,7 @@ func (h *Handler) OpenIDAuthorize(c *gin.Context) {
 	if shared {
 		limiter, ownerCap = h.oidcSharedLimiter, oidcSharedCredentialCap
 	}
-	if !limiter.AllowKey(h.hop1RateKey(c, callerKey)) {
+	if !limiter.AllowKey(oidcRateKey(c, callerKey)) {
 		oidcLog.Warn("openid authorize rate-limited: caller=%s", logger.SanitizeLogValue(callerKey))
 		h.oidcAuthorizeReject(c, "rate-limited", "Too many sign-in attempts. Wait a minute and try again.")
 		return
@@ -1301,18 +1301,6 @@ func (h *Handler) refuseOpenIDCore(c *gin.Context, pending oidcPendingCode, err 
 // them to anything and mint fresh rate-limit buckets at will.
 func oidcRateKey(c *gin.Context, callerKey string) string {
 	return "openid:" + callerKey + "|" + strings.TrimSpace(c.ClientIP())
-}
-
-// hop1RateKey is oidcRateKey under HEAD's wiring, and under core identity the
-// same key with the visitor bucket the wiring built from
-// cfaccess.ClientAddrTrust (Handler.clientBucket) in place of c.ClientIP(): the
-// gin binder the HEAD address rule reads does not run there. A bucket the
-// wiring cannot name keeps c.ClientIP().
-func (h *Handler) hop1RateKey(c *gin.Context, callerKey string) string {
-	if bucket := h.clientBucket(c); bucket != "" {
-		return "openid:" + callerKey + "|" + bucket
-	}
-	return oidcRateKey(c, callerKey)
 }
 
 // oidcLogValue sanitizes a caller-supplied value for a log line and caps it at
