@@ -161,17 +161,30 @@ func restoreTokens(r hookReport) []backupToken {
 // backupProbe is core.backup's probe (coreComponentSources.Backup): the
 // journal's tokens and the restore tokens, combined. Either source may be nil
 // (no journal bound, no restore hooks this build). The journal's Health reads
-// no store and writes nothing, so the probe is cheap. Nothing calls this until
-// F4-08's B3 wires the boot.
-func backupProbe(journalHealth func() []journal.Health, restore func() hookReport) func(context.Context) health.Result {
-	return func(context.Context) health.Result {
+// no store and writes nothing; the restore source reads the report the hooks
+// recorded, and a report it cannot read raises restore_report_unreadable
+// instead of reading as nothing to review.
+func backupProbe(journalHealth func() []journal.Health, restore func(context.Context) (hookReport, error)) func(context.Context) health.Result {
+	return func(ctx context.Context) health.Result {
 		var tokens []backupToken
 		if journalHealth != nil {
 			tokens = append(tokens, journalTokens(journalHealth())...)
 		}
 		if restore != nil {
-			tokens = append(tokens, restoreTokens(restore())...)
+			rep, err := restore(ctx)
+			if err != nil {
+				tokens = append(tokens, backupToken{Reason: reasonRestoreReportUnreadable, Status: health.StatusDegraded, Detail: detailRestoreReportUnreadable})
+			}
+			tokens = append(tokens, restoreTokens(rep)...)
 		}
 		return combineBackup(tokens)
 	}
 }
+
+// reasonRestoreReportUnreadable is raised when the stored restore report cannot
+// be read: whether a restore left accounts to review is then unknown, which is
+// shown, not hidden. Its Detail is fixed text; the read error goes to the log.
+const (
+	reasonRestoreReportUnreadable = "restore_report_unreadable"
+	detailRestoreReportUnreadable = "the report of the last restore's hooks cannot be read: accounts it flagged for review are not known"
+)

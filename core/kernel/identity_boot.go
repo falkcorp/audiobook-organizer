@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -65,6 +66,10 @@ type identityBoot struct {
 	settings   func() auth.Settings
 	stateFiles auth.StateFiles
 	p4d        p4dStepsResult
+	// backupKS is c/backup/, which the core.backup probe reads the stored restore
+	// report from; log is its logger.
+	backupKS storage.Keyspace
+	log      *slog.Logger
 
 	// svc is what P5 built (buildIdentityServices); mu guards compat, the late
 	// AuthCompat handles by method name that a module's Registrar.AuthMethod

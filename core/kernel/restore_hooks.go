@@ -169,6 +169,13 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 			return res, err
 		}
 		res.Ran = true
+		// The report is the source of the restore health tokens, which outlive the
+		// boot: it is recorded before the record that says the hooks completed, so
+		// a crash between the two re-runs the hooks and records it again.
+		rep := journal.RestoreReport{Kept: res.Report.KeptAdmins, Review: res.Report.AdminsToReview}
+		if err := bootseam.Labelled(bootseam.From(ctx), labelHooksReport, func() error { return journal.PutRestoreReport(ctx, in.KS, rep, in.now()) }); err != nil {
+			return res, fmt.Errorf("kernel: record the restore hooks' report: %w", err)
+		}
 		// restore_hooked is the record that the hooks completed, whatever the
 		// restore journal says: a crash before it re-runs them next boot.
 		for _, l := range in.hookedLines() {
