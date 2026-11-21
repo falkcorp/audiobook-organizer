@@ -213,6 +213,16 @@ func (s *Service) client(r *http.Request) ClientInfo {
 	if s.d.Client != nil {
 		return s.d.Client(r)
 	}
+	return DirectClient(r)
+}
+
+// DirectClient is the connection as auth sees it with no resolver wired: the
+// TCP peer is the client, the request is HTTPS only when the connection is TLS,
+// and any forwarding header marks it Forwarded (so ClientInfo.Local refuses
+// it). It is the floor of strictness: a resolver passed as Deps.Client must
+// never report Local() for a request this reports not Local(); the kernel's
+// resolver test holds httpapi's to that by comparing against this function.
+func DirectClient(r *http.Request) ClientInfo {
 	c := ClientInfo{UserAgent: r.UserAgent(), HTTPS: r.TLS != nil, Forwarded: forwarded(r)}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

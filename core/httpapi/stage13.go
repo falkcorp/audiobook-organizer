@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -282,6 +283,13 @@ type Stage13Options struct {
 	ClearCookie func(r *http.Request) *http.Cookie
 	// Log receives a refusal's write failure; nil is allowed.
 	Log *slog.Logger
+	// Audit records each 403 this stage writes as core.permission.deny
+	// (05-rbac §8: recorded where the 403 is written; the store coalesces
+	// identical denials). nil records nothing. A 401 is no denial of a
+	// credential's reach and is not recorded here.
+	Audit audit.Logger
+	// Route is "METHOD /pattern", the route the denial names.
+	Route string
 }
 
 // ErrStage13Options is Stage13's refusal of options it cannot run with.
@@ -292,14 +300,14 @@ var ErrStage13Options = errors.New("httpapi: stage 13 options incomplete")
 // Authorize with the route's perm and guards, clears the session cookie when
 // the decision asks, and answers a refusal as a problem without calling next.
 //
-// Not wired yet. B4 (F4-08's flip) must: add it after stage 12 on every route
-// stage 12 runs on (native, Infra routes whose perm is not Public, legacy
-// manifest routes of a LegacyAuthCore mount) and never on an OwnAuth legacy
-// route, whose Delegated requirement Authorize refuses; pass books' atom table
-// as ResolveAtom, the catalog, auth's owner-required derivation and a
-// ClearCookie over auth.Service.SessionCookie; audit each refusal
-// (core.permission.deny, coalesced, 05-rbac §7.1) where it is written; and
-// relax checkMount/ErrNoAuthService only when auth exists.
+// Router.SetAuth wires it (auth.go): after stage 12 on every route stage 12
+// runs on (native, Infra routes whose perm is not Public, legacy manifest
+// routes of a LegacyAuthCore mount) and never on an OwnAuth legacy route,
+// whose Delegated requirement Authorize refuses, with books' atom table as
+// ResolveAtom, the catalog, auth's owner-required derivation, a ClearCookie
+// over auth.Service.SessionCookie, and each 403 audited as
+// core.permission.deny (the store coalesces, 05-rbac §7.1). The same
+// predicate relaxes checkMount/ErrNoAuthService.
 func Stage13(perm rbac.Requirement, guards Guards, o Stage13Options) (func(http.Handler) http.Handler, error) {
 	return stage13(perm, guards, o, stage12Outcome)
 }
@@ -333,6 +341,12 @@ func stage13(perm rbac.Requirement, guards Guards, o Stage13Options, outcome fun
 				}
 			}
 			if d.Refusal != nil {
+				if o.Audit != nil && d.Refusal.Status == http.StatusForbidden {
+					o.Audit.Emit(r.Context(), audit.Event{
+						Action: "core.permission.deny", Outcome: audit.Denied, Permission: string(d.Refusal.required),
+						Route: o.Route, Reason: d.Refusal.Code,
+					})
+				}
 				WriteError(w, r, d.Refusal, o.Log)
 				return
 			}
