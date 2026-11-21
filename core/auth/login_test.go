@@ -324,7 +324,7 @@ func TestLogin_BusyHasherAnswersBusy(t *testing.T) {
 	f, _ := loginFx(t)
 	release := make(chan struct{})
 	entered := make(chan struct{}, 1)
-	busy := password.New(password.Options{Permits: 1, Time: 1, MemoryKiB: 64,
+	busy := password.New(password.Options{Permits: 1, Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost,
 		Compute: func(pw, salt []byte, tm, mem uint32, th uint8, kl uint32) []byte {
 			select {
 			case entered <- struct{}{}:

@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"golang.org/x/crypto/argon2"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -548,7 +550,7 @@ func TestBootstrap_OwnerDemotedBeforeCommitIsRepicked(t *testing.T) {
 // countingHasher is a lowered-cost hasher that counts its derivations.
 func countingHasher(n *atomic.Int32) *password.Hasher {
 	return password.New(password.Options{
-		Time: 1, MemoryKiB: 64,
+		Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost,
 		Compute: func(pw, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
 			n.Add(1)
 			return argon2.IDKey(pw, salt, time, memory, threads, keyLen)

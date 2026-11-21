@@ -114,6 +114,11 @@ type AuthHandler struct {
 	// credential epoch with it). nil when the store lacks the capability, in
 	// which case ChangePassword refuses.
 	creds database.UserCredentialWriter
+	// rehasher re-stores a legacy bcrypt password as argon2id after it verifies
+	// (spec §3.5, as the ABS /login and core's sign-in do), so bcrypt rows drain
+	// on their owners' next sign-in. nil when the store lacks the capability:
+	// the sign-in still succeeds and the row stays bcrypt.
+	rehasher database.UserPasswordRehasher
 	// revokeGuestAccess ends invite-granted SSO / Cloudflare access for an
 	// email the user gave up in UpdateMe; nil = nothing to revoke.
 	revokeGuestAccess GuestAccessRevoker
@@ -131,7 +136,18 @@ func NewAuthHandler(store AuthStore, enableAuth bool) *AuthHandler {
 		throttle:    coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil),
 		absSessions: ResolveABSSessionRevoker(store),
 		creds:       ResolveUserCredentialWriter(store),
+		rehasher:    resolveUserPasswordRehasher(store),
 	}
+}
+
+// resolveUserPasswordRehasher finds database.UserPasswordRehasher through the
+// store's decorator chain, or nil.
+func resolveUserPasswordRehasher(store any) database.UserPasswordRehasher {
+	r, ok := database.AsCapability[database.UserPasswordRehasher](store)
+	if !ok {
+		return nil
+	}
+	return r
 }
 
 // SetThrottleKeyFunc sets how the per-IP failed-login throttle keys a request.
@@ -369,7 +385,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "invalid credentials")
 		return
 	}
-	if ok, _ := absauth.Passwords.VerifyLogin(user.PasswordHashAlgo, user.PasswordHash, req.Password); !ok {
+	ok, needsRehash := absauth.Passwords.VerifyLogin(user.PasswordHashAlgo, user.PasswordHash, req.Password)
+	if !ok {
 		// Soft, progressive per-account slowdown — never a hard lock, so the
 		// real user with the correct password is never denied (HIGH-3). An account
 		// with no password credential at all spends the same verification work.
@@ -392,6 +409,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// own failures against this account (capped), never its failures against
 	// other accounts.
 	h.throttle.Clear(accountKey, ip)
+	// spec §3.5: a verified legacy bcrypt password is re-stored as argon2id.
+	// Best effort, after the status check so a disabled account's row is left
+	// alone: a store hiccup here must never deny a correct password.
+	if needsRehash {
+		h.rehashPassword(user, req.Password)
+	}
 	ttl := defaultSessionTTL
 	if req.RememberMe {
 		ttl = rememberMeSessionTTL
@@ -428,6 +451,25 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		"user":       resp,
 		"expires_at": session.ExpiresAt,
 	})
+}
+
+// rehashPassword re-stores a verified password as argon2id. The write is
+// conditional on the stored hash still being the one just verified
+// (RehashUserPassword) and touches only the hash fields of the fresh row, so a
+// concurrent password change or deactivation is never overwritten. Failures
+// are logged, never returned: the sign-in has already succeeded.
+func (h *AuthHandler) rehashPassword(user *database.User, plain string) {
+	if h.rehasher == nil {
+		return
+	}
+	algo, hash, err := absauth.Passwords.Hash(plain)
+	if err != nil {
+		authLoginLog.Warn("login: rehash of user %s failed: %s", logger.SanitizeLogValue(user.ID), logger.SanitizeLogValue(err.Error()))
+		return
+	}
+	if _, err := h.rehasher.RehashUserPassword(user.ID, user.PasswordHash, algo, hash); err != nil {
+		authLoginLog.Warn("login: rehash of user %s not stored: %s", logger.SanitizeLogValue(user.ID), logger.SanitizeLogValue(err.Error()))
+	}
 }
 
 // Me handles GET /auth/me.

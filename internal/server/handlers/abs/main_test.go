@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	authpw "github.com/falkcorp/mediacore/auth/password"
 )
@@ -20,12 +22,15 @@ import (
 // failed login for an unknown name pays one on the dummy hash too. None of the
 // tests asserts on the cost: the derivation still runs with the parameters
 // stored in each hash, so a hash verifies and fails exactly as in production.
-// absauth's own tests pin the production parameters.
+// absauth's own tests pin the production parameters. Every login verification
+// also runs one bcrypt comparison (against a dummy unless the account is a
+// legacy bcrypt row), and BcryptCost lowers that dummy from DefaultCost the
+// same way.
 //
 // SetHashCostForTest panics outside a test binary and once the dummy hash is
 // built, so it must be the first thing here, before any test code runs.
 func TestMain(m *testing.M) {
-	absauth.Passwords = authpw.New(authpw.Options{Time: 1, MemoryKiB: 8192})
+	absauth.Passwords = authpw.New(authpw.Options{Time: 1, MemoryKiB: 8192, BcryptCost: bcrypt.MinCost})
 	os.Exit(m.Run())
 }
 

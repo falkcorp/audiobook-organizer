@@ -239,3 +239,72 @@ func TestAuthHandler_ChangePassword_UnknownAlgoDenied(t *testing.T) {
 		})
 	}
 }
+
+// rehashingStore adds the conditional-rehash capability to an AuthStore and
+// records each call.
+type rehashingStore struct {
+	handlers.AuthStore
+	calls []rehashCall
+}
+
+type rehashCall struct{ userID, verifiedHash, algo, hash string }
+
+func (s *rehashingStore) RehashUserPassword(userID, verifiedHash, algo, hash string) (bool, error) {
+	s.calls = append(s.calls, rehashCall{userID, verifiedHash, algo, hash})
+	return true, nil
+}
+
+// spec §3.5, as on the ABS door and in core's sign-in: a successful web sign-in
+// with a legacy bcrypt password re-stores it as argon2id, conditional on the
+// hash that was just verified, so bcrypt rows drain as their owners sign in.
+// An argon2id sign-in, a wrong password and a correct password for a disabled
+// account write nothing.
+func TestAuthHandler_Login_RehashesABcryptPasswordToArgon2id(t *testing.T) {
+	legacy := testBcryptHash(t, "password123")
+	for _, tc := range []struct {
+		name, algo, hash, password, status string
+		want                               int
+		rehash                             bool
+	}{
+		{"bcrypt, right password", authpw.AlgoBcrypt, legacy, "password123", "active", http.StatusOK, true},
+		{"empty algo (bcrypt), right password", "", legacy, "password123", "active", http.StatusOK, true},
+		{"bcrypt, wrong password", authpw.AlgoBcrypt, legacy, "wrong-password", "active", http.StatusUnauthorized, false},
+		{"bcrypt, right password, disabled", authpw.AlgoBcrypt, legacy, "password123", "inactive", http.StatusForbidden, false},
+		{"argon2id, right password", "", "", "password123", "active", http.StatusOK, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			user := &database.User{
+				ID: "user-1", Username: "alice", PasswordHash: tc.hash, PasswordHashAlgo: tc.algo,
+				Roles: []string{"user"}, Status: tc.status, CreatedAt: time.Now(),
+			}
+			if tc.hash == "" {
+				user = absRehashedUser(t, tc.password)
+			}
+			mocked := handlersmocks.NewMockAuthStore(t)
+			mocked.EXPECT().GetUserByUsername("alice").Return(user, nil)
+			if tc.want == http.StatusOK {
+				session := &database.Session{ID: "sess-abc", UserID: user.ID, ExpiresAt: time.Now().Add(24 * time.Hour)}
+				mocked.EXPECT().GetRoleByID("user").Return(nil, nil)
+				mocked.EXPECT().CreateSessionWithOrigin(user.ID, mock.Anything, mock.Anything, mock.Anything, database.SessionOriginPassword, int64(0)).Return(session, nil)
+			}
+			store := &rehashingStore{AuthStore: mocked}
+			h := handlers.NewAuthHandler(store, true)
+			h.SetFailureDelay(func(time.Duration) {})
+			c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "alice", "password": tc.password})
+			h.Login(c)
+			require.Equal(t, tc.want, w.Code, w.Body.String())
+			if !tc.rehash {
+				require.Empty(t, store.calls)
+				return
+			}
+			require.Len(t, store.calls, 1)
+			got := store.calls[0]
+			require.Equal(t, user.ID, got.userID)
+			require.Equal(t, legacy, got.verifiedHash, "the rehash is conditional on the hash that was verified")
+			require.Equal(t, authpw.AlgoArgon2id, got.algo)
+			ok, rehash := absauth.Passwords.Verify(got.algo, got.hash, tc.password)
+			require.True(t, ok, "the stored argon2id hash verifies the same password")
+			require.False(t, rehash)
+		})
+	}
+}

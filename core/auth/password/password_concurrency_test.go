@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // overlapCounter is a Compute that records the peak number of derivations in
@@ -84,8 +86,12 @@ func TestPasswordHash_DefaultPermitsFollowGOMAXPROCS(t *testing.T) {
 // bounded hash, verify or login verify fails ErrBusy after its wait instead of
 // queueing, and a cancelled context ends an unbounded wait.
 func TestPasswordHash_BoundedWaitIsBusy(t *testing.T) {
-	h := New(Options{Permits: 1, Time: 1, MemoryKiB: 8})
+	h := New(Options{Permits: 1, Time: 1, MemoryKiB: 8, BcryptCost: bcrypt.MinCost})
 	_, stored, err := h.Hash("pw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := bcrypt.GenerateFromPassword([]byte("pw"), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +105,18 @@ func TestPasswordHash_BoundedWaitIsBusy(t *testing.T) {
 	}
 	if ok, _, err := h.VerifyLoginWithin(ctx, 0, AlgoOAuth, "", "pw"); ok || !errors.Is(err, ErrBusy) {
 		t.Fatalf("VerifyLoginWithin(no credential) = %v, %v; want false, ErrBusy (the dummy work waits too)", ok, err)
+	}
+	// A legacy bcrypt row waits for the same permit: were it compared without
+	// one, a busy Hasher would refuse an unknown name (503) and answer a bcrypt
+	// account (401), and the answer would give the name away.
+	if ok, _, err := h.VerifyLoginWithin(ctx, 0, AlgoBcrypt, string(legacy), "pw"); ok || !errors.Is(err, ErrBusy) {
+		t.Fatalf("VerifyLoginWithin(bcrypt) = %v, %v; want false, ErrBusy", ok, err)
+	}
+	if ok, _, err := h.VerifyWithin(ctx, time.Millisecond, AlgoBcrypt, string(legacy), "pw"); ok || !errors.Is(err, ErrBusy) {
+		t.Fatalf("VerifyWithin(bcrypt) = %v, %v; want false, ErrBusy", ok, err)
+	}
+	if n, _ := h.BcryptCompares(); n != 0 {
+		t.Fatalf("%d bcrypt comparisons ran without a permit", n)
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	cancel()

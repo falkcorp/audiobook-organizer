@@ -22,10 +22,12 @@ const passwordImportPath = "github.com/falkcorp/mediacore/auth/password"
 
 // NoLoweredHashCost fails t when a non-test Go file of the module rooted at
 // dir, outside the directories testSupport reports (paths relative to dir;
-// nil: none), builds a password.Options literal that sets Time, MemoryKiB or
-// Compute, or sets its fields by position. Those fields lower the argon2id
-// cost every password is written at and belong to tests only; a production
-// file that set them would make every stored password cheap to guess. It
+// nil: none), builds a password.Options literal that sets Time, MemoryKiB,
+// Compute or BcryptCost, or sets its fields by position. The first three lower
+// the argon2id cost every password is written at, and BcryptCost lowers the
+// dummy comparison that keeps a login's timing equal. They belong to tests
+// only: a production file that set them would make every stored password
+// cheap to guess, or let a legacy bcrypt account's timing stand out. It
 // walks the module's directories (moduleSourceFiles), so a file behind any
 // build tag and the root main package are read too. password.New also panics
 // on those fields outside a test binary; this guard catches the literal
@@ -51,7 +53,7 @@ func NoLoweredHashCost(t testing.TB, dir string, testSupport func(rel string) bo
 		t.Fatalf("NoLoweredHashCost: %v", err)
 	}
 	if len(findings) > 0 {
-		t.Errorf("%d production password.Options literal(s) lower the hash cost; set Time, MemoryKiB and Compute from tests only:\n  %s",
+		t.Errorf("%d production password.Options literal(s) lower the hash cost; set Time, MemoryKiB, Compute and BcryptCost from tests only:\n  %s",
 			len(findings), strings.Join(findings, "\n  "))
 	}
 }
@@ -126,7 +128,7 @@ func loweredHashCost(filename string, src any) ([]string, error) {
 			}
 			if key, ok := kv.Key.(*ast.Ident); ok {
 				switch key.Name {
-				case "Time", "MemoryKiB", "Compute":
+				case "Time", "MemoryKiB", "Compute", "BcryptCost":
 					hits = append(hits, strconv.Itoa(fset.Position(kv.Pos()).Line)+": Options."+key.Name)
 				}
 			}

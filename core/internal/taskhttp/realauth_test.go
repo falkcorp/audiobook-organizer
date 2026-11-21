@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -136,7 +138,7 @@ func newRealAuth(t testing.TB) *realAuth {
 	r.svc, err = auth.New(ctx, auth.Options{}, auth.Deps{
 		Store: r.st, NewBatch: r.st.NewBatch, RBAC: r.rb, Audit: &sinkAudit{}, Revocations: &sinkJournal{},
 		Clock:  func() time.Time { return r.now },
-		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64}),
+		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
 		Extensions: []auth.Extension{
 			{Authenticator: nameAuthenticator("cfaccess"), Spec: auth.MethodSpec{Method: extCF, Interactive: true}, Order: 150},
 			{Authenticator: nameAuthenticator("badge"), Spec: auth.MethodSpec{Method: extBadge}, Order: 160},
