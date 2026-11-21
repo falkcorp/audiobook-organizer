@@ -12,7 +12,7 @@ rollback-restore`, 09 §9.2.1 "Rollback", 09 §9.2.2.
 Usage (the Makefile passes every value):
     deploy_rollback.py rollback --guard G --host H --bin B --db D --url U --unit N --timeout S
     deploy_rollback.py restore  --guard G --host H --bin B --db D --url U --unit N --timeout S [--archive NAME] [--release TAG]
-    deploy_rollback.py deploy   --guard G --host H --bin B --db D --url U --unit N --timeout S --release TAG
+    deploy_rollback.py deploy   --guard G --host H --bin B --db D --url U --unit N --timeout S --release TAG [--local-conf FILE]
 
 The decisions are scripts/storage_format_guard.py's, loaded from --guard so
 the recipe tests can run a mutated copy; every remote command is in its
@@ -70,6 +70,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -674,11 +675,54 @@ def same_version(got: str, tag: str) -> bool:
     return got.removeprefix("v") == tag.removeprefix("v")
 
 
+def upload_local_conf(run: Run, path: str) -> int:
+    """Upload the local file to stage_local_conf and install it through the
+    helper. Returns 0, or 1 after printing what state the host is in."""
+    o = run.o
+    run.say(
+        f"→ Uploading {path} to {o.stage_local_conf} and rendering it as the local.conf drop-in..."
+    )
+    try:
+        r = subprocess.run(  # noqa: S603 (argv, no shell on this side)
+            ["scp", *run.g.SSH_OPTS, path, f"{o.host}:{o.stage_local_conf}"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        failed = "" if r.returncode == 0 else f"scp exit {r.returncode}: {r.stderr.strip()[:200]}"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        failed = f"scp did not run ({type(e).__name__})"
+    if failed:
+        return run.refuse(
+            f"ERROR: uploading {path} to {o.host} failed ({failed}). The unit was installed from the helper "
+            f"bundle; the binary and local.conf were not replaced and {o.unit} was not restarted."
+        )
+    r2 = run.act("install_local_conf")
+    if r2.rc != 0:
+        return run.refuse(
+            f"ERROR: installing local.conf through the helper failed ({run.g._cause(r2)}). The unit was "
+            f"installed; local.conf and the binary were not replaced and {o.unit} was not restarted."
+        )
+    return 0
+
+
 def deploy(run: Run) -> int:
     o = run.o
+    local_conf = run.a.local_conf
     run.say(f"→ Deploying release {o.release} to {o.bin} on {o.host} (no local build)...")
+    if local_conf and not os.path.isfile(local_conf):
+        return run.refuse(
+            f"REFUSING: --local-conf {local_conf} is not a file. Nothing was changed."
+        )
     if run.preflight():
         return 1
+    if local_conf and not o.stage_local_conf:
+        return run.refuse(
+            f"REFUSING: {local_conf} would be uploaded, but {run.g.HOST_CONFIG} on {o.host} does not set "
+            f"stage_local_conf. Nothing was changed.",
+            f"Set stage_local_conf there (the file make deploy uploads local.conf to; {run.g.DOCS}).",
+        )
     probe = run.g.check_inflight(o, run.get)
     if probe:
         return run.refuse(*probe)
@@ -709,6 +753,8 @@ def deploy(run: Run) -> int:
             f"ERROR: installing the unit from the helper bundle failed ({run.g._cause(unit)}). The binary "
             f"was not replaced and {o.unit} was not restarted. The fetched file is deleted."
         )
+    if local_conf and upload_local_conf(run, local_conf):
+        return 1
     if run.match_unit_type(f"the fetched {o.release}"):
         return 1
     previous, err = run.invocation()
@@ -808,6 +854,10 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--archive", default="")
         if mode in ("restore", "deploy"):
             p.add_argument("--release", default="", required=mode == "deploy")
+        if mode == "deploy":
+            p.add_argument(
+                "--local-conf", default="", help="upload this file as the local.conf drop-in"
+            )
         p.add_argument(
             "--env",
             default="",
@@ -828,6 +878,8 @@ def main(argv: list[str] | None = None) -> int:
         a.archive = a.archive.strip()
     if a.mode in ("restore", "deploy"):
         a.release = a.release.strip()
+    if a.mode == "deploy":
+        a.local_conf = a.local_conf.strip()
     if a.mode == "deploy" and not a.release:
         print("deploy_rollback: deploy needs RELEASE=<tag>", file=sys.stderr)
         return 2

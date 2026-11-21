@@ -78,6 +78,9 @@ DEPLOY_READY_TIMEOUT ?= 300
 # directory, the service user, the checkpoint directory and the archive
 # directory (docs/system/deploy-and-gpu-ops.md, "Rollback helpers").
 DEPLOY_UNIT ?= audiobook-organizer.service
+
+# The local.conf `make deploy-release` uploads and deploy-env-check reads.
+DEPLOY_LOCAL_CONF ?= deploy/local.conf
 # The rollback guard (a variable so the recipe tests can run a mutated copy).
 ROLLBACK_GUARD ?= scripts/storage_format_guard.py
 
@@ -1016,7 +1019,7 @@ backup:
 #     local.conf for `make rollback`. DEPLOY_ALLOW_NO_ROLLBACK=1 overrides.
 .PHONY: deploy-env-check
 deploy-env-check:
-	@python3 scripts/deploy_env_check.py
+	@python3 scripts/deploy_env_check.py --local-conf "$(DEPLOY_LOCAL_CONF)"
 
 ## rollback: Swap in the previous deployed binary and restart (requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB; DEPLOY_URL defaults from API_URL or DEPLOY_HOST)
 #
@@ -1120,13 +1123,17 @@ rollback-restore:
 # exactly as `make deploy` does, the replaced binary becoming <bin>.prev with the
 # unit and local.conf it ran under, so `make rollback` puts them back together.
 # The sha256 handed to install-staged is measured on the host, never taken from
-# a local file. deploy/local.conf is not uploaded and deploy-env-check is not run:
-# the host's local.conf stays as it is (change it with `make deploy`'s own step).
+# a local file. Like `make deploy`, it first runs deploy-env-check (no retired
+# env name in deploy/local.conf; a Makefile.local deploy that keeps a rollback
+# state), then uploads deploy/local.conf, when there is one, to the helpers'
+# stage_local_conf and has install-staged render it, so the env renames a release
+# needs reach the host. DEPLOY_LOCAL_CONF names another file; none present means
+# the host's local.conf stays as it is.
 # Set DEPLOY_READY_TIMEOUT to the measured first-boot time for a release that
 # migrates the store (the wait refuses ready until the unit has a new
 # InvocationID, and passes exit 78, the binary refusing the store, through).
 .PHONY: deploy-release
-deploy-release:
+deploy-release: deploy-env-check
 	@[ -n "$(RELEASE)" ] || (echo "ERROR: RELEASE is not set. Pass the release tag: make deploy-release RELEASE=<tag>"; exit 1)
 	@[ -n "$(DEPLOY_HOST)" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
 	@[ -n "$(DEPLOY_BIN)" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
@@ -1135,7 +1142,7 @@ deploy-release:
 	@python3 scripts/deploy_rollback.py deploy \
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	  --url="$(DEPLOY_URL)" --unit="$(DEPLOY_UNIT)" --timeout="$(DEPLOY_READY_TIMEOUT)" \
-	  --release="$(RELEASE)"
+	  --release="$(RELEASE)" --local-conf="$(wildcard $(DEPLOY_LOCAL_CONF))"
 
 ## rollback-check: List the environment generations the deploy host keeps for rollback, and which one .prev matches (read-only; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
 #

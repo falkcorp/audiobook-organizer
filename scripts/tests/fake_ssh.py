@@ -6,9 +6,11 @@
 
 """A fake deploy host for the deploy and rollback recipes' tests.
 
-Installed on PATH as `ssh` (a symlink to this file), it stands in for the
-real `ssh HOST 'command'` the Makefile, scripts/deploy-wait-ready.sh and
-scripts/storage_format_guard.py run. No network, no real host: every
+Installed on PATH as `ssh` and `scp` (symlinks to this file), it stands in for
+the real `ssh HOST 'command'` the Makefile, scripts/deploy-wait-ready.sh and
+scripts/storage_format_guard.py run, and for `scp SRC HOST:DEST`, which copies
+one local file to the destination inside the sandbox (after the same path
+mapping; rules match the text `scp SRC HOST:DEST`). No network, no real host: every
 command runs inside a sandbox directory the test owns.
 
 The scenario is a JSON file named by FAKE_SSH_SCENARIO:
@@ -126,14 +128,40 @@ def _sandboxed(root: str, command: str) -> str | None:
     return stripped
 
 
+def _scp_args(argv: list[str]) -> tuple[str, str, str]:
+    """(source, host, destination) from scp's arguments: options, a local
+    source, `host:destination`."""
+    i, rest = 0, []
+    while i < len(argv):
+        if argv[i] in ("-o", "-P", "-i", "-F", "-J"):
+            i += 2
+            continue
+        if not argv[i].startswith("-"):
+            rest.append(argv[i])
+        i += 1
+    if len(rest) != 2 or ":" not in rest[1]:
+        return "", "", ""
+    host, _, dest = rest[1].partition(":")
+    return rest[0], host, dest
+
+
 def main(argv: list[str]) -> int:
     scenario_path = os.environ.get("FAKE_SSH_SCENARIO")
     if not scenario_path:
         print("fake_ssh: FAKE_SSH_SCENARIO is not set", file=sys.stderr)
         return 255
     sc = _load(scenario_path)
-    host, command = _split_args(argv)
-    log_line(sc["log"], {"kind": "ssh", "host": host, "command": command})
+    is_scp = Path(sys.argv[0]).name == "scp"
+    if is_scp:
+        src, host, dest = _scp_args(argv)
+        if not src:
+            print("fake_ssh: scp wants one source and host:destination", file=sys.stderr)
+            return 255
+        command = f"scp {src} {host}:{dest}"
+        log_line(sc["log"], {"kind": "scp", "host": host, "src": src, "dest": dest})
+    else:
+        host, command = _split_args(argv)
+        log_line(sc["log"], {"kind": "ssh", "host": host, "command": command})
     for i, rule in enumerate(sc.get("rules", [])):
         if re.search(rule["match"], command):
             responses = rule.get("responses") or [{}]
@@ -145,6 +173,19 @@ def main(argv: list[str]) -> int:
             sys.stdout.write(r.get("stdout", ""))
             sys.stderr.write(r.get("stderr", ""))
             return int(r.get("exit", 0))
+    if is_scp:
+        # The destination is a host path: mapped, then held inside the sandbox.
+        target = dest
+        for host_path, sandbox_path in sc.get("map", []):
+            target = target.replace(host_path, sandbox_path)
+        real = os.path.realpath(target)
+        root = os.path.realpath(sc["root"])
+        if not real.startswith(root + os.sep):
+            print(f"fake_ssh: refusing to scp outside the sandbox: {dest}", file=sys.stderr)
+            return 255
+        Path(real).parent.mkdir(parents=True, exist_ok=True)
+        Path(real).write_bytes(Path(src).read_bytes())
+        return 0
     mapped = command
     for host_path, sandbox_path in sc.get("map", []):
         mapped = mapped.replace(host_path, sandbox_path)
@@ -294,9 +335,10 @@ def install(
     sb = Path(sandbox)
     bindir = sb / "fake-bin"
     bindir.mkdir(parents=True, exist_ok=True)
-    link = bindir / "ssh"
-    if not link.exists():
-        link.symlink_to(Path(__file__).resolve())
+    for name in ("ssh", "scp"):
+        link = bindir / name
+        if not link.exists():
+            link.symlink_to(Path(__file__).resolve())
     scenario = sb / "scenario.json"
     log = sb / "invocations.log"
     scenario.write_text(

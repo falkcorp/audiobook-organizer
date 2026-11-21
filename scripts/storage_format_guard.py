@@ -169,6 +169,9 @@ class Opts:
     # `install-staged prev` installs from.
     release: str = ""
     stage_bin: str = ""
+    # HOST_CONFIG's optional stage_local_conf: the file `make deploy` and
+    # `make deploy-release` upload deploy/local.conf to for install-staged.
+    stage_local_conf: str = ""
     # prev_path names the binary whose levels, format and capabilities the
     # recipes read: "" = DEPLOY_BIN.prev, the fetched file once a RELEASE was
     # fetched and has not been installed.
@@ -372,6 +375,7 @@ def load_host_config(o: Opts, get: Getter) -> list[str]:
     o.state_dir, o.user = cfg["state_dir"], cfg["service_user"]
     o.checkpoint_dir, o.archive_dir = cfg.get("checkpoint_dir", ""), cfg["archive_dir"]
     o.stage_bin = cfg.get("stage_bin", "")
+    o.stage_local_conf = cfg.get("stage_local_conf", "")
     bad = _validate(o)
     if bad:
         return [f"REFUSING: {HOST_CONFIG}: {bad}. Nothing was changed."]
@@ -872,6 +876,7 @@ def _validate(o: Opts) -> str:
         ("state_dir", o.state_dir),
         ("archive_dir", o.archive_dir),
         ("stage_bin", o.stage_bin),
+        ("stage_local_conf", o.stage_local_conf),
     ):
         if p and (not _SAFE_PATH.fullmatch(p) or ".." in p.split("/")):
             return f"{label} {p!r} must be an absolute path of letters, digits and ._/@+-"
