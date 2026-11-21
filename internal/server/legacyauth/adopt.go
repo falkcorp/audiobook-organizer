@@ -127,6 +127,17 @@ func (b *Bridge) AdminHeld(ctx context.Context) bool {
 	return rbac.Require(ctx, rbac.CoreAdmin) == nil
 }
 
+// AdminRefused is the core-identity leg of a role-name admin test (F4-08 B7):
+// it reports whether the request runs under core identity and the caller does
+// not hold core:admin. A site keeps HEAD's role-name test exactly as it was and
+// adds this as a further refusal, so under core identity the caller must pass
+// both and the outcome can only narrow from HEAD's, never widen. With no
+// Identity (LegacyAuthGin) it is false and HEAD alone decides.
+func AdminRefused(ctx context.Context) bool {
+	b, ok := BridgeFrom(ctx)
+	return ok && !b.AdminHeld(ctx)
+}
+
 // Authenticate is the adapter of HEAD's RequireAuth (05-http-api §8.3
 // RequireAuth row). It authenticates nothing: it fills HEAD's context values
 // from the principal stage 12 bound (FromCorePrincipal) and hands the user to

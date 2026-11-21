@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -275,7 +276,13 @@ func newPendingInviteView(inv *database.Invite, withToken bool) *pendingInviteVi
 // With auth disabled there is no caller to tell apart and the credential
 // guard is off as well, so every token is shown, as before.
 func (h *UserHandler) inviteTokenVisible(c *gin.Context, inv *database.Invite) bool {
-	if !h.authEnabled {
+	// "Auth off" is HEAD's wiring flag, or, under core identity (F4-08 B7), the
+	// auth-disabled principal: the flag is books' own and is not read there.
+	if b, bridged := legacyauth.BridgeFrom(c.Request.Context()); bridged {
+		if b.AuthOff(c.Request.Context()) {
+			return true
+		}
+	} else if !h.authEnabled {
 		return true
 	}
 	if !servermiddleware.CredentialChangeAllowed(c) {
@@ -285,7 +292,8 @@ func (h *UserHandler) inviteTokenVisible(c *gin.Context, inv *database.Invite) b
 		return true
 	}
 	actor, ok := servermiddleware.CurrentUser(c)
-	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole) && servermiddleware.APIKeyMayActAsAdmin(c)
+	return ok && actor != nil && actor.Status == "active" && slices.Contains(actor.Roles, adminRole) && servermiddleware.APIKeyMayActAsAdmin(c) &&
+		!legacyauth.AdminRefused(c.Request.Context())
 }
 
 // findInvite resolves an admin route's invite ID to the invite, or nil.
@@ -461,6 +469,14 @@ func (h *UserHandler) SetUserEmail(c *gin.Context) {
 	}
 	if h.emailSetter == nil {
 		httputil.RespondWithInternalError(c, "setting emails is not supported by this store")
+		return
+	}
+	// Under core identity (F4-08 B7) the actor must also hold core:admin; the
+	// role test above stays as HEAD's, and this is a further refusal. It follows
+	// the store-capability check only because the pin test's anchor text runs
+	// through that check; nothing is read or written between the two.
+	if legacyauth.AdminRefused(c.Request.Context()) {
+		httputil.RespondWithForbidden(c, "setting another user's email needs the admin role")
 		return
 	}
 	var req struct {
