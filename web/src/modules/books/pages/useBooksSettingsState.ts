@@ -16,6 +16,8 @@ import {
   ScanErrorTarget,
 } from '../../../hooks/useSettingsHandlers';
 import * as api from '../../../services/api';
+import type { SecretStatus } from '../../../services/configView';
+import { defaultMetadataSources, uiSourcesFromConfig } from '../../../utils/metadataSources';
 import type { SettingsState } from './settingsState';
 
 export function useBooksSettingsState() {
@@ -64,8 +66,8 @@ export function useBooksSettingsState() {
   const [importInProgress, setImportInProgress] = useState(false);
   const [savedSnapshot, setSavedSnapshot] = useState('');
   const [configLoaded, setConfigLoaded] = useState(false);
-  // Masked by the server; shown by the Dedup section, never the real key.
-  const [acoustidKeyMask, setAcoustidKeyMask] = useState('');
+  // What the secret store says about the AcoustID.org key: set or not, never the key.
+  const [acoustidKeyStatus, setAcoustidKeyStatus] = useState<SecretStatus | undefined>();
   // Config keys the server's environment is currently forcing; their controls
   // render disabled. Server-reported and read-only — never saved back.
   const [envLocked, setEnvLocked] = useState<string[]>([]);
@@ -103,48 +105,7 @@ export function useBooksSettingsState() {
     // Metadata settings
     enableAIParsing: false,
     openaiApiKey: '',
-    metadataSources: [
-      {
-        id: 'audible',
-        name: 'Audible',
-        enabled: true,
-        priority: 1,
-        requiresAuth: false,
-        credentials: {},
-      },
-      {
-        id: 'openlibrary',
-        name: 'Open Library',
-        enabled: true,
-        priority: 2,
-        requiresAuth: false,
-        credentials: {},
-      },
-      {
-        id: 'audnexus',
-        name: 'Audnexus',
-        enabled: true,
-        priority: 3,
-        requiresAuth: false,
-        credentials: {},
-      },
-      {
-        id: 'google-books',
-        name: 'Google Books',
-        enabled: false,
-        priority: 4,
-        requiresAuth: true,
-        credentials: { apiKey: '' },
-      },
-      {
-        id: 'hardcover',
-        name: 'Hardcover',
-        enabled: false,
-        priority: 5,
-        requiresAuth: true,
-        credentials: { apiKey: '' },
-      },
-    ],
+    metadataSources: defaultMetadataSources(),
 
     // Performance settings
     concurrentScans: 4,
@@ -165,8 +126,6 @@ export function useBooksSettingsState() {
     autoUpdateEnabled: false,
     autoUpdateChannel: 'stable',
     autoUpdateCheckMinutes: 60,
-    autoUpdateWindowStart: 1,
-    autoUpdateWindowEnd: 4,
 
     // Maintenance window
     maintenanceWindowEnabled: false,
@@ -191,7 +150,8 @@ export function useBooksSettingsState() {
       { testing: boolean; result?: { success: boolean; message?: string; error?: string } }
     >
   >({});
-  const [savedApiKeyMask, setSavedApiKeyMask] = useState<string>('');
+  // What the secret store says about the OpenAI key: set or not, never the key.
+  const [openaiKeyStatus, setOpenaiKeyStatus] = useState<SecretStatus | undefined>();
 
   // Nested config state (CFG-2)
   const [dedupConfig, setDedupConfig] = useState<api.DedupConfig>({
@@ -320,10 +280,8 @@ export function useBooksSettingsState() {
       setEnvLocked(config.env_locked ?? []);
       setSettingLocks(config.setting_locks ?? {});
       setNamingPatternTokens(config.naming_pattern_tokens);
-      // Store masked key if present
-      if (config.openai_api_key && config.openai_api_key.includes('***')) {
-        setSavedApiKeyMask(config.openai_api_key);
-      }
+      // Secrets are write-only: the server reports whether each is set, never its value.
+      setOpenaiKeyStatus(config.secret_status?.openai_api_key);
       // Map all backend config fields to frontend settings format
       const nextSettings: SettingsState = {
         // Library settings
@@ -349,65 +307,7 @@ export function useBooksSettingsState() {
         // Metadata settings
         enableAIParsing: config.enable_ai_parsing ?? false,
         openaiApiKey: '', // Clear field when loading, show placeholder instead
-        metadataSources:
-          config.metadata_sources && config.metadata_sources.length > 0
-            ? config.metadata_sources.map((source) => {
-                // Force requiresAuth for sources that need API keys,
-                // even if the saved config has requires_auth: false
-                const authSources = ['google-books', 'hardcover'];
-                return {
-                  id: source.id,
-                  name: source.name,
-                  enabled: source.enabled,
-                  priority: source.priority,
-                  requiresAuth: source.requires_auth || authSources.includes(source.id),
-                  credentials: authSources.includes(source.id)
-                    ? { apiKey: '', ...source.credentials }
-                    : source.credentials || ({} as { [key: string]: string }),
-                };
-              })
-            : [
-                {
-                  id: 'audible',
-                  name: 'Audible',
-                  enabled: true,
-                  priority: 1,
-                  requiresAuth: false,
-                  credentials: {},
-                },
-                {
-                  id: 'openlibrary',
-                  name: 'Open Library',
-                  enabled: true,
-                  priority: 2,
-                  requiresAuth: false,
-                  credentials: {},
-                },
-                {
-                  id: 'audnexus',
-                  name: 'Audnexus',
-                  enabled: true,
-                  priority: 3,
-                  requiresAuth: false,
-                  credentials: {},
-                },
-                {
-                  id: 'google-books',
-                  name: 'Google Books',
-                  enabled: false,
-                  priority: 4,
-                  requiresAuth: true,
-                  credentials: { apiKey: '' },
-                },
-                {
-                  id: 'hardcover',
-                  name: 'Hardcover',
-                  enabled: false,
-                  priority: 5,
-                  requiresAuth: true,
-                  credentials: { apiKey: '' },
-                },
-              ],
+        metadataSources: uiSourcesFromConfig(config.metadata_sources),
 
         // Performance settings
         concurrentScans: config.concurrent_scans || 4,
@@ -429,8 +329,6 @@ export function useBooksSettingsState() {
         autoUpdateEnabled: config.auto_update?.enabled ?? false,
         autoUpdateChannel: config.auto_update?.channel ?? 'stable',
         autoUpdateCheckMinutes: config.auto_update?.check_minutes ?? 60,
-        autoUpdateWindowStart: config.auto_update?.window_start ?? 1,
-        autoUpdateWindowEnd: config.auto_update?.window_end ?? 4,
 
         // Maintenance window, nested object only (same reason).
         maintenanceWindowEnabled: config.maintenance?.enabled ?? false,
@@ -445,7 +343,7 @@ export function useBooksSettingsState() {
         // Deluge integration
         protectedPaths: (config.protected_paths || []).join('\n'),
       };
-      setAcoustidKeyMask(config.acoustid_api_key || '');
+      setAcoustidKeyStatus(config.secret_status?.acoustid_api_key);
       if (config.dedup) setDedupConfig(config.dedup);
       if (config.embedding) setEmbeddingConfig(config.embedding);
       if (config.ai_backend) setAIBackendConfig(config.ai_backend);
@@ -495,6 +393,7 @@ export function useBooksSettingsState() {
     handleSourceToggle,
     handleTestMetadataSource,
     handleCredentialChange,
+    handleToggleClearCredential,
     handleSourceReorder,
     handleSave,
     handleReset,
@@ -510,11 +409,12 @@ export function useBooksSettingsState() {
     handleSaveAndNavigate,
     handleDiscardNavigation,
     handleCancelNavigation,
+    handleClearOpenAIKey,
   } = useSettingsHandlers({
     settings,
     setSettings,
     setSaved,
-    setSavedApiKeyMask,
+    setOpenaiKeyStatus,
     setConfigLoaded,
     setDedupConfig,
     setEmbeddingConfig,
@@ -557,7 +457,7 @@ export function useBooksSettingsState() {
     setImportInProgress,
     setExtensionsInput,
     setExcludePatternInput,
-    savedApiKeyMask,
+    openaiKeyStatus,
     configLoaded,
     navigate,
     scanIntervalsRef,
@@ -589,7 +489,7 @@ export function useBooksSettingsState() {
   });
 
   return {
-    acoustidKeyMask,
+    acoustidKeyStatus,
     addFolderDialogOpen,
     aiBackendConfig,
     backupNotice,
@@ -626,6 +526,7 @@ export function useBooksSettingsState() {
     handleConfirmImport,
     handleConfirmRestore,
     handleCreateBackup,
+    handleClearOpenAIKey,
     handleCredentialChange,
     handleDedupChange,
     handleDiscardNavigation,
@@ -651,6 +552,7 @@ export function useBooksSettingsState() {
     handleSourceToggle,
     handleTestAIConnection,
     handleTestMetadataSource,
+    handleToggleClearCredential,
     handleToolsChange,
     handleViewScanErrors,
     hasUnsavedChanges,
@@ -667,13 +569,13 @@ export function useBooksSettingsState() {
     namingPatternTokens,
     newFolderPath,
     openaiKeyError,
+    openaiKeyStatus,
     openaiTestState,
     restoreDialogOpen,
     restoreInProgress,
     restoreTarget,
     restoreVerify,
     saved,
-    savedApiKeyMask,
     savedSnapshot,
     scanErrorTarget,
     scanStatuses,
@@ -689,7 +591,6 @@ export function useBooksSettingsState() {
     setNewFolderPath,
     setRestoreDialogOpen,
     setRestoreVerify,
-    setSavedApiKeyMask,
     setScanErrorTarget,
     setSettings,
     setShowFolderBrowser,
