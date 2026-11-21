@@ -151,6 +151,7 @@ func (w *dryRunWiring) bindCoreStores(ctx context.Context, db *storage.DB) (allo
 	}
 	cb.store.SetImportSecrets(ks.store)
 	w.imp.bind(cb.store.Importer(), ks.store.Importer())
+	w.imp.bindLookup(cb.store.Lookup)
 	return allowRegen, nil
 }
 

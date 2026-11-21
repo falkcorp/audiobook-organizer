@@ -257,6 +257,9 @@ func (k *Kernel) migrateStorage(ctx context.Context) error {
 	// Importers.Legacy and AllowKeyRegen bind with them: the legacy ranges exist
 	// as soon as Prepare returned the DB, gate or no gate.
 	k.importers().bindLegacy(db, k.importerAllowRegen)
+	if k.cfgBoot != nil && k.cfgBoot.store != nil {
+		k.importers().bindLookup(k.cfgBoot.store.Lookup)
+	}
 	if err := db.Migrate(ctx); err != nil {
 		return fmt.Errorf("kernel: migrate storage (P4b): %w", err)
 	}

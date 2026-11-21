@@ -288,3 +288,32 @@ func TestConfigBoot_AllowKeyRegenReachesTheImporters(t *testing.T) {
 		h.close(k)
 	}
 }
+
+// Importers.OperatorSet answers false until the config store's Lookup is
+// bound, then reports the lock of a key an operator layer sets, and false for
+// a free key or an unregistered one.
+func TestLateImporters_OperatorSet(t *testing.T) {
+	l := &lateImporters{}
+	imp := l.values()
+	if by, set := imp.OperatorSet("core.auth.oidc.providers"); set || by != "" {
+		t.Fatalf("unbound OperatorSet = %q, %v; want \"\", false", by, set)
+	}
+	l.bindLookup(func(p config.Path) (config.KeyState, bool) {
+		switch p {
+		case "core.auth.oidc.providers":
+			return config.KeyState{Path: p, LockedBy: "env ABO_CORE_AUTH_OIDC_PROVIDERS"}, true
+		case "core.log.level":
+			return config.KeyState{Path: p}, true
+		}
+		return config.KeyState{}, false
+	})
+	if by, set := imp.OperatorSet("core.auth.oidc.providers"); !set || by != "env ABO_CORE_AUTH_OIDC_PROVIDERS" {
+		t.Errorf("locked key: OperatorSet = %q, %v", by, set)
+	}
+	if _, set := imp.OperatorSet("core.log.level"); set {
+		t.Error("a free key reads as operator-set")
+	}
+	if _, set := imp.OperatorSet("core.batcave.unregistered"); set {
+		t.Error("an unregistered key reads as operator-set")
+	}
+}
