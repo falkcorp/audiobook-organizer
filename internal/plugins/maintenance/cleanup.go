@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/cleanup.go
-// version: 1.35.6
+// version: 1.35.7
 // guid: c3d4e5f6-a7b8-9012-cdef-234567890123
-// last-edited: 2026-11-15
+// last-edited: 2026-11-21
 
 package maintenance
 
@@ -46,7 +46,7 @@ func (p *Plugin) purgeDeletedDef() sdk.OperationDef {
 		Permissions:     []auth.Permission{auth.PermSettingsManage},
 		Liveness:        sdk.LivenessManual,
 		Plugin:          "maintenance",
-		DisplayName:     "Purge soft-deleted books",
+		DisplayName:     "Purge soft-deleted books past retention",
 		Description:     "Permanently removes soft-deleted books that have exceeded the retention period.",
 		ResumePolicy:    sdk.ResumeDrop,
 		DefaultPriority: sdk.PriorityLow,
