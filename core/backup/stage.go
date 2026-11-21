@@ -812,6 +812,44 @@ func lastJournalStep(p string) string {
 	return r.Step
 }
 
+// ReadStagedManifest reads the manifest of the archive intent in staged into
+// in.Staging and checks it against in.ManifestSHA256, the one read both step
+// b's re-check (Recheck) and a restore boot's derivation of its source
+// (kernel P4d) make. m is the core manifest, nil for a legacy archive (legacy
+// true: HEAD's archive, which has no provenance, no journal sequence and no
+// audit high-water mark); entries are the files the staging directory must
+// hold either way. An intent that names no staging directory or manifest hash,
+// a manifest that is missing, or one whose bytes do not hash to the intent's
+// is an error: nothing about the source can be read from it.
+func ReadStagedManifest(in restorejournal.Intent) (m *Manifest, entries []Entry, legacy bool, err error) {
+	if in.Staging == "" || in.ManifestSHA256 == "" {
+		return nil, nil, false, errors.New("the intent names no staging directory or manifest hash")
+	}
+	raw, err := readBounded(filepath.Join(in.Staging, ManifestName), MaxManifestBytes)
+	if err == nil {
+		if SumManifest(raw) != in.ManifestSHA256 {
+			return nil, nil, false, errors.New("the staged manifest does not match the intent")
+		}
+		m, perr := ParseManifest(raw)
+		if perr != nil {
+			return nil, nil, false, perr
+		}
+		return m, m.Entries, false, nil
+	}
+	raw, lerr := readBounded(filepath.Join(in.Staging, legacyManifestName), MaxManifestBytes)
+	if lerr != nil {
+		return nil, nil, false, fmt.Errorf("no staged manifest: %w", err)
+	}
+	if SumManifest(raw) != in.ManifestSHA256 {
+		return nil, nil, false, errors.New("the staged manifest does not match the intent")
+	}
+	var ls legacyStaged
+	if json.Unmarshal(raw, &ls) != nil {
+		return nil, nil, false, errors.New("the staged legacy manifest does not decode")
+	}
+	return nil, ls.Entries, true, nil
+}
+
 // Recheck is step b's re-check of a staged archive restore (decision D4), for
 // restoreswap.Options.Recheck: the manifest in staging must hash to the
 // intent's manifest_sha256, and every listed file must exist with its recorded
@@ -829,34 +867,9 @@ func Recheck(rehash func() bool) func(ctx context.Context, in restorejournal.Int
 		if in.Kind != restorejournal.KindArchive {
 			return nil
 		}
-		if in.Staging == "" || in.ManifestSHA256 == "" {
-			return errors.New("the intent names no staging directory or manifest hash")
-		}
-		var (
-			raw     []byte
-			entries []Entry
-			err     error
-		)
-		if raw, err = readBounded(filepath.Join(in.Staging, ManifestName), MaxManifestBytes); err == nil {
-			if SumManifest(raw) != in.ManifestSHA256 {
-				return errors.New("the staged manifest does not match the intent")
-			}
-			m, perr := ParseManifest(raw)
-			if perr != nil {
-				return perr
-			}
-			entries = m.Entries
-		} else if raw, lerr := readBounded(filepath.Join(in.Staging, legacyManifestName), MaxManifestBytes); lerr == nil {
-			if SumManifest(raw) != in.ManifestSHA256 {
-				return errors.New("the staged manifest does not match the intent")
-			}
-			var ls legacyStaged
-			if json.Unmarshal(raw, &ls) != nil {
-				return errors.New("the staged legacy manifest does not decode")
-			}
-			entries = ls.Entries
-		} else {
-			return fmt.Errorf("no staged manifest: %w", err)
+		_, entries, _, err := ReadStagedManifest(in)
+		if err != nil {
+			return err
 		}
 		full := rehash != nil && rehash()
 		for _, e := range entries {

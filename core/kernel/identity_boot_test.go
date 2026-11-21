@@ -22,7 +22,6 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
-	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // TestIdentityBootDeclared_IsTheFlagAlone pins the switch: the kernel decides
@@ -263,21 +262,6 @@ func TestResolveBackupDir(t *testing.T) {
 		if got := resolveBackupDir(tc.configured, db); got != tc.want {
 			t.Errorf("resolveBackupDir(%q) = %q, want %q", tc.configured, got, tc.want)
 		}
-	}
-}
-
-// TestIdentityBoot_ARestoreBootRefusesToServe: the identity boot's P4d steps
-// need a restore boot's derived inputs, which are not built, so a restore boot
-// with the switch on fails New with errP4dRefuse and serves nothing. The switch
-// off keeps today's behaviour for the same restore
-// (TestRestoreBootWithoutHooksReachesApplied).
-func TestIdentityBoot_ARestoreBootRefusesToServe(t *testing.T) {
-	h, c := identityHost(t)
-	h.close(h.mustBoot(c))
-	h.stage("r-archive", restorejournal.KindArchive, h.stagedCopy("r-archive", "robin"))
-	_, err := h.boot(c)
-	if !errors.Is(err, errP4dRefuse) || !errors.Is(err, errRestoreBootNeedsDerivation) {
-		t.Fatalf("restore boot with identity on = %v, want errP4dRefuse wrapping errRestoreBootNeedsDerivation", err)
 	}
 }
 
