@@ -261,7 +261,7 @@ func (c *checker) check(p *packages.Package) {
 
 // readExportData returns the package ip as its export file describes it,
 // resolving every package the file names against the universe.
-func (c *checker) readExportData(ip *packages.Package) (*types.Package, error) {
+func (c *checker) readExportData(ip *packages.Package) (pkg *types.Package, err error) {
 	if t := c.universe[ip.PkgPath]; t != nil && t.Complete() {
 		return t, nil
 	}
@@ -272,7 +272,11 @@ func (c *checker) readExportData(ip *packages.Package) (*types.Package, error) {
 	if err != nil {
 		return nil, fmt.Errorf("export data for %s: %w", ip.PkgPath, err)
 	}
-	defer f.Close()
+	defer func() {
+		if cerr := f.Close(); cerr != nil && err == nil {
+			pkg, err = nil, fmt.Errorf("export data for %s: close: %w", ip.PkgPath, cerr)
+		}
+	}()
 	r, err := gcexportdata.NewReader(f)
 	if err != nil {
 		return nil, fmt.Errorf("export data for %s: %w", ip.PkgPath, err)

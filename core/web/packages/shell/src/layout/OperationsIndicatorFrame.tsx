@@ -40,6 +40,7 @@ import ArticleIcon from '@mui/icons-material/Article';
 import CloseIcon from '@mui/icons-material/Close';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import { storageKey } from '../app/appId';
 import { byNewestFirst, type GroupableOperation } from '../providers';
 import { formatProgressCounts } from './operationProgress';
 
@@ -134,7 +135,10 @@ function activityTargetFor(op: OperationsFrameRow): ActivityTarget {
   return op.group ? { id: op.id, memberIds: op.group.memberIds } : { id: op.id };
 }
 
-const COLLAPSE_STORAGE_NAME = 'ops-indicator-collapse-v1';
+// Under the app ID (07 §7.4.2), never the pre-shell literal key: two apps on one
+// origin must not share it. Resolved per call because the app ID is set by
+// createShell, after this module loads.
+const collapseStorageKey = () => storageKey('operations', 'indicatorCollapse');
 
 function loadCollapseState(): Record<CollapseKey, boolean> {
   // Defaults: Running open, Pending open, Completed collapsed.
@@ -144,7 +148,7 @@ function loadCollapseState(): Record<CollapseKey, boolean> {
     completed: false,
   };
   try {
-    const raw = localStorage.getItem(COLLAPSE_STORAGE_NAME);
+    const raw = localStorage.getItem(collapseStorageKey());
     if (!raw) return defaults;
     const parsed = JSON.parse(raw);
     return { ...defaults, ...parsed };
@@ -155,7 +159,7 @@ function loadCollapseState(): Record<CollapseKey, boolean> {
 
 function persistCollapseState(state: Record<CollapseKey, boolean>) {
   try {
-    localStorage.setItem(COLLAPSE_STORAGE_NAME, JSON.stringify(state));
+    localStorage.setItem(collapseStorageKey(), JSON.stringify(state));
   } catch {
     /* ignore quota errors */
   }

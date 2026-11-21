@@ -172,8 +172,12 @@ type createKeyReq struct {
 func (r *createKeyReq) Validate() error { return r.Body.validate() }
 
 func (k KeyCreate) validate() error {
-	if err := k.bothExpiries(); err != nil {
-		return err
+	// expires_in and expires_at together are two answers to one question. The
+	// test is presence, not value: an empty or zero expires_in next to an
+	// expires_at is still both, as HEAD's expires_in_days 0 next to expires_at
+	// is (400).
+	if k.ExpiresIn != nil && k.ExpiresAt != nil {
+		return &httpapi.Error{Status: http.StatusBadRequest, Code: "bad_request", Detail: "send expires_in or expires_at, not both"}
 	}
 	var fields []httpapi.FieldError
 	if k.Name == "" {
@@ -196,17 +200,6 @@ func (k KeyCreate) validate() error {
 	return nil
 }
 
-// bothExpiries refuses a body that sends expires_in and expires_at together.
-// It tests presence, not value: an empty or zero expires_in next to an
-// expires_at is still two answers to one question, as HEAD's expires_in_days 0
-// next to expires_at is (400).
-func (k KeyCreate) bothExpiries() error {
-	if k.ExpiresIn != nil && k.ExpiresAt != nil {
-		return &httpapi.Error{Status: http.StatusBadRequest, Code: "bad_request", Detail: "send expires_in or expires_at, not both"}
-	}
-	return nil
-}
-
 // positiveDuration parses s as a duration greater than zero.
 func positiveDuration(s string) (time.Duration, bool) {
 	d, err := time.ParseDuration(s)
@@ -214,10 +207,11 @@ func positiveDuration(s string) (time.Duration, bool) {
 }
 
 // keySpec turns a body into the Service's request for owner. Validate has
-// already refused a bad expiry; this refuses it again rather than send the
-// Service a zero that means "the default lifetime".
+// already refused a bad body; this runs the same check again (the user-key
+// route reaches it without createKeyReq) rather than send the Service a zero
+// that means "the default lifetime".
 func (k KeyCreate) keySpec(owner auth.UserID) (auth.KeySpec, error) {
-	if err := k.bothExpiries(); err != nil {
+	if err := k.validate(); err != nil {
 		return auth.KeySpec{}, err
 	}
 	spec := auth.KeySpec{Owner: owner, Name: k.Name}
