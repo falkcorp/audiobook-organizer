@@ -7,6 +7,7 @@ package operations_test
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -44,12 +45,7 @@ func TestRevertOperation_MergeWarningsThatNameAUserNeedUsersManage(t *testing.T)
 		"admin":  {[]string{auth.PermLibraryView, auth.PermLibraryOrganize, auth.PermUsersManage}, true},
 	} {
 		holds := func(_ *gin.Context, p auth.Permission) bool {
-			for _, have := range tc.perms {
-				if have == p {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(tc.perms, p)
 		}
 		store := operationsmocks.NewMockOperationsStore(t)
 		allowRevertReads(store)

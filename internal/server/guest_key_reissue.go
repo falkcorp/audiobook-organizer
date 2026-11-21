@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -149,10 +150,8 @@ func guestKeyUserBlocked(store database.UserReader, u *database.User) string {
 // to a user who already has a record: reissue is unchanged for them.
 func guestKeyFirstKeyBlocked(u *database.User) string {
 	const why = "admins sign in through Cloudflare's own login and don't need a phone-app key"
-	for _, role := range u.Roles {
-		if role == auth.SeedRoleAdmin {
-			return why
-		}
+	if slices.Contains(u.Roles, auth.SeedRoleAdmin) {
+		return why
 	}
 	if owner := coreauth.NormalizeEmail(config.Snapshot().OwnerEmail); owner != "" && coreauth.NormalizeEmail(u.Email) == owner {
 		return why

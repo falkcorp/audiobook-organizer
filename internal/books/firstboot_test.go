@@ -246,7 +246,7 @@ func TestShadowModeBootsABO(t *testing.T) {
 	assert.Equal(t, uint64(3), got[storage.ClaimViolation{Owner: database.BooksOwner, Op: "write", Mode: "shadow"}])
 	assert.Equal(t, uint64(1), got[storage.ClaimViolation{Owner: database.BooksOwner, Op: "read", Mode: "shadow"}])
 	writes := 0
-	for _, l := range strings.Split(c.newLog.String(), "\n") {
+	for l := range strings.SplitSeq(c.newLog.String(), "\n") {
 		if strings.Contains(l, "allowed by core.storage.claims.mode=shadow") && strings.Contains(l, "op=set") {
 			writes++
 		}

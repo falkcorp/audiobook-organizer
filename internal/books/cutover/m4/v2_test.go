@@ -29,11 +29,11 @@ func logLines(t *testing.T, ctx context.Context, s *snap, id string) []tasks.Pag
 // HEAD rebuilds from it are deleted, and no opv2: row is left.
 func TestCutover_V2MirrorFolded(t *testing.T) {
 	done := epoch.Add(time.Hour)
-	withCkpt := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(done), logs: 2, ckpt: true,
+	withCkpt := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(done), logs: 2, ckpt: true,
 		v2op: true, v2state: true, v2logs: 3, v2errs: 2, v2derived: true}
-	noCkpt := runSpec{id: runID(2), def: "maintenance.itunes-heal", st: "failed", completed: tptr(done), errText: "Joker laughed",
+	noCkpt := runSpec{id: runID(2), def: "maintenance.itunes-heal", st: "failed", completed: new(done), errText: "Joker laughed",
 		v2op: true, v2state: true, v2logs: 2, v2derived: true}
-	v2Only := runSpec{id: runID(3), def: "dedup.book-scan", st: "succeeded", completed: tptr(done), v2op: true, v2logs: 1}
+	v2Only := runSpec{id: runID(3), def: "dedup.book-scan", st: "succeeded", completed: new(done), v2op: true, v2logs: 1}
 	r := newRig(t, withRuns(nil, withCkpt, noCkpt, v2Only))
 	r.runObserve(t, func(ctx context.Context, s *snap) {
 		if len(s.Left) != 0 || len(s.Quarantine) != 0 {
@@ -131,7 +131,7 @@ func TestCutover_V2OnlyOperationQuarantined(t *testing.T) {
 // TestCutover_V2OperationRowNotJSONQuarantined: the one v2 row of an otherwise
 // good run that is not JSON is set aside by itself; the run still imports.
 func TestCutover_V2OperationRowNotJSONQuarantined(t *testing.T) {
-	spec := runSpec{id: runID(4), def: "dedup.book-scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), v2state: true}
+	spec := runSpec{id: runID(4), def: "dedup.book-scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), v2state: true}
 	r := newRig(t, withRuns(nil, spec), withRaw(map[string]string{"opv2:op:" + runID(4): "{not json"}))
 	r.runObserve(t, func(ctx context.Context, s *snap) {
 		if _, err := s.Stores.Runs.Get(ctx, tasks.RunID(spec.id)); err != nil {
@@ -149,7 +149,7 @@ func TestCutover_V2OperationRowNotJSONQuarantined(t *testing.T) {
 // TestCutover_V2LineUndecodableQuarantinesRun: a half-imported log is not
 // history, so a v2 line that does not decode sets the whole run aside.
 func TestCutover_V2LineUndecodableQuarantinesRun(t *testing.T) {
-	spec := runSpec{id: runID(5), def: "dedup.book-scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)), v2logs: 2}
+	spec := runSpec{id: runID(5), def: "dedup.book-scan", st: "succeeded", completed: new(epoch.Add(time.Hour)), v2logs: 2}
 	r := newRig(t, withRuns(nil, spec), withRaw(map[string]string{"opv2:err:" + runID(5) + ":00000000000000000007": "nope"}))
 	r.runObserve(t, func(ctx context.Context, s *snap) {
 		if _, err := s.Stores.Runs.Get(ctx, tasks.RunID(spec.id)); err == nil {

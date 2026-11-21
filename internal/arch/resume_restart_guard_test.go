@@ -12,6 +12,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -88,12 +89,7 @@ func follow(name string, idx pkgFuncs, seen map[string]bool, walk func(ast.Node)
 		return false
 	}
 	seen[name] = true
-	for _, b := range bodies {
-		if walk(b) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(bodies, walk)
 }
 
 // runBody resolves a Run: expression to the node to scan: a function literal,

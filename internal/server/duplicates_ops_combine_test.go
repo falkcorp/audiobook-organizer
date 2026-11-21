@@ -28,7 +28,7 @@ func runCombineOp(t *testing.T, store database.Store, p dedup.BookCombineParams)
 	def := relinkOpDef(t, s.RegisterBookCombineOp, "dedup.book-combine")
 	params, err := json.Marshal(p)
 	require.NoError(t, err)
-	rep := &resultReporter{opReporter: opReporter{id: "op-combine-run"}}
+	rep := &resultReporter{id: "op-combine-run"}
 	runErr := def.Run(context.Background(), params, rep)
 	got, ok := rep.result.(BookCombineOpResult)
 	if runErr == nil || rep.result != nil {
@@ -225,7 +225,7 @@ func TestBookCombineOpRun_RequiresKeepAndMergeIDs(t *testing.T) {
 	} {
 		raw, err := json.Marshal(p)
 		require.NoError(t, err)
-		require.Error(t, def.Run(context.Background(), raw, &resultReporter{opReporter: opReporter{id: "op-" + name}}), name)
+		require.Error(t, def.Run(context.Background(), raw, &resultReporter{id: "op-" + name}), name)
 	}
 }
 

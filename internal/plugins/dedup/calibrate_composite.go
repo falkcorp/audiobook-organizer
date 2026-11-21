@@ -259,8 +259,8 @@ func cumulativeBandStat(scores []float64, pairs []compositePair, cutMin float64,
 // bandRec is the sweep result for one tunable band.
 type bandRec struct {
 	Met      bool     `json:"met"`
-	Baseline bandStat `json:"baseline"`      // stat at the baseline band minimum
-	Rec      bandStat `json:"rec,omitempty"` // stat at the recommended minimum (valid only when Met)
+	Baseline bandStat `json:"baseline"` // stat at the baseline band minimum
+	Rec      bandStat `json:"rec"`      // stat at the recommended minimum (valid only when Met)
 }
 
 // sweepBandParallel evaluates every candidate cut-point in

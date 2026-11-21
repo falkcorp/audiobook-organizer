@@ -1040,7 +1040,7 @@ func referencedIDs(fam string, key, val []byte, ids map[string]string) []string 
 	}
 	rest := string(key[len(fam):])
 	_, self := idKinds[fam]
-	for _, seg := range strings.Split(rest, ":") {
+	for seg := range strings.SplitSeq(rest, ":") {
 		if len(seg) < minRefID || (self && seg == rest) {
 			continue
 		}

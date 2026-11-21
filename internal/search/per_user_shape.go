@@ -5,6 +5,8 @@
 
 package search
 
+import "slices"
+
 // perUserNeedsTree reports whether a query's per-user terms sit somewhere the flat
 // per-user list cannot give them their boolean meaning, so the query must be
 // translated with the viewer's rows (MixedQuery) instead of through TranslateAt.
@@ -52,10 +54,8 @@ func shapeNeedsTree(n Node, negated bool) bool {
 			return true
 		}
 		if len(v.Children) > 1 {
-			for _, c := range v.Children {
-				if containsPerUserTerm(c) {
-					return true
-				}
+			if slices.ContainsFunc(v.Children, containsPerUserTerm) {
+				return true
 			}
 		}
 		for _, c := range v.Children {
@@ -73,16 +73,12 @@ func shapeNeedsTree(n Node, negated bool) bool {
 func containsPerUserTerm(n Node) bool {
 	switch v := n.(type) {
 	case *AndNode:
-		for _, c := range v.Children {
-			if containsPerUserTerm(c) {
-				return true
-			}
+		if slices.ContainsFunc(v.Children, containsPerUserTerm) {
+			return true
 		}
 	case *OrNode:
-		for _, c := range v.Children {
-			if containsPerUserTerm(c) {
-				return true
-			}
+		if slices.ContainsFunc(v.Children, containsPerUserTerm) {
+			return true
 		}
 	case *NotNode:
 		return containsPerUserTerm(v.Child)

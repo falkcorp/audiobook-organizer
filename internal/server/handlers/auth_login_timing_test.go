@@ -87,7 +87,7 @@ func fastestLogins(t *testing.T, h *handlers.AuthHandler, cases []loginCase, rou
 	t.Helper()
 	src := &loginSource{}
 	fastest := make(map[string]time.Duration, len(cases))
-	for r := 0; r < rounds; r++ {
+	for r := range rounds {
 		for k := range cases {
 			lc := cases[(r+k)%len(cases)]
 			start := time.Now()
@@ -181,7 +181,7 @@ func TestLogin_StoreLookupErrorIsA500AndChargesNothing(t *testing.T) {
 	th.SetSleep(func(time.Duration) {})
 	h := handlers.NewAuthHandler(store, true)
 	h.SetThrottle(th)
-	for i := 0; i < 30; i++ { // past both the per-source and per-name budgets
+	for i := range 30 { // past both the per-source and per-name budgets
 		c, w := newAuthCtx("POST", "/auth/login", map[string]any{"username": "alice", "password": "pw"})
 		c.Request.RemoteAddr = "192.0.2.9:4000"
 		h.Login(c)

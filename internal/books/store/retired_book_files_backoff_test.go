@@ -43,13 +43,11 @@ func probeVersionStripeDuringBackoff(t *testing.T, ps *PebbleStore, versionID st
 		p.sleeps++
 		p.mu.Unlock()
 		got := make(chan struct{})
-		p.wg.Add(1)
-		go func() {
-			defer p.wg.Done()
+		p.wg.Go(func() {
 			unlock := ps.lockBookVersion(versionID)
 			close(got)
 			unlock()
-		}()
+		})
 		select {
 		case <-got:
 			p.mu.Lock()

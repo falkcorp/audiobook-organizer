@@ -53,7 +53,7 @@ func untilCancelled(ctx context.Context) error {
 func TestSuperviseRequest_AWorkerThatStopsAnsweringHealthIsAnOutageNotStuck(t *testing.T) {
 	shortLiveness(t, 20*time.Millisecond)
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusInternalServerError, nil })
-	h := remoteHealth{BusySeconds: f64(0)}
+	h := remoteHealth{BusySeconds: new(float64(0))}
 
 	start := time.Now()
 	err := superviseRequest(context.Background(), srv.URL, h, time.Hour, []string{"a", "b"}, untilCancelled)
@@ -81,7 +81,7 @@ func TestSuperviseRequest_ASingleFailedProbeDoesNotCancel(t *testing.T) {
 		}
 		return http.StatusOK, map[string]any{"busy_seconds": 1.0, "busy_limit_seconds": 60.0}
 	})
-	h := remoteHealth{BusySeconds: f64(0)}
+	h := remoteHealth{BusySeconds: new(float64(0))}
 	err := superviseRequest(context.Background(), srv.URL, h, time.Hour, nil, func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
@@ -101,7 +101,7 @@ func TestSuperviseRequest_ADecodePastItsDeadlineIsStuck(t *testing.T) {
 	srv, _ := probeServer(t, func() (int, map[string]any) {
 		return http.StatusOK, map[string]any{"busy_seconds": 500.0, "busy_limit_seconds": 60.0}
 	})
-	h := remoteHealth{BusySeconds: f64(0)}
+	h := remoteHealth{BusySeconds: new(float64(0))}
 	err := superviseRequest(context.Background(), srv.URL, h, time.Hour, []string{"a", "b"}, untilCancelled)
 	se, ok := errors.AsType[*WorkerStuckError](err)
 	if !ok {
@@ -117,7 +117,7 @@ func TestSuperviseRequest_AWorkerInsideItsDeadlineIsLeftAlone(t *testing.T) {
 	srv, hits := probeServer(t, func() (int, map[string]any) {
 		return http.StatusOK, map[string]any{"busy_seconds": 70.0, "busy_limit_seconds": 60.0} // inside the grace
 	})
-	h := remoteHealth{BusySeconds: f64(0)}
+	h := remoteHealth{BusySeconds: new(float64(0))}
 	err := superviseRequest(context.Background(), srv.URL, h, time.Hour, nil, func(ctx context.Context) error {
 		time.Sleep(300 * time.Millisecond)
 		return ctx.Err()
@@ -152,7 +152,7 @@ func TestSuperviseRequest_TheCallersCancellationWins(t *testing.T) {
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusInternalServerError, nil })
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
 	defer cancel()
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil, untilCancelled)
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, nil, untilCancelled)
 	if err == nil || IsWorkerStuck(err) || IsTransport(err) {
 		t.Fatalf("an operator cancel must come back as the plain context error, got %v", err)
 	}
@@ -163,7 +163,7 @@ func TestSuperviseRequest_StopsItsPollerWhenTheRequestEnds(t *testing.T) {
 	srv, hits := probeServer(t, func() (int, map[string]any) {
 		return http.StatusOK, map[string]any{"busy_seconds": 1.0, "busy_limit_seconds": 60.0}
 	})
-	if err := superviseRequest(context.Background(), srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil,
+	if err := superviseRequest(context.Background(), srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, nil,
 		func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestPathChunk_AWorkerThatGoesSilentMidRequestIsAnOutageAndKeepsEarlierChunk
 	})
 	useEndpoints(t, 2, w.srv.URL)
 
-	h := remoteHealth{BusySeconds: f64(0)}
+	h := remoteHealth{BusySeconds: new(float64(0))}
 	go func() {
 		// The host "goes away" shortly after the run starts.
 		time.Sleep(150 * time.Millisecond)
@@ -226,13 +226,12 @@ func TestSuperviseRequest_ALivenessCancelAfterTheRequestFailedDoesNotRelabelIt(t
 				return http.StatusOK, map[string]any{"busy_seconds": 1.0, "busy_limit_seconds": 60.0}
 			})
 			http500 := errors.New("worker answered HTTP 500: internal error")
-			err := superviseRequest(context.Background(), srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"},
+			err := superviseRequest(context.Background(), srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"},
 				func(context.Context) error { return http500 })
 			if !errors.Is(err, http500) || IsWorkerStuck(err) {
 				t.Fatalf("the request's own failure must come back as itself, got %T %v", err, err)
 			}
-			var te *TransportError
-			if errors.As(err, &te) {
+			if _, ok := errors.AsType[*TransportError](err); ok {
 				t.Fatalf("an HTTP 500 was relabelled as an unreachable worker: %v", err)
 			}
 		})

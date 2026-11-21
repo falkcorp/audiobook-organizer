@@ -56,8 +56,7 @@ func UnparsablePerUserQuery(q string, parseErr error) error {
 // accepted, without the wrappers callers put around it ("search: ", "query: "):
 // a message that adds its own lead-in must not repeat theirs.
 func PerUserQueryReason(err error) string {
-	var ve *PerUserValueError
-	if errors.As(err, &ve) {
+	if ve, ok := errors.AsType[*PerUserValueError](err); ok {
 		return ve.Reason
 	}
 	return err.Error()

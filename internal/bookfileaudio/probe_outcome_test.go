@@ -296,7 +296,7 @@ func TestEnsureDuration_WarnsOncePerUnavailableCause(t *testing.T) {
 		return nil, fmt.Errorf("ffprobe: %w", exec.ErrNotFound)
 	}))
 	log := &recLog{}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		row := database.BookFile{FilePath: fmt.Sprintf("/lib/Year One/%02d.m4b", i)}
 		if got := EnsureDuration(&row, Known{}, log); got != SourceProbeUnavailable {
 			t.Fatalf("source = %v", got)
@@ -355,7 +355,7 @@ func TestRecordProbeFailure_DemotedWarningDoesNotUseUpTheOnce(t *testing.T) {
 	resetWarned(t)
 	missing := fmt.Errorf("ffprobe /x: %w", exec.ErrNotFound)
 	quiet := &recLog{}
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		RecordProbeFailure(&database.BookFile{}, "/x", missing, demotingLog{quiet})
 	}
 	if quiet.warnCount() != 0 {

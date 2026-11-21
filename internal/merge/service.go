@@ -313,8 +313,7 @@ func IsRefusal(err error) bool {
 // part of the step wrote. A CombineIncompleteError is excluded even when it wraps
 // the same error: that combine got past its journal and may have written.
 func IsRetryLater(err error) bool {
-	var incomplete *CombineIncompleteError
-	if errors.As(err, &incomplete) {
+	if _, ok := errors.AsType[*CombineIncompleteError](err); ok {
 		return false
 	}
 	return errors.Is(err, database.ErrOwnershipLookupIncomplete) || errors.Is(err, database.ErrBookFileConflict)

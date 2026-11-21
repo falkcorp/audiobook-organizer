@@ -249,8 +249,8 @@ func scanJobSites(helpers map[string]bool) (map[string]map[string]*siteInfo, err
 					st.scan(mm, "", nil)
 				case *ssa.Type:
 					ms := prog.MethodSets.MethodSet(types.NewPointer(mm.Type()))
-					for i := 0; i < ms.Len(); i++ {
-						if fn := prog.MethodValue(ms.At(i)); fn != nil && fn.Pkg == p {
+					for method := range ms.Methods() {
+						if fn := prog.MethodValue(method); fn != nil && fn.Pkg == p {
 							st.scan(fn, "", nil)
 						}
 					}

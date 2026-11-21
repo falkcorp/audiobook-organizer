@@ -1063,10 +1063,7 @@ func budgeted(ctx context.Context, d, reserve time.Duration) time.Duration {
 	if !ok {
 		return d
 	}
-	left := time.Until(dl) - reserve
-	if left < 0 {
-		left = 0
-	}
+	left := max(time.Until(dl)-reserve, 0)
 	return min(d, left)
 }
 

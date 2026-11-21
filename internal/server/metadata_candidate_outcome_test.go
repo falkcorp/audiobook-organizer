@@ -21,16 +21,16 @@ func TestCandidateFetchEnv_LogOutcomeFollowsTheShell(t *testing.T) {
 	wantLevel, wantMsg, _ := candidateOutcomeLine(r)
 
 	var viaEnv []string
-	native := candidateFetchEnv{t7Env: t7Env{Log: func(level slog.Level, msg string, _ ...slog.Attr) {
+	native := candidateFetchEnv{Log: func(level slog.Level, msg string, _ ...slog.Attr) {
 		assert.Equal(t, wantLevel, level)
 		viaEnv = append(viaEnv, msg)
-	}}}
+	}}
 	native.logOutcome(r)
 	require.Equal(t, []string{wantMsg}, viaEnv, "no LogOutcome: the env's Log gets the line")
 
 	rep := &purgeOpReporter{}
 	head := candidateFetchEnv{
-		t7Env:      t7Env{Log: func(slog.Level, string, ...slog.Attr) { t.Error("HEAD's shell logs through its reporter, not env.Log") }},
+		Log:        func(slog.Level, string, ...slog.Attr) { t.Error("HEAD's shell logs through its reporter, not env.Log") },
 		LogOutcome: func(r CandidateResult) { logCandidateOutcome(rep, r) },
 	}
 	head.logOutcome(r)

@@ -34,7 +34,7 @@ func raceTouchKey(t *testing.T, store *PebbleStore, id string, write func() erro
 	var started, done sync.WaitGroup
 	started.Add(raceTouchers)
 	done.Add(raceTouchers)
-	for i := 0; i < raceTouchers; i++ {
+	for range raceTouchers {
 		go func() {
 			defer done.Done()
 			first := true
@@ -59,7 +59,7 @@ func raceTouchKey(t *testing.T, store *PebbleStore, id string, write func() erro
 		t.Errorf("write: %v", err)
 	}
 	// Let touches that were in flight across the write land before stopping.
-	for i := 0; i < raceTouchers; i++ {
+	for range raceTouchers {
 		if err := store.TouchAPIKeyLastUsed(id, time.Now(), raceTouchIP); err != nil {
 			t.Errorf("touch: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestLegacyRevokeRacesTouch_NeverUnrevokes(t *testing.T) {
 
 	t.Run("revoke", func(t *testing.T) {
 		lost := 0
-		for round := 0; round < raceRounds; round++ {
+		for round := range raceRounds {
 			key, err := store.CreateAPIKey(&APIKey{UserID: "u-bruce", Name: "The Long Halloween", Status: "active"})
 			if err != nil {
 				t.Fatalf("round %d: create: %v", round, err)
@@ -106,7 +106,7 @@ func TestLegacyRevokeRacesTouch_NeverUnrevokes(t *testing.T) {
 
 	t.Run("expiry", func(t *testing.T) {
 		lost := 0
-		for round := 0; round < raceRounds; round++ {
+		for round := range raceRounds {
 			before := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
 			key, err := store.CreateAPIKey(&APIKey{UserID: "u-bruce", Name: "Year One", Status: "active", ExpiresAt: &before})
 			if err != nil {

@@ -494,7 +494,7 @@ func journalOf(t *testing.T, state, id string) []restorejournal.Record {
 	raw, err := os.ReadFile(filepath.Join(restorejournal.JournalDir(state, id), restorejournal.JournalName))
 	require.NoError(t, err)
 	var out []restorejournal.Record
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
 		var r restorejournal.Record
 		require.NoError(t, json.Unmarshal([]byte(line), &r))
 		out = append(out, r)

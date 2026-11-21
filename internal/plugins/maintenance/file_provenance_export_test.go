@@ -44,7 +44,7 @@ func exportPlugin(t *testing.T, prov database.FileProvenanceStore) (*Plugin, str
 	root := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(root, "Gotham"), 0o755))
 	require.NoError(t, os.Mkdir(filepath.Join(root, ".ledger"), 0o755))
-	return New(provDeps{fakeDeps: fakeDeps{root: root}, prov: prov}), filepath.Join(root, ".ledger", "ledger.jsonl")
+	return New(provDeps{root: root, prov: prov}), filepath.Join(root, ".ledger", "ledger.jsonl")
 }
 
 func newExportFixture(t *testing.T) (*Plugin, *database.PebbleStore, string) {
@@ -229,7 +229,7 @@ func TestFileProvenanceExportOpenRefusesALinkPlantedAfterTheResolve(t *testing.T
 	require.NoError(t, os.WriteFile(victim, []byte("keep me"), 0o644))
 
 	ok := filepath.Join(reports, "ledger.jsonl")
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		w, err := openExportFile(ok)
 		require.NoError(t, err)
 		_, err = w.Write([]byte("line\n"))
@@ -315,7 +315,7 @@ func TestFileProvenanceExportRefusesAnUnmountedLibraryRoot(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	seedEvents(t, store, 2)
 	root := t.TempDir() // empty: the share is not mounted
-	p := New(provDeps{fakeDeps: fakeDeps{root: root}, prov: store})
+	p := New(provDeps{root: root, prov: store})
 
 	for _, apply := range []bool{true, false} {
 		raw, mErr := json.Marshal(map[string]any{"path": "ledger.jsonl", "apply": apply})
@@ -345,7 +345,7 @@ func TestFileProvenanceExportNeedsARootDir(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	p := New(provDeps{fakeDeps: fakeDeps{root: "relative/library"}, prov: store})
+	p := New(provDeps{root: "relative/library", prov: store})
 	raw, mErr := json.Marshal(map[string]any{"path": filepath.Join(t.TempDir(), "ledger.jsonl"), "apply": true})
 	require.NoError(t, mErr)
 	_, err = exportFileProvenanceHEAD(p, context.Background(), raw)

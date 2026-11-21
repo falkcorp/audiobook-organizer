@@ -186,7 +186,7 @@ func (w headAuthorReclassifyWriter) InvalidateAuthorCaches() {
 func (s *Server) runAuthorReclassify(ctx context.Context, opID string, authorID int) (string, error) {
 	store := s.storeForWiring()
 	env := authorReclassifyEnv{
-		t7Env:  t7Env{Live: true, OpID: opID},
+		Live: true, OpID: opID,
 		Store:  store,
 		Writer: headAuthorReclassifyWriter{authorReclassifyStoreWrites: store, s: s},
 		StandDown: func(ctx context.Context, reason string) (t7Hold, error) {

@@ -17,8 +17,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
-func intPtr(i int) *int { return &i }
-
 // TestListDedupCandidates_IncludeBooks_AuthorName pins book_a.author_name /
 // book_b.author_name (and series_name): the TypeScript Book type reads them
 // and the bare database.Book never carried them. Two pairs share one author,
@@ -29,9 +27,9 @@ func TestListDedupCandidates_IncludeBooks_AuthorName(t *testing.T) {
 	insertCandidate(t, d.es, "a-year-one", "b-year-one")
 	insertCandidate(t, d.es, "a-long-halloween", "b-no-author")
 
-	d.store.EXPECT().GetBookByID("a-year-one").Return(&database.Book{ID: "a-year-one", Title: "Year One", AuthorID: intPtr(7), SeriesID: intPtr(3)}, nil).Maybe()
-	d.store.EXPECT().GetBookByID("b-year-one").Return(&database.Book{ID: "b-year-one", Title: "Year One", AuthorID: intPtr(7)}, nil).Maybe()
-	d.store.EXPECT().GetBookByID("a-long-halloween").Return(&database.Book{ID: "a-long-halloween", Title: "The Long Halloween", AuthorID: intPtr(7)}, nil).Maybe()
+	d.store.EXPECT().GetBookByID("a-year-one").Return(&database.Book{ID: "a-year-one", Title: "Year One", AuthorID: new(7), SeriesID: new(3)}, nil).Maybe()
+	d.store.EXPECT().GetBookByID("b-year-one").Return(&database.Book{ID: "b-year-one", Title: "Year One", AuthorID: new(7)}, nil).Maybe()
+	d.store.EXPECT().GetBookByID("a-long-halloween").Return(&database.Book{ID: "a-long-halloween", Title: "The Long Halloween", AuthorID: new(7)}, nil).Maybe()
 	d.store.EXPECT().GetBookByID("b-no-author").Return(&database.Book{ID: "b-no-author", Title: "No Author"}, nil).Maybe()
 	d.store.EXPECT().GetAuthorByID(7).Return(&database.Author{ID: 7, Name: "Bruce Wayne"}, nil).Once()
 	d.store.EXPECT().GetSeriesByID(3).Return(&database.Series{ID: 3, Name: "Gotham Knights"}, nil).Once()
@@ -83,7 +81,7 @@ func TestListDedupCandidates_IncludeBooks_AuthorName(t *testing.T) {
 func TestGetDedupCandidateBreakdown_AuthorName(t *testing.T) {
 	h, d := newHandler(t)
 	id, aID, bID := insertCandidateWithBand(t, d.es, "book-ba", "book-bb", "HIGH")
-	d.store.EXPECT().GetBookByID(aID).Return(&database.Book{ID: aID, Title: "Year One", AuthorID: intPtr(7)}, nil).Once()
+	d.store.EXPECT().GetBookByID(aID).Return(&database.Book{ID: aID, Title: "Year One", AuthorID: new(7)}, nil).Once()
 	d.store.EXPECT().GetBookByID(bID).Return(&database.Book{ID: bID, Title: "Year One"}, nil).Once()
 	d.store.EXPECT().GetBookFiles(mock.Anything).Return([]database.BookFile{}, nil).Twice()
 	d.store.EXPECT().GetAuthorByID(7).Return(&database.Author{ID: 7, Name: "Bruce Wayne"}, nil).Once()

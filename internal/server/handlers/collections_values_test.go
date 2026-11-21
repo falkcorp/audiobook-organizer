@@ -140,7 +140,7 @@ func TestCollections_AStoredValueTheEvaluatorRefusesReadsAsUnavailableWithGuidan
 	for _, tc := range cases {
 		t.Run(tc.query, func(t *testing.T) {
 			store := &colFakeStore{cols: []database.Collection{perViewerRow("c1", tc.query, "b1")}}
-			rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+			rig := newFailureRig(t, store, &countingEval{states: viewerStates()}, true)
 
 			got := decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
 			assert.True(t, got.MembersUnavailable)

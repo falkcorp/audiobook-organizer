@@ -500,7 +500,7 @@ var namePartStopWords = map[string]bool{"the": true, "a": true, "an": true, "of"
 // person's name: personname.LooksLikePersonName, behind the title words
 // (namePartStopWords) it has no stoplist for.
 func looksLikePersonSegment(s string) bool {
-	for _, w := range strings.Fields(s) {
+	for w := range strings.FieldsSeq(s) {
 		if namePartStopWords[strings.ToLower(w)] {
 			return false
 		}

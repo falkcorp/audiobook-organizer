@@ -424,10 +424,8 @@ func TestDeleteSeriesIfUnreferenced_DoesNotDeadlockWithWritersThatCreateSeries(t
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	for w := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 60; i++ {
+		wg.Go(func() {
+			for i := range 60 {
 				id := ids[(w*7+i)%books]
 				_, _ = s.ModifyBook(id, func(b *Book) error {
 					ser, err := s.CreateSeries(fmt.Sprintf("Knightfall %d", (w+i)%5), nil)
@@ -438,18 +436,16 @@ func TestDeleteSeriesIfUnreferenced_DoesNotDeadlockWithWritersThatCreateSeries(t
 					return nil
 				})
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 60; i++ {
+	wg.Go(func() {
+		for i := range 60 {
 			ser, err := s.CreateSeries(fmt.Sprintf("No Mans Land %d", i%3), nil)
 			if err == nil {
 				_, _ = s.DeleteSeriesIfUnreferenced(ser.ID, ser.Name, ser.AuthorID)
 			}
 		}
-	}()
+	})
 	go func() { wg.Wait(); close(done) }()
 	select {
 	case <-done:

@@ -52,12 +52,12 @@ func cbSplitFixture(t *testing.T, s1ID, s2ID string) *cbFixture {
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Harvey Bullock")
 	f.book(s1ID, "Gotham Central: In the Line of Duty", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba(s1ID, [2]int{bruce, 0}), nil)
 	f.book(s2ID, "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya and Harvey Bullock")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya and Harvey Bullock")
 	}, ba(s2ID, [2]int{bruce, 0}), nil)
 	return f
 }
@@ -177,8 +177,8 @@ func TestCreditsBackfill_SplitBookNamingAnUncreatedPersonStaysUnderReview(t *tes
 	f := cbSplitFixture(t, "s1", "s2")
 	dick := f.author("Dick Grayson")
 	f.book("s3", "Gotham Central: Soft Targets", func(b *database.Book) {
-		b.AuthorID = intp(dick)
-		b.Narrator = strp("Renee Montoya and Selina Kyle")
+		b.AuthorID = new(dick)
+		b.Narrator = new("Renee Montoya and Selina Kyle")
 	}, ba("s3", [2]int{dick, 0}), nil)
 	dry, err := f.run(creditsBackfillParams{}, 2)
 	if err != nil {
@@ -212,8 +212,8 @@ func TestCreditsBackfill_SplitBookNameCoveredByAFoldKeyTwinIsRespelledToTheRecor
 		"t1": "Renée Montoya", "t2": "Renée Montoya", "t3": "Renee Montoya and Harvey Bullock",
 	} {
 		f.book(id, "Gotham Central "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp(col)
+			b.AuthorID = new(bruce)
+			b.Narrator = new(col)
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	res, err := f.run(creditsBackfillParams{Apply: true}, 2)
@@ -244,8 +244,8 @@ func TestCreditsBackfill_BookIDsRunCountsSpellingsOverTheWholeLibrary(t *testing
 	bruce := f.author("Bruce Wayne")
 	for id, n := range map[string]string{"g-1": "Renee Montoya", "g-2": "Renée Montoya", "g-3": "Renée Montoya"} {
 		f.book(id, "No Man's Land "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp(n)
+			b.AuthorID = new(bruce)
+			b.Narrator = new(n)
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	full, err := f.run(creditsBackfillParams{}, 2)
@@ -305,8 +305,8 @@ func TestCreditsBackfill_BookIDsRunLimitsAndCountsGoneOverItsOwnBooks(t *testing
 	bruce := f.author("Bruce Wayne")
 	for _, id := range []string{"b-1", "b-2", "b-3", "b-4"} {
 		f.book(id, "Knightfall "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp("Renee Montoya")
+			b.AuthorID = new(bruce)
+			b.Narrator = new("Renee Montoya")
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	res, err := f.run(creditsBackfillParams{Apply: true, BookIDs: []string{"b-2", "b-3", "b-4", "b-nope"}, Limit: 2}, 2)
@@ -356,9 +356,9 @@ func TestCreditsBackfill_JSONEntryOfAnotherPersonDoesNotRefuseTheBook(t *testing
 	f.narrator("Jean-Paul Valley")
 	f.narrator("Jean Paul Valley Jr.")
 	f.book("c1", "Knightfall", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Jean Paul Valley Jr. and Jean Paul Valley")
-		b.NarratorsJSON = strp(raw)
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Jean Paul Valley Jr. and Jean Paul Valley")
+		b.NarratorsJSON = new(raw)
 	}, ba("c1", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true, Allow: []string{cbAllowNewFromSplit}}, 1)
 	if err != nil {
@@ -391,8 +391,8 @@ func TestCreditsBackfill_RoleCreditNamingTheSamePersonIsSkippedForTheNarratorPie
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Jean-Paul Valley")
 	f.book("c1b", "Knightquest", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp(text)
+		b.AuthorID = new(bruce)
+		b.Narrator = new(text)
 	}, ba("c1b", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
 	if err != nil {
@@ -419,8 +419,8 @@ func TestCreditsBackfill_SamePersonTwiceInTheColumnIsRespelledInEveryPiece(t *te
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Renée Montoya")
 	f.book("c7", "Gotham Central: Soft Targets", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya, Read by Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya, Read by Renee Montoya")
 	}, ba("c7", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
 	if err != nil {
@@ -488,8 +488,8 @@ func TestCreditsBackfill_CaseOnlyTieTakesMixedCaseAndListsNoRespelledColumn(t *t
 	bruce := f.author("Bruce Wayne")
 	for id, n := range map[string]string{"a": "Renee Montoya", "b": "RENEE MONTOYA"} {
 		f.book(id, "No Man's Land "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp(n)
+			b.AuthorID = new(bruce)
+			b.Narrator = new(n)
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	for _, apply := range []bool{false, true} {
@@ -562,8 +562,8 @@ func TestCreditsBackfill_ApplyTimeSpellingRefusalKeepsTheAuthorWrite(t *testing.
 	bruce := f.author("Bruce Wayne")
 	lucius := f.author("Lucius Fox")
 	f.book("ap", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(lucius)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(lucius)
+		b.Narrator = new("Renee Montoya")
 	}, ba("ap", [2]int{bruce, 0}), nil)
 	before := f.state("ap")
 	env := creditsBackfillEnv{store: cbSpellingStore{f.s}, mod: f.s, opID: cbTestOpID, workers: 1}
@@ -626,13 +626,13 @@ func TestCreditsBackfill_AuthorOnlyBookAfterSettleRefusalJournalsNoNarratorSideA
 	lucius := f.author("Lucius Fox")
 	for _, id := range []string{"r1-a", "r1-b"} {
 		f.book(id, "Gotham Central "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp("Renee Montoya")
+			b.AuthorID = new(bruce)
+			b.Narrator = new("Renee Montoya")
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	f.book("r1-c", "Gotham Central: Daylight", func(b *database.Book) {
-		b.AuthorID = intp(lucius)
-		b.NarratorsJSON = strp(`["Read by Renée Montoya"]`)
+		b.AuthorID = new(lucius)
+		b.NarratorsJSON = new(`["Read by Renée Montoya"]`)
 	}, nil, nil)
 	before := f.state("r1-c")
 	rawKeys := []string{"book_authors:r1-c", "book_narrators:r1-c"}
@@ -700,7 +700,7 @@ func TestCreditsBackfill_AccentTwinInTheJoinIsHeldAsDuplicateName(t *testing.T) 
 	plain := f.author("Renee Montoya")
 	accent := f.author("Renée Montoya")
 	f.book("c9", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(plain)
+		b.AuthorID = new(plain)
 		b.Author = &database.Author{ID: 0, Name: "Renée Montoya"}
 	}, ba("c9", [2]int{accent, 0}), nil)
 	before := f.state("c9")

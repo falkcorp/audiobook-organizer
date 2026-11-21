@@ -51,7 +51,7 @@ func r0Effective(t testing.TB, corpus string) map[string]any {
 // lookupHead finds the dotted HEAD name in R0's effective config.
 func lookupHead(eff map[string]any, head string) (any, bool) {
 	var cur any = eff
-	for _, seg := range strings.Split(head, ".") {
+	for seg := range strings.SplitSeq(head, ".") {
 		m, ok := cur.(map[string]any)
 		if !ok {
 			return nil, false
@@ -122,14 +122,14 @@ func TestConfigCutover_EffectiveConfigUnchanged(t *testing.T) {
 // headTypeAt is the Go type of HEAD's dotted name head in headConfig.
 func headTypeAt(head string) (reflect.Type, bool) {
 	t := reflect.TypeFor[headConfig]()
-	for _, seg := range strings.Split(head, ".") {
+	for seg := range strings.SplitSeq(head, ".") {
 		if t.Kind() != reflect.Struct {
 			return nil, false
 		}
 		found := false
-		for i := 0; i < t.NumField(); i++ {
-			if name, _ := fieldName(t.Field(i)); name == seg {
-				t, found = t.Field(i).Type, true
+		for field := range t.Fields() {
+			if name, _ := fieldName(field); name == seg {
+				t, found = field.Type, true
 				break
 			}
 		}
@@ -147,8 +147,7 @@ func perturbAt(head string, t reflect.Type) (any, bool) {
 	switch t.Kind() {
 	case reflect.Struct:
 		m := map[string]any{}
-		for i := 0; i < t.NumField(); i++ {
-			sf := t.Field(i)
+		for sf := range t.Fields() {
 			name, envOnly := fieldName(sf)
 			if name == "" || envOnly {
 				continue

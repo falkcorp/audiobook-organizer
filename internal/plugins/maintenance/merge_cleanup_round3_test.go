@@ -28,8 +28,8 @@ import (
 func mcTrash(t *testing.T, x *mcFixture, name string) {
 	t.Helper()
 	_, err := x.st.ModifyBook(x.ids[name], func(b *database.Book) error {
-		b.MarkedForDeletion = retiredPtr(true)
-		b.MarkedForDeletionAt = retiredPtr(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+		b.MarkedForDeletion = new(true)
+		b.MarkedForDeletionAt = new(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
 		return nil
 	})
 	require.NoError(t, err)
@@ -237,7 +237,7 @@ func TestMergeCleanupDeadEndOnAMissingBookSaysItReadNothing(t *testing.T) {
 	x := newMCFixture(t)
 	x.mk("loser", mcHushSpec(30000))
 	_, err := x.st.ModifyBook(x.ids["loser"], func(b *database.Book) error {
-		b.MergedIntoBookID = retiredPtr("01HZZZZZZZZZZZZZZZZZZZZZZZ")
+		b.MergedIntoBookID = new("01HZZZZZZZZZZZZZZZZZZZZZZZ")
 		b.IsPrimaryVersion = mcFalse()
 		return nil
 	})

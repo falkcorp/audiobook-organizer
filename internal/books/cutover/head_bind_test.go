@@ -80,8 +80,7 @@ func resolveKey(t reflect.Type, key string) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		for _, n := range tagNames(f) {
 			if n != head {
 				continue
@@ -107,7 +106,7 @@ var providerBaseURLBindings = []string{"audible_base_url", "openlibrary_base_url
 func TestHeadBindingsFieldsAreHeadConfigTags(t *testing.T) {
 	var unresolved []string
 	for _, b := range headBindings {
-		if !resolveKey(reflect.TypeOf(headConfig{}), b.Field) {
+		if !resolveKey(reflect.TypeFor[headConfig](), b.Field) {
 			unresolved = append(unresolved, b.Field)
 		}
 	}
@@ -117,7 +116,7 @@ func TestHeadBindingsFieldsAreHeadConfigTags(t *testing.T) {
 }
 
 func TestResolveKeyNested(t *testing.T) {
-	typ := reflect.TypeOf(headConfig{})
+	typ := reflect.TypeFor[headConfig]()
 	for _, k := range []string{"root_dir", "embedding.base_url", "metadata_fetch.negative_ttl_days.google", "scheduled.library_scan.enabled"} {
 		if !resolveKey(typ, k) {
 			t.Errorf("%q should resolve", k)

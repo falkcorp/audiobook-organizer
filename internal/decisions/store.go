@@ -121,10 +121,7 @@ func New(kv KV, opts ...Option) *Store {
 func (s *Store) newID(at time.Time) (string, error) {
 	s.idMu.Lock()
 	defer s.idMu.Unlock()
-	ms := ulid.Timestamp(at)
-	if ms < s.lastIDms {
-		ms = s.lastIDms
-	}
+	ms := max(ulid.Timestamp(at), s.lastIDms)
 	id, err := ulid.New(ms, s.entropy)
 	if err != nil {
 		return "", fmt.Errorf("decisions: new id: %w", err)
@@ -408,7 +405,7 @@ func indexKeys(rec *Record) ([]string, error) {
 		return keys, nil
 	case IndexEdges:
 		keys := make([]string, 0, n*(n-1)/2)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			for j := i + 1; j < n; j++ {
 				lo, hi := orderPair(rec.EntityIDs[i], rec.EntityIDs[j])
 				keys = append(keys, edgeKey(rec.EntityType, lo, hi, rec.Family, rec.ID))

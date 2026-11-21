@@ -110,8 +110,6 @@ func (s *fakeRetiredStore) UnretireBookFiles(moves []database.BookFileMove, back
 	return nil
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 // newRetiredFixture: holder "h1" with retired version "v-new" (two rows) and
 // "v-old" (one row), both retired out of the trashed shell "shell1"; "v-gone"
 // retired out of the purged shell "shell-purged"; "v-empty" is retired with no
@@ -122,7 +120,7 @@ func newRetiredFixture() *fakeRetiredStore {
 	return &fakeRetiredStore{
 		books: map[string]*database.Book{
 			"h1":     {ID: "h1", Title: "Holder"},
-			"shell1": {ID: "shell1", Title: "Shell Title", MarkedForDeletion: boolPtr(true)},
+			"shell1": {ID: "shell1", Title: "Shell Title", MarkedForDeletion: new(true)},
 			"live2":  {ID: "live2", Title: "Live Shell"},
 		},
 		versions: map[string]*database.BookVersion{

@@ -76,19 +76,17 @@ func (p *Plugin) runIntegrityCheck(ctx context.Context, raw json.RawMessage, rep
 // the same env from rc. The kind only reads, so it has no writer.
 func (p *Plugin) integrityCheckKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(integrityCheckKind, tasks.TaskSpec[struct{}, integrityCheckResult]{
-		Common: tasks.Common{
-			Title:    "File integrity check",
-			Help:     "Flags book_file rows where file_hash differs from original_file_hash with no AO tag-write on record (post_metadata_hash empty) — a candidate for external modification or bit-rot. Report-only; takes no action.",
-			Effects:  tasks.ReadOnly(),
-			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:   tasks.ResumeDrop,
-			Priority: tasks.PriorityNormal,
-			// HEAD's ConcurrencyKey is its own ID: "books." + that ID.
-			ConcurrencyKey: tasks.Key("books.maintenance.file-integrity-check"),
-			Timeout:        30 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title:    "File integrity check",
+		Help:     "Flags book_file rows where file_hash differs from original_file_hash with no AO tag-write on record (post_metadata_hash empty) — a candidate for external modification or bit-rot. Report-only; takes no action.",
+		Effects:  tasks.ReadOnly(),
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:   tasks.ResumeDrop,
+		Priority: tasks.PriorityNormal,
+		// HEAD's ConcurrencyKey is its own ID: "books." + that ID.
+		ConcurrencyKey: tasks.Key("books.maintenance.file-integrity-check"),
+		Timeout:        30 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, _ struct{}) (integrityCheckResult, error) {
 			base, err := t6g4NativeBase(rc, deps, false)
 			if err != nil {

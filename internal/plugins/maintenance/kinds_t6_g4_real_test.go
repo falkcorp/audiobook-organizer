@@ -269,9 +269,9 @@ func TestT6G4Kinds_TranscribeStatsBypassTheGatedWriter(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds a real PebbleStore; skipped in -short")
 	}
-	iface := reflect.TypeOf((*t6g4Writer)(nil)).Elem()
-	for i := 0; i < iface.NumMethod(); i++ {
-		if n := iface.Method(i).Name; strings.HasSuffix(n, "Stats") {
+	iface := reflect.TypeFor[t6g4Writer]()
+	for method := range iface.Methods() {
+		if n := method.Name; strings.HasSuffix(n, "Stats") {
 			t.Errorf("t6g4Writer has %s: a stats key must not be a gated write", n)
 		}
 	}

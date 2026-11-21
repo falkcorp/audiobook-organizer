@@ -8,6 +8,7 @@ package middleware
 import (
 	"html"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -64,9 +65,7 @@ var navHeaders = map[string]string{"Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest
 
 func with(base map[string]string, kv ...string) map[string]string {
 	out := map[string]string{}
-	for k, v := range base {
-		out[k] = v
-	}
+	maps.Copy(out, base)
 	for i := 0; i+1 < len(kv); i += 2 {
 		out[kv[i]] = kv[i+1]
 	}

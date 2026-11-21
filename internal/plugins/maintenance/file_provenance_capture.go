@@ -158,27 +158,25 @@ func (p *Plugin) runFileProvenanceCapture(ctx context.Context, rawParams json.Ra
 // preview, so there is no Live-only error.
 func (p *Plugin) fileProvenanceCaptureKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(fileProvenanceCaptureKind, tasks.TaskSpec[fileProvCaptureNativeParams, fileProvCaptureResult]{
-		Common: tasks.Common{
-			Title: "Capture provenance for files outside the library",
-			Help: "Walks the given roots, digests each audio file, and records an " +
-				"append-only provenance event so the pristine hash exists before anything " +
-				"copies, moves, or retags the file. Events are orphans until the file is " +
-				"imported, then adopted into its book_file chain. Roots are required; " +
-				"a preview (the default) writes nothing, start in live mode to write events.",
-			// The events are the file-history chain of a book_file (orphans until the
-			// file is imported). Declared as t6g4ResProvenance.
-			Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-capture"),
-			// HEAD declares no Timeout (the registry's own default applies); the
-			// native kind states 120 minutes, a sweep-sized bound (decision of
-			// the F5-09 review, MINOR 13). Listed in the PR's Deviations.
-			Timeout:  120 * time.Minute,
-			Schedule: sched,
-			Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Capture provenance for files outside the library",
+		Help: "Walks the given roots, digests each audio file, and records an " +
+			"append-only provenance event so the pristine hash exists before anything " +
+			"copies, moves, or retags the file. Events are orphans until the file is " +
+			"imported, then adopted into its book_file chain. Roots are required; " +
+			"a preview (the default) writes nothing, start in live mode to write events.",
+		// The events are the file-history chain of a book_file (orphans until the
+		// file is imported). Declared as t6g4ResProvenance.
+		Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-capture"),
+		// HEAD declares no Timeout (the registry's own default applies); the
+		// native kind states 120 minutes, a sweep-sized bound (decision of
+		// the F5-09 review, MINOR 13). Listed in the PR's Deviations.
+		Timeout:  120 * time.Minute,
+		Schedule: sched,
+		Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fileProvCaptureNativeParams) (fileProvCaptureResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileProvCaptureResult{}, err

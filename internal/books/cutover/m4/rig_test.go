@@ -757,8 +757,6 @@ type runSpec struct {
 	mutateRec func(*store.RunRecord)
 }
 
-func tptr(t time.Time) *time.Time { return &t }
-
 func runID(i int) string { return fmt.Sprintf("01HBAT%020d", i) }
 
 // seedRun writes one run's rows into lr and returns the keys it wrote.
@@ -799,8 +797,8 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 		SchemaVersion: 3, ID: s.id, DefID: s.def, State: s.st, WaitReason: s.wait, StopReason: s.stop, InterruptedWhy: s.why,
 		Mode: s.mode, Trigger: s.trigger, Params: params, ParentID: s.parent, Attempt: 1, FenceEpoch: 2,
 		Actor: store.Actor{UserID: "bruce.wayne", AuthMethod: "session"}, Priority: s.priority,
-		StartedAt: s.started, CompletedAt: s.completed, QueuedAt: tptr(s.queued),
-		Progress: store.ProgressSnapshot{Done: 7, Total: ptr(int64(9)), Current: "The Long Halloween", UpdatedAt: s.queued},
+		StartedAt: s.started, CompletedAt: s.completed, QueuedAt: new(s.queued),
+		Progress: store.ProgressSnapshot{Done: 7, Total: new(int64(9)), Current: "The Long Halloween", UpdatedAt: s.queued},
 	}
 	if s.noQueued {
 		rec.QueuedAt = nil
@@ -823,7 +821,7 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 	put("opv3:prog:"+s.id, struct {
 		Progress       store.ProgressSnapshot `json:"progress"`
 		LastProgressAt *time.Time             `json:"last_progress_at,omitempty"`
-	}{rec.Progress, tptr(s.queued.Add(time.Minute))})
+	}{rec.Progress, new(s.queued.Add(time.Minute))})
 	for i := 1; i <= s.evts; i++ {
 		at := s.queued.Add(time.Duration(i) * time.Second)
 		put(fmt.Sprintf("opv3:evt:%s:%020d:%06d", s.id, at.UnixNano(), i), store.Transition{Seq: uint64(i), From: state.V3Queued, To: state.V3Running, Event: "claim", Attempt: 1, FenceEpoch: 2, At: at})
@@ -897,8 +895,6 @@ func seedRun(ctx context.Context, t testing.TB, lr storage.LegacyRange, s runSpe
 	}
 	return wrote
 }
-
-func ptr[T any](v T) *T { return &v }
 
 // withRuns is a rig option that writes runs into books' legacy range after the
 // pre-freeze boot and records every key it wrote, by run.

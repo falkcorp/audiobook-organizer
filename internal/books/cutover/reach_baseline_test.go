@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -368,9 +369,7 @@ func TestReachBaseline_ServerErrorReasonsMatchTheRecordersTable(t *testing.T) {
 	}
 	// the comparison itself must see a one-sided edit
 	changed := map[string]string{}
-	for k, v := range reachServerErrorReasons {
-		changed[k] = v
-	}
+	maps.Copy(changed, reachServerErrorReasons)
 	changed["POST /api/v1/update/apply"] = "failed-to-apply-update-x"
 	if len(reachServerErrorReasonDiff(changed, py)) != 1 {
 		t.Error("a one-sided token change is not reported by the comparison")
