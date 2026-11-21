@@ -131,6 +131,54 @@ var tokenCells = []tokenCell{
 		map[health.ComponentID]string{"core.storage": "storage_quarantine", "core.secrets": "secrets_undecryptable"}),
 	f2Cell("F2 (core.secrets: secrets_keyring_not_exported)",
 		map[health.ComponentID]string{"core.secrets": "secrets_keyring_not_exported"}),
+	// F4-08 (B9a): core.backup carries the revocation journal's tokens and core.auth
+	// auth's one posture token. A component holds one Reason at a time, so each token
+	// is a cell. None is in the unauthenticated set: /health carries none of them,
+	// and the authenticated degraded field carries each.
+	f4Cell("F4 (core.backup: revocation_journal_broken)", "core.backup", "revocation_journal_broken"),
+	f4Cell("F4 (core.backup: revocation_journal_unwritable)", "core.backup", "revocation_journal_unwritable"),
+	f4Cell("F4 (core.backup: revocation_journal_reset)", "core.backup", "revocation_journal_reset"),
+	f4Cell("F4 (core.backup: revocation_journal_colocated)", "core.backup", "revocation_journal_colocated"),
+	f4Cell("F4 (core.backup: revocation_journal_queued, Q6a's info token)", "core.backup", "revocation_journal_queued"),
+	f4Cell("F4 (core.auth: auth_disabled_remote)", "core.auth", "auth_disabled_remote"),
+}
+
+// f4Cell is one F4-08 row: the kernel's two identity components (core/kernel
+// registers core.backup and core.auth when the app declares the identity flip,
+// neither Critical nor Readiness) with reason reported Degraded on component.
+// Like f2Cell it also raises the R0 and R1 tokens, so a /health that stopped
+// filtering would show a posture token, and the registry's tokens ride the
+// provider R1-24's checkpoint tokens ride.
+func f4Cell(name string, component health.ComponentID, reason string) tokenCell {
+	return tokenCell{
+		name: name,
+		raise: func(t *testing.T) tokenRaise {
+			m := systemmocks.NewMockSystemStore(t)
+			m.EXPECT().CountAuthors().Return(1, nil).Maybe()
+			config.AppConfig.AutoUpdate.Enabled = true
+			reg := health.NewRegistry()
+			for _, id := range []health.ComponentID{"core.backup", "core.auth"} {
+				rep, err := reg.Register(health.Check{ID: id})
+				require.NoError(t, err)
+				if id == component {
+					rep.Report(health.Result{Status: health.StatusDegraded, Reason: reason, Detail: "gotham/archive"})
+				}
+			}
+			src := fixedTokens{"search_index", DegradedBasicGateNoPassword}
+			return tokenRaise{
+				store:       warmingTokenStore{m},
+				getDegraded: func() DegradedSource { return src },
+				posture: func() []PostureToken {
+					return append(
+						[]PostureToken{{Token: DegradedStorageCheckpointMode, Subject: "/batcave/.mediacore-checkpoints/x"}},
+						HealthPostureTokens(reg)...)
+				},
+			}
+		},
+		wantPublic:              []string{"memdb_warming", "search_index", "basic_gate_no_password"},
+		wantAuthenticatedOnly:   []string{DegradedAutoUpdatePaused, DegradedStorageCheckpointMode, reason},
+		everyTokenAuthenticated: true,
+	}
 }
 
 // f2Cell is one F2 row: the kernel's two components (core/kernel/health.go
