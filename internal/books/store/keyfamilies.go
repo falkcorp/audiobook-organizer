@@ -252,7 +252,7 @@ var keyFamilies = []KeyFamily{
 	{"pref:_system:apply_rename_failure:", "durable organizer apply-rename failure records", "internal/organizer/apply_failure.go"},
 	{"pref:_system:itunes_clone_record:", "iTunes clone-into-library records", "internal/plugins/maintenance/itunes_clone_into_library.go"},
 	{"pref:_system:organize_collision_skip:", "durable organize collision-skip records", "internal/organizer/apply_failure.go"},
-	{"pref:_system:outbox:writeback:", "tag write-back outbox", "internal/writeback/outbox.go"},
+	{"pref:_system:outbox:writeback:", "tag write-back outbox (removed; purged once at startup)", "internal/server/itunes_writeback_cleanup.go"},
 	{"pref:_system:pipeline_checkpoint:", "organizer per-book phase checkpoints", "internal/organizer/checkpoint.go"},
 	{"pref:_system:rename_path_write_failure:", "rename path-write failure records", "internal/organizer/rename_path_failure.go"},
 	{"preference:", "global preferences", "internal/books/store/pebble_store_preferences.go"},
