@@ -280,4 +280,3 @@ func (s *Store) judgeRetired(fileKeys []string, final bool) (uses, refused []Ret
 	}
 	return uses, refused
 }
-
