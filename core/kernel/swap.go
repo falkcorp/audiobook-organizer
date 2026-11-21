@@ -280,9 +280,10 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootRestore && phase == phaseP2:
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
-		if bootseam.RestoreWalk(ctx) {
-			// The crash-matrix cell's walk (F4-08 B10j): P4d's steps 2 and 3 journal
-			// restore_line, hooks_done, marker_written and applied; none is owed here.
+		if k.restoreWalks() {
+			// An identity boot walks the edges from P4d (steps 2 and 3 journal
+			// restore_line, hooks_done, marker_written and applied), so none is
+			// taken here.
 			break
 		}
 		// M8's hook may have journaled it already; the call is idempotent, and a
@@ -344,13 +345,27 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 	return k.swap.s.SwapBack(ctx, out.ID, fmt.Errorf("%s: %w", phase, cause))
 }
 
+// restoreWalks reports whether this restore boot's journal reaches applied by
+// P4d's steps 2 and 3 (restore_line, hooks_done, marker_written, applied: the
+// spec's edges, 05-backup 5B.3.4 steps g and h) and not by swapAfter's Owed edge
+// at P4b (marker_written{HooksOwed}, applied, before any hook ran). An identity
+// boot walks. The two others take the Owed edge: a boot that did not declare the
+// identity flip (nothing walks for it, and its journal ends at P4b exactly as it
+// always did), and an identity boot whose pending store rewrite (M8) had the
+// restore journaled applied before it (restoreAppliedBeforeRewrite: M8's own swap
+// refuses while the restore holds the intent slot), whose hooks then run owed.
+func (k *Kernel) restoreWalks() bool {
+	return k.swap != nil && k.swap.out.Boot == restoreswap.BootRestore &&
+		k.identityBootDeclared() && !k.swap.appliedBeforeRewrite.Load()
+}
+
 // restoreAppliedBeforeRewrite is DataMigrationsConfig.BeforeRewrite: on a
 // restore boot, the restore's applied record (and the in-flight file's
 // removal) is journaled once every data migration has run and before M8
 // starts, because M8's own swap refuses while a restore holds the intent
 // slot (restorejournal.ErrSwapPending). Any other boot does nothing.
 func (k *Kernel) restoreAppliedBeforeRewrite(ctx context.Context) error {
-	if k.swap == nil || k.swap.out.Boot != restoreswap.BootRestore || bootseam.RestoreWalk(ctx) {
+	if k.swap == nil || k.swap.out.Boot != restoreswap.BootRestore {
 		return nil
 	}
 	if err := k.swap.s.RestoreApplied(ctx, k.swap.out.ID); err != nil {

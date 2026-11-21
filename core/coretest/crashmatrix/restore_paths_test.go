@@ -34,25 +34,24 @@ import (
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
-// This file is the cell F4-08 B10j asked for: an identity restore is killed at
-// every durable operation of the boot that applies it, under two paths, and what
-// the next boots leave behind is compared.
-//
-//   - owed: today's path. swap.go's P4b edge journals marker_written{HooksOwed}
-//     and applied before P4d runs, so P4d derives the restore with no journal
-//     edge to walk (restoreBoot.Owed) and a crash before the hooks commit leaves
-//     a store the next boot meets as an ordinary one.
-//   - walk: the spec's path (05-backup 5B.3.4 steps g and h). bootseam.Seams.
-//     RestoreWalk makes P4b journal nothing and P4d walk restore_line,
-//     hooks_done, marker_written and applied, so the restore journal and its
-//     in-flight file survive a crash until the hooks have committed and the next
-//     boot resumes the restore itself, with the pre-swap view and its coverage.
+// This file is F4-08 B10j's cell, kept as the identity restore's permanent
+// regression. An identity restore is killed at every durable operation of the
+// boot that applies it, the next boots are run, and what they leave behind must
+// be what a fault-free boot leaves: in all seven compared fields (admins, users,
+// keys, the journal's lines, the journal head with its queue and restore_hooked
+// records, the stored restore report and the core.backup health). An identity
+// boot WALKS the restore journal (05-backup 5B.3.4 steps g and h: restore_line,
+// hooks_done, marker_written, applied, from P4d), so a crash anywhere in the
+// hooks leaves the in-flight restore, which the next boot resumes as the same
+// restore: one restore line, the pre-swap view and the coverage the hooks need.
 //
 // The fixture is built to make the hooks act: the restored store is an earlier
 // snapshot of the install, and the store it replaces has journaled, since, a key
 // revocation, a promotion and the demotion of the restored store's only
 // administrator (the last-admin guard), so coverage, the pre-swap pass, a kept
-// admin and the restore report all have something to do.
+// admin and the restore report all have something to do. Two fixtures run: one
+// with the replaced store's set-aside copy (the rbac hook's pre-swap-view
+// branch) and one without (a host loss: no pre-swap store, previous == nil).
 
 // The fixture's people and key (Batman names only).
 const (
@@ -96,10 +95,9 @@ type bootRes struct {
 	ready  bool
 }
 
-// pathCell is one path (owed or walk) over one fixture.
+// pathCell is the restore over one fixture.
 type pathCell struct {
 	name  string
-	walk  bool
 	f     Fixture
 	cache *config.SectionCache
 	// seed runs inside the boot, after app.New and before Run, with the services:
@@ -116,7 +114,6 @@ func (c pathCell) bootOnce(ctx context.Context, mem *vfs.MemFS, opts bootseamtes
 	opts.Stores = []string{c.f.dbPath()}
 	rec := bootseamtest.New(mem, opts)
 	inj := newInjector(c.f, rec, nil, c.cache)
-	inj.seams.RestoreWalk = c.walk
 	inj.seams.Built = func(k any) { res.k, _ = k.(*kernel.Kernel) }
 	defer func() {
 		if p := recover(); p != nil {
@@ -404,17 +401,20 @@ func walkMem(mem *vfs.MemFS, root string, fn func(string)) error {
 // ---------------------------------------------------------------------------
 // The fixture.
 
-// pathsFixture builds the restore both paths apply: the install's earlier
-// snapshot is staged as a revert over the install's current store.
+// pathsFixture builds the restore: the install's earlier snapshot is staged as a
+// revert over the install's current store, or, with hostLoss, over no store.
 //
 // Snapshot (what is restored): alfred is the only administrator, bruce is a
 // viewer, tim is an editor holding one active key. Since the snapshot the live
 // store journaled three lines: bruce promoted to administrator (his viewer role
 // removed), alfred demoted (his admin role removed, which the restored store
 // cannot take without a lockout), and tim's key revoked.
-func pathsFixture(t *testing.T) Fixture {
+func pathsFixture(t *testing.T, hostLoss bool) Fixture {
 	t.Helper()
 	f := Fixture{Name: "wayne-manor-hooks", StateDir: t.TempDir()}
+	if hostLoss {
+		f.Name = "wayne-manor-host-loss"
+	}
 	seed := pathCell{name: "seed", f: f, seed: func(ctx context.Context, a *auth.Service, r *rbac.Service) error {
 		actor, err := pathsActor(r)
 		if err != nil {
@@ -489,6 +489,13 @@ func pathsFixture(t *testing.T) Fixture {
 	if err := Stage(f, in); err != nil {
 		t.Fatalf("staging the restore: %v", err)
 	}
+	if hostLoss {
+		// The host lost its store: the restore lands on no live store, so no
+		// pre-swap copy is set aside and the hooks have no previous view.
+		if err := os.RemoveAll(f.dbPath()); err != nil {
+			t.Fatalf("losing the host's store: %v", err)
+		}
+	}
 	return f
 }
 
@@ -497,7 +504,6 @@ func pathsFixture(t *testing.T) Fixture {
 func (c pathCell) build(t *testing.T) error {
 	t.Helper()
 	build := func(_ testing.TB, inj *Injector) error {
-		inj.seams.RestoreWalk = c.walk
 		inj.seams.Built = nil
 		var k *kernel.Kernel
 		inj.seams.Built = func(x any) { k, _ = x.(*kernel.Kernel) }
@@ -545,129 +551,223 @@ func (c pathCell) census(t *testing.T, ctx context.Context) (free endState, clon
 	return free, r.clones
 }
 
-// pathsResult is both paths' census and kill rows.
-type pathsResult struct {
-	free  map[string]endState
-	rows  map[string]map[string]*killRow // path -> key -> row
-	order map[string][]string            // path -> keys in boot order
+// restoreResult is the census and the kill rows of one fixture.
+type restoreResult struct {
+	free  endState
+	rows  map[string]*killRow
+	order []string
 }
 
-// runPaths kills each path at every kill point and boots the chain after it.
-func runPaths(t *testing.T, f Fixture) pathsResult {
+// runRestore kills the restore at every kill point and boots the chain after it.
+func runRestore(t *testing.T, f Fixture) restoreResult {
 	t.Helper()
 	ctx := context.Background()
-	cache := config.NewSectionCache()
-	res := pathsResult{free: map[string]endState{}, rows: map[string]map[string]*killRow{}, order: map[string][]string{}}
-	for _, c := range []pathCell{{name: "owed"}, {name: "walk", walk: true}} {
-		c.f, c.cache = f, cache
-		free, clones := c.census(t, ctx)
-		res.free[c.name] = free
-		res.rows[c.name] = map[string]*killRow{}
-		var mu sync.Mutex
-		sem := make(chan struct{}, runtime.GOMAXPROCS(0))
-		var wg sync.WaitGroup
-		// A kill point is named by its label and ordinal; Pebble's engine
-		// operations share one (the ordinal counts only the others), so the
-		// nth clone of a name carries ".n" and none is dropped.
-		seenKey := map[string]int{}
-		for _, cl := range clones {
-			key := fmt.Sprintf("%s #%d", cl.Event.Label, cl.Event.Ordinal)
-			if n := seenKey[key]; n > 0 {
-				key = fmt.Sprintf("%s.%d", key, n)
-			}
-			seenKey[fmt.Sprintf("%s #%d", cl.Event.Label, cl.Event.Ordinal)]++
-			row := &killRow{key: key, desc: describe(cl.Event)}
-			res.rows[c.name][key] = row
-			res.order[c.name] = append(res.order[c.name], key)
-			sem <- struct{}{}
-			wg.Add(1)
-			go func() {
-				defer func() { <-sem; wg.Done() }()
-				cl.FS.TestingSetDiskUsage(diskUsage())
-				end, boots := c.chain(ctx, cl.FS)
-				mu.Lock()
-				row.end, row.boots = end, boots
-				mu.Unlock()
-			}()
+	c := pathCell{name: "restore", f: f, cache: config.NewSectionCache()}
+	free, clones := c.census(t, ctx)
+	res := restoreResult{free: free, rows: map[string]*killRow{}}
+	var mu sync.Mutex
+	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
+	var wg sync.WaitGroup
+	// A kill point is named by its label and ordinal; Pebble's engine
+	// operations share one (the ordinal counts only the others), so the nth
+	// clone of a name carries ".n" and none is dropped.
+	seenKey := map[string]int{}
+	for _, cl := range clones {
+		base := fmt.Sprintf("%s #%d", cl.Event.Label, cl.Event.Ordinal)
+		key := base
+		if n := seenKey[base]; n > 0 {
+			key = fmt.Sprintf("%s.%d", base, n)
 		}
-		wg.Wait()
+		seenKey[base]++
+		row := &killRow{key: key, desc: describe(cl.Event)}
+		res.rows[key] = row
+		res.order = append(res.order, key)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			cl.FS.TestingSetDiskUsage(diskUsage())
+			end, boots := c.chain(ctx, cl.FS)
+			mu.Lock()
+			row.end, row.boots = end, boots
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 	return res
 }
 
-// TestRestorePaths_OwedVersusWalk is B10j's evidence cell. See the table it logs.
-func TestRestorePaths_OwedVersusWalk(t *testing.T) {
-	f := pathsFixture(t)
-	before, err := snapshot(f)
-	if err != nil {
-		t.Fatal(err)
+// TestIdentityRestore_KilledThenBootedEqualsFaultFree is the regression: at every
+// kill point of the boot that applies an identity restore, the killed-then-booted
+// restore ends as the fault-free one does, in all seven fields, with exactly one
+// restore line that restore_hooked names. Both fixtures run: the replaced store's
+// set-aside copy present (the rbac hook's pre-swap-view branch) and absent (a
+// host loss).
+func TestIdentityRestore_KilledThenBootedEqualsFaultFree(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		hostLoss bool
+	}{{"with_previous", false}, {"previous_nil", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := pathsFixture(t, tc.hostLoss)
+			before, err := snapshot(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := runRestore(t, f)
+			after, err := snapshot(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := before.diff(after); len(d) > 0 {
+				t.Fatalf("the cell wrote to the real disk: %v", d)
+			}
+			var out strings.Builder
+			writeTable(&out, res)
+			if p := os.Getenv("B10J_TABLE"); p != "" {
+				if err := os.WriteFile(p+"."+tc.name, []byte(out.String()), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Log("\n" + out.String())
+			checkRestoreConverges(t, res, tc.hostLoss)
+		})
 	}
-	res := runPaths(t, f)
-	after, err := snapshot(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if d := before.diff(after); len(d) > 0 {
-		t.Fatalf("the cell wrote to the real disk: %v", d)
-	}
-	var out strings.Builder
-	writeTable(&out, res)
-	if p := os.Getenv("B10J_TABLE"); p != "" {
-		if err := os.WriteFile(p, []byte(out.String()), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Log("\n" + out.String())
-	checkPathsEvidence(t, res)
 }
 
-// checkPathsEvidence holds the cell to what it shows. The fault-free ends of
-// the two paths are equal in every field, and neither is empty (so equal is not
-// vacuous); at every kill point both paths hit, the two paths leave the same
-// admins, users, keys, stored report and health tokens. The revocation journal
-// is the field that differs, and the table above is where it is read: a
-// duplicated or reordered restore line and the seq the restore_hooked row
-// names after a kill between P4b and the hooks' commit.
-func checkPathsEvidence(t *testing.T, res pathsResult) {
-	t.Helper()
-	for _, p := range []string{"owed", "walk"} {
-		e := res.free[p]
-		switch {
-		case !e.Ready, len(e.Live.Admins) == 0, len(e.Live.Keys) == 0, len(e.Raw.Lines) < 6,
-			e.Raw.Report == "none", !strings.Contains(e.Live.Health, "restore_admins_review"):
-			t.Errorf("%s: the fault-free end is empty of what the cell compares: %+v", p, e)
+// restoreLines is the fault-free-comparable restore lines of an end state: the
+// journal lines of kind "restore".
+func restoreLines(e endState) []string {
+	var out []string
+	for _, l := range e.Raw.Lines {
+		if strings.Contains(l, "kind=restore,") || strings.HasSuffix(l, "kind=restore") {
+			out = append(out, l)
 		}
 	}
-	if d := differ(res.free["owed"], res.free["walk"]); len(d) > 0 {
-		t.Errorf("the fault-free ends differ in %v", d)
+	return out
+}
+
+// knownRow is a kill point that does not converge for a reason outside the walk,
+// named and held to exactly that: the row must still differ from the fault-free
+// end (so a fix makes the entry stale and the test says so), and must be equal to
+// it once normalise removes the one thing the reason names.
+type knownRow struct {
+	why       string
+	normalise func(endState) endState
+}
+
+// hostLossForwardRows (a host-loss restore: no live store, so no set-aside copy):
+// the swap itself, before P4b and so before any step of the walk, cannot prove
+// that the two names a crashed place rename leaves (restoreswap's memGhost model:
+// the staged store at both its source and its destination) are one store. With
+// no set-aside to prove the twin by, restoreswap.mv refuses (ErrSwapAmbiguous),
+// the restore is swapped back and the next boot is a fresh install. A swap
+// property reached only on a filesystem that can keep both names of a rename.
+var hostLossForwardRows = map[string]knownRow{
+	"swap.place.mv #2": {why: "the dir sync after the staged store's rename into an empty place: the swap cannot prove the twin", normalise: nil},
+}
+
+// epochDriftRows (a restore with a pre-swap store): auth.PostRestore bumps every
+// user's credential epoch on each run, so a boot resumed after the auth hook
+// committed bumps it again, and the kept admin's password.changed line, which the
+// rbac hook journals after it, records the epoch of its run (2, not 1). The
+// standing is the same: the users field leaves the epoch out for this reason.
+var epochDriftRows = map[string]knownRow{
+	"kernel.hooks.rbac #1": {why: "the resumed auth hook bumped the credential epoch again before the rbac hook's restriction line", normalise: dropEpochs},
+}
+
+// dropEpochs is e with the epoch of every journal line removed.
+func dropEpochs(e endState) endState {
+	lines := make([]string, len(e.Raw.Lines))
+	for i, l := range e.Raw.Lines {
+		parts := strings.Split(l, ",")
+		parts = slices.DeleteFunc(parts, func(p string) bool { return strings.HasPrefix(p, "epoch=") })
+		lines[i] = strings.Join(parts, ",")
 	}
-	both, differing := 0, 0
-	for _, k := range res.order["owed"] {
-		o, w := res.rows["owed"][k], res.rows["walk"][k]
-		if w == nil {
+	e.Raw.Lines = lines
+	return e
+}
+
+// known is the known row for kill point k in the fixture.
+func known(k string, hostLoss bool) (knownRow, bool) {
+	m := epochDriftRows
+	if hostLoss {
+		m = hostLossForwardRows
+	}
+	kr, ok := m[k]
+	return kr, ok
+}
+
+// checkRestoreConverges holds the cell to its bar. The fault-free end is not
+// empty of what the cell compares (so equal is not vacuous); at every kill point
+// the chain reaches readiness and ends equal to it in every field, with exactly
+// one restore line and restore_hooked naming it.
+func checkRestoreConverges(t *testing.T, res restoreResult, hostLoss bool) {
+	t.Helper()
+	e := res.free
+	switch {
+	case !e.Ready, len(e.Live.Admins) == 0, len(e.Live.Keys) == 0, len(e.Raw.Lines) < 6, e.Raw.Report == "none":
+		t.Fatalf("the fault-free end is empty of what the cell compares: %+v", e)
+	case !hostLoss && !strings.Contains(e.Live.Health, "restore_last_admin_kept"):
+		// With the pre-swap view the rbac hook keeps the restored store's only
+		// administrator (the demotion would lock out) and restricts it.
+		t.Fatalf("the fault-free end of a restore with a pre-swap store did not take the pre-swap branch: %s", e.Live.Health)
+	case hostLoss && !strings.Contains(e.Live.Health, "restore_admins_review"):
+		// With no pre-swap store (previous == nil) every administrator is listed
+		// for review.
+		t.Fatalf("the fault-free end of a restore with no pre-swap store did not take the previous == nil branch: %s", e.Live.Health)
+	}
+	if got := restoreLines(e); len(got) != 1 {
+		t.Fatalf("the fault-free end has %d restore lines, want 1: %v", len(got), got)
+	}
+	if len(e.Raw.Hooked) != 1 {
+		t.Fatalf("the fault-free end has restore_hooked %v, want one record", e.Raw.Hooked)
+	}
+	if len(res.order) < 20 {
+		t.Fatalf("the census found %d kill points: the cell is not killing the boot", len(res.order))
+	}
+	bad := 0
+	for _, k := range res.order {
+		r := res.rows[k]
+		if kr, ok := known(k, hostLoss); ok {
+			// The row must still differ, so a fix that closes it makes this entry
+			// stale; and it may differ in nothing the reason does not name.
+			if r.end.Ready && len(differ(r.end, e)) == 0 {
+				t.Errorf("kill point %s converges now: remove it from the known rows (%s)", k, kr.why)
+			}
+			if kr.normalise != nil {
+				if d := differ(kr.normalise(r.end), kr.normalise(e)); len(d) > 0 {
+					t.Errorf("kill point %s: differs in %v beyond what its known reason names (%s)", k, d, kr.why)
+				}
+			}
 			continue
 		}
-		both++
-		d := differ(o.end, w.end)
-		if len(d) > 0 {
-			differing++
+		if !r.end.Ready {
+			t.Errorf("kill point %s: the chain of %d boots never reached readiness: %s", k, r.end.Boots, r.end.LastErr)
+			bad++
+			continue
 		}
-		for _, f := range d {
-			if f != "journal.lines" && f != "journal.head+queue" {
-				t.Errorf("kill point %s: owed and walk differ in %s (owed %q, walk %q)", k, f, o.end.field(f), w.end.field(f))
-			}
+		for _, f := range differ(r.end, e) {
+			t.Errorf("kill point %s: %s differs from the fault-free end\n  killed-then-booted: %s\n  fault-free:         %s%s", k, f, shortField(r.end, f), shortField(e, f), lineDiffNote(r.end, e, f))
+			bad++
+		}
+		lines := restoreLines(r.end)
+		if len(lines) != 1 {
+			t.Errorf("kill point %s: %d restore lines, want exactly 1: %v", k, len(lines), lines)
+			bad++
+		}
+		if !slices.Equal(r.end.Raw.Hooked, e.Raw.Hooked) {
+			t.Errorf("kill point %s: restore_hooked = %v, want the restore line's seq %v", k, r.end.Raw.Hooked, e.Raw.Hooked)
+			bad++
 		}
 	}
-	if both == 0 {
-		t.Error("the two paths share no kill point")
-	}
-	t.Logf("kill points in both paths: %d; differing in the journal: %d", both, differing)
+	t.Logf("kill points: %d; rows that did not converge: %d", len(res.order), bad)
 }
 
-// TestRestorePaths_ComparatorSeesEachField is the comparator's control: an end
+// TestIdentityRestore_ComparatorSeesEachField is the comparator's control: an end
 // state altered in one field is reported in that field and no other, so an
 // "equal" in the table is not a comparator that cannot tell.
-func TestRestorePaths_ComparatorSeesEachField(t *testing.T) {
+func TestIdentityRestore_ComparatorSeesEachField(t *testing.T) {
 	base := endState{
 		Live: liveObs{Users: []string{"u"}, Keys: []string{"k"}, Admins: []string{"a"}, Health: "h"},
 		Raw:  rawObs{Report: "r", Head: "1", Queue: []string{"1"}, Hooked: []string{"1"}, Lines: []string{"l"}, Pending: "clear"},
@@ -696,52 +796,29 @@ func TestRestorePaths_ComparatorSeesEachField(t *testing.T) {
 	}
 }
 
-// writeTable prints the evidence: the fault-free ends, then one row per kill
-// point of each path against the other and against its own fault-free end.
-func writeTable(w *strings.Builder, res pathsResult) {
-	fmt.Fprintf(w, "FAULT-FREE ENDS\n")
-	for _, p := range []string{"owed", "walk"} {
-		e := res.free[p]
-		fmt.Fprintf(w, "  %s: boots=%d ready=%t\n", p, e.Boots, e.Ready)
-		for _, n := range fieldNames {
-			fmt.Fprintf(w, "    %-20s %s\n", n, e.field(n))
-		}
+// writeTable prints the fault-free end and, for each kill point, whether the
+// chain after it ends as the fault-free one does.
+func writeTable(w *strings.Builder, res restoreResult) {
+	e := res.free
+	fmt.Fprintf(w, "FAULT-FREE END: boots=%d ready=%t\n", e.Boots, e.Ready)
+	for _, n := range fieldNames {
+		fmt.Fprintf(w, "    %-20s %s\n", n, e.field(n))
 	}
-	fmt.Fprintf(w, "  owed vs walk fault-free: differ in %v\n\n", differ(res.free["owed"], res.free["walk"]))
-	var all []string
-	seen := map[string]bool{}
-	for _, p := range []string{"walk", "owed"} {
-		for _, k := range res.order[p] {
-			if !seen[k] {
-				seen[k] = true
-				all = append(all, k)
-			}
-		}
-	}
-	fmt.Fprintf(w, "KILL POINTS (owed vs walk at the same label+ordinal; own-free = kill end vs the same path's fault-free end)\n")
-	for _, k := range all {
-		o, ow := res.rows["owed"][k]
-		wk, wl := res.rows["walk"][k]
-		switch {
-		case ow && wl:
-			fmt.Fprintf(w, "  %-52s owed-vs-walk %-9s owed-vs-ownfree %-9s walk-vs-ownfree %-9s\n", k, verdict(differ(o.end, wk.end)),
-				verdict(differ(o.end, res.free["owed"])), verdict(differ(wk.end, res.free["walk"])))
-			if d := differ(o.end, wk.end); len(d) > 0 {
-				fmt.Fprintf(w, "      differs in %v\n", d)
-				for _, n := range d {
-					fmt.Fprintf(w, "        %s\n          owed: %s\n          walk: %s\n", n, shortField(o.end, n), shortField(wk.end, n))
-				}
-			}
-		case ow:
-			fmt.Fprintf(w, "  %-52s owed-only: vs walk fault-free %-9s vs owed fault-free %-9s\n", k, verdict(differ(o.end, res.free["walk"])), verdict(differ(o.end, res.free["owed"])))
-		default:
-			fmt.Fprintf(w, "  %-52s walk-only: vs owed fault-free %-9s vs walk fault-free %-9s\n", k, verdict(differ(wk.end, res.free["owed"])), verdict(differ(wk.end, res.free["walk"])))
+	fmt.Fprintf(w, "\nKILL POINTS (killed-then-booted vs the fault-free end)\n")
+	for _, k := range res.order {
+		r := res.rows[k]
+		d := differ(r.end, e)
+		fmt.Fprintf(w, "  %-52s boots=%d ready=%-5t %s\n", k, r.end.Boots, r.end.Ready, verdict(d))
+		for _, n := range d {
+			fmt.Fprintf(w, "        %s\n          killed: %s\n          free:   %s%s\n", n, shortField(r.end, n), shortField(e, n), lineDiffNote(r.end, e, n))
 		}
 	}
 }
 
-// shortField is a field's render with journal lines cut to their kind and seq,
-// so a differing row shows what differs.
+// shortField is a field's render for a differing row. The journal's lines are
+// shown as the seq:kind order and, after it, the lines the other end does not
+// have: a duplicated or reordered line differs in the order, a line that names
+// another seq, key or detail differs in the text.
 func shortField(e endState, name string) string {
 	if name != "journal.lines" {
 		return e.field(name)
@@ -760,6 +837,25 @@ func shortField(e endState, name string) string {
 		out = append(out, seq+":"+kind)
 	}
 	return strings.Join(out, " ")
+}
+
+// lineDiffNote is the journal lines each end lacks, for the journal's field.
+func lineDiffNote(killed, free endState, field string) string {
+	if field != "journal.lines" {
+		return ""
+	}
+	return "\n  only in killed-then-booted:\n                      " + lineDiff(killed, free) + "\n  only in fault-free:\n                      " + lineDiff(free, killed)
+}
+
+// lineDiff lists the journal lines of a that b lacks, in full.
+func lineDiff(a, b endState) string {
+	var out []string
+	for _, l := range a.Raw.Lines {
+		if !slices.Contains(b.Raw.Lines, l) {
+			out = append(out, l)
+		}
+	}
+	return strings.Join(out, "\n                      ")
 }
 
 func verdict(d []string) string {

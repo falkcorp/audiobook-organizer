@@ -418,7 +418,7 @@ type hookStores struct {
 // pre-swap store, built from the same auth.RestoreDeps the hooks use so the two
 // paths cannot drift.
 func reapplyApplyFor(s hookStores) reapplyApply {
-	authDeps := auth.RestoreDeps{Store: s.Auth, NewBatch: s.Auth.NewBatch, Revocations: s.Journal, Clock: s.Clock, Log: s.Log}
+	authDeps := auth.RestoreDeps{Store: s.Auth, NewBatch: s.Auth.NewBatch, Revocations: s.Journal, Journaled: journaledOf(s.Journal), Clock: s.Clock, Log: s.Log}
 	roleDeps := rbac.RestoreDeps{Store: s.Roles, NewBatch: s.Roles.NewBatch, Users: &restoreUsers{store: s.Auth, now: s.Clock},
 		Revocations: s.Journal, Clock: s.Clock, Log: s.Log}
 	return reapplyApply{
@@ -431,8 +431,10 @@ func reapplyApplyFor(s hookStores) reapplyApply {
 			rep, err := rbac.StageReapply(ctx, roleDeps, b, lines)
 			return rep.KeptAdmins, err
 		},
-		RestrictLastAdmins: func(ctx context.Context, ids []string) error {
-			_, err := auth.RestrictLastAdmins(ctx, authDeps, userIDs(ids))
+		RestrictLastAdmins: func(ctx context.Context, ids []string, runKey string) error {
+			d := authDeps
+			d.RunKey = runKey
+			_, err := auth.RestrictLastAdmins(ctx, d, userIDs(ids))
 			return err
 		},
 		FailClosed: func(ctx context.Context) (map[string]int, error) {
@@ -440,6 +442,31 @@ func reapplyApplyFor(s hookStores) reapplyApply {
 			return c, err
 		},
 	}
+}
+
+// journaledOf is how auth asks the journal whether it already holds a line
+// (journal.Component.Journaled); nil for a journal that cannot say, which
+// leaves auth appending every line it owes.
+func journaledOf(j journal.RevocationJournal) func(journal.Revocation) (bool, error) {
+	if c, ok := j.(interface {
+		Journaled(journal.Revocation) (bool, error)
+	}); ok {
+		return c.Journaled
+	}
+	return nil
+}
+
+// hookRunKey is the key auth's last-admin restriction stamps on its lines for
+// one run of the hooks: the restore line's seq while there is one, else the
+// run's stored ID (hookEnv.RunKey), the same two that key audit's records.
+func hookRunKey(env hookEnv) string {
+	if env.RestoreSeq != 0 {
+		return fmt.Sprintf("seq:%d", env.RestoreSeq)
+	}
+	if env.RunKey != "" {
+		return "run:" + env.RunKey
+	}
+	return ""
 }
 
 // userIDs is ids as auth's user IDs.
@@ -458,7 +485,8 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 		if s.Auth == nil || s.Roles == nil || s.Audit == nil {
 			return nil, errors.New("the auth, rbac and audit stores are all required")
 		}
-		authDeps := auth.RestoreDeps{Store: s.Auth, NewBatch: s.Auth.NewBatch, Revocations: env.Journal, Clock: s.Clock, Log: s.Log}
+		authDeps := auth.RestoreDeps{Store: s.Auth, NewBatch: s.Auth.NewBatch, Revocations: env.Journal, Journaled: journaledOf(s.Journal),
+			RunKey: hookRunKey(env), Clock: s.Clock, Log: s.Log}
 		roleDeps := rbac.RestoreDeps{
 			Store: s.Roles, NewBatch: s.Roles.NewBatch, Users: &restoreUsers{store: s.Auth, now: s.Clock},
 			Revocations: env.Journal, Clock: s.Clock, Log: s.Log,
