@@ -1,4 +1,4 @@
-// file: web/src/pages/UserMerge.test.tsx
+// file: web/src/modules/books/pages/UserMerge.test.tsx
 // version: 1.0.1
 // guid: 7f3a9c15-2d68-4e04-b1a7-96c0e5d83f41
 // last-edited: 2026-10-23
@@ -6,9 +6,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { renderWithProviders } from '../test/renderWithProviders';
-import { UserMergeDialog, type MergeableUser } from './UserMerge';
-import type { UserMergePlan } from '../services/api';
+import { renderWithProviders } from '../../../test/renderWithProviders';
+import { UserMergeDialog } from './UserMerge';
+import type { MergeableUser } from '../../../components/users/userAccountParts';
+import type { UserMergePlan } from '../../../services/api';
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {

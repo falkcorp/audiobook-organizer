@@ -1,4 +1,4 @@
-// file: web/src/components/GuestPhoneKeys.tsx
+// file: web/src/modules/books/pages/GuestPhoneKeys.tsx
 // version: 1.2.0
 // guid: c4f8a2d6-93b1-4e07-8a5d-1e6b7c9d3f24
 // last-edited: 2026-11-07
@@ -31,8 +31,8 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { ApiTimeoutError, apiFetch } from '../utils/apiFetch';
-import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
+import { ApiTimeoutError, apiFetch } from '../../../utils/apiFetch';
+import { describeRequestError, responseErrorMessage, unwrapData } from '../../../utils/apiResponse';
 import {
   phoneKeyIssueVerb,
   phoneKeyReissuable,
