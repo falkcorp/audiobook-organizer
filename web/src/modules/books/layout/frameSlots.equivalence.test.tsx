@@ -37,7 +37,10 @@ vi.mock('../../../hooks/usePendingFileOps', () => ({
 
 type Status = { state: 'open' | 'reconnecting' | 'closed' | 'error'; attempt: number };
 const connection = vi.hoisted(() => ({
-  statusListener: null as null | ((s: { state: string; attempt: number }) => void),
+  statusListener: null as null | ((s: {
+    state: 'open' | 'reconnecting' | 'closed' | 'error';
+    attempt: number;
+  }) => void),
   unsubscribe: undefined as unknown as ReturnType<typeof vi.fn>,
   subscribed: 0,
 }));
