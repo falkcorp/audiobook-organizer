@@ -536,9 +536,15 @@ class ImageProbeTests(unittest.TestCase):
         p.chmod(p.stat().st_mode | stat.S_IEXEC)
 
     def curl(
-        self, health: str = '{"status":"ok","ready":true}', header: str = "", html: str = ""
+        self,
+        health: str = '{"status":"ok","ready":true}',
+        header: str = "",
+        html: str = "",
+        status: str | None = None,
+        status_rc: int = 0,
     ) -> None:
         (self.state / "health").write_text(health)
+        (self.state / "status").write_text(status or "")
         (self.state / "headers").write_text(header)
         (self.state / "html").write_text(html)
         self.stub(
@@ -558,6 +564,7 @@ class ImageProbeTests(unittest.TestCase):
             done
             case $url in
               */health) cat $S/health ;;
+              */api/v1/system/status) cat $S/status; exit {status_rc} ;;
               *) [ -n "$hdr" ] && cp $S/headers "$hdr"; if [ -n "$out" ]; then cp $S/html "$out"; else cat $S/html; fi ;;
             esac
             """),
@@ -649,6 +656,82 @@ class ImageProbeTests(unittest.TestCase):
         # attribute order does not matter
         self.curl(header="X-App-Build: q\r\n", html='<meta content="q" name="mediacore-build">')
         self.assertEqual(self.run_probe("c", "http://h", PROBE_BUILD_ID="1").returncode, 0)
+
+    # -- PROBE_AUTH_OFF (05-authn section 10, TestAuthOffDockerBoots) ----------
+
+    TOKEN = "auth_disabled_remote"
+
+    def auth_off(
+        self, status: str, health: str = '{"status":"ok","ready":true,"degraded":[]}', **kw
+    ):
+        self.curl(health=health, status=status, **kw)
+        self.docker()
+        return self.run_probe("c", "http://h", PROBE_AUTH_OFF="1")
+
+    def test_auth_off_is_off_by_default(self):
+        # Neither a status route nor the token exists in the stubs: a probe that ran
+        # without the switch would fail.
+        self.curl()
+        self.docker()
+        proc = self.run_probe("c", "http://h")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("auth_disabled_remote", proc.stdout)
+
+    def test_auth_off_passes_when_the_authenticated_list_carries_the_token(self):
+        proc = self.auth_off(
+            '{"status":"ok","degraded":["auth_disabled_remote"],"degraded_details":[{"token":"auth_disabled_remote"}]}'
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("not on /health", proc.stdout)
+
+    def test_auth_off_reads_a_pretty_printed_list_with_other_tokens(self):
+        status = textwrap.dedent("""\
+            {
+              "status": "ok",
+              "degraded" : [
+                "search_index",
+                "auth_disabled_remote",
+                "storage_checkpoint_open"
+              ],
+              "version": "1"
+            }
+            """)
+        proc = self.auth_off(status)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_auth_off_fails_on_an_empty_list(self):
+        proc = self.auth_off('{"status":"ok","degraded":[]}')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("lacks auth_disabled_remote", proc.stderr)
+        self.assertEqual(len(proc.stderr.strip().splitlines()), 1, proc.stderr)
+
+    def test_auth_off_does_not_take_the_token_from_degraded_details(self):
+        # The token appears in the response, but not as an entry of `degraded`.
+        proc = self.auth_off(
+            '{"degraded":["search_index"],"degraded_details":[{"token":"auth_disabled_remote"}]}'
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("lacks auth_disabled_remote", proc.stderr)
+
+    def test_auth_off_does_not_take_a_longer_token_for_the_token(self):
+        proc = self.auth_off('{"degraded":["auth_disabled_remote_x","x_auth_disabled_remote"]}')
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("lacks auth_disabled_remote", proc.stderr)
+
+    def test_auth_off_fails_when_the_status_route_refuses(self):
+        proc = self.auth_off('{"error":"unauthorized"}', status_rc=22)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("system/status", proc.stderr)
+
+    def test_auth_off_fails_when_health_carries_the_token(self):
+        for health in (
+            '{"ready":true,"degraded":["auth_disabled_remote"]}',
+            '{"ready":true,"note":"auth_disabled_remote"}',
+        ):
+            proc = self.auth_off('{"degraded":["auth_disabled_remote"]}', health=health)
+            self.assertEqual(proc.returncode, 1, health)
+            self.assertIn("unauthenticated", proc.stderr)
+            self.assertIn("/health", proc.stderr)
 
 
 # -- the docker-image workflow -------------------------------------------------
