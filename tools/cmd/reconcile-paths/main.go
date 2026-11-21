@@ -43,9 +43,9 @@ import (
 // audioExt lists extensions to check for single-file books.
 //
 // Deliberately the compiled-in canonical list and NOT config-derived. This is
-// a standalone read-only CLI: it never calls config.InitConfig and never reads
-// a config file, so config.AppConfig.SupportedExtensions is nil for its whole
-// lifetime. Resolving that at package-var init would look config-aware, freeze
+// a standalone read-only CLI: it never loads the config (no core config boot, no
+// config file), so config.AppConfig.SupportedExtensions stays at its zero value
+// (nil) for its whole lifetime. Resolving that at package-var init would look config-aware, freeze
 // the value before main() runs, and still yield exactly audioext.Default() —
 // a misleading dependency that buys nothing. If this tool ever grows real
 // config loading, resolve inside main() via audioext.Resolve, not here.
