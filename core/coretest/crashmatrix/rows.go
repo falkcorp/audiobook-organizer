@@ -148,7 +148,7 @@ func Rows() []Row {
 		// conflicts trivially. The boot wires them behind app.Options.IdentityBoot
 		// (F4-08 B3); IdentityUnreachedLabels is what no fixture reaches yet.
 		{Phase: "P4d 2", Writer: "the kernel: the re-apply's store commits: each tail chunk's two batches (auth's revocations, then rbac's with the head), each drained chunk's two (the second with the dequeue of its entries), the head of the boot's own line committed alone, a restore boot's restore line with its head, the unapplied queue's batches, the dequeue of the entries a kept admin held, the kept admins' restriction, the withheld head, MarkUnappliedClosed, and served_boot (on a restore boot after the hooks) (restore_reapply.go; 05-backup §5B.3.6 \"Boot re-apply\")", Labels: kernel.ReapplyLabels()},
-		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (restore_hooks.go; journal.EnsureHookRun, journal.ClearHookRun)", Labels: kernel.HookRunLabels()},
+		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (journal.EnsureHookRun, journal.ClearHookRun), restore_hooked/<seq> once the hooks completed (journal.MarkHooked), the head a replaced store's restore line held back (journal.CommitHead), and the commits of auth's, rbac's and audit's restore hooks, each under its own region (restore_hooks.go)", Labels: kernel.HookRunLabels()},
 		{Phase: "P4d 4", Writer: "auth: BootWrites' commits: the _system user's seed, the bootstrap token's mint or the deletion of the stored ones, and the start-up key's revoke and mint (05-authn §3.2, §4.6)", Labels: auth.BootWritesLabels()},
 		{Phase: "P4d 2 (before the journal opens)", Writer: "the kernel: the effective backup directory created in the boot's journal filesystem, so the journal file can be created inside it (identity_p4d.go ensureBackupDir; a no-operation when the directory exists)", Labels: []string{kernel.LabelBackupDirMkdir}},
 		{Phase: "P4d 4", Writer: "auth: BootWrites' state files, each a temporary file written and fsynced, renamed into place and the state directory fsynced: the bootstrap token (written, or removed when bootstrap is disabled) and the start-up key's file (05-authn §4.6; auth.StateFiles over the labelled state directory)", Labels: []string{auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel}},
@@ -179,10 +179,12 @@ func IdentityUnreachedLabels() map[string]string {
 		roll     = "a failed append's cut back runs only after a journal write failed; core/backup/journal's own crash cells break it, and no fault-free boot appends a line that fails"
 		cut      = "the cut of an incomplete last line runs only when a journal ends mid-line, which a crash leaves; no fault-free boot starts from one"
 		tail     = "the re-apply's tail, drain, queue, restriction and head writers run only when the journal holds lines past the store's head or an unapplied queue, a journal state no fixture builds: the kernel's restore_* tests break each of them with a crash between its batches (TailBatch 1, a wrapped NewBatch); F4-08 B10 or a journal-tail fixture reaches them in the matrix"
-		hooks    = "the restore hooks' run ID is written only when the hooks run with no restore line (a replaced store, or a hooks-owed restore), a state no fixture builds: restore_runkey_test.go crashes between its ensure and its clear"
+		hooks    = "the restore hooks' run ID is written only when the hooks run with no restore line (a replaced store whose line could not be journaled), a state no fixture builds: restore_runkey_test.go crashes between its ensure and its clear"
 		startup  = "the start-up key's revoke and mint run only with core.auth.bootstrap.readonly_key set and an active admin, state no fixture builds (the kit's identity scenario has no user)"
 		disabled = "the deletion of stored bootstrap tokens runs only with core.auth.bootstrap.enabled false (the default mints one), a setting the kit's identity scenario leaves at its default"
 		appendOK = "a revocation line is appended only when something is revoked, which no fault-free boot does; core/backup/journal's own crash cells and the kernel's restore_* tests break the append"
+		held     = "the held head is committed only when a replaced store's restore line could not be journaled (a keyring that cannot sign it), a state no fixture builds: the kernel's TestReapplyRegions_EveryCommitSiteCarriesItsLabel reaches it"
+		rbacHook = "rbac's restore hook commits only when it changes a role assignment (a re-applied demotion, a restriction); the scenario's revert restore has none to re-apply, and the kernel's restore_* tests break the hook's batch"
 		cleanup  = "the failed location temporary file's removal runs only after the temporary file's write failed; the error mode of journal.location.tmp reaches it from the next boot's cleanup, and no fault-free boot does"
 	)
 	out := map[string]string{}
@@ -191,18 +193,24 @@ func IdentityUnreachedLabels() map[string]string {
 		auth.BootWritesLabels(),
 		[]string{backupjournal.LabelCreate, backupjournal.LabelHeader, backupjournal.LabelDirSync},
 		[]string{backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync},
-		[]string{"kernel.reapply.served_boot"},
+		// A restore boot's own writers: the restore line, restore_hooked, and the
+		// auth and audit hooks' commits (the scenario's revert fixture stages a restore).
+		[]string{"kernel.reapply.served_boot", "kernel.reapply.restore_line", "kernel.hooks.marked", "kernel.hooks.auth", "kernel.hooks.audit"},
 	) {
 		out[l] = identityFlipOnly
 	}
 	for _, l := range kernel.ReapplyLabels() {
-		if l != "kernel.reapply.served_boot" {
+		if _, set := out[l]; !set {
 			out[l] = tail
 		}
 	}
 	for _, l := range kernel.HookRunLabels() {
-		out[l] = hooks
+		if _, set := out[l]; !set {
+			out[l] = hooks
+		}
 	}
+	out["kernel.hooks.held_head"] = held
+	out["kernel.hooks.rbac"] = rbacHook
 	out[auth.LabelBootBootstrapDelete] = disabled
 	out[auth.LabelBootStartupKey] = startup
 	out[auth.ReadOnlyKeyLabel] = startup
