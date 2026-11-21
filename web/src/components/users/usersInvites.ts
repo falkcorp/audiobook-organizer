@@ -1,4 +1,4 @@
-// file: web/src/pages/usersInvites.ts
+// file: web/src/components/users/usersInvites.ts
 // version: 1.3.0
 // guid: 1f6b3d82-7c45-4e9a-b2d0-8a5e9c3f7b61
 // last-edited: 2026-10-19

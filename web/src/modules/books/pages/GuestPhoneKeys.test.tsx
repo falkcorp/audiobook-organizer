@@ -1,4 +1,4 @@
-// file: web/src/components/GuestPhoneKeys.test.tsx
+// file: web/src/modules/books/pages/GuestPhoneKeys.test.tsx
 // version: 1.2.0
 // guid: 5e1a7c93-2d48-4b6f-a0c7-8f3d9b2e6a41
 // last-edited: 2026-11-07
@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { renderWithProviders } from '../test/renderWithProviders';
+import { renderWithProviders } from '../../../test/renderWithProviders';
 import GuestPhoneKeys from './GuestPhoneKeys';
 
 const jsonResponse = (body: unknown, status = 200) =>

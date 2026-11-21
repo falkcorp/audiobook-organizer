@@ -1,4 +1,4 @@
-// file: web/src/components/phoneKeyLabels.ts
+// file: web/src/modules/books/pages/phoneKeyLabels.ts
 // version: 1.1.0
 // guid: 7b2d9e4c-1a63-4f58-9c0e-5d8a3b6f2e17
 // last-edited: 2026-11-07

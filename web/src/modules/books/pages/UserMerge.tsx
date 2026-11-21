@@ -1,7 +1,10 @@
-// file: web/src/pages/UserMerge.tsx
+// file: web/src/modules/books/pages/UserMerge.tsx
 // version: 1.0.2
 // guid: 0b6d2f48-7a31-4c95-9e84-c3a1d58f7e20
 // last-edited: 2026-10-23
+
+// F9-04 slice 4: books' account-merge extension of the Users page (07 §7.11 userPageExtensions):
+// the merge dialog and the merge journals panel. The footprint drawer stayed with the shell page.
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -15,7 +18,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  Drawer,
   FormControlLabel,
   IconButton,
   MenuItem,
@@ -32,153 +34,16 @@ import {
 import { Refresh as RefreshIcon } from '@mui/icons-material';
 import {
   applyUserMerge,
-  getUserFootprint,
   listUserMerges,
   previewUserMerge,
   resumeUserMerge,
   undoUserMerge,
   userMergePlanFromError,
-  type UserFootprint,
-  type UserMergeIdentity,
   type UserMergeJournal,
   type UserMergePlan,
-} from '../services/api';
-import { describeRequestError } from '../utils/apiResponse';
-
-/** The part of a user row these components need. */
-export interface MergeableUser {
-  id: string;
-  username: string;
-  status: string;
-  roles?: string[];
-  merged_into_user_id?: string;
-}
-
-const errorText = (err: unknown, fallback: string) =>
-  err instanceof Error && err.message ? err.message : describeRequestError(err, fallback);
-
-const FAMILY_LABELS: Record<string, string> = {
-  book_state: 'Books with listening progress',
-  positions: 'Playback positions',
-  bookmarks: 'Bookmarks',
-  oauth_identities: 'Linked sign-ins',
-  api_keys: 'API keys',
-};
-
-const familyLabel = (family: string) => FAMILY_LABELS[family] ?? family.replace(/_/g, ' ');
-
-function IdentityList({ identities }: { identities: UserMergeIdentity[] }) {
-  if (identities.length === 0) {
-    return (
-      <Typography variant="body2" color="text.secondary">
-        No linked sign-ins
-      </Typography>
-    );
-  }
-  return (
-    <Box component="ul" sx={{ m: 0, pl: 2 }}>
-      {identities.map((id) => (
-        <li key={id.id}>
-          <Typography variant="body2" component="span">
-            {id.provider}
-            {id.email ? ` · ${id.email}` : ''} · {id.subject}
-          </Typography>
-          {id.owner_email && <Chip size="small" color="warning" label="owner" sx={{ ml: 0.5 }} />}
-        </li>
-      ))}
-    </Box>
-  );
-}
-
-/**
- * Read-only drawer: one account's linked sign-ins and how much data it holds.
- * The page keys it by account, so each account starts from an empty state.
- */
-export function UserFootprintDrawer({
-  user,
-  onClose,
-}: {
-  user: MergeableUser | null;
-  onClose: () => void;
-}) {
-  const [footprint, setFootprint] = useState<UserFootprint | null>(null);
-  const [error, setError] = useState('');
-  const userId = user?.id;
-
-  useEffect(() => {
-    if (!userId) return;
-    let cancelled = false;
-    getUserFootprint(userId)
-      .then((fp) => {
-        if (!cancelled) setFootprint(fp);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(errorText(err, 'Failed to load sign-ins and data'));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
-
-  return (
-    <Drawer anchor="right" open={!!user} onClose={onClose}>
-      <Box
-        sx={{ width: { xs: '100vw', sm: 420 }, p: 3 }}
-        role="region"
-        aria-label="Sign-ins & data"
-      >
-        <Typography variant="h6" gutterBottom>
-          Sign-ins &amp; data{user ? `: ${user.username}` : ''}
-        </Typography>
-        {error && <Alert severity="error">{error}</Alert>}
-        {!footprint && !error && <CircularProgress size={24} aria-label="Loading" />}
-        {footprint && (
-          <>
-            <Typography variant="subtitle2" sx={{ mt: 1 }}>
-              Account
-            </Typography>
-            <Typography variant="body2">
-              {footprint.user.status}
-              {footprint.user.email ? ` · ${footprint.user.email}` : ''}
-              {footprint.user.has_password ? ' · has a password' : ' · no password'}
-              {footprint.user.merged_into_user_id ? ' · merged into another account' : ''}
-            </Typography>
-            <Typography variant="subtitle2" sx={{ mt: 2 }}>
-              Linked sign-ins
-            </Typography>
-            <IdentityList identities={footprint.identities} />
-            <Typography variant="subtitle2" sx={{ mt: 2 }}>
-              Data
-            </Typography>
-            <Table size="small">
-              <TableBody>
-                {Object.entries(footprint.counts).map(([family, n]) => (
-                  <TableRow key={family}>
-                    <TableCell>{familyLabel(family)}</TableCell>
-                    <TableCell align="right">{n}</TableCell>
-                  </TableRow>
-                ))}
-                <TableRow>
-                  <TableCell>Active web sessions</TableCell>
-                  <TableCell align="right">{footprint.active_sessions}</TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-            {footprint.unreadable.length > 0 && (
-              <Alert severity="warning" sx={{ mt: 2 }}>
-                {footprint.unreadable.length} row(s) could not be read; a merge would be refused
-                until they are fixed.
-              </Alert>
-            )}
-          </>
-        )}
-        <Box sx={{ mt: 3, textAlign: 'right' }}>
-          <Button onClick={onClose}>Close</Button>
-        </Box>
-      </Box>
-    </Drawer>
-  );
-}
+} from '../../../services/api';
+import { IdentityList } from '../../../components/users/IdentityList';
+import { errorText, familyLabel, type MergeableUser } from '../../../components/users/userAccountParts';
 
 /**
  * The merge dialog: pick the account that stays, read the preview (counts,
