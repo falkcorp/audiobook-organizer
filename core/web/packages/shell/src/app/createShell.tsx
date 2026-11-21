@@ -36,11 +36,11 @@ export interface ShellProvidersProps {
   children: ReactNode;
 }
 
-/** GET /api/core/v1/tasks/{id}: the run the task tracker follows. */
+/** GET /api/core/v1/tasks/runs/{id} (internal/taskhttp getTaskRun): the run the task tracker follows. */
 export function taskFetcher(client: ShellClient) {
   return async (runId: string, signal: AbortSignal): Promise<TaskRunView> => {
     const rt = client.runtime;
-    const res = await rt.fetch(`${rt.baseUrl}/api/core/v1/tasks/${encodeURIComponent(runId)}`, { signal, credentials: 'same-origin' });
+    const res = await rt.fetch(`${rt.baseUrl}/api/core/v1/tasks/runs/${encodeURIComponent(runId)}`, { signal, credentials: 'same-origin' });
     const body = await res.json().catch(() => null);
     if (!res.ok) throw new Error(body?.detail || body?.title || `HTTP ${res.status}`);
     return body as TaskRunView;

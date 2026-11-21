@@ -6,9 +6,21 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskRunState, TaskRunView } from '../src/contracts';
+import { taskFetcher } from '../src/app/createShell';
 import { TaskTrackerProvider, useTask, useTaskError } from '../src/tasks';
 
-const run = (id: string, state: TaskRunState): TaskRunView => ({ id, kind: 'batcave.scan', state });
+const run = (id: string, state: TaskRunState): TaskRunView => ({
+  id,
+  kind: 'batcave.scan',
+  mode: 'run',
+  state,
+  held: false,
+  actor: { user_id: 'bruce' },
+  trigger: 'manual',
+  created: '2026-11-20T01:02:03Z',
+  done: 0,
+  total: 0,
+});
 
 function Probe({ id, label }: { id: string | undefined; label: string }) {
   const view = useTask(id);
@@ -74,6 +86,52 @@ describe('task tracker', () => {
     expect(fetchRun).toHaveBeenCalledTimes(3);
     await advance(20000);
     expect(fetchRun).toHaveBeenCalledTimes(3);
+  });
+
+  // Every state core's tasks.RunState defines: the poll stops on exactly the
+  // terminal ones (core/tasks/client.go RunState.Terminal) and carries on for
+  // the rest, so a canceled or timed_out run never polls forever.
+  it.each([
+    ['succeeded', true],
+    ['failed', true],
+    ['timed_out', true],
+    ['canceled', true],
+    ['interrupted_dropped', true],
+    ['queued', false],
+    ['waiting_deps', false],
+    ['running', false],
+    ['stopping', false],
+    ['interrupted', false],
+    ['interrupted_quiesced', false],
+    ['awaiting_decision', false],
+  ] as const)('after a %s answer the poll stopped is %s', async (state, stopped) => {
+    const fetchRun = vi.fn(async (id: string) => run(id, state));
+    render(
+      <TaskTrackerProvider fetchRun={fetchRun}>
+        <Probe id="gadgets" label="a" />
+      </TaskTrackerProvider>,
+    );
+    await flush();
+    expect(screen.getByTestId('a').textContent).toBe(`${state}|`);
+    await advance(20000);
+    if (stopped) expect(fetchRun).toHaveBeenCalledTimes(1);
+    else expect(fetchRun.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('reads one run from core\'s runs route', async () => {
+    const urls: string[] = [];
+    const client = {
+      runtime: {
+        baseUrl: 'https://cave.invalid',
+        fetch: async (url: string) => {
+          urls.push(url);
+          return new Response(JSON.stringify(run('wayne/1', 'canceled')), { status: 200 });
+        },
+      },
+    } as unknown as Parameters<typeof taskFetcher>[0];
+    const view = await taskFetcher(client)('wayne/1', new AbortController().signal);
+    expect(urls).toEqual(['https://cave.invalid/api/core/v1/tasks/runs/wayne%2F1']);
+    expect(view.state).toBe('canceled');
   });
 
   it('aborts the in-flight request on unmount', async () => {
