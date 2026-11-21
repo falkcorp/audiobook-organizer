@@ -7,7 +7,6 @@ package abs_test
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 	"testing"
@@ -67,19 +66,37 @@ func (t bridgeTable) Atoms() []string { return slices.Clone(t) }
 // bridgeScope is the native scope the table maps atom to.
 func bridgeScope(atom string) rbac.Permission { return rbac.Permission("test:" + atom) }
 
-// bridgeCompat is the Compat an Identity needs and these sites never call.
-type bridgeCompat struct{ coreauth.Compat }
+// bridgeSignedIn is the Compat of a server whose ABS routes are admitted by
+// core (F4-08 B10b1: ABSRequireAuth under an Identity asks core, never books'
+// own rows). It answers PrincipalFor with the principal and checker the request
+// already carries (the stage 12 stand-in bindCore binds), naming the user the
+// surface resolved, and admits every credential CheckCredentialFor.
+type bridgeSignedIn struct{ coreauth.Compat }
 
-// bridgeIdentity is an Identity over a table that knows atoms.
-func bridgeIdentity(t testing.TB, atoms ...string) *legacyauth.Identity {
+func (bridgeSignedIn) PrincipalFor(ctx context.Context, u *coreauth.User, _ []rbac.Permission, _ int64, _ coreauth.ClientInfo) (*coreauth.Principal, error) {
+	p, ok := coreauth.PrincipalFrom(ctx)
+	if !ok {
+		return nil, coreauth.ErrInvalidCredentials
+	}
+	out := *p
+	out.User = u
+	return &out, nil
+}
+
+func (bridgeSignedIn) CheckCredentialFor(*coreauth.Principal, rbac.Requirement) error { return nil }
+
+// bridgeIdentityFor is bridgeIdentity for a request that also passes the ABS
+// surface's own auth: the user lookup reads h's store and the Compat is
+// bridgeSignedIn.
+func bridgeIdentityFor(t testing.TB, h *harness, atoms ...string) *legacyauth.Identity {
 	t.Helper()
-	b, err := legacyauth.New(bridgeTable(atoms), func(context.Context, coreauth.UserID) (*database.User, error) {
-		return nil, errors.New("no user lookup in this test")
+	b, err := legacyauth.New(bridgeTable(atoms), func(_ context.Context, id coreauth.UserID) (*database.User, error) {
+		return h.store.GetUserByID(string(id))
 	}, nil)
 	require.NoError(t, err)
 	return &legacyauth.Identity{
 		Bridge:  b,
-		Compat:  bridgeCompat{},
+		Compat:  bridgeSignedIn{},
 		Client:  func(*http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{} },
 		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },
 	}
