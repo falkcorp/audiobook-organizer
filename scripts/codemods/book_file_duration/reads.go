@@ -41,6 +41,8 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/falkcorp/mediacore/archtest/typedload"
 )
 
 type edit struct {
@@ -66,7 +68,7 @@ func isBF(t types.Type) bool {
 func main() {
 	apply := len(os.Args) > 1 && os.Args[1] == "apply"
 	cfg := &packages.Config{Mode: packages.LoadAllSyntax, Tests: true}
-	pkgs, err := packages.Load(cfg, "./internal/...", "./cmd/...", "./tools/...")
+	pkgs, err := typedload.Load(cfg, "./internal/...", "./cmd/...", "./tools/...") // not packages.Load: see typedload
 	if err != nil {
 		panic(err)
 	}

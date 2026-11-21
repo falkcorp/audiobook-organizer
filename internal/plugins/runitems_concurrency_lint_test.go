@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"golang.org/x/tools/go/packages"
+
+	"github.com/falkcorp/mediacore/archtest/typedload"
 )
 
 // modulePath is this module's import path. It was declared in
@@ -135,7 +137,8 @@ func loadRunItemsPackages(t *testing.T, root string) []*packages.Package {
 
 func loadTyped(t *testing.T, root string, overlay map[string][]byte, patterns []string) []*packages.Package {
 	t.Helper()
-	pkgs, err := packages.Load(&packages.Config{
+	// typedload, not packages.Load: it type-checks on one goroutine (see its doc).
+	pkgs, err := typedload.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedImports | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
 		Dir:     root,

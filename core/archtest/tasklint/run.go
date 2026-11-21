@@ -21,6 +21,8 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/checker"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/falkcorp/mediacore/archtest/typedload"
 )
 
 // Options configures Run: the packages to check and the analyzer settings of
@@ -142,7 +144,7 @@ func Analyze(cfg Config, root string, patterns []string) ([]Finding, int, error)
 	if err != nil {
 		return nil, 0, err
 	}
-	pkgs, err := loadTyped(patterns) // not packages.Load: see loadTyped
+	pkgs, err := typedload.Load(&packages.Config{Mode: packages.LoadSyntax}, patterns...) // not packages.Load: see typedload
 	if err != nil {
 		return nil, 0, fmt.Errorf("load: %w", err)
 	}

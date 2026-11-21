@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
+	"github.com/falkcorp/mediacore/archtest/typedload"
 	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/tools/go/callgraph"
 	"golang.org/x/tools/go/callgraph/cha"
@@ -1853,7 +1854,8 @@ func loadOracleProgram(checkBuild bool, overlay map[string][]byte, patterns ...s
 		Env:        append(os.Environ(), oracleEnv...),
 		Overlay:    overlay,
 	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	// typedload, not packages.Load: it type-checks on one goroutine (see its doc).
+	pkgs, err := typedload.Load(cfg, patterns...)
 	if err != nil {
 		return nil, fmt.Errorf("load %v: %w", patterns, err)
 	}

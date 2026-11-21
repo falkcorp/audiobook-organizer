@@ -95,6 +95,8 @@ import (
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
+
+	"github.com/falkcorp/audiobook-organizer/tools/fixerstores/typedload"
 )
 
 const (
@@ -183,7 +185,8 @@ func analyze(repo string) (*report, error) {
 		// needed to type-check, which keeps the build cache untouched.
 		Env: append(os.Environ(), "CGO_ENABLED=0"),
 	}
-	pkgs, err := packages.Load(cfg, maintenancePkg)
+	// typedload, not packages.Load: it type-checks on one goroutine (see its doc).
+	pkgs, err := typedload.Load(cfg, maintenancePkg)
 	if err != nil {
 		return nil, err
 	}

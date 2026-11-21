@@ -70,8 +70,8 @@ func TestTasklint_TestSupportOnly(t *testing.T) {
 		t.Fatalf("go list -deps returned %d packages; the listing is broken", len(deps))
 	}
 	for _, d := range deps {
-		if d == core+"/archtest/tasklint" || d == core+"/archtest/guards" || strings.HasPrefix(d, "golang.org/x/tools/") {
-			t.Errorf("%s is in the dependency graph of tasks, kernel, app, archtest or coretest; tasklint, guards and x/tools are test-support only and never linked by coretest", d)
+		if d == core+"/archtest/tasklint" || d == core+"/archtest/guards" || d == core+"/archtest/typedload" || strings.HasPrefix(d, "golang.org/x/tools/") {
+			t.Errorf("%s is in the dependency graph of tasks, kernel, app, archtest or coretest; tasklint, guards, typedload and x/tools are test-support only and never linked by coretest", d)
 		}
 	}
 }

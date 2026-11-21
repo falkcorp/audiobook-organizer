@@ -21,6 +21,8 @@ import (
 
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/types/typeutil"
+
+	"github.com/falkcorp/mediacore/archtest/typedload"
 )
 
 // tasksPath is core's tasks package, whose definitions and loops the type-aware
@@ -37,12 +39,13 @@ type GuardFinding struct {
 func (f GuardFinding) String() string { return fmt.Sprintf("%s:%d: %s", f.File, f.Line, f.Msg) }
 
 // loadTyped type-checks the packages patterns name, from the working
-// directory, with syntax and type information (dependencies from export data).
+// directory, with syntax and type information (dependencies from export data),
+// through typedload so the type-check runs on one goroutine (see its doc).
 func loadTyped(patterns []string) ([]*packages.Package, error) {
 	if len(patterns) == 0 {
 		return nil, fmt.Errorf("no package pattern; the check would be vacuous")
 	}
-	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports |
+	pkgs, err := typedload.Load(&packages.Config{Mode: packages.NeedName | packages.NeedFiles | packages.NeedImports |
 		packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo}, patterns...)
 	if err != nil {
 		return nil, err
