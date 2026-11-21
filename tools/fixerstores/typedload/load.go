@@ -12,6 +12,7 @@
 package typedload
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -23,6 +24,8 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/tools/go/gcexportdata"
@@ -250,20 +253,57 @@ func (c *checker) readExportData(ip *packages.Package) (*types.Package, error) {
 	if ip.ExportFile == "" {
 		return nil, fmt.Errorf("no export data for %s", ip.PkgPath)
 	}
-	f, err := os.Open(ip.ExportFile)
+	data, err := os.ReadFile(ip.ExportFile)
 	if err != nil {
 		return nil, fmt.Errorf("export data for %s: %w", ip.PkgPath, err)
 	}
-	defer f.Close()
-	r, err := gcexportdata.NewReader(f)
+	body, err := exportSection(data)
 	if err != nil {
 		return nil, fmt.Errorf("export data for %s: %w", ip.PkgPath, err)
 	}
-	t, err := gcexportdata.Read(r, c.fset, c.universe, ip.PkgPath)
+	t, err := gcexportdata.Read(bytes.NewReader(body), c.fset, c.universe, ip.PkgPath)
 	if err != nil {
 		return nil, fmt.Errorf("export data for %s: %w", ip.PkgPath, err)
 	}
 	return t, nil
+}
+
+// exportSection returns the binary export data inside data, the contents of a
+// `go list -export` file. That file is a compiler-produced archive whose first
+// member, __.PKGDEF, holds some object headers and then the data between a
+// "$$B\n" line and the end-of-section marker "\n$$\n"; a bare cmd/export file
+// is all export data. gcexportdata.NewReader unwraps the archive for us but is
+// deprecated (it drops archive support in Go 1.29), and the section finder
+// behind it is internal to x/tools, so this does the same unwrap here.
+func exportSection(data []byte) ([]byte, error) {
+	const (
+		arMagic   = "!<arch>\n"
+		arHdrLen  = 60 // name[16] mtime[12] uid[6] gid[6] mode[8] size[10] "`\n"
+		pkgdef    = "__.PKGDEF"
+		sectStart = "\n$$B\n"
+		sectEnd   = "\n$$\n"
+	)
+	if len(data) > 0 && data[0] == 'i' {
+		return data, nil // cmd/export output: the whole file is export data
+	}
+	if !bytes.HasPrefix(data, []byte(arMagic)) || len(data) < len(arMagic)+arHdrLen {
+		return nil, errors.New("not an archive or export data file")
+	}
+	hdr := data[len(arMagic) : len(arMagic)+arHdrLen]
+	if string(hdr[58:60]) != "`\n" || strings.TrimSpace(string(hdr[:16])) != pkgdef {
+		return nil, fmt.Errorf("first archive member is not %s", pkgdef)
+	}
+	size, err := strconv.Atoi(strings.TrimSpace(string(hdr[48:58])))
+	body := data[len(arMagic)+arHdrLen:]
+	if err != nil || size < 0 || size > len(body) {
+		return nil, fmt.Errorf("bad %s size %q", pkgdef, hdr[48:58])
+	}
+	body = body[:size]
+	i := bytes.Index(body, []byte(sectStart))
+	if i < 0 || !bytes.HasSuffix(body, []byte(sectEnd)) || i+len(sectStart) > len(body)-len(sectEnd) {
+		return nil, fmt.Errorf("no binary export data section in %s", pkgdef)
+	}
+	return body[i+len(sectStart) : len(body)-len(sectEnd)], nil
 }
 
 // importerFunc adapts a function to types.Importer.
