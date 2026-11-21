@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -193,9 +194,7 @@ func (k *Kernel) fillDocuments() error {
 		return err
 	}
 	m := modulehttp.DocumentMap{"core": d.Core}
-	for owner, b := range d.OpenAPI {
-		m[owner] = b
-	}
+	maps.Copy(m, d.OpenAPI)
 	k.docs.m.Store(&m)
 	return nil
 }
