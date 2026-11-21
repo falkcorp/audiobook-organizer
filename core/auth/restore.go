@@ -31,6 +31,17 @@ type RestoreDeps struct {
 	// restore (§4.14 step 3); nil when there is none.
 	Previous    Store
 	Revocations journal.RevocationJournal // the lines the hook appends (§4.12)
+	// RunKey names one restore run (the restore line's seq for a hook run, the
+	// restore's ID for a boot re-apply); empty for a run that has none. With
+	// Journaled it makes RestrictLastAdmins idempotent across a crash: every line
+	// it journals carries the key, and a line the journal already holds for this
+	// run is not appended a second time.
+	RunKey string
+	// Journaled reports whether the journal already holds a line equal to r in
+	// kind, subject, object and detail (journal.Component.Journaled). Nil means
+	// the journal cannot be asked, and RestrictLastAdmins appends every line as
+	// it did before the key.
+	Journaled func(r journal.Revocation) (bool, error)
 	StateFiles  StateFiles                // bootstrap token and read-only key files (COR10-7); nil writes no file
 	// BootstrapTokenFile is Options.BootstrapTokenFile, the bootstrap token's
 	// file name under the state directory; "" is BootstrapTokenFile.
@@ -550,6 +561,42 @@ func (p *restorePlan) restrictUser(id UserID) error {
 	return nil
 }
 
+// keyLines makes the lines this plan owes idempotent across a crash (RunKey): each
+// carries the run's key as its last Detail element, and a line the journal already
+// holds for the run (the crash fell between the line and the commit that carries
+// the restriction) is dropped from the plan. Only the line is dropped: every row
+// the restriction changes (sign-in restricted, keys, identity links, the blanked
+// hash) is staged from the store's own state, which the crash left unrestricted,
+// so a durable line never stands in for the restriction. A key with no way to ask
+// the journal changes nothing but the Detail.
+func (p *restorePlan) keyLines() error {
+	if p.d.RunKey == "" {
+		return nil
+	}
+	kept := p.lines[:0]
+	for _, r := range p.lines {
+		r.Detail = append(slices.Clone(r.Detail), RunKeyDetail+p.d.RunKey)
+		if p.d.Journaled != nil {
+			have, err := p.d.Journaled(r)
+			if err != nil {
+				return fmt.Errorf("auth: ask the journal for the %s line of %s: %w", r.Kind, r.Subject.ID, err)
+			}
+			if have {
+				continue
+			}
+		}
+		kept = append(kept, r)
+	}
+	p.lines = kept
+	return nil
+}
+
+// RunKeyDetail prefixes the restore run's key in the Detail of a line
+// RestrictLastAdmins journals. Detail of the kinds it journals (password.changed,
+// api_key.disabled, identity.unlinked) is read by position (identity.unlinked's
+// first two elements), so a last element is not read by any applier.
+const RunKeyDetail = "restore-run:"
+
 // stage writes the plan into b, journal lines first.
 func (p *restorePlan) stage(ctx context.Context, b *storage.Batch) error {
 	st := p.d.Store
@@ -764,6 +811,9 @@ func RestrictLastAdmins(ctx context.Context, d RestoreDeps, ids []UserID) (Resto
 				}
 				return err
 			}
+		}
+		if err := p.keyLines(); err != nil {
+			return err
 		}
 		if err := p.stage(ctx, b); err != nil {
 			return err
