@@ -30,27 +30,24 @@ func TestNewEmbeddingClientWithOptions_Model(t *testing.T) {
 }
 
 // TestNewEmbeddingClient_BackwardCompat verifies the legacy constructor keeps
-// the default model and still honors OPENAI_BASE_URL (existing setups must
-// not regress). Since 2026-08-20 the env flows through
-// config.AppConfig.OpenAIBaseURL (viper.BindEnv) rather than a live
-// os.Getenv read, so — same as every other viper-bound setting in this repo
-// — config.InitConfig() must (re)run after t.Setenv for the change to take
-// effect. We can't observe the SDK's base URL directly, but we can confirm
-// construction succeeds with the env set and the model is unchanged.
+// the default model and still honors the configured OpenAI base URL (existing
+// setups must not regress). The base URL is read from
+// config.AppConfig.OpenAIBaseURL; OPENAI_BASE_URL reaches that field through
+// core config's ecosystem passthrough at boot, not through internal/config.
+// We can't observe the SDK's base URL directly, but we can confirm
+// construction succeeds with the field set and the model is unchanged.
 func TestNewEmbeddingClient_BackwardCompat(t *testing.T) {
 	original := config.AppConfig.OpenAIBaseURL
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = original })
 	})
 
-	t.Setenv("OPENAI_BASE_URL", "http://example.invalid/v1")
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = "http://example.invalid/v1" })
 	c := NewEmbeddingClient("k")
 	assert.Equal(t, defaultEmbeddingModel, c.Model())
 
-	// Sanity: the env path is exercised (no panic), and clearing it also works.
-	t.Setenv("OPENAI_BASE_URL", "")
-	config.InitConfig()
+	// Sanity: the configured path is exercised (no panic), and clearing it also works.
+	config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = "" })
 	c2 := NewEmbeddingClient("k")
 	assert.Equal(t, defaultEmbeddingModel, c2.Model())
 }

@@ -23,12 +23,12 @@ func TestAudibleClient_Name(t *testing.T) {
 	}
 }
 
-// TestNewAudibleClientUsesEnvBaseURL locks the 2026-08-20 os.Getenv-to-viper
-// consolidation: AUDIBLE_BASE_URL now flows through
-// config.AppConfig.MetadataSources (viper.BindEnv), not a live os.Getenv read, so
-// the env var only takes effect once InitConfig() (re)populates AppConfig. See
-// the identical guard in openlibrary_test.go.
-func TestNewAudibleClientUsesEnvBaseURL(t *testing.T) {
+// TestNewAudibleClientUsesConfiguredBaseURL locks that the Audible metadata
+// source's BaseURL in config.AppConfig.MetadataSources reaches the client.
+// internal/config no longer reads AUDIBLE_BASE_URL itself (the env layer lands
+// in the config through core config at boot), so the test sets the source
+// directly. See the identical guard in openlibrary_test.go.
+func TestNewAudibleClientUsesConfiguredBaseURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -39,12 +39,15 @@ func TestNewAudibleClientUsesEnvBaseURL(t *testing.T) {
 		config.Mutate(func(c *config.Config) { c.MetadataSources = original })
 	})
 
-	t.Setenv("AUDIBLE_BASE_URL", server.URL)
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: server.URL},
+		}
+	})
 
 	client := NewAudibleClient()
 	if client.baseURL != server.URL {
-		t.Errorf("Expected baseURL to use env %s, got %s", server.URL, client.baseURL)
+		t.Errorf("Expected baseURL to use configured %s, got %s", server.URL, client.baseURL)
 	}
 }
 

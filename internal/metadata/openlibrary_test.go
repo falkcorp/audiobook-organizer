@@ -28,14 +28,13 @@ func TestNewOpenLibraryClient(t *testing.T) {
 	}
 }
 
-// TestNewOpenLibraryClientUsesEnvBaseURL locks the 2026-08-20 os.Getenv-to-viper
-// consolidation: OPENLIBRARY_BASE_URL now flows through
-// config.AppConfig.MetadataSources (viper.BindEnv), not a live os.Getenv read, so
-// the env var only takes effect once InitConfig() (re)populates AppConfig — same
-// as every other viper-bound setting in this repo. Restores the pre-test
-// MetadataSources afterward so this doesn't leak a closed httptest URL into
-// later tests in this package.
-func TestNewOpenLibraryClientUsesEnvBaseURL(t *testing.T) {
+// TestNewOpenLibraryClientUsesConfiguredBaseURL locks that the Open Library
+// metadata source's BaseURL in config.AppConfig.MetadataSources reaches the
+// client. internal/config no longer reads OPENLIBRARY_BASE_URL itself (the env
+// layer lands in the config through core config at boot), so the test sets the
+// source directly. Restores the pre-test MetadataSources afterward so this
+// doesn't leak a closed httptest URL into later tests in this package.
+func TestNewOpenLibraryClientUsesConfiguredBaseURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -46,12 +45,15 @@ func TestNewOpenLibraryClientUsesEnvBaseURL(t *testing.T) {
 		config.Mutate(func(c *config.Config) { c.MetadataSources = original })
 	})
 
-	t.Setenv("OPENLIBRARY_BASE_URL", server.URL)
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: server.URL},
+		}
+	})
 
 	client := NewOpenLibraryClient()
 	if client.baseURL != server.URL {
-		t.Errorf("Expected baseURL to use env %s, got %s", server.URL, client.baseURL)
+		t.Errorf("Expected baseURL to use configured %s, got %s", server.URL, client.baseURL)
 	}
 }
 
