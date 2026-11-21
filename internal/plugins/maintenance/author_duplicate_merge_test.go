@@ -52,9 +52,9 @@ func (w *authorDupWrites) ledgerFor(bookID string) []database.OperationChange {
 
 // authorDupFixture is two independent duplicate groups plus one unrelated row.
 //
-//	"Raymond L. Weil"  -> ids 1 (2 books) and 2 (1 book)   <- the listed group
-//	"Karen Joy Fowler" -> ids 3 (1 book) and 4 (1 book)    <- NOT listed, must not move
-//	"Brandon Sanderson"-> id 5, no duplicate
+//	"Harvey T. Dent"  -> ids 1 (2 books) and 2 (1 book)   <- the listed group
+//	"Selina Anne Kyle" -> ids 3 (1 book) and 4 (1 book)    <- NOT listed, must not move
+//	"Lucius Fox"-> id 5, no duplicate
 //
 // The second group exists so a test can prove the op acts on the allowlist and
 // not on "every duplicate it can see".
@@ -71,11 +71,11 @@ func authorDupFixture() (
 	refCounts map[int]int,
 ) {
 	authors = []database.Author{
-		{ID: 1, Name: "Raymond L. Weil"},
-		{ID: 2, Name: "RAYMOND L. WEIL"},
-		{ID: 3, Name: "Karen Joy Fowler"},
-		{ID: 4, Name: "KAREN JOY FOWLER"},
-		{ID: 5, Name: "Brandon Sanderson"},
+		{ID: 1, Name: "Harvey T. Dent"},
+		{ID: 2, Name: "HARVEY T. DENT"},
+		{ID: 3, Name: "Selina Anne Kyle"},
+		{ID: 4, Name: "SELINA ANNE KYLE"},
+		{ID: 5, Name: "Lucius Fox"},
 	}
 	booksByAuthor = map[int][]database.BookCore{
 		1: {{ID: "b1"}, {ID: "b2"}},
@@ -162,7 +162,7 @@ func runAuthorDup(t *testing.T, params string, w *authorDupWrites) {
 func TestAuthorDuplicateMerge_DryRunDefaultTrue(t *testing.T) {
 	var w authorDupWrites
 	// No dry_run key at all: the default must be the harmless one.
-	runAuthorDup(t, `{"names":["Raymond L. Weil"]}`, &w)
+	runAuthorDup(t, `{"names":["Harvey T. Dent"]}`, &w)
 	if w.total() != 0 {
 		t.Fatalf("dry run wrote: setBookAuthors=%v deletedAuthors=%v updatedBooks=%v",
 			w.setBookAuthors, w.deletedAuthors, w.updatedBooks)
@@ -173,7 +173,7 @@ func TestAuthorDuplicateMerge_DryRunDefaultTrue(t *testing.T) {
 
 	// And explicitly, since a client may send the flag rather than omit it.
 	w = authorDupWrites{}
-	runAuthorDup(t, `{"names":["Raymond L. Weil"],"dry_run":true}`, &w)
+	runAuthorDup(t, `{"names":["Harvey T. Dent"],"dry_run":true}`, &w)
 	if w.total() != 0 || len(w.ledger) != 0 {
 		t.Fatalf("dry_run=true wrote: %+v", w)
 	}
@@ -192,11 +192,11 @@ func TestAuthorDuplicateMerge_EmptyNamesIsNoop(t *testing.T) {
 }
 
 // 🔴 THE ANTI-LAUNDERING GUARD, half two: only the LISTED group moves. The
-// Karen Joy Fowler pair is an equally obvious duplicate and must be untouched,
+// Selina Anne Kyle pair is an equally obvious duplicate and must be untouched,
 // because the operator did not name it.
 func TestAuthorDuplicateMerge_MergesListedGroupOnly(t *testing.T) {
 	var w authorDupWrites
-	runAuthorDup(t, `{"names":["Raymond L. Weil"],"dry_run":false}`, &w)
+	runAuthorDup(t, `{"names":["Harvey T. Dent"],"dry_run":false}`, &w)
 
 	if len(w.deletedAuthors) != 1 || w.deletedAuthors[0] != 2 {
 		t.Fatalf("expected only author 2 deleted, got %v", w.deletedAuthors)
@@ -221,7 +221,7 @@ func TestAuthorDuplicateMerge_MergesListedGroupOnly(t *testing.T) {
 // an error. An operator's typo must not become a merge and must not abort a run.
 func TestAuthorDuplicateMerge_UnknownNameTouchesNothing(t *testing.T) {
 	var w authorDupWrites
-	runAuthorDup(t, `{"names":["Raymund Weyl","Nobody At All"],"dry_run":false}`, &w)
+	runAuthorDup(t, `{"names":["Harvie T. Dent","Nobody At All"],"dry_run":false}`, &w)
 	if w.total() != 0 || len(w.ledger) != 0 {
 		t.Fatalf("a name matching no live author changed something: %+v", w)
 	}
@@ -234,7 +234,7 @@ func TestAuthorDuplicateMerge_CanonicalIsHighestBookCount(t *testing.T) {
 	var w authorDupWrites
 	// Normalization is what matches, so the operator's spelling need not equal
 	// either row's spelling.
-	runAuthorDup(t, `{"names":["  raymond l. weil  "],"dry_run":false}`, &w)
+	runAuthorDup(t, `{"names":["  harvey t. dent  "],"dry_run":false}`, &w)
 	if len(w.deletedAuthors) != 1 || w.deletedAuthors[0] != 2 {
 		t.Fatalf("the row with the most books must survive; deleted=%v", w.deletedAuthors)
 	}
@@ -244,7 +244,7 @@ func TestAuthorDuplicateMerge_CanonicalIsHighestBookCount(t *testing.T) {
 // defect: `git revert` restores the code, not the data.
 func TestAuthorDuplicateMerge_JournalsOneRowPerMovedBook(t *testing.T) {
 	var w authorDupWrites
-	runAuthorDup(t, `{"names":["Raymond L. Weil"],"dry_run":false}`, &w)
+	runAuthorDup(t, `{"names":["Harvey T. Dent"],"dry_run":false}`, &w)
 
 	// The rows are the ones the revert engine reverses (undo/author_merge.go),
 	// the same shape the Authors view merge writes: one author_merge_credits row
@@ -273,7 +273,7 @@ func TestAuthorDuplicateMerge_JournalsOneRowPerMovedBook(t *testing.T) {
 			if err := json.Unmarshal([]byte(c.OldValue), &snap); err != nil {
 				t.Fatalf("decode the delete row: %v", err)
 			}
-			if snap.ID != 2 || snap.Name != "RAYMOND L. WEIL" {
+			if snap.ID != 2 || snap.Name != "HARVEY T. DENT" {
 				t.Fatalf("author_merge_delete row must preserve the deleted author, got %+v", snap)
 			}
 		}
@@ -301,7 +301,7 @@ func TestAuthorDuplicateMerge_RefusesDeleteWhileStillReferenced(t *testing.T) {
 	var w authorDupWrites
 	p := newAuthorDupPlugin(authors, books, joins, counts, refs, &w)
 	if err := p.runAuthorDuplicateMerge(context.Background(),
-		json.RawMessage(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}); err != nil {
+		json.RawMessage(`{"names":["Harvey T. Dent"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}); err != nil {
 		t.Fatalf("runAuthorDuplicateMerge: %v", err)
 	}
 	if len(w.deletedAuthors) != 0 {
@@ -316,7 +316,7 @@ func TestAuthorDuplicateMerge_RefusesDeleteWhileStillReferenced(t *testing.T) {
 	w = authorDupWrites{}
 	p = newAuthorDupPlugin(authors, books, joins, counts, refs, &w)
 	if err := p.runAuthorDuplicateMerge(context.Background(),
-		json.RawMessage(`{"names":["Raymond L. Weil"]}`), &fakeReporter{}); err != nil {
+		json.RawMessage(`{"names":["Harvey T. Dent"]}`), &fakeReporter{}); err != nil {
 		t.Fatalf("dry run: %v", err)
 	}
 	if w.total() != 0 {
@@ -342,7 +342,7 @@ func TestAuthorDuplicateMerge_AbortsWhenRefCountUnavailable(t *testing.T) {
 	}
 	p := New(&fakeDeps{store: store})
 	err := p.runAuthorDuplicateMerge(context.Background(),
-		json.RawMessage(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"})
+		json.RawMessage(`{"names":["Harvey T. Dent"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"})
 	if err == nil {
 		t.Fatal("expected the op to abort when the unfiltered ref count is unavailable")
 	}
@@ -353,7 +353,7 @@ func TestAuthorDuplicateMerge_AbortsWhenRefCountUnavailable(t *testing.T) {
 // found" about the merge that had just succeeded.
 func TestAuthorDuplicateMerge_DuplicateListedNamesProcessOnce(t *testing.T) {
 	var w authorDupWrites
-	runAuthorDup(t, `{"names":["Raymond L. Weil","RAYMOND L. WEIL"],"dry_run":false}`, &w)
+	runAuthorDup(t, `{"names":["Harvey T. Dent","HARVEY T. DENT"],"dry_run":false}`, &w)
 	if len(w.deletedAuthors) != 1 {
 		t.Fatalf("expected exactly one deletion across two spellings of one group, got %v", w.deletedAuthors)
 	}
@@ -363,7 +363,7 @@ func TestAuthorDuplicateMerge_DuplicateListedNamesProcessOnce(t *testing.T) {
 // op after a successful apply is how an operator confirms it is done.
 func TestAuthorDuplicateMerge_SingletonGroupIsNoop(t *testing.T) {
 	var w authorDupWrites
-	runAuthorDup(t, `{"names":["Brandon Sanderson"],"dry_run":false}`, &w)
+	runAuthorDup(t, `{"names":["Lucius Fox"],"dry_run":false}`, &w)
 	if w.total() != 0 || len(w.ledger) != 0 {
 		t.Fatalf("a name with no duplicate changed something: %+v", w)
 	}

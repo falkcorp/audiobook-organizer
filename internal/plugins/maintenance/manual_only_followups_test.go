@@ -550,7 +550,7 @@ func TestITunesClone_OwnerManualReadFailure(t *testing.T) {
 // not relinked, not counted as owner-manual.
 func TestAuthorStripMerge_RelinkOwnerManualReadFailure(t *testing.T) {
 	f := newRelinkFixture()
-	f.fetched["bk-t"] = "T.J. Ward"
+	f.fetched["bk-t"] = "B.T. Wayne"
 	f.tagErr = map[string]error{"bk-t": errors.New("simulated tag read failure")}
 	calls, summary := f.run(t, `{"apply":true,"relink_title_as_author":true,"delete_title_as_author":true}`)
 	if len(calls.setAuthors["bk-t"]) != 0 {

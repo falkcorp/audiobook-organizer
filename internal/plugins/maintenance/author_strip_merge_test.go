@@ -34,12 +34,12 @@ type stripMergeCalls struct {
 // residue names two existing authors.
 func stripFixture() []database.Author {
 	return []database.Author{
-		{ID: 1, Name: "Kevin J Anderson"},
-		{ID: 2, Name: "001-147 Kevin J Anderson"},
+		{ID: 1, Name: "Bruce T Wayne"},
+		{ID: 2, Name: "001-147 Bruce T Wayne"},
 		{ID: 3, Name: "Track 01"},
-		{ID: 4, Name: "Penguin Books"},
-		{ID: 5, Name: "001_Head of the Dragon"},
-		{ID: 6, Name: "002_Head of the Dragon"},
+		{ID: 4, Name: "Gotham Books"},
+		{ID: 5, Name: "001_The Long Halloween"},
+		{ID: 6, Name: "002_The Long Halloween"},
 		{ID: 7, Name: "Jane Roe"},
 		{ID: 8, Name: "Jane Roe"},
 		{ID: 9, Name: "003_Jane Roe"},
@@ -84,12 +84,12 @@ func newStripPlugin(authors []database.Author, calls *stripMergeCalls) *Plugin {
 			if authorID == 5 {
 				id := 5
 				return []database.BookCore{
-					{ID: "bk-title", Title: "Head of the Dragon", AuthorID: &id},
-					{ID: "bk-twice", Title: "Head of the Dragon 2", AuthorID: currentPrimary("bk-twice", 5)},
+					{ID: "bk-title", Title: "The Long Halloween", AuthorID: &id},
+					{ID: "bk-twice", Title: "The Long Halloween 2", AuthorID: currentPrimary("bk-twice", 5)},
 				}, nil
 			}
 			if authorID == 6 {
-				return []database.BookCore{{ID: "bk-twice", Title: "Head of the Dragon 2", AuthorID: currentPrimary("bk-twice", 5)}}, nil
+				return []database.BookCore{{ID: "bk-twice", Title: "The Long Halloween 2", AuthorID: currentPrimary("bk-twice", 5)}}, nil
 			}
 			if authorID == 10 {
 				id := 10
@@ -309,12 +309,12 @@ func TestAuthorStripMerge_JunkDeleteMovesPrimaryToCoAuthor(t *testing.T) {
 func TestAuthorStripMerge_LeavesOutOfScopeRowsAlone(t *testing.T) {
 	calls := runStripMerge(t, `{"apply":true}`)
 	if containsInt(calls.deleted, 4) {
-		t.Error("deleted the publisher row 'Penguin Books', which is out of this op's scope")
+		t.Error("deleted the publisher row 'Gotham Books', which is out of this op's scope")
 	}
 }
 
 // A stripped name matching no existing author is left alone BY DEFAULT, and
-// never renamed: "001_Head of the Dragon" is a book title, and renaming it
+// never renamed: "001_The Long Halloween" is a book title, and renaming it
 // would launder an obviously-corrupt row into a plausible one.
 func TestAuthorStripMerge_DoesNotRenameWhenNoTargetExists(t *testing.T) {
 	calls := runStripMerge(t, `{"apply":true}`)
@@ -494,7 +494,7 @@ func containsInt(xs []int, v int) bool {
 // on a book. 50 is the canonical Unknown Author, 51 a duplicate of it.
 func placeholderFixture() []database.Author {
 	return []database.Author{
-		{ID: 1, Name: "Kevin J Anderson"},
+		{ID: 1, Name: "Bruce T Wayne"},
 		{ID: 3, Name: "Unknown"},
 		{ID: 50, Name: database.UnknownAuthorName},
 		{ID: 51, Name: "Unknown Author"},
@@ -504,7 +504,7 @@ func placeholderFixture() []database.Author {
 		{ID: 55, Name: "None"},
 		{ID: 56, Name: "Various Artists"},
 		{ID: 60, Name: "Track01"},
-		{ID: 61, Name: "Lords of the Sith_418m_07s_"},
+		{ID: 61, Name: "Court of Owls_418m_07s_"},
 		{ID: 62, Name: "14-25"},
 		{ID: 63, Name: "Track_07"},
 	}
@@ -601,7 +601,7 @@ func TestAuthorStripMerge_TrackAndTimecodeRowsAreJunk(t *testing.T) {
 	if !strings.Contains(summary, "junk=4") {
 		t.Errorf("summary should count 4 junk rows: %s", summary)
 	}
-	for _, name := range []string{"Kevin J Anderson", "Track Palin", "50 Cent", "Homer"} {
+	for _, name := range []string{"Bruce T Wayne", "Track Gordon", "47 Robin", "Alfred"} {
 		if isTrackOrTimecodeArtifact(name) {
 			t.Errorf("isTrackOrTimecodeArtifact(%q) = true; a person's name must not match", name)
 		}
@@ -631,14 +631,14 @@ func TestNormalizeForTitleAuthorCompare(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"already normal", "arcane chef 2", "arcane chef 2"},
-		{"case folds", "Arcane Chef 2", "arcane chef 2"},
-		{"underscore becomes space", "Arcane_Chef_2", "arcane chef 2"},
-		{"punctuation dropped", "Arcane Chef 2: A LitRPG Adventure", "arcane chef 2 a litrpg adventure"},
+		{"already normal", "dark victory 2", "dark victory 2"},
+		{"case folds", "Dark Victory 2", "dark victory 2"},
+		{"underscore becomes space", "Dark_Victory_2", "dark victory 2"},
+		{"punctuation dropped", "Dark Victory 2: A Gotham Adventure", "dark victory 2 a gotham adventure"},
 		{"apostrophe becomes a space, then collapses", "O'Brien", "o brien"},
-		{"whitespace collapses", "Arcane   Chef\t2", "arcane chef 2"},
+		{"whitespace collapses", "Dark   Victory\t2", "dark victory 2"},
 		{"empty stays empty", "", ""},
-		{"mixed separators", "Arcane-Chef_2!!", "arcane chef 2"},
+		{"mixed separators", "Dark-Victory_2!!", "dark victory 2"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -653,7 +653,7 @@ func TestNormalizeForTitleAuthorCompare(t *testing.T) {
 // title, the leading segment before ':' or ' - ', and "<series> <position>".
 func TestBookTitleNamesAuthor(t *testing.T) {
 	seriesByID := map[int]database.Series{
-		1: {ID: 1, Name: "Broken Circle"},
+		1: {ID: 1, Name: "Broken City"},
 	}
 	cases := []struct {
 		name   string
@@ -663,25 +663,25 @@ func TestBookTitleNamesAuthor(t *testing.T) {
 	}{
 		{
 			name:   "whole title matches",
-			author: "Arcane Chef 2",
-			book:   database.BookCore{Title: "Arcane Chef 2"},
+			author: "Dark Victory 2",
+			book:   database.BookCore{Title: "Dark Victory 2"},
 			want:   true,
 		},
 		{
 			name:   "leading colon segment matches",
-			author: "Arcane Chef 2",
-			book:   database.BookCore{Title: "Arcane Chef 2: A LitRPG Adventure"},
+			author: "Dark Victory 2",
+			book:   database.BookCore{Title: "Dark Victory 2: A Gotham Adventure"},
 			want:   true,
 		},
 		{
 			name:   "leading ' - ' segment matches",
-			author: "Arcane Chef 2",
-			book:   database.BookCore{Title: "Arcane Chef 2 - A LitRPG Adventure"},
+			author: "Dark Victory 2",
+			book:   database.BookCore{Title: "Dark Victory 2 - A Gotham Adventure"},
 			want:   true,
 		},
 		{
 			name:   "series + position matches",
-			author: "Broken Circle 3",
+			author: "Broken City 3",
 			book: database.BookCore{
 				Title:          "Prologue",
 				SeriesID:       new(1),
@@ -691,7 +691,7 @@ func TestBookTitleNamesAuthor(t *testing.T) {
 		},
 		{
 			name:   "series + raw position string matches",
-			author: "Broken Circle 3",
+			author: "Broken City 3",
 			book: database.BookCore{
 				Title:             "Prologue",
 				SeriesID:          new(1),
@@ -701,14 +701,14 @@ func TestBookTitleNamesAuthor(t *testing.T) {
 		},
 		{
 			name:   "no match, different title",
-			author: "Arcane Chef 2",
-			book:   database.BookCore{Title: "The Stand"},
+			author: "Dark Victory 2",
+			book:   database.BookCore{Title: "Year One"},
 			want:   false,
 		},
 		{
 			name:   "no match, colon segment differs",
-			author: "Arcane Chef 2",
-			book:   database.BookCore{Title: "Something Else: Arcane Chef 2"},
+			author: "Dark Victory 2",
+			book:   database.BookCore{Title: "Something Else: Dark Victory 2"},
 			want:   false,
 		},
 		{
@@ -739,22 +739,22 @@ func TestClassifyTitleAsAuthor(t *testing.T) {
 	}{
 		{
 			name:  "single self-titled book is junk",
-			books: []database.BookCore{{ID: "b1", Title: "Arcane Chef 2: A LitRPG Adventure"}},
+			books: []database.BookCore{{ID: "b1", Title: "Dark Victory 2: A Gotham Adventure"}},
 			want:  true,
 		},
 		{
 			name: "two self-titled books, both match, is junk",
 			books: []database.BookCore{
-				{ID: "b1", Title: "Arcane Chef 2: A LitRPG Adventure"},
-				{ID: "b2", Title: "Arcane Chef 2"},
+				{ID: "b1", Title: "Dark Victory 2: A Gotham Adventure"},
+				{ID: "b2", Title: "Dark Victory 2"},
 			},
 			want: true,
 		},
 		{
 			name: "a differently-titled book protects the author",
 			books: []database.BookCore{
-				{ID: "b1", Title: "Arcane Chef 2: A LitRPG Adventure"},
-				{ID: "b2", Title: "Arcane Chef 3: The Sequel"},
+				{ID: "b1", Title: "Dark Victory 2: A Gotham Adventure"},
+				{ID: "b2", Title: "Dark Victory 3: The Sequel"},
 			},
 			want: false,
 		},
@@ -766,14 +766,14 @@ func TestClassifyTitleAsAuthor(t *testing.T) {
 		{
 			name: "only a soft-deleted matching book is not flagged",
 			books: []database.BookCore{
-				{ID: "b1", Title: "Arcane Chef 2", MarkedForDeletion: &trashed},
+				{ID: "b1", Title: "Dark Victory 2", MarkedForDeletion: &trashed},
 			},
 			want: false,
 		},
 		{
 			name: "a soft-deleted differently-titled book still protects the author",
 			books: []database.BookCore{
-				{ID: "b1", Title: "Arcane Chef 2"},
+				{ID: "b1", Title: "Dark Victory 2"},
 				{ID: "b2", Title: "Completely Different", MarkedForDeletion: &trashed},
 			},
 			want: false,
@@ -782,7 +782,7 @@ func TestClassifyTitleAsAuthor(t *testing.T) {
 	seriesByID := map[int]database.Series{}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			author := database.Author{ID: 100, Name: "Arcane Chef 2"}
+			author := database.Author{ID: 100, Name: "Dark Victory 2"}
 			if got := classifyTitleAsAuthor(author, c.books, seriesByID); got != c.want {
 				t.Errorf("classifyTitleAsAuthor(...) = %v, want %v", got, c.want)
 			}
@@ -790,33 +790,33 @@ func TestClassifyTitleAsAuthor(t *testing.T) {
 	}
 }
 
-// titleAsAuthorFixture: author 100 "Arcane Chef 2" credits one book titled
+// titleAsAuthorFixture: author 100 "Dark Victory 2" credits one book titled
 // after it (the TODO's motivating example, fixed by hand on 2026-09-25 as
-// author id 64477). Author 101 "Stephen King" credits a self-titled book
-// AND "The Stand" — a real person who must never be flagged just because one
+// author id 64477). Author 101 "Jim Gordon" credits a self-titled book
+// AND "Year One" — a real person who must never be flagged just because one
 // of their books shares their name. Author 102 "Solo Title" has exactly one
-// book, also self-titled. Author 103 "Broken Circle 3" is matched only
+// book, also self-titled. Author 103 "Broken City 3" is matched only
 // through its series name + position, on a book titled "Prologue". Author 104
 // "Co Writer" is PRIMARY only on a self-titled book but is credited through
 // the junction on "Other Book" too: the primary-only prefilter matches it, and
 // the full-credit confirmation must reject it.
 func titleAsAuthorFixture() []database.Author {
 	return []database.Author{
-		{ID: 100, Name: "Arcane Chef 2"},
-		{ID: 101, Name: "Stephen King"},
+		{ID: 100, Name: "Dark Victory 2"},
+		{ID: 101, Name: "Jim Gordon"},
 		{ID: 102, Name: "Solo Title"},
-		{ID: 103, Name: "Broken Circle 3"},
+		{ID: 103, Name: "Broken City 3"},
 		{ID: 104, Name: "Co Writer"},
 	}
 }
 
 func newTitleAsAuthorPlugin(calls *stripMergeCalls) *Plugin {
 	books := []database.BookCore{
-		{ID: "bk-arcane", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(100)},
-		{ID: "bk-king-self", Title: "Stephen King", AuthorID: new(101)},
-		{ID: "bk-king-stand", Title: "The Stand", AuthorID: new(101)},
+		{ID: "bk-victory", Title: "Dark Victory 2: A Gotham Adventure", AuthorID: new(100)},
+		{ID: "bk-gordon-self", Title: "Jim Gordon", AuthorID: new(101)},
+		{ID: "bk-gordon-stand", Title: "Year One", AuthorID: new(101)},
 		{ID: "bk-solo", Title: "Solo Title", AuthorID: new(102)},
-		{ID: "bk-broken-circle", Title: "Prologue", AuthorID: new(103), SeriesID: new(1), SeriesSequence: new(3)},
+		{ID: "bk-broken-city", Title: "Prologue", AuthorID: new(103), SeriesID: new(1), SeriesSequence: new(3)},
 		{ID: "bk-cowriter-self", Title: "Co Writer", AuthorID: new(104)},
 		{ID: "bk-cowriter-other", Title: "Other Book", AuthorID: new(101)},
 	}
@@ -834,7 +834,7 @@ func newTitleAsAuthorPluginWith(calls *stripMergeCalls, authors []database.Autho
 
 	store.GetAllBooksCoreFunc = func(limit, offset int) ([]database.BookCore, error) { return books, nil }
 	store.GetAllSeriesFunc = func() ([]database.Series, error) {
-		return []database.Series{{ID: 1, Name: "Broken Circle"}}, nil
+		return []database.Series{{ID: 1, Name: "Broken City"}}, nil
 	}
 
 	byID := map[string]database.BookCore{}
@@ -904,13 +904,13 @@ func runTitleAsAuthorStripMerge(t *testing.T, params string) (*stripMergeCalls, 
 	return calls, rep.summary(t)
 }
 
-// 🔴 THE ARCANE CHEF CASE. Author 100 "Arcane Chef 2" credits only a book
-// titled "Arcane Chef 2: A LitRPG Adventure" — the exact pattern fixed by
+// 🔴 THE DARK VICTORY CASE. Author 100 "Dark Victory 2" credits only a book
+// titled "Dark Victory 2: A Gotham Adventure" — the exact pattern fixed by
 // hand on 2026-09-25 (author id 64477). It, and the series-matched author
 // 103, are still FLAGGED as title-as-author, but each is its book's only author
 // credit, so since 2026-10-21 (never leave a book authorless) neither is
 // deleted: the books keep their credit until relink_title_as_author finds the
-// real author. The legitimate Stephen King row survives either way.
+// real author. The legitimate Jim Gordon row survives either way.
 func TestAuthorStripMerge_TitleAsAuthorSoleCreditIsHeld(t *testing.T) {
 	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_title_as_author":true}`)
 	for _, id := range []int{100, 102, 103} {
@@ -918,13 +918,13 @@ func TestAuthorStripMerge_TitleAsAuthorSoleCreditIsHeld(t *testing.T) {
 			t.Errorf("title-as-author row %d was deleted although it is its book's only author credit; deleted=%v", id, calls.deleted)
 		}
 	}
-	for _, id := range []string{"bk-arcane", "bk-solo", "bk-broken-circle"} {
+	for _, id := range []string{"bk-victory", "bk-solo", "bk-broken-city"} {
 		if as, ok := calls.setAuthors[id]; ok {
 			t.Errorf("%s credits were rewritten: %+v", id, as)
 		}
 	}
 	if containsInt(calls.deleted, 101) {
-		t.Errorf("Stephen King (row 101) was deleted, but it credits a differently-titled book too")
+		t.Errorf("Jim Gordon (row 101) was deleted, but it credits a differently-titled book too")
 	}
 	for _, want := range []string{"title-as-author=3 ", "books-held-sole-credit=3 ", "rows-held-sole-credit=3 "} {
 		if !strings.Contains(summary, want) {
@@ -934,16 +934,16 @@ func TestAuthorStripMerge_TitleAsAuthorSoleCreditIsHeld(t *testing.T) {
 }
 
 // A legitimate author who happens to share a title with one of their books
-// (Stephen King crediting both "Stephen King" and "The Stand") must never be
+// (Jim Gordon crediting both "Jim Gordon" and "Year One") must never be
 // flagged: the differing title is exactly the protection the TODO calls for.
 func TestAuthorStripMerge_LegitimateSameTitleAuthorIsNotFlagged(t *testing.T) {
 	calls, summary := runTitleAsAuthorStripMerge(t, `{"apply":true,"delete_title_as_author":true}`)
 	if containsInt(calls.deleted, 101) {
-		t.Fatalf("Stephen King (row 101) was deleted; deleted=%v", calls.deleted)
+		t.Fatalf("Jim Gordon (row 101) was deleted; deleted=%v", calls.deleted)
 	}
-	if len(calls.setAuthors["bk-king-self"]) != 0 || len(calls.setAuthors["bk-king-stand"]) != 0 {
-		t.Errorf("Stephen King's books should not have been touched: %v / %v",
-			calls.setAuthors["bk-king-self"], calls.setAuthors["bk-king-stand"])
+	if len(calls.setAuthors["bk-gordon-self"]) != 0 || len(calls.setAuthors["bk-gordon-stand"]) != 0 {
+		t.Errorf("Jim Gordon's books should not have been touched: %v / %v",
+			calls.setAuthors["bk-gordon-self"], calls.setAuthors["bk-gordon-stand"])
 	}
 	_ = summary
 }
@@ -992,9 +992,9 @@ func TestAuthorStripMerge_TitleAsAuthorChecksEveryCredit(t *testing.T) {
 }
 
 // 🔴 Review finding 2026-09-25: a title-as-author row can also be a merge
-// target in the same run. T "Arcane Chef 2" credits only its self-titled book
-// and is deleted as title-as-author; S "01 Arcane Chef 2" is the same import
-// bug with a track prefix, strips to "Arcane Chef 2" and would be merged into
+// target in the same run. T "Dark Victory 2" credits only its self-titled book
+// and is deleted as title-as-author; S "01 Dark Victory 2" is the same import
+// bug with a track prefix, strips to "Dark Victory 2" and would be merged into
 // T. With T first, the merge wrote T's deleted ID into S's book (dangling
 // AuthorID); with S first, T's delete unlinked S's book, which the gate never
 // judged. Both orderings: the merge is never planned, S and its book are
@@ -1015,11 +1015,11 @@ func TestAuthorStripMerge_TitleAsAuthorRowIsNeverAMergeTarget(t *testing.T) {
 			run := func(params string) (*stripMergeCalls, string) {
 				calls := &stripMergeCalls{}
 				authors := []database.Author{
-					{ID: ids.t, Name: "Arcane Chef 2"},
-					{ID: ids.s, Name: "01 Arcane Chef 2"},
+					{ID: ids.t, Name: "Dark Victory 2"},
+					{ID: ids.s, Name: "01 Dark Victory 2"},
 				}
 				books := []database.BookCore{
-					{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(ids.t)},
+					{ID: "bk-t", Title: "Dark Victory 2: A Gotham Adventure", AuthorID: new(ids.t)},
 					{ID: "bk-s", Title: "Fish Tales", AuthorID: new(ids.s)},
 				}
 				p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
@@ -1089,18 +1089,18 @@ func planOnlySummary(line string) string {
 	return strings.Join(keep, " ")
 }
 
-// titleTwinRun runs the op over the Arcane Chef twin shape: T "Arcane Chef 2"
-// credits only its self-titled book, S "01 Arcane Chef 2" strips to T's name.
+// titleTwinRun runs the op over the Dark Victory twin shape: T "Dark Victory 2"
+// credits only its self-titled book, S "01 Dark Victory 2" strips to T's name.
 // creditErr, when set, makes T's full credit read fail.
 func titleTwinRun(t *testing.T, params string, extra []database.Author, extraBooks []database.BookCore, creditErr error) (*stripMergeCalls, string) {
 	t.Helper()
 	calls := &stripMergeCalls{}
 	authors := append([]database.Author{
-		{ID: 100, Name: "Arcane Chef 2"},
-		{ID: 200, Name: "01 Arcane Chef 2"},
+		{ID: 100, Name: "Dark Victory 2"},
+		{ID: 200, Name: "01 Dark Victory 2"},
 	}, extra...)
 	books := append([]database.BookCore{
-		{ID: "bk-t", Title: "Arcane Chef 2: A LitRPG Adventure", AuthorID: new(100)},
+		{ID: "bk-t", Title: "Dark Victory 2: A Gotham Adventure", AuthorID: new(100)},
 		{ID: "bk-s", Title: "Fish Tales", AuthorID: new(200)},
 	}, extraBooks...)
 	p := newTitleAsAuthorPluginWith(calls, authors, books, nil)
@@ -1148,22 +1148,22 @@ func TestAuthorStripMerge_FlagOffNeverMergesIntoTitleAsAuthorTarget(t *testing.T
 	}
 }
 
-// The target gate does not stop ordinary merges: "01 Stephen King" still
-// merges into Stephen King, whose self-titled book passes the primary-author
-// prefilter but whose full credit set includes "The Stand".
+// The target gate does not stop ordinary merges: "01 Jim Gordon" still
+// merges into Jim Gordon, whose self-titled book passes the primary-author
+// prefilter but whose full credit set includes "Year One".
 func TestAuthorStripMerge_FlagOffStillMergesIntoRealAuthor(t *testing.T) {
 	calls, summary := titleTwinRun(t, `{"apply":true}`,
-		[]database.Author{{ID: 101, Name: "Stephen King"}, {ID: 201, Name: "01 Stephen King"}},
+		[]database.Author{{ID: 101, Name: "Jim Gordon"}, {ID: 201, Name: "01 Jim Gordon"}},
 		[]database.BookCore{
-			{ID: "bk-king-self", Title: "Stephen King", AuthorID: new(101)},
-			{ID: "bk-king-stand", Title: "The Stand", AuthorID: new(101)},
-			{ID: "bk-king-numbered", Title: "Carrie", AuthorID: new(201)},
+			{ID: "bk-gordon-self", Title: "Jim Gordon", AuthorID: new(101)},
+			{ID: "bk-gordon-stand", Title: "Year One", AuthorID: new(101)},
+			{ID: "bk-gordon-numbered", Title: "Zero Year", AuthorID: new(201)},
 		}, nil)
 	if !containsInt(calls.deleted, 201) {
 		t.Errorf("numbered row 201 was not merged away; deleted=%v", calls.deleted)
 	}
 	if containsInt(calls.deleted, 200) || containsInt(calls.deleted, 100) {
-		t.Errorf("the Arcane Chef rows were touched; deleted=%v", calls.deleted)
+		t.Errorf("the Dark Victory rows were touched; deleted=%v", calls.deleted)
 	}
 	merged := false
 	for _, ts := range calls.tombstones {

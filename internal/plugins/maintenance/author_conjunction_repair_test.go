@@ -171,7 +171,7 @@ func newConjRepairPluginWithDeps(
 // costs real work for no reason.
 func TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite(t *testing.T) {
 	authors := []database.Author{
-		{ID: 46414, Name: "& Joe Thompson"},
+		{ID: 46414, Name: "& Harvey Bullock"},
 	}
 
 	t.Run("apply invalidates", func(t *testing.T) {
@@ -201,7 +201,7 @@ func TestAuthorConjunctionRepair_InvalidatesAuthorsCacheOnWrite(t *testing.T) {
 	t.Run("no matching rows does not invalidate", func(t *testing.T) {
 		var w conjRepairWrites
 		deps := &conjRepairDeps{}
-		p := newConjRepairPluginWithDeps([]database.Author{{ID: 1, Name: "Dan Simmons"}}, nil, nil, &w, deps)
+		p := newConjRepairPluginWithDeps([]database.Author{{ID: 1, Name: "Oswald Cobblepot"}}, nil, nil, &w, deps)
 		if err := p.runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), &opIDReporter{id: "op-conj-repair"}); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -222,7 +222,7 @@ func conjRepairParamsSkip(dryRun bool, skip ...int) json.RawMessage {
 }
 
 // TestAuthorConjunctionRepair_SkipAuthorIDs pins the exclusion added for author
-// 46627 ("& Nicholas Courtney"), where Pebble holds two book links memdb does
+// 46627 ("& Lucius Fox"), where Pebble holds two book links memdb does
 // not. Merging it would relink zero books and then DELETE the author row,
 // orphaning those links.
 //
@@ -232,11 +232,11 @@ func conjRepairParamsSkip(dryRun bool, skip ...int) json.RawMessage {
 // exists to prevent.
 func TestAuthorConjunctionRepair_SkipAuthorIDs(t *testing.T) {
 	authors := []database.Author{
-		{ID: 46627, Name: "& Nicholas Courtney"},
-		{ID: 43791, Name: "Nicholas Courtney"},
-		{ID: 46751, Name: "& Conrad Westmaas"},
-		{ID: 44001, Name: "Conrad Westmaas"},
-		{ID: 46414, Name: "& Joe Thompson"}, // no twin → rename
+		{ID: 46627, Name: "& Lucius Fox"},
+		{ID: 43791, Name: "Lucius Fox"},
+		{ID: 46751, Name: "& Selina Kyle"},
+		{ID: 44001, Name: "Selina Kyle"},
+		{ID: 46414, Name: "& Harvey Bullock"}, // no twin → rename
 	}
 	booksByAuthor := map[int][]database.BookCore{
 		46627: {{ID: "skipbook"}},
@@ -270,7 +270,7 @@ func TestAuthorConjunctionRepair_SkipAuthorIDs(t *testing.T) {
 	if _, ok := w.setBookAuthors["b1"]; !ok {
 		t.Errorf("non-excluded merge did not run; skip must not halt the loop")
 	}
-	if got := w.renamedAuthors[46414]; got != "Joe Thompson" {
+	if got := w.renamedAuthors[46414]; got != "Harvey Bullock" {
 		t.Errorf("non-excluded rename did not run: got %q", got)
 	}
 	found := false
@@ -293,9 +293,9 @@ func TestAuthorConjunctionRepair_SkipAuthorIDs(t *testing.T) {
 // rewrote the denormalized primary would report success and move nothing.
 func TestAuthorConjunctionRepair_MergesIntoExistingTwin(t *testing.T) {
 	authors := []database.Author{
-		{ID: 43620, Name: "Paul McGann"},
-		{ID: 46751, Name: "& Conrad Westmaas"},
-		{ID: 44001, Name: "Conrad Westmaas"},
+		{ID: 43620, Name: "Dick Grayson"},
+		{ID: 46751, Name: "& Selina Kyle"},
+		{ID: 44001, Name: "Selina Kyle"},
 	}
 	primary := 43620
 	booksByAuthor := map[int][]database.BookCore{
@@ -352,7 +352,7 @@ func TestAuthorConjunctionRepair_MergesIntoExistingTwin(t *testing.T) {
 // SetBookAuthors stays silent is the point of the test.
 func TestAuthorConjunctionRepair_RenamesWhenNoTwin(t *testing.T) {
 	authors := []database.Author{
-		{ID: 46751, Name: "& Conrad Westmaas"},
+		{ID: 46751, Name: "& Selina Kyle"},
 	}
 	var w conjRepairWrites
 	p := newConjRepairPlugin(authors, nil, nil, &w)
@@ -360,8 +360,8 @@ func TestAuthorConjunctionRepair_RenamesWhenNoTwin(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if got := w.renamedAuthors[46751]; got != "Conrad Westmaas" {
-		t.Errorf("expected rename to %q, got %q", "Conrad Westmaas", got)
+	if got := w.renamedAuthors[46751]; got != "Selina Kyle" {
+		t.Errorf("expected rename to %q, got %q", "Selina Kyle", got)
 	}
 	if len(w.deletedAuthors) != 0 {
 		t.Errorf("rename path must not delete anything, got %v", w.deletedAuthors)
@@ -376,9 +376,9 @@ func TestAuthorConjunctionRepair_RenamesWhenNoTwin(t *testing.T) {
 // destructive: it deletes an author row.
 func TestAuthorConjunctionRepair_DryRunWritesNothing(t *testing.T) {
 	authors := []database.Author{
-		{ID: 46751, Name: "& Conrad Westmaas"},
-		{ID: 44001, Name: "Conrad Westmaas"},
-		{ID: 46411, Name: "& Patricia Merrick"}, // no twin → would rename
+		{ID: 46751, Name: "& Selina Kyle"},
+		{ID: 44001, Name: "Selina Kyle"},
+		{ID: 46411, Name: "& Barbara Gordon"}, // no twin → would rename
 	}
 	booksByAuthor := map[int][]database.BookCore{
 		46751: {{ID: "b1"}},
@@ -429,20 +429,20 @@ func TestAuthorConjunctionRepair_DryRunWritesNothing(t *testing.T) {
 // TestAuthorConjunctionRepair_LeavesNonAmpersandRowsAlone is the guard that
 // keeps this op narrower than dedup.NormalizeAuthorName.
 //
-// The "and " rows are book-title fragments ("So Long, and Thanks for All the
-// Fish"), not stranded conjunctions; renaming them yields something that is
+// The "and " rows are book-title fragments ("The Joker, and the Last
+// Laugh"), not stranded conjunctions; renaming them yields something that is
 // still not an author but no longer looks broken. The "&#169" rows are
 // decapitated HTML entities from a copyright string. All are a different defect
 // and must survive this op untouched.
 func TestAuthorConjunctionRepair_LeavesNonAmpersandRowsAlone(t *testing.T) {
 	authors := []database.Author{
-		{ID: 46595, Name: "and Thanks for All the Fish"},
-		{ID: 46989, Name: "and the Farm Boy (DBY)"},
-		{ID: 47193, Name: "and Make Better Decisions"},
+		{ID: 46595, Name: "and the Last Laugh"},
+		{ID: 46989, Name: "and the Boy Wonder (DBY)"},
+		{ID: 47193, Name: "and Gotham Burns"},
 		{ID: 46583, Name: "&#169"},
-		{ID: 51870, Name: "&#169;2013 by HarperCollinsPublishers"},
-		{ID: 38542, Name: "Dan Simmons"},
-		{ID: 44444, Name: "Anders Bergman"},
+		{ID: 51870, Name: "&#169;2013 by GothamCityPublishers"},
+		{ID: 38542, Name: "Oswald Cobblepot"},
+		{ID: 44444, Name: "Edward Nygma"},
 	}
 	var w conjRepairWrites
 	p := newConjRepairPlugin(authors, nil, nil, &w)

@@ -137,12 +137,12 @@ func TestLibraryStateRepairAndRewritePathPrefix_DryRunCamel(t *testing.T) {
 // and a dryRun=true body still previews.
 func TestAuthorDuplicateMerge_DryRunCamelAppliesAndDefaultsToPreview(t *testing.T) {
 	var live authorDupWrites
-	runAuthorDup(t, `{"names":["Raymond L. Weil"],"dryRun":false}`, &live)
+	runAuthorDup(t, `{"names":["Harvey T. Dent"],"dryRun":false}`, &live)
 	if live.total() == 0 {
 		t.Fatal(`{"dryRun":false} wrote nothing: the camelCase spelling is still being dropped`)
 	}
 	var dry authorDupWrites
-	runAuthorDup(t, `{"names":["Raymond L. Weil"],"dryRun":true}`, &dry)
+	runAuthorDup(t, `{"names":["Harvey T. Dent"],"dryRun":true}`, &dry)
 	if dry.total() != 0 {
 		t.Fatalf(`{"dryRun":true} wrote: %+v`, dry)
 	}
