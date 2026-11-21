@@ -29,11 +29,10 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
-// gatedConfig is the swap host's Config with Config.CoreConfigBoot on and no
-// ambient environment: the operator layers are exactly env.
-func (h *swapHost) gatedConfig(deps *module.Deps, env ...string) Config {
+// envConfig is the swap host's Config with no ambient environment: the
+// operator layers are exactly env.
+func (h *swapHost) envConfig(deps *module.Deps, env ...string) Config {
 	c := h.config(deps)
-	c.CoreConfigBoot = true
 	c.ConfigOptions = config.Options{Environ: append([]string{}, env...)}
 	c.StateDirDefault = h.state
 	return c
@@ -47,37 +46,12 @@ func ownerIDs(k *Kernel) []storage.Owner {
 	return ids
 }
 
-// TestConfigBoot_GateOffIsTheOldBoot pins what ABO's boot is with the gate
-// off: storageOwners is exactly audit, tasks and the modules, no layered store
-// is built, the core config is never built (it is lazy and a boot with no task
-// never reads it), and no keyring or c/config/ or c/secrets/ keyspace exists.
-// The gate-on twin is TestConfigBoot_GateOnClaimsBothOwners.
-func TestConfigBoot_GateOffIsTheOldBoot(t *testing.T) {
-	h := newSwapHost(t)
-	k := h.mustBoot(h.config(nil))
-	want := []storage.Owner{"core/audit", "core/tasks", "alfred"}
-	if got := ownerIDs(k); !slices.Equal(got, want) {
-		t.Fatalf("storageOwners = %v, want %v", got, want)
-	}
-	if k.cfgBoot != nil || k.coreCfg != nil || k.settingHandles != nil {
-		t.Fatalf("a gate-off boot built config: cfgBoot=%v coreCfg=%v", k.cfgBoot, k.coreCfg)
-	}
-	for _, o := range []storage.Owner{configOwnerSpec().Owner, secretsOwnerID} {
-		if _, ok := k.store.db.Keyspace(o); ok {
-			t.Errorf("a gate-off boot opened the %s keyspace", o)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); !os.IsNotExist(err) {
-		t.Fatalf("a gate-off boot created the keyring: %v", err)
-	}
-}
-
 // TestConfigBoot_GateOnClaimsBothOwners: with the gate on the store claims
 // c/config/ and c/secrets/ at its first P4b, after audit and tasks, and the
 // layered store is the kernel's (P0 ran, P3 loaded).
 func TestConfigBoot_GateOnClaimsBothOwners(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil))
+	k := h.mustBoot(h.envConfig(nil))
 	want := []storage.Owner{"core/audit", "core/tasks", configOwnerSpec().Owner, secretsOwnerID, "alfred"}
 	if got := ownerIDs(k); !slices.Equal(got, want) {
 		t.Fatalf("storageOwners = %v, want %v", got, want)
@@ -103,7 +77,7 @@ func TestConfigBoot_StoragePath(t *testing.T) {
 	t.Run("layer replaces the default", func(t *testing.T) {
 		h := newSwapHost(t)
 		moved := filepath.Join(h.state, "elsewhere", "main.pebble")
-		c := h.gatedConfig(nil, "GOTHAM_CORE_STORAGE_PATH="+moved)
+		c := h.envConfig(nil, "GOTHAM_CORE_STORAGE_PATH="+moved)
 		c.StoragePath = ""
 		k := h.mustBoot(c)
 		if k.cfg.StoragePath != moved {
@@ -115,11 +89,11 @@ func TestConfigBoot_StoragePath(t *testing.T) {
 	})
 	t.Run("no layer: the compiled default, then the state directory", func(t *testing.T) {
 		h := newSwapHost(t)
-		if k := h.mustBoot(h.gatedConfig(nil)); k.cfg.StoragePath != h.db {
+		if k := h.mustBoot(h.envConfig(nil)); k.cfg.StoragePath != h.db {
 			t.Fatalf("StoragePath = %q, want the compiled %q", k.cfg.StoragePath, h.db)
 		}
 		h2 := newSwapHost(t)
-		c := h2.gatedConfig(nil)
+		c := h2.envConfig(nil)
 		c.StoragePath = ""
 		if k := h2.mustBoot(c); k.cfg.StoragePath != h2.db {
 			t.Fatalf("StoragePath = %q, want <state>/storage/main.pebble %q", k.cfg.StoragePath, h2.db)
@@ -127,14 +101,14 @@ func TestConfigBoot_StoragePath(t *testing.T) {
 	})
 	t.Run("two stores", func(t *testing.T) {
 		h := newSwapHost(t)
-		c := h.gatedConfig(nil, "GOTHAM_CORE_STORAGE_PATH="+filepath.Join(h.state, "other.pebble"))
+		c := h.envConfig(nil, "GOTHAM_CORE_STORAGE_PATH="+filepath.Join(h.state, "other.pebble"))
 		if _, err := h.boot(c); err == nil || !strings.Contains(err.Error(), "name different stores") {
 			t.Fatalf("boot = %v, want the two-stores refusal", err)
 		}
 	})
 	t.Run("relative", func(t *testing.T) {
 		h := newSwapHost(t)
-		c := h.gatedConfig(nil, "GOTHAM_CORE_STORAGE_PATH=rel/main.pebble")
+		c := h.envConfig(nil, "GOTHAM_CORE_STORAGE_PATH=rel/main.pebble")
 		c.StoragePath = ""
 		if _, err := h.boot(c); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
 			t.Fatalf("boot = %v, want the absolute-path refusal", err)
@@ -146,7 +120,7 @@ func TestConfigBoot_StoragePath(t *testing.T) {
 // directory differs from step 0's fails the boot.
 func TestConfigBoot_OneStateDirResolver(t *testing.T) {
 	h := newSwapHost(t)
-	c := h.gatedConfig(nil)
+	c := h.envConfig(nil)
 	c.StateDir = filepath.Join(filepath.Dir(h.state), "another")
 	if _, err := h.boot(c); err == nil || !strings.Contains(err.Error(), "one resolver must own it") {
 		t.Fatalf("boot = %v, want the two-resolvers refusal", err)
@@ -163,7 +137,6 @@ func TestConfigBoot_NoStorageApp(t *testing.T) {
 		return r.Err()
 	}, module.Settings(beltSection))
 	c := testConfig(t, m)
-	c.CoreConfigBoot = true
 	c.StateDirDefault = filepath.Join(t.TempDir(), "state")
 	c.ConfigOptions = config.Options{Environ: []string{"GOTHAM_BATCAVE_BELT_GRAPPLE=9"}}
 	k := mustNew(t, c)
@@ -191,7 +164,7 @@ func TestConfigBoot_ModuleSections(t *testing.T) {
 	arkham := mod("arkham", func(r *module.Registrar) error { registered["arkham"] = true; return r.Err() }).
 		with(func(m *module.Manifest) { m.Settings = []module.SettingsSection{module.Settings(arkhamSection)} })
 	h := newSwapHost(t)
-	c := h.gatedConfig(nil, "GOTHAM_BATCAVE_BELT_CORD=nylon", "GOTHAM_CORE_MODULES_ARKHAM_ENABLED=false")
+	c := h.envConfig(nil, "GOTHAM_BATCAVE_BELT_CORD=nylon", "GOTHAM_CORE_MODULES_ARKHAM_ENABLED=false")
 	c.Modules = append(c.Modules, batcave, arkham)
 	k := h.mustBoot(c)
 	if live == nil || live.Get().Cord != "nylon" || live.Get().Grapple != 3 {
@@ -218,7 +191,7 @@ func TestConfigBoot_ModuleSections(t *testing.T) {
 // closing the kernel closes that store once.
 func TestConfigBoot_CoreConfigIsTheLayeredStore(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil, "GOTHAM_CORE_TASKS_WORKERS=7"))
+	k := h.mustBoot(h.envConfig(nil, "GOTHAM_CORE_TASKS_WORKERS=7"))
 	cc, err := k.coreConfig()
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +211,7 @@ func TestConfigBoot_CoreConfigIsTheLayeredStore(t *testing.T) {
 // and creates no state directory.
 func TestConfigBoot_DescribeDoesNoIO(t *testing.T) {
 	h := newSwapHost(t)
-	c := h.gatedConfig(nil)
+	c := h.envConfig(nil)
 	if _, err := Describe(h.ctx, c); err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -255,7 +228,7 @@ func TestConfigBoot_DescribeDoesNoIO(t *testing.T) {
 func TestConfigBoot_P4bOpensTheSecretStore(t *testing.T) {
 	h := newSwapHost(t)
 	var deps module.Deps
-	k := h.mustBoot(h.gatedConfig(&deps))
+	k := h.mustBoot(h.envConfig(&deps))
 	kr, err := os.ReadFile(filepath.Join(h.state, "secrets.keyring"))
 	if err != nil {
 		t.Fatalf("the gate-on boot wrote no keyring: %v", err)
@@ -275,17 +248,14 @@ func TestConfigBoot_P4bOpensTheSecretStore(t *testing.T) {
 	}
 }
 
-// appConfigHost boots two modules over a gate-on kernel: alfred, which
+// appConfigHost boots two modules: alfred, which
 // declares no AppConfig, and lucius, which does and admits only names under
 // "integrations.batcave.". It returns each module's Deps.
-func appConfigHost(t *testing.T, gateOn bool, env ...string) (k *Kernel, alfred, lucius module.Deps) {
+func appConfigHost(t *testing.T, env ...string) (k *Kernel, alfred, lucius module.Deps) {
 	t.Helper()
 	h := newSwapHost(t)
-	c := h.config(&alfred)
-	if gateOn {
-		c = h.gatedConfig(&alfred, env...)
-		c.ConfigOptions.Passthrough = func(p config.Path) bool { return p == "integrations.batcave.alfred.host" }
-	}
+	c := h.envConfig(&alfred, env...)
+	c.ConfigOptions.Passthrough = func(p config.Path) bool { return p == "integrations.batcave.alfred.host" }
 	c.Modules = append(c.Modules, mod("lucius", func(r *module.Registrar) error {
 		lucius = r.Deps()
 		return nil
@@ -298,20 +268,15 @@ func appConfigHost(t *testing.T, gateOn bool, env ...string) (k *Kernel, alfred,
 }
 
 // TestConfigBoot_DepsConfigNeedsTheManifestLine: a module that does not
-// declare Manifest.AppConfig gets a nil Deps.Config under a gate-on boot, so
-// the ambient reach is nil, and a gate-off boot hands even the declaring
-// module none.
+// declare Manifest.AppConfig gets a nil Deps.Config, so the ambient reach is
+// nil.
 func TestConfigBoot_DepsConfigNeedsTheManifestLine(t *testing.T) {
-	_, alfred, lucius := appConfigHost(t, true)
+	_, alfred, lucius := appConfigHost(t)
 	if alfred.Config != nil {
 		t.Fatalf("a module with no AppConfig got a config store: %T", alfred.Config)
 	}
 	if lucius.Config == nil {
 		t.Fatal("the module declaring AppConfig got no config store")
-	}
-	_, alfred, lucius = appConfigHost(t, false)
-	if alfred.Config != nil || lucius.Config != nil {
-		t.Fatalf("a gate-off boot handed out a config store: alfred=%v lucius=%v", alfred.Config, lucius.Config)
 	}
 }
 
@@ -319,7 +284,7 @@ func TestConfigBoot_DepsConfigNeedsTheManifestLine(t *testing.T) {
 // Deps.Config reads the effective value, lists the keys, and its Apply
 // commits, moves the generation and fires OnCommit once with it.
 func TestConfigBoot_DepsConfigIsTheLayeredStore(t *testing.T) {
-	_, _, lucius := appConfigHost(t, true)
+	_, _, lucius := appConfigHost(t)
 	cfg := lucius.Config
 	const key config.Path = "core.shutdown.budget"
 	st, ok := cfg.Lookup(key)
@@ -352,7 +317,7 @@ func TestConfigBoot_DepsConfigIsTheLayeredStore(t *testing.T) {
 // TestConfigBoot_DepsConfigPassthroughValues: an operator value of a passthrough
 // path reaches the module raw, with where it came from.
 func TestConfigBoot_DepsConfigPassthroughValues(t *testing.T) {
-	_, _, lucius := appConfigHost(t, true, "GOTHAM_INTEGRATIONS_BATCAVE_ALFRED_HOST=bat.example.test")
+	_, _, lucius := appConfigHost(t, "GOTHAM_INTEGRATIONS_BATCAVE_ALFRED_HOST=bat.example.test")
 	var got config.OperatorValue
 	var found bool
 	for p, v := range lucius.Config.PassthroughValues() {
@@ -370,7 +335,7 @@ func TestConfigBoot_DepsConfigPassthroughValues(t *testing.T) {
 // ErrOutOfScope, a name outside it, a name that is a registered config key
 // (Apply's), and everything for a module that declares no Secrets func.
 func TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames(t *testing.T) {
-	_, _, lucius := appConfigHost(t, true)
+	_, _, lucius := appConfigHost(t)
 	ctx := t.Context()
 	const in secrets.Name = "integrations.batcave.signal_key"
 	if _, err := lucius.Config.PutSecret(ctx, in, secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
@@ -433,7 +398,7 @@ func TestConfigBoot_DepsConfigSecretsAreTheDeclaredNames(t *testing.T) {
 // declaration is not listed even when it matches the prefix, a deleted one is
 // gone, and the prefix narrows.
 func TestConfigBoot_DepsConfigListSecrets(t *testing.T) {
-	_, _, lucius := appConfigHost(t, true)
+	_, _, lucius := appConfigHost(t)
 	ctx := t.Context()
 	acc := lucius.Config.(*appConfigAccess)
 	for _, n := range []secrets.Name{"integrations.batcave.zeta", "integrations.batcave.alpha", "integrations.batcave.gone"} {
@@ -475,7 +440,7 @@ func TestConfigBoot_DepsConfigListSecrets(t *testing.T) {
 // twin is TestResetHookDoneAfterMigrationList (applied after P4a).
 func TestConfigBoot_ResetAppliedAfterSecretsOpen(t *testing.T) {
 	h := newSwapHost(t)
-	h.close(h.mustBoot(h.gatedConfig(nil)))
+	h.close(h.mustBoot(h.envConfig(nil)))
 	oldHeader, err := os.ReadFile(filepath.Join(h.state, "secrets.keyring"))
 	if err != nil {
 		t.Fatal(err)
@@ -489,14 +454,14 @@ func TestConfigBoot_ResetAppliedAfterSecretsOpen(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(h.state, "not-a-keyring"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.boot(h.gatedConfig(nil, "GOTHAM_CORE_SECRETS_KEY_FILE=not-a-keyring")); err == nil {
+	if _, err := h.boot(h.envConfig(nil, "GOTHAM_CORE_SECRETS_KEY_FILE=not-a-keyring")); err == nil {
 		t.Fatal("a reset boot whose secrets.Open fails succeeded")
 	}
 	got := stepsOf(h.journal(id))
 	if last := got[len(got)-1]; last != "set_aside" {
 		t.Fatalf("after a failed secrets.Open the journal is %v, want it at set_aside", got)
 	}
-	k := h.mustBoot(h.gatedConfig(nil))
+	k := h.mustBoot(h.envConfig(nil))
 	got = stepsOf(h.journal(id))
 	if last := got[len(got)-1]; last != "hook_done" {
 		t.Fatalf("after the retry the journal is %v, want it at hook_done", got)
@@ -515,7 +480,7 @@ func TestConfigBoot_ResetAppliedAfterSecretsOpen(t *testing.T) {
 // fails): the importer a Cutover step held refuses once the store is closed.
 func TestConfigBoot_ClosesSecretsWithStorage(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil))
+	k := h.mustBoot(h.envConfig(nil))
 	store := k.sec.store
 	if _, err := store.Put(t.Context(), "modules.alfred.signal_key", secrets.NewValue(secretsFixture), "user:alfred"); err != nil {
 		t.Fatal(err)
@@ -532,7 +497,7 @@ func TestConfigBoot_ClosesSecretsWithStorage(t *testing.T) {
 
 	// A boot that fails after P4b opened the store closes it too.
 	h2 := newSwapHost(t)
-	h2.close(h2.mustBoot(h2.gatedConfig(nil)))
+	h2.close(h2.mustBoot(h2.envConfig(nil)))
 	var held secrets.Importer
 	broken := storage.Migration{Version: 2, Name: "broken", Compat: storage.Additive,
 		Up: func(context.Context, *storage.MigrationTx) error { return errors.New("bane broke it") }}
@@ -542,9 +507,9 @@ func TestConfigBoot_ClosesSecretsWithStorage(t *testing.T) {
 			return nil
 		}
 	}))
-	c.StoragePath, c.StateDir, c.CoreConfigBoot = h2.db, h2.state, true
+	c.StoragePath, c.StateDir = h2.db, h2.state
 	c.ConfigOptions, c.StateDirDefault = config.Options{Environ: []string{}}, h2.state
-	if _, err := New(h2.ctx, c); err == nil {
+	if _, err := newKCtx(h2.t, h2.ctx, c); err == nil {
 		t.Fatal("a boot with a failing migration succeeded")
 	}
 	err := held.ImportSecret(h2.ctx, new(storage.Batch), secrets.Write{Name: "modules.alfred.signal_key", Value: secrets.NewValue(secretsFixture), By: "user:alfred"})
@@ -563,7 +528,7 @@ func TestConfigBoot_P4dAttachesStoredValues(t *testing.T) {
 	}).with(func(m *module.Manifest) { m.Settings = []module.SettingsSection{module.Settings(beltSection)} })
 	h := newSwapHost(t)
 	cfg := func() Config {
-		c := h.gatedConfig(nil)
+		c := h.envConfig(nil)
 		c.Modules = append(c.Modules, batcave)
 		return c
 	}
@@ -591,7 +556,7 @@ func (r *recordedHealth) Report(res health.Result) { r.last = res }
 // kernel's tokens (F3-01's seam item 1): Up with none, Degraded with them.
 func TestConfigBoot_ReportsConfigHealth(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil))
+	k := h.mustBoot(h.envConfig(nil))
 	if k.reporters.Config == nil {
 		t.Fatal("the gate-on boot registered no core.config reporter")
 	}
@@ -634,7 +599,7 @@ func TestBootConfig_OwnerVerifierNeedsOwnerSet(t *testing.T) {
 // and secrets instruments once (a second registration is refused by each).
 func TestConfigBoot_InstrumentsBothStores(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil))
+	k := h.mustBoot(h.envConfig(nil))
 	if _, err := k.cfgBoot.configMetrics(k.provider); err == nil || !strings.Contains(err.Error(), "twice") {
 		t.Fatalf("config metrics registered a second time: %v, want the refusal (the boot registered them)", err)
 	}
@@ -652,7 +617,6 @@ func TestConfigBoot_ImporterDeletesEntrySecrets(t *testing.T) {
 	h := newSwapHost(t)
 	gated := func(c Config) Config {
 		c.StoragePath, c.StateDir = h.db, h.state
-		c.CoreConfigBoot = true
 		c.ConfigOptions = config.Options{Environ: []string{}}
 		c.StateDirDefault = h.state
 		return c
@@ -708,7 +672,6 @@ func TestConfigBoot_QuarantineSealsIntoTheSecretStore(t *testing.T) {
 	h := newSwapHost(t)
 	gated := func(c Config) Config {
 		c.StoragePath, c.StateDir = h.db, h.state
-		c.CoreConfigBoot = true
 		c.ConfigOptions = config.Options{Environ: []string{}}
 		c.StateDirDefault = h.state
 		return c
@@ -754,37 +717,17 @@ func TestConfigBoot_QuarantineSealsIntoTheSecretStore(t *testing.T) {
 	}
 
 	h.close(k)
-
-	// Gate off: the seams stay unbound.
-	h2 := newSwapHost(t)
-	c2 := testConfig(t, gcpdMod(storage.ClaimReadWrite).with(func(m *module.Manifest) {
-		m.DataMigrations = []datamigrate.DataMigration{{
-			ID: "gcpd.noop", Owner: "gcpd", Description: "nothing to do",
-			Source:      cutoverSource,
-			Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking, Compat: storage.Additive,
-			Step: func(context.Context, storage.KV, *datamigrate.StepWriter) error { return nil },
-		}}
-	}))
-	c2.StoragePath, c2.StateDir = h2.db, h2.state
-	off := h2.mustBoot(c2)
-	if off.dataMig == nil {
-		t.Fatal("the gate-off control has no runner")
-	}
-	if off.dataMig.cfg.LevelStep != nil || off.dataMig.cfg.Quarantine != nil || off.dataMig.cfg.Preflight != nil {
-		t.Fatal("a gate-off boot bound the quarantine, level or preflight seam")
-	}
 }
 
 // TestConfigBoot_StoresSurviveM8: M8 closes and reopens the engine inside P4b,
-// after bindCoreStores took its keyspace handles. A gate-on boot that runs M8
-// finishes it, and afterwards the secret store still writes and reads, the
-// config store still applies, and P4d attached (gate-off twin:
+// after bindCoreStores took its keyspace handles. A boot that runs M8 finishes
+// it, and afterwards the secret store still writes and reads, the config store
+// still applies, and P4d attached (the declared-swapper cell is
 // TestBoot_RewriteRunsAtP4bThroughTheDeclaredSwapper).
 func TestConfigBoot_StoresSurviveM8(t *testing.T) {
 	h := newSwapHost(t)
 	gated := func(c Config) Config {
 		c.StoragePath, c.StateDir = h.db, h.state
-		c.CoreConfigBoot = true
 		c.ConfigOptions = config.Options{Environ: []string{}}
 		c.StateDirDefault = h.state
 		return c
@@ -815,7 +758,7 @@ func TestConfigBoot_StoresSurviveM8(t *testing.T) {
 // and it fails loudly. With no store at all it stays a no-op.
 func TestConfigBoot_AttachRefusesAnOpenStoreWithNoSecrets(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil))
+	k := h.mustBoot(h.envConfig(nil))
 	defer h.close(k)
 	sec := k.sec
 	k.sec = nil
@@ -832,7 +775,7 @@ func TestConfigBoot_AttachRefusesAnOpenStoreWithNoSecrets(t *testing.T) {
 // resolvable is the gated config an app hands ResolveStorage: no path, no
 // state directory, so step 0 chooses both.
 func (h *swapHost) resolvable(env ...string) Config {
-	c := h.gatedConfig(nil, env...)
+	c := h.envConfig(nil, env...)
 	c.StoragePath, c.StateDir = "", ""
 	return c
 }
@@ -1061,25 +1004,11 @@ func TestResolveStorage_WarnsOnStandardErrorWithNoLogger(t *testing.T) {
 	}
 }
 
-// TestResolveStorage_GateOffPassesThrough: with the gate off the Config's own
-// paths come back and nothing is created.
-func TestResolveStorage_GateOffPassesThrough(t *testing.T) {
-	h := newSwapHost(t)
-	c := h.config(nil)
-	db, state, err := ResolveStorage(h.ctx, c, "")
-	if err != nil || db != h.db || state != h.state {
-		t.Fatalf("ResolveStorage gate off = %q, %q, %v", db, state, err)
-	}
-	if _, err := os.Stat(h.state); !os.IsNotExist(err) {
-		t.Fatalf("a gate-off resolve created the state directory: %v", err)
-	}
-}
-
 // TestResolveStorage_NoStorageIsEmpty: an app with no storage resolves to "".
 func TestResolveStorage_NoStorageIsEmpty(t *testing.T) {
 	h := newSwapHost(t)
 	c := testConfig(t, mod("alfred", nil))
-	c.CoreConfigBoot, c.ConfigOptions, c.StateDirDefault = true, config.Options{Environ: []string{}}, h.state
+	c.ConfigOptions, c.StateDirDefault = config.Options{Environ: []string{}}, h.state
 	db, state, err := ResolveStorage(h.ctx, c, "")
 	if err != nil || db != "" || state != "" {
 		t.Fatalf("ResolveStorage with no storage = %q, %q, %v", db, state, err)
@@ -1132,7 +1061,7 @@ func TestScheduleKeys_ModuleKeysDeclared(t *testing.T) {
 	}
 	boot := func(t *testing.T, key string) (*Kernel, error) {
 		h := newSwapHost(t)
-		c := h.gatedConfig(nil)
+		c := h.envConfig(nil)
 		c.Modules = append(c.Modules, gothamWith(key))
 		return h.boot(c)
 	}
@@ -1172,13 +1101,4 @@ func TestScheduleKeys_ModuleKeysDeclared(t *testing.T) {
 			}
 		})
 	}
-	t.Run("the gate off declares no module key", func(t *testing.T) {
-		h := newSwapHost(t)
-		c := h.config(nil)
-		c.Modules = append(c.Modules, gothamWith(patrolKey))
-		_, err := New(h.ctx, c)
-		if !hasKind(err, module.ProblemInvalidRegistration) || !strings.Contains(err.Error(), "is not declared") {
-			t.Fatalf("New = %v, want the key refused as undeclared", err)
-		}
-	})
 }

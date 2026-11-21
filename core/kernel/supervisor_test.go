@@ -395,7 +395,7 @@ func TestNewCleansUpCoreGoroutines(t *testing.T) {
 			r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, ServesSPA: true})
 			return nil
 		}
-		k, err := New(t.Context(), testConfig(t, mod("batcave", spa), mod("arkham", spa)))
+		k, err := newK(t, testConfig(t, mod("batcave", spa), mod("arkham", spa)))
 		if k != nil || !hasKind(err, module.ProblemSPAOwner) {
 			t.Fatalf("New = %v, %v; want a P7 ProblemSPAOwner", k, err)
 		}
@@ -406,7 +406,7 @@ func TestNewCleansUpCoreGoroutines(t *testing.T) {
 			r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, TopSegments: []string{"arkham"}})
 			return nil
 		})}}
-		if _, err := New(t.Context(), c); !hasKind(err, module.ProblemRouteOutsidePrefix) {
+		if _, err := newK(t, c); !hasKind(err, module.ProblemRouteOutsidePrefix) {
 			t.Fatalf("New = %v, want a P7 ProblemRouteOutsidePrefix", err)
 		}
 	})

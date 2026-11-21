@@ -16,55 +16,19 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/internal/bootseam"
-	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
 
-// With Options.CoreConfigBoot storagePath passes on only the compiled path: the
-// environment is not read (the layers own core.storage.path and the state
-// directory), the state directory is left to P0, and an app with no storage
-// still has neither.
-func TestStoragePath_GatedPassesOnlyTheCompiledPath(t *testing.T) {
-	keeper := offlineKeeper()
-	elsewhere := filepath.Join(t.TempDir(), "elsewhere", "main.pebble")
-	opts := offlineOpts(t)
-	opts.CoreConfigBoot = true
-	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + elsewhere, "GOTHAM_CORE_PATHS_STATE_DIR=" + t.TempDir()}
-
-	db, state, err := storagePath(opts, []module.Module{keeper})
-	if err != nil || db != "" || state != "" {
-		t.Fatalf("gated storagePath with only the environment = %q, %q, %v; want \"\", \"\", nil", db, state, err)
-	}
-	opts.R1StoragePath = filepath.Join(t.TempDir(), "abo.db")
-	if db, state, err = storagePath(opts, []module.Module{keeper}); err != nil || db != opts.R1StoragePath || state != "" {
-		t.Fatalf("gated storagePath with R1StoragePath = %q, %q, %v", db, state, err)
-	}
-	opts.R1StoragePath = "relative.db"
-	if _, _, err = storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
-		t.Fatalf("gated storagePath with a relative R1StoragePath = %v", err)
-	}
-	opts.R1StoragePath = ""
-	if db, state, err = storagePath(opts, nil); err != nil || db != "" || state != "" {
-		t.Fatalf("gated storagePath with no storage = %q, %q, %v", db, state, err)
-	}
-	// The gate-off twin reads the environment, as before.
-	opts.CoreConfigBoot = false
-	if db, _, err = storagePath(opts, []module.Module{keeper}); err != nil || db != elsewhere {
-		t.Fatalf("ungated storagePath = %q, %v; want the environment's %q", db, err, elsewhere)
-	}
-}
-
-// TestCoreConfigBoot_ServeAndOfflineOpenOneStore: with the gate on, New and
+// TestConfigBoot_ServeAndOfflineOpenOneStore: New and
 // every offline command resolve core.storage.path and the state directory
 // through P0, so they open one store and one keyring; the boot itself creates
-// the keyring (the gate-on twin of TestExportKeyring_OpensNoStore's "writes
-// nothing" cell, where a gate-off boot leaves none).
-func TestCoreConfigBoot_ServeAndOfflineOpenOneStore(t *testing.T) {
+// the keyring (TestExportKeyring_OpensNoStore's "writes nothing" cell is the
+// export alone).
+func TestConfigBoot_ServeAndOfflineOpenOneStore(t *testing.T) {
 	root := t.TempDir()
 	db := filepath.Join(root, "data", "main.pebble")
 	state := filepath.Join(root, "st")
 	opts := offlineOpts(t)
-	opts.CoreConfigBoot = true
 	opts.StateDir = filepath.Join(root, "compiled-default-unused")
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + db, "GOTHAM_CORE_PATHS_STATE_DIR=" + state}
 	keeper := offlineKeeper()
@@ -107,12 +71,11 @@ func TestCoreConfigBoot_ServeAndOfflineOpenOneStore(t *testing.T) {
 	}
 }
 
-// TestCoreConfigBoot_NoStorageOfflineRefused: with the gate on and no module
+// TestConfigBoot_NoStorageOfflineRefused: with the gate on and no module
 // declaring storage, an offline command that needs the store says so (the
 // resolve returns "" rather than inventing a path).
-func TestCoreConfigBoot_NoStorageOfflineRefused(t *testing.T) {
+func TestConfigBoot_NoStorageOfflineRefused(t *testing.T) {
 	opts := offlineOpts(t)
-	opts.CoreConfigBoot = true
 	cmds := OfflineCommands(opts)
 	err := secretsCmd(t, cmds, "storage prune-checkpoints").Run(context.Background(), nil, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "declares storage") {
@@ -120,13 +83,12 @@ func TestCoreConfigBoot_NoStorageOfflineRefused(t *testing.T) {
 	}
 }
 
-// TestCoreConfigBoot_ClaimsModeIsStillRead: core.storage.claims.mode and the
+// TestConfigBoot_ClaimsModeIsStillRead: core.storage.claims.mode and the
 // state-file table do not depend on the store path being known at New (the
 // gate leaves it to P0), so a mistyped dial fails the gated boot as it fails
 // the ungated one.
-func TestCoreConfigBoot_ClaimsModeIsStillRead(t *testing.T) {
+func TestConfigBoot_ClaimsModeIsStillRead(t *testing.T) {
 	opts := offlineOpts(t)
-	opts.CoreConfigBoot = true
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_CLAIMS_MODE=lenient"}
 	a, err := New(t.Context(), opts, offlineKeeper())
 	if err == nil {
@@ -138,7 +100,7 @@ func TestCoreConfigBoot_ClaimsModeIsStillRead(t *testing.T) {
 	}
 }
 
-// TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst (F3-07 a6,
+// TestConfigBoot_OfflineWritesRefuseANonOwnerFirst (F3-07 a6,
 // seams.d/F3-07.md): with the gate on, each offline command that writes
 // names itself to kernel.ResolveStorage, which refuses a state directory
 // candidate that this user does not own (or, if it is absent, whose nearest
@@ -148,7 +110,7 @@ func TestCoreConfigBoot_ClaimsModeIsStillRead(t *testing.T) {
 // check refused; with it nothing is made. A read-only open is not refused.
 // The resolver never reads the boot record, so none is set aside as .bad
 // (kernel's TestResolveStorage_RefusesANonOwnerBeforeAnything).
-func TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
+func TestConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("files carry no owner storage.StateDirOwner reads")
 	}
@@ -158,7 +120,6 @@ func TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := offlineOpts(t)
-	opts.CoreConfigBoot = true
 	opts.StateDir = state // the compiled default: exists, not a directory
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(data, "main.pebble")}
 	keeper := offlineKeeper()
@@ -207,7 +168,7 @@ func TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
 	}
 }
 
-// TestCoreConfigBoot_RestoreOfflineOnABlankHost (F3-07 b, seams.d/F3-07.md
+// TestConfigBoot_RestoreOfflineOnABlankHost (F3-07 b, seams.d/F3-07.md
 // "Absent state directory"): storage restore-offline gets no exemption from
 // the owner rule on a host with no state directory yet. A blank host here is
 // a state directory four levels below a directory that exists. Run as the
@@ -215,7 +176,7 @@ func TestCoreConfigBoot_OfflineWritesRefuseANonOwnerFirst(t *testing.T) {
 // the restore goes on to fail for want of a checkpoint (not as a non-owner).
 // Run as another user it is refused as a non-owner, naming the command, and
 // not one level of the chain is created.
-func TestCoreConfigBoot_RestoreOfflineOnABlankHost(t *testing.T) {
+func TestConfigBoot_RestoreOfflineOnABlankHost(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("files carry no owner storage.StateDirOwner reads")
 	}
@@ -226,7 +187,6 @@ func TestCoreConfigBoot_RestoreOfflineOnABlankHost(t *testing.T) {
 		top = filepath.Join(base, "wayne", "manor")
 		state = filepath.Join(top, "batcave", "state")
 		opts = offlineOpts(t)
-		opts.CoreConfigBoot = true
 		opts.StateDir = state
 		return top, state, opts
 	}

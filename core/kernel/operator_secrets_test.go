@@ -32,7 +32,7 @@ func operatorSecretHost(t *testing.T, filePath string, env ...string) (*Kernel, 
 	t.Helper()
 	h := newSwapHost(t)
 	var dep module.Deps
-	c := h.gatedConfig(&dep, env...)
+	c := h.envConfig(&dep, env...)
 	c.ConfigOptions.FilePath = filePath
 	c.Modules = append(c.Modules, mod("lucius", func(r *module.Registrar) error {
 		dep = r.Deps()

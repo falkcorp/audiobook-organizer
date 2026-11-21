@@ -91,14 +91,14 @@ func TestResetFreshRows_StaleOperatorValueLoses(t *testing.T) {
 	for _, kind := range []restorejournal.ResetKind{restorejournal.ResetStore, restorejournal.ResetFactory} {
 		t.Run(string(kind), func(t *testing.T) {
 			h := newSwapHost(t)
-			k := h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+			k := h.mustBoot(h.envConfig(nil, staleAuthOff))
 			if got := effective(t, k, authMode); got != `"disabled"` {
 				t.Fatalf("before the reset core.auth.mode = %s, want the operator's \"disabled\"", got)
 			}
 			h.close(k)
 			const id = "z-reset"
 			h.stageReset(id, kind)
-			k = h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+			k = h.mustBoot(h.envConfig(nil, staleAuthOff))
 			if got := effective(t, k, authMode); got != `"required"` {
 				t.Fatalf("after the reset core.auth.mode = %s, want the stored \"required\" over the stale operator value", got)
 			}
@@ -135,7 +135,7 @@ const healthFailClosedOverride = "config_fail_closed_override"
 // it ("with only one of them set, that one", 05-config §1.3.5).
 func TestResetFreshRows_FreshInstallStoresNone(t *testing.T) {
 	h := newSwapHost(t)
-	k := h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+	k := h.mustBoot(h.envConfig(nil, staleAuthOff))
 	if got := effective(t, k, authMode); got != `"disabled"` {
 		t.Fatalf("core.auth.mode = %s, want the operator's \"disabled\" on a fresh install", got)
 	}
@@ -143,7 +143,7 @@ func TestResetFreshRows_FreshInstallStoresNone(t *testing.T) {
 		t.Fatalf("a fresh install stored %v, want no row", rows)
 	}
 	h.close(k)
-	k = h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+	k = h.mustBoot(h.envConfig(nil, staleAuthOff))
 	if rows := storedRows(t, k); len(rows) != 0 {
 		t.Fatalf("a plain reboot stored %v, want no row", rows)
 	}
@@ -155,16 +155,16 @@ func TestResetFreshRows_FreshInstallStoresNone(t *testing.T) {
 // no later boot writes the row again.
 func TestResetFreshRows_OwnerUnsetSticks(t *testing.T) {
 	h := newSwapHost(t)
-	h.close(h.mustBoot(h.gatedConfig(nil, staleAuthOff)))
+	h.close(h.mustBoot(h.envConfig(nil, staleAuthOff)))
 	h.stageReset("z-reset", restorejournal.ResetStore)
-	k := h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+	k := h.mustBoot(h.envConfig(nil, staleAuthOff))
 	owner := config.Actor{Subject: "batman", Interactive: true, Owner: true, Can: func(string) bool { return true }}
 	if _, err := k.cfgBoot.store.Apply(t.Context(), config.Patch{Unset: []config.Path{authMode}}, owner); err != nil {
 		t.Fatalf("the owner's unset of %s: %v", authMode, err)
 	}
 	h.close(k)
 	for boot := range 2 {
-		k = h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+		k = h.mustBoot(h.envConfig(nil, staleAuthOff))
 		if got := effective(t, k, authMode); got != `"disabled"` {
 			t.Fatalf("boot %d after the unset: core.auth.mode = %s, want the operator's \"disabled\"", boot+1, got)
 		}
@@ -183,13 +183,13 @@ func TestResetFreshRows_OwnerUnsetSticks(t *testing.T) {
 // once, with the same values.
 func TestResetFreshRows_DurableBeforeApplied(t *testing.T) {
 	h := newSwapHost(t)
-	h.close(h.mustBoot(h.gatedConfig(nil, staleAuthOff)))
+	h.close(h.mustBoot(h.envConfig(nil, staleAuthOff)))
 	const id = "z-reset"
 	h.stageReset(id, restorejournal.ResetStore)
 	if err := os.Mkdir(filepath.Join(h.state, "not-a-keyring"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.boot(h.gatedConfig(nil, staleAuthOff, "GOTHAM_CORE_SECRETS_KEY_FILE=not-a-keyring")); err == nil {
+	if _, err := h.boot(h.envConfig(nil, staleAuthOff, "GOTHAM_CORE_SECRETS_KEY_FILE=not-a-keyring")); err == nil {
 		t.Fatal("a reset boot whose secrets.Open fails succeeded")
 	}
 	if got := stepsOf(h.journal(id)); got[len(got)-1] != "set_aside" {
@@ -197,7 +197,7 @@ func TestResetFreshRows_DurableBeforeApplied(t *testing.T) {
 	}
 	order := &labelOrder{}
 	h.ctx = bootseam.With(h.t.Context(), &bootseam.Seams{BuildID: swapBuild, Labels: order})
-	k := h.mustBoot(h.gatedConfig(nil, staleAuthOff))
+	k := h.mustBoot(h.envConfig(nil, staleAuthOff))
 	rows, applied := order.index(labelResetFreshRows), order.index("swap.journal.applied")
 	if rows < 0 || applied < 0 || rows > applied {
 		t.Fatalf("labels %v: the fresh rows at %d, applied at %d; want the rows committed first", order.labels, rows, applied)

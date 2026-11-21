@@ -149,15 +149,11 @@ func newFlipFixture(t *testing.T, seed func(*database.PebbleStore), yaml string)
 // only boot: the gap-fill strip is a repairs-hook step, which runs at start.
 func (fx *flipFixture) runFlipped(t *testing.T, atReady func(*composed)) {
 	t.Helper()
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	r := runComposedIn(t, fx.stateDir, func(cfg *config.Config) {
 		cfg.DatabasePath = fx.dbPath
 		cfg.RootDir = fx.dbDir
 	}, nil, func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		o.CoreConfigBoot = true
 		o.StateDir = fx.stateDir
 		o.Env = []string{storagePathEnv + "=" + fx.dbPath}
 		// sandboxStateDirAt wrote a fixed key; the rows are sealed under this one.

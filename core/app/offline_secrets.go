@@ -86,7 +86,7 @@ func exportKeyringCommand(opts Options, mods []module.Module) Command {
 			if err != nil {
 				return err
 			}
-			dbPath, stateDir, err := offlineStoragePath(ctx, opts, c, mods, "secrets export-keyring")
+			dbPath, stateDir, err := kernel.ResolveStorage(ctx, c, "secrets export-keyring")
 			if err != nil {
 				return err
 			}

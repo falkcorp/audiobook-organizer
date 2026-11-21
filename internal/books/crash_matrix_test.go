@@ -250,7 +250,6 @@ func aboStorageBuild(f crashmatrix.Fixture) func(testing.TB, *crashmatrix.Inject
 		_, err := inj.New(context.Background(), app.Options{
 			AppID:             AppID,
 			Logger:            slog.New(slog.DiscardHandler),
-			R1StoragePath:     f.DBDir,
 			StorageStateFiles: StateFiles(f.StateDir, f.DBDir),
 		}, booksStorage{})
 		return err
@@ -283,20 +282,15 @@ func aboUnreachedLabels() map[string]string {
 			"hello's data-migration cells break the writer through the kernel's entry point until then"
 		noM8 = "books registers no store rewrite (M8) until F3-07, and the boot call that runs one is F2-16's; " +
 			"hello's m8-rewrite cells break the writer through the kernel's entry point and restoreswap's P0a until then"
-		// F3-07 slice (a6): the config boot's writers. ABO boots with
-		// app.Options.CoreConfigBoot off until slice (e) deletes the gate,
-		// so no ABO boot runs P0's config step or P4b's secrets.Open.
-		noConfigBoot = "ABO boots with app.Options.CoreConfigBoot off until F3-07's slice (e); hello's TestBootCrashMatrix breaks the config boot's writers"
+		// The config boot's two P0 writers no ABO fixture reaches: every
+		// fixture has a state directory, and none holds an unparsable boot record.
+		noStateDirFixture = "every ABO fixture has its state directory already, so P0 never creates one; hello's boot-record fixtures and missing-state-dir cell break it"
+		noBadBootRecord   = "no ABO fixture holds an unparsable config boot record to set aside; hello's boot-record-unparsable fixture breaks the quarantine"
 	)
 	out := crashmatrix.JournalUnreachedLabels()
 	maps.Copy(out, map[string]string{
-		"config.statedir.mkdir":        noConfigBoot,
-		"config.bootrecord.quarantine": noConfigBoot,
-		"secrets.keyring.stale":        noConfigBoot,
-		"secrets.keyring.load-sync":    noConfigBoot + " (a boot that finds the keyring; TestBootCrashMatrix_ABOFlipCells/keyring-load-sync breaks it over the flip)",
-		"secrets.keyring":              noConfigBoot,
-		"secrets.meta":                 noConfigBoot,
-		"config.reset.fresh_rows":      noConfigBoot + " (the reset boot's FailClosed rows, SEC8-5; hello's reset fixtures break it)",
+		"config.statedir.mkdir":        noStateDirFixture,
+		"config.bootrecord.quarantine": noBadBootRecord,
 		"storage.levelstep.sidecars":   "books declares no level step at R1 (Level 0; raising one is an R1-23 STOP condition)",
 		"storage.levelstep.rollback":   "books declares no level step at R1",
 		"storage.dm.plan":              noDataMigration,
@@ -429,7 +423,24 @@ func aboFlipFixture(t *testing.T, name string) crashmatrix.Fixture {
 	})
 	aboFlipFixtureMu.Unlock()
 	require.NoError(t, crashmatrix.Boot(t, aboStorageBuild(f), f), "fixture %s: R1's first boot", name)
+	stripKeyring(t, f)
 	return f
+}
+
+// stripKeyring turns the store of an install's first boot into the store the
+// deployed R1 left: this build's every boot creates the keyring and
+// c/secrets/meta, and R1 created neither, so the flip boot's own writes (the
+// keyring's five kill points and the meta batch) would otherwise be behind it.
+// The keyring file and every c/secrets/ row go. The rows are deleted under the
+// engine's own prefix with a plain Pebble open, as the foreign-keys fixture
+// plants its row, so nothing else of the store changes.
+func stripKeyring(t *testing.T, f crashmatrix.Fixture) {
+	t.Helper()
+	require.NoError(t, os.Remove(filepath.Join(f.StateDir, "secrets.keyring")), "fixture %s: the first boot left no keyring", f.Name)
+	db, err := pebble.Open(f.DBDir, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
+	require.NoError(t, err)
+	require.NoError(t, db.DeleteRange([]byte("c/secrets/"), []byte("c/secrets0"), pebble.Sync))
+	require.NoError(t, db.Close())
 }
 
 // aboFlipModule is books' manifest with F3's cutover declared (flipOnAt) and
@@ -464,14 +475,14 @@ func (a aboFlipModule) Register(r *module.Registrar) error {
 	return a.probe(context.Background(), r.Deps())
 }
 
-// aboFlipBuild boots mod over f with the config boot on and the flip's config
-// lists, through the kit's injector.
+// aboFlipBuild boots mod over f with the flip's config lists, through the
+// kit's injector.
 func aboFlipBuild(f crashmatrix.Fixture, mod aboFlipModule) func(testing.TB, *crashmatrix.Injector) error {
-	retired, bindings, passthrough := flipConfigNames(true)
+	retired, bindings, passthrough := flipConfigNames()
 	return func(_ testing.TB, inj *crashmatrix.Injector) error {
 		_, err := inj.New(context.Background(), app.Options{
-			AppID: AppID, Logger: slog.New(slog.DiscardHandler), R1StoragePath: f.DBDir, StorageStateFiles: StateFiles(f.StateDir, f.DBDir),
-			CoreConfigBoot: true, RetiredConfigNames: retired, ConfigEnvBindings: bindings, ConfigPassthrough: passthrough,
+			AppID: AppID, Logger: slog.New(slog.DiscardHandler), StorageStateFiles: StateFiles(f.StateDir, f.DBDir),
+			RetiredConfigNames: retired, ConfigEnvBindings: bindings, ConfigPassthrough: passthrough,
 		}, mod)
 		return err
 	}
@@ -1011,8 +1022,7 @@ func aboFlipWriterLabels() []string {
 // TestBootCrashMatrix_ABOFlipCoversEveryWriter: each write the flip boot adds
 // is reached by the fault-free flip boot and has a cell, and no label of the
 // families the flip adds (secrets, the data-migration records, the rewrite,
-// the level step) is reached without one. aboUnreachedLabels, the gate-off
-// allowlist of the R1 matrix, stays: slice e8 removes it with the gate.
+// the level step) is reached without one.
 func TestBootCrashMatrix_ABOFlipCoversEveryWriter(t *testing.T) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
