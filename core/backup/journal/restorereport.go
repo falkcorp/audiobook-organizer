@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -82,4 +84,91 @@ func ReadRestoreReport(ctx context.Context, ks storage.Reader) (RestoreReport, e
 		return RestoreReport{}, fmt.Errorf("journal: %s does not decode: %w", restoreReportKey, err)
 	}
 	return rec.RestoreReport, nil
+}
+
+// ErrNotInReview is Acknowledge of an account the stored report does not list:
+// no report is recorded, the report has no review list, or the account is not
+// on it (never listed, or already acknowledged).
+var ErrNotInReview = errors.New("journal: the account is not listed for review")
+
+// ReviewAcks removes accounts from the report's review list, one at a time,
+// as an interactive admin acknowledges them (05-rbac 7.1: "until an
+// interactive core:admin session acknowledges each one").
+//
+// c/backup/restore_report is a plain write, not a Serialized key, so a batch
+// cannot carry an Expect on it and its commit cannot fail on a concurrent
+// change. The read-modify-write is therefore made exclusive instead: mu is held
+// from the read to the Commit, so two acknowledgements never both decide on the
+// same record (the second would otherwise write the record back with the
+// first's account still on it). The only other writer is the boot's hook run
+// (PutRestoreReport), which finishes before any route is mounted. Making the key
+// Serialized would make that check the store's, but PutRestoreReport's plain
+// write would then need an Expect and the c/backup/ owner spec would change.
+type ReviewAcks struct {
+	ks storage.Keyspace
+	mu sync.Mutex
+
+	// beforeCommit runs after the new record is staged and before Commit: the
+	// tests' seam. Nil outside tests.
+	beforeCommit func()
+}
+
+// NewReviewAcks is the acknowledgements over ks, the c/backup/ keyspace.
+func NewReviewAcks(ks storage.Keyspace) *ReviewAcks { return &ReviewAcks{ks: ks} }
+
+// Acknowledge removes userID from the stored report's review list. The report
+// is read again under the lock, so an account another acknowledgement just
+// removed is ErrNotInReview, not removed twice. The Kept list is not touched:
+// restore_last_admin_kept clears by recovery, not by review. A report left with
+// nobody on either list is deleted (PutRestoreReport's replace rule); otherwise
+// the record is rewritten with its hook run's time.
+//
+// stage runs after the record's write is staged, with the same batch, so what it
+// stages (the audit record) commits with the removal or not at all; a stage
+// error discards both. A report that cannot be read or does not decode is an
+// error that is not ErrNotInReview: an unreadable report is not an unlisted
+// account.
+func (r *ReviewAcks) Acknowledge(ctx context.Context, userID string, stage func(*storage.Batch) error) (err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	raw, err := r.ks.Get(ctx, []byte(restoreReportKey))
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+		return ErrNotInReview
+	case err != nil:
+		return fmt.Errorf("journal: read %s: %w", restoreReportKey, err)
+	}
+	var rec restoreReportRecord
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		return fmt.Errorf("journal: %s does not decode: %w", restoreReportKey, err)
+	}
+	if !slices.Contains(rec.Review, userID) {
+		return ErrNotInReview
+	}
+	rec.Review = slices.DeleteFunc(slices.Clone(rec.Review), func(id string) bool { return id == userID })
+	b := r.ks.NewBatch()
+	defer func() { err = errors.Join(err, b.Close()) }()
+	if rec.Empty() {
+		err = b.In(r.ks).Delete([]byte(restoreReportKey))
+	} else {
+		var next []byte
+		if next, err = json.Marshal(rec); err == nil {
+			err = b.In(r.ks).Set([]byte(restoreReportKey), next)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("journal: stage %s: %w", restoreReportKey, err)
+	}
+	if stage != nil {
+		if err := stage(b); err != nil {
+			return err
+		}
+	}
+	if r.beforeCommit != nil {
+		r.beforeCommit()
+	}
+	if err := b.Commit(ctx, storage.Sync); err != nil {
+		return fmt.Errorf("journal: record %s: %w", restoreReportKey, err)
+	}
+	return nil
 }
