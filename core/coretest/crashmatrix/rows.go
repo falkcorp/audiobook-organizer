@@ -112,6 +112,9 @@ func Rows() []Row {
 			backupjournal.LabelMoveSource, backupjournal.LabelMoveMkdir, backupjournal.LabelMoveClear, backupjournal.LabelMoveCopy, backupjournal.LabelMoveRename,
 			backupjournal.LabelMoveDirSync, backupjournal.LabelMoveCleanup, backupjournal.LabelMoveRemoveSource,
 		}},
+		{Phase: "Retention (after a backup, not a boot step)", Writer: "journal: File.Trim, a leftover temporary file cleared, the kept lines and a new header written and fsynced to a temporary file that is locked, the temporary file renamed over the journal, the directory fsynced, a failed temporary file removed (retention's PruneJournal; §5B.3.6 row \"Retention\")", Labels: []string{
+			backupjournal.LabelTrimClear, backupjournal.LabelTrimCopy, backupjournal.LabelTrimRename, backupjournal.LabelTrimDirSync, backupjournal.LabelTrimCleanup,
+		}, Unbound: unboundJournalTrim},
 		{Phase: "P4d 2", Writer: "the kernel: another install's journal renamed aside and the directory fsynced before CreateBased starts the new one (restore_reapply.go setAside, around :491, and syncDirOf, around :504), raw os calls the kit cannot see until F4-08 routes them through a labelled journal filesystem; a fixture that reaches them (another install's journal on disk) is the F4-08 scenario", Labels: []string{
 			LabelKernelJournalAside, LabelKernelJournalAsideSync,
 		}},
@@ -128,6 +131,12 @@ func Rows() []Row {
 // unboundJournal is the Unbound reason of the journal's file-writer rows that
 // the first boot with a revocation in it reaches (open, append, location).
 const unboundJournal = "no boot binds the revocation journal until F4-08 wires P4d step 2 (the kernel opens the journal component with core/internal/journalfs's filesystem)"
+
+// unboundJournalTrim is the Unbound reason of File.Trim's row: no boot binds the
+// journal until F4-08, and nothing calls Trim until F8-04a's G2 wires
+// backup.Options.PruneJournal to Component.Trim. The trim's own crash cells
+// (core/internal/journalfs, TestKill_Trim) break every step of it meanwhile.
+const unboundJournalTrim = "no boot binds the revocation journal until F4-08, and nothing calls File.Trim until F8-04a G2 wires backup.Options.PruneJournal to it; core/internal/journalfs's TestKill_Trim breaks its steps meanwhile"
 
 // The kernel-side labels of the journal's set-aside, which F4-08 gives the two
 // raw os calls of core/kernel/restore_reapply.go's setAside (and, with them,
