@@ -497,3 +497,54 @@ func TestAudiobookMediaInfo(t *testing.T) {
 		t.Error("Expected Quality to be set")
 	}
 }
+
+// goldenAudiobookJSON is the byte-exact JSON of goldenAudiobook, captured
+// BEFORE Audiobook, Author and Series moved from internal/models to
+// internal/itunes (R3-01b). The moved test file keeps this constant untouched.
+const goldenAudiobookJSON = `{"id":1,"title":"The Long Halloween","author_id":2,"series_id":3,"series_sequence":4,"file_path":"/library/batman/long-halloween.m4b","original_filename":"long-halloween.m4b","format":"m4b","duration":36000,"narrator":"Alfred Pennyworth","edition":"Unabridged","description":"A year of holiday murders in Gotham.","language":"en","publisher":"Wayne Press","print_year":1997,"audiobook_release_year":2020,"isbn10":"0000000001","isbn13":"9780000000001","itunes_persistent_id":"ABCDEF0123456789","itunes_date_added":"2026-01-02T03:04:05Z","itunes_play_count":5,"itunes_last_played":"2026-02-03T04:05:06Z","itunes_rating":80,"itunes_bookmark":123456,"itunes_import_source":"itunes-library.xml","bitrate_kbps":64,"codec":"AAC","sample_rate_hz":44100,"channels":2,"bit_depth":16,"quality":"64 kbps AAC","is_primary_version":true,"version_group_id":"vg-1","version_notes":"Remastered 2020","author":{"id":2,"name":"Bruce Wayne"},"series":{"id":3,"name":"Batman Year Two","author_id":2,"author":{"id":2,"name":"Bruce Wayne"}}}`
+
+func goldenAudiobook() Audiobook {
+	i := func(v int) *int { return &v }
+	s := func(v string) *string { return &v }
+	added := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	played := time.Date(2026, 2, 3, 4, 5, 6, 0, time.UTC)
+	bookmark := int64(123456)
+	primary := true
+	return Audiobook{
+		ID: 1, Title: "The Long Halloween", AuthorID: i(2), SeriesID: i(3), SeriesSequence: i(4),
+		FilePath: "/library/batman/long-halloween.m4b", OriginalFilename: s("long-halloween.m4b"),
+		Format: "m4b", Duration: i(36000), Narrator: s("Alfred Pennyworth"), Edition: s("Unabridged"),
+		Description: s("A year of holiday murders in Gotham."), Language: s("en"), Publisher: s("Wayne Press"),
+		PrintYear: i(1997), AudiobookReleaseYear: i(2020), ISBN10: s("0000000001"), ISBN13: s("9780000000001"),
+		ITunesPersistentID: s("ABCDEF0123456789"), ITunesDateAdded: &added, ITunesPlayCount: i(5),
+		ITunesLastPlayed: &played, ITunesRating: i(80), ITunesBookmark: &bookmark, ITunesImportSource: s("itunes-library.xml"),
+		Bitrate: i(64), Codec: s("AAC"), SampleRate: i(44100), Channels: i(2), BitDepth: i(16), Quality: s("64 kbps AAC"),
+		IsPrimaryVersion: &primary, VersionGroupID: s("vg-1"), VersionNotes: s("Remastered 2020"),
+		Author: &Author{ID: 2, Name: "Bruce Wayne"},
+		Series: &Series{ID: 3, Name: "Batman Year Two", AuthorID: i(2), Author: &Author{ID: 2, Name: "Bruce Wayne"}},
+	}
+}
+
+// TestAudiobookJSONGoldenBytes pins the wire form of Audiobook (with its
+// Author and Series): marshalling gives the golden bytes and the golden bytes
+// decode and re-encode unchanged.
+func TestAudiobookJSONGoldenBytes(t *testing.T) {
+	b, err := json.Marshal(goldenAudiobook())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != goldenAudiobookJSON {
+		t.Fatalf("Audiobook JSON changed\n got: %s\nwant: %s", b, goldenAudiobookJSON)
+	}
+	var back Audiobook
+	if err := json.Unmarshal([]byte(goldenAudiobookJSON), &back); err != nil {
+		t.Fatal(err)
+	}
+	b2, err := json.Marshal(back)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b2) != goldenAudiobookJSON {
+		t.Fatalf("Audiobook round trip changed the bytes\n got: %s\nwant: %s", b2, goldenAudiobookJSON)
+	}
+}
