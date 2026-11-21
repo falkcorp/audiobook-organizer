@@ -47,7 +47,7 @@ func TestCreditsBackfillR4200b_UnresolvableSnapshotNamingAJoinMemberIsHeldNotWri
 				join = ba("bk", [2]int{dick, 0}, [2]int{jason, 0})
 			}
 			f.book("bk", "A Lonely Place of Dying", func(b *database.Book) {
-				b.AuthorID = intp(jason)
+				b.AuthorID = new(jason)
 				b.Author = tc.snap(dick)
 			}, join, nil)
 			before := f.state("bk")
@@ -86,7 +86,7 @@ func TestCreditsBackfillR4200b_UnresolvableSnapshotThatContradictsNothingIsStill
 			dick := f.author("Dick Grayson")
 			f.author("Tim Drake")
 			f.book("bk", "A Death in the Family", func(b *database.Book) {
-				b.AuthorID = intp(jason)
+				b.AuthorID = new(jason)
 				b.Author = snap
 			}, ba("bk", [2]int{dick, 0}), nil)
 			res, err := f.run(creditsBackfillParams{Apply: true}, 1)
@@ -115,14 +115,14 @@ func TestCreditsBackfillR4200b_SpellingRefusalKeepsTheBooksAuthorSideWrite(t *te
 		if withSiblings {
 			for _, id := range []string{"r1-a", "r1-b"} {
 				f.book(id, "Gotham Central "+id, func(b *database.Book) {
-					b.AuthorID = intp(bruce)
-					b.Narrator = strp("Renee Montoya")
+					b.AuthorID = new(bruce)
+					b.Narrator = new("Renee Montoya")
 				}, ba(id, [2]int{bruce, 0}), nil)
 			}
 		}
 		f.book("r1-c", "Gotham Central: Daylight", func(b *database.Book) {
-			b.AuthorID = intp(lucius)
-			b.NarratorsJSON = strp(`["Read by Renée Montoya"]`)
+			b.AuthorID = new(lucius)
+			b.NarratorsJSON = new(`["Read by Renée Montoya"]`)
 		}, nil, nil)
 		return f, lucius
 	}
@@ -179,13 +179,13 @@ func TestCreditsBackfillR4200b_SpellingRefusalOfANarratorOnlyBookWritesNothing(t
 	bruce := f.author("Bruce Wayne")
 	for _, id := range []string{"a", "b"} {
 		f.book(id, "Gotham Central "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp("Renee Montoya")
+			b.AuthorID = new(bruce)
+			b.Narrator = new("Renee Montoya")
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	f.book("c", "Gotham Central: Daylight", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.NarratorsJSON = strp(`["Read by Renée Montoya"]`)
+		b.AuthorID = new(bruce)
+		b.NarratorsJSON = new(`["Read by Renée Montoya"]`)
 	}, ba("c", [2]int{bruce, 0}), nil)
 	before := f.state("c")
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
@@ -210,8 +210,8 @@ func TestCreditsBackfillR4200b_NewNarratorSpellingIsCountedOverTheWholeLibraryNo
 	bruce := f.author("Bruce Wayne")
 	for id, n := range map[string]string{"g-1": "Renee Montoya", "g-2": "Renée Montoya", "g-3": "Renée Montoya"} {
 		f.book(id, "No Man's Land "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp(n)
+			b.AuthorID = new(bruce)
+			b.Narrator = new(n)
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	dry, err := f.run(creditsBackfillParams{}, 2)
@@ -289,8 +289,8 @@ func TestCreditsBackfillR4200b_NameThatPrefixesAnotherCreditedNameIsNotAFalseRef
 	f.narrator("Renée Montoya")
 	f.narrator("Renee Montoya-Sawyer")
 	f.book("r3", "Gotham Central: Corrigan II", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya-Sawyer and Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya-Sawyer and Renee Montoya")
 	}, ba("r3", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
 	if err != nil {
@@ -312,9 +312,9 @@ func TestCreditsBackfillR4200b_JSONEntryContainingTheNameIsNotRespelled(t *testi
 	f.narrator("Renée Montoya")
 	f.narrator("Renee Montoya-Sawyer")
 	f.book("r4", "Gotham Central: Corrigan III", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya and Renee Montoya-Sawyer")
-		b.NarratorsJSON = strp(`["Renee Montoya-Sawyer", "Renee Montoya"]`)
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya and Renee Montoya-Sawyer")
+		b.NarratorsJSON = new(`["Renee Montoya-Sawyer", "Renee Montoya"]`)
 	}, ba("r4", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
 	if err != nil {

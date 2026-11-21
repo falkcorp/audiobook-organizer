@@ -310,8 +310,7 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 			env.Log(slog.LevelWarn, fmt.Sprintf("could not persist result data: %v", rerr))
 		}
 	}
-	var refused *usermerge.RefusedError
-	if errors.As(err, &refused) {
+	if refused, ok := errors.AsType[*usermerge.RefusedError](err); ok {
 		_ = env.SetResult(refused.Plan.Summary())
 	}
 	if err != nil {

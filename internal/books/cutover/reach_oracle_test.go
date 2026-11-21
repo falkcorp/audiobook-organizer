@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -583,8 +584,6 @@ func reachJudgeErrWith(vd *reachR0Doc, routeAtoms []m3.AtomRow, whos []reachWho,
 	// The recorded starts and approvals join the routes as pseudo-routes.
 	withTasks := *vd
 	withTasks.Routes = append(slices.Clone(vd.Routes), reachTaskRoutes(vd, tasks)...)
-	for k, v := range tasks {
-		r2.verdict[k] = v
-	}
+	maps.Copy(r2.verdict, tasks)
 	return reachDiff(&withTasks, r2), r2, nil
 }

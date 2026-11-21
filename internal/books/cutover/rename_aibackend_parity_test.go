@@ -30,8 +30,6 @@ type aiWrite struct {
 	url, llm, emb, chat, embed *string
 }
 
-func sp(s string) *string { return &s }
-
 func (w aiWrite) values() map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
 	for k, p := range map[string]*string{
@@ -112,14 +110,14 @@ func refused(a aiCfg, w aiWrite) bool {
 }
 
 func TestAIBackend_ParitySquare(t *testing.T) {
-	urls := []*string{nil, sp(""), sp(aiURL1), sp(aiURL2)}
-	modes := []*string{nil, sp("disabled"), sp("local"), sp("openai"), sp("openai-fallback-local")}
-	chats := []*string{nil, sp(aiDefChat), sp("joker-chat")}
-	embeds := []*string{nil, sp(aiDefEmbed), sp("joker-embed")}
+	urls := []*string{nil, new(""), new(aiURL1), new(aiURL2)}
+	modes := []*string{nil, new("disabled"), new("local"), new("openai"), new("openai-fallback-local")}
+	chats := []*string{nil, new(aiDefChat), new("joker-chat")}
+	embeds := []*string{nil, new(aiDefEmbed), new("joker-embed")}
 	if testing.Short() {
 		// Short runs (make ci, -race) take the models that matter: unnamed,
 		// and one that is neither HEAD's default nor anything on the row.
-		chats, embeds = []*string{nil, sp("joker-chat")}, []*string{nil, sp("joker-embed")}
+		chats, embeds = []*string{nil, new("joker-chat")}, []*string{nil, new("joker-embed")}
 	}
 
 	var as []aiCfg

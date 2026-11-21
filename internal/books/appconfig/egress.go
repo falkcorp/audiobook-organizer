@@ -429,14 +429,14 @@ func webhookViolation(before config.Config, u config.Update) []error {
 		return nil
 	}
 	known := map[string]bool{}
-	for _, one := range strings.Split(old["urls"], ",") {
+	for one := range strings.SplitSeq(old["urls"], ",") {
 		if one = strings.TrimSpace(one); one != "" {
 			known[originOf(one)] = true
 		}
 	}
 	var fresh []string
 	if p := nw.Settings["urls"]; p != nil {
-		for _, one := range strings.Split(*p, ",") {
+		for one := range strings.SplitSeq(*p, ",") {
 			if one = strings.TrimSpace(one); one != "" && !known[originOf(one)] {
 				fresh = append(fresh, originOf(one))
 			}

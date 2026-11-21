@@ -303,8 +303,7 @@ func (de *Engine) MergeBooksJournaled(candidateID int64, bookIDs []string, keepI
 		// failure (a plain error, a typed one raised after writes began, a
 		// part-way merge) may have written, so its entries stay provisional and
 		// keep pinning the one snapshot per book an operator would need.
-		var refused *merge.RefusedBeforeWriteError
-		if errors.As(mergeErr, &refused) {
+		if _, ok := errors.AsType[*merge.RefusedBeforeWriteError](mergeErr); ok {
 			de.abortProvisional(provisional, "the merge was refused before it wrote anything")
 			return nil, journalKeys, fmt.Errorf("merge-journaled: merge books: %w", mergeErr)
 		}

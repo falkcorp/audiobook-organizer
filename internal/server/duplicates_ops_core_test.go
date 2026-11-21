@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -695,12 +696,7 @@ func TestSeriesNormalizeCore(t *testing.T) {
 }
 
 func dedupHasCall(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, s)
 }
 
 // ---- native scan controller ------------------------------------------------

@@ -29,7 +29,7 @@ func TestM4_ShardsDisjoint(t *testing.T) {
 			var specs []runSpec
 			for i := 1; i <= runs; i++ {
 				specs = append(specs, runSpec{
-					id: runID(i), def: "library.scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour)),
+					id: runID(i), def: "library.scan", st: "succeeded", completed: new(epoch.Add(time.Hour)),
 					evts: 2, intents: 1, items: 2, logs: 2, ckpt: i%2 == 0, ledger: i%3 == 0, snaps: i % 2, rows: i % 3, rowmarks: i % 2, marks: i % 4, derived: true,
 					v2op: true, v2state: i%2 == 1, v2logs: i % 3, v2errs: i % 2, v2derived: true,
 				})
@@ -45,7 +45,7 @@ func TestM4_ShardsDisjoint(t *testing.T) {
 			// v3 run, and v1 rows of no operation.
 			const v1Only = 6
 			for i := 1; i <= v1Only; i++ {
-				v1Op{id: runID(200 + i), typ: "dedup.book-scan", status: "completed", done: tptr(epoch.Add(time.Hour)), logs: 2, results: 1, summary: true, state: i%2 == 0, journal: i%3 == 0}.put(raw)
+				v1Op{id: runID(200 + i), typ: "dedup.book-scan", status: "completed", done: new(epoch.Add(time.Hour)), logs: 2, results: 1, summary: true, state: i%2 == 0, journal: i%3 == 0}.put(raw)
 			}
 			for i := 5; i <= runs; i += 5 {
 				v1Op{id: runID(i), typ: "library.scan", status: "completed", logs: 2, results: 1}.put(raw)

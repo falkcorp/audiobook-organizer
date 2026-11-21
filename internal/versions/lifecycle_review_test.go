@@ -493,7 +493,7 @@ func TestCleanupTrashedVersions_KeptFilesAreReportedWithTheVersionAndPaths(t *te
 // The control: a purge that kept nothing reports nothing kept, and the version
 // carries no kept list.
 func TestCleanupTrashedVersions_ANoKeepPurgeReportsNoKeptFiles(t *testing.T) {
-	f := newTrashFixtureStamped(t, time.Now().Add(-90*day), database.BookVersionStatusTrash, ptrTime(time.Now().Add(-40*day)))
+	f := newTrashFixtureStamped(t, time.Now().Add(-90*day), database.BookVersionStatusTrash, new(time.Now().Add(-40*day)))
 	res, err := cleanupTrashedVersionsAt(f.store, time.Now(), testGuard, true)
 	if err != nil || res.Purged != 1 || len(res.KeptFiles) != 0 || len(res.NeedsAttention) != 0 {
 		t.Fatalf("res=%+v err=%v, want one plain purge", res, err)
@@ -503,8 +503,6 @@ func TestCleanupTrashedVersions_ANoKeepPurgeReportsNoKeptFiles(t *testing.T) {
 	}
 	f.requireFile(t, false)
 }
-
-func ptrTime(t time.Time) *time.Time { return &t }
 
 // ---- SF4: the book purge's path checks apply to a version purge ----
 
@@ -592,7 +590,7 @@ func TestPurgeVersion_WithoutAGuardDeletesNothing(t *testing.T) {
 // directory too (and .versions when that leaves it empty), instead of leaving
 // an empty folder per purged version.
 func TestPurgeVersion_RemovesTheEmptySlotDirectory(t *testing.T) {
-	f := newTrashFixtureStamped(t, time.Now().Add(-90*day), database.BookVersionStatusTrash, ptrTime(time.Now().Add(-40*day)))
+	f := newTrashFixtureStamped(t, time.Now().Add(-90*day), database.BookVersionStatusTrash, new(time.Now().Add(-40*day)))
 	slot := VersionSlotDir(f.bookDir, f.ver.ID)
 	if _, err := os.Stat(slot); err != nil {
 		t.Fatalf("slot before: %v", err)

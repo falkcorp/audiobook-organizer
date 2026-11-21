@@ -65,7 +65,7 @@ func TestCheckRun_ADistinctRunIsConfirmed(t *testing.T) {
 	titles := []string{"A Death in the Family", "A Lonely Place of Dying", "Under the Red Hood", "Hush", "Heart of Hush"}
 	for _, selfAt := range []int{0, 1, 2} {
 		var all []RunSeries
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			all = append(all, one(i+1, i+4, titles[i]))
 		}
 		self := all[selfAt]
@@ -81,7 +81,7 @@ func TestCheckRun_ADistinctRunIsConfirmed(t *testing.T) {
 	}
 	// A long run is read whole, and the order the siblings arrive in does not matter.
 	var all []RunSeries
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		all = append(all, one(i+1, i+1, titles[i]))
 	}
 	if v := CheckRun("Batman", all[2], []RunSeries{all[4], all[0], all[3], all[1]}); v.State != RunConfirmed {

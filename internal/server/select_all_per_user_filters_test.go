@@ -249,7 +249,7 @@ func TestBulkFetchOp_ASelectionThatResolvesToNothingFetchesNothing(t *testing.T)
 		t.Helper()
 		body, merr := json.Marshal(params)
 		require.NoError(t, merr)
-		rep = &recordingReporter{sdReporter: sdReporter{id: "op-select-none"}}
+		rep = &recordingReporter{id: "op-select-none"}
 		func() {
 			// The whole-library path goes on to use services this harness does not
 			// wire; reaching it is what is being observed, not how it ends.

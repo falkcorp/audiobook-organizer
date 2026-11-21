@@ -131,8 +131,7 @@ func (rs *RevertService) loadSettleView(operationID string, scope *revertScope) 
 		revertLog.Warn("revert: the owed group settles of operation %s are unreadable and left as they are for this run: %s",
 			logger.SanitizeLogValue(v.record), logger.SanitizeLogValue(err.Error()))
 		v.unreadable = true
-		var bad *undecodableOwedError
-		if errors.As(err, &bad) {
+		if bad, ok := errors.AsType[*undecodableOwedError](err); ok {
 			// A record that does not decode never will. Left in place it
 			// would stay unreadable for every later revert of the
 			// operation, which could then never record its intent.

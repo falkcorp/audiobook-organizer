@@ -221,9 +221,7 @@ func TestBookWrites_NeverStrandABookOnADeletedSeriesUnderConcurrentDeletes(t *te
 
 	var wg sync.WaitGroup
 	for w := range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for i := range 120 {
 				id := ids[(w*5+i)%nSeries]
 				bid := books[(w*3+i)%nBooks]
@@ -232,20 +230,16 @@ func TestBookWrites_NeverStrandABookOnADeletedSeriesUnderConcurrentDeletes(t *te
 					t.Errorf("unexpected write error: %v", err)
 				}
 			}
-		}()
+		})
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for round := range 6 {
 			for i := round; i < nSeries; i += 6 {
 				_, _ = s.DeleteSeriesIfUnreferenced(ids[i], names[i], nil)
 			}
 		}
-	}()
-	wg.Add(1)
-	go func() { // a callback that creates a series takes stripe -> series lock
-		defer wg.Done()
+	})
+	wg.Go(func() { // a callback that creates a series takes stripe -> series lock
 		for i := range 40 {
 			bid := books[i%nBooks]
 			_, err := s.ModifyBook(bid, func(b *Book) error {
@@ -260,7 +254,7 @@ func TestBookWrites_NeverStrandABookOnADeletedSeriesUnderConcurrentDeletes(t *te
 				t.Errorf("unexpected create-link error: %v", err)
 			}
 		}
-	}()
+	})
 	wg.Wait()
 
 	for _, bid := range books {

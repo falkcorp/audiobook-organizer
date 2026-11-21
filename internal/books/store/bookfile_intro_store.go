@@ -678,7 +678,7 @@ const IntroTimeoutWorkerSeparator = " + "
 // worker value.
 func introTimeoutWorkers(v string) map[string]bool {
 	out := make(map[string]bool)
-	for _, id := range strings.Split(v, IntroTimeoutWorkerSeparator) {
+	for id := range strings.SplitSeq(v, IntroTimeoutWorkerSeparator) {
 		if id = strings.TrimSpace(id); id != "" {
 			out[id] = true
 		}

@@ -229,7 +229,7 @@ func TestCAS_SweepChunk_RestagesOnlyTheRowsThatChanged(t *testing.T) {
 	const rows = 6
 	var chunk []sweepRowRef
 	var churned *BookFile
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		row := &BookFile{
 			ID: "01HUSH00000000000000000R" + string(rune('A'+i)), BookID: book.ID,
 			FilePath: "/lib/Gotham/Hush/r" + string(rune('A'+i)) + ".m4b", Duration: Secs(100),

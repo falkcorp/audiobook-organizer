@@ -23,8 +23,7 @@ func jsonFields(t *testing.T, typ reflect.Type) map[string]reflect.Kind {
 		typ = typ.Elem()
 	}
 	out := map[string]reflect.Kind{}
-	for i := range typ.NumField() {
-		f := typ.Field(i)
+	for f := range typ.Fields() {
 		tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if tag == "" || tag == "-" {
 			continue
@@ -77,8 +76,8 @@ func TestFrozenRowsMatchTheStore(t *testing.T) {
 		})
 	}
 	// The hot half has no exported type; it is RunRecord's own progress fields.
-	head := jsonFields(t, reflect.TypeOf(store.RunRecord{}))
-	for name := range jsonFields(t, reflect.TypeOf(progRow{})) {
+	head := jsonFields(t, reflect.TypeFor[store.RunRecord]())
+	for name := range jsonFields(t, reflect.TypeFor[progRow]()) {
 		if _, ok := head[name]; !ok {
 			t.Errorf("progRow reads %q, which the store's RunRecord (the hot half's source) has no field for", name)
 		}
@@ -99,8 +98,7 @@ func TestFrozenV2RowsMatchTheStore(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			ft, st := reflect.TypeOf(c.frozen), reflect.TypeOf(c.store)
-			for i := range ft.NumField() {
-				f := ft.Field(i)
+			for f := range ft.Fields() {
 				sf, ok := st.FieldByName(f.Name)
 				switch {
 				case !ok:

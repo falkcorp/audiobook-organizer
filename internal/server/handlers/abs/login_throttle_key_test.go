@@ -147,7 +147,7 @@ func TestLoginThrottle_SuccessDoesNotResetTheVisitorBudget(t *testing.T) {
 	h.seedPasswordUser(t, "u2", "attacker", "pw-pw-pw-pw")
 	blocked := false
 	for round := 0; round < 50 && !blocked; round++ {
-		for g := 0; g < 3; g++ {
+		for range 3 {
 			w, _ := h.do(t, request{
 				method: http.MethodPost, path: "/login",
 				body:    map[string]any{"username": "owner", "password": "guess"},
@@ -176,7 +176,7 @@ func TestLoginThrottle_SuccessDoesNotResetTheVisitorBudget(t *testing.T) {
 func TestLoginThrottle_SuccessTakesBackOwnMistypes(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
 	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	for round := 0; round < 4; round++ {
+	for round := range 4 {
 		for range 4 {
 			if code := okLogin(h, t, "192.0.2.51", "owner", "typo"); code != http.StatusUnauthorized {
 				t.Fatalf("round %d: typo answered %d", round, code)

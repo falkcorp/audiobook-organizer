@@ -46,8 +46,8 @@ func TestCreditsBackfill_BookNamingThePersonInTwoCasesLinksToTheAccentedRecordAn
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Renée Montoya")
 	f.book("cv", "Gotham Central: Unresolved", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya, RENEE MONTOYA")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya, RENEE MONTOYA")
 	}, ba("cv", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 2)
 	if err != nil {

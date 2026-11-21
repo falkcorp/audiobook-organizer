@@ -208,23 +208,21 @@ type aiDedupBatchNativeParams struct {
 // into the params the way HEAD's registry merges it on a resume.
 func (p *Plugin) aiDedupBatchKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(aiDedupBatchKind, tasks.TaskSpec[aiDedupBatchNativeParams, aiDedupBatchResult]{
-		Common: tasks.Common{
-			Title: "AI author dedup batch",
-			Help:  "Submits authors to the OpenAI Batch API for dedup review (50% cheaper, up to 24h turnaround). Results land in the AI author review queue.",
-			// The batch submission writes one ai_jobs row (SubmitAuthorDedupJob).
-			// pkg/ops has no ai_jobs constant and "operations" is the undo
-			// journal only, so the nearest valid name is review_items: the AI
-			// author review queue the batch's results land in. Listed under
-			// "Review decisions" in the PR.
-			Effects:        tasks.Writes(t6g4Res(ops.ResReviewItems)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeContinue,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.ai-dedup-batch"),
-			Timeout:        30 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "AI author dedup batch",
+		Help:  "Submits authors to the OpenAI Batch API for dedup review (50% cheaper, up to 24h turnaround). Results land in the AI author review queue.",
+		// The batch submission writes one ai_jobs row (SubmitAuthorDedupJob).
+		// pkg/ops has no ai_jobs constant and "operations" is the undo
+		// journal only, so the nearest valid name is review_items: the AI
+		// author review queue the batch's results land in. Listed under
+		// "Review decisions" in the PR.
+		Effects:        tasks.Writes(t6g4Res(ops.ResReviewItems)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeContinue,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.ai-dedup-batch"),
+		Timeout:        30 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in aiDedupBatchNativeParams) (aiDedupBatchResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return aiDedupBatchResult{}, err

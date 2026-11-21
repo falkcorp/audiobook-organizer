@@ -101,8 +101,8 @@ func t6g5KindWriterIfaces() map[string][]reflect.Type {
 func ifaceMethods(types []reflect.Type) []string {
 	seen := map[string]bool{}
 	for _, ty := range types {
-		for i := range ty.NumMethod() {
-			seen[ty.Method(i).Name] = true
+		for method := range ty.Methods() {
+			seen[method.Name] = true
 		}
 	}
 	out := make([]string, 0, len(seen))
@@ -119,8 +119,8 @@ func ifaceMethods(types []reflect.Type) []string {
 func TestT6G5Resources_TableCoversEveryWriterMethod(t *testing.T) {
 	typ := reflect.TypeFor[t6g5Writer]()
 	var methods, rows []string
-	for i := range typ.NumMethod() {
-		methods = append(methods, typ.Method(i).Name)
+	for method := range typ.Methods() {
+		methods = append(methods, method.Name)
 	}
 	for name := range t6g5WriterResources {
 		rows = append(rows, name)

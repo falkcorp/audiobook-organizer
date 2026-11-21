@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -206,13 +207,13 @@ func syncTree(root string) error {
 	}); err != nil {
 		return err
 	}
-	for i := len(paths) - 1; i >= 0; i-- {
-		f, err := os.Open(paths[i])
+	for _, path := range slices.Backward(paths) {
+		f, err := os.Open(path)
 		if err != nil {
 			return err
 		}
 		if err := errors.Join(f.Sync(), f.Close()); err != nil {
-			return fmt.Errorf("%s: %w", paths[i], err)
+			return fmt.Errorf("%s: %w", path, err)
 		}
 	}
 	return nil

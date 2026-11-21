@@ -23,7 +23,6 @@ func TestListUserBookStates_ReturnsOnlyThatUsersRows(t *testing.T) {
 		// separator, so it must not leak into alice's map.
 		{UserID: "alice2", BookID: "b9", Status: UserBookStatusFinished},
 	} {
-		s := s
 		if err := p.SetUserBookState(&s); err != nil {
 			t.Fatal(err)
 		}

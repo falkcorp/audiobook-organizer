@@ -85,7 +85,7 @@ func r0ReleaseTag(t *testing.T, root string) string {
 	raw, err := os.ReadFile(filepath.Join(root, "ci", "r0_release.txt"))
 	require.NoError(t, err)
 	var tags []string
-	for _, line := range strings.Split(string(raw), "\n") {
+	for line := range strings.SplitSeq(string(raw), "\n") {
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
