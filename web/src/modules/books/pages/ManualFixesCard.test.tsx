@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ManualFixesCard } from './ManualFixesCard';
 import * as api from '../../../services/api';
 
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/api')>()),
   listMaintenanceJobs: vi.fn(),
   runMaintenanceJob: vi.fn(),
   pollOperation: vi.fn(),

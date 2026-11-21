@@ -29,7 +29,8 @@ import { ToastProvider } from '../components/toast/ToastProvider';
 import { useAppStore } from '../stores/useAppStore';
 import { useOperationsStore, type ActiveOperation } from '../stores/useOperationsStore';
 
-vi.mock('../services/api', () => {
+vi.mock('../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/api')>();
   class ApiError extends Error {
     status: number;
     data?: unknown;
@@ -41,6 +42,7 @@ vi.mock('../services/api', () => {
     }
   }
   return {
+    ...actual,
     ApiError,
     getOperationLogsTail: vi.fn().mockResolvedValue([]),
     getBooks: vi.fn().mockResolvedValue({

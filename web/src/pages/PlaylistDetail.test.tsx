@@ -10,14 +10,16 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import { buildPlaylist } from '../test/factories';
 import PlaylistDetail from './PlaylistDetail';
 
-vi.mock('../services/playlistApi', () => ({
+vi.mock('../services/playlistApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/playlistApi')>()),
   getPlaylist: vi.fn(),
   updatePlaylist: vi.fn(),
   removeBookFromPlaylist: vi.fn(),
   materializePlaylist: vi.fn(),
   deletePlaylist: vi.fn(),
 }));
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getBook: vi.fn().mockRejectedValue(new Error('not needed')),
 }));
 

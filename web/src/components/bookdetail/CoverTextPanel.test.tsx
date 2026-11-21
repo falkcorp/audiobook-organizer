@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { getCoverText } from '../../services/api';
 import { CoverTextPanel } from './CoverTextPanel';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getCoverText: vi.fn(),
 }));
 

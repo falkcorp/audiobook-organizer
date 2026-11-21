@@ -10,7 +10,7 @@ import { renderWithProviders } from '../../test/renderWithProviders';
 import TrashCleanupResultPanel from './TrashCleanupResultPanel';
 import { getOperationResult } from '../../services/api';
 
-vi.mock('../../services/api', () => ({ getOperationResult: vi.fn() }));
+vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../services/api')>()),  getOperationResult: vi.fn() }));
 const mockedResult = vi.mocked(getOperationResult);
 
 beforeEach(() => {

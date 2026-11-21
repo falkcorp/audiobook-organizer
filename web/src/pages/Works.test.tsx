@@ -10,7 +10,8 @@ import * as api from '../services/api';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { useLocation } from 'react-router';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getWorks: vi.fn(),
 }));
 

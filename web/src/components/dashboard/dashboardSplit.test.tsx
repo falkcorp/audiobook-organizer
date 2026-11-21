@@ -16,7 +16,8 @@ import { LibraryHomeWidget } from '../../modules/books/pages/LibraryHomeWidget';
 import { DashboardFrame } from './DashboardFrame';
 import frameSource from './DashboardFrame.tsx?raw';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getSystemStatus: vi.fn(),
   getSystemStorage: vi.fn(),
   countAuthors: vi.fn(),

@@ -16,8 +16,9 @@ import { OperationsIndicator } from './OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../stores/useOperationsStore';
 import { getUndoPreflight } from '../../services/versionApi';
 
-vi.mock('../../services/api', () => ({ cancelOperation: vi.fn() }));
-vi.mock('../../services/versionApi', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../services/api')>()),  cancelOperation: vi.fn() }));
+vi.mock('../../services/versionApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/versionApi')>()),
   getUndoPreflight: vi.fn(),
   revertOperation: vi.fn(),
 }));

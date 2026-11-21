@@ -18,7 +18,8 @@ import frameSource from './MaintenanceTabFrame.tsx?raw';
 import { DuplicateAndHashJobs } from '../../modules/books/pages/DuplicateAndHashJobs';
 import { OptimizeLibraryCard } from '../../modules/books/pages/OptimizeLibraryCard';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getMaintenanceWindowStatus: vi.fn(),
   updateMaintenanceWindowConfig: vi.fn(),
   runMaintenanceWindow: vi.fn(),

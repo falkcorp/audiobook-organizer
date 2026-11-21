@@ -9,7 +9,8 @@ import userEvent from '@testing-library/user-event';
 import { useLocation, useNavigate } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 
-vi.mock('../services/playlistApi', () => ({
+vi.mock('../services/playlistApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/playlistApi')>()),
   listPlaylists: vi.fn(),
   createPlaylist: vi.fn(),
   deletePlaylist: vi.fn(),

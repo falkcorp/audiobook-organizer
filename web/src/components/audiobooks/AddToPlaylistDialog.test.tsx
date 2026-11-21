@@ -7,7 +7,8 @@ import { renderWithProviders } from '../../test/renderWithProviders';
 import { buildPlaylist } from '../../test/factories';
 import AddToPlaylistDialog from './AddToPlaylistDialog';
 
-vi.mock('../../services/playlistApi', () => ({
+vi.mock('../../services/playlistApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/playlistApi')>()),
   listPlaylists: vi.fn(),
   addBooksToPlaylist: vi.fn(),
   createPlaylist: vi.fn(),

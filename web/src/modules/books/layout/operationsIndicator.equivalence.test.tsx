@@ -26,8 +26,9 @@ vi.mock('react-router', async () => {
   const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return { ...actual, useNavigate: () => navigateSpy };
 });
-vi.mock('../../../services/api', () => ({ cancelOperation: vi.fn() }));
-vi.mock('../../../services/versionApi', () => ({
+vi.mock('../../../services/api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../services/api')>()),  cancelOperation: vi.fn() }));
+vi.mock('../../../services/versionApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/versionApi')>()),
   getUndoPreflight: vi.fn(),
   revertOperation: vi.fn(),
 }));

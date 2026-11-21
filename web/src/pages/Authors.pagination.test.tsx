@@ -13,7 +13,8 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import { Authors } from './Authors';
 import * as api from '../services/api';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getAuthorsPage: vi.fn(),
   getAuthorBooks: vi.fn().mockResolvedValue([]),
   bulkDeleteAuthors: vi.fn(),
