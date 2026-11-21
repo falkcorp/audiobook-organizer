@@ -298,7 +298,7 @@
   "OperationTimeoutMinutes": 30,
   "OrganizationStrategy": "auto",
   "OwnerEmail": "",
-  "PathAliases": [],
+  "PathAliases": null,
   "PlaylistDir": "",
   "Plugins": null,
   "ProtectedPaths": null,
