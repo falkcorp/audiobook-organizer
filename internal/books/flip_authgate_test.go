@@ -17,6 +17,7 @@ import (
 
 	"github.com/falkcorp/mediacore/app"
 	coreconfig "github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/stretchr/testify/require"
 
@@ -192,6 +193,7 @@ func TestAuthSwitch_MoreRestrictiveWins(t *testing.T) {
 			var retired *coreconfig.RetiredNameError
 			require.True(t, errors.As(err, &retired), "the refusal is not a *config.RetiredNameError: %v", err)
 			require.Len(t, retired.Uses, 1, "%v", err)
+			require.Equal(t, kernel.ExitConfig, kernel.ExitCode(err), "a retired-name refusal exits 78 so systemd does not restart-loop: %v", err)
 			use := retired.Uses[0]
 			require.Equal(t, r.name, use.Name)
 			require.False(t, use.File, "the refused use is an env name")
