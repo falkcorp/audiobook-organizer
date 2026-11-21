@@ -96,7 +96,6 @@ type Store interface {
 	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
 	PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error)
 	DeleteSecret(ctx context.Context, name secrets.Name, by string) error
-	ListSecrets(ctx context.Context, prefix string) ([]secrets.Meta, error)
 }
 
 // New builds an Engine over acc. publish receives every projection (production:
