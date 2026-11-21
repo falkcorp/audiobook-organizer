@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 )
 
@@ -25,11 +26,7 @@ import (
 // way the server will, or skips when either is missing.
 func realWindowTools(t *testing.T) fingerprint.WindowTools {
 	t.Helper()
-	for _, bin := range []string{"ffmpeg", "fpcalc"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH", bin)
-		}
-	}
+	tooltest.RequireAll(t, "ffmpeg", "fpcalc")
 	reg := tools.NewToolRegistry(&tools.ToolsConfig{Fpcalc: tools.ToolConfig{Mode: tools.ToolModeSystem}})
 	reg.Register(tools.ToolDef{Name: "fpcalc"})
 	reg.Register(tools.ToolDef{Name: "ffmpeg"})

@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // TestRealDurationSec_UnifiedProbe_RealFixture is a regression test for TODO
@@ -18,13 +20,8 @@ import (
 // of shelling out to ffprobe directly. This proves the reroute still returns
 // the correct rounded integer seconds for a real audio file.
 func TestRealDurationSec_UnifiedProbe_RealFixture(t *testing.T) {
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH — skipping real-audio duration test")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not on PATH — skipping real-audio duration test")
-	}
+	ffmpegPath := tooltest.Require(t, "ffmpeg")
+	tooltest.Require(t, "ffprobe")
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "b4-real-duration.mp3")

@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,9 +25,7 @@ import (
 // other, and testing only one format hides exactly that.
 func makeTestAudioFormat(t *testing.T, name, codec string) string {
 	t.Helper()
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available; skipping real-file write-back test")
-	}
+	tooltest.Require(t, "ffmpeg")
 	path := filepath.Join(t.TempDir(), name)
 	cmd := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1",

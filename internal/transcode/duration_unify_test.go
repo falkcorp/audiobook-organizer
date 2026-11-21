@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // b4GenSilentMP3 writes a silent mono MP3 of the given duration (seconds) to
@@ -40,14 +42,8 @@ func b4GenSilentMP3(t *testing.T, ffmpegPath, dir, name string, seconds int) str
 // and probeFileDuration must keep returning int64 MICROSECONDS (the transcode
 // progress reporter sums these across input files).
 func TestProbeDuration_UnifiedProbe_RealFixture(t *testing.T) {
-	ffprobePath, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not on PATH — skipping real-audio duration test")
-	}
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH — skipping real-audio duration test")
-	}
+	ffprobePath := tooltest.Require(t, "ffprobe")
+	ffmpegPath := tooltest.Require(t, "ffmpeg")
 
 	dir := t.TempDir()
 	path := b4GenSilentMP3(t, ffmpegPath, dir, "b4-transcode-probe.mp3", 5)
@@ -62,13 +58,8 @@ func TestProbeDuration_UnifiedProbe_RealFixture(t *testing.T) {
 }
 
 func TestProbeFileDuration_UnifiedProbe_RealFixture(t *testing.T) {
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not on PATH — skipping real-audio duration test")
-	}
-	ffmpegPath, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH — skipping real-audio duration test")
-	}
+	tooltest.Require(t, "ffprobe")
+	ffmpegPath := tooltest.Require(t, "ffmpeg")
 
 	dir := t.TempDir()
 	path := b4GenSilentMP3(t, ffmpegPath, dir, "b4-transcode-probefile.mp3", 5)
@@ -83,9 +74,7 @@ func TestProbeFileDuration_UnifiedProbe_RealFixture(t *testing.T) {
 // best-effort contract: probeFileDuration returns 0 (never an error) when
 // ffprobe cannot be resolved or the probe fails.
 func TestProbeFileDuration_UnifiedProbe_MissingFile(t *testing.T) {
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not on PATH — skipping real-audio duration test")
-	}
+	tooltest.Require(t, "ffprobe")
 	us := probeFileDuration(filepath.Join(t.TempDir(), "does-not-exist.mp3"))
 	if us != 0 {
 		t.Errorf("expected 0 for a missing file, got %d", us)

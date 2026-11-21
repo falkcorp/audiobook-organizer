@@ -9,13 +9,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // MockStore is a test double for Store interface.
@@ -112,9 +112,7 @@ func TestRemuxMalformedFilesRootDirNotConfigured(t *testing.T) {
 // threaded through and called every 25 files (and once more at the end),
 // with an accurate total from the pre-count pass.
 func TestRemuxMalformedFilesProgressCallback(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 
 	origRoot := config.AppConfig.RootDir
 	tmpDir := t.TempDir()

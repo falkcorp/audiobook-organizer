@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,6 +22,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // TestLibraryTranscodeOp_RegisteredOpCreatesVersion runs the REAL registered
@@ -40,11 +40,7 @@ import (
 // original under the library root hands the primary to the M4B; an unorganized
 // one leaves the group held with no primary.
 func TestLibraryTranscodeOp_RegisteredOpCreatesVersion(t *testing.T) {
-	for _, bin := range []string{"ffmpeg", "ffprobe"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not found", bin)
-		}
-	}
+	tooltest.RequireAll(t, "ffmpeg", "ffprobe")
 
 	for _, tc := range []struct {
 		name      string

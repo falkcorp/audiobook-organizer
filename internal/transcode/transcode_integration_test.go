@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,6 +20,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 )
 
@@ -62,12 +62,8 @@ func (m *mockProgressReporter) IsCanceled() bool {
 // is covered in internal/server (TestLibraryTranscodeOp_RegisteredOpCreatesVersion).
 func TestTranscodeIntegration_M4BConversion(t *testing.T) {
 	// Skip if ffmpeg is not available
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not found")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not found")
-	}
+	tooltest.Require(t, "ffmpeg")
+	tooltest.Require(t, "ffprobe")
 
 	// Set up integration environment with real Pebble store
 	env, cleanup := testutil.SetupIntegration(t)

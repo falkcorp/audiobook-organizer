@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 )
 
@@ -502,11 +503,7 @@ func TestWindowBackfill_CancelThenResume(t *testing.T) {
 
 // Real ffmpeg + fpcalc through a ToolRegistry, as the server resolves them.
 func TestWindowBackfill_Integration_RealBinaries(t *testing.T) {
-	for _, bin := range []string{"ffmpeg", "fpcalc"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH", bin)
-		}
-	}
+	tooltest.RequireAll(t, "ffmpeg", "fpcalc")
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })

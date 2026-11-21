@@ -8,12 +8,12 @@ package scanner
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/audioutil"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // odysseyM4B is the real, committed 115 MB fixture with 6 embedded chapters,
@@ -47,9 +47,7 @@ func odysseyTrackTitle(n int) string {
 // the unusual machine that has mediainfo but not ffprobe.
 func requireChapterTestFFprobe(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not found on PATH, skipping")
-	}
+	tooltest.Require(t, "ffprobe")
 }
 
 func requireChapterTestFixture(t *testing.T, path string) {

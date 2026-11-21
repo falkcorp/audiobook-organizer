@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // b4RequireFFmpeg skips the test when ffmpeg/ffprobe are not on PATH — these
@@ -20,14 +22,8 @@ import (
 // LFS-gated testdata fixtures that may not be checked out.
 func b4RequireFFmpeg(t *testing.T) (ffmpegPath, ffprobePath string) {
 	t.Helper()
-	fp, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH — skipping real-audio duration test")
-	}
-	pp, err := exec.LookPath("ffprobe")
-	if err != nil {
-		t.Skip("ffprobe not on PATH — skipping real-audio duration test")
-	}
+	fp := tooltest.Require(t, "ffmpeg")
+	pp := tooltest.Require(t, "ffprobe")
 	return fp, pp
 }
 

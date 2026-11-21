@@ -17,16 +17,14 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // scan-composer-tags rewrites COMPOSER across the whole library, a bulk tag
 // write: with create_backups on it must leave no .bak-* sibling (owner
 // decision D69). The file is a silent ffmpeg-synthesized m4a.
 func TestScanComposerTags_LeavesNoBackup(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	prev := config.Snapshot()
 	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })

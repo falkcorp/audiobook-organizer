@@ -14,6 +14,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/falkcorp/audiobook-organizer/internal/undo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -43,9 +44,7 @@ var revertTestCodecs = map[string]string{"m4a": "aac", "mp3": "libmp3lame", "fla
 // props to it. Skips when ffmpeg or its encoder for ext is unavailable.
 func makeRevertTestAudioExt(t *testing.T, ext string, props map[string][]string) string {
 	t.Helper()
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available; skipping real-file tag revert test")
-	}
+	tooltest.Require(t, "ffmpeg")
 	path := filepath.Join(t.TempDir(), "book."+ext)
 	out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1",

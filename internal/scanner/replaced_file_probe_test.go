@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/testutil/durtest"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // writeSilentMP3 writes a real mp3 of the given length and bitrate.
@@ -76,13 +77,8 @@ func seedOwnedRowWithAudioData(t *testing.T, store *database.PebbleStore, path s
 // fingerprint, transcript and duration, and carry the new real duration. A
 // re-encode of the same length (different bytes, same audio length) keeps them.
 func TestCreateBookFilesForBook_SamePathReplacement(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
+	tooltest.Require(t, "ffprobe")
 
 	rescan := func(t *testing.T, store *database.PebbleStore, path string) database.BookFile {
 		t.Helper()

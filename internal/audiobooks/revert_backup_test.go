@@ -13,16 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // A revert writes one tag row at a time; with create_backups on, each write
 // used to copy the whole file. The revert's writer opts out (owner decision
 // D69, applied to reverts). Runs on a silent ffmpeg-synthesized m4a.
 func TestRevertWriteTags_LeavesNoBackup(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	prev := config.Snapshot()
 	config.Mutate(func(c *config.Config) { c.CreateBackups = true })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })

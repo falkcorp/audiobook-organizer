@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // liveClipSeconds is longer than every window the production paths pass to
@@ -37,12 +39,7 @@ const liveClipSeconds = 330
 // These tests add a check against whichever fpcalc build is installed locally.
 func liveClip(t *testing.T) string {
 	t.Helper()
-	for _, bin := range []string{"ffmpeg", "fpcalc"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH: live fpcalc decode tests are local-only by design (CI installs no ffmpeg/fpcalc; "+
-				"decoder coverage there comes from the golden fixtures and the argv pin tests)", bin)
-		}
-	}
+	tooltest.RequireAll(t, "ffmpeg", "fpcalc")
 	prev := resolvedFpcalcPath
 	SetResolvedFpcalcPath("")
 	t.Cleanup(func() { SetResolvedFpcalcPath(prev) })

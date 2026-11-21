@@ -18,6 +18,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	taglib "go.senan.xyz/taglib"
 )
 
@@ -500,9 +501,7 @@ func TestWriteTagsSafe_VerifyAfterWrite_RecordsThroughStoreDecorator(t *testing.
 // Extra coverage for containers the checked-in fixtures do not include. It
 // needs ffmpeg and skips without it; the fixture tests above are the gate.
 func TestWriteTagsSafe_VerifyAfterWrite_FFmpegContainers(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available")
-	}
+	tooltest.Require(t, "ffmpeg")
 	setVerifyAfterWrite(t, true)
 	cases := map[string][]string{
 		"book.m4a":  {"-c:a", "aac"},
