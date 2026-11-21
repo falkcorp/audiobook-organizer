@@ -33,6 +33,17 @@ type diagnosticsUsers interface {
 	User(ctx context.Context, id auth.UserID) (*auth.User, error)
 }
 
+// Each seam is asserted against the real service the F8-04 fold will pass, so
+// a change to the service's method fails the build here, not at the fold. The
+// test doubles satisfy the seams by shape alone and would not notice.
+var (
+	_ diagnosticsUsers = (*auth.Service)(nil)
+	_ checkerCompiler  = (*rbac.Service)(nil)
+	_ exportStarter    = tasks.Client(nil)
+	_ runRecords       = tasks.RunStore(nil)
+	_ routeLister      = (*httpapi.Router)(nil)
+)
+
 // checkerCompiler is rbac.Service.Compile: it resolves the named roles'
 // patterns and compiles them through authz.Compile.
 type checkerCompiler interface {
@@ -46,8 +57,8 @@ var errNoDiagnosticsViewer = errors.New("kernel: diagnostics run has no active p
 
 // diagnosticsViewerFor is diagnostics.Config.ViewerFor (F8-03 obligation 4).
 // It resolves the run's stamped actor to the person's CURRENT roles and
-// compiles them with Interactive set only for actor.AuthMethod "session",
-// the rule of auth.Method.Interactive(). Every other method, "token",
+// compiles them with Interactive set by auth.Method.Interactive(), which is
+// true only for actor.AuthMethod "session". Every other method, "token",
 // "session_delegated", "auth_disabled" or one nobody classified, gets the
 // non-interactive checker, so an administrator's API key never reaches a
 // Sensitive scope (core:backup.restore and the rest) that only the live
@@ -72,7 +83,7 @@ func diagnosticsViewerFor(users diagnosticsUsers, rb checkerCompiler) func(conte
 		if u == nil || u.Status != auth.StatusActive {
 			return diagnostics.Viewer{}, fmt.Errorf("%w: the user is not active", errNoDiagnosticsViewer)
 		}
-		c := rb.Compile(rbac.CheckerInput{Roles: u.Roles, Interactive: actor.AuthMethod == string(auth.MethodSession)})
+		c := rb.Compile(rbac.CheckerInput{Roles: u.Roles, Interactive: auth.Method(actor.AuthMethod).Interactive()})
 		if c == nil {
 			return diagnostics.Viewer{}, fmt.Errorf("%w: no checker", errNoDiagnosticsViewer)
 		}

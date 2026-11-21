@@ -646,6 +646,47 @@ func TestDiagnosticsDownload_StatesAndHeaders(t *testing.T) {
 	}
 }
 
+// Deps.Retention is read on every download, not once at registration: a
+// hot-reload that lowers core.diagnostics.retention takes effect on the next
+// request, so the route never serves a bundle the prune task (which reads the
+// same value live) is about to delete. A zero value, and a nil Retention, are
+// the 24 h default.
+func TestDiagnosticsDownload_RetentionReadOnEachRequest(t *testing.T) {
+	r := newRig(t)
+	r.bundleFor("run-bruce", hhBruce)
+	p := hhAs(hhBruce, auth.MethodSession, manage)
+	keep := 3 * time.Hour
+	var reads int
+	// The bundle was written just now; the route's clock is two hours later.
+	r.mount(func(d *Deps) {
+		d.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+		d.Retention = func() time.Duration { reads++; return keep }
+	})
+	get := func() int { return r.do(p, "GET", "/diagnostics/run-bruce", "", "").status }
+	if got := get(); got != 200 {
+		t.Fatalf("2 h old, retention 3 h = %d, want 200", got)
+	}
+	keep = time.Hour
+	if got := get(); got != 410 {
+		t.Fatalf("2 h old, retention lowered to 1 h = %d, want 410 (the route served what the prune would delete)", got)
+	}
+	keep = 0
+	if got := get(); got != 200 {
+		t.Fatalf("2 h old, retention 0 = %d, want 200 (0 is the 24 h default)", got)
+	}
+	if reads != 3 {
+		t.Errorf("Retention read %d times for 3 downloads, want once per request", reads)
+	}
+	r.mount(func(d *Deps) { d.Now = func() time.Time { return time.Now().Add(2 * time.Hour) } })
+	if got := get(); got != 200 {
+		t.Fatalf("nil Retention = %d, want 200 (the default)", got)
+	}
+	r.mount(func(d *Deps) { d.Now = func() time.Time { return time.Now().Add(25 * time.Hour) } })
+	if got := get(); got != 410 {
+		t.Fatalf("nil Retention, 25 h old = %d, want 410", got)
+	}
+}
+
 func TestDiagnosticsDownload_AuditFailureStopsTheStream(t *testing.T) {
 	r := newRig(t)
 	r.bundleFor("run-bruce", hhBruce)

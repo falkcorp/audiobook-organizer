@@ -88,10 +88,14 @@ type Deps struct {
 	Enqueuer Enqueuer
 	// Bundles is the os.Root on core.diagnostics.dir.
 	Bundles *os.Root
-	// Retention is core.diagnostics.retention: a bundle older than it is 410
-	// even if the prune task has not removed it yet. Zero means the 24 h
+	// Retention reads core.diagnostics.retention: a bundle older than it is
+	// 410 even if the prune task has not removed it yet. It is called on
+	// every download, never cached, because the prune task reads the same
+	// live value each pass; a value read once at registration would serve a
+	// bundle after a hot-reload that lowered the retention had made the prune
+	// delete it. A zero or negative result, and a nil function, mean the 24 h
 	// default (diagnostics.DefaultRetention).
-	Retention time.Duration
+	Retention func() time.Duration
 	// Now is the clock; nil means time.Now.
 	Now   func() time.Time
 	Audit Recorder
@@ -134,7 +138,7 @@ type api struct {
 	runs    Runs
 	enq     Enqueuer
 	root    *os.Root
-	keep    time.Duration
+	keep    func() time.Duration
 	now     func() time.Time
 	audit   Recorder
 	red     *log.Redactor
@@ -455,7 +459,11 @@ func (a *api) download(w http.ResponseWriter, r *http.Request, c caller) {
 		a.fail(w, r, &httpapi.Error{Status: http.StatusConflict, Code: "bundle_not_ready", Detail: "the run has not produced its bundle"})
 		return
 	}
-	b, err := diagnostics.OpenBundle(a.root, run.File, a.keep, a.now())
+	var keep time.Duration // 0 is the default retention (OpenBundle)
+	if a.keep != nil {
+		keep = a.keep()
+	}
+	b, err := diagnostics.OpenBundle(a.root, run.File, keep, a.now())
 	switch {
 	case errors.Is(err, diagnostics.ErrExpired):
 		a.fail(w, r, &httpapi.Error{Status: http.StatusGone, Code: "bundle_expired", Detail: "the bundle is past its retention and was removed"})
