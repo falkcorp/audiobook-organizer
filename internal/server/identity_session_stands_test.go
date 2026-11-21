@@ -1,5 +1,5 @@
 // file: internal/server/identity_session_stands_test.go
-// version: 0.1.0
+// version: 0.1.1
 // guid: 22a60a7e-07cd-45b6-be66-143b43d5e2b5
 // last-edited: 2026-11-21
 
@@ -40,10 +40,19 @@ func TestSessionStillStands_IdentityAsksCore(t *testing.T) {
 	id := adoptIdentity(t, nil, nil, nil, alfred)
 	var asked []*coreauth.Principal
 	refusal := error(nil)
+	// shape picks what a refusing Refresh also returns beside its error, and
+	// whether an answer with no error carries a principal: stands means a
+	// principal AND no error, so every other pair must fail the stream.
+	shape := "error only"
 	id.Refresh = func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) {
 		asked = append(asked, p)
-		if refusal != nil {
+		switch {
+		case refusal != nil && shape == "principal and error":
+			return p, refusal
+		case refusal != nil:
 			return nil, refusal
+		case shape == "no principal, no error":
+			return nil, nil
 		}
 		return p, nil
 	}
@@ -76,6 +85,13 @@ func TestSessionStillStands_IdentityAsksCore(t *testing.T) {
 		require.False(t, ask(p), name)
 	}
 	refusal = nil
+
+	shape = "principal and error"
+	refusal = coreauth.ErrRevoked
+	require.False(t, ask(p), "an error refuses even when Refresh also hands a principal back")
+	shape, refusal = "no principal, no error", nil
+	require.False(t, ask(p), "an answer with no principal does not stand")
+	shape = "error only"
 
 	require.False(t, ask(nil), "no principal is not a first run: it fails closed, where HEAD's no-accounts bypass would stand")
 
