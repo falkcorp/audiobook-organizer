@@ -20,6 +20,7 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -72,6 +73,7 @@ type embeddingSpy struct {
 	// engine behaviour
 	embedErr      map[string]error
 	embedBooksErr error
+	readinessErr  error
 	asyncCount    int
 	asyncErr      error
 	scoreErr      error
@@ -223,6 +225,10 @@ func (s *embeddingSpy) EmbedBooksAsync(ctx context.Context) (string, int, error)
 }
 
 func (s *embeddingSpy) EmbedConcurrency(fallback int) int { return fallback }
+
+// EmbedReadiness is deliberately not recorded: the parity pins assert exact call
+// sequences, and the readiness check is not one of the HEAD calls.
+func (s *embeddingSpy) EmbedReadiness() error { return s.readinessErr }
 
 func (s *embeddingSpy) EmbedBooks(ctx context.Context, bookIDs []string) (map[string]dedupengine.EmbedStatus, error) {
 	s.rec("EmbedBooks " + strings.Join(bookIDs, ","))
@@ -650,6 +656,7 @@ func (e *wideEmbedEngine) EmbedBook(context.Context, string) (dedupengine.EmbedS
 
 func (e *wideEmbedEngine) EmbedBooksAsync(context.Context) (string, int, error) { return "", 0, nil }
 func (e *wideEmbedEngine) EmbedConcurrency(int) int                             { return e.width }
+func (e *wideEmbedEngine) EmbedReadiness() error                                { return nil }
 
 type wideEmbedStore struct{ books []database.BookCore }
 
@@ -715,6 +722,35 @@ func TestDedupEmbedding_EmbedScanErrorPaths(t *testing.T) {
 	_, err := embeddingRun(t, def, tasks.ModeLive, "")
 	require.ErrorContains(t, err, "load books: pebble gone")
 	require.Empty(t, spy.recorded())
+}
+
+// With routing on and no endpoint able to embed, the synchronous run fails once
+// at start with the dispatcher's refusal reasons, before any book is loaded or
+// embedded (the native kind and the shared core the v2 shell calls).
+func TestDedupEmbedding_EmbedScanFailsClosedWhenNoEndpointCanEmbed(t *testing.T) {
+	refusal := &aidispatch.NoCapableEndpointError{
+		Capability: "embed.text",
+		Refusals:   []aidispatch.Refusal{{EndpointID: "arkham", Reason: "serves nomic-embed-text, pinned to bge-m3"}},
+	}
+	spy, d := newEmbeddingSpy()
+	spy.readinessErr = refusal
+	def := (&Plugin{}).embedScanNative(d, nil)
+	_, err := embeddingRun(t, def, tasks.ModeLive, "")
+	require.ErrorIs(t, err, aidispatch.ErrNoCapableEndpoint)
+	require.ErrorContains(t, err, "arkham: serves nomic-embed-text, pinned to bge-m3")
+	require.Empty(t, spy.recorded(), "no EmbedBook call and no book load")
+
+	// The shared core, as the v2 shell runs it.
+	spy2, _ := newEmbeddingSpy()
+	spy2.readinessErr = refusal
+	_, err = embedScanCore(context.Background(), embedScanEnv{
+		kindEnv: headEnv(&mockReporter{}, true),
+		Store:   wideEmbedStore{books: []database.BookCore{{ID: "year-one", Title: "Batman: Year One"}}},
+		Engine:  spy2,
+	})
+	require.ErrorIs(t, err, aidispatch.ErrNoCapableEndpoint)
+	require.ErrorContains(t, err, "arkham: serves nomic-embed-text")
+	require.Empty(t, spy2.recorded())
 }
 
 func TestDedupEmbedding_EmbedScanRefusesUnwiredDeps(t *testing.T) {
@@ -918,6 +954,26 @@ func TestDedupEmbedding_ReembedBatchFailureIsTheRunsError(t *testing.T) {
 	def := (&Plugin{}).reembedEmbeddingsNative(d, nil)
 	_, err := embeddingRun(t, def, tasks.ModeLive, "")
 	require.ErrorContains(t, err, "embed batch at offset 0 (2 books): ollama unreachable")
+}
+
+// A live run with no endpoint able to embed fails before it deletes a single
+// stale vector (deleting then failing would leave the library without
+// embeddings); a dry run never asks the engine and still succeeds.
+func TestDedupEmbedding_ReembedFailsClosedBeforeDeletingWhenNoEndpointCanEmbed(t *testing.T) {
+	spy, d := newEmbeddingSpy()
+	spy.readinessErr = &aidispatch.NoCapableEndpointError{
+		Capability: "embed.text",
+		Refusals:   []aidispatch.Refusal{{EndpointID: "arkham", Reason: "cloud endpoint excluded: this call is local-only"}},
+	}
+	def := (&Plugin{}).reembedEmbeddingsNative(d, nil)
+	_, err := embeddingRun(t, def, tasks.ModeLive, "")
+	require.ErrorIs(t, err, aidispatch.ErrNoCapableEndpoint)
+	require.ErrorContains(t, err, "arkham: cloud endpoint excluded")
+	require.Empty(t, spy.recorded(), "no stale-row Delete and no EmbedBooks call")
+
+	_, err = embeddingRun(t, def, tasks.ModePreview, "")
+	require.NoError(t, err)
+	require.Empty(t, spy.recorded())
 }
 
 func TestDedupEmbedding_ReembedRefusesAMissingTargetModel(t *testing.T) {

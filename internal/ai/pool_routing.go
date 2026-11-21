@@ -230,6 +230,29 @@ func (c *EmbeddingClient) RoutedCapacity() int {
 	return c.embedDispatcher().Capacity(aidispatch.EmbedText)
 }
 
+// RoutedReadiness answers whether a synchronous embed fan-out can start. It
+// returns nil when calls are not pool-routed (nil client, no pool, routing
+// off): the legacy single-backend path has its own failure handling and
+// RoutedCapacity's 0 there means "use the fallback", not "refuse". When routing
+// is active and no endpoint can serve the pinned embedding model it returns a
+// *aidispatch.NoCapableEndpointError (errors.Is ErrNoCapableEndpoint) whose
+// text lists each refused endpoint and why, so an op can fail once at start
+// instead of failing every book. Candidates also drops endpoints in failure
+// cooldown, so a pool whose only embed endpoint is cooling down is refused too.
+func (c *EmbeddingClient) RoutedReadiness() error {
+	if c == nil || !c.pool.IsActive() {
+		return nil
+	}
+	eps, refusals, err := c.embedDispatcher().Candidates(aidispatch.EmbedText)
+	if err != nil {
+		return err
+	}
+	if len(eps) == 0 {
+		return &aidispatch.NoCapableEndpointError{Capability: aidispatch.EmbedText.ID(), Refusals: refusals}
+	}
+	return nil
+}
+
 func (c *EmbeddingClient) embedRouted(ctx context.Context, texts []string) ([][]float32, error) {
 	d := c.embedDispatcher()
 	return aidispatch.Call(ctx, d, aidispatch.EmbedText, func(ctx context.Context, t aidispatch.Target) ([][]float32, error) {

@@ -430,3 +430,67 @@ func TestRoutedParse_MissingSecretFailsOver(t *testing.T) {
 		t.Fatalf("cloud %d local %d; want 0 and 1", cloud.chats.Load(), local.chats.Load())
 	}
 }
+
+// RoutedReadiness is nil whenever calls are not pool-routed, and while at least
+// one endpoint can serve the pinned model.
+func TestRoutedReadiness_NilWhenNotRoutedOrServed(t *testing.T) {
+	var nilClient *EmbeddingClient
+	if err := nilClient.RoutedReadiness(); err != nil {
+		t.Fatalf("nil client: %v", err)
+	}
+	if err := NewEmbeddingClientWithOptions("ollama", "bge-m3", "").RoutedReadiness(); err != nil {
+		t.Fatalf("no pool: %v", err)
+	}
+
+	// Routing off: even a pool with no usable endpoint is not this client's concern.
+	off := newTestPool(ep("ras-al-ghul", "http://127.0.0.1:1/v1", 1))
+	off.active.Store(false)
+	if err := NewEmbeddingClientWithOptions("ollama", "bge-m3", "").WithPoolRouting(off.PoolSource).RoutedReadiness(); err != nil {
+		t.Fatalf("routing off: %v", err)
+	}
+
+	on := newTestPool(ep("gordon", "http://127.0.0.1:2/v1", 1, et))
+	if err := NewEmbeddingClientWithOptions("ollama", "bge-m3", "").WithPoolRouting(on.PoolSource).RoutedReadiness(); err != nil {
+		t.Fatalf("routing on with a usable endpoint: %v", err)
+	}
+}
+
+// Routing on with endpoints that are unticked or serve another model: the error
+// is ErrNoCapableEndpoint and names every refused endpoint.
+func TestRoutedReadiness_RefusalListsEachEndpoint(t *testing.T) {
+	unticked := ep("bane", "http://127.0.0.1:3/v1", 1, fp)
+	otherModel := ep("joker", "http://127.0.0.1:4/v1", 2, et)
+	otherModel.EmbedModel = "nomic-embed-text"
+	c := NewEmbeddingClientWithOptions("ollama", "bge-m3", "").WithPoolRouting(newTestPool(unticked, otherModel).PoolSource)
+
+	err := c.RoutedReadiness()
+	if !errors.Is(err, aidispatch.ErrNoCapableEndpoint) {
+		t.Fatalf("err = %v, want ErrNoCapableEndpoint", err)
+	}
+	for _, id := range []string{"bane", "joker"} {
+		if !strings.Contains(err.Error(), id+": ") {
+			t.Fatalf("error %q does not name endpoint %q with a reason", err, id)
+		}
+	}
+	// RoutedCapacity keeps its contract: 0, indistinguishable from "not routed".
+	if got := c.RoutedCapacity(); got != 0 {
+		t.Fatalf("RoutedCapacity = %d, want 0", got)
+	}
+}
+
+// A routed pool with no endpoints at all is refused too, and an endpoint in
+// failure cooldown is refused with that reason.
+func TestRoutedReadiness_EmptyPoolAndCooldown(t *testing.T) {
+	empty := NewEmbeddingClientWithOptions("ollama", "bge-m3", "").WithPoolRouting(newTestPool().PoolSource)
+	if err := empty.RoutedReadiness(); !errors.Is(err, aidispatch.ErrNoCapableEndpoint) {
+		t.Fatalf("empty pool: err = %v, want ErrNoCapableEndpoint", err)
+	}
+
+	pool := newTestPool(ep("robin", "http://127.0.0.1:5/v1", 1, et))
+	c := NewEmbeddingClientWithOptions("ollama", "bge-m3", "").WithPoolRouting(pool.PoolSource)
+	pool.health.MarkFailure("robin")
+	err := c.RoutedReadiness()
+	if !errors.Is(err, aidispatch.ErrNoCapableEndpoint) || !strings.Contains(err.Error(), "robin: ") {
+		t.Fatalf("cooldown: err = %v, want ErrNoCapableEndpoint naming robin", err)
+	}
+}

@@ -136,6 +136,10 @@ type reembedEmbeddingsWriter interface {
 // the fresh vectors through the engine's own store).
 type reembedEmbeddingsEngine interface {
 	EmbedBooks(ctx context.Context, bookIDs []string) (map[string]dedupengine.EmbedStatus, error)
+	// EmbedReadiness is non-nil when pool routing is on and no endpoint can
+	// serve the pinned embedding model; a live run fails on it before deleting
+	// any stale vector.
+	EmbedReadiness() error
 }
 
 // reembedEmbeddingsEnv is what the core takes from its shell (rules R2 and R10).
@@ -290,6 +294,16 @@ func reembedEmbeddingsCore(ctx context.Context, env reembedEmbeddingsEnv) (reemb
 		env.Logger.Info("reembed-embeddings: dry-run only; no changes written",
 			"would_reembed", needCount)
 		return res, nil
+	}
+
+	// Fail closed before Phase 2 deletes anything: with routing on and no
+	// endpoint able to serve the target model, every batch would delete the
+	// stale vectors and then fail to embed. A run with nothing to re-embed needs
+	// no endpoint, so it is not refused.
+	if needCount > 0 {
+		if err := env.Engine.EmbedReadiness(); err != nil {
+			return res, fmt.Errorf("reembed-embeddings: no endpoint can embed: %w", err)
+		}
 	}
 
 	// --- Phase 2: delete stale vectors + re-embed, in batches ---

@@ -1,0 +1,3 @@
+### Fixed
+
+- `dedup.embed-scan` (synchronous path) and a live `dedup.reembed-embeddings` now fail once at start when AI endpoint routing is on and no endpoint can serve the pinned embedding model, with an error that lists each endpoint and why it was refused. Before, the scan fell back to four workers and logged one `NoCapableEndpointError` per book across the whole library. The re-embed check runs before any stale vector is deleted. A dry run is unaffected. Two behaviours to know: an embed endpoint that is in failure cooldown at start counts as unusable, and a scan where every book is already cached now also fails when no endpoint is usable, where it used to succeed without contacting one.

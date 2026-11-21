@@ -2732,6 +2732,15 @@ func (de *Engine) EmbedConcurrency(fallback int) int {
 	return fallback
 }
 
+// EmbedReadiness is nil when a synchronous embed fan-out can start: calls are
+// not pool-routed, or at least one routed endpoint can serve the pinned
+// embedding model. Otherwise it is the dispatcher's refusal (each endpoint and
+// why), so the op can fail once at start. EmbedBooksAsync (the batch API) is
+// never pool-routed and does not need it.
+func (de *Engine) EmbedReadiness() error {
+	return de.embedClient.RoutedReadiness()
+}
+
 // resolvedBookThresholds returns the active book high/low cosine thresholds for
 // the wired embedding client's model (DEDUP-2/3).
 //
