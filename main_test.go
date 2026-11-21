@@ -9,11 +9,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/books"
+	"github.com/falkcorp/mediacore/kernel"
 )
 
 func TestRunSuccess(t *testing.T) {
@@ -134,9 +138,12 @@ func TestRunPrintCapabilities(t *testing.T) {
 // TestRunPrintStorageLevels (05-storage §5S.3.7; R1-23): the image probe and
 // R1-27's rollback guard run a binary with --print-storage-levels and parse
 // stdout as the JSON level vector it serves, so stdout must be exactly that
-// object and cobra must never run. Release R1 raises no level (09 §9.2.2):
-// core and books both serve level 0. A trailing --db PATH (the brief's
-// acceptance command) is accepted and ignored: the flag opens nothing.
+// object and cobra must never run. Release R1 raised no level; F3's flip
+// (09 §9.2.2, row M7) raises books to its flipped manifest's level and core to
+// kernel.CoreCutoverLevel, and the vector names exactly those, since the
+// rollback guard compares them with the store's stamps. A trailing --db PATH
+// (the brief's acceptance command) is accepted and ignored: the flag opens
+// nothing.
 func TestRunPrintStorageLevels(t *testing.T) {
 	for _, args := range [][]string{
 		{"audiobook-organizer", "--print-storage-levels"},
@@ -205,11 +212,15 @@ func runPrintStorageLevels(t *testing.T, args []string) {
 	if err := json.Unmarshal(out, &levels); err != nil {
 		t.Fatalf("stdout %q is not a JSON object: %v", out, err)
 	}
-	if len(levels) != 2 || levels["core"] != 0 || levels["books"] != 0 {
-		t.Fatalf("levels = %v, want core and books at 0 (R1 raises no level)", levels)
+	want := map[string]int{
+		"books": books.FastExitModule().Manifest().Storage.Level,
+		"core":  kernel.CoreCutoverLevel,
 	}
-	if _, ok := levels["books"]; !ok {
-		t.Fatalf("levels = %v, want a books entry", levels)
+	if want["books"] < 1 {
+		t.Fatalf("the flipped books manifest declares level %d: the flip raises no level and this test checks nothing", want["books"])
+	}
+	if !maps.Equal(levels, want) {
+		t.Fatalf("levels = %v, want %v (the flip's raised levels)", levels, want)
 	}
 }
 
