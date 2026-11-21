@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -64,6 +65,13 @@ type identityBoot struct {
 	settings   func() auth.Settings
 	stateFiles auth.StateFiles
 	p4d        p4dStepsResult
+
+	// svc is what P5 built (buildIdentityServices); mu guards compat, the late
+	// AuthCompat handles by method name that a module's Registrar.AuthMethod
+	// creates at P6 and registerCompat binds at P7.
+	svc    identityServices
+	mu     sync.Mutex
+	compat map[auth.Method]*lateCompat
 }
 
 // identityModules are the RBAC declarations fed to rbac's Declarer at P5 and

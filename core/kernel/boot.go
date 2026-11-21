@@ -167,6 +167,11 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		if describe {
 			return nil
 		}
+		if k.identityBootDeclared() {
+			if err := k.identityConsume(ctx); err != nil {
+				return err
+			}
+		}
 		return k.buildTasks(ctx)
 	}); err != nil {
 		return nil, err
@@ -313,6 +318,11 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	// module's legacy prefix over it collides at P7 (05-http-api §4.9). Core
 	// routes join it as their packages land.
 	k.router.CoreGroup()
+	// The identity boot's services (identity_p5.go), after the Provider and the
+	// router they hang on. Describe opens no store and builds none.
+	if !describe && k.identityBootDeclared() {
+		return k.buildIdentityServices(ctx)
+	}
 	return nil
 }
 
@@ -546,6 +556,11 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 			k.perimeterStop()
 		}
 		if err := k.stopCoreServices(cctx, atLeastFloor(deadline)); err != nil {
+			errs = append(errs, err)
+		}
+		// The events bus drains after the executor and before the journal and
+		// the store its handlers read; a no-op when Run's stop already did.
+		if err := k.closeEvents(cctx, deadline); err != nil {
 			errs = append(errs, err)
 		}
 		if k.provider != nil {
