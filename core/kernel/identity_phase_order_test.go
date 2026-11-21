@@ -55,7 +55,7 @@ func assertGroupsInOrder(t *testing.T, entered []string, groups ...[]string) {
 // in order and P7 after them: the re-apply's served_boot, then step 4's boot
 // writes, then P7's seed commit (06 section 6.5.1's writer table is in this
 // order). A restore boot adds the restore line first, then the restore hooks'
-// own commits, their completion record, and only then served_boot.
+// own commits, their report, their completion record, and only then served_boot.
 func TestIdentityBoot_PhasesRunInTheSpecsOrder(t *testing.T) {
 	t.Run("a fresh boot", func(t *testing.T) {
 		h, c := identityHost(t)
@@ -78,6 +78,7 @@ func TestIdentityBoot_PhasesRunInTheSpecsOrder(t *testing.T) {
 		assertGroupsInOrder(t, labels.take(),
 			[]string{labelReapplyRestoreLine},
 			[]string{labelHookAuth, labelHookAudit},
+			[]string{labelHooksReport},
 			[]string{labelHooksMarkHooked},
 			[]string{labelReapplyServedBoot},
 			auth.BootWritesLabels(),
