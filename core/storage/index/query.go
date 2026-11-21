@@ -185,9 +185,11 @@ func group(op Op, qs []Query) Query {
 // query-level weight; Field.Boost is the field-level default. The two do not
 // multiply: on a Match node an explicit Boost replaces the field's declared
 // one (so "title:joker^2" scores 2 on a field declared 3, as HEAD's search
-// does), and on every other node it is the only weight. Boosting a node
-// twice keeps the last weight. A Boost on a QueryString weights the whole
-// parsed string, on top of any ^n written inside it.
+// does), and on every other leaf it is the only weight. Boosting a node
+// twice keeps the last weight. On a group (And, Or, Not) or a QueryString the
+// weight multiplies the weight of every scored leaf under it, an inner Boost
+// or a ^n written inside the string included (a Not's excluded operand scores
+// nothing and is not weighted).
 //
 // A caller that translates a tree which already carries every weight (HEAD's
 // bleve tree, fan-out weights included) declares no Field.Boost and emits a
