@@ -61,7 +61,7 @@ func TestCutover_ClocksMergedPerKind(t *testing.T) {
 		}
 		full, ok := clockOf(ctx, t, s, "books.library.scan-full")
 		if !ok || !full.LastDue.Equal(t4) {
-			t.Errorf("books.library.scan-full clock = %+v (%v), want due %v (the latest of the interval clock and the sweep's)", full, ok, t4)
+			t.Errorf("books.library.scan-full clock = %+v (%v), want due %v (the sweep's own clock; its hourly due-check tick is no clock)", full, ok, t4)
 		}
 		poll, ok := clockOf(ctx, t, s, "core.ai.batch-poll")
 		if !ok || !poll.LastDue.Equal(t2) {
@@ -274,13 +274,21 @@ func TestCutover_ClockRowTakenByItsGroupIsLeftAlone(t *testing.T) {
 // would import a clock built from its own row alone, over the driver's merged
 // one. The worker re-reads its own row last and leaves a group already taken:
 // it writes no clock.
+//
+// No group of HEAD's rows reaches that guard today: the race needs a group whose
+// lowest key (the driver) is read after another of its rows, so an exact key
+// (the sweep's or the window's clock) grouped with an interval clock. The only
+// such pair was library_scan_full's due-check tick with the sweep's clock, and
+// the tick is no clock (TestCutover_FullSweepTickIsNotItsClock). The guard
+// stays for a later mapping that adds one, and this test drives it with a
+// synthetic view: the window's group with a v3 schedule state of its def, the
+// driver's row hidden from the scan and the worker's own row from its re-read.
 func TestCutover_ClockGroupDriverCommitsBetweenReads(t *testing.T) {
 	early := time.Date(2026, 11, 3, 1, 0, 0, 0, time.UTC)
-	late := early.Add(48 * time.Hour)
-	const sweep, tick = "setting:library_scan_full_last_run", "setting:scheduled_task_last_tick.library_scan_full"
+	const sched, window = "opv3:sched:maintenance.window", "setting:maintenance_window_last_run"
 	raw := map[string]string{}
-	setting(raw, "library_scan_full_last_run", early.Format(time.RFC3339))
-	setting(raw, "scheduled_task_last_tick.library_scan_full", late.Format(time.RFC3339))
+	raw[sched] = schedRowJSON("maintenance.window", &early, nil, 0)
+	setting(raw, "maintenance_window_last_run", "2026-11-04")
 	r := newRig(t, withRaw(raw), func(r *rig) {
 		r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
 	})
@@ -292,16 +300,25 @@ func TestCutover_ClockGroupDriverCommitsBetweenReads(t *testing.T) {
 		if handed != 1 {
 			return inner(ctx, kv, w)
 		}
-		// The runner hands the higher row (the interval clock's) first, as a
-		// parallel shard can, and the driver's commit lands after the worker's
-		// scan of the interval clocks and before its read of the sweep key: the
-		// driver's row and the worker's own are gone from every point read.
+		// The runner hands the higher row (the window's) first, as a parallel
+		// shard can, and the driver's commit lands after the worker's read of
+		// the window key and before its re-read: the driver's row is gone from
+		// the scan, and the worker's own row from the re-read.
+		gets := 0
+		r.scanHide = func(key string) bool { return key == sched }
 		r.view = func(key string) ([]byte, bool, error) {
-			return nil, key == sweep || key == tick, storage.ErrNotFound
+			if key != window {
+				return nil, false, nil
+			}
+			gets++
+			return nil, gets > 1, storage.ErrNotFound
 		}
-		defer func() { r.view = nil }()
-		err := inner(ctx, storage.KV{Key: []byte(tick), Value: []byte(raw[tick])}, w)
-		if n := r.imp.clockCalls("books.library.scan-full"); n != 0 {
+		defer func() { r.view, r.scanHide = nil, nil }()
+		err := inner(ctx, storage.KV{Key: []byte(window), Value: []byte(raw[window])}, w)
+		if gets < 2 {
+			t.Errorf("the worker read its own row %d times, want the group read and the re-read", gets)
+		}
+		if n := r.imp.clockCalls("core.window.nightly"); n != 0 {
 			t.Errorf("%d clock imports from a worker that read a group the driver had already taken", n)
 		}
 		return err
@@ -310,5 +327,94 @@ func TestCutover_ClockGroupDriverCommitsBetweenReads(t *testing.T) {
 	// there, which Verify reports.
 	if _, err := r.runWith(t, r.seed(t), dm); err == nil || !strings.Contains(err.Error(), "still present") {
 		t.Errorf("boot = %v, want Verify's finding for the rows the swapped call never handled", err)
+	}
+}
+
+// TestCutover_FullSweepTickIsNotItsClock: library_scan_full's interval clock is
+// HEAD's hourly due check (fullSweepDueCheck stamps it every hour whether or not
+// a sweep runs); the weekly sweep's clock is library_scan_full_last_run alone.
+// A tick later than the last sweep (the live shape: the check ran after the
+// sweep) leaves the sweep due at last run plus a period, not at cutover plus a
+// period; a tick alone imports no clock. The tick row is dropped, not
+// quarantined.
+func TestCutover_FullSweepTickIsNotItsClock(t *testing.T) {
+	lastRun := time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC)
+	tick := time.Date(2026, 11, 5, 22, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		sweep   bool
+		wantDue time.Time
+	}{
+		{"tick after the last sweep", true, lastRun},
+		{"tick alone", false, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := map[string]string{}
+			setting(raw, "scheduled_task_last_tick.library_scan_full", tick.Format(time.RFC3339))
+			if tc.sweep {
+				setting(raw, "library_scan_full_last_run", lastRun.Format(time.RFC3339))
+			}
+			r := newRig(t, withRaw(raw))
+			r.runObserve(t, func(ctx context.Context, s *snap) {
+				if len(s.Left) != 0 {
+					t.Errorf("source rows left: %v", keysOf(s.Left))
+				}
+				if len(s.Quarantine) != 0 {
+					t.Errorf("quarantine = %+v, want none", s.Quarantine)
+				}
+				full, ok := clockOf(ctx, t, s, "books.library.scan-full")
+				if ok != tc.sweep || !full.LastDue.Equal(tc.wantDue) {
+					t.Errorf("books.library.scan-full clock = %+v (%v), want due %v (present %v)", full, ok, tc.wantDue, tc.sweep)
+				}
+			})
+		})
+	}
+}
+
+// TestCutover_DBOptimizeClockFeedsBothHalves: HEAD's db-optimize compacted the
+// main store and the two aux stores in one run; core splits it into
+// core.storage.compact and books.maintenance.aux-store-compact. Every
+// db-optimize clock (the db_optimize interval clock, and the v3 schedule state
+// of the def or of its former ID) was the last run of both, so both kinds get
+// the same merged clock and each fires at that run plus its period, not one
+// period after cutover.
+func TestCutover_DBOptimizeClockFeedsBothHalves(t *testing.T) {
+	tick := time.Date(2026, 11, 2, 2, 0, 0, 0, time.UTC)
+	fire := tick.Add(5 * 24 * time.Hour)
+	for _, tc := range []struct {
+		name string
+		rows func(raw map[string]string)
+		want tasks.Clock
+	}{
+		{"interval clock", func(raw map[string]string) {
+			setting(raw, "scheduled_task_last_tick.db_optimize", tick.Format(time.RFC3339))
+		}, tasks.Clock{LastDue: tick}},
+		{"interval clock and a later v3 schedule state", func(raw map[string]string) {
+			setting(raw, "scheduled_task_last_tick.db_optimize", tick.Format(time.RFC3339))
+			raw["opv3:sched:maintenance.db-optimize"] = schedRowJSON("maintenance.db-optimize", &fire, nil, 1)
+		}, tasks.Clock{LastDue: fire, LastFire: fire, LastRun: fire, Missed: 1}},
+		{"the former ID's schedule state", func(raw map[string]string) {
+			raw["opv3:sched:scheduler.db-optimize"] = schedRowJSON("scheduler.db-optimize", &fire, nil, 0)
+		}, tasks.Clock{LastDue: fire, LastFire: fire, LastRun: fire}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := map[string]string{}
+			tc.rows(raw)
+			r := newRig(t, withRaw(raw))
+			r.runObserve(t, func(ctx context.Context, s *snap) {
+				if len(s.Left) != 0 || len(s.Quarantine) != 0 {
+					t.Errorf("source rows left %v, quarantined %+v", keysOf(s.Left), s.Quarantine)
+				}
+				for _, k := range []tasks.Kind{"core.storage.compact", "books.maintenance.aux-store-compact"} {
+					c, ok := clockOf(ctx, t, s, k)
+					if !ok || !c.LastDue.Equal(tc.want.LastDue) || !c.LastFire.Equal(tc.want.LastFire) || !c.LastRun.Equal(tc.want.LastRun) || c.Missed != tc.want.Missed {
+						t.Errorf("%s clock = %+v (%v), want %+v", k, c, ok, tc.want)
+					}
+					if n := r.imp.clockCalls(k); n != 1 {
+						t.Errorf("%s imported %d times, want once", k, n)
+					}
+				}
+			})
+		})
 	}
 }
