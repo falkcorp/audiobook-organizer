@@ -27,7 +27,9 @@ import (
 // filesystems, and leaves everything else where it is, naming each one it
 // leaves in a warning: a staging directory with anything beside staging/,
 // one that is a symbolic link or holds one, one an intent was linked for
-// (silently: the swap's own), and an entry that is not a directory.
+// (its journal is there; silently: the swap's own), one whose restore/<id>
+// Stage created and never linked an intent into (no journal, not in the
+// slot), and an entry that is not a directory.
 func TestRestoreSweepsOrphanStaging(t *testing.T) {
 	h, _ := newCrossDeviceHost(t)
 	name := h.completedUpgrade()
@@ -42,6 +44,7 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 		innerLink   = "20261101T010000Z-keep0004"
 		linked      = "20261101T010000Z-keep0005"
 		notDir      = "20261101T010000Z-keep0006"
+		stopped     = "20261101T010000Z-keep0007"
 	)
 	write(t, filepath.Join(stateAside, orphanState, "staging/state/encryption_key"), "joker", 0o600)
 	write(t, filepath.Join(dbAside, orphanDB, "staging/db/MANIFEST-000001"), "penguin", 0o600)
@@ -62,7 +65,9 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(stateAside, linked, "staging/state/encryption_key"), "harley", 0o600)
-	if err := os.MkdirAll(restorejournal.JournalDir(h.state, linked), 0o700); err != nil {
+	write(t, filepath.Join(restorejournal.JournalDir(h.state, linked), restorejournal.JournalName), "{}\n", 0o600)
+	write(t, filepath.Join(stateAside, stopped, "staging/state/encryption_key"), "poison-ivy", 0o600)
+	if err := os.MkdirAll(restorejournal.JournalDir(h.state, stopped), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	write(t, filepath.Join(stateAside, notDir), "mad-hatter", 0o600)
@@ -94,6 +99,7 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 		{filepath.Join(stateAside, innerLink), "staging/state/encryption_key", true},
 		{filepath.Join(stateAside, linked), "staging/state/encryption_key", false},
 		{filepath.Join(stateAside, notDir), "", true},
+		{filepath.Join(stateAside, stopped), "staging/state/encryption_key", true},
 	} {
 		if _, err := os.Lstat(filepath.Join(c.root, c.kept)); err != nil {
 			t.Errorf("%s was removed (%v), want it left in place", filepath.Join(c.root, c.kept), err)

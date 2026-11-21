@@ -87,16 +87,22 @@ func (d *syncedDir) Sync() error {
 }
 
 // assertNoOrphanStaging: every restore's private directory on either side
-// is one an intent was linked for (restore/<id> exists). One without is a
-// restore's staging that nothing will ever remove.
+// is one an intent was linked for: restore/<id> holds its journal, or the
+// slot names it. One without is a restore's staging that nothing will ever
+// remove.
 func (h *swapHost) assertNoOrphanStaging(what string) {
 	h.t.Helper()
+	st := h.slot()
 	for _, dir := range []string{filepath.Dir(h.db), h.state} {
 		entries, _ := os.ReadDir(filepath.Join(dir, restorejournal.AsideDirName))
 		for _, e := range entries {
-			if _, err := os.Stat(restorejournal.JournalDir(h.state, e.Name())); errors.Is(err, os.ErrNotExist) {
+			id := e.Name()
+			if st.Pending != nil && st.Pending.ID == id || slices.ContainsFunc(st.InFlight, func(s restorejournal.SlotEntry) bool { return s.ID == id }) {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(restorejournal.JournalDir(h.state, id), restorejournal.JournalName)); errors.Is(err, os.ErrNotExist) {
 				h.t.Errorf("%s: %s is left with no intent linked for it",
-					what, filepath.Join(dir, restorejournal.AsideDirName, e.Name()))
+					what, filepath.Join(dir, restorejournal.AsideDirName, id))
 			}
 		}
 	}
