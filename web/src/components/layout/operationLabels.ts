@@ -1,5 +1,5 @@
 // file: web/src/components/layout/operationLabels.ts
-// version: 1.0.0
+// version: 1.0.1
 // guid: e41b7c08-5a2d-4f93-8c16-0d9e3a72b5f4
 // last-edited: 2026-11-21
 
@@ -102,7 +102,7 @@ export const OPERATION_DEF_LABELS: Readonly<Record<string, string>> = {
   'library.import': 'Manual Import',
   'library.organize': 'Organize',
   'library.organize-when-scanned': 'Organize After Scan',
-  'library.purge-soft-deleted': 'Purge soft-deleted books (trash)',
+  'library.purge-soft-deleted': 'Purge soft-deleted books on demand (dry run by default)',
   'library.scan': 'Library Scan',
   'library.size-refresh': 'Library Size Refresh',
   'library.transcode': 'Transcode to M4B',
@@ -190,7 +190,7 @@ export const OPERATION_DEF_LABELS: Readonly<Record<string, string>> = {
   'maintenance.probe-directory-books': 'Probe directory-shaped books (tier 2 · re-classify)',
   'maintenance.prune-ai-journal': 'Prune AI result journal',
   'maintenance.prune-book-snapshots': 'Prune Book Version Snapshots',
-  'maintenance.purge-deleted': 'Purge soft-deleted books (retention)',
+  'maintenance.purge-deleted': 'Purge soft-deleted books past retention',
   'maintenance.purge-empty-authors': 'Purge empty authors',
   'maintenance.purge-empty-narrators': 'Purge empty narrators',
   'maintenance.purge-old-logs': 'Prune old logs',
@@ -297,7 +297,7 @@ export const OPERATION_DEF_LABELS: Readonly<Record<string, string>> = {
   'scheduler.db-optimize': 'Optimize database',
   'scheduler.dedup-llm-review': 'Dedup AI Review',
   'scheduler.metadata-refresh': 'Metadata refresh scan',
-  'scheduler.purge-deleted': 'Purge soft-deleted books (retention)',
+  'scheduler.purge-deleted': 'Purge soft-deleted books past retention',
   'scheduler.resolve-production-authors': 'Resolve production company authors',
   'scheduler.temp-file-cleanup': 'Clean orphaned temp files',
   'scheduler.tombstone-cleanup': 'Resolve author tombstone chains',

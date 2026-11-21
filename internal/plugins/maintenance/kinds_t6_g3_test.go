@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/kinds_t6_g3_test.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: 9aaa6b83-dcdb-4af3-95bd-23f236575c90
-// last-edited: 2026-11-17
+// last-edited: 2026-11-21
 
 package maintenance
 
@@ -648,7 +648,7 @@ func t6g3ExpectedWrites(t *testing.T, headID string) []string {
 }
 
 var t6g3Wants = []t6g3Want{
-	{"maintenance.purge-deleted", "Purge soft-deleted books", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, ""},
+	{"maintenance.purge-deleted", "Purge soft-deleted books past retention", tasks.ResumeDrop, "books.maintenance.purge-deleted", 2 * time.Hour, 0, false, ""},
 	{"maintenance.tombstone-cleanup", "Resolve author tombstone chains", tasks.ResumeDrop, "books.maintenance.tombstone-cleanup", time.Hour, 0, false, ""},
 	{"maintenance.temp-file-cleanup", "Clean orphaned temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, ""},
 	{"maintenance.transcode-temp-cleanup", "Clean stale transcode temp files", tasks.ResumeDrop, "books.maintenance.temp-file-cleanup", time.Hour, time.Hour, false, ""},

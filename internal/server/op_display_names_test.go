@@ -1,12 +1,11 @@
 // file: internal/server/op_display_names_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 8d4b2f61-3e07-4a95-b1c8-52e9a7d03f14
 // last-edited: 2026-11-21
 
 package server
 
 import (
-	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -45,14 +44,14 @@ func registeredDisplayNameCollisions(t *testing.T) map[string][]string {
 	return out
 }
 
-// BASELINE, replaced in the commit that renames the two defs below: HEAD
-// registers exactly one shared DisplayName.
-func TestOpDisplayNames_BaselineCollisions(t *testing.T) {
-	got := registeredDisplayNameCollisions(t)
-	want := map[string][]string{
-		"purge soft-deleted books": {"library.purge-soft-deleted", "maintenance.purge-deleted"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("shared DisplayNames = %v, want %v", got, want)
+// TestOpDisplayNames_NoTwoDefsShareOne fails when two registered defs carry the
+// same DisplayName (compared ignoring case and surrounding space). It replaces
+// the baseline that pinned library.purge-soft-deleted and maintenance.purge-deleted
+// sharing "Purge soft-deleted books": the first is the operator's dry-run-first
+// purge of the trash, the second the nightly, unattended purge of books past
+// retention, and the UI could not tell them apart.
+func TestOpDisplayNames_NoTwoDefsShareOne(t *testing.T) {
+	if got := registeredDisplayNameCollisions(t); len(got) != 0 {
+		t.Fatalf("registered defs share a DisplayName (name: def IDs): %v", got)
 	}
 }

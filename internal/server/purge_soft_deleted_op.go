@@ -1,7 +1,7 @@
 // file: internal/server/purge_soft_deleted_op.go
-// version: 1.2.0
+// version: 1.2.1
 // guid: 2e7a9c41-5d08-4b63-8f1a-6c3d0b9e4a72
-// last-edited: 2026-11-19
+// last-edited: 2026-11-21
 
 package server
 
@@ -200,7 +200,7 @@ func (s *Server) purgeSoftDeletedDef() opsregistry.OperationDef {
 		Preview:         opsregistry.PreviewSpec{Params: PurgeSoftDeletedOpParams{}},
 		Liveness:        opsregistry.LivenessManual,
 		Plugin:          "library",
-		DisplayName:     "Purge soft-deleted books",
+		DisplayName:     "Purge soft-deleted books on demand (dry run by default)",
 		Description:     "Permanently removes soft-deleted books from the trash. A book is purged only when it owns no book_file rows, is not the retired shell of a combine that can still be undone, and has no listening state it cannot carry to a live version. Dry run by default: reports how many would be purged and how many are kept, by reason, and changes nothing. A real run must be given the trashed_before the preview returned and takes no book trashed after it. The result breaks the trash down by reason.",
 		DefaultPriority: opsregistry.PriorityNormal,
 		Cancellable:     true,
