@@ -40,10 +40,9 @@ const headStoreName = "audiobooks.pebble"
 // state directory are: ABO's identity, the compiled state-directory default
 // and the config layers. Options and OfflineOptions both start from it, so
 // serve and every offline command resolve through one rule.
-func bootOptions(boot BootInputs, flip bool) app.Options {
-	retired, bindings, passthrough := flipConfigNames(flip)
+func bootOptions(boot BootInputs) app.Options {
+	retired, bindings, passthrough := flipConfigNames()
 	return app.Options{
-		CoreConfigBoot:     true,
 		AppID:              AppID,
 		StateDir:           config.DefaultSecureStateDir,
 		ConfigFile:         boot.ConfigFile,
@@ -70,7 +69,7 @@ func ResolveBootPaths(ctx context.Context, mod module.Module, boot BootInputs) (
 	if err := refuseHEADKeyedConfigFile(boot.ConfigFile); err != nil {
 		return "", "", err
 	}
-	dbPath, stateDir, err = app.ResolveStorage(ctx, bootOptions(boot, flipDeclared), []module.Module{mod}, "")
+	dbPath, stateDir, err = app.ResolveStorage(ctx, bootOptions(boot), []module.Module{mod}, "")
 	if err != nil {
 		return "", "", err
 	}
@@ -178,7 +177,7 @@ func refuseHEADKeyedConfigFile(configFile string) error {
 // flipRetiredFileKeys are the top-level operator-file keys HEAD read that the
 // flip retires, from the same list core's boot is given.
 func flipRetiredFileKeys() []string {
-	retired, _, _ := flipConfigNames(flipDeclared)
+	retired, _, _ := flipConfigNames()
 	var out []string
 	for _, r := range retired {
 		if r.File {

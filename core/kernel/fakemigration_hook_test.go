@@ -97,7 +97,7 @@ func TestFakeMigration_BadDurationFailsTheBoot(t *testing.T) {
 	for _, raw := range []string{"twelve", "12", "0s", "-1m"} {
 		t.Run(raw, func(t *testing.T) {
 			t.Setenv(fakeMigrationEnv, raw)
-			_, err := New(t.Context(), testConfig(t))
+			_, err := newK(t, testConfig(t))
 			if err == nil || !strings.Contains(err.Error(), fakeMigrationEnv) {
 				t.Fatalf("New with %s=%q = %v, want an error naming the variable", fakeMigrationEnv, raw, err)
 			}
@@ -114,7 +114,7 @@ func TestFakeMigration_StopsWithTheBootContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
-			_, err := New(ctx, testConfig(t))
+			_, err := newKCtx(t, ctx, testConfig(t))
 			done <- err
 		}()
 		time.Sleep(90 * time.Second)

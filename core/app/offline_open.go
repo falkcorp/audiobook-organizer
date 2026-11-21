@@ -60,7 +60,7 @@ func offlineConfig(ctx context.Context, opts Options, mods []module.Module, owne
 		return kernel.Config{}, err
 	}
 	c.StorageFS = opts.StorageFS
-	if c.StoragePath, c.StateDir, err = offlineStoragePath(ctx, opts, c, mods, owner); err != nil {
+	if c.StoragePath, c.StateDir, err = kernel.ResolveStorage(ctx, c, owner); err != nil {
 		return kernel.Config{}, err
 	}
 	if declaresStorage(mods) {
@@ -115,26 +115,12 @@ func absPath(p string) (string, error) {
 	return filepath.Abs(p)
 }
 
-// offlineStoragePath is the store path and state directory an offline command
-// opens: storagePath's with Options.CoreConfigBoot off, and with it on the
-// ones kernel.ResolveStorage reads through P0 over c (kernelConfig's), so an
-// offline command opens the store a serve boot opens. Both are "" for an app
-// with no storage. owner is ResolveStorage's (offlineConfig's).
-func offlineStoragePath(ctx context.Context, opts Options, c kernel.Config, mods []module.Module, owner string) (dbPath, stateDir string, err error) {
-	if dbPath, stateDir, err = storagePath(opts, mods); err != nil || !opts.CoreConfigBoot {
-		return dbPath, stateDir, err
-	}
-	c.StoragePath, c.StateDir = dbPath, stateDir
-	return kernel.ResolveStorage(ctx, c, owner)
-}
-
 // ResolveStorage is the store path and the state directory a boot of mods
 // over opts opens, resolved before anything boots (05-config section 1.7, step
-// 0): with Options.CoreConfigBoot the ones kernel.ResolveStorage reads over
-// the operator layers (the environment, opts.ConfigFlags and the operator
-// file), so an app that must name the store before New (its state-file table,
-// its swap check) agrees with the boot by construction, not by re-deriving
-// the rule. With the gate off they are storagePath's. Both are "" for mods
+// 0): the ones kernel.ResolveStorage reads over the operator layers (the
+// environment, opts.ConfigFlags and the operator file), so an app that must
+// name the store before New (its state-file table, its swap check) agrees with
+// the boot by construction, not by re-deriving the rule. Both are "" for mods
 // that declare no storage. It creates the state directory when it is absent,
 // as the boot would. owner is the offline commands' (see offlineConfig): ""
 // for a boot, which checks nothing before it creates.
@@ -143,7 +129,7 @@ func ResolveStorage(ctx context.Context, opts Options, mods []module.Module, own
 	if err != nil {
 		return "", "", err
 	}
-	return offlineStoragePath(ctx, opts, c, mods, owner)
+	return kernel.ResolveStorage(ctx, c, owner)
 }
 
 // readWriteOwner is offlineConfig's owner for an open that writes only when

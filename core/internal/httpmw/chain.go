@@ -80,9 +80,9 @@ type Peer struct {
 	Addr   netip.Addr
 }
 
-// Settings are the perimeter values that may change after Build: in R1 set
-// once per boot from app.Options.R1Values before the first listener opens
-// (05-config §1.12.1), hot-reloaded from F3 (05-http-api §9).
+// Settings are the perimeter values that may change after Build: set at
+// boot from core.http.* before the first listener opens (05-config §1.12.1)
+// and hot-reloaded when those keys change (05-http-api §9).
 type Settings struct {
 	// PeerAllowlist: nil or empty accepts every peer (stage 0 off).
 	PeerAllowlist  []Peer

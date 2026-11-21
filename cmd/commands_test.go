@@ -10,9 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -307,53 +305,6 @@ func TestServe_RunsNoStartupStepOfItsOwn(t *testing.T) {
 	}
 	if got := in.Telemetry.OTelExporterOTLPEndpoint; got != "http://192.0.2.9:4317" {
 		t.Fatalf("telemetry endpoint = %q, want the pre-settings snapshot's", got)
-	}
-}
-
-// serve reads ABO_CORE_SHUTDOWN_BUDGET and hands it to the composition root
-// as ServeInputs.ShutdownBudget; unset means 0, core's default (R1-33).
-func TestServe_ShutdownBudgetFromEnvReachesApp(t *testing.T) {
-	for _, tc := range []struct {
-		name, value string
-		set         bool
-		want        time.Duration
-	}{
-		{name: "unset"},
-		{name: "empty", set: true},
-		{name: "set", set: true, value: "40s", want: 40 * time.Second},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			stubCommandDeps(t)
-			if tc.set {
-				t.Setenv(shutdownBudgetEnv, tc.value)
-			} else {
-				os.Unsetenv(shutdownBudgetEnv)
-			}
-			started, in, err := serveWithStubs(t)
-			if err != nil || !started {
-				t.Fatalf("started=%v err=%v", started, err)
-			}
-			if in.ShutdownBudget != tc.want {
-				t.Fatalf("ShutdownBudget = %v, want %v", in.ShutdownBudget, tc.want)
-			}
-		})
-	}
-}
-
-// An invalid ABO_CORE_SHUTDOWN_BUDGET makes serve refuse to start, with an
-// error naming the variable, before anything is opened or bound.
-func TestServe_InvalidShutdownBudgetRefusesToStart(t *testing.T) {
-	stubCommandDeps(t)
-	t.Setenv(shutdownBudgetEnv, "soon")
-	started, _, err := serveWithStubs(t)
-	if err == nil {
-		t.Fatal("serve started with an invalid ABO_CORE_SHUTDOWN_BUDGET")
-	}
-	if !strings.Contains(err.Error(), shutdownBudgetEnv) {
-		t.Fatalf("error %q does not name %s", err, shutdownBudgetEnv)
-	}
-	if started {
-		t.Fatal("composition root reached despite the invalid value")
 	}
 }
 
