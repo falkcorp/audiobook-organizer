@@ -11,12 +11,13 @@ import { useState } from 'react';
 import { IconButton, Tooltip } from '@mui/material';
 import { MergeType as MergeIcon } from '@mui/icons-material';
 import type { UserRowActionProps } from '../../../components/users/usersExtensions';
+import { isSystemAccount } from '../../../components/users/userAccountParts';
 import { UserMergeDialog } from './UserMerge';
 
 export function UserMergeRowAction({ user, users, onDone }: UserRowActionProps) {
   const [open, setOpen] = useState(false);
 
-  if (user.username === '_system' || user.status !== 'active' || user.merged_into_user_id) {
+  if (isSystemAccount(user) || user.status !== 'active' || user.merged_into_user_id) {
     return null;
   }
 
@@ -37,6 +38,7 @@ export function UserMergeRowAction({ user, users, onDone }: UserRowActionProps) 
         candidates={users.filter(
           (c) =>
             c.id !== user.id &&
+            !isSystemAccount(c) &&
             c.status === 'active' &&
             !c.merged_into_user_id &&
             (c.roles ?? []).includes('admin')

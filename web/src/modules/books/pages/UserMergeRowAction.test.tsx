@@ -8,7 +8,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { MergeableUser } from '../../../components/users/userAccountParts';
+import { isSystemAccount, type MergeableUser } from '../../../components/users/userAccountParts';
 import { UserMergeRowAction } from './UserMergeRowAction';
 import { booksUsersExtensions } from './usersExtensions';
 import { UserMergesPanel } from './UserMerge';
@@ -63,6 +63,34 @@ describe('UserMergeRowAction', () => {
     expect(screen.getByTestId('candidates')).toHaveTextContent(/^alfred\.pennyworth$/);
     await user.click(screen.getByRole('button', { name: 'close' }));
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('never offers a system account as a survivor, whatever status or roles it carries', async () => {
+    const user = userEvent.setup();
+    const systemByName: MergeableUser = { id: 'u8', username: '_system', status: 'active', roles: ['admin'] };
+    const systemByStatus: MergeableUser = { id: 'u9', username: 'batcomputer', status: 'system', roles: ['admin'] };
+    render(
+      <UserMergeRowAction user={bruce} users={[...everyone, systemByName, systemByStatus]} onDone={vi.fn()} />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Merge bruce.wayne into another account' }));
+    expect(screen.getByTestId('candidates')).toHaveTextContent(/^alfred\.pennyworth$/);
+  });
+
+  it('is hidden for an account with the system status, not only the _system name', () => {
+    render(
+      <UserMergeRowAction
+        user={{ ...bruce, username: 'batcomputer', status: 'system' }}
+        users={everyone}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('recognises a system account by its name or by its status', () => {
+    expect(isSystemAccount({ username: '_system', status: 'active' })).toBe(true);
+    expect(isSystemAccount({ username: 'batcomputer', status: 'system' })).toBe(true);
+    expect(isSystemAccount({ username: 'bruce.wayne', status: 'active' })).toBe(false);
   });
 
   it('reports a started merge through onDone with the notice, and closes', async () => {
