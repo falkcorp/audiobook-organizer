@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-11-09
+// last-edited: 2026-11-21
 
 package server
 
@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
+	coreauth "github.com/falkcorp/mediacore/auth"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -160,6 +162,26 @@ const liveRecheckTTL = 5 * time.Second
 // included: the stream ends and the client reconnects, which re-authenticates
 // it. Auth disabled, and a first run with no accounts yet, stand.
 func (s *Server) sessionStillStands() func(c *gin.Context) bool {
+	// Under core identity (F4-08 B10b2) the question goes to core: the
+	// principal stage 12 bound is re-resolved (Identity.Refresh), which fails
+	// when its user is disabled or removed, its session or key is gone or
+	// expired, its credential epoch moved, or an extension's token ended, and
+	// answers for the auth-disabled principal too, so books' EnableAuth is not
+	// read. Books' store is no longer the account record there, so HEAD's reads
+	// below would answer about rows M3 deletes. It fails closed: no principal
+	// is not a first run (HEAD's no-accounts bypass reads books' user count),
+	// it is a request core did not authenticate. Identity is the wiring's
+	// (WithIdentity), never the request's.
+	if id := s.identity; id != nil {
+		return func(c *gin.Context) bool {
+			p, ok := coreauth.PrincipalFrom(c.Request.Context())
+			if !ok || p == nil || id.Refresh == nil {
+				return false
+			}
+			np, err := id.Refresh(c.Request.Context(), p)
+			return err == nil && np != nil
+		}
+	}
 	if !config.Snapshot().EnableAuth {
 		return func(*gin.Context) bool { return true }
 	}
