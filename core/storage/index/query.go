@@ -7,6 +7,7 @@ package index
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -42,6 +43,9 @@ type Node struct {
 	Text     string
 	Min, Max any
 	Children []Node
+	// Boost is the node's own score weight, set by index.Boost; 0 = none.
+	// On a Match it replaces the field's declared Field.Boost.
+	Boost float64
 }
 
 type query struct{ n Node }
@@ -173,6 +177,30 @@ func group(op Op, qs []Query) Query {
 		}
 		n.Children = append(n.Children, c)
 	}
+	return query{n}
+}
+
+// Boost weights q's score by weight, a finite number above 0: a user's
+// "title:joker^3", or a weight a caller computes per clause. It is the
+// query-level weight; Field.Boost is the field-level default. The two do not
+// multiply: on a Match node an explicit Boost replaces the field's declared
+// one (so "title:joker^2" scores 2 on a field declared 3, as HEAD's search
+// does), and on every other node it is the only weight. Boosting a node
+// twice keeps the last weight. A Boost on a QueryString weights the whole
+// parsed string, on top of any ^n written inside it.
+//
+// A caller that translates a tree which already carries every weight (HEAD's
+// bleve tree, fan-out weights included) declares no Field.Boost and emits a
+// Boost for each weighted node, which reproduces HEAD's scores exactly.
+func Boost(q Query, weight float64) Query {
+	n, err := Describe(q)
+	if err != nil {
+		return badQuery{err}
+	}
+	if math.IsNaN(weight) || math.IsInf(weight, 0) || weight <= 0 {
+		return badQuery{fmt.Errorf("%w: boost %v must be a finite number above 0", ErrInvalidQuery, weight)}
+	}
+	n.Boost = weight
 	return query{n}
 }
 

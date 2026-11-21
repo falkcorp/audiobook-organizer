@@ -77,7 +77,8 @@ type Field struct {
 	// over several fields ranks a hit in a heavier field first. 0 means 1 (no
 	// weight); a negative, NaN or infinite value is refused. It applies to
 	// OpMatch nodes only: Term, Prefix, Wildcard and Range keep their own
-	// score, and a field named inside a QueryString is not weighted. It is a
+	// score, a field named inside a QueryString is not weighted, and a Match
+	// that carries its own index.Boost uses that weight instead. It is a
 	// query-time weight, so changing it needs no rebuild (it is not part of
 	// the mapping fingerprint).
 	Boost float64
