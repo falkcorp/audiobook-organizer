@@ -165,7 +165,11 @@ func (h *handler) Handle(ctx context.Context, r slog.Record) error {
 	l.countRecord(h.sc.module, r.Level)
 
 	// Step 4a: the primary output.
-	out := slog.NewRecord(t, r.Level, msg, r.PC)
+	pc := r.PC
+	if !l.addSource.Load() {
+		pc = 0 // core.log.add_source is off: no source on the primary line
+	}
+	out := slog.NewRecord(t, r.Level, msg, pc)
 	// The process default logger (Root, ProcessHandler; Handler is the same
 	// scope) has no module, so its
 	// records carry no module attribute; every other scope's do, first.

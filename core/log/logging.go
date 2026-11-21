@@ -144,6 +144,43 @@ func DefaultSettings() Settings {
 	}
 }
 
+// Validate implements config.Validator (log cannot import config, 03 R4, so
+// the interface is met structurally). It refuses the values the live keys
+// cannot apply, so config refuses them when it loads or applies them and the
+// pipeline is never handed one: level and every levels value must be a level
+// ParseLevel knows, a levels key must name a scope, and a redact_keys entry
+// must normalise to something (an entry that is only separators would never
+// match, so the operator would believe a key protected that is not).
+func (s Settings) Validate() error {
+	_, _, err := s.parseLevels()
+	if err != nil {
+		return err
+	}
+	for i, k := range s.RedactKeys {
+		if normKey(k) == "" {
+			return fmt.Errorf("log: core.log.redact_keys[%d] %q names no key (it has nothing but separators)", i, k)
+		}
+	}
+	return nil
+}
+
+// parseLevels resolves level and levels, or reports the first bad one.
+func (s Settings) parseLevels() (root slog.Level, per map[string]slog.Level, err error) {
+	if root, err = ParseLevel(s.Level); err != nil {
+		return 0, nil, fmt.Errorf("core.log.level: %w", err)
+	}
+	per = make(map[string]slog.Level, len(s.Levels))
+	for scope, v := range s.Levels {
+		if strings.TrimSpace(scope) == "" {
+			return 0, nil, errors.New("log: core.log.levels: a scope name is empty")
+		}
+		if per[scope], err = ParseLevel(v); err != nil {
+			return 0, nil, fmt.Errorf("core.log.levels.%s: %w", scope, err)
+		}
+	}
+	return root, per, nil
+}
+
 // Options configures New. The kernel builds it from core.log (05-logging §4
 // step 1).
 type Options struct {
@@ -214,6 +251,10 @@ type Counters struct {
 type Logging struct {
 	primary  slog.Handler // stdlib Text or JSON handler over Options.Output
 	redactor *Redactor
+	// addSource is core.log.add_source, live: the primary handler is always
+	// built to print the source, and Handle clears the record's PC while this
+	// is false, which is how the stdlib handlers omit it.
+	addSource atomic.Bool
 	now      func() time.Time // Options.Now, or nil: keep the record's own time
 	clock    func() time.Time // now, or time.Now: for the stderr rate limit
 	stderr   io.Writer        // where the pipeline reports its own failures
@@ -263,7 +304,7 @@ func New(o Options) (*Logging, error) {
 		return nil, errors.New("log: Options.Redactor is nil: records would reach the output unredacted")
 	}
 	ho := &slog.HandlerOptions{
-		AddSource: o.AddSource,
+		AddSource: true, // gated per record by Logging.addSource
 		// The pipeline gates levels itself, per scope; the stdlib handler
 		// passes everything it is handed.
 		Level:       slog.Level(math.MinInt),
@@ -292,6 +333,7 @@ func New(o Options) (*Logging, error) {
 	if l.clock == nil {
 		l.clock = time.Now
 	}
+	l.addSource.Store(o.AddSource)
 	l.taps.Store(&[]*tap{})
 	l.root = l.scope(rootModule, "")
 	l.process = l.scope(processModule, "")
@@ -426,6 +468,32 @@ func (l *Logging) SetLevels(root slog.Level, per map[string]slog.Level) (unknown
 	}
 	slices.Sort(unknown)
 	return unknown
+}
+
+// SetAddSource turns the source file and line on or off for the primary
+// output (core.log.add_source); the next record sees it.
+func (l *Logging) SetAddSource(on bool) { l.addSource.Store(on) }
+
+// ApplySettings applies the live keys of core.log to the running pipeline
+// (05-logging §4 item 3): level and levels through SetLevels, add_source, and
+// redact_keys through the Redactor's SetExtraKeys. Format, output and file are
+// restart-bound and are not read. s is validated first and nothing is changed
+// when it is refused, so a bad value never half-applies: the pipeline keeps
+// the state it had and the error says which key. unknown is SetLevels' list
+// of levels keys that name no scope created so far (not an error; the caller
+// warns).
+func (l *Logging) ApplySettings(s Settings) (unknown []string, err error) {
+	if err = s.Validate(); err != nil {
+		return nil, err
+	}
+	root, per, err := s.parseLevels()
+	if err != nil {
+		return nil, err
+	}
+	unknown = l.SetLevels(root, per)
+	l.SetAddSource(s.AddSource)
+	l.redactor.SetExtraKeys(s.RedactKeys)
+	return unknown, nil
 }
 
 // Level returns the level a record from scope ("module" or
