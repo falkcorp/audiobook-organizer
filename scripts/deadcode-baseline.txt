@@ -655,6 +655,9 @@ internal/authority.PersonKey
 internal/authority.PutPersonOverride
 internal/authority.PutPublisherOverride
 internal/authority.pubOverrideKey
+internal/books.NewSchedules
+internal/books.ScheduledKinds
+internal/books.scheduleDecl.schedule
 internal/books/adapters/metadata.Descriptors
 internal/books/adapters/metadata.NewChain
 internal/books/adapters/metadata.audibleProvider.ListByAuthor
