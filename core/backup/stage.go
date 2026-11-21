@@ -218,7 +218,7 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 	// 6. The config file and boot record: placed only when asked, whole and
 	// passing the rename pre-check; otherwise left for the operator.
 	targets := []restorejournal.Target{{From: filepath.Join(staging, "db"), To: s.o.DBPath}}
-	cfgTargets, w, err := s.configTargets(staging, rid, man, o)
+	cfgTargets, cfgCopies, w, err := s.configTargets(staging, rid, man, o)
 	if err != nil {
 		return PendingRestore{}, err
 	}
@@ -255,6 +255,10 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		return PendingRestore{}, err
 	}
 	staged = true
+	// The operator's copies go into restore/<id>/ only now: Stage refuses an
+	// intent whose restore/<id> already exists, so a copy written before it
+	// refused every restore of an archive carrying the config file.
+	warnings = append(warnings, s.keepConfigCopies(rid, cfgCopies)...)
 	if err := s.writeStageNote(rid, stageNote{ArchiveID: id, Foreign: foreign, Warnings: warnings}); err != nil {
 		s.o.log().Warn("backup: could not write the stage note; the archive is not floor-protected", "error", err)
 		warnings = append(warnings, "the archive is not protected from retention while this restore is pending")
@@ -553,21 +557,30 @@ func (s *Svc) checkSecrets(info StoreInfo, o RestoreOptions) (warnings []string,
 	return []string{fmt.Sprintf("secrets sealed under %d key(s) this install does not hold are unreadable and must be re-entered", len(missing))}, nil
 }
 
+// configCopy is one config file the archive holds, read from staging, that
+// keepConfigCopies writes to restore/<id>/config.restored/.
+type configCopy struct {
+	name string
+	data []byte
+}
+
 // configTargets places the archive's config file and boot record when the
 // caller asked (ReplaceConfig), the archive holds the files themselves and the
-// rename pre-check passes; otherwise it copies them to
-// <state_dir>/restore/<id>/config.restored/ for the operator to merge.
-func (s *Svc) configTargets(staging, rid string, m *Manifest, o RestoreOptions) ([]restorejournal.Target, []string, error) {
+// rename pre-check passes; otherwise it reads them for keepConfigCopies,
+// which copies them to <state_dir>/restore/<id>/config.restored/ for the
+// operator to merge once Stage created restore/<id>/. A file that cannot be
+// read refuses the restore before anything is staged.
+func (s *Svc) configTargets(staging, rid string, m *Manifest, o RestoreOptions) ([]restorejournal.Target, []configCopy, []string, error) {
 	if m == nil || s.o.ConfigPath == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	cfgDir := filepath.Join(staging, "config")
 	ents, err := os.ReadDir(cfgDir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	live := map[string]string{filepath.Base(s.o.ConfigPath): s.o.ConfigPath}
 	if s.o.BootRecordPath != "" {
@@ -585,31 +598,52 @@ func (s *Svc) configTargets(staging, rid string, m *Manifest, o RestoreOptions) 
 	}
 	if o.ReplaceConfig && !m.ConfigRedacted {
 		if err := restorejournal.Validate(s.probe(), moves); err == nil {
-			return moves, warnings, nil
+			return moves, nil, warnings, nil
 		} else {
 			// The refusal names the files and the filesystem; the log keeps it.
 			s.o.log().Warn("backup: the config file or boot record cannot be swapped by rename; staging them for the operator", "restore", rid, "error", err)
 			warnings = append(warnings, "the config file or boot record cannot be swapped by rename here; they are staged for you to merge")
 		}
 	}
-	dst := filepath.Join(restorejournal.JournalDir(s.o.StateDir, rid), "config.restored")
-	if err := mkdirPrivate(dst); err != nil {
-		return nil, nil, err
-	}
+	copies := []configCopy{}
 	for _, mv := range moves {
 		b, err := os.ReadFile(mv.From)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		if err := writeFileAtomic(filepath.Join(dst, filepath.Base(mv.From)), b); err != nil {
-			return nil, nil, err
+		copies = append(copies, configCopy{name: filepath.Base(mv.From), data: b})
+	}
+	return nil, copies, warnings, nil
+}
+
+// keepConfigCopies writes copies (configTargets', nil when the files are
+// placed by the swap or the archive has none) to
+// <state_dir>/restore/<id>/config.restored/, after Stage created
+// restore/<id>/, and returns the warning that points the operator there. The
+// restore is staged either way, so a write that fails is a warning: the files
+// stay in the restore's staging directory beside the database, which the
+// warning says.
+func (s *Svc) keepConfigCopies(rid string, copies []configCopy) []string {
+	if copies == nil {
+		return nil
+	}
+	dst := filepath.Join(restorejournal.JournalDir(s.o.StateDir, rid), "config.restored")
+	err := mkdirPrivate(dst)
+	for _, c := range copies {
+		if err != nil {
+			break
 		}
+		err = writeFileAtomic(filepath.Join(dst, c.name), c.data)
+	}
+	if err != nil {
+		s.o.log().Warn("backup: the archive's config files could not be copied for the operator", "restore", rid, "dir", dst, "error", err)
+		return []string{"the archive's config files could not be copied to <state_dir>/restore/" + rid +
+			"/config.restored; they are in the restore's staging directory beside the database"}
 	}
 	// The warning names the directory relative to the state directory, not the
 	// host path; the log has the full one.
 	s.o.log().Info("backup: the archive's config files are staged for the operator to merge", "restore", rid, "dir", dst)
-	warnings = append(warnings, "the archive's config files are in <state_dir>/restore/"+rid+"/config.restored")
-	return nil, warnings, nil
+	return []string{"the archive's config files are in <state_dir>/restore/" + rid + "/config.restored"}
 }
 
 // Pending reports the staged restore, nil when the slot holds none.
