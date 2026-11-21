@@ -211,7 +211,7 @@ func resolveJobsCaps(src any) (jobsCaps, error) {
 	c.planner = capOf[database.SnapshotPrunePlanner](src, "SnapshotPrunePlanner", &missing)
 	c.hashes = capOf[database.BookFileHashUpdater](src, "BookFileHashUpdater", &missing)
 
-	c.store = capOf[jobsStoreOps](src, "the database.Store methods merge and dedup reach", &missing)
+	c.store = capOf[jobsStoreOps](src, "the store methods merge and dedup reach", &missing)
 	c.bookmarkCopier = capOf[database.BookmarkCopier](src, "BookmarkCopier", &missing)
 	c.syncMerge = capOf[jobsSyncMergeClearer](src, "ClearSyncMerge", &missing)
 	c.syncRedirect = capOf[jobsSyncRedirectClearer](src, "ClearSyncRedirect", &missing)
