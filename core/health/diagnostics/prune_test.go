@@ -144,6 +144,49 @@ func TestPruneTask_RetentionBoundary(t *testing.T) {
 	}
 }
 
+// An export is ReadOnly, so nothing excludes it from the prune: a retention
+// shorter than ExportTimeout must not delete the ".zip.tmp" of a run that is
+// still inside its own timeout. A partial goes only once it is older than
+// max(retention, ExportTimeout); a finished bundle still goes at retention.
+func TestPruneTask_PartialOutlivesAShortRetention(t *testing.T) {
+	f := newFixture(t)
+	const keep = 10 * time.Minute
+	writeAged(t, f.dir, map[string]time.Duration{
+		"past-edge.zip":         keep + time.Nanosecond,
+		"at-edge.zip":           keep,
+		"running.zip.tmp":       keep + time.Minute,
+		"timeout-edge.zip.tmp":  diagnostics.ExportTimeout,
+		"abandoned.zip.tmp":     diagnostics.ExportTimeout + time.Nanosecond,
+		"abandoned-day.zip.tmp": 24 * time.Hour,
+	})
+	res := runPruneTask(t, pruneTaskAt(f.root, keep))
+	if res.Removed != 3 || res.Retention != keep.String() {
+		t.Errorf("result = %+v, want 3 removed at %s", res, keep)
+	}
+	want := []string{"at-edge.zip", "running.zip.tmp", "timeout-edge.zip.tmp"}
+	if got := left(t, f.dir); !slices.Equal(got, want) {
+		t.Errorf("left %v, want %v", got, want)
+	}
+}
+
+// A retention longer than ExportTimeout governs the partials as it does the
+// bundles: the floor never shortens it.
+func TestPruneTask_PartialFollowsALongRetention(t *testing.T) {
+	f := newFixture(t)
+	const keep = 3 * time.Hour
+	writeAged(t, f.dir, map[string]time.Duration{
+		"running.zip.tmp":   diagnostics.ExportTimeout + time.Hour,
+		"at-edge.zip.tmp":   keep,
+		"abandoned.zip.tmp": keep + time.Nanosecond,
+	})
+	if n, err := diagnostics.Prune(f.root, keep, fixedNow); err != nil || n != 1 {
+		t.Fatalf("Prune = %d, %v; want 1", n, err)
+	}
+	if got, want := left(t, f.dir), []string{"at-edge.zip.tmp", "running.zip.tmp"}; !slices.Equal(got, want) {
+		t.Errorf("left %v, want %v", got, want)
+	}
+}
+
 // A zero or negative core.diagnostics.retention is the 24 h default, the rule
 // OpenBundle and the download route apply, never "everything is old": a bundle
 // the route would still serve is never pruned from under it.

@@ -167,6 +167,13 @@ func (s *dwStarter) Start(ctx context.Context, kind tasks.Kind, req tasks.StartR
 	return tasks.RunRef{ID: "run-ra-s-al-ghul"}, nil
 }
 
+// emptyUserCtx is a principal whose user has the ID "", so a params ActorID of
+// "" and a requestedBy of "" both equal it: the one thing left to refuse is the
+// empty requester itself.
+func emptyUserCtx() context.Context {
+	return auth.WithPrincipal(context.Background(), &auth.Principal{Method: auth.MethodSession, User: &auth.User{}})
+}
+
 func principalCtx(id string) context.Context {
 	p := &auth.Principal{Method: auth.MethodSession}
 	if id != "" {
@@ -207,6 +214,7 @@ func TestDiagnosticsEnqueuer_RefusesAMismatchedPerson(t *testing.T) {
 		"principal has no user":  {principalCtx(""), diagnostics.ExportParams{ActorID: "bruce"}, "bruce"},
 		"no principal":           {context.Background(), diagnostics.ExportParams{ActorID: "bruce"}, "bruce"},
 		"no requester":           {principalCtx(""), diagnostics.ExportParams{}, ""},
+		"empty requester alone":  {emptyUserCtx(), diagnostics.ExportParams{}, ""},
 		"requester is not owner": {principalCtx("bruce"), diagnostics.ExportParams{ActorID: "bruce"}, "jason"},
 	} {
 		st := &dwStarter{}

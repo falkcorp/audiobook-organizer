@@ -32,7 +32,8 @@ type PruneParams struct{}
 
 // PruneResult is what a pass did.
 type PruneResult struct {
-	// Removed counts the bundles and abandoned partials deleted.
+	// Removed counts the bundles and abandoned partials deleted. A partial is
+	// abandoned once it is older than max(Retention, ExportTimeout).
 	Removed int `json:"removed"`
 	// Retention is the retention the pass applied, after the default rule
 	// (a zero or negative setting is DefaultRetention), in Go duration text.
@@ -44,8 +45,9 @@ type PruneResult struct {
 // use. retention reads core.diagnostics.retention at the start of each run,
 // so a changed value applies to the next pass; a value of zero or less is
 // DefaultRetention (Prune's rule, the same as OpenBundle's, so the prune
-// never deletes a bundle the download route would still serve). now is the
-// clock (nil = time.Now). A nil root or retention yields a definition whose
+// never deletes a bundle the download route would still serve; a partial is
+// kept at least ExportTimeout, so a short retention never deletes a running
+// export's file). now is the clock (nil = time.Now). A nil root or retention yields a definition whose
 // Run is nil, which tasks.Problems reports, so registration fails closed.
 //
 // Perms.Start is core:tasks.manage for the reason core.tasks.prune's is: the
@@ -65,7 +67,7 @@ func PruneTask(root *os.Root, retention func() time.Duration, now func() time.Ti
 	}
 	return tasks.Task(PruneKind, tasks.TaskSpec[PruneParams, PruneResult]{
 		Title:    "Prune diagnostics bundles",
-		Help:     "Deletes diagnostics bundles, and partial bundles a stopped export left behind, once they are older than the diagnostics retention.",
+		Help:     "Deletes diagnostics bundles, and partial bundles a stopped export left behind, once they are older than the diagnostics retention (a partial is kept at least as long as an export may run).",
 		Effects:  tasks.Writes(tasks.Res("core", "diagnostics")),
 		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeFromZero,

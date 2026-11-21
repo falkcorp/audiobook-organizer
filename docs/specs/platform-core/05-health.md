@@ -483,7 +483,11 @@ signature, so the interim `Run` is the backend's method value and F8's native bo
 `core.diagnostics.dir` (no path escapes), named `<run-id>.zip`, deleted after
 `core.diagnostics.retention` by the task `core.diagnostics.prune`
 (`Schedule: tasks.ScheduleFromConfig("core.diagnostics.schedules.prune")`, default every 1 h; the key
-lives in the owner's own namespace, 05-tasks 5T.3.8, R2-7).
+lives in the owner's own namespace, 05-tasks 5T.3.8, R2-7). A retention of zero or less means the
+24 h default, in the download route (which reads the key on every request) and in the prune alike, so
+no setting reads as "every bundle is old". An abandoned `<run-id>.zip.tmp` partial goes by the same
+rule once it is older than `max(retention, 30 min)`, the export's own timeout: the export is ReadOnly,
+so nothing keeps the prune from running while it writes.
 
 ### 5H.3.6 sysinfo
 
@@ -631,7 +635,7 @@ internally.
 | `core.shutdown.http_drain` | duration | 10s | yes | — |
 | `core.diagnostics.schedules.prune` | `tasks.ScheduleConfig` | `{enabled: true, every: 1h}` | yes | — |
 | `core.diagnostics.dir` | path | `diagnostics` beside the DB (relative values resolve against the DB's parent, as `core.backup.dir`; there is no data-dir key, 05-config §1.7) | no | `ProtectAdmin` (a server path, 05-config `FieldServerPath`) |
-| `core.diagnostics.retention` | duration | 24h | yes | — |
+| `core.diagnostics.retention` | duration | 24h (zero or less means 24h) | yes | — |
 | `core.diagnostics.log_lines` | int | 5000 | yes | — |
 | `core.diagnostics.task_runs` | int | 200 | yes | — |
 | `core.diagnostics.max_file_bytes` | int | 64 MiB | yes | — |

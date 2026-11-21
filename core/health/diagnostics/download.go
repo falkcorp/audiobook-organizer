@@ -210,14 +210,18 @@ func isBundleName(name string) bool {
 	return ok && plainName(id)
 }
 
-// Prune removes bundle files (and abandoned ".zip.tmp" partials) whose
+// Prune removes bundle files, and abandoned ".zip.tmp" partials, whose
 // modification time is more than retention before now. retention <= 0 means
 // DefaultRetention, the rule OpenBundle and the download route apply: a zero
 // or negative core.diagnostics.retention must never read as "every bundle is
-// old" and delete the one being downloaded. A file exactly retention old is
-// kept, and so is one dated after now (a clock step). It touches only names
-// that match a bundle's, through the root. It returns how many it removed;
-// a file it could not remove is reported with the others removed.
+// old" and delete the one being downloaded. A partial is held to
+// max(retention, ExportTimeout) instead: an export is ReadOnly, so nothing
+// keeps it from running while the prune does, and a retention shorter than the
+// export's own timeout must not delete the partial of a run that is still
+// inside it. A file exactly that old is kept, and so is one dated after now (a
+// clock step). It touches only names that match a bundle's, through the root.
+// It returns how many it removed; a file it could not remove is reported with
+// the others removed.
 func Prune(root *os.Root, retention time.Duration, now time.Time) (removed int, err error) {
 	if retention <= 0 {
 		retention = DefaultRetention
@@ -231,13 +235,18 @@ func Prune(root *os.Root, retention time.Duration, now time.Time) (removed int, 
 	if err != nil {
 		return 0, fmt.Errorf("diagnostics: read dir: %w", err)
 	}
+	partialKeep := max(retention, ExportTimeout)
 	var errs []error
 	for _, de := range ents {
 		if de.IsDir() || !isBundleName(de.Name()) {
 			continue
 		}
+		keep := retention
+		if strings.HasSuffix(de.Name(), ".tmp") {
+			keep = partialKeep
+		}
 		fi, ierr := de.Info()
-		if ierr != nil || now.Sub(fi.ModTime()) <= retention {
+		if ierr != nil || now.Sub(fi.ModTime()) <= keep {
 			continue
 		}
 		if rerr := root.Remove(de.Name()); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {

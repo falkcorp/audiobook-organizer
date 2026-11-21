@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -49,6 +50,15 @@ type infraMounter interface {
 	Infra(pattern string, perm rbac.Requirement, h http.Handler)
 }
 
+// The real router is asserted here, so a change to Router.Infra fails the
+// build rather than the F8-04 fold.
+var _ infraMounter = (*httpapi.Router)(nil)
+
+// buildInfoUnsetVersion is the version label of a kernel whose Config.Version
+// is empty: a build_info series with version="" would be a label no dashboard
+// can select.
+const buildInfoUnsetVersion = "dev"
+
 // mountMetrics mounts p's handler at path ("" = /metrics) as a Router.Infra
 // route requiring core:metrics.read, and registers the <namespace>_build_info
 // gauge (label version = the app's release version, value 1) on p. It is
@@ -62,8 +72,11 @@ type infraMounter interface {
 // are not mounted here (healthhttp.RegisterProbes).
 //
 // Stage 9 skips compression only for the exact pattern "/metrics"
-// (httpapi.Router), so a non-default path is compressed by the chain as well
-// as by promhttp; F8-04's fold passes the default.
+// (httpapi.Router). promhttp compresses its own response for a client that
+// accepts gzip, so a non-default path is not left uncompressed: the chain
+// meets a handler-set "Content-Encoding: gzip" and sends it as the handler
+// encoded it, never a second time (httpmw gzipWriter.decide). The default
+// path skips stage 9 altogether; F8-04's fold passes it.
 func mountMetrics(r infraMounter, p *metrics.Provider, path, version string, log *slog.Logger) error {
 	if r == nil || p == nil {
 		return errors.New("kernel: metrics mount needs the router and the Provider")
@@ -78,8 +91,12 @@ func mountMetrics(r infraMounter, p *metrics.Provider, path, version string, log
 	return nil
 }
 
-// registerBuildInfo registers <namespace>_build_info{version} = 1 on p.
+// registerBuildInfo registers <namespace>_build_info{version} = 1 on p. An
+// empty or blank version is labelled buildInfoUnsetVersion.
 func registerBuildInfo(p *metrics.Provider, version string) error {
+	if strings.TrimSpace(version) == "" {
+		version = buildInfoUnsetVersion
+	}
 	scope, err := p.Core(buildInfoSubsystem, buildInfoVersion)
 	if err != nil {
 		return fmt.Errorf("kernel: build_info scope: %w", err)
