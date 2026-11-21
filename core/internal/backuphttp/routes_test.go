@@ -502,15 +502,20 @@ func TestBackupRoutesRefusalOrder(t *testing.T) {
 	for _, c := range bhCases() {
 		t.Run(c.name, func(t *testing.T) {
 			if c.perm != permSystemView {
-				// authorise's own rule, ahead of Authorize: a route other
-				// than a view route needs a user to name as the actor, so
-				// the auth-disabled principal is refused even holding
-				// every scope the route asks for.
+				// The auth-disabled principal holding every scope the
+				// route asks for: a guarded route refuses it as the router
+				// does (403 interactive_required); an unguarded one, which
+				// the router admits, meets authorise's own rule that a
+				// non-view route needs a user to name as the actor (401).
 				t.Run("auth-disabled principal holding the permission", func(t *testing.T) {
 					r := newBHRig(t)
 					rep := r.run(bhAs(auth.MethodAuthDisabled, c.perm, rbac.CoreAdmin), c)
-					if rep.status != 401 || bhProblem(t, rep).Code != "authentication_required" {
-						t.Errorf("= %d %s, want 401 authentication_required", rep.status, rep.body)
+					status, code := 401, "authentication_required"
+					if c.interactive || c.owner {
+						status, code = 403, "interactive_required"
+					}
+					if rep.status != status || bhProblem(t, rep).Code != code {
+						t.Errorf("= %d %s, want %d %s", rep.status, rep.body, status, code)
 					}
 					r.untouched("auth-disabled")
 				})

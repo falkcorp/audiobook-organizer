@@ -293,8 +293,12 @@ func holds(p *auth.Principal, perm rbac.Permission) bool {
 // (403 permission_denied). Calling Authorize rather than restating it keeps
 // the two from drifting. Every one of those refusals is a 403 after the 401,
 // as at HEAD, whose credential guard, permission and owner gate also answer
-// 403. The one rule of its own is that a route other than a view route needs a
-// user to name as the actor (401 for a principal with none). It passes no
+// 403. The one rule of its own comes after Authorize admits: a route other
+// than a view route needs a user to name as the actor, so a principal with
+// none (the auth-disabled one) is answered 401 there. The router admits that
+// principal on an unguarded route, so on those routes this 401 is what a
+// caller sees; on a guarded route Authorize has already refused it 403
+// interactive_required, as the router does. It passes no
 // rbac catalog, so a non-interactive principal missing a Sensitive scope is
 // told permission_denied where the router says interactive_required; the
 // router judges first, so a caller never sees the difference. Only the
@@ -305,14 +309,14 @@ func (a *api) authorise(p *auth.Principal, g gate) (string, error) {
 	if p != nil && p.User != nil {
 		subject = string(p.User.ID)
 	}
-	if p != nil && !g.anon && subject == "" {
-		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
-	}
 	d := httpapi.Authorize(httpapi.AuthzRequest{
 		Perm: rbac.Need(g.perm), Guards: httpapi.Guards{Interactive: g.interactive, Owner: g.owner}, Principal: p,
 	}, httpapi.AuthzOptions{OwnerRequired: a.ownerRequired == nil || a.ownerRequired()})
 	if d.Refusal != nil {
 		return "", d.Refusal
+	}
+	if !g.anon && subject == "" {
+		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
 	}
 	return subject, nil
 }
