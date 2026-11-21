@@ -75,3 +75,31 @@ func TestExtractStoreRefusesALegacyArchiveReplacedAfterTheChecksumCheck(t *testi
 		t.Fatalf("the replacement extracted on its own: id %q, err %v", id, err)
 	}
 }
+
+// TestExtractStoreRefusesALegacyArchiveReplacedBetweenTheScanAndTheExtraction:
+// a legacy-abo/0 archive renamed over the path after the scan matched the
+// checksum check's digest, and before the extraction opens the path again, is
+// refused with the same verification failure (409), not a bare ErrChanged
+// (500). The free-space check between the two is where the swap lands.
+func TestExtractStoreRefusesALegacyArchiveReplacedBetweenTheScanAndTheExtraction(t *testing.T) {
+	path, _ := tinyLegacy(t, t.TempDir(), "Alfred", true)
+	other, _ := tinyLegacy(t, t.TempDir(), "Selina", false)
+	var swapped bool
+	var swapErr error
+	disk := Disk{
+		Device: func(string) (uint64, error) {
+			if !swapped {
+				swapped, swapErr = true, os.Rename(other, path)
+			}
+			return 1, nil
+		},
+		Avail: func(string) (uint64, error) { return 1 << 40, nil },
+	}
+	id, err := extractStore(context.Background(), path, t.TempDir(), disk)
+	if !swapped || swapErr != nil {
+		t.Fatalf("fixture: the archive was not replaced between the scan and the extraction: %v", swapErr)
+	}
+	if !errors.Is(err, ErrChecksumMismatch) || !errors.Is(err, backuparchive.ErrChanged) || id != "" {
+		t.Fatalf("a legacy archive replaced after the scan: id %q, err %v; want ErrChecksumMismatch and backuparchive.ErrChanged", id, err)
+	}
+}
