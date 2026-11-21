@@ -4383,11 +4383,15 @@ export async function applyMetadataCandidate(
  * Un-rejects one candidate for one book (POST /metadata/unreject-candidate):
  * the owner's way back from a rejection, by book and candidate alone.
  * `unrejected` is false when no rejection matched the candidate.
+ * `still_rejected` is true when another rejection still refuses the candidate
+ * after this one was removed: a rejection under another source that shares
+ * its ISBN, or an older title-wide rejection of its source and title. The
+ * owner must undo that one too before the candidate can be applied.
  */
 export async function unrejectCandidate(
   bookId: string,
   candidate: MetadataCandidate
-): Promise<{ unrejected: boolean }> {
+): Promise<{ unrejected: boolean; still_rejected: boolean }> {
   const response = await apiFetch(`${API_BASE}/metadata/unreject-candidate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

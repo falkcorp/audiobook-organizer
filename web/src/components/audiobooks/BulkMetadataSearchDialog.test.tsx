@@ -25,6 +25,7 @@ vi.mock('../../services/api', async (importOriginal) => {
     markNoMatch: vi.fn(),
     pollOperationV2: vi.fn(),
     getBook: vi.fn(),
+    unrejectCandidate: vi.fn(),
   };
 });
 
@@ -36,8 +37,10 @@ import {
   markNoMatch,
   pollOperationV2,
   getBook,
+  unrejectCandidate,
 } from '../../services/api';
 
+const mockUnreject = vi.mocked(unrejectCandidate);
 const mockSearch = vi.mocked(searchMetadataForBook);
 const mockApply = vi.mocked(applyMetadataCandidate);
 const mockGetBookFiles = vi.mocked(getBookFiles);
@@ -473,6 +476,58 @@ describe('BulkMetadataSearchDialog — reopened on a new selection before the ap
     expect(onComplete).not.toHaveBeenCalled();
     expect(screen.getByText('Book X')).toBeInTheDocument();
     expect(header()).toBe('Search Metadata — Book 1 of 2');
+  });
+});
+
+describe('BulkMetadataSearchDialog — Undo a rejection', () => {
+  const rejectedAudnexus: MetadataCandidate = {
+    title: 'Year One',
+    author: 'Bruce Wayne',
+    source: 'audnexus',
+    score: 0.99,
+    asin: 'B00BATMAN1',
+    apply_check: { owner_rejected: true, detail: 'rejected by the owner' },
+  };
+  const rejectedAudible: MetadataCandidate = {
+    ...rejectedAudnexus,
+    source: 'audible',
+    score: 0.98,
+  };
+  const STILL_REJECTED_TOAST =
+    'Another rejection still refuses this record: a rejection under another source that shares its ISBN, or an older title-wide rejection. Undo that one too to apply it.';
+
+  it('keeps the chip, explains why and refuses to stage when another rejection still refuses it', async () => {
+    mockUnreject.mockResolvedValue({ unrejected: true, still_rejected: true });
+    mockSearch.mockResolvedValue({ results: [rejectedAudnexus, other] } as Awaited<
+      ReturnType<typeof searchMetadataForBook>
+    >);
+    renderDialog([book('a')]);
+    await screen.findByText('Year One');
+
+    fireEvent.click(screen.getByTestId('owner-rejected-undo'));
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(STILL_REJECTED_TOAST, 'info'));
+    expect(screen.getByTestId('owner-rejected-chip')).toBeInTheDocument();
+
+    fireEvent.click(pickButtons()[0]);
+    expect(toast).toHaveBeenCalledWith(
+      'You rejected this candidate for this book. Undo the rejection to apply it.',
+      'warning'
+    );
+    expect(screen.queryByTestId('bulk-staged-pick')).not.toBeInTheDocument();
+  });
+
+  it('clears the chip on a same-ASIN row from another source too', async () => {
+    mockUnreject.mockResolvedValue({ unrejected: true, still_rejected: false });
+    mockSearch.mockResolvedValue({ results: [rejectedAudnexus, rejectedAudible] } as Awaited<
+      ReturnType<typeof searchMetadataForBook>
+    >);
+    renderDialog([book('a')]);
+    await screen.findAllByText('Year One');
+    expect(screen.getAllByTestId('owner-rejected-chip')).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByTestId('owner-rejected-undo')[0]);
+    await waitFor(() => expect(mockUnreject).toHaveBeenCalledWith('a', rejectedAudnexus));
+    await waitFor(() => expect(screen.queryByTestId('owner-rejected-chip')).not.toBeInTheDocument());
   });
 });
 

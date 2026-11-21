@@ -157,7 +157,7 @@ describe('MetadataSearchDialog — candidate checks', () => {
   });
 
   it('Undo un-rejects the candidate for this book, and it can then be staged', async () => {
-    mockUnreject.mockResolvedValue({ unrejected: true });
+    mockUnreject.mockResolvedValue({ unrejected: true, still_rejected: false });
     searchReturns(rejectedOne, plain);
     renderDialog();
     await screen.findByText('Rejected One');
@@ -169,6 +169,42 @@ describe('MetadataSearchDialog — candidate checks', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: /^(Pick|Picked)$/ })[0]);
     expect(await screen.findByTestId('staged-pick')).toHaveTextContent('Rejected One');
+  });
+
+  it('keeps the chip, explains why and refuses to stage when another rejection still refuses it', async () => {
+    mockUnreject.mockResolvedValue({ unrejected: true, still_rejected: true });
+    searchReturns(rejectedOne, plain);
+    renderDialog();
+    await screen.findByText('Rejected One');
+
+    fireEvent.click(screen.getByTestId('owner-rejected-undo'));
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        'Another rejection still refuses this record: a rejection under another source that shares its ISBN, or an older title-wide rejection. Undo that one too to apply it.',
+        'info'
+      )
+    );
+    expect(screen.getByTestId('owner-rejected-chip')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^(Pick|Picked)$/ })[0]);
+    expect(toast).toHaveBeenCalledWith(
+      'You rejected this candidate for this book. Undo the rejection to apply it.',
+      'warning'
+    );
+    expect(screen.queryByTestId('staged-pick')).not.toBeInTheDocument();
+  });
+
+  it('Undo clears the chip on a same-ASIN result from another source', async () => {
+    mockUnreject.mockResolvedValue({ unrejected: true, still_rejected: false });
+    const nexus: MetadataCandidate = { ...rejectedOne, source: 'audnexus', score: 0.98, asin: 'B00BATMAN1' };
+    const audible: MetadataCandidate = { ...rejectedOne, asin: 'B00BATMAN1' };
+    searchReturns(audible, nexus);
+    renderDialog();
+    await screen.findAllByText('Rejected One');
+    expect(screen.getAllByTestId('owner-rejected-chip')).toHaveLength(2);
+
+    fireEvent.click(screen.getAllByTestId('owner-rejected-undo')[0]);
+    await waitFor(() => expect(screen.queryByTestId('owner-rejected-chip')).not.toBeInTheDocument());
   });
 
   it('a failed Undo keeps the marker and says why', async () => {

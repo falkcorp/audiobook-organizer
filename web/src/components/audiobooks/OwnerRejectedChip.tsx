@@ -9,11 +9,19 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import type { MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 
+const STILL_REJECTED_MESSAGE =
+  'Another rejection still refuses this record: a rejection under another source that shares its ISBN, or an older title-wide rejection. Undo that one too to apply it.';
+
 interface OwnerRejectedChipProps {
   bookId: string;
   candidate: MetadataCandidate;
-  /** Called once the rejection is gone, so the dialog can clear its marker. */
-  onUnrejected: (candidate: MetadataCandidate) => void;
+  /**
+   * Called once the server removed a rejection, so the dialog can clear its
+   * markers. `stillRejected` says another rejection still refuses this very
+   * candidate: its own marker stays, but rows the server un-rejected with it
+   * (same ASIN under another source) are cleared.
+   */
+  onUnrejected: (candidate: MetadataCandidate, outcome: { stillRejected: boolean }) => void;
   toast: (message: string, severity?: 'success' | 'error' | 'warning' | 'info') => void;
 }
 
@@ -31,12 +39,20 @@ export function OwnerRejectedChip({
   toast,
 }: OwnerRejectedChipProps) {
   const [busy, setBusy] = useState(false);
+  const [stillRejected, setStillRejected] = useState(false);
 
   const undo = async () => {
     setBusy(true);
     try {
       const res = await api.unrejectCandidate(bookId, candidate);
-      onUnrejected(candidate);
+      if (res.still_rejected) {
+        setStillRejected(true);
+        // Nothing removed means nothing else changed either: leave every row.
+        if (res.unrejected) onUnrejected(candidate, { stillRejected: true });
+        toast(STILL_REJECTED_MESSAGE, 'info');
+        return;
+      }
+      onUnrejected(candidate, { stillRejected: false });
       toast(
         res.unrejected
           ? 'Rejection undone: this candidate can be applied again.'
@@ -52,7 +68,13 @@ export function OwnerRejectedChip({
 
   return (
     <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-      <Tooltip title="You rejected this candidate for this book. Undo the rejection to apply it.">
+      <Tooltip
+        title={
+          stillRejected
+            ? STILL_REJECTED_MESSAGE
+            : 'You rejected this candidate for this book. Undo the rejection to apply it.'
+        }
+      >
         <Chip
           icon={<WarningAmberIcon />}
           label="Rejected by you"
