@@ -179,8 +179,8 @@ func refuseHEADKeyedConfigFile(configFile string) error {
 	slices.Sort(found)
 	return fmt.Errorf("books: %s holds settings under HEAD's flat key names (%s), which nothing reads any more and the cutover does not import from a --config file: "+
 		"move them to canonical keys in the operator file or to ABO_* environment names (the R2 release note lists every rename), "+
-		"or remove them; the config.yaml beside the database is imported once by the cutover and needs no change",
-		configFile, strings.Join(found, ", "))
+		"or remove them; the config.yaml beside the database is imported once by the cutover and needs no change (%w)",
+		configFile, strings.Join(found, ", "), coreconfig.ErrRetiredName)
 }
 
 // flipRetiredFileKeys are the top-level operator-file keys HEAD read that the

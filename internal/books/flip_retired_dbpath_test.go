@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/mediacore/app"
 	coreconfig "github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/stretchr/testify/require"
 
@@ -176,6 +177,10 @@ func TestRetiredDatabasePathRefusesStoreCreate(t *testing.T) {
 				require.Contains(t, err.Error(), c.retired)
 				require.Contains(t, err.Error(), "ABO_CORE_STORAGE_PATH")
 			}
+			// Both refusals are the retired-name class, so the process exits 78
+			// and systemd's RestartPreventExitStatus stops a restart loop.
+			require.ErrorIs(t, err, coreconfig.ErrRetiredName)
+			require.Equal(t, kernel.ExitConfig, kernel.ExitCode(err), "%v", err)
 			require.False(t, exists(in.state), "the refused resolution created the state directory")
 			require.False(t, exists(in.storeDir), "the refused resolution created the store directory the retired name pointed at")
 			require.Empty(t, dirImage(t, in.parent), "the refused resolution wrote under the install's parent directory")

@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
@@ -40,8 +41,10 @@ import (
 // (storage.ErrRewriteSwappedBack), and a store too new for this build
 // (*storage.LevelTooNewError, 05-storage §5S.3.7), and a store below a
 // declared upgrade floor (*storage.ErrUpgradeFloor, R2-4: the operator must
-// install the release it names first). A supervisor that restarts on failure
-// must not restart on it.
+// install the release it names first), and a retired config name in the
+// environment or the operator file (config.ErrRetiredName, 05-config §1.3.6:
+// the operator must rename it). A supervisor that restarts on failure must not
+// restart on it.
 const ExitConfig = 78
 
 // ExitCode maps a boot's error to the process's exit status: 0 for nil,
@@ -51,7 +54,7 @@ func ExitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	if errors.Is(err, storage.ErrCutoverBlocked) || errors.Is(err, storage.ErrRewriteSwappedBack) {
+	if errors.Is(err, storage.ErrCutoverBlocked) || errors.Is(err, storage.ErrRewriteSwappedBack) || errors.Is(err, config.ErrRetiredName) {
 		return ExitConfig
 	}
 	if _, ok := errors.AsType[*storage.LevelTooNewError](err); ok {

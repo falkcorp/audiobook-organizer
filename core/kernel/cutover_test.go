@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/storagemigrate"
@@ -977,6 +978,8 @@ func TestExitCode(t *testing.T) {
 		"blocked plain":  {storage.ErrCutoverBlocked, 78},
 		"swapped back":   {fmt.Errorf("storage: M8: %w", storage.ErrRewriteSwappedBack), 78},
 		"level too new":  {fmt.Errorf("kernel: P2: %w", &storage.LevelTooNewError{Owner: "gcpd", Store: 3, Supported: 2, Source: "stamp"}), 78},
+		"retired name":   {fmt.Errorf("kernel: config: %w", &config.RetiredNameError{Uses: []config.RetiredUse{{Name: "ENABLE_AUTH"}}}), 78},
+		"retired plain":  {config.ErrRetiredName, 78},
 		"anything else":  {errors.New("the Riddler's question"), 1},
 		"quarantine nil": {storage.ErrQuarantineNoSealer, 1},
 	} {
