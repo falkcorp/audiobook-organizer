@@ -378,8 +378,11 @@ func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error)
 		np.ClientAddr = p.ClientAddr
 		return np, nil
 	}
-	if p != nil && !p.built {
-		return nil, fmt.Errorf("%w: a principal auth did not build cannot be refreshed", ErrInvalidCredentials)
+	// p is whatever the caller holds, and a holder can write its exported
+	// fields: Refresh rebuilds for the user, method and credential it names, so
+	// it believes them only while they are what auth sealed (principalSeal).
+	if err := p.checkSeal(); err != nil {
+		return nil, err
 	}
 	u, k, err := s.stands(ctx, p)
 	if err != nil {
@@ -403,6 +406,7 @@ func (s *Service) Refresh(ctx context.Context, p *Principal) (*Principal, error)
 	np.CredentialID, np.keyID = p.CredentialID, p.keyID
 	np.AuthTime, np.Assurance, np.ClientAddr = p.AuthTime, p.Assurance, p.ClientAddr
 	np.notAfter = p.notAfter // carried, never extended
+	np.sealIdentity()        // the fields just set are core's, so they are sealed
 	return np, nil
 }
 
@@ -493,13 +497,14 @@ func (s *Service) PrincipalFor(ctx context.Context, u *User, m Method, scopes []
 	if (m == MethodAPIKey && len(scopes) == 0) || (scopes != nil && len(scopes) == 0) {
 		return nil, fmt.Errorf("%w: a key credential carries at least one scope", ErrInvalidCredentials)
 	}
-	return &Principal{
+	p := &Principal{
 		User:   u,
 		Method: m,
 		Perms: s.d.RBAC.Compile(rbac.CheckerInput{
 			Roles: slices.Clone(u.Roles), Scopes: slices.Clone(scopes), Interactive: s.interactive(m),
 		}),
 		scopes: slices.Clone(scopes),
-		built:  true,
-	}, nil
+	}
+	p.sealIdentity()
+	return p, nil
 }

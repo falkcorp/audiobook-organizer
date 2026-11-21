@@ -163,6 +163,16 @@ type Manifest struct {
 	// Config over core keys; a module that only reads its own sections has no
 	// use for it, so the access is a reviewed manifest line, never ambient.
 	AppConfig *AppConfigSpec
+
+	// AuthRefresh declares that the module re-derives the principal stage 12
+	// bound to a request (ABO: books' legacy-auth bridge, which must answer
+	// again after a password reset or a role change), and so receives
+	// Deps.AuthRefresh. false, the default, leaves Deps.AuthRefresh nil: the
+	// handle is never ambient, a reviewed manifest line like AppConfig. The
+	// declaration admits the module to auth.Service.Refresh and nothing wider;
+	// Refresh itself refuses any principal core did not build or whose identity
+	// fields its holder edited.
+	AuthRefresh bool
 }
 
 // AppConfigSpec is a module's declaration of App-wide config access.
