@@ -116,7 +116,7 @@ func TestITunesClone_OwnerManualOffTheRow(t *testing.T) {
 	files, err := f.s.GetBookFiles("F")
 	require.NoError(t, err)
 	require.Len(t, files, 1)
-	dw := "Doctor Who: The Chimes of Midnight"
+	dw := "Doctor Who: The Gotham Gambit"
 	files[0].TranscribedTitle = &dw
 	require.NoError(t, f.s.UpdateBookFile(files[0].ID, &files[0]))
 
@@ -137,11 +137,11 @@ func TestITunesClone_OwnerManualOffTheRow(t *testing.T) {
 // only by a file's transcribed title are skipped as owner-manual instead.
 func TestAuthorStripMerge_RelinkOwnerManualOffTheRow(t *testing.T) {
 	f := newRelinkFixture()
-	f.fetched["bk-t"] = "T.J. Ward"
-	f.fetched["bk-s"] = "T.J. Ward"
+	f.fetched["bk-t"] = "B.T. Wayne"
+	f.fetched["bk-s"] = "B.T. Wayne"
 	f.tags = map[string][]database.BookTag{"bk-t": {{BookID: "bk-t", Tag: franchise.Tags(franchise.BigFinish, "")[0]}}}
-	dw := "Doctor Who: The Chimes of Midnight"
-	f.files["bk-s"] = []database.BookFile{{ID: "f1", BookID: "bk-s", FilePath: "/lib/01 Arcane Chef 2/Arcane Chef 2/01.m4b", TranscribedTitle: &dw}}
+	dw := "Doctor Who: The Gotham Gambit"
+	f.files["bk-s"] = []database.BookFile{{ID: "f1", BookID: "bk-s", FilePath: "/lib/01 Dark Victory 2/Dark Victory 2/01.m4b", TranscribedTitle: &dw}}
 	calls, summary := f.run(t, `{"apply":true,"relink_title_as_author":true,"delete_title_as_author":true}`)
 	if len(calls.setAuthors["bk-t"]) != 0 || len(calls.setAuthors["bk-s"]) != 0 {
 		t.Errorf("owner-manual books were rewritten: %v", calls.setAuthors)

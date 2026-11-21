@@ -281,7 +281,7 @@ func TestAuthorDuplicateMerge_DanglingRefsDoNotHoldBack(t *testing.T) {
 		}, nil
 	}
 	require.NoError(t, p.runAuthorDuplicateMerge(context.Background(),
-		[]byte(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
+		[]byte(`{"names":["Harvey T. Dent"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
 	require.Equal(t, []int{2}, w.deletedAuthors, "dangling-only extra refs must not hold the row back")
 }
 
@@ -297,7 +297,7 @@ func TestAuthorDuplicateMerge_UnmovableTrashedRefStillHoldsBack(t *testing.T) {
 		return map[int]database.AuthorRefBuckets{1: {Live: 2}, 2: {Live: 1, Trashed: 1}}, nil
 	}
 	require.NoError(t, p.runAuthorDuplicateMerge(context.Background(),
-		[]byte(`{"names":["Raymond L. Weil"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
+		[]byte(`{"names":["Harvey T. Dent"],"dry_run":false}`), &opIDReporter{id: "op-dup-merge"}))
 	require.Empty(t, w.deletedAuthors)
 	require.Zero(t, w.total())
 }
