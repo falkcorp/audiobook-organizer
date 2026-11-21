@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/authstore"
 	"github.com/falkcorp/mediacore/internal/rbacstore"
@@ -77,6 +78,11 @@ type identityBoot struct {
 	svc    identityServices
 	mu     sync.Mutex
 	compat map[auth.Method]*lateCompat
+
+	// resolver is the OIDC account resolver P5 bound into
+	// Config.AccountResolver (bindAccountResolver); nil when the app handed no
+	// handle.
+	resolver *oidc.Resolver
 }
 
 // identityModules are the RBAC declarations fed to rbac's Declarer at P5 and

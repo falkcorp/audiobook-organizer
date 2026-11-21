@@ -36,6 +36,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -211,6 +212,14 @@ type Config struct {
 	// AuthMethod specs).
 	AuthOptions    auth.Options
 	Authenticators []auth.Extension
+
+	// AccountResolver is app.Options.AccountResolver: the late handle of the
+	// OIDC account resolver. Read only by the identity boot: P5 builds an
+	// oidc.Resolver over the identity stores and the auth service (its
+	// AccountLock is that service, so a sign-in takes the one e-mail lock every
+	// account creator holds), binds it here, and closeCore unbinds it. nil
+	// builds no resolver.
+	AccountResolver *oidc.LateResolver
 
 	// beforeP5 is called once with the kernel after P4d and before P5, the
 	// last point at which Importers still reach an rbac catalog that is not

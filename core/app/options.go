@@ -13,6 +13,7 @@ import (
 	"net/http"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
@@ -124,6 +125,20 @@ type Options struct {
 	// Registrar.AuthMethod, which refuses all three (SEC2-16). nil = none.
 	// Not read until F4-08's boot wiring.
 	Authenticators []auth.Extension // {Authenticator, Spec auth.MethodSpec, Order}
+
+	// AccountResolver is the late handle of the OIDC account resolver, for an
+	// identity extension that resolves a verified claim to a local user (ABO:
+	// internal/cfaccess). The app builds it with oidc.NewLateResolver, gives
+	// the same handle to the extension it puts in Authenticators and to this
+	// field. Read only by an identity boot (IdentityBoot): P5 builds the
+	// resolver over core's identity stores with the auth service as its
+	// account lock, so a sign-in creates and links accounts under the one
+	// e-mail lock auth's own creators hold, and binds it; close unbinds it.
+	// Until it is bound the handle refuses every claim
+	// (oidc.ErrResolverUnbound), so an extension that holds it admits nobody
+	// before the boot or on a boot that never declared IdentityBoot. nil
+	// builds no resolver (hello and new apps).
+	AccountResolver *oidc.LateResolver
 
 	// Auth is the app's compile-time auth configuration (05-authn §3.2
 	// auth.Options): accepted API-key prefixes and the defaults of the app's

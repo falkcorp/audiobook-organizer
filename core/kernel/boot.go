@@ -575,6 +575,9 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		cctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
 		defer cancel()
 		var errs []error
+		// The account resolver refuses first: a sign-in that starts from here
+		// is refused, not resolved against stores that are closing.
+		k.unbindAccountResolver()
 		// Whatever Run (or coretest) started stops first, scheduler before
 		// executor before the audit writer (06 §6.5.2), while storage is open;
 		// a no-op for a boot that started none, or when Run's stop order
