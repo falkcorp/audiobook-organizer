@@ -155,6 +155,13 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
+	// Under core identity (F4-08 B10b1fu) the account is core's, not books'
+	// store's: the password, the epoch and the status are core's to judge.
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.loginThroughCore(c, id, username, req.Password, ip, accountKey, throttleKey, req.DeviceInfo, now)
+		return
+	}
+
 	user, err := h.store.GetUserByUsername(username)
 	if err != nil {
 		// Transient, not a credential verdict.
