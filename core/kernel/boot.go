@@ -119,7 +119,7 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		}
 		// P4d (06 §6.5.1): the config store reads its DB layer once.
 		if k.cfgBoot != nil {
-			if err := k.phase(phaseP4d, func() error { return k.attachCoreConfig(ctx) }); err != nil {
+			if err := k.phase(phaseP4d, func() error { return k.p4d(ctx) }); err != nil {
 				return nil, err
 			}
 		}
@@ -556,6 +556,10 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		}
 		if k.store != nil {
 			k.awaitLateStops(cctx)
+		}
+		// The journal component's last anchor reads the store.
+		if err := k.closeIdentity(cctx); err != nil {
+			errs = append(errs, err)
 		}
 		if err := k.closeStorage(); err != nil {
 			errs = append(errs, err)

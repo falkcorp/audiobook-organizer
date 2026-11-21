@@ -185,7 +185,23 @@ type reapplyInput struct {
 	QueueBatch func() *storage.Batch
 	Clock      func() time.Time
 	Log        *slog.Logger
+	// FS is the filesystem of the journal's files: the journal, backup.location.json
+	// and the set-aside's rename. nil is the real one; the identity boot passes
+	// journalfs.From(ctx), so the crash-matrix kit sees these writes under their
+	// labels (docs/agent-tasks/platform-core/seams.d/F4-08-PB.md).
+	FS journal.FS
 }
+
+// fs is FS, or the real filesystem.
+func (in reapplyInput) fs() journal.FS {
+	if in.FS != nil {
+		return in.FS
+	}
+	return journal.OSFS()
+}
+
+// fsOpt is the option that runs a journal free function over FS.
+func (in reapplyInput) fsOpt() journal.FSOption { return journal.WithFS(in.FS) }
 
 func (in reapplyInput) now() time.Time {
 	if in.Clock != nil {
@@ -278,7 +294,7 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	// commit (§5B.3.6 row "Head in the store").
 	in.Journal.SetFrozen(restoring)
 
-	loc, haveLoc, locErr := journal.ReadLocation(in.StateDir)
+	loc, haveLoc, locErr := journal.ReadLocation(in.StateDir, in.fsOpt())
 	if locErr != nil {
 		// A missing file is "no marker" (row "Where"); one that exists and
 		// cannot be read or decoded is not: it may have held the evidence that
@@ -436,7 +452,7 @@ func (in reapplyInput) settleLocation(loc journal.Location, describes bool, res 
 	case in.Restore != nil && !in.Restore.Owed:
 		return recorded
 	}
-	if err := journal.MoveFile(recorded, in.JournalPath, in.Keys); err != nil {
+	if err := journal.MoveFile(recorded, in.JournalPath, in.Keys, in.fsOpt()); err != nil {
 		in.log().Error("kernel: the revocation journal was not moved to the new backup directory", "from", recorded, "to", in.JournalPath, "err", err)
 		in.Journal.NoteBroken(err)
 		return recorded
@@ -451,7 +467,7 @@ func (in reapplyInput) settleLocation(loc journal.Location, describes bool, res 
 // it the way it does on a chain that does not verify, and never continues as
 // if the journal were empty.
 func (in reapplyInput) readChain(path string, head journal.Head) *journal.Chain {
-	c, err := journal.ReadFile(path, in.Keys)
+	c, err := journal.ReadFile(path, in.Keys, in.fsOpt())
 	switch {
 	case err == nil:
 		return c
@@ -476,40 +492,47 @@ func (in reapplyInput) setAside(ctx context.Context, path string, head journal.H
 	// Only a regular file is renamed: a link planted at the journal's name is not
 	// the journal, and moving it would take whatever it points at out of the
 	// share's reach.
-	if fi, err := os.Lstat(path); err != nil {
+	fsys := in.fs()
+	if fi, err := fsys.Lstat(path); err != nil {
 		return false, fmt.Errorf("kernel: set the other install's journal aside: %w", err)
 	} else if !fi.Mode().IsRegular() {
 		return false, fmt.Errorf("kernel: set the other install's journal aside: %w: %s", journal.ErrNotRegular, path)
 	}
 	aside := path + ".other-install-" + in.now().Format("20060102T150405Z")
 	for n := 2; ; n++ {
-		if _, err := os.Lstat(aside); errors.Is(err, os.ErrNotExist) {
+		if _, err := fsys.Lstat(aside); errors.Is(err, os.ErrNotExist) {
 			break
 		}
 		aside = fmt.Sprintf("%s.other-install-%s-%d", path, in.now().Format("20060102T150405Z"), n)
 	}
-	if err := os.Rename(path, aside); err != nil {
+	if err := renameLabelled(fsys, LabelJournalAside, path, aside); err != nil {
 		return false, fmt.Errorf("kernel: set the other install's journal aside: %w", err)
 	}
-	if err := syncDirOf(path); err != nil {
+	if err := syncDirLabelled(fsys, LabelJournalAsideSync, filepath.Dir(path)); err != nil {
 		return false, err
 	}
 	// The app is the component's, the one source of the expected app: Bind
 	// refuses a header that names another (journal.ErrOtherApp), so the journal
 	// started here and the one Bind opens next cannot disagree.
 	hdr := journal.Header{InstallID: in.Install, App: in.Journal.App(), StartedAt: in.now()}
-	if err := journal.CreateBased(path, in.Keys, hdr, head); err != nil {
+	if err := journal.CreateBased(path, in.Keys, hdr, head, in.fsOpt()); err != nil {
 		return false, fmt.Errorf("kernel: start the new journal: %w", err)
 	}
 	return true, nil
 }
 
-func syncDirOf(path string) error {
-	d, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	return errors.Join(d.Sync(), d.Close())
+// renameLabelled is fsys.Rename inside the crash-matrix region label.
+func renameLabelled(fsys journal.FS, label, from, to string) error {
+	exit := fsys.Region(label)
+	defer exit()
+	return fsys.Rename(from, to)
+}
+
+// syncDirLabelled is fsys.SyncDir inside the crash-matrix region label.
+func syncDirLabelled(fsys journal.FS, label, dir string) error {
+	exit := fsys.Region(label)
+	defer exit()
+	return fsys.SyncDir(dir)
 }
 
 // untrusted decides whether the chain cannot be re-applied from, and records in
@@ -1283,7 +1306,7 @@ func restoreKindLabel(k journal.RestoreKind) string {
 
 // writeMarkers is the end of step 2 on a plain boot.
 func (in reapplyInput) writeMarkers(ctx context.Context, res *reapplyResult) error {
-	return writeStoreMarkers(ctx, in.Journal, res.Path, in.Identity, res.Moved, in.log())
+	return writeStoreMarkers(ctx, in.Journal, in.fs(), res.Path, in.Identity, res.Moved, in.log())
 }
 
 // writeStoreMarkers writes c/backup/served_boot and then backup.location.json
@@ -1291,7 +1314,7 @@ func (in reapplyInput) writeMarkers(ctx context.Context, res *reapplyResult) err
 // step 2 on a plain boot, step h on a restore boot, after the hooks); then it
 // removes the old journal file of a move, now that the record points at the new
 // one.
-func writeStoreMarkers(ctx context.Context, comp *journal.Component, path string, id storage.StoreIdentity, moved string, log *slog.Logger) error {
+func writeStoreMarkers(ctx context.Context, comp *journal.Component, fsys journal.FS, path string, id storage.StoreIdentity, moved string, log *slog.Logger) error {
 	exit := bootseam.Region(ctx, labelReapplyServedBoot)
 	pair, err := comp.AdvanceServedBoot(ctx)
 	exit()
@@ -1303,7 +1326,7 @@ func writeStoreMarkers(ctx context.Context, comp *journal.Component, path string
 		return fmt.Errorf("kernel: write %s: %w", journal.LocationFile, err)
 	}
 	if moved != "" {
-		if err := os.Remove(moved); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := journal.RemoveMoved(moved, journal.WithFS(fsys)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn("kernel: the old revocation journal could not be removed after the move", "path", moved, "err", err)
 		}
 	}

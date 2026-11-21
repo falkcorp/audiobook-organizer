@@ -76,3 +76,14 @@ func ReapplyLabels() []string {
 // file labels (the restore hooks' run ID, restore_hooks.go), for the writer
 // table.
 func HookRunLabels() []string { return []string{labelHooksRunEnsure, labelHooksRunClear} }
+
+// The crash-matrix labels of the kernel's own journal-file operations: the
+// set-aside of another install's journal (restore_reapply.go setAside) renames
+// it and fsyncs its directory, each in a region of the boot's journal
+// filesystem (journalfs.From). They run only on that non-default branch of the
+// re-apply, so every fixture allows them with a reason
+// (crashmatrix.JournalUnreachedLabels).
+const (
+	LabelJournalAside     = "kernel.journal.aside.rename"
+	LabelJournalAsideSync = "kernel.journal.aside.dirsync"
+)

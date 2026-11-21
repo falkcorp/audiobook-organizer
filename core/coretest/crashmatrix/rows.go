@@ -6,6 +6,8 @@
 package crashmatrix
 
 import (
+	"slices"
+
 	"github.com/falkcorp/mediacore/auth"
 	backupjournal "github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/bootseam/bootseamtest"
@@ -113,23 +115,23 @@ func Rows() []Row {
 		}},
 		{Phase: "P4d 2", Writer: "journal: the revocation journal file's creation, its header line and the directory fsync that makes the name durable, on the first open of a new journal (OpenFile; 05-backup §5B.3.6 row \"Format and integrity\")", Labels: []string{
 			backupjournal.LabelCreate, backupjournal.LabelHeader, backupjournal.LabelDirSync,
-		}, Unbound: unboundJournal},
+		}},
 		{Phase: "P4d 2", Writer: "journal: a line or several written and fsynced (Append, AppendLine), the cut back of one whose append failed, and the cut of an incomplete last line at open (§5B.3.6 \"Append failure\")", Labels: []string{
 			backupjournal.LabelAppend, backupjournal.LabelRollback, backupjournal.LabelCut,
-		}, Unbound: unboundJournal},
+		}},
 		{Phase: "P4d 2", Writer: "journal: CreateBased, a new journal that continues after the store's head, exclusively created, written, fsynced and its directory fsynced (the set-aside of another install's journal, §5B.3.6 \"Boot re-apply\" (0))", Labels: []string{
 			backupjournal.LabelBaseCreate, backupjournal.LabelBaseDirSync,
 		}},
 		{Phase: "P4d 2", Writer: "journal: backup.location.json, a temporary file written and fsynced, renamed over the file, the state directory fsynced, a failed temporary file removed (WriteLocation; §5B.3.6 row \"Where\")", Labels: []string{
 			backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync, backupjournal.LabelLocationCleanup,
-		}, Unbound: unboundJournal},
+		}},
 		{Phase: "P4d 2", Writer: "journal: MoveFile, the source's open, the destination directory, a leftover temporary copy cleared, the copy written and fsynced, renamed into place, the directory fsynced, a failed copy removed, and the old file removed once the record points at the new one (RemoveMoved; §5B.3.6 row \"Where\")", Labels: []string{
 			backupjournal.LabelMoveSource, backupjournal.LabelMoveMkdir, backupjournal.LabelMoveClear, backupjournal.LabelMoveCopy, backupjournal.LabelMoveRename,
 			backupjournal.LabelMoveDirSync, backupjournal.LabelMoveCleanup, backupjournal.LabelMoveRemoveSource,
 		}},
 		{Phase: "Retention (after a backup, not a boot step)", Writer: "journal: File.Trim, a leftover temporary file cleared, the kept lines and a new header written and fsynced to a temporary file that is locked, the temporary file renamed over the journal, the directory fsynced, a failed temporary file removed (retention's PruneJournal; §5B.3.6 row \"Retention\")", Labels: []string{
 			backupjournal.LabelTrimClear, backupjournal.LabelTrimCopy, backupjournal.LabelTrimRename, backupjournal.LabelTrimDirSync, backupjournal.LabelTrimCleanup,
-		}, Unbound: unboundJournalTrim},
+		}},
 		{Phase: "P4d 2", Writer: "the kernel: another install's journal renamed aside and the directory fsynced before CreateBased starts the new one (restore_reapply.go setAside, around :491, and syncDirOf, around :504), raw os calls the kit cannot see until F4-08 routes them through a labelled journal filesystem; a fixture that reaches them (another install's journal on disk) is the F4-08 scenario", Labels: []string{
 			LabelKernelJournalAside, LabelKernelJournalAsideSync,
 		}},
@@ -143,37 +145,57 @@ func Rows() []Row {
 
 		// F4-08 A5: the identity boot's store commits (P4d steps 2-4, P7's
 		// seeds), one block so a re-cut of another PR's edits to this table
-		// conflicts trivially. Unbound until F4-08 wires them.
-		{Phase: "P4d 2", Writer: "the kernel: the re-apply's store commits: each tail chunk's two batches (auth's revocations, then rbac's with the head), each drained chunk's two (the second with the dequeue of its entries), the head of the boot's own line committed alone, a restore boot's restore line with its head, the unapplied queue's batches, the dequeue of the entries a kept admin held, the kept admins' restriction, the withheld head, MarkUnappliedClosed, and served_boot (on a restore boot after the hooks) (restore_reapply.go; 05-backup §5B.3.6 \"Boot re-apply\")", Labels: kernel.ReapplyLabels(), Unbound: unboundIdentityBoot},
-		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (restore_hooks.go; journal.EnsureHookRun, journal.ClearHookRun)", Labels: kernel.HookRunLabels(), Unbound: unboundIdentityBoot},
-		{Phase: "P4d 4", Writer: "auth: BootWrites' commits: the _system user's seed, the bootstrap token's mint or the deletion of the stored ones, and the start-up key's revoke and mint (05-authn §3.2, §4.6)", Labels: auth.BootWritesLabels(), Unbound: unboundIdentityBoot},
-		{Phase: "P7", Writer: "rbac: the seed roles' batch (CommitSeeds; 05-rbac §5)", Labels: []string{rbac.LabelCommitSeeds}, Unbound: unboundIdentityBoot},
+		// conflicts trivially. The boot wires them behind app.Options.IdentityBoot
+		// (F4-08 B3); IdentityUnreachedLabels is what no fixture reaches yet.
+		{Phase: "P4d 2", Writer: "the kernel: the re-apply's store commits: each tail chunk's two batches (auth's revocations, then rbac's with the head), each drained chunk's two (the second with the dequeue of its entries), the head of the boot's own line committed alone, a restore boot's restore line with its head, the unapplied queue's batches, the dequeue of the entries a kept admin held, the kept admins' restriction, the withheld head, MarkUnappliedClosed, and served_boot (on a restore boot after the hooks) (restore_reapply.go; 05-backup §5B.3.6 \"Boot re-apply\")", Labels: kernel.ReapplyLabels()},
+		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (restore_hooks.go; journal.EnsureHookRun, journal.ClearHookRun)", Labels: kernel.HookRunLabels()},
+		{Phase: "P4d 4", Writer: "auth: BootWrites' commits: the _system user's seed, the bootstrap token's mint or the deletion of the stored ones, and the start-up key's revoke and mint (05-authn §3.2, §4.6)", Labels: auth.BootWritesLabels()},
+		{Phase: "P4d 2 (before the journal opens)", Writer: "the kernel: the effective backup directory created in the boot's journal filesystem, so the journal file can be created inside it (identity_p4d.go ensureBackupDir; a no-operation when the directory exists)", Labels: []string{kernel.LabelBackupDirMkdir}},
+		{Phase: "P4d 4", Writer: "auth: BootWrites' state files, each a temporary file written and fsynced, renamed into place and the state directory fsynced: the bootstrap token (written, or removed when bootstrap is disabled) and the start-up key's file (05-authn §4.6; auth.StateFiles over the labelled state directory)", Labels: []string{auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel}},
+		{Phase: "P7", Writer: "rbac: the seed roles' batch (CommitSeeds; 05-rbac §5)", Labels: []string{rbac.LabelCommitSeeds}},
 	}
 }
 
-// unboundIdentityBoot is the Unbound reason of the identity boot's rows (F4-08
-// A5): the writers carry their labels, and no boot runs them yet.
-const unboundIdentityBoot = "no boot runs P4d steps 2-4 or P7's seed commit until F4-08 wires them (the kernel builds rbac, auth and audit only once the app declares Options.Auth)"
+// IdentityUnreachedLabels is the allow-map entries, one reason per label, for
+// every writer the identity boot wires (F4-08 B3: P4d steps 2-4, the journal,
+// P7's seed commit) that no fixture reaches yet, because no fixture declares the
+// flip (app.Options.IdentityBoot): hello's does at B9 and ABO's at B10. A
+// fixture's allow map takes the whole set (maps.Copy) and drops a label only
+// when one of its own scenarios reaches it; Unobserved reports an entry a
+// fixture reaches as stale, so a boot that starts reaching a writer fails until
+// its entry goes. The two labels that no fault-free boot reaches even with
+// identity on are given their own reasons.
+func IdentityUnreachedLabels() map[string]string {
+	const (
+		flip = "no fixture declares the identity flip (app.Options.IdentityBoot) until F4-08 B9 (hello) and B10 (ABO); the first fixture that does reaches this writer and drops the entry"
+		trim = "nothing calls File.Trim until F8-04a G2 wires backup.Options.PruneJournal to Component.Trim; core/internal/journalfs's TestKill_Trim breaks its steps meanwhile"
+		roll = "a failed append's cut back runs only after a journal write failed; core/backup/journal's own crash cells break it, and no fault-free boot appends a line that fails"
+		cut  = "the cut of an incomplete last line runs only when a journal ends mid-line, which a crash leaves; no fault-free boot starts from one"
+	)
+	out := map[string]string{}
+	for _, l := range slices.Concat(
+		kernel.ReapplyLabels(), kernel.HookRunLabels(), auth.BootWritesLabels(),
+		[]string{rbac.LabelCommitSeeds, kernel.LabelBackupDirMkdir, auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel},
+		[]string{backupjournal.LabelCreate, backupjournal.LabelHeader, backupjournal.LabelDirSync, backupjournal.LabelAppend},
+		[]string{backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync, backupjournal.LabelLocationCleanup},
+	) {
+		out[l] = flip
+	}
+	for _, l := range []string{backupjournal.LabelTrimClear, backupjournal.LabelTrimCopy, backupjournal.LabelTrimRename, backupjournal.LabelTrimDirSync, backupjournal.LabelTrimCleanup} {
+		out[l] = trim
+	}
+	out[backupjournal.LabelRollback] = roll
+	out[backupjournal.LabelCut] = cut
+	return out
+}
 
-// unboundJournal is the Unbound reason of the journal's file-writer rows that
-// the first boot with a revocation in it reaches (open, append, location).
-const unboundJournal = "no boot binds the revocation journal until F4-08 wires P4d step 2 (the kernel opens the journal component with core/internal/journalfs's filesystem)"
-
-// unboundJournalTrim is the Unbound reason of File.Trim's row: no boot binds the
-// journal until F4-08, and nothing calls Trim until F8-04a's G2 wires
-// backup.Options.PruneJournal to Component.Trim. The trim's own crash cells
-// (core/internal/journalfs, TestKill_Trim) break every step of it meanwhile.
-const unboundJournalTrim = "no boot binds the revocation journal until F4-08, and nothing calls File.Trim until F8-04a G2 wires backup.Options.PruneJournal to it; core/internal/journalfs's TestKill_Trim breaks its steps meanwhile"
-
-// The kernel-side labels of the journal's set-aside, which F4-08 gives the two
-// raw os calls of core/kernel/restore_reapply.go's setAside (and, with them,
-// the raw os.Remove of the moved source, writeStoreMarkers around :1274, which
-// F4-08 moves onto journal.RemoveMoved). No code carries them yet; they are
-// listed so the matrix already knows the writers exist, and every fixture
-// allows them with a reason (they run on a non-default branch of the re-apply).
+// The kernel-side labels of the journal's set-aside: the rename of another
+// install's journal and the fsync of its directory (core/kernel/restore_reapply.go
+// setAside, through the boot's journal filesystem). They run on a non-default
+// branch of the re-apply, so every fixture allows them with a reason.
 const (
-	LabelKernelJournalAside     = "kernel.journal.aside.rename"
-	LabelKernelJournalAsideSync = "kernel.journal.aside.dirsync"
+	LabelKernelJournalAside     = kernel.LabelJournalAside
+	LabelKernelJournalAsideSync = kernel.LabelJournalAsideSync
 )
 
 // JournalUnreachedLabels is the allow-map entries, one reason per label, for
