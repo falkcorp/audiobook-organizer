@@ -330,6 +330,10 @@ type ConfigCheck struct {
 	Config          config.Options
 	StateDirDefault string
 	Modules         []module.Module
+	// Defaults are the app's compiled defaults of core keys (Config.CoreDefaults):
+	// the retired-name verdicts do not depend on them, but OperatorConfig's
+	// effective values do.
+	Defaults CoreDefaults
 }
 
 // CheckConfig is the engine of the offline command config check (05-config
@@ -343,34 +347,48 @@ type ConfigCheck struct {
 // sections, enabled or not, is judged as a start judges it. bootConfig also
 // runs it, before step 0, so a refused boot creates no directory.
 func CheckConfig(ctx context.Context, c ConfigCheck) (uses []config.RetiredUse, err error) {
+	st, lerr, err := loadOperatorLayers(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, st.Close(ctx)) }()
+	return st.RetiredSet(), lerr
+}
+
+// loadOperatorLayers is CheckConfig's store: every core section (with c's
+// core defaults) and every compiled module's sections registered, then Load
+// over the operator layers alone. It opens no store, reads no boot record and
+// creates no directory. err is a failure to build the store, which is then
+// closed; lerr is Load's own result, with the store left open for the caller
+// to close.
+func loadOperatorLayers(ctx context.Context, c ConfigCheck) (st *config.Store, lerr, err error) {
 	o := c.Config
 	o.BootRecordRoot = nil
 	o.Metrics, o.Secrets = nil, nil
-	st, err := config.NewStore(o)
+	st, err = config.NewStore(o)
 	if err != nil {
-		return nil, fmt.Errorf("kernel: config check: %w", err)
+		return nil, nil, fmt.Errorf("kernel: config check: %w", err)
 	}
-	defer func() { err = errors.Join(err, st.Close(ctx)) }()
-	rest, err := coreSectionsButPathsAndModules(CoreDefaults{})
+	fail := func(e error) (*config.Store, error, error) { return nil, nil, errors.Join(e, st.Close(ctx)) }
+	rest, err := coreSectionsButPathsAndModules(c.Defaults)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if _, err := config.RegisterSections(st.Registry(), rest...); err != nil {
-		return nil, fmt.Errorf("kernel: config check: register the core sections: %w", err)
+		return fail(fmt.Errorf("kernel: config check: register the core sections: %w", err))
 	}
 	if _, _, _, err := registerPathsAndModules(st, c.StateDirDefault, c.Modules); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	for _, m := range c.Modules {
 		man := m.Manifest()
 		for _, sec := range man.Settings {
 			if _, err := sec.Register(st.Registry()); err != nil {
-				return nil, fmt.Errorf("kernel: config check: register %s's section %s: %w", man.ID, sec.Path(), err)
+				return fail(fmt.Errorf("kernel: config check: register %s's section %s: %w", man.ID, sec.Path(), err))
 			}
 		}
 	}
-	lerr := st.Load(ctx)
-	return st.RetiredSet(), lerr
+	return st, st.Load(ctx), nil
 }
 
 // bootRoot is Options.BootRecordRoot. Boot hands back core.paths.state_dir
