@@ -24,22 +24,7 @@ import LockOpenIcon from '@mui/icons-material/LockOpen';
 import type { Audiobook } from '../../types';
 import type { MetadataFieldStates, MetadataFieldStateEntry } from '../../services/api';
 import * as api from '../../services/api';
-
-// Maps Audiobook field names to their backend field-state keys
-const FIELD_STATE_KEYS: Record<string, string> = {
-  title: 'title',
-  author: 'author_name',
-  narrator: 'narrator',
-  series: 'series_name',
-  series_number: 'series_position',
-  genre: 'genre',
-  year: 'audiobook_release_year',
-  language: 'language',
-  publisher: 'publisher',
-  isbn10: 'isbn10',
-  isbn13: 'isbn13',
-  description: 'description',
-};
+import { FIELD_TO_API as FIELD_STATE_KEYS } from './editOverrides';
 
 function formatValue(val: unknown): string {
   if (val === undefined || val === null || val === '') return '';
@@ -50,7 +35,14 @@ interface MetadataEditDialogProps {
   open: boolean;
   audiobook: Audiobook | null;
   onClose: () => void;
-  onSave: (audiobook: Audiobook, dirtyFields: Set<string>) => Promise<void>;
+  // lockChanges holds the NET lock toggles (form field -> new locked state):
+  // a field toggled back to its loaded state is absent, and a dirty field
+  // appears only when the user explicitly toggled its lock.
+  onSave: (
+    audiobook: Audiobook,
+    dirtyFields: Set<string>,
+    lockChanges: Record<string, boolean>
+  ) => Promise<void>;
 }
 
 export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
@@ -157,6 +149,22 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     setDirty('year', parsed);
   };
 
+  const computeLockChanges = (): Record<string, boolean> => {
+    const changes: Record<string, boolean> = {};
+    for (const [field, locked] of Object.entries(lockOverrides)) {
+      if (dirtyFields.has(field)) {
+        // A dirty field is locked by default, so any explicit toggle is sent.
+        changes[field] = locked;
+        continue;
+      }
+      // Net change only: re-sending the loaded state would, for a repair
+      // lock, turn it into a user lock.
+      const loaded = getFieldState(field)?.override_locked ?? false;
+      if (locked !== loaded) changes[field] = locked;
+    }
+    return changes;
+  };
+
   const handleSave = async () => {
     if (!audiobook) return;
     setSaving(true);
@@ -167,7 +175,7 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
         setSaving(false);
         return;
       }
-      await onSave({ ...audiobook, ...formData }, dirtyFields);
+      await onSave({ ...audiobook, ...formData }, dirtyFields, computeLockChanges());
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save metadata');
@@ -218,6 +226,8 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
     const { multiline, rows, type, width } = options || {};
     const currentVal = field === 'year' ? yearInput : String(formData[field] ?? '');
     const entry = getFieldState(field);
+    // Only fields with a server-side lock get a padlock; the rest would be dead buttons.
+    const lockable = field in FIELD_STATE_KEYS;
     const locked = isFieldLocked(field);
     const isDirty = dirtyFields.has(field);
     const fetchedStr = entry ? formatValue(entry.fetched_value) : '';
@@ -246,70 +256,73 @@ export const MetadataEditDialog: React.FC<MetadataEditDialogProps> = ({
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0 }}>
-          <Tooltip
-            title={
-              locked && repairLockSource(field)
-                ? `Repair lock (${repairLockSource(field)}) — set by a repair so rescans and fetches keep its fix; a match you pick by hand may still replace it. Click to unlock.`
-                : locked
-                  ? 'Your lock — will not be overwritten by metadata fetches. Click to unlock.'
-                  : 'Unlocked — may be updated by metadata fetches. Click to lock.'
-            }
-          >
-            <IconButton
-              size="small"
-              onClick={() => toggleLock(field)}
-              aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`}
-              // This is a toggle, so its state belongs in aria-pressed rather
-              // than only in the icon it happens to render. Screen readers
-              // announce pressed/not pressed; without it the state is carried
-              // solely by a glyph, which is also why the e2e suite was asserting
-              // on MUI's internal icon `data-testid` -- an affordance MUI 9
-              // stopped emitting in production builds.
-              aria-pressed={locked}
-              sx={[
-                {
-                  mt: '10px',
-                  mr: 0.5,
-                  flexShrink: 0,
-                  width: 32,
-                  height: 32,
-                  border: '1px solid',
-                  borderRadius: 1,
-                },
-                locked
-                  ? {
-                      borderColor: 'warning.main',
-                    }
-                  : {
-                      borderColor: 'divider',
-                    },
-                locked
-                  ? {
-                      bgcolor: 'rgba(237, 108, 2, 0.08)',
-                    }
-                  : {
-                      bgcolor: 'transparent',
-                    },
-                locked
-                  ? {
-                      '&:hover': {
-                        bgcolor: 'rgba(237, 108, 2, 0.16)',
-                      },
-                    }
-                  : {
-                      '&:hover': {
-                        bgcolor: 'action.hover',
-                      },
-                    },
-              ]}
+          {lockable && (
+            <Tooltip
+              title={
+                locked && repairLockSource(field)
+                  ? `Repair lock (${repairLockSource(field)}) — set by a repair so rescans and fetches keep its fix; a match you pick by hand may still replace it. Click to unlock.`
+                  : locked
+                    ? 'Your lock — will not be overwritten by metadata fetches. Click to unlock.'
+                    : 'Unlocked — may be updated by metadata fetches. Click to lock.'
+              }
             >
-              {locked ? (
-                <LockIcon sx={{ fontSize: 16, color: 'warning.main' }} />
-              ) : (
-                <LockOpenIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
-              )}
-            </IconButton>
-          </Tooltip>
+              <IconButton
+                size="small"
+                onClick={() => toggleLock(field)}
+                aria-label={`${locked ? 'Unlock' : 'Lock'} ${label}`}
+                // This is a toggle, so its state belongs in aria-pressed rather
+                // than only in the icon it happens to render. Screen readers
+                // announce pressed/not pressed; without it the state is carried
+                // solely by a glyph, which is also why the e2e suite was asserting
+                // on MUI's internal icon `data-testid` -- an affordance MUI 9
+                // stopped emitting in production builds.
+                aria-pressed={locked}
+                sx={[
+                  {
+                    mt: '10px',
+                    mr: 0.5,
+                    flexShrink: 0,
+                    width: 32,
+                    height: 32,
+                    border: '1px solid',
+                    borderRadius: 1,
+                  },
+                  locked
+                    ? {
+                        borderColor: 'warning.main',
+                      }
+                    : {
+                        borderColor: 'divider',
+                      },
+                  locked
+                    ? {
+                        bgcolor: 'rgba(237, 108, 2, 0.08)',
+                      }
+                    : {
+                        bgcolor: 'transparent',
+                      },
+                  locked
+                    ? {
+                        '&:hover': {
+                          bgcolor: 'rgba(237, 108, 2, 0.16)',
+                        },
+                      }
+                    : {
+                        '&:hover': {
+                          bgcolor: 'action.hover',
+                        },
+                      },
+                ]}
+              >
+                {locked ? (
+                  <LockIcon sx={{ fontSize: 16, color: 'warning.main' }} />
+                ) : (
+                  <LockOpenIcon sx={{ fontSize: 16, color: 'text.disabled' }} />
+                )}
+          {!lockable && <Box sx={{ width: 36, flexShrink: 0 }} />}
+              </IconButton>
+            </Tooltip>
+          )}
           <Box sx={{ flexGrow: 1 }}>
             <TextField
               fullWidth

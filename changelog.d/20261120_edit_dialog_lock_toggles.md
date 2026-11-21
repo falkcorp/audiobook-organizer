@@ -1,0 +1,3 @@
+### Fixed
+
+- The padlock buttons in the metadata edit dialog now take effect on Save. A lock or unlock toggled without editing the field was dropped (Book Detail built its overrides from edited fields only), and an edited field the user had explicitly unlocked was still locked. The dialog now reports its net lock changes; `web/src/components/audiobooks/editOverrides.ts` builds lock-only overrides (no `value`, so no edit is recorded) for toggled fields and `locked: false` for an edited field left unlocked. A toggled-and-restored lock sends nothing, so a repair lock is not turned into a user lock. The Library page's edit dialog sends the same lock-only overrides. Fields the server cannot lock (track and disk numbers) no longer show a padlock that did nothing.

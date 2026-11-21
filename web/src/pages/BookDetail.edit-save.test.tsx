@@ -64,7 +64,9 @@ const openEditor = async () => {
   return { dialog, title };
 };
 
-type Payload = Record<string, unknown> & { overrides?: Record<string, { value: unknown }> };
+type Payload = Record<string, unknown> & {
+  overrides?: Record<string, { value?: unknown; locked?: boolean }>;
+};
 const sentPayload = (): Payload => vi.mocked(api.updateBook).mock.calls[0][1] as Payload;
 
 beforeEach(() => {
@@ -161,8 +163,39 @@ describe('BookDetail handleEditSave', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
 
     expect(
-      await screen.findByText(/Metadata saved, but not completely: .*field locks and overrides were not: disk full/)
+      await screen.findByText(
+        /Metadata saved, but not completely: .*field locks and overrides were not: disk full/
+      )
     ).toBeInTheDocument();
     expect(screen.queryByText('Metadata saved. Edited fields are now locked.')).toBeNull();
+  });
+
+  it('sends a lock-only override, with no value, for a toggle-only save', async () => {
+    renderPage();
+    const { dialog } = await openEditor();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Lock Narrator' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
+
+    await waitFor(() => expect(api.updateBook).toHaveBeenCalled());
+    const overrides = sentPayload().overrides;
+    expect(overrides).toEqual({ narrator: { locked: true } });
+    expect(overrides?.narrator && 'value' in overrides.narrator).toBe(false);
+    expect(
+      await screen.findByText('Metadata saved. Field lock changes applied.')
+    ).toBeInTheDocument();
+  });
+
+  it('sends locked: false for an edited field the user unlocked', async () => {
+    renderPage();
+    const { dialog, title } = await openEditor();
+    fireEvent.change(title, { target: { value: 'Redshirts (Unabridged)' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unlock Title *' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^save/i }));
+
+    await waitFor(() => expect(api.updateBook).toHaveBeenCalled());
+    expect(sentPayload().overrides?.title).toEqual({
+      value: 'Redshirts (Unabridged)',
+      locked: false,
+    });
   });
 });

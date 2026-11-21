@@ -38,6 +38,7 @@ import {
   BookDetailDialogs,
   type MetadataRejection,
 } from '../components/bookdetail/BookDetailDialogs';
+import { buildOverrides } from '../components/audiobooks/editOverrides';
 import { sanitizeReturn } from '../utils/safeReturn';
 import { describeBlockOutcome, describeDeleteBookError } from '../utils/deleteBookError';
 import { apiFetch } from '../utils/apiFetch';
@@ -997,26 +998,14 @@ export const BookDetail = () => {
   // "new" book, and the user's edits were wiped while the dialog stayed open.
   const editAudiobook = useMemo(() => (book ? mapBookToAudiobook(book) : null), [book]);
 
-  const handleEditSave = async (updated: Audiobook, dirtyFields: Set<string>) => {
+  const handleEditSave = async (
+    updated: Audiobook,
+    dirtyFields: Set<string>,
+    lockChanges: Record<string, boolean>
+  ) => {
     if (!book) return;
     setActionLoading(true);
     setActionLabel('Saving changes...');
-
-    // Map form field names to API field names for overrides
-    const FIELD_TO_API: Record<string, string> = {
-      title: 'title',
-      author: 'author_name',
-      narrator: 'narrator',
-      series: 'series_name',
-      series_number: 'series_position',
-      genre: 'genre',
-      year: 'audiobook_release_year',
-      language: 'language',
-      publisher: 'publisher',
-      isbn10: 'isbn10',
-      isbn13: 'isbn13',
-      description: 'description',
-    };
 
     // Build payload outside try so it's accessible in catch for conflict retry
     const payload: Partial<Book> & { overrides?: Record<string, OverridePayload> } = {
@@ -1054,32 +1043,28 @@ export const BookDetail = () => {
       series_name: updated.series ?? '',
     };
 
-    // Auto-lock edited fields (Plex-style: edits are automatically locked)
-    if (dirtyFields && dirtyFields.size > 0) {
-      const overrides: Record<string, OverridePayload> = {};
-      for (const field of dirtyFields) {
-        const apiField = FIELD_TO_API[field];
-        if (!apiField) continue;
-        const value =
-          field === 'year'
-            ? (updated.year ?? updated.audiobook_release_year ?? null)
-            : field === 'series_number'
-              ? (updated.series_number ?? null)
-              : ((updated as unknown as Record<string, unknown>)[field] ?? null);
-        overrides[apiField] = { value, locked: true };
-      }
-      if (Object.keys(overrides).length > 0) {
-        payload.overrides = overrides;
-      }
+    // Auto-lock edited fields (Plex-style: edits are automatically locked),
+    // and carry any lock toggles the user made without editing the field.
+    const overrides = buildOverrides(updated, dirtyFields ?? new Set(), lockChanges ?? {});
+    if (Object.keys(overrides).length > 0) {
+      payload.overrides = overrides;
     }
+    const lockToggled = Object.keys(lockChanges ?? {}).length > 0;
 
     try {
-      const { book: saved, warnings } = api.splitUpdateWarnings(await api.updateBook(book.id, payload));
+      const { book: saved, warnings } = api.splitUpdateWarnings(
+        await api.updateBook(book.id, payload)
+      );
       setBook(saved);
       if (warnings.length > 0) {
         toast(`Metadata saved, but not completely: ${warnings.join('; ')}`, 'warning');
       } else {
-        toast('Metadata saved. Edited fields are now locked.', 'success');
+        toast(
+          lockToggled
+            ? 'Metadata saved. Field lock changes applied.'
+            : 'Metadata saved. Edited fields are now locked.',
+          'success'
+        );
       }
       setEditDialogOpen(false);
       refreshFilesTab(); // reload tags/changelog to reflect saved changes
@@ -1176,7 +1161,8 @@ export const BookDetail = () => {
           startIcon={<ArrowBackIcon />}
           sx={{ mt: 2 }}
           onClick={() => {
-            const returnUrl = sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
+            const returnUrl =
+              sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
             navigate(returnUrl);
           }}
         >
@@ -1214,7 +1200,8 @@ export const BookDetail = () => {
         versions={versions}
         activeTab={activeTab}
         onBack={() => {
-          const returnUrl = sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
+          const returnUrl =
+            sanitizeReturn(sessionStorage.getItem('library_return_url')) || '/library';
           navigate(returnUrl);
         }}
         onSetActiveTab={setActiveTab}

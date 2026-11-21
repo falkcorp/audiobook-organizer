@@ -141,4 +141,76 @@ describe('MetadataEditDialog', () => {
     fireEvent.mouseOver(narratorLock);
     expect(await screen.findByText(/Your lock — will not be overwritten/)).toBeInTheDocument();
   });
+
+  const lastSave = (onSave: ReturnType<typeof vi.fn>) =>
+    onSave.mock.calls[0] as [Audiobook, Set<string>, Record<string, boolean>];
+
+  it('reports a lock toggled without any edit', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <MetadataEditDialog open audiobook={book} onClose={vi.fn()} onSave={onSave} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lock Narrator' }));
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const [, dirty, lockChanges] = lastSave(onSave);
+    expect(dirty.size).toBe(0);
+    expect(lockChanges).toEqual({ narrator: true });
+  });
+
+  it('sends nothing when a lock is toggled and toggled back', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <MetadataEditDialog open audiobook={book} onClose={vi.fn()} onSave={onSave} />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lock Narrator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock Narrator' }));
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(lastSave(onSave)[2]).toEqual({});
+  });
+
+  it('sends nothing for a repair-locked field that was never clicked', async () => {
+    vi.mocked(api.getAudiobookFieldStates).mockResolvedValueOnce({
+      narrator: { override_locked: true, lock_source: 'repair:op-1' },
+    } as unknown as Awaited<ReturnType<typeof api.getAudiobookFieldStates>>);
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <MetadataEditDialog open audiobook={book} onClose={vi.fn()} onSave={onSave} />
+    );
+
+    await screen.findByRole('button', { name: 'Unlock Narrator' });
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(lastSave(onSave)[2]).toEqual({});
+  });
+
+  it('reports an explicit unlock of an edited field', async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <MetadataEditDialog open audiobook={book} onClose={vi.fn()} onSave={onSave} />
+    );
+
+    fireEvent.change(screen.getByLabelText(/^Author/), { target: { value: 'Alfred Pennyworth' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock Author' }));
+    fireEvent.click(screen.getByRole('button', { name: /^save/i }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    const [, dirty, lockChanges] = lastSave(onSave);
+    expect(dirty.has('author')).toBe(true);
+    expect(lockChanges).toEqual({ author: false });
+  });
+
+  it('renders no padlock for fields the server cannot lock', () => {
+    renderWithProviders(
+      <MetadataEditDialog open audiobook={book} onClose={vi.fn()} onSave={vi.fn()} />
+    );
+    expect(screen.queryByRole('button', { name: /(Lock|Unlock) Track Number/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Lock Narrator' })).toBeInTheDocument();
+  });
 });
