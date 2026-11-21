@@ -164,6 +164,9 @@ var layerOf = map[string]int{
 	"internal/search":      2, // table: storage
 
 	// Layer 3: domain
+	"internal/books/searchindex":                 3, // computed: max of imports=2 (search, books/store), floored at 3
+	"internal/books/searchindex/searchindextest": 3, // computed: max of imports=3 (searchindex), floored at 3
+
 	"internal/activity":                 3, // computed: max of imports=3, floored at 3
 	"internal/ai":                       3, // computed: max of imports=3, floored at 3
 	"internal/ai/aijobs":                3, // computed: max of imports=2, floored at 3
