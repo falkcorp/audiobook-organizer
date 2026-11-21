@@ -1,0 +1,9 @@
+### Fixed
+
+- Config flip (F3-07): a flipped boot keeps the library root. `root_dir` and `path_aliases` are class i: M2 leaves them in the settings blob for M6, which ships with F7. The books settings projection read them only from `core.library.roots`, which nothing writes before F7, so a store whose root was in the blob (every install that runs with no `--dir` and no `ABO_CORE_LIBRARY_ROOTS`) booted with no library root. The projection now reads and writes both fields in the blob. An operator layer that sets `core.library.roots` (`ABO_CORE_LIBRARY_ROOTS` or the operator file) overrides them and locks both, so a save of either is refused. A save of a root that is not an absolute path, or that holds a NUL, is refused, because M6 would quarantine it. A root save no longer writes `core.library.roots`, which M6 would have overwritten from the blob at F7. `cutover.FoldRoots` is deleted.
+- M2 (`books.config-cutover`) now stores a VerifyReport with its counts. Read is the encrypted settings rows present, Written the rows whose value was imported, and Quarantined the rows quarantined. Verify fails when those and the rows deleted by rule do not add up to Read. Before, every count in the stored report was zero. The settings blob is not counted: it is rewritten in place, and a quarantine record of one of its members is not a row.
+
+### Changed
+
+- `AUDIOBOOK_ROOT_DIR` is a retired env name with verdict warn. No build ever read it. A boot that finds it set logs a warning that says to delete it and raises `config_retired_name_ignored`. It is in `deploy/retired-env-names.txt`, so `make deploy` refuses a `deploy/local.conf` that sets it.
+- core config: a retired name's message (`RetiredName.Message`) now travels on `RetiredUse.Message`. A refused boot (`RetiredNameError`) prints it after the name, as the boot warning does, and `config check` prints it for every retired name, not only for removed settings.
