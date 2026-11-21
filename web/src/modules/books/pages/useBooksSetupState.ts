@@ -8,6 +8,8 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
+import { useToast } from '../../../components/toast/ToastProvider';
+import { installRecommendedTools } from './installRecommendedTools';
 
 /**
  * All of the first-run wizard's books state: the library path, the OpenAI key, the iTunes library,
@@ -43,9 +45,12 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
     Record<number, api.ITunesTestMappingResponse | null>
   >({});
   const [testingMapping, setTestingMapping] = useState<number | null>(null);
-  const [toolInstallChoice, setToolInstallChoice] = useState<'recommended' | 'custom'>(
+  // 'skip' is what the Tools step's Skip button sets: nothing is installed. 'custom' shows the tools
+  // panel, which installs one tool at a time itself.
+  const [toolInstallChoice, setToolInstallChoice] = useState<'recommended' | 'custom' | 'skip'>(
     'recommended'
   );
+  const { toast } = useToast();
 
   useEffect(() => {
     if (!open) return;
@@ -237,6 +242,12 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
       localStorage.setItem(STORAGE_KEYS.WELCOME_WIZARD_COMPLETED, 'true');
 
       onComplete();
+
+      // Last, and not awaited: the setup is already saved, and the install downloads for as long as
+      // Ollama takes. It reports through toasts and never throws.
+      if (toolInstallChoice === 'recommended') {
+        void installRecommendedTools(toast);
+      }
     } catch (error) {
       console.error('Failed to complete setup:', error);
       alert('Failed to save settings. Please check the console for details.');

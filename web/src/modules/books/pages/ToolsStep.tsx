@@ -20,6 +20,10 @@ import { useBooksSetup } from './booksSetupContext';
 
 export function ToolsStep({ onNext }: { onNext: () => void }) {
   const { toolInstallChoice, setToolInstallChoice } = useBooksSetup();
+  const skip = () => {
+    setToolInstallChoice('skip');
+    onNext();
+  };
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
@@ -67,7 +71,7 @@ export function ToolsStep({ onNext }: { onNext: () => void }) {
       <Button
         variant="text"
         size="small"
-        onClick={onNext}
+        onClick={skip}
         sx={{ mt: 1 }}
       >
         Skip — I'll set this up later
