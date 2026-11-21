@@ -203,6 +203,13 @@ type Config struct {
 	// AuthMethod specs).
 	AuthOptions    auth.Options
 	Authenticators []auth.Extension
+
+	// beforeP5 is called once with the kernel after P4d and before P5, the
+	// last point at which Importers still reach an rbac catalog that is not
+	// frozen (P5 builds and freezes it). Unexported: only this package's
+	// tests set it, to exercise what a Cutover step sees at P4b through a real
+	// boot. nil, the production value, does nothing.
+	beforeP5 func(k *Kernel) error
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
