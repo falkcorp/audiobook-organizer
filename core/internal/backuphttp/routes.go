@@ -284,29 +284,35 @@ func holds(p *auth.Principal, perm rbac.Permission) bool {
 	return p.Perms != nil && p.Perms.Has(perm) && p.Perms.Satisfies(rbac.Need(perm))
 }
 
-// authorise is the repetition of the route's permission and guards, in the
-// order stage 13 refuses them: a principal (401), the permission (403), an
-// interactive credential (403) and, while the owner is required, the owner
-// assurance (403) or, once it is not, core:admin. Only the handler's own
-// 503 for a missing collaborator comes after it, so an unauthorised caller
-// learns nothing about availability.
+// authorise repeats stage 13's judgement of the route's permission and guards
+// (httpapi.Authorize, over the same Perm and Guards Register declares), so a
+// handler mounted without the router refuses exactly what the router would,
+// in the same order: a principal (401), then the interactive guard (403
+// interactive_required), then the owner guard (403 owner_required while the
+// owner is required, else interactive plus core:admin), then the permission
+// (403 permission_denied). Calling Authorize rather than restating it keeps
+// the two from drifting. Every one of those refusals is a 403 after the 401,
+// as at HEAD, whose credential guard, permission and owner gate also answer
+// 403. The one rule of its own is that a route other than a view route needs a
+// user to name as the actor (401 for a principal with none). It passes no
+// rbac catalog, so a non-interactive principal missing a Sensitive scope is
+// told permission_denied where the router says interactive_required; the
+// router judges first, so a caller never sees the difference. Only the
+// handler's own 503 for a missing collaborator comes after it, so an
+// unauthorised caller learns nothing about availability.
 func (a *api) authorise(p *auth.Principal, g gate) (string, error) {
 	subject := ""
 	if p != nil && p.User != nil {
 		subject = string(p.User.ID)
 	}
-	ownerNeeded := a.ownerRequired == nil || a.ownerRequired()
-	switch {
-	case p == nil || (!g.anon && subject == ""):
+	if p != nil && !g.anon && subject == "" {
 		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
-	case !holds(p, g.perm):
-		return "", httpapi.Forbidden(g.perm)
-	case (g.interactive || g.owner) && !p.Method.MayChangeCredentials():
-		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive session"}
-	case g.owner && ownerNeeded && p.Assurance&auth.AssuranceOwner == 0:
-		return "", &httpapi.Error{Status: http.StatusForbidden, Code: "owner_required", Detail: "this route needs the deployment owner"}
-	case g.owner && !ownerNeeded && !holds(p, rbac.CoreAdmin):
-		return "", httpapi.Forbidden(rbac.CoreAdmin)
+	}
+	d := httpapi.Authorize(httpapi.AuthzRequest{
+		Perm: rbac.Need(g.perm), Guards: httpapi.Guards{Interactive: g.interactive, Owner: g.owner}, Principal: p,
+	}, httpapi.AuthzOptions{OwnerRequired: a.ownerRequired == nil || a.ownerRequired()})
+	if d.Refusal != nil {
+		return "", d.Refusal
 	}
 	return subject, nil
 }
