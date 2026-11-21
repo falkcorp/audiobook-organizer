@@ -61,7 +61,7 @@ func (pl *planner) perimeterRules() {
 // the entries that are exact addresses (an IPv6 zone allowed), in order, and
 // the number of non-empty entries that are not.
 func connectorAddresses(csv string) (kept []string, dropped int) {
-	for _, e := range strings.Split(csv, ",") {
+	for e := range strings.SplitSeq(csv, ",") {
 		e = strings.TrimSpace(e)
 		if e == "" {
 			continue

@@ -130,7 +130,7 @@ func levelsAt(t *testing.T, work string) map[string]string {
 	b, err := os.ReadFile(storeDB(work) + ".storage-levels")
 	require.NoError(t, err)
 	out := map[string]string{}
-	for _, f := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+	for f := range strings.SplitSeq(strings.TrimSpace(string(b)), "\n") {
 		if k, v, ok := strings.Cut(strings.TrimSpace(f), " "); ok {
 			out[k] = strings.TrimSpace(v)
 		}
