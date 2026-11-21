@@ -10,10 +10,11 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // prefixChecker protects every path under one directory, the shape of
@@ -71,9 +72,7 @@ func doneFlagSet(s *MockStore, key string) bool {
 // every candidate was considered, and at 8a8a9ebe it was set anyway, so the
 // skipped file was never retried.
 func TestMalformedPasses_SkipProtectedFiles(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, p := range passes {
 		t.Run(p.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -123,9 +122,7 @@ func TestMalformedPasses_SkipProtectedFiles(t *testing.T) {
 // A canceled walk stopped part-way: the done flag must stay unset so the next
 // run reaches the files it never saw. At 8a8a9ebe it was set.
 func TestMalformedPasses_CanceledRunNotMarkedDone(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, p := range passes {
 		t.Run(p.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -146,9 +143,7 @@ func TestMalformedPasses_CanceledRunNotMarkedDone(t *testing.T) {
 // With the Deluge list never loaded, every seeding file reads as
 // unprotected. Neither pass may rewrite anything on that answer.
 func TestMalformedPasses_RefuseWhenProtectedListNotLoaded(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, p := range passes {
 		t.Run(p.name, func(t *testing.T) {
 			root := t.TempDir()

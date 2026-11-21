@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -21,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
@@ -203,9 +203,7 @@ func TestNewYieldDue(t *testing.T) {
 // hold for any interleaving: nothing at or before the cursor is repeated, and
 // every file is asked about at least once across the two legs.
 func TestBootOps_RemuxResumesOnTheRealPoolWithoutReprocessingBeforeTheCursor(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	root := t.TempDir()
 	prev := config.AppConfig.RootDir
 	config.AppConfig.RootDir = root

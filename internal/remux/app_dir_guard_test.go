@@ -8,13 +8,13 @@ package remux
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/appdirs"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // withRemuxAppDirs points the process config's root and app directories at a
@@ -77,9 +77,7 @@ func seedCandidates(t *testing.T, root string) {
 // `processed`). They MUST agree — the first is the progress denominator for the
 // second — so asserting on both is what catches a guard added to only one.
 func TestRemuxMalformedFiles_SkipsAppDirs(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, tc := range []struct {
 		name      string
 		appDirs   bool
@@ -117,9 +115,7 @@ func TestRemuxMalformedFiles_SkipsAppDirs(t *testing.T) {
 // same shape as above. Its per-file work is a full ffmpeg transcode, so an
 // unguarded walk would transcode files out of the backup tree.
 func TestTranscodeMalformedFiles_SkipsAppDirs(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, tc := range []struct {
 		name      string
 		appDirs   bool

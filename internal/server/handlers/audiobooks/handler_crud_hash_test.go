@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // Review round 4, item 1 (audit A3 item 9): the book PATCH write-back rewrote
@@ -27,10 +28,7 @@ import (
 // replaced. The handler's own store is the usual mock; the hash is recorded
 // through the metadata package's store, a real PebbleStore holding the row.
 func TestUpdateAudiobook_WriteBackRecordsNewFileHash(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	path := filepath.Join(t.TempDir(), "book.mp3")
 	gen := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "3",
@@ -96,10 +94,7 @@ func TestUpdateAudiobook_WriteBackRecordsNewFileHash(t *testing.T) {
 // plain one leaves exactly one. The write used a background context before,
 // which took a backup whatever the caller's ctx said.
 func TestUpdateAudiobook_WriteBackBackupFollowsRequestContext(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	prev := config.Snapshot().CreateBackups
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.CreateBackups = prev }) })
 	config.Mutate(func(c *config.Config) { c.CreateBackups = true })

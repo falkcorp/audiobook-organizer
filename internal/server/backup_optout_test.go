@@ -23,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // Owner decision D69: every bulk tag-writing entry point wraps its context
@@ -244,7 +245,7 @@ func TestBackupOptOut_FileIOPoolReplays(t *testing.T) {
 // The startup movement-atom cleanup rewrites every m4b/m4a under RootDir. With
 // create_backups on it must still leave no .bak-* sibling.
 func TestBackupOptOut_MovementAtomCleanupLeavesNoBackup(t *testing.T) {
-	ffmpeg := requireUsableFFmpeg(t)
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	backupsOn(t)
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)

@@ -9,10 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // odysseyM4B is the real, committed 115 MB fixture with 12 embedded chapters.
@@ -28,9 +29,7 @@ const odysseyMP3Track1 = "../../testdata/audio/librivox/odyssey_butler_librivox/
 
 func requireFFprobe(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not found on PATH, skipping")
-	}
+	tooltest.Require(t, "ffprobe")
 }
 
 func requireFixture(t *testing.T, path string) {

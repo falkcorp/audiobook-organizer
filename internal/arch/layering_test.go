@@ -146,6 +146,7 @@ var layerOf = map[string]int{
 	"internal/telemetry":               0, // computed: imports no module package
 	"internal/telemetrypolicy":         0, // computed: imports no module package (test-only; was internal/telemetry/contract)
 	"internal/testutil/durtest":        0, // computed: imports no module package
+	"internal/testutil/tooltest":       0, // computed: imports no module package
 	"internal/titleutil":               0, // table: leaf
 	"internal/tools":                   0, // computed: imports no module package
 	"internal/trackseq":                0, // computed: imports no module package

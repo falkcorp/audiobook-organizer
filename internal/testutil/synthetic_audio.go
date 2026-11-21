@@ -18,6 +18,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // SynthesizeMP3 writes a short generated sine-tone MP3 to path using ffmpeg's
@@ -26,10 +28,7 @@ import (
 // libmp3lame encoder; any other ffmpeg failure fails the test.
 func SynthesizeMP3(t *testing.T, path string, seconds, freqHz int) {
 	t.Helper()
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not found")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	encoders, err := exec.Command(ffmpeg, "-hide_banner", "-encoders").Output()
 	require.NoError(t, err, "ffmpeg -encoders failed")
 	if !strings.Contains(string(encoders), "libmp3lame") {

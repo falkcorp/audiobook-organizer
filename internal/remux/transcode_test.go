@@ -10,13 +10,13 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 func TestTranscoderNew(t *testing.T) {
@@ -85,9 +85,7 @@ func TestTranscodeMalformedFilesRootDirNotConfigured(t *testing.T) {
 // TestTranscodeMalformedFilesProgressCallback proves the C2 fix: progress is
 // threaded through with an accurate total from the pre-count pass.
 func TestTranscodeMalformedFilesProgressCallback(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 
 	origRoot := config.AppConfig.RootDir
 	tmpDir := t.TempDir()

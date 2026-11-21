@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	taglib "go.senan.xyz/taglib"
@@ -31,9 +32,7 @@ var testAudioCodecs = map[string]string{"m4a": "aac", "mp3": "libmp3lame", "flac
 // it. Skips when ffmpeg or its encoder for ext is unavailable.
 func makeTestAudioExt(t *testing.T, ext string, props map[string][]string) string {
 	t.Helper()
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available; skipping real-file tag undo test")
-	}
+	tooltest.Require(t, "ffmpeg")
 	path := filepath.Join(t.TempDir(), "book."+ext)
 	out, err := exec.Command("ffmpeg", "-hide_banner", "-loglevel", "error",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "1",

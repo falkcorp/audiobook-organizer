@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // A live scan-composer-tags run rewrites files, and a rewritten file whose
@@ -38,10 +39,7 @@ type noRecorderStore struct{ maintenance.JobStore }
 // The tag write records the new hash on the store the run was handed, not on
 // the store internal/metadata has installed at startup.
 func TestScanComposerTags_RecordsHashesOnTheStoreItWasHanded(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	path := filepath.Join(t.TempDir(), "book.m4a")
 	out, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "anullsrc=r=22050:cl=mono", "-t", "1",

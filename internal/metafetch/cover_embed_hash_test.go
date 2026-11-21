@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // Review round 4, item 1 (audit A3 item 9): embedding a cover rewrites the
@@ -27,10 +28,7 @@ import (
 // replaced. Real store, real mp3, real embed.
 func TestEmbedCoverInBookFiles_RecordsNewFileHash(t *testing.T) {
 	setEmbedCoverArt(t, true)
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "book.mp3")
 	gen := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
@@ -104,10 +102,7 @@ func setEmbedCoverArt(t *testing.T, on bool) {
 // into dir and returns their paths. It skips when ffmpeg is not on PATH.
 func writeEmbedFixture(t *testing.T, dir string) (audioPath, coverPath string) {
 	t.Helper()
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	audioPath = filepath.Join(dir, "book.mp3")
 	gen := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
 		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "3",

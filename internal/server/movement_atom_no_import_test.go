@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // seedingDirChecker reports every path under dir as protected, the way the
@@ -49,7 +50,7 @@ func (c *countingLibraryImporter) ImportPath(context.Context, string, string) (s
 // The cleanup must refuse it: ErrProtectedPathWrite, the importer never
 // called, the seeding file byte-identical.
 func TestRemoveMovementAtomsFromFile_ProtectedPathRefusedNeverImported(t *testing.T) {
-	ffmpeg := requireUsableFFmpeg(t)
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	seeding := filepath.Join(t.TempDir(), "seeding")
 	path := filepath.Join(seeding, "book.m4a")
 	require.NoError(t, os.MkdirAll(seeding, 0o755))

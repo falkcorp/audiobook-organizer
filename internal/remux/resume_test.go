@@ -10,11 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
 
@@ -92,9 +92,7 @@ var resumePasses = []resumePass{
 // asked about exactly once, the earlier attempts' counters carry, and only the
 // completed run sets the done flag.
 func TestMalformedPasses_CancelledRunCheckpointsAndResumeSkipsDoneItems(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	const n = 40
 	for _, p := range resumePasses {
 		t.Run(p.name, func(t *testing.T) {
@@ -166,9 +164,7 @@ func TestMalformedPasses_CancelledRunCheckpointsAndResumeSkipsDoneItems(t *testi
 // of the checkpoint: a protected file skipped by attempt 1, below the cursor, must
 // still stop attempt 2 from marking the pass done.
 func TestMalformedPasses_ProtectedSkipBeforeCursorStillWithholdsDoneFlag(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, p := range resumePasses {
 		t.Run(p.name, func(t *testing.T) {
 			_, files := resumeFixture(t, 12)
@@ -189,9 +185,7 @@ func TestMalformedPasses_ProtectedSkipBeforeCursorStillWithholdsDoneFlag(t *test
 // A run told to yield stops after a checkpoint with walkresume.ErrYield, leaves
 // the done flag unset, and a resume from that checkpoint finishes the walk.
 func TestMalformedPasses_YieldStopsAfterCheckpointAndResumeFinishes(t *testing.T) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not available, skipping")
-	}
+	tooltest.Require(t, "ffmpeg")
 	for _, p := range resumePasses {
 		t.Run(p.name, func(t *testing.T) {
 			_, files := resumeFixture(t, 30)

@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/deluge"
+	"github.com/falkcorp/audiobook-organizer/internal/testutil/tooltest"
 )
 
 // A protected file carrying a movement atom: the write guard refuses it
@@ -27,7 +28,7 @@ import (
 // Before 2026-09-14 the refusal landed in Failed, so every seeding file with a
 // movement atom read as a cleanup failure.
 func TestStripMovementAtoms_ProtectedFileCountedAsSkippedNotFailed(t *testing.T) {
-	ffmpeg := requireUsableFFmpeg(t)
+	ffmpeg := tooltest.Require(t, "ffmpeg")
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
