@@ -11,6 +11,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WelcomeWizard } from './WelcomeWizard';
+import { SetupWizardFrame } from '../setup/SetupWizardFrame';
+import frameSource from '../setup/SetupWizardFrame.tsx?raw';
 import * as api from '../../services/api';
 import { STORAGE_KEYS } from '../../lib/storageKeys';
 
@@ -198,5 +200,52 @@ describe('WelcomeWizard composition (F9-04 slice 5)', () => {
       path_mappings: [],
     });
     expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.ITUNES_IMPORT_SETTINGS) || '{}').libraryPath).toBe('/audio/in/gotham');
+  });
+
+  describe('the setup frame alone', () => {
+    const steps = [
+      { id: 'one', title: 'First', Component: ({ onNext }: { onNext: () => void }) => <button onClick={onNext}>skip-one</button> },
+      { id: 'two', title: 'Second', Component: () => <p>second body</p> },
+    ];
+    const renderFrame = (over: Partial<React.ComponentProps<typeof SetupWizardFrame>> = {}) => {
+      const onFinish = vi.fn();
+      const canProceed = vi.fn((id: string) => id !== 'one');
+      render(<SetupWizardFrame open title="Gotham first run" version="9.9" steps={steps} canProceed={canProceed} onFinish={onFinish} saving={false} {...over} />);
+      return { onFinish, canProceed };
+    };
+
+    it('shows the title, version chip, step labels and the active step, and gates Next with canProceed', () => {
+      const { canProceed } = renderFrame();
+      expect(screen.getByText('Gotham first run')).toBeInTheDocument();
+      expect(screen.getByText('v9.9')).toBeInTheDocument();
+      expect(screen.getByText('First')).toBeInTheDocument();
+      expect(screen.getByText('Second')).toBeInTheDocument();
+      expect(canProceed).toHaveBeenCalledWith('one');
+      expect(next()).toBeDisabled();
+    });
+
+    it('lets a step advance with onNext, then shows Complete Setup that calls onFinish', async () => {
+      const user = userEvent.setup();
+      const { onFinish } = renderFrame();
+      await user.click(screen.getByRole('button', { name: 'skip-one' }));
+      expect(screen.getByText('second body')).toBeInTheDocument();
+      expect(back()).toBeEnabled();
+      await user.click(screen.getByRole('button', { name: 'Complete Setup' }));
+      expect(onFinish).toHaveBeenCalledTimes(1);
+    });
+
+    it('hides an unknown version and shows Saving while saving', async () => {
+      const user = userEvent.setup();
+      renderFrame({ version: 'unknown', canProceed: () => true });
+      expect(screen.queryByText('vunknown')).toBeNull();
+      await user.click(next());
+      expect(screen.getByRole('button', { name: 'Complete Setup' })).toBeEnabled();
+    });
+
+    it('imports no books code and no services/api', () => {
+      const imports = frameSource.split('\n').filter((l) => /from '/.test(l));
+      expect(imports.length).toBeGreaterThan(3);
+      for (const l of imports) expect(l).not.toMatch(/modules\/books|services\/api|WelcomeWizard/);
+    });
   });
 });
