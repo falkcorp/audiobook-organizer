@@ -647,7 +647,7 @@ func (k *Kernel) register(ctx context.Context) error {
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
 			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
 			Config: k.configAccess(e.man)}
-		k.applyIdentityDeps(&deps, id)
+		k.applyIdentityDeps(&deps, e.man)
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,
 			Deps:          deps,
