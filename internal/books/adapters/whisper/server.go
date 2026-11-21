@@ -250,7 +250,7 @@ func (i *serverInstance) probe(ctx context.Context, op string) (workerHealth, er
 	if err != nil {
 		return workerHealth{}, err
 	}
-	defer drainClose(resp.Body)
+	defer i.drainClose(ctx, resp.Body)
 	var h workerHealth
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(&h); err != nil {
 		return workerHealth{}, failf(i.ref, op, integrations.ClassBadOutput, resp.StatusCode, "",
@@ -405,7 +405,7 @@ func (i *serverInstance) upload(ctx context.Context, a ai.AudioSource) (workerAn
 	if err != nil {
 		return workerAnswer{}, err
 	}
-	defer drainClose(resp.Body)
+	defer i.drainClose(ctx, resp.Body)
 	var ans workerAnswer
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAnswer)).Decode(&ans); err != nil {
 		return workerAnswer{}, failf(i.ref, "transcribe", integrations.ClassBadOutput, resp.StatusCode, "", "the answer to /transcribe is not the worker's JSON")
@@ -445,7 +445,7 @@ func (i *serverInstance) byPath(ctx context.Context, p library.Path) (workerAnsw
 	if err != nil {
 		return workerAnswer{}, err
 	}
-	defer drainClose(resp.Body)
+	defer i.drainClose(ctx, resp.Body)
 	var out struct {
 		Results map[string]workerAnswer `json:"results"`
 	}
@@ -475,7 +475,12 @@ func setDeadlineHeader(ctx context.Context, req *http.Request) {
 // decodes by content, so this is a hint for its logs. WAV when unspecified (the
 // worker's own extraction format).
 func clipExt(mimeType string) string {
-	mt, _, _ := mime.ParseMediaType(mimeType)
+	mt, _, err := mime.ParseMediaType(mimeType)
+	if err != nil && !errors.Is(err, mime.ErrInvalidMediaParameter) {
+		// Not a media type at all: treat it as unspecified. (An invalid
+		// parameter still returns the usable media type, which is kept.)
+		mt = ""
+	}
 	switch mt {
 	case "", "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave":
 		return ".wav"
@@ -507,15 +512,22 @@ func (i *serverInstance) send(ctx context.Context, op string, req *http.Request)
 	if resp.StatusCode == http.StatusOK {
 		return resp, nil
 	}
-	defer drainClose(resp.Body)
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	defer i.drainClose(ctx, resp.Body)
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	if readErr != nil {
+		// The status already classifies the failure; a short body only thins
+		// the message, so keep what arrived and say the read stopped early.
+		i.log.WarnContext(ctx, "whisper error body read stopped early", "op", op, "error", readErr)
+	}
 	return nil, i.statusFailure(op, req.URL.Path, resp, body)
 }
 
 // drainClose reads a little of the body, so the connection can be reused, and
 // closes it.
-func drainClose(b io.ReadCloser) {
-	_, _ = io.Copy(io.Discard, io.LimitReader(b, 64<<10))
+func (i *serverInstance) drainClose(ctx context.Context, b io.ReadCloser) {
+	if _, err := io.Copy(io.Discard, io.LimitReader(b, 64<<10)); err != nil {
+		i.log.DebugContext(ctx, "whisper body drain stopped early", "error", err)
+	}
 	_ = b.Close()
 }
 
