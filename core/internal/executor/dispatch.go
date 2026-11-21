@@ -92,6 +92,7 @@ type candidate struct {
 // dispatchOnce is one pass over the queue in dispatch order (priority, then
 // enqueue time): every gate of 5T.3.4/5T.4, then the claim.
 func (e *executor) dispatchOnce(ctx context.Context) {
+	e.beginPass()
 	e.reapHolds(ctx)
 	e.releaseWaitingDeps(ctx)
 	var cands []candidate
@@ -115,8 +116,7 @@ func (e *executor) dispatchOnce(ctx context.Context) {
 	// records it for the run view and the wait gauge. Visibility only: it never
 	// changes whether the run is deferred.
 	deferAs := func(rec tasks.RunRecord, reason string, by blocker) {
-		e.deferRun(rec, reason)
-		if reason != "" {
+		if e.deferRun(rec, reason) {
 			waits[rec.ID] = newWait(rec, reason, by, now, prev)
 		}
 	}
@@ -223,19 +223,43 @@ func overlapsSet(a, b []entity.Ref) bool {
 	return false
 }
 
+// beginPass opens a dispatch pass: it advances the pass number and forgets the
+// runs that went terminal during earlier passes (this pass reads the queue after
+// this call, so it already sees them gone).
+func (e *executor) beginPass() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.pass++
+	for id, p := range e.left {
+		if p < e.pass {
+			delete(e.left, id)
+		}
+	}
+}
+
 // deferRun counts a deferral once per run and reason (a reason change
-// counts again), so a run held for an hour is one sample, not 36,000.
-func (e *executor) deferRun(rec tasks.RunRecord, reason string) {
+// counts again), so a run held for an hour is one sample, not 36,000. It
+// reports whether the deferral was recorded: not for an empty reason, and not
+// for a run that went terminal (canceled, say) since this pass read the queue.
+// Such a run's dedupe entry was deleted by its terminal move, so recording the
+// stale candidate would count a run that is gone a second time and leave an
+// entry nothing ever deletes.
+func (e *executor) deferRun(rec tasks.RunRecord, reason string) bool {
 	if reason == "" {
-		return
+		return false
 	}
 	e.mu.Lock()
+	if p, gone := e.left[rec.ID]; gone && p >= e.pass {
+		e.mu.Unlock()
+		return false
+	}
 	same := e.deferred[rec.ID] == reason
 	e.deferred[rec.ID] = reason
 	e.mu.Unlock()
 	if !same {
 		e.ins.deferredRun(reason)
 	}
+	return true
 }
 
 // wait is the visibility record of one run the last dispatch pass deferred:

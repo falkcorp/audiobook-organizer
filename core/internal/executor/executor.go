@@ -154,9 +154,11 @@ type executor struct {
 	bootQuiet map[tasks.RunID]bool // quiesced by a marker that survived a crash: not resumed this boot
 	waiting   map[string]bool      // Ready sets with a live waiter
 	deferred  map[tasks.RunID]string
-	waits     map[tasks.RunID]wait // the last dispatch pass's deferrals; replaced whole, never mutated once set
-	heldCount map[string]int64     // unfinished held runs by module, as of the resume sweep
-	termCh    chan struct{}        // closed and replaced on every terminal transition
+	pass      uint64                 // the dispatch pass in progress (beginPass); passes are serial
+	left      map[tasks.RunID]uint64 // runs that went terminal, by the pass in progress then; pruned at the next pass
+	waits     map[tasks.RunID]wait   // the last dispatch pass's deferrals; replaced whole, never mutated once set
+	heldCount map[string]int64       // unfinished held runs by module, as of the resume sweep
+	termCh    chan struct{}          // closed and replaced on every terminal transition
 	shutting  bool
 	runCalled bool
 	shutDone  bool
@@ -181,7 +183,7 @@ func New(opts Options) (tasks.Executor, error) {
 		starts: map[string][]tasks.Kind{}, lanes: map[tasks.LaneID]*lane{},
 		cpu: newCPUBudget(cfg.CPUSlots), refs: newRefTable(),
 		running: map[tasks.RunID]*attempt{}, zombies: map[string]int{}, holds: map[tasks.Key]*standHold{},
-		bootQuiet: map[tasks.RunID]bool{}, waiting: map[string]bool{}, deferred: map[tasks.RunID]string{},
+		bootQuiet: map[tasks.RunID]bool{}, waiting: map[string]bool{}, deferred: map[tasks.RunID]string{}, left: map[tasks.RunID]uint64{},
 		heldCount: map[string]int64{},
 		termCh:    make(chan struct{}), unpaused: make(chan struct{}), wake: make(chan struct{}, 1),
 	}
@@ -449,6 +451,7 @@ func (e *executor) moved(prev, next tasks.RunRecord) {
 		close(e.termCh)
 		e.termCh = make(chan struct{})
 		delete(e.deferred, next.ID)
+		e.left[next.ID] = e.pass
 		e.mu.Unlock()
 		e.ins.runEnded(next)
 	}
