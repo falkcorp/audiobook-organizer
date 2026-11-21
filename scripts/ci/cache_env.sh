@@ -45,7 +45,7 @@ unset OPENAI_API_KEY ANTHROPIC_API_KEY ACOUSTID_API_KEY GOOGLE_BOOKS_API_KEY HAR
 
 
 CI_CACHE_ROOT=
-for _ci_cache_candidate in /tank/ci/cache /Users/jdfalk/ci/cache /srv/ci/cache; do
+for _ci_cache_candidate in ${CI_CACHE_ROOT_CANDIDATES:-/tank/ci/cache /Users/jdfalk/ci/cache /srv/ci/cache}; do
   if [ -d "$_ci_cache_candidate" ]; then
     CI_CACHE_ROOT=$_ci_cache_candidate
     break
@@ -66,4 +66,27 @@ export CI_CACHE_ROOT
 export GOMODCACHE="$CI_CACHE_ROOT/gomod"
 export GOCACHE="$CI_CACHE_ROOT/go-build"
 export npm_config_cache="$CI_CACHE_ROOT/npm"
-echo "CI cache root: $CI_CACHE_ROOT"
+
+# Scratch space on disk, not in /tmp. The Go linker writes /tmp/go-link-* and
+# `go build` puts $WORK under GOTMPDIR (else TMPDIR). On u0-local /tmp is a 16G
+# tmpfs backed by prod RAM, and a -race link plus concurrent builds filled it:
+# pipeline 4897 test-native-taglib failed at the link of internal/tagger.test
+# with "final link failed: No space left on device". The directory is named
+# for the pipeline and workflow (not the step or PID) so the workflow's cleanup
+# step, which sources this file again, lands on the same path and removes it;
+# workflows of one pipeline can run at once on an agent, so the workflow name
+# keeps them apart. Dirs a crashed run left behind are swept after six hours.
+_ci_tmp_root="$CI_CACHE_ROOT/tmp"
+_ci_tmp_name=$(printf '%s-%s' "${CI_PIPELINE_NUMBER:-0}" "${CI_WORKFLOW_NAME:-local}" | tr -c 'A-Za-z0-9._-' '_')
+mkdir -p "$_ci_tmp_root" && find "$_ci_tmp_root" -mindepth 1 -maxdepth 1 -type d -mmin +360 \
+  -exec sh -c 'chmod -R u+w "$@" 2>/dev/null; rm -rf "$@"' _ {} + 2>/dev/null
+CI_RUN_TMPDIR="$_ci_tmp_root/$_ci_tmp_name"
+mkdir -p "$CI_RUN_TMPDIR" || {
+  echo "cache_env.sh: cannot create $CI_RUN_TMPDIR" >&2
+  return 1 2>/dev/null || exit 1
+}
+export CI_RUN_TMPDIR
+export GOTMPDIR="$CI_RUN_TMPDIR"
+export TMPDIR="$CI_RUN_TMPDIR"
+unset _ci_tmp_root _ci_tmp_name
+echo "CI cache root: $CI_CACHE_ROOT (scratch: $CI_RUN_TMPDIR)"
