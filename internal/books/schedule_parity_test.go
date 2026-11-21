@@ -1709,7 +1709,9 @@ func m4Import(t *testing.T, settings map[string]string, zone *time.Location) map
 // 23:00-24:00 Gotham, run once at 23:30 on the last evening; db_optimize on;
 // the last weekly sweep 160 hours before the cutover), M4 imports its settings
 // rows, and core's scheduler starts over the imported clocks at 23:45 beside
-// HEAD restarted over its own rows. On that first boot only the on-start
+// HEAD restarted over its own rows, with metadata_refresh switched on at that
+// restart so one enabled kind has no clock at all (seeded at the boot's
+// first poll, first run one interval later). On that first boot only the on-start
 // kinds fire; no kind fires before its next due instant from HEAD's clock
 // (LastDue + every) and each fires exactly then: the full sweep at last_run +
 // 168h, both db_optimize halves at the last tick + 24h, with no gap; the
@@ -1729,7 +1731,12 @@ func TestCutover_NoCatchUpStorm(t *testing.T) {
 	pre = append(pre, windowRun)
 	sweepDue := time.Date(2030, 3, 6, 8, 0, 0, 0, parityZone)
 	lastSweep := sweepDue.Add(-168 * time.Hour)
-	steps := []parityStep{{at: cut}}
+	// metadata_refresh is switched on with the cutover's restart, so HEAD's
+	// rows hold no clock for it: the first poll seeds it and the first run
+	// is one interval later, on both sides.
+	enableAtCut := map[string]any{"scheduled.metadata_refresh.enabled": true, "scheduled.metadata_refresh.interval": 120}
+	const unclocked tasks.Kind = "books.maintenance.metadata-refresh"
+	steps := []parityStep{{at: cut, edit: enableAtCut}}
 	for at := time.Date(2030, 3, 6, 0, 0, 0, 0, parityZone); !at.After(time.Date(2030, 3, 7, 1, 0, 0, 0, parityZone)); at = at.Add(time.Hour) {
 		steps = append(steps, parityStep{at: at})
 	}
@@ -1784,7 +1791,10 @@ func TestCutover_NoCatchUpStorm(t *testing.T) {
 	// fire at the first step at or after it. A kind core ran at the boot
 	// (difference (l)) is re-anchored there: its first scheduled fire is one
 	// interval after the cutover's boot, and never before HEAD's due instant.
-	view := coreViewOf(t, head)
+	if _, ok := res.imported[unclocked]; ok {
+		t.Fatalf("M4 imported a clock for %s, which HEAD never ran", unclocked)
+	}
+	view := coreViewOf(t, withHead(t, head, enableAtCut))
 	startedAtBoot := func(k tasks.Kind) bool {
 		return slices.Contains(res.core[0], fmt.Sprintf("enqueue %s on_start", k))
 	}
@@ -1800,14 +1810,22 @@ func TestCutover_NoCatchUpStorm(t *testing.T) {
 	for _, d := range scheduleDecls {
 		c, ok := res.imported[d.kind]
 		sc := view.schedules[scheduleKeyPrefix+d.key]
-		if !ok || !sc.Enabled || sc.Every <= 0 {
+		if !sc.Enabled || sc.Every <= 0 {
+			continue
+		}
+		if !ok && d.kind != unclocked {
 			continue
 		}
 		every := time.Duration(sc.Every)
-		headDue := c.LastDue.Add(every)
-		base := c.LastDue
-		if startedAtBoot(d.kind) {
-			base = cut
+		// A kind with no clock on record is seeded by the boot's first poll
+		// (the cutover instant): it runs one interval later, never at once.
+		base := cut
+		if ok && !startedAtBoot(d.kind) {
+			base = c.LastDue
+		}
+		headDue := base.Add(every)
+		if ok {
+			headDue = c.LastDue.Add(every)
 		}
 		due := base.Add(every)
 		want := time.Time{}
@@ -1831,6 +1849,7 @@ func TestCutover_NoCatchUpStorm(t *testing.T) {
 	for k, want := range map[tasks.Kind]time.Time{
 		kindrename.FullSweepKind:              sweepDue,
 		"books.maintenance.aux-store-compact": compactTick.Add(24 * time.Hour),
+		unclocked:                             time.Date(2030, 3, 6, 2, 0, 0, 0, parityZone), // seeded 23:45, due 01:45
 	} {
 		if got, ok := checked[k]; !ok || !got.Equal(want) {
 			t.Errorf("%s: due %s (checked %v), want %s", k, got, ok, want)
