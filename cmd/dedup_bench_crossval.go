@@ -88,7 +88,6 @@ For "reviews": only include entries where you disagree or want to modify.
 For "missed": include any obvious duplicates or issues that model A completely missed.`
 
 func runDedupBenchCrossval(cmd *cobra.Command, args []string) error {
-	config.InitConfig()
 	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")

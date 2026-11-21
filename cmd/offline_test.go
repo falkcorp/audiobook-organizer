@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
-
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/app"
@@ -66,17 +64,9 @@ func TestCLIExposesCoreOfflineCommands(t *testing.T) {
 				fl.Changed = false
 			}
 		}
-		viper.Reset()
 	})
 	rootCmd.SetOut(&out)
 	rootCmd.SetErr(&out)
-	// Another test's viper.Reset drops init's flag bindings; restore them,
-	// as a fresh process has them.
-	for flagName, key := range persistentFlagConfigKeys {
-		if err := viper.BindPFlag(key, rootCmd.PersistentFlags().Lookup(flagName)); err != nil {
-			t.Fatal(err)
-		}
-	}
 
 	rootCmd.SetArgs([]string{"storage", "prune-checkpoints", "--include-open", "--config", cfg, "--db", dbPath})
 	if err := rootCmd.Execute(); err == nil || !strings.Contains(err.Error(), "--confirm") {

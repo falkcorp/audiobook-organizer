@@ -25,7 +25,6 @@ var dedupBenchStatusCmd = &cobra.Command{
 }
 
 func runDedupBenchStatus(cmd *cobra.Command, args []string) error {
-	config.InitConfig()
 	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
