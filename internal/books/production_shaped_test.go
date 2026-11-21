@@ -186,37 +186,13 @@ func pointConfigAtStore(c *config.Config, work string) {
 // (cutover/testdata/rename_table.golden), to the same place. The store itself
 // is not edited. root_dir has no such name: it is class i, M2 leaves it in the
 // settings blob for M6, and the booted projection reads it from that blob
-// (pointBlobRootAtStore points it at the copy's library).
+// (repointCorpusPaths points it at the copy's library before the boot).
 func pointEnvAtStore(t *testing.T, work string) {
 	t.Helper()
 	var c config.Config
 	pointConfigAtStore(&c, work)
 	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", c.PlaylistDir)
 	t.Setenv("ABO_BOOKS_OPENLIBRARY_DUMP_DIR", c.OpenLibraryDumpDir)
-}
-
-// pointBlobRootAtStore is pointEnvAtStore for root_dir: the store copy's
-// settings blob row names the builder's scratch library, and a flipped boot
-// takes the root from that row (no operator layer sets it in production:
-// no --dir, no ABO_CORE_LIBRARY_ROOTS), so the copy's row is pointed at the
-// copy's library, the one place the boot may walk. It runs as the composed
-// boot's pre hook, on the copy only; the generated store is never written.
-func pointBlobRootAtStore(t *testing.T, work string) func(*database.PebbleStore) {
-	t.Helper()
-	return func(s *database.PebbleStore) {
-		row, err := s.GetSetting("config_blob")
-		require.NoError(t, err, "read the store copy's settings blob")
-		require.NotNil(t, row, "the store copy holds no settings blob: the corpus stores its root there")
-		var blob map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal([]byte(row.Value), &blob), "the settings blob is not a JSON object")
-		require.Contains(t, blob, "root_dir", "the corpus' settings blob holds no root_dir")
-		root, err := json.Marshal(filepath.Join(work, "library"))
-		require.NoError(t, err)
-		blob["root_dir"] = root
-		out, err := json.Marshal(blob)
-		require.NoError(t, err)
-		require.NoError(t, s.SetSetting("config_blob", string(out), row.Type, row.IsSecret))
-	}
 }
 
 // storedBlobRoot is the root_dir the booted store's settings blob holds.
@@ -265,7 +241,7 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
 	}
 	start := time.Now()
-	r := runComposedIn(t, stateDir, edit, pointBlobRootAtStore(t, work), opt, nil)
+	r := runComposedIn(t, stateDir, edit, nil, opt, nil)
 	var ready bool
 	for deadline := start.Add(wait); ; time.Sleep(50 * time.Millisecond) {
 		var err error
@@ -331,6 +307,15 @@ func TestProductionShapedStore_BootTime(t *testing.T) {
 	key, err := os.ReadFile(database.EncryptionKeyPath(filepath.Join(work, "state")))
 	require.NoError(t, err, "the store holds no settings key")
 
+	// root_dir has no environment name: the flipped boot reads it from the
+	// settings blob, which names the builder's library. The copy's blob is
+	// pointed at the copy's library offline, once, before the first boot
+	// opens the store: the Engine projects the blob before any composed-boot
+	// hook runs, so a hook's edit would land after the boot had used the
+	// builder's root, and after the first boot the store is at a level the
+	// offline opener refuses. No operator layer names the root, as in
+	// production.
+	repointCorpusPaths(t, work)
 	phases, ready := bootShapedStore(t, work, key, wait)
 	_, steady := bootShapedStore(t, work, key, wait)
 
