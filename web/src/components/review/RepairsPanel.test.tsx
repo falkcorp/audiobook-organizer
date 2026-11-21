@@ -1065,6 +1065,27 @@ describe('RepairsPanel — owner rows', () => {
 });
 
 describe('SKIP_KIND_LABEL', () => {
+  it('words every skip of the Missing files fixer, none alike', () => {
+    const kinds = [
+      'no_candidate',
+      'book_gone',
+      'path_changed',
+      'not_missing',
+      'file_gone',
+      'file_tracked',
+      'no_file_row',
+      'own_row_at_match',
+      'shared_match',
+      'index_warming',
+      'error',
+    ];
+    for (const kind of kinds) {
+      expect(SKIP_KIND_LABEL[kind], kind).toBeTruthy();
+      expect(SKIP_KIND_LABEL[kind]).not.toEqual(kind);
+    }
+    expect(new Set(kinds.map((k) => SKIP_KIND_LABEL[k])).size).toBe(kinds.length);
+  });
+
   it('words every hold of the combined author credits fixer', () => {
     for (const kind of [
       'skipped_split_refused',
@@ -1587,7 +1608,7 @@ describe('RepairsPanel — missing files', () => {
     expect(within(skipped).getByText('no candidate file')).toBeInTheDocument();
     expect(within(skipped).queryByRole('checkbox')).not.toBeInTheDocument();
     const chip = screen.getByTestId('repairs-skip-kind-no_candidate');
-    expect(chip).toHaveTextContent('no_candidate (1)');
+    expect(chip).toHaveTextContent('No candidate file found (1)');
     await user.click(chip);
     expect(vi.mocked(api.getRepairPlanRows)).toHaveBeenLastCalledWith(
       'reconcile.missing-files',

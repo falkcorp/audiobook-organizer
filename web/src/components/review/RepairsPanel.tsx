@@ -555,6 +555,17 @@ export const SKIP_KIND_LABEL: Record<string, string> = {
   sync_redirect_present: 'An Audiobookshelf sync redirect points away from this book',
   owner_says_distinct: 'You rejected joining these two books',
   owner_veto_unresolvable: 'A reject of yours could not be matched to one book',
+  // reconcile.missing-files: why a book the scan found missing is left alone.
+  no_candidate: 'No candidate file found',
+  book_gone: 'The book is gone or retired since the scan',
+  path_changed: "The book's path is no longer the one the scan found missing",
+  not_missing: 'The file is on disk again',
+  file_gone: 'The matched file is no longer on disk',
+  file_tracked: 'The matched file now belongs to another book',
+  no_file_row: 'No single file record to repoint (none, or more than one)',
+  own_row_at_match: 'The book already has a file record at the matched file',
+  shared_match: 'The scan matched the file to more than one book',
+  index_warming: 'File index still warming up (try again shortly)',
   error: 'Error',
 };
 

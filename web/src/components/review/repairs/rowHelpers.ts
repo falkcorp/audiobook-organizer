@@ -198,6 +198,11 @@ const CLASS_LABELS: Record<string, string> = {
   swap_keeper: 'Fragment kept over the full copy: keep the full copy',
   repoint_chain: 'Merge target is gone: point at the live book',
   no_verdict: 'No verdict (left alone)',
+  // reconcile.missing-files: a match row's class is the scan's match type.
+  no_candidate: 'No candidate file',
+  hash: 'Matched by file hash',
+  original_hash: 'Matched by original file hash',
+  filename: 'Matched by file name',
   error: 'Error',
 };
 
