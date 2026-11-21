@@ -312,7 +312,9 @@ func TestRefusedRestoreCountsOnceAndLeavesNoBareStageRecord(t *testing.T) {
 				}
 				return list[0].ID, backup.RestoreOptions{Foreign: true}
 			},
-			want: backuparchive.ErrChanged, foreign: true,
+			// ErrChecksumMismatch, not only ErrChanged: the HTTP layer maps it to
+			// 409 archive_verification_failed, where ErrChanged alone is a 500.
+			want: backup.ErrChecksumMismatch, foreign: true,
 		},
 		{
 			name: "unreadable secrets",
