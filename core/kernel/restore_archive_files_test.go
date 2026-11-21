@@ -37,7 +37,13 @@ type archiveHost struct {
 // visible change, and sets the extractor to return id.
 func newArchiveHost(t *testing.T, id string) *archiveHost {
 	t.Helper()
-	h := newSwapHost(t)
+	return newArchiveHostOn(t, newSwapHost(t), id)
+}
+
+// newArchiveHostOn is newArchiveHost over a host the caller laid out (the
+// cross-filesystem host, restore_xdev_test.go).
+func newArchiveHostOn(t *testing.T, h *swapHost, id string) *archiveHost {
+	t.Helper()
 	h.close(h.mustBoot(h.config(nil)))
 	saved := filepath.Join(t.TempDir(), "archived.pebble")
 	copyTree(t, h.db, saved)
