@@ -113,6 +113,11 @@ type Store struct {
 
 	gen    atomic.Uint64
 	index  atomic.Pointer[keyIndex]
+	// readPerms is the registered sections' read permissions by section path,
+	// replaced whole by each Register (never written in place), so
+	// ReadPermission reads it without the mutex: the settings routes ask it
+	// from inside Schema's include callback, which runs under that mutex.
+	readPerms atomic.Pointer[map[Path]string]
 	health map[string]string
 
 	// The subscriber goroutines (05-config §1.6): none before Load; Close
@@ -264,6 +269,11 @@ func (s *Store) register(sp *sectionSpec) (*binding, error) {
 		paths = append(paths, x.path)
 	}
 	s.met.setSections(paths)
+	perms := make(map[Path]string, len(s.sections))
+	for _, x := range s.sections {
+		perms[x.path] = x.permRead
+	}
+	s.readPerms.Store(&perms)
 	return b, nil
 }
 
