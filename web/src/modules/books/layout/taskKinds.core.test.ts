@@ -1,5 +1,5 @@
 // file: web/src/modules/books/layout/taskKinds.core.test.ts
-// version: 0.1.0
+// version: 0.2.0
 // guid: 9e1c4a07-3b52-4d68-8f20-c5a7d0b3e619
 // last-edited: 2026-11-21
 
@@ -13,6 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { OPERATION_DEF_LABELS } from '../../../components/layout/operationLabels';
 import { BOOKS_KIND_LABELS, booksTaskKinds } from './taskKinds';
 
 const dir = resolve(import.meta.dirname, '../../../../../internal/books/cutover/kindrename');
@@ -34,7 +35,9 @@ function mapBody(name: string): string {
 /** defTargets: HEAD def id to {Kind, Rule}. Every line must parse, so a format change fails loudly. */
 function defTargets(): Map<string, Entry> {
   const out = new Map<string, Entry>();
-  const lines = mapBody('defTargets').split('\n').filter((l) => l.trim() !== '');
+  const lines = mapBody('defTargets')
+    .split('\n')
+    .filter((l) => l.trim() !== '');
   for (const l of lines) {
     // The two repairs defs carry no Kind: the fixer id names it per run (a run-level rule).
     const m = /^\t"([^"]+)":\s*\{(?:Kind: "([^"]+)", )?Rule: (\w+)/.exec(l);
@@ -45,13 +48,15 @@ function defTargets(): Map<string, Entry> {
 }
 
 function schedulerKinds(): Set<string> {
-  const lines = mapBody('schedulerTargets').split('\n').filter((l) => l.trim() !== '');
+  const lines = mapBody('schedulerTargets')
+    .split('\n')
+    .filter((l) => l.trim() !== '');
   return new Set(
     lines.map((l) => {
       const m = /^\t"([^"]+)":\s*\{(?:Kind: "([^"]*)")?/.exec(l);
       if (!m) throw new Error(`unparsed schedulerTargets line: ${l}`);
       return m[2] ?? '';
-    }),
+    })
   );
 }
 
@@ -68,7 +73,10 @@ describe('the kind-rename table as parsed', () => {
   it('is read in full (a vacuous parse would pass every test below)', () => {
     expect(targets.size).toBeGreaterThan(250);
     expect(targets.get('library.scan')).toEqual({ kind: 'books.library.scan', rule: 'RuleBooks' });
-    expect(targets.get('itunes.sync')).toEqual({ kind: 'books.retired.itunes.sync', rule: 'RuleRetired' });
+    expect(targets.get('itunes.sync')).toEqual({
+      kind: 'books.retired.itunes.sync',
+      rule: 'RuleRetired',
+    });
     expect(retiredPrefix).toBe('books.retired.');
     expect(goConst('FullSweepKind')).toBe('books.library.scan-full');
   });
@@ -91,7 +99,7 @@ describe('booksTaskKinds against the kind-rename table', () => {
         expect(e.alsoKind).toBe(goConst('FullSweepKind'));
         expect(e.kind).toBe(goConst('ScanKind'));
       }
-    },
+    }
   );
 
   it('labels only kinds the table or the scheduler produces', () => {
@@ -130,24 +138,12 @@ describe('booksTaskKinds against the kind-rename table', () => {
     expect(Object.keys(booksTaskKinds).sort()).toEqual([...kinds].sort());
   });
 
-  it('keeps the labels operationsFormat.ts shows for the same legacy ids', async () => {
-    const { formatOperationType } = await import('../../../components/layout/operationsFormat');
-    // legacy label key per def id (the tail the bell looked up, or the type it was keyed by)
-    const legacyKey: Record<string, string> = {
-      'itunes.import': 'itunes_import',
-      'itunes.sync': 'itunes_sync',
-      'library.scan': 'scan',
-      'library.organize': 'organize',
-      'metadata.candidate-fetch': 'metadata_candidate_fetch',
-      'dedup.llm-review': 'dedup-llm-review',
-      'dedup.book-signature-scan': 'dedup-book-signature-scan',
-      'dedup.embed-scan': 'embed-scan',
-      'acoustid.fingerprint-rescan': 'fingerprint-rescan',
-      'activity.sql-migration': 'sql-migration',
-    };
-    expect(Object.keys(legacyKey).sort()).toEqual(BOOKS_KIND_LABELS.map((e) => e.defId).sort());
+  it('labels each kind with the label the bell shows for its def id', () => {
+    // One wording in both places: the def-id label table is what the bell and the
+    // Activity page fall back to, and these are the task-run labels for the same defs.
     for (const e of BOOKS_KIND_LABELS) {
-      expect(e.label, e.defId).toBe(formatOperationType(legacyKey[e.defId]!));
+      expect(OPERATION_DEF_LABELS[e.defId], e.defId).toBeDefined();
+      expect(e.label, e.defId).toBe(OPERATION_DEF_LABELS[e.defId]);
     }
   });
 });

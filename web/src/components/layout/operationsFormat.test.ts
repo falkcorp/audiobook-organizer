@@ -1,6 +1,7 @@
 // file: web/src/components/layout/operationsFormat.test.ts
-// version: 1.1.0
+// version: 1.2.0
 // guid: 5a8c31e0-9d47-4b62-8e15-2f0a7c94b3d6
+// last-edited: 2026-11-21
 
 import { describe, it, expect } from 'vitest';
 import { formatProgressCounts, operationDisplayName } from './operationsFormat';
@@ -52,6 +53,14 @@ describe('operationDisplayName', () => {
   });
 
   it('de-slugs an unknown def id rather than printing it raw', () => {
-    expect(operationDisplayName({ def_id: 'maintenance.title-backfill' })).toBe('Title Backfill');
+    // maintenance.title-backfill is a registered def with a label of its own now, so the
+    // unknown id has to be one no table knows.
+    expect(operationDisplayName({ def_id: 'maintenance.no-such-def' })).toBe('No Such Def');
+  });
+
+  it('labels a registered def by its own label, not by the tail it shares with others', () => {
+    expect(operationDisplayName({ def_id: 'maintenance.title-backfill' })).toBe(
+      'Strip chapter prefixes from book titles'
+    );
   });
 });
