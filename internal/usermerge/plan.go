@@ -289,6 +289,13 @@ func (b *builder) finalize() []database.UserMergeOp {
 	return append(append(sets, units...), deletes...)
 }
 
+// isSystemAccount reports whether u is the _system attribution pseudo-user (or any
+// account carrying the system status). It cannot sign in and only attributes
+// background work, so it is neither a merge survivor nor something to merge away.
+func isSystemAccount(u *database.User) bool {
+	return u.Status == string(coreauth.StatusSystem) || u.Username == string(coreauth.SystemUserID)
+}
+
 // BuildPlan builds the preview: which rows move or merge, the conflicts and how
 // they resolve, every refusal, the identities each side holds, and the digest.
 // It writes nothing. An error is an I/O failure; a merge that must not run is a
@@ -335,6 +342,12 @@ func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error)
 		case req.ActorID == abs.ID:
 			p.Refusals = append(p.Refusals, "you cannot merge away the account you are signed in as")
 		}
+	}
+	if isSystemAccount(surv) {
+		p.Refusals = append(p.Refusals, "the surviving account is a system account; system accounts are never merged")
+	}
+	if isSystemAccount(abs) {
+		p.Refusals = append(p.Refusals, "the account to merge away is a system account; system accounts are never merged")
 	}
 	if surv.Status != "active" {
 		p.Refusals = append(p.Refusals, "the surviving account is not active")

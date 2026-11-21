@@ -633,6 +633,33 @@ func TestBuildPlan_Refusals(t *testing.T) {
 	refusal("active op", f.svc, f.planReq(), "queued or running")
 }
 
+// The _system pseudo-user only attributes background work. It must be refused on
+// either side of a merge: as the survivor it could never sign in, and as the
+// absorbed account its attribution rows would be repointed and the account marked
+// merged away, so every later background write would be attributed to a ghost.
+func TestBuildPlan_RefusesTheSystemAccountOnEitherSide(t *testing.T) {
+	f := newFixture(t)
+	sys, err := f.s.CreateUser("_system", "_system@local", "", "", nil, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, req := range map[string]PlanRequest{
+		"as the survivor": {ActorID: f.a.ID, SurvivorID: sys.ID, AbsorbedID: f.b.ID},
+		"as the absorbed": {ActorID: f.a.ID, SurvivorID: f.a.ID, AbsorbedID: sys.ID},
+	} {
+		p, err := f.svc.BuildPlan(context.Background(), req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p.Applicable() {
+			t.Errorf("%s: plan is applicable, want a refusal", name)
+		}
+		if !slices.ContainsFunc(p.Refusals, func(r string) bool { return strings.Contains(r, "system account") }) {
+			t.Errorf("%s: refusals = %v, want one naming the system account", name, p.Refusals)
+		}
+	}
+}
+
 func TestBuildPlan_SurvivorWithNoSignInIsRefused(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.s.SetUserPassword(f.a.ID, "", "bcrypt", "", ""); err != nil {

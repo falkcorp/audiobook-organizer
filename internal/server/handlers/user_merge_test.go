@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -230,6 +231,39 @@ func TestUserMergeRoutes_SurvivorMustBeAnAdmin(t *testing.T) {
 	path := "/users/" + r.absorbed.ID + "/merge-into/" + r.viewer.ID + "/apply"
 	if w, _ := r.do(t, http.MethodPost, path, map[string]any{"digest": "x"}); w.Code != http.StatusConflict {
 		t.Errorf("a non-admin survivor: %d, want 409", w.Code)
+	}
+}
+
+// The _system attribution user is refused on either side at the route: the preview
+// lists the refusal and apply answers 409 without enqueuing, even when the digest
+// is the one the preview just returned.
+func TestUserMergeRoutes_TheSystemAccountIsNeverMerged(t *testing.T) {
+	r := newMergeRig(t)
+	sys, err := r.store.CreateUser("_system", "_system@local", "", "", nil, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"as the absorbed account": "/users/" + sys.ID + "/merge-into/" + r.admin.ID + "/",
+		"as the survivor":         "/users/" + r.absorbed.ID + "/merge-into/" + sys.ID + "/",
+	} {
+		w, data := r.do(t, http.MethodPost, path+"preview", nil)
+		if w.Code != http.StatusOK || data["applicable"] == true {
+			t.Fatalf("%s: preview %d %s", name, w.Code, w.Body.String())
+		}
+		digest, _ := data["digest"].(string)
+		if !strings.Contains(w.Body.String(), "system account") {
+			t.Errorf("%s: no refusal names the system account: %s", name, w.Body.String())
+		}
+		if w, _ := r.do(t, http.MethodPost, path+"apply", map[string]any{"digest": digest}); w.Code != http.StatusConflict {
+			t.Errorf("%s: apply %d, want 409", name, w.Code)
+		}
+	}
+	if len(r.enq.calls) != 0 {
+		t.Errorf("enqueued %d operation(s)", len(r.enq.calls))
+	}
+	if u, _ := r.store.GetUserByID(sys.ID); u.MergedIntoUserID != "" {
+		t.Error("the system account was merged away")
 	}
 }
 

@@ -16,6 +16,14 @@ export interface MergeableUser {
   merged_into_user_id?: string;
 }
 
+/**
+ * The _system attribution account (and any account the server marks `system`). It cannot sign
+ * in and only attributes background work, so it is never merged away and never a survivor. The
+ * server refuses both; this keeps it out of the choices.
+ */
+export const isSystemAccount = (u: Pick<MergeableUser, 'username' | 'status'>) =>
+  u.status === 'system' || u.username === '_system';
+
 export const errorText = (err: unknown, fallback: string) =>
   err instanceof Error && err.message ? err.message : describeRequestError(err, fallback);
 
