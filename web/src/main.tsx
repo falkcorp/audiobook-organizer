@@ -15,6 +15,7 @@ import { OperationTrackerProvider } from './components/operations/OperationTrack
 import { AuthProvider } from './contexts/AuthContext';
 import { FlushOnNavigate } from './components/FlushOnNavigate';
 import { STORAGE_KEYS } from './lib/storageKeys';
+import { initShellAppId } from './shellAppId';
 
 // eslint-disable-next-line react-refresh/only-export-components
 function AppRoot() {
@@ -54,4 +55,7 @@ function AppRoot() {
   return import.meta.env.DEV ? <React.StrictMode>{app}</React.StrictMode> : app;
 }
 
+// Shell code (the operations bell's saved state) reads storageKey() while it
+// renders, so the app ID is set first.
+initShellAppId();
 ReactDOM.createRoot(document.getElementById('root')!).render(<AppRoot />);

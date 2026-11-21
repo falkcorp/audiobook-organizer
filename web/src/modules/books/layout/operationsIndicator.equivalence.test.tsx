@@ -17,11 +17,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, type Mock }
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { storageKey } from '@mediacore/shell';
-// The shell does not export its app-ID setter (createShell and renderInShell are
-// its only callers, and renderInShell renders with core/web's own React copy, which
-// cannot mount beside web's). Reaching the source module is the same instance the
-// package's `development` entry resolves to.
-import { setShellAppId } from '../../../../../core/web/packages/shell/src/app/appId';
+import { setTestShellAppId } from '@mediacore/shell/testing';
 import { OperationsIndicator } from '../../../components/layout/OperationsIndicator';
 import { useOperationsStore, type ActiveOperation } from '../../../stores/useOperationsStore';
 import { cancelOperation } from '../../../services/api';
@@ -88,7 +84,7 @@ const popover = () => screen.getByRole('presentation');
 beforeAll(() => {
   // storageKey() throws until createShell sets the app ID, and the frame swallows
   // that throw, so without this the collapse state is silently never saved.
-  setShellAppId('test');
+  setTestShellAppId();
 });
 
 beforeEach(() => {

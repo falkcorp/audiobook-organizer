@@ -138,7 +138,21 @@ function activityTargetFor(op: OperationsFrameRow): ActivityTarget {
 // Under the app ID (07 §7.4.2), never the pre-shell literal key: two apps on one
 // origin must not share it. Resolved per call because the app ID is set by
 // createShell, after this module loads.
-const collapseStorageKey = () => storageKey('operations', 'indicatorCollapse');
+// A missing app ID is a wiring bug, not a storage failure: it is reported once
+// (a swallowed throw here once left the collapse state silently unsaved in the
+// running SPA) and the state then simply is not persisted.
+let reportedMissingAppId = false;
+function collapseStorageKey(): string | null {
+  try {
+    return storageKey('operations', 'indicatorCollapse');
+  } catch (err) {
+    if (!reportedMissingAppId) {
+      reportedMissingAppId = true;
+      console.error('@mediacore/shell: the operations bell cannot save its collapse state', err);
+    }
+    return null;
+  }
+}
 
 function loadCollapseState(): Record<CollapseKey, boolean> {
   // Defaults: Running open, Pending open, Completed collapsed.
@@ -147,8 +161,10 @@ function loadCollapseState(): Record<CollapseKey, boolean> {
     pending: true,
     completed: false,
   };
+  const key = collapseStorageKey();
+  if (key === null) return defaults;
   try {
-    const raw = localStorage.getItem(collapseStorageKey());
+    const raw = localStorage.getItem(key);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw);
     return { ...defaults, ...parsed };
@@ -158,8 +174,10 @@ function loadCollapseState(): Record<CollapseKey, boolean> {
 }
 
 function persistCollapseState(state: Record<CollapseKey, boolean>) {
+  const key = collapseStorageKey();
+  if (key === null) return;
   try {
-    localStorage.setItem(collapseStorageKey(), JSON.stringify(state));
+    localStorage.setItem(key, JSON.stringify(state));
   } catch {
     /* ignore quota errors */
   }
