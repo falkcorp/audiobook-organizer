@@ -178,8 +178,15 @@ func (s *Service) bind(ctx context.Context, p *Principal, c ClientInfo) context.
 		Method: string(p.Method), CredentialID: p.CredentialID,
 		ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent,
 	}
-	if p.User != nil {
+	switch {
+	case p.User != nil:
 		a.UserID, a.Username = string(p.User.ID), p.User.Username
+	case p.Method == MethodAuthDisabled:
+		// The auth-off principal has no user, and an audited write needs an
+		// actor with one (core's config committer refuses a commit without
+		// it): it is named for its method, which no real user ID can be (IDs
+		// are issued by the service).
+		a.UserID = string(MethodAuthDisabled)
 	}
 	return audit.WithActor(ctx, a)
 }
