@@ -457,6 +457,29 @@ type schedulerSchedules struct {
 	Reconcile                tasks.ScheduleConfig `json:"reconcile"`
 	ResolveProductionAuthors tasks.ScheduleConfig `json:"resolve_production_authors"`
 	SeriesPrune              tasks.ScheduleConfig `json:"series_prune"`
+
+	// F5-14: the tasks HEAD scheduled with no scheduled.<entry> setting, at
+	// HEAD's cadence (internal/scheduler/testdata/cadence.golden); the ones
+	// HEAD's window ran are placed in the nightly window by nightly().
+	AcoustIDOnlineLookup      tasks.ScheduleConfig `json:"acoustid_online_lookup"`
+	AIJournalPrune            tasks.ScheduleConfig `json:"ai_journal_prune"`
+	CleanupActivityLog        tasks.ScheduleConfig `json:"cleanup_activity_log"`
+	CleanupOldBackups         tasks.ScheduleConfig `json:"cleanup_old_backups"`
+	CollectionsRefresh        tasks.ScheduleConfig `json:"collections_refresh"`
+	DedupLLMReview            tasks.ScheduleConfig `json:"dedup_llm_review"`
+	FileIntegrityCheck        tasks.ScheduleConfig `json:"file_integrity_check"`
+	IdentificationAdvance     tasks.ScheduleConfig `json:"identification_advance"`
+	LibraryOrganize           tasks.ScheduleConfig `json:"library_organize"`
+	LibrarySizeRefresh        tasks.ScheduleConfig `json:"library_size_refresh"`
+	NightlyActivityCompaction tasks.ScheduleConfig `json:"nightly_activity_compaction"`
+	OrphanBookFilesCleanup    tasks.ScheduleConfig `json:"orphan_book_files_cleanup"`
+	PurgeDeleted              tasks.ScheduleConfig `json:"purge_deleted"`
+	ReportsPrune              tasks.ScheduleConfig `json:"reports_prune"`
+	SeriesNormalize           tasks.ScheduleConfig `json:"series_normalize"`
+	TempFileCleanup           tasks.ScheduleConfig `json:"temp_file_cleanup"`
+	TombstoneCleanup          tasks.ScheduleConfig `json:"tombstone_cleanup"`
+	TranscodeTempCleanup      tasks.ScheduleConfig `json:"transcode_temp_cleanup"`
+	TrashCleanup              tasks.ScheduleConfig `json:"trash_cleanup"`
 }
 
 type schedulerSettings struct {
@@ -899,6 +922,26 @@ func schedulerDefaults() schedulerSettings {
 			Reconcile:                nightly("reconcile", tasks.ScheduleConfig{Enabled: false}),
 			ResolveProductionAuthors: tasks.ScheduleConfig{Enabled: false},
 			SeriesPrune:              nightly("series_prune", tasks.ScheduleConfig{Enabled: false}),
+
+			AcoustIDOnlineLookup:      tasks.ScheduleConfig{Enabled: false},
+			AIJournalPrune:            nightly("ai_journal_prune", tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour)}),
+			CleanupActivityLog:        nightly("cleanup_activity_log", tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour)}),
+			CleanupOldBackups:         nightly("cleanup_old_backups", tasks.ScheduleConfig{Enabled: true}),
+			CollectionsRefresh:        tasks.ScheduleConfig{Enabled: true, Every: dur(time.Hour)},
+			DedupLLMReview:            nightly("dedup_llm_review", tasks.ScheduleConfig{Enabled: true}),
+			FileIntegrityCheck:        nightly("file_integrity_check", tasks.ScheduleConfig{Enabled: true}),
+			IdentificationAdvance:     tasks.ScheduleConfig{Enabled: true, Every: dur(5 * time.Minute)},
+			LibraryOrganize:           nightly("library_organize", tasks.ScheduleConfig{Enabled: true}),
+			LibrarySizeRefresh:        nightly("library_size_refresh", tasks.ScheduleConfig{Enabled: true}),
+			NightlyActivityCompaction: tasks.ScheduleConfig{Enabled: true, DailyAt: "00:10"},
+			OrphanBookFilesCleanup:    nightly("orphan_book_files_cleanup", tasks.ScheduleConfig{Enabled: true}),
+			PurgeDeleted:              nightly("purge_deleted", tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour)}),
+			ReportsPrune:              nightly("reports_prune", tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour)}),
+			SeriesNormalize:           tasks.ScheduleConfig{Enabled: false},
+			TempFileCleanup:           nightly("temp_file_cleanup", tasks.ScheduleConfig{Enabled: true}),
+			TombstoneCleanup:          nightly("tombstone_cleanup", tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour)}),
+			TranscodeTempCleanup:      tasks.ScheduleConfig{Enabled: true, Every: dur(time.Hour)},
+			TrashCleanup:              nightly("trash_cleanup", tasks.ScheduleConfig{Enabled: true}),
 		},
 	}
 }
