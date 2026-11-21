@@ -5,97 +5,82 @@
 
 # Bootstrap API Reference
 
-## POST /api/v1/auth/bootstrap
+## POST /api/core/v1/auth/bootstrap
 
-Exchanges a one-time bootstrap token for a full-privilege API key.
+Exchanges a one-time bootstrap token for a full-privilege API key. Public route
+(no credential needed), rate limited as an auth route.
 
 ### Request
 
 ```json
 {
-  "token": "abbs_xxxxxxxxxxxxx",
-  "key_name": "optional-key-name"
+  "token": "mcb_xxxxxxxxxxxxx"
 }
 ```
 
-- **token** (required): Bootstrap token read from the `.bootstrap-token` file (format: `abbs_*`; no longer logged in plaintext — pen-test CRIT-1)
-- **key_name** (optional): Human-readable name for the API key. Defaults to "Bootstrap recovery key".
+- **token** (required): Bootstrap token read from the `bootstrap-token` file in the state directory (format: `mcb_*`; never logged).
+
+Core refuses a body with any other field, so there is no key name to send.
 
 ### Response (200 OK)
 
+The bare body, with no `data` envelope:
+
 ```json
 {
-  "data": {
-    "api_key": "abbs_xxxxxxxxxxxxx",
-    "key_id": "ulid-...",
-    "user_id": "ulid-...",
+  "key": "mck_xxxxxxxxxxxxx",
+  "key_id": "ulid-...",
+  "expires_at": "2026-09-24T12:00:00Z",
+  "user": {
+    "id": "ulid-...",
     "username": "admin",
-    "scopes": ["all"],
-    "message": "Bootstrap token consumed. This key will not be shown again.",
-    "expires_at": "2026-09-24T12:00:00Z",
-    "generated_password": "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ23",
-    "password_message": "Admin account created. Change this password after logging in."
-  }
+    "roles": ["..."],
+    "status": "active"
+  },
+  "generated_password": "..."
 }
 ```
 
-- The API wraps successful responses in the standard `data` envelope. Extract
-  the bearer key with `jq -er '.data.api_key'`.
-- **data.api_key**: The actual API token to use in subsequent requests. Store securely. Only shown once.
+- **key**: The API token to use in subsequent requests. Only shown once.
 - **key_id**: Internal ID for the key.
-- **user_id**: Admin user ID.
-- **username**: The existing active admin, or for a bootstrap-created admin the
-  first free name of "admin", "admin-2", ... (since 2026-10-20).
-- **scopes**: API scopes (always "all" for bootstrap).
+- **user**: The existing active admin, or the account the exchange created.
 - **expires_at**: When the key stops working: 8 hours after issue by default
-  (config `bootstrap_key_ttl`, a Go duration, capped at 24h; the deprecated
-  `bootstrap_key_ttl_days` is honoured but capped at 24h with a warning).
-  Before 2026-10-07 this defaulted to 30 days.
-- **generated_password**: (Only when bootstrap created the admin) Temporary password for
-  that user: 28 base32 symbols in groups of four (140 bits from crypto/rand) since
-  2026-10-20; before that, a word-word-word-number passphrase.
+  (`core.auth.bootstrap.key_ttl`, a Go duration, capped at 24h).
+- **generated_password**: (Only when the exchange created the admin account.)
 
 ### Error Responses
 
-#### 400 Bad Request
-Missing or empty token field.
+Errors are problem documents with a `code`.
 
-#### 401 Unauthorized
-- Token is invalid
-- Token has expired (> 10 minutes old)
-- Token has already been consumed
-
-Wait for service restart to generate a new bootstrap token.
-
-#### 429 Too Many Requests
-More than 5 failed bootstrap attempts in an hour from the same IP.
-
-Wait 1 hour or restart the service.
-
-#### 500 Internal Server Error
-Database or key generation failure. Check server logs.
+- **401 `bootstrap_invalid`**: the token is wrong, expired (10 minutes after
+  service start), already spent, or bootstrap is disabled
+  (`core.auth.bootstrap.enabled`). All are the same answer. Restart the service
+  for a new token.
+- **429**: the exchange is limited to 5 attempts an hour per client, with a
+  service-wide ceiling above that; the limiter is in memory, so a restart
+  clears it.
+- Other statuses (a malformed body, a store failure) are problem documents too;
+  check the server logs for a 5xx.
 
 ## Using the API Key
 
 Once obtained, use the API key in subsequent requests:
 
 ```bash
-curl -H "Authorization: Bearer abbs_xxxxxxxxxxxxx" \
+curl -H "Authorization: Bearer mck_xxxxxxxxxxxxx" \
   http://server:8484/api/v1/audiobooks
 ```
 
-The API key has full permissions (`scopes: ["all"]`), except that no API key
-may change credentials or identity: password changes and resets, invites,
-temp-login links, user (de)activation, keys for another user and sign-in
-settings answer 403. Do those signed in to the web UI. See SKILL.md, "What a
-bootstrap key cannot do".
+The key has full permissions, except that routes that change credentials or
+identity need an interactive sign-in and answer 403 `interactive_required` to
+a key. See SKILL.md, "What a bootstrap key cannot do".
 
 ## Token File Format (.api-token)
 
 After bootstrap.sh runs, the token file contains:
 
 ```
-api_key=abbs_xxxxxxxxxxxxx
+api_key=mck_xxxxxxxxxxxxx
 key_id=ulid-...
 username=admin
 server_ip=<server-ip>
@@ -108,60 +93,32 @@ expires_at=1716470400
 
 ## Bootstrapping the Server
 
-Only one bootstrap token is valid at a time. To get a new token:
+Only one bootstrap token is valid at a time: each start deletes the stored ones
+and mints a new one. To get a new token:
 
 ```bash
 ssh -tt <server> '
   sudo systemctl restart audiobook-organizer.service
   sleep 90
-  TOKEN_FILE=$(journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
-    | grep -o "token_file=[^ ]*" | tail -1 | cut -d= -f2-)
-  echo "token_file = $TOKEN_FILE"
-  sudo cat "$TOKEN_FILE"
+  journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
+    | grep "bootstrap token written" | tail -1
+  sudo cat /var/lib/audiobook-organizer/bootstrap-token
 '
 ```
 
-**Derive the path anyway, even though it is now a constant.** As of
-2026-09-09 the token is written to `/var/lib/audiobook-organizer/`, which does
-not move when the database moves. Reading the path out of the startup log the
-app just wrote is still the right habit: it survives the directory changing
-again, and — more importantly here — it identifies the file written by *this*
-restart rather than one left over from an earlier one.
+The file is `<state_dir>/bootstrap-token`, mode 0600, owned by the service user.
+The state directory is `core.paths.state_dir` (`ABO_CORE_PATHS_STATE_DIR`),
+which defaults to `/var/lib/audiobook-organizer` on the prod host. The log line
+carries the file name and the token's expiry, never the directory or the
+value.
 
-The 90-second delay must occur before `cat`. The previous token file can remain
+The 90-second delay must occur before `cat`: the previous token file can remain
 visible during initialization, so reading it immediately after the restart can
 return a stale token that the new process rejects. Production sudo also requires
 the SSH pseudo-terminal supplied by `-tt`.
 
-The journalctl line confirms *when* a token was written and, crucially, WHERE:
-```
-msg="Emergency access token written" token_file=<data-dir>/.bootstrap-token expires_at=...
-msg="Token expires in 10 minutes..."
-```
-
-### ⚠️ A leftover token still answers, at whichever path it sits
-
-Token files are never cleaned up on restart — they are only overwritten in the
-directory currently in use. A file from an earlier configuration therefore stays
-on disk indefinitely, and `sudo cat` on it SUCCEEDS, handing back a well-formed
-`abbs_…` value that expired ten minutes after it was written.
-
-That is the worst failure shape available here: the runbook appears to work, and
-the exchange returns `401 invalid bootstrap token` with nothing explaining why.
-Deriving the path from the `token_file=` log line is what prevents it.
-
-Two paths are known to hold expired files on the prod host and should be deleted
-(needs root):
-
-```
-/var/lib/audiobook-organizer/.bootstrap-token                     # pre-2026-09-09
-/mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token  # the interim location
-```
-
-**Historical note.** Between the database relocation and PR #3171 the token was
-written beside the database, so it briefly lived in `.appdata/` — mode 0700,
-named by no sudoers rule, and unreadable by the operator. Hosts not redeployed
-since are still in that state. The credential directory is now a constant
-precisely so this cannot recur.
+A file named `.bootstrap-token` (leading dot) is HEAD's and is never cleaned up;
+it answers `sudo cat` with a well-formed, long-expired value. Read the file
+without the dot.
 
 The token is valid for exactly 10 minutes from service startup.

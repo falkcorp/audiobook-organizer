@@ -382,7 +382,7 @@ class UnitLifecycleTest(unittest.TestCase):
         goes through a signed-in session: the bootstrap exchange also returns
         the admin's generated password. Returns (HTTP status, JSON body).
         """
-        token_file = STATE_DIR / ".bootstrap-token"
+        token_file = STATE_DIR / "bootstrap-token"
         deadline = time.monotonic() + 120
         while not (token_file.exists() and token_file.stat().st_size > 0):
             self.assertLess(time.monotonic(), deadline, "no bootstrap token was written")
@@ -411,13 +411,18 @@ class UnitLifecycleTest(unittest.TestCase):
                 except ValueError:
                     return e.code, {"raw": raw}
 
-        status, doc = call("POST", "/api/v1/auth/bootstrap", {"token": token})
+        # Core's native identity routes answer the bare body, with no `data`
+        # envelope: the generated password is top-level and the account is
+        # nested under `user`.
+        status, admin = call("POST", "/api/core/v1/auth/bootstrap", {"token": token})
         self.assertEqual(status, 200, "bootstrap exchange failed")
-        admin = doc["data"]
         status, _ = call(
             "POST",
-            "/api/v1/auth/login",
-            {"username": admin["username"], "password": admin["generated_password"]},
+            "/api/core/v1/auth/login",
+            {
+                "username": admin["user"]["username"],
+                "password": admin["generated_password"],
+            },
         )
         self.assertEqual(status, 200, "login failed")
         status, doc = call("POST", "/api/v1/backup/create", {})
