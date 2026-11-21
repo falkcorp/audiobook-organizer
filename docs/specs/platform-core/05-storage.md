@@ -1166,6 +1166,8 @@ func Match(field, text string) Query
 func Term(field, value string) Query
 func Prefix(field, prefix string) Query
 func Wildcard(field, pattern string) Query // * and ?, a leading one allowed; bounded, see below
+func All() Query                          // every document
+func MatchAnyField(text string) Query     // unweighted match over every Text and Keyword field (_all)
 func Range[T int64 | float64 | time.Time](field string, min, max *T) Query
 func And(qs ...Query) Query
 func Or(qs ...Query) Query
@@ -1217,7 +1219,8 @@ recreates and rebuilds the index, and a Spec that declares none keeps the finger
 without analysis, so the engine lowercases their text on a field whose analyzer lowercases (HEAD's
 `patternTerm`, `bleve_translator.go`), and stems nothing. `Field.Boost` weights `Match` nodes only and is not
 part of the fingerprint; HEAD's free-text fan-out (`translateFreeText`, `textFieldBoosts`) becomes an `Or` of
-per-field `Match` nodes. `QueryString` still refuses a wildcard that starts with `*` or `?` and every regular
+per-field `Match` nodes plus `MatchAnyField` (HEAD's unfielded `_all` child, analysed with the standard
+analyzer), and a listing with no term is `All()` (charged a Not's 64 nodes). `QueryString` still refuses a wildcard that starts with `*` or `?` and every regular
 expression; `Wildcard` is the explicit opt-in. A leading wildcard walks the field's whole term dictionary
 (linear in its distinct terms) and every term it matches counts against the engine's term-searcher cap
 (default 1024 per search); past the cap a search fails with `ErrTooBroad` instead of running, and each
