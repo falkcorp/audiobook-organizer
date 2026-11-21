@@ -18,8 +18,8 @@ import (
 
 // A schedule with an interval and a window slot (owner ruling 2026-11-20,
 // seams.d/F5-14.md: "Allow both in core"). HEAD's tombstone_cleanup,
-// reports_prune, purge_deleted, cleanup_activity_log and ai_journal_prune
-// tick on an interval and are also members of maintenanceOrder, and fire on
+// reports_prune, purge_deleted, cleanup_activity_log, ai_journal_prune and
+// purge_old_logs tick on an interval and are also members of maintenanceOrder, and fire on
 // either; a fire that finds a run of the task active is skipped (HEAD's
 // isTaskRunning), which core's executor fold reproduces.
 

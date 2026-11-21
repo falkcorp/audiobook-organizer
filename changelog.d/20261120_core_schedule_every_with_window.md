@@ -2,7 +2,7 @@
 
 #### A core schedule can carry an interval and a maintenance-window slot
 
-`tasks.ScheduleConfig` now accepts `every` together with `window` (owner ruling 2026-11-20). Such a kind is polled on its interval and is also started by its window, and it fires on whichever comes due; a start that finds the kind's run active folds into it, so one due moment never starts two runs. `window` with `daily_at` or `cron` is still refused. A window member's on-start schedule now fires at boot. This keeps HEAD's cadence for the five books tasks that tick on an interval and also sit in the nightly window (`tombstone_cleanup`, `reports_prune`, `purge_deleted`, `cleanup_activity_log`, `ai_journal_prune`) and for `temp_file_cleanup`'s start-up run. Nothing registers a core-scheduled books kind yet, so production behaviour is unchanged.
+`tasks.ScheduleConfig` now accepts `every` together with `window` (owner ruling 2026-11-20). Such a kind is polled on its interval and is also started by its window, and it fires on whichever comes due; a start that finds the kind's run active folds into it under the kind's dedupe policy, so the default policy starts one run for one due moment. `window` with `daily_at` or `cron` is still refused. A window member's on-start schedule now fires at boot. This keeps HEAD's cadence for the six books tasks that tick on an interval and also sit in the nightly window (`tombstone_cleanup`, `reports_prune`, `purge_deleted`, `cleanup_activity_log`, `ai_journal_prune`, `purge_old_logs`) and for `temp_file_cleanup`'s start-up run. Nothing registers a core-scheduled books kind yet, so production behaviour is unchanged.
 
 ### Added
 

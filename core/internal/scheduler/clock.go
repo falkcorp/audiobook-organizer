@@ -92,8 +92,10 @@ func effectiveOf(c tasks.ScheduleConfig, poll time.Duration, loc *time.Location)
 			// Both (owner ruling 2026-11-20): the interval clock is polled
 			// as for an interval-only kind, and the window starts the kind
 			// as a member; a start that finds a run of the kind active folds
-			// into it (the executor's DedupePolicy), so one due moment never
-			// starts two runs.
+			// into it under the kind's DedupePolicy (the executor's fold), so
+			// the default policy starts one run for one due moment. A Key
+			// policy never folds into a running run, and a finished run does
+			// not suppress the other trigger; see tasks.ScheduleConfig.
 			return effective{enabled: true, window: c.Window, t: interval(d), hash: hashOf("every", d.String(), "window", c.Window)}, nil
 		}
 		return effective{enabled: true, t: interval(d), hash: hashOf("every", d.String())}, nil
