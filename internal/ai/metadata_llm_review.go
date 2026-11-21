@@ -160,13 +160,16 @@ Include one score per input candidate, using the same index as the input.`
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
 		if len(completion.Choices) == 0 {
-			return fmt.Errorf("no response from OpenAI")
+			return noChoicesReply(ctx, meta)
 		}
 		var result struct {
 			Scores []MetadataLLMScore `json:"scores"`
 		}
 		if err := json.Unmarshal([]byte(completion.Choices[0].Message.Content), &result); err != nil {
-			return fmt.Errorf("parse response: %w", err)
+			// The request was ok (observe counted it); the reply was not usable.
+			rerr := newReplyParseError(err, completion.Choices[0].Message.Content)
+			recordReplyFailure(ctx, meta, rerr)
+			return rerr
 		}
 		scores = result.Scores
 		return nil

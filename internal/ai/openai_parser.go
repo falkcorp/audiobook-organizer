@@ -501,7 +501,9 @@ func (p *OpenAIParser) readCoverTextImage(ctx context.Context, dataURL string) (
 		return "", err
 	}
 	if len(completion.Choices) == 0 {
-		return "", errNoCoverTextChoices
+		// Typed as a reply failure (errors.Is still finds the sentinel through
+		// Unwrap); coverTextAttempt records it, so it is not recorded here.
+		return "", newReplyParseError(errNoCoverTextChoices, "")
 	}
 	return completion.Choices[0].Message.Content, nil
 }
@@ -570,7 +572,7 @@ Set confidence based on clarity of the filename structure.`
 	}
 
 	if len(completion.Choices) == 0 {
-		return nil, fmt.Errorf("no response from OpenAI")
+		return nil, noChoicesReply(ctx, meta)
 	}
 
 	content := completion.Choices[0].Message.Content
@@ -680,7 +682,7 @@ Set confidence based on how much context was available and how unambiguous it is
 	}
 
 	if len(completion.Choices) == 0 {
-		return nil, fmt.Errorf("no response from OpenAI")
+		return nil, noChoicesReply(ctx, meta)
 	}
 
 	content := completion.Choices[0].Message.Content
@@ -779,7 +781,7 @@ Set confidence based on clarity of the filename structure.`
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
 		if len(completion.Choices) == 0 {
-			return fmt.Errorf("no response from OpenAI")
+			return noChoicesReply(ctx, meta)
 		}
 		content = completion.Choices[0].Message.Content
 		return nil
@@ -861,7 +863,7 @@ Set confidence based on how clearly the text is readable on the cover.`
 	}
 
 	if len(completion.Choices) == 0 {
-		return nil, fmt.Errorf("no response from OpenAI")
+		return nil, noChoicesReply(ctx, meta)
 	}
 
 	content := completion.Choices[0].Message.Content
@@ -1183,13 +1185,16 @@ The roles object fields are all optional — only include roles that are detecte
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
 		if len(completion.Choices) == 0 {
-			return fmt.Errorf("no response from OpenAI")
+			return noChoicesReply(ctx, meta)
 		}
 		var result struct {
 			Suggestions []AuthorDedupSuggestion `json:"suggestions"`
 		}
 		if err := json.Unmarshal([]byte(completion.Choices[0].Message.Content), &result); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
+			// The request was ok (observe counted it); the reply was not usable.
+			rerr := newReplyParseError(err, completion.Choices[0].Message.Content)
+			recordReplyFailure(ctx, meta, rerr)
+			return rerr
 		}
 		suggestions = result.Suggestions
 		return nil
@@ -1308,13 +1313,16 @@ The roles object fields are all optional — only include roles that are detecte
 			return fmt.Errorf("OpenAI API call failed: %w", err)
 		}
 		if len(completion.Choices) == 0 {
-			return fmt.Errorf("no response from OpenAI")
+			return noChoicesReply(ctx, meta)
 		}
 		var result struct {
 			Suggestions []AuthorDiscoverySuggestion `json:"suggestions"`
 		}
 		if err := json.Unmarshal([]byte(completion.Choices[0].Message.Content), &result); err != nil {
-			return fmt.Errorf("failed to parse response: %w", err)
+			// The request was ok (observe counted it); the reply was not usable.
+			rerr := newReplyParseError(err, completion.Choices[0].Message.Content)
+			recordReplyFailure(ctx, meta, rerr)
+			return rerr
 		}
 		suggestions = result.Suggestions
 		return nil
@@ -1712,6 +1720,22 @@ func (e *ResultCountError) Error() string {
 
 func newReplyParseError(err error, content string) *ReplyParseError {
 	return &ReplyParseError{Err: err, Excerpt: responseExcerpt(content)}
+}
+
+// errNoChoices is a completion that came back with no choices: the endpoint
+// answered and said nothing.
+var errNoChoices = errors.New("no response from OpenAI")
+
+// noChoicesReply is the error for an empty-choices completion. The request was
+// "ok" (observe counted it), so this adds the reply_parse failure, once per
+// attempt: call it at the point of return, inside the retry closure where there
+// is one. It is a *ReplyParseError, so classification stays by type: it is
+// retried by DoWithRetry, never permanent, and a routed batch parse treats it
+// as a quality failure rather than failing over to a peer.
+func noChoicesReply(ctx context.Context, meta callMeta) error {
+	err := newReplyParseError(errNoChoices, "")
+	recordReplyFailure(ctx, meta, err)
+	return err
 }
 
 // responseExcerpt returns a truncated, log-safe copy of an LLM reply for use in
