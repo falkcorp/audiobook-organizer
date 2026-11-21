@@ -491,6 +491,9 @@ core/internal/uihttp.uiMetrics.recordCSP
 core/internal/uihttp.uiMetrics.recordDiagnostic
 core/kernel.CutoverPreflight
 core/kernel.ExitCode
+core/kernel.Kernel.applyLogSettings
+core/kernel.Kernel.bootLogSettings
+core/kernel.Kernel.watchLogConfig
 core/kernel.NewQuarantineGauge
 core/kernel.QuarantineDetail
 core/kernel.QuarantineGauge.Record
@@ -555,6 +558,7 @@ core/kernel.kernelRealtime.closeOnShutdown
 core/kernel.kernelRealtime.run
 core/kernel.kernelRealtime.subscriptions
 core/kernel.kernelSecrets.close
+core/kernel.logHandle
 core/kernel.metricsGate
 core/kernel.mountIdentityRoutes
 core/kernel.mountMetrics
@@ -572,6 +576,7 @@ core/kernel.outboxKinds
 core/kernel.outboxOwnerSpec
 core/kernel.outboxProbe
 core/kernel.outboxProblems
+core/kernel.overlayLogChange
 core/kernel.permissions
 core/kernel.principalInvalidatedTopic
 core/kernel.publishPrincipalInvalidated
