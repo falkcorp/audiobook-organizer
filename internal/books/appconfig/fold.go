@@ -98,7 +98,9 @@ func (e *Engine) withSecretRefs(ctx context.Context, list json.RawMessage, setti
 	changed := false
 	for _, ent := range entries {
 		var id string
-		_ = json.Unmarshal(ent["id"], &id)
+		if err := json.Unmarshal(ent["id"], &id); err != nil {
+			return nil, fmt.Errorf("a provider entry's id is not a string: %w", err)
+		}
 		name, known := e.oidcSecret[id]
 		if !known {
 			continue

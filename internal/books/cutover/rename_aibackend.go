@@ -147,7 +147,7 @@ func parseAIRows(in json.RawMessage) (*aiRows, error) {
 		if err := json.Unmarshal(raw, &m); err != nil || m == nil {
 			return nil, aiBad("an endpoint is not an object")
 		}
-		e := &aiEntry{raw: raw}
+		e := &aiEntry{raw: raw, m: m}
 		if v, has := m["id"]; has && json.Unmarshal(v, &e.id) != nil {
 			return nil, aiBad("an endpoint's id is not a string")
 		}
@@ -197,11 +197,9 @@ func (r *aiRows) openaiPriorityIs(n int) bool {
 	return json.Unmarshal(v, &f) == nil && f == float64(n)
 }
 
-// fields decodes the entry's fields.
+// fields is the entry's fields, decoded when the entry was built (parseAIRows,
+// or the local-llm row FoldAIBackend seeds).
 func (e *aiEntry) fields() map[string]json.RawMessage {
-	if e.m == nil {
-		_ = json.Unmarshal(e.raw, &e.m) // validated by parseAIRows
-	}
 	return e.m
 }
 
@@ -238,10 +236,21 @@ func (e *aiEntry) set(key string, v any) {
 	e.dirty = true
 }
 
+// mark ticks caps when on, unticks them otherwise.
+func (e *aiEntry) mark(caps []string, on bool) error {
+	if on {
+		return e.tick(caps)
+	}
+	return e.untick(caps)
+}
+
 // tick adds the capabilities in caps that are missing; untick removes every
 // copy of them. Neither touches a capability that is not named.
-func (e *aiEntry) tick(caps []string) {
-	have, _ := e.caps() // validated
+func (e *aiEntry) tick(caps []string) error {
+	have, err := e.caps()
+	if err != nil {
+		return err
+	}
 	next := slices.Clone(have)
 	for _, c := range caps {
 		if !slices.Contains(next, c) {
@@ -251,10 +260,14 @@ func (e *aiEntry) tick(caps []string) {
 	if len(next) != len(have) {
 		e.set("capabilities", next)
 	}
+	return nil
 }
 
-func (e *aiEntry) untick(caps []string) {
-	have, _ := e.caps()
+func (e *aiEntry) untick(caps []string) error {
+	have, err := e.caps()
+	if err != nil {
+		return err
+	}
 	next := make([]string, 0, len(have))
 	for _, c := range have {
 		if !slices.Contains(caps, c) {
@@ -264,6 +277,7 @@ func (e *aiEntry) untick(caps []string) {
 	if len(next) != len(have) {
 		e.set("capabilities", next)
 	}
+	return nil
 }
 
 func hasAny(have []string, caps []string) bool {
@@ -275,26 +289,40 @@ func hasAny(have []string, caps []string) bool {
 	return false
 }
 
-// state reads the five names off the list.
-func (r *aiRows) state() aiState {
+// state reads the five names off the list. parseAIRows has already checked
+// every field it reads, so an error here is a row changed since into a shape
+// the view cannot read, and is returned rather than read as empty.
+func (r *aiRows) state() (aiState, error) {
 	chat, embed := aiDefaultModels()
 	s := aiState{chat: chat, embed: embed}
 	if r.local != nil {
-		s.url, _ = r.local.str("url")
-		s.chat, _ = r.local.str("chat_model")
-		s.embed, _ = r.local.str("embed_model")
-		have, _ := r.local.caps()
+		var err error
+		for _, f := range []struct {
+			key string
+			dst *string
+		}{{"url", &s.url}, {"chat_model", &s.chat}, {"embed_model", &s.embed}} {
+			if *f.dst, err = r.local.str(f.key); err != nil {
+				return aiState{}, err
+			}
+		}
+		have, err := r.local.caps()
+		if err != nil {
+			return aiState{}, err
+		}
 		s.llmLocal = hasAny(have, aiLocalLLMCaps)
 		s.embLocal = hasAny(have, aiEmbedTextCaps)
 	}
 	if r.openai != nil {
-		have, _ := r.openai.caps()
+		have, err := r.openai.caps()
+		if err != nil {
+			return aiState{}, err
+		}
 		s.llmCloud = hasAny(have, aiCloudLLMCaps)
 		s.embCloud = hasAny(have, aiEmbedTextCaps)
 		s.batch = hasAny(have, aiEmbedBatch)
 		s.fallbackPrio = r.openaiPriorityIs(aiBackendFallbackPrio)
 	}
-	return s
+	return s, nil
 }
 
 // modeOf names the effective mode two routes make.
@@ -349,7 +377,10 @@ func UnfoldAIBackend(endpoints json.RawMessage) (map[string]json.RawMessage, err
 	if err != nil {
 		return nil, err
 	}
-	s := rows.state()
+	s, err := rows.state()
+	if err != nil {
+		return nil, err
+	}
 	return map[string]json.RawMessage{
 		aiBackendEmbeddingMode: mustJSON(s.embMode()),
 		aiBackendLLMMode:       mustJSON(s.llmMode()),
@@ -415,7 +446,10 @@ func FoldAIBackend(values map[string]json.RawMessage, prev json.RawMessage) (jso
 	if err != nil {
 		return nil, err
 	}
-	cur := rows.state()
+	cur, err := rows.state()
+	if err != nil {
+		return nil, err
+	}
 	defChat, defEmbed := aiDefaultModels()
 	removed := map[*aiEntry]bool{}
 	var created *aiEntry
@@ -458,7 +492,11 @@ func FoldAIBackend(values map[string]json.RawMessage, prev json.RawMessage) (jso
 			if err != nil {
 				return nil, aiBad("the local-llm endpoint does not encode")
 			}
-			created = &aiEntry{raw: b, id: headAIEndpointIDLocalLLM, dirty: true}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(b, &fields); err != nil {
+				return nil, aiBad("the local-llm endpoint does not decode")
+			}
+			created = &aiEntry{raw: b, m: fields, id: headAIEndpointIDLocalLLM, dirty: true}
 			rows.local = created
 		}
 	}
@@ -496,24 +534,23 @@ func FoldAIBackend(values map[string]json.RawMessage, prev json.RawMessage) (jso
 
 	// The modes, against what the list reads now.
 	if m, ok := named[aiBackendLLMMode]; ok {
-		w := rows.state()
+		w, err := rows.state()
+		if err != nil {
+			return nil, err
+		}
 		if m != w.llmMode() {
 			needLocal, needCloud := modeLocal(m), modeCloud(m)
 			if err := aiNeedRows(rows, needLocal, needCloud); err != nil {
 				return nil, err
 			}
 			if rows.local != nil {
-				if needLocal {
-					rows.local.tick(aiLocalLLMCaps)
-				} else {
-					rows.local.untick(aiLocalLLMCaps)
+				if err := rows.local.mark(aiLocalLLMCaps, needLocal); err != nil {
+					return nil, err
 				}
 			}
 			if rows.openai != nil {
-				if needCloud {
-					rows.openai.tick(aiCloudLLMCaps)
-				} else {
-					rows.openai.untick(aiCloudLLMCaps)
+				if err := rows.openai.mark(aiCloudLLMCaps, needCloud); err != nil {
+					return nil, err
 				}
 				fallback := m == headAIBackendModeOpenAIFallbackLocal
 				if wasFallback := w.llmMode() == headAIBackendModeOpenAIFallbackLocal; wasFallback != fallback {
@@ -527,29 +564,26 @@ func FoldAIBackend(values map[string]json.RawMessage, prev json.RawMessage) (jso
 		}
 	}
 	if m, ok := named[aiBackendEmbeddingMode]; ok {
-		w := rows.state()
+		w, err := rows.state()
+		if err != nil {
+			return nil, err
+		}
 		if m != w.embMode() {
 			needLocal, needCloud := modeLocal(m), modeCloud(m)
 			if err := aiNeedRows(rows, needLocal, needCloud); err != nil {
 				return nil, err
 			}
 			if rows.local != nil {
-				if needLocal {
-					rows.local.tick(aiEmbedTextCaps)
-				} else {
-					rows.local.untick(aiEmbedTextCaps)
+				if err := rows.local.mark(aiEmbedTextCaps, needLocal); err != nil {
+					return nil, err
 				}
 			}
 			if rows.openai != nil {
-				if needCloud {
-					rows.openai.tick(aiEmbedTextCaps)
-				} else {
-					rows.openai.untick(aiEmbedTextCaps)
+				if err := rows.openai.mark(aiEmbedTextCaps, needCloud); err != nil {
+					return nil, err
 				}
-				if m == headAIBackendModeOpenAI {
-					rows.openai.tick(aiEmbedBatch)
-				} else {
-					rows.openai.untick(aiEmbedBatch)
+				if err := rows.openai.mark(aiEmbedBatch, m == headAIBackendModeOpenAI); err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -587,9 +621,11 @@ func FoldAIBackend(values map[string]json.RawMessage, prev json.RawMessage) (jso
 	if created != nil {
 		// The seed puts the local row first. Its ticks, if a mode gave it any,
 		// were written into fields().
-		if created.m != nil {
-			created.raw, _ = marshalNoEscape(created.m)
+		raw, err := marshalNoEscape(created.m)
+		if err != nil {
+			return nil, aiBad("the local-llm endpoint does not encode")
 		}
+		created.raw = raw
 		if err := emit(created); err != nil {
 			return nil, err
 		}
