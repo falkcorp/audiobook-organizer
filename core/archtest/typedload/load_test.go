@@ -225,3 +225,29 @@ func TestLoad_Refusals(t *testing.T) {
 		t.Error("Tests without NeedDeps accepted")
 	}
 }
+
+func TestExportSection_Refuses(t *testing.T) {
+	hdr := func(name string, size string) string {
+		return "!<arch>\n" + (name + strings.Repeat(" ", 16))[:16] + strings.Repeat(" ", 12+6+6+8) + (size + strings.Repeat(" ", 10))[:10] + "`\n"
+	}
+	body := "go object x\n$$B\nidata\n$$\n"
+	good := hdr("__.PKGDEF", "25") + body
+	if got, err := exportSection([]byte(good)); err != nil || string(got) != "idata" {
+		t.Fatalf("good archive: %q, %v", got, err)
+	}
+	if got, err := exportSection([]byte("ibare")); err != nil || string(got) != "ibare" {
+		t.Fatalf("bare export data: %q, %v", got, err)
+	}
+	for name, in := range map[string]string{
+		"empty":         "",
+		"not an ar":     "garbage that is long enough to pass the length check, but is not an archive at all....",
+		"wrong member":  hdr("other.o", "25") + body,
+		"size too big":  hdr("__.PKGDEF", "9999") + body,
+		"no section":    hdr("__.PKGDEF", "12") + "go object x\n",
+		"no end marker": hdr("__.PKGDEF", "21") + "go object x\n$$B\nidata",
+	} {
+		if _, err := exportSection([]byte(in)); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}
