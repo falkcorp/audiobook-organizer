@@ -46,15 +46,23 @@ func forbidden(c *gin.Context, msg string) {
 // auth-disabled principal, refused only an all-AuthRequired requirement,
 // 05-rbac §4.11), 403 with msg otherwise.
 func enforce(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg string) {
+	if holds(c, p, r, msg) {
+		c.Next()
+	}
+}
+
+// holds is enforce's check without continuing the chain: it reports whether
+// the caller satisfies r and, when not, writes the refusal and stops the chain.
+func holds(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg string) bool {
 	if err := rbac.RequireRequirement(c.Request.Context(), r); err != nil {
 		if p.User == nil {
 			unauthenticated(c)
-			return
+			return false
 		}
 		forbidden(c, msg)
-		return
+		return false
 	}
-	c.Next()
+	return true
 }
 
 // RequirePerm is the adapter of HEAD's s.perm(atom): the caller must satisfy
@@ -87,19 +95,29 @@ func (b *Bridge) RequirePerm(atom string) gin.HandlerFunc {
 // Perm). Auth-off reach follows from the auth-disabled checker. perm must be
 // an AllOf or AnyOf; any other value refuses every request.
 func (b *Bridge) RequireAdmin(perm rbac.Requirement) gin.HandlerFunc {
-	checkable := perm.Kind() == rbac.KindAllOf || perm.Kind() == rbac.KindAnyOf
 	return func(c *gin.Context) {
-		p, ok := coreauth.PrincipalFrom(c.Request.Context())
-		if !ok {
-			unauthenticated(c)
-			return
+		if b.CheckAdmin(c, perm) {
+			c.Next()
 		}
-		if !checkable {
-			forbidden(c, msgAdminRequired)
-			return
-		}
-		enforce(c, p, perm, msgAdminRequired)
 	}
+}
+
+// CheckAdmin is RequireAdmin's decision without continuing the chain, for a
+// gate that adds a further check of its own after it (F4-08 B7b). It reports
+// whether the caller satisfies perm; when not it has written the refusal (401
+// without a principal or a user, 403 otherwise, and 403 for a perm that is not
+// an AllOf or AnyOf) and stopped the chain.
+func (b *Bridge) CheckAdmin(c *gin.Context, perm rbac.Requirement) bool {
+	p, ok := coreauth.PrincipalFrom(c.Request.Context())
+	if !ok {
+		unauthenticated(c)
+		return false
+	}
+	if perm.Kind() != rbac.KindAllOf && perm.Kind() != rbac.KindAnyOf {
+		forbidden(c, msgAdminRequired)
+		return false
+	}
+	return holds(c, p, perm, msgAdminRequired)
 }
 
 // RequireCredentialChange is the adapter of HEAD's credGuard (Guards.Interactive
