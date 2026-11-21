@@ -35,7 +35,7 @@ const breakdown: DedupCandidateBreakdownResponse = {
       score: 91.4,
       band: 'HIGH',
       formula: 'v2',
-      // Real wire shape (models.Signal JSON tags), no cast. `raw` and
+      // Real wire shape (unified.Signal JSON tags), no cast. `raw` and
       // `confidence` differ on every row: they were interchangeable in the
       // fixture this replaces, which is how a mapping that reads the wrong one
       // stays green. `primary` is absent because the backend does not send it;

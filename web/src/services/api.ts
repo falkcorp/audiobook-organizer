@@ -6771,8 +6771,8 @@ export type DedupBand = 'CERTAIN' | 'HIGH' | 'MEDIUM' | 'REVIEW';
 
 // T016: single evidence signal stored in ScoreBreakdown.
 //
-// These field names are the JSON tags on models.Signal in
-// internal/models/dedup_score.go -- NOT a restatement of them. Until 2026-09-01
+// These field names are the JSON tags on unified.Signal in
+// internal/dedup/unified/score.go -- NOT a restatement of them. Until 2026-09-01
 // this interface declared `value`, `weight` and `primary`, none of which the Go
 // side has ever emitted, so every field but `kind` and `evidence` arrived
 // `undefined` and the evidence panel rendered blank in production. There is no

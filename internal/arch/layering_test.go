@@ -124,8 +124,8 @@ var layerOf = map[string]int{
 	"internal/metadata/dailyquota":   0, // computed: imports no module package
 	"internal/metastate":             0, // computed: imports no module package
 	"internal/metrics":               0, // table: leaf
-	"internal/models":                0, // table: leaf
 	"internal/mtls":                  0, // computed: imports no module package
+	"internal/dedup/unified":         0, // computed: imports no module package (the score types and provenance helpers formerly in internal/models)
 	"internal/walkresume":            0, // computed: imports no module package
 	"internal/operations/freshness":  0, // computed: imports no module package
 	"internal/operations/opmode":     0, // computed: imports no module package
@@ -194,7 +194,6 @@ var layerOf = map[string]int{
 	"internal/decisions":                3, // computed: max of imports=2, floored at 3
 	"internal/dedup":                    3, // table: domain
 	"internal/dedup/dataset":            3, // computed: max of imports=3, floored at 3
-	"internal/dedup/unified":            3, // computed: max of imports=0, floored at 3
 	"internal/deluge":                   3, // computed: max of imports=3, floored at 3
 	"internal/diagnostics":              3, // computed: max of imports=3, floored at 3
 	"internal/fileops":                  3, // computed: max of imports=2, floored at 3
@@ -328,7 +327,6 @@ var allowed = map[edge]string{
 	{"internal/config", "internal/auth"}:                        "config imports auth (which imports database); 07-M1",
 	{"internal/config", "internal/backup"}:                      "config reaches a package that floors at domain; 07-M1",
 	{"internal/config", "internal/books/store"}:                 "config reads the store directly; 07-M1",
-	{"internal/config", "internal/dedup/unified"}:               "config reaches a package that floors at domain; 07-M1",
 	{"internal/dedup", "internal/operations/registry"}:          "domain package registers operations itself; move registration into plugins/dedup",
 	{"internal/metadata", "internal/operations/registry"}:       "provider clients import the operations registry; 07-M4",
 	{"internal/plugins/itunes", "internal/itunes/service"}:      "itunes/service imports realtime (transport), so it computes to layer 5",
@@ -505,7 +503,7 @@ var namedLayer = map[string]int{
 	// Layer 0 leaf.
 	"internal/util": 0, "internal/pathutil": 0, "internal/personname": 0, "internal/titleutil": 0,
 	"internal/authorname": 0, "internal/audioext": 0, "internal/httputil": 0, "internal/logger": 0,
-	"internal/metrics": 0, "internal/cache": 0, "internal/models": 0,
+	"internal/metrics": 0, "internal/cache": 0,
 	"internal/seqnum": 0, "internal/querygrammar": 0,
 	// Layer 1 config.
 	"internal/config": 1,

@@ -30,7 +30,7 @@ import (
 //
 // It lives in this package, not in internal/dedup, because the write boundary
 // (UpdateConfig) is here and config → unified is a legal import (unified pulls
-// in only viper and internal/models); the reverse, unified → config, would be a
+// in only viper); the reverse, unified → config, would be a
 // cycle, which is why the conversion cannot live in unified itself.
 //
 // A returned error means the effective config failed unified.Validate

@@ -19,7 +19,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
 
 // fakePairScorer returns a canned UnifiedDedupScore for every injected pair. When
@@ -28,7 +27,7 @@ import (
 type fakePairScorer struct {
 	score   float64
 	band    string
-	signals []models.Signal
+	signals []unified.Signal
 }
 
 func (f *fakePairScorer) ScorePairsForBook(_ context.Context, aID string, inputs []dedupengine.RescorePairInput) ([]dedupengine.RescorePairResult, error) {
@@ -55,7 +54,7 @@ func belowBandScorer() *fakePairScorer {
 	return &fakePairScorer{
 		score: 4.0,
 		band:  "", // below the review floor — the scan would drop this pair
-		signals: []models.Signal{
+		signals: []unified.Signal{
 			{Kind: unified.SigDuration, Raw: 1.0, Confidence: 0, Evidence: "duration match"},
 		},
 	}
@@ -96,7 +95,7 @@ func TestRescoreLabeledExamples_BelowBandPersisted(t *testing.T) {
 		t.Fatal("below-band pair: ScoreBreakdown was not persisted (band-skip bypass failed)")
 	}
 	// It must be parseable with >=1 signal — the property calibrate-composite needs.
-	var uds models.UnifiedDedupScore
+	var uds unified.UnifiedDedupScore
 	if err := json.Unmarshal(got.ScoreBreakdown, &uds); err != nil {
 		t.Fatalf("persisted ScoreBreakdown does not parse: %v", err)
 	}

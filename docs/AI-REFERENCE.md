@@ -90,6 +90,7 @@ The Go binary embeds the compiled React app. A single process serves both the AP
 - **import.go** — `ValidateImport()`, `ConvertTrack()`, `ExtractPlaylistTags()`, path mapping
 - **writeback.go** — Write changes back to iTunes .itl binary files
 - Types: `Track`, `Playlist`, `Library`, `ImportOptions`, `PathMapping`
+- **audiobook.go** — `Audiobook`, `Author`, `Series`: the import conversion target of `ConvertTrack` (the former `internal/models` package, deleted in R3-01b; mostly superseded by `database.Book`)
 
 ### `internal/itunes/service` — iTunes integration service (extracted from `internal/server`)
 - The import/sync/write-back/grouping orchestration formerly coupled to `*Server` now lives here (~5,500 LOC, ~25 files) behind an explicit `Deps` struct (`service.go`) and its own narrow `Store` interface — no `*Server` captures. `*Server` keeps only thin op-registration wrappers that delegate to `s.itunesSvc`.
@@ -150,9 +151,6 @@ opv2:strike:{def_id}:{ts_nano:020d}:{op_id}      → OpStrikeV2Row JSON (watchdo
 
 ### `internal/backup` — Backup/restore
 - **backup.go** — `CreateBackup()`, `ListBackups()`, `RestoreBackup()`
-
-### `internal/models` — Legacy models
-- **audiobook.go** — `Audiobook` struct (mostly superseded by `database.Book`)
 
 ### `internal/dedup` — Book deduplication engine
 - **engine.go** — `Engine` type; per-layer candidate emitters (`checkExactTitle`, `checkExactISBN`, `checkExactFileHash`, `checkExactMetadataSourceHash`, `checkDurationMatch`; the AcoustID/LSH/embedding/metadata-fuzzy collectors live in `collectors_*.go`); `PairEligibility` pre-filter; `hasPlausibleAudio(book) bool` gate (returns true when `Duration > 0` OR `FileSize >= 256 KiB`). The exact-title and exact-ISBN emitters call this gate for both sides before emitting a candidate — prevents stub/unscanned books from creating false-positive pairs.

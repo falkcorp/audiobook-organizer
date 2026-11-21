@@ -22,7 +22,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -298,7 +297,7 @@ func labelWriteProbes(t *testing.T) []writeProbe {
 // meet target, so apply fires); "inseparable" scores both at the same value.
 func calibrateExamples(nTrue, nNot int, shape string) []database.LabeledExample {
 	bd := func(kind unified.SignalKind, conf float64) json.RawMessage {
-		b, _ := json.Marshal(models.UnifiedDedupScore{Signals: []models.Signal{{Kind: kind, Confidence: conf, Raw: conf}}})
+		b, _ := json.Marshal(unified.UnifiedDedupScore{Signals: []unified.Signal{{Kind: kind, Confidence: conf, Raw: conf}}})
 		return b
 	}
 	tdKind, tdConf, ndKind, ndConf := unified.SigExactAcoustID, 0.99, unified.SigMetaFuzzy, 0.80

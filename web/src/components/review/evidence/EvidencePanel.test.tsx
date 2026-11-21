@@ -270,7 +270,7 @@ const dedupBreakdown: DedupScoreBreakdown = {
   score: 97.5,
   band: 'CERTAIN',
   formula: 'v2',
-  // Real wire shape (models.Signal JSON tags), no cast. `raw` and `confidence`
+  // Real wire shape (unified.Signal JSON tags), no cast. `raw` and `confidence`
   // differ on every row on purpose -- see the note on the fixture above.
   signals: [
     { kind: 'exact_file', raw: 1, confidence: 0.99, evidence: 'identical hash' },
@@ -298,7 +298,7 @@ describe('dedup lane through the shared panel', () => {
 
   it('shows each signal its calibrated confidence, not its raw measurement', () => {
     // The two are different numbers and only one of them drives the score:
-    // models.Signal says "ComposeScore reads this field; Raw is stored for
+    // unified.Signal says "ComposeScore reads this field; Raw is stored for
     // human auditing". Mapping `raw` into the headline slot renders a plausible
     // percentage that means something else entirely, so both are asserted.
     renderPanel(dedupEvidence(dedupBreakdown));

@@ -78,10 +78,10 @@ export function signalLabel(kind: string): string {
  * (`k == SigDuration || k == SigFolderPath || k == SigSamePath || k == SigCoverText
  * || k == SigExactRule || k == SigWindowAcoustID`). This is a DUPLICATE of that rule,
  * and duplicating it is not the design -- it is a stopgap. The wire format
- * (models.Signal in internal/models/dedup_score.go) does not serialize the
+ * (unified.Signal in internal/dedup/unified/score.go) does not serialize the
  * primary/supporting classification at all, so the frontend cannot read the
  * answer and has to re-derive it. A follow-up PR should add a `primary` field to
- * models.Signal and make this list collapse into reading it.
+ * unified.Signal and make this list collapse into reading it.
  *
  * Until then: if a kind is added to `isSupportingKind` in Go and not here, its
  * chip silently starts claiming to be the reason a pair exists.
