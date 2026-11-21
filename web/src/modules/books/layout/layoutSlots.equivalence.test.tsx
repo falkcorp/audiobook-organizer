@@ -9,7 +9,7 @@
 // it was before the cut, so a regenerated snapshot cannot hide a change.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, screen, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { renderWithProviders } from '../../../test/renderWithProviders';
 import { Sidebar } from '../../../components/layout/Sidebar';
 import { useReviewStore } from '../../../stores/useReviewStore';
@@ -153,6 +153,37 @@ describe('layout slots equivalence: Sidebar', () => {
     // A store write outside React is how the poller publishes a count.
     act(() => setReviewCount(3));
     expect(within(screen.getByRole('button', { name: /^Review/ })).getByText('3')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['/library', true],
+    ['/library/batman-year-one', true],
+    ['/fingerprints', true],
+    ['/series', true],
+    ['/authors', true],
+    ['/dashboard', false],
+    ['/review', false],
+  ])('collapsed: the Library icon at %s is selected=%s', (at, selected) => {
+    renderSidebar({ collapsed: true, at });
+    const library = screen.getByRole('button', { name: 'Library' });
+    expect(library.classList.contains('Mui-selected')).toBe(selected);
+  });
+
+  it('expanded: the Library header is selected on /library only, not on a page under it', () => {
+    renderSidebar({ collapsed: false, at: '/library/batman-year-one' });
+    expect(screen.getByRole('button', { name: /^Library$/ })).not.toHaveClass('Mui-selected');
+  });
+
+  it('expanded: the Library group collapses and expands from its chevron', async () => {
+    renderSidebar({ collapsed: false });
+    expect(screen.getByRole('button', { name: 'Finished' })).toBeInTheDocument();
+    const chevron = screen
+      .getAllByRole('button')
+      .find((b) => !b.getAttribute('aria-label') && !b.textContent);
+    fireEvent.click(chevron!);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Finished' })).not.toBeInTheDocument());
+    fireEvent.click(chevron!);
+    expect(await screen.findByRole('button', { name: 'Finished' })).toBeInTheDocument();
   });
 
   it.each([
