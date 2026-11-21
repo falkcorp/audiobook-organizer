@@ -1,6 +1,6 @@
 ---
 name: server-bootstrap
-description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file (no longer logged in plaintext — pen-test CRIT-1), exchange it for an API key via POST /api/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
+description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the bootstrap-token file in the state directory (never logged), exchange it for an API key via POST /api/core/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
 <!-- version: 1.6.1 -->
@@ -22,64 +22,44 @@ Server IP: <user will prompt>
 The skill will:
 1. SSH to the server and restart `audiobook-organizer.service`.
 2. **Wait 90 seconds before reading the token file.** The previous file may remain visible while the service initializes; reading immediately after `systemctl restart` can return that stale token and cause a `401 invalid bootstrap token` response.
-3. Read the bootstrap token from the **`.bootstrap-token` file** (the raw token is no longer logged to journalctl — pen-test finding CRIT-1):
+3. Read the bootstrap token from the **`bootstrap-token` file** in core's state directory (the raw token is never logged to journalctl):
    ```bash
-   # STILL DERIVE the path from the log line rather than hardcoding it. The
-   # directory is now a constant (see below), but the log line is the only
-   # reading that stays correct if that ever changes again, and it is also how
-   # you confirm the token you are about to read is the one THIS restart wrote.
-   #
-   # The file is mode 0600 owned by the service user, so sudo is required, and
-   # production sudo requires a pseudo-terminal. Keep the delay between restart
-   # and cat so this reads the newly written token, not the previous file.
+   # The file is <state_dir>/bootstrap-token (no leading dot), mode 0600, owned
+   # by the service user, so sudo is required, and production sudo requires a
+   # pseudo-terminal. Core logs only the file NAME ("auth: bootstrap token
+   # written file=bootstrap-token expires_at=..."), not its directory: the
+   # directory is core.paths.state_dir (ABO_CORE_PATHS_STATE_DIR), which
+   # defaults to /var/lib/audiobook-organizer on the prod host.
+   # Keep the delay between restart and cat so this reads the newly written
+   # token, not the previous file.
    ssh -tt <server> '
      sudo systemctl restart audiobook-organizer.service
      sleep 90
-     TOKEN_FILE=$(journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
-       | grep -o "token_file=[^ ]*" | tail -1 | cut -d= -f2-)
-     echo "token_file = $TOKEN_FILE"
-     sudo cat "$TOKEN_FILE"
+     journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
+       | grep "bootstrap token written" | tail -1
+     sudo cat /var/lib/audiobook-organizer/bootstrap-token
    '
    ```
 
-   > **The token directory is fixed as of 2026-09-09.** It is
-   > `/var/lib/audiobook-organizer/`, a constant — no longer
-   > `filepath.Dir(database_path)`. The existing NOPASSWD sudoers rule names that
-   > path and keeps working, and it will not need editing the next time the
-   > database moves between pools.
-   >
-   > Between the database relocation and this fix, the token was briefly written
-   > to `/mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token`, a
-   > mode-0700 directory no sudoers rule named. If you are reading a host that
-   > has not been redeployed since, that is where its token is.
-   >
-   > **⚠️ A LEFTOVER TOKEN STILL ANSWERS AT EITHER PATH.** Token files are not
-   > cleaned up on restart, only overwritten in the directory currently in use.
-   > So a file from before or after the move can sit there indefinitely, and
-   > `sudo cat` on it SUCCEEDS and returns a well-formed `abbs_…` string — one
-   > that expired ten minutes after it was written. Reading the wrong one gets
-   > you a plausible token and a `401 invalid bootstrap token` with nothing
-   > pointing at why.
-   >
-   > This is exactly what the `token_file=` derivation above protects you from:
-   > it names the file *this* restart wrote. Do not shortcut it with a
-   > remembered path. Known stale files that should be deleted (needs root):
-   > ```
-   > /var/lib/audiobook-organizer/.bootstrap-token                       # pre-move, expired
-   > /mnt/bigdata/books/audiobook-organizer/.appdata/.bootstrap-token    # interim, expired
-   > ```
-4. POST to `/api/v1/auth/bootstrap` to exchange token for API key
+   > **A leftover file can still answer.** A restart overwrites the token file
+   > in the state directory in use, but a file from an earlier configuration
+   > (HEAD named it `.bootstrap-token`, with a leading dot) is never cleaned up
+   > and `sudo cat` on it succeeds with a well-formed but expired value. The
+   > exchange then answers `401 bootstrap_invalid` with nothing pointing at
+   > why. Read `bootstrap-token` (no dot), and confirm the `bootstrap token
+   > written` log line is from THIS restart before trusting what you read.
+4. POST to `/api/core/v1/auth/bootstrap` to exchange token for API key
 5. Write key + expiry to `.claude/.api-token` (shared, .gitignored)
 6. Schedule cleanup after 8 hours (non-blocking background process). That
    is also when the server-side key expires (default `bootstrap_key_ttl` = 8h).
 
-> Note: the journalctl startup log still prints a `token_file` path + expiry (not the secret), so journalctl confirms *when* a fresh token was written — but the token value only lives in the file above.
+> Note: the journalctl startup log prints the file name and the token's expiry (not the secret), so journalctl confirms *when* a fresh token was written — but the token value only lives in the file above.
 
 ## The Token File
 
 The `.api-token` file format:
 ```
-api_key=abbs_xxxxx
+api_key=mck_xxxxx
 key_id=...
 username=admin
 expires_at=<unix-timestamp-8h-from-now>
@@ -89,82 +69,76 @@ Other worktrees read this file to get the shared API key. The cleanup process re
 
 ## Bootstrap Token Exchange
 
-The bootstrap token (from logs) is one-time-use and valid for 10 minutes. The POST request:
+The bootstrap token (from the token file) is one-time-use and valid for 10 minutes. The POST request:
 
 ```bash
-curl -sk -X POST https://<server>:8484/api/v1/auth/bootstrap \
+curl -sk -X POST https://<server>:8484/api/core/v1/auth/bootstrap \
   -H "Content-Type: application/json" \
-  -d '{"token":"abbs_...", "key_name":"workspace-key"}'
+  -d '{"token":"mcb_..."}'
 ```
 
-Returns:
+The body takes `token` only: core refuses a body with unknown fields.
+
+Returns the bare body (no `data` envelope):
 ```json
 {
-  "data": {
-    "api_key": "abbs_xxxxx",
-    "key_id": "...",
-    "user_id": "...",
-    "username": "admin",
-    "scopes": ["all"],
-    "expires_at": "2026-09-24T12:00:00Z"
-  }
+  "key": "mck_xxxxx",
+  "key_id": "...",
+  "expires_at": "2026-09-24T12:00:00Z",
+  "user": { "id": "...", "username": "admin", "roles": ["..."], "status": "active" },
+  "generated_password": "..."
 }
 ```
 
-The API uses the standard success envelope, so extract the bearer key with
-`jq -er '.data.api_key'`, not `.api_key`. The bootstrap token is consumed by a
-successful exchange even if a client subsequently fails to parse the response.
+Extract the bearer key with `jq -er '.key'`. `generated_password` is present
+only when the exchange created the admin account. The bootstrap token is
+consumed by a successful exchange even if a client subsequently fails to parse
+the response.
 
-`expires_at` is the server-side expiry of the issued key. Since 2026-10-07
-it is **8 hours** by default (config `bootstrap_key_ttl`, a Go duration such
-as `8h`; capped at 24h). The 8-hour `.claude/.api-token` cleanup above now
-matches it: when the file disappears, the key behind it has expired too.
-Until 2026-10-07 the server default was 30 days and only the local file went
-away after 8 hours.
-
-The old setting `bootstrap_key_ttl_days` is deprecated. A config file or
-environment that still sets it is honoured, capped at 24 hours, with a startup
-warning. Replace it with `bootstrap_key_ttl`.
+`expires_at` is the server-side expiry of the issued key: 8 hours by default
+(`core.auth.bootstrap.key_ttl`, a Go duration, capped at 24h). The 8-hour
+`.claude/.api-token` cleanup above matches it: when the file disappears, the
+key behind it has expired too.
 
 ### What a bootstrap key cannot do
 
-A bootstrap key is a full-scope admin API key, and **no API key may change
-credentials or identity.** These answer 403 ("API keys cannot change
-passwords, users, roles, invites, sessions or sign-in settings; sign in to do
-this"):
+A bootstrap key is a full-scope admin API key, but routes that change
+credentials or identity need an interactive sign-in, not a key. They answer 403
+`interactive_required` ("this route needs an interactive sign-in, not an API
+key"):
 
-- `PUT /api/v1/auth/me/password` (own change or the `user_id` admin reset)
-- `PATCH /api/v1/auth/me` (email)
-- `POST /api/v1/auth/temp-tokens`, `POST /api/v1/users/:id/reset-password`
-- `POST /api/v1/users/invite`, `POST /api/v1/users/:id/deactivate`, `.../reactivate`
-- `POST /api/v1/auth/api-keys` with another user's `user_id` (and the retired
-  `POST /api/v1/auth/api-keys/:id/rotate` on another user's key, which is still
-  refused before it answers 410)
+- `PUT /api/core/v1/me/password`, `PATCH /api/core/v1/me`
+- `POST /api/core/v1/users/{id}/reset-password`, `POST /api/core/v1/users/{id}/temp-login`
+- `POST /api/core/v1/users/invites`, `DELETE /api/core/v1/users/invites/{id}`
+- `POST /api/core/v1/users/{id}/disable`, `.../enable`, `DELETE /api/core/v1/users/{id}`
+- `PUT /api/core/v1/users/{id}/roles`, `DELETE /api/core/v1/users/{id}/sessions/{publicID}`
+- `POST /api/core/v1/users/{id}/api-keys` (a key for another user)
+- re-enabling a key (`PATCH /api/core/v1/me/api-keys/{id}` or `/api-keys/{id}` to `active`)
 - `POST /api/v1/backup/restore`
-- `PUT /api/v1/config` when it changes a sign-in setting (`enable_auth`,
-  `basic_auth_*`, `oauth_*`, `cf_access_*`, `abs_api_enabled`,
-  `abs_auth_modes`, the ABS token lifetimes, `write_startup_readonly_key`)
+- `PUT /api/v1/config` when it changes a sign-in setting
+
+(The `backup/restore` and `config` lines are carried over from before the
+identity flip and have not been re-checked against their successor routes.)
 
 To create a user (for example a `claude_*` login) or reset a password, the
 owner does it from the web UI while signed in. A key the bootstrap key creates
-can't outlive it, so it also expires within 8 hours. To replace a key, create a
-new one with `POST /api/v1/auth/api-keys` and revoke the old one with
-`DELETE /api/v1/auth/api-keys/:id`; `POST .../:id/rotate` answers 410.
+can't outlive it, so it also expires within 8 hours. To replace a key, mint a
+new one with `POST /api/core/v1/me/api-keys` and revoke the old one with
+`DELETE /api/core/v1/me/api-keys/{id}`. There is no rotate route.
 
 A key that creates a key must name the new key's scopes in the request body
-(for example `"scopes": ["library.view"]`), and they must be a subset of the
-calling key's own. A request with no `scopes`, or an empty list, answers 403
-("an API key must name the scopes of the key it creates") since R0-02.
+(for example `"scopes": ["library.view"]`) and a `name`, and every scope must be
+one the calling key holds now. A request with no scopes is refused as invalid.
 
 See [references/bootstrap-api.md](references/bootstrap-api.md) for full API details.
 
 ## Troubleshooting
 
-- **Token file missing / empty**: The service takes time to initialize and write the fresh file. Wait before reading it.
-- **`401 invalid bootstrap token` immediately after restart**: The token file was read before the fresh startup token replaced the previous file. Restart once, wait 90 seconds, then read and exchange the new value.
-- **Successful exchange but `.api_key` is empty**: Parse `.data.api_key`; all successful API responses use the standard `data` envelope. The one-time bootstrap token has already been consumed, so restart and repeat if the issued key was discarded.
-- **Permission denied reading the token file**: The file is mode 0600 owned by the service user — use `sudo cat`. If sudo is unavailable, `journalctl` will show the `token_file` path but not the value; you'll need filesystem access to that path.
-- **"Token expired"**: Server restart required. The bootstrap token has a fixed 10-minute TTL from service startup.
+- **Token file missing / empty**: The service takes time to initialize and write the fresh file. Wait before reading it. If the service has no state filesystem it mints no token and says so in the log.
+- **`401 bootstrap_invalid` immediately after restart**: The token file was read before the fresh startup token replaced the previous file. Restart once, wait 90 seconds, then read and exchange the new value.
+- **Successful exchange but `.key` is empty**: Parse `.key`; the native routes answer the bare body, with no `data` envelope. The one-time bootstrap token has already been consumed, so restart and repeat if the issued key was discarded.
+- **Permission denied reading the token file**: The file is mode 0600 owned by the service user — use `sudo cat`. If sudo is unavailable you need filesystem access to the state directory.
+- **`401 bootstrap_invalid` for an expired token**: Server restart required. The bootstrap token has a fixed 10-minute TTL from service startup.
 - **SSH connection fails**: Check server IP and network connectivity.
 - **Rate limited**: If you fail the token exchange 5 times in an hour, you'll be rate-limited. Wait or restart the service for a fresh token.
 - **Rate limited with only a few failures of your own**: the bootstrap exchange also has a service-wide ceiling shared by every caller, and loopback and local-network callers count toward it like anyone else (they used to be exempt). Other callers' failed attempts can use it up. The limiter is in memory, so restarting the service clears it; the fresh token the restart issues is what you need anyway.
