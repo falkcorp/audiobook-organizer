@@ -1122,6 +1122,10 @@ type VersionTwinMetadataService interface {
 	// CopyCandidateCache copies one book's cached candidates onto another,
 	// re-keyed for the target (metafetch.Service.CopyCandidateCache).
 	CopyCandidateCache(fromID, toID string, check func(target *database.Book, cur *database.MetadataCandidateCache) error) (*database.MetadataCandidateCache, error)
+	// RerankCachedCandidates re-orders one book's cached candidate row by the
+	// ranker buildRank returns, read under the row's lock; it only re-orders
+	// (metafetch.Service.RerankCachedCandidates).
+	RerankCachedCandidates(bookID string, buildRank func() (func(metafetch.MetadataCandidate) int, error)) (metafetch.RerankOutcome, error)
 	// ValidateCachedIdentityForBook: nil when entry was fetched for book as
 	// it is now.
 	ValidateCachedIdentityForBook(entry *database.MetadataCandidateCache, book *database.Book, liveAuthors []string) error
