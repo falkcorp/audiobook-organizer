@@ -142,8 +142,9 @@ func TestReapplyRegions_EveryCommitSiteCarriesItsLabel(t *testing.T) {
 }
 
 // TestReapplyRegions_NoOpWithoutSeams: production boots carry no Seams, so a
-// region is the no-op exit (bootseam.With is called only by core/coretest,
-// archtest.BootseamHookCallers), and the re-apply runs exactly as before.
+// region is the no-op exit (outside test files, bootseam.With is called only by
+// core/coretest, archtest.BootseamHookCallers), and the re-apply runs exactly as
+// before.
 func TestReapplyRegions_NoOpWithoutSeams(t *testing.T) {
 	if bootseam.From(context.Background()) != nil {
 		t.Fatal("a plain context carries Seams")

@@ -8,9 +8,9 @@ package kernel
 // The crash-matrix labels of P4d steps 2 and 3's own store commits
 // (restore_reapply.go, restore_hooks.go): a bootseam.Region around each, as
 // tasks.go does around tasks.def.upsert. A region is a no-op in production (no
-// boot carries a Labeler: bootseam.With is called only by core/coretest and its
-// sub-packages, archtest.BootseamHookCallers), so these change nothing but what
-// the kit records. No boot reaches them until F4-08 wires P4d; their rows in
+// boot carries a Labeler: outside test files, bootseam.With is called only by
+// core/coretest and its sub-packages, archtest.BootseamHookCallers), so these
+// change nothing but what the kit records. No boot reaches them until F4-08 wires P4d; their rows in
 // core/coretest/crashmatrix are Unbound until then.
 //
 // The recorder's outer label wins, so a region that wraps a call which also
