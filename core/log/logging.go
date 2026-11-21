@@ -255,11 +255,12 @@ type Logging struct {
 	// built to print the source, and Handle clears the record's PC while this
 	// is false, which is how the stdlib handlers omit it.
 	addSource atomic.Bool
-	now      func() time.Time // Options.Now, or nil: keep the record's own time
-	clock    func() time.Time // now, or time.Now: for the stderr rate limit
-	stderr   io.Writer        // where the pipeline reports its own failures
-	root     *scope           // the "core" scope, created up front so Levels["core"] is known
-	process  *scope           // Root() and Handler(): the process default logger, gated at the root level
+
+	now     func() time.Time // Options.Now, or nil: keep the record's own time
+	clock   func() time.Time // now, or time.Now: for the stderr rate limit
+	stderr  io.Writer        // where the pipeline reports its own failures
+	root    *scope           // the "core" scope, created up front so Levels["core"] is known
+	process *scope           // Root() and Handler(): the process default logger, gated at the root level
 
 	mu     sync.Mutex
 	rootLv slog.Level            // SetLevels' root (guarded by mu)
