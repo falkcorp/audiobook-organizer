@@ -130,8 +130,15 @@ func TestAuthSettings_EveryKeyMapsToItsField(t *testing.T) {
 		{"bootstrap.enabled", func(s *authSettings) { s.Bootstrap.Enabled = false }, func(w *auth.Settings) { w.BootstrapEnabled = new(false) }},
 		{"bootstrap.key_ttl", func(s *authSettings) { s.Bootstrap.KeyTTL = dur(3 * time.Hour) }, func(w *auth.Settings) { w.BootstrapKeyTTL = 3 * time.Hour }},
 		{"bootstrap.readonly_key.enabled", func(s *authSettings) { s.Bootstrap.ReadonlyKey.Enabled = true }, func(w *auth.Settings) { w.ReadOnlyKey = true }},
-		{"bootstrap.readonly_key.scopes", func(s *authSettings) { s.Bootstrap.ReadonlyKey.Scopes = []string{"core:metrics.read", "core:system.view"} },
-			func(w *auth.Settings) { w.ReadOnlyKeyScopes = []rbac.Permission{"core:metrics.read", "core:system.view"} }},
+		{
+			"bootstrap.readonly_key.scopes",
+			func(s *authSettings) {
+				s.Bootstrap.ReadonlyKey.Scopes = []string{"core:metrics.read", "core:system.view"}
+			},
+			func(w *auth.Settings) {
+				w.ReadOnlyKeyScopes = []rbac.Permission{"core:metrics.read", "core:system.view"}
+			},
+		},
 		{"bootstrap.readonly_key.scopes nil", func(s *authSettings) { s.Bootstrap.ReadonlyKey.Scopes = nil }, func(w *auth.Settings) { w.ReadOnlyKeyScopes = nil }},
 		{"setup_requires_token", func(s *authSettings) { s.SetupRequiresToken = false }, func(w *auth.Settings) { w.SetupRequiresToken = new(false) }},
 		{"extension_max_age", func(s *authSettings) { s.ExtensionMaxAge = dur(48 * time.Hour) }, func(w *auth.Settings) { w.ExtensionMaxAge = 48 * time.Hour }},
