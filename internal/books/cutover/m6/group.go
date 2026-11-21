@@ -106,7 +106,13 @@ func (g *groupRun) settleDeferred(ctx context.Context) error {
 		ref := p.inst.Config.Ref
 		owner := g.exact[ref]
 		if g.wrote[ref] {
-			g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: "id already taken by " + owner + ", whose HEAD id it is"})
+			// The holder is the exact entry, or an earlier renamed entry that took the
+			// ID because the exact one was not written (r2 m-b).
+			detail := "id already taken by " + g.seen[ref]
+			if g.seen[ref] == owner {
+				detail += ", whose HEAD id it is"
+			}
+			g.m.report(Entry{Kind: "instance", ID: ref.String(), Detail: detail})
 			if err := g.quarantineMember(p.member, p.raw, reasonInstanceConflict); err != nil {
 				return err
 			}
