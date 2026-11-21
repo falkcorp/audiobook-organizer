@@ -32,7 +32,10 @@ type RestoreDeps struct {
 	Previous    Store
 	Revocations journal.RevocationJournal // the lines the hook appends (§4.12)
 	StateFiles  StateFiles                // bootstrap token and read-only key files (COR10-7); nil writes no file
-	Clock       func() time.Time
+	// BootstrapTokenFile is Options.BootstrapTokenFile, the bootstrap token's
+	// file name under the state directory; "" is BootstrapTokenFile.
+	BootstrapTokenFile string
+	Clock              func() time.Time
 	// NewBatch is an indexed batch over Store's keyspace (authstore.Store.NewBatch).
 	NewBatch func() *storage.Batch
 	// Settings are the live core.auth.* values; nil takes every default.

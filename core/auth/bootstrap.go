@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -28,8 +29,9 @@ const (
 	// ten minutes: a restart is what mints the next one, so an unexpected
 	// restart shows in the logs.
 	DefaultBootstrapTokenTTL = 10 * time.Minute
-	// BootstrapTokenFile is the token file's name in the app's state
-	// directory (mode 0600), written through Deps.StateFiles.
+	// BootstrapTokenFile is the token file's default name in the app's state
+	// directory (mode 0600), written through Deps.StateFiles. An app that
+	// must keep another name sets Options.BootstrapTokenFile.
 	BootstrapTokenFile = "bootstrap-token"
 	// BootstrapTokenLabel is the label the token file's writes carry in the
 	// labelled state filesystem (coretest/crashmatrix sees it by this).
@@ -46,6 +48,36 @@ const (
 	// generatedPasswordLen is the length of a generated admin password.
 	generatedPasswordLen = 24
 )
+
+// bootstrapTokenName is the token file's name under the state directory:
+// configured (Options.BootstrapTokenFile, RestoreDeps.BootstrapTokenFile), or
+// BootstrapTokenFile when it is empty. Every write, removal and log line about
+// the file goes through it, so no site keeps the default while another moved.
+func bootstrapTokenName(configured string) string {
+	if configured == "" {
+		return BootstrapTokenFile
+	}
+	return configured
+}
+
+// checkBootstrapTokenFile refuses a configured token file name that cannot be
+// a file directly under the state directory: a path (it would leave or nest
+// in the directory), "." or "..", an absolute name, or the read-only key's
+// own file, which the token would overwrite. "" is the default and is fine.
+// A bad name fails the boot: left to the file write it would only log a
+// warning and boot without a token file.
+func checkBootstrapTokenFile(configured string) error {
+	if configured == "" {
+		return nil
+	}
+	if configured == "." || configured == ".." || !filepath.IsLocal(configured) || filepath.Base(configured) != configured || strings.ContainsAny(configured, `/\`) {
+		return fmt.Errorf("%w: the bootstrap token file %q must be a plain file name in the state directory", ErrBadInput, configured)
+	}
+	if configured == ReadOnlyKeyFile {
+		return fmt.Errorf("%w: the bootstrap token file cannot be %q, the read-only key's file", ErrBadInput, ReadOnlyKeyFile)
+	}
+	return nil
+}
 
 // StateFiles is auth's view of the labelled state filesystem, the
 // core/internal/statefs value the kernel builds, so coretest/crashmatrix
@@ -451,8 +483,9 @@ func (s *Service) removeBootstrapFile() {
 	if s.d.StateFiles == nil {
 		return
 	}
-	if err := s.d.StateFiles.Remove(BootstrapTokenLabel, BootstrapTokenFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		s.log.Warn("auth: could not remove the spent bootstrap token file", "file", BootstrapTokenFile, "err", err)
+	name := bootstrapTokenName(s.opts.BootstrapTokenFile)
+	if err := s.d.StateFiles.Remove(BootstrapTokenLabel, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		s.log.Warn("auth: could not remove the spent bootstrap token file", "file", name, "err", err)
 	}
 }
 

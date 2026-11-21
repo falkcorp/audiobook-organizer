@@ -105,6 +105,14 @@ type Options struct {
 	// OIDCCallbackBase is the path prefix of the OIDC/OAuth callback (§3.2,
 	// §4.13); empty for hello and new apps.
 	OIDCCallbackBase string
+	// BootstrapTokenFile is the bootstrap token file's name directly under
+	// the app's state directory (§4.6). "" is BootstrapTokenFile
+	// ("bootstrap-token"), core's own name, which hello and new apps keep.
+	// An app whose operators already read the token from another name sets
+	// it (ABO: ".bootstrap-token", the path its sudoers rule names), so an
+	// upgrade breaks no tooling that reads it. It must be a plain file name
+	// (New refuses a path, "." or "..") and not ReadOnlyKeyFile.
+	BootstrapTokenFile string
 }
 
 // Settings are the live core.auth.* values the service reads on each call
@@ -379,6 +387,9 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 		s.hasher = password.New(password.Options{})
 	}
 	if err := checkImportedPrefixes(opts.ImportedKeyPrefixes); err != nil {
+		return nil, err
+	}
+	if err := checkBootstrapTokenFile(opts.BootstrapTokenFile); err != nil {
 		return nil, err
 	}
 	s.opts.ImportedKeyPrefixes = slices.Clone(opts.ImportedKeyPrefixes)
