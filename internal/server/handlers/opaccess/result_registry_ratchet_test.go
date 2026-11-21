@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
+	"github.com/falkcorp/mediacore/archtest/typedload"
 )
 
 const modulePathForScan = "github.com/falkcorp/audiobook-organizer"
@@ -240,7 +241,8 @@ func loadResultCallers(t *testing.T, root string) []*packages.Package {
 	if len(paths) == 0 {
 		t.Fatal("found no package that imports the registry: the package listing is broken")
 	}
-	pkgs, err := packages.Load(&packages.Config{
+	// typedload, not packages.Load: it type-checks on one goroutine (see its doc).
+	pkgs, err := typedload.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedImports | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
 		Dir: root,

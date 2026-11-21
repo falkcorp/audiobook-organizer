@@ -22,6 +22,8 @@ import (
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/ssa/ssautil"
+
+	"github.com/falkcorp/mediacore/archtest/typedload"
 )
 
 // The scan behind TestEveryCapabilityTheJobsResolveIsClassified: for every job,
@@ -203,7 +205,8 @@ func scanJobSites(helpers map[string]bool) (map[string]map[string]*siteInfo, err
 		BuildFlags: []string{scanTags},
 		Env:        append(os.Environ(), scanEnv...),
 	}
-	pkgs, err := packages.Load(cfg, scanModule+"/internal/maintenance/jobs")
+	// typedload, not packages.Load: it type-checks on one goroutine (see its doc).
+	pkgs, err := typedload.Load(cfg, scanModule+"/internal/maintenance/jobs")
 	if err != nil {
 		return nil, fmt.Errorf("load jobs package: %w", err)
 	}
