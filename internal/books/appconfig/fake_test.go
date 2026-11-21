@@ -12,7 +12,6 @@ import (
 	"errors"
 	"iter"
 	"slices"
-	"strings"
 	"sync"
 
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -258,16 +257,4 @@ func (r *fakeResidual) Redact(head string, v json.RawMessage) json.RawMessage {
 		return json.RawMessage(`"********"`)
 	}
 	return v
-}
-
-func (f *fakeAccess) ListSecrets(_ context.Context, prefix string) ([]secrets.Meta, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []secrets.Meta
-	for _, n := range slices.Sorted(mapKeys(f.secrets)) {
-		if strings.HasPrefix(string(n), prefix) {
-			out = append(out, secrets.Meta{Name: n, Set: true})
-		}
-	}
-	return out, nil
 }
