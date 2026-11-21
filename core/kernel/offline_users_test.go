@@ -619,6 +619,39 @@ func TestJournalQueue_AJournalThatProvesNothingMakesNoOrphan(t *testing.T) {
 					journal.Header{InstallID: "arkham-install", App: "gotham", StartedAt: time.Now().UTC()}, head))
 			})
 		}},
+		{"journal path is a symlink to an intact copy", func(t *testing.T, fx *oiFx) {
+			raw, err := os.ReadFile(fx.journalPath)
+			must(t, err)
+			real := fx.journalPath + ".real"
+			must(t, os.WriteFile(real, raw, 0o600))
+			must(t, os.Remove(fx.journalPath))
+			must(t, os.Symlink(real, fx.journalPath))
+		}},
+		{"location file describes another store", func(t *testing.T, fx *oiFx) {
+			loc, ok, err := journal.ReadLocation(fx.c.StateDir)
+			if err != nil || !ok {
+				t.Fatalf("location = %v, %v", ok, err)
+			}
+			loc.DBPath = filepath.Join(filepath.Dir(loc.DBPath), "arkham.db")
+			must(t, journal.WriteLocation(fx.c.StateDir, loc))
+		}},
+		{"store head records a seq and no mac", func(t *testing.T, fx *oiFx) {
+			fx.inspect(t, func(oi *offlineIdentity) {
+				ks, err := oi.keyspace()
+				must(t, err)
+				head, err := journal.ReadHead(t.Context(), ks)
+				must(t, err)
+				// StageHead never moves a head sideways, so the record is written directly:
+				// a head with a seq and no mac cannot be checked against the journal's line.
+				b := ks.NewBatch()
+				defer b.Close()
+				if _, err := b.GetForUpdate(t.Context(), ks, []byte("journal_head")); err != nil {
+					t.Fatal(err)
+				}
+				must(t, b.In(ks).Set([]byte("journal_head"), []byte(`{"seq":`+strconv.FormatUint(head.Seq, 10)+`}`)))
+				must(t, b.Commit(t.Context(), storage.Sync))
+			})
+		}},
 		{"location file unreadable", func(t *testing.T, fx *oiFx) {
 			must(t, os.WriteFile(filepath.Join(fx.c.StateDir, journal.LocationFile), []byte("{not json"), 0o600))
 		}},
@@ -728,5 +761,27 @@ func TestOfflineIdentity_NeverSetsABootRecordAside(t *testing.T) {
 	}
 	if _, err := os.Stat(rec + ".bad"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the boot record was set aside (%v)", err)
+	}
+}
+
+// TestJournalQueue_EmptyJournalUnderAnEmptyHeadProvesNothing: a store that has
+// journaled nothing (head 0) with a zero-byte journal file is still not proof:
+// with no verified header there is no history to hold or lack a line, so an
+// entry is unverified and not clearable, not an orphan.
+func TestJournalQueue_EmptyJournalUnderAnEmptyHeadProvesNothing(t *testing.T) {
+	fx := seedIdentity(t, func(k *Kernel, b *storage.Batch, jks storage.Keyspace) {
+		must(t, journal.StageUnapplied(t.Context(), b, jks, journal.Unapplied{
+			Seq: 500, MAC: "00ff", Kind: "batcave.future", At: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)}))
+	})
+	must(t, os.WriteFile(fx.journalPath, nil, 0o600))
+	es, err := JournalQueueList(t.Context(), fx.c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entryStates(es); got["00000000000000000500"] != QueueUnverified {
+		t.Errorf("states = %v, want the entry unverified", got)
+	}
+	if _, err := JournalQueueClear(t.Context(), fx.c, 500, "ops"); !errors.Is(err, ErrJournalQueueNotClearable) {
+		t.Errorf("clear = %v, want ErrJournalQueueNotClearable", err)
 	}
 }
