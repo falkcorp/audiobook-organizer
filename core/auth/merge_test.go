@@ -240,6 +240,49 @@ func TestUserMerge_OwnerGateDefault(t *testing.T) {
 	}
 }
 
+// TestService_OwnerRequiredIsTheMergeRulesReading: the exported accessor stage
+// 13 and the owner-guarded routes take answers exactly what the merge rule
+// reads, per call, so a setting changed at runtime reaches all of them.
+func TestService_OwnerRequiredIsTheMergeRulesReading(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ownerSet bool
+		setting  *bool
+		want     bool
+	}{
+		{name: "unset, no owner set", want: false},
+		{name: "unset, owner set", ownerSet: true, want: true},
+		{name: "false, owner set", ownerSet: true, setting: new(bool), want: false},
+		{name: "true, no owner set", setting: func() *bool { v := true; return &v }(), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFx(t)
+			f.setSettings(auth.Settings{OwnerRequired: tc.setting})
+			svc, err := auth.New(context.Background(), auth.Options{}, auth.Deps{
+				Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
+				Hasher: f.hasher, Settings: f.liveSettings,
+				Extensions: []auth.Extension{{
+					Authenticator: fakeExt{}, Order: 150,
+					Spec:     auth.MethodSpec{Method: "ext:signal", OwnerVerifier: true},
+					OwnerSet: func() bool { return tc.ownerSet },
+				}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := svc.OwnerRequired(); got != tc.want {
+				t.Fatalf("OwnerRequired() = %v, want %v", got, tc.want)
+			}
+			// Per call: flipping the live setting is seen by the next read.
+			flipped := !tc.want
+			f.setSettings(auth.Settings{OwnerRequired: &flipped})
+			if got := svc.OwnerRequired(); got != flipped {
+				t.Fatalf("after the setting changed, OwnerRequired() = %v, want %v", got, flipped)
+			}
+		})
+	}
+}
+
 // TestOwnerRule_FallbackIsAnInteractiveAdmin (§4.8): without the owner gate,
 // the rule falls back to core:admin through an interactive method; with it,
 // only AssuranceOwner passes.

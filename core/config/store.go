@@ -111,14 +111,14 @@ type Store struct {
 	commitMu sync.Mutex
 	onCommit []func(gen uint64)
 
-	gen    atomic.Uint64
-	index  atomic.Pointer[keyIndex]
+	gen   atomic.Uint64
+	index atomic.Pointer[keyIndex]
 	// readPerms is the registered sections' read permissions by section path,
 	// replaced whole by each Register (never written in place), so
 	// ReadPermission reads it without the mutex: the settings routes ask it
 	// from inside Schema's include callback, which runs under that mutex.
 	readPerms atomic.Pointer[map[Path]string]
-	health map[string]string
+	health    map[string]string
 
 	// The subscriber goroutines (05-config §1.6): none before Load; Close
 	// cancels and joins them all.
