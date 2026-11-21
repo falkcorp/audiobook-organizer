@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -281,6 +282,25 @@ func translate(fields map[string]fieldInfo, n index.Node) (query.Query, error) {
 	return translateNode(fields, n, 1, &nodes)
 }
 
+// translateNode translates n and applies its own Boost (index.Boost), which
+// on a Match replaces the field's declared weight (translateOp applies that
+// one only to an unboosted Match).
+func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *int) (query.Query, error) {
+	if n.Boost != 0 && (math.IsNaN(n.Boost) || math.IsInf(n.Boost, 0) || n.Boost < 0) { // a Node built by hand
+		return nil, fmt.Errorf("%w: boost %v must be a finite number above 0", index.ErrInvalidQuery, n.Boost)
+	}
+	q, err := translateOp(fields, n, depth, nodes)
+	if err != nil || n.Boost == 0 {
+		return q, err
+	}
+	b, ok := q.(query.BoostableQuery)
+	if !ok {
+		return nil, fmt.Errorf("%w: operator %d takes no boost", index.ErrInvalidQuery, n.Op)
+	}
+	b.SetBoost(n.Boost)
+	return q, nil
+}
+
 // notCost is what a Not node, and an All node, counts in the node budget: a
 // Not is translated to "match all, except", so each one scans every document (1.6s over 20k documents
 // for an Or of 510 of them), where a Term or a Match costs a dictionary lookup.
@@ -330,10 +350,10 @@ func checkShape(n index.Node, depth int, nodes *int) error {
 	return nil
 }
 
-// translateNode translates n, which sits at depth in the tree. nodes is the
-// budget shared by the whole query: it holds what checkShape counted and grows
-// by what each parsed query string costs.
-func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *int) (query.Query, error) {
+// translateOp translates n, which sits at depth in the tree, without its own
+// Boost. nodes is the budget shared by the whole query: it holds what
+// checkShape counted and grows by what each parsed query string costs.
+func translateOp(fields map[string]fieldInfo, n index.Node, depth int, nodes *int) (query.Query, error) {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
 	}
@@ -357,7 +377,7 @@ func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *
 		}
 		q := bleve.NewMatchQuery(n.Text)
 		q.SetField(n.Field)
-		if fi.boost > 0 {
+		if fi.boost > 0 && n.Boost == 0 { // an explicit index.Boost replaces it (translateNode)
 			q.SetBoost(fi.boost)
 		}
 		return q, nil

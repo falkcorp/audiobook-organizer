@@ -122,3 +122,26 @@ func TestAllAndMatchAnyFieldConstructors(t *testing.T) {
 		t.Fatalf("MatchAnyField = %+v, %v", n, err)
 	}
 }
+
+func TestBoostConstructor(t *testing.T) {
+	n, err := index.Describe(index.Boost(index.Match("title", "joker"), 3))
+	if err != nil || n.Op != index.OpMatch || n.Boost != 3 {
+		t.Fatalf("Boost = %+v, %v", n, err)
+	}
+	n, err = index.Describe(index.Boost(index.Boost(index.Term("alias", "clown"), 3), 0.5))
+	if err != nil || n.Boost != 0.5 {
+		t.Fatalf("re-Boost = %+v, %v; want the last weight", n, err)
+	}
+	for name, q := range map[string]index.Query{
+		"zero":     index.Boost(index.Match("title", "joker"), 0),
+		"negative": index.Boost(index.Match("title", "joker"), -2),
+		"NaN":      index.Boost(index.Match("title", "joker"), math.NaN()),
+		"infinite": index.Boost(index.Match("title", "joker"), math.Inf(1)),
+		"bad q":    index.Boost(index.Match("", "joker"), 2),
+		"nil q":    index.Boost(nil, 2),
+	} {
+		if _, err := index.Describe(q); !errors.Is(err, index.ErrInvalidQuery) {
+			t.Errorf("%s: %v, want ErrInvalidQuery", name, err)
+		}
+	}
+}

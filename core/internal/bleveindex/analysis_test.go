@@ -195,6 +195,45 @@ func TestFieldBoostOrdersAnOrOfMatches(t *testing.T) {
 	}
 }
 
+// TestBoostNodeReplacesTheFieldBoost: index.Boost on a Match replaces the
+// field's declared weight, as HEAD's "title:gotham^2" scores 2, not 3 x 2. The
+// orders are relative within one Or, since a lone clause's score is
+// normalised by its own weight.
+func TestBoostNodeReplacesTheFieldBoost(t *testing.T) {
+	_, ix := openCases(t, coretest.IndexEngineOptions{}, caseSpec(caseFields(true), bookish))
+	author := index.Match("author", "gotham") // weight 2, two words: byline
+	for name, tc := range map[string]struct {
+		q    index.Query
+		want []string
+	}{
+		"declared weight 3":       {index.Or(index.Match("title", "gotham"), author), []string{"heading", "byline"}},
+		"explicit weight 2":       {index.Or(index.Boost(index.Match("title", "gotham"), 2), author), []string{"byline", "heading"}},
+		"query string ^2":         {index.Or(index.QueryString("title:gotham^2"), author), []string{"byline", "heading"}},
+		"explicit weight 6":       {index.Or(index.Boost(index.Match("title", "gotham"), 6), author), []string{"heading", "byline"}},
+		"weights a prefix":        {index.Or(index.Boost(index.Prefix("description", "goth"), 100), author), []string{"desc", "byline"}},
+		"weights a group":         {index.Or(index.Boost(index.Or(index.Term("description", "gotham")), 100), author), []string{"desc", "byline"}},
+		"weights a query string":  {index.Or(index.Boost(index.QueryString("description:gotham"), 100), author), []string{"desc", "byline"}},
+		"weights a wildcard":      {index.Or(index.Boost(index.Wildcard("description", "*tham"), 100), author), []string{"desc", "byline"}},
+		"last boost wins":         {index.Or(index.Boost(index.Boost(index.Match("title", "gotham"), 100), 2), author), []string{"byline", "heading"}},
+		"weights all (no effect)": {index.Boost(index.All(), 5), []string{"byline", "desc", "heading", "joker", "todd", "wayne"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sortBy := []string{}
+			if name == "weights all (no effect)" {
+				sortBy = []string{"_id"}
+			}
+			if got := hitIDs(t, ix, tc.q, sortBy...); !slices.Equal(got, tc.want) {
+				t.Fatalf("order = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	for _, w := range []float64{0, -1} {
+		if _, err := ix.Search(t.Context(), index.Boost(index.Match("title", "gotham"), w), index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
+			t.Fatalf("Boost %v: %v, want ErrInvalidQuery", w, err)
+		}
+	}
+}
+
 func TestWildcardLeadingAndBounded(t *testing.T) {
 	_, ix := openCases(t, coretest.IndexEngineOptions{}, caseSpec(caseFields(true), bookish))
 	for name, tc := range map[string]struct {
