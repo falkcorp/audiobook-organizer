@@ -224,8 +224,11 @@ func (s *Startup) Complete() {
 }
 
 // CoreStartupSteps is the core rows of the startup table (the steps core runs
-// before any module): the secrets location, the key guard, encryption, the
-// stored config, its validation, the operation registry gate and the listener.
+// before any module): the secrets location, the key guard, encryption, config
+// validation, the operation registry gate and the listener. There is no row for
+// loading the stored config: core's own loader reads its layers before any step
+// runs, and no whole-config document is persisted for a default boot to
+// overwrite.
 // Module rows (a books step such as the search index) arrive through
 // Registrar.StartupSteps and Startup.Add.
 func CoreStartupSteps() []StartupStep {
@@ -236,8 +239,6 @@ func CoreStartupSteps() []StartupStep {
 			Reason: "regenerating the key would orphan every encrypted setting"},
 		{Name: "initEncryption", Class: Fatal,
 			Reason: "without the key, secrets are unreadable and a save would write them under the wrong key"},
-		{Name: "loadConfigFromDB", Class: Fatal,
-			Reason: "the stored config is persisted whole, so a server running on defaults overwrites it on its first settings save"},
 		{Name: "config.Validate", Class: Fatal,
 			Reason: "bad config must not serve"},
 		{Name: "opRegistrationGate", Class: Fatal,

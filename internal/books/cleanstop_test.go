@@ -143,7 +143,9 @@ func TestSwapBootVoidsTheCleanStopClaim(t *testing.T) {
 	for name, staged := range map[string]bool{"nothing staged": false, "a staged restore": true} {
 		t.Run(name, func(t *testing.T) {
 			h := newOfflineABO(t)
-			store, err := database.NewPebbleStore(h.path)
+			// The harness booted serve over this path, so the store carries the
+			// flip's level: a standalone open plans it (StandaloneSpec).
+			store, err := database.OpenStandalone(h.path, StandaloneOptions(database.StandaloneOptions{}))
 			require.NoError(t, err)
 			seedCleanStopRows(t, store, h.path)
 			require.NoError(t, store.Close())

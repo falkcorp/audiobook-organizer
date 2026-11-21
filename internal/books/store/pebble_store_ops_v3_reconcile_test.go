@@ -221,13 +221,21 @@ func TestReconcileOpsV3RepairsOldBinaryWritesOnReboot(t *testing.T) {
 		}
 		return s.(*PebbleStore)
 	}
+	closeGlobal := func() error {
+		s := GetGlobalStore()
+		SetGlobalStore(nil)
+		if s == nil {
+			return nil
+		}
+		return s.Close()
+	}
 	shut := func() {
 		t.Helper()
-		if err := CloseStore(); err != nil {
-			t.Fatalf("CloseStore: %v", err)
+		if err := closeGlobal(); err != nil {
+			t.Fatalf("close store: %v", err)
 		}
 	}
-	t.Cleanup(func() { _ = CloseStore() })
+	t.Cleanup(func() { _ = closeGlobal() })
 
 	p := open()
 	now := time.Now().UTC().Truncate(time.Second)

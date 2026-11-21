@@ -1,0 +1,4 @@
+### Changed
+
+- With authentication off, a save that sets or clears a secret (an API key, a password, a token) or one of the admin-only settings is refused, where it used to go through: with no account and no sign-in, anyone who can reach the page is the "admin", and a stored key or an address a key is sent to could be changed by them. Turn authentication on (or create the first account) and save again; the first-run wizard's own keys are still accepted before the first account exists. Reading a secret back is unchanged: the page shows it as set, never its value (F3-07).
+- A settings save is all or nothing: its changes land in several stores (core's settings, the secret store, the rest of the settings blob), and a failure in a later one now puts the earlier ones back instead of leaving a half-applied save. If putting one back also fails, the error says which step could not be undone (F3-07).

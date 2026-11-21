@@ -1,7 +1,7 @@
 // file: core/secrets/keyring_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 211fe806-6c88-41f7-8232-e85cc488f922
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/mediacore/internal/statefs"
 )
 
 // exportTo exports e's keyring to a scratch file, fatal on error.
@@ -63,7 +65,7 @@ func TestExportRecord_VouchesOnlyForItsMaterial(t *testing.T) {
 			t.Fatal("the export record holds key material")
 		}
 	}
-	r, err := readExportRecord(e.root, "secrets.keyring.exported")
+	r, err := readExportRecord(statefs.FromRoot(e.root), "secrets.keyring.exported")
 	if err != nil || len(r.Keys) != 2 || r.Keys[0].ID != "d1" || r.Keys[1].ID != "k1" || len(r.Keys[0].SHA256) != 64 {
 		t.Fatalf("export record = %+v, %v; want d1 and k1 with SHA-256 digests", r, err)
 	}
@@ -181,7 +183,7 @@ func TestReadExportRecord_RegularAndBounded(t *testing.T) {
 	if err := os.Symlink("record.real", rec); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readExportRecord(e.root, "secrets.keyring.exported"); err == nil {
+	if _, err := readExportRecord(statefs.FromRoot(e.root), "secrets.keyring.exported"); err == nil {
 		t.Error("a symbolic link to a valid record was read")
 	}
 	if missing, err := s.UnexportedKeys(); err == nil || len(missing) != 2 {
@@ -194,7 +196,7 @@ func TestReadExportRecord_RegularAndBounded(t *testing.T) {
 	if err := os.WriteFile(rec, big[:maxKeyringBytes+1], 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readExportRecord(e.root, "secrets.keyring.exported"); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if _, err := readExportRecord(statefs.FromRoot(e.root), "secrets.keyring.exported"); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("a record one byte over the bound = %v, want refused as too large", err)
 	}
 }
@@ -232,7 +234,7 @@ func TestWriteKeyringNew_NeverReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeKeyringNew(e.root, defaultKeyFile, f); err != nil {
+	if err := writeKeyringNew(statefs.FromRoot(e.root), defaultKeyFile, f); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Stat(e.keyringPath()); err != nil || fi.Mode().Perm() != keyringMode {
@@ -243,7 +245,7 @@ func TestWriteKeyringNew_NeverReplaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeKeyringNew(e.root, defaultKeyFile, g); err == nil {
+	if err := writeKeyringNew(statefs.FromRoot(e.root), defaultKeyFile, g); err == nil {
 		t.Fatal("writeKeyringNew replaced an existing keyring")
 	}
 	if !bytes.Equal(fileBytes(t, e.keyringPath()), before) {
@@ -318,7 +320,7 @@ func TestUnexportedKeys_SameIDsOtherMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writeKeyring(e.root, defaultKeyFile, f); err != nil {
+	if err := writeKeyring(statefs.FromRoot(e.root), defaultKeyFile, f); err != nil {
 		t.Fatal(err)
 	}
 	s2 := e.open(t, nil)

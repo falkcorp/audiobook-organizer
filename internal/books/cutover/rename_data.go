@@ -1,7 +1,7 @@
 // file: internal/books/cutover/rename_data.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b874765a-43e8-4e15-a309-3879bf7e2e64
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -80,6 +80,13 @@ func tk(path string, conv string) Target { return Target{Kind: TargetKey, Path: 
 func tkc(path string, conv string) Target {
 	return Target{Kind: TargetKey, Path: path, Convert: conv, Coined: true}
 }
+
+// tmember is a member of the registered map-valued key mapKey: rel is the dotted
+// path below it ("nightly.start").
+func tmember(mapKey, rel, conv string) Target {
+	return Target{Kind: TargetMember, Path: mapKey + "." + rel, Map: mapKey, Convert: conv}
+}
+
 func ts(path string) Target { return Target{Kind: TargetSecret, Path: path} }
 func tsc(path string) Target {
 	return Target{Kind: TargetSecret, Path: path, Coined: true}
@@ -121,12 +128,12 @@ var explicitRows = []explicitRow{
 	{head: "otel_metrics_otlp_insecure", targets: []Target{tk("core.metrics.otlp.insecure", "")}, admin: true},
 	{head: "telemetry_environment", targets: []Target{tk("core.metrics.environment", "")}},
 	{head: "ai_endpoints", class: ClassInput, targets: []Target{tinst("ai/<row id> instances")}, note: "05-ai §10"},
-	{head: "ai_endpoints_routing", class: ClassDropped, note: "not a router input (05-ai §10)"},
+	{head: "ai_endpoints_routing", class: ClassDropped, note: "behaviour change: routing is always on after the flip (the one path is the router over ai_endpoints, 05-ai §10); an install that never turned it on moves from the legacy single-backend path to the routed one"},
 	{head: "operation_timeout_minutes", targets: []Target{tk("modules.books.operations.stale_threshold_minutes", "")}, note: "read at HEAD only as the staleness threshold of books' GET /api/v1/operations/stale"},
 	{head: "log_retention_days", targets: []Target{tk("core.log.journal.retention_days", ConvertLogRetention)}, note: "0 -> 90, negative -> 0 (keep)"},
 	{head: "operation_log_retention_days", targets: []Target{tk("core.tasks.history_retention", ConvertDaysToDuration)}, note: "days -> duration"},
 	{head: "ai_journal_retention_days", targets: []Target{tkc("core.ai.journal_retention", ConvertDaysToDuration)}, note: "days -> duration"},
-	{head: "ai_backend", class: ClassDropped, note: "its scalars are already folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend", targets: []Target{tk("modules.books.ai.*", "")}, note: "sub-key rows below"},
 	{head: "api_rate_limit_per_minute", targets: []Target{tk("core.http.rate_limit.per_minute", "")}},
 	{head: "json_body_limit_mb", targets: []Target{tk("core.http.body.json_max_bytes", ConvertMiBToBytes)}, note: "MiB -> bytes"},
 	{head: "upload_body_limit_mb", targets: []Target{tk("core.http.body.upload_max_bytes", ConvertMiBToBytes)}, note: "MiB -> bytes"},
@@ -151,7 +158,7 @@ var explicitRows = []explicitRow{
 	{head: "smtp_username", targets: []Target{tpass("integrations.notify.email.username", false)}},
 	{head: "smtp_password", class: ClassSecret, targets: []Target{tpassSecret("integrations.notify.email.password")}},
 	{head: "smtp_from", targets: []Target{tpass("integrations.notify.email.from", false)}},
-	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}},
+	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}, admin: true, note: "HEAD's file-only key becomes a storable key; ProtectAdmin like its sibling core.auth.oidc.redirect_base_url (F3-07)"},
 	{head: "invite_email_service_token", targets: []Target{tk("modules.books.cfguests.invite_email_service_token", "")}},
 	{head: "tunnel_connector_addrs", targets: []Target{tk("core.http.trusted_proxies", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
 	{head: "allowed_peer_cidrs", targets: []Target{tk("core.http.peer_allowlist", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
@@ -209,9 +216,17 @@ type subRow struct {
 // subRows are the explicit rows of struct-typed fields' sub-keys.
 var subRows = []subRow{
 	{head: "itunes.path_mappings", class: ClassInput, targets: []Target{tentry("core.library.mappings", "core.library.mappings entries, Source: \"itunes\"")}, note: "05-library §5L.10; core.library.mappings is ProtectInteractive, so its retired name warns although HEAD classed the field FieldServerPath"},
-	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.enabled", "")}},
-	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.start", "")}},
-	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.end", "")}},
+	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.enabled", "")}},
+	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.start", "")}},
+	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.end", "")}},
+	{head: "ai_backend.embedding_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.llm_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.local_base_url", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.local_embedding_model", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.local_llm_model", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.parse_batch_size", class: ClassKey, targets: []Target{tk("modules.books.ai.parse_batch_size", "")}, note: "not folded: read by the scanner's AI batch phase (ResolveAIParseBatch), 0 = its default"},
+	{head: "ai_backend.parse_batch_timeout_seconds", class: ClassKey, targets: []Target{tk("modules.books.ai.parse_batch_timeout_seconds", "")}, note: "not folded: read by the scanner's AI batch phase, 0 = its default"},
+	{head: "ai_backend.parse_batch_workers", class: ClassKey, targets: []Target{tk("modules.books.ai.parse_batch_workers", "")}, note: "not folded: read by the scanner's AI batch phase, 0 = its default"},
 	{head: "auto_update.enabled", class: ClassKey, targets: []Target{tk("core.updater.mode", ConvertUpdaterMode)}, admin: true, note: "true -> check (unattended apply stays check-only, 05-updater), false -> off"},
 	{head: "auto_update.channel", class: ClassKey, targets: []Target{tk("core.updater.channel", ConvertUpdaterChannel)}, admin: true, note: "develop -> prerelease"},
 	{head: "auto_update.check_minutes", class: ClassKey, targets: []Target{tk("core.updater.schedules.check", ConvertUpdaterCheck)}, note: "{enabled: true, every: <minutes>}"},

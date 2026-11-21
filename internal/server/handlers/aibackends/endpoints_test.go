@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	aibackendshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/aibackends"
 )
@@ -76,8 +75,10 @@ func TestEndpointsStatus_RowsCoverageAndMasking(t *testing.T) {
 	require.Equal(t, "not_probed", d.Endpoints[0].Probe.Status)
 	require.Equal(t, []string{"llm.from_the_future"}, d.Endpoints[0].UnknownCapabilities)
 	require.Equal(t, 1, d.Endpoints[0].EffectiveConcurrency)
-	require.Equal(t, database.MaskSecret("openai_api_key"), d.Endpoints[1].Endpoint.AuthRef)
-	require.Equal(t, "openai_api_key", config.Snapshot().AIEndpoints[1].AuthRef, "handler masked the live config")
+	// auth_ref names a secret (validated against knownAIAuthRefs); it is not
+	// one, so it is served as stored. HEAD masked it with the settings masks
+	// F3-07 deleted.
+	require.Equal(t, "openai_api_key", d.Endpoints[1].Endpoint.AuthRef)
 
 	var fp *aibackendshandler.CapabilityCoverage
 	for i := range d.Coverage {

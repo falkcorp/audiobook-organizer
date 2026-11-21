@@ -37,8 +37,8 @@ const corePath = "github.com/falkcorp/mediacore"
 // internal/rbacstore entry, F3-01's internal/configstore entry, F4-09's
 // internal/authz entry, F4-02's internal/authstore entry and F2-04's
 // internal/schedspec entry, F7-07's internal/bleveindex entry, F6-02's
-// internal/sse entry and F8-01's internal/backuparchive entry, R4 packages the
-// table missed.
+// internal/sse entry, F8-01's internal/backuparchive entry and F3-07's
+// internal/statefs entry, R4 packages the table missed.
 var coreLayerOf = map[string]int{
 	// L0
 	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
@@ -54,6 +54,11 @@ var coreLayerOf = map[string]int{
 	// internal/bootseam is R1-21's per-boot seam of the crash-matrix kit: the
 	// layer of its consumers' lowest, so storage (L1) may read it.
 	"internal/bootseam": 0,
+	// internal/statefs (F3-07) is the state directory the keyring and the
+	// boot record write through: *os.Root in production, the crash kit's
+	// in-memory filesystem under bootseam. Its one core import is
+	// internal/bootseam, and secrets (L2) reads it, so it sits with bootseam.
+	"internal/statefs": 0,
 	// internal/backuparchive (F8-01) is backup's archive codecs and the hardened
 	// tar reader/extractor over the standard library and klauspost/compress; it
 	// imports no core package, so backup (L4) and the offline restore path may

@@ -7,86 +7,45 @@ package ai
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
-// mapSettings is a minimal database.SettingsStore so the test can drive the
-// REAL LoadConfigFromDatabase migration path.
-type mapSettings struct {
-	mu sync.Mutex
-	m  map[string]database.Setting
-}
-
-func (s *mapSettings) GetSetting(k string) (*database.Setting, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if v, ok := s.m[k]; ok {
-		return &v, nil
-	}
-	return nil, nil
-}
-func (s *mapSettings) SetSetting(k, v, typ string, secret bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[k] = database.Setting{Key: k, Value: v, Type: typ, IsSecret: secret}
-	return nil
-}
-func (s *mapSettings) GetAllSettings() ([]database.Setting, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]database.Setting, 0, len(s.m))
-	for _, v := range s.m {
-		out = append(out, v)
-	}
-	return out, nil
-}
-func (s *mapSettings) DeleteSetting(k string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.m, k)
-	return nil
-}
-
-// migratedLocalModeRows runs the real ai_endpoints migration from a legacy
-// config: llm_mode=local at localURL, with an OpenAI key whose base URL is
-// cloudURL. It returns the migrated rows as the dispatcher sees them.
+// migratedLocalModeRows returns the ai_endpoints rows HEAD's first-boot
+// migration wrote for a legacy llm_mode=local install (local at localURL, an
+// OpenAI key whose base URL is cloudURL), as the dispatcher sees them. The
+// migration left with the HEAD settings loader (F3-07); installs keep the rows
+// it wrote, so the locality rules are still pinned on exactly that shape.
 func migratedLocalModeRows(t *testing.T, localURL, cloudURL string) []aidispatch.Endpoint {
 	t.Helper()
-	prev := config.Snapshot()
-	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = prev }) })
-	config.Mutate(func(c *config.Config) {
-		c.AIEndpoints = nil
-		c.OpenAIAPIKey = "sk-test"
-		c.OpenAIBaseURL = cloudURL
-	})
-	blob := `{"enable_ai_parsing":true,"openai_base_url":"` + cloudURL + `",` +
-		`"ai_backend":{"llm_mode":"local","embedding_mode":"local","local_base_url":"` + localURL + `",` +
-		`"local_llm_model":"qwen2.5:7b-instruct","local_embedding_model":"bge-m3"}}`
-	store := &mapSettings{m: map[string]database.Setting{
-		"config_blob":    {Key: "config_blob", Value: blob, Type: "json"},
-		"openai_api_key": {Key: "openai_api_key", Value: "sk-test", Type: "string"},
-	}}
-	if err := config.LoadConfigFromDatabase(store); err != nil {
-		t.Fatal(err)
-	}
-	rows := config.Snapshot().AIEndpoints
-	var sawCloud bool
-	for _, r := range rows {
-		if r.ID == config.AIEndpointIDOpenAI {
-			sawCloud = true
-			if r.URL != cloudURL {
-				t.Fatalf("migrated openai row URL = %q, want the cloud fake %q", r.URL, cloudURL)
-			}
+	ids := func(cs ...aidispatch.Capability) []string {
+		out := make([]string, 0, len(cs))
+		for _, c := range cs {
+			out = append(out, c.ID())
 		}
+		return out
 	}
-	if !sawCloud {
-		t.Fatalf("migration produced no openai row: %+v", rows)
+	rows := []config.AIEndpoint{
+		{
+			ID: config.AIEndpointIDLocalLLM, Protocol: string(aidispatch.ProtocolOpenAICompat),
+			URL: localURL, ChatModel: "qwen2.5:7b-instruct", EmbedModel: "bge-m3",
+			Priority: 10, Concurrency: 4, Enabled: true,
+			Capabilities: ids(aidispatch.LLMFilenameParse, aidispatch.LLMAuthorReview,
+				aidispatch.LLMAuthorDiscovery, aidispatch.LLMMetadataRerank, aidispatch.EmbedText),
+		},
+		{
+			ID: config.AIEndpointIDOpenAI, Protocol: string(aidispatch.ProtocolOpenAICompat),
+			URL: cloudURL, ChatModel: config.DefaultOpenAIChatModel,
+			Priority: 20, Concurrency: 4, Enabled: true,
+			Features: []string{aidispatch.FeatureBatchAPI, aidispatch.FeatureVision},
+			AuthRef:  "openai_api_key",
+			Capabilities: ids(aidispatch.LLMFilenameParse, aidispatch.LLMAudiobookParse,
+				aidispatch.LLMCoverArtVision, aidispatch.LLMAuthorReview, aidispatch.LLMAuthorDiscovery,
+				aidispatch.LLMAuthorDedupBatch, aidispatch.LLMDiagnostics, aidispatch.TranscribeIntroClip),
+		},
 	}
 	return config.DispatchEndpoints(rows)
 }

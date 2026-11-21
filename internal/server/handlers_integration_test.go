@@ -77,7 +77,7 @@ func newEntitiesHandler(s *Server) *entities.Handler {
 // injected deps. The system domain handlers were extracted into the
 // handlers/system sub-package; the whitebox handler tests in
 // handlers_unit_test.go still exercise the real store → JSON-envelope path
-// through this constructor. systemService/configUpdateService/pluginRegistry/
+// through this constructor. systemService/pluginRegistry/
 // and the func deps are wired from the real Server fields; the hub is
 // passed as a lazy provider closure (mirroring wireHandlers) so the
 // handleEvents nil-guard test, which nils s.hub after construction, still
@@ -86,10 +86,6 @@ func newSystemHandler(s *Server) *system.Handler {
 	var sysSvc system.SystemService
 	if s.systemService != nil {
 		sysSvc = s.systemService
-	}
-	var cfgUpd system.ConfigUpdateService
-	if s.configUpdateService != nil {
-		cfgUpd = s.configUpdateService
 	}
 	var plugins system.PluginHealthChecker
 	if s.pluginRegistry != nil {
@@ -102,7 +98,6 @@ func newSystemHandler(s *Server) *system.Handler {
 	return system.New(
 		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
-		cfgUpd,
 		plugins,
 		// Lazy hub provider mirrors wireHandlers; resolve s.hub at request time so
 		// TestHandleEventsUnavailable (which nils s.hub after construction) still

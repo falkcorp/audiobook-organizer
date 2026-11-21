@@ -1,7 +1,7 @@
 // file: core/app/offline_secrets_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 6a2e9f14-c873-4b0d-9e51-2f7d8a3c6b90
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package app
 
@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -65,7 +66,7 @@ func fixtureKeyring(t *testing.T, stateDir string) []string {
 		t.Fatal(err)
 	}
 	defer func() { _ = root.Close() }()
-	s, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: ks, AppID: "gotham", InstallID: "batcave-0001"})
+	s, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: ks, AppID: "gotham", InstallID: "batcave-0001"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,12 +27,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -219,9 +222,42 @@ func (p *Plugin) runRescore(ctx context.Context, raw json.RawMessage, reporter s
 	return err
 }
 
-// dedupScoreSink is what the config UpdateService calls after it has persisted
-// a changed dedup.signals ladder: swap the ladder into the live engine, then
-// QUEUE the re-band and hand back its op id.
+// dedupRescoreOpKey is the UpdateResult.Ops key dedupScoreHook reports the
+// queued re-band under; the settings handler copies it into the PUT response.
+const dedupRescoreOpKey = "dedup_rescore_op_id"
+
+// dedupScoreHook is the config Facade's UpdateHook for dedup.signals
+// (registered in PostInit). After an Update commits, a changed score ladder is
+// handed to dedupScoreSink, which swaps it into the live engine and queues the
+// re-band of the stored candidates; the queued op's id comes back under
+// dedupRescoreOpKey. A prior ladder that failed to convert counts as changed:
+// the engine could not have been running on it.
+//
+// An error does not roll the write back (an UpdateHook never does): the saved
+// ladder stays, and the error, which names the manual remedy, is reported as
+// the Update's PostCommit failure.
+func (p *Plugin) dedupScoreHook(ctx context.Context, before, after config.Config) (map[string]string, error) {
+	next, err := after.Dedup.Signals.ScoreConfig()
+	if err != nil {
+		return nil, fmt.Errorf("the saved dedup.signals ladder is not a valid score config, so the live engine keeps its current ladder: %w; fix dedup.signals through PUT /api/v1/config, then %s", err, dedupengine.RescoreRemedy)
+	}
+	if prior, perr := before.Dedup.Signals.ScoreConfig(); perr == nil && reflect.DeepEqual(prior, next) {
+		return nil, nil
+	}
+	opID, err := p.dedupScoreSink(ctx, next)
+	if err != nil {
+		return nil, err
+	}
+	logger.InfoCtx(ctx, "dedup score ladder updated in live engine; stored-candidate re-band queued",
+		"certain", next.BandCertainMin, "high", next.BandHighMin,
+		"medium", next.BandMediumMin, "review", next.BandReviewMin,
+		"rescore_op_id", opID)
+	return map[string]string{dedupRescoreOpKey: opID}, nil
+}
+
+// dedupScoreSink is what dedupScoreHook calls once a changed dedup.signals
+// ladder is persisted: swap the ladder into the live engine, then QUEUE the
+// re-band and hand back its op id.
 //
 // The swap itself is cheap and must be synchronous — the engine has to score
 // on the ladder that is now persisted, or a restart would change behaviour.

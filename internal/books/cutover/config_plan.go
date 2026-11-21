@@ -1,7 +1,7 @@
 // file: internal/books/cutover/config_plan.go
-// version: 1.4.0
+// version: 1.5.0
 // guid: 0f2f4b87-3f6d-4a4c-8e0a-7c7f2c64b0d1
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package cutover
 
@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -36,6 +37,7 @@ const (
 	reasonRefusedStore   = "refused by config: the key cannot be stored"
 	reasonRefusedValue   = "refused by config: the value is not valid for the key"
 	reasonNotConvertible = "refused: the value does not convert to the canonical key's type"
+	reasonMemberNoBase   = "refused: a sibling member of the same canonical key has no value to merge with"
 	reasonUnreadableRow  = "unreadable settings row: the ciphertext does not decrypt"
 	reasonSecretConflict = "refused by secrets: the name already holds other content"
 	reasonSecretName     = "refused by secrets: the derived name is not a valid secret name"
@@ -136,6 +138,16 @@ type stagedKey struct {
 	Value    json.RawMessage
 	Original json.RawMessage // the value as stored, quarantined if config refuses Value
 	Member   string          // the blob member, the quarantine key's suffix
+	// Also are the other blob members a staged map-valued key carries
+	// (TargetMember): a refusal of the key quarantines each of them, not only
+	// Member, or the refused value would drop their originals.
+	Also []stagedMember
+}
+
+// stagedMember is one more blob member a staged key holds.
+type stagedMember struct {
+	Member   string
+	Original json.RawMessage
 }
 
 // quarantined is one row or blob member M2 quarantines (sealed: both live
@@ -349,6 +361,18 @@ type planner struct {
 	imported map[secrets.Name]bool
 	keepTop  map[string]bool // top-level class-i members, kept even when emptied
 	oidc     *oidcFold
+	// members are the TargetMember rows found in the blob, by the registered
+	// map-valued key they live in; stageMembers turns each group into one write.
+	members map[config.Path]*memberGroup
+}
+
+// memberGroup is the members of one registered map-valued key that the blob
+// holds: rel (the member path below the key) to its converted value, and to the
+// blob member it came from.
+type memberGroup struct {
+	vals  map[string]json.RawMessage
+	heads map[string]string
+	raws  map[string]json.RawMessage // by HEAD name
 }
 
 // buildPlan plans M2a for in. A blob that does not decode, or HEAD's codec
@@ -397,6 +421,7 @@ func buildPlan(in *m2Input) (*plan, error) {
 			return nil, err
 		}
 		pl.tree = tree
+		pl.reportBlobNulls(blobSetting.Value)
 		headEffectiveTree(pl.tree, in.MaintSet)
 		// A file value M2 cannot carry exactly is HEAD's effective setting when
 		// the blob lacks the key, and the strip would delete it: refuse by name.
@@ -404,6 +429,13 @@ func buildPlan(in *m2Input) (*plan, error) {
 			return nil, &unrepresentableError{Keys: keys}
 		}
 		pl.gapFill()
+		pl.perimeterRules()
+		// After the gap-fill, so config.yaml's llm_mode and enable_ai_parsing are
+		// part of the effective config the legacy path served.
+		for _, line := range aiRoutingContinuity(pl.tree, hasOpenAI) {
+			pl.p.Reported = append(pl.p.Reported, line)
+			pl.p.count("ai-routing-continuity")
+		}
 	} else {
 		pl.tree = map[string]any{}
 		// What config.yaml holds that HEAD reads as a setting (root_dir and the
@@ -417,6 +449,7 @@ func buildPlan(in *m2Input) (*plan, error) {
 
 	pl.secretRows(rows)
 	pl.rowsPass()
+	pl.stageMembers()
 	pl.metadataSources()
 	pl.plugins()
 	pl.fold()
@@ -637,18 +670,22 @@ func (pl *planner) addSecret(name secrets.Name, value, member string) {
 func (pl *planner) keyMember(r *Row, val any) {
 	raw := marshalAt(val)
 	if val == nil {
+		pl.nullUnset(r.Head)
 		return
 	}
 	for _, t := range r.Targets {
 		switch t.Kind {
 		case TargetFold:
 			pl.foldValue(r.Head, val)
-		case TargetKey:
+		case TargetKey, TargetMember:
 			if strings.HasSuffix(t.Path, ".*") || !isConcretePath(t.Path) {
 				continue
 			}
 			out, dropped, err := Convert(t.Convert, raw)
 			switch {
+			case errors.Is(err, ErrNullUnset):
+				pl.nullUnset(r.Head)
+				continue
 			case errors.Is(err, ErrNotStaged):
 				pl.p.Dropped = append(pl.p.Dropped, r.Head)
 				pl.p.count("dropped-by-rule")
@@ -660,8 +697,114 @@ func (pl *planner) keyMember(r *Row, val any) {
 			for _, d := range dropped {
 				pl.p.Dropped = append(pl.p.Dropped, r.Head+"."+d)
 			}
+			if t.Kind == TargetMember {
+				pl.addMember(r, t, out, raw)
+				continue
+			}
 			pl.stageKey(r, t, out, raw)
 		}
+	}
+}
+
+// reportBlobNulls names every top-level member the stored blob holds as an
+// explicit JSON null. HEAD's decode (headDecodeBlob) leaves such a member at the
+// default, so the decoded tree already carries the default and a null reaches no
+// converter from here; this is where the cutover report learns it was there.
+// Only a name the table knows is logged, so a hostile blob cannot write the log.
+func (pl *planner) reportBlobNulls(blob string) {
+	var members map[string]json.RawMessage
+	if json.Unmarshal([]byte(blob), &members) != nil {
+		return
+	}
+	known := map[string]bool{}
+	for _, r := range pl.tab.Rows {
+		if r.Top && r.BlobField != "" {
+			known[r.BlobField] = true
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(members)) {
+		if known[name] && bytes.Equal(bytes.TrimSpace(members[name]), []byte("null")) {
+			pl.nullUnset(name)
+		}
+	}
+}
+
+// nullUnset records a blob member stored as a JSON null: HEAD decoded it into
+// the value it already held, the default, so it is unset. Nothing is staged and
+// the cutover report names the key (never a value; a null has none).
+func (pl *planner) nullUnset(head string) {
+	pl.p.Reported = append(pl.p.Reported, "setting "+head+" was stored as null: treated as unset, so it keeps its default")
+	pl.p.count("null-as-unset")
+}
+
+// addMember holds one member row's converted value until stageMembers has every
+// row of its map-valued key: core stores the map as one key, so the members can
+// only be written together.
+func (pl *planner) addMember(r *Row, t Target, out, original json.RawMessage) {
+	if pl.members == nil {
+		pl.members = map[config.Path]*memberGroup{}
+	}
+	key := config.Path(t.Map)
+	g := pl.members[key]
+	if g == nil {
+		g = &memberGroup{vals: map[string]json.RawMessage{}, heads: map[string]string{}, raws: map[string]json.RawMessage{}}
+		pl.members[key] = g
+	}
+	rel := strings.TrimPrefix(t.Path, t.Map+".")
+	g.vals[rel], g.heads[rel], g.raws[r.Head] = out, r.Head, original
+}
+
+// stageMembers writes each map-valued key the blob has a member of, once, with
+// the members merged. A sibling the blob does not hold is HEAD's default (what
+// HEAD ran with), never the zero value a missing field would decode to, so one
+// stored member cannot silently reset the others. A group that cannot be
+// completed is quarantined whole.
+func (pl *planner) stageMembers() {
+	for _, key := range slices.Sorted(maps.Keys(pl.members)) {
+		g := pl.members[key]
+		var whole json.RawMessage
+		var heads []string
+		ok := true
+		for _, r := range pl.tab.Rows {
+			for _, t := range r.Targets {
+				if t.Kind != TargetMember || config.Path(t.Map) != key {
+					continue
+				}
+				rel := strings.TrimPrefix(t.Path, t.Map+".")
+				val, have := g.vals[rel]
+				if !have {
+					def, known := headDefault(r.Head)
+					if !known {
+						ok = false
+						continue
+					}
+					conv, _, err := Convert(t.Convert, marshalAt(def))
+					if err != nil {
+						ok = false
+						continue
+					}
+					val = conv
+				} else {
+					heads = append(heads, r.Head)
+				}
+				var err error
+				if whole, err = WithMember(whole, rel, val); err != nil {
+					ok = false
+				}
+			}
+		}
+		slices.Sort(heads)
+		if !ok {
+			for _, h := range heads {
+				pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey(h), Raw: g.raws[h], Reason: reasonMemberNoBase})
+			}
+			continue
+		}
+		st := stagedKey{Head: heads[0], Path: key, Value: whole, Original: g.raws[heads[0]], Member: heads[0]}
+		for _, h := range heads[1:] {
+			st.Also = append(st.Also, stagedMember{Member: h, Original: g.raws[h]})
+		}
+		pl.p.Stages = append(pl.p.Stages, st)
 	}
 }
 
@@ -895,9 +1038,16 @@ func (pl *planner) fold() {
 			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_" + p.id + "_client_id"), Raw: marshalAt(pair), Reason: reasonOAuthDisabled})
 			continue
 		}
-		entry := map[string]any{"id": p.id, "kind": p.kind, "client_id": id}
-		if p.issuer != "" {
-			entry["issuer"] = p.issuer
+		// Core's schema for a provider entry requires issuer, scopes, allowed_emails,
+		// allowed_domains and link_existing_by_email to be present (authOIDCProvider
+		// has no omitempty on them), so an entry without them is refused whole and
+		// sign-in goes off. An empty allow-list is written out as [], which admits
+		// nobody, HEAD's meaning of an empty oauth_allowed_emails; the other three
+		// take the zero values HEAD has no setting for.
+		entry := map[string]any{
+			"id": p.id, "kind": p.kind, "client_id": id, "issuer": p.issuer,
+			"scopes": []string{}, "allowed_emails": []string{}, "allowed_domains": []string{},
+			"link_existing_by_email": false,
 		}
 		if len(emails) > 0 {
 			entry["allowed_emails"] = emails
@@ -961,7 +1111,7 @@ func (pl *planner) metadataSources() {
 			if v == "" {
 				continue
 			}
-			pl.addSecret(secrets.Name("integrations.metadata."+id+".credentials."+snakeSegment(k)), v, fmt.Sprintf("metadata_sources.%d.credentials.%s", i, k))
+			pl.addSecret(MetadataCredentialName(id, k), v, fmt.Sprintf("metadata_sources.%d.credentials.%s", i, k))
 		}
 		delete(src, "credentials")
 	}
@@ -1007,7 +1157,7 @@ func (pl *planner) plugins() {
 			continue
 		}
 		if len(settings) > 0 {
-			name := secrets.Name("modules.books.plugins." + id + ".settings")
+			name := PluginSettingsName(id)
 			if err := name.Validate(); err != nil {
 				pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("plugins." + id), Raw: marshalAt(entry), Reason: reasonPluginName})
 			} else {
@@ -1037,7 +1187,7 @@ func (pl *planner) webhook(settings map[string]any) {
 			continue
 		}
 		n++
-		pl.addSecret(secrets.Name(fmt.Sprintf("integrations.notify.webhook-%d.secret", n)), secret, "plugins.webhook.settings.secret")
+		pl.addSecret(WebhookSecretName(n), secret, "plugins.webhook.settings.secret")
 	}
 	if n == 0 {
 		pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("plugins.webhook.settings.secret"), Raw: []byte(secret), Reason: reasonWebhookNoURL})

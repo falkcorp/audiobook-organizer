@@ -1,7 +1,7 @@
 // file: web/src/hooks/useMetadataSourceHandlers.ts
-// version: 1.0.0
+// version: 1.1.0
 // guid: c3d4e5f6-a7b8-9012-cdef-123456789012
-// last-edited: 2026-06-23
+// last-edited: 2026-11-19
 
 import type { Dispatch, SetStateAction } from 'react';
 import * as api from '../services/api';
@@ -23,6 +23,7 @@ export interface UseMetadataSourceHandlersReturn {
   handleSourceToggle: (sourceId: string) => void;
   handleTestMetadataSource: (sourceId: string) => Promise<void>;
   handleCredentialChange: (sourceId: string, field: string, value: string) => void;
+  handleToggleClearCredential: (sourceId: string, field: string) => void;
   handleSourceReorder: (sourceId: string, direction: 'up' | 'down') => void;
 }
 
@@ -83,9 +84,32 @@ export function useMetadataSourceHandlers(
           ? {
               ...source,
               credentials: { ...source.credentials, [field]: value },
+              // Typing a new key replaces the saved one: nothing left to clear.
+              clearCredentials: value
+                ? source.clearCredentials.filter((f) => f !== field)
+                : source.clearCredentials,
             }
           : source
       ),
+    }));
+    setSaved(false);
+  };
+
+  // Stage (or unstage) deleting a saved credential; the save sends it as null.
+  const handleToggleClearCredential = (sourceId: string, field: string) => {
+    setSettings((prev) => ({
+      ...prev,
+      metadataSources: prev.metadataSources.map((source) => {
+        if (source.id !== sourceId) return source;
+        const staged = source.clearCredentials.includes(field);
+        return {
+          ...source,
+          credentials: staged ? source.credentials : { ...source.credentials, [field]: '' },
+          clearCredentials: staged
+            ? source.clearCredentials.filter((f) => f !== field)
+            : [...source.clearCredentials, field],
+        };
+      }),
     }));
     setSaved(false);
   };
@@ -116,6 +140,7 @@ export function useMetadataSourceHandlers(
     handleSourceToggle,
     handleTestMetadataSource,
     handleCredentialChange,
+    handleToggleClearCredential,
     handleSourceReorder,
   };
 }

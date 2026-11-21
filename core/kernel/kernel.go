@@ -1,7 +1,7 @@
 // file: core/kernel/kernel.go
-// version: 1.0.21
+// version: 1.2.0
 // guid: 2f2f54dc-093c-4cea-9ec3-7078e672dc38
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 // Package kernel is core's boot machinery (06 §6.4.6): the boot-phase runner
 // of 06 §6.5.1, the Registrar and Deps of each module, the collision checks
@@ -42,6 +42,7 @@ import (
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/version"
@@ -58,10 +59,6 @@ type Config struct {
 	Version               string // the app's release version: the resource's service.version
 	ReservedAPINamespaces []string
 	LegacyAuthGinUntil    module.ID
-	// R1Values is app.Options.R1Values, converted. The supervisor calls it
-	// once per Run, at start step (7), before the listener opens. nil = every
-	// value at core's default.
-	R1Values func() R1Values
 	// Logger replaces the log.Logging the kernel would build (tests).
 	Logger *slog.Logger
 	// LogOutput is where the kernel's log.Logging writes; nil = the stream of
@@ -139,6 +136,9 @@ type Config struct {
 	// StorageStateFiles is the state-file table the pre-migration checkpoint
 	// copies (05-config §2.4; storage.OpenOptions.StateFiles).
 	StorageStateFiles []storage.StateFile
+	// FromRelease is the tag the pre-migration checkpoint records as
+	// from_release (storage.OpenOptions.FromRelease); "" = none embedded.
+	FromRelease string
 	// StateDir is core.paths.state_dir, absolute, resolved once from
 	// pre-boot inputs (06 §6.4.5 StateDir). Set, the kernel runs P0a, the
 	// pre-boot swap, over <StateDir>/restore/ before the store opens, and
@@ -172,21 +172,28 @@ type Config struct {
 	// UIOptions is app.Options.UIOptions, merged into the ui.Options P8
 	// builds (FE3-4). Ignored with a zero UI.
 	UIOptions ui.AppOptions
-}
-
-// R1Values mirrors app.R1Values field for field (05-config §1.12.1), so app
-// converts one into the other without copying fields by hand; the kernel
-// cannot import app. F3 deletes both.
-type R1Values struct {
-	Listen                       string
-	TLSCertFile, TLSKeyFile      string
-	PeerAllowlist                []string
-	TrustedProxies               []string
-	ClientIPHeader               string
-	RateLimitEnabled             bool
-	RateLimitPerMinute           int
-	JSONMaxBytes, UploadMaxBytes int64
-	ShutdownBudget               time.Duration
+	// CoreConfigBoot turns on core's own config and secrets boot (F3-07 slice
+	// a5; 06 §6.5.1 P0, P3, P4b and P4d): the layered config store built from
+	// ConfigOptions, the secrets store opened at the start of P4b, and both
+	// owners claimed in the store. false, the default, boots as before: no
+	// config layer is read through core, no keyring is created and no
+	// c/config/ or c/secrets/ row is written. It is one explicit bool, not
+	// the presence of the wiring, so a build without it is byte-for-byte the
+	// old boot; slice (e) of F3-07 deletes it with R1Values. ABO leaves it
+	// off.
+	CoreConfigBoot bool
+	// ConfigOptions are the operator layers of the config boot: the app's
+	// Environ, FilePath, Flags, Passthrough, EnvBindings and Retired
+	// (app.Options.configOptions); the kernel adds AppID, the logger, the
+	// clock, the boot-record root and the secrets. Read only when
+	// CoreConfigBoot is set.
+	ConfigOptions config.Options
+	// StateDirDefault is app.Options.StateDir: the compiled default of
+	// core.paths.state_dir. Read only when CoreConfigBoot is set.
+	StateDirDefault string
+	// CoreDefaults are the app's compiled defaults of the core keys whose
+	// default is the app's to name (app.Options.CoreDefaults).
+	CoreDefaults CoreDefaults
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
@@ -260,6 +267,9 @@ type Kernel struct {
 	// when a manifest declares data migrations (storageOptions).
 	rbacCat *rbac.Catalog
 	coreCfg *coreConfig
+	// perimeterStop ends the core.http subscription followPerimeter made; nil
+	// before start step 7.
+	perimeterStop func()
 	// sectionCache is the section cache a test handed the boot in its
 	// bootseam.Seams (read at P5), for the core config built at P7; nil in
 	// every production boot.
@@ -270,8 +280,30 @@ type Kernel struct {
 	reporters    kernelReporters
 	tasks        *kernelTasks
 	dataMig      *DataMigrations
-	swap         *kernelSwap // P0a on; nil when P0a did not run (swap.go)
-	build        string      // the binary ID, once computed (swap.go)
+	// imp are the importers Manifest.Cutover receives, bound at the start of
+	// P4b once the stores they write through are open (cutover_importers.go).
+	// importerCfg and importerSec are what P4b binds: nil until the config
+	// boot and the secrets store are wired (F3-07), so every Cutover step
+	// still refuses with module.ErrImporterNotBound.
+	imp         *lateImporters
+	importerCfg config.Importer
+	importerSec secrets.Importer
+	// importerAllowRegen is core.secrets.allow_key_regen as bindCoreStores read
+	// it; false until then. P4b binds it, with the Legacy reader, into the
+	// Importers a Cutover func holds (Importers.AllowKeyRegen).
+	importerAllowRegen bool
+	// cfgBoot is the layered config store (Config.CoreConfigBoot): built at
+	// P0, loaded at P3, bound to the DB layer at P4b and attached at P4d. nil
+	// when the gate is off, which is every boot of ABO.
+	cfgBoot *configBoot
+	// sec is the open secret store (Config.CoreConfigBoot, a store open): opened
+	// at the start of P4b, closed before the store (storage.go closeStorage).
+	sec *kernelSecrets
+	// settingHandles are the live handles of the enabled modules' declared
+	// sections, by path, registered at P3 (RegistrarConfig.Settings).
+	settingHandles map[config.Path]any
+	swap           *kernelSwap // P0a on; nil when P0a did not run (swap.go)
+	build          string      // the binary ID, once computed (swap.go)
 	// swapLock is the swap lock this kernel holds (exclusive through P0a
 	// and shared from its end, storage.LockSwapShared for an offline open,
 	// storage.LockSwapExclusive for an offline swap), released by closeCore
@@ -297,8 +329,11 @@ type entry struct {
 	mod     module.Module
 	man     module.Manifest
 	enabled bool
-	held    string               // ModuleState.Disabled when storage holds an enabled module (storage.go)
-	rec     module.Registrations // P6, enabled modules only
+	held    string // ModuleState.Disabled when storage holds an enabled module (storage.go)
+	// disabledBy is ModuleState.Disabled for a module a config layer turned off
+	// (config_boot.go applyBootEnabled); "" = the manifest default.
+	disabledBy string
+	rec        module.Registrations // P6, enabled modules only
 }
 
 // New runs the boot phases that exist (P1, P5, P6, P7, P8). It starts no
@@ -400,6 +435,9 @@ func (k *Kernel) Modules() []ModuleState {
 		s := ModuleState{ID: e.man.ID, Version: e.man.Version, Enabled: e.enabled}
 		if !e.enabled {
 			s.Disabled = disabledByDefault
+			if e.disabledBy != "" {
+				s.Disabled = e.disabledBy
+			}
 			if e.held != "" {
 				s.Disabled = e.held
 			}
@@ -438,6 +476,15 @@ func (k *Kernel) document(owner, ver string) ([]byte, error) {
 	}
 	doc.Info.Version = ver
 	return doc.JSON()
+}
+
+// importers returns the kernel's late-bound Cutover importers, built on
+// first use.
+func (k *Kernel) importers() *lateImporters {
+	if k.imp == nil {
+		k.imp = &lateImporters{}
+	}
+	return k.imp
 }
 
 // catalog is P1: every manifest, enabled or not; IDs against the reserved
@@ -509,7 +556,9 @@ func (k *Kernel) catalog(describe bool) error {
 	// Every manifest's TaskLedger and DataMigrations, enabled or not: they stay
 	// known while the module is disabled (06 §6.4.2).
 	probs = append(probs, ledgerProblems(k.entries)...)
-	probs = append(probs, dataMigrationProblems(k.entries)...)
+	probs = append(probs, dataMigrationProblems(k.entries, k.importers().values())...)
+	probs = append(probs, settingsProblems(k.entries)...)
+	probs = append(probs, rewriteProblems(k.entries)...)
 	return joined(probs)
 }
 
@@ -559,12 +608,14 @@ func (k *Kernel) register(ctx context.Context) error {
 			continue
 		}
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
-			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id)}
+			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
+			Config: k.configAccess(e.man)}
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,
 			Deps:          deps,
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
+			Settings:      declaredSettings(e.man, k.settingHandles),
 			// Err is read once, below: a call after Close (from a goroutine
 			// Register started, against 06 §6.4.1) would otherwise vanish.
 			AfterClose: func(p module.Problem) {

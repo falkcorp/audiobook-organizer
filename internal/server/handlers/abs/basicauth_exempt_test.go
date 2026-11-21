@@ -1,21 +1,28 @@
 // file: internal/server/handlers/abs/basicauth_exempt_test.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 1a51d292-2d49-43bb-b5d1-afc53fd96f5b
-// last-edited: 2026-10-19
+// last-edited: 2026-11-19
 
 package abs_test
 
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/gin-gonic/gin"
 )
+
+// absAuthMethodForTest names the auth method the mount's own-auth rows carry;
+// the test registers it for its owner, as books does for the real one.
+const absAuthMethodForTest = "books.abs"
 
 // absUnauthenticatedRoutes is every ABS route Register mounts WITHOUT
 // ABSRequireAuth. With Basic Auth enabled these must stay behind it, because it
@@ -51,21 +58,69 @@ func enableBasicAuthForTest(t *testing.T) {
 	config.AppConfig.BasicAuthPassword = "secret"
 }
 
-// newBasicAuthGatedABS returns an engine shaped like production for this
-// question: the global BasicAuth middleware first, then the real ABS Register
-// table. The bearer token is minted on the harness's own (ungated) router
-// before Basic Auth is switched on.
-func newBasicAuthGatedABS(t *testing.T) (*gin.Engine, string) {
+// newBasicAuthGatedABS returns the engine and the whole stack in front of it,
+// shaped like production for this question: the real ABS Register table behind
+// core's router, with the production Basic gate (server.LegacyBasicGate) as
+// stage 8. A route is mounted own-auth (exempt from the gate) unless
+// absUnauthenticatedRoutes lists it, so a route that is not listed and does
+// not refuse an unauthenticated request itself fails the walk below. The
+// bearer token is minted on the harness's own (ungated) router before Basic
+// Auth is switched on.
+func newBasicAuthGatedABS(t *testing.T) (engine *gin.Engine, stack http.Handler, token string) {
 	t.Helper()
 	h, _, token := newBrowseHarness(t)
 	enableBasicAuthForTest(t)
-	gated := gin.New()
-	gated.Use(servermiddleware.BasicAuth())
-	h.handler.Register(gated)
-	return gated, token
+	engine = gin.New()
+	h.handler.Register(engine)
+
+	var manifest []httpapi.LegacyRoute
+	claims := map[string]bool{}
+	var top []string // the first segments outside /api, which the mount declares
+	for _, route := range engine.Routes() {
+		own := !absUnauthenticatedRoutes[route.Method+" "+route.Path]
+		lr := httpapi.LegacyRoute{Method: route.Method, GinPath: route.Path, Perm: rbac.Public, Public: true, RateClass: httpapi.RateExempt}
+		if own {
+			lr.Perm, lr.Public, lr.OwnAuth, lr.AuthMethod = rbac.Delegated(absAuthMethodForTest), false, true, absAuthMethodForTest
+		}
+		manifest = append(manifest, lr)
+		segs := strings.Split(strings.TrimPrefix(route.Path, "/"), "/")
+		if segs[0] == "api" && len(segs) > 1 {
+			claims["/api/"+segs[1]+"/"] = true
+		} else {
+			claims["/"+segs[0]+"/"] = true
+			if !slices.Contains(top, segs[0]) {
+				top = append(top, segs[0])
+			}
+		}
+	}
+	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
+	for _, c := range slices.Sorted(func(yield func(string) bool) {
+		for c := range claims {
+			if !yield(c) {
+				return
+			}
+		}
+	}) {
+		if err := r.Claim("abs", c); err != nil {
+			t.Fatalf("claim %s: %v", c, err)
+		}
+	}
+	r.AllowAuthMethods("abs", absAuthMethodForTest)
+	if err := r.MountLegacy(httpapi.LegacyMount{
+		Owner: "abs", Handler: engine, Auth: httpapi.LegacyAuthGin,
+		Routes: slices.Values(manifest), TopSegments: top, BasicGate: server.LegacyBasicGate(),
+		BasicExemptAssets: server.LegacyBasicExemptAssets,
+	}); err != nil {
+		t.Fatalf("mount: %v", err)
+	}
+	stack, err := r.Build()
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	return engine, stack, token
 }
 
-func serveGated(r *gin.Engine, method, path string, headers map[string]string) *httptest.ResponseRecorder {
+func serveGated(r http.Handler, method, path string, headers map[string]string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Content-Type", "application/json")
 	for k, v := range headers {
@@ -88,7 +143,7 @@ func isBasicChallenge(w *httptest.ResponseRecorder) bool {
 // The Basic-challenged set must equal absUnauthenticatedRoutes exactly, so a
 // future ABS route registered without ABSRequireAuth fails here loudly.
 func TestBasicAuth_ExemptsExactlyTheTokenGatedABSRoutes(t *testing.T) {
-	gated, _ := newBasicAuthGatedABS(t)
+	engine, gated, _ := newBasicAuthGatedABS(t)
 
 	placeholders := strings.NewReplacer(
 		":libraryId", "b5e3a5b2-a76e-471f-b18b-915e4716d053",
@@ -103,7 +158,7 @@ func TestBasicAuth_ExemptsExactlyTheTokenGatedABSRoutes(t *testing.T) {
 
 	challenged := map[string]bool{}
 	var exempt []string
-	for _, route := range gated.Routes() {
+	for _, route := range engine.Routes() {
 		key := route.Method + " " + route.Path
 		path := placeholders.Replace(route.Path)
 		if strings.Contains(path, ":") || strings.Contains(path, "*") {
@@ -143,7 +198,7 @@ func TestBasicAuth_ExemptsExactlyTheTokenGatedABSRoutes(t *testing.T) {
 // a real ABS client holding a bearer token and sending no Basic credentials
 // reaches token-gated ABS routes.
 func TestBasicAuth_ABSRouteWithValidTokenPassesWithoutBasic(t *testing.T) {
-	gated, token := newBasicAuthGatedABS(t)
+	_, gated, token := newBasicAuthGatedABS(t)
 	for _, path := range []string{"/api/me", "/api/libraries"} {
 		w := serveGated(gated, http.MethodGet, path, bearer(token))
 		if w.Code != http.StatusOK {
@@ -157,7 +212,7 @@ func TestBasicAuth_ABSRouteWithValidTokenPassesWithoutBasic(t *testing.T) {
 // traversal spellings, unmatched paths and the auth-free ABS routes all stay
 // Basic-challenged.
 func TestBasicAuth_ABSTokenDoesNotOpenNonExemptRoutes(t *testing.T) {
-	gated, token := newBasicAuthGatedABS(t)
+	_, gated, token := newBasicAuthGatedABS(t)
 	cases := []struct{ method, path string }{
 		{http.MethodGet, "/api/me/../v1/config"},
 		{http.MethodGet, "/api/me/%2e%2e/%2e%2e/api/v1/config"},

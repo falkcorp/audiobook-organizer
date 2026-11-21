@@ -1,7 +1,7 @@
 // file: core/kernel/secrets_test.go
-// version: 1.0.3
+// version: 1.0.5
 // guid: 3f0c9a52-6e1b-4d7a-8c25-b94e1f6a0d37
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -53,7 +53,9 @@ func openTestSecrets(t *testing.T, db *storage.DB, stateDir string, mut func(*se
 }
 
 // TestSecretsOwnerSpec: c/secrets/ is an enabled keyspace, Serialized as a
-// whole, with no claims or migrations, and no boot lists it yet (F3-07).
+// whole, with no claims or migrations, and a boot with Config.CoreConfigBoot
+// off (ABO's) does not list it. TestConfigBoot_P4bOpensTheSecretStore is the
+// gate-on twin.
 func TestSecretsOwnerSpec(t *testing.T) {
 	spec := secretsOwnerSpec()
 	if spec.Owner != "core/secrets" || !spec.Spec.Keyspace || !spec.Enabled || !slices.Equal(spec.Spec.Serialized, []string{""}) {
@@ -66,14 +68,14 @@ func TestSecretsOwnerSpec(t *testing.T) {
 	k := h.mustBoot(h.config(nil))
 	for _, o := range k.storageOwners() {
 		if o.Owner == secretsOwnerID {
-			t.Fatal("storageOwners lists core/secrets before F3-07")
+			t.Fatal("storageOwners lists core/secrets with the gate off")
 		}
 	}
 	if _, ok := k.store.db.Keyspace(secretsOwnerID); ok {
-		t.Fatal("a boot opened the c/secrets/ keyspace before F3-07")
+		t.Fatal("a boot opened the c/secrets/ keyspace with the gate off")
 	}
 	if _, err := os.Stat(filepath.Join(h.state, "secrets.keyring")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a boot created the keyring before F3-07: %v", err)
+		t.Fatalf("a boot created the keyring with the gate off: %v", err)
 	}
 }
 
@@ -151,9 +153,7 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 	s := openTestSecrets(t, db, state, nil)
 	export := func() {
 		t.Helper()
-		if _, err := secrets.ExportKeyring(s.root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
-			t.Fatal(err)
-		}
+		exportFrom(t, state)
 	}
 
 	r := secretsHealth(ctx, s.store)
@@ -168,8 +168,8 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 	if err := s.close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := secrets.RotateDerive(s.root, "", time.Hour, time.Now()); err == nil {
-		t.Fatal("RotateDerive through a closed root succeeded")
+	if _, err := s.root.Lstat("."); err == nil {
+		t.Fatal("close left the state directory open")
 	}
 	root, err := os.OpenRoot(state)
 	if err != nil {
@@ -193,6 +193,20 @@ func TestExportKeyring_ClearsHealthWarning(t *testing.T) {
 	}
 }
 
+// exportFrom runs secrets export-keyring's engine over the state directory
+// state, as the offline command opens it.
+func exportFrom(t *testing.T, state string) {
+	t.Helper()
+	root, err := os.OpenRoot(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	if _, err := secrets.ExportKeyring(root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestSecretsHealth_Tokens covers the kernel half of
 // TestStageUnreadable_ReadsReenter (05-config §2.9) and the precedence of the
 // core.secrets tokens: a fresh keyring raises secrets_keyring_not_exported, an
@@ -212,9 +226,7 @@ func TestSecretsHealth_Tokens(t *testing.T) {
 	if rep.r.Status != health.StatusDegraded || rep.r.Reason != reasonKeyringNotExported || !strings.Contains(rep.r.Detail, "d1") {
 		t.Fatalf("fresh keyring: %+v, want degraded %s naming d1", rep.r, reasonKeyringNotExported)
 	}
-	if _, err := secrets.ExportKeyring(s.root, "", filepath.Join(t.TempDir(), "keyring.export"), time.Now()); err != nil {
-		t.Fatal(err)
-	}
+	exportFrom(t, state)
 	if r := secretsHealth(ctx, s.store); r.Status != health.StatusUp || r.Reason != "" {
 		t.Fatalf("after the export: %+v, want Up", r)
 	}

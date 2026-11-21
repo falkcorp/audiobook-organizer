@@ -52,14 +52,6 @@ type Scheduler interface {
 // endpoints: list/run/configure tasks, and trigger/inspect/configure the
 // nightly maintenance window.
 type SchedulerHandler struct {
-	// store is used only to persist config changes (SaveConfigToDatabase).
-	// database.SettingsStore is the exact four-method interface that call
-	// needs -- see operations.OperationsStore's doc for why it is embedded
-	// rather than method-listed elsewhere in this codebase; the same
-	// reasoning applies here, one level narrower since this handler needs
-	// nothing else from the store.
-	store database.SettingsStore
-
 	// getScheduler resolves the scheduler lazily, at request time. The
 	// *Server.scheduler field is assigned in Start() -- AFTER NewServer →
 	// setupRoutes → wireHandlers runs -- so snapshotting it at wire time would
@@ -73,11 +65,8 @@ type SchedulerHandler struct {
 // NewSchedulerHandler constructs a SchedulerHandler. getScheduler is a lazy
 // provider (see the field doc) rather than a plain Scheduler value because
 // *Server.scheduler is populated after wire time.
-func NewSchedulerHandler(store database.SettingsStore, getScheduler func() Scheduler) *SchedulerHandler {
-	return &SchedulerHandler{
-		store:        store,
-		getScheduler: getScheduler,
-	}
+func NewSchedulerHandler(getScheduler func() Scheduler) *SchedulerHandler {
+	return &SchedulerHandler{getScheduler: getScheduler}
 }
 
 // resolveScheduler returns the live scheduler via the lazy provider, or nil if
@@ -148,24 +137,11 @@ type taskConfigBinding struct {
 	// key instead of reporting the field as merely unsupported.
 	hints map[string]string
 
-	// foldLegacy normalizes a deprecated config key into the per-task fields
-	// above, and runs once before any caller write is applied. It runs inside
-	// config.Mutate and writes through c, so it must not take the config lock.
-	//
-	// A binding pointer is only honest if the task's trigger reads that field
-	// ALONE. library_scan's does not: IsEnabled is
-	// `Scheduled.LibraryScan.Enabled || ScanOnStartup`, kept that way on purpose
-	// so nobody who only ever set the legacy scan_on_startup key loses their
-	// startup scan. The side effect is that while the legacy key is set, writing
-	// enabled=false lands in the struct and the task still reports enabled — a
-	// 200 for a change the caller cannot observe, which is the exact defect this
-	// endpoint is being fixed for.
-	//
-	// Folding is lossless by construction: with the legacy key set, both
-	// IsEnabled() and RunOnStart() already evaluate true, so writing true into
-	// both per-task fields and clearing the legacy key preserves each getter's
-	// value while making the per-task fields the only thing that decides them.
-	// The caller's write then lands on a field that governs.
+	// foldLegacy runs once on the Mutate copy before any caller write, for a task
+	// whose IsEnabled ORs the per-task flag with another key. It writes the
+	// OR's current value into the per-task flag, so a write that clears the other
+	// key (library_scan's run_on_startup is scan_on_startup) cannot disable a
+	// task the other key was keeping enabled.
 	foldLegacy func(c *config.Config)
 }
 
@@ -198,6 +174,12 @@ func (b taskConfigBinding) describeRejection(field string) string {
 	return field
 }
 
+// onStartupRetiredHint answers a run_on_startup write for a task whose start
+// trigger is no longer a setting. HEAD stored scheduled.<task>.on_startup; core's
+// schedule value has no such field (a kind's start trigger is declared in code,
+// 05-tasks 5T.8.2), so the flipped build neither stores nor reads it.
+const onStartupRetiredHint = "run on start is no longer a setting: a task's start trigger is part of its definition"
+
 // fixedScheduleHint covers tasks whose scheduler definition hardcodes
 // IsEnabled/GetInterval/RunOnStart as constants rather than reading config.
 const fixedScheduleHint = "this task's schedule is fixed in code"
@@ -206,18 +188,25 @@ const fixedScheduleHint = "this task's schedule is fixed in code"
 // reads, mirroring the TaskDefinition triggers in internal/scheduler/tasks.go.
 // The second return is false for a task that has no configurable schedule at
 // all.
-func bindingForTask(name string) (taskConfigBinding, bool) {
-	sched := &config.AppConfig.Scheduled
-	maint := &config.AppConfig.Maintenance
+//
+// The pointers are into cfg, never into config.AppConfig: with the Facade
+// installed, Mutate hands its callback a COPY of the settings and stores what
+// differs, so a write through a pointer into the global changes nothing that is
+// stored, and the request would answer 200 for it. The caller builds a binding
+// on the copy it is handed (UpdateTaskConfig builds a second one inside the
+// Mutate callback), and a read-only one on a snapshot to decide what to reject.
+func bindingForTask(name string, cfg *config.Config) (taskConfigBinding, bool) {
+	sched := &cfg.Scheduled
+	maint := &cfg.Maintenance
 
 	// full is for tasks whose TaskDefinition reads a ScheduledTaskConfig for
 	// enabled/interval/on-startup plus a Maintenance flag for the window.
 	full := func(t *config.ScheduledTaskConfig, window *bool) taskConfigBinding {
 		return taskConfigBinding{
-			enabled:   &t.Enabled,
-			interval:  &t.Interval,
-			onStartup: &t.OnStartup,
-			inWindow:  window,
+			enabled:  &t.Enabled,
+			interval: &t.Interval,
+			inWindow: window,
+			hints:    map[string]string{"run_on_startup": onStartupRetiredHint},
 		}
 	}
 
@@ -245,15 +234,17 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		// configurable" while ListTasks still enumerates it and the UI renders
 		// an interval editor for it -- an editable field that cannot be saved.
 		//
-		// interval is the DUE-CHECK cadence, not the sweep period. The period
-		// is scheduled.library_scan_full.period_hours and has no knob in this
-		// API; it is reachable via PUT /config or the env var. Changing that
-		// means widening the UpdateTaskConfig request body, which is a decision
-		// about the whole endpoint rather than this task.
+		// interval used to be the DUE-CHECK cadence, not the sweep period. It is
+		// not a setting any more: core's schedule value carries the sweep period
+		// (scheduled.library_scan_full.period_hours, reachable via PUT /config or
+		// the env var) and nothing else, and the scheduler checks hourly. Widening
+		// the UpdateTaskConfig request body to take the period is a decision about
+		// the whole endpoint rather than this task.
 		return taskConfigBinding{
-			enabled:  &sched.LibraryScanFull.Enabled,
-			interval: &sched.LibraryScanFull.Interval,
+			enabled: &sched.LibraryScanFull.Enabled,
 			hints: map[string]string{
+				"interval_minutes": "the due-check runs hourly; the sweep period is " +
+					"scheduled.library_scan_full.period_hours, set via PUT /config",
 				"run_on_startup": "the full sweep never runs on startup by design — this host " +
 					"restarts several times a day and each one would trigger a full re-hash",
 				"run_in_maintenance_window": "not reachable from the maintenance window; it has its " +
@@ -261,19 +252,27 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 			},
 		}, true
 	case "library_scan":
-		// All four knobs are real: the task reads Scheduled.LibraryScan for
-		// enabled/interval/on-startup. The previous switch bound only the
-		// maintenance-window flag and silently dropped the other three.
+		// enabled, interval and the window flag are real knobs. Run-on-start is
+		// scan_on_startup, the one start setting core carries
+		// (modules.books.scan.on_startup); scheduled.library_scan.on_startup is
+		// not stored or read.
 		b := full(&sched.LibraryScan, &maint.LibraryScan)
-		// ...but two of those three are OR'd with the legacy scan_on_startup key
-		// in tasks.go, so they only govern once it is folded away. See foldLegacy.
+		b.onStartup = &cfg.ScanOnStartup
+		delete(b.hints, "run_on_startup")
+		// IsEnabled is `Enabled || ScanOnStartup` in tasks.go, kept that way on
+		// purpose so nobody who only ever set scan_on_startup loses their
+		// startup scan. While that key is set, writing enabled=false would land
+		// and the task would still report enabled: a 200 for a change the caller
+		// cannot observe. Name the key instead of answering 200.
 		b.foldLegacy = func(c *config.Config) {
-			if !c.ScanOnStartup {
-				return
+			if c.ScanOnStartup {
+				c.Scheduled.LibraryScan.Enabled = true
 			}
-			c.Scheduled.LibraryScan.Enabled = true
-			c.Scheduled.LibraryScan.OnStartup = true
-			c.ScanOnStartup = false
+		}
+		if cfg.ScanOnStartup {
+			b.enabled = nil
+			b.hints["enabled"] = "library_scan stays enabled while scan_on_startup is set; " +
+				"turn run_on_startup off first, then disable the task"
 		}
 		return b, true
 	case "reconcile_scan":
@@ -300,7 +299,7 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		}), true
 	case "nightly_activity_compaction":
 		return taskConfigBinding{
-			enabled: &config.AppConfig.ActivityLogNightlyCompactionEnabled,
+			enabled: &cfg.ActivityLogNightlyCompactionEnabled,
 			hints: map[string]string{
 				"interval_minutes":          "runs daily at 00:10 server-local time; the cutoff is local midnight whenever it runs",
 				"run_on_startup":            fixedScheduleHint,
@@ -314,9 +313,9 @@ func bindingForTask(name string) (taskConfigBinding, bool) {
 		// nightly) and 0 turns it off; there is no enabled switch to forget
 		// (see config.ScheduledTasksConfig.MetadataUpgrade).
 		return taskConfigBinding{
-			interval:  &sched.MetadataUpgrade.Interval,
-			onStartup: &sched.MetadataUpgrade.OnStartup,
+			interval: &sched.MetadataUpgrade.Interval,
 			hints: map[string]string{
+				"run_on_startup": onStartupRetiredHint,
 				"enabled": "metadata_upgrade is scheduled whenever interval_minutes > 0; " +
 					"set interval_minutes to 0 to stop it",
 				"run_in_maintenance_window": "metadata_upgrade runs on its own interval, " +
@@ -400,7 +399,11 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 		return
 	}
 
-	binding, ok := bindingForTask(name)
+	// What the task accepts is decided on a snapshot; the writes are applied to
+	// the copy Mutate hands the callback (see bindingForTask), so the same
+	// request resolves its fields twice, once to validate and once to write.
+	snap := config.Snapshot()
+	binding, ok := bindingForTask(name, &snap)
 	if !ok {
 		httputil.RespondWithBadRequest(c, fmt.Sprintf("task %q config is not configurable", name))
 		return
@@ -408,33 +411,33 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 
 	// Resolve every provided field against the binding BEFORE applying any of
 	// them, so a rejected field cannot leave a half-written config behind.
-	var writes []func()
+	var writes []func(taskConfigBinding)
 	var rejected []string
-	bindBool := func(field string, v, target *bool) {
+	bindBool := func(field string, v *bool, pick func(taskConfigBinding) *bool) {
 		if v == nil {
 			return
 		}
-		if target == nil {
+		if pick(binding) == nil {
 			rejected = append(rejected, binding.describeRejection(field))
 			return
 		}
-		writes = append(writes, func() { *target = *v })
+		writes = append(writes, func(b taskConfigBinding) { *pick(b) = *v })
 	}
-	bindInt := func(field string, v, target *int) {
+	bindInt := func(field string, v *int, pick func(taskConfigBinding) *int) {
 		if v == nil {
 			return
 		}
-		if target == nil {
+		if pick(binding) == nil {
 			rejected = append(rejected, binding.describeRejection(field))
 			return
 		}
-		writes = append(writes, func() { *target = *v })
+		writes = append(writes, func(b taskConfigBinding) { *pick(b) = *v })
 	}
 
-	bindBool("enabled", req.Enabled, binding.enabled)
-	bindInt("interval_minutes", req.IntervalMinutes, binding.interval)
-	bindBool("run_on_startup", req.RunOnStartup, binding.onStartup)
-	bindBool("run_in_maintenance_window", req.RunInMaintenanceWindow, binding.inWindow)
+	bindBool("enabled", req.Enabled, func(b taskConfigBinding) *bool { return b.enabled })
+	bindInt("interval_minutes", req.IntervalMinutes, func(b taskConfigBinding) *int { return b.interval })
+	bindBool("run_on_startup", req.RunOnStartup, func(b taskConfigBinding) *bool { return b.onStartup })
+	bindBool("run_in_maintenance_window", req.RunInMaintenanceWindow, func(b taskConfigBinding) *bool { return b.inWindow })
 
 	if len(rejected) > 0 {
 		accepted := "no schedule fields"
@@ -447,27 +450,27 @@ func (h *SchedulerHandler) UpdateTaskConfig(c *gin.Context) {
 		return
 	}
 
-	// Fold before applying, and only once a write is actually going to land, so
-	// a rejected or empty request never rewrites config as a side effect.
+	// Only once a write is actually going to land, so a rejected or empty request
+	// never rewrites config as a side effect.
+	//
+	// The write is one call that returns an error: a refusal (the Facade turned
+	// the change down) or a failed save is reported, never answered with a 200.
+	// With a Facade installed the write is durable; with none it is live in
+	// memory only (HEAD's blob save is gone since F3-07).
 	if len(writes) > 0 {
-		config.Mutate(func(c *config.Config) {
-			if binding.foldLegacy != nil {
-				binding.foldLegacy(c)
+		err := config.MutateChecked(func(cfg *config.Config) {
+			b, _ := bindingForTask(name, cfg)
+			if b.foldLegacy != nil {
+				b.foldLegacy(cfg)
 			}
 			for _, write := range writes {
-				write()
+				write(b)
 			}
 		})
-	}
-
-	// Persist to database. A failure here means the change is live in memory but
-	// will not survive a restart, which is not "task config updated" — report it
-	// rather than logging a warning under a 200.
-	if h.store != nil {
-		if err := config.SaveConfigToDatabase(h.store); err != nil {
+		if err != nil {
 			slog.Error("Failed to save task config", "task", name, "err", err)
 			httputil.RespondWithInternalError(c, fmt.Sprintf(
-				"task %q config applied in memory but could not be persisted: %v", name, err))
+				"task %q config was not saved: %v", name, err))
 			return
 		}
 	}
@@ -535,16 +538,13 @@ func (h *SchedulerHandler) UpdateMaintenanceWindowConfig(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "window_start and window_end must be 0-23")
 		return
 	}
-	config.Mutate(func(c *config.Config) {
+	if err := config.MutateChecked(func(c *config.Config) {
 		c.Maintenance.Enabled = req.Enabled
 		c.Maintenance.WindowStart = req.WindowStart
 		c.Maintenance.WindowEnd = req.WindowEnd
-	})
-	if h.store != nil {
-		if err := config.SaveConfigToDatabase(h.store); err != nil {
-			httputil.InternalError(c, "failed to save maintenance window config", err)
-			return
-		}
+	}); err != nil {
+		httputil.InternalError(c, "failed to save maintenance window config", err)
+		return
 	}
 	httputil.RespondWithOK(c, gin.H{"ok": true})
 }

@@ -1,7 +1,7 @@
 // file: internal/server/reach_pin_behaviour_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 5d0c2b8e-9b1f-4c63-a7e4-2f8d6a1c3b90
-// last-edited: 2026-11-15
+// last-edited: 2026-11-19
 
 package server
 
@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -72,8 +73,6 @@ const reachMergeJournalID = "merge-batman-0001"
 // stages and the global middleware.
 var reachSharedChain = []string{
 	"server.perimeterSeen.func*",
-	"middleware.BasicAuth.func*",
-	"server.perimeterGatePassed.func*",
 	"server.captureRawResponseController.func*",
 	"server.legacyMatchCheck.func*",
 	"server.(*Server).setupRoutes.func*",
@@ -228,6 +227,10 @@ func TestReachPin_ChainsAreTheOnesTheOraclePins(t *testing.T) {
 		t.Run(rt.name, func(t *testing.T) {
 			got, ok := chains[rt.method+" "+rt.pattern]
 			require.True(t, ok, "the router has no route %s %s", rt.method, rt.pattern)
+			// The test binary installs HEAD's frozen Basic gate behind a hook
+			// (head_basic_gate_test.go); production's engine has no gate link,
+			// stage 8 being core's, and that is the chain pinned here.
+			got = slices.DeleteFunc(slices.Clone(got), func(n string) bool { return n == "server.headBasicGateHook" })
 			assert.Equal(t, rt.chain, got,
 				"the ordered middleware and handler chain of %s %s changed; the oracle's pin (reachHandlerAdmin) rests on it", rt.method, rt.pattern)
 		})
