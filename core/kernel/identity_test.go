@@ -259,8 +259,9 @@ func TestIdentity_BuildsOverInMemoryStores(t *testing.T) {
 }
 
 // TestIdentity_RefusesMissingInputs: each required input missing refuses the
-// build, by name, before anything is built. A typed nil store would pass
-// rbac's and auth's own interface nil checks, so the kernel checks them.
+// build, by name, before anything is built. The stores and the audit store
+// are concrete pointers: a nil one would pass rbac's and auth's interface
+// nil checks as a non-nil interface, so the kernel checks them itself.
 func TestIdentity_RefusesMissingInputs(t *testing.T) {
 	f := newIDFx(t)
 	for name, drop := range map[string]func(*identityInputs){
