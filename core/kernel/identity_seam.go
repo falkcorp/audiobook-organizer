@@ -7,6 +7,7 @@ package kernel
 
 import (
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -27,4 +28,23 @@ func (k *Kernel) IdentityServices() (a *auth.Service, r *rbac.Service, ok bool) 
 		return nil, nil, false
 	}
 	return k.ident.svc.Auth, k.ident.svc.RBAC, true
+}
+
+// BackupHealth is the registry's state of core.backup (its restore and journal
+// tokens), for the crash-matrix cell that compares what two restore paths leave
+// behind (F4-08 B10j): the registry is the one place those tokens are computed,
+// and a posture token never reaches an unauthenticated surface, so there is no
+// HTTP call a test can make without minting an administrator. Like
+// IdentityServices it is reachable only through bootseam.Seams.Built, and ok is
+// false for a kernel with no identity boot or no core.backup component.
+func (k *Kernel) BackupHealth() (health.ComponentState, bool) {
+	if k.ident == nil || k.healthReg == nil {
+		return health.ComponentState{}, false
+	}
+	for _, cs := range k.healthReg.Snapshot().Components {
+		if cs.ID == componentBackup {
+			return cs, true
+		}
+	}
+	return health.ComponentState{}, false
 }
