@@ -89,6 +89,10 @@ type identityInputs struct {
 	Settings func() auth.Settings
 	// OnRoleChange publishes core.rbac.changed.v1 (rbac.Deps.OnChange).
 	OnRoleChange func(generation uint64)
+	// OnInvalidated publishes core.principal.invalidated.v1
+	// (auth.Deps.OnInvalidated, publishPrincipalInvalidated); nil publishes
+	// nothing.
+	OnInvalidated func(ctx context.Context, userID, credentialID, reason string)
 	// Client, Reach and StateFiles are auth.Deps' (httpapi's resolver, the
 	// listeners' reach, the labelled state filesystem).
 	Client     func(*http.Request) auth.ClientInfo
@@ -168,6 +172,8 @@ func buildIdentity(ctx context.Context, in identityInputs) (identityServices, er
 		StateFiles:  in.StateFiles,
 		Client:      in.Client,
 		Reach:       in.Reach,
+
+		OnInvalidated: in.OnInvalidated,
 	})
 	if err != nil {
 		return identityServices{}, fmt.Errorf("kernel: identity: auth: %w", err)

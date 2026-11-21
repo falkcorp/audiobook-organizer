@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -196,6 +197,12 @@ type Config struct {
 	// backup archives and of its revocation journal's file name and header
 	// (<prefix>revocations.journal). "" is <AppID>_.
 	ArchivePrefix string
+	// AuthOptions and Authenticators are app.Options.Auth and
+	// app.Options.Authenticators, read only by the identity boot (P5 builds the
+	// auth service with them; P7 hands it each enabled module's Registrar.
+	// AuthMethod specs).
+	AuthOptions    auth.Options
+	Authenticators []auth.Extension
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
@@ -300,6 +307,9 @@ type Kernel struct {
 	// ident is the identity boot's state (identity_boot.go): nil unless the app
 	// declared Config.IdentityBoot and the boot got to P4b.
 	ident *identityBoot
+	// events is the App's one events bus (events.go), built at P5 for an app
+	// that declared the identity flip; nil otherwise.
+	events *kernelEvents
 	// cfgBoot is the layered config store: built at P0, loaded at P3, bound to
 	// the DB layer at P4b and attached at P4d. nil for Describe, which does no
 	// I/O and so has no boot.
@@ -619,12 +629,14 @@ func (k *Kernel) register(ctx context.Context) error {
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
 			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
 			Config: k.configAccess(e.man)}
+		k.applyIdentityDeps(&deps, id)
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,
 			Deps:          deps,
 			HTTP:          k.router.ModuleGroup(string(id)),
 			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
 			Settings:      declaredSettings(e.man, k.settingHandles),
+			Compat:        k.compatFor(id),
 			// Err is read once, below: a call after Close (from a goroutine
 			// Register started, against 06 §6.4.1) would otherwise vanish.
 			AfterClose: func(p module.Problem) {
