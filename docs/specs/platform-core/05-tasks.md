@@ -2241,7 +2241,8 @@ the `dispatch_wait` gauge, the longest wait per `def_id`, `reason` and `trigger`
 blocking run's ID is on the view only, never a metric label, and only for a caller who may view the blocker's kind (the
 same `View` rule `Get` and `Runs` apply to a run, checked against the blocker's definition); a caller who may not still
 sees the reason and the start of the wait, and the realtime stream, which cannot ask, never carries `blocked_by`. Which runs are deferred, the reasons, and the
-counter are unchanged.
+counter's once-per-run-and-reason rule are unchanged, except that a run that went terminal while a pass held it as a
+candidate is no longer counted or recorded by that pass (the counter used to count a canceled run a second time).
 The two histograms default to HEAD's bucket lists (`0.1 … 86400`, `views.go:42`; `1 … 86400`,
 `views.go:58`), declared as plain numbers through `Scope.View`, so `le` values do not change;
 `ref_lock_wait` takes 05-metrics' default for a core histogram.

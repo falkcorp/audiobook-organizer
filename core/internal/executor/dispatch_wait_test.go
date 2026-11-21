@@ -8,13 +8,13 @@ package executor
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/cockroachdb/pebble/v2/vfs"
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/falkcorp/mediacore/metrics"
@@ -408,11 +408,15 @@ func TestDispatchWait_ConcurrentDeferralsReadersAndCancels(t *testing.T) {
 	})
 	wg.Wait()
 
-	// Cancel every third waiter while the readers run.
+	// Cancel every third waiter while the readers run, once every run has been
+	// counted (each is deferred once, by the write-set gate).
 	canceled := map[tasks.RunID]bool{}
 	mu.Lock()
 	all := append([]tasks.RunID(nil), ids...)
 	mu.Unlock()
+	eventually(t, "every run to be counted once", func() bool {
+		return deferredCount(t, p, deferWriteSet) == float64(len(all))
+	})
 	for i, id := range all {
 		if i%3 == 0 {
 			if err := h.x.Cancel(context.Background(), id); err != nil {
@@ -444,12 +448,11 @@ func TestDispatchWait_ConcurrentDeferralsReadersAndCancels(t *testing.T) {
 		}
 		return len(w) == survivors
 	})
-	// Every survivor was counted at least once. No upper bound: a pass that
-	// had already read a run when Cancel finished it defers it once more
-	// (deferRun re-adds the entry the terminal move deleted), which is how the
-	// counter has always behaved and is not this slice's to change.
-	if n := deferredCount(t, p, deferWriteSet); n < float64(survivors) || n != math.Trunc(n) {
-		t.Errorf("dispatch_deferred{reason=writeset} = %v, want at least %d", n, survivors)
+	// Exactly one count per run: a Cancel while a pass holds the run as a
+	// candidate must not make that pass count it again (deferRun refuses a run
+	// that went terminal since the pass read the queue).
+	if n := deferredCount(t, p, deferWriteSet); n != float64(len(all)) {
+		t.Errorf("dispatch_deferred{reason=writeset} = %v, want %d: one per run, canceled or not", n, len(all))
 	}
 	if err := h.x.Cancel(context.Background(), holder); err != nil {
 		t.Fatal(err)
@@ -648,5 +651,87 @@ func TestDispatchWait_GaugeIsTheLongestWaitOfTheKind(t *testing.T) {
 		if len(ss) != 1 || ss[0].seconds < oldest || ss[0].seconds > oldest+60 {
 			t.Fatalf("gather %d: samples %+v, want one of about %v s, the oldest wait", i, ss, oldest)
 		}
+	}
+}
+
+// TestDeferRun_ACanceledCandidateIsNotCountedAgain: a pass reads the queue, a
+// Cancel finishes one of the runs it read, and the pass then reaches that run's
+// gate. The terminal move deleted the run's dedupe entry, so recording the stale
+// candidate would count a run that is gone a second time and leave an entry
+// nothing deletes. The dispatcher is not running, so the interleaving is fixed:
+// beginPass, read, Cancel, defer.
+func TestDeferRun_ACanceledCandidateIsNotCountedAgain(t *testing.T) {
+	p, err := metrics.New(context.Background(), metrics.Options{AppID: "gotham", MetricNamespace: "gotham", Prometheus: true})
+	if err != nil {
+		t.Fatalf("metrics.New: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Shutdown(context.Background()) })
+	sc, err := p.Core("ops", Attributes()...)
+	if err != nil {
+		t.Fatalf("core ops scope: %v", err)
+	}
+	fs := vfs.NewCrashableMem()
+	stores, ks := bootStores(t, fs)
+	h := onStores(t, fs, stores, ks, []tasks.Definition{taskDef("gotham.forgery", okBody)}, func(o *Options) {
+		o.Metrics, o.InstrumentsOff = sc, false
+	}, false)
+
+	canceled := h.start("gotham.forgery", tasks.StartRequest{Params: mustParams(t, "case-a")})
+	kept := h.start("gotham.forgery", tasks.StartRequest{Params: mustParams(t, "case-b")})
+	h.e.beginPass()
+	canceledRec, keptRec := h.get(canceled), h.get(kept)
+	if canceledRec.State != tasks.StateQueued || keptRec.State != tasks.StateQueued {
+		t.Fatalf("fixture: states %s and %s, want both queued", canceledRec.State, keptRec.State)
+	}
+	if err := h.x.Cancel(context.Background(), canceled); err != nil {
+		t.Fatal(err)
+	}
+	h.waitState(canceled, tasks.StateCanceled)
+
+	if h.e.deferRun(canceledRec, deferWriteSet) {
+		t.Error("deferRun recorded a run that was canceled since the pass read it")
+	}
+	if !h.e.deferRun(keptRec, deferWriteSet) {
+		t.Error("deferRun refused a run that is still queued")
+	}
+	if n := deferredCount(t, p, deferWriteSet); n != 1 {
+		t.Errorf("dispatch_deferred{reason=writeset} = %v, want 1 (the run still queued)", n)
+	}
+	h.e.mu.Lock()
+	_, entry := h.e.deferred[canceled]
+	h.e.mu.Unlock()
+	if entry {
+		t.Error("the canceled run left a dedupe entry that nothing deletes")
+	}
+
+	// The next pass reads the queue after the cancel, so it never sees the run,
+	// and the memory of it is dropped.
+	h.e.beginPass()
+	h.e.mu.Lock()
+	_, remembered := h.e.left[canceled]
+	h.e.mu.Unlock()
+	if remembered {
+		t.Error("the left set kept a run past the next pass")
+	}
+}
+
+// TestDispatchOnce_OpensAPassAndForgetsTheLeft: the dispatcher opens a pass on
+// every tick (the pass number advances), and a run that went terminal is
+// forgotten by a later pass, so the left set stays bounded by what ended during
+// one pass.
+func TestDispatchOnce_OpensAPassAndForgetsTheLeft(t *testing.T) {
+	h := newHarness(t, []tasks.Definition{taskDef("gotham.forgery", okBody)}, func(o *Options) {
+		o.Config = Config{DispatchTick: 5 * time.Millisecond, WatchdogInterval: time.Hour}
+	})
+	id := h.start("gotham.forgery", tasks.StartRequest{})
+	h.waitState(id, tasks.StateSucceeded)
+	passes := func() uint64 { h.e.mu.Lock(); defer h.e.mu.Unlock(); return h.e.pass }
+	before := passes()
+	eventually(t, "two more passes", func() bool { return passes() >= before+2 })
+	h.e.mu.Lock()
+	_, remembered := h.e.left[id]
+	h.e.mu.Unlock()
+	if remembered {
+		t.Error("a finished run is still in the left set two passes later")
 	}
 }
