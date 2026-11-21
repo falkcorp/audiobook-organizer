@@ -98,7 +98,7 @@ func TestRunDiagnosticsQuerySuccess(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -113,6 +113,7 @@ func TestRunDiagnosticsQuerySuccess(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
 		t.Fatalf("runDiagnosticsQuery failed: %v", err)
@@ -127,7 +128,7 @@ func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -135,6 +136,7 @@ func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
 		t.Fatalf("runDiagnosticsQuery failed: %v", err)
@@ -149,7 +151,7 @@ func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -170,6 +172,7 @@ func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
 		t.Fatalf("runDiagnosticsQuery failed: %v", err)
@@ -184,7 +187,7 @@ func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -199,6 +202,7 @@ func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runCleanupInvalidBooks(false, true); err != nil {
 		t.Fatalf("runCleanupInvalidBooks failed: %v", err)
@@ -213,7 +217,7 @@ func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -228,6 +232,7 @@ func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -255,7 +260,7 @@ func TestRunCleanupInvalidBooksDelete(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -270,6 +275,7 @@ func TestRunCleanupInvalidBooksDelete(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -292,7 +298,7 @@ func TestRunCleanupInvalidBooksDelete(t *testing.T) {
 func TestRunRawPebbleQuery(t *testing.T) {
 	isolateStateDir(t)
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -306,6 +312,7 @@ func TestRunRawPebbleQuery(t *testing.T) {
 	_ = store.Close()
 
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 	if err := runRawPebbleQuery(1, "book:"); err != nil {
 		t.Fatalf("runRawPebbleQuery failed: %v", err)
 	}
@@ -354,6 +361,7 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 	origPath := config.AppConfig.DatabasePath
 	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
 	config.AppConfig.DatabasePath = dbPath
+	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 	if err := runRawPebbleQuery(1, "preference:"); err != nil {
 		t.Fatalf("runRawPebbleQuery on a store the guard refuses: %v", err)
 	}
@@ -396,6 +404,7 @@ func TestRawPebbleQuery_OpensReadOnly(t *testing.T) {
 	origPath := config.AppConfig.DatabasePath
 	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
 	config.AppConfig.DatabasePath = dbPath
+	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 
 	before := storeFileNames(t, dbPath)
 	if err := runRawPebbleQuery(1, "book:"); err != nil {
@@ -416,6 +425,7 @@ func TestRawPebbleQuery_OpensReadOnly(t *testing.T) {
 
 	missing := filepath.Join(t.TempDir(), "joker.pebble")
 	config.AppConfig.DatabasePath = missing
+	t.Setenv("ABO_CORE_STORAGE_PATH", missing)
 	if err := runRawPebbleQuery(1, "book:"); err == nil {
 		t.Fatal("runRawPebbleQuery where there is no store succeeded")
 	}
@@ -439,11 +449,14 @@ func TestReservedPrefs_ChangesRunOnlyAsTheOwner(t *testing.T) {
 	if owner, ok, err := storage.StateDirOwner(vfs.Default, root); err != nil || !ok || owner != 0 {
 		t.Skipf("the filesystem root is not root's here (uid %d, %v, %v)", owner, ok, err)
 	}
+	// The store is started under a state directory this process can write (the
+	// boot opens its log file there); the root-owned one is named afterwards.
+	isolateStateDir(t)
+	dbPath := filepath.Join(t.TempDir(), "gcpd.pebble")
+	seedStarted(t, dbPath)
 	t.Setenv(config.SecureStateDirEnv, root)
 	config.ResetStateDirForTest()
 	t.Cleanup(config.ResetStateDirForTest)
-	dbPath := filepath.Join(t.TempDir(), "gcpd.pebble")
-	seedStarted(t, dbPath)
 	rowsBefore, _, _, err := database.ListReservedPreferences(dbPath)
 	if err != nil || len(rowsBefore) == 0 {
 		t.Fatalf("premise: the seeded store's reserved rows = %v, %v", rowsBefore, err)
@@ -492,6 +505,7 @@ func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
 	origPath := config.AppConfig.DatabasePath
 	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
 	config.AppConfig.DatabasePath = dbPath
+	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 	if err := runRawPebbleQuery(1, "book:"); err != nil {
 		t.Fatalf("runRawPebbleQuery: %v", err)
 	}
@@ -650,6 +664,7 @@ func TestRunReservedPrefs_ClosedStdinAsksForYes(t *testing.T) {
 }
 
 func TestExecuteHelp(t *testing.T) {
+	restoreRootFlags(t)
 	tempDir := t.TempDir()
 
 	origCfg := cfgFile
@@ -730,6 +745,7 @@ func TestEnsureDiagnosticsStorePebble(t *testing.T) {
 	tempDir := t.TempDir()
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	// The offline open never creates a store: an empty directory is a
 	// store the service has not started yet.
@@ -755,7 +771,7 @@ func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -770,6 +786,7 @@ func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	// Test force mode (no prompt)
 	if err := runCleanupInvalidBooks(true, true); err != nil {
@@ -785,7 +802,7 @@ func TestRunDiagnosticsQueryPebble(t *testing.T) {
 	}()
 
 	tempDir := t.TempDir()
-	store, err := database.NewPebbleStore(tempDir)
+	store, err := startedStore(t, tempDir)
 	if err != nil {
 		t.Fatalf("failed to create pebble store: %v", err)
 	}
@@ -800,6 +817,7 @@ func TestRunDiagnosticsQueryPebble(t *testing.T) {
 
 	config.AppConfig.DatabaseType = "pebble"
 	config.AppConfig.DatabasePath = tempDir
+	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
 		t.Fatalf("runDiagnosticsQuery with pebble failed: %v", err)

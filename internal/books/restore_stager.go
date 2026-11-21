@@ -37,7 +37,7 @@ func (s restoreStager) StageRestore(ctx context.Context, backupDir, filename str
 		StateDir: s.stateDir, DBPath: s.dbPath,
 		BuildID: s.buildID, InstallID: s.installID, RequestedBy: requestedBy,
 		LegacySuffixes: legacySidecarSuffixes(),
-		VerifyStore:    database.VerifyStoreOpens,
+		VerifyStore:    database.VerifyStoreOpensWith(StandaloneOptions(database.StandaloneOptions{})),
 		Probe:          s.probe,
 		// Once every check passed, before the intent: first the live HNSW
 		// store is marked diverged, so this run's stop (the restart that

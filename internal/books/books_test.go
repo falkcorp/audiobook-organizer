@@ -63,15 +63,18 @@ func withConfig(t *testing.T, c config.Config) {
 	orig := config.AppConfig
 	config.AppConfig = c
 	t.Cleanup(func() { config.AppConfig = orig })
+	// Module() reads the ABS surface from the environment, as the manifest is
+	// read before any store opens: the fixture's setting is that environment.
+	t.Setenv(absEnabledEnv, strconv.FormatBool(c.ABSAPIEnabled))
 }
 
 // initConfigForTest runs config.InitConfig as serve does and puts back what
 // it changes for the whole process: config.AppConfig (withConfig) and the
 // process-wide viper. InitConfig registers every shipped default and env
 // binding on viper and nothing undoes them, so without the restore every
-// later boot in the package has LoadConfigFromDatabase overwrite stored
-// settings with defaults (abs_api_enabled reads as set, to false, and Register
-// refuses with errABSFlagDrift). viper cannot be snapshotted, so restoring it
+// later boot in the package reads those defaults instead of the config the
+// test set (abs_api_enabled reads as set, to false, and Register can refuse
+// with errABSFlagDrift). viper cannot be snapshotted, so restoring it
 // means returning it to empty. The helper fails unless viper is empty when it
 // starts, which keeps the restore exact and catches the next test that leaks.
 func initConfigForTest(t *testing.T) {
@@ -502,6 +505,7 @@ func TestTelemetry_TracerFromEnv(t *testing.T) {
 	}
 	sandboxStateDir(t)
 	config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "books.pebble")
+	t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)
 	mod := Module()
 	opts, err := Options(mod, ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
 	if err != nil {

@@ -1,0 +1,6 @@
+# A test placeholder (an OPENAI_API_KEY stand-in in
+# internal/books/cutover_flip_test.go) that a later commit of this branch
+# replaced with a low-entropy value. History is not rewritten, so the old
+# commit stays scanned; this is not a real credential. A fingerprint names a
+# commit hash, so a re-cut of the branch changes it: update the hash then.
+091c657e762a4acf387d5006bf31bca621a10166:internal/books/cutover_flip_test.go:generic-api-key:247

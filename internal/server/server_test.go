@@ -1,7 +1,7 @@
 // file: internal/server/server_test.go
-// version: 2.16.6
+// version: 2.17.0
 // guid: b2c3d4e5-f6a7-8901-bcde-234567890abc
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // NOTE(fable5 T022): setupTestServer ported from NewSQLiteStore to NewPebbleStore.
 
@@ -53,6 +53,9 @@ import (
 // NewServer directly.
 func newTestServer(t testing.TB, store database.Store) *Server {
 	t.Helper()
+	// GET/PUT /api/v1/config answer over the installed config.Facade (F3-07
+	// e3): every route test that builds a server has one.
+	installServerConfigFacade(t)
 	s := NewServer(store)
 	t.Cleanup(s.releaseUnstarted)
 	attachTestMetrics(t, s)
@@ -669,7 +672,11 @@ func TestGetConfig(t *testing.T) {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
 	response = response["data"].(map[string]any)
-	assert.NotNil(t, response["config"])
+	assert.NotEmpty(t, response["keys"], "the body is the Facade's View: one entry per key")
+	assert.Contains(t, response, "generation")
+	assert.NotEmpty(t, response["naming_pattern_tokens"])
+	_, ok := configKey(response, "log_level")
+	assert.True(t, ok, "log_level is a key of the View")
 }
 
 // TestListBackups tests listing backups
@@ -1483,11 +1490,14 @@ func TestAddImportPathEmptyPath(t *testing.T) {
 }
 
 // TestUpdateConfig tests the config update endpoint
+//
+// Run as an admin session: root_dir and the naming patterns are admin keys, and
+// core's protection has no auth-off exemption, so an anonymous caller is refused
+// them (see TestUpdateConfigEndpoint).
 func TestUpdateConfig(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
+	f := setupCredGuardServer(t)
 
-	payload := map[string]any{
+	payload := map[string]any{"set": map[string]any{
 		"root_dir":              "/new/root",
 		"auto_organize":         true,
 		"scan_on_startup":       false,
@@ -1499,21 +1509,29 @@ func TestUpdateConfig(t *testing.T) {
 		// a pattern that is actually valid.
 		"file_naming_pattern": "{title} - {track:02d}",
 		"log_level":           "debug",
-	}
-	body, _ := json.Marshal(payload)
-
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
+	}}
+	w := f.do(t, f.sessionToken, http.MethodPut, "/api/v1/config", payload)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	resp = resp["data"].(map[string]any)
-	assert.Equal(t, "/new/root", resp["root_dir"])
-	assert.Equal(t, true, resp["auto_organize"])
+	assert.ElementsMatch(t, []any{"root_dir", "auto_organize", "scan_on_startup", "folder_naming_pattern", "file_naming_pattern", "log_level"}, resp["applied"])
+	root, ok := configKey(resp, "root_dir")
+	require.True(t, ok)
+	assert.Equal(t, "/new/root", root["value"])
+	auto, ok := configKey(resp, "auto_organize")
+	require.True(t, ok)
+	assert.Equal(t, true, auto["value"])
+	assert.True(t, config.Snapshot().AutoOrganize)
+
+	// A file pattern with no per-track placeholder is refused whole: 422 naming
+	// the key, and nothing of the request is stored.
+	w = f.do(t, f.sessionToken, http.MethodPut, "/api/v1/config", map[string]any{"set": map[string]any{
+		"file_naming_pattern": "{title}", "log_level": "warn"}})
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "file_naming_pattern")
+	assert.Equal(t, "debug", config.Snapshot().LogLevel, "all or nothing: the valid key beside the bad one is not stored")
 }
 
 // TestUpdateConfigRejectsDatabaseType tests that database_type changes are rejected
@@ -1521,9 +1539,9 @@ func TestUpdateConfigRejectsDatabaseType(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	payload := map[string]any{
+	payload := map[string]any{"set": map[string]any{
 		"database_type": "postgres",
-	}
+	}}
 	body, _ := json.Marshal(payload)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))

@@ -1,7 +1,7 @@
 // file: core/internal/httpmw/chain.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: 43e0ed35-4635-49ca-aaab-d5bfe2f6fa1b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package httpmw
 
@@ -173,9 +173,11 @@ type stage struct {
 }
 
 // outer is the chain around the router, outermost first: §4.2's table
-// without stage 8 (gin's in R1) and without the route stages 10-11.
-func (c *Chain) outer() []stage {
-	return []stage{
+// without the route stages 10-11. Stage 8, the Basic gate, is the app's
+// (httpapi.Router.Build hands it in as gate); without one the chain runs
+// 0-7 and 9.
+func (c *Chain) outer(gate func(http.Handler) http.Handler) []stage {
+	st := []stage{
 		{0, c.peer},
 		{1, c.requestID},
 		{2, c.telemetry},
@@ -184,8 +186,11 @@ func (c *Chain) outer() []stage {
 		{5, c.headers},
 		{6, c.cors},
 		{7, c.crossOrigin},
-		{9, c.compress},
 	}
+	if gate != nil {
+		st = append(st, stage{8, gate})
+	}
+	return append(st, stage{9, c.compress})
 }
 
 // route is the chain inside each route's wrapper.
@@ -200,7 +205,7 @@ func (c *Chain) route(spec RouteSpec) []stage {
 // the outer chain, then the route chain (TestChain_OrderGolden).
 func (c *Chain) Order() []int {
 	var out []int
-	for _, s := range c.outer() {
+	for _, s := range c.outer(nil) {
 		out = append(out, s.num)
 	}
 	for _, s := range c.route(RouteSpec{}) {
@@ -210,12 +215,18 @@ func (c *Chain) Order() []int {
 }
 
 // Outer wraps the router with the stages that run for every request.
-func (c *Chain) Outer(router http.Handler) http.Handler {
+func (c *Chain) Outer(router http.Handler) http.Handler { return c.OuterGated(router, nil) }
+
+// OuterGated is Outer with stage 8, the Basic gate, between stages 7 and 9:
+// a request it refuses has passed the peer, ID, telemetry, recovery,
+// access-log, header, CORS and cross-origin stages, and is answered before
+// stage 9 and the router. nil gate is Outer.
+func (c *Chain) OuterGated(router http.Handler, gate func(http.Handler) http.Handler) http.Handler {
 	h := router
 	if c.deps.Inner != nil {
 		h = c.deps.Inner(h)
 	}
-	h = c.compose(c.outer(), h)
+	h = c.compose(c.outer(gate), h)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.ServeHTTP(w, r.WithContext(withState(r.Context(), &State{start: time.Now()})))
 	})

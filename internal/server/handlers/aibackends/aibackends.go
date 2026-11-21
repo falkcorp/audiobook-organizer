@@ -315,11 +315,10 @@ func (h *Handler) EndpointsStatus(c *gin.Context) {
 	slots := aidispatch.DefaultSlots()
 	attribution := h.attribution
 
-	masked := config.MaskAIEndpoints(rows)
 	eps := make([]EndpointStatus, 0, len(rows))
-	for i, r := range rows {
+	for _, r := range rows {
 		st := EndpointStatus{
-			Endpoint:             masked[i],
+			Endpoint:             r,
 			UnknownCapabilities:  nonNil(r.UnknownCapabilities()),
 			InFlight:             slots.Depth(r.ID),
 			EffectiveConcurrency: aidispatch.EffectiveConcurrency(r.Concurrency),

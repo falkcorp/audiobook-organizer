@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: e72629cb-5107-4d3a-a859-c970b70f9c17
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -323,22 +323,38 @@ func (s *Server) ownerCredRoute() { _ = s.ownerGateWhenOwnerSet() }
 // (LegacyPrefixes, LegacyTopSegments, LegacySPAShared, LegacyRedirects).
 func booksMount(t *testing.T, f *credGuardFixture) (*httpapi.Router, http.Handler) {
 	t.Helper()
-	manifest, err := f.srv.LegacyManifest()
+	return mountBooks(t, f.srv)
+}
+
+// mountBooks is books' legacy mount over srv's engine, as books.Module
+// registers it: the manifest, the perimeter values and stage 8's inputs
+// (BasicGate, BasicExemptAssets), built into the kernel's root handler.
+func mountBooks(t *testing.T, srv *Server) (*httpapi.Router, http.Handler) {
+	t.Helper()
+	return mountBooksWith(t, srv, httpapi.Deps{})
+}
+
+// mountBooksWith is mountBooks with the router's dependencies, for a test
+// that reads what the stages log.
+func mountBooksWith(t *testing.T, srv *Server, deps httpapi.Deps) (*httpapi.Router, http.Handler) {
+	t.Helper()
+	manifest, err := srv.LegacyManifest()
 	require.NoError(t, err)
-	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
+	r := httpapi.NewRouter(httpapi.Options{}, deps)
 	r.CoreGroup()
 	for _, c := range LegacyPrefixes(config.AppConfig.ABSAPIEnabled) {
 		require.NoError(t, r.Claim("books", c))
 	}
 	r.AllowAuthMethods("books", absAuthMethod)
-	csp, report, build := f.srv.LegacyPerimeter()
+	csp, report, build := srv.LegacyPerimeter()
 	require.NoError(t, r.MountLegacy(httpapi.LegacyMount{
-		Owner: "books", Handler: f.srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
+		Owner: "books", Handler: srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
 		Routes:      slices.Values(manifest),
-		Redirects:   f.srv.LegacyRedirects(),
+		Redirects:   srv.LegacyRedirects(),
 		TopSegments: LegacyTopSegments(),
 		SPAShared:   LegacySPAShared(),
 		DefaultCSP:  csp, CSPReport: report, BuildID: build,
+		BasicGate: LegacyBasicGate(), BasicExemptAssets: LegacyBasicExemptAssets,
 	}))
 	h, err := r.Build()
 	require.NoError(t, err)
@@ -749,6 +765,44 @@ func TestOwnAuthRoutesGolden(t *testing.T) {
 		}
 	}
 	goldenRoutes(t, "own_auth_routes.golden", "b304ad2a-94d4-454f-84c4-4c6d6a4c6bae", lines)
+}
+
+// TestBasicGate_ExemptSetGolden is the reviewed set of what core's Basic gate
+// (stage 8) lets through unauthenticated over books' real manifest: HEAD's set
+// until F8 retires it. A route is exempt when its row is BasicExempt (the two
+// health probes) or OwnAuth (the ABS routes that run their own authentication);
+// the Vite-built static files are exempt by LegacyBasicExemptAssets on the "/"
+// owner. /ping, /status and /login stay gated: they are public to the app's own
+// auth but not to the gate. A route that becomes exempt, or stops being, changes
+// this file, which is the review.
+func TestBasicGate_ExemptSetGolden(t *testing.T) {
+	var lines []string
+	for _, abs := range absModes() {
+		lines = append(lines, "# "+absName(abs))
+		for _, lr := range legacyManifest(abs) {
+			switch {
+			case lr.BasicExempt:
+				lines = append(lines, lr.Method+" "+lr.GinPath+" basic-exempt")
+			case lr.OwnAuth:
+				lines = append(lines, lr.Method+" "+lr.GinPath+" own-auth")
+			}
+		}
+	}
+	lines = append(lines, "# static-asset rule on the / owner")
+	for _, path := range []string{
+		"/assets/index-abc.js", "/assets/logo.png", "/favicon.ico", "/app.js", "/style.css", "/mark.png", "/mark.svg", "/font.woff2",
+		"/", "/index.html", "/api/v1/books", "/ping", "/status", "/login", "/metrics", "/sw.js.map",
+	} {
+		lines = append(lines, fmt.Sprintf("%s %t", path, LegacyBasicExemptAssets(path)))
+	}
+	goldenRoutes(t, "basic_gate_exempt.golden", "5d0f7a3c-81b6-4e29-a4c5-9e2b7f1d6038", lines)
+	// The three routes the gate must keep gating, by name.
+	for _, lr := range legacyManifest(true) {
+		switch lr.Method + " " + lr.GinPath {
+		case "GET /ping", "GET /status", "POST /login":
+			assert.False(t, lr.BasicExempt || lr.OwnAuth, "%s %s is exempt from the Basic gate", lr.Method, lr.GinPath)
+		}
+	}
 }
 
 // TestLegacyManifest_DriftFailsBoot: a gin route with no row, and a row with

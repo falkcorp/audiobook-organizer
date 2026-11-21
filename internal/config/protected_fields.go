@@ -33,18 +33,17 @@ const (
 	FieldServerPath
 )
 
-// Protected reports whether a field of this class needs an interactive
-// session to change.
-func (c FieldClass) Protected() bool { return c != FieldUnprotected }
-
 type fieldRule struct {
 	Class FieldClass
 	Why   string
 }
 
-// configFieldRules is THE classification of config fields that the
-// interactive-session rule cares about. It is the only list: UpdateService
-// enforces it (ChangedProtectedFields), and protected_fields_test.go fails
+// configFieldRules is HEAD's classification of config fields that the
+// interactive-session rule cares about. Nothing enforces it since F3-07
+// deleted UpdateService (ChangedProtectedFields was its enforcer). With the
+// flip on, core config's protect:"..." struct tags (internal/books/config.go,
+// core/kernel/core_sections.go) carry the rule; with it off, no PUT path
+// checks these classes. protected_fields_test.go fails
 // when a field whose name looks like a path, an executable, a URL or a
 // sign-in setting exists in Config without an entry here.
 //
@@ -161,56 +160,11 @@ var configFieldRules = map[string]fieldRule{
 	"download_client":             {FieldUnprotected, "outbound endpoints"},
 }
 
-// ChangedProtectedFields returns, sorted, the protected fields whose value
-// differs between before and after. It compares the decoded structs, not the
-// request body, so it sees exactly what the decoder applied — whatever the
-// spelling or case of the keys that carried it (the 2026-10-07 review found
-// that a key-name check could be walked around with "OAuth_Default_Role",
-// which encoding/json still decodes onto oauth_default_role).
-func ChangedProtectedFields(before, after *Config) []string {
-	if before == nil || after == nil {
-		return nil
-	}
-	var changed []string
-	for path, rule := range configFieldRules {
-		if !rule.Class.Protected() {
-			continue
-		}
-		a, errA := projectField(reflect.ValueOf(*before), strings.Split(path, "."))
-		b, errB := projectField(reflect.ValueOf(*after), strings.Split(path, "."))
-		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
-			// A rule that no longer resolves is reported as changed: the
-			// check fails closed, and the completeness test names it.
-			changed = append(changed, path)
-		}
-	}
-	sort.Strings(changed)
-	return changed
-}
-
-// ChangedEnvOnlyFields lists the absEnvOnlySettings keys whose value differs
-// between before and after, sorted, each as "key (VARIABLE)".
-func ChangedEnvOnlyFields(before, after *Config) []string {
-	if before == nil || after == nil {
-		return nil
-	}
-	var changed []string
-	for key, envVar := range absEnvOnlySettings {
-		a, errA := projectField(reflect.ValueOf(*before), []string{key})
-		b, errB := projectField(reflect.ValueOf(*after), []string{key})
-		if errA != nil || errB != nil || !reflect.DeepEqual(a, b) {
-			changed = append(changed, key+" ("+envVar+")")
-		}
-	}
-	sort.Strings(changed)
-	return changed
-}
-
 // ownerTrustRootFields are the settings that decide WHO the owner is or how
 // the owner's identity is proven (auth.OwnerProofWhyNot). They are sign-in
 // settings too (configFieldRules), so an API key can never change them; on
 // top of that, once owner_email is set, only the owner may change them
-// (UpdateService; plan D15), whatever the caller's auth method and whether or
+// (plan D15; books/appconfig's owner trust-root rule), whatever the caller's auth method and whether or
 // not local auth is on. Without this a second admin signed in through
 // Access, or a stolen password session, could set owner_email to itself, or
 // point cf_access_* at a team it controls and mint the owner's JWT.
@@ -225,6 +179,17 @@ var ownerTrustRootFields = map[string]string{
 	"enable_auth":           "turns every other sign-in guard off",
 	"oauth_allowed_emails":  "which Access identities are admitted at all",
 }
+
+// IsOwnerTrustRootField reports whether name is one of the owner trust-root
+// settings, by HEAD's flat key.
+func IsOwnerTrustRootField(name string) bool {
+	_, ok := ownerTrustRootFields[name]
+	return ok
+}
+
+// OwnerTrustRootUnsetMessage is the refusal for an owner trust-root change
+// while no owner is configured.
+const OwnerTrustRootUnsetMessage = "No owner is configured, so who the owner is and how the owner signs in (owner_email, cf_access_team_domain, cf_access_aud, enable_auth, oauth_allowed_emails) can be set only on the server: set OWNER_EMAIL (and CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD) in the host environment or config file and restart"
 
 // ChangedOwnerTrustRoot returns the ownerTrustRootFields that differ between
 // before and after, sorted. Same comparison as ChangedProtectedFields.

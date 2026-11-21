@@ -1,7 +1,7 @@
 // file: core/kernel/dryrun_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 1a867e9f-773e-4516-bfdc-da0d56a19606
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -228,6 +228,32 @@ func TestDryRunRefusesAnUnknownID(t *testing.T) {
 	for _, id := range []string{"gcpd.case-files", "gcpd.rewrite", ""} {
 		if migs, err := dryRunList([]datamigrate.DataMigration{cutoverMigration(&cutoverHandles{})}, id, rw.ID); err != nil {
 			t.Errorf("--id %q = %v, %v; want accepted", id, migs, err)
+		}
+	}
+}
+
+// TestStorageOptions_CarriesFromRelease: Config.FromRelease reaches
+// storage.OpenOptions.FromRelease on every open (P2 and the offline opens
+// share storageOptions), which is where the checkpoint record's from_release
+// comes from.
+func TestStorageOptions_CarriesFromRelease(t *testing.T) {
+	for _, tag := range []string{"", "v0.232.0"} {
+		h := newSwapHost(t)
+		c := testConfig(t, gcpdMod(storage.ClaimReadWrite))
+		c.StoragePath, c.StateDir, c.FromRelease = h.db, h.state, tag
+		k, err := offlineKernel(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts, err := k.storageOptions(t.Context())
+		if err != nil {
+			t.Fatal(errors.Join(err, k.closeOffline(context.Background())))
+		}
+		if opts.FromRelease != tag {
+			t.Errorf("OpenOptions.FromRelease = %q, want %q", opts.FromRelease, tag)
+		}
+		if err := k.closeOffline(context.Background()); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

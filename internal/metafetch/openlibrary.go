@@ -28,6 +28,13 @@ type OpenLibraryService struct {
 	Mu        sync.Mutex
 	Importing map[string]bool
 
+	// foundStore is set when the service found a dump store already on disk at
+	// construction. The status endpoint reports the dumps as enabled for it, as the
+	// setting did when construction wrote it. It is a fact about this process, not
+	// a setting: writing it through config.Mutate would store openlibrary_dump_enabled
+	// permanently (as the process's own, fully privileged actor) behind the operator's back.
+	foundStore atomic.Bool
+
 	// olStore is the open store, or nil. Guarded by Mu, and unexported so that
 	// every write goes through setStoreLocked: a write from anywhere else would
 	// leave live (what lookups read) pointing at a different store. Code that
@@ -62,7 +69,7 @@ func GetOLDumpDir() string {
 }
 
 // NewOpenLibraryService creates a new service, optionally opening the existing store.
-// If an existing oldb directory is found, it auto-enables Open Library dumps in config.
+// If an existing oldb directory is found, the service reports the dumps as enabled (DumpsEnabled); it writes no setting.
 func NewOpenLibraryService() *OpenLibraryService {
 	svc := &OpenLibraryService{
 		Tracker:   openlibrary.NewDownloadTracker(),
@@ -85,6 +92,12 @@ func NewOpenLibraryService() *OpenLibraryService {
 	}
 
 	return svc
+}
+
+// DumpsEnabled reports whether Open Library dumps are in use: the setting, or a
+// store the service found on disk when it was built.
+func (s *OpenLibraryService) DumpsEnabled() bool {
+	return s.foundStore.Load() || config.Snapshot().OpenLibraryDumpEnabled
 }
 
 // NewOpenLibraryServiceWithStore returns a service that already holds store,

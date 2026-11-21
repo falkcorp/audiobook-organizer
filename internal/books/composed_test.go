@@ -1,7 +1,7 @@
 // file: internal/books/composed_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package books
 
@@ -132,9 +132,7 @@ func checkClaimViolations(t *testing.T, a *app.App, c *composed) {
 // bootComposed boots the composition with the ABS surface on or off; edit,
 // when set, adjusts the config before the store opens. pre, when set, runs
 // on books' store in Register, after core's migrations and before the
-// settings boot and the server (a stored settings blob, say). The settings
-// boot's loader and env sync are stubbed (stubSettingsLoad); a test of
-// either sets the seam back. Cleanup releases the unstarted server and the
+// settings boot and the server (a stored settings blob, say). Cleanup releases the unstarted server and the
 // store and puts the process defaults back.
 func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
 	t.Helper()
@@ -217,8 +215,25 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 		edit(&c)
 	}
 	withConfig(t, c)
+	// The store path is a layer now (core.storage.path), not the loaded
+	// config's database_path: name the one the fixture's config holds.
+	t.Setenv(storagePathEnv, c.DatabasePath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(c.DatabasePath), 0o700))
+	// The ABS signing secret is an operator-only secret (class o): its layer is
+	// the environment, not the loaded config the fixture also sets.
+	if c.ABSJWTSecret != "" {
+		t.Setenv("ABO_BOOKS_ABS_JWT_SECRET", c.ABSJWTSecret)
+	}
+	// Sign-in is core's auth mode (class k, fail-closed): a fixture whose
+	// config leaves auth off names it the way an operator does, in the
+	// environment. A fixture that turns it on leaves core's default (required).
+	if !c.EnableAuth {
+		t.Setenv("ABO_CORE_AUTH_MODE", "disabled")
+	}
+	if !c.BasicAuthEnabled {
+		t.Setenv("ABO_CORE_HTTP_BASIC_GATE_ENABLED", "false")
+	}
 	sandboxStateDirAt(t, stateDir)
-	stubSettingsLoad(t)
 	t.Cleanup(func() {
 		database.SetGlobalStore(nil)
 		scanner.SetStore(nil)
@@ -262,17 +277,6 @@ func sandboxStateDirAt(t *testing.T, dir string) string {
 	t.Setenv(config.SecureStateDirEnv, dir)
 	require.NoError(t, os.WriteFile(database.EncryptionKeyPath(dir), bytes.Repeat([]byte{9}, 32), 0o600))
 	return dir
-}
-
-// stubSettingsLoad stubs the settings boot's loader and env sync for the
-// test, which otherwise apply the process's viper state over the config the
-// test set. A test of the loader sets loadConfigFromDB back.
-func stubSettingsLoad(t *testing.T) {
-	t.Helper()
-	origLoad, origSync := loadConfigFromDB, syncConfigFromEnv
-	loadConfigFromDB = func(database.SettingsStore) error { return nil }
-	syncConfigFromEnv = func() {}
-	t.Cleanup(func() { loadConfigFromDB, syncConfigFromEnv = origLoad, origSync })
 }
 
 // runningApp is a composition whose App runs as serve runs it, with its
@@ -368,71 +372,6 @@ func (c *composed) serve(method, path string, body []byte) *httptest.ResponseRec
 	w := httptest.NewRecorder()
 	c.app.Handler().ServeHTTP(w, req)
 	return w
-}
-
-// configBlob is the stored config_blob, decoded by key.
-func configBlob(t *testing.T, store *database.PebbleStore) map[string]json.RawMessage {
-	t.Helper()
-	s, err := store.GetSetting("config_blob")
-	require.NoError(t, err)
-	require.NotNil(t, s, "no config_blob stored")
-	var m map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(s.Value), &m))
-	return m
-}
-
-// TestR1AppConfigFromBlob (06 §6.10; COR4-1, R4-6): in R1 a value set only in
-// the settings blob is effective after boot (in AppConfig, and in the
-// R1Values the kernel reads at start step 7), and a PUT /api/v1/config that
-// changes one field leaves every other blob field byte-identical.
-func TestR1AppConfigFromBlob(t *testing.T) {
-	defaults := config.Snapshot()
-	const rate, jsonMB = 37, 9
-	require.NotEqual(t, rate, defaults.APIRateLimitPerMinute)
-	require.NotEqual(t, jsonMB, defaults.JSONBodyLimitMB)
-
-	c := bootComposed(t, false, nil, func(store *database.PebbleStore) {
-		blob := fmt.Sprintf(`{"api_rate_limit_per_minute":%d,"json_body_limit_mb":%d}`, rate, jsonMB)
-		require.NoError(t, store.SetSetting("config_blob", blob, "json", false))
-		// The settings boot's loadConfigFromDB, which this harness stubs.
-		require.NoError(t, config.LoadConfigFromDatabase(store))
-	})
-	snap := config.Snapshot()
-	assert.Equal(t, rate, snap.APIRateLimitPerMinute, "blob-only value not effective in AppConfig")
-	assert.Equal(t, jsonMB, snap.JSONBodyLimitMB, "blob-only value not effective in AppConfig")
-	opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap})
-	require.NoError(t, err)
-	v := opts.R1Values()
-	assert.Equal(t, rate, v.RateLimitPerMinute, "R1Values ignores the blob")
-	assert.Equal(t, int64(jsonMB)<<20, v.JSONMaxBytes, "R1Values ignores the blob")
-
-	put := func(field string, value int) {
-		t.Helper()
-		w := c.serve(http.MethodPut, "/api/v1/config", []byte(fmt.Sprintf(`{%q:%d}`, field, value)))
-		require.Equal(t, http.StatusOK, w.Code, "PUT /api/v1/config: %s", w.Body.String())
-	}
-	put("concurrent_scans", 3)
-	first := configBlob(t, c.store)
-	assert.JSONEq(t, strconv.Itoa(rate), string(first["api_rate_limit_per_minute"]))
-	assert.Equal(t, strconv.Itoa(rate), string(first["api_rate_limit_per_minute"]), "a blob-only field changed bytes")
-	assert.Equal(t, strconv.Itoa(jsonMB), string(first["json_body_limit_mb"]), "a blob-only field changed bytes")
-	assert.Equal(t, "3", string(first["concurrent_scans"]))
-
-	// The PUT wrote the whole config; a second one-field PUT must leave every
-	// other field of that full blob byte-identical.
-	put("concurrent_scans", 4)
-	second := configBlob(t, c.store)
-	require.Greater(t, len(first), 50, "the blob after a PUT is not the whole config")
-	for k, before := range first {
-		if k == "concurrent_scans" {
-			continue
-		}
-		if !bytes.Equal(before, second[k]) {
-			t.Errorf("blob field %s changed on a PUT of concurrent_scans: %s -> %s", k, before, second[k])
-		}
-	}
-	assert.Equal(t, "4", string(second["concurrent_scans"]))
-	assert.Len(t, second, len(first), "the PUT added or dropped blob fields")
 }
 
 // TestABOMetricsGatherNoDuplicate (05-metrics §6; F2-03 extends it): the
@@ -713,4 +652,36 @@ func TestOptions_ShutdownBudgetReachesR1Values(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, opts.R1Values().ShutdownBudget)
 	}
+}
+
+// ServeInputs.FromRelease (the pre-freeze tag main embeds) becomes
+// app.Options.FromRelease, which the pre-migration checkpoint records as
+// from_release (09 §9.2.1).
+func TestOptions_FromReleaseReachesCore(t *testing.T) {
+	c := bootComposed(t, false, nil, nil)
+	snap := config.Snapshot()
+	for _, want := range []string{"", "v0.232.0"} {
+		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, FromRelease: want})
+		require.NoError(t, err)
+		assert.Equal(t, want, opts.FromRelease)
+	}
+}
+
+// storageEnv is the core.storage.path layer a fixture that replaces
+// app.Options.Env must keep: the path the fixture's config holds, which
+// composedOptions put in the process environment for ResolveBootPaths.
+func storageEnv() string { return storagePathEnv + "=" + os.Getenv(storagePathEnv) }
+
+// absEnv is the ABS layers (flag and signing secret, both operator-only) a
+// fixture that replaces app.Options.Env keeps when its config serves the ABS
+// surface: the module reads the flag from the process environment, and the
+// config boot must see the same value or the boot refuses (errABSFlagDrift).
+func absEnv() []string {
+	var env []string
+	for _, k := range []string{absEnabledEnv, "ABO_BOOKS_ABS_JWT_SECRET"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }

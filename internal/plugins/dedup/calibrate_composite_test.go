@@ -259,8 +259,8 @@ func TestCalibrateCompositeSweepParallel(t *testing.T) {
 }
 
 // TestCalibrateCompositeApplyPersistsBands: with apply=true and both tunable
-// bands meeting target, the recommended BAND thresholds (1) survive a
-// SaveConfigToDatabase → LoadConfigFromDatabase round-trip, (2) are what the
+// bands meeting target, the recommended BAND thresholds (1) are written to the
+// config (config.MutateChecked), (2) are what the
 // LIVE engine scores with as soon as the op returns — no restart — AND (3) are
 // re-applied to the candidate rows ALREADY in the store, so a row banded under
 // the previous ladder does not keep that band (AutoResolveCertain reads the
@@ -304,8 +304,8 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 		t.Fatalf("seed stale candidate: %v", err)
 	}
 
-	// Restore global config after the test (UpdateConfig/LoadConfigFromDatabase
-	// mutate the process-wide AppConfig).
+	// Restore global config after the test (the apply's MutateChecked
+	// changes the process-wide AppConfig).
 	orig := config.Snapshot()
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { *c = orig }) })
 
@@ -354,10 +354,8 @@ func TestCalibrateCompositeApplyPersistsBands(t *testing.T) {
 		t.Errorf("apply must log that the stored candidates were re-banded (with counts), so an operator can see the rescore happened")
 	}
 
-	// (1) Reload from the persisted config blob and assert the bands round-tripped.
-	if err := config.LoadConfigFromDatabase(pebble); err != nil {
-		t.Fatalf("LoadConfigFromDatabase: %v", err)
-	}
+	// (1) The bands were written to the config (config.MutateChecked: the
+	// Facade's durable write when one is installed, memory here).
 	sig := config.Snapshot().Dedup.Signals
 	if sig.BandCertainMin != recCertain {
 		t.Errorf("persisted band_certain_min = %v, want %v", sig.BandCertainMin, recCertain)

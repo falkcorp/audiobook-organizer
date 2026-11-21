@@ -1,7 +1,7 @@
 // file: core/integrations/env_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 08e48a33-e0c4-4f6d-8167-db3c1f261851
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package integrations_test
 
@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -139,7 +140,7 @@ func newEnv(t testing.TB) *env {
 	}
 	t.Cleanup(func() { _ = root.Close() })
 	clk := &clock{t: time.Date(2039, 4, 1, 22, 0, 0, 0, time.UTC)}
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: keyspace(t, db, secretsOwner), AppID: "gotham", Now: clk.now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: keyspace(t, db, secretsOwner), AppID: "gotham", Now: clk.now})
 	if err != nil {
 		t.Fatalf("open secrets: %v", err)
 	}

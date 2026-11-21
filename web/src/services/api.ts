@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.211.0
+// version: 2.214.0
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -11,6 +11,15 @@ import type { FilterOptions } from '../types';
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
 import { apiFetch } from '../utils/apiFetch';
 import { followOperation } from '../utils/followOperation';
+import {
+  buildUpdateBody,
+  diffUpdate,
+  parseView,
+  type ConfigView,
+  type ParsedView,
+  type SecretStatus,
+  type SecretWrites,
+} from './configView';
 import { isSettled } from '../generated/ops';
 import type { OperationV2Status } from '../generated/ops';
 import type {
@@ -863,10 +872,20 @@ export interface MetadataSource {
   enabled: boolean;
   priority: number;
   requires_auth: boolean;
-  credentials: {
+  /** Served with blank values (a key means one is saved); left out when a source has none. */
+  credentials?: {
     [key: string]: string;
   };
 }
+
+/**
+ * A metadata source as a save writes it. A credential is write-only: a
+ * non-empty string replaces the saved one, an empty string leaves it, null
+ * deletes it.
+ */
+export type MetadataSourceWrite = Omit<MetadataSource, 'credentials'> & {
+  credentials?: { [key: string]: string | null };
+};
 
 export interface EmbeddingConfig {
   enabled: boolean;
@@ -1013,8 +1032,6 @@ export interface AutoUpdateConfig {
   enabled: boolean;
   channel: string;
   check_minutes: number;
-  window_start: number;
-  window_end: number;
 }
 
 export interface ToolsConfig {
@@ -1046,22 +1063,30 @@ export interface Config {
   setup_complete?: boolean;
 
   /**
-   * Read-only, computed per request: the config keys the server's environment is
-   * currently forcing. A key listed here cannot be changed from the UI — the
-   * environment's value is re-applied over the saved one on every boot — so the
-   * corresponding control must render disabled rather than accept an edit that
-   * will be silently discarded. Never sent back on save.
+   * Read-only, computed per request: the config keys an operator layer (the
+   * environment, a flag, the config file) is currently forcing. A key listed
+   * here cannot be changed from the UI, so the corresponding control must
+   * render disabled rather than accept an edit the server will refuse. Never
+   * sent back on save.
    */
   env_locked?: string[];
   /**
    * Read-only, computed per request: the same keys as `env_locked`, mapped to
-   * WHAT is locking each one — an environment variable name (`DATABASE_PATH`)
-   * or a command-line flag (`--db`). Use it for the copy that tells the
+   * WHAT is locking each one, as the server names it: `env NAME`, `flag --x`
+   * or `file <name>`. Pass it to describeLock for the copy that tells the
    * operator where to go; a message blaming an environment variable when the
    * cause is a flag on the `ExecStart` line sends them to edit the wrong half
    * of the unit file. Never sent back on save.
    */
   setting_locks?: Record<string, string>;
+  /**
+   * Read-only: every secret setting (API keys, tokens, passwords) as the
+   * server's secret store reports it, by key name: set or not, from where, and
+   * a fingerprint. A secret's value never reaches the browser, and there is no
+   * masked placeholder either: show the status, and write a new value or clear
+   * it with `updateConfig({ secrets, clear_secrets })`. Never sent back on save.
+   */
+  secret_status?: Record<string, SecretStatus>;
   /**
    * Read-only: the "{token}" placeholders the server's path builder resolves in
    * folder/file naming patterns (organizer.NamingPatternTokens). The Settings
@@ -1090,11 +1115,8 @@ export interface Config {
 
   // AI parsing
   enable_ai_parsing: boolean;
-  openai_api_key: string;
-  // Optional acoustid.org client ID for the acoustid.lookup-online op.
-  // Masked when read back from the API; the user re-enters a new value
-  // to change it. Empty value falls through to the ACOUSTID_API_KEY env.
-  acoustid_api_key?: string;
+  // The OpenAI key and the optional acoustid.org client ID are secrets: see
+  // `secret_status` (keys `openai_api_key`, `acoustid_api_key`).
 
   // Performance
   concurrent_scans: number;
@@ -1115,10 +1137,6 @@ export interface Config {
   auto_rename_on_apply?: boolean;
   auto_write_tags_on_apply?: boolean;
   verify_after_write?: boolean;
-
-  // iTunes import
-  itunes_library_read_path?: string;
-  itunes_library_write_path?: string;
 
   // Sub-structs (CFG-1 nested fields)
   embedding?: EmbeddingConfig;
@@ -3318,10 +3336,65 @@ export async function startOrganize(
 }
 
 // Config
+//
+// The server serves settings as keys (see configView.ts). The Settings page
+// edits a nested `Config`, so getConfig folds the keys into one, and
+// updateConfig turns the page's edits back into the keys that changed. What
+// the last read or write said is kept as the baseline a save is diffed against:
+// a PUT names only keys whose value moved, because the server judges every
+// key it is sent (a locked or admin-only key is refused even when its value is
+// the one it already has).
+//
+// A baseline can go stale (another session saved), and a stale one would drop
+// an edit that happens to equal the old value, so a save re-reads the config
+// when the baseline is older than CONFIG_BASELINE_TTL_MS. A burst of edits
+// (one request per keystroke) shares one read.
+const CONFIG_BASELINE_TTL_MS = 10_000;
+let configBaseline: ParsedView | null = null;
+let configBaselineAt = 0;
+/** The Config the baseline stands for, returned when a save has nothing to send. */
+let configCurrent: Config | null = null;
+
+/** The nested config a parsed View stands for, with the read-only annotations. */
+function configFromView(view: ConfigView, parsed: ParsedView): Config {
+  return {
+    ...(parsed.config as unknown as Config),
+    env_locked: parsed.envLocked,
+    setting_locks: parsed.settingLocks,
+    secret_status: parsed.secretStatus,
+    ...(view.naming_pattern_tokens ? { naming_pattern_tokens: view.naming_pattern_tokens } : {}),
+  };
+}
+
+function adoptView(view: ConfigView): Config {
+  const parsed = parseView(view);
+  configBaseline = parsed;
+  configBaselineAt = Date.now();
+  configCurrent = configFromView(view, parsed);
+  return configCurrent;
+}
+
 /**
- * GET /config. `options` bounds the read: without a timeoutMs apiFetch sets no
- * deadline, so a caller that must not wait on a hung server (the review
- * lane's mode read) passes one.
+ * GET /config as the server serves it: one entry per key, with a class, the
+ * lock on it, and, for a secret, its status and never its value.
+ */
+export async function getConfigView(
+  options: { timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<ConfigView> {
+  const response = await apiFetch(`${API_BASE}/config`, options);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to fetch config');
+  }
+  const data = await response.json();
+  const view: ConfigView = data.data ?? data;
+  adoptView(view);
+  return view;
+}
+
+/**
+ * GET /config folded into the nested `Config` the Settings page edits. `options`
+ * bounds the read: without a timeoutMs apiFetch sets no deadline, so a caller
+ * that must not wait on a hung server (the review lane's mode read) passes one.
  */
 export async function getConfig(
   options: { timeoutMs?: number; signal?: AbortSignal } = {}
@@ -3331,20 +3404,55 @@ export async function getConfig(
     throw await buildApiError(response, 'Failed to fetch config');
   }
   const data = await response.json();
-  return data.data?.config ?? data.config;
+  return adoptView(data.data ?? data);
 }
 
-export async function updateConfig(updates: Partial<Config>): Promise<Config> {
+/** A section of the config where a save may name only the keys it changes. */
+type ConfigPatch<T> = {
+  [K in keyof T]?: NonNullable<T[K]> extends readonly unknown[]
+    ? T[K]
+    : NonNullable<T[K]> extends object
+      ? ConfigPatch<NonNullable<T[K]>>
+      : T[K];
+};
+
+/** What a page may change: the plain settings (a section by the keys in it that change), and the secrets by name. */
+export type ConfigUpdate = ConfigPatch<
+  Omit<
+    Config,
+    'env_locked' | 'setting_locks' | 'secret_status' | 'naming_pattern_tokens' | 'metadata_sources'
+  >
+> & { metadata_sources?: MetadataSourceWrite[] } & SecretWrites;
+
+/**
+ * PUT /config. Only the settings that differ from what the server last said
+ * are sent, with each secret write and clear, as one all-or-nothing request.
+ * Resolves to the config as the server now has it; a refusal throws an
+ * ApiError whose message names the keys.
+ */
+export async function updateConfig(updates: ConfigUpdate): Promise<Config> {
+  const { secrets, clear_secrets, ...plain } = updates;
+  if (!configBaseline || Date.now() - configBaselineAt > CONFIG_BASELINE_TTL_MS) {
+    await getConfigView();
+  }
+  const base = configBaseline as ParsedView;
+  const changed = diffUpdate(plain as Record<string, unknown>, base.known, base.baseline);
+  const body = buildUpdateBody(changed, { secrets, clear_secrets });
+  if (Object.keys(body.set).length === 0 && body.unset.length === 0 && configCurrent) {
+    // Nothing differs from what the server has: there is no write to make, and
+    // no request to spend on one.
+    return configCurrent;
+  }
   const response = await apiFetch(`${API_BASE}/config`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(updates),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     throw await buildApiError(response, 'Failed to update config');
   }
   const data = await response.json();
-  return data.data?.config ?? data.config;
+  return adoptView(data.data ?? data);
 }
 
 /** Result of the setup wizard's server-side OpenAI key check. */

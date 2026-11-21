@@ -163,7 +163,7 @@ func preflight(root string, kept func(path string) bool) (int, error) {
 // resetDirs is the library root and the Open Library dump directory the
 // service runs with, layered as the settings boot layers them: the stored
 // settings (the config blob, else HEAD's per-key rows) over the loaded
-// config (config.LoadConfigFromDatabase), then a root_dir from the
+// config (as HEAD's config.LoadConfigFromDatabase did), then a root_dir from the
 // environment or the config file over both (config.RootDirOverride); the
 // default dump directory is <root>/openlibrary-dumps. The stored settings are read through the
 // read-only storage the kernel hands Plan (module.ResetPlanStorage). When
@@ -212,7 +212,7 @@ type storedSetting struct {
 
 // storedDirs reads root_dir and openlibrary_dump_dir from the stored
 // settings: the config_blob row when there is one (a blob that does not
-// parse is an error, as LoadConfigFromDatabase refuses it), else HEAD's
+// parse is an error, as HEAD's LoadConfigFromDatabase refused it), else HEAD's
 // per-key rows. found says which the store set.
 func storedDirs(ctx context.Context, r storage.LegacyRange) (dirs resetArgs, found struct{ root, dump bool }, err error) {
 	if v, ok, err := settingRow(ctx, r, "config_blob"); err != nil {

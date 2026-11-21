@@ -1,7 +1,7 @@
 // file: core/secrets/keyring.go
-// version: 1.0.2
+// version: 1.1.0
 // guid: 019b2e61-2abe-476e-9ba0-b5fe3f908bb0
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -271,7 +271,7 @@ func cleanKeyFile(name string) (string, error) {
 func exportedRecordName(keyFile string) string { return keyFile + ".exported" }
 
 // readKeyring reads and decodes the keyring file name under root.
-func readKeyring(root *os.Root, name string) (*keyringFile, error) {
+func readKeyring(root StateFiles, name string) (*keyringFile, error) {
 	fh, err := root.Open(name)
 	if err != nil {
 		return nil, err
@@ -291,7 +291,7 @@ func readKeyring(root *os.Root, name string) (*keyringFile, error) {
 // when that fails. A path that is not a regular file, a symbolic link
 // included, is refused (Lstat): the keyring is never read through a link.
 // fixed reports a change, for the caller's log.
-func checkMode(root *os.Root, name string) (fixed bool, err error) {
+func checkMode(root StateFiles, name string) (fixed bool, err error) {
 	fi, err := root.Lstat(name)
 	if err != nil {
 		return false, err
@@ -302,7 +302,7 @@ func checkMode(root *os.Root, name string) (fixed bool, err error) {
 	if fi.Mode().Perm()&0o077 == 0 {
 		return false, nil
 	}
-	if err := root.Chmod(name, keyringMode); err != nil {
+	if err := root.Chmod(labelKeyring, name, keyringMode); err != nil {
 		return false, fmt.Errorf("%w: %s is mode %v and could not be set to 0600: %w", ErrKeyfileInsecure, name, fi.Mode().Perm(), err)
 	}
 	if fi, err = root.Lstat(name); err != nil {
@@ -315,7 +315,7 @@ func checkMode(root *os.Root, name string) (fixed bool, err error) {
 }
 
 // writeKeyring validates f and writes it to name under root atomically.
-func writeKeyring(root *os.Root, name string, f *keyringFile) error {
+func writeKeyring(root StateFiles, name string, f *keyringFile) error {
 	if err := f.validate(); err != nil {
 		return fmt.Errorf("secrets: refusing to write an invalid keyring: %w", err)
 	}
@@ -323,12 +323,12 @@ func writeKeyring(root *os.Root, name string, f *keyringFile) error {
 	if err != nil {
 		return fmt.Errorf("secrets: encode the keyring: %w", err)
 	}
-	return writeFileAtomic(root, name, append(data, '\n'))
+	return writeFileAtomic(root, labelKeyring, name, append(data, '\n'))
 }
 
 // writeKeyringNew writes f to name, which must not exist: a first or
 // regenerated keyring never replaces one that appeared meanwhile.
-func writeKeyringNew(root *os.Root, name string, f *keyringFile) error {
+func writeKeyringNew(root StateFiles, name string, f *keyringFile) error {
 	if err := f.validate(); err != nil {
 		return fmt.Errorf("secrets: refusing to write an invalid keyring: %w", err)
 	}
@@ -336,12 +336,13 @@ func writeKeyringNew(root *os.Root, name string, f *keyringFile) error {
 	if err != nil {
 		return fmt.Errorf("secrets: encode the keyring: %w", err)
 	}
-	return writeFile(root, name, append(data, '\n'), true)
+	return writeFile(root, labelKeyring, name, append(data, '\n'), true)
 }
 
-// writeFileAtomic writes data to name under root, replacing it.
-func writeFileAtomic(root *os.Root, name string, data []byte) error {
-	return writeFile(root, name, data, false)
+// writeFileAtomic writes data to name under root, replacing it; label is
+// every operation's crash-point label.
+func writeFileAtomic(root StateFiles, label, name string, data []byte) error {
+	return writeFile(root, label, name, data, false)
 }
 
 // writeFile writes data to name under root: a new temporary file created
@@ -349,11 +350,11 @@ func writeFileAtomic(root *os.Root, name string, data []byte) error {
 // hard-linked to name, which fails when name exists (no replace), then the
 // directory fsynced. A directory the path needs is created 0700. Only the
 // temporary file this call created is ever removed: when a step before the
-// rename fails, and after the link.
-func writeFile(root *os.Root, name string, data []byte, noReplace bool) (err error) {
+// rename fails, and after the link. Every operation carries label.
+func writeFile(root StateFiles, label, name string, data []byte, noReplace bool) (err error) {
 	dir := filepath.Dir(name)
 	if dir != "." {
-		if err := root.MkdirAll(dir, keyringDirMode); err != nil {
+		if err := root.MkdirAll(label, dir, keyringDirMode); err != nil {
 			return fmt.Errorf("secrets: create %s: %w", dir, err)
 		}
 	}
@@ -362,33 +363,26 @@ func writeFile(root *os.Root, name string, data []byte, noReplace bool) (err err
 		return err
 	}
 	tmp := name + ".tmp-" + suffix
-	fh, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, keyringMode)
-	if err != nil {
-		return fmt.Errorf("secrets: create %s: %w", tmp, err)
-	}
-	renamed := false
+	renamed, created := false, false
 	defer func() {
-		if !renamed {
-			if rerr := root.Remove(tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
+		if created && !renamed {
+			if rerr := root.Remove(label, tmp); rerr != nil && !errors.Is(rerr, fs.ErrNotExist) {
 				err = errors.Join(err, rerr)
 			}
 		}
 	}()
-	if _, err := fh.Write(data); err != nil {
-		return errors.Join(fmt.Errorf("secrets: write %s: %w", tmp, err), fh.Close())
+	if err := root.WriteNew(label, tmp, data, keyringMode); err != nil {
+		// Only an exclusive create that failed leaves no file of ours.
+		created = !errors.Is(err, fs.ErrExist)
+		return fmt.Errorf("secrets: write %s: %w", tmp, err)
 	}
-	if err := fh.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("secrets: fsync %s: %w", tmp, err), fh.Close())
-	}
-	if err := fh.Close(); err != nil {
-		return fmt.Errorf("secrets: close %s: %w", tmp, err)
-	}
+	created = true
 	if noReplace {
-		lerr := root.Link(tmp, name)
+		lerr := root.Link(label, tmp, name)
 		switch {
 		case lerr == nil:
 			// The defer removes the temporary name; name keeps the inode.
-			return syncDir(root, dir)
+			return syncDir(root, label, dir)
 		case errors.Is(lerr, fs.ErrExist):
 			return fmt.Errorf("secrets: create %s: it appeared meanwhile and is never replaced: %w", name, lerr)
 		}
@@ -398,23 +392,19 @@ func writeFile(root *os.Root, name string, data []byte, noReplace bool) (err err
 			return fmt.Errorf("secrets: create %s: it appeared meanwhile and is never replaced (link: %v)", name, lerr)
 		}
 	}
-	if err := root.Rename(tmp, name); err != nil {
+	if err := root.Rename(label, tmp, name); err != nil {
 		return fmt.Errorf("secrets: rename %s to %s: %w", tmp, name, err)
 	}
 	renamed = true
-	return syncDir(root, dir)
+	return syncDir(root, label, dir)
 }
 
 // syncDir fsyncs dir under root, so a rename in it is durable.
-func syncDir(root *os.Root, dir string) error {
-	d, err := root.Open(dir)
-	if err != nil {
-		return fmt.Errorf("secrets: open %s: %w", dir, err)
+func syncDir(root StateFiles, label, dir string) error {
+	if err := root.SyncDir(label, dir); err != nil {
+		return fmt.Errorf("secrets: fsync %s: %w", dir, err)
 	}
-	if err := d.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("secrets: fsync %s: %w", dir, err), d.Close())
-	}
-	return d.Close()
+	return nil
 }
 
 // randomHex is n random bytes in hex.

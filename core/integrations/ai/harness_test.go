@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
@@ -283,7 +284,7 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	t.Cleanup(func() { _ = root.Close() })
 	clk := newClock()
 	h := &harness{t: t, clk: clk, stager: &fakeStager{}, backends: map[integrations.InstanceID]ai.Backend{}}
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: keyspaceOf(t, db, secretsOwner), AppID: "gotham", Now: clk.Now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: keyspaceOf(t, db, secretsOwner), AppID: "gotham", Now: clk.Now})
 	if err != nil {
 		t.Fatalf("open secrets: %v", err)
 	}

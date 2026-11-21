@@ -40,14 +40,14 @@ func topCounts(t *RenameTable) (top int, byClass map[Class]int, twoTarget int) {
 }
 
 // TestRenameTable_Counts: the generated table's counts are the spec's
-// (05-config §1.12.3): 173 top-level rows, 134 k, 11 s, 9 i, 16 o, 3 x, and
+// (05-config §1.12.3): 173 top-level rows, 135 k, 11 s, 9 i, 16 o, 2 x, and
 // two rows with two targets (oauth_allowed_emails and maintenance).
 func TestRenameTable_Counts(t *testing.T) {
 	top, by, two := topCounts(Table())
 	if top != 173 {
 		t.Errorf("top-level rows = %d, want 173", top)
 	}
-	for c, want := range map[Class]int{ClassKey: 134, ClassSecret: 11, ClassInput: 9, ClassEnv: 16, ClassDropped: 3} {
+	for c, want := range map[Class]int{ClassKey: 135, ClassSecret: 11, ClassInput: 9, ClassEnv: 16, ClassDropped: 2} {
 		if by[c] != want {
 			t.Errorf("class %s rows = %d, want %d", c, by[c], want)
 		}

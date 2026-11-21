@@ -8,14 +8,14 @@
 // newTestSchedulerHandler/run helpers) from
 // internal/server/handlers/operations/handler_test.go when TODO.md's
 // scheduler-config item split these six routes off operations.Handler. The
-// store is exercised through databasemocks.MockStore (a superset of
-// database.SettingsStore, the handler's actual dependency); the scheduler dep
-// uses the generated handlersmocks.MockScheduler.
+// scheduler dep uses the generated handlersmocks.MockScheduler; config writes
+// go through config.MutateChecked, so the handler holds no store.
 
 package handlers_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -24,7 +24,6 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	databasemocks "github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
@@ -37,14 +36,13 @@ import (
 
 // --- helpers ---
 
-func newTestSchedulerHandler(t *testing.T) (*handlers.SchedulerHandler, *databasemocks.MockStore, *handlersmocks.MockScheduler) {
+func newTestSchedulerHandler(t *testing.T) (*handlers.SchedulerHandler, *handlersmocks.MockScheduler) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	store := databasemocks.NewMockStore(t)
 	sched := handlersmocks.NewMockScheduler(t)
 
-	h := handlers.NewSchedulerHandler(store, func() handlers.Scheduler { return sched })
-	return h, store, sched
+	h := handlers.NewSchedulerHandler(func() handlers.Scheduler { return sched })
+	return h, sched
 }
 
 // run wires a single route and serves one request, returning the recorder.
@@ -69,7 +67,7 @@ func run(method, routePath, reqPath string, body []byte, register func(r *gin.En
 // --- ListTasks ---
 
 func TestListTasks_Success(t *testing.T) {
-	h, _, sched := newTestSchedulerHandler(t)
+	h, sched := newTestSchedulerHandler(t)
 	sched.EXPECT().ListTasks().Return([]scheduler.TaskInfo{{Name: "dedup_refresh"}})
 	w := run(http.MethodGet, "/tasks", "/tasks", nil, func(r *gin.Engine) {
 		r.GET("/tasks", h.ListTasks)
@@ -79,7 +77,7 @@ func TestListTasks_Success(t *testing.T) {
 
 func TestListTasks_NilScheduler(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := handlers.NewSchedulerHandler(databasemocks.NewMockStore(t), nil)
+	h := handlers.NewSchedulerHandler(nil)
 	w := run(http.MethodGet, "/tasks", "/tasks", nil, func(r *gin.Engine) {
 		r.GET("/tasks", h.ListTasks)
 	})
@@ -89,7 +87,7 @@ func TestListTasks_NilScheduler(t *testing.T) {
 // --- RunTask ---
 
 func TestRunTask_UnknownName(t *testing.T) {
-	h, _, sched := newTestSchedulerHandler(t)
+	h, sched := newTestSchedulerHandler(t)
 	sched.EXPECT().RunTaskManual("bogus").Return(nil, errors.New("unknown task"))
 	w := run(http.MethodPost, "/tasks/:name/run", "/tasks/bogus/run", nil, func(r *gin.Engine) {
 		r.POST("/tasks/:name/run", h.RunTask)
@@ -98,7 +96,7 @@ func TestRunTask_UnknownName(t *testing.T) {
 }
 
 func TestRunTask_Success(t *testing.T) {
-	h, _, sched := newTestSchedulerHandler(t)
+	h, sched := newTestSchedulerHandler(t)
 	sched.EXPECT().RunTaskManual("dedup_refresh").Return(&database.Operation{ID: "op-1"}, nil)
 	w := run(http.MethodPost, "/tasks/:name/run", "/tasks/dedup_refresh/run", nil, func(r *gin.Engine) {
 		r.POST("/tasks/:name/run", h.RunTask)
@@ -109,11 +107,7 @@ func TestRunTask_Success(t *testing.T) {
 // --- UpdateTaskConfig ---
 
 func TestUpdateTaskConfig_KnownTask(t *testing.T) {
-	h, store, _ := newTestSchedulerHandler(t)
-	// config.SaveConfigToDatabase persists settings; it reads/writes via the
-	// SettingsStore subset of our store. Allow any setting writes.
-	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	store.EXPECT().GetSetting(mock.Anything).Return(nil, nil).Maybe()
+	h, _ := newTestSchedulerHandler(t)
 	enabled := true
 	body, _ := json.Marshal(map[string]any{"enabled": enabled})
 	w := run(http.MethodPut, "/tasks/:name", "/tasks/dedup_refresh", body, func(r *gin.Engine) {
@@ -123,7 +117,7 @@ func TestUpdateTaskConfig_KnownTask(t *testing.T) {
 }
 
 func TestUpdateTaskConfig_UnknownTask(t *testing.T) {
-	h, _, _ := newTestSchedulerHandler(t)
+	h, _ := newTestSchedulerHandler(t)
 	body, _ := json.Marshal(map[string]any{"enabled": true})
 	w := run(http.MethodPut, "/tasks/:name", "/tasks/not_a_task", body, func(r *gin.Engine) {
 		r.PUT("/tasks/:name", h.UpdateTaskConfig)
@@ -134,7 +128,7 @@ func TestUpdateTaskConfig_UnknownTask(t *testing.T) {
 // --- RunMaintenanceWindowNow ---
 
 func TestRunMaintenanceWindowNow_Triggers(t *testing.T) {
-	h, _, sched := newTestSchedulerHandler(t)
+	h, sched := newTestSchedulerHandler(t)
 	sched.EXPECT().RunMaintenanceWindow(mock.Anything).Return(nil)
 	w := run(http.MethodPost, "/maintenance-window/run", "/maintenance-window/run", nil, func(r *gin.Engine) {
 		r.POST("/maintenance-window/run", h.RunMaintenanceWindowNow)
@@ -145,7 +139,7 @@ func TestRunMaintenanceWindowNow_Triggers(t *testing.T) {
 // --- GetMaintenanceWindowStatus ---
 
 func TestGetMaintenanceWindowStatus_RunningState(t *testing.T) {
-	h, _, sched := newTestSchedulerHandler(t)
+	h, sched := newTestSchedulerHandler(t)
 	sched.EXPECT().GetLastMaintenanceRunDate().Return("2026-06-01")
 	sched.EXPECT().IsMaintenanceRunning().Return(true)
 	w := run(http.MethodGet, "/maintenance-window/status", "/maintenance-window/status", nil, func(r *gin.Engine) {
@@ -162,9 +156,7 @@ func TestGetMaintenanceWindowStatus_RunningState(t *testing.T) {
 // --- UpdateMaintenanceWindowConfig ---
 
 func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
-	h, store, _ := newTestSchedulerHandler(t)
-	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	store.EXPECT().GetSetting(mock.Anything).Return(nil, nil).Maybe()
+	h, _ := newTestSchedulerHandler(t)
 	body, _ := json.Marshal(map[string]any{"enabled": true, "window_start": 3, "window_end": 5})
 	w := run(http.MethodPut, "/maintenance-window/config", "/maintenance-window/config", body, func(r *gin.Engine) {
 		r.PUT("/maintenance-window/config", h.UpdateMaintenanceWindowConfig)
@@ -173,7 +165,7 @@ func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
 }
 
 func TestUpdateMaintenanceWindowConfig_InvalidHour(t *testing.T) {
-	h, _, _ := newTestSchedulerHandler(t)
+	h, _ := newTestSchedulerHandler(t)
 	body, _ := json.Marshal(map[string]any{"enabled": true, "window_start": 24, "window_end": 5})
 	w := run(http.MethodPut, "/maintenance-window/config", "/maintenance-window/config", body, func(r *gin.Engine) {
 		r.PUT("/maintenance-window/config", h.UpdateMaintenanceWindowConfig)
@@ -210,33 +202,26 @@ type taskIntField struct {
 func acceptedBoolFields() []taskBoolField {
 	return []taskBoolField{
 		{"dedup_refresh", "enabled", func() bool { return config.AppConfig.Scheduled.DedupRefresh.Enabled }},
-		{"dedup_refresh", "run_on_startup", func() bool { return config.AppConfig.Scheduled.DedupRefresh.OnStartup }},
 		{"dedup_refresh", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.DedupRefresh }},
 		{"author_split_scan", "enabled", func() bool { return config.AppConfig.Scheduled.AuthorSplit.Enabled }},
-		{"author_split_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.AuthorSplit.OnStartup }},
 		{"author_split_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.AuthorSplit }},
 		{"db_optimize", "enabled", func() bool { return config.AppConfig.Scheduled.DbOptimize.Enabled }},
-		{"db_optimize", "run_on_startup", func() bool { return config.AppConfig.Scheduled.DbOptimize.OnStartup }},
 		{"db_optimize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.DbOptimize }},
 		{"metadata_refresh", "enabled", func() bool { return config.AppConfig.Scheduled.MetadataRefresh.Enabled }},
-		{"metadata_refresh", "run_on_startup", func() bool { return config.AppConfig.Scheduled.MetadataRefresh.OnStartup }},
 		{"metadata_refresh", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.MetadataRefresh }},
 		{"series_prune", "enabled", func() bool { return config.AppConfig.Scheduled.SeriesPrune.Enabled }},
-		{"series_prune", "run_on_startup", func() bool { return config.AppConfig.Scheduled.SeriesPrune.OnStartup }},
 		{"series_prune", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.SeriesPrune }},
 		// library_scan's first three bound only after 2026-08-16; before that the
 		// case wired the maintenance-window flag alone and dropped the rest.
 		{"library_scan", "enabled", func() bool { return config.AppConfig.Scheduled.LibraryScan.Enabled }},
-		{"library_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.LibraryScan.OnStartup }},
+		{"library_scan", "run_on_startup", func() bool { return config.AppConfig.ScanOnStartup }},
 		{"library_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryScan }},
 		{"reconcile_scan", "enabled", func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled }},
-		{"reconcile_scan", "run_on_startup", func() bool { return config.AppConfig.Scheduled.Reconcile.OnStartup }},
 		{"reconcile_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.Reconcile }},
 		{"purge_deleted", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeDeleted }},
 		{"purge_old_logs", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeOldLogs }},
 		{"tombstone_cleanup", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.TombstoneCleanup }},
 		{"library_organize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryOrganize }},
-		{"metadata_upgrade", "run_on_startup", func() bool { return config.AppConfig.Scheduled.MetadataUpgrade.OnStartup }},
 	}
 }
 
@@ -274,6 +259,16 @@ func rejectedFields() []struct{ task, field string } {
 		{"library_organize", "run_on_startup"},
 		{"metadata_upgrade", "enabled"},
 		{"metadata_upgrade", "run_in_maintenance_window"},
+		// run on start is no longer a setting (core's schedule value has no
+		// such field), and the full sweep's due-check is fixed.
+		{"metadata_upgrade", "run_on_startup"},
+		{"dedup_refresh", "run_on_startup"},
+		{"author_split_scan", "run_on_startup"},
+		{"db_optimize", "run_on_startup"},
+		{"metadata_refresh", "run_on_startup"},
+		{"series_prune", "run_on_startup"},
+		{"reconcile_scan", "run_on_startup"},
+		{"library_scan_full", "interval_minutes"},
 		{"asin_backfill", "enabled"},
 		{"asin_backfill", "run_on_startup"},
 		{"asin_backfill", "run_in_maintenance_window"},
@@ -284,9 +279,7 @@ func rejectedFields() []struct{ task, field string } {
 // MaintenanceTab.tsx sends these — one field per request, never a merged body.
 func putTaskConfig(t *testing.T, task, field string, value any) *httptest.ResponseRecorder {
 	t.Helper()
-	h, store, _ := newTestSchedulerHandler(t)
-	store.EXPECT().SetSetting(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	store.EXPECT().GetSetting(mock.Anything).Return(nil, nil).Maybe()
+	h, _ := newTestSchedulerHandler(t)
 	body, err := json.Marshal(map[string]any{field: value})
 	require.NoError(t, err)
 	return run(http.MethodPut, "/tasks/:name", "/tasks/"+task, body, func(r *gin.Engine) {
@@ -418,11 +411,12 @@ func TestUpdateTaskConfig_SchedulerReportsTheAppliedValue(t *testing.T) {
 	}
 }
 
-// TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup pins the
-// specific masking this endpoint used to have. Before the fold, this PUT wrote
-// Scheduled.LibraryScan.Enabled=false, answered 200, and IsEnabled() stayed
-// true because it ORs in the legacy scan_on_startup key.
-func TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup(t *testing.T) {
+// TestUpdateTaskConfig_LibraryScanEnabledNamesScanOnStartup pins the masking
+// this endpoint used to have: a PUT wrote Scheduled.LibraryScan.Enabled=false,
+// answered 200, and IsEnabled() stayed true because it ORs in scan_on_startup.
+// The write is refused while that key is set, naming it, and works once the
+// startup run is off.
+func TestUpdateTaskConfig_LibraryScanEnabledNamesScanOnStartup(t *testing.T) {
 	restoreAppConfig(t)
 	config.AppConfig.ScanOnStartup = true
 	config.AppConfig.Scheduled.LibraryScan.Enabled = true
@@ -432,8 +426,14 @@ func TestUpdateTaskConfig_LibraryScanEnabledBeatsLegacyScanOnStartup(t *testing.
 	require.True(t, before.Enabled, "precondition: the task should start enabled")
 
 	w := putTaskConfig(t, "library_scan", "enabled", false)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
+	require.Contains(t, w.Body.String(), "scan_on_startup")
+	still, _ := schedulerView(t, "library_scan")
+	require.True(t, still.Enabled, "a refused write must change nothing")
 
+	require.Equal(t, http.StatusOK, putTaskConfig(t, "library_scan", "run_on_startup", false).Code)
+	w = putTaskConfig(t, "library_scan", "enabled", false)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	after, ok := schedulerView(t, "library_scan")
 	require.True(t, ok)
 	require.False(t, after.Enabled,
@@ -446,7 +446,6 @@ func TestUpdateTaskConfig_LibraryScanRunOnStartupOffKeepsTaskEnabled(t *testing.
 	restoreAppConfig(t)
 	config.AppConfig.ScanOnStartup = true
 	config.AppConfig.Scheduled.LibraryScan.Enabled = false
-	config.AppConfig.Scheduled.LibraryScan.OnStartup = false
 
 	w := putTaskConfig(t, "library_scan", "run_on_startup", false)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -498,4 +497,76 @@ func TestUpdateTaskConfig_MetadataUpgradeIntervalAloneSchedulesIt(t *testing.T) 
 	w = putTaskConfig(t, "metadata_upgrade", "interval_minutes", 0)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	require.False(t, view().Enabled, "interval 0 turns it off")
+}
+
+// --- the writers go through the Facade, and its refusal is an answer ---
+
+// refusingFacade is a config.Facade whose Mutate is answered as the Engine does for
+// a change it will not store.
+type refusingFacade struct {
+	err     error
+	mutated int
+}
+
+func (f *refusingFacade) Snapshot() config.Config { return config.Config{} }
+func (f *refusingFacade) Generation() uint64      { return 0 }
+func (f *refusingFacade) Mutate(fn func(*config.Config)) error {
+	f.mutated++
+	var c config.Config
+	fn(&c)
+	return f.err
+}
+func (f *refusingFacade) Locks() map[string]string { return nil }
+func (f *refusingFacade) View() config.View        { return config.View{Keys: []config.KeyView{}} }
+func (f *refusingFacade) Update(context.Context, config.Actor, config.Update) (config.UpdateResult, error) {
+	return config.UpdateResult{}, nil
+}
+
+// TestSchedulerWriters_FacadeRefusalIsNot200: with the Facade installed a refused
+// change answers 500 naming it (the handler holds no store, so nothing else can
+// be written). Before this, the handler
+// called Mutate (the refusal only logged), answered 200, and saved the whole flat
+// Config, which the projection fills with every drained secret in plaintext.
+func TestSchedulerWriters_FacadeRefusalIsNot200(t *testing.T) {
+	cases := []struct {
+		name, method, route, path, want string
+		body                            map[string]any
+		register                        func(h *handlers.SchedulerHandler) func(r *gin.Engine)
+	}{
+		{"task config", http.MethodPut, "/tasks/:name", "/tasks/dedup_refresh", "alfred refuses", map[string]any{"enabled": true},
+			func(h *handlers.SchedulerHandler) func(r *gin.Engine) {
+				return func(r *gin.Engine) { r.PUT("/tasks/:name", h.UpdateTaskConfig) }
+			}},
+		{"maintenance window", http.MethodPut, "/maintenance-window/config", "/maintenance-window/config", "failed to save maintenance window config",
+			map[string]any{"enabled": true, "window_start": 3, "window_end": 5},
+			func(h *handlers.SchedulerHandler) func(r *gin.Engine) {
+				return func(r *gin.Engine) { r.PUT("/maintenance-window/config", h.UpdateMaintenanceWindowConfig) }
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := newTestSchedulerHandler(t)
+			prev := config.Install(&refusingFacade{err: errors.New("config: alfred refuses")})
+			t.Cleanup(func() { config.Install(prev) })
+			body, _ := json.Marshal(c.body)
+			w := run(c.method, c.route, c.path, body, c.register(h))
+			assert.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), c.want)
+		})
+	}
+}
+
+// TestSchedulerWriters_FacadeAcceptedWriteTouchesNoBlob: an accepted change is 200
+// and the settings store is not written beside the Facade.
+func TestSchedulerWriters_FacadeAcceptedWriteTouchesNoBlob(t *testing.T) {
+	h, _ := newTestSchedulerHandler(t)
+	f := &refusingFacade{}
+	prev := config.Install(f)
+	t.Cleanup(func() { config.Install(prev) })
+	body, _ := json.Marshal(map[string]any{"enabled": true, "window_start": 3, "window_end": 5})
+	w := run(http.MethodPut, "/maintenance-window/config", "/maintenance-window/config", body, func(r *gin.Engine) {
+		r.PUT("/maintenance-window/config", h.UpdateMaintenanceWindowConfig)
+	})
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Equal(t, 1, f.mutated)
 }

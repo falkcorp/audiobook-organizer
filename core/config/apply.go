@@ -1,7 +1,7 @@
 // file: core/config/apply.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: dd5734d4-3c90-4ba8-9e83-8eb5778ff55a
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package config
 
@@ -62,7 +62,47 @@ func (s *Store) Apply(ctx context.Context, p Patch, a Actor) (Result, error) {
 		return Result{}, err
 	}
 	s.afterCommit(ctx, notes, &res)
+	if notes != nil {
+		s.fireCommit(res.Generation)
+	}
 	return res, nil
+}
+
+// OnCommit registers fn to run after every committed Apply, once, with the new
+// generation: after the store mutex is released, the hooks and the section
+// subscribers' wake-up, on Apply's goroutine, so fn may read the store and may
+// call Apply itself. It fires for neither a refused nor a no-op Apply, nor for
+// Attach or SetSecrets, which publish without moving the generation. It is
+// for one consumer that projects every key (the App's config Facade); a
+// section's own consumers use Handle.OnChange.
+func (s *Store) OnCommit(fn func(gen uint64)) {
+	if fn == nil {
+		return
+	}
+	s.commitMu.Lock()
+	s.onCommit = append(s.onCommit, fn)
+	s.commitMu.Unlock()
+}
+
+// fireCommit runs the OnCommit hooks in registration order.
+func (s *Store) fireCommit(gen uint64) {
+	s.commitMu.Lock()
+	fns := slices.Clone(s.onCommit)
+	s.commitMu.Unlock()
+	for _, fn := range fns {
+		s.runCommitHook(fn, gen)
+	}
+}
+
+// runCommitHook runs one hook; a panic is recovered and logged, so a faulty
+// hook neither fails the Apply that committed nor skips the hooks after it.
+func (s *Store) runCommitHook(fn func(gen uint64), gen uint64) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.log.Error("config: an OnCommit hook panicked; recovered", "generation", gen, "panic", fmt.Sprint(r))
+		}
+	}()
+	fn(gen)
 }
 
 // applyLocked is Apply under s.mu.

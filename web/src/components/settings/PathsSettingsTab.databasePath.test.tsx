@@ -1,7 +1,7 @@
 // file: web/src/components/settings/PathsSettingsTab.databasePath.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 2d94b7e1-6c38-4a05-9f72-8b1e3d05c4a7
-// last-edited: 2026-10-19
+// last-edited: 2026-11-19
 
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
@@ -70,7 +70,7 @@ describe('PathsSettingsTab — main database', () => {
   // pins the database with --db on its ExecStart line, so the field must refuse
   // the edit rather than accept a value the next boot discards.
   it('disables the field when the server pins the path', () => {
-    renderTab({ envLocked: ['database_path'], settingLocks: { database_path: '--db' } });
+    renderTab({ envLocked: ['database_path'], settingLocks: { database_path: 'flag --db' } });
     expect(dbField()).toBeDisabled();
   });
 
@@ -78,7 +78,7 @@ describe('PathsSettingsTab — main database', () => {
   // file. Naming the wrong one sends the operator to delete something that was
   // never the cause, and conclude the app is broken when it does not help.
   it('names the FLAG when a flag is what pins it', () => {
-    renderTab({ envLocked: ['database_path'], settingLocks: { database_path: '--db' } });
+    renderTab({ envLocked: ['database_path'], settingLocks: { database_path: 'flag --db' } });
 
     expect(screen.getAllByText(/--db/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/start-up command/i).length).toBeGreaterThan(0);
@@ -91,7 +91,7 @@ describe('PathsSettingsTab — main database', () => {
   it('names the ENVIRONMENT VARIABLE when that is what pins it', () => {
     renderTab({
       envLocked: ['database_path'],
-      settingLocks: { database_path: 'DATABASE_PATH' },
+      settingLocks: { database_path: 'env DATABASE_PATH' },
     });
 
     expect(screen.getAllByText(/DATABASE_PATH/).length).toBeGreaterThan(0);

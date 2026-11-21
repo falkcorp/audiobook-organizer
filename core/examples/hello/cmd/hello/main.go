@@ -1,7 +1,7 @@
 // file: core/examples/hello/cmd/hello/main.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 04a21a08-0f99-4dac-9ee2-0a0f6beac486
-// last-edited: 2026-11-07
+// last-edited: 2026-11-19
 
 // Command hello serves the hello example app (06 §6.12.5), or, as
 // `hello openapi [--out <file>]`, writes core's OpenAPI document (06 §6.4.5
@@ -55,6 +55,9 @@ func options(args []string) app.Options {
 		StateDir:    "hello-state",    // compiled default; HELLO_CORE_PATHS_STATE_DIR overrides it
 		UI:          hello.UIBundle(), // ui_embed.go (embed_frontend) or ui_nonembed.go
 		Args:        args,
+		// The config boot (F3-07): core config and the secret store are wired
+		// at P0, P3, P4b and P4d. Deleted with R1Values in F3-07's slice (e).
+		CoreConfigBoot: true,
 	}
 }
 
