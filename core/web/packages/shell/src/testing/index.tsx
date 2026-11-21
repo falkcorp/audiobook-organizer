@@ -25,6 +25,11 @@ import { CORE_VERSION } from '../version/coreVersion';
 
 export { FakeRealtime };
 
+/** Sets the page's app ID for a test that renders without renderInShell (default `test`, renderInShell's own). */
+export function setTestShellAppId(id = 'test'): void {
+  setShellAppId(id);
+}
+
 /** The /api/core/v1/modules payload (07 §7.5.1). */
 export type ModulesResponse = ServerModules;
 

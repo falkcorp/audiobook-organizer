@@ -9,7 +9,13 @@
 
 let appId: string | undefined;
 
-/** Sets the page's app ID. createShell and renderInShell call it; nothing else does. */
+/**
+ * Sets the page's app ID. createShell and renderInShell call it. An app that
+ * has not adopted createShell yet (ABO before F9-03) calls it once at startup,
+ * before its first render, with the same ID its manifest and the
+ * `mediacore-app` meta carry, so the keys it stores do not move when it adopts
+ * createShell.
+ */
 export function setShellAppId(id: string): void {
   appId = id;
 }

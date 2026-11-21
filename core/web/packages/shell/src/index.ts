@@ -10,7 +10,7 @@ export type * from './types';
 export type { AuthState, AuthUser, AuthStatus, TaskRunView, TaskRunState, ToastApi, ToastSeverity } from './contracts';
 export { createShell } from './app/createShell';
 export { defineModule } from './defineModule';
-export { storageKey } from './app/appId';
+export { setShellAppId, storageKey } from './app/appId';
 export { useApi } from './app/context';
 export { useAction, useAuth, usePermission } from './auth';
 export { useResync, useTopic } from './realtime';
