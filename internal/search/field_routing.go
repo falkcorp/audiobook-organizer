@@ -97,10 +97,8 @@ func QueryMayUsePerUserField(query string) bool {
 	if err != nil {
 		return true
 	}
-	for _, name := range FieldNames(ast) {
-		if IsPerUserField(name) {
-			return true
-		}
+	if slices.ContainsFunc(FieldNames(ast), IsPerUserField) {
+		return true
 	}
 	return perUserNameInText.MatchString(query)
 }
@@ -145,12 +143,7 @@ func QueryNamesPerUserTerm(query string) bool {
 	if err != nil {
 		return perUserTermInText.MatchString(query)
 	}
-	for _, name := range FieldNames(ast) {
-		if IsPerUserField(name) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(FieldNames(ast), IsPerUserField)
 }
 
 // The store cannot import this package (it imports the store), so the fail-closed

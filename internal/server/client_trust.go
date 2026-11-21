@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,12 +51,7 @@ func (p connectorPeers) contains(remoteAddr string) bool {
 	if !ok {
 		return false
 	}
-	for _, c := range p {
-		if c == a {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p, a)
 }
 
 // connectorReject is a TUNNEL_CONNECTOR_ADDRS entry parseConnectorPeers
@@ -92,7 +88,7 @@ const (
 // (rejected) and NOT trusted. Any other entry
 // is kept without a zone, which it cannot meaningfully carry.
 func parseConnectorPeers(csv string) (peers connectorPeers, rejected []connectorReject) {
-	for _, part := range strings.Split(csv, ",") {
+	for part := range strings.SplitSeq(csv, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -449,12 +445,7 @@ func remoteAddrIsLocal(addr string) bool {
 		return false
 	}
 	bare := a.WithZone("")
-	for _, own := range owned {
-		if own == bare {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(owned, bare)
 }
 
 // zoneInterfaceAddrs returns the addresses (zone dropped, unmapped) of the

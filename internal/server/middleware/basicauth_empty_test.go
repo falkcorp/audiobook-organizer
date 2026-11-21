@@ -51,8 +51,6 @@ func setBasicGateEnv(t *testing.T, v *string) {
 	}
 }
 
-func strPtr(s string) *string { return &s }
-
 type basicCreds struct{ user, pass string }
 
 // TestLegacyBasicGate_EmptyPasswordRefuses is early fix 5 (05-authn §11.1
@@ -88,16 +86,16 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 			enabled: true, user: "admin", stored: "", env: nil, path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "anything"}, want: http.StatusUnauthorized, wantNoPassword: true},
 		{name: "empty stored, env set empty counts as unset",
-			enabled: true, user: "admin", stored: "", env: strPtr(""), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new(""), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", ""}, want: http.StatusUnauthorized, wantNoPassword: true},
 		{name: "empty stored, env recovers in memory",
-			enabled: true, user: "admin", stored: "", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new("recover"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
 		{name: "empty stored, env set, empty password still refused",
-			enabled: true, user: "admin", stored: "", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new("recover"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", ""}, want: http.StatusUnauthorized, wantFromEnv: true},
 		{name: "saved password beats env",
-			enabled: true, user: "admin", stored: "secret", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "secret", env: new("recover"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusUnauthorized},
 		{name: "saved password, env unset, accepted",
 			enabled: true, user: "admin", stored: "secret", env: nil, path: "/api/v1/audiobooks",
@@ -108,13 +106,13 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 
 		// Beyond the brief's table: the rest of the state space it implies.
 		{name: "env of blanks counts as unset",
-			enabled: true, user: "admin", stored: "", env: strPtr(" \t\n"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new(" \t\n"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", ""}, want: http.StatusUnauthorized, wantNoPassword: true},
 		{name: "env of blanks, blank password refused",
-			enabled: true, user: "admin", stored: "", env: strPtr(" \t\n"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new(" \t\n"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", " \t\n"}, want: http.StatusUnauthorized, wantNoPassword: true},
 		{name: "env value is compared trimmed",
-			enabled: true, user: "admin", stored: "", env: strPtr("  recover\n"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new("  recover\n"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusOK, wantFromEnv: true},
 		// A saved password counts as set when it is not "" (brief step 2): a
 		// blank saved value is a password, compared exactly, and still beats
@@ -124,7 +122,7 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 			enabled: true, user: "admin", stored: "   ", env: nil, path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "   "}, want: http.StatusOK},
 		{name: "blank saved password beats env",
-			enabled: true, user: "admin", stored: "   ", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "   ", env: new("recover"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "recover"}, want: http.StatusUnauthorized},
 		{name: "saved password with surrounding spaces is compared exactly",
 			enabled: true, user: "admin", stored: " secret ", env: nil, path: "/api/v1/audiobooks",
@@ -133,7 +131,7 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 			enabled: true, user: "admin", stored: " secret ", env: nil, path: "/api/v1/audiobooks",
 			creds: &basicCreds{"admin", "secret"}, want: http.StatusUnauthorized},
 		{name: "env recovery still checks the username",
-			enabled: true, user: "admin", stored: "", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			enabled: true, user: "admin", stored: "", env: new("recover"), path: "/api/v1/audiobooks",
 			creds: &basicCreds{"joker", "recover"}, want: http.StatusUnauthorized, wantFromEnv: true},
 		{name: "empty stored, env unset, static asset stays exempt",
 			enabled: true, user: "admin", stored: "", env: nil, path: "/assets/main.js",
@@ -150,7 +148,7 @@ func TestLegacyBasicGate_EmptyPasswordRefuses(t *testing.T) {
 			enabled: false, user: "admin", stored: "", env: nil, path: "/api/v1/audiobooks",
 			creds: nil, want: http.StatusOK},
 		{name: "gate off with env set raises nothing",
-			enabled: false, user: "admin", stored: "", env: strPtr("recover"), path: "/api/v1/audiobooks",
+			enabled: false, user: "admin", stored: "", env: new("recover"), path: "/api/v1/audiobooks",
 			creds: nil, want: http.StatusOK},
 	}
 
@@ -221,7 +219,7 @@ func TestBasicGateEnvRecovery_WarnsOnceWithoutValue(t *testing.T) {
 	config.AppConfig.BasicAuthEnabled = true
 	config.AppConfig.BasicAuthUsername = "admin"
 	config.AppConfig.BasicAuthPassword = ""
-	setBasicGateEnv(t, strPtr(recovery))
+	setBasicGateEnv(t, new(recovery))
 
 	var mu sync.Mutex
 	var buf bytes.Buffer
@@ -280,14 +278,12 @@ func TestBasicGate_NoRaceWithConfigMutate(t *testing.T) {
 	config.AppConfig.BasicAuthEnabled = true
 	config.AppConfig.BasicAuthUsername = "admin"
 	config.AppConfig.BasicAuthPassword = "secret"
-	setBasicGateEnv(t, strPtr("recover"))
+	setBasicGateEnv(t, new("recover"))
 
 	r := setupBasicAuthRouter()
 	done := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; ; i++ {
 			select {
 			case <-done:
@@ -304,8 +300,8 @@ func TestBasicGate_NoRaceWithConfigMutate(t *testing.T) {
 				}
 			})
 		}
-	}()
-	for i := 0; i < 200; i++ {
+	})
+	for range 200 {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks", nil)
 		req.SetBasicAuth("admin", "secret")
 		w := httptest.NewRecorder()

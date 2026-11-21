@@ -134,8 +134,7 @@ func FailureCause(err error) string {
 			return CauseClientError
 		}
 	}
-	var ne net.Error
-	if errors.As(err, &ne) {
+	if ne, ok := errors.AsType[net.Error](err); ok {
 		if ne.Timeout() {
 			return CauseTimeout
 		}

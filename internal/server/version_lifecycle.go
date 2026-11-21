@@ -273,8 +273,7 @@ func (s *Server) swapActiveVersionOut(c *gin.Context, ver *database.BookVersion)
 	store := s.storeForWiring()
 	target, err := versions.PickSwapTarget(store, ver.BookID, ver.ID)
 	if err != nil {
-		var none *versions.NoSwapTargetError
-		if errors.As(err, &none) {
+		if none, ok := errors.AsType[*versions.NoSwapTargetError](err); ok {
 			httputil.RespondWithError(c, http.StatusConflict,
 				"The version was not trashed: it is the book's active version and no other version can take over as the active one ("+
 					none.Why()+"). Add or restore another version first.", codeNoSwapTarget)
@@ -442,8 +441,7 @@ func (s *Server) handlePurgeVersion(c *gin.Context) {
 		}
 		// A live book still serves a file of the version: nothing was deleted or
 		// claimed, the version is still in the trash with every file intact.
-		var served *versions.BookServesFilesError
-		if errors.As(err, &served) {
+		if _, ok := errors.AsType[*versions.BookServesFilesError](err); ok {
 			httputil.RespondWithConflict(c, "version not purged: the book still serves its file(s); restore the version or change what the book plays first")
 			return
 		}

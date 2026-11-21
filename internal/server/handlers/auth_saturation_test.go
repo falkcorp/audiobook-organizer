@@ -64,7 +64,7 @@ func TestLogin_SaturatedDelaysLowFailureAccountsAndRefusesSpentOnes(t *testing.T
 	require.Equal(t, []time.Duration{coreauth.SaturationDelayBase}, delays)
 
 	// Take the account to SoftThreshold failures, then it is refused while saturated.
-	for i := 0; i < coreauth.DefaultSoftThreshold; i++ {
+	for range coreauth.DefaultSoftThreshold {
 		login("sat-user", false, "198.51.100.1:1")
 	}
 	delays = nil
@@ -102,7 +102,7 @@ func TestLogin_SaturatedAnswerDoesNotRevealWhetherTheNameExists(t *testing.T) {
 		h.Login(c)
 		return w.Code, absauth.LoginSaturationRefused(c)
 	}
-	for i := 0; i < coreauth.DefaultSoftThreshold; i++ {
+	for range coreauth.DefaultSoftThreshold {
 		for _, name := range []string{"Real-User", "ghost-user"} {
 			code, _ := login(name, false, "198.51.100.1:1")
 			require.Equal(t, http.StatusUnauthorized, code)
@@ -156,7 +156,7 @@ func TestLogin_SuccessDoesNotResetTheSourceBudget(t *testing.T) {
 	blockedAfter := -1
 	for round := 0; round < 50 && blockedAfter < 0; round++ {
 		// guesses at OTHER accounts, then a login to the attacker's own account
-		for g := 0; g < 3; g++ {
+		for range 3 {
 			if login("some-victim", "guess") == http.StatusTooManyRequests {
 				blockedAfter = round
 			}
@@ -198,7 +198,7 @@ func TestLogin_SuccessTakesBackOwnMistypes(t *testing.T) {
 		return w.Code
 	}
 	// Ten rounds of 4 mistypes then a success never exhausts the 15-failure budget.
-	for round := 0; round < 10; round++ {
+	for round := range 10 {
 		for range 4 {
 			require.Equal(t, http.StatusUnauthorized, login("typo"))
 		}

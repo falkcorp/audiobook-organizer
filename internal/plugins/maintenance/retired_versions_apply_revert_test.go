@@ -354,9 +354,9 @@ func TestRetiredApply_RevertAfterAChainApplyKeepsTheShellWhole(t *testing.T) {
 
 	rf.live("nightwing", "g1", rf.file("g1/new.mp3"))
 	_, err := rf.st.ModifyBook(holder, func(b *database.Book) error {
-		b.MarkedForDeletion = retiredPtr(true)
-		b.MarkedForDeletionAt = retiredPtr(rf.now.Add(-30 * 24 * time.Hour))
-		b.IsPrimaryVersion = retiredPtr(false)
+		b.MarkedForDeletion = new(true)
+		b.MarkedForDeletionAt = new(rf.now.Add(-30 * 24 * time.Hour))
+		b.IsPrimaryVersion = new(false)
 		return nil
 	})
 	require.NoError(t, err)

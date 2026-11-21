@@ -6,7 +6,7 @@
 package dedup
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -126,7 +126,7 @@ func observedWrites(t *testing.T, pr writeProbe, writers map[string][]ops.Resour
 			require.Failf(t, "unclassified call", "%s recorded %q: add it to oracleWriters, oracleEngine or oracleReads (kinds_oracle_test.go)", pr.Kind, word)
 		}
 	}
-	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	slices.Sort(got)
 	return got, words
 }
 

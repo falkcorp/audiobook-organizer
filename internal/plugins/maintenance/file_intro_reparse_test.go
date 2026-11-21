@@ -34,8 +34,6 @@ const (
 	rpFranchise = "Big Finish Productions presents, Hush, written by Lucius Fox, read by Selina Kyle"
 )
 
-func rpStr(s string) *string { return &s }
-
 // reparseFakeStore is the op's whole world: the listing, the full rows and the
 // per-row writer. ReparseBookFileIntro mirrors the real writer's contract: decide
 // sees the row as it is now, a nil transcript is never offered, and the only
@@ -168,7 +166,7 @@ func (s *reparseFakeStore) GetAllBooksCoreComplete(limit, offset int) ([]databas
 		seen[r.BookID] = true
 		b := database.BookCore{ID: r.BookID}
 		if t, ok := s.bookText[r.BookID]; ok {
-			b.IntroTranscription = rpStr(t)
+			b.IntroTranscription = new(t)
 		}
 		out = append(out, b)
 	}
@@ -305,14 +303,14 @@ func rpIntro(book, file, text, status string, id database.IntroReparseIdentity, 
 		IntroSourceHash: "hash-" + file, IntroParse: parse,
 	}
 	if text != "" {
-		f.IntroTranscription = rpStr(text)
+		f.IntroTranscription = new(text)
 	}
 	if status != "" {
-		f.TranscribeStatus = rpStr(status)
+		f.TranscribeStatus = new(status)
 	}
 	set := func(dst **string, v string) {
 		if v != "" {
-			*dst = rpStr(v)
+			*dst = new(v)
 		}
 	}
 	set(&f.TranscribedTitle, id.Title)
@@ -888,7 +886,7 @@ func TestReparseFileIntros_AFailedListingIsAnError(t *testing.T) {
 func TestReparseFileIntros_SelectsTranscriptOnlyRowsThroughTheBook(t *testing.T) {
 	s := newReparseFakeStore()
 	only := func(book, file, text string) {
-		s.put(&database.BookFile{ID: file, BookID: book, FilePath: "/lib/" + book + "/" + file + ".m4b", IntroTranscription: rpStr(text)})
+		s.put(&database.BookFile{ID: file, BookID: book, FilePath: "/lib/" + book + "/" + file + ".m4b", IntroTranscription: new(text)})
 	}
 	only("single", "s1", rpTitle) // single-file book, book has the transcript: selected
 	s.bookText["single"] = rpTitle
@@ -1075,7 +1073,7 @@ func TestReparseFileIntros_DecidesOnTheFreshRow(t *testing.T) {
 	s.beforeDecide = func(st *reparseFakeStore, key string) {
 		st.mu.Lock()
 		defer st.mu.Unlock()
-		st.rows[key].IntroTranscription = rpStr(rpTitle) // the text was replaced
+		st.rows[key].IntroTranscription = new(rpTitle) // the text was replaced
 	}
 
 	res, err := runReparseFileIntros(context.Background(), newReparseEnv(s, &fakeReporter{}), false)
@@ -1102,9 +1100,9 @@ func TestReparseFileIntros_DecidesOnTheFreshRow(t *testing.T) {
 func TestReparseFileIntros_SelectionAndVanishedRows(t *testing.T) {
 	s := newReparseFakeStore()
 	s.put(&database.BookFile{ID: "plain", BookID: "b1"})
-	runOnly := &database.BookFile{ID: "r1", BookID: "b1", IntroRunOpID: "op-batman", IntroTranscription: rpStr(rpNarr)}
+	runOnly := &database.BookFile{ID: "r1", BookID: "b1", IntroRunOpID: "op-batman", IntroTranscription: new(rpNarr)}
 	s.put(runOnly)
-	titleOnly := &database.BookFile{ID: "r2", BookID: "b1", TranscribedTitle: rpStr("Hush"), IntroTranscription: rpStr(rpNarr)}
+	titleOnly := &database.BookFile{ID: "r2", BookID: "b1", TranscribedTitle: new("Hush"), IntroTranscription: new(rpNarr)}
 	s.put(titleOnly)
 	s.put(rpIntro("b1", "f01", rpNarr, "ok", rpNone, nil))
 	s.put(rpIntro("b1", "f02", rpNarr, "ok", rpNone, nil)) // vanishes at the read
@@ -1538,15 +1536,15 @@ func TestAddSample_KeepsTheLowestDistinctIdsInAnyOrder(t *testing.T) {
 func TestHasIntroFields_EveryRetainedColumnSelects(t *testing.T) {
 	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
 	cases := map[string]database.BookFileCore{
-		"status":       {TranscribeStatus: rpStr("ok")},
+		"status":       {TranscribeStatus: new("ok")},
 		"time":         {IntroTranscribedAt: &now},
 		"hash":         {IntroSourceHash: "hash-batman"},
 		"run id":       {IntroRunOpID: "op-batman"},
-		"title":        {TranscribedTitle: rpStr("Hush")},
-		"author":       {TranscribedAuthor: rpStr("Selina Kyle")},
-		"narrator":     {TranscribedNarrator: rpStr("Alfred Pennyworth")},
-		"translator":   {TranscribedTranslator: rpStr("Lucius Fox")},
-		"cover artist": {TranscribedCoverArtist: rpStr("Barbara Gordon")},
+		"title":        {TranscribedTitle: new("Hush")},
+		"author":       {TranscribedAuthor: new("Selina Kyle")},
+		"narrator":     {TranscribedNarrator: new("Alfred Pennyworth")},
+		"translator":   {TranscribedTranslator: new("Lucius Fox")},
+		"cover artist": {TranscribedCoverArtist: new("Barbara Gordon")},
 	}
 	for name, c := range cases {
 		if !hasIntroFields(&c) {
@@ -1684,7 +1682,7 @@ func TestReparseFileIntros_AnUnconfirmedWriteIsCountedApartFromErrors(t *testing
 func TestReparseFileIntros_TheSoleAudioFileIsSelectedBesideACoverArtRow(t *testing.T) {
 	s := newReparseFakeStore()
 	row := func(book, file, path string) {
-		s.put(&database.BookFile{ID: file, BookID: book, FilePath: path, IntroTranscription: rpStr(rpTitle)})
+		s.put(&database.BookFile{ID: file, BookID: book, FilePath: path, IntroTranscription: new(rpTitle)})
 	}
 	row("cover", "a1", "/lib/cover/01.m4b")
 	row("cover", "c1", "/lib/cover/cover.jpg")

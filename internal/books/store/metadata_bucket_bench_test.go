@@ -35,9 +35,9 @@ var metadataBucketSuffixes = []string{
 func syntheticMetadataBuckets(nBuckets, perBucket int) []metadataDupEntry {
 	rng := rand.New(rand.NewSource(20261030))
 	entries := make([]metadataDupEntry, 0, nBuckets*perBucket)
-	for b := 0; b < nBuckets; b++ {
+	for b := range nBuckets {
 		authorID := 1000 + b
-		for i := 0; i < perBucket; i++ {
+		for i := range perBucket {
 			parts := []string{"Batman", metadataBucketStorylines[rng.Intn(len(metadataBucketStorylines))]}
 			if sfx := metadataBucketSuffixes[rng.Intn(len(metadataBucketSuffixes))]; sfx != "" {
 				parts = append(parts, sfx)

@@ -85,8 +85,8 @@ func TestTitleKey_IsOpaque(t *testing.T) {
 	require.Equal(t, reflect.Struct, ty.Kind())
 	require.Zero(t, ty.NumMethod(), "a TitleKey method could hand back the store it names")
 	require.Zero(t, reflect.PointerTo(ty).NumMethod())
-	for i := range ty.NumField() {
-		require.False(t, ty.Field(i).IsExported(), "exported field %s reads the store back", ty.Field(i).Name)
+	for field := range ty.Fields() {
+		require.False(t, field.IsExported(), "exported field %s reads the store back", field.Name)
 	}
 	var k any = TitleKeyOf(&database.PebbleStore{})
 	_, isStore := k.(database.Store)

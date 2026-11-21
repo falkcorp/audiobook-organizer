@@ -6,6 +6,7 @@
 package transcribe
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -173,12 +174,7 @@ func TestParseClipTitleAnnouncementsCarryATitle(t *testing.T) {
 // (a canary, not a label check).
 // validClipKind reports whether k is one of the storable kinds.
 func validClipKind(k ClipKind) bool {
-	for _, v := range AllClipKinds {
-		if k == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(AllClipKinds, k)
 }
 
 func TestParseClipCorpusDistribution(t *testing.T) {

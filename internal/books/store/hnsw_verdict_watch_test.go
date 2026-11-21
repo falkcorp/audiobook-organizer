@@ -209,9 +209,6 @@ func verdictStore(t *testing.T) (*PebbleStore, *EmbeddingStore) {
 	return ps, NewEmbeddingStore(ps.DB())
 }
 
-func intp(v int) *int    { return &v }
-func boolp(v bool) *bool { return &v }
-
 // TestVerdictWatch_StoreChokepoints: the store writes the reconcile's verdict
 // reads (embedding rows, book existence, the primary flag and the series
 // fields) count, and a book update that leaves those fields alone does not.
@@ -223,7 +220,7 @@ func TestVerdictWatch_StoreChokepoints(t *testing.T) {
 	countsOne(t, db, "EmbeddingStore.Upsert", 1, func() error { return es.Upsert(emb) })
 	countsOne(t, db, "EmbeddingStore.Delete", 1, func() error { return es.Delete("book", "venom") })
 	countsOne(t, db, "CreateBook", 1, func() error {
-		_, err := ps.CreateBook(&Book{ID: "venom", Title: "Venom", IsPrimaryVersion: boolp(true)})
+		_, err := ps.CreateBook(&Book{ID: "venom", Title: "Venom", IsPrimaryVersion: new(true)})
 		return err
 	})
 
@@ -241,16 +238,16 @@ func TestVerdictWatch_StoreChokepoints(t *testing.T) {
 	}
 	desc := "a Gotham Knights tie-in"
 	update("description only", 0, func(b *Book) { b.Description = &desc })
-	update("primary flag", 1, func(b *Book) { b.IsPrimaryVersion = boolp(false) })
+	update("primary flag", 1, func(b *Book) { b.IsPrimaryVersion = new(false) })
 	update("primary flag unset (reads as primary)", 1, func(b *Book) { b.IsPrimaryVersion = nil })
-	update("primary flag set true from unset", 0, func(b *Book) { b.IsPrimaryVersion = boolp(true) })
+	update("primary flag set true from unset", 0, func(b *Book) { b.IsPrimaryVersion = new(true) })
 	seedSeriesRow(t, ps, 3) // a book write refuses a series that does not exist
-	update("series id", 1, func(b *Book) { b.SeriesID = intp(3) })
+	update("series id", 1, func(b *Book) { b.SeriesID = new(3) })
 	update("title without a series sequence", 1, func(b *Book) { b.Title = "Venom, Book 2" })
-	update("series sequence", 1, func(b *Book) { b.SeriesSequence = intp(2) })
+	update("series sequence", 1, func(b *Book) { b.SeriesSequence = new(2) })
 	update("title with a series sequence", 0, func(b *Book) { b.Title = "Venom (Knightfall)" })
 	countsOne(t, db, "ModifyBook primary flag", 1, func() error {
-		_, err := ps.ModifyBook("venom", func(b *Book) error { b.IsPrimaryVersion = boolp(false); return nil })
+		_, err := ps.ModifyBook("venom", func(b *Book) error { b.IsPrimaryVersion = new(false); return nil })
 		return err
 	})
 	countsOne(t, db, "SetRaw of a book row", 1, func() error { return ps.SetRaw("book:bane", []byte("{}")) })

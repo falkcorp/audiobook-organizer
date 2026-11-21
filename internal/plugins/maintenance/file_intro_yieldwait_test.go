@@ -161,7 +161,7 @@ func TestFileIntroYieldWait_AGivenUpBatchIsSkippedNotFailedNorCounted(t *testing
 func TestFileIntroYieldWait_ABatchParkedAtTheWriteGateYieldsWithACursor(t *testing.T) {
 	fx := newIntroFx(t)
 	q := &scanQueue{}
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	fx.p = New(queueDeps{store: fx.s, q: q})
 	paths := fx.yieldFiles(fileIntroBatchGroups + 1) // batch 0: eight files, batch 1: the last one
 	lastPath := paths[len(paths)-1]
 

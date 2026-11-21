@@ -3826,7 +3826,7 @@ func (p *PebbleStore) PruneBookSnapshots(id string, keepCount int) (int, error) 
 	// window, and the patch reads the snapshot list AFTER the prune, so it names
 	// one that survived; nothing a row names is ever missing. (Which snapshot an
 	// unrelated edit in that window displaces is a separate matter: todo.d.)
-	for attempt := 0; attempt < pruneStablePinsAttempts; attempt++ {
+	for attempt := range pruneStablePinsAttempts {
 		pins, err := p.snapshotPins()
 		if err != nil {
 			return 0, err

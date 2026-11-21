@@ -186,8 +186,7 @@ func decodeJSON(raw []byte, v any) error {
 		return errNotJSON
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
-		var syn *json.SyntaxError
-		if errors.As(err, &syn) {
+		if _, ok := errors.AsType[*json.SyntaxError](err); ok {
 			return errNotJSON
 		}
 		return errBadShape

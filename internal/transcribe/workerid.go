@@ -237,7 +237,7 @@ func (g gatedEndpoint) workerID() string {
 // splitWorkers is the set of identities in a stored worker value.
 func splitWorkers(v string) map[string]bool {
 	out := make(map[string]bool)
-	for _, id := range strings.Split(v, WorkerSeparator) {
+	for id := range strings.SplitSeq(v, WorkerSeparator) {
 		if id = strings.TrimSpace(id); id != "" {
 			out[id] = true
 		}

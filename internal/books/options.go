@@ -350,7 +350,7 @@ func connectorAddrs(csv string) []string {
 // entries.
 func splitList(s string) []string {
 	var out []string
-	for _, f := range strings.Split(s, ",") {
+	for f := range strings.SplitSeq(s, ",") {
 		if f = strings.TrimSpace(f); f != "" {
 			out = append(out, f)
 		}

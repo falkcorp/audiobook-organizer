@@ -106,7 +106,7 @@ func TestBookMergeOpRun_ReportsSkippedTrashedLoser(t *testing.T) {
 	def := relinkOpDef(t, s.RegisterBookMergeOp, "dedup.book-merge")
 	params, err := json.Marshal(dedup.BookMergeParams{KeepID: keep, MergeIDs: []string{trashed, live}})
 	require.NoError(t, err)
-	rep := &resultReporter{opReporter: opReporter{id: "op-trashed-loser"}}
+	rep := &resultReporter{id: "op-trashed-loser"}
 	require.NoError(t, def.Run(context.Background(), params, rep))
 
 	got, ok := rep.result.(BookMergeOpResult)
@@ -126,7 +126,7 @@ func TestBookMergeOpRun_AllTrashedIsASuccessfulNoOp(t *testing.T) {
 	def := relinkOpDef(t, s.RegisterBookMergeOp, "dedup.book-merge")
 	params, err := json.Marshal(dedup.BookMergeParams{KeepID: keep, MergeIDs: []string{trashed}})
 	require.NoError(t, err)
-	rep := &resultReporter{opReporter: opReporter{id: "op-all-trashed"}}
+	rep := &resultReporter{id: "op-all-trashed"}
 	require.NoError(t, def.Run(context.Background(), params, rep))
 	got := rep.result.(BookMergeOpResult)
 	require.True(t, got.NoOp)
@@ -155,7 +155,7 @@ func TestBookMergeOpRun_FailureStoresAResult(t *testing.T) {
 		def := relinkOpDef(t, s.RegisterBookMergeOp, "dedup.book-merge")
 		params, err := json.Marshal(dedup.BookMergeParams{KeepID: keep, MergeIDs: []string{loser}})
 		require.NoError(t, err)
-		rep := &resultReporter{opReporter: opReporter{id: "op-failed-merge"}}
+		rep := &resultReporter{id: "op-failed-merge"}
 		runErr := def.Run(context.Background(), params, rep)
 		got, ok := rep.result.(BookMergeOpResult)
 		require.True(t, ok, "result payload is %T", rep.result)

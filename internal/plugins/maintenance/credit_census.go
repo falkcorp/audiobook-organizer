@@ -680,11 +680,9 @@ func (p *Plugin) runCreditCensus(ctx context.Context, _ json.RawMessage, reporte
 // persist what was counted.
 func runCreditCensusScan(ctx context.Context, store creditCensusStore, reporter sdk.Reporter, concurrency int) (*creditCensusResult, error) {
 	env := creditCensusEnv{
-		t6g3Base: t6g3Base{
-			Log:      func(level slog.Level, msg string, attrs ...slog.Attr) { _ = reporter.Log(level, msg, attrs...) },
-			Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
-		},
-		Items: t6g3HeadItems(ctx, reporter, concurrency),
+		Log:      func(level slog.Level, msg string, attrs ...slog.Attr) { _ = reporter.Log(level, msg, attrs...) },
+		Progress: func(done, total int, msg string) { _ = reporter.UpdateProgress(done, total, msg) },
+		Items:    t6g3HeadItems(ctx, reporter, concurrency),
 	}
 	return t6g3CreditCensusCore(ctx, store, env)
 }

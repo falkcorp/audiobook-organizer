@@ -754,11 +754,9 @@ func TestSetUserEmailAsAdmin_RacingClaimsOfOneEmailLetOneWin(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, n)
 	for i, u := range users {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, errs[i] = s.SetUserEmailAsAdmin(u.ID, "contested@example.com")
-		}()
+		})
 	}
 	wg.Wait()
 	won := 0

@@ -18,10 +18,10 @@ import (
 // top-level fields.
 func topLevelTagNames() map[string]bool {
 	names := map[string]bool{}
-	t := reflect.TypeOf(headConfig{})
-	for i := 0; i < t.NumField(); i++ {
+	t := reflect.TypeFor[headConfig]()
+	for field := range t.Fields() {
 		for _, tag := range []string{"json", "mapstructure"} {
-			if v, ok := t.Field(i).Tag.Lookup(tag); ok {
+			if v, ok := field.Tag.Lookup(tag); ok {
 				if name, _, _ := strings.Cut(v, ","); name != "" && name != "-" {
 					names[name] = true
 				}
