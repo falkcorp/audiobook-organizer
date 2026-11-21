@@ -180,6 +180,9 @@ type plan struct {
 	Dropped     []string
 	Reported    []string // notes for the report: names, never values
 	Counts      map[string]int
+	// RowsRead is how many of the four encrypted rows are present: the Source
+	// rows outside the Residual that Verify's report counts as read.
+	RowsRead int
 	// OAuthEmptyAllowList: the fold writes at least one enabled provider entry
 	// whose allowed_emails is empty (configStep.oauthBlocker).
 	OAuthEmptyAllowList bool
@@ -524,6 +527,9 @@ func (pl *planner) secretRows(rows map[string]*rowState) {
 		}
 		name := secrets.Name(r.Targets[0].Path)
 		rs := rows[r.Head]
+		if rs.Present {
+			pl.p.RowsRead++
+		}
 		v, _ := asString(pl.tree[r.Head])
 		delAt(pl.tree, []string{r.Head})
 		if rs.Present && rs.Readable {
