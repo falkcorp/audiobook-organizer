@@ -173,12 +173,24 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	// stopped phase 1. Their books were not touched. Counted by finishing the
 	// selection (reads only) instead of leaving the loop.
 	var singleNotReached int
+	// singleHeld: one-book series the row read at the start of the run says are
+	// held (HeldBy set). A start-of-run skip like singleSkipped: nothing was
+	// written, the book keeps its link, and it is in no singleKept bucket (that
+	// bucket is the race where the hold lands AFTER the read, which only the
+	// conditional delete can see). Counted before singleFound, so the identity
+	// above is unchanged, and in dry runs too: a dry run must not report a held
+	// series as a candidate.
+	var singleHeld int
 	// phase1Settled: series phase 1 made a delete decision about (deleted, kept
 	// or already gone). Phase 2 must not group them: their books are already
 	// unlinked, so its start-of-run reference count would refuse them again and
 	// count them a second time, under a cause that is not the real one. Series
 	// whose unlink failed (csNotAttempted) are NOT settled: they stay grouped, with
-	// the hoisted map updated by the unlinks that did succeed.
+	// the hoisted map updated by the unlinks that did succeed. A series skipped as
+	// held is settled too, though phase 1 decided nothing about its row: left out,
+	// it would enter phase 2's groups, and a name twin would make phase 2 re-home
+	// its book before the conditional delete refused it (the same unlink-then-
+	// refused defect), or pick it as the keeper.
 	phase1Settled := make(map[int]bool)
 	// phase1Stopped: the store cannot count references to any series (csStoreWide),
 	// so phase 1 stopped writing instead of unlinking the books of every remaining
@@ -250,6 +262,16 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"Kept 1-book series %d (%q): %d books reference it but only %d can be unlinked "+
 					"(trashed or unhydratable rows would have been stranded)",
 				ser.ID, ser.Name, refCounts[ser.ID], len(unlink)), nil)
+			reporter.Increment()
+			continue
+		}
+
+		if database.SeriesHeld(ser) {
+			singleHeld++
+			phase1Settled[ser.ID] = true
+			reporter.Log("warn", fmt.Sprintf(
+				"Kept 1-book series %d (%q): it is held (%s), so its book was not unlinked",
+				ser.ID, ser.Name, ser.HeldBy), nil)
 			reporter.Increment()
 			continue
 		}
@@ -407,6 +429,12 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 				"could not reach (trashed, or counted but unhydratable); rerun once those rows are visible",
 			singleSkipped, dupRefused))
 	}
+	if singleHeld > 0 {
+		kept = append(kept, fmt.Sprintf(
+			"%d single-book series were held when this run started and were skipped before any write "+
+				"(their books keep the link); release the hold to let a rerun settle them",
+			singleHeld))
+	}
 	if singleKept.Referenced > 0 || dupKept.Referenced > 0 {
 		kept = append(kept, fmt.Sprintf(
 			"the conditional delete found live references in %d single-book series and %d merged-from series "+
@@ -476,6 +504,7 @@ func (j *cleanupSeriesJob) Run(ctx context.Context, store maintenance.JobStore, 
 	}
 	slog.Info("Done single_found single_applied single_skipped dup_groups_found dup_applied dup_refused dryRun",
 		"singleFound", singleFound, "singleApplied", singleApplied, "singleSkipped", singleSkipped,
+		"singleHeld", singleHeld,
 		"singleBooksSkipped", singleBooksSkipped, "dupBooksSkipped", dupBooksSkipped,
 		"singleBooksLockHeld", singleBooksHeld, "dupBooksLockHeld", dupBooksHeld,
 		"singleKeptLockHeld", singleKept.LockHeld, "dupKeptLockHeld", dupKept.LockHeld,

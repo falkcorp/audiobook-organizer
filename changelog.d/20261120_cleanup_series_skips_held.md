@@ -1,0 +1,3 @@
+### Fixed
+
+- `cleanup-series` no longer strips the series link off the book of a one-book series that is held (`HeldBy` set). Phase 1 now checks `database.SeriesHeld` on the row it read at the start of the run and skips a held series before any write, in dry runs too, so a dry run no longer lists it as a candidate. It is counted in its own bucket (`singleHeld`, also in the Done line) and named in the warn summary, separate from the existing "renamed, re-authored or held after this run read it" line, which still covers a hold that lands after the read. A skipped held series is also marked settled for phase 2, so a normalized-name twin cannot make phase 2 re-home its book or pick it as the keeper.
