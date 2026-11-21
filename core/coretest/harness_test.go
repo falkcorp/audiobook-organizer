@@ -9,9 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -541,10 +541,26 @@ func TestHarness_StorageInMemory(t *testing.T) {
 	if status := h.Anonymous().GetJSON(t, "/api/hello/v1/greeting?name=Selina", &g); status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)
 	}
-	// The identity boot's revocation journal is a file under storage/, so the
-	// store's own path is what must be absent.
-	if _, err := os.Stat(filepath.Join(h.stateDir, "storage", "main.pebble")); !os.IsNotExist(err) {
-		t.Fatalf("the harness left a store on disk under its state directory: %v", err)
+	// The identity boot's revocation journal is a plain file under storage/
+	// backups/ (the journal's own FS, not Pebble's), so the original check, that
+	// storage/ does not exist, no longer holds. What must hold is that nothing
+	// else is there: no store directory under any name, no Pebble file.
+	var found []string
+	root := filepath.Join(h.stateDir, "storage")
+	err := filepath.WalkDir(root, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if rel, _ := filepath.Rel(root, p); rel != "." {
+			found = append(found, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if want := []string{"backups", "backups/coretest_revocations.journal"}; !slices.Equal(found, want) {
+		t.Fatalf("the state directory's storage/ holds %v, want only the revocation journal %v: the harness left a store on disk", found, want)
 	}
 }
 
