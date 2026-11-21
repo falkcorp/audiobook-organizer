@@ -285,7 +285,7 @@ func (p *authorityBuildNativeParams) UnmarshalJSON(b []byte) error {
 func (p *Plugin) authorityBuildNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(authorityBuildKind, sched)
 	c.Title = "Authority lists: build"
-	c.Help = authorityBuildHelp
+	c.Help = strings.Replace(strings.Replace(authorityBuildHelp, "DRY RUN BY DEFAULT:", "PREVIEW BY DEFAULT:", 1), "dry_run=false needs plan_op_id (a reviewed dry run)", "a live run needs plan_op_id (a reviewed preview run)", 1)
 	c.Effects = tasks.Writes(tasks.Res("books", string(ops.ResAuthorityLists)))
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow

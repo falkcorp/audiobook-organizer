@@ -371,7 +371,7 @@ func (p *authorSplitNativeParams) UnmarshalJSON(b []byte) error {
 func (p *Plugin) authorSplitScanNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(authorSplitScanKind, sched)
 	c.Title = "Author split scan"
-	c.Help = authorSplitScanHelp
+	c.Help = strings.Replace(authorSplitScanHelp, "DRY RUN BY DEFAULT, including the scheduled run: lists each composite and its parts; pass dry_run=false to", "PREVIEW BY DEFAULT: a run started in preview mode lists each composite and its parts; start it in live mode to", 1)
 	// metadata_cache and indexes: every path of this kind re-authors books through
 	// ModifyBookCredits (the per-book commit) or ModifyBook (inside DeleteAuthor,
 	// MergeDeleteAuthor and MoveCredits),
@@ -838,7 +838,7 @@ func (p *resolveProductionNativeParams) UnmarshalJSON(b []byte) error {
 func (p *Plugin) resolveProductionAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(resolveProductionAuthorsKind, sched)
 	c.Title = "Resolve production company authors"
-	c.Help = resolveProductionAuthorsHelp
+	c.Help = strings.Replace(resolveProductionAuthorsHelp, "DRY RUN BY DEFAULT, including the scheduled run: counts the books it would re-fetch; pass dry_run=false to fetch and write.", "PREVIEW BY DEFAULT: a run started in preview mode counts the books it would re-fetch; start it in live mode to fetch and write.", 1)
 	// The fetch is metafetch's apply (see autoMatchTranscribedNative for the
 	// trace): book, credits, segment titles, change record (metadata_change:
 	// rows, the books resource), the fetched-metadata cache (metadata_cache) and

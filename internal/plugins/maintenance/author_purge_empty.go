@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -269,7 +270,7 @@ func (p *purgeEmptyAuthorsNativeParams) UnmarshalJSON(b []byte) error {
 func (p *Plugin) purgeEmptyAuthorsNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(purgeEmptyAuthorsKind, sched)
 	c.Title = "Purge empty authors"
-	c.Help = purgeEmptyAuthorsHelp
+	c.Help = strings.Replace(purgeEmptyAuthorsHelp, "DRY-RUN BY DEFAULT: pass apply=true to delete.", "PREVIEW BY DEFAULT: a run started in preview mode only reports; start it in live mode to delete.", 1)
 	// metadata_cache and indexes: every path of this kind re-authors books through
 	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
 	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an

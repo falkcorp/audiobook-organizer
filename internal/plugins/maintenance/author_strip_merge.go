@@ -581,7 +581,7 @@ func (p *authorStripMergeNativeParams) UnmarshalJSON(b []byte) error {
 func (p *Plugin) authorStripMergeNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(authorStripMergeKind, sched)
 	c.Title = "Strip author numbering and merge"
-	c.Help = authorStripMergeHelp
+	c.Help = strings.Replace(authorStripMergeHelp, "REPORT-ONLY BY DEFAULT: pass apply=true to write.", "REPORT-ONLY BY DEFAULT: a run started in preview mode only reports; start it in live mode to write.", 1)
 	// metadata_cache and indexes: every path of this kind re-authors books through
 	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
 	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an
