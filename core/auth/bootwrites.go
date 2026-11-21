@@ -99,6 +99,9 @@ func BootWrites(ctx context.Context, d RestoreDeps) error {
 	if err := d.check("Revocations"); err != nil {
 		return err
 	}
+	if err := checkBootstrapTokenFile(d.BootstrapTokenFile); err != nil {
+		return err
+	}
 	if err := d.commitAt(ctx, LabelBootSystemUser, func(b *storage.Batch) error { return stageSystemUser(ctx, d, b) }); err != nil {
 		return fmt.Errorf("auth: boot writes: seed %s: %w", SystemUserID, err)
 	}
@@ -157,11 +160,12 @@ func bootstrapToken(ctx context.Context, d RestoreDeps) error {
 	if err != nil {
 		return err
 	}
-	if err := d.StateFiles.WriteFile(BootstrapTokenLabel, BootstrapTokenFile, []byte(raw+"\n"), 0o600); err != nil {
-		d.log().Warn("auth: bootstrap token file not written", "file", BootstrapTokenFile, "err", err)
+	name := bootstrapTokenName(d.BootstrapTokenFile)
+	if err := d.StateFiles.WriteFile(BootstrapTokenLabel, name, []byte(raw+"\n"), 0o600); err != nil {
+		d.log().Warn("auth: bootstrap token file not written", "file", name, "err", err)
 		return nil
 	}
-	d.log().Info("auth: bootstrap token written", "file", BootstrapTokenFile, "expires_at", expires.Format(time.RFC3339))
+	d.log().Info("auth: bootstrap token written", "file", name, "expires_at", expires.Format(time.RFC3339))
 	return nil
 }
 
@@ -201,8 +205,9 @@ func retireBootstrapToken(ctx context.Context, d RestoreDeps) error {
 	if d.StateFiles == nil {
 		return nil
 	}
-	if err := d.StateFiles.Remove(BootstrapTokenLabel, BootstrapTokenFile); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		d.log().Warn("auth: bootstrap token file not removed", "file", BootstrapTokenFile, "err", err)
+	name := bootstrapTokenName(d.BootstrapTokenFile)
+	if err := d.StateFiles.Remove(BootstrapTokenLabel, name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		d.log().Warn("auth: bootstrap token file not removed", "file", name, "err", err)
 	}
 	return nil
 }

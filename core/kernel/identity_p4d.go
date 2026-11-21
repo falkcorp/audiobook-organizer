@@ -243,6 +243,7 @@ func (k *Kernel) runIdentityP4d(ctx context.Context) error {
 			return auth.BootWrites(ctx, auth.RestoreDeps{
 				Store: id.users, NewBatch: id.users.NewBatch, Revocations: comp, StateFiles: id.stateFiles,
 				Clock: clock, Settings: settings, RoleGrantsAdmin: id.roleGrantsAdmin, Log: log,
+				BootstrapTokenFile: k.cfg.AuthOptions.BootstrapTokenFile,
 			})
 		},
 	})
