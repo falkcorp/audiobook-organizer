@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
+	"github.com/falkcorp/audiobook-organizer/internal/books/adapters/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
@@ -523,5 +524,58 @@ func TestCoreFeatures_PinnedBothWays(t *testing.T) {
 		if err := r.ValidateEndpoint(p.inst.Config.Settings, nil); err != nil {
 			t.Errorf("feature %s: core refuses it: %v", f, err)
 		}
+	}
+}
+
+// TestMetadataAdapters_FoldTableIsTheAdaptersDeclaredSecrets pins metadataAdapters
+// (which sources the credential fold knows and the one secret field each
+// declares) against the real descriptors of the books metadata adapters, both
+// ways: a source added to or removed from the adapters, or a secret field
+// renamed, is a failure here and not a source whose credentials silently go
+// dark or silently fold into a field that does not exist.
+func TestMetadataAdapters_FoldTableIsTheAdaptersDeclaredSecrets(t *testing.T) {
+	ds, err := metadata.Descriptors(metadata.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]string{}
+	for _, d := range ds {
+		m := d.Meta()
+		id, ok := strings.CutPrefix(string(m.ID), "books.")
+		if !ok {
+			t.Fatalf("adapter %s is not a books adapter", m.ID)
+		}
+		var doc struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(m.Settings.JSON(), &doc); err != nil {
+			t.Fatalf("%s settings schema: %v", id, err)
+		}
+		var secretFields []string
+		for name, p := range doc.Properties {
+			if _, secret := p["x-mediacore-secret"]; secret {
+				secretFields = append(secretFields, name)
+			}
+		}
+		if len(secretFields) > 1 {
+			t.Fatalf("%s declares %v: the fold plans one declared field", id, secretFields)
+		}
+		declared[id] = ""
+		if len(secretFields) == 1 {
+			declared[id] = secretFields[0]
+		}
+	}
+	got := map[string]string{}
+	for id, f := range metadataAdapters {
+		got[id] = ""
+		if f != nil {
+			got[id] = f.field
+			if f.order[0] != f.field {
+				t.Errorf("%s: the declared field %s is not first in HEAD's order %v (the operator's secret is read first)", id, f.field, f.order)
+			}
+		}
+	}
+	if !maps.Equal(got, declared) {
+		t.Errorf("the fold table is %v, the adapters declare %v", got, declared)
 	}
 }

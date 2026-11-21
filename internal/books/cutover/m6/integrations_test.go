@@ -76,11 +76,13 @@ func TestIntegrationsMigration_EveryInstanceAndID(t *testing.T) {
 }
 
 // secretRefs are the refs the fixture's instances must carry, by instance and
-// settings key: the names M2 stored the credentials under.
+// settings key: the names M2 stored the credentials under. metadata/openlibrary
+// has none: M2 stored a credentials.token for it, but its adapter declares no
+// secret field and core's closed settings schema refuses an undeclared one, so M6
+// leaves it unbound (TestMetadataCredentials_UndeclaredSecretDropped).
 var secretRefs = map[string]map[string]string{
 	"metadata/hardcover":    {"api_token": "integrations.metadata.hardcover.api_token"},
 	"metadata/google-books": {"api_key": "integrations.metadata.google-books.api_key"},
-	"metadata/openlibrary":  {"credentials.token": "integrations.metadata.openlibrary.credentials.token"},
 	"ai/openai":             {"api_key": "integrations.ai.openai.api_key"},
 	"ai/local-llm":          {"api_key": "integrations.ai.local-llm.api_key"},
 	"download/deluge":       {"password": "integrations.download.deluge.password", "daemon_password": "integrations.download.deluge.daemon_password"},
@@ -195,9 +197,10 @@ func TestIntegrationsMigration_TrustCarried(t *testing.T) {
 			t.Errorf("%s: secrets_origin %v, want %s", id, row["secrets_origin"], origin)
 		}
 	}
-	// The two without a URL: a secret with no destination uses the adapter's.
-	if got["metadata/openlibrary"]["secrets_origin"] != "adapter-default" {
-		t.Errorf("openlibrary secrets_origin %v, want adapter-default", got["metadata/openlibrary"]["secrets_origin"])
+	// An instance with no secret has no secrets_origin to sign (openlibrary had a
+	// credentials.token at HEAD, dropped by the credentials fold).
+	if o, has := got["metadata/openlibrary"]["secrets_origin"]; has {
+		t.Errorf("openlibrary has no secret setting but secrets_origin %v", o)
 	}
 	for id := range wantOrigin {
 		key := "core.integration.local_migrated|" + id

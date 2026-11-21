@@ -119,6 +119,7 @@ const (
 	// order whose root contains it (web/src/utils/pathAliases.ts matchAlias).
 	reasonAliasShadowed      = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
 	reasonDroppedValue       = "a value HEAD selected by nothing with, left out of the migrated instance: kept here so it can be recovered"
+	reasonUnreadCredential   = "a secret setting of a metadata source that HEAD never read for it, or that another of its secrets overrode, and its adapter declares no field for: left unbound, its secret stays in the store"
 	reasonMappingRootRefused = "core refused the library roots this iTunes mapping's To resolves against"
 	reasonRootPath           = "the root path is not an absolute host path"
 	reasonUnreadMember       = "a settings blob member that no part of M6 reads"

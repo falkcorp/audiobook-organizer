@@ -277,9 +277,6 @@
         "settings": {
           "api_token": {
             "secret": "integrations.metadata.hardcover.api_token"
-          },
-          "credentials.api_key": {
-            "secret": "integrations.metadata.hardcover.credentials.api_key"
           }
         },
         "updated": "0001-01-01T00:00:00Z",
@@ -354,6 +351,9 @@
         ],
         "v": 1
       }
+    },
+    "core/secrets": {
+      "core.storage.quarantine.row-1": "integrations.metadata.hardcover.credentials.api_key"
     }
   },
   "removed_legacy_keys": [
@@ -362,7 +362,13 @@
     "import_path:path:/tmp/r2corpus/stage1/import",
     "setting:config_blob"
   ],
-  "quarantined": null,
+  "quarantined": [
+    {
+      "key": "setting:config_blob#metadata_sources.4.secrets.credentials.api_key",
+      "reason": "a secret setting of a metadata source that HEAD never read for it, or that another of its secrets overrode, and its adapter declares no field for: left unbound, its secret stays in the store",
+      "step": "books.integrations-cutover"
+    }
+  ],
   "report": [
     {
       "Kind": "root",
@@ -398,6 +404,16 @@
       "Kind": "instance",
       "ID": "metadata/hardcover",
       "Detail": "books.hardcover"
+    },
+    {
+      "Kind": "note",
+      "ID": "metadata/hardcover",
+      "Detail": "dropped: secret setting credentials.api_key is not bound: HEAD used the api_token secret of this source first and the adapter declares no field for it (its secret integrations.metadata.hardcover.credentials.api_key stays in the store, unreferenced)"
+    },
+    {
+      "Kind": "quarantine",
+      "ID": "setting:config_blob#metadata_sources.4.secrets.credentials.api_key",
+      "Detail": "a secret setting of a metadata source that HEAD never read for it, or that another of its secrets overrode, and its adapter declares no field for: left unbound, its secret stays in the store"
     },
     {
       "Kind": "instance",

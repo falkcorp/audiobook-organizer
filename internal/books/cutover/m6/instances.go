@@ -87,6 +87,10 @@ type headMetadataSource struct {
 type carriedSecret struct {
 	from, to secrets.Name
 	field    string
+	// folded: the credential is not a renamed source's but a credentials.<k> secret
+	// of a source that kept its ID, bound under the field its adapter declares
+	// (planCredentialFold).
+	folded bool
 }
 
 // secretSet is the names the secrets store holds.
@@ -157,6 +161,8 @@ func (p *pending) secretRefs(set secretSet, ref integrations.Ref, headID string,
 type droppedValue struct {
 	path  string
 	value any // JSON-encoded where it is quarantined, so an encode error is returned
+	// reason is the quarantine reason; reasonDroppedValue when empty.
+	reason string
 }
 
 // unreadableCarried is the marker reason of a credential carried unreadable:
@@ -435,15 +441,27 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 			if err := m.cfg.Secrets.ImportUnreadable(ctx, b, mv.cs.to, unreadableCarried, m.by); err != nil && !errors.Is(err, storage.ErrImportConflict) {
 				return false, fmt.Errorf("m6: carry an unreadable credential to %s: %w", mv.cs.to, err)
 			}
-			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + mv.cs.field + " is unreadable under the old name and is carried as unreadable: re-enter it"})
+			if mv.cs.folded {
+				m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + string(mv.cs.from) + " is unreadable and is folded into " + mv.cs.field + " as unreadable: re-enter it"})
+			} else {
+				m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + mv.cs.field + " is unreadable under the old name and is carried as unreadable: re-enter it"})
+			}
 		} else {
 			if err := m.cfg.Secrets.ImportSecret(ctx, b, secrets.Write{Name: mv.cs.to, Value: secrets.NewValue(mv.val), By: m.by}); err != nil && !errors.Is(err, storage.ErrImportConflict) {
 				return false, fmt.Errorf("m6: carry a credential to %s: %w", mv.cs.to, err)
 			}
 			c.note(OutcomeSecretCopy)
-			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + mv.cs.field + " is carried to the renamed source's secret name"})
+			if mv.cs.folded {
+				m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + string(mv.cs.from) + " is folded into " + mv.cs.field + " (HEAD read it as this source's key)"})
+			} else {
+				m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + mv.cs.field + " is carried to the renamed source's secret name"})
+			}
 		}
-		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the secret " + string(mv.cs.from) + " under the old ID stays in the store and nothing refers to it"})
+		if mv.cs.folded {
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the secret " + string(mv.cs.from) + " stays in the store under its own name and nothing refers to it"})
+		} else {
+			m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the secret " + string(mv.cs.from) + " under the old ID stays in the store and nothing refers to it"})
+		}
 	}
 	for _, cs := range p.uncarried {
 		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "the credential " + cs.field + " is not carried: a secret is already stored under " + string(cs.to) + ", the name M2 gave the credential of the entry whose HEAD id is " + string(ref.Instance) + " (or of none), so neither is bound: re-enter it (" + string(cs.from) + " stays in the store, unreferenced)"})
@@ -453,7 +471,11 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		if err != nil {
 			return false, fmt.Errorf("m6: encode the dropped value %s of %s: %w", dv.path, p.member, err)
 		}
-		if err := c.quarantine(KeyBlob+"#"+p.member+"."+dv.path, raw, reasonDroppedValue); err != nil {
+		reason := dv.reason
+		if reason == "" {
+			reason = reasonDroppedValue
+		}
+		if err := c.quarantine(KeyBlob+"#"+p.member+"."+dv.path, raw, reason); err != nil {
 			return false, err
 		}
 	}
@@ -523,6 +545,9 @@ func (m *Migration) metadataInstance(raw json.RawMessage, i int, set secretSet) 
 		p.renamedFrom = src.ID
 	}
 	settings := p.secretRefs(set, ref, src.ID, renamed)
+	// Settings the adapter cannot declare make the whole instance misconfigured:
+	// fold the credential HEAD sent into the declared field and drop the rest.
+	p.foldMetadataCredentials(string(id), renamed, ref, settings)
 	if src.BaseURL != "" {
 		clean, ok := p.cleanURL("base_url", src.BaseURL)
 		if !ok {
