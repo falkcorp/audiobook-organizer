@@ -1,7 +1,7 @@
 // file: web/src/stores/useOperationsStore.ts
-// version: 3.14.0
+// version: 3.14.1
 // guid: 2a3b4c5d-6e7f-8a9b-0c1d-2e3f4a5b6c7d
-// last-edited: 2026-10-30
+// last-edited: 2026-11-21
 
 import { create } from 'zustand';
 import * as api from '../services/api';
@@ -9,6 +9,7 @@ import { type OperationSSEEventName } from '../services/api';
 import { useAppStore } from './useAppStore';
 import { isTerminal } from '../utils/operationPolling';
 import { groupOperations, type OperationGroup } from './operationGrouping';
+import { operationDisplayName } from '../components/layout/operationsFormat';
 
 export interface ActiveOperation {
   id: string;
@@ -174,36 +175,6 @@ function fromV2(op: api.OperationV2): ActiveOperation {
 let unknownOpReloadPending = false;
 let logEventSequence = 0;
 
-function formatOpLabel(type: string): string {
-  const labels: Record<string, string> = {
-    itunes_import: 'iTunes Import',
-    itunes_sync: 'iTunes Sync',
-    scan: 'Library Scan',
-    organize: 'Organize',
-    metadata_fetch: 'Metadata Fetch',
-    metadata_candidate_fetch: 'Metadata Fetch (Batch)',
-    bulk_write_back: 'Tag Write-back',
-    composer_tag_scan: 'Composer Tag Scan',
-    // isbn_enrichment: retired 2026-10-02; kept so historical rows keep a label.
-    isbn_enrichment: 'ISBN Enrichment (retired)',
-    asin_backfill: 'ASIN Backfill (Audible)',
-    candidate_fetch: 'Metadata Fetch (Unfetched Books)',
-    metadata_refresh: 'Metadata Refresh',
-    reconcile_scan: 'Reconcile Scan',
-    itunes_path_repair: 'iTunes Path Repair',
-    series_normalize: 'Series Normalize',
-    transcode: 'Transcode',
-    ol_dump_import: 'Open Library Import',
-    'dedup-scan': 'Dedup Scan',
-    'dedup-llm-review': 'Dedup AI Review',
-    'dedup-acoustid-scan': 'AcoustID Scan',
-    'dedup-book-signature-scan': 'Book Signature Scan',
-    'embed-scan': 'Embedding Rescan',
-    'fingerprint-rescan': 'Fingerprint Rescan',
-  };
-  return labels[type] ?? type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 // Helper to derive activeOperations and alertOperations arrays from operations map
 function deriveOperationArrays(operations: Record<string, ActiveOperation>): {
   activeOperations: ActiveOperation[];
@@ -283,7 +254,7 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
   },
 
   startPolling: (operationId: string, type: string, resumed = false) => {
-    const label = formatOpLabel(type);
+    const label = operationDisplayName({ type });
     const notify = useAppStore.getState().addNotification;
 
     notify(resumed ? `${label} resumed` : `${label} started`, 'info');
@@ -345,7 +316,7 @@ export const useOperationsStore = create<OperationsState>()((set, get) => ({
     // Fire the "started" toast IMMEDIATELY — the click should produce
     // visible feedback before any network round-trip. The reconcile step
     // does not emit a second toast; the catch path can show "Failed".
-    const label = formatOpLabel(type);
+    const label = operationDisplayName({ type });
     useAppStore.getState().addNotification(`${label} starting…`, 'info');
 
     return tempId;
