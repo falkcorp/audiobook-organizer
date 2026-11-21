@@ -326,8 +326,14 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	k.router.CoreGroup()
 	// The identity boot's services (identity_p5.go), after the Provider and the
 	// router they hang on. Describe opens no store and builds none.
-	if !describe && k.identityBootDeclared() {
-		return k.buildIdentityServices(ctx)
+	if k.identityBootDeclared() {
+		if describe {
+			return k.describeIdentity()
+		}
+		if err := k.buildIdentityServices(ctx); err != nil {
+			return err
+		}
+		return k.mountIdentity(ctx)
 	}
 	return nil
 }

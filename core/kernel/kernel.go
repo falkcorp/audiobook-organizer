@@ -193,6 +193,16 @@ type Config struct {
 	// the app boots as it did before F4-08. Temporary, as the F3 config gate
 	// was: B10 deletes it with the flip that makes identity unconditional.
 	IdentityBoot bool
+	// ResolveAtom is the app's atom table for stage 13: it resolves the
+	// rbac.LegacyAtom and rbac.LegacyCheck requirements of its legacy-mounted
+	// routes (httpapi.Stage13Options.ResolveAtom). nil refuses every such
+	// requirement. Read only when IdentityBoot is true. Kernel-only until B10
+	// plumbs it from app.Options.
+	ResolveAtom httpapi.AtomResolver
+	// DisplayName is the app's human name (app.Options.DisplayName), reported
+	// by GET /api/core/v1/modules. Read only when IdentityBoot is true.
+	// Kernel-only until B10 plumbs it.
+	DisplayName string
 	// ArchivePrefix is app.Options.ArchivePrefix: the prefix of the app's
 	// backup archives and of its revocation journal's file name and header
 	// (<prefix>revocations.journal). "" is <AppID>_.
@@ -273,6 +283,9 @@ type Kernel struct {
 	handler   http.Handler
 
 	store *kernelStore // P2 on; nil when no store was opened (storage.go)
+	// docs is modulehttp's view of the built OpenAPI documents (identity boot
+	// only; identity_mount.go), filled after Router.Build.
+	docs *documents
 
 	// The F2 foundation's boot products (F2-16). Each is built where the
 	// phases of 06 §6.5.1 put it, and each is nil until then: rbacCat at P5
@@ -801,7 +814,7 @@ func (k *Kernel) handlerPhase() error {
 		return err
 	}
 	k.handler = h
-	return nil
+	return k.fillDocuments()
 }
 
 // mountUI builds ui.Handler over Config.UI with Config.UIOptions merged in

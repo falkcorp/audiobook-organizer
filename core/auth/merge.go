@@ -168,6 +168,12 @@ func (s *Service) ownerSatisfied(p *Principal) bool {
 	return !s.ownerRequired() && s.interactive(p.Method) && p.Perms.Has(rbac.CoreAdmin)
 }
 
+// OwnerRequired is core.auth.owner.required as the service reads it per call:
+// the one function stage 13's Owner guard, the owner-guarded routes' own
+// handlers (storagehttp, backuphttp) and the merge rule all take, so no two of
+// them can disagree about whether the owner gate is on.
+func (s *Service) OwnerRequired() bool { return s.ownerRequired() }
+
 // ownerRequired is core.auth.owner.required: the configured value, else
 // true exactly when an OwnerVerifier extension is configured and an owner
 // identity is set (§4.8, SEC4-14: HEAD gates on "owner set").
