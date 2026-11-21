@@ -286,6 +286,7 @@ func (k *Kernel) applyIdentityDeps(d *module.Deps, id module.ID) {
 	}
 	d.Auth = identitiesOnly{k.ident.svc.Auth}
 	d.AuthAdmin = adminOnly{k.ident.svc.Auth}
+	d.AuthRefresh = k.ident.svc.Auth.Refresh
 	d.Audit = newModuleAudit(id, k.audit, k.coreLog("audit"))
 	d.Events = k.events.scope(id)
 }

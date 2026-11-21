@@ -23,7 +23,7 @@ import (
 // Deps are the handles a module may use (06 §6.4.4). Every handle is scoped
 // to the module and safe for concurrent use; none is nil except Config and
 // AuthCompat, and, until F4-08's boot wiring (B3) builds them, Auth, AuthAdmin
-// and Audit, which the kernel leaves nil. These are the R1 fields and the
+// AuthRefresh and Audit, which the kernel leaves nil. These are the R1 fields and the
 // identity flip's (Auth, AuthAdmin, AuthCompat, Audit, Events); the rest
 // arrive with their subsystems' R2 flips (06 §6.4.10).
 type Deps struct {
@@ -105,11 +105,32 @@ type Deps struct {
 	// until the kernel hands compat methods to auth at P7 (F4-08, B3).
 	AuthCompat auth.Compat
 
+	// AuthRefresh is auth.Service.Refresh as a plain func, the one auth
+	// operation besides the read-only Auth view that a request-bound module
+	// (a legacy-auth bridge that must re-derive the principal stage 12 bound,
+	// after a password reset or a role change) needs. It is a func, not a
+	// widened Identities: auth.Identities is fixed at four methods (05-authn
+	// §3.1) and a module that does not refresh holds no handle to the rest of
+	// the service. It never widens: the answer is built from the stored user and
+	// at most the scopes p was built with that its stored key still holds, p's
+	// credential, AuthTime, Assurance, ClientAddr and extension expiry are
+	// carried (the expiry is never extended), a disabled or reset-required
+	// user is refused, and a principal auth did not build (a literal) is
+	// refused with auth.ErrInvalidCredentials. Pass the request's own
+	// principal. Nil until the kernel builds the auth service (F4-08, B3),
+	// like Auth and AuthAdmin: nil on a boot without IdentityBoot.
+	AuthRefresh RefreshFunc
+
 	// Audit records audit events, the actor taken from the ctx (05-rbac §3.5:
 	// Record, RecordIn, Emit); the action namespace "<ID>." is checked. Nil
 	// until the kernel builds the audit logger for modules (F4-08, B3).
 	Audit audit.Logger
 }
+
+// RefreshFunc is Deps.AuthRefresh: auth.Service.Refresh. It has the underlying
+// type of a legacy-auth bridge's own refresh hook, so a bridge takes the handle
+// by plain assignment.
+type RefreshFunc func(ctx context.Context, p *auth.Principal) (*auth.Principal, error)
 
 // ConfigAccess is Deps.Config: *config.Store's reads, one write, its
 // generation and the secrets the module's declaration admits. The store is
