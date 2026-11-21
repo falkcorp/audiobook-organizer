@@ -43,7 +43,7 @@ var errIdentityRoutes = errors.New("kernel: identity routes: a required input is
 //
 // Required, because a nil would open something, lose an audit record, let two
 // packages disagree, or leave a route answering 503 for the life of the boot:
-// Auth, RBAC, Audit, Client, OwnerRequired, AcceptDiagnostics, Config,
+// Auth, RBAC, Review, Audit, Client, OwnerRequired, AcceptDiagnostics, Config,
 // ConfigReadPerm, Stager, Modules and Documents. In particular a nil
 // uihttp.AcceptDiagnostics means "accept", and a nil audit sink in authhttp or
 // rbachttp drops core.permission.deny records without a word.
@@ -55,6 +55,11 @@ var errIdentityRoutes = errors.New("kernel: identity routes: a required input is
 type identityRoutes struct {
 	Auth *auth.Service
 	RBAC *rbac.Service
+	// Review acknowledges the core:admin holders a restore listed for review
+	// (rbac.AdminReview over the stored restore report). Required: a nil one
+	// would leave the one route that clears restore_admins_review answering 503
+	// for the life of the boot, so the token could never clear.
+	Review rbachttp.AdminReviewer
 	// Audit is the boot's one audit store (buildAudit): authhttp's and
 	// rbachttp's denial records, audithttp's reader and export record,
 	// storagehttp's reset record.
@@ -90,7 +95,7 @@ type identityRoutes struct {
 func (in identityRoutes) missing() []string {
 	var out []string
 	for name, isNil := range map[string]bool{
-		"Auth": in.Auth == nil, "RBAC": in.RBAC == nil, "Audit": in.Audit == nil,
+		"Auth": in.Auth == nil, "RBAC": in.RBAC == nil, "Review": in.Review == nil, "Audit": in.Audit == nil,
 		"Client": in.Client == nil, "OwnerRequired": in.OwnerRequired == nil,
 		"AcceptDiagnostics": in.AcceptDiagnostics == nil,
 		"Config":            in.Config == nil, "ConfigReadPerm": in.ConfigReadPerm == nil,
@@ -133,7 +138,7 @@ func (in identityRoutes) deps() identityDeps {
 	ad.OIDCCallbackBase, ad.Log = in.OIDCCallbackBase, log("authhttp")
 	return identityDeps{
 		Auth:    ad,
-		RBAC:    rbachttp.Deps{Roles: in.RBAC, Audit: in.Audit, Log: log("rbachttp")},
+		RBAC:    rbachttp.Deps{Roles: in.RBAC, Review: in.Review, Audit: in.Audit, Log: log("rbachttp")},
 		Audit:   audithttp.Deps{Reader: in.Audit, Recorder: in.Audit, Log: log("audithttp")},
 		Config:  confighttp.Deps{Store: in.Config, ReadPerm: in.ConfigReadPerm, Log: log("confighttp")},
 		Storage: storagehttp.Deps{Stager: in.Stager, Audit: in.Audit, OwnerRequired: in.OwnerRequired, Log: log("storagehttp")},

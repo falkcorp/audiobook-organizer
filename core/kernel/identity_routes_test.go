@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/audithttp"
@@ -65,8 +66,14 @@ func routesFx(t *testing.T) identityRoutes {
 	t.Helper()
 	f := newIDFx(t)
 	svc := f.build(f.inputs())
+	// The fixture's store has no c/backup/ keyspace: nothing here acknowledges a
+	// review, so the zero keyspace is never read.
+	review, err := rbac.NewAdminReview(journal.NewReviewAcks(storage.Keyspace{}), f.audit)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return identityRoutes{
-		Auth: svc.Auth, RBAC: svc.RBAC, Audit: f.audit,
+		Auth: svc.Auth, RBAC: svc.RBAC, Review: review, Audit: f.audit,
 		Client:            func(*http.Request) auth.ClientInfo { return auth.ClientInfo{} },
 		OwnerRequired:     func() bool { return true },
 		AcceptDiagnostics: func() bool { return false },
@@ -223,6 +230,7 @@ func TestMountIdentityRoutes_RefusesAMissingInput(t *testing.T) {
 	for name, drop := range map[string]func(*identityRoutes){
 		"Auth":              func(in *identityRoutes) { in.Auth = nil },
 		"RBAC":              func(in *identityRoutes) { in.RBAC = nil },
+		"Review":            func(in *identityRoutes) { in.Review = nil },
 		"Audit":             func(in *identityRoutes) { in.Audit = nil },
 		"Client":            func(in *identityRoutes) { in.Client = nil },
 		"OwnerRequired":     func(in *identityRoutes) { in.OwnerRequired = nil },
@@ -296,6 +304,9 @@ func TestIdentityDeps_FansOutTheSharedInputs(t *testing.T) {
 	}
 	if d.UI.AcceptDiagnostics == nil || fnPtr(d.UI.AcceptDiagnostics) != fnPtr(in.AcceptDiagnostics) {
 		t.Error("uihttp.AcceptDiagnostics is not core.ui.accept_diagnostics")
+	}
+	if d.RBAC.Review != any(in.Review) {
+		t.Error("rbachttp.Review is not the assembly's admin review")
 	}
 	if d.RBAC.Roles != any(in.RBAC) || d.Auth.Dominance != any(in.RBAC) || d.Auth.Entry != any(in.Auth) {
 		t.Error("the services are not the assembly's")

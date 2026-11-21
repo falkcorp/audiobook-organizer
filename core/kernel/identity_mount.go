@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/modulehttp"
@@ -94,9 +95,16 @@ func (k *Kernel) identityRoutesInput(ctx context.Context) (identityRoutes, error
 	if err != nil {
 		return identityRoutes{}, err
 	}
+	// The acknowledgement of a restore's admin review works over c/backup/'s
+	// stored report (id.backupKS, set at P4d) and records in the audit store, in
+	// the commit that clears the entry.
+	review, err := rbac.NewAdminReview(journal.NewReviewAcks(k.ident.backupKS), k.audit)
+	if err != nil {
+		return identityRoutes{}, fmt.Errorf("kernel: identity: the admin review: %w", err)
+	}
 	k.docs = &documents{}
 	return identityRoutes{
-		Auth: svc.Auth, RBAC: svc.RBAC, Audit: k.audit,
+		Auth: svc.Auth, RBAC: svc.RBAC, Review: review, Audit: k.audit,
 		Client:            httpapi.ClientInfoFrom,
 		OwnerRequired:     svc.Auth.OwnerRequired,
 		AcceptDiagnostics: accept,
@@ -253,11 +261,15 @@ func (v modulesView) restartRequired() bool {
 // router would otherwise refuse. Nothing here is ever called: Describe Builds
 // and renders the router, it never serves it.
 func (k *Kernel) describeIdentity() error {
+	review, err := rbac.NewAdminReview(journal.NewReviewAcks(storage.Keyspace{}), new(audit.Store))
+	if err != nil {
+		return fmt.Errorf("kernel: describe: the admin review: %w", err)
+	}
 	if err := k.router.SetAuth(httpapi.AuthWiring{Service: inertAuthenticator{}, ResolveAtom: k.cfg.ResolveAtom}); err != nil {
 		return fmt.Errorf("kernel: describe: stages 12 and 13: %w", err)
 	}
 	return mountIdentityRoutes(k.router, identityRoutes{
-		Auth: new(auth.Service), RBAC: new(rbac.Service), Audit: new(audit.Store),
+		Auth: new(auth.Service), RBAC: new(rbac.Service), Review: review, Audit: new(audit.Store),
 		Client:            httpapi.ClientInfoFrom,
 		OwnerRequired:     func() bool { return true },
 		AcceptDiagnostics: func() bool { return false },
