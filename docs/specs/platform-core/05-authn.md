@@ -358,7 +358,7 @@ func (s *Service) Users(ctx context.Context, f UserFilter) iter.Seq2[*User, erro
 func (s *Service) ChangeOwnPassword(ctx context.Context, actor *Principal, current, next string) error // self only, Interactive
 func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st UserStatus) error      // bumps epoch on disable/enable
 func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) error
-func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, roles []rbac.RoleName) error // CanAssign on added and removed roles + dominance
+func (s *Service) SetRoles(ctx context.Context, actor *Principal, id UserID, roles []rbac.RoleName) error // CanAssign on added and removed roles + dominance; a committed change calls rbac's AssignmentsChanged
 func (s *Service) MintTempLogin(ctx context.Context, actor *Principal, target UserID) (link string, err error)
 func (s *Service) MintResetLink(ctx context.Context, actor *Principal, target UserID) (link string, err error)
 func (s *Service) HasUsers() bool // atomic flag, no store read

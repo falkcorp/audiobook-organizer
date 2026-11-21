@@ -527,9 +527,27 @@ func (s *Service) Catalog() *Catalog {
 	return nil
 }
 
-// Generation is bumped by Freeze and by every committed role change; a
-// compiled checker is cached under the generation it was built at.
+// Generation is bumped by Freeze, by every committed role change and by
+// AssignmentsChanged; a compiled checker is cached under the generation it
+// was built at.
 func (s *Service) Generation() uint64 { return s.gen.Load() }
+
+// AssignmentsChanged records that a user's role assignment changed (auth's
+// SetRoles; the assignment lives on the user row, which rbac does not own).
+// It bumps Generation and calls Deps.OnChange, as a role write does, so the
+// kernel publishes core.rbac.changed.v1 and an open realtime stream
+// re-resolves its rights at once, instead of keeping a removed role until its
+// next heartbeat (F4-08 A16). It writes nothing and reloads nothing: the roles
+// themselves did not change. A call for a change that did not commit costs a
+// spurious re-resolution and nothing else.
+func (s *Service) AssignmentsChanged() {
+	s.rolesMu.Lock()
+	gen := s.gen.Add(1)
+	s.rolesMu.Unlock()
+	if s.deps.OnChange != nil {
+		s.deps.OnChange(gen)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Roles CRUD (§4.7).

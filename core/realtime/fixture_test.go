@@ -187,7 +187,7 @@ func newAuth(t testing.TB) *env {
 	}
 	if e.rb, err = rbac.New(ctx, rbac.Options{Source: "realtime-test"}, rbac.Deps{
 		Store: rst, Compile: authz.Compile, Audit: sink{}, Revocations: revJournal{},
-		NewBatch: rst.NewBatch, Holders: noHolders{},
+		NewBatch: rst.NewBatch, Holders: noHolders{}, OnChange: e.rbacChanged,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -230,6 +230,16 @@ func newAuth(t testing.TB) *env {
 		t.Fatal(err)
 	}
 	return e
+}
+
+// rbacChanged is rbac.Deps.OnChange as the kernel binds it
+// (publishRBACChanged): core.rbac.changed.v1 on the bus, once wire has opened
+// one. A role write before then has no stream to wake.
+func (e *env) rbacChanged(gen uint64) {
+	if e.bus == nil {
+		return
+	}
+	events.Publish(e.cor, context.Background(), topicRBAC, "", RBACChanged{Generation: gen})
 }
 
 // user stores an active user holding roles.

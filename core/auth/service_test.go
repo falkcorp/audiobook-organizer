@@ -48,6 +48,8 @@ type fx struct {
 	// hasher is a lowered-cost hasher (test binaries only) whose derivations
 	// the sign-in tests count.
 	hasher *password.Hasher
+	// genLog records the generations rbac's Deps.OnChange reported.
+	genLog *genLog
 	// loginSleep, when set, replaces the sign-in delays of every service
 	// rebuild builds.
 	loginSleep func(time.Duration)
@@ -147,9 +149,10 @@ func newFxRoleStore(t testing.TB, wrap func(rbac.Store) rbac.Store) *fx {
 	if wrap != nil {
 		roleStore = wrap(rst)
 	}
+	f.genLog = &genLog{}
 	if f.rb, err = rbac.New(ctx, rbac.Options{Source: "gotham-test"}, rbac.Deps{
 		Store: roleStore, Compile: authz.Compile, Audit: &auditFake{}, Revocations: &journalFake{},
-		NewBatch: rst.NewBatch, Holders: f.holders,
+		NewBatch: rst.NewBatch, Holders: f.holders, OnChange: f.genLog.record,
 	}); err != nil {
 		t.Fatal(err)
 	}
