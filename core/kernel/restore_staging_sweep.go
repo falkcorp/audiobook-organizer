@@ -33,8 +33,11 @@ import (
 //   - <id> is a restore id and <id>/ is a directory, not a symbolic link;
 //   - <id>/ holds staging/ and nothing else (no previous/, the only undo,
 //     no failed/, no stray file);
-//   - no restore/<id> exists under the state directory: no intent was ever
-//     linked for it;
+//   - no restore/<id> exists under the state directory, or restore/<id> is
+//     an empty directory (not a symbolic link, no entries at all, so no
+//     journal) that the slot does not name: Stage creates restore/<id>
+//     before it links the intent, and a kill between the two leaves it bare.
+//     Such a bare restore/<id> is removed too, before <id>/;
 //   - everything under staging/ is a directory or a regular file, none a
 //     symbolic link.
 //
@@ -44,10 +47,10 @@ import (
 // applied restore's previous/, a failed one's failed/) is the swap's own
 // and is passed over without a word, and so is one whose intent was linked:
 // restore/<id> holds the journal, or the slot names <id>. A restore/<id>
-// with neither (Stage stopped between creating it and linking the intent)
-// links nothing, but it is not the shape above, so both are left and named. A target outside the state directory
-// and the DB's parent that the current config and request do not name is
-// not visited.
+// with neither that is not empty, or not a plain directory, is left with
+// <id>/ and both are named. A target outside the state directory and the
+// DB's parent that the current config and request do not name is not
+// visited.
 func (k *Kernel) sweepOrphanStaging(fsys vfs.FS, req RestoreOfflineRequest) []string {
 	var warnings []string
 	slot, slotErr := restorejournal.ReadSlot(fsys, k.cfg.StateDir)
@@ -90,13 +93,25 @@ func (k *Kernel) sweepOrphanStaging(fsys vfs.FS, req RestoreOfflineRequest) []st
 		slices.Sort(names)
 		for _, n := range names {
 			root := filepath.Join(dir, n)
-			orphan, why, err := k.orphanStaging(fsys, root, n, linked)
+			orphan, bare, why, err := k.orphanStaging(fsys, root, n, linked)
 			switch {
 			case err != nil:
 				warnings = append(warnings, fmt.Sprintf("left in place: %s could not be checked: %v", root, err))
 			case why != "":
 				warnings = append(warnings, fmt.Sprintf("left in place: %s %s", root, why))
 			case orphan:
+				// The bare restore/<id> first: a crash between the two
+				// removes leaves the plain orphan shape, which the next
+				// sweep finds; the other order would leave restore/<id>
+				// where no sweep looks.
+				if bare != "" {
+					if err := fsys.Remove(bare); err != nil {
+						warnings = append(warnings, fmt.Sprintf("left in place: %s and the staging at %s: the empty %s was not removed: %v", bare, root, bare, err))
+						continue
+					}
+					k.log.Warn("kernel: removed the empty journal directory a stopped Stage left", "path", bare)
+					warnings = append(warnings, fmt.Sprintf("removed %s: Stage created it and was stopped before it linked an intent", bare))
+				}
 				if err := fsys.RemoveAll(root); err != nil {
 					warnings = append(warnings, fmt.Sprintf("the staging an earlier restore left at %s was not removed: %v", root, err))
 					continue
@@ -138,42 +153,50 @@ func (k *Kernel) stagingParents(req RestoreOfflineRequest) []string {
 }
 
 // orphanStaging decides one entry root (named name) of a .mediacore-restore
-// directory: orphan when sweepOrphanStaging's conditions all hold; a
+// directory: orphan when sweepOrphanStaging's conditions all hold, with
+// bare the empty restore/<id> to remove first ("" when there is none); a
 // non-empty why, the reason it is left in place, when it holds staging/ but
 // misses one; neither when it is the swap's own (no staging/, or linked
 // reports an intent linked for it).
-func (k *Kernel) orphanStaging(fsys vfs.FS, root, name string, linked func(id string) (bool, error)) (orphan bool, why string, err error) {
+func (k *Kernel) orphanStaging(fsys vfs.FS, root, name string, linked func(id string) (bool, error)) (orphan bool, bare, why string, err error) {
 	fi, err := lstatFS(fsys, root)
 	switch {
 	case err != nil:
-		return false, "", err
+		return false, "", "", err
 	case fi.Mode()&fs.ModeSymlink != 0:
-		return false, "is a symbolic link", nil
+		return false, "", "is a symbolic link", nil
 	case !fi.IsDir():
-		return false, fmt.Sprintf("is not a directory (%s)", fi.Mode().Type()), nil
+		return false, "", fmt.Sprintf("is not a directory (%s)", fi.Mode().Type()), nil
 	}
 	names, err := fsys.List(root)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 	if !slices.Contains(names, leafStaging) {
-		return false, "", nil
+		return false, "", "", nil
 	}
 	if !restorejournal.ValidID(name) || strings.HasPrefix(name, ".") {
-		return false, "holds staging/ but is not named for a restore id", nil
+		return false, "", "holds staging/ but is not named for a restore id", nil
 	}
-	switch _, err := fsys.Stat(restorejournal.JournalDir(k.cfg.StateDir, name)); {
+	jdir := restorejournal.JournalDir(k.cfg.StateDir, name)
+	switch _, err := fsys.Stat(jdir); {
 	case err == nil:
 		ok, err := linked(name)
 		switch {
 		case err != nil:
-			return false, "", fmt.Errorf("the journal of %s: %w", name, err)
+			return false, "", "", fmt.Errorf("the journal of %s: %w", name, err)
 		case ok:
-			return false, "", nil // an intent was linked: the swap's
+			return false, "", "", nil // an intent was linked: the swap's
 		}
-		return false, fmt.Sprintf("has restore/%s with no journal and the slot does not name it (Stage stopped before it linked the intent)", name), nil
+		if why, err := emptyPlainDir(fsys, jdir); err != nil || why != "" {
+			if err != nil {
+				return false, "", "", fmt.Errorf("restore/%s: %w", name, err)
+			}
+			return false, "", fmt.Sprintf("has restore/%s with no journal, the slot does not name it, and it %s", name, why), nil
+		}
+		bare = jdir
 	case !errors.Is(err, os.ErrNotExist):
-		return false, "", fmt.Errorf("the journal of %s: %w", name, err)
+		return false, "", "", fmt.Errorf("the journal of %s: %w", name, err)
 	}
 	if len(names) != 1 {
 		var other []string
@@ -183,12 +206,12 @@ func (k *Kernel) orphanStaging(fsys vfs.FS, root, name string, linked func(id st
 			}
 		}
 		slices.Sort(other)
-		return false, fmt.Sprintf("holds %s beside staging/ and no intent was linked for it", strings.Join(other, ", ")), nil
+		return false, "", fmt.Sprintf("holds %s beside staging/ and no intent was linked for it", strings.Join(other, ", ")), nil
 	}
 	if why, err := plainTree(fsys, filepath.Join(root, leafStaging)); err != nil || why != "" {
-		return false, why, err
+		return false, "", why, err
 	}
-	return true, "", nil
+	return true, bare, "", nil
 }
 
 // leafStaging is the staging leaf of a restore's private directory
@@ -219,6 +242,29 @@ func plainTree(fsys vfs.FS, dir string) (why string, err error) {
 		if why, err := plainTree(fsys, filepath.Join(dir, n)); err != nil || why != "" {
 			return why, err
 		}
+	}
+	return "", nil
+}
+
+// emptyPlainDir reports, in why, how dir is not an empty directory that is
+// not a symbolic link ("" when it is one).
+func emptyPlainDir(fsys vfs.FS, dir string) (why string, err error) {
+	fi, err := lstatFS(fsys, dir)
+	switch {
+	case err != nil:
+		return "", err
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return "is a symbolic link", nil
+	case !fi.IsDir():
+		return fmt.Sprintf("is not a directory (%s)", fi.Mode().Type()), nil
+	}
+	names, err := fsys.List(dir)
+	if err != nil {
+		return "", err
+	}
+	if len(names) > 0 {
+		slices.Sort(names)
+		return "holds " + strings.Join(names, ", "), nil
 	}
 	return "", nil
 }

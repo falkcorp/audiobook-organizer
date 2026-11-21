@@ -28,8 +28,10 @@ import (
 // leaves in a warning: a staging directory with anything beside staging/,
 // one that is a symbolic link or holds one, one an intent was linked for
 // (its journal is there; silently: the swap's own), one whose restore/<id>
-// Stage created and never linked an intent into (no journal, not in the
-// slot), and an entry that is not a directory.
+// holds a stray file or is a symbolic link, and an entry that is not a
+// directory. A Stage stopped after it created restore/<id> and before it
+// linked the intent leaves that directory empty: it is removed with the
+// staging beside it.
 func TestRestoreSweepsOrphanStaging(t *testing.T) {
 	h, _ := newCrossDeviceHost(t)
 	name := h.completedUpgrade()
@@ -44,7 +46,9 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 		innerLink   = "20261101T010000Z-keep0004"
 		linked      = "20261101T010000Z-keep0005"
 		notDir      = "20261101T010000Z-keep0006"
-		stopped     = "20261101T010000Z-keep0007"
+		stopped     = "20261101T010000Z-0rphan03"
+		stoppedFull = "20261101T010000Z-keep0007"
+		stoppedLink = "20261101T010000Z-keep0008"
 	)
 	write(t, filepath.Join(stateAside, orphanState, "staging/state/encryption_key"), "joker", 0o600)
 	write(t, filepath.Join(dbAside, orphanDB, "staging/db/MANIFEST-000001"), "penguin", 0o600)
@@ -70,6 +74,13 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 	if err := os.MkdirAll(restorejournal.JournalDir(h.state, stopped), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	write(t, filepath.Join(stateAside, stoppedFull, "staging/state/encryption_key"), "killer-croc", 0o600)
+	write(t, filepath.Join(restorejournal.JournalDir(h.state, stoppedFull), "notes.txt"), "hush", 0o600)
+	write(t, filepath.Join(stateAside, stoppedLink, "staging/state/encryption_key"), "clayface", 0o600)
+	emptyElsewhere := t.TempDir()
+	if err := os.Symlink(emptyElsewhere, restorejournal.JournalDir(h.state, stoppedLink)); err != nil {
+		t.Fatal(err)
+	}
 	write(t, filepath.Join(stateAside, notDir), "mad-hatter", 0o600)
 
 	res, err := RestoreOffline(h.ctx, h.keyed(h.config(nil)), RestoreOfflineRequest{Checkpoint: name, AcceptLoss: true})
@@ -80,7 +91,8 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 		t.Fatalf("key file = %q, want the checkpoint's wayne", got)
 	}
 	warnings := strings.Join(res.Warnings, "\n")
-	for _, p := range []string{filepath.Join(stateAside, orphanState), filepath.Join(dbAside, orphanDB)} {
+	for _, p := range []string{filepath.Join(stateAside, orphanState), filepath.Join(dbAside, orphanDB),
+		filepath.Join(stateAside, stopped), restorejournal.JournalDir(h.state, stopped)} {
 		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s is still there (%v), want an orphan staging directory removed", p, err)
 		}
@@ -99,7 +111,8 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 		{filepath.Join(stateAside, innerLink), "staging/state/encryption_key", true},
 		{filepath.Join(stateAside, linked), "staging/state/encryption_key", false},
 		{filepath.Join(stateAside, notDir), "", true},
-		{filepath.Join(stateAside, stopped), "staging/state/encryption_key", true},
+		{filepath.Join(stateAside, stoppedFull), "staging/state/encryption_key", true},
+		{filepath.Join(stateAside, stoppedLink), "staging/state/encryption_key", true},
 	} {
 		if _, err := os.Lstat(filepath.Join(c.root, c.kept)); err != nil {
 			t.Errorf("%s was removed (%v), want it left in place", filepath.Join(c.root, c.kept), err)
@@ -110,6 +123,12 @@ func TestRestoreSweepsOrphanStaging(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(elsewhere, "staging/state/encryption_key")); got != "catwoman" {
 		t.Errorf("what the symbolic link points at = %q, want it untouched", got)
+	}
+	for _, p := range []string{filepath.Join(restorejournal.JournalDir(h.state, stoppedFull), "notes.txt"),
+		restorejournal.JournalDir(h.state, stoppedLink), emptyElsewhere} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("%s was removed (%v), want it left in place", p, err)
+		}
 	}
 	if got := read(t, outside); got != "alfred" {
 		t.Errorf("the file the inner symbolic link points at = %q, want it untouched", got)
