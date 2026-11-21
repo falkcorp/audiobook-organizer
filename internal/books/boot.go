@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -19,41 +18,36 @@ import (
 // books' settings boot (06 §6.4.3 "Health, startup steps and diagnostics",
 // R4-6, COR4-1, MOD4-17): from release R1 the kernel opens the store at P2,
 // and the HEAD steps serve ran over it before app.New run here, in books'
-// Register, over the store core opened: the key guard, the encryption init,
-// the settings load with the env sync, and config.Validate. Each is Fatal as
-// it was in serve (startup.Table): running on defaults would write the
-// defaults over the stored settings on the first save (06 §6.9 row "HEAD's
-// settings load fails in R1"). R2's config flip replaces them with core
-// config and secrets. They run in Register, not in the start hook, because
-// NewServer reads the effective config and Register builds the server the
-// legacy mount needs before P7 (seams.d/R1-23.md). Register commits no
-// write (TestBooksConstructorWritesNothing): the load runs over
-// deferredSettings, and the writes it makes commit in the repairs start hook.
+// Register, over the store core opened: the key guard, the encryption init
+// and config.Validate. Each is Fatal as it was in serve (startup.Table).
+// HEAD's settings load (config.LoadConfigFromDatabase) and its env sync are
+// gone since F3-07: the effective config comes from the core config Facade
+// that installAppConfig binds before this runs. They run in Register, not in
+// the start hook, because NewServer reads the effective config and Register
+// builds the server the legacy mount needs before P7 (seams.d/R1-23.md).
+// Register commits no write (TestBooksConstructorWritesNothing).
 
 // The settings boot's dependencies, variables so tests can fail each step.
-var (
-	initEncryption    = database.InitEncryption
-	loadConfigFromDB  = config.LoadConfigFromDatabase
-	syncConfigFromEnv = config.SyncConfigFromEnv
-)
+var initEncryption = database.InitEncryption
 
 // settingsStore is what the settings boot reads: the settings census (the key
-// guard and the settings load) and the import paths it logs.
+// guard) and the import paths it logs.
 type settingsStore interface {
-	database.SettingsStore
+	settingsCensus
 	GetAllImportPaths() ([]database.ImportPath, error)
 }
 
 // bootSettings runs HEAD's pre-server steps over store, through steps, in
-// HEAD's order, and returns the settings load's held writes for the repairs
-// hook to commit. stateDir is the secure state directory Options resolved;
-// the key's legacy location is the database's own directory.
-func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*deferredSettings, error) {
-	legacyKeyDir := filepath.Dir(config.AppConfig.DatabasePath)
+// HEAD's order. stateDir is the secure state directory Options resolved and
+// dbPath the store it resolved; the key's legacy location is the store's own
+// directory (legacyKeyDir), the same one StateFiles tells the checkpoint to
+// copy the key from, so the file the boot loads is the file the checkpoint saved.
+func bootSettings(store settingsStore, steps *startup.Steps, stateDir, dbPath string) error {
+	legacyKeyDir := legacyKeyDir(dbPath)
 	if err := steps.Run("guardAgainstKeyRegeneration", func() error {
 		return guardAgainstKeyRegeneration(store, stateDir, legacyKeyDir)
 	}); err != nil {
-		return nil, err
+		return err
 	}
 	// The key lives in the secure state directory, a constant, not beside
 	// the database, which may move between pools; the database's directory
@@ -67,22 +61,10 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return err
 	}
 	bootLog.Info("settings encryption initialized (state dir: %s)", stateDir)
 
-	// Fatal, not a warning: SaveConfigToDatabase persists the whole config
-	// struct, so a server running on defaults would write those defaults
-	// over the stored config on its first settings save.
-	pending := newDeferredSettings(store)
-	if err := steps.Run("loadConfigFromDB", func() error {
-		if err := loadConfigFromDB(pending); err != nil {
-			return fmt.Errorf("failed to load config from database: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
 	snap := config.Snapshot()
 	// Only whether the key is set: even a suffix is secret material in the
 	// startup log (CodeQL go/clear-text-logging).
@@ -90,11 +72,7 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*
 	if snap.OpenAIAPIKey != "" {
 		openAIKeyState = "set"
 	}
-	bootLog.Info("configuration loaded from database; root dir (organize output): %s; OpenAI API key: %s", snap.RootDir, openAIKeyState)
-
-	// Env overrides apply over the stored settings (the command line takes
-	// precedence over the DB).
-	syncConfigFromEnv()
+	bootLog.Info("configuration: root dir (organize output): %s; OpenAI API key: %s", snap.RootDir, openAIKeyState)
 
 	if err := steps.Run("config.Validate", func() error {
 		if err := config.AppConfig.Validate(); err != nil {
@@ -102,7 +80,7 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return err
 	}
 
 	if folders, err := store.GetAllImportPaths(); err == nil {
@@ -111,10 +89,7 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*
 			bootLog.Info("  import path %s (%s)", folder.Name, folder.Path)
 		}
 	}
-	if n := pending.pending(); n > 0 {
-		bootLog.Info("the settings load staged %d write(s); they commit in books' repairs hook", n)
-	}
-	return pending, nil
+	return nil
 }
 
 // allowKeyRegenEnv lets an operator proceed past guardAgainstKeyRegeneration.
@@ -135,10 +110,9 @@ type settingsCensus interface {
 // anywhere AND the database already holds encrypted secrets.
 //
 // That combination is not recoverable by starting up. InitEncryption would
-// generate a fresh key, and LoadConfigFromDatabase would then fail to decrypt
-// every existing secret, re-encrypt the four it can recover from the config file
-// and DeleteSetting the rest. The secrets are gone before anyone sees a warning,
-// and the app looks healthy afterwards. Refusing to boot is the only point at
+// generate a fresh key, and every existing secret would be unreadable under it
+// (the cutover could carry none of them over). The secrets are gone before
+// anyone sees a warning, and the app looks healthy afterwards. Refusing to boot is the only point at
 // which the operator can still put the key file back.
 //
 // Fails CLOSED on a census error, and names the override in the message: a
@@ -149,11 +123,9 @@ type settingsCensus interface {
 // no census. Otherwise the census runs BEFORE allowKeyRegenEnv is honoured,
 // because one census result is refused even with the override set: an
 // unreadable settings row (*database.UnreadableSettingsError). The override
-// cannot get past it -- loadConfigFromDB fails on the same rows next -- and
-// honouring it would let InitEncryption write a NEW key file first. Once the
-// row is repaired, the following boot would find that key, skip this guard,
-// fail to decrypt every stored secret, and LoadConfigFromDatabase would delete
-// them. So that message names the rows and the repair and does not offer the
+// cannot get past it, and honouring it would let InitEncryption write a NEW
+// key file first. Once the row is repaired, the following boot would find
+// that key, skip this guard, and every stored secret would be unreadable. So that message names the rows and the repair and does not offer the
 // override. Any other census error (I/O, iterator, close) still yields to the
 // override, which is the escape hatch it exists for.
 func guardAgainstKeyRegeneration(store settingsCensus, stateDir, legacyKeyDir string) error {

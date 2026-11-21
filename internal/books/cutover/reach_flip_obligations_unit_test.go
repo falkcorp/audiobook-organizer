@@ -83,7 +83,7 @@ func TestReachObligations_TheTableIsStatedInTheSeamsAndEveryRowIsOpenToday(t *te
 	for _, r := range reachOwnerRoutes(in) {
 		want[r] = true
 	}
-	if len(hidden) != len(want) || len(hidden) != 31 {
+	if len(hidden) != len(want) || len(hidden) != 32 {
 		t.Errorf("the HIDDEN-HANDLER-CHECKS bar is %d routes, want the %d routes of the %d sites and the owner routes", len(hidden), len(want), len(reachHiddenSites))
 	}
 	for _, r := range []string{"GET /api/v1/users/invites", "PUT /api/v1/auth/me/password", "POST /api/v1/audiobooks/batch", "GET /api/v3/ops/events"} {

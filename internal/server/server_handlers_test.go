@@ -1,7 +1,7 @@
 // file: internal/server/server_handlers_test.go
-// version: 1.3.3
+// version: 1.3.4
 // guid: b1c2d3e4-f5a6-7b8c-9d0e-1f2a3b4c5d6e
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package server
 
@@ -116,15 +116,15 @@ func TestConfigEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Test PUT config
-	configReq := map[string]any{
+	configReq := map[string]any{"set": map[string]any{
 		"log_level": "info",
-	}
+	}}
 	body, _ := json.Marshal(configReq)
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
-	assert.True(t, w.Code == 200 || w.Code == 400)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
 
 // TestSystemStatus tests system status endpoint

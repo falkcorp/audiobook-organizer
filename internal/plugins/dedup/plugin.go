@@ -122,12 +122,15 @@ func (p *Plugin) OperationDefs() []sdk.OperationDef {
 }
 
 // pluginStore is what this plugin reads and writes, measured with an
-// empty-interface compiler probe under -gcflags=-e: eight methods plus two
-// forwarding constraints, both embedded by name. It was pluginStore -- 398
-// methods -- until 2026-08-19.
+// empty-interface compiler probe under -gcflags=-e: ten methods plus one
+// forwarding constraint, embedded by name. It was pluginStore -- 398
+// methods -- until 2026-08-19. It embedded database.SettingsStore for
+// config.NewUpdateService until F3-07 deleted that (settings are written
+// through the config Facade); the two settings rows below are the done flags
+// the maintenance kinds keep (emb_reencode, kinds_scoring, purge_legacy_fp).
 type pluginStore interface {
-	// config.NewUpdateService.
-	database.SettingsStore
+	GetSetting(key string) (*database.Setting, error)
+	SetSetting(key, value, typ string, isSecret bool) error
 	// dedupengine.DetectSplitBookCandidates.
 	dedupengine.Store
 

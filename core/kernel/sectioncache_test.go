@@ -40,15 +40,15 @@ func TestBootSectionCache(t *testing.T) {
 // store never shows in another over the same cache.
 func TestNewCoreConfig_SharedCache(t *testing.T) {
 	cache := config.NewSectionCache()
-	plain, err := newCoreConfig("gotham", nil)
+	plain, err := newCoreConfig("gotham", CoreDefaults{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := newCoreConfig("gotham", cache)
+	first, err := newCoreConfig("gotham", CoreDefaults{}, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newCoreConfig("arkham", cache)
+	second, err := newCoreConfig("arkham", CoreDefaults{}, cache)
 	if err != nil {
 		t.Fatal(err)
 	}

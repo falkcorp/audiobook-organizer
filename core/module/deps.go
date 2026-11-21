@@ -1,21 +1,26 @@
 // file: core/module/deps.go
-// version: 1.0.3
+// version: 1.5.0
 // guid: 04c2ba0c-0bfa-4d6b-9e91-bc7ba2db6894
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package module
 
 import (
+	"context"
 	"errors"
+	"iter"
 	"log/slog"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
 // Deps are the handles a module may use (06 §6.4.4). Every handle is scoped
-// to the module and safe for concurrent use; none is nil. These are the R1
-// fields; the rest arrive with their subsystems' R2 flips (06 §6.4.10).
+// to the module and safe for concurrent use; none is nil except Config. These
+// are the R1 fields; the rest arrive with their subsystems' R2 flips (06
+// §6.4.10).
 type Deps struct {
 	Module ID
 
@@ -47,6 +52,80 @@ type Deps struct {
 	// (R8). Both are zero values, whose every method fails, when the module
 	// declared no keyspace or no claims.
 	Storage StorageHandles
+
+	// Secrets is the module's secret scope: names under "modules.<ID>.",
+	// values never logged (06 §6.4.4, 05-config Part 2). It is the zero
+	// secrets.Scope, which refuses every name (secrets.ErrOutOfScope),
+	// where no secret store is open: app.Describe, and a boot without core
+	// config.
+	Secrets secrets.Scope
+
+	// Config is the App's layered config store (05-config): every key of
+	// core and of every module, read and written as the caller's Actor, plus
+	// the secrets Manifest.AppConfig names. It is nil unless the module
+	// declares Manifest.AppConfig and a core config boot ran (not in
+	// app.Describe, nor without kernel.Config.CoreConfigBoot), so it is the one
+	// Deps handle a module must nil-check. Apply authorizes per key against the
+	// Actor the caller passes, so the handle grants no authority the Actor
+	// lacks; it does let the module name any Actor, which is why only a module
+	// the App's manifest review admits takes it.
+	Config ConfigAccess
+}
+
+// ConfigAccess is Deps.Config: *config.Store's reads, one write, its
+// generation and the secrets the module's declaration admits. The store is
+// attached before any module's Register runs (P4d), so Apply works from
+// Register on. It is three embedded interfaces, not ten methods: each is a
+// handle a caller can take alone, and the interface-width ratchet counts the
+// declared entries.
+type ConfigAccess interface {
+	ConfigReads
+	ConfigWrite
+	ConfigSecrets
+}
+
+// ConfigReads is the read side of ConfigAccess.
+type ConfigReads interface {
+	// Lookup is a key's effective state (value, source, lock, protection,
+	// pending restart, secret metadata); false for an unregistered path.
+	Lookup(p config.Path) (config.KeyState, bool)
+	// Keys is every registered key in path order.
+	Keys() iter.Seq2[config.Path, config.KeyState]
+	// Generation moves on every commit and on Attach.
+	Generation() uint64
+	// OnCommit registers fn to run after every committed Apply with the new
+	// generation (config.Store.OnCommit): the hook an App-wide projection
+	// rebuilds on, whoever wrote.
+	OnCommit(fn func(gen uint64))
+	// PassthroughValues are the operator-layer values of passthrough paths
+	// (integrations.<kind>.<instance>.<field>), raw and sorted by path.
+	PassthroughValues() iter.Seq2[config.Path, config.OperatorValue]
+}
+
+// ConfigWrite is the one write of ConfigAccess.
+type ConfigWrite interface {
+	// Apply validates and commits a patch in one batch (05-config 1.4 step 8).
+	Apply(ctx context.Context, p config.Patch, a config.Actor) (config.Result, error)
+}
+
+// ConfigSecrets is the secret side of ConfigAccess.
+type ConfigSecrets interface {
+	// Secret, PutSecret and DeleteSecret reach the secret store by name, for
+	// names Manifest.AppConfig.Secrets admits; any other name is refused with
+	// secrets.ErrOutOfScope. A name that is a registered config key is
+	// readable (the key's Lookup carries only metadata) but not writable here:
+	// PutSecret and DeleteSecret refuse it, because Apply writes it and so
+	// keeps its audit, protection and lock.
+	Secret(ctx context.Context, name secrets.Name) (secrets.Value, secrets.Meta, error)
+	PutSecret(ctx context.Context, name secrets.Name, v secrets.Value, by string) (secrets.Meta, error)
+	DeleteSecret(ctx context.Context, name secrets.Name, by string) error
+	// ListSecrets is the Meta (never a value) of every set secret whose name
+	// starts with prefix and that Manifest.AppConfig.Secrets admits, sorted by
+	// name. A name the gate refuses is left out, not reported, so the list can
+	// never reveal that a record exists outside the declaration. It lets a module
+	// find the secrets of an entry it cannot enumerate by name (the credentials of
+	// a metadata source).
+	ListSecrets(ctx context.Context, prefix string) ([]secrets.Meta, error)
 }
 
 // StorageHandles is what Deps.Storage carries (06 §6.4.4). It lives in

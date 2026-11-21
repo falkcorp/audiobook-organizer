@@ -471,7 +471,8 @@ func TestConfigPlan_NoURLTypedKeyEscapesTheGuard(t *testing.T) {
 				// A dropped member (class x) is read by nothing and HEAD's codec has
 				// already folded its scalars into the class-i member that stays; its
 				// value is not kept, but it must not leak either.
-				if row, _ := Table().Row(l.top); row.Class == ClassDropped {
+				leafRow, _ := Table().Row(l.name)
+				if row, _ := Table().Row(l.top); row.Class == ClassDropped || leafRow != nil && leafRow.Class == ClassDropped {
 					requireNoLeakOnly(t, l.name, w)
 					continue
 				}

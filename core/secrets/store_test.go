@@ -1,7 +1,7 @@
 // file: core/secrets/store_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: 45016034-b979-435e-b52a-6ddb35c3501c
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -524,7 +525,7 @@ func TestDeriveKey_IndependentOfDataKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.Keys[0] = keyringKey{ID: "k2", Use: useData, Created: f.Keys[0].Created, Status: statusActive, Material: nk}
-	if err := writeKeyring(e.root, defaultKeyFile, f); err != nil {
+	if err := writeKeyring(statefs.FromRoot(e.root), defaultKeyFile, f); err != nil {
 		t.Fatal(err)
 	}
 	r := e.open(t, nil)

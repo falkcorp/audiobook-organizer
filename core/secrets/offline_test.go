@@ -1,18 +1,99 @@
 // file: core/secrets/offline_test.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: a73ea92d-cb22-49ff-8573-95512b562818
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 )
+
+// orderSpy records, in call order, each directory sync (by label) and each
+// open of the keyring file, and fails the syncs of failOn.
+type orderSpy struct {
+	StateFiles
+	keyFile string
+	failOn  map[string]bool
+
+	mu     sync.Mutex
+	events []string
+}
+
+func (p *orderSpy) note(ev string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, ev)
+}
+
+func (p *orderSpy) SyncDir(label, name string) error {
+	p.note("sync:" + label)
+	if p.failOn[label] {
+		return errors.New("no space left on device (Penguin's trap)")
+	}
+	return p.StateFiles.SyncDir(label, name)
+}
+
+func (p *orderSpy) Open(name string) (io.ReadCloser, error) {
+	if name == p.keyFile {
+		p.note("open:keyring")
+	}
+	return p.StateFiles.Open(name)
+}
+
+// TestExportKeyring_SyncsTheDirectoryBeforeItCopies: the keyring's directory
+// is fsynced before export-keyring reads the keyring, and when that sync fails
+// nothing is copied and no record is written: an operator never holds a backup
+// of a key whose directory entry may be lost with the next power cut.
+func TestExportKeyring_SyncsTheDirectoryBeforeItCopies(t *testing.T) {
+	e := newEnv(t)
+	e.open(t, nil)
+	run := func(failOn ...string) (*orderSpy, string, error) {
+		spy := &orderSpy{StateFiles: RootStateFiles(e.root), keyFile: defaultKeyFile, failOn: map[string]bool{}}
+		for _, l := range failOn {
+			spy.failOn[l] = true
+		}
+		out := filepath.Join(t.TempDir(), "keyring.export")
+		_, err := exportKeyring(e.root, spy, "", out, e.clock.now())
+		return spy, out, err
+	}
+
+	spy, out, err := run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spy.events; len(got) < 2 || got[0] != "sync:"+labelExportSync || got[1] != "open:keyring" {
+		t.Fatalf("events = %v, want the export-sync before the keyring is opened", got)
+	}
+	if _, err := os.Stat(out); err != nil {
+		t.Fatalf("a healthy export wrote no copy: %v", err)
+	}
+
+	if err := os.Remove(filepath.Join(e.dir, "secrets.keyring.exported")); err != nil {
+		t.Fatal(err)
+	}
+	spy, out, err = run(labelExportSync)
+	if err == nil {
+		t.Fatal("the export succeeded though the keyring's directory could not be synced")
+	}
+	if slices.Contains(spy.events, "open:keyring") {
+		t.Errorf("events = %v: the keyring was read after the sync failed", spy.events)
+	}
+	if _, serr := os.Stat(out); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("a copy exists after the failed sync (stat: %v)", serr)
+	}
+	if _, serr := os.Stat(filepath.Join(e.dir, "secrets.keyring.exported")); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("an export record exists after the failed sync (stat: %v)", serr)
+	}
+}
 
 // TestExportKeyring_CopiesWithoutTheStore (a test name coined by F3-03; the
 // running-server half is the kernel's TestExportKeyring_OpensNoStore): the

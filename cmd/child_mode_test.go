@@ -15,7 +15,6 @@ import (
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/books/store/mocks"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
@@ -40,19 +39,9 @@ func TestChildModeHelperProcess(t *testing.T) {
 	}
 
 	switch mode {
-	case "fail":
-		initializeChildStore = func(string, string, database.StandaloneOptions) (database.Store, error) {
-			return mocks.NewMockStore(t), nil
-		}
-		closeChildStore = func() error { return nil }
-		loadConfigFromDB = func(database.SettingsStore) error {
-			return errors.New("read settings: boom")
-		}
 	case "empty":
-		// A fresh install: the real store and the real settings load, on a
-		// new, empty database (registry.EnvChildDBPath is set by the parent
-		// test to a temp dir).
-		loadConfigFromDB = config.LoadConfigFromDatabase
+		// A fresh install: the real store on a new, empty database
+		// (registry.EnvChildDBPath is set by the parent test to a temp dir).
 	default:
 		t.Fatalf("unknown helper mode %q", mode)
 	}
@@ -103,24 +92,6 @@ func runChildModeHelperIn(t *testing.T, mode, stateDir, dbPath string) (int, str
 		t.Fatalf("run helper: %v", err)
 	}
 	return cmd.ProcessState.ExitCode(), stderr.String()
-}
-
-// A child op process must not run on defaults when it cannot read the stored
-// settings: an op that saves settings writes the whole config struct, so it
-// would overwrite them. It exits non-zero before building the server, the same
-// as the server's Fatal loadConfigFromDB step. Until 2026-10-10 the failure
-// was a warning and the child went on to run the op.
-func TestRunOperationRunner_SettingsReadFailureExitsNonZero(t *testing.T) {
-	code, out := runChildModeHelper(t, "fail")
-	if code == reachedServerExitCode {
-		t.Fatalf("child mode went on to build the server after a settings read failure; output:\n%s", out)
-	}
-	if code == 0 {
-		t.Fatalf("child mode exited 0 after a settings read failure; output:\n%s", out)
-	}
-	if !strings.Contains(out, "failed to load config from database") {
-		t.Errorf("child mode output does not name the settings read failure:\n%s", out)
-	}
 }
 
 // An empty settings keyspace (a fresh install) is not a failure: the child

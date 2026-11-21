@@ -253,10 +253,13 @@ func (h *offlineABO) boot() {
 func (h *offlineABO) offline() {
 	h.t.Helper()
 	withConfig(h.t, func() config.Config { c := config.AppConfig; h.edit(&c); return c }())
-	h.mod = Module().(*booksModule)
-	opts, err := OfflineOptions()
+	opts, err := OfflineOptions(BootInputs{})
 	require.NoError(h.t, err)
 	h.disk(&opts)
+	// The module an offline command plans over names the database, as
+	// cmd's does (books.OfflineModule): a flipped store carries the level
+	// step, which a module that plans none refuses to open.
+	h.mod = OfflineModule(opts).(*booksModule)
 	h.opts = opts
 	h.cmds = map[string]app.Command{}
 	for _, c := range app.OfflineCommands(opts, h.mod) {

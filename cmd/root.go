@@ -1,7 +1,7 @@
 // file: cmd/root.go
-// version: 1.30.3
+// version: 1.31.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package cmd
 
@@ -22,33 +22,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
-
-// shutdownBudgetEnv is the R1 reading of core.shutdown.budget's operator name (05-health §5H.4;
-// 05-config §1.12.1). F3 deletes it with R1Values: core config reads the variable from then on.
-// serve reads it first thing and passes it as books.ServeInputs.ShutdownBudget, which books.Options
-// sets as R1Values.ShutdownBudget.
-const shutdownBudgetEnv = "ABO_CORE_SHUTDOWN_BUDGET"
-
-// shutdownBudgetFromEnv returns 0 (core's default) when the variable is unset or empty, the parsed
-// duration when it is a positive time.ParseDuration value, and an error naming the variable otherwise.
-func shutdownBudgetFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
-	raw, ok := lookup(shutdownBudgetEnv)
-	if !ok || raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", shutdownBudgetEnv, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("%s: %q must be a positive duration", shutdownBudgetEnv, raw)
-	}
-	return d, nil
-}
 
 var cfgFile string
 var rootDir string
@@ -59,18 +37,7 @@ var logLevel string
 var metadataInspectFile string
 
 // persistentFlagConfigKeys maps each root persistent flag to the config key it
-// feeds. It drives BOTH viper.BindPFlag and the explicit-flag capture in
-// initConfig, deliberately: those two loops have to agree about which flags
-// exist, and a table is the only way to guarantee they still agree after
-// someone adds the next flag.
-//
-// The capture exists because viper flattens flags, environment, config file and
-// the persisted DB blob into one namespace and remembers only the winning
-// VALUE, never who supplied it. config.LoadConfigFromDatabase later overlays
-// the blob on top, at which point "the operator typed --db" is unrecoverable —
-// and neither viper.IsSet nor viper.Get can recover it, for reasons measured and
-// tabulated on config.explicitFlags. cobra's Changed() is the only API that
-// answers the question, and only while the parse is fresh.
+// feeds through viper.BindPFlag.
 var persistentFlagConfigKeys = map[string]string{
 	"dir":       "root_dir",
 	"db":        "database_path",
@@ -94,7 +61,6 @@ var (
 	processBooks           = scanner.ProcessBooks  // func([]Book, logger.Logger) error
 	generatePlaylists      = playlist.GeneratePlaylistsForSeries
 	updateSeriesTags       = tagger.UpdateSeriesTags
-	loadConfigFromDB       = config.LoadConfigFromDatabase
 	newServer              = server.NewServer
 	getDefaultServerConfig = server.GetDefaultServerConfig
 	// runApp is serve's composition root (serve_app.go): app.New(ctx, opts,
@@ -260,13 +226,6 @@ var serveCmd = &cobra.Command{
 	Short: "Start the web server",
 	Long:  `Start the web server to provide a web interface for audiobook management.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// An invalid ABO_CORE_SHUTDOWN_BUDGET refuses the start, before the
-		// store opens or anything binds (R1-33).
-		shutdownBudget, err := shutdownBudgetFromEnv(os.LookupEnv)
-		if err != nil {
-			return fmt.Errorf("serve: %w", err)
-		}
-
 		// Lines before app.New installs the log pipeline at P5 (the config
 		// load here, and the kernel's store open, checkpoint and migrations at
 		// P2 to P4b) go to standard output at log_level, as the rest of serve's
@@ -314,7 +273,10 @@ var serveCmd = &cobra.Command{
 			}
 		}
 
-		// TLS configuration (defaults to snake oil certs)
+		// TLS: the files reach the listener as core.http.tls.* (the flags are
+		// flag layers, serveBootInputs); these two only describe the process
+		// to the server config until the listener's address and files replace
+		// them.
 		cfg.TLSCertFile = cmd.Flag("tls-cert").Value.String()
 		cfg.TLSKeyFile = cmd.Flag("tls-key").Value.String()
 		cfg.HTTP3Port = cmd.Flag("http3-port").Value.String()
@@ -322,9 +284,21 @@ var serveCmd = &cobra.Command{
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
 
-		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
+		boot, err := serveBootInputs(cmd.Flags())
+		if err != nil {
+			return err
+		}
+		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, FromRelease: fromRelease, Boot: boot})
 	},
 }
+
+// fromRelease is the pre-freeze release's tag main embeds (09 §9.2.1); serve
+// hands it to books as ServeInputs.FromRelease.
+var fromRelease string
+
+// SetFromRelease records the pre-freeze release's tag. Called from main before
+// Execute, like SetVersion.
+func SetFromRelease(tag string) { fromRelease = tag }
 
 // SetVersion sets the version string on the root command.
 // Called from main before Execute so --version and the version command work.
@@ -390,7 +364,7 @@ func init() {
 	rootCmd.AddCommand(diagnosticsCmd)
 	rootCmd.AddCommand(metadataInspectCmd)
 	rootCmd.AddCommand(seedCmd)
-	addOfflineCommands(rootCmd, func() []module.Module { return []module.Module{books.Module()} })
+	addOfflineCommands(rootCmd, func(o app.Options) []module.Module { return []module.Module{books.OfflineModule(o)} })
 
 	// Add serve command specific flags
 	serveCmd.Flags().String("port", "8484", "port to run the web server on")
@@ -398,8 +372,8 @@ func init() {
 	serveCmd.Flags().String("read-timeout", "0s", "read timeout (0s disables timeout for SSE compatibility)")
 	serveCmd.Flags().String("write-timeout", "0s", "write timeout (0s disables timeout for SSE compatibility)")
 	serveCmd.Flags().String("idle-timeout", "120s", "idle timeout (e.g. 60s, 2m)")
-	serveCmd.Flags().String("tls-cert", "certs/localhost.crt", "TLS certificate file for HTTPS/HTTP2/HTTP3")
-	serveCmd.Flags().String("tls-key", "certs/localhost.key", "TLS key file for HTTPS/HTTP2/HTTP3")
+	serveCmd.Flags().String("tls-cert", "", "TLS certificate file for HTTPS/HTTP2/HTTP3 (core.http.tls.cert_file; with --tls-key; none = HTTP only)")
+	serveCmd.Flags().String("tls-key", "", "TLS key file for HTTPS/HTTP2/HTTP3 (core.http.tls.key_file)")
 	serveCmd.Flags().String("http3-port", "8484", "HTTP/3 (QUIC) port on UDP (same as --port for best compatibility)")
 	serveCmd.Flags().String("external-url", "", "public-facing origin used in generated links, e.g. https://books.example.com (prevents Host-header injection)")
 	serveCmd.Flags().Int("workers", 2, "number of background operation workers")
@@ -471,16 +445,6 @@ broken tags or filename fallbacks without running a full scan.`,
 const skipAppInitAnnotation = "audiobook-organizer/skip-app-init"
 
 func initConfig() {
-	// FIRST: record which flags the operator actually typed, before any config
-	// layer is loaded. cobra.OnInitialize runs after flag parsing and before the
-	// command body, so this is the earliest point where Changed() is both
-	// populated and still ahead of every consumer.
-	for flagName, configKey := range persistentFlagConfigKeys {
-		if rootCmd.PersistentFlags().Changed(flagName) {
-			config.MarkFlagExplicit(configKey)
-		}
-	}
-
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
@@ -539,8 +503,7 @@ func initConfig() {
 	}
 	// Report what was BUILT, not what was asked for. enabled_sort_indexes is
 	// boot-only: this is the value GET /api/v1/config shows for the life of
-	// the process, LoadConfigFromDatabase pins it over whatever the stored
-	// blob holds, and UpdateConfig refuses a PUT that changes it. Writing the
+	// the process (the setting is boot-only). Writing the
 	// accepted set back drops unknown names, so a typo is not reported as an
 	// enabled index.
 	builtSortIndexes := database.EnabledSortIndexFields()

@@ -33,3 +33,47 @@ func TestAdminStoreIdentity(t *testing.T) {
 		t.Errorf("reopened identity = %+v, want the same store's %+v", got, first)
 	}
 }
+
+// TestAdminDataMigrationDone: the record's state decides, and only done counts.
+func TestAdminDataMigrationDone(t *testing.T) {
+	e := newEnv(t, offlineOwners()...)
+	db := e.open()
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := t.Context()
+	adm := db.Admin()
+	done := func() bool {
+		t.Helper()
+		got, err := adm.DataMigrationDone(ctx, "test.cutover")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if done() {
+		t.Fatal("a migration with no record is not done")
+	}
+	for _, c := range []struct {
+		state string
+		want  bool
+	}{{"pending", false}, {"running", false}, {"verifying", false}, {"failed", false}, {"held", false}, {DataMigrationDone, true}} {
+		raw, err := DataMigrationCodec().Encode(DataMigrationRecord{State: c.state})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.storageKS().Set(ctx, DataMigrationKey("test.cutover"), raw); err != nil {
+			t.Fatal(err)
+		}
+		if got := done(); got != c.want {
+			t.Errorf("state %q: done = %v, want %v", c.state, got, c.want)
+		}
+	}
+	if err := db.storageKS().Set(ctx, DataMigrationKey("test.cutover"), []byte("not a record")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adm.DataMigrationDone(ctx, "test.cutover"); err == nil {
+		t.Error("an unreadable record must be an error, not a false")
+	}
+	if got, err := adm.DataMigrationDone(ctx, "test.other"); err != nil || got {
+		t.Errorf("another migration's record leaked: %v %v", got, err)
+	}
+}

@@ -1,7 +1,7 @@
 // file: web/src/components/settings/ITunesImport.tsx
-// version: 1.24.0
+// version: 1.24.1
 // guid: 4eb9b74d-7192-497b-849a-092833ae63a4
-// last-edited: 2026-10-08
+// last-edited: 2026-11-19
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -129,10 +129,11 @@ export function ITunesImport() {
   useEffect(() => {
     getConfig()
       .then((cfg) => {
-        if (cfg.itunes_library_read_path) {
+        const readPath = cfg.itunes?.library_read_path;
+        if (readPath) {
           setSettings((prev) => {
             if (!prev.libraryPath) {
-              return { ...prev, libraryPath: cfg.itunes_library_read_path! };
+              return { ...prev, libraryPath: readPath };
             }
             return prev;
           });
@@ -201,7 +202,7 @@ export function ITunesImport() {
       setSettings((prev) => ({ ...prev, libraryPath: path }));
     } else if (browseTarget === 'itl') {
       setSettings((prev) => ({ ...prev, itlPath: path }));
-      updateConfig({ itunes_library_write_path: path }).catch(() => {});
+      updateConfig({ itunes: { library_write_path: path } }).catch(() => {});
     }
     setBrowseTarget(null);
   };
@@ -369,7 +370,7 @@ export function ITunesImport() {
             onChange={(event) => {
               const itlPath = event.target.value;
               setSettings((prev) => ({ ...prev, itlPath }));
-              updateConfig({ itunes_library_write_path: itlPath }).catch(() => {});
+              updateConfig({ itunes: { library_write_path: itlPath } }).catch(() => {});
             }}
             fullWidth
             placeholder="/path/to/iTunes Library.itl"

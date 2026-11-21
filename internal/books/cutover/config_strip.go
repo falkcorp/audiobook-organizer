@@ -137,6 +137,11 @@ type FileMeta struct {
 // osFiles is the OS filesystem.
 type osFiles struct{}
 
+// OSFiles is the OS filesystem as StripGapFill's FileOps, for a caller that
+// wraps it (F3-07's strip guards its writes with a check of the pre-migration
+// checkpoint) instead of passing nil.
+func OSFiles() FileOps { return osFiles{} }
+
 func (osFiles) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
 
 func (osFiles) Resolve(path string) (string, error) {

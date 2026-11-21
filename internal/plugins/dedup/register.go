@@ -35,7 +35,7 @@ func ServiceDefs() []serviceregistry.ServiceDef {
 	return []serviceregistry.ServiceDef{
 		{
 			Name:   "dedupplugin",
-			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore, serviceregistry.KeyConfigUpdate},
+			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyDedup, serviceregistry.KeyEmbeddingStore},
 			Groups: []string{"plugins"},
 			Build: func(c *serviceregistry.Container) (any, error) {
 				engine, _ := serviceregistry.TryGet[*dedupengine.Engine](c, serviceregistry.KeyDedup)
@@ -68,28 +68,19 @@ func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) err
 	if p == nil {
 		return nil
 	}
-	// The dedup-score sink lives here, not in the dedup ServiceDef in
+	// The dedup-score hook lives here, not in the dedup ServiceDef in
 	// internal/server/registry_wire.go, because it needs BOTH the engine and
 	// the ops registry: a PUT /api/v1/config that changes dedup.signals swaps
 	// the ladder into the live engine and queues dedup.rescore to re-band the
-	// stored rows (see rescore_op.go). It is installed unconditionally on the
-	// registry being present, so a missing ops registry surfaces as a sink
+	// stored rows (see rescore_op.go). It is registered unconditionally on the
+	// registry being present, so a missing ops registry surfaces as a hook
 	// error naming the manual remedy rather than as a silently un-re-banded
 	// backlog.
-	//
-	// A MISSING update service is a hard error, not a warning. KeyConfigUpdate
-	// is a declared Needs of this plugin's ServiceDef (see the Needs list
-	// above), so its absence is a wiring bug, not a deployment shape. Warning
-	// and continuing would leave a server that starts clean and looks healthy
-	// while dedup.signals silently never reaches the live engine — the whole
-	// feature disabled by one log line nobody reads. Fail the startup instead.
-	updateSvc, ok := serviceregistry.TryGet[*config.UpdateService](c, serviceregistry.KeyConfigUpdate)
-	if !ok || updateSvc == nil {
-		return fmt.Errorf("dedup PostInit: the config update service (%s) is a declared Needs but was not in the container; dedup.signals changes would never reach the live engine", serviceregistry.KeyConfigUpdate)
+	if err := p.registerScoreHook(config.Current()); err != nil {
+		return err
 	}
-	updateSvc.SetDedupScoreConfigSink(p.dedupScoreSink)
 
-	// Unlike the update service above, a missing ops registry stays non-fatal:
+	// Unlike a Facade without hooks, a missing ops registry stays non-fatal:
 	// it is not a declared Needs, and the sink reports it per-request with the
 	// manual remedy (rescore_op.go's nil-registry branch). But say plainly that
 	// ZERO op defs were registered — including dedup.full-scan — rather than
@@ -100,4 +91,23 @@ func (p *Plugin) PostInit(ctx context.Context, c *serviceregistry.Container) err
 		return nil
 	}
 	return p.Register(wrapper.Registry)
+}
+
+// registerScoreHook registers dedupScoreHook on the installed config Facade, so
+// every committed settings Update reaches the live engine. With no Facade there
+// is no settings write path (PUT /api/v1/config answers 503 and Mutate changes
+// memory only), so there is nothing to follow. A Facade that runs no hooks is a
+// wiring bug, not a deployment shape, and fails the start: warning and going on
+// would leave a server that looks healthy while dedup.signals silently never
+// reaches the live engine.
+func (p *Plugin) registerScoreHook(f config.Facade) error {
+	if f == nil {
+		return nil
+	}
+	reg, ok := f.(config.UpdateHookRegistrar)
+	if !ok {
+		return fmt.Errorf("dedup PostInit: the installed config Facade (%T) runs no update hooks; dedup.signals changes would never reach the live engine", f)
+	}
+	reg.OnUpdate("dedup.signals", p.dedupScoreHook)
+	return nil
 }
