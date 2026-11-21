@@ -187,7 +187,7 @@ func forwardedHTTPS(r *http.Request) bool {
 		if i := strings.LastIndexByte(last, ','); i >= 0 {
 			last = last[i+1:]
 		}
-		for _, part := range strings.Split(last, ";") {
+		for part := range strings.SplitSeq(last, ";") {
 			k, val, ok := strings.Cut(strings.TrimSpace(part), "=")
 			if ok && strings.EqualFold(k, "proto") {
 				return strings.EqualFold(strings.Trim(val, `"`), "https")
