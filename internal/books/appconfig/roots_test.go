@@ -170,6 +170,14 @@ func TestRoots_OperatorLayerOverlaysAndLocks(t *testing.T) {
 		t.Fatalf("a refused save wrote: blob saves %d, core applies %d", res.saves, len(f.applied))
 	}
 
+	// An operator list with no books-library entry is still the effective
+	// list (as it is after M6, when the projection reads core.library.roots):
+	// root_dir is empty, and locked, not the blob's.
+	e, _, _ = foldEngineRes(t, `[]`, withRoots(`[]`, by), withBlob("root_dir", `"/srv/gotham"`))
+	if got := e.Snapshot().RootDir; got != "" || e.Locks()["root_dir"] != by {
+		t.Fatalf("an operator list without books-library: root=%q locks=%v", got, e.Locks())
+	}
+
 	// The operator's aliases come through, each with its root's path.
 	withAliases := `[{"id":"books-library","path":"/srv/blackgate","aliases":[{"windows":"B:\\gate","unc":"","smb_url":""}]}]`
 	e, _, _ = foldEngineRes(t, `[]`, withRoots(withAliases, by))

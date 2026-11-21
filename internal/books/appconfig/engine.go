@@ -328,6 +328,18 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 		}
 		return nil
 	}
+	// A canonical value one HEAD row cannot hold may be held by another row
+	// naming the same canonical path (a Shared pair: bootstrap_key_ttl and
+	// bootstrap_key_ttl_days both name core.auth.bootstrap.key_ttl, and the
+	// default 8h is no whole number of days). The value reaches HEAD's Config
+	// through that sibling, so nothing is lost: only a value no row naming
+	// the path can hold is reported (heldBy, notHeld after the loop).
+	heldBy := map[string]bool{}
+	type unheldRow struct {
+		head, path string
+		err        error
+	}
+	var notHeld []unheldRow
 	for _, p := range e.rows {
 		if p.kind != kindKey && p.kind != kindMember {
 			continue // projectFolds reads these
@@ -362,7 +374,7 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 		}
 		switch {
 		case errors.Is(rerr, cutover.ErrNotRepresentable):
-			e.noteUnrepresentable(out, p.row.Head, rerr)
+			notHeld = append(notHeld, unheldRow{head: p.row.Head, path: p.target.Path, err: rerr})
 			continue
 		case errors.Is(rerr, cutover.ErrNotApplicable):
 			continue // never stored: the base holds it
@@ -385,6 +397,16 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 		if err := set(p.row.Head, val); err != nil {
 			return nil, err
 		}
+		if !p.residual {
+			heldBy[p.target.Path] = true // read from the canonical key, not the blob
+		}
+	}
+	for _, u := range notHeld {
+		if heldBy[u.path] {
+			e.log.Debug("appconfig: %s cannot hold %s's value (%s); another setting naming it holds it", u.head, u.path, logger.SanitizeLogErr(u.err))
+			continue
+		}
+		e.noteUnrepresentable(out, u.head, u.err)
 	}
 	if err := e.projectFolds(out, set); err != nil {
 		return nil, err
