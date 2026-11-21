@@ -65,7 +65,7 @@ var appConfigRatchet = map[string]int{
 	"internal/plugins/acoustid":           13,
 	"internal/plugins/dedup":              10,
 	"internal/plugins/deluge":             4,
-	"internal/plugins/maintenance":        43,
+	"internal/plugins/maintenance":        38,
 	"internal/plugins/metafetch":          1,
 	"internal/reconcile":                  8,
 	"internal/remux":                      2,

@@ -98,9 +98,7 @@ import (
 	"sync/atomic"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -505,7 +503,7 @@ func rewritePathPrefixCheckParams(params rewritePathPrefixParams) error {
 	// PREFIXES, which is enough: every row this op touches is under old_prefix
 	// and every path it writes is under new_prefix, so neither side can reach
 	// into an iTunes root once both prefixes are outside one.
-	roots, itErr := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+	roots, itErr := itunesProtectedRoots()
 	if itErr != nil {
 		return fmt.Errorf("rewrite-path-prefix: %w", itErr)
 	}
