@@ -65,8 +65,10 @@ describe('the kind-rename inputs this test reads', () => {
 });
 
 describe('OPERATION_DEF_LABELS', () => {
-  it('labels every def id the kind-rename table knows', () => {
-    const missing = allDefs.filter((id) => !OPERATION_DEF_LABELS[id]?.trim());
+  it('labels every registered and retired def id the kind-rename table knows', () => {
+    const missing = allDefs
+      .filter((id) => !formerOf.has(id))
+      .filter((id) => !OPERATION_DEF_LABELS[id]?.trim());
     expect(missing).toEqual([]);
   });
 
@@ -95,10 +97,10 @@ describe('OPERATION_DEF_LABELS', () => {
     expect(shared).toEqual([]);
   });
 
-  it('labels a former id as the def it was renamed to', () => {
-    for (const [old, canon] of formerOf) {
-      expect(OPERATION_DEF_LABELS[old], old).toBe(OPERATION_DEF_LABELS[canon]);
-    }
+  it('names no former id: code never names an alias', () => {
+    // The Go guard TestOpIDs_CodeNeverNamesAnAlias fails on a former id written as a
+    // key here. A former id still displays: the server sends the renamed def's name.
+    expect([...formerOf.keys()].filter((old) => old in OPERATION_DEF_LABELS)).toEqual([]);
   });
 
   it('points every legacy type code at a registered def', () => {
@@ -127,6 +129,13 @@ describe('operationDisplayName', () => {
     expect(operationDisplayName({ type: 'scan' })).toBe('Library Scan');
     expect(operationDisplayName({ type: 'ol_dump_import' })).toBe('OpenLibrary Dump Import');
     expect(operationDisplayName({ type: 'acoustid.scan' })).toBe('AcoustID fingerprint scan');
+  });
+
+  it('shows the renamed def\'s server name for a stored row that carries a former id', () => {
+    for (const [old, canon] of formerOf) {
+      const name = OPERATION_DEF_LABELS[canon] ?? 'Renamed';
+      expect(operationDisplayName({ def_id: old, displayName: name }), old).toBe(name);
+    }
   });
 
   it('prefers the server display_name, and still de-slugs a def nothing knows', () => {
