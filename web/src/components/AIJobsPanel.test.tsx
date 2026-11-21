@@ -7,7 +7,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { AIJobsPanel } from './AIJobsPanel';
 import * as api from '../services/api';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   listAIJobs: vi.fn(),
 }));
 

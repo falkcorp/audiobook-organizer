@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../../services/api';
 import { booksSetup, isBooksSetupRequired } from './booksSetup';
 
-vi.mock('../../../services/api', () => ({ getConfig: vi.fn() }));
+vi.mock('../../../services/api', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../../services/api')>()),  getConfig: vi.fn() }));
 
 beforeEach(() => {
   vi.mocked(api.getConfig).mockReset();

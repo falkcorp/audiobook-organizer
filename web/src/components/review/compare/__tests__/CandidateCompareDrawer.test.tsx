@@ -10,7 +10,8 @@ import { CandidateCompareDrawer } from '../CandidateCompareDrawer';
 import * as api from '../../../../services/api';
 import type { DedupCandidateBreakdownResponse } from '../../../../services/api';
 
-vi.mock('../../../../services/api', () => ({
+vi.mock('../../../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../services/api')>()),
   compareAcoustID: vi.fn(),
   rejectDedupCandidate: vi.fn(),
   getConfig: vi.fn().mockResolvedValue({ root_dir: '/library' }),

@@ -8,7 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../services/api';
 import { SCOPED_TAG_FACETS_DEBOUNCE_MS, useScopedTagFacets } from './useScopedTagFacets';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getScopedTagFacets: vi.fn(),
 }));
 

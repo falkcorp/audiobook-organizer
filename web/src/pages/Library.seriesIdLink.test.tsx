@@ -11,7 +11,8 @@ import { OperationTrackerProvider } from '../components/operations/OperationTrac
 import * as api from '../services/api';
 import { useLibraryCache } from '../stores/useLibraryCache';
 
-vi.mock('../services/api', () => {
+vi.mock('../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/api')>();
   class ApiError extends Error {
     status: number;
     data?: unknown;
@@ -23,6 +24,7 @@ vi.mock('../services/api', () => {
     }
   }
   return {
+    ...actual,
     ApiError,
     getOperationLogsTail: vi.fn().mockResolvedValue([]),
     getOperationTimeline: vi.fn().mockResolvedValue([]),

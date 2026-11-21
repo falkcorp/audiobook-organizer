@@ -7,7 +7,8 @@ import { render, screen } from '@testing-library/react';
 import { ToolsPanel } from './ToolsPanel';
 import { vi } from 'vitest';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getTools: vi.fn().mockResolvedValue([
     {
       name: 'ollama',

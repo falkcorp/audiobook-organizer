@@ -10,7 +10,8 @@ import { Routes, Route } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
 import AuthorDetail from './AuthorDetail';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getAuthor: vi.fn(),
   getAuthorBooks: vi.fn(),
 }));

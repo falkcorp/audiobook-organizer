@@ -7,7 +7,8 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import { buildPlaylist } from '../test/factories';
 import Playlists from './Playlists';
 
-vi.mock('../services/playlistApi', () => ({
+vi.mock('../services/playlistApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/playlistApi')>()),
   listPlaylists: vi.fn(),
   createPlaylist: vi.fn(),
   deletePlaylist: vi.fn(),

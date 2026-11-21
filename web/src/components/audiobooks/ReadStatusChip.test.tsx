@@ -8,7 +8,8 @@ import { buildBookState } from '../../test/factories';
 import ReadStatusChip from './ReadStatusChip';
 
 // Mock the entire readingApi module
-vi.mock('../../services/readingApi', () => ({
+vi.mock('../../services/readingApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/readingApi')>()),
   READ_STATUS_LABELS: {
     unstarted: 'Unstarted',
     in_progress: 'In Progress',

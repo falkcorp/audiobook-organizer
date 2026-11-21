@@ -14,7 +14,8 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import { Series } from './Series';
 import * as api from '../services/api';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getSeriesPage: vi.fn(),
   getSeriesBooks: vi.fn().mockResolvedValue([]),
   bulkDeleteSeries: vi.fn(),

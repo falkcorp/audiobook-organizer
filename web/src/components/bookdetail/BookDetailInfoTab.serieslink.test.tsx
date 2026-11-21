@@ -10,7 +10,8 @@ import { Routes, Route, useLocation } from 'react-router';
 import { renderWithProviders } from '../../test/renderWithProviders';
 import { BookDetailInfoTab } from './BookDetailInfoTab';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getBookRating: vi.fn().mockResolvedValue(null),
   setBookRating: vi.fn(),
   getCoverText: vi.fn().mockResolvedValue({ book_id: '', images: [] }),

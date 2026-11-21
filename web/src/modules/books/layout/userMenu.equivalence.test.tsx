@@ -32,7 +32,8 @@ const apiMock = vi.hoisted(() => ({
   updateMe: undefined as unknown as Mock<AsyncFn>,
   changePassword: undefined as unknown as Mock<AsyncFn>,
 }));
-vi.mock('../../../services/api', () => ({
+vi.mock('../../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../services/api')>()),
   updateMe: (...a: unknown[]) => apiMock.updateMe(...a),
   changePassword: (...a: unknown[]) => apiMock.changePassword(...a),
 }));

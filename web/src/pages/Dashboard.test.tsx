@@ -8,7 +8,8 @@ import { renderWithProviders } from '../test/renderWithProviders';
 import { Dashboard } from './Dashboard';
 
 // Mock the API module
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getSystemStatus: vi.fn(),
   getSystemStorage: vi.fn(),
   countAuthors: vi.fn(),

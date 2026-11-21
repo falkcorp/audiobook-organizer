@@ -49,7 +49,8 @@ const { feedMock, digestMock } = vi.hoisted(() => ({
   digestMock: vi.fn<typeof import('../services/activityApi').fetchActivity>(),
 }));
 
-vi.mock('../services/activityApi', () => ({
+vi.mock('../services/activityApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/activityApi')>()),
   fetchActivity: vi.fn((filter, opts) =>
     filter?.tier === 'digest' ? digestMock(filter, opts) : feedMock(filter, opts)
   ),
@@ -57,7 +58,8 @@ vi.mock('../services/activityApi', () => ({
   compactActivityLog: vi.fn(),
 }));
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   getOperationLogs: vi.fn().mockResolvedValue([]),
   getOperationResult: vi.fn(),
   cancelOperation: vi.fn().mockResolvedValue(undefined),
@@ -74,7 +76,8 @@ vi.mock('../services/api', () => ({
   revertOperation: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../services/versionApi', () => ({
+vi.mock('../services/versionApi', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/versionApi')>()),
   getUndoPreflight: vi.fn(),
 }));
 

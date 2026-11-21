@@ -9,7 +9,8 @@ import { ThrottlePanel } from './ThrottlePanel';
 import * as api from '../../services/api';
 import * as perm from '../../hooks/useLibraryPermission';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getProviderThrottles: vi.fn(),
   startThrottleReset: vi.fn(),
   pollOperationV2: vi.fn(),

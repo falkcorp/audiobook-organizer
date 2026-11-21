@@ -8,7 +8,8 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FolderFilesChip } from '../FolderFilesChip';
 import * as api from '../../../../services/api';
 
-vi.mock('../../../../services/api', () => ({
+vi.mock('../../../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../../services/api')>()),
   getBookFiles: vi.fn(),
 }));
 

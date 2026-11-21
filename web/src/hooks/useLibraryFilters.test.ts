@@ -10,7 +10,8 @@ import type { FilterOptions } from '../types';
 
 // useLibraryFilters fires several fetches on mount (tags/facets/authors/
 // series) unrelated to URL parsing; stub them so the hook mounts cleanly.
-vi.mock('../services/api', () => ({
+vi.mock('../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/api')>()),
   listAllUserTags: vi.fn().mockResolvedValue([]),
   getBookFacets: vi.fn().mockResolvedValue({ genres: [], languages: [] }),
   getAuthors: vi.fn().mockResolvedValue([]),

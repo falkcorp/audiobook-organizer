@@ -20,7 +20,8 @@ import { getConfig, type Config, type PathAlias } from '../../services/api';
 // makes these tests synchronous, but it also means they no longer prove the
 // vars reach a row from a real spine -- DupesSpine.test.tsx owns that wiring
 // assertion.
-vi.mock('../../services/api', () => ({
+vi.mock('../../services/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api')>()),
   getConfig: vi.fn().mockResolvedValue({ root_dir: '/library/books/audiobooks' }),
 }));
 
