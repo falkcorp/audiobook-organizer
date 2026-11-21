@@ -20,6 +20,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import CachedIcon from '@mui/icons-material/Cached';
 import { ViewMode } from '../components/audiobooks/SearchBar';
+import { buildOverrides } from '../components/audiobooks/editOverrides';
 import { useColumnConfig } from '../hooks/useColumnConfig';
 import {
   defaultSortField,
@@ -1403,10 +1404,19 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     setDeleteDialogOpen(true);
   }, []);
 
-  const handleSaveMetadata = async (audiobook: Audiobook) => {
+  const handleSaveMetadata = async (
+    audiobook: Audiobook,
+    _dirtyFields: Set<string>,
+    lockChanges: Record<string, boolean>
+  ) => {
     try {
+      // The padlocks in the dialog only travel as lock-only overrides here:
+      // this payload is the whole form object and (separately) does not
+      // auto-lock edited fields, so dirty fields are deliberately not sent.
+      const overrides = buildOverrides(audiobook, new Set(), lockChanges);
+      const payload = Object.keys(overrides).length > 0 ? { ...audiobook, overrides } : audiobook;
       const { book: saved, warnings } = api.splitUpdateWarnings(
-        await api.updateBook(audiobook.id, audiobook)
+        await api.updateBook(audiobook.id, payload)
       );
       // Update local state with server response
       setAudiobooks((prev) => prev.map((ab) => (ab.id === audiobook.id ? saved : ab)));

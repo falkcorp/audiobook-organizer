@@ -88,7 +88,11 @@ export interface BookDetailDialogsProps {
   editDialogOpen: boolean;
   editAudiobook: Audiobook | null;
   onCloseEdit: () => void;
-  onEditSave: (audiobook: Audiobook, dirtyFields: Set<string>) => Promise<void>;
+  onEditSave: (
+    audiobook: Audiobook,
+    dirtyFields: Set<string>,
+    lockChanges: Record<string, boolean>
+  ) => Promise<void>;
   // conflict
   conflictDialogOpen: boolean;
   onCloseConflict: () => void;

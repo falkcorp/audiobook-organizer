@@ -72,7 +72,11 @@ interface LibraryDialogsProps {
   // MetadataEditDialog
   editingAudiobook: Audiobook | null;
   setEditingAudiobook: (book: Audiobook | null) => void;
-  handleSaveMetadata: (audiobook: Audiobook) => Promise<void>;
+  handleSaveMetadata: (
+    audiobook: Audiobook,
+    dirtyFields: Set<string>,
+    lockChanges: Record<string, boolean>
+  ) => Promise<void>;
 
   // BatchEditDialog
   batchEditOpen: boolean;
