@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -154,7 +155,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 	locks := e.Locks()
 	var invalid []error
 	byPath := map[coreconfig.Path]string{}
-	foldVals, rootsVals := map[string]json.RawMessage{}, map[string]json.RawMessage{}
+	foldVals := map[string]json.RawMessage{}
 	aiVals := map[string]json.RawMessage{}     // ai_backend.<name> -> value
 	memberVals := map[string]json.RawMessage{} // a member row's head -> its canonical value
 	add := func(head string, raw json.RawMessage, clear bool) {
@@ -215,11 +216,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("the value does not fit the setting")})
 				return
 			}
-			switch {
-			case p.kind == kindRoots:
-				rootsVals[head] = raw
-				return
-			case p.kind == kindFold:
+			if p.kind == kindFold {
 				foldVals[head] = raw
 				return
 			}
@@ -247,6 +244,10 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			var probe config.Config
 			if f, ok := fieldAt(&probe, p.segs); !ok || json.Unmarshal(raw, f.Addr().Interface()) != nil {
 				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("the value does not fit the setting")})
+				return
+			}
+			if head == "root_dir" && badLibraryRoot(probe.RootDir) {
+				invalid = append(invalid, &coreconfig.FieldError{Path: "root_dir", Err: errors.New("the library root must be an absolute path")})
 				return
 			}
 			resSet[head] = raw
@@ -317,7 +318,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		add(head, nil, true)
 	}
 	also := map[coreconfig.Path][]string{}
-	if err := e.foldInto(ctx, &patch, byPath, also, foldVals, rootsVals, secretSets); err != nil {
+	if err := e.foldInto(ctx, &patch, byPath, also, foldVals, secretSets); err != nil {
 		invalid = append(invalid, err)
 	}
 	if err := e.memberInto(&patch, byPath, also, memberVals); err != nil {
@@ -515,6 +516,15 @@ func runHook(ctx context.Context, h namedHook, before, after config.Config) (ops
 		}
 	}()
 	return h.fn(ctx, before, after)
+}
+
+// badLibraryRoot reports whether p is a library root M6 would quarantine at F7
+// (internal/books/cutover/m6/roots.go badRootPath): one that holds a NUL or is
+// not an absolute path. Blank is HEAD's "no root" and is not refused. root_dir
+// is a residual row with no quarantine on the write path, so what M6 cannot
+// move is refused when it is saved rather than stored and set aside later.
+func badLibraryRoot(p string) bool {
+	return strings.TrimSpace(p) != "" && (strings.ContainsRune(p, 0) || !filepath.IsAbs(p))
 }
 
 // secretOp is one secret-store write the update makes outside Apply.

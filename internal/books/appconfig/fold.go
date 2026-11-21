@@ -19,37 +19,18 @@ import (
 	"github.com/falkcorp/mediacore/secrets"
 )
 
-// foldInto turns the oauth_* values and the root_dir/path_aliases values of an
-// Update into the one write each list takes: the new OIDC provider list
-// (cutover.FoldOIDC) and the new library roots (cutover.FoldRoots), merged into
-// the lists as they stand. A list is rewritten only when a value names one of its
-// fields or a provider's client secret is being set (so its entry can reference
-// it). byPath and also name, for the response and for errors, the HEAD fields the
-// list stands for.
+// foldInto turns the oauth_* values of an Update into the one write the OIDC
+// provider list takes (cutover.FoldOIDC), merged into the list as it stands.
+// The list is rewritten only when a value names one of its fields or a
+// provider's client secret is being set (so its entry can reference it). byPath
+// and also name, for the response and for errors, the HEAD fields the list
+// stands for.
 //
 // A value that cannot be merged (the existing providers disagree on the
-// allow-list or role, a root that is not an absolute path) is a field error naming
-// the first field of the group, never a partial write.
+// allow-list or role) is a field error naming the first field of the group,
+// never a partial write.
 func (e *Engine) foldInto(ctx context.Context, patch *coreconfig.Patch, byPath map[coreconfig.Path]string, also map[coreconfig.Path][]string,
-	foldVals, rootsVals map[string]json.RawMessage, secretSets []secretOp) error {
-	if len(rootsVals) > 0 {
-		heads := slices.Sorted(maps.Keys(rootsVals))
-		st, ok := e.acc.Lookup(libraryRootsKey)
-		if !ok {
-			return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: errors.New("the library roots key is not registered")}
-		}
-		rootDir := e.Snapshot().RootDir
-		if v, has := rootsVals["root_dir"]; has {
-			if err := json.Unmarshal(v, &rootDir); err != nil {
-				return &coreconfig.FieldError{Path: "root_dir", Err: err}
-			}
-		}
-		out, err := cutover.FoldRoots(rootDir, rootsVals["path_aliases"], listOrEmpty(st.Effective))
-		if err != nil {
-			return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: err}
-		}
-		e.claim(patch, byPath, also, libraryRootsKey, heads, out)
-	}
+	foldVals map[string]json.RawMessage, secretSets []secretOp) error {
 	oidcSecretSet := map[string]bool{}
 	for _, op := range secretSets {
 		for id, name := range e.oidcSecret {

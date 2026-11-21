@@ -177,9 +177,6 @@ const (
 	// kindFold is an oauth_* field that lives inside core's OIDC provider list
 	// (projectFolds reads it, FoldOIDC writes it).
 	kindFold
-	// kindRoots is root_dir or path_aliases, which live in core's library roots
-	// (projectFolds reads them, FoldRoots writes them).
-	kindRoots
 	// kindAI is one of the five ai_backend.* fields, a view over the
 	// ai_endpoints list in the residual (projectAI reads them, FoldAIBackend
 	// writes them). The table has one class-x row, ai_backend; plan makes these
@@ -215,14 +212,10 @@ func plan(tab *cutover.RenameTable, residual bool) []projRow {
 			continue
 		}
 		if r.Class == cutover.ClassInput {
-			if foldsIntoRoots(r) {
-				// root_dir and path_aliases come from core.library.roots: read by
-				// projectFolds, written by FoldRoots.
-				if segs := strings.Split(r.Head, "."); hasField(segs) {
-					out = append(out, projRow{row: r, segs: segs, kind: kindRoots})
-				}
-				continue
-			}
+			// root_dir and path_aliases among them: M2 leaves them in the blob for
+			// M6, which F7 ships, so until then the blob is their home for reads
+			// and writes (05-config 1.12.1 "Class-i fields"); core.library.roots
+			// only overlays them when an operator layer sets it (projectRoots).
 			if segs := strings.Split(r.Head, "."); residual && concrete(r.Head) && hasField(segs) {
 				out = append(out, projRow{row: r, segs: segs, residual: true})
 			}
@@ -396,6 +389,9 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 	if err := e.projectFolds(out, set); err != nil {
 		return nil, err
 	}
+	if err := e.projectRoots(out, set); err != nil {
+		return nil, err
+	}
 	if err := e.projectAI(out, set, resv); err != nil {
 		return nil, err
 	}
@@ -427,15 +423,16 @@ func (e *Engine) projectAI(out *projection, set func(string, json.RawMessage) er
 }
 
 // The two list keys whose entries fold several HEAD fields (the rows with a
-// fold or entry target): core's OIDC providers and library roots.
+// fold or entry target): core's OIDC providers, which M2 writes and the Engine
+// reads and writes, and the library roots, which M6 writes at F7 and an
+// operator layer may set before it (projectRoots).
 const (
 	oidcProvidersKey = "core.auth.oidc.providers"
 	libraryRootsKey  = "core.library.roots"
 )
 
-// projectFolds unfolds the OIDC providers into the oauth_* fields and the
-// library roots into root_dir and path_aliases, with the inverse functions of M2's
-// planner (cutover.UnfoldOIDC, UnfoldRoots).
+// projectFolds unfolds the OIDC providers into the oauth_* fields, with the
+// inverse function of M2's planner (cutover.UnfoldOIDC).
 func (e *Engine) projectFolds(out *projection, set func(string, json.RawMessage) error) error {
 	if st, ok := e.acc.Lookup(oidcProvidersKey); !ok {
 		out.missing["oauth_enabled"] = true
@@ -457,29 +454,41 @@ func (e *Engine) projectFolds(out *projection, set func(string, json.RawMessage)
 			}
 		}
 	}
-	if st, ok := e.acc.Lookup(libraryRootsKey); !ok {
-		out.missing["root_dir"] = true
-	} else if len(st.Effective) > 0 {
-		rootDir, aliases, err := cutover.UnfoldRoots(st.Effective)
-		switch {
-		case errors.Is(err, cutover.ErrNotRepresentable):
-			e.noteUnrepresentable(out, "root_dir", err)
-		case err != nil:
-			return fmt.Errorf("appconfig: %s: %w", libraryRootsKey, err)
-		default:
-			if err := set("root_dir", mustMarshal(rootDir)); err != nil {
-				return err
-			}
-			if len(aliases) > 0 && string(aliases) != "null" {
-				if err := set("path_aliases", aliases); err != nil {
-					return err
-				}
-			}
-			if st.LockedBy != "" {
-				out.locks["root_dir"], out.locks["path_aliases"] = st.LockedBy, st.LockedBy
-			}
-		}
+	return nil
+}
+
+// projectRoots overlays the library root an operator layer names. root_dir and
+// path_aliases are residual rows (the blob holds them until M6 at F7), so
+// core.library.roots holds nothing books stored before then; an operator layer
+// that sets it (ABO_CORE_LIBRARY_ROOTS, ROOT_DIR's canonical name, or the
+// operator file) is authoritative over the stored root and locks both fields,
+// as a passthrough operator value locks a residual field (project). A stored
+// value of the key is not read: nothing writes one before M6, and M6 stages
+// the list from the blob. Without a Residual the class-i rows are not
+// projected, so there is nothing to overlay.
+func (e *Engine) projectRoots(out *projection, set func(string, json.RawMessage) error) error {
+	if e.res == nil {
+		return nil
 	}
+	st, ok := e.acc.Lookup(libraryRootsKey)
+	if !ok || st.LockedBy == "" || len(st.Effective) == 0 {
+		return nil
+	}
+	rootDir, aliases, err := cutover.UnfoldRoots(st.Effective)
+	switch {
+	case errors.Is(err, cutover.ErrNotRepresentable):
+		e.noteUnrepresentable(out, "root_dir", err)
+		return nil
+	case err != nil:
+		return fmt.Errorf("appconfig: %s (set by %s): %w", libraryRootsKey, st.LockedBy, err)
+	}
+	if err := set("root_dir", mustMarshal(rootDir)); err != nil {
+		return err
+	}
+	if err := set("path_aliases", aliases); err != nil {
+		return err
+	}
+	out.locks["root_dir"], out.locks["path_aliases"] = st.LockedBy, st.LockedBy
 	return nil
 }
 
@@ -705,17 +714,6 @@ func hasField(segs []string) bool {
 	return ok
 }
 
-// foldsIntoRoots reports whether a row is one of the HEAD fields that live in
-// core's library roots (an entry target of that list).
-func foldsIntoRoots(r *cutover.Row) bool {
-	for _, t := range r.Targets {
-		if t.Kind == cutover.TargetEntry && t.List == libraryRootsKey {
-			return true
-		}
-	}
-	return false
-}
-
 // foldsIntoOIDC reports whether a row is one of the HEAD fields that live in
 // core's OIDC provider list (a fold target of that list).
 func foldsIntoOIDC(r *cutover.Row) bool {
@@ -739,13 +737,11 @@ func hasKeyTarget(r *cutover.Row) bool {
 }
 
 // keyOf is the core key a row's value is stored in: its own target, or the list
-// a fold or roots row lives in.
+// a fold row lives in.
 func (e *Engine) keyOf(p projRow) string {
 	switch p.kind {
 	case kindFold:
 		return oidcProvidersKey
-	case kindRoots:
-		return libraryRootsKey
 	case kindMember:
 		return p.target.Map
 	}
