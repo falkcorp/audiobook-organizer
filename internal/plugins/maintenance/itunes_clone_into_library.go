@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
@@ -1265,18 +1266,28 @@ func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) i
 		SourcePriorState: derefString(p.source.LibraryState), SourcePriorPrimary: storedPrimaryFlag(p.source.IsPrimaryVersion),
 		PriorPrimaries: priorPrimaryFlags(p.members), OpID: r.opID, At: time.Now()}
 	var made []string
-	cleanup := func() {
+	// cleanup removes the clones made so far and returns a note for each one it
+	// could not remove: a clone left on disk with no row is picked up by the next
+	// scan as a new book, so the group result must say so.
+	cleanup := func() string {
+		var left []string
 		for _, m := range made {
-			_ = r.removePath(m)
+			if err := r.removePath(m); err != nil && !errors.Is(err, os.ErrNotExist) {
+				left = append(left, m+" ("+err.Error()+")")
+			}
 		}
+		if len(left) == 0 {
+			return ""
+		}
+		return " clone files left on disk: " + strings.Join(left, "; ")
 	}
 	for i, f := range p.files {
 		if !pathutil.UnderFrozenITunesTree(f.FilePath) {
 			continue
 		}
 		if err := r.reflink(f.FilePath, p.dests[i]); err != nil {
-			cleanup()
-			g.Outcome, g.Error = icOutcomeFailed, fmt.Sprintf("reflink %s: %v", f.FilePath, err)
+			left := cleanup()
+			g.Outcome, g.Error = icOutcomeFailed, fmt.Sprintf("reflink %s: %v", f.FilePath, err)+left
 			return g
 		}
 		made = append(made, p.dests[i])
@@ -1286,8 +1297,8 @@ func (r *icRunner) applyMixed(ctx context.Context, g icGroupReport, p *icPlan) i
 	// The record goes down BEFORE any row moves, so a failure part way can
 	// always be reversed from it.
 	if err := r.saveRecord(&rec); err != nil {
-		cleanup()
-		g.Outcome, g.Error = icOutcomeFailed, "rollback record not saved; clones removed: "+err.Error()
+		left := cleanup()
+		g.Outcome, g.Error = icOutcomeFailed, "rollback record not saved; clones removed: "+err.Error()+left
 		return g
 	}
 	for _, pr := range rec.Pairs {
@@ -1508,7 +1519,12 @@ func (r *icRunner) undo(ctx context.Context, rec *icRecord) icGroupReport {
 			leftover = append(leftover, pr.ClonePath+" ("+err.Error()+")")
 		}
 		if rec.Kind == icKindVersion {
-			_ = r.removePath(filepath.Dir(pr.ClonePath)) // only if now empty
+			// Only if now empty: a folder that still holds something is not the
+			// clone's to remove, so "not empty" (and already gone) is the normal
+			// answer, not a failure.
+			if err := r.removePath(filepath.Dir(pr.ClonePath)); err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+				leftover = append(leftover, filepath.Dir(pr.ClonePath)+" (folder: "+err.Error()+")")
+			}
 		}
 	}
 	if len(leftover) > 0 {
