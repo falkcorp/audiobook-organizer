@@ -197,6 +197,7 @@ func (k *Kernel) runIdentityP4d(ctx context.Context) error {
 		return err
 	}
 	bks, ok := db.Keyspace(journal.Owner)
+	id.backupKS, id.log = bks, k.coreLog("backup")
 	if !ok {
 		return fmt.Errorf("kernel: identity: no %s keyspace in the store", journal.Owner)
 	}
@@ -288,7 +289,19 @@ func (k *Kernel) registerBackupHealth() error {
 // backupProbe is core.backup's probe over this boot's journal and hook report,
 // the one registerBackupHealth registers.
 func (id *identityBoot) backupProbe() func(context.Context) health.Result {
-	return backupProbe(id.journal.Health, func() hookReport { return id.p4d.Hooks.Report })
+	return backupProbe(id.journal.Health, id.storedRestoreReport)
+}
+
+// storedRestoreReport is the restore hooks' report as recorded in the store
+// (journal.PutRestoreReport), so the restore tokens outlive the boot whose hooks
+// produced them.
+func (id *identityBoot) storedRestoreReport(ctx context.Context) (hookReport, error) {
+	rep, err := journal.ReadRestoreReport(ctx, id.backupKS)
+	if err != nil {
+		id.log.Warn("kernel: the restore hooks' report cannot be read", "err", err)
+		return hookReport{}, err
+	}
+	return hookReport{KeptAdmins: rep.Kept, AdminsToReview: rep.Review}, nil
 }
 
 // closeIdentity closes the journal component (it stops the anchor, writes the
