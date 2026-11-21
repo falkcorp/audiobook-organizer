@@ -179,6 +179,16 @@ func (k *Kernel) runIdentityP4d(ctx context.Context) error {
 	if k.swap != nil && k.swap.out.Boot == restoreswap.BootRestore {
 		rb, err := k.deriveRestoreBoot(ctx)
 		if err != nil {
+			if k.restoreWalks() {
+				// The refused restore stays swapped in and journaled applied, as it
+				// is when swapAfter takes the Owed edge: left at opened, the next
+				// boot would resume it and refuse again without end, and its
+				// ordinary boot is the one that re-applies what the journal holds
+				// and runs the hooks fail-closed on a replaced store.
+				if aerr := k.swap.s.RestoreApplied(ctx, k.swap.out.ID); aerr != nil {
+					err = errors.Join(err, fmt.Errorf("kernel: swap journal %s after the refused derivation: %w", k.swap.out.ID, aerr))
+				}
+			}
 			return fmt.Errorf("%w: %w", errP4dRefuse, err)
 		}
 		restore = rb

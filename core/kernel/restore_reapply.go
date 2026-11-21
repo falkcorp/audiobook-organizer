@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -94,6 +95,7 @@ const (
 // (restoreswap.Swapper's RestoreLine, HooksDone, MarkerWritten and
 // HooksApplied).
 type restoreJournal interface {
+	Boundary(ctx context.Context, id string, seq uint64) error
 	RestoreLine(ctx context.Context, id string, seq uint64) error
 	HooksDone(ctx context.Context, id string) error
 	MarkerWritten(ctx context.Context, id string) error
@@ -143,7 +145,7 @@ type reapplyApply struct {
 	// and one commit for all of them leaves no point at which the head is up and
 	// an admin the journal proved demoted is not yet restricted. A user a later
 	// line deleted is skipped.
-	RestrictLastAdmins func(ctx context.Context, userIDs []string) error
+	RestrictLastAdmins func(ctx context.Context, userIDs []string, runKey string) error
 	// FailClosed is auth's restore fallback with no coverage and no pre-swap
 	// store (auth.PostRestore): every key needs_confirmation, every credential
 	// epoch bumped, every session deleted.
@@ -347,6 +349,12 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 
 	untrusted := in.untrusted(chain, headBefore, &res)
 
+	// A restore boot's boundary is settled before any head moves.
+	if restoring {
+		if err := in.settleBoundary(ctx, &res); err != nil {
+			return res, err
+		}
+	}
 	// The lines this boot owes the journal come before any head moves: what
 	// the verdict that the store was replaced is made durable by.
 	pend, err := in.writeBookkeeping(ctx, chain, aborted, bindErr == nil, &res)
@@ -962,6 +970,18 @@ func (k *keptAdmins) keep(users []string) {
 	}
 }
 
+// restrictKey keys the lines the restriction of the kept admins journals to this
+// restore, by its ID (a run that is no restore boot has none: its lines are
+// unkeyed, as they were). A boot resumed after a crash between those lines and the
+// commit that restricts the users is the same restore, so it finds them and
+// appends none again (auth.RestoreDeps.RunKey).
+func (in reapplyInput) restrictKey() string {
+	if in.Restore == nil || in.Restore.ID == "" {
+		return ""
+	}
+	return "restore:" + in.Restore.ID
+}
+
 // restrictKept restricts the admins the drain and the tail kept, once the whole
 // tail has been applied, and then completes what waited for them: the queue
 // entries of the drained lines that kept one and the head a chunk withheld. A
@@ -974,7 +994,7 @@ func (k *keptAdmins) keep(users []string) {
 // is, and the commit never moves it back.
 func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head) error {
 	if len(owe.Users) > 0 {
-		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users) }); err != nil {
+		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users, in.restrictKey()) }); err != nil {
 			return fmt.Errorf("kernel: restrict the last admins %v: %w", owe.Users, err)
 		}
 	}
@@ -1256,12 +1276,35 @@ func (in reapplyInput) unhookedExternal(ctx context.Context, chain *journal.Chai
 	return out, nil
 }
 
+// settleBoundary decides this restore's boundary, min(the source's seq, the
+// swapped-in store's journal_head), and for a walking boot makes it durable in
+// the restore journal before the re-apply moves that head: the boot a crash in
+// the re-apply leaves is resumed with the boundary the first boot decided, never
+// one recomputed from the head the first boot moved (the restore line a resumed
+// boot appends would name another boundary than the one a fault-free boot's does).
+func (in reapplyInput) settleBoundary(ctx context.Context, res *reapplyResult) error {
+	rb := in.Restore
+	if rb.Steps != nil {
+		if seq, ok := restoreswap.BoundaryOf(rb.Records); ok {
+			res.RestoreBoundary = seq
+			return nil
+		}
+	}
+	res.RestoreBoundary = min(rb.SourceSeq, res.HeadBefore.Seq)
+	if rb.Steps == nil {
+		return nil
+	}
+	if err := rb.Steps.Boundary(ctx, rb.ID, res.RestoreBoundary); err != nil {
+		return fmt.Errorf("kernel: journal the restore's boundary: %w", err)
+	}
+	return nil
+}
+
 // restoreLine finds this restore's line in the journal (by the restore
 // journal's ID, so a crash between the append and the `restore_line` journal
 // record never appends a second) or appends it, then journals restore_line.
 func (in reapplyInput) restoreLine(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, res *reapplyResult) error {
 	rb := in.Restore
-	res.RestoreBoundary = min(rb.SourceSeq, res.HeadBefore.Seq)
 	for _, l := range chain.Lines {
 		if info, ok := l.RestoreInfo(); ok && info.RestoreID == rb.ID && !aborted[l.Seq] {
 			res.RestoreLine, res.RestoreBoundary = l.Seq, info.Boundary

@@ -26,17 +26,14 @@ import (
 // boot applies, read from P0a's outcome, the restore journal and the staged
 // source (05-backup §5B.3.6 "Coverage at restore").
 //
-// P4b's swapAfter journals a restore boot's marker_written{HooksOwed} and
-// applied (machine 1's hook-less edge) before P4d runs, whether the app declared
-// the identity boot or not, so the journal already reads applied and no edge of
-// it is left to walk: the derivation is always the Owed one (restoreBoot.Owed,
-// Steps nil). The restore line is appended and the hooks run now, with the
-// source's boundary, and a crash before the hooks commit leaves the line
-// without its c/backup/restore_hooked/<seq> record, which the next boot resumes
-// as an external one (no coverage, fail-closed). Walking opened, restore_line,
-// hooks_done, marker_written and applied from P4d, the spec's order, needs
-// swapAfter's P4b edge to stand down for an identity boot (swap.go): that is
-// F4-08's carry.
+// An identity boot WALKS the restore journal from here (restoreBoot.Steps is
+// the swapper, Owed false): swapAfter's P4b edge stands down (Kernel.restoreWalks),
+// so P4d's steps 2 and 3 journal restore_line, hooks_done, marker_written and
+// applied in the spec's order, and a crash anywhere in them leaves a journal the
+// next boot resumes as the same restore, with the same restore line and the
+// source's boundary. The Owed derivation (Steps nil, the journal already
+// reading applied) remains for the one identity boot whose pending store rewrite
+// had the restore journaled applied before P4d.
 
 // errRestoreSourceUnreadable refuses an identity boot whose restore source
 // cannot be read: the boundary, the provenance and the audit high-water mark all
@@ -60,16 +57,16 @@ func (k *Kernel) deriveRestoreBoot(ctx context.Context) (*restoreBoot, error) {
 		return nil, fmt.Errorf("%w: restore journal %s: %w", errRestoreSourceUnreadable, out.ID, err)
 	}
 	rb := &restoreBoot{ID: out.ID, Owed: true, Records: recs}
-	if bootseam.RestoreWalk(ctx) {
-		// The crash-matrix cell's walk (F4-08 B10j): swapAfter journaled nothing at
-		// P4b, so P4d's steps 2 and 3 walk the journal's edges themselves.
+	if k.restoreWalks() {
+		// swapAfter journaled nothing at P4b, so P4d's steps 2 and 3 walk the
+		// journal's edges themselves.
 		rb.Owed, rb.Steps = false, k.swap.s
 	}
 
 	// The pre-swap store: the DB directory's set-aside, absent on a host loss
 	// (nothing was live to set aside).
 	prev := restorejournal.SetAsideDest(k.cfg.StateDir, k.cfg.StoragePath, out.ID, in.DBPath)
-	if _, err := os.Stat(prev); err == nil {
+	if _, err := bootseam.FS(ctx).Stat(prev); err == nil {
 		rb.PreSwapDir = prev
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w: the pre-swap store %s: %w", errRestoreSourceUnreadable, prev, err)
