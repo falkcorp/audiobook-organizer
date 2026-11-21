@@ -23,6 +23,7 @@ fixture's go directive from fetching a toolchain.
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -253,7 +254,7 @@ class ShardSliceTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
         for bad in ("0/4", "5/4", "1/0", "x/4", "4"):
-            with self.assertRaises(Exception, msg=bad):
+            with self.assertRaises(argparse.ArgumentTypeError, msg=bad):
                 ccb.parse_shard(bad)
 
 
