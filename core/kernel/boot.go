@@ -317,7 +317,7 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	}
 	k.router = httpapi.NewRouter(httpapi.Options{
 		ServerName: serviceName,
-		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.cfg.AppID + "_session"},
+		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.openAPICookieName()},
 	}, httpapi.Deps{Log: k.coreLog("http"), Metrics: httpScope, MeterProvider: p.MeterProvider(),
 		TracerProvider: p.TracerProvider(), Propagator: p.Propagator(), Redactor: k.redactor})
 	// Core's group claims /api/core/ now, before any module registers, so a
@@ -336,6 +336,22 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		return k.mountIdentity(ctx)
 	}
 	return nil
+}
+
+// openAPICookieName is the session cookie the OpenAPI documents' sessionCookie
+// scheme names. An app that declared the identity boot has the name auth sets
+// the cookie under (core.auth.session.cookie_name, read through the same
+// reader auth's Settings come from, so the document and the Set-Cookie cannot
+// drift); every other boot, and Describe, which opens no config store and so
+// cannot see an operator-set name, has the <AppID>_session default the scheme
+// always carried.
+func (k *Kernel) openAPICookieName() string {
+	if k.ident != nil && k.ident.settings != nil {
+		if name := k.ident.settings().SessionCookie; name != "" {
+			return name
+		}
+	}
+	return k.cfg.AppID + "_session"
 }
 
 // buildLogging builds the App's log.Logging from core.log, or adopts
