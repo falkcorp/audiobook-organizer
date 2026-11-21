@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
@@ -629,7 +630,14 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 		// The request's effective permissions (the auth middleware's union of
 		// the caller's roles), not a fresh walk of the user's roles: the walk
 		// ignored everything about how the request was authenticated.
-		if !auth.Can(c.Request.Context(), auth.PermUsersManage) {
+		//
+		// Under core identity (F4-08 B7) the atom's table entry is judged
+		// through the principal stage 12 bound instead.
+		held, bridged := legacyauth.Held(c.Request.Context(), string(auth.PermUsersManage))
+		if !bridged {
+			held = auth.Can(c.Request.Context(), auth.PermUsersManage)
+		}
+		if !held {
 			httputil.RespondWithForbidden(c, "only admins can reset another user's password")
 			return
 		}

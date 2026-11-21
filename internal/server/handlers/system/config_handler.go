@@ -7,6 +7,7 @@ package system
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/gin-gonic/gin"
@@ -277,6 +279,15 @@ func (h *Handler) configActor(c *gin.Context, f config.Facade) config.Actor {
 // held when the principal holds an atom whose native scopes include it.
 func (h *Handler) configCan(c *gin.Context) func(string) bool {
 	return func(perm string) bool {
+		// Under core identity (F4-08 B7) every answer is the principal stage 12
+		// bound: core:admin is the permission itself (key scoping applied),
+		// any other is held when the principal holds an atom whose native
+		// scopes include it, and there is no first-run grant: it read books'
+		// own user count, which is not the account record once core owns
+		// identity.
+		if id, bridged := legacyauth.IdentityFrom(c.Request.Context()); bridged {
+			return h.configCanBridged(c.Request.Context(), id.Bridge, perm)
+		}
 		if perm == config.FirstRunPerm {
 			return h.configFirstRun != nil && h.configFirstRun()
 		}
@@ -295,6 +306,24 @@ func (h *Handler) configCan(c *gin.Context) func(string) bool {
 		}
 		return false
 	}
+}
+
+// configCanBridged is configCan under core identity.
+func (h *Handler) configCanBridged(ctx context.Context, b *legacyauth.Bridge, perm string) bool {
+	switch {
+	case perm == config.FirstRunPerm:
+		return false
+	case perm == "core:admin":
+		return b.AdminHeld(ctx)
+	case h.configAtoms == nil:
+		return false
+	}
+	for _, atom := range h.configAtoms(perm) {
+		if b.Can(ctx, string(atom)) {
+			return true
+		}
+	}
+	return false
 }
 
 // respondConfigUpdateError maps the Facade's error to a status and the JSON

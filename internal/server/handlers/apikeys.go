@@ -15,6 +15,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -218,6 +219,11 @@ func buildAPIKeyResponse(key database.APIKey, username string) APIKeyResponse {
 
 // isAdminUser reports whether the current request has the users.manage permission.
 func isAdminUser(c *gin.Context) bool {
+	// Under core identity (F4-08 B7) the atom's table entry is judged through
+	// the principal stage 12 bound.
+	if held, bridged := legacyauth.Held(c.Request.Context(), string(auth.PermUsersManage)); bridged {
+		return held
+	}
 	return auth.Can(c.Request.Context(), auth.PermUsersManage)
 }
 

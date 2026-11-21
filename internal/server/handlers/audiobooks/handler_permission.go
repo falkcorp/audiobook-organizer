@@ -10,6 +10,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/batch"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -32,6 +33,12 @@ func (h *Handler) SetPermissionHolds(holds PermissionHolds) {
 // StrictPermissionHolds is auth.Can on the request: no first-run bypass, no
 // auth-disabled bypass. It fails closed for a handler the server did not wire.
 func StrictPermissionHolds(c *gin.Context, p auth.Permission) bool {
+	// Under core identity (F4-08 B7) the atom's table entry is judged through
+	// the principal stage 12 bound; the auth-disabled principal holds nothing
+	// here, as HEAD's auth.Can is false with no permission set bound.
+	if held, bridged := legacyauth.Held(c.Request.Context(), string(p)); bridged {
+		return held
+	}
 	return auth.Can(c.Request.Context(), p)
 }
 
