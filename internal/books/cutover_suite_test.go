@@ -815,11 +815,35 @@ func cutoverBoot(t *testing.T, work string) module.Manifest {
 	t.Run("boot", func(t *testing.T) {
 		c := bootComposedWith(t, false, filepath.Join(work, "state"), edit, nil, opt)
 		man = c.mod.Manifest()
+		logStepItems(t, c.app)
 		require.NoError(t, c.app.Close(t.Context()))
 		Release(c.mod)
 	})
 	require.False(t, t.Failed(), "the cutover boot failed")
 	return man
+}
+
+// logStepItems logs what each data migration counted this boot, per outcome
+// (<ns>_storage_data_migration_items_total{migration,outcome}, the runner's
+// metric). Diagnostics only: the checks read the stored VerifyReport, never
+// these, so a step that counts here and stores no count in its report still
+// fails the count rule, and the log shows what it would have stored.
+func logStepItems(t *testing.T, a *app.App) {
+	t.Helper()
+	mfs, err := a.Metrics().Gatherer().Gather()
+	require.NoError(t, err)
+	for _, mf := range mfs {
+		if !strings.HasSuffix(mf.GetName(), "_storage_data_migration_items_total") {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			labels := map[string]string{}
+			for _, l := range m.GetLabel() {
+				labels[l.GetName()] = l.GetValue()
+			}
+			t.Logf("step items: %s %s = %v", labels["migration"], labels["outcome"], m.GetCounter().GetValue())
+		}
+	}
 }
 
 // checkpoints lists the pre-migration checkpoints beside the store copy's
