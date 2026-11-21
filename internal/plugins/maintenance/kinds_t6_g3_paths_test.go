@@ -831,3 +831,33 @@ func TestT6G3_CreditsBackfillNativeWarnsWhenAJudgedMarkerIsNotWritten(t *testing
 	assert.Equal(t, cbCrashedOp, line.Attrs["operation"])
 	assert.Equal(t, "marker refused", line.Attrs["error"])
 }
+
+// Both HEAD-shell journal forwarders create a row behind the classification
+// check (database.RecordOperationChange): an unclassified change type is
+// refused and nothing is written, a classified one lands. The journal-writer
+// guard (internal/arch) no longer allowlists kinds_t6_g3.go, so this is the
+// check that stays with it.
+func TestT6G3_HeadJournalForwardersRefuseAnUnclassifiedChangeType(t *testing.T) {
+	st := newRepairPebble(t)
+	w := headT6g3Writer{p: &Plugin{deps: fakeDeps{store: st}}, store: st}
+	view := t6g3CBStoreView{w: w}
+	forwarders := map[string]func(*database.OperationChange) error{
+		"writer": w.CreateOperationChange,
+		"view":   view.CreateOperationChange,
+	}
+	for name, create := range forwarders {
+		t.Run(name, func(t *testing.T) {
+			opID := "op-" + name
+			err := create(&database.OperationChange{OperationID: opID, BookID: "b-1", ChangeType: "no_such_change_type"})
+			require.ErrorIs(t, err, database.ErrUnclassifiedChangeType)
+			rows, gerr := st.GetOperationChanges(opID)
+			require.NoError(t, gerr)
+			require.Empty(t, rows, "an unclassified row was not written")
+
+			require.NoError(t, create(&database.OperationChange{OperationID: opID, BookID: "b-1", ChangeType: "author_merge_credits"}))
+			rows, gerr = st.GetOperationChanges(opID)
+			require.NoError(t, gerr)
+			require.Len(t, rows, 1)
+		})
+	}
+}
