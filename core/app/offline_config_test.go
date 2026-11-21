@@ -93,7 +93,7 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	opts.StateDir = filepath.Join(t.TempDir(), "state")
 	opts.RetiredConfigNames = []config.RetiredName{
 		{Name: "GOTHAM_DB_PATH", Canonical: "core.storage.path"},
-		{Name: "GOTHAM_JOURNAL_DAYS", Canonical: "core.log.journal.retention_days"},
+		{Name: "GOTHAM_JOURNAL_DAYS", Canonical: "core.log.journal.retention_days", Message: "the journal keeps its own days"},
 		{Name: "GOTHAM_BAT_SIGNAL", Message: "the signal moved to the roof"},
 		{Name: "GOTHAM_NOT_SET", Canonical: "core.log.journal.min_level"},
 		{Name: "GOTHAM_ORACLE_SECRET", Canonical: "modules.oracle.auth.secret"},
@@ -115,7 +115,7 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	for i, want := range [][]string{
 		{"env GOTHAM_DB_PATH", "STOPS THE SERVICE FROM STARTING", "GOTHAM_CORE_STORAGE_PATH", "core.storage.path"},
 		{"env GOTHAM_ORACLE_SECRET", "NOT CHECKED", "GOTHAM_ORACLE_AUTH_SECRET", "modules.oracle.auth.secret"},
-		{"env GOTHAM_JOURNAL_DAYS", "ignored", "GOTHAM_CORE_LOG_JOURNAL_RETENTION_DAYS", "core.log.journal.retention_days"},
+		{"env GOTHAM_JOURNAL_DAYS", "ignored", "GOTHAM_CORE_LOG_JOURNAL_RETENTION_DAYS", "core.log.journal.retention_days", "(the journal keeps its own days)"},
 		{"env GOTHAM_BAT_SIGNAL", "ignored", "removed", "the signal moved to the roof"},
 		{"4 retired config names set, 1 of them would stop the service from starting, 1 not checked"},
 	} {
