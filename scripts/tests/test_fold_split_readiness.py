@@ -49,16 +49,29 @@ class FoldTest(unittest.TestCase):
         self.assertNotIn("No night has been folded in yet.", folded)
 
     def test_only_the_two_regions_and_the_header_change(self) -> None:
-        folded = fold.fold(DOC, "2026-11-09", "a" * 40, night())
+        # The committed document's header moves every night (the fold bumps it), so the
+        # expected "before" lines are read from DOC, never written as literals here.
+        fold_date = "2099-01-01"  # a fixed date no committed last-edited can equal
+        folded = fold.fold(DOC, fold_date, "a" * 40, night())
         before = fold.HISTORY_RE.sub("", fold.LATEST_RE.sub("", DOC))
         after = fold.HISTORY_RE.sub("", fold.LATEST_RE.sub("", folded))
+        self.assertEqual(len(before.splitlines()), len(after.splitlines()))
         diff = [(a, b) for a, b in zip(before.splitlines(), after.splitlines()) if a != b]
+
+        old_version = fold.VERSION_RE.search(DOC)
+        new_version = fold.VERSION_RE.search(folded)
+        old_edited = fold.EDITED_RE.search(DOC)
+        assert old_version and new_version and old_edited
+        major, minor, patch = (int(old_version.group(i)) for i in (2, 3, 4))
         self.assertEqual(
-            [a for a, _ in diff], ["<!-- version: 1.0.0 -->", "<!-- last-edited: 2026-11-08 -->"]
+            diff,
+            [
+                (old_version.group(0), f"<!-- version: {major}.{minor}.{patch + 1} -->"),
+                (old_edited.group(0), f"<!-- last-edited: {fold_date} -->"),
+            ],
         )
-        self.assertIn("<!-- version: 1.0.1 -->", folded)
-        self.assertIn("<!-- last-edited: 2026-11-09 -->", folded)
-        self.assertIn("<!-- guid: 54041305-9707-4448-b5af-133d66d4696a -->", folded)
+        guid = next(ln for ln in DOC.splitlines() if ln.startswith("<!-- guid: "))
+        self.assertIn(guid, folded)
 
     def test_an_identical_rerun_changes_nothing_and_does_not_bump(self) -> None:
         once = fold.fold(DOC, "2026-11-09", "a" * 40, night())
