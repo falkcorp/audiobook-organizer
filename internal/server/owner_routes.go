@@ -1,7 +1,7 @@
 // file: internal/server/owner_routes.go
-// version: 1.4.2
+// version: 1.4.3
 // guid: 3e9a6c25-1f74-4b8d-a0c2-5d7e8b4f1a63
-// last-edited: 2026-11-11
+// last-edited: 2026-11-21
 
 package server
 
