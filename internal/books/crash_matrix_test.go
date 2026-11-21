@@ -460,7 +460,7 @@ func (a aboFlipModule) Manifest() module.Manifest {
 		DefaultEnabled: true, Settings: b.Settings, Cutover: b.Cutover,
 		// database.BooksSpec(nil) carries no observer: books' own beforeMigration
 		// discards the HNSW marker on the real disk, which the kit forbids.
-		Storage:   a.m.flipSteps(module.Importers{}).Spec(database.BooksSpec(nil)),
+		Storage:   cutover.NewFlipShape(flipShapeOptions()).Spec(database.BooksSpec(nil)),
 		AppConfig: &module.AppConfigSpec{Secrets: func(secrets.Name) bool { return true }}}
 	if !a.noRewrite {
 		man.Rewrite = b.Rewrite
