@@ -263,8 +263,8 @@ type Options struct {
 	// PruneJournal drops the revocation journal's lines at or below seq, the
 	// smallest boundary any retained archive records (§5B.3.5, §5B.3.6
 	// "Retention"). It is not called while a pending or undo-able restore
-	// exists, whose boundary is not known here. nil until backup/journal has a
-	// trim.
+	// exists, whose boundary is not known here. nil until F8-04a G2 binds it to
+	// backup/journal's Component.Trim.
 	PruneJournal func(ctx context.Context, seq uint64) error
 	// Audit records an action before it happens (core.restore.stage, written
 	// after every check that can refuse the restore and just before the intent's
