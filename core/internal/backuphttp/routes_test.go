@@ -493,6 +493,62 @@ func (s scopedOnly) Satisfies(r rbac.Requirement) bool {
 func (scopedOnly) Confined() bool                { return false }
 func (s scopedOnly) Concrete() []rbac.Permission { return []rbac.Permission{s.perm} }
 
+// TestBackupRoutesRefusalOrder: a caller failing more than one leg is refused
+// for the leg stage 13 checks first (httpapi.Authorize: the interactive guard,
+// then the owner guard, then the permission), so a handler mounted without
+// the router answers what the router would. Each cell fails a guard AND the
+// permission; refused for the permission, it would name the route's scope.
+func TestBackupRoutesRefusalOrder(t *testing.T) {
+	for _, c := range bhCases() {
+		t.Run(c.name, func(t *testing.T) {
+			if c.perm != permSystemView {
+				// authorise's own rule, ahead of Authorize: a route other
+				// than a view route needs a user to name as the actor, so
+				// the auth-disabled principal is refused even holding
+				// every scope the route asks for.
+				t.Run("auth-disabled principal holding the permission", func(t *testing.T) {
+					r := newBHRig(t)
+					rep := r.run(bhAs(auth.MethodAuthDisabled, c.perm, rbac.CoreAdmin), c)
+					if rep.status != 401 || bhProblem(t, rep).Code != "authentication_required" {
+						t.Errorf("= %d %s, want 401 authentication_required", rep.status, rep.body)
+					}
+					r.untouched("auth-disabled")
+				})
+			}
+			if c.interactive {
+				t.Run("API key lacking the permission", func(t *testing.T) {
+					r := newBHRig(t)
+					rep := r.run(bhAs(auth.MethodAPIKey, "core:users.view"), c)
+					if rep.status != 403 || bhProblem(t, rep).Code != "interactive_required" {
+						t.Errorf("= %d %s, want 403 interactive_required", rep.status, rep.body)
+					}
+					r.untouched("key lacking the permission")
+				})
+			}
+			if !c.owner {
+				return
+			}
+			t.Run("non-owner session lacking the permission", func(t *testing.T) {
+				r := newBHRig(t)
+				rep := r.run(bhAs(auth.MethodSession, "core:users.view"), c)
+				if rep.status != 403 || bhProblem(t, rep).Code != "owner_required" {
+					t.Errorf("= %d %s, want 403 owner_required", rep.status, rep.body)
+				}
+				r.untouched("non-owner lacking the permission")
+			})
+			t.Run("owner not required: session lacking the permission and core:admin", func(t *testing.T) {
+				r := newBHRig(t)
+				r.ownerRequired = func() bool { return false }
+				rep := r.run(bhAs(auth.MethodSession, "core:users.view"), c)
+				if pb := bhProblem(t, rep); rep.status != 403 || pb.Code != "permission_denied" || pb.Required != string(rbac.CoreAdmin) {
+					t.Errorf("= %d %s, want 403 permission_denied naming core:admin (the owner fallback, before the route's scope)", rep.status, rep.body)
+				}
+				r.untouched("fallback lacking the permission")
+			})
+		})
+	}
+}
+
 // TestBackupRoutesRestoreForeign: a foreign restore also needs core:admin.
 func TestBackupRoutesRestoreForeign(t *testing.T) {
 	target := "/backups/" + string(bhArkham) + "/restore"
