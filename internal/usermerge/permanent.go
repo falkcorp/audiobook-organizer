@@ -1,7 +1,7 @@
 // file: internal/usermerge/permanent.go
-// version: 0.1.0
+// version: 0.1.1
 // guid: 5fc732a5-a3ab-4a17-81ec-4fe29bf985fe
-// last-edited: 2026-11-20
+// last-edited: 2026-11-21
 
 package usermerge
 
@@ -61,4 +61,12 @@ func (s *Service) CheckMergeAction(action Action, journalID string, identityFlip
 		return fmt.Errorf("%w: %s", ErrJournalNotFound, journalID)
 	}
 	return ErrMergePermanent
+}
+
+// CheckAction is CheckMergeAction with the flip level read from the service's
+// wiring (WithIdentityFlipped), for a caller that has no store level of its
+// own: the merge handler asks it before it reads any journal. A service built
+// without the option answers as HEAD does.
+func (s *Service) CheckAction(action Action, journalID string) error {
+	return s.CheckMergeAction(action, journalID, s.identityFlipped != nil && s.identityFlipped())
 }
