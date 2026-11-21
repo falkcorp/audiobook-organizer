@@ -440,15 +440,20 @@ type starter func(ctx context.Context, b *storage.Batch) (tasks.RunRef, bool, er
 // of the kind and mode with identical params), and a start that folded comes
 // back RunRef.Existing. This package has no fold rule of its own, so a kind's
 // Key, Merge and AnyParams policies hold for a scheduled start as for any
-// other.
+// other. The params are resolved at the start (a ParamsFunc value is built
+// then); one that does not encode is a refused start.
 func (s *Scheduler) startFor(e entry, tr tasks.Trigger, parent tasks.RunID) starter {
 	mode := tasks.ModeRequestLive
 	if e.sched.IsPreview() || (!e.sched.IsLive() && !e.readOnly) {
 		mode = tasks.ModeRequestPreview
 	}
 	return func(ctx context.Context, b *storage.Batch) (tasks.RunRef, bool, error) {
+		params, err := e.sched.ResolveParams()
+		if err != nil {
+			return tasks.RunRef{}, false, err
+		}
 		ref, err := s.opts.Starter.StartIn(ctx, b, e.kind, tasks.StartRequest{
-			Mode: mode, Params: e.sched.RunParams(), Trigger: tr, Parent: parent,
+			Mode: mode, Params: params, Trigger: tr, Parent: parent,
 		})
 		return ref, ref.Existing, err
 	}
@@ -613,8 +618,9 @@ func (e *clockReadError) Unwrap() error { return e.err }
 
 // refused reports whether a start error is the executor refusing the start
 // itself (an unknown or held kind, a permission, a mode, priority or plan
-// rule, a write outside the declared effects): retrying it at every poll would fail the
-// same way, so commitFire advances the clock alone. Every other error is
+// rule, a write outside the declared effects, a ParamsFunc value that does not
+// encode): retrying it at every poll would fail the same way, so commitFire
+// advances the clock alone. Every other error is
 // treated as transient and fires at the next poll. A definition's static
 // Params that fail to decode is not one of these sentinels: it is retried and
 // counted at every poll until the definition is fixed.
@@ -623,7 +629,7 @@ func refused(err error) bool {
 		executor.ErrUnknownKind, executor.ErrHeld, executor.ErrNotPermitted,
 		executor.ErrPlanRequired, executor.ErrInvalidPriority, executor.ErrPlanInvalid, executor.ErrPlanTooOld,
 		executor.ErrApprovalRequired, executor.ErrPlanRejected, executor.ErrPlanDecided,
-		tasks.ErrModeUnset, tasks.ErrOutsideEffects,
+		tasks.ErrModeUnset, tasks.ErrOutsideEffects, tasks.ErrScheduleParams,
 	} {
 		if errors.Is(err, target) {
 			return true
