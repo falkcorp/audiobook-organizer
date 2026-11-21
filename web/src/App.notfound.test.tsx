@@ -38,7 +38,9 @@ function renderAt(path: string) {
 }
 
 // Mock API
-vi.mock('./services/api', async () => (await import('./test/appApiMock')).createAppApiMock());
+vi.mock('./services/api', async (importOriginal) =>
+  (await import('./test/appApiMock')).createAppApiMock(await importOriginal<typeof import('./services/api')>()),
+);
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -6,13 +6,17 @@
 import { vi } from 'vitest';
 
 /**
- * Stub of `services/api` shared by the App-level tests. Use it from a hoisted
- * mock factory so the `vi.fn` instances are created per test file:
+ * Stubs of `services/api` shared by the App-level tests, layered over the real module so an export
+ * added later (by any PR) never turns into "No X export is defined on the mock". Use it from a mock
+ * factory so the `vi.fn` instances are created per test file:
  *
- *   vi.mock('./services/api', async () => (await import('./test/appApiMock')).createAppApiMock());
+ *   vi.mock('./services/api', async (importOriginal) =>
+ *     (await import('./test/appApiMock')).createAppApiMock(await importOriginal<typeof import('./services/api')>()),
+ *   );
  */
-export function createAppApiMock() {
+export function createAppApiMock<T extends object>(actual: T) {
   return {
+    ...actual,
     getAuthStatus: vi.fn().mockResolvedValue({
       has_users: false,
       requires_auth: false,
