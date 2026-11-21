@@ -301,6 +301,9 @@ func isSystemAccount(u *database.User) bool {
 // It writes nothing. An error is an I/O failure; a merge that must not run is a
 // Plan with Refusals.
 func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error) {
+	if err := s.CheckAvailable(); err != nil {
+		return nil, err
+	}
 	p := &Plan{SurvivorID: req.SurvivorID, AbsorbedID: req.AbsorbedID,
 		Counts: map[string]FamilyCount{}, Conflicts: []Conflict{}, Warnings: []string{}, Refusals: []string{},
 		SurvivorIdentities: []Identity{}, AbsorbedIdentities: []Identity{}, RolesGained: []string{}}
