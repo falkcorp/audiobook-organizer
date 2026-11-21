@@ -282,9 +282,9 @@ func translate(fields map[string]fieldInfo, n index.Node) (query.Query, error) {
 	return translateNode(fields, n, 1, &nodes)
 }
 
-// translateNode translates n and applies its own Boost (index.Boost), which
-// on a Match replaces the field's declared weight (translateOp applies that
-// one only to an unboosted Match).
+// translateNode translates n and applies its own Boost (index.Boost) through
+// weigh. On a Match it replaces the field's declared weight (translateOp
+// applies that one only to an unboosted Match).
 func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *int) (query.Query, error) {
 	if n.Boost != 0 && (math.IsNaN(n.Boost) || math.IsInf(n.Boost, 0) || n.Boost < 0) { // a Node built by hand
 		return nil, fmt.Errorf("%w: boost %v must be a finite number above 0", index.ErrInvalidQuery, n.Boost)
@@ -293,12 +293,56 @@ func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *
 	if err != nil || n.Boost == 0 {
 		return q, err
 	}
-	b, ok := q.(query.BoostableQuery)
-	if !ok {
+	if !weigh(q, n.Boost) {
 		return nil, fmt.Errorf("%w: operator %d takes no boost", index.ErrInvalidQuery, n.Op)
 	}
-	b.SetBoost(n.Boost)
 	return q, nil
+}
+
+// weigh multiplies the weight of every scored leaf of q by w. bleve scores a
+// conjunction, a disjunction and a boolean query as the sum of their scored
+// clauses and ignores a weight set on the group itself (DisjunctionQuery's
+// BoostVal never reaches its searcher), so a group's weight is pushed down to
+// its leaves; a must-not clause scores nothing and is left alone. A leaf's
+// existing weight (a ^n inside a QueryString, an inner index.Boost) is
+// multiplied, not replaced. It reports false for a query that takes no weight.
+func weigh(q query.Query, w float64) bool {
+	switch v := q.(type) {
+	case *query.ConjunctionQuery:
+		if v == nil {
+			return true
+		}
+		for _, c := range v.Conjuncts {
+			if !weigh(c, w) {
+				return false
+			}
+		}
+		return true
+	case *query.DisjunctionQuery:
+		if v == nil {
+			return true
+		}
+		for _, c := range v.Disjuncts {
+			if !weigh(c, w) {
+				return false
+			}
+		}
+		return true
+	case *query.BooleanQuery:
+		if v == nil {
+			return true
+		}
+		for _, c := range []query.Query{v.Must, v.Should} {
+			if c != nil && !weigh(c, w) {
+				return false
+			}
+		}
+		return true
+	case query.BoostableQuery:
+		v.SetBoost(v.Boost() * w)
+		return true
+	}
+	return false
 }
 
 // notCost is what a Not node, and an All node, counts in the node budget: a

@@ -215,6 +215,10 @@ func TestBoostNodeReplacesTheFieldBoost(t *testing.T) {
 		"weights a query string":  {index.Or(index.Boost(index.QueryString("description:gotham"), 100), author), []string{"desc", "byline"}},
 		"weights a wildcard":      {index.Or(index.Boost(index.Wildcard("description", "*tham"), 100), author), []string{"desc", "byline"}},
 		"last boost wins":         {index.Or(index.Boost(index.Boost(index.Match("title", "gotham"), 100), 2), author), []string{"byline", "heading"}},
+		"a group multiplies":      {index.Or(index.Boost(index.Or(index.Boost(index.Match("title", "gotham"), 0.5)), 4), author), []string{"byline", "heading"}}, // 0.5 x 4 = 2, as "explicit weight 2"
+		"a group multiplies more": {index.Or(index.Boost(index.Or(index.Boost(index.Match("title", "gotham"), 0.5)), 12), author), []string{"heading", "byline"}},
+		"a string multiplies ^n":  {index.Or(index.Boost(index.QueryString("title:gotham^0.25"), 4), author), []string{"byline", "heading"}},
+		"weights an and":          {index.Or(index.Boost(index.And(index.Term("description", "gotham")), 100), author), []string{"desc", "byline"}},
 		"weights all (no effect)": {index.Boost(index.All(), 5), []string{"byline", "desc", "heading", "joker", "todd", "wayne"}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -226,6 +230,10 @@ func TestBoostNodeReplacesTheFieldBoost(t *testing.T) {
 				t.Fatalf("order = %v, want %v", got, tc.want)
 			}
 		})
+	}
+	// A weighted Not keeps its set (only its match-all part scores).
+	if got := hitIDs(t, ix, index.Boost(index.Not(index.Term("format", "flac")), 3), "_id"); !slices.Equal(got, []string{"joker", "todd", "wayne"}) {
+		t.Fatalf("a weighted Not = %v", got)
 	}
 	for _, w := range []float64{0, -1} {
 		if _, err := ix.Search(t.Context(), index.Boost(index.Match("title", "gotham"), w), index.Page{}); !errors.Is(err, index.ErrInvalidQuery) {
