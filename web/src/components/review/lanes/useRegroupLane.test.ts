@@ -1023,6 +1023,193 @@ describe('the kind filter is pushed to the server', () => {
     expect(result.current.buckets.flatMap((b) => b.items).map((i) => i.id)).toEqual(['m1']);
   });
 
+  // The tests below pin what the test above cannot: a reload that is
+  // issued BEFORE a kind switch and lands AFTER the switch's request was issued
+  // but BEFORE it was answered. Landing after the new kind's response is the
+  // ordering the sequence guard covers; landing in this window is not, because
+  // the reload's sequence number is newer than anything yet applied.
+  const ids = (result: { current: { buckets: { items: api.ReviewItem[] }[] } }) =>
+    result.current.buckets.flatMap((b) => b.items).map((i) => i.id);
+
+  function deferred<T>() {
+    let resolve: (value: T) => void = () => {};
+    let reject: (reason: unknown) => void = () => {};
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const pageOf = (items: api.ReviewItem[]): api.ReviewItemsPage => ({
+    items,
+    count: items.length,
+    limit: 500,
+    offset: 0,
+    total: items.length,
+  });
+
+  /**
+   * Gets the lane onto kind A with one row, approves it with the reload's
+   * request held open, then switches to kind B with B's request ALSO held open.
+   * Returns the two holds; nothing has landed yet.
+   */
+  async function reloadInFlightThenKindSwitch() {
+    vi.mocked(api.approveReviewItem).mockResolvedValue({} as never);
+    mockItems([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+    const view = await renderLane();
+
+    await act(async () => {
+      view.result.current.setFilters({ kind: 'regroup.ambiguous' });
+    });
+    await waitFor(() => expect(lastFilter().kind).toBe('regroup.ambiguous'));
+    await waitFor(() => expect(ids(view.result)).toEqual(['a1']));
+
+    const reloadA = deferred<api.ReviewItemsPage>();
+    vi.mocked(api.getReviewItems).mockImplementationOnce(() => reloadA.promise);
+    const callsBeforeApprove = vi.mocked(api.getReviewItems).mock.calls.length;
+    act(() => {
+      void view.result.current.approveItem(view.result.current.buckets[0].items[0]);
+    });
+    // Pins the ordering under test: the reload must be IN FLIGHT before the
+    // switch, or this degrades into a sequential pair that anything passes.
+    await waitFor(() =>
+      expect(vi.mocked(api.getReviewItems).mock.calls.length).toBe(callsBeforeApprove + 1)
+    );
+
+    const loadB = deferred<api.ReviewItemsPage>();
+    vi.mocked(api.getReviewItems).mockImplementationOnce(() => loadB.promise);
+    await act(async () => {
+      view.result.current.setFilters({ kind: 'regroup.multidisc' });
+    });
+    await waitFor(() => expect(lastFilter().kind).toBe('regroup.multidisc'));
+    return { view, reloadA, loadB };
+  }
+
+  const ambiguousPage = () =>
+    pageOf([makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' })]);
+  const multidiscPage = () =>
+    pageOf([makeItem('m1', 'regroup.multidisc', { recommendedAction: 'combine' })]);
+
+  it('does not paint the old kind rows when a reload lands between a kind switch and its answer', async () => {
+    const { view, reloadA, loadB } = await reloadInFlightThenKindSwitch();
+    const { result } = view;
+
+    // The switch cleared the lane and its own request is still out.
+    expect(ids(result)).toEqual([]);
+    expect(result.current.loading).toBe(true);
+
+    // The reload, issued for the OLD kind, answers first. Its sequence number
+    // is newer than anything applied, so only a kind comparison can drop it.
+    await act(async () => {
+      reloadA.resolve(ambiguousPage());
+      await reloadA.promise;
+    });
+    expect(ids(result)).toEqual([]);
+    expect(result.current.loading).toBe(true);
+
+    // And the switch's own answer still lands normally afterwards.
+    await act(async () => {
+      loadB.resolve(multidiscPage());
+      await loadB.promise;
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(ids(result)).toEqual(['m1']);
+  });
+
+  it('leaves no old kind rows under the error when the switch fails after the reload landed', async () => {
+    const { view, reloadA, loadB } = await reloadInFlightThenKindSwitch();
+    const { result } = view;
+
+    await act(async () => {
+      reloadA.resolve(ambiguousPage());
+      await reloadA.promise;
+    });
+    await act(async () => {
+      loadB.reject(new Error('queue unavailable'));
+      await loadB.promise.catch(() => {});
+    });
+
+    await waitFor(() => expect(result.current.error).toBe('queue unavailable'));
+    expect(ids(result)).toEqual([]);
+    expect(result.current.loaded).toBe(0);
+  });
+
+  it('leaves no old kind rows under the error when the reload lands after the switch failed', async () => {
+    const { view, reloadA, loadB } = await reloadInFlightThenKindSwitch();
+    const { result } = view;
+
+    // The failure arrives FIRST: nothing in the error path can clear rows the
+    // reload has not painted yet, so only the landing guard can cover this.
+    await act(async () => {
+      loadB.reject(new Error('queue unavailable'));
+      await loadB.promise.catch(() => {});
+    });
+    await waitFor(() => expect(result.current.error).toBe('queue unavailable'));
+
+    await act(async () => {
+      reloadA.resolve(ambiguousPage());
+      await reloadA.promise;
+    });
+
+    expect(ids(result)).toEqual([]);
+    expect(result.current.loaded).toBe(0);
+    expect(result.current.error).toBe('queue unavailable');
+  });
+
+  it('refreshes for the kind on screen when the switch happens while the approve is still in flight', async () => {
+    // 🔴 THE THIRD ORDERING, and the one a plain drop gets wrong. The approve is
+    // still out when the reviewer switches to the all-kinds view. That view's
+    // read can predate the approve's write, so it still lists the decided hold.
+    // The reload that follows the approve is issued AFTER the switch, so it has
+    // the newest sequence number; built from a stale closure it would re-ask for
+    // the OLD kind and paint that kind's rows under the all-kinds heading for
+    // good. Dropping it would leave the decided hold on screen instead. It has
+    // to ask for the kind that is showing NOW.
+    let decided = false;
+    const queue = [
+      makeItem('a1', 'regroup.ambiguous', { recommendedAction: 'combine' }),
+      makeItem('a2', 'regroup.ambiguous', { recommendedAction: 'combine' }),
+      makeItem('m1', 'regroup.multidisc', { recommendedAction: 'combine' }),
+    ];
+    vi.mocked(api.getReviewItems).mockImplementation(async (filter = {}) => {
+      const rows = queue
+        .filter((it) => !(decided && it.id === 'a1'))
+        .filter((it) => !filter.kind || it.kind === filter.kind);
+      return pageOf(rows);
+    });
+    const approve = deferred<unknown>();
+    vi.mocked(api.approveReviewItem).mockImplementation(() => approve.promise as never);
+
+    const { result } = await renderLane();
+    await act(async () => {
+      result.current.setFilters({ kind: 'regroup.ambiguous' });
+    });
+    // Sorted: this test is about WHICH rows are showing, not the lane's row order.
+    const shown = () => [...ids(result)].sort();
+    await waitFor(() => expect(shown()).toEqual(['a1', 'a2']));
+
+    act(() => {
+      void result.current.approveItem(result.current.buckets[0].items[0]);
+    });
+    await waitFor(() => expect(api.approveReviewItem).toHaveBeenCalled());
+
+    // Switch to the all-kinds view while the approve is out; it still lists a1.
+    await act(async () => {
+      result.current.setFilters({ kind: '' });
+    });
+    await waitFor(() => expect(shown()).toEqual(['a1', 'a2', 'm1']));
+
+    await act(async () => {
+      decided = true;
+      approve.resolve({});
+      await approve.promise;
+    });
+
+    await waitFor(() => expect(shown()).toEqual(['a2', 'm1']));
+    expect(lastFilter().kind).toBeUndefined();
+  });
+
   it('drops the previous kind rows while the new request is in flight', async () => {
     // A lane that is fetching must not look like a lane that has answered. The
     // spine only spins when it has NOTHING, so leaving the old kind's rows up

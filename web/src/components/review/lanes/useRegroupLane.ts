@@ -78,7 +78,7 @@
  * warning that means something unreadable.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { serverAnsweredTerm, useDebouncedSearch } from '../../../hooks/useDebouncedSearch';
 import * as api from '../../../services/api';
 import type {
@@ -427,9 +427,16 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
    *
    * `reqSeq` is bumped by BOTH the load effect and reload(); `appliedSeq` is the
    * newest response already painted. A response older than what is on screen is
-   * dropped whether it lost the race to a different kind or to a later reload of
-   * its own kind. This also removes the `null`-sentinel question entirely: a
-   * first reload carries seq 1 against appliedSeq 0 and applies.
+   * dropped. That covers ordering BETWEEN responses: two reloads of one kind, or
+   * a reload that lands after a load issued later. It does NOT cover a response
+   * for a kind the lane has since left, when nothing newer has been painted yet:
+   * a reload issued before a kind switch carries a sequence number newer than
+   * anything applied, so the guard lets it through while the switch's own
+   * request is still out. That half is reload()'s kind check against
+   * `latestRef`, and the two guards are both needed. The first version of the
+   * kind check was removed once as "subsumed by the sequence guard"; it is not.
+   * This also removes the `null`-sentinel question entirely: a first reload
+   * carries seq 1 against appliedSeq 0 and applies.
    */
   const reqSeq = useRef(0);
   const appliedSeq = useRef(0);
@@ -489,6 +496,23 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       ),
     [kindFilter, searchFilter]
   );
+
+  // The request this lane would make RIGHT NOW: the latest fetchPage and the kind
+  // and term it is built for. reload() reads it at call time and again when its
+  // response lands, because reload is held by callers that outlive a kind switch.
+  // runItemAction and bulkAction await an approve or reject and only then call
+  // the reload they captured when they started; a switch made while that call
+  // was in flight would otherwise send the refresh for the OLD kind, with a
+  // sequence number newer than the switch's own, and paint that kind's rows for
+  // good. Written in a layout effect, not a passive one, so no response can land
+  // between a commit that changed the kind and the ref learning of it. Not
+  // gated on `active` and not tied to the load effect's `fetchedKindRef`, which
+  // is only written while the lane is showing: a reload can land after the lane
+  // went inactive, and a kind changed while inactive must still drop it.
+  const latestRef = useRef({ fetchPage, kind: kindFilter, search: searchFilter });
+  useLayoutEffect(() => {
+    latestRef.current = { fetchPage, kind: kindFilter, search: searchFilter };
+  }, [fetchPage, kindFilter, searchFilter]);
 
   const applyPage = useCallback((page: ReviewItemsPage, term: string) => {
     setItems(page.items ?? []);
@@ -557,6 +581,13 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         // a refresh that did not land, and its rows are still a correct answer,
         // so those stay. The "widening must not clear" rule below is about the
         // SUCCESS path and does not extend to this.
+        //
+        // No kind clause here, deliberately. A failed request for a NEW kind has
+        // no old kind's rows to clear: this effect emptied the lane when the
+        // kind changed, and reload() drops any page for a kind the lane has left
+        // (see its kind check), so nothing but this effect can put rows on
+        // screen under a kind it was not fetched for. A clause here would be
+        // unreachable, and a branch no test can reach is not defence in depth.
         if (previousTerm !== searchFilter) {
           setItems([]);
           setTotal(0);
@@ -776,12 +807,25 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
         // Reload carries no abort signal ON PURPOSE -- it has to finish so the
         // hold the reviewer just decided actually leaves the list -- so nothing
         // cancels it and it can land after a newer request. It orders itself
-        // instead: see reqSeq above for the two races that reach here.
+        // instead, with two guards that each cover what the other cannot: see
+        // reqSeq above.
+        //
+        // The request is built from the lane's CURRENT kind and term (latestRef),
+        // not from this callback's closure: a caller can have captured this
+        // reload before a kind switch and invoke it after one.
+        const { fetchPage: fetchCurrent, kind, search } = latestRef.current;
         const seq = ++reqSeq.current;
-        return fetchPage().then((page) => {
+        return fetchCurrent().then((page) => {
           if (seq < appliedSeq.current) return;
+          // The lane has moved to another kind since this was issued, so these
+          // rows would sit under the wrong heading until the switch's own
+          // response arrived -- or for good, if that request fails. Dropped, not
+          // refetched: the switch has its own request out and it was issued
+          // after the action this reload follows. Checked before appliedSeq is
+          // advanced so a dropped page cannot make a newer response look stale.
+          if (latestRef.current.kind !== kind) return;
           appliedSeq.current = seq;
-          applyPage(page, searchFilter);
+          applyPage(page, search);
         });
       })().catch(() => {
         // A failed refresh after a SUCCESSFUL action must not report the
@@ -789,12 +833,10 @@ export function useRegroupLane(toast: Toast, active = true): RegroupLane {
       }),
       loadCount(),
     ]);
-    // No `kindFilter` here: this body no longer reads it. `fetchPage` is keyed on
-    // it, so reload is still rebuilt on a kind change -- carrying it twice only
-    // tells a reader the body reads something it does not.
-    // `searchFilter` IS read here now -- it is handed to applyPage as the term
-    // these rows answer. It is not the dead duplicate that `kindFilter` was.
-  }, [loadCount, fetchPage, applyPage, searchFilter]);
+    // Neither `kindFilter`, `searchFilter` nor `fetchPage` appears here: the body
+    // reads them through `latestRef`, which is what keeps this callback and the
+    // approve/reject/bulk handlers built on it stable across a kind switch.
+  }, [loadCount, applyPage]);
 
   const runItemAction = useCallback(
     async (item: ReviewItem, action: 'approve' | 'reject') => {
