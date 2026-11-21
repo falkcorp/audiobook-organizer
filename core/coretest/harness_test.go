@@ -327,34 +327,6 @@ func TestRoutesHavePermissions_RejectsFixtures(t *testing.T) {
 	})
 }
 
-// TestAssertPermission_Hello: the "Authentication at R1" check found no
-// principal seam the router authorises from (route.go only binds the
-// principal into In; Build refuses every non-Public native route), so As and
-// AssertPermission fail the test with the identity-flip message, and WithUser
-// only records the principal.
-func TestAssertPermission_Hello(t *testing.T) {
-	const want = "needs core authentication, which lands at R2's identity flip"
-	rec := runRecording(t, func(tb testing.TB) {
-		h := New(tb, WithModules(hello.New()), WithUser("alfred", "hello:read"))
-		if got := h.users["alfred"]; !slices.Equal(got, []rbac.Permission{"hello:read"}) {
-			t.Errorf("WithUser recorded %v, want [hello:read]", got)
-		}
-		h.As("alfred")
-		t.Error("As returned instead of failing the test")
-	})
-	if !rec.contains("coretest: As " + want) {
-		t.Errorf("As did not fail with the identity-flip message:\n%s", rec.text())
-	}
-
-	h := New(t, WithModules(hello.New()))
-	rec = runRecording(t, func(tb testing.TB) {
-		AssertPermission(tb, h, http.MethodGet, "/api/hello/v1/greeting", "hello:read")
-	})
-	if !rec.contains("coretest: AssertPermission " + want) {
-		t.Errorf("AssertPermission did not fail with the identity-flip message:\n%s", rec.text())
-	}
-}
-
 // TestBoot_Refusals: Boot returns, never fails the test for, a boot error;
 // the options it cannot honour at R1 are refused, not ignored.
 func TestBoot_Refusals(t *testing.T) {
@@ -569,7 +541,9 @@ func TestHarness_StorageInMemory(t *testing.T) {
 	if status := h.Anonymous().GetJSON(t, "/api/hello/v1/greeting?name=Selina", &g); status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)
 	}
-	if _, err := os.Stat(filepath.Join(h.stateDir, "storage")); !os.IsNotExist(err) {
+	// The identity boot's revocation journal is a file under storage/, so the
+	// store's own path is what must be absent.
+	if _, err := os.Stat(filepath.Join(h.stateDir, "storage", "main.pebble")); !os.IsNotExist(err) {
 		t.Fatalf("the harness left a store on disk under its state directory: %v", err)
 	}
 }
