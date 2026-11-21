@@ -59,6 +59,22 @@ const (
 	// (journal.EnsureHookRun, journal.ClearHookRun).
 	labelHooksRunEnsure = "kernel.hooks.run.ensure"
 	labelHooksRunClear  = "kernel.hooks.run.clear"
+	// labelHooksMarkHooked is c/backup/restore_hooked/<seq>, the record that a
+	// restore line's hooks ran to completion (journal.MarkHooked), one batch per
+	// line the run covers.
+	labelHooksMarkHooked = "kernel.hooks.marked"
+	// labelHooksHeldHead is the journal head a replaced store's restore line held
+	// back, committed once the hooks have completed (journal.CommitHead).
+	labelHooksHeldHead = "kernel.hooks.held_head"
+	// labelHookAuth, labelHookRBAC and labelHookAudit are each module's restore
+	// hook (auth.PostRestore, rbac.PostRestore, audit.RestoreHook): a region around
+	// the whole hook, so every store batch it commits is recorded under its name.
+	// The hooks' own commits are the module's code, which the kernel does not
+	// split; a journal line a hook appends (RestrictLastAdmins) records under the
+	// hook's label too, the outer-label rule above.
+	labelHookAuth  = "kernel.hooks.auth"
+	labelHookRBAC  = "kernel.hooks.rbac"
+	labelHookAudit = "kernel.hooks.audit"
 )
 
 // ReapplyLabels is every label of P4d step 2's own store commits (the
@@ -73,9 +89,14 @@ func ReapplyLabels() []string {
 }
 
 // HookRunLabels is every label of P4d step 3's own store commits that this
-// file labels (the restore hooks' run ID, restore_hooks.go), for the writer
-// table.
-func HookRunLabels() []string { return []string{labelHooksRunEnsure, labelHooksRunClear} }
+// file labels (the restore hooks' run ID, their completion record and the held
+// head they commit, restore_hooks.go), for the writer table.
+func HookRunLabels() []string {
+	return []string{
+		labelHooksRunEnsure, labelHooksRunClear, labelHooksMarkHooked, labelHooksHeldHead,
+		labelHookAuth, labelHookRBAC, labelHookAudit,
+	}
+}
 
 // The crash-matrix labels of the kernel's own journal-file operations: the
 // set-aside of another install's journal (restore_reapply.go setAside) renames
