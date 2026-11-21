@@ -53,7 +53,7 @@ func TestValuesMatch(t *testing.T) {
 func TestFoldTagKeys(t *testing.T) {
 	t.Parallel()
 	in := map[string][]string{"title": {"lower"}, "TITLE": {"UPPER"}, "Album": {"x"}, "zed": {"z"}, "Zed": {"Z"}}
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		got := FoldTagKeys(in)
 		if len(got) != 3 || got["TITLE"][0] != "UPPER" || got["ALBUM"][0] != "x" {
 			t.Fatalf("FoldTagKeys = %v", got)

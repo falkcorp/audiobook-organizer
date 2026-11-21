@@ -16,6 +16,7 @@ import (
 	"fmt"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"log/slog"
+	"maps"
 	"net/http"
 	"sort"
 	"strconv"
@@ -1225,9 +1226,7 @@ func (f *opEventFilter) withoutUserText(ev opsregistry.Event) opsregistry.Event 
 		return ev
 	}
 	cp := make(map[string]any, len(m))
-	for k, val := range m {
-		cp[k] = val
-	}
+	maps.Copy(cp, m)
 	cp["label"] = activity.WithheldUserText
 	return opsregistry.Event{Name: ev.Name, Payload: cp}
 }

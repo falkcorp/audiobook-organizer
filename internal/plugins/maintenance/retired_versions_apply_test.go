@@ -493,7 +493,7 @@ func TestRetiredApply_OneHolderIsOnePartition(t *testing.T) {
 		rf := newRetiredFixture(t)
 		rf.enableApply()
 		rf.live("primary", "g", rf.file("g/primary.mp3"))
-		for i := 0; i < 6; i++ {
+		for i := range 6 {
 			rf.trashed("shell-"+string(rune('a'+i)), "g", 30, rf.file("g/"+string(rune('a'+i))+".mp3"))
 		}
 		res := rf.planAll()

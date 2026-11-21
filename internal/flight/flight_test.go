@@ -169,7 +169,7 @@ func TestGroup_AlreadyCancelledCallerStartsNoBuild(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if _, err := f.Do(ctx, "k", 0, build); !errors.Is(err, context.Canceled) {
 			t.Fatalf("err %v, want context.Canceled", err)
 		}

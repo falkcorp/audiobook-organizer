@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -243,13 +244,11 @@ func TestEnsureEmail_ConcurrentAddsLoseNothing(t *testing.T) {
 	var wg sync.WaitGroup
 	emails := []string{"a@example.com", "b@example.com", "c@example.com", "d@example.com"}
 	for _, e := range emails {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if _, err := c.EnsureEmail(context.Background(), e); err != nil {
 				t.Errorf("%s: %v", e, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	inc, _ := includeList(f.policy)
@@ -331,12 +330,7 @@ func TestRemoveEmail_RefusesToEmptyThePolicy(t *testing.T) {
 }
 
 func isWritable(k string) bool {
-	for _, w := range writableFields {
-		if w == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(writableFields, k)
 }
 
 func TestPut_OmitsServerManagedAndUnknownFields(t *testing.T) {

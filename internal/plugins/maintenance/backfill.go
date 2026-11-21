@@ -58,7 +58,7 @@ type bootBackfillParams struct {
 	// Resume is the checkpoint (it is not a param an operator sets): the
 	// registry merges the saved checkpoint over params on a restart, and a
 	// checkpoint is these same params with Resume updated.
-	Resume walkresume.State `json:"resume,omitempty"`
+	Resume walkresume.State `json:"resume"`
 }
 
 // bootYieldMargin is the least time left before the run's deadline at which a

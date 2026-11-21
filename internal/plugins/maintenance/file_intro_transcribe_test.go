@@ -322,8 +322,6 @@ func (fx *introFx) bookRow(id string) *database.Book {
 	return b
 }
 
-func sp(s string) *string { return &s }
-
 // ---- run behaviour ----------------------------------------------------------
 
 func TestFileIntroRun_PreviewIsTheDefaultAndWritesNothing(t *testing.T) {
@@ -360,7 +358,7 @@ func TestFileIntroRun_FillsFilesAndOnlyEmptyBookTranscripts(t *testing.T) {
 	a2, a2p := fx.file(a, "02.m4b", 2, "ha2", false)
 	b := fx.book("Book B")
 	b1, b1p := fx.file(b, "01.m4b", 1, "hb1", false)
-	if _, err := fx.s.ModifyBook(b, func(cur *database.Book) error { cur.IntroTranscription = sp("curated words"); return nil }); err != nil {
+	if _, err := fx.s.ModifyBook(b, func(cur *database.Book) error { cur.IntroTranscription = new("curated words"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	fx.whisp.texts[a1p], fx.whisp.texts[a2p], fx.whisp.texts[b1p] = goodIntro, "second track words", "b words"
@@ -669,7 +667,7 @@ func TestFileIntroRun_BoundedConcurrencyAndRace(t *testing.T) {
 	fx.whisp.delay = 3 * time.Millisecond
 	fileIntroSlots = func() int { return 3 }
 	const books = 40
-	for i := 0; i < books; i++ {
+	for i := range books {
 		b := fx.book(fmt.Sprintf("Book %02d", i))
 		_, p1 := fx.file(b, "01.m4b", 1, fmt.Sprintf("c%02d-1", i), false)
 		_, p2 := fx.file(b, "02.m4b", 2, fmt.Sprintf("c%02d-2", i), false)
@@ -872,7 +870,7 @@ func (d queueDeps) OperationQueueStore() OpQueueReader { return d.q }
 func TestFileIntro_ScanStartingMidTranscriptionHoldsTheWrites(t *testing.T) {
 	fx := newIntroFx(t)
 	q := &scanQueue{clearAfter: 3}
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	fx.p = New(queueDeps{store: fx.s, q: q})
 	b := fx.book("Scan mid-run")
 	f1, p1 := fx.file(b, "01.m4b", 1, "sm1", false)
 	f2, p2 := fx.file(b, "02.m4b", 2, "sm2", false)
@@ -920,7 +918,7 @@ func TestFileIntro_ScanStartingMidTranscriptionHoldsTheWrites(t *testing.T) {
 func TestFileIntro_RefusesToStartWhileAScanRuns(t *testing.T) {
 	fx := newIntroFx(t)
 	q := &scanQueue{busy: true}
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	fx.p = New(queueDeps{store: fx.s, q: q})
 	b := fx.book("Scan at start")
 	f1, p1 := fx.file(b, "01.m4b", 1, "ss1", false)
 	fx.whisp.texts[p1] = goodIntro
@@ -946,7 +944,7 @@ func TestFileIntro_RefusesToStartWhileAScanRuns(t *testing.T) {
 	}
 
 	// And the queue being unreadable is not an idle queue.
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: nil})
+	fx.p = New(queueDeps{store: fx.s, q: nil})
 	if _, err := fx.run(""); err == nil {
 		t.Fatal("a nil queue must fail closed")
 	}
@@ -962,7 +960,7 @@ func TestFileIntroClear_RefusesWhileAScanRunsAndGatesEachChunk(t *testing.T) {
 	}
 
 	q := &scanQueue{busy: true}
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+	fx.p = New(queueDeps{store: fx.s, q: q})
 	err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), &fileIntroRep{id: "clear-x"})
 	if err == nil || !strings.Contains(err.Error(), "refusing to start") {
 		t.Fatalf("a live clear during a scan must refuse to start, got %v", err)
@@ -974,7 +972,7 @@ func TestFileIntroClear_RefusesWhileAScanRunsAndGatesEachChunk(t *testing.T) {
 	// Idle at the start gate, scan appears before the chunk's writes: the clear
 	// waits and clears only after the scan is gone.
 	q2 := &scanQueue{clearAfter: 3}
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: &flipAfterFirstPoll{inner: q2}})
+	fx.p = New(queueDeps{store: fx.s, q: &flipAfterFirstPoll{inner: q2}})
 	var early bool
 	q2.onBusyPoll = func() {
 		if r := fx.row(b, f1); r.IntroRunOpID == "" {
@@ -1023,7 +1021,7 @@ func TestFileIntroClear_DryRunCountsThenLiveRevertsOnlyItsOwnFills(t *testing.T)
 	if _, err := fx.run(""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fx.s.ModifyBook(b, func(cur *database.Book) error { cur.IntroTranscription = sp("owner edit"); return nil }); err != nil {
+	if _, err := fx.s.ModifyBook(b, func(cur *database.Book) error { cur.IntroTranscription = new("owner edit"); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	// A second run's file must survive clearing the first run.
@@ -1285,7 +1283,7 @@ func TestFileIntroClear_AnnouncesItsPauseInProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	q2 := &scanQueue{clearAfter: 3}
-	fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: &flipAfterFirstPoll{inner: q2}})
+	fx.p = New(queueDeps{store: fx.s, q: &flipAfterFirstPoll{inner: q2}})
 	rep := &recordingReporter{}
 	if err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(`{"clear_run_id":"run-test-1"}`), &fileIntroClearRep{recordingReporter: rep, id: "clear-p"}); err != nil {
 		t.Fatal(err)

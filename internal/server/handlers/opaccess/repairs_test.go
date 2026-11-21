@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -55,8 +56,6 @@ func (o *opRows) GetOperationV2(id string) (*database.OperationV2Row, error) {
 // noOps is an OpLookup with no op rows at all.
 var noOps = &opRows{}
 
-func ptr(s string) *string { return &s }
-
 func ctxHolding() (*gin.Context, *httptest.ResponseRecorder) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
@@ -67,12 +66,7 @@ func ctxHolding() (*gin.Context, *httptest.ResponseRecorder) {
 
 func holdsOnly(held ...auth.Permission) func(*gin.Context, auth.Permission) bool {
 	return func(_ *gin.Context, p auth.Permission) bool {
-		for _, h := range held {
-			if h == p {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(held, p)
 	}
 }
 
@@ -98,13 +92,13 @@ func TestReader_MayRead(t *testing.T) {
 		"no row":                         {nil, view, true},
 		"plan, fixer in params, viewer":  {row(repairs.PlanOpID, `{"fixer_id":"plain"}`, nil), view, false},
 		"plan, fixer in params, editor":  {row(repairs.PlanOpID, `{"fixer_id":"plain"}`, nil), edit, true},
-		"apply, fixer in result only":    {row(repairs.ApplyOpID, `{}`, ptr(`{"fixer_id":"plain"}`)), edit, true},
-		"apply, fixer in result, viewer": {row(repairs.ApplyOpID, ``, ptr(`{"fixer_id":"plain"}`)), view, false},
+		"apply, fixer in result only":    {row(repairs.ApplyOpID, `{}`, new(`{"fixer_id":"plain"}`)), edit, true},
+		"apply, fixer in result, viewer": {row(repairs.ApplyOpID, ``, new(`{"fixer_id":"plain"}`)), view, false},
 		"scoped fixer, editor":           {row(repairs.ApplyOpID, `{"fixer_id":"scoped"}`, nil), edit, false},
 		"scoped fixer, admin":            {row(repairs.ApplyOpID, `{"fixer_id":"scoped"}`, nil), admin, true},
-		"params win over result":         {row(repairs.ApplyOpID, `{"fixer_id":"plain"}`, ptr(`{"fixer_id":"scoped"}`)), edit, true},
-		"no fixer anywhere, admin":       {row(repairs.ApplyOpID, `{}`, ptr(`{}`)), admin, false},
-		"unparseable params and result":  {row(repairs.ApplyOpID, `not json`, ptr(`also not`)), admin, false},
+		"params win over result":         {row(repairs.ApplyOpID, `{"fixer_id":"plain"}`, new(`{"fixer_id":"scoped"}`)), edit, true},
+		"no fixer anywhere, admin":       {row(repairs.ApplyOpID, `{}`, new(`{}`)), admin, false},
+		"unparseable params and result":  {row(repairs.ApplyOpID, `not json`, new(`also not`)), admin, false},
 		"unknown fixer, editor":          {row(repairs.ApplyOpID, `{"fixer_id":"gone"}`, nil), edit, false},
 		// A fixer this build does not know needs every permission: a custom
 		// role with settings.manage but not users.manage (which
@@ -509,7 +503,7 @@ func TestReader_StreamRecheckBoundsTheLiveQuestions(t *testing.T) {
 
 	// A burst of events inside the window: no new questions, verdicts stand.
 	lost = true
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		clock.advance(50 * time.Millisecond)
 		r.Refresh()
 		require.True(t, r.MayReadFixer(repairs.ApplyOpID, "plain"), "event %d is inside the window", i)
@@ -570,7 +564,7 @@ func TestReader_StreamOpenEndsAStreamWhoseCredentialIsGone(t *testing.T) {
 
 	require.True(t, stream.StreamOpen())
 	standing = false
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		clock.advance(100 * time.Millisecond)
 		require.True(t, stream.StreamOpen(), "inside the window the answer stands")
 	}
@@ -620,10 +614,10 @@ func TestReader_ReadableLegacyOps(t *testing.T) {
 	reg := fixers{"plain": scopedFixer{}, "scoped": scopedFixer{perms: []auth.Permission{auth.PermSettingsManage}}}
 	ops := []database.Operation{
 		{ID: "scan", Type: "library.scan"},
-		{ID: "plain", Type: repairs.ApplyOpID, ResultData: ptr(`{"fixer_id":"plain"}`)},
-		{ID: "scoped", Type: repairs.PlanOpID, ResultData: ptr(`{"fixer_id":"scoped"}`)},
+		{ID: "plain", Type: repairs.ApplyOpID, ResultData: new(`{"fixer_id":"plain"}`)},
+		{ID: "scoped", Type: repairs.PlanOpID, ResultData: new(`{"fixer_id":"scoped"}`)},
 		{ID: "nofixer", Type: repairs.ApplyOpID},
-		{ID: "garbled", Type: repairs.ApplyOpID, ResultData: ptr(`not json`)},
+		{ID: "garbled", Type: repairs.ApplyOpID, ResultData: new(`not json`)},
 	}
 	ids := func(in []database.Operation) []string {
 		out := []string{}

@@ -8,6 +8,7 @@ package cutover
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -31,9 +32,7 @@ func maintenanceBlob(members map[string]any) func(*rig) {
 				delete(tree, "maintenance")
 				if len(members) > 0 {
 					m := map[string]any{}
-					for k, v := range members {
-						m[k] = v
-					}
+					maps.Copy(m, members)
 					tree["maintenance"] = m
 				}
 			})

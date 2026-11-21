@@ -761,7 +761,7 @@ type durationBackfillEnv struct {
 // out of the core unchanged. It reports no progress of its own and never fails.
 func durationPoolHEAD(ctx context.Context, workers, _ int, jobs <-chan database.Book, process func(context.Context, database.Book) bool) error {
 	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
+	for range workers {
 		wg.Go(func() {
 			for book := range jobs {
 				if !process(ctx, book) {
@@ -908,33 +908,31 @@ func (p *Plugin) runDurationBackfill(ctx context.Context, raw json.RawMessage, r
 // preview, so a preview run counts and writes nothing.
 func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(durationBackfillKind, tasks.TaskSpec[durationBackfillNativeParams, durationBackfillResult]{
-		Common: tasks.Common{
-			Title: "Backfill book durations",
-			Help: "The single duration operation. Reads the real per-file duration already stored from fingerprinting (AcoustIDFingerprintDurationSec) first — a fast DB pass — " +
-				"and falls back to ffprobe only for never-fingerprinted files. Handles both multi-file and virtual single-file books. " +
-				"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
-				"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
-				"A preview counts what would change (incl. fingerprint vs ffprobe split); start in live mode to apply. " +
-				"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
-				"Set onlyMissingDuration=true to scope the run to books with no known duration. " +
-				"mode=unknownRows is the row-grain pass: it walks book_file rows in ANY book (copies and books/itunes rows included, read-only on disk) that no one has measured, " +
-				"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest (absent files are not probed; rows excluded from scanning are skipped); narrow it with fileIds / bookIds. On demand only.",
-			// Declared write-set (as HEAD, dispatcher Gate 3b): this op rewrites
-			// book_file rows. It also writes the book's own Duration and
-			// DurationVerifiedAt columns (ModifyBook), which HEAD never declared.
-			// ModifyBook also stamps the metadata cache stale on an identity change and
-			// stages the ident: rows (metadata_cache, indexes): the shared ModifyBook
-			// row, declared whole whatever the closure sets (THE RULE,
-			// kinds_resources.go).
-			Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books." + durationBackfillOpID),
-			Timeout:        120 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Backfill book durations",
+		Help: "The single duration operation. Reads the real per-file duration already stored from fingerprinting (AcoustIDFingerprintDurationSec) first — a fast DB pass — " +
+			"and falls back to ffprobe only for never-fingerprinted files. Handles both multi-file and virtual single-file books. " +
+			"Corrects Book.Duration where the old fileSize÷bitrate estimate was wrong (PR #1555; m4b/m4a were ~2× too short). " +
+			"Never overwrites a real duration with an estimate, and skips books with any unreadable segment. " +
+			"A preview counts what would change (incl. fingerprint vs ffprobe split); start in live mode to apply. " +
+			"Workers param (default 4) controls ffprobe concurrency — higher = faster ffprobe tail. " +
+			"Set onlyMissingDuration=true to scope the run to books with no known duration. " +
+			"mode=unknownRows is the row-grain pass: it walks book_file rows in ANY book (copies and books/itunes rows included, read-only on disk) that no one has measured, " +
+			"borrows a duration from a sibling row at the same path, promotes the fingerprint duration, then ffprobes the rest (absent files are not probed; rows excluded from scanning are skipped); narrow it with fileIds / bookIds. On demand only.",
+		// Declared write-set (as HEAD, dispatcher Gate 3b): this op rewrites
+		// book_file rows. It also writes the book's own Duration and
+		// DurationVerifiedAt columns (ModifyBook), which HEAD never declared.
+		// ModifyBook also stamps the metadata cache stale on an identity change and
+		// stages the ident: rows (metadata_cache, indexes): the shared ModifyBook
+		// row, declared whole whatever the closure sets (THE RULE,
+		// kinds_resources.go).
+		Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books." + durationBackfillOpID),
+		Timeout:        120 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in durationBackfillNativeParams) (durationBackfillResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return durationBackfillResult{}, err

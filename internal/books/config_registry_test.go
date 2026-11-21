@@ -659,8 +659,7 @@ func TestBooksSettings_ScheduleKeysAreScheduleConfig(t *testing.T) {
 	b := newBooksStore(t)
 	want := map[string]bool{}
 	st := reflect.TypeOf(schedulerDefaults().Schedules)
-	for i := range st.NumField() {
-		f := st.Field(i)
+	for f := range st.Fields() {
 		if f.Type != reflect.TypeFor[tasks.ScheduleConfig]() {
 			t.Errorf("Schedules.%s is %s, not tasks.ScheduleConfig", f.Name, f.Type)
 			continue

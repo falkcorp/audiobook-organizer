@@ -268,12 +268,10 @@ type upgradeCoreHarness struct {
 
 func (h *upgradeCoreHarness) env() metadataUpgradeEnv {
 	return metadataUpgradeEnv{
-		t7Env: t7Env{
-			Log:      func(_ slog.Level, msg string, _ ...slog.Attr) { h.notes = append(h.notes, msg) },
-			Progress: func(_, _ int, msg string) { h.notes = append(h.notes, "progress: "+msg) },
-		},
-		Store:  h.w,
-		Writer: h.w,
+		Log:      func(_ slog.Level, msg string, _ ...slog.Attr) { h.notes = append(h.notes, msg) },
+		Progress: func(_, _ int, msg string) { h.notes = append(h.notes, "progress: "+msg) },
+		Store:    h.w,
+		Writer:   h.w,
 		StandDown: func(ctx context.Context, reason string) (t7Hold, error) {
 			h.acquired = append(h.acquired, reason)
 			if h.standErr != nil {

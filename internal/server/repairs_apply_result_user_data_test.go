@@ -77,7 +77,6 @@ func TestRepairsApplyResult_DiagnosticsExportWithholdsTheOwnerAndFixerText(t *te
 	admin, err := store.GetUserByUsername("admin")
 	require.NoError(t, err)
 	for id, actor := range map[string]string{"op-export-apply-mgr": mgr.ID, "op-export-apply-admin": admin.ID} {
-		actor := actor
 		require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
 			ID: id, DefID: "diagnostics.export", Plugin: "diagnostics", Status: "running",
 			Params: `{"category":"general"}`, ActorUserID: &actor, QueuedAt: now,

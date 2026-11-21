@@ -522,7 +522,7 @@ func TestMasterListImport_RecordCreatedSincePlanIsKept(t *testing.T) {
 	id := database.ElsewhereID(l.user, "asin:B100000099")
 	other := database.MasterListElsewhere{ID: id, UserID: l.user, ListID: "another-list", Title: "Someone else's"}
 	require.NoError(t, st.CreateElsewhere(other))
-	l.p.deps = hidingDeps{fakeDeps: fakeDeps{store: l.store}, lists: hidingLists{st}}
+	l.p.deps = hidingDeps{store: l.store, lists: hidingLists{st}}
 
 	res := l.apply(plan, []string{"asin:B100000099"}, false)
 	require.Equal(t, repairs.OutcomeChangedSincePlan, res["asin:B100000099"].Outcome, "%+v", res)
@@ -806,7 +806,7 @@ func TestMasterListImport_ApplyRechecksTargetBookAndUser(t *testing.T) {
 		t.Run("user removed before the write "+rowID, func(t *testing.T) {
 			l, plan := setup(t)
 			var gone atomic.Bool
-			l.p.deps = vanishingDeps{fakeDeps: fakeDeps{store: l.store}, us: vanishingUsers{UserReadStateStore: NewUserReadStateStore(l.store), gone: &gone}}
+			l.p.deps = vanishingDeps{store: l.store, us: vanishingUsers{UserReadStateStore: NewUserReadStateStore(l.store), gone: &gone}}
 			f := &actingFixer{masterListImportFixer: l.fixer, after: func() { gone.Store(true) }}
 			res := l.applyWith(f, plan, []string{rowID}, false)
 			require.Equal(t, repairs.OutcomeChangedSincePlan, res[rowID].Outcome, "%+v", res[rowID])
@@ -819,7 +819,7 @@ func TestMasterListImport_ApplyRechecksTargetBookAndUser(t *testing.T) {
 		l, plan := setup(t)
 		var gone atomic.Bool
 		gone.Store(true)
-		l.p.deps = vanishingDeps{fakeDeps: fakeDeps{store: l.store}, us: vanishingUsers{UserReadStateStore: NewUserReadStateStore(l.store), gone: &gone}}
+		l.p.deps = vanishingDeps{store: l.store, us: vanishingUsers{UserReadStateStore: NewUserReadStateStore(l.store), gone: &gone}}
 		for _, dry := range []bool{true, false} {
 			res := l.apply(plan, []string{"asin:B100000001"}, dry)
 			r := res["asin:B100000001"]

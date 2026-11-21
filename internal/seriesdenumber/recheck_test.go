@@ -7,11 +7,9 @@ package seriesdenumber
 
 import "testing"
 
-func seqp(n int) *int { return &n }
-
 func TestRecheck_APositionTakenSinceThePlanHoldsTheMove(t *testing.T) {
 	moves := []Move{{BookID: "m1", FromSeriesID: 5, Identity: "b:m1", NewSeq: 3}}
-	keep, held := Recheck("Court of Owls", moves, []Book{{ID: "x", Seq: seqp(3)}}, 0)
+	keep, held := Recheck("Court of Owls", moves, []Book{{ID: "x", Seq: new(3)}}, 0)
 	if len(keep) != 0 || len(held) != 1 || held[0].Code != HoldCollision || held[0].BookID != "m1" {
 		t.Fatalf("keep=%v held=%+v, want the move held as a collision", keep, held)
 	}
@@ -22,7 +20,7 @@ func TestRecheck_ATrashedBookKeepsItsPosition(t *testing.T) {
 	// trash); the decision cannot tell and must not.
 	keep, held := Recheck("Court of Owls",
 		[]Move{{BookID: "m1", Identity: "b:m1", NewSeq: 2}},
-		[]Book{{ID: "t", Seq: seqp(2)}}, 0)
+		[]Book{{ID: "t", Seq: new(2)}}, 0)
 	if len(keep) != 0 || len(held) != 1 {
 		t.Fatalf("keep=%v held=%+v", keep, held)
 	}
@@ -38,7 +36,7 @@ func TestRecheck_UnseenMembersHoldEveryMove(t *testing.T) {
 
 func TestRecheck_AFreePositionKeepsTheMove(t *testing.T) {
 	moves := []Move{{BookID: "a", Identity: "b:a", NewSeq: 4}}
-	keep, held := Recheck("Court of Owls", moves, []Book{{ID: "x", Seq: seqp(3)}, {ID: "y"}}, 0)
+	keep, held := Recheck("Court of Owls", moves, []Book{{ID: "x", Seq: new(3)}, {ID: "y"}}, 0)
 	if len(keep) != 1 || len(held) != 0 {
 		t.Fatalf("keep=%v held=%+v", keep, held)
 	}
@@ -49,7 +47,7 @@ func TestRecheck_VersionsOfOneBookAreHeldTogether(t *testing.T) {
 		{BookID: "v1", Identity: "g:one", NewSeq: 2},
 		{BookID: "v2", Identity: "g:one", NewSeq: 2},
 	}
-	keep, held := Recheck("Court of Owls", moves, []Book{{ID: "x", Seq: seqp(2)}}, 0)
+	keep, held := Recheck("Court of Owls", moves, []Book{{ID: "x", Seq: new(2)}}, 0)
 	if len(keep) != 0 || len(held) != 2 {
 		t.Fatalf("keep=%v held=%+v, want both versions held", keep, held)
 	}

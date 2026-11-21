@@ -1073,10 +1073,10 @@ func TestT6G2Kinds_MatchHEADDefs(t *testing.T) {
 	// have a hole: a writer method with no entry would be an unchecked write, and
 	// an entry with no method a stale claim.
 	t.Run("touch map has an entry for every writer method", func(t *testing.T) {
-		iface := reflect.TypeOf((*t6g2Writer)(nil)).Elem()
+		iface := reflect.TypeFor[t6g2Writer]()
 		methods := map[string]bool{}
-		for i := range iface.NumMethod() {
-			name := iface.Method(i).Name
+		for method := range iface.Methods() {
+			name := method.Name
 			methods[name] = true
 			if len(t6g2Touches[name]) == 0 {
 				t.Errorf("t6g2Writer.%s has no t6g2Touches entry", name)

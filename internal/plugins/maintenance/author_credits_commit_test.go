@@ -697,7 +697,7 @@ func counter(t *testing.T, line, key string) int {
 
 func runConjRepair(t *testing.T, st database.Store) (*logReporter, *conjRepairDeps) {
 	t.Helper()
-	deps := &conjRepairDeps{fakeDeps: fakeDeps{store: st}}
+	deps := &conjRepairDeps{store: st}
 	rep := &logReporter{}
 	require.NoError(t, New(deps).runAuthorConjunctionRepair(context.Background(), conjRepairParams(false), rep))
 	return rep, deps
@@ -754,7 +754,7 @@ func TestAuthorConjunctionRepair_UnlockedBooksMergeAndInvalidateTheCache(t *test
 
 func runDupMerge(t *testing.T, st database.Store) (*logReporter, *conjRepairDeps) {
 	t.Helper()
-	deps := &conjRepairDeps{fakeDeps: fakeDeps{store: st}}
+	deps := &conjRepairDeps{store: st}
 	rep := &logReporter{}
 	require.NoError(t, New(deps).runAuthorDuplicateMerge(context.Background(),
 		[]byte(`{"names":["Edward Nygma"],"dry_run":false}`), rep))

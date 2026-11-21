@@ -734,7 +734,7 @@ func entryRefusal(name string) error {
 	if clean == ".." || strings.HasPrefix(clean, "../") {
 		return fmt.Errorf("%w: %q", ErrArchiveEntryEscapes, name)
 	}
-	for _, part := range strings.Split(clean, "/") {
+	for part := range strings.SplitSeq(clean, "/") {
 		if strings.EqualFold(part, hnswSnapshotDirName) {
 			return fmt.Errorf("%w: %q", ErrArchiveCarriesHNSWSnapshot, name)
 		}

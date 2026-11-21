@@ -62,21 +62,21 @@ func TestAuthorityProvider_WaiterIsWaitedOn(t *testing.T) {
 	st := newStore(t)
 	l := snapshotLookup(t, "Waited Person")
 
-	rel := SetAuthorityProvider(providerWaiter{providerOnly: providerOnly{lookup: l}, ready: true})
+	rel := SetAuthorityProvider(providerWaiter{lookup: l, ready: true})
 	t.Cleanup(rel)
 	got, ready := AwaitAuthority(context.Background(), st)
 	require.True(t, ready)
 	require.Same(t, l, got)
 
 	rel()
-	rel = SetAuthorityProvider(providerWaiter{providerOnly: providerOnly{lookup: authority.Empty()}, ready: false})
+	rel = SetAuthorityProvider(providerWaiter{lookup: authority.Empty(), ready: false})
 	t.Cleanup(rel)
 	_, ready = AwaitAuthority(context.Background(), st)
 	require.False(t, ready, "a waiter that has no snapshot yet is not ready")
 
 	var nilSnap *authority.Snapshot
 	rel()
-	rel = SetAuthorityProvider(providerWaiter{providerOnly: providerOnly{lookup: nilSnap}, ready: true})
+	rel = SetAuthorityProvider(providerWaiter{lookup: nilSnap, ready: true})
 	t.Cleanup(rel)
 	got, ready = AwaitAuthority(context.Background(), st)
 	require.False(t, ready, "a provider answering a typed-nil snapshot is not ready")
@@ -90,7 +90,7 @@ func TestAuthorityProvider_StoreCapabilityWins(t *testing.T) {
 	st := newStore(t)
 	storeLookup := snapshotLookup(t, "Store Person")
 	providerLookup := snapshotLookup(t, "Provider Person")
-	t.Cleanup(SetAuthorityProvider(providerWaiter{providerOnly: providerOnly{lookup: providerLookup}, ready: true}))
+	t.Cleanup(SetAuthorityProvider(providerWaiter{lookup: providerLookup, ready: true}))
 
 	got, ready := AwaitAuthority(context.Background(), authorityLookupStore{PebbleStore: st, lookup: storeLookup})
 	require.True(t, ready)
@@ -140,7 +140,7 @@ func TestAuthorityProvider_ConcurrentSetAndLookup(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 200 {
-				rel := SetAuthorityProvider(providerWaiter{providerOnly: providerOnly{lookup: l}, ready: true})
+				rel := SetAuthorityProvider(providerWaiter{lookup: l, ready: true})
 				_, _ = AwaitAuthority(context.Background(), st)
 				_, _ = CurrentAuthority(st)
 				rel()

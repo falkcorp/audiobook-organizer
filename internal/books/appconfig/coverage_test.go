@@ -19,13 +19,13 @@ import (
 // leafPaths are the dotted names of every leaf field of v that the Engine's field
 // walk names, descending structs only (a slice, map or scalar is a leaf).
 func leafPaths(t reflect.Type, prefix []string, out *[][]string) {
-	for i := range t.NumField() {
-		name := fieldName(t.Field(i))
+	for field := range t.Fields() {
+		name := fieldName(field)
 		if name == "" {
 			continue
 		}
 		p := append(append([]string(nil), prefix...), name)
-		if ft := t.Field(i).Type; ft.Kind() == reflect.Struct && ft.PkgPath() != "time" {
+		if ft := field.Type; ft.Kind() == reflect.Struct && ft.PkgPath() != "time" {
 			leafPaths(ft, p, out)
 			continue
 		}
@@ -71,7 +71,7 @@ func TestEngine_EveryConfigFieldHasARow(t *testing.T) {
 	// only on an Engine that has somewhere to keep them, as the books module's does.
 	e, _, _ := aiEngine(t, "")
 	var paths [][]string
-	leafPaths(reflect.TypeOf(config.Config{}), nil, &paths)
+	leafPaths(reflect.TypeFor[config.Config](), nil, &paths)
 	if len(paths) < 100 {
 		t.Fatalf("walked only %d fields: the walk is broken", len(paths))
 	}

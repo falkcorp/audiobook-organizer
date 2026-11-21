@@ -82,8 +82,8 @@ func (x *mlElsewhereIndex) find(lists MasterListStore, user string, row masterli
 		x.byKey = make(map[string]database.MasterListElsewhere, len(recs))
 		// ListElsewhere is newest first: the oldest record of a key wins, by
 		// writing in reverse, so the answer does not move as records are added.
-		for i := len(recs) - 1; i >= 0; i-- {
-			rec := recs[i]
+		for _, rec := range slices.Backward(recs) {
+
 			as := masterlist.Row{ASIN: rec.ASIN, ISBN10: rec.ISBN10, ISBN13: rec.ISBN13}
 			for _, s := range rec.Sources {
 				as.Sources = append(as.Sources, masterlist.Source{Source: s.Source, SourceID: s.SourceID})

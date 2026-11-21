@@ -585,11 +585,9 @@ func parallelRanges(n, workers, minChunk int, fn func(lo, hi int) error) error {
 	var wg sync.WaitGroup
 	for part, lo := 0, 0; lo < n; part, lo = part+1, lo+chunk {
 		hi := min(lo+chunk, n)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[part] = fn(lo, hi)
-		}()
+		})
 	}
 	wg.Wait()
 	for _, err := range errs {

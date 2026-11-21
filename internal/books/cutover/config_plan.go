@@ -1025,7 +1025,7 @@ func (pl *planner) fold() {
 		return
 	}
 	var emails []string
-	for _, e := range strings.Split(f.emails, ",") {
+	for e := range strings.SplitSeq(f.emails, ",") {
 		if e = strings.TrimSpace(e); e != "" {
 			emails = append(emails, e)
 		}
@@ -1193,7 +1193,7 @@ func (pl *planner) webhook(settings map[string]any) {
 	}
 	urls, _ := asString(settings["urls"])
 	n := 0
-	for _, u := range strings.Split(urls, ",") {
+	for u := range strings.SplitSeq(urls, ",") {
 		if strings.TrimSpace(u) == "" {
 			continue
 		}

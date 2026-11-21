@@ -21,9 +21,6 @@ import (
 // itself lives in retireIntoWith, which every Repairs retire shares. All
 // fixtures are synthetic.
 
-func rcFloat(v float64) *float64 { return &v }
-func rcStr(v string) *string     { return &v }
-
 func (f *fragFixture) rcRate(t *testing.T, role string, req database.UpdateBookRatingRequest) {
 	t.Helper()
 	require.NoError(t, f.s.UpdateBookRating(f.ids[role], req))
@@ -75,8 +72,8 @@ func TestRetireCarry_RatingsCollectionsAndPlaylistsFollowAndUndo(t *testing.T) {
 	parent := f.ids["parent"]
 	// The survivor has a story rating of its own; the child has overall and
 	// notes as well as a (different) story rating.
-	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Story: rcFloat(3)})
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(4.5), Story: rcFloat(1), Notes: rcStr("loved it")})
+	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Story: new(float64(3))})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: new(4.5), Story: new(float64(1)), Notes: new("loved it")})
 	// colA: the child sits between two others; colB already lists the parent;
 	// plA is a static playlist; a dynamic collection is never touched.
 	colA := f.rcCollection(t, "Favourites", "other-1", child, "other-2")
@@ -142,8 +139,8 @@ func TestRetireCarry_TheSurvivorsRatingIsNeverOverwritten(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
-	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: rcFloat(2), Notes: rcStr("meh")})
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(5), Notes: rcStr("great")})
+	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: new(float64(2)), Notes: new("meh")})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: new(float64(5)), Notes: new("great")})
 	parent := f.rcRetire(t, child)
 
 	p, err := f.s.GetBookByID(parent)
@@ -161,14 +158,14 @@ func TestRetireCarry_UndoNeverOverwritesALaterEdit(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: new(float64(4))})
 	colA := f.rcCollection(t, "Favourites", "other-1", child)
 	plA := f.rcPlaylist(t, "Road trip", child)
 	parent := f.rcRetire(t, child)
 
 	// After the retire the owner re-rates the survivor, drops it from the
 	// collection and clears the playlist.
-	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: rcFloat(1)})
+	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: new(float64(1))})
 	_, err := f.s.RemoveBookFromCollection(colA, parent)
 	require.NoError(t, err)
 	pl, err := f.s.GetUserPlaylist(plA)

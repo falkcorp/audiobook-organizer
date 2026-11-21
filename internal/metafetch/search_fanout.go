@@ -608,7 +608,7 @@ func (mfs *Service) enrichRuntimeByASIN(p fanoutParams, states []*fanoutSource, 
 	// Pass 0 only REPRIORITISES: the single lookup goes to an answer the
 	// transcription matched (its runtime decides the transcription boost);
 	// pass 1 is the original rule, for any answer.
-	for pass := 0; pass < 2; pass++ {
+	for pass := range 2 {
 		if pass == 0 && th.empty() {
 			continue
 		}

@@ -17,6 +17,7 @@ package seriesdenumber
 
 import (
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -114,7 +115,7 @@ func OwnNameKeys(name string) []string {
 	}
 	for _, form := range nameForms(name) {
 		var toks []string
-		for _, w := range strings.Fields(strings.NewReplacer(",", " ", ".", " ").Replace(form)) {
+		for w := range strings.FieldsSeq(strings.NewReplacer(",", " ", ".", " ").Replace(form)) {
 			if letterCount(w) >= 2 {
 				toks = append(toks, w)
 			}
@@ -133,12 +134,7 @@ func ownNameHas(name, base string) bool {
 	if bk == "" {
 		return false
 	}
-	for _, k := range OwnNameKeys(name) {
-		if k == bk {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(OwnNameKeys(name), bk)
 }
 
 // nameForms returns the spellings of a name OwnNameKeys reads: each credit of a

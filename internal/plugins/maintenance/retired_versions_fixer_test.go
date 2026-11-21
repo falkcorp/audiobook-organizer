@@ -61,15 +61,16 @@ func newRetiredFixture(t *testing.T) *retiredFixture {
 	return rf
 }
 
-func retiredPtr[T any](v T) *T { return &v }
+//go:fix inline
+func retiredPtr[T any](v T) *T { return new(v) }
 
 // live creates a live book; a non-empty group makes it that group's primary.
 func (rf *retiredFixture) live(name, group string, rows ...string) string {
 	rf.t.Helper()
 	b := &database.Book{Title: name, FilePath: "/lib/" + name}
 	if group != "" {
-		b.VersionGroupID = retiredPtr(group)
-		b.IsPrimaryVersion = retiredPtr(true)
+		b.VersionGroupID = new(group)
+		b.IsPrimaryVersion = new(true)
 	}
 	return rf.add(name, b, rows...)
 }
@@ -77,16 +78,16 @@ func (rf *retiredFixture) live(name, group string, rows ...string) string {
 // liveNoFlag creates a live group member whose primary flag is unset.
 func (rf *retiredFixture) liveNoFlag(name, group string) string {
 	rf.t.Helper()
-	return rf.add(name, &database.Book{Title: name, FilePath: "/lib/" + name, VersionGroupID: retiredPtr(group)})
+	return rf.add(name, &database.Book{Title: name, FilePath: "/lib/" + name, VersionGroupID: new(group)})
 }
 
 // trashed creates a book soft-deleted daysAgo days before the fixture's now.
 func (rf *retiredFixture) trashed(name, group string, daysAgo int, rows ...string) string {
 	rf.t.Helper()
-	b := &database.Book{Title: name, FilePath: "/lib/" + name, MarkedForDeletion: retiredPtr(true),
-		MarkedForDeletionAt: retiredPtr(rf.now.Add(-time.Duration(daysAgo) * 24 * time.Hour))}
+	b := &database.Book{Title: name, FilePath: "/lib/" + name, MarkedForDeletion: new(true),
+		MarkedForDeletionAt: new(rf.now.Add(-time.Duration(daysAgo) * 24 * time.Hour))}
 	if group != "" {
-		b.VersionGroupID = retiredPtr(group)
+		b.VersionGroupID = new(group)
 	}
 	return rf.add(name, b, rows...)
 }
@@ -130,7 +131,7 @@ func (rf *retiredFixture) mergedInto(name, target string) {
 	rf.t.Helper()
 	b, err := rf.st.GetBookByID(rf.ids[name])
 	require.NoError(rf.t, err)
-	b.MergedIntoBookID = retiredPtr(rf.ids[target])
+	b.MergedIntoBookID = new(rf.ids[target])
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(rf.t, err)
 }
@@ -150,7 +151,7 @@ func (rf *retiredFixture) seedEveryCategory() int {
 	deleted := rf.trashed("trash-labelled", "g1", 30, rf.file("g1/deleted.mp3"))
 	b, err := rf.st.GetBookByID(deleted)
 	require.NoError(t, err)
-	b.LibraryState = retiredPtr("deleted")
+	b.LibraryState = new("deleted")
 	_, err = rf.st.UpdateBook(deleted, b)
 	require.NoError(t, err)
 	// A trashed row with no soft-delete time: the shape older builds left. The
@@ -435,7 +436,7 @@ func TestRetiredVersions_ReplanAgreesWithPlan(t *testing.T) {
 	// A book that left the trash re-plans as gone, not as an error.
 	b, err := rf.st.GetBookByID(rf.ids["too-recent"])
 	require.NoError(t, err)
-	b.MarkedForDeletion, b.MarkedForDeletionAt = retiredPtr(false), nil
+	b.MarkedForDeletion, b.MarkedForDeletionAt = new(false), nil
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(t, err)
 	fresh, err = rf.f.Replan(context.Background(), nil, rows[rf.ids["too-recent"]], &fakeReporter{})

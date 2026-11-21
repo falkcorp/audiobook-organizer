@@ -193,15 +193,14 @@ func capIfaceMethods(t *testing.T, ty types.Type) map[string]string {
 	it, ok := ty.Underlying().(*types.Interface)
 	require.True(t, ok, "%s is not an interface", ty)
 	out := map[string]string{}
-	for i := 0; i < it.NumMethods(); i++ {
-		m := it.Method(i)
+	for m := range it.Methods() {
 		sig := m.Type().(*types.Signature)
 		var ps, rs []string
-		for j := 0; j < sig.Params().Len(); j++ {
-			ps = append(ps, normType(types.TypeString(sig.Params().At(j).Type(), qual)))
+		for v := range sig.Params().Variables() {
+			ps = append(ps, normType(types.TypeString(v.Type(), qual)))
 		}
-		for j := 0; j < sig.Results().Len(); j++ {
-			rs = append(rs, normType(types.TypeString(sig.Results().At(j).Type(), qual)))
+		for v := range sig.Results().Variables() {
+			rs = append(rs, normType(types.TypeString(v.Type(), qual)))
 		}
 		out[m.Name()] = sigString(ps, rs, sig.Variadic())
 	}
@@ -212,14 +211,13 @@ func capIfaceMethods(t *testing.T, ty types.Type) map[string]string {
 // normalised signature (the receiver is not part of it).
 func concreteMethods(rt reflect.Type) map[string]string {
 	out := map[string]string{}
-	for i := 0; i < rt.NumMethod(); i++ {
-		m := rt.Method(i)
+	for m := range rt.Methods() {
 		var ps, rs []string
 		for j := 1; j < m.Type.NumIn(); j++ {
 			ps = append(ps, normType(m.Type.In(j).String()))
 		}
-		for j := 0; j < m.Type.NumOut(); j++ {
-			rs = append(rs, normType(m.Type.Out(j).String()))
+		for out := range m.Type.Outs() {
+			rs = append(rs, normType(out.String()))
 		}
 		out[m.Name] = sigString(ps, rs, m.Type.IsVariadic())
 	}
@@ -348,8 +346,8 @@ func TestJobsStoreEveryMethodIsGatedRefusedOrAForwardedRead(t *testing.T) {
 	}
 
 	wt := reflect.TypeFor[*booksJobsStore]()
-	for i := 0; i < wt.NumMethod(); i++ {
-		name := wt.Method(i).Name
+	for method := range wt.Methods() {
+		name := method.Name
 		decl, declared := src[name]
 		switch {
 		case !declared:

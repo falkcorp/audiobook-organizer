@@ -113,9 +113,9 @@ func TestCreditsBackfill_StandDownLeaseIsRenewedDuringPlanning(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	const books = 10
-	for i := 0; i < books; i++ {
+	for i := range books {
 		id := fmt.Sprintf("sd-%02d", i)
-		f.book(id, "Knightfall "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Knightfall "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	reads := &atomic.Int64{}
 	scan := &cbReadLeaseScan{reads: reads, maxReads: 3}
@@ -164,9 +164,9 @@ func TestCreditsBackfill_LostStandDownIsReportedAsTheCause(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	const books = 6
-	for i := 0; i < books; i++ {
+	for i := range books {
 		id := fmt.Sprintf("sl-%02d", i)
-		f.book(id, "Hush "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Hush "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	writes := &atomic.Int64{}
 	env := creditsBackfillEnv{
@@ -204,13 +204,13 @@ func TestCreditsBackfill_EmptyJoinSnapshotNamingAnotherAuthorIsHeldForReview(t *
 	jason := f.author("Jason Todd")
 	dick := f.author("Dick Grayson")
 	f.book("ej-conflict", "Under the Red Hood", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: dick, Name: "Dick Grayson"}
 	}, nil, nil)
 	// Control: the snapshot names the SAME author (under an old name): the
 	// plan's fill and snapshot refresh stand.
 	f.book("ej-stale", "Batman: Year One", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: jason, Name: "Jay Todd"}
 	}, nil, nil)
 	idx, err := buildCreditCensusIndex(f.s)
@@ -276,8 +276,8 @@ func TestCreditsBackfill_FoldLinkedNarratorLeavesColumnAndJunctionAgreeing(t *te
 	bruce := f.author("Bruce Wayne")
 	renee := f.narrator("Renée Montoya")
 	f.book("fl-col", "Gotham Central: In the Line of Duty", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("fl-col", [2]int{bruce, 0}), nil)
 
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
@@ -313,12 +313,12 @@ func TestCreditsBackfill_NewNarratorSharedByFoldKeyFollowsTheCreatedSpelling(t *
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	f.book("fn-1", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("fn-1", [2]int{bruce, 0}), nil)
 	f.book("fn-2", "Gotham Central: Corrigan", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renée Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renée Montoya")
 	}, ba("fn-2", [2]int{bruce, 0}), nil)
 
 	if _, err := f.run(creditsBackfillParams{Apply: true}, 1); err != nil {
@@ -401,8 +401,8 @@ func TestCreditsBackfill_LockAppearingAfterThePlanHoldsTheBook(t *testing.T) {
 			bruce := f.author("Bruce Wayne")
 			f.narrator("Oswald Cobblepot")
 			f.book("lk-1", "The Court of Owls", func(b *database.Book) {
-				b.AuthorID = intp(bruce)
-				b.Narrator = strp("Oswald Cobblepot")
+				b.AuthorID = new(bruce)
+				b.Narrator = new("Oswald Cobblepot")
 			}, nil, nil)
 			before := f.state("lk-1")
 
@@ -459,9 +459,9 @@ func (r *cbLockOnWriteReporter) SetCurrentItem(label string) {
 func TestCreditsBackfill_LockAppearingBeforeTheWriteLeavesNoJournalRow(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
-	f.book("lj-1", "Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
-	f.book("lj-2", "Year Two", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
-	rep := &cbLockOnWriteReporter{cbReporter: cbReporter{id: cbTestOpID}, f: f, books: []string{"lj-1", "lj-2"}, field: database.FieldKeyAuthorName}
+	f.book("lj-1", "Year One", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
+	f.book("lj-2", "Year Two", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
+	rep := &cbLockOnWriteReporter{id: cbTestOpID, f: f, books: []string{"lj-1", "lj-2"}, field: database.FieldKeyAuthorName}
 	res, err := f.runEnv(context.Background(), creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{Apply: true}, rep)
 	if err != nil {
 		t.Fatal(err)
@@ -500,7 +500,7 @@ func TestCreditsBackfill_UnreadableBookKeepsItsPlaceInTheLimitCohort(t *testing.
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	for _, id := range []string{"lm-01", "lm-02", "lm-03", "lm-04"} {
-		f.book(id, "Arkham "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Arkham "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	env := creditsBackfillEnv{store: failingReadStore{f.s, "lm-02"}, mod: f.s}
 	res, err := f.runEnv(context.Background(), env, creditsBackfillParams{Apply: true, Limit: 2}, &cbReporter{id: cbTestOpID})
@@ -539,7 +539,7 @@ func TestCreditsBackfill_RevertOfAWriteThatNeverLandedIsNotRefused(t *testing.T)
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
 	raw := ba("sr-1", [2]int{bruce, 0}, [2]int{selina, 0})
-	f.book("sr-1", "Hush", func(b *database.Book) { b.AuthorID = intp(bruce) }, raw, nil)
+	f.book("sr-1", "Hush", func(b *database.Book) { b.AuthorID = new(bruce) }, raw, nil)
 	if _, err := f.run(creditsBackfillParams{Apply: true}, 1); err != nil {
 		t.Fatal(err)
 	}

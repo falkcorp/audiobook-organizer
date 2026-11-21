@@ -346,8 +346,7 @@ func TestRevertSeriesCreate_ALoneRowWithoutAPlanKeepsAReferencedSeries(t *testin
 
 	err = NewRevertService(f.store).revertChangeIn(create, nil)
 
-	var kept *seriesKept
-	if !errors.As(err, &kept) {
+	if _, ok := errors.AsType[*seriesKept](err); !ok {
 		t.Fatalf("revertChangeIn(series_create, nil plan) = %v, want the series reported kept", err)
 	}
 	baseSeriesStillThere(t, f.store, f.base.ID)

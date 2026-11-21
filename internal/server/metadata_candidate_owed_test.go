@@ -712,12 +712,10 @@ func TestCandidateOwed_TwoConcurrentOpsChargeOneAsk(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			errs[i] = f.s.runMetadataCandidateFetchOp(context.Background(), params,
 				&resumeRecorder{opID: fmt.Sprintf("op-owed-concurrent-%d", i)})
-		}()
+		})
 	}
 	wg.Wait()
 	for i, err := range errs {

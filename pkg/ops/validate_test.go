@@ -29,7 +29,7 @@ func okBatch(id string, c Common, conc Concurrency) Definition {
 
 func okFixer(id string, e Effects) Definition {
 	return Fixer(id, FixerSpec[NoParams, string]{
-		Common:     Common{Title: id, Effects: e, Permission: auth.PermSettingsManage},
+		Title: id, Effects: e, Permission: auth.PermSettingsManage,
 		Candidates: func(*RC, NoParams) (Source[string], error) { return Source[string]{}, nil },
 		Load:       func(*RC, NoParams, string) (string, bool, error) { return "", false, nil },
 		Evaluate:   func(*ItemRC, NoParams, string) (Row, error) { return Row{}, nil },
@@ -58,7 +58,7 @@ func refusals(err error) map[Refusal]bool {
 
 func TestValidateCatalogAcceptsAGoodCatalog(t *testing.T) {
 	child := okTask("c.child")
-	pipe := Pipeline("p.pipe", PipelineSpec[NoParams]{Common: Common{Title: "p", Permission: auth.PermSettingsManage},
+	pipe := Pipeline("p.pipe", PipelineSpec[NoParams]{Title: "p", Permission: auth.PermSettingsManage,
 		Stages: []Stage[NoParams]{{Name: "one", Def: child}}})
 	defs := []Definition{okTask("a.one"), child, pipe,
 		okBatch("b.one", Common{Title: "b", Effects: Writes(ResBooks), Permission: auth.PermSettingsManage}, Sequential("one row at a time")),
@@ -84,19 +84,19 @@ func TestValidateCatalogRefusals(t *testing.T) {
 		{"invalid (no Run)", []Definition{Task("t", TaskSpec[NoParams, NoResult]{Common: readOnlyCommon("t")})}, RefuseInvalid},
 		{"duplicate id", []Definition{okTask("same"), okTask("same")}, RefuseDuplicateID},
 		{"former id collides", []Definition{okTask("a"), Task("b", TaskSpec[NoParams, NoResult]{
-			Common: Common{Title: "b", Effects: ReadOnly(), Permission: auth.PermLibraryView, FormerIDs: []string{"a"}},
-			Run:    func(*RC, NoParams) (NoResult, error) { return NoResult{}, nil }})}, RefuseDuplicateID},
+			Title: "b", Effects: ReadOnly(), Permission: auth.PermLibraryView, FormerIDs: []string{"a"},
+			Run: func(*RC, NoParams) (NoResult, error) { return NoResult{}, nil }})}, RefuseDuplicateID},
 		{"invalid schedule", []Definition{Task("s", TaskSpec[NoParams, NoResult]{
-			Common: Common{Title: "s", Effects: ReadOnly(), Permission: auth.PermLibraryView, Schedule: Cron("not a cron")},
-			Run:    func(*RC, NoParams) (NoResult, error) { return NoResult{}, nil }})}, RefuseSchedule},
+			Title: "s", Effects: ReadOnly(), Permission: auth.PermLibraryView, Schedule: Cron("not a cron"),
+			Run: func(*RC, NoParams) (NoResult, error) { return NoResult{}, nil }})}, RefuseSchedule},
 		{"no effects", []Definition{Task("e", TaskSpec[NoParams, NoResult]{
-			Common: Common{Title: "e", Permission: auth.PermLibraryView},
-			Run:    func(*RC, NoParams) (NoResult, error) { return NoResult{}, nil }})}, RefuseNoEffects},
+			Title: "e", Permission: auth.PermLibraryView,
+			Run: func(*RC, NoParams) (NoResult, error) { return NoResult{}, nil }})}, RefuseNoEffects},
 		{"fixer without writes", []Definition{okFixer("f", ReadOnly(ResBooks))}, RefuseFixerReadOnly},
 		{"native without permission", []Definition{okBatch("np", Common{Title: "np", Effects: Writes(ResBooks)}, CPU())}, RefuseNoPermission},
 		{"sequential without a reason", []Definition{okBatch("sq", writes, Sequential(""))}, RefuseSequentialNoReason},
 		{"stage not in catalog", []Definition{Pipeline("p", PipelineSpec[NoParams]{
-			Common: Common{Title: "p", Permission: auth.PermSettingsManage},
+			Title: "p", Permission: auth.PermSettingsManage,
 			Stages: []Stage[NoParams]{{Name: "one", Def: okTask("missing")}}})}, RefuseStageNotInCatalog},
 	}
 	for _, tc := range cases {
@@ -127,7 +127,7 @@ func TestValidateCatalogLedgerCheckIsStubbed(t *testing.T) {
 
 func TestPipelineCycleAndUnknownStage(t *testing.T) {
 	a := okTask("a")
-	p := Pipeline("p", PipelineSpec[NoParams]{Common: Common{Title: "p", Permission: auth.PermSettingsManage},
+	p := Pipeline("p", PipelineSpec[NoParams]{Title: "p", Permission: auth.PermSettingsManage,
 		Stages: []Stage[NoParams]{{Name: "x", Def: a, After: []string{"y"}}, {Name: "y", Def: a, After: []string{"x"}},
 			{Name: "z", Def: a, After: []string{"nope"}}}})
 	probs := Compile(p).Problems

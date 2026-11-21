@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -77,10 +78,8 @@ func memberNames(rel string) ([]string, error) {
 		return nil, errMemberPath
 	}
 	names := strings.Split(rel, ".")
-	for _, n := range names {
-		if n == "" {
-			return nil, errMemberPath
-		}
+	if slices.Contains(names, "") {
+		return nil, errMemberPath
 	}
 	return names, nil
 }

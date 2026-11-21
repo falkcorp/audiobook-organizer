@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -45,8 +46,8 @@ func snapshotNanos(t *testing.T, s *database.PebbleStore, id string) []int64 {
 	snaps, err := s.GetBookSnapshots(id, 1000)
 	require.NoError(t, err)
 	out := make([]int64, 0, len(snaps))
-	for i := len(snaps) - 1; i >= 0; i-- {
-		out = append(out, snaps[i].Timestamp.UnixNano())
+	for _, snap := range slices.Backward(snaps) {
+		out = append(out, snap.Timestamp.UnixNano())
 	}
 	return out
 }

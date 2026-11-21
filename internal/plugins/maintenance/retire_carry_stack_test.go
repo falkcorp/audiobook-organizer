@@ -44,7 +44,7 @@ func countOf(ids []string, id string) int {
 func TestRetireCarry_NoCollectionCapabilityRefusesBeforeAnyWrite(t *testing.T) {
 	d := newDCFixture(t)
 	s, l := d.dune(t)
-	d.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	d.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: new(float64(4))})
 	col := d.rcCollection(t, "Favourites", l)
 	pl := d.rcPlaylist(t, "Road trip", l)
 	u, err := d.s.CreateUser("reader", "reader@example.com", "bcrypt", "x", []string{"user"}, "active")
@@ -91,11 +91,11 @@ func TestRetireCarry_FiveChildrenOneOperationRevertRestoresEverything(t *testing
 		children[i] = f.hcChild(t, "c"+n, "Stray "+n, "hash-p0"+n)
 		rows[i] = hcRowID(parent, children[i])
 	}
-	f.rcRate(t, "c1", database.UpdateBookRatingRequest{Overall: rcFloat(1)})
-	f.rcRate(t, "c2", database.UpdateBookRatingRequest{Story: rcFloat(2)})
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Performance: rcFloat(3)})
-	f.rcRate(t, "c4", database.UpdateBookRatingRequest{Notes: rcStr("n4")})
-	f.rcRate(t, "c5", database.UpdateBookRatingRequest{Overall: rcFloat(5)})
+	f.rcRate(t, "c1", database.UpdateBookRatingRequest{Overall: new(float64(1))})
+	f.rcRate(t, "c2", database.UpdateBookRatingRequest{Story: new(float64(2))})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Performance: new(float64(3))})
+	f.rcRate(t, "c4", database.UpdateBookRatingRequest{Notes: new("n4")})
+	f.rcRate(t, "c5", database.UpdateBookRatingRequest{Overall: new(float64(5))})
 	colX := f.rcCollection(t, "Both children", children[0], "x", children[1], children[2])
 	colY := f.rcCollection(t, "Already listed", children[4], parent, children[0])
 	plX := f.rcPlaylist(t, "Road trip", children[3], "y", children[4])
@@ -156,8 +156,8 @@ func seedTwoOps(t *testing.T) *twoOps {
 	o := &twoOps{f: f, parent: f.ids["parent"]}
 	o.c3 = f.hcChild(t, "c3", "Stray Three", "hash-p03")
 	o.c4 = f.hcChild(t, "c4", "Stray Four", "hash-p04")
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(4), Story: rcFloat(1)})
-	f.rcRate(t, "c4", database.UpdateBookRatingRequest{Story: rcFloat(2), Notes: rcStr("note")})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: new(float64(4)), Story: new(float64(1))})
+	f.rcRate(t, "c4", database.UpdateBookRatingRequest{Story: new(float64(2)), Notes: new("note")})
 	o.colX = f.rcCollection(t, "Shared", o.c3, o.c4, "y")
 	o.plX = f.rcPlaylist(t, "Shared list", o.c3, "y", o.c4)
 	f.plan(t, "op-plan")
@@ -448,7 +448,7 @@ func TestRetireCarry_RevertReportsMarkersApartFromRestored(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: new(float64(4))})
 	f.rcCollection(t, "Favourites", "other-1", child)
 	f.rcPlaylist(t, "Road trip", child)
 	f.rcRetire(t, child)
@@ -484,7 +484,7 @@ func TestRetireCarry_PreflightPredictsTheRevert(t *testing.T) {
 	t.Parallel()
 	f := hcSeed(t)
 	child := f.hcChild(t, "c3", "Stray Recording", "hash-p03")
-	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	f.rcRate(t, "c3", database.UpdateBookRatingRequest{Overall: new(float64(4))})
 	colA := f.rcCollection(t, "Favourites", "other-1", child)
 	plA := f.rcPlaylist(t, "Road trip", child)
 	parent := f.rcRetire(t, child)
@@ -503,7 +503,7 @@ func TestRetireCarry_PreflightPredictsTheRevert(t *testing.T) {
 	require.NoError(t, err)
 	pl.BookIDs = []string{"other-9"}
 	require.NoError(t, f.s.UpdateUserPlaylist(pl))
-	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: rcFloat(1)})
+	f.rcRate(t, "parent", database.UpdateBookRatingRequest{Overall: new(float64(1))})
 	rep, err = preflightUndoConflicts(f.s, "op-apply")
 	require.NoError(t, err)
 	require.Len(t, rep.CheckFailed, 3, "collection, playlist and rating: %+v", rep)
@@ -552,7 +552,7 @@ func TestRetireCarry_EveryRetireReadsTheListsAfresh(t *testing.T) {
 func TestRetireCarry_DuplicateCopiesCarryAndRevert(t *testing.T) {
 	d := newDCFixture(t)
 	s, l := d.dune(t)
-	d.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: rcFloat(4)})
+	d.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: new(float64(4))})
 	col := d.rcCollection(t, "Favourites", "other-1", l)
 	pl := d.rcPlaylist(t, "Road trip", l, s)
 
@@ -582,7 +582,7 @@ func TestRetireCarry_DuplicateCopiesCarryAndRevert(t *testing.T) {
 func TestRetireCarry_ConsolidationLeftoversCarryAndRevert(t *testing.T) {
 	f := newLFFixture(t)
 	l, c := f.whm(t)
-	f.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: rcFloat(3)})
+	f.rcRate(t, "L", database.UpdateBookRatingRequest{Overall: new(float64(3))})
 	col := f.rcCollection(t, "Favourites", l, "other-1")
 	pl := f.rcPlaylist(t, "Road trip", "other-2", l)
 

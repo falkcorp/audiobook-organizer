@@ -203,7 +203,7 @@ func convert(name string, in json.RawMessage) (out json.RawMessage, dropped []st
 			return nil, nil, bad("want a string")
 		}
 		var list []string
-		for _, part := range strings.Split(s, ",") {
+		for part := range strings.SplitSeq(s, ",") {
 			if part = strings.TrimSpace(part); part != "" {
 				list = append(list, part)
 			}

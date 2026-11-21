@@ -22,7 +22,7 @@ func TestReader_MayReadResult(t *testing.T) {
 	withUsers := []auth.Permission{auth.PermLibraryView, auth.PermUsersManage}
 	settings := []auth.Permission{auth.PermLibraryView, auth.PermSettingsManage}
 	row := func(def string) *database.OperationV2Row {
-		return &database.OperationV2Row{ID: "op", DefID: def, ResultData: ptr(`{"items":[{"user_id":"01INVENTEDLISTENER000000A"}]}`)}
+		return &database.OperationV2Row{ID: "op", DefID: def, ResultData: new(`{"items":[{"user_id":"01INVENTEDLISTENER000000A"}]}`)}
 	}
 	for name, tc := range map[string]struct {
 		def  string
@@ -53,7 +53,7 @@ func TestReader_MayReadResult(t *testing.T) {
 // RequireResult answers 403 itself, and WithoutResult strips the result and
 // params of a refused row without touching the input.
 func TestReader_RequireResultAndWithoutResult(t *testing.T) {
-	row := database.OperationV2Row{ID: "op", DefID: merge.UserStateRepairOpID, Params: `{"apply":true}`, ResultData: ptr(`{"items":[1]}`)}
+	row := database.OperationV2Row{ID: "op", DefID: merge.UserStateRepairOpID, Params: `{"apply":true}`, ResultData: new(`{"items":[1]}`)}
 
 	c, w := ctxHolding()
 	r := NewRepairs(fixers{}, noOps, holdsOnly(auth.PermLibraryView)).For(c)
