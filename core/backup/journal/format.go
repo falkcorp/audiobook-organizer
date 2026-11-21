@@ -80,7 +80,17 @@ type Keys interface {
 // Header is the journal's line 0 (§5B.3.6). BaseSeq and BaseMAC are the last
 // line retention dropped (0 and "" for a journal that dropped none), so the
 // chain continues after a prune: the first line after the header has seq
-// BaseSeq+1 and chains from the header's own mac.
+// BaseSeq+1 and chains from the header's own mac, or, when ChainBase is set,
+// from BaseMAC.
+//
+// ChainBase is what a trim (File.Trim) sets. The lines a trim keeps are the
+// bytes they were written with, macs included, because the store's
+// journal_head, the unapplied queue and the location file's anchor name lines
+// by mac; each was signed with the previous line's mac, so the first of them
+// chains from the last line the trim dropped, which is BaseMAC, and not from the
+// new header's own mac. A header without it (every header a journal started
+// with, CreateBased's included) keeps the older rule, so no journal that exists
+// changes meaning.
 type Header struct {
 	InstallID string
 	App       string
@@ -88,6 +98,7 @@ type Header struct {
 	KID       string
 	BaseSeq   uint64
 	BaseMAC   string
+	ChainBase bool
 	MAC       string // verified; not set by the writer's input
 }
 
@@ -100,6 +111,9 @@ type wireHeader struct {
 	KID       string    `json:"kid"`
 	BaseSeq   uint64    `json:"base_seq"`
 	BaseMAC   string    `json:"base_mac"`
+	// ChainBase is omitted when false, so the bytes of a header that never
+	// carried it (and the mac over them) are the ones they always were.
+	ChainBase bool `json:"chain_base,omitempty"`
 }
 
 // wireLine is a revocation line's JSON form without its mac.
@@ -206,7 +220,7 @@ func canonicalLine(r Revocation, kid string) ([]byte, error) {
 func canonicalHeader(h Header) ([]byte, error) {
 	b, err := json.Marshal(wireHeader{
 		Seq: 0, InstallID: h.InstallID, App: h.App, StartedAt: h.StartedAt.UTC(),
-		KID: h.KID, BaseSeq: h.BaseSeq, BaseMAC: h.BaseMAC,
+		KID: h.KID, BaseSeq: h.BaseSeq, BaseMAC: h.BaseMAC, ChainBase: h.ChainBase,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("journal: encode header: %w", err)
@@ -302,7 +316,10 @@ func decodeHeader(canonical []byte) (Header, error) {
 	if w.InstallID == "" || w.KID == "" {
 		return Header{}, errors.New("the first line is not a header (no install_id or kid)")
 	}
-	return Header{InstallID: w.InstallID, App: w.App, StartedAt: w.StartedAt, KID: w.KID, BaseSeq: w.BaseSeq, BaseMAC: w.BaseMAC}, nil
+	if w.ChainBase && (w.BaseSeq == 0 || w.BaseMAC == "") {
+		return Header{}, errors.New("the header chains from its base but names none (no base_seq or base_mac)")
+	}
+	return Header{InstallID: w.InstallID, App: w.App, StartedAt: w.StartedAt, KID: w.KID, BaseSeq: w.BaseSeq, BaseMAC: w.BaseMAC, ChainBase: w.ChainBase}, nil
 }
 
 // IsRevocation reports whether a line of this kind is a revocation. gap,

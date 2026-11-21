@@ -191,6 +191,20 @@ const (
 	// LabelMoveRemoveSource: RemoveMoved, the removal of the old journal once
 	// backup.location.json points at the new one.
 	LabelMoveRemoveSource = "journal.move.remove_source"
+	// LabelTrimClear: the removal of a crash's leftover temporary file of an
+	// earlier trim.
+	LabelTrimClear = "journal.trim.clear"
+	// LabelTrimCopy: the trim's temporary file: created exclusively, locked,
+	// written (the new header and the kept lines) and fsynced.
+	LabelTrimCopy = "journal.trim.copy"
+	// LabelTrimRename: the rename of the verified temporary file over the
+	// journal.
+	LabelTrimRename = "journal.trim.rename"
+	// LabelTrimDirSync: the journal's directory fsync after the rename.
+	LabelTrimDirSync = "journal.trim.dirsync"
+	// LabelTrimCleanup: the removal of a temporary file that failed its write,
+	// its verification or the rename.
+	LabelTrimCleanup = "journal.trim.cleanup"
 )
 
 // FSLabels is every label of this package's file writers, in the order of the
@@ -202,6 +216,7 @@ func FSLabels() []string {
 		LabelLocationTmp, LabelLocationRename, LabelLocationDirSync, LabelLocationCleanup,
 		LabelMoveSource, LabelMoveMkdir, LabelMoveClear, LabelMoveCopy, LabelMoveRename, LabelMoveDirSync, LabelMoveCleanup,
 		LabelMoveRemoveSource,
+		LabelTrimClear, LabelTrimCopy, LabelTrimRename, LabelTrimDirSync, LabelTrimCleanup,
 	})
 }
 

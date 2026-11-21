@@ -86,12 +86,21 @@ func (c *Chain) IntactEnd() uint64 {
 }
 
 // PrevMAC is the mac the next line chains from: the last verified line's, or
-// the header's own when no line follows it.
+// when no line follows the header, the header's own (a header that chains from
+// its base, which a trim writes, gives its base_mac instead: Header.ChainBase).
 func (c *Chain) PrevMAC() string {
 	if n := len(c.Lines); n > 0 {
 		return c.Lines[n-1].MAC
 	}
-	return c.Header.MAC
+	return c.Header.firstPrevMAC()
+}
+
+// firstPrevMAC is the mac the first line after h chains from.
+func (h Header) firstPrevMAC() string {
+	if h.ChainBase {
+		return h.BaseMAC
+	}
+	return h.MAC
 }
 
 // MACAt is the mac of the line at seq: a verified line's, or the header's
@@ -173,16 +182,7 @@ func (c *Chain) Has(after uint64, f func(Line) bool) bool {
 // that names a retired derive key (BreakKey).
 func ReadChain(data []byte, keys Keys) *Chain {
 	c := &Chain{}
-	var lines [][]byte
-	off := 0
-	for {
-		i := bytes.IndexByte(data[off:], '\n')
-		if i < 0 {
-			break
-		}
-		lines = append(lines, data[off:off+i])
-		off += i + 1
-	}
+	lines, off := completeLines(data)
 	c.ValidLen, c.Torn = int64(off), int64(len(data)-off)
 	if len(lines) == 0 {
 		return c
@@ -194,7 +194,7 @@ func ReadChain(data []byte, keys Keys) *Chain {
 		return c
 	}
 	c.HasHeader, c.Header = true, hdr
-	prevSeq, prevMAC := hdr.BaseSeq, hdr.MAC
+	prevSeq, prevMAC := hdr.BaseSeq, hdr.firstPrevMAC()
 	for n, raw := range lines[1:] {
 		want := prevSeq + 1
 		l, berr := verifyLine(raw, keys, want, prevMAC)
@@ -211,6 +211,20 @@ func ReadChain(data []byte, keys Keys) *Chain {
 	}
 	c.ClaimedEnd = prevSeq
 	return c
+}
+
+// completeLines splits data into its newline-terminated lines (without the
+// newline) and reports how many bytes they take; what follows is an incomplete
+// last line.
+func completeLines(data []byte) (lines [][]byte, n int) {
+	for {
+		i := bytes.IndexByte(data[n:], '\n')
+		if i < 0 {
+			return lines, n
+		}
+		lines = append(lines, data[n:n+i])
+		n += i + 1
+	}
 }
 
 type verifyErr struct {
