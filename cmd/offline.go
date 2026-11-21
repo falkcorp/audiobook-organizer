@@ -28,6 +28,21 @@ var offlineOptions = func() (app.Options, error) {
 	return books.OfflineOptions(boot)
 }
 
+// configCheckName is core's offline config check (app.OfflineCommands).
+const configCheckName = "config check"
+
+// configCheckOptions is the app.Options config check runs with: the root
+// flags' layers and ABO's identity, with no config load and no store or
+// state-directory resolution (both would refuse a boot-refusing retired
+// name before the check could report it). A var so a test can see it used.
+var configCheckOptions = func() (app.Options, error) {
+	boot, err := rootBootInputs()
+	if err != nil {
+		return app.Options{}, err
+	}
+	return books.ConfigCheckOptions(boot), nil
+}
+
 // addOfflineCommands wraps each entry of app.OfflineCommands as a cobra
 // command under root (06 §6.4.5; MOD2-4, R9-9, COR9-6): core's offline
 // commands are reachable from ABO's CLI without ABO importing kernel. An
@@ -78,9 +93,16 @@ func addOfflineCommands(root *cobra.Command, mods func(app.Options) []module.Mod
 				// resolve (and perhaps create) the state directory.
 				opts := app.Options{AppID: books.AppID}
 				if !wantsHelp(own) {
-					initConfig()
 					var err error
-					if opts, err = offlineOptions(); err != nil {
+					if name == configCheckName {
+						// config check reports the retired names a boot would
+						// refuse, so it must not run the config load that refuses
+						// them, and it opens nothing: the operator layers alone.
+						opts, err = configCheckOptions()
+					} else if err = initConfig(); err == nil {
+						opts, err = offlineOptions()
+					}
+					if err != nil {
 						return err
 					}
 				}

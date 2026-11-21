@@ -78,8 +78,6 @@ func init() {
 }
 
 func runDedupBench(cmd *cobra.Command, args []string) error {
-	config.InitConfig()
-
 	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" && !benchDryRun {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
@@ -190,7 +188,6 @@ func runDedupBench(cmd *cobra.Command, args []string) error {
 func runDedupBenchCheck(cmd *cobra.Command, args []string) error {
 	runDir := args[0]
 
-	config.InitConfig()
 	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")
