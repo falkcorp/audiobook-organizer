@@ -143,7 +143,7 @@ func TestAuthenticate(t *testing.T) {
 	for name, ctx := range map[string]context.Context{
 		"no principal":        bound(nil, laxChecker{}),
 		"no checker":          bound(principal(coreauth.MethodSession, laxChecker{}), nil),
-		"an unmapped method":  as("ext:cfaccess", laxChecker{}),
+		"an unmapped method":  as("ext:penguin", laxChecker{}),
 		"a user core lacks":   bound(&coreauth.Principal{Method: coreauth.MethodSession, Perms: laxChecker{}, User: &coreauth.User{ID: "u-nobody", Status: coreauth.StatusActive}}, laxChecker{}),
 		"a principal no user": bound(&coreauth.Principal{Method: coreauth.MethodSession, Perms: laxChecker{}}, laxChecker{}),
 	} {

@@ -27,6 +27,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -827,4 +828,14 @@ func TestLegacyManifest_DriftFailsBoot(t *testing.T) {
 	assert.Contains(t, err.Error(), "POST /")
 	withHead := append(slices.Clone(walk), gin.RouteInfo{Method: http.MethodHead, Path: "/"})
 	require.NoError(t, checkLegacyManifest(withHead, m))
+}
+
+// TestAbsAuthMethod_MatchesTheLegacyauthMapping (F4-08 B10b1): legacyauth
+// spells books' compat method for itself (it never imports books), and maps
+// it to HEAD's abs/api_key. If books renames its method this fails, rather
+// than every ABS principal becoming unmapped (401) at the flip.
+func TestAbsAuthMethod_MatchesTheLegacyauthMapping(t *testing.T) {
+	if absAuthMethod != string(legacyauth.MethodBooksABS) {
+		t.Errorf("absAuthMethod = %q, legacyauth maps %q", absAuthMethod, legacyauth.MethodBooksABS)
+	}
 }
