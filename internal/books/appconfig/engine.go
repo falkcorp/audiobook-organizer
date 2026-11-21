@@ -315,14 +315,7 @@ func (e *Engine) project(ctx context.Context) (*projection, error) {
 		if !ok {
 			return fmt.Errorf("appconfig: row %s names no field of Config", head)
 		}
-		if err := json.Unmarshal(val, f.Addr().Interface()); err != nil {
-			// HEAD holds some operator values as the text its environment gave
-			// (LOGIN_SATURATED_RATE "2"); core types the key (a number). The
-			// number's own text is the value HEAD would have held.
-			if text, ok := scalarText(val); ok && f.Kind() == reflect.String {
-				f.SetString(text)
-				return nil
-			}
+		if err := decodeHEADField(f, val); err != nil {
 			return fmt.Errorf("appconfig: row %s: %q does not fit %s: %w", head, val, f.Type(), err)
 		}
 		return nil
@@ -771,6 +764,24 @@ func (e *Engine) keyOf(p projRow) string {
 
 // scalarText is the literal text of a JSON number or boolean, and false for any
 // other JSON value.
+// decodeHEADField sets HEAD's field f from a canonical JSON value, as the
+// projection builds Config: a plain decode, except that HEAD holds some
+// operator values as the text its environment gave (LOGIN_SATURATED_RATE "2")
+// where core types the key (a number), and the number's own text is the value
+// HEAD would have held. validateCandidate builds its candidate with the same
+// rule, so it judges the Config the write would really produce.
+func decodeHEADField(f reflect.Value, val json.RawMessage) error {
+	err := json.Unmarshal(val, f.Addr().Interface())
+	if err == nil {
+		return nil
+	}
+	if text, ok := scalarText(val); ok && f.Kind() == reflect.String {
+		f.SetString(text)
+		return nil
+	}
+	return err
+}
+
 func scalarText(raw json.RawMessage) (string, bool) {
 	var v any
 	if json.Unmarshal(raw, &v) != nil {
