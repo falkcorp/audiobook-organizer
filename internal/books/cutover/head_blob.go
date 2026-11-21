@@ -345,6 +345,31 @@ func headMigrateAIBackendBlob(blob string) (string, bool) {
 	return string(migrated), true
 }
 
+// headSeedConfig is the resolved config the ai_endpoints seed derives its rows
+// from: HEAD unmarshals the blob onto the live config, which holds the viper
+// defaults at boot (aiEndpointsSeed.Base), so the base is those defaults
+// (headDefaultConfig), the blob goes over them, the environment overrides in
+// seed go over that, and a key held anywhere counts as present. ok is false
+// when the blob does not decode.
+func headSeedConfig(blob string, seed headAIEndpointsSeed) (cfg *headConfig, hasKey, ok bool) {
+	cfg, _ = headDefaultConfig()
+	if err := json.Unmarshal([]byte(blob), cfg); err != nil {
+		return nil, false, false
+	}
+	if seed.EnvWhisperEndpoints != nil {
+		cfg.WhisperEndpoints = *seed.EnvWhisperEndpoints
+	}
+	if seed.EnvWhisperRemoteURL != nil {
+		cfg.WhisperRemoteURL = *seed.EnvWhisperRemoteURL
+	}
+	hasKey = seed.HasOpenAIKey || cfg.OpenAIAPIKey != ""
+	if hasKey && cfg.OpenAIAPIKey == "" {
+		// The effective-mode helpers look at the key field itself.
+		cfg.OpenAIAPIKey = "present"
+	}
+	return cfg, hasKey, true
+}
+
 // headMigrateAIEndpointsBlob writes the ai_endpoints list derived from the legacy
 // fields (PLAN section 5) into a blob that has none. Idempotent: a blob that
 // already has ai_endpoints (even an empty list the operator saved) is
@@ -364,22 +389,9 @@ func headMigrateAIEndpointsBlob(blob string, seed headAIEndpointsSeed) (string, 
 		return blob, false
 	}
 
-	// HEAD unmarshals the blob onto the live config, which holds the viper
-	// defaults at boot (aiEndpointsSeed.Base); the base here is those defaults.
-	cfg, _ := headDefaultConfig()
-	if err := json.Unmarshal([]byte(blob), cfg); err != nil {
+	cfg, hasKey, ok := headSeedConfig(blob, seed)
+	if !ok {
 		return blob, false
-	}
-	if seed.EnvWhisperEndpoints != nil {
-		cfg.WhisperEndpoints = *seed.EnvWhisperEndpoints
-	}
-	if seed.EnvWhisperRemoteURL != nil {
-		cfg.WhisperRemoteURL = *seed.EnvWhisperRemoteURL
-	}
-	hasKey := seed.HasOpenAIKey || cfg.OpenAIAPIKey != ""
-	if hasKey && cfg.OpenAIAPIKey == "" {
-		// The effective-mode helpers look at the key field itself.
-		cfg.OpenAIAPIKey = "present"
 	}
 
 	enc, err := json.Marshal(headBuildMigratedAIEndpoints(cfg, hasKey))

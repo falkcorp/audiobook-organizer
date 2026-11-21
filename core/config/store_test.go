@@ -1,7 +1,7 @@
 // file: core/config/store_test.go
-// version: 1.0.8
+// version: 1.0.9
 // guid: 922df5f6-7010-42b3-883c-cc23b3885d55
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config_test
 
@@ -89,7 +89,7 @@ func TestBoot_ResolvesPathsWithoutStorage(t *testing.T) {
 		})
 	}
 	// BootRecordRoot failing fails boot.
-	st, err := config.NewStore(config.Options{AppID: "gotham", BootRecordRoot: func(string) (*os.Root, error) { return nil, os.ErrPermission }})
+	st, err := config.NewStore(config.Options{AppID: "gotham", BootRecordRoot: func(string) (config.StateFiles, error) { return nil, os.ErrPermission }})
 	if err != nil {
 		t.Fatal(err)
 	}

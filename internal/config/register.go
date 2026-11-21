@@ -5,25 +5,8 @@
 package config
 
 import (
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
-
-// ServiceDefs returns this package's service definitions for the composition
-// root's one explicit list (06 §6.11.1 step 3).
-func ServiceDefs() []serviceregistry.ServiceDef {
-	return []serviceregistry.ServiceDef{
-		{
-			Name:   serviceregistry.KeyConfigUpdate,
-			Needs:  []string{serviceregistry.KeyStore},
-			Groups: []string{"core"},
-			Build: func(c *serviceregistry.Container) (any, error) {
-				store := serviceregistry.Get[database.SettingsStore](c, serviceregistry.KeyStore)
-				return NewUpdateService(store), nil
-			},
-		},
-	}
-}
 
 // GetConfig returns the shared *Config from the container's "config" key
 // (serviceregistry.KeyConfig). Config is Override'd unconditionally in
@@ -48,8 +31,8 @@ func ServiceDefs() []serviceregistry.ServiceDef {
 // KeyConfig) calls ran at, so no registration-order behavior changed.
 //
 // This accessor cannot live in internal/serviceregistry itself: that
-// package is a dependency of this one (see ServiceDefs above), so
-// serviceregistry importing config back would be an import cycle.
+// package is a dependency of this one, so serviceregistry importing config
+// back would be an import cycle.
 func GetConfig(c *serviceregistry.Container) *Config {
 	return serviceregistry.Get[*Config](c, serviceregistry.KeyConfig)
 }

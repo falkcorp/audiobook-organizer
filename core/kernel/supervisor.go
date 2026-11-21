@@ -24,8 +24,8 @@ import (
 )
 
 // The supervisor's defaults. Each is a config key's default (06 §6.8,
-// 05-health §5H.4); until config lands (F3) nothing overrides them except
-// R1Values.ShutdownBudget.
+// 05-health §5H.4); core.shutdown.budget is read from the layered config
+// (shutdownBudget), and the other two are still read as constants.
 const (
 	defaultShutdownBudget = 25 * time.Second // core.shutdown.budget
 	httpDrain             = 10 * time.Second // core.shutdown.http_drain
@@ -50,37 +50,36 @@ var errRunTwice = errors.New("kernel: Run called more than once, or after Close"
 
 // Close releases what New built, for a Kernel that will not Run (coretest's
 // harness, a command that only boots): the metrics Provider, the store and
-// logging, in closeCore's order within core.shutdown.budget (R1Values, read
-// here as Run reads it at start step 7; a read that fails or a negative
-// budget is logged and the default used, since a close must not fail on a
-// value only Run acts on). Once Run has started, Run owns the shutdown and
-// Close does nothing; a Run after Close returns errRunTwice, and a second
-// Close does nothing.
+// logging, in closeCore's order within core.shutdown.budget (read here as
+// Run reads it; a read that fails or a budget that is not positive is logged
+// and the default used, since a close must not fail on a value only Run acts
+// on). Once Run has started, Run owns the shutdown and Close does nothing; a
+// Run after Close returns errRunTwice, and a second Close does nothing.
 func (k *Kernel) Close(ctx context.Context) error {
 	if !k.ran.CompareAndSwap(false, true) {
 		return nil
 	}
-	v, err := k.r1Values()
+	budget, err := k.shutdownBudget()
 	if err != nil {
-		err = fmt.Errorf("kernel: app.Options.R1Values: %w", err)
-	}
-	budget, berr := shutdownBudget(v)
-	if err = errors.Join(err, berr); err != nil {
 		k.log.WarnContext(ctx, "kernel: Close uses the default shutdown budget", "budget", budget, "err", err)
 	}
 	return k.closeCore(ctx, time.Now().Add(budget))
 }
 
-// shutdownBudget is core.shutdown.budget from v: zero is the default, and a
-// negative value is an error that leaves the default in force.
-func shutdownBudget(v R1Values) (time.Duration, error) {
-	switch {
-	case v.ShutdownBudget < 0:
-		return defaultShutdownBudget, fmt.Errorf("kernel: core.shutdown.budget %s is negative", v.ShutdownBudget)
-	case v.ShutdownBudget == 0:
-		return defaultShutdownBudget, nil
+// shutdownBudget is core.shutdown.budget as the layered config holds it. A
+// value that is not positive, or a config that cannot be read, is an error
+// that leaves the default in force: the budget bounds the stop order, so a
+// bad one must not leave an app with no bound at all.
+func (k *Kernel) shutdownBudget() (time.Duration, error) {
+	cc, err := k.coreConfig()
+	if err != nil {
+		return defaultShutdownBudget, err
 	}
-	return v.ShutdownBudget, nil
+	b := cc.shutdown.Get().Budget.Std()
+	if b <= 0 {
+		return defaultShutdownBudget, fmt.Errorf("kernel: core.shutdown.budget %s is not positive", b)
+	}
+	return b, nil
 }
 
 // ReadinessNotifier receives the supervisor's readiness signals (05-health
@@ -174,7 +173,7 @@ type moduleWorker struct {
 
 // Run starts the app in the order of 06 §6.5.2 that exists at R1 (the served
 // write on open checkpoint records, core background services, module hooks,
-// module workers, R1Values then the listener, readiness, then the checkpoint
+// module workers, core.http then the listener, readiness, then the checkpoint
 // sweeper of 05-storage §5S.4 step 15), blocks until ctx is
 // done, a StopAppOnExit worker
 // exits, the listener fails or a restart is requested, and then stops in the
@@ -209,11 +208,15 @@ func (k *Kernel) Run(ctx context.Context) error {
 	k.runResetHook(ctx)
 	started, late, err := k.startHooks(ctx)
 	if err != nil {
-		// R1Values (and core.shutdown.budget with it) is read at start step
-		// 7, after the hooks, so a start failure rolls back within core's
-		// default budget. A hook whose Start was abandoned has not started:
-		// the rollback waits for it only briefly (awaitLateStart).
-		deadline := time.Now().Add(defaultShutdownBudget)
+		// A start failure rolls back within core.shutdown.budget (the
+		// default when it cannot be read). A hook whose Start was abandoned
+		// has not started: the rollback waits for it only briefly
+		// (awaitLateStart).
+		budget, berr := k.shutdownBudget()
+		if berr != nil {
+			k.log.WarnContext(ctx, "kernel: the start rollback uses the default shutdown budget", "budget", budget, "err", berr)
+		}
+		deadline := time.Now().Add(budget)
 		started = append(started, k.awaitLateStart(ctx, late, deadline)...)
 		return errors.Join(err, k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
 	}
@@ -223,13 +226,16 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// held at P7 (tasks.go); then step (7)'s first member, the audit writer,
 	// before any listener can queue a record for it (F2-16).
 	coreErr := k.startCoreServices(ctx)
-	// (7) Listeners: R1Values once (05-config §1.12.1), the perimeter
-	// values handed to the router, then the listener.
-	v, err := k.r1Values()
+	// (7) Listeners: core.http read from the layered config, the perimeter
+	// values handed to the router (and kept in step with the config from
+	// then on), then the listener.
+	cc, err := k.coreConfig()
+	var hs *httpSettings
 	if err == nil {
-		err = k.setPerimeter(v, k.cfg.R1Values != nil)
+		hs = cc.http.Get()
+		err = k.setPerimeter(hs)
 	}
-	budget, berr := shutdownBudget(v)
+	budget, berr := k.shutdownBudget()
 	var srv Server
 	// A second owner of a family refused since New (an instrument created
 	// through the process-global MeterProvider once the app installed it, or
@@ -242,11 +248,12 @@ func (k *Kernel) Run(ctx context.Context) error {
 	case familyErr != nil:
 		err = familyErr
 	case err != nil:
-		err = fmt.Errorf("kernel: app.Options.R1Values: %w", err)
+		err = fmt.Errorf("kernel: core.http: %w", err)
 	case berr != nil:
 		err = berr
 	default:
-		if srv, err = k.listen(httpapi.ListenOptions{Addr: v.Listen, TLSCertFile: v.TLSCertFile, TLSKeyFile: v.TLSKeyFile},
+		k.followPerimeter(cc.http)
+		if srv, err = k.listen(httpapi.ListenOptions{Addr: hs.Listen, TLSCertFile: hs.TLS.CertFile, TLSKeyFile: hs.TLS.KeyFile},
 			k.handler, k.coreLog("http")); err != nil {
 			err = fmt.Errorf("kernel: listener: %w", err)
 		}
@@ -740,20 +747,6 @@ func (k *Kernel) stopWorkers(ctx context.Context, ws *workerSet, deadline time.T
 	slices.Sort(names)
 	k.log.ErrorContext(ctx, "kernel: workers abandoned at the shutdown budget", "workers", strings.Join(names, ", "))
 	return fmt.Errorf("kernel: workers %s abandoned: %w", strings.Join(names, ", "), context.DeadlineExceeded)
-}
-
-// r1Values calls Config.R1Values once; nil means every value at its
-// default. It is app code: a panic is recovered into an error, so the stop
-// order still runs.
-func (k *Kernel) r1Values() (v R1Values, err error) {
-	if k.cfg.R1Values == nil {
-		return R1Values{}, nil
-	}
-	err = k.protect("", "R1Values", "call", func() error {
-		v = k.cfg.R1Values()
-		return nil
-	})
-	return v, err
 }
 
 // signal logs a failed readiness signal; it never fails the app.

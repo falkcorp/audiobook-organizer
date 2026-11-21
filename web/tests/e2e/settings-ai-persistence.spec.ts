@@ -1,7 +1,7 @@
 // file: web/tests/e2e/settings-ai-persistence.spec.ts
-// version: 1.2.0
+// version: 1.3.0
 // guid: f1e2d3c4-b5a6-7890-abcd-123456789abc
-// last-edited: 2026-11-05
+// last-edited: 2026-11-19
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
@@ -56,7 +56,7 @@ test.describe('AI Key Persistence', () => {
 
     // After save, field should clear and show placeholder indicating key is saved
     await expect(page.getByLabel('OpenAI API Key')).toHaveValue('');
-    await expect(page.getByPlaceholder(/key saved/i)).toBeVisible();
+    await expect(page.getByPlaceholder(/^Saved/)).toBeVisible();
   });
 
   test('pre-existing masked API key shows on load', async ({ page }) => {

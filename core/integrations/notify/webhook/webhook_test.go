@@ -1,7 +1,7 @@
 // file: core/integrations/notify/webhook/webhook_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: c41d8e07-5a92-4f36-b0e8-72a9d3f15b86
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package webhook_test
 
@@ -35,6 +35,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/notify/webhook"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -109,7 +110,7 @@ func newRig(t testing.TB) *rig {
 	must(t, err)
 	t.Cleanup(func() { _ = root.Close() })
 	now := func() time.Time { return noon }
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: ks(secretsOwner), AppID: "gotham", Now: now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: ks(secretsOwner), AppID: "gotham", Now: now})
 	must(t, err)
 	aks := ks(auditOwner)
 	au, err := audit.New(ctx, audit.Options{}, audit.Deps{Keyspace: aks, Seq: aks.Sequence("seq"), Now: now})

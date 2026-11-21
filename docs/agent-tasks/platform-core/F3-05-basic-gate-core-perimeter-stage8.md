@@ -1,7 +1,7 @@
 <!-- file: docs/agent-tasks/platform-core/F3-05-basic-gate-core-perimeter-stage8.md -->
-<!-- version: 1.1.2 -->
+<!-- version: 1.1.3 -->
 <!-- guid: 178fe6db-0b0b-4bd3-b26b-8306e5d130de -->
-<!-- last-edited: 2026-11-05 -->
+<!-- last-edited: 2026-11-19 -->
 
 # F3-05 — The Basic gate as core perimeter stage 8, dark: HEAD's exempt set, `core.http.basic_gate.enabled` fail-closed, an enabled gate with no password refuses
 
@@ -68,7 +68,9 @@ grep -rn 'basic_gate' core/kernel/core_sections.go | wc -l
 # the FailClosed declaration lands with F3-02 in a later wave, the password's secrets.Ref with F3-03 in this wave
 # (expect 0 here; the stage reads only the effective values, so neither is needed)
 grep -rn 'FailClosed("core.http.basic_gate.enabled"' core/ | wc -l
-# HEAD's gate you port (HEAD ac4368bdb; R0-05 has since added the empty-password refusal)
+# HEAD's gate you port (HEAD ac4368bdb; R0-05 has since added the empty-password refusal).
+# F3-07 (e4) has since deleted internal/server/middleware/basicauth.go and moved the gate to core stage 8: on a
+# tree after F3-07 these four counts are 0, and the HEAD-side pins live in internal/server/head_basic_gate_test.go.
 grep -c 'func BasicAuth()' internal/server/middleware/basicauth.go              # expect 1
 grep -c '"/api/health" || path == "/api/v1/health"' internal/server/middleware/basicauth.go   # expect 1
 grep -c 'subtle.ConstantTimeCompare' internal/server/middleware/basicauth.go    # expect 2
@@ -143,7 +145,7 @@ caller). It must not import gin, `internal/...` of ABO, or `auth`.
 (cd core && go vet ./httpapi/...)                                                     # exit 0
 (cd core && go test -race -count=1 ./httpapi/...)                                     # ok
 (cd core && go test -count=1 -run 'TestBasicGate_' ./httpapi/...)                     # PASS for each
-go test -count=1 ./internal/server/middleware/...                                     # ok (gin gate untouched)
+go test -count=1 ./internal/server/middleware/...                                     # ok (gin gate untouched; deleted later by F3-07)
 git diff --stat origin/main | grep -c 'internal/server/middleware/basicauth.go'       # 0
 make -C core ci                                                                       # exit 0
 make ci                                                                               # exit 0

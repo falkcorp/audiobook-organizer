@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/05-config.md -->
-<!-- version: 1.14.1 -->
+<!-- version: 1.14.4 -->
 <!-- guid: fb637cbc-bbfa-4aea-807c-71f02534b3c9 -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-19 -->
 
 # 05 — Config and secrets (`core/config`, `core/secrets`)
 
@@ -273,8 +273,9 @@ type Options struct {
 	Flags       map[Path]string   // ONLY flags the operator explicitly set (FromFlagSet / app adapter)
 	// BootRecordRoot is called by Boot with core.paths.state_dir as ResolveStateDir resolved it (env, flags,
 	// compiled default, HEAD's fallback; never the file or the record it locates, §1.7); the kernel opens
-	// and returns the os.Root that holds config.boot.json (§1.3.5).
-	BootRecordRoot func(stateDir string) (*os.Root, error)
+	// and returns the directory that holds config.boot.json (§1.3.5): config.StateFiles, an *os.Root-backed
+	// labelled view in production (internal/statefs; F3-07 a6) so the crash matrix can break its writes.
+	BootRecordRoot func(stateDir string) (StateFiles, error)
 	// Passthrough reports the operator-layer paths config reads raw and does not own: the
 	// integrations.<kind>.<instance>.<field> paths of 05-metadata M1 (C11).
 	Passthrough func(Path) bool
@@ -884,6 +885,13 @@ keys at all (C11).
    The updater marker's `db_path` is not an input: the marker lives inside the directory being resolved, and
    its `db_path` is only `ReaderCheck`'s DB path (05-updater; OPS4-8).
 
+**A state directory that does not exist yet (F3-07 b).** Step 2 and step 3 create it, and a command that writes
+(restore, reset, the secrets commands, prune-checkpoints, a read-write offline open) must run as the user the service
+runs as (05-storage, the owner rule). An absent directory has no owner to compare, so the command compares the owner of
+the **nearest existing ancestor**, walking up through any number of missing levels, and is refused, with nothing
+created at any level, when that is another user. `storage restore-offline` onto a blank host has no exemption. Root
+under a root-owned ancestor creates it; read-only commands and `storage migrate --dry-run` check nothing.
+
 **`core.storage.path` is a kernel pre-boot key (COR4-20).** Step 3 reads it before storage opens; 05-storage's
 `storage` section declares it without changing its name or default. **One resolver (OPS4-8, OPS5-13).** HEAD's
 `EnsureSecureStateDir` (`cmd/root.go:336`) resolves from `AppConfig.DatabasePath`, which at that point holds viper's
@@ -1083,7 +1091,8 @@ an optional ratchet, not an extraction step.
    becomes a façade. The books module constructs one **`Facade` value** per App (the type lives in ABO's
    `internal/config` itself, so it adds no package path; MOD6-11) from the handles it registered and the core
    handles it reads (`core.storage`, `core.auth`, …), and installs it as the target of ABO's package-level
-   `AppConfig`, `Snapshot`, `Mutate`, `Generation`, `SettingLocks`, `EnvLockedSettings`. `AppConfig` is a
+   `AppConfig`, `Snapshot`, `Mutate`, `Generation`, `SettingLockedBy` (`SettingLocks` and `EnvLockedSettings`, which fed the old
+   `env_locked` annotation, are deleted at F3-07). `AppConfig` is a
    **projection** rebuilt under the façade's lock on every core generation change (one `OnChange` per section),
    mapped field by field through the rename table (§1.12.3); secret fields in the projection are resolved from
    `secrets` in memory only. `Mutate(fn)` diffs the before/after `Config` and turns it into one `Store.Apply`
@@ -1398,7 +1407,7 @@ Two further books sections come from explicit rows: `identity` and `scheduler` (
 **The table** (generated; HEAD's source order). *Stored*: where HEAD keeps the value (`blob` = the settings blob,
 `row` = an encrypted row, `env/file` = never stored). *Class*: `k` key and `s` secret (migrated by M2), `i` input
 of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow §1.3.6), `x` dropped. A path ending
-`.*` holds the struct's sub-keys under their `json` names. Counts: 134 `k`, 11 `s`, 9 `i`, 16 `o`, 3 `x` (173 top-level rows; two of them, `oauth_allowed_emails` and the
+`.*` holds the struct's sub-keys under their `json` names. Counts: 135 `k`, 11 `s`, 9 `i`, 16 `o`, 2 `x` (173 top-level rows; two of them, `oauth_allowed_emails` and the
 `scheduled.db_optimize` sub-key, have two targets).
 
 | HEAD name | Stored | Canonical path or name | Class | Note |
@@ -1466,7 +1475,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `whisper_endpoints` | blob | `modules.books.whisper.endpoints` | k | |
 | `whisper_requires` | blob | `modules.books.whisper.requires` | k | |
 | `ai_endpoints` | blob | `ai/<row id>` instances | i | 05-ai §10 |
-| `ai_endpoints_routing` | blob | — | x | not a router input (05-ai §10) |
+| `ai_endpoints_routing` | blob | — | x | behaviour change: routing is always on after the flip (the one path is the router over ai_endpoints, 05-ai §10); an install that never turned it on moves from the legacy single-backend path to the routed one |
 | `concurrent_scans` | blob | `modules.books.scan.concurrent_scans` | k | |
 | `scan_progress_every` | blob | `modules.books.scan.progress_every` | k | |
 | `scan_standdown_grace_seconds` | blob | `modules.books.scan.standdown_grace_seconds` | k | |
@@ -1497,7 +1506,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `dedup_boilerplate` | blob | `modules.books.dedup.boilerplate.*` | k | |
 | `metadata_scoring` | blob | `modules.books.metadata.scoring.*` | k | |
 | `catalog` | blob | `modules.books.catalog.*` | k | |
-| `ai_backend` | blob | — | x | its scalars are already folded into `ai_endpoints` by HEAD's codec (05-ai §10) |
+| `ai_backend` | blob | `modules.books.ai.*` | k | sub-key rows below: the five mode and model scalars are `x` (folded into `ai_endpoints` by HEAD's codec, 05-ai §10); `parse_batch_size`, `parse_batch_timeout_seconds` and `parse_batch_workers` are `k` keys `modules.books.ai.parse_batch_*` (the scanner's AI batch phase reads them and no list carries them; 0 is the phase's default) |
 | `api_rate_limit_per_minute` | blob | `core.http.rate_limit.per_minute` | k | |
 | `json_body_limit_mb` | blob | `core.http.body.json_max_bytes` | k | MiB → bytes |
 | `upload_body_limit_mb` | blob | `core.http.body.upload_max_bytes` | k | MiB → bytes |
@@ -1797,7 +1806,7 @@ type Write struct { // staged by config.Store.Apply into Committer.Commit
 }
 
 type Options struct {
-	StateDir      *os.Root          // opened by the kernel on core.paths.state_dir
+	StateDir      StateFiles        // opened by the kernel on core.paths.state_dir: *os.Root-backed (internal/statefs; F3-07 a6)
 	KeyFile       string            // relative to StateDir; default "secrets.keyring"
 	Keyspace      storage.Keyspace  // c/secrets/
 	AppID         string            // app.Options.AppID: a compiled constant of the app's main, bound into AAD

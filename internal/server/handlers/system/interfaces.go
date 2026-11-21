@@ -1,7 +1,7 @@
 // file: internal/server/handlers/system/interfaces.go
-// version: 1.8.3
+// version: 1.9.0
 // guid: 7a91ad40-5c96-4423-ad24-715acb791cf8
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 // Narrow dependency interfaces for the system domain handlers (health, status,
 // announcements, storage, logs, activity-log, config
@@ -14,11 +14,9 @@
 package system
 
 import (
-	"context"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/gin-gonic/gin"
 )
@@ -107,13 +105,6 @@ type SystemStore interface {
 type SystemService interface {
 	CollectSystemStatus(mayRead sysinfo.OperationReadCheck) (*sysinfo.SystemStatus, error)
 	CollectSystemLogs(level, search string, limit, offset int, mayRead sysinfo.LogReadCheck) ([]sysinfo.SystemLogEntry, int, error)
-}
-
-// ConfigUpdateService is the narrow *config.UpdateService subset used by
-// updateConfig.
-type ConfigUpdateService interface {
-	MaskSecrets(cfg config.Config) config.Config
-	UpdateConfig(ctx context.Context, payload map[string]any) (int, map[string]any)
 }
 
 // PluginHealthChecker is the narrow *plugin.Registry subset used by

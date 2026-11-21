@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -93,15 +94,14 @@ func (inj *Injector) New(ctx context.Context, opts app.Options, mods ...module.M
 	}
 	opts.Env = append(env, prefix+"_CORE_STORAGE_PATH="+inj.f.dbPath())
 	opts.StateDir = inj.f.StateDir
-	values := opts.R1Values
-	opts.R1Values = func() app.R1Values {
-		var v app.R1Values
-		if values != nil {
-			v = values()
-		}
-		v.Listen, v.TLSCertFile, v.TLSKeyFile = "localhost:0", "", ""
-		return v
+	// The listener is a flag layer, which beats every other: the app's own
+	// listen address and TLS files never reach a crash-matrix run.
+	flags := maps.Clone(opts.ConfigFlags)
+	if flags == nil {
+		flags = map[config.Path]string{}
 	}
+	flags["core.http.listen"], flags["core.http.tls.cert_file"], flags["core.http.tls.key_file"] = "localhost:0", "", ""
+	opts.ConfigFlags = flags
 	inner := opts.Logger
 	if inner == nil {
 		inner = slog.New(slog.DiscardHandler)

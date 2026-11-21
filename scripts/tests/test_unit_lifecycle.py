@@ -1,7 +1,7 @@
 # file: scripts/tests/test_unit_lifecycle.py
-# version: 1.1.0
+# version: 1.1.1
 # guid: 42763f48-1a7c-4d74-8f41-6d9477d4162e
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 
 """The unit-lifecycle job's two cells (09 §9.2.1 unit-lifecycle row; 09 §9.4 R1
 Verification; 05-health §5H.4; R1-28).
@@ -173,7 +173,7 @@ class DropInTest(unittest.TestCase):
         self.assertIn("PrivateNetwork=yes", body)
         env = [ln for ln in body if ln.startswith("Environment=")]
         self.assertEqual(len(env), 1)
-        self.assertIn("DATABASE_PATH=", env[0])
+        self.assertIn("ABO_CORE_STORAGE_PATH=", env[0])
         self.assertNotIn(FAKE_MIGRATION_ENV, "\n".join(body), "the cell sets the duration")
 
     def test_dropin_keeps_the_committed_units_arguments(self) -> None:

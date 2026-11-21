@@ -1,7 +1,7 @@
 // file: internal/server/basic_gate_health_token_test.go
-// version: 1.1.2
+// version: 1.1.3
 // guid: e4e0550a-a189-4939-ac92-8e07e8a78ac9
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package server
 
@@ -18,7 +18,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -69,7 +68,7 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 		setBasicGate(t, true, "admin", "", nil)
 		src := s.startupDegradedSource()
 		require.NotNil(t, src, "no runner yet, but the gate has no password: the source must exist")
-		assert.Equal(t, []string{servermiddleware.BasicGateNoPasswordToken}, src.Tokens())
+		assert.Equal(t, []string{BasicGateNoPasswordToken}, src.Tokens())
 
 		// Saving a password clears it on the next call, no restart.
 		config.AppConfig.BasicAuthPassword = "secret"
@@ -94,7 +93,7 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 
 		setBasicGate(t, true, "admin", "", nil)
 		assert.ElementsMatch(t,
-			[]string{startup.TokenSearchIndex, servermiddleware.BasicGateNoPasswordToken},
+			[]string{startup.TokenSearchIndex, BasicGateNoPasswordToken},
 			sourceTokens(s.startupDegradedSource()))
 
 		config.AppConfig.BasicAuthPassword = "secret"
@@ -107,10 +106,12 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 		// After setupTestServer, which replaces config.AppConfig wholesale.
 		setBasicGate(t, true, "admin", "", nil)
 
+		// The whole stack: core's router with books' mount, stage 8 included.
+		_, stack := mountBooks(t, srv)
 		health := func() []string {
 			t.Helper()
 			w := httptest.NewRecorder()
-			srv.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+			stack.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
 			require.Equal(t, http.StatusOK, w.Code, "/api/v1/health is exempt from the gate: %s", w.Body.String())
 			var resp struct {
 				Data struct {
@@ -128,23 +129,23 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audiobooks", nil)
 			req.SetBasicAuth(user, pass)
 			w := httptest.NewRecorder()
-			srv.router.ServeHTTP(w, req)
+			stack.ServeHTTP(w, req)
 			return w.Code == http.StatusUnauthorized &&
 				strings.HasPrefix(w.Header().Get("WWW-Authenticate"), "Basic ")
 		}
 
-		assert.Contains(t, health(), servermiddleware.BasicGateNoPasswordToken)
+		assert.Contains(t, health(), BasicGateNoPasswordToken)
 		assert.True(t, basicRefused("admin", ""), "the gate must refuse admin: with no password")
 
 		// Saving a password clears the token without a restart.
 		config.AppConfig.BasicAuthPassword = "secret"
-		assert.NotContains(t, health(), servermiddleware.BasicGateNoPasswordToken)
+		assert.NotContains(t, health(), BasicGateNoPasswordToken)
 		assert.False(t, basicRefused("admin", "secret"))
 
 		// The env recovery opens the gate and raises no token.
 		config.AppConfig.BasicAuthPassword = ""
 		require.NoError(t, os.Setenv(basicGateEnvName, "recover"))
-		assert.NotContains(t, health(), servermiddleware.BasicGateNoPasswordToken)
+		assert.NotContains(t, health(), BasicGateNoPasswordToken)
 		assert.False(t, basicRefused("admin", "recover"))
 		assert.True(t, basicRefused("admin", ""))
 		assert.Equal(t, "", config.AppConfig.BasicAuthPassword, "the env value must never be written")
@@ -172,7 +173,7 @@ func TestStart_LogsBasicGatePosture(t *testing.T) {
 		{name: "on, nothing saved, env blank", enabled: true, stored: "", env: func() *string { s := "  "; return &s }(),
 			wantLevel: "level=ERROR", wantLine: noPasswordLine},
 		{name: "on, nothing saved, env set", enabled: true, stored: "", env: func() *string { s := recovery; return &s }(),
-			wantLevel: "level=WARN", wantLine: servermiddleware.BasicGateEnvPasswordWarning},
+			wantLevel: "level=WARN", wantLine: BasicGateEnvPasswordWarning},
 		{name: "on, password saved", enabled: true, stored: "secret", env: nil},
 		{name: "off", enabled: false, stored: "", env: nil},
 	}
@@ -196,7 +197,7 @@ func TestStart_LogsBasicGatePosture(t *testing.T) {
 			assert.NotContains(t, out, recovery, "the BASIC_AUTH_PASSWORD value must never be logged")
 			if tc.wantLine == "" {
 				assert.NotContains(t, out, noPasswordLine)
-				assert.NotContains(t, out, servermiddleware.BasicGateEnvPasswordWarning)
+				assert.NotContains(t, out, BasicGateEnvPasswordWarning)
 				return
 			}
 			var line string

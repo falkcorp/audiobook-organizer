@@ -25,8 +25,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -118,17 +120,35 @@ var errNotBooks = errors.New("books: not the module books.Module returned")
 // opens the store at P2 and books reaches it through its claims (R1-23).
 // Module does no work: it reads whether the ABS surface is on, which decides
 // the legacy prefixes the manifest declares. The kernel reads the manifest
-// before the store opens, so that is the value from the environment and the
-// config file; the ABS flag is environment-authoritative (internal/config
-// applyEnvAuthoritativeConfig), and Register refuses a boot whose stored
-// settings turn it the other way (errABSFlagDrift).
+// before the store opens, so that is the value from the environment
+// (ABO_BOOKS_ABS_API_ENABLED, modules.books.abs.api_enabled), and Register
+// refuses a boot whose settings, once the store is open, turn it the other
+// way (errABSFlagDrift).
 func Module() module.Module {
-	return &booksModule{abs: config.AppConfig.ABSAPIEnabled}
+	return &booksModule{abs: absSurfaceFromEnv(), flip: flipDeclared}
+}
+
+// absEnabledEnv is the environment name of modules.books.abs.api_enabled (the
+// layered store's <APP>_<PATH> grammar, the leading "modules." dropped).
+const absEnabledEnv = "ABO_BOOKS_ABS_API_ENABLED"
+
+// absSurfaceFromEnv is whether the environment turns the ABS surface on. An
+// unset or unparsable value is off: core's config boot reports the unparsable
+// one (it fails boot, naming the variable) before Register runs.
+func absSurfaceFromEnv() bool {
+	on, err := strconv.ParseBool(strings.TrimSpace(os.Getenv(absEnabledEnv)))
+	return err == nil && on
 }
 
 // booksModule is books' module.Module.
 type booksModule struct {
 	abs bool
+	// flip is the one switch that makes books declare F3's cutover (cutover.go):
+	// the level step on its storage spec, M2 in Manifest.Cutover and M8 in
+	// Manifest.Rewrite. Module() leaves it off, so the shipped manifest is the
+	// pre-flip one; slice (e) of F3-07 turns it on together with the config
+	// boot gate (app.Options.CoreConfigBoot) the steps need. Tests set it.
+	flip bool
 
 	// steps is serve's startup runner and stateDir the secure state
 	// directory, both set by Options before app.New, whose Register reads
@@ -166,6 +186,17 @@ type booksModule struct {
 	srv atomic.Pointer[server.Server]
 	// registered counts Register calls (TestBooksDisabledInert).
 	registered atomic.Int32
+	// appConfigInstalled is set when Register bound the config Facade
+	// (config_wire.go); closeStore unbinds it.
+	appConfigInstalled atomic.Bool
+
+	// gapFillIn is what the strip of config.yaml's gap-fill keys needs from
+	// Register (the config access and books' legacy range, set when the Facade
+	// was bound) and from Attach (the storage admin that says whether M2a
+	// committed); startRepairs runs the step only when both arrived and the flip
+	// is declared (config_strip_boot.go).
+	gapFillIn    atomic.Pointer[gapFillInputs]
+	storageAdmin atomic.Pointer[storage.Admin]
 }
 
 // Manifest is books' static declaration. It is pure: the legacy prefixes
@@ -184,11 +215,21 @@ func (m *booksModule) Manifest() module.Manifest {
 		// (05-storage §5S.3.4, §5S.9.3; internal/books/store booksspec.go).
 		// The first step discards the HNSW clean-stop marker and marks this
 		// boot migrated (beforeMigration).
-		Storage: database.BooksSpec(m.beforeMigration),
+		Storage: m.storageSpec(),
 		// HEAD's factory-reset file effects (the Open Library dumps and,
 		// only on request, the library folder's contents), run at the boot
 		// that applies a ResetFactory swap (reset_hook.go).
 		ResetHook: m.resetHook(),
+		// Books' config sections (config.go), registered by the kernel at P3
+		// when the config boot is on (F3-07 b); a boot without it never
+		// reads them.
+		Settings: booksSettings(),
+		// F3's cutover, when the flip switch is on (cutover.go).
+		Cutover: m.cutoverSteps(),
+		// The App's configuration surface: Deps.Config and the secrets the
+		// rename table maps (config_wire.go).
+		AppConfig: appConfigSpec(),
+		Rewrite:   m.rewriteStep(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
@@ -227,7 +268,7 @@ func (m *booksModule) cleanStopVoid() string {
 // surface the other way from the environment Module read: the manifest's
 // legacy prefixes were fixed from the environment before the store opened.
 var errABSFlagDrift = errors.New("books: the stored settings set abs_api_enabled differently from the environment; " +
-	"set ABS_API_ENABLED in the environment (it is environment-authoritative), so the legacy prefixes fixed before the store opened match the server")
+	"set " + absEnabledEnv + " in the environment (it is environment-authoritative), so the legacy prefixes fixed before the store opened match the server")
 
 // reservedAPINamespaces are the second segments under /api of ABO's
 // unversioned surfaces (the ABS protocol's /api/me, /api/items, ...), which
@@ -310,6 +351,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 	}
 	database.SetGlobalStore(store)
+	// With the core config boot on, the Facade is bound before the settings
+	// boot and the server read AppConfig (config_wire.go); without it Deps.Config
+	// is nil and HEAD's loaders below stay the source.
+	bound, err := m.installAppConfig(context.Background(), r, store)
+	if err != nil {
+		return err
+	}
+	if bound && m.declaresFlip() {
+		m.gapFillIn.Store(&gapFillInputs{acc: r.Deps().Config, legacy: legacy})
+	}
 	if m.beforeSettings != nil {
 		m.beforeSettings(store)
 	}
@@ -317,8 +368,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if steps == nil {
 		steps = newSteps()
 	}
-	settingsWrites, err := bootSettings(store, steps, m.stateDir)
-	if err != nil {
+	if err := bootSettings(store, steps, m.stateDir, m.dbPath); err != nil {
 		return err
 	}
 	if config.AppConfig.ABSAPIEnabled != m.abs {
@@ -365,14 +415,14 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// closes the core DB.
 	r.Hook(module.Hook{
 		Name: string(ID) + ".repairs",
-		// The settings load's held writes, then HEAD's open-time writers
+		// The config.yaml gap-fill strip, then HEAD's open-time writers
 		// and the opv3 reconcile (05-storage §5S.9.3; 06 §6.5.2 step 2),
 		// then the memdb warmup, before the server's start resumes
 		// operations. A failure closes the store here: the kernel calls no
 		// Stop for a hook whose Start failed.
 		Start: func(ctx context.Context) error {
 			m.repairsBegan.Store(true)
-			return m.startRepairs(ctx, steps, settingsWrites, store)
+			return m.startRepairs(ctx, steps, store)
 		},
 		Stop: func(context.Context) error { return m.closeStore() },
 	})
@@ -390,6 +440,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		DefaultCSP:  csp,
 		CSPReport:   cspReport,
 		BuildID:     buildID,
+		// Stage 8: the Basic gate that was gin's middleware (F3-07 e4).
+		BasicGate:         server.LegacyBasicGate(),
+		BasicExemptAssets: server.LegacyBasicExemptAssets,
 	})
 	cfg := m.serveConfig()
 	r.Hook(module.Hook{
@@ -432,16 +485,13 @@ func asBooks(mod module.Module) (*booksModule, error) {
 // closeStore closes the store Register built and clears the process-global
 // reference to it. Close is idempotent.
 // startRepairs is the repairs hook's Start once it has marked the hook
-// begun. The settings load's held writes commit first, as the Degraded
-// startup step settingsWrites (R1-23 review S2): a failed commit is logged,
-// settings_writes is recorded for /health, and the boot goes on, because the
-// effective config is already loaded, validated and served, the writes
-// after the failure stay uncommitted for the next boot's load to stage
-// again, and HEAD's load logged a failed marker or re-encryption write and
-// served the same way. Then the boot repairs, whose failure closes the
-// store (the kernel calls no Stop for a hook whose Start failed).
-func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, writes *deferredSettings, store *database.PebbleStore) error {
-	if err := steps.Run("settingsWrites", writes.apply); err != nil {
+// begun: the config.yaml gap-fill strip, then the boot repairs, whose
+// failure closes the store (the kernel calls no Stop for a hook whose Start
+// failed).
+func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, store *database.PebbleStore) error {
+	// A failed or refused strip degrades /health, it does not stop the boot: the
+	// file is untouched or already stripped, and the next boot runs it again.
+	if err := steps.Run("gapFillStrip", func() error { return m.stripGapFill(ctx) }); err != nil {
 		return errors.Join(err, m.closeStore())
 	}
 	if err := store.RunBootRepairs(ctx); err != nil {
@@ -456,6 +506,7 @@ func (m *booksModule) closeStore() error {
 		return nil
 	}
 	database.SetGlobalStore(nil)
+	m.releaseAppConfig()
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("books: close the store: %w", err)
 	}

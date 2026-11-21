@@ -1,7 +1,7 @@
 // file: internal/server/legacy_manifest.go
-// version: 1.0.9
+// version: 1.0.10
 // guid: 1f86291c-166f-4f94-92a6-26ebb4bef101
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package server
 
@@ -49,7 +49,9 @@ import (
 //     credRouteWhen route ("conditional") is guarded only for some requests,
 //     which Guards cannot say; gin keeps that guard, so it carries none here.
 //   - fOwner: the chain runs ownerGateWhenOwnerSet (RequireOwner).
-//   - fBasicExempt: HEAD's Basic-gate health exemption (basicauth.go).
+//   - fBasicExempt: HEAD's Basic-gate health exemption, read by core's stage 8
+//     (httpapi.LegacyRoute.BasicExempt; the gate's other exemptions are
+//     pABS's OwnAuth and LegacyBasicExemptAssets).
 //   - fNoCompress: HEAD's compressionMiddleware exclusions (server.go).
 //   - fABSOnly: registered only while the ABS surface is enabled.
 //
@@ -852,4 +854,18 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/public/session/:id/track/:index", pPublic, fABSOnly},
 		{http.MethodGet, "/status", pPublic, fABSOnly},
 	}
+}
+
+// LegacyBasicExemptAssets is books' httpapi.LegacyMount.BasicExemptAssets:
+// HEAD's static-asset rule of the Basic gate, a path test on the Vite-built
+// frontend files (the removed gin middleware's, kept verbatim), which stage 8
+// applies to the requests the mount that owns "/" answers.
+func LegacyBasicExemptAssets(path string) bool {
+	return strings.HasPrefix(path, "/assets/") ||
+		path == "/favicon.ico" ||
+		strings.HasSuffix(path, ".js") ||
+		strings.HasSuffix(path, ".css") ||
+		strings.HasSuffix(path, ".png") ||
+		strings.HasSuffix(path, ".svg") ||
+		strings.HasSuffix(path, ".woff2")
 }

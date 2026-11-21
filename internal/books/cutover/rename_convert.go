@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,33 +50,47 @@ const (
 // default" or "never stored": the row stages nothing.
 var ErrNotStaged = errors.New(errNotStagedMessage)
 
+// ErrNullUnset is returned by every converter for a stored JSON null. HEAD
+// decoded a null into the value it already held (the default), so a null means
+// "unset": nothing is staged and the key keeps its default. The planner lists
+// each such key in the cutover report. Without this rule a null would decode
+// into a bool or a number as its zero value, which for a boolean is "false".
+var ErrNullUnset = errors.New("cutover: a stored null means unset")
+
 // ErrConvertInput wraps a converter's refusal of its input's shape. The
 // error never carries the value.
 var ErrConvertInput = errors.New(errConvertInputMessage)
 
 // knownConvert reports whether name is a converter this package defines.
-func knownConvert(name string) bool {
-	switch name {
-	case "", ConvertNeverStored, ConvertAuthMode, ConvertDaysToDuration, ConvertMiBToBytes, ConvertLogRetention,
-		ConvertOIDCFold, ConvertUpdaterMode, ConvertUpdaterChannel, ConvertUpdaterCheck, ConvertScheduleStandard,
-		ConvertScheduleInterval, ConvertScheduleFullScan, ConvertCSVList:
-		return true
-	}
-	return false
-}
+func knownConvert(name string) bool { return slices.Contains(converterNames, name) }
+
+// converterNames is every converter name Convert implements ("" is the identity),
+// so a test can run each of them against the same input.
+var converterNames = []string{"", ConvertNeverStored, ConvertAuthMode, ConvertDaysToDuration, ConvertMiBToBytes,
+	ConvertLogRetention, ConvertOIDCFold, ConvertUpdaterMode, ConvertUpdaterChannel, ConvertUpdaterCheck,
+	ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertCSVList}
 
 // Convert applies converter name to in. dropped lists the input fields the
 // canonical value has no place for (named, never valued), which M2 logs.
 func Convert(name string, in json.RawMessage) (out json.RawMessage, dropped []string, err error) {
 	bad := func(what string) error { return fmt.Errorf("%w: %s: %s", ErrConvertInput, name, what) }
+	// A converter that stages nothing for any input says so for a null too.
+	if name == ConvertNeverStored || name == ConvertOIDCFold {
+		return nil, nil, ErrNotStaged
+	}
+	// A stored null is "unset" for every other converter, before any of them
+	// decodes it: encoding/json leaves a bool or a number at its zero value on a
+	// null without an error, and a zero value is a setting (auth-mode would read
+	// it as "disabled").
+	if bytes.Equal(bytes.TrimSpace(in), []byte("null")) {
+		return nil, nil, ErrNullUnset
+	}
 	switch name {
 	case "":
 		return in, nil, nil
-	case ConvertNeverStored, ConvertOIDCFold:
-		return nil, nil, ErrNotStaged
 	case ConvertAuthMode:
 		var b bool
-		if err := json.Unmarshal(in, &b); err != nil {
+		if json.Unmarshal(in, &b) != nil {
 			return nil, nil, bad("want a boolean")
 		}
 		if b {

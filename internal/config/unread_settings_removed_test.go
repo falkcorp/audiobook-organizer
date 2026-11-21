@@ -6,11 +6,7 @@
 package config
 
 import (
-	"context"
 	"encoding/json"
-	"net/http"
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -87,42 +83,6 @@ func TestInitConfig_LanguageWarnsFromFileNotEnvironment(t *testing.T) {
 	})
 }
 
-// The config.yaml next to the database is loaded by LoadConfigFromFile; it warns
-// for each retired key, including language, and loads the live keys.
-func TestLoadConfigFromFile_RemovedUnreadSettingsWarnAndLoad(t *testing.T) {
-	restoreAppConfig(t)
-	logs := captureRemovedKeyLogs(t)
-
-	dir := t.TempDir()
-	Mutate(func(c *Config) {
-		c.DatabasePath = dir + "/audiobooks.pebble"
-		c.RootDir = ""
-	})
-	require.NoError(t, os.WriteFile(dir+"/config.yaml", []byte(oldConfigYAML), 0o600))
-
-	require.NoError(t, LoadConfigFromFile())
-	assert.Equal(t, "/srv/library", Snapshot().RootDir)
-	for _, k := range unreadSettingKeys {
-		assert.Contains(t, logs.String(), "key="+k+" ", "no removed-setting warning for %s", k)
-	}
-}
-
-// Saving the config scrubs the retired keys from config.yaml so a stale value
-// does not live on, and keeps catalog.language.
-func TestSaveConfigToFile_ScrubsRemovedUnreadSettings(t *testing.T) {
-	path := saveFileFixture(t, oldConfigYAML)
-	require.NoError(t, SaveConfigToFile())
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	for line := range strings.SplitSeq(string(data), "\n") {
-		for _, k := range unreadSettingKeys {
-			assert.False(t, strings.HasPrefix(line, k+":"), "retired key %s survived the save: %q", k, line)
-		}
-	}
-	assert.Contains(t, string(data), "german", "catalog.language was lost")
-}
-
 // A stored config blob written before the removal still carries the keys in its
 // JSON; decoding it must not fail.
 func TestConfigBlob_RemovedUnreadSettingsDecode(t *testing.T) {
@@ -133,24 +93,4 @@ func TestConfigBlob_RemovedUnreadSettingsDecode(t *testing.T) {
 	var c Config
 	require.NoError(t, json.Unmarshal([]byte(blob), &c))
 	assert.Equal(t, "/srv/library", c.RootDir)
-}
-
-// A PUT that still carries a retired key is refused with the removal message
-// (the Settings page and its import no longer send them), and applies nothing.
-func TestUpdateConfig_RejectsRemovedUnreadSettings(t *testing.T) {
-	for _, k := range unreadSettingKeys {
-		t.Run(k, func(t *testing.T) {
-			restoreAppConfig(t)
-			ms, blobs := ladderTestStore(t)
-			svc := NewUpdateService(ms)
-
-			status, resp := svc.UpdateConfig(context.Background(), map[string]any{k: 1, "root_dir": "/lib"})
-			require.Equal(t, http.StatusBadRequest, status, "resp = %v", resp)
-			msg, _ := resp["error"].(string)
-			assert.Contains(t, msg, k)
-			assert.Contains(t, msg, "was removed")
-			assert.Empty(t, *blobs, "a rejected PUT persisted a blob")
-			assert.NotEqual(t, "/lib", Snapshot().RootDir)
-		})
-	}
 }
