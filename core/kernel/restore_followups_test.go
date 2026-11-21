@@ -158,7 +158,8 @@ func TestReapply_AWaitingQueueRaisesTheQueuedToken(t *testing.T) {
 		t.Errorf("second boot of the older build: queued %d, unapplied %d, health %v; want the token from Unapplied", res.Queued, res.Unapplied, fx.health())
 	}
 
-	fx.restart()
+	// The same component (no restart): a boot that ends with the queue empty
+	// clears what an earlier count raised, not only a fresh component's zero.
 	res, _ = fx.boot(nil, nil)
 	if res.Drained != 1 || res.Unapplied != 0 || fx.hasHealth(journal.HealthQueued) {
 		t.Errorf("draining boot: drained %d, unapplied %d, health %v; want the token cleared", res.Drained, res.Unapplied, fx.health())
