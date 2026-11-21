@@ -12,7 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // Admin-role routes and EnableAuth=false.
@@ -74,6 +76,9 @@ func (s *Server) recordAdminRoute(method, fullPath string, kind adminRouteKind) 
 // with it off (read once, at wiring, like s.perm). Only read-only introspection
 // belongs behind it; see the rule at the top of this file.
 func (s *Server) adminRole() gin.HandlerFunc {
+	if s.identity != nil {
+		return s.bridgedAdminGate(adminRouteReadOnly)
+	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
@@ -82,6 +87,9 @@ func (s *Server) adminRole() gin.HandlerFunc {
 
 // adminGate returns the middleware for a route of the given kind.
 func (s *Server) adminGate(kind adminRouteKind) gin.HandlerFunc {
+	if s.identity != nil {
+		return s.bridgedAdminGate(kind)
+	}
 	if kind == adminRouteReadOnly {
 		return s.adminRole()
 	}
@@ -103,4 +111,68 @@ func (s *Server) adminGroup(g *gin.RouterGroup, kind adminRouteKind, method, rel
 // adminRoute registers method rel on g behind the admin gate for kind.
 func (s *Server) adminRoute(g *gin.RouterGroup, kind adminRouteKind, method, rel string, h ...gin.HandlerFunc) {
 	s.adminGroup(g, kind, method, rel).Handle(method, rel, h...)
+}
+
+// adminManifestRequirements indexes the 05-rbac §6.2 requirement of every
+// manifest row by "METHOD gin-path", the key a request's own route gives
+// (c.Request.Method and c.FullPath()).
+var adminManifestRequirements = sync.OnceValue(func() map[string]rbac.Requirement {
+	rows := legacyManifestRows()
+	m := make(map[string]rbac.Requirement, len(rows))
+	for _, r := range rows {
+		m[r.method+" "+r.path] = r.perm.req()
+	}
+	return m
+})
+
+// adminManifestRequirement is the requirement the manifest holds for the
+// request's route, and false for a route that has no row.
+func adminManifestRequirement(method, fullPath string) (rbac.Requirement, bool) {
+	r, ok := adminManifestRequirements()[method+" "+fullPath]
+	return r, ok
+}
+
+// bridgedAdminGate is the admin gate of a route under core identity (WithIdentity,
+// F4-08 B7b): HEAD's role-name gate, adminRole or RequireAdmin by kind, with the
+// route's manifest requirement (05-rbac §6.2: books:admin.view, books:admin.debug,
+// core:admin or AllOf(core:users.manage, books:admin.view)) enforced first through
+// the bridge. It is resolved per request from the matched route, so a group-level
+// gate (the master-list group, admindebug's reads) and a per-route one take the same
+// path, and a route with no manifest row is refused with 403, never opened.
+//
+// After the bridge passes, HEAD's own RequireAdmin still runs (its role-name test
+// and its API-key scope test), so the gate is the conjunction of the two and can only
+// refuse more than HEAD, never less: whether a custom role that holds the
+// requirement's scopes but is not named "admin" should pass is the successor's
+// decision, not this adapter's. The auth-disabled principal is judged by its own
+// checker for a read-only route (HEAD's adminRole passed it) and refused with 401
+// for an always-authenticated one (HEAD's RequireAdmin answered 401 with auth off;
+// core's auth-disabled checker would otherwise hold a requirement that is not
+// AuthRequired and open it).
+func (s *Server) bridgedAdminGate(kind adminRouteKind) gin.HandlerFunc {
+	b := s.identity.Bridge
+	head := servermiddleware.RequireAdmin()
+	return func(c *gin.Context) {
+		req, ok := adminManifestRequirement(c.Request.Method, c.FullPath())
+		if !ok {
+			httputil.RespondWithForbidden(c, "admin role required")
+			c.Abort()
+			return
+		}
+		if b.AuthOff(c.Request.Context()) {
+			if kind == adminRouteAlwaysAuthenticated {
+				httputil.RespondWithUnauthorized(c, "authentication required")
+				c.Abort()
+				return
+			}
+			if b.CheckAdmin(c, req) {
+				c.Next()
+			}
+			return
+		}
+		if !b.CheckAdmin(c, req) {
+			return
+		}
+		head(c)
+	}
 }
