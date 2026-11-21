@@ -808,7 +808,6 @@ func TestExecutor_SlowSubscriberDoesNotStallTheExecutor(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	unblock := func() { once.Do(func() { close(release) }) }
-	t.Cleanup(unblock)
 	p.on = func(emission) { <-release }
 	h := tapeHarness(t, p, []tasks.Definition{
 		taskDef("gotham.patrol", func(rc *tasks.RC, _ noParams) (string, error) {
@@ -818,6 +817,9 @@ func TestExecutor_SlowSubscriberDoesNotStallTheExecutor(t *testing.T) {
 		}, readOnly("gotham.patrol")),
 		taskDef("gotham.ambush", okBody, readOnly("gotham.ambush")),
 	}, nil, false)
+	// Registered after the harness so it runs before the harness's own
+	// cleanup: a failing test must free the sink before Shutdown waits on work.
+	t.Cleanup(unblock)
 	var ids []tasks.RunID
 	within(t, 10*time.Second, "starting runs behind a stuck sink", func() {
 		for i := 0; i < 6; i++ {
@@ -995,10 +997,18 @@ func TestPublisher_ShutdownAbandonsAStuckSink(t *testing.T) {
 	s := newStuckSink()
 	p := newPublisher(s.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(s.unstick)
+	// One commit of 20 emissions is one batch for the drainer, which sticks on
+	// its first call; 5 more commits queue behind it. Both the rest of the
+	// batch in hand and the queue must be given up at shutdown.
+	c := p.newPending()
 	for i := 0; i < 20; i++ {
-		publishOne(t, p, runEmission(tasks.RunID(fmt.Sprintf("robin-%d", i)), emitRunChanged, "running", 0))
+		c.stage(runEmission(tasks.RunID(fmt.Sprintf("robin-%d", i)), emitRunChanged, "running", 0))
 	}
+	c.commit()
 	<-s.entered
+	for i := 0; i < 5; i++ {
+		publishOne(t, p, runEmission(tasks.RunID(fmt.Sprintf("alfred-%d", i)), emitRunChanged, "running", 0))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	start := time.Now()
