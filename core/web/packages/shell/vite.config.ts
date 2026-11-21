@@ -12,5 +12,8 @@ export default mergeConfig(mediacoreLibrary({ name: '@mediacore/shell' }), defin
     globals: true,
     include: ['src/**/*.test.{ts,tsx}', 'test/**/*.test.{ts,tsx}'],
     setupFiles: ['./test/setup.ts'],
+    // Above test/setup.ts's 5s asyncUtilTimeout, so a findBy that never finds
+    // fails with its DOM dump, not as a bare test timeout.
+    testTimeout: 15000,
   },
 }));
