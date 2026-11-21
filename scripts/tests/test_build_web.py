@@ -29,6 +29,17 @@ import unittest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ci" / "build_web.sh"
 
+# The core packages build_web.sh builds, in its order (shell's types and bundle read
+# the other two's dist/), and the npm calls that build them.
+CORE_PACKAGES = ("api-client", "ui-kit", "shell")
+CORE_BUILDS = [f"run build -w @mediacore/{name}" for name in CORE_PACKAGES]
+# Every npm call of a deps run with core/web: core's ci, each build, then web's ci.
+DEPS_CALLS = [
+    ("core/web", "ci --no-audit --no-fund"),
+    *(("core/web", build) for build in CORE_BUILDS),
+    ("web", "ci --no-audit --no-fund"),
+]
+
 # Logs "cwd|argv|BUILD_ID" per call; exits NPM_STUB_EXIT when the call's first two
 # arguments match NPM_STUB_FAIL_ON (e.g. "ci" or "run build"), else 0.
 STUB_NPM = """#!/bin/sh
@@ -111,14 +122,7 @@ class BuildWebScriptTest(unittest.TestCase):
         t = self.tree(core_web=True)
         res = t.run("deps")
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(
-            [(cwd, argv) for cwd, argv, _ in t.calls()],
-            [
-                ("core/web", "ci --no-audit --no-fund"),
-                ("core/web", "run build -w @mediacore/api-client"),
-                ("web", "ci --no-audit --no-fund"),
-            ],
-        )
+        self.assertEqual([(cwd, argv) for cwd, argv, _ in t.calls()], DEPS_CALLS)
 
     def test_core_web_dir_without_manifest_is_not_a_core_web(self) -> None:
         t = self.tree(core_web=True)
@@ -130,7 +134,7 @@ class BuildWebScriptTest(unittest.TestCase):
         # (failing call, expected number of npm calls made, expected exit)
         for fail_on, made, code in (
             ("ci", 1, 7),  # core's ci: nothing after it runs
-            ("run build", 2, 9),  # the api-client build: web's ci never runs
+            ("run build", 2, 9),  # the first core build (api-client): nothing after it runs
         ):
             with self.subTest(fail_on=fail_on):
                 t = self.tree(core_web=True)
@@ -149,7 +153,7 @@ class BuildWebScriptTest(unittest.TestCase):
     def test_caller_build_id_reaches_every_npm_call(self) -> None:
         t = self.tree(core_web=True)
         self.assertEqual(t.run("deps", env={"BUILD_ID": "rc-123"}).returncode, 0)
-        self.assertEqual([c[2] for c in t.calls()], ["rc-123"] * 3)
+        self.assertEqual([c[2] for c in t.calls()], ["rc-123"] * len(DEPS_CALLS))
 
     def test_script_never_sets_build_id(self) -> None:
         t = self.tree(core_web=True)
@@ -194,7 +198,7 @@ class BuildWebScriptTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual([c[0] for c in t.calls()], ["core/web", "core/web", "web"])
+        self.assertEqual([c[0] for c in t.calls()], [cwd for cwd, _ in DEPS_CALLS])
 
     def test_caller_npm_config_reaches_npm(self) -> None:
         # How the ignore-scripts and prefer-offline sites keep their flags: npm reads
@@ -243,7 +247,7 @@ class BuildWebScriptTest(unittest.TestCase):
         t = self.tree(core_web=True)
         res = t.run("deps", shell=dash)
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertEqual(len(t.calls()), 3)
+        self.assertEqual([(cwd, argv) for cwd, argv, _ in t.calls()], DEPS_CALLS)
 
 
 @unittest.skipUnless(shutil.which("make"), "make not installed")
