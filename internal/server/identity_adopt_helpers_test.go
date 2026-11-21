@@ -106,6 +106,8 @@ func adoptIdentity(t testing.TB, atoms []string, owner legacyauth.OwnerRequired,
 		Bridge: b,
 		Compat: compat,
 		Client: func(*http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: "batarang"} },
+		// Refresh stands for core's Service.Refresh: the principal unchanged.
+		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },
 	}
 }
 

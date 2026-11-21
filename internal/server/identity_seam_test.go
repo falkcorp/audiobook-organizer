@@ -80,10 +80,11 @@ func TestIdentity_ValidateRefusesAPartialWiring(t *testing.T) {
 	full := adoptIdentity(t, []string{"library.view"}, nil, nil)
 	require.NoError(t, full.Validate())
 	for name, id := range map[string]*legacyauth.Identity{
-		"nil":       nil,
-		"no bridge": {Compat: full.Compat, Client: full.Client},
-		"no compat": {Bridge: full.Bridge, Client: full.Client},
-		"no client": {Bridge: full.Bridge, Compat: full.Compat},
+		"nil":        nil,
+		"no bridge":  {Compat: full.Compat, Client: full.Client, Refresh: full.Refresh},
+		"no compat":  {Bridge: full.Bridge, Client: full.Client, Refresh: full.Refresh},
+		"no client":  {Bridge: full.Bridge, Compat: full.Compat, Refresh: full.Refresh},
+		"no refresh": {Bridge: full.Bridge, Compat: full.Compat, Client: full.Client},
 	} {
 		require.Error(t, id.Validate(), name)
 	}
