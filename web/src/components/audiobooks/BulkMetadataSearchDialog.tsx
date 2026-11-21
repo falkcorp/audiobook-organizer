@@ -45,7 +45,7 @@ import type { BookFile, MetadataCandidate } from '../../services/api';
 import * as api from '../../services/api';
 import { rankScoreOf } from './rankScore';
 import { OwnerRejectedChip } from './OwnerRejectedChip';
-import { clearOwnerRejected } from './ownerRejected';
+import { clearUnrejected } from './ownerRejected';
 import {
   METADATA_APPLY_FIELD_LABELS,
   candidateApplyFieldValue,
@@ -1071,8 +1071,8 @@ export function BulkMetadataSearchDialog({
                             bookId={currentBook.id}
                             candidate={candidate}
                             toast={toast}
-                            onUnrejected={(c) =>
-                              setResults((prev) => prev.map((r) => (r === c ? clearOwnerRejected(r) : r)))
+                            onUnrejected={(c, outcome) =>
+                              setResults((prev) => clearUnrejected(prev, c, outcome))
                             }
                           />
                         )}
