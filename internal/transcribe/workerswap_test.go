@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,7 +71,7 @@ func TestLiveness_AWorkerThatAnswersAsAnotherMachineMidRequestEndsTheRequestWith
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
 
 	start := time.Now()
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a", "b"}, waitOrAnswer(10*time.Second))
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a", "b"}, waitOrAnswer(10*time.Second))
 	sw, ok := errors.AsType[*WorkerSwappedError](err)
 	if !ok {
 		t.Fatalf("err = %T %v, want a *WorkerSwappedError", err, err)
@@ -107,7 +108,7 @@ func TestLiveness_ASwappedWorkerThatIsAlsoWedgedIsASwapNotStuck(t *testing.T) {
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusOK, body })
 	noteCanaryPort(batKey, srv.URL, true)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, waitOrAnswer(10*time.Second))
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, waitOrAnswer(10*time.Second))
 	if !IsWorkerSwapped(err) || IsWorkerStuck(err) {
 		t.Fatalf("err = %T %v, want a swap and not a stuck worker", err, err)
 	}
@@ -121,7 +122,7 @@ func TestLiveness_AWorkerThatMissedItsMachineIDMidRequestIsNotASwap(t *testing.T
 	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth("") })
 	noteCanaryPort(batKey, srv.URL, true) // the link the gate made: the URL is the bat machine
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, waitOrAnswer(300*time.Millisecond))
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, waitOrAnswer(300*time.Millisecond))
 	if err != nil {
 		t.Fatalf("a worker that only missed its machine id was treated as swapped: %v", err)
 	}
@@ -138,7 +139,7 @@ func TestLiveness_AWeakIdentityWithNoLinkToTheFrozenMachineIsASwap(t *testing.T)
 	freshCanaryMemory(t)
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth("") })
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, waitOrAnswer(10*time.Second))
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, waitOrAnswer(10*time.Second))
 	if !IsWorkerSwapped(err) {
 		t.Fatalf("err = %v, want a swap", err)
 	}
@@ -150,7 +151,7 @@ func TestLiveness_ARequestOnTheSameMachineIsUnchanged(t *testing.T) {
 	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(batMachine) })
 	noteCanaryPort(batKey, srv.URL, true)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, waitOrAnswer(300*time.Millisecond)); err != nil {
+	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, waitOrAnswer(300*time.Millisecond)); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if hits.Load() < 2 {
@@ -170,7 +171,7 @@ func TestLiveness_ARequestWithNoFrozenIdentityIsNotCheckedForASwap(t *testing.T)
 		"empty":       withFrozenWorker(context.Background(), frozenWorker{key: "", capable: true}),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil, waitOrAnswer(200*time.Millisecond)); err != nil {
+			if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, nil, waitOrAnswer(200*time.Millisecond)); err != nil {
 				t.Fatalf("err = %v", err)
 			}
 		})
@@ -185,11 +186,11 @@ func TestLiveness_ALoneEndpointThatGainedItsMachineIDIsNotASwapButAPoolPortIs(t 
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(batMachine) })
 	weak := "u:" + shortHash(srv.URL)
 	lone := withFrozenWorker(context.Background(), frozenWorker{key: weak, capable: true, lone: true})
-	if err := superviseRequest(lone, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil, waitOrAnswer(200*time.Millisecond)); err != nil {
+	if err := superviseRequest(lone, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, nil, waitOrAnswer(200*time.Millisecond)); err != nil {
 		t.Fatalf("lone endpoint: err = %v", err)
 	}
 	pool := withFrozenWorker(context.Background(), frozenWorker{key: weak, capable: true})
-	if err := superviseRequest(pool, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil, waitOrAnswer(10*time.Second)); !IsWorkerSwapped(err) {
+	if err := superviseRequest(pool, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, nil, waitOrAnswer(10*time.Second)); !IsWorkerSwapped(err) {
 		t.Fatalf("pool port: err = %v, want a swap", err)
 	}
 }
@@ -202,7 +203,7 @@ func TestLiveness_AResponseThatRacesTheSwapCancelIsWithheld(t *testing.T) {
 	noteCanaryPort(batKey, srv.URL, true)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
 	// A request that ignores its context and answers once the poll has fired.
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error {
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error {
 		time.Sleep(300 * time.Millisecond)
 		return nil
 	})
@@ -379,9 +380,7 @@ func flipOnSecondPost(t *testing.T, srv *httptest.Server, post string, base map[
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/health":
 			body := map[string]any{}
-			for k, v := range base {
-				body[k] = v
-			}
+			maps.Copy(body, base)
 			if flipped.Load() {
 				body["machine_id"] = swappedInMachine
 			}
@@ -400,9 +399,7 @@ func flipOnSecondPost(t *testing.T, srv *httptest.Server, post string, base map[
 
 func swapBaseHealth(extra map[string]any) map[string]any {
 	h := map[string]any{"status": "ok", "model": "M", "backend": backendMLX, "machine_id": batMachine, "busy_seconds": 0.0, "busy_limit_seconds": nil}
-	for k, v := range extra {
-		h[k] = v
-	}
+	maps.Copy(h, extra)
 	return h
 }
 
@@ -723,7 +720,7 @@ func TestLiveness_ASwapAfterTheLastPollIsCaughtWhenTheResponseIsAccepted(t *test
 	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(swappedInMachine) })
 	noteCanaryPort(batKey, srv.URL, true)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
 	sw, ok := errors.AsType[*WorkerSwappedError](err)
 	if !ok || sw.Now != "m:"+swappedInMachine {
 		t.Fatalf("err = %T %v, want a swap to the new machine", err, err)
@@ -765,7 +762,7 @@ func TestLiveness_AnUnreadableProbeAfterTheResponseWithholdsOnlyThatResponseAndI
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
 	// The window is livenessInterval+healthProbeTimeout, so an hour-old
 	// confirmation is outside it only because there is none at all.
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
 	unv, ok := errors.AsType[*WorkerUnverifiedError](err)
 	if !ok || unv.Probes != livenessMisses || len(unv.Jobs) != 1 {
 		t.Fatalf("err = %T %v, want a withheld, unverified answer after %d attempts", err, err, livenessMisses)
@@ -797,7 +794,7 @@ func TestVerify_AProbeThatFailsTwiceThenAnswersAcceptsTheResponse(t *testing.T) 
 	noteCanaryPort(batKey, srv.URL, true)
 	fw := frozenWorker{key: batKey, capable: true}
 	ctx := withFrozenWorker(context.Background(), fw)
-	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil }); err != nil {
+	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("err = %v, want the response accepted once the retry read /health", err)
 	}
 	if hits.Load() != 3 {
@@ -818,7 +815,7 @@ func TestVerify_AProbeThatFailsOnceThenShowsAnotherMachineIsASwap(t *testing.T) 
 	})
 	noteCanaryPort(batKey, srv.URL, true)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
 	if sw, ok := errors.AsType[*WorkerSwappedError](err); !ok || sw.Now != "m:"+swappedInMachine {
 		t.Fatalf("err = %T %v, want a swap to the new machine", err, err)
 	}
@@ -836,7 +833,7 @@ func TestVerify_ARecentConfirmationVouchesForAnUnreadableProbeAndAnOldOneDoesNot
 		seen := &identityEvidence{}
 		seen.record(time.Now().Add(-confirmedAgo))
 		ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true, seen: seen})
-		return superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
+		return superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error { return nil })
 	}
 	if err := run(time.Minute); err != nil {
 		t.Errorf("confirmed a minute ago: err = %v, want the response kept", err)
@@ -877,7 +874,7 @@ func TestVerify_APollProbeDuringTheRequestVouchesForTheResponse(t *testing.T) {
 	noteCanaryPort(batKey, srv.URL, true)
 	seen := &identityEvidence{}
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true, seen: seen})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error {
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error {
 		// The bound only ends a poll that never confirms; it is not a timing
 		// the test relies on.
 		deadline := time.Now().Add(10 * time.Second)
@@ -943,7 +940,7 @@ func TestLiveness_AResponseFromTheSameMachineIsAcceptedAfterTheProbe(t *testing.
 	srv, hits := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(batMachine) })
 	noteCanaryPort(batKey, srv.URL, true)
 	ctx := withFrozenWorker(context.Background(), frozenWorker{key: batKey, capable: true})
-	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, nil, func(context.Context) error { return nil }); err != nil {
+	if err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, nil, func(context.Context) error { return nil }); err != nil {
 		t.Fatalf("err = %v", err)
 	}
 	if hits.Load() != 1 {
@@ -965,7 +962,7 @@ func TestLiveness_ACancelledOpStillVerifiesTheAnswerItAccepts(t *testing.T) {
 	noteCanaryPort(batKey, srv.URL, true)
 	base, cancel := context.WithCancel(context.Background())
 	ctx := withFrozenWorker(base, frozenWorker{key: batKey, capable: true})
-	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: f64(0)}, time.Hour, []string{"a"}, func(context.Context) error {
+	err := superviseRequest(ctx, srv.URL, remoteHealth{BusySeconds: new(float64(0))}, time.Hour, []string{"a"}, func(context.Context) error {
 		cancel() // the op ends just as the answer arrives
 		return nil
 	})
@@ -1028,7 +1025,7 @@ func TestIdentitySwap_TheLoneEndpointStoresNothingUnderALearnedMachineThePollCon
 	shortLiveness(t, 20*time.Millisecond)
 	freshCanaryMemory(t)
 	srv, _ := probeServer(t, func() (int, map[string]any) { return http.StatusOK, swapHealth(swappedInMachine) })
-	h := remoteHealth{Backend: backendMLX, BusySeconds: f64(0)}
+	h := remoteHealth{Backend: backendMLX, BusySeconds: new(float64(0))}
 	weak := "u:" + shortHash(srv.URL)
 	g := gatedEndpoint{Endpoint: Endpoint{URL: srv.URL, Concurrency: 1}, Health: h, Probed: true, resolved: weak, learned: batKey}
 

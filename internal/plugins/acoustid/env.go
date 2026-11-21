@@ -246,8 +246,7 @@ func nativeItems(rc *tasks.RC) kindItemsFunc {
 			}
 			return err
 		}, tasks.ItemsOptions[int]{OnError: tasks.FailFast, ProgressBase: o.ProgressBase, ProgressTotal: o.ProgressTotal, Label: label})
-		var ie *tasks.ItemsError
-		if errors.As(err, &ie) {
+		if ie, ok := errors.AsType[*tasks.ItemsError](err); ok {
 			if ie.First != nil {
 				return ie.First
 			}

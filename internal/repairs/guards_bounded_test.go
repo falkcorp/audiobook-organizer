@@ -93,7 +93,7 @@ func TestPathResolver_StopsTryingPastTheAbandonedCap(t *testing.T) {
 	h := newHangingFS(t, filepath.Join(dir, "hung"))
 	const limit = 3
 	r := boundedResolver(h, 15*time.Millisecond, limit)
-	for i := 0; i < limit+5; i++ {
+	for i := range limit + 5 {
 		p := filepath.Join(dir, "hung", string(rune('a'+i)), "f.mp3")
 		kind, _ := GuardBookPathsWith(r, "b", []string{p}, "")
 		require.Equal(t, SkipGuardUnreadable, kind, p)

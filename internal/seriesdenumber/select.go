@@ -39,10 +39,7 @@ type Selection struct {
 // a canary are the first plans that actually change something and a dry run
 // and the apply after it agree.
 func Select(items []Item, sel Selection) []int {
-	min := sel.MinBooks
-	if min < 1 {
-		min = 1
-	}
+	min := max(sel.MinBooks, 1)
 	want := foldName(sel.BaseName)
 
 	idx := make([]int, 0, len(items))

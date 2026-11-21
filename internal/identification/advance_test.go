@@ -277,7 +277,7 @@ func TestItem_Idempotent(t *testing.T) {
 	fx.books["b1"] = primaryBook("b1")
 	fx.result = FetchResult{Outcome: OutcomeFetched, Reason: database.IdentReasonManualOnly}
 	m := Mark{BookID: "b1", Epoch: fx.store.mark("b1")}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		o, err := fx.item()(context.Background(), m)
 		if err != nil || o != OutcomeFetched {
 			t.Fatalf("run %d: got %q, %v", i, o, err)
@@ -322,7 +322,7 @@ func TestItem_ErrorClearsMark(t *testing.T) {
 // Finish's counters add up.
 func TestDirtySet_PagesAndTally(t *testing.T) {
 	st := newFakeStore()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		st.mark("b" + strconv.Itoa(i))
 	}
 	src := DirtySet{Store: st}

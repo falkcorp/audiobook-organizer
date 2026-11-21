@@ -151,7 +151,7 @@ func TestDigestDetails_MergeAggregates(t *testing.T) {
 		dd, existing := withAgg(), withAgg()
 		existing.OpAggregates = map[string]*DigestOpAggregate{}
 		for i := range maxDigestOpAggregates {
-			existing.OpAggregates[fmt.Sprintf("op-%d", i)] = &DigestOpAggregate{DigestAggregate: DigestAggregate{Count: 1}}
+			existing.OpAggregates[fmt.Sprintf("op-%d", i)] = &DigestOpAggregate{Count: 1}
 		}
 		dd.mergeAggregates(existing)
 		assert.Zero(t, dd.AggregatesVersion)

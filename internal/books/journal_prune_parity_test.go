@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -189,9 +190,7 @@ func TestJournalPruneParity_HeadGolden(t *testing.T) {
 		row := journalPruneRow{Name: rw.name, Clock: c.LastDue.In(parityZone)}
 
 		rig := newHeadRig(t, paritySetup{})
-		for k, v := range settings {
-			rig.settings[k] = v
-		}
+		maps.Copy(rig.settings, settings)
 		for i := range n {
 			boot := i == 0
 			if rw.edit != nil && rw.edit.step == i {

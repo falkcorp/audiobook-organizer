@@ -113,7 +113,7 @@ func TestScannerRescanOfSameFailingBytesReachesUnreadableAndStops(t *testing.T) 
 	require.Equal(t, database.DurationUnreadable, row.DurationState())
 
 	// Past the ceiling: no more probes, no more attempts, until ResetDuration.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		f.rescan(t)
 	}
 	require.Equal(t, database.DeepScanMaxAttempts, runs(), "an unreadable row must not be probed again")

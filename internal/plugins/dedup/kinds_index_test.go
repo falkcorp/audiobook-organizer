@@ -152,15 +152,13 @@ func (s *indexSpy) recorded() []string {
 	return out
 }
 
-func strp(s string) *string { return &s }
-
 func newIndexSpy() (*indexSpy, IndexKindDeps) {
 	one := 1.0
 	before := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	s := &indexSpy{
 		books: []database.BookCore{
-			{ID: "year-one", ISBN10: strp("0930289560"), ISBN13: strp("9780930289560"), FilePath: "/lib/year-one.m4b"},
-			{ID: "long-halloween", ASIN: strp("B000HALLOW"), FilePath: "/lib/long-halloween.m4b"},
+			{ID: "year-one", ISBN10: new("0930289560"), ISBN13: new("9780930289560"), FilePath: "/lib/year-one.m4b"},
+			{ID: "long-halloween", ASIN: new("B000HALLOW"), FilePath: "/lib/long-halloween.m4b"},
 			{ID: "hush", FilePath: "/lib/hush.m4b"},
 			{ID: "dark-victory", FilePath: "/lib/hush.m4b"},
 		},

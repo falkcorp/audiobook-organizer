@@ -179,7 +179,7 @@ func (f *servedFixture) requireKept(res CleanupResult, v *database.BookVersion, 
 	}
 	// One WARN naming the book, the version, the path count and the reason.
 	var warns []string
-	for _, line := range strings.Split(f.logBuf.String(), "\n") {
+	for line := range strings.SplitSeq(f.logBuf.String(), "\n") {
 		if strings.Contains(line, "level=WARN") && strings.Contains(line, v.ID) {
 			warns = append(warns, line)
 		}

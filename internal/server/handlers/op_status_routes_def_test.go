@@ -8,6 +8,7 @@ package handlers_test
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -77,12 +78,7 @@ const ownRunMessage = "importing for user_id=01INVENTEDOWNRUN000000A"
 // opAccessHolding is an op-text reader whose caller holds exactly perms.
 func opAccessHolding(perms ...auth.Permission) *opaccess.Repairs {
 	return opaccess.NewRepairs(nil, nil, func(_ *gin.Context, p auth.Permission) bool {
-		for _, q := range perms {
-			if p == q {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(perms, p)
 	})
 }
 

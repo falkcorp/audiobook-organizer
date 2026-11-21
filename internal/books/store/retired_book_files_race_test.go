@@ -256,13 +256,11 @@ func TestBatchUpsertBookFiles_StripeOrderDoesNotDeadlock(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, 64)
 	run := func(fn func() error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := fn(); err != nil {
 				errs <- err
 			}
-		}()
+		})
 	}
 	batch := func(reverse bool, dur int) []*BookFile {
 		out := make([]*BookFile, 0, n)

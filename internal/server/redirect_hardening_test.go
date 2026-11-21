@@ -104,8 +104,8 @@ func TestRedirectHardening_FullRouterNeverRedirects(t *testing.T) {
 			sawABS = true
 		}
 		other := rt.Path + "/"
-		if strings.HasSuffix(rt.Path, "/") {
-			other = strings.TrimSuffix(rt.Path, "/")
+		if before, ok := strings.CutSuffix(rt.Path, "/"); ok {
+			other = before
 		}
 		w := probeRequest(t, f.srv.router, http.MethodGet, other)
 		requireNoPrefixReflected(t, w)

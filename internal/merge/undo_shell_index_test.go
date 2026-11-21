@@ -202,7 +202,7 @@ func TestUndoShellIndex_NoUnreadableRowsBehavesNormally(t *testing.T) {
 // Many bad rows: the message names the first few and counts the rest.
 func TestUnreadableCombineJournalsError_CapsTheKeysItNames(t *testing.T) {
 	var rows []UnreadableCombineJournal
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		rows = append(rows, UnreadableCombineJournal{Key: combineJournalPrefix + string(rune('a'+i))})
 	}
 	msg := (&UnreadableCombineJournalsError{Rows: rows}).Error()

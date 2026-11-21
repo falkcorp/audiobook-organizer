@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -183,21 +184,15 @@ func (c reportOpCase) key() string {
 func (c reportOpCase) raw(t *testing.T, live bool, extra map[string]any) json.RawMessage {
 	t.Helper()
 	m := map[string]any{}
-	for k, v := range c.base {
-		m[k] = v
-	}
+	maps.Copy(m, c.base)
 	if live {
 		sw := c.live
 		if sw == nil {
 			sw = map[string]any{"apply": true}
 		}
-		for k, v := range sw {
-			m[k] = v
-		}
+		maps.Copy(m, sw)
 	}
-	for k, v := range extra {
-		m[k] = v
-	}
+	maps.Copy(m, extra)
 	raw, err := json.Marshal(m)
 	require.NoError(t, err)
 	return raw

@@ -105,31 +105,29 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 // and the run writes book_files.file_hash, so it is a Live-only writer (rule R7).
 func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(extractWAVClipsKind, tasks.TaskSpec[extractWAVNativeParams, extractWAVResult]{
-		Common: tasks.Common{
-			Title: "Extract WAV clips for transcription cache",
-			Help:  "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
-			// book_files: the file hash it persists. books: SetBookFileHash notifies the
-			// aggregate recompute when a hash makes or breaks a pairing of two rows
-			// (writeHashesOver -> RecomputeBookAggregates -> ModifyBook), which commits
-			// the book row's Duration (the shared SetBookFileHash row, kinds_resources.go;
-			// stack parity review P1). files: the clips it cuts and the content-stable
-			// hardlinks it makes under the library root (bytes on disk, written outside
-			// the writer).
-			// ModifyBook is reached through the recompute, so the row is the whole ModifyBook row:
-			// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
-			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
-			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
-			// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is
-			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
-			Resume:          tasks.ResumeFromZero,
-			Priority:        tasks.PriorityLow,
-			ConcurrencyKey:  tasks.Key("books.maintenance.extract-wav-clips"),
-			Timeout:         24 * time.Hour,
-			ProgressTimeout: 10 * time.Minute,
-			Schedule:        sched,
-			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Extract WAV clips for transcription cache",
+		Help:  "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
+		// book_files: the file hash it persists. books: SetBookFileHash notifies the
+		// aggregate recompute when a hash makes or breaks a pairing of two rows
+		// (writeHashesOver -> RecomputeBookAggregates -> ModifyBook), which commits
+		// the book row's Duration (the shared SetBookFileHash row, kinds_resources.go;
+		// stack parity review P1). files: the clips it cuts and the content-stable
+		// hardlinks it makes under the library root (bytes on disk, written outside
+		// the writer).
+		// ModifyBook is reached through the recompute, so the row is the whole ModifyBook row:
+		// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
+		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
+		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+		// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is
+		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+		Resume:          tasks.ResumeFromZero,
+		Priority:        tasks.PriorityLow,
+		ConcurrencyKey:  tasks.Key("books.maintenance.extract-wav-clips"),
+		Timeout:         24 * time.Hour,
+		ProgressTimeout: 10 * time.Minute,
+		Schedule:        sched,
+		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in extractWAVNativeParams) (extractWAVResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return extractWAVResult{}, err

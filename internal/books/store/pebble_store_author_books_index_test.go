@@ -654,7 +654,7 @@ func TestAuthorBooksBounds_AuthorOneNeverLeaksIntoAuthorTen(t *testing.T) {
 func TestGetBooksByAuthorIDCore_AuthorOneDoesNotSeeAuthorTen(t *testing.T) {
 	p := newAuthorBooksPebble(t)
 	ids := make([]int, 0, 11)
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		ids = append(ids, abMakeAuthor(t, p, fmt.Sprintf("Robin %02d", i)))
 	}
 	var one, ten int

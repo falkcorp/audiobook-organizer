@@ -33,11 +33,9 @@ func TestBatchApplyCore_RefusesAnUnreadyServiceBeforeReporting(t *testing.T) {
 	var emitted []string
 	var finished error
 	env := batchApplyEnv{
-		t7Env: t7Env{
-			Log:      func(slog.Level, string, ...slog.Attr) { emitted = append(emitted, "log") },
-			Progress: func(int, int, string) { emitted = append(emitted, "progress") },
-		},
-		Writer: w,
+		Log:      func(slog.Level, string, ...slog.Attr) { emitted = append(emitted, "log") },
+		Progress: func(int, int, string) { emitted = append(emitted, "progress") },
+		Writer:   w,
 		StandDown: func(context.Context, string) (t7Hold, error) {
 			return t7Hold{Finish: func(runErr error) error { finished = runErr; return runErr }}, nil
 		},

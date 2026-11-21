@@ -366,7 +366,7 @@ func TestAcoustidEnv_ErrNeedMessages(t *testing.T) {
 // item cancels the ctx and then holds; whether the loop sees the cancel before or
 // after its next dispatch is a scheduler race, so the scenario repeats.
 func TestAcoustidEnv_HeadPoolNeverReturnsWithAnItemInFlight(t *testing.T) {
-	for trial := 0; trial < 60; trial++ {
+	for trial := range 60 {
 		ctx, cancel := context.WithCancel(context.Background())
 		release := make(chan struct{})
 		done := make(chan error, 1)

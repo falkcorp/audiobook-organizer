@@ -331,9 +331,7 @@ func TestRetiredBookFilesWithHash_ScopeUnderConcurrentRetires(t *testing.T) {
 	var wg sync.WaitGroup
 	stop := make(chan struct{})
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -365,7 +363,7 @@ func TestRetiredBookFilesWithHash_ScopeUnderConcurrentRetires(t *testing.T) {
 					}
 				}
 			}
-		}()
+		})
 	}
 	for _, r := range rows {
 		r.phase.Store(phaseRetiring)

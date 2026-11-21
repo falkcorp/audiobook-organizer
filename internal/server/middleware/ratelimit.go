@@ -10,6 +10,7 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -441,8 +442,8 @@ func CommitReservations(rs []KeyReservation) {
 
 // CancelReservations cancels each reservation, last taken first.
 func CancelReservations(rs []KeyReservation) {
-	for i := len(rs) - 1; i >= 0; i-- {
-		rs[i].Cancel()
+	for _, r := range slices.Backward(rs) {
+		r.Cancel()
 	}
 }
 

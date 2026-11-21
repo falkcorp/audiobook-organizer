@@ -126,25 +126,23 @@ type identIndexNativeParams struct {
 // param: the run's mode decides, preview by default as at HEAD.
 func (p *Plugin) identIndexKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(identIndexKind, tasks.TaskSpec[identIndexNativeParams, struct{}]{
-		Common: tasks.Common{
-			Title: "Identification index rebuild",
-			Help: "Manual rebuild of the book identification index (ident:state: and ident:by: rows and " +
-				"their in-memory counts) that the Library's ident: filter and the review summary's ident_counts " +
-				"read. Every boot already builds or reconciles it and retries a failure, so this is the manual " +
-				"handle for the same repair. Preview by default: reports the books whose state is wrong, the " +
-				"orphan rows and keys, and the counter drift, writes nothing. Started in live mode it rebuilds; " +
-				"ident: queries answer 503 while a from-scratch rebuild runs. Writes ident: rows only, never " +
-				"book or metadata cache rows.",
-			// HEAD declares books; the rebuild writes ident: index rows (indexes).
-			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResIndexes)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.ident-index"),
-			Timeout:        30 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Identification index rebuild",
+		Help: "Manual rebuild of the book identification index (ident:state: and ident:by: rows and " +
+			"their in-memory counts) that the Library's ident: filter and the review summary's ident_counts " +
+			"read. Every boot already builds or reconciles it and retries a failure, so this is the manual " +
+			"handle for the same repair. Preview by default: reports the books whose state is wrong, the " +
+			"orphan rows and keys, and the counter drift, writes nothing. Started in live mode it rebuilds; " +
+			"ident: queries answer 503 while a from-scratch rebuild runs. Writes ident: rows only, never " +
+			"book or metadata cache rows.",
+		// HEAD declares books; the rebuild writes ident: index rows (indexes).
+		Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResIndexes)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.ident-index"),
+		Timeout:        30 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in identIndexNativeParams) (struct{}, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return struct{}{}, err

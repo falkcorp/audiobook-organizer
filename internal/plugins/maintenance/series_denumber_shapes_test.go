@@ -7,6 +7,7 @@ package maintenance
 
 import (
 	"encoding/json"
+	"maps"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -40,9 +41,7 @@ func shapeApplyParams(l *denumberLib, extra map[string]any) string {
 		l.reportPath = filepath.Join(l.root, ".reports", "report.tsv")
 	}
 	p := map[string]any{"apply": true, "reportPath": l.reportPath}
-	for k, v := range extra {
-		p[k] = v
-	}
+	maps.Copy(p, extra)
 	raw, err := json.Marshal(p)
 	if err != nil {
 		t.Fatal(err)

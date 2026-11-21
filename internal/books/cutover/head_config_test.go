@@ -11,7 +11,7 @@ import (
 )
 
 func TestHeadConfigShape(t *testing.T) {
-	typ := reflect.TypeOf(headConfig{})
+	typ := reflect.TypeFor[headConfig]()
 	if typ.NumField() < 150 {
 		t.Fatalf("headConfig has %d fields, want at least 150", typ.NumField())
 	}
@@ -19,8 +19,7 @@ func TestHeadConfigShape(t *testing.T) {
 		t.Fatalf("headConfig has %d fields, HEAD has 173", typ.NumField())
 	}
 	dash := 0
-	for i := 0; i < typ.NumField(); i++ {
-		f := typ.Field(i)
+	for f := range typ.Fields() {
 		js, ok := f.Tag.Lookup("json")
 		if !ok {
 			t.Errorf("field %s has no json tag", f.Name)
@@ -39,10 +38,9 @@ func TestHeadConfigShape(t *testing.T) {
 }
 
 func TestHeadConfigJSONTagsUnique(t *testing.T) {
-	typ := reflect.TypeOf(headConfig{})
+	typ := reflect.TypeFor[headConfig]()
 	seen := map[string]string{}
-	for i := 0; i < typ.NumField(); i++ {
-		f := typ.Field(i)
+	for f := range typ.Fields() {
 		js := f.Tag.Get("json")
 		if js == "-" {
 			continue

@@ -47,7 +47,7 @@ var droppedWithValue = map[string]string{
 func dropField(cfg *types.Named, head string) *types.Var {
 	t := types.Type(cfg)
 	var fv *types.Var
-	for _, seg := range strings.Split(head, ".") {
+	for seg := range strings.SplitSeq(head, ".") {
 		st, ok := t.Underlying().(*types.Struct)
 		if !ok {
 			return nil

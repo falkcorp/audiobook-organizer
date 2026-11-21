@@ -80,10 +80,7 @@ func (p *PebbleStore) refuseDeleteIfBookOwnsFiles(bookID string) error {
 		// this refusal path, by decoding the rows' retired flag; a row that does
 		// not decode is counted as live, which is the safe side (it is never
 		// reported as holding only retired versions).
-		retired := p.countRetiredBookFileRows(bookID)
-		if retired > n {
-			retired = n
-		}
+		retired := min(p.countRetiredBookFileRows(bookID), n)
 		return ownedFilesRefusal("delete book", bookID, n-retired, retired)
 	}
 	return nil

@@ -636,11 +636,9 @@ func TestDedupChain_LabelRefinementResultNamesTheChildren(t *testing.T) {
 func TestDedupChain_UnreadableRecordedChildWarningNamesTheStepID(t *testing.T) {
 	var buf bytes.Buffer
 	env := chainEnv{
-		kindEnv: kindEnv{
-			Logger:   slog.New(slog.NewTextHandler(&buf, nil)),
-			Progress: func(int, int, string) {},
-			Log:      func(slog.Level, string) {},
-		},
+		Logger:   slog.New(slog.NewTextHandler(&buf, nil)),
+		Progress: func(int, int, string) {},
+		Log:      func(slog.Level, string) {},
 		Children: childDriver{
 			NoID: "the test returned no id",
 			Start: func(context.Context, string, childMode) (string, error) {

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1672,8 +1673,8 @@ func applySeriesDenumber(ctx context.Context, env seriesDenumberEnv,
 
 				// This version did not move. The earlier ones of the same book did:
 				// take them back, so the book is not split across two series.
-				for di := len(done) - 1; di >= 0; di-- {
-					d := done[di]
+				for di, d := range slices.Backward(done) {
+
 					if rerr := restoreVersion(w, d.mv, pl.FromID, targetID); rerr != nil {
 						// It stays in the base. It is journaled, so a revert still puts it
 						// back; the run reports the split loudly and does not delete.

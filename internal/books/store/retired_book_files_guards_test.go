@@ -80,12 +80,10 @@ func runTogether(fns ...func()) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, fn := range fns {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			fn()
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

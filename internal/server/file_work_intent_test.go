@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -106,9 +107,7 @@ func (p *replayProbe) waitFor(t *testing.T, books ...string) map[string]metafetc
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := map[string]metafetch.FetchIntent{}
-	for k, v := range p.intents {
-		out[k] = v
-	}
+	maps.Copy(out, p.intents)
 	return out
 }
 

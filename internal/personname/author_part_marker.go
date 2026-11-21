@@ -64,7 +64,7 @@ var (
 // "[Track") never changes the verdict.
 func markerTokens(name string) []string {
 	var toks []string
-	for _, t := range strings.Fields(StripEditionSuffix(name)) {
+	for t := range strings.FieldsSeq(StripEditionSuffix(name)) {
 		if t = strings.Trim(t, ".,;:()[]"); t != "" {
 			toks = append(toks, t)
 		}

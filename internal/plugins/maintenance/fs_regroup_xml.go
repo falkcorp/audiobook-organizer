@@ -311,33 +311,31 @@ func (p *Plugin) runFSRegroupXML(ctx context.Context, raw json.RawMessage, repor
 // a preview run plans and reports and writes nothing.
 func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(fsRegroupKind, tasks.TaskSpec[fsRegroupNativeParams, fsRegroupResult]{
-		Common: tasks.Common{
-			Title: "Repair chapter-per-folder books (fragments, duplicates, layout)",
-			Help: "Finds books laid out one chapter per folder (<Book>/<Book> - N/<file>) and sorts them into " +
-				"fragments (one book row per chapter: merged onto one survivor, shells soft-deleted), duplicates " +
-				"(rows whose files another book already owns: shells soft-deleted, owner untouched) and " +
-				"chapter_folder_layout (one book whose files sit in per-chapter folders: reported only). Never " +
-				"deletes a book_file row, skips the iTunes tree and protected paths, journals every change. " +
-				"A preview reports the per-group plan; start in live mode to apply.",
-			// Declared write-set (as HEAD: dispatcher Gate 3b): this op never runs beside
-			// another op that declares books or book_files, so no repoint can land
-			// between its path lookup and its row create. HEAD declares books and
-			// book_files; the body also repoints a shadowed external id
-			// (ReassignExternalID: external_ids) and writes the undo ledger it
-			// reverts from (CreateOperationChange, MarkOperationChangesReverted:
-			// operations). ModifyBook (the survivor's title and path, the retired
-			// shells' soft delete) also stamps the metadata cache stale on an identity
-			// change and stages the ident: rows (metadata_cache, indexes: the shared
-			// ModifyBook row, kinds_resources.go).
-			Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.fs-regroup-xml"),
-			Timeout:        120 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Repair chapter-per-folder books (fragments, duplicates, layout)",
+		Help: "Finds books laid out one chapter per folder (<Book>/<Book> - N/<file>) and sorts them into " +
+			"fragments (one book row per chapter: merged onto one survivor, shells soft-deleted), duplicates " +
+			"(rows whose files another book already owns: shells soft-deleted, owner untouched) and " +
+			"chapter_folder_layout (one book whose files sit in per-chapter folders: reported only). Never " +
+			"deletes a book_file row, skips the iTunes tree and protected paths, journals every change. " +
+			"A preview reports the per-group plan; start in live mode to apply.",
+		// Declared write-set (as HEAD: dispatcher Gate 3b): this op never runs beside
+		// another op that declares books or book_files, so no repoint can land
+		// between its path lookup and its row create. HEAD declares books and
+		// book_files; the body also repoints a shadowed external id
+		// (ReassignExternalID: external_ids) and writes the undo ledger it
+		// reverts from (CreateOperationChange, MarkOperationChangesReverted:
+		// operations). ModifyBook (the survivor's title and path, the retired
+		// shells' soft delete) also stamps the metadata cache stale on an identity
+		// change and stages the ident: rows (metadata_cache, indexes: the shared
+		// ModifyBook row, kinds_resources.go).
+		Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.fs-regroup-xml"),
+		Timeout:        120 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fsRegroupNativeParams) (fsRegroupResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fsRegroupResult{}, err

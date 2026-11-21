@@ -506,7 +506,7 @@ func TestMergeCleanupDeadEndBareFilelessCoLoserStillLeavesTheLoserAlone(t *testi
 func TestMergeCleanupDeadEndSourcesAreComputedOncePerDeadBook(t *testing.T) {
 	x := newMCFixture(t)
 	x.mk("t", mcSpec{title: "Hush", authors: []string{"Selina Kyle"}, trashed: true})
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		n := fmt.Sprintf("l%d", i)
 		x.mk(n, mcHushSpec(30000+i))
 		x.point(n, "t")

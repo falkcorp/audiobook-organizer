@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -69,7 +70,7 @@ type peerAllowList struct {
 // (fe80::5%eth0) that names an interface of this host.
 func parsePeerAllowList(raw string) (list peerAllowList, invalid []string) {
 	bad := func(e, why string) { invalid = append(invalid, e+" ("+why+")") }
-	for _, e := range strings.Split(raw, ",") {
+	for e := range strings.SplitSeq(raw, ",") {
 		e = strings.TrimSpace(e)
 		if e == "" {
 			continue
@@ -120,10 +121,8 @@ func parsePeerAllowList(raw string) (list peerAllowList, invalid []string) {
 
 // contains reports whether a (in trust form, parseTrustAddr) is allowed.
 func (l peerAllowList) contains(a netip.Addr) bool {
-	for _, z := range l.zoned {
-		if z == a {
-			return true
-		}
+	if slices.Contains(l.zoned, a) {
+		return true
 	}
 	a = a.WithZone("").Unmap()
 	for _, p := range l.prefixes {

@@ -326,9 +326,7 @@ func TestIPRateLimiter_ReserveKeyIsAtomic(t *testing.T) {
 		var got atomic.Int64
 		var wg sync.WaitGroup
 		for i := range 100 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				res, ok := r.ReserveKey("k")
 				if !ok {
 					return
@@ -340,7 +338,7 @@ func TestIPRateLimiter_ReserveKeyIsAtomic(t *testing.T) {
 					res.Cancel()
 					got.Add(-1)
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		// Cancelled reservations give their token back, so later goroutines

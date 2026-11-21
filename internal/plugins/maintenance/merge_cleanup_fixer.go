@@ -629,7 +629,7 @@ type mcCoLoser struct {
 // the other caller's cancel.
 func (r *mcRun) deadEndIndex(ctx context.Context) (map[string][]mcCoLoser, error) {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		e, _ := r.deadEnds.LoadOrStore("", &onceVal[map[string][]mcCoLoser]{})
 		ov := e.(*onceVal[map[string][]mcCoLoser])
 		ov.once.Do(func() { ov.v, ov.err = r.buildDeadEndIndex(ctx) })
@@ -776,7 +776,7 @@ const mcHolderReadAttempts = 3
 // holder in between (RehomeRetiredVersion) is read again rather than counted as
 // holding nothing.
 func mcRowHolders(ret database.RetiredBookFileReader, src string) ([]string, error) {
-	for attempt := 0; attempt < mcHolderReadAttempts; attempt++ {
+	for range mcHolderReadAttempts {
 		versions, err := ret.GetRetiredVersionsFromBook(src)
 		if err != nil {
 			return nil, fmt.Errorf("read the retired versions of %s: %w", src, err)
@@ -1788,8 +1788,7 @@ func (r *mcRun) ownerGate(fa *mcFacts) error {
 	var unresolved []decisions.UnresolvedID
 	for _, fam := range []string{decisions.FamilySameWork, decisions.FamilySameCopy} {
 		v, err := r.vetoes.PairVetoed(retiredEntityBook, a, b, fam)
-		var ue *decisions.UnresolvableError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*decisions.UnresolvableError](err); ok {
 			unresolved = append(unresolved, ue.IDs...)
 			continue
 		}

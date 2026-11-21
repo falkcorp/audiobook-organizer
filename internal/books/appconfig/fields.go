@@ -73,8 +73,8 @@ func exposed(segs []string) bool {
 			return false
 		}
 		var found *reflect.StructField
-		for i := range t.NumField() {
-			if f := t.Field(i); fieldName(f) == seg {
+		for f := range t.Fields() {
+			if fieldName(f) == seg {
 				found = &f
 				break
 			}
