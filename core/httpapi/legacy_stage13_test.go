@@ -60,7 +60,8 @@ func s13Atoms() map[string][]rbac.Permission {
 // exactly when the atom's native successor, AllOf its table scopes, admits the
 // principal. The property that matters is "never wider": a role admitted by
 // stage 13 that the successor refuses fails first. "Never narrower" is held
-// beside it, and both outcomes must occur for every atom, so neither side is
+// beside it, and both outcomes must occur for every atom among native-role principals (auth
+// off is left out of the count: it admits by its own rule), so neither side is
 // vacuous and a generator that only yields the empty role fails.
 //
 // The run is seeded and reproducible: the seed is logged and named in every
@@ -139,6 +140,9 @@ func TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits(t *testing.T) 
 				t.Fatalf("seed PCG(%d, %d) round %d: %s refused %s (perms %v), which its successor admits",
 					seedHi, seedLo, i, atom, p.Method, p.Perms.Concrete())
 			}
+			if p.Method == auth.MethodAuthDisabled {
+				continue // auth off admits by its own rule: it must not stand in for a native role
+			}
 			if got {
 				admits[atom]++
 			} else {
@@ -148,7 +152,7 @@ func TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits(t *testing.T) 
 	}
 	for _, atom := range names {
 		if admits[atom] == 0 || denies[atom] == 0 {
-			t.Errorf("%s: %d admits, %d denies over %d rounds (seed PCG(%d, %d)); both must occur",
+			t.Errorf("%s: %d admits, %d denies of native-role principals over %d rounds (seed PCG(%d, %d)); both must occur",
 				atom, admits[atom], denies[atom], rounds, seedHi, seedLo)
 		}
 	}
