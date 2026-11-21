@@ -986,6 +986,22 @@ func TestExitCode(t *testing.T) {
 	}
 }
 
+// TestExitCodeUpgradeFloor: a store below a declared upgrade floor (R2-4)
+// exits 78, wrapped or not: a restart cannot raise the store's version, and
+// systemd's RestartPreventExitStatus=78 depends on it.
+func TestExitCodeUpgradeFloor(t *testing.T) {
+	floor := &storage.ErrUpgradeFloor{Owner: "gcpd", Have: 12, Floor: 66, InstallFirst: "v9.9.9"}
+	for name, err := range map[string]error{
+		"plain":   floor,
+		"wrapped": fmt.Errorf("kernel: P4: %w", floor),
+		"joined":  errors.Join(errors.New("the Penguin's umbrella"), floor),
+	} {
+		if got := ExitCode(err); got != ExitConfig || ExitConfig != 78 {
+			t.Errorf("%s: ExitCode(%v) = %d, want 78", name, err, got)
+		}
+	}
+}
+
 // TestQuarantineGauge: <ns>_storage_quarantine_rows{step,sensitive}
 // records per step the sealed rows and the others; after a purge both fall
 // to 0 rather than keeping the step's last value.
