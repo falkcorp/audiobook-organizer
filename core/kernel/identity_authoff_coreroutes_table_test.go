@@ -96,18 +96,18 @@ func (r offRow) key() string {
 
 // The clauses.
 const (
-	clPublic = "05-authn 4.13 table (Public) and 05-http-api 4.2 row 13 step 2: a Public route needs no principal, so stage 13 admits"
+	clPublic        = "05-authn 4.13 table (Public) and 05-http-api 4.2 row 13 step 2: a Public route needs no principal, so stage 13 admits"
 	clPublicHandler = clPublic + "; the handler then refuses a probe that carries no valid token or state (not the router's reach)"
-	clAnyAuth = "05-rbac 4.10 and 4.11: AnyAuthenticated is core:self or a non-Confining scope, and the auth-disabled checker holds core:self (neither AuthRequired nor Sensitive)"
-	clOpenAPI = "05-http-api 7 (the document is AnyAuthenticated unless core.http.openapi.public) with 05-rbac 4.11: the auth-disabled principal holds core:self"
-	clView = "05-rbac 4.11 bullet 1 and 05-authn 4.13 (no guard on the row): the auth-disabled checker holds every scope that is neither AuthRequired nor Sensitive, and core:users.view and core:roles.view are ClassView only"
-	clInteractive = "05-rbac 4.11 (a) and 05-authn 4.11 bullet 2 (SEC5-8): a Guards.Interactive route is refused because the auth-disabled principal is non-interactive (Method.MayChangeCredentials is false)"
-	clNeedUser = "05-authn 4.11 bullet 3 (SEC-3) and 05-rbac 4.11 (d): credential metadata needs a user, the auth-disabled principal has none, so 401 authentication_required before the handler acts"
-	clAudit = "05-rbac 4.11 (d) and 6.1: core:audit.view is AuthRequired, so the auth-disabled checker never holds it and the audit query and export answer 401"
-	clReset = "05-rbac 6.2 (factory-reset row) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive and Guards.Owner; Interactive refuses first"
-	clSettings = "05-config 1.3.7 (cited by confighttp/routes.go): settings keep their auth-off reach, AnyAuthenticated with the per-section and per-key checks inside the handler"
-	clProtect = "05-config 1.3.7 and 05-authn 4.11 (SEC4-8): the auth-disabled principal changes any key below ProtectAdmin and none at or above it; core.auth.mode is never changed by it"
-	clUIReport = "07 7.5.2 (AnyAuthenticated, no guard; uihttp/uihttp.go 101-106): the shell of an auth-off install still reports, a report is not a credential change"
+	clAnyAuth       = "05-rbac 4.10 and 4.11: AnyAuthenticated is core:self or a non-Confining scope, and the auth-disabled checker holds core:self (neither AuthRequired nor Sensitive)"
+	clOpenAPI       = "05-http-api 7 (the document is AnyAuthenticated unless core.http.openapi.public) with 05-rbac 4.11: the auth-disabled principal holds core:self"
+	clView          = "05-rbac 4.11 bullet 1 and 05-authn 4.13 (no guard on the row): the auth-disabled checker holds every scope that is neither AuthRequired nor Sensitive, and core:users.view and core:roles.view are ClassView only"
+	clInteractive   = "05-rbac 4.11 (a) and 05-authn 4.11 bullet 2 (SEC5-8): a Guards.Interactive route is refused because the auth-disabled principal is non-interactive (Method.MayChangeCredentials is false)"
+	clNeedUser      = "05-authn 4.11 bullet 3 (SEC-3) and 05-rbac 4.11 (d): credential metadata needs a user, the auth-disabled principal has none, so 401 authentication_required before the handler acts"
+	clAudit         = "05-rbac 4.11 (d) and 6.1: core:audit.view is AuthRequired, so the auth-disabled checker never holds it and the audit query and export answer 401"
+	clReset         = "05-rbac 6.2 (factory-reset row) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive and Guards.Owner; Interactive refuses first"
+	clSettings      = "05-config 1.3.7 (cited by confighttp/routes.go): settings keep their auth-off reach, AnyAuthenticated with the per-section and per-key checks inside the handler"
+	clProtect       = "05-config 1.3.7 and 05-authn 4.11 (SEC4-8): the auth-disabled principal changes any key below ProtectAdmin and none at or above it; core.auth.mode is never changed by it"
+	clUIReport      = "07 7.5.2 (AnyAuthenticated, no guard; uihttp/uihttp.go 101-106): the shell of an auth-off install still reports, a report is not a credential change"
 	// clBeyond is the one cell no clause lists: GET /users/invites. 05-authn 4.13
 	// has no row for it and 05-rbac 4.11 (a)-(d) do not name it; authhttp's
 	// spec marks it needUser, a tightening of HEAD's open listing that the spec
@@ -210,7 +210,7 @@ var offCoreRows = []offRow{
 // bundle download, 05-health 5H.5, is not mounted at this base).
 var offControlRows = []offRow{
 	{Route: "GET /api/alfred/v1/relay", Want: offAllow,
-		Clause: "05-rbac 4.11 bullet 1 and 4.11 'Books' gin routes with auth disabled': a module scope that is neither AuthRequired nor Sensitive is held by the auth-disabled checker"},
+		Clause: "05-rbac 4.11 bullet 1: a module scope that is neither AuthRequired nor Sensitive is held by the auth-disabled checker"},
 	{Route: "POST /api/alfred/v1/relay-lock", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
 	{Route: "POST /api/alfred/v1/relay-session", Want: offDeny, Code: "interactive_required",
 		Clause: "05-authn 4.11 bullet 2 and httpapi.Guards.Session: only the user's own interactive sign-in (Method.Interactive) passes; the auth-disabled principal is neither interactive nor a user"},
@@ -218,6 +218,8 @@ var offControlRows = []offRow{
 		Clause: "05-authn 4.8 and 4.11: Guards.Owner without an OwnerVerifier falls back to Interactive plus core:admin, which the auth-disabled principal is not"},
 	{Route: "GET /api/alfred/v1/vault", Want: offDeny, Code: "authentication_required",
 		Clause: "05-rbac 4.11 bullet 1: a route whose only scope is AuthRequired is answered 401 with auth disabled"},
+	{Route: "GET /api/alfred/v1/vault-any", Want: offDeny, Code: "authentication_required",
+		Clause: "05-rbac 4.11 bullet 1 and 6.1: the auth-disabled checker never holds an AuthRequired scope, also when the requirement is an AnyOf, which the AllOf drop rule does not reach"},
 }
 
 // The probe bodies the table names.
