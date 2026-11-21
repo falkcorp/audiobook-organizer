@@ -10,6 +10,8 @@ export {
   DEFAULT_TIMEOUT_MS,
   MAX_RETRY_AFTER_MS,
   createTransport,
+  discardBody,
   parseRetryAfterMs,
+  readJsonBody,
 } from './transport';
 export type { RawRequest, Refusal, Transport, TransportOptions } from './transport';

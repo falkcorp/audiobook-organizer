@@ -245,11 +245,15 @@ describe('list', () => {
     expect(isAuthRedirectError(e)).toBe(true);
   });
 
-  it('a 200 text/html page is the same bounce', async () => {
-    const f = fake(
-      new Response('<html>log in</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })
-    );
+  it('a 200 text/html page is the same bounce and never reads response.redirected', async () => {
+    const page = new Response('<html>log in</html>', {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    });
+    const redirected = vi.spyOn(Response.prototype, 'redirected', 'get');
+    const f = fake(page);
     expect(await caught(client(f).list())).toBeInstanceOf(ApiAuthRedirectError);
+    expect(redirected).not.toHaveBeenCalled();
   });
 
   it('an archive without a string format or provenance is a BackupProtocolError', async () => {
@@ -304,6 +308,56 @@ describe('list', () => {
     const p = caught(createBackupsClient({ fetch: f, timeoutMs: 1000 }).list());
     await vi.advanceTimersByTimeAsync(1001);
     expect(await p).toBeInstanceOf(ApiTimeoutError);
+  });
+
+  it('a body that stalls after the headers is abandoned with ApiTimeoutError, not "not JSON" (#4819 r3 m2)', async () => {
+    vi.useFakeTimers();
+    const stalledJson = () =>
+      new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const p = caught(client(fake(stalledJson), { timeoutMs: 1000 }).list());
+    await vi.advanceTimersByTimeAsync(1001);
+    const e = await p;
+    expect(e).toBeInstanceOf(ApiTimeoutError);
+    expect(e).not.toBeInstanceOf(BackupProtocolError);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a stalled body ends at the caller abort as an AbortError, and a stalled error body at the deadline', async () => {
+    const ctl = new AbortController();
+    const stalled = (status: number, type: string) => () =>
+      new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status,
+        headers: { 'Content-Type': type },
+      });
+    const p = caught(client(fake(stalled(200, 'application/json'))).list({ signal: ctl.signal }));
+    ctl.abort();
+    const e = (await p) as Error;
+    expect(e).not.toBeInstanceOf(ApiTimeoutError);
+    expect(e.name).toBe('AbortError');
+
+    vi.useFakeTimers();
+    const q = caught(
+      client(fake(stalled(503, 'application/problem+json')), { timeoutMs: 1000 }).list()
+    );
+    await vi.advanceTimersByTimeAsync(1001);
+    expect(await q).toBeInstanceOf(ApiTimeoutError);
+  });
+
+  it('a stalled restore body with no stageTimeoutMs ends only at the caller signal', async () => {
+    vi.useFakeTimers();
+    const ctl = new AbortController();
+    const stalled = () =>
+      new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const p = caught(client(fake(stalled)).restore(ID, undefined, { signal: ctl.signal }));
+    await vi.advanceTimersByTimeAsync(24 * 3600 * 1000);
+    ctl.abort();
+    expect(((await p) as Error).name).toBe('AbortError');
   });
 
   it('the caller aborting is the AbortError, not a timeout', async () => {

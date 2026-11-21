@@ -32,7 +32,9 @@ import {
   DEFAULT_TIMEOUT_MS,
   MAX_RETRY_AFTER_MS,
   createTransport,
+  discardBody,
   parseRetryAfterMs,
+  readJsonBody,
   type RawRequest,
 } from '../coreHttp';
 
@@ -233,18 +235,20 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
   const send = (op: Op, r: RawRequest) => transport.send(op, r);
 
   async function obj(op: Op, res: Response, status: number): Promise<Record<string, unknown>> {
-    if (res.status !== status)
+    if (res.status !== status) {
+      discardBody(res);
       throw new BackupProtocolError(op, `expected ${status}, got ${res.status}`);
+    }
     const contentType = (res.headers?.get?.('Content-Type') ?? '').toLowerCase();
     if (!contentType.includes('application/json')) {
+      discardBody(res);
       throw new BackupProtocolError(op, `unexpected content type "${contentType}"`);
     }
-    let v: unknown;
-    try {
-      v = await res.json();
-    } catch {
-      throw new BackupProtocolError(op, 'the answer is not JSON');
-    }
+    // The body is under the request's deadline and signal: a stall throws ApiTimeoutError or
+    // the caller's AbortError here, not "the answer is not JSON".
+    const body = await readJsonBody(res);
+    if (!body.ok) throw new BackupProtocolError(op, 'the answer is not JSON');
+    const v = body.value;
     if (typeof v !== 'object' || v === null || Array.isArray(v)) {
       throw new BackupProtocolError(op, 'the answer is not a JSON object');
     }
@@ -252,7 +256,10 @@ export function createBackupsClient(opts: BackupsClientOptions = {}): BackupsCli
   }
 
   function noContent(op: Op, res: Response): void {
-    if (res.status !== 204) throw new BackupProtocolError(op, `expected 204, got ${res.status}`);
+    if (res.status !== 204) {
+      discardBody(res);
+      throw new BackupProtocolError(op, `expected 204, got ${res.status}`);
+    }
   }
 
   function archive(op: Op, v: unknown): BackupArchive {

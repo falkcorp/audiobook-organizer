@@ -363,6 +363,37 @@ describe('deadline and abort', () => {
     expect(await p).toBeInstanceOf(ApiTimeoutError);
   });
 
+  it('a body that stalls after the headers is an ApiTimeoutError, not "not JSON" (#4819 r3 m2)', async () => {
+    vi.useFakeTimers();
+    const stalled = () =>
+      new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const p = createUpdaterClient({ fetch: fake(stalled).fetch, timeoutMs: 1000 })
+      .status()
+      .catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1001);
+    const err = await p;
+    expect(err).toBeInstanceOf(ApiTimeoutError);
+    expect(err).not.toBeInstanceOf(UpdaterProtocolError);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a stalled body ends at the caller abort as an AbortError', async () => {
+    const stalled = () =>
+      new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    const ctl = new AbortController();
+    const p = createUpdaterClient({ fetch: fake(stalled).fetch }).check({ signal: ctl.signal }).catch((e: unknown) => e);
+    ctl.abort();
+    const err = (await p) as Error;
+    expect(err).not.toBeInstanceOf(ApiTimeoutError);
+    expect(err.name).toBe('AbortError');
+  });
+
   it('a caller abort stays an AbortError, not a timeout', async () => {
     const f: typeof fetch = (_u, init) =>
       new Promise((_resolve, reject) => {

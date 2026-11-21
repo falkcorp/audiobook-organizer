@@ -25,7 +25,9 @@ import {
   DEFAULT_TIMEOUT_MS,
   MAX_RETRY_AFTER_MS,
   createTransport,
+  discardBody,
   parseRetryAfterMs,
+  readJsonBody,
 } from '../coreHttp';
 
 import {
@@ -99,18 +101,18 @@ export function createUpdaterClient(opts: UpdaterClientOptions = {}): UpdaterCli
     // Every updater answer is JSON; the transport has already refused an SSO page.
     const contentType = (res.headers?.get?.('Content-Type') ?? '').toLowerCase();
     if (!contentType.includes('application/json')) {
+      discardBody(res);
       throw new UpdaterProtocolError(op, `unexpected content type "${contentType}"`);
     }
     return res;
   }
 
   async function json(op: Op, res: Response): Promise<Record<string, unknown>> {
-    let v: unknown;
-    try {
-      v = await res.json();
-    } catch {
-      throw new UpdaterProtocolError(op, 'the answer is not JSON');
-    }
+    // The body is under the request's deadline and signal: a stall throws ApiTimeoutError or
+    // the caller's AbortError here, not "the answer is not JSON".
+    const body = await readJsonBody(res);
+    if (!body.ok) throw new UpdaterProtocolError(op, 'the answer is not JSON');
+    const v = body.value;
     if (typeof v !== 'object' || v === null || Array.isArray(v)) {
       throw new UpdaterProtocolError(op, 'the answer is not a JSON object');
     }
@@ -119,7 +121,10 @@ export function createUpdaterClient(opts: UpdaterClientOptions = {}): UpdaterCli
 
   async function started(op: Op, path: string, body: UpdaterApplyRequest | undefined, signal?: AbortSignal) {
     const res = await send(op, 'POST', path, body, signal);
-    if (res.status !== 202) throw new UpdaterProtocolError(op, `expected 202, got ${res.status}`);
+    if (res.status !== 202) {
+      discardBody(res);
+      throw new UpdaterProtocolError(op, `expected 202, got ${res.status}`);
+    }
     const o = await json(op, res);
     if (typeof o.task_id !== 'string' || o.task_id === '') {
       throw new UpdaterProtocolError(op, 'the answer has no task_id');
