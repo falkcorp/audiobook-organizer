@@ -792,8 +792,13 @@ func TestReachFlip_EachOpenObligationAloneBlocksTheFlip(t *testing.T) {
 	}
 	flipped := reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        httpapi.LegacyAuthCore,")
 	open := reachOpenObligationsNow(t)
-	if len(open) != len(reachObligations) {
-		t.Fatalf("%d of %d obligations are open: with no discharge registered every row blocks the flip", len(open), len(reachObligations))
+	if want := len(reachObligations) - len(reachDischargedRows); len(open) != want {
+		t.Fatalf("%d of %d obligations are open, want %d: every row without a discharge blocks the flip and the %d discharged rows (reachDischargedRows) do not", len(open), len(reachObligations), want, len(reachDischargedRows))
+	}
+	for _, o := range open {
+		if reachDischargedRows[o.name] {
+			t.Fatalf("%s is discharged and still blocks the flip: %s", o.name, o.discharge)
+		}
 	}
 	for _, o := range open {
 		got := reachFlipProblems(flipped, 0, true, []reachFlipObligation{o})
