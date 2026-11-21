@@ -1013,6 +1013,7 @@ internal/books/cutover/m4.Migration.driverOf
 internal/books/cutover/m4.Migration.quarantineBucket
 internal/books/cutover/m4.Migration.quarantineOne
 internal/books/cutover/m4.Migration.quarantineRun
+internal/books/cutover/m4.Migration.quarantineSubject
 internal/books/cutover/m4.Migration.reconcile
 internal/books/cutover/m4.Migration.stepBucket
 internal/books/cutover/m4.Migration.stepClock
@@ -1028,9 +1029,11 @@ internal/books/cutover/m4.SourcePrefixes
 internal/books/cutover/m4.SourceRanges
 internal/books/cutover/m4.Steps
 internal/books/cutover/m4.attrFields
+internal/books/cutover/m4.batchBucket
 internal/books/cutover/m4.batchOpType
 internal/books/cutover/m4.clockGroup
 internal/books/cutover/m4.completionKey.subject
+internal/books/cutover/m4.completionSubject
 internal/books/cutover/m4.convert
 internal/books/cutover/m4.convertV1
 internal/books/cutover/m4.converted.checkpoints
