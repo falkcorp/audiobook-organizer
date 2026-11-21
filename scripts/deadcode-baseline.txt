@@ -386,7 +386,6 @@ internal/books/adapters/whisper.canceled
 internal/books/adapters/whisper.clipExt
 internal/books/adapters/whisper.decodeSettings
 internal/books/adapters/whisper.detail
-internal/books/adapters/whisper.drainClose
 internal/books/adapters/whisper.errorMarkers
 internal/books/adapters/whisper.failf
 internal/books/adapters/whisper.healthOf
@@ -407,6 +406,7 @@ internal/books/adapters/whisper.serverInstance.Health
 internal/books/adapters/whisper.serverInstance.Test
 internal/books/adapters/whisper.serverInstance.Transcribe
 internal/books/adapters/whisper.serverInstance.byPath
+internal/books/adapters/whisper.serverInstance.drainClose
 internal/books/adapters/whisper.serverInstance.fail
 internal/books/adapters/whisper.serverInstance.features
 internal/books/adapters/whisper.serverInstance.probe
