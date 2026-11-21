@@ -241,6 +241,16 @@ func TestSearch_LadderStopsAtFirstRungWithRecords(t *testing.T) {
 	}
 }
 
+// A query with an author and an identifier but no title never asks a title rung
+// with an empty title (hardcover's ISBN lookup answers by identifier).
+func TestSearch_NoTitleRungsWithoutATitle(t *testing.T) {
+	s := &scripted{}
+	_, err := providerOver(scriptedCtx{s}).Search(context.Background(), Query{ISBN13: "9780000000002", Author: "Jeph Loeb"})
+	if err != nil || !slices.Equal(s.calls, []string{"context"}) {
+		t.Fatalf("rungs = %v, err = %v", s.calls, err)
+	}
+}
+
 func TestSearch_NoContextRungWithoutContextualSearch(t *testing.T) {
 	s := &scripted{t: result{rs: []Result{yearOne}}}
 	rs, err := providerOver(s).Search(context.Background(), Query{Title: "Year One"})

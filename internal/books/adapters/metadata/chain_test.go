@@ -121,6 +121,54 @@ func TestChain_AudnexusIsSkippedWithoutAnASIN(t *testing.T) {
 	}
 }
 
+// HEAD's hardcover and wikipedia clients dial a fixed public endpoint and never
+// read a configured base URL. An M6 row for either carries base_url whenever the
+// source row had one (and Local with its origins, since the URL is a
+// destination); the adapter accepts it and ignores it, so the request still goes
+// to the endpoint HEAD sent it to, the instance is healthy, and the egress
+// policy is public-only (a Local grant for the ignored URL must not let the
+// client reach a private address).
+func TestM6Shape_BaseURLIsAcceptedAndIgnoredByHardcoverAndWikipedia(t *testing.T) {
+	const mirror = "https://mirror.example.test/api"
+	const sig = "base_url=https://mirror.example.test:443"
+	for _, c := range []struct {
+		id       string
+		set      map[string]any
+		sec      memSecrets
+		q        Query
+		wantHost string
+	}{
+		{"hardcover", map[string]any{"base_url": mirror, "api_token": secrets.RefTo(gbSecret("hardcover", "api_token"))},
+			memSecrets{gbSecret("hardcover", "api_token"): "bat-token"}, Query{ISBN13: "9780000000002"}, "api.hardcover.app"},
+		{"wikipedia", map[string]any{"base_url": mirror}, nil, Query{Title: "Knightfall"}, "en.wikipedia.org"},
+	} {
+		t.Run(c.id, func(t *testing.T) {
+			rt := newRoute(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+			r := row(c.id, c.set)
+			r.Config.Local, r.LocalOrigin, r.SecretsOrigin = true, sig, sig
+			reg := load(t, rt.outbound(), c.sec, r)
+			ref := integrations.Ref{Kind: integrations.KindMetadata, Instance: integrations.InstanceID(c.id)}
+			if h, err := reg.Health(context.Background(), ref); err != nil || h.Status != integrations.HealthOK {
+				t.Fatalf("health = %+v, %v: a base_url the adapter ignores must not make the instance unhealthy", h, err)
+			}
+			_, _, _ = search(t, reg, c.q)
+			urls := rt.urls()
+			if len(urls) == 0 {
+				t.Fatal("nothing was sent")
+			}
+			for _, u := range urls {
+				if strings.Contains(u, "mirror.example.test") || !strings.Contains(u, c.wantHost) {
+					t.Errorf("request went to %s, want the fixed %s endpoint", u, c.wantHost)
+				}
+			}
+			spec, ok := rt.specFor(ref)
+			if !ok || spec.Egress != integrations.EgressPublicOnly {
+				t.Errorf("outbound spec = %+v (ok=%v), want EgressPublicOnly", spec.Egress, ok)
+			}
+		})
+	}
+}
+
 // ---- the M6 cutover's credentials.<k> settings ------------------------------
 
 // M6 writes each secret M2 stored under integrations.metadata.<id>.<field> as

@@ -61,8 +61,13 @@ func (noAudit) RecordIn(context.Context, *storage.Batch, audit.Event) error { re
 type route struct {
 	mu   sync.Mutex
 	seen []*http.Request
-	h    http.HandlerFunc
-	srv  *httptest.Server
+	// origURLs are the URLs the clients built, before the transport sent them to
+	// the test server: where the request would really have gone.
+	origURLs []string
+	// specs are what the Registry asked its Outbound for, per instance.
+	specs []integrations.OutboundSpec
+	h     http.HandlerFunc
+	srv   *httptest.Server
 }
 
 func newRoute(t *testing.T, h http.HandlerFunc) *route {
@@ -84,15 +89,38 @@ func (r *route) requests() []*http.Request {
 	return append([]*http.Request(nil), r.seen...)
 }
 
+func (r *route) urls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.origURLs...)
+}
+
+func (r *route) specFor(ref integrations.Ref) (integrations.OutboundSpec, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.specs {
+		if s.Ref == ref {
+			return s, true
+		}
+	}
+	return integrations.OutboundSpec{}, false
+}
+
 type rtHTTP struct{ c *http.Client }
 
 func (h rtHTTP) Do(req *http.Request) (*http.Response, error) { return h.c.Do(req) }
 func (h rtHTTP) Client() *http.Client                         { return h.c }
 func (rtHTTP) Gate() integrations.Gate                        { return nil }
 
-type redirect struct{ to string }
+type redirect struct {
+	to string
+	r  *route
+}
 
 func (d redirect) RoundTrip(req *http.Request) (*http.Response, error) {
+	d.r.mu.Lock()
+	d.r.origURLs = append(d.r.origURLs, req.URL.String())
+	d.r.mu.Unlock()
 	u := *req.URL
 	srv, _ := http.NewRequest(http.MethodGet, d.to, nil)
 	u.Scheme, u.Host = srv.URL.Scheme, srv.URL.Host
@@ -102,8 +130,11 @@ func (d redirect) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (r *route) outbound() func(integrations.OutboundSpec) (integrations.HTTP, integrations.Gate) {
-	return func(integrations.OutboundSpec) (integrations.HTTP, integrations.Gate) {
-		return rtHTTP{&http.Client{Transport: redirect{to: r.srv.URL}}}, nil
+	return func(spec integrations.OutboundSpec) (integrations.HTTP, integrations.Gate) {
+		r.mu.Lock()
+		r.specs = append(r.specs, spec)
+		r.mu.Unlock()
+		return rtHTTP{&http.Client{Transport: redirect{to: r.srv.URL, r: r}}}, nil
 	}
 }
 
