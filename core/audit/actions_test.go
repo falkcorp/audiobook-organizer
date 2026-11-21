@@ -31,15 +31,15 @@ func coreActionGrammar() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
 }
 
-// TestAuditAction_Grammar (05-rbac §7.1): the action table has the 64 core
+// TestAuditAction_Grammar (05-rbac §7.1): the action table has the 65 core
 // actions, sorted and unique, every one of them and every action named in an
 // audit.Event literal under core/ matches <ns>.<noun>.<verb>, and ValidAction
 // agrees with the spec's regexp.
 func TestAuditAction_Grammar(t *testing.T) {
 	re := coreActionGrammar()
 	table := audit.CoreActions()
-	if len(table) != 64 {
-		t.Errorf("CoreActions has %d actions, want the 64 of §7.1", len(table))
+	if len(table) != 65 {
+		t.Errorf("CoreActions has %d actions, want the 65 of §7.1", len(table))
 	}
 	if !slices.IsSorted(table) {
 		t.Error("CoreActions is not sorted")

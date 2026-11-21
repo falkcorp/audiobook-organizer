@@ -84,6 +84,11 @@ type configInput struct {
 	// Mkdir creates a state directory candidate; nil = MkdirAll(d, 0o700)
 	// through the boot's filesystem (statefs), labelled labelStateDirMkdir.
 	Mkdir func(string) error
+	// SkipBootRecord reads no boot record, so an offline command that wants
+	// the effective settings (the identity commands, offline_users.go) never
+	// sets a bad record aside or touches the state directory's boot files:
+	// the same stance ResolveStorage takes.
+	SkipBootRecord bool
 }
 
 // configBoot is the config store after P0, with what P0 resolved.
@@ -114,7 +119,11 @@ func bootConfig(ctx context.Context, in configInput) (cb *configBoot, err error)
 		return nil, errors.New("kernel: config: an owner verifier is configured and config.Options.OwnerSet is nil: ProtectOwner keys would be checked as ProtectAdmin; the app must say whether an owner is set")
 	}
 	cb = &configBoot{prefix: in.prefix(), log: in.logger()}
-	st, handles, err := newStep0Store(in, func(dir string) (config.StateFiles, error) { return cb.bootRoot(ctx, dir) })
+	var bootRecord func(string) (config.StateFiles, error)
+	if !in.SkipBootRecord {
+		bootRecord = func(dir string) (config.StateFiles, error) { return cb.bootRoot(ctx, dir) }
+	}
+	st, handles, err := newStep0Store(in, bootRecord)
 	if err != nil {
 		return nil, err
 	}
