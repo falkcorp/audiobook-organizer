@@ -41,6 +41,7 @@ import (
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks/taskstest/parity"
 )
@@ -150,14 +151,21 @@ func bootComposedIn(t *testing.T, abs bool, stateDir string, edit func(*config.C
 }
 
 // bootComposedWith is bootComposedIn with opt, when set, adjusting the App's
-// options after books.Options builds them and before app.New.
-func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options)) *composed {
+// options after books.Options builds them and before app.New, and each wrap,
+// in order, wrapping the module app.New registers (preFlip boots the build
+// that predates the flip). Attach and the composition's handles still reach
+// the books module inside.
+func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), wrap ...func(module.Module) module.Module) *composed {
 	t.Helper()
 	mod, opts, newLog := composedOptions(t, abs, stateDir, edit, pre)
 	if opt != nil {
 		opt(&opts)
 	}
-	a, err := app.New(t.Context(), opts, mod)
+	var registered module.Module = mod
+	for _, w := range wrap {
+		registered = w(registered)
+	}
+	a, err := app.New(t.Context(), opts, registered)
 	var c *composed
 	if a != nil {
 		// Registered first, so it runs last, once the app has stopped and
@@ -301,19 +309,19 @@ func runComposed(t *testing.T) *runningApp {
 	return runComposedWith(t, nil, nil, nil, nil)
 }
 
-// runComposedWith is runComposed with edit, pre and opt as bootComposedWith
-// takes them, and booted, when set, called with the composition after
+// runComposedWith is runComposed with edit, pre, opt and wrap as
+// bootComposedWith takes them, and booted, when set, called with the composition after
 // app.New and before Run. When it returns, Run has opened the listener, so
 // every start hook has returned (06 §6.5.2 start steps (2) and (7)).
-func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed), wrap ...func(module.Module) module.Module) *runningApp {
 	t.Helper()
-	return runComposedIn(t, "", edit, pre, opt, booted)
+	return runComposedIn(t, "", edit, pre, opt, booted, wrap...)
 }
 
 // runComposedIn is runComposedWith over the state directory stateDir ("" is
 // a fresh temporary one), so two boots of one store share their swap slot
 // and keys.
-func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed), wrap ...func(module.Module) module.Module) *runningApp {
 	t.Helper()
 	addrs := make(chan net.Addr, 1)
 	c := bootComposedWith(t, false, stateDir, edit, pre, func(o *app.Options) {
@@ -328,7 +336,7 @@ func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre
 			}
 			return srv, err
 		}
-	})
+	}, wrap...)
 	if booted != nil {
 		booted(c)
 	}
@@ -489,15 +497,11 @@ func TestServeComposition_HostileOTLPEnvNeverLogged(t *testing.T) {
 		}
 		return
 	}
-	// serve reads the environment into AppConfig (cmd/root.go InitConfig)
-	// and snapshots the telemetry config before the stored settings load.
-	config.InitConfig()
-	env := config.Snapshot()
-	require.NotEmpty(t, env.OTelExporterOTLPEndpoint, "OTEL_EXPORTER_OTLP_ENDPOINT not read")
-	require.NotEmpty(t, env.OTelMetricsOTLPEndpoint, "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT not read")
+	// The telemetry config serve snapshots carries the endpoints; the hostile
+	// OTEL_EXPORTER_OTLP_* values stay in the environment for the OTel SDK.
 	c := bootComposed(t, false, func(c *config.Config) {
-		c.OTelExporterOTLPEndpoint = env.OTelExporterOTLPEndpoint
-		c.OTelMetricsOTLPEndpoint = env.OTelMetricsOTLPEndpoint
+		c.OTelExporterOTLPEndpoint = "http://192.0.2.1:4317"
+		c.OTelMetricsOTLPEndpoint = "http://192.0.2.1:4317"
 		c.OTelMetricsOTLPInsecure = true
 	}, nil)
 	logged := c.newLog.String()
