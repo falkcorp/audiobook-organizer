@@ -1584,7 +1584,8 @@ type lateImporter struct{ tasks.Importer }
 // (books' storage spec raised to its cutover level behind its level step, M4's
 // families retired, the kernel's data-migration runner and preflight, the way
 // internal/books/cutover/m4's rig does) and returns the clock M4 imported for
-// every scheduled kind, core.storage.compact and the nightly window.
+// every scheduled kind, core.storage.compact, core.log.journal.prune and the
+// nightly window.
 func m4Import(t *testing.T, settings map[string]string, zone *time.Location) map[tasks.Kind]tasks.Clock {
 	t.Helper()
 	ctx := context.Background()
@@ -1693,7 +1694,7 @@ func m4Import(t *testing.T, settings map[string]string, zone *time.Location) map
 	}
 	clocks := tasks.NativeStores(ks).Clocks
 	out := map[tasks.Kind]tasks.Clock{}
-	for _, k := range append(ScheduledKinds(), "core.storage.compact", tasks.WindowKind("nightly")) {
+	for _, k := range append(ScheduledKinds(), "core.storage.compact", "core.log.journal.prune", tasks.WindowKind("nightly")) {
 		c, ok, err := clocks.Get(ctx, k)
 		if err != nil {
 			t.Fatal(err)

@@ -1,0 +1,2241 @@
+{
+  "_header": {
+    "file": "core/kernel/testdata/journal_prune_parity.json",
+    "generated": "go test ./internal/books -run TestJournalPruneParity_HeadGolden -update-journal-prune",
+    "guid": "aa45f737-95e4-4577-a4dc-3033e53b5730",
+    "last-edited": "2026-11-21",
+    "version": "1.0.0"
+  },
+  "kind": "core.log.journal.prune",
+  "every": "168h0m0s",
+  "window": "nightly",
+  "order": 9,
+  "default_prune_in_window": true,
+  "zone_offset": -18000,
+  "rows": [
+    {
+      "name": "defaults",
+      "clock": "2030-02-25T20:00:00-05:00",
+      "steps": [
+        {
+          "at": "2030-03-04T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "enqueue schedule"
+          ]
+        },
+        {
+          "at": "2030-03-04T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "window"
+          ]
+        },
+        {
+          "at": "2030-03-05T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T04:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T05:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T06:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T07:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T08:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T09:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T10:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T11:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T12:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "window"
+          ]
+        },
+        {
+          "at": "2030-03-06T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        }
+      ]
+    },
+    {
+      "name": "window toggle off",
+      "clock": "2030-02-25T20:00:00-05:00",
+      "steps": [
+        {
+          "at": "2030-03-04T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "enqueue schedule"
+          ]
+        },
+        {
+          "at": "2030-03-04T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T04:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T05:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T06:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T07:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T08:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T09:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T10:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T11:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T12:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        }
+      ]
+    },
+    {
+      "name": "retention off",
+      "clock": "2030-02-25T20:00:00-05:00",
+      "steps": [
+        {
+          "at": "2030-03-04T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T13:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T14:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T15:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T16:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T17:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T18:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T19:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T20:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T21:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T22:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T23:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T00:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T01:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T02:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T03:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T04:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T05:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T06:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T07:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T08:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T09:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T10:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T11:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T12:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T13:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T14:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T15:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T16:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T17:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T18:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T19:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T20:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T21:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T22:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T23:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T00:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T01:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T02:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T03:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        }
+      ]
+    },
+    {
+      "name": "window off",
+      "clock": "2030-02-25T20:00:00-05:00",
+      "steps": [
+        {
+          "at": "2030-03-04T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": [
+            "enqueue schedule"
+          ]
+        },
+        {
+          "at": "2030-03-04T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T04:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T05:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T06:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T07:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T08:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T09:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T10:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T11:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T12:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": false,
+          "head": []
+        }
+      ]
+    },
+    {
+      "name": "retention off then on at 22:00",
+      "clock": "2030-02-25T20:00:00-05:00",
+      "steps": [
+        {
+          "at": "2030-03-04T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T13:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T14:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T15:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T16:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T17:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T18:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T19:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T20:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T21:00:00-05:00",
+          "retention_days": 0,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T22:00:00-05:00",
+          "boot": true,
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "enqueue schedule"
+          ]
+        },
+        {
+          "at": "2030-03-04T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "window"
+          ]
+        },
+        {
+          "at": "2030-03-05T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T04:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T05:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T06:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T07:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T08:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T09:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T10:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T11:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T12:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "window"
+          ]
+        },
+        {
+          "at": "2030-03-06T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        }
+      ]
+    },
+    {
+      "name": "window toggle off then on at noon",
+      "clock": "2030-02-25T20:00:00-05:00",
+      "steps": [
+        {
+          "at": "2030-03-04T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "enqueue schedule"
+          ]
+        },
+        {
+          "at": "2030-03-04T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-04T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T04:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T05:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T06:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T07:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T08:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T09:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T10:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T11:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": false,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T12:00:00-05:00",
+          "boot": true,
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T13:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T14:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T15:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T16:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T17:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T18:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T19:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T20:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T21:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T22:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-05T23:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T00:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T01:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": [
+            "window"
+          ]
+        },
+        {
+          "at": "2030-03-06T02:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        },
+        {
+          "at": "2030-03-06T03:00:00-05:00",
+          "retention_days": 90,
+          "prune_in_window": true,
+          "window_start": 1,
+          "window_end": 5,
+          "window_enabled": true,
+          "head": []
+        }
+      ]
+    }
+  ]
+}

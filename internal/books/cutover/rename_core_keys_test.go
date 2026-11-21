@@ -112,13 +112,16 @@ func TestRenameTable_CoreProjectionMatchesFixture(t *testing.T) {
 }
 
 // TestRenameTable_CoinedCoreRowsMarked pins the two rows 05-config section
-// 1.12.3 coins and no owner table declared (seams.d/F2-09.md "Not declared"):
-// each is a row of the table with its target marked coined. That the target is
+// 1.12.3 coins and no owner table declared (seams.d/F2-09.md "Not declared"),
+// and maintenance.purge_old_logs, whose core.log.journal.prune_in_window F5-14b
+// coined for HEAD's log-purge window toggle: each is a row of the table with
+// its target marked coined. That the target is
 // a key core declares is core's TestRenameTable_CoreCoinedRowsDeclared.
 func TestRenameTable_CoinedCoreRowsMarked(t *testing.T) {
 	for head, want := range map[string]config.Path{
-		"ai_journal_retention_days": "core.ai.journal_retention",
-		"public_base_url":           "core.http.public_base_url",
+		"ai_journal_retention_days":  "core.ai.journal_retention",
+		"public_base_url":            "core.http.public_base_url",
+		"maintenance.purge_old_logs": "core.log.journal.prune_in_window",
 	} {
 		r, ok := Table().Row(head)
 		if !ok {
