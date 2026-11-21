@@ -5,15 +5,26 @@
 
 package config
 
-import "github.com/spf13/viper"
+import "sync/atomic"
 
-// RootDirOverride is viper's root_dir (the environment or the config file)
+// operatorRootDir is the library root this process's operator layers name,
+// "" for none.
+var operatorRootDir atomic.Pointer[string]
+
+// SetOperatorRootDir records the library root the operator layers name (cmd's
+// initConfig, from the operator projection): --dir, or core.library.roots set
+// by ABO_CORE_LIBRARY_ROOTS or the operator file. ROOT_DIR and the file's
+// root_dir are retired names that refuse the boot, so they never reach it.
+func SetOperatorRootDir(dir string) { operatorRootDir.Store(&dir) }
+
+// RootDirOverride is the library root this process's operator layers name,
 // when set and not empty. books' reset hook, which resolves the library root
-// from the stored settings with the service stopped, applies it over them.
+// from the stored settings with the service stopped, applies it over them, as
+// a boot's operator lock would.
 func RootDirOverride() (string, bool) {
-	if !viper.IsSet("root_dir") {
+	p := operatorRootDir.Load()
+	if p == nil || *p == "" {
 		return "", false
 	}
-	val := viper.GetString("root_dir")
-	return val, val != ""
+	return *p, true
 }
