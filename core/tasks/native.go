@@ -146,12 +146,15 @@ func runIndex(r RunRecord) taskstore.RunIndex {
 }
 
 // putRun stages r as the run row and moves its derived keys from prev (nil
-// for a new run). Held is computed at read time and never stored (5T.3.11).
+// for a new run). Held is computed at read time and never stored (5T.3.11);
+// so are the deferral fields (Deferred, BlockedBy, DeferredSince), which the
+// executor's dispatch pass owns in memory.
 func putRun(st *taskstore.Store, b *storage.Batch, r RunRecord, prev *taskstore.RunIndex) error {
 	if err := validRecord(r); err != nil {
 		return err
 	}
 	r.Held = false
+	r.Deferred, r.BlockedBy, r.DeferredSince = "", "", time.Time{}
 	r.Params, r.Result = jsonOrNil(r.Params), jsonOrNil(r.Result)
 	raw, err := encodeValue(r)
 	if err != nil {

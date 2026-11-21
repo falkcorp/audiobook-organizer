@@ -31,7 +31,7 @@ const probeYield tasks.Kind = "gotham.parity-yield"
 // boots a standalone executor over a fresh in-memory store with its
 // instruments on, in p's core ops scope (Provider.Core("ops",
 // executor.Attributes()...), the scope the kernel builds at F5), and drives
-// it until each of the 18 instruments has a sample: a run in flight that
+// it until each of the 19 instruments has a sample: a run in flight that
 // reports progress, takes a ref lock and runs items; a second run of its
 // concurrency key, queued and deferred; a run that yields once; a held run
 // of a disabled module; an undecodable stored record; a declared lane; and

@@ -376,6 +376,7 @@ func TestRunPayload_WireKeys(t *testing.T) {
 		Done: 2, Total: 5, Current: "the cowl", Reason: "r", Parent: "p", PlanRef: "pl", Trigger: tasks.TriggerManual,
 		Actor:   tasks.Actor{UserID: "bruce", AuthMethod: "session", System: "core.scheduler"},
 		Created: created, Started: started, Finished: finished,
+		Deferred: "writeset", BlockedBy: "run-robin-0", DeferredSince: created.Add(2 * time.Minute),
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -387,6 +388,7 @@ func TestRunPayload_WireKeys(t *testing.T) {
 	want := map[string]any{"id": "run-robin-1", "kind": "batcave.sweep", "mode": "preview", "state": "succeeded", "held": true,
 		"done": 2.0, "total": 5.0, "current": "the cowl", "reason": "r", "parent": "p", "plan_ref": "pl", "trigger": "manual",
 		"created": "2026-11-20T09:00:00Z", "started": "2026-11-20T09:01:00Z", "finished": "2026-11-20T10:00:00Z",
+		"deferred": "writeset", "blocked_by": "run-robin-0", "deferred_since": "2026-11-20T09:02:00Z",
 		"actor": map[string]any{"user_id": "bruce", "auth_method": "session", "system": "core.scheduler"}}
 	if !reflect.DeepEqual(m, want) {
 		t.Errorf("wire form =\n%v\nwant exactly\n%v", m, want)
@@ -400,7 +402,7 @@ func TestRunPayload_WireKeys(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"started", "finished", "reason", "parent", "plan_ref", "current"} {
+	for _, k := range []string{"started", "finished", "reason", "parent", "plan_ref", "current", "deferred", "blocked_by", "deferred_since"} {
 		if _, ok := m[k]; ok {
 			t.Errorf("an empty %s is on the wire: %s", k, b)
 		}

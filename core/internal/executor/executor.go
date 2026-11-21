@@ -153,8 +153,9 @@ type executor struct {
 	bootQuiet map[tasks.RunID]bool // quiesced by a marker that survived a crash: not resumed this boot
 	waiting   map[string]bool      // Ready sets with a live waiter
 	deferred  map[tasks.RunID]string
-	heldCount map[string]int64 // unfinished held runs by module, as of the resume sweep
-	termCh    chan struct{}    // closed and replaced on every terminal transition
+	waits     map[tasks.RunID]wait // the last dispatch pass's deferrals; replaced whole, never mutated once set
+	heldCount map[string]int64     // unfinished held runs by module, as of the resume sweep
+	termCh    chan struct{}        // closed and replaced on every terminal transition
 	shutting  bool
 	runCalled bool
 	shutDone  bool
@@ -235,10 +236,16 @@ func (e *executor) held(kind tasks.Kind) bool {
 	return e.heldMods[kind.Module()]
 }
 
-// view is a record's read model with Held computed (never stored).
+// view is a record's read model with Held and the deferral fields computed
+// (never stored).
 func (e *executor) view(r tasks.RunRecord) tasks.RunView {
 	v := r.RunView
 	v.Held = e.held(r.Kind)
+	if r.State == tasks.StateQueued {
+		if w, ok := e.waitsNow()[r.ID]; ok {
+			v.Deferred, v.BlockedBy, v.DeferredSince = w.reason, w.blocker, w.since
+		}
+	}
 	return v
 }
 

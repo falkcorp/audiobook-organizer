@@ -2226,8 +2226,20 @@ tasks flip PR (5T.8.2) updates every dashboard panel and rule that reads them (`
 | `<ns>.ops.yields` | counter | `def_id` | new |
 | `<ns>.ops.schedule_errors` | counter | `def_id` | new |
 | `<ns>.ops.undecodable_records` | counter | `family` (a closed set the native store declares) | new |
+| `<ns>.ops.dispatch_wait` | gauge (s) | `def_id`, `reason` (as `dispatch_deferred`), `trigger` (the run's trigger: `manual`, `schedule`, ...) | new (F5-18i) |
 
 Prometheus series follow 05-metrics' rule (`<ns>_ops_runs_total`, `<ns>_ops_run_duration_seconds`, …).
+
+**A deferral is visible (F5-18i).** `dispatch_deferred` counts a deferral once per run and reason and says
+nothing of how long a run has waited or on whom. Each dispatch pass therefore also records, for every run a
+gate deferred with a reason, `{reason, blocking run, start of the unbroken deferral}` (the start carries over
+from the previous pass, so a changed reason or blocker does not restart it). That record, replaced whole each
+pass, feeds two read-only outputs and nothing else: the run view (`RunView.Deferred`, `BlockedBy`,
+`DeferredSince`, and the matching `RunPayload` keys `deferred`, `blocked_by`, `deferred_since`), computed at
+read time for a queued run exactly as `Held` is and never stored, so no dispatch pass writes a run row; and
+the `dispatch_wait` gauge, the longest wait per `def_id`, `reason` and `trigger` of a registered kind. The
+blocking run's ID is on the view only, never a metric label. Which runs are deferred, the reasons, and the
+counter are unchanged.
 The two histograms default to HEAD's bucket lists (`0.1 … 86400`, `views.go:42`; `1 … 86400`,
 `views.go:58`), declared as plain numbers through `Scope.View`, so `le` values do not change;
 `ref_lock_wait` takes 05-metrics' default for a core histogram.

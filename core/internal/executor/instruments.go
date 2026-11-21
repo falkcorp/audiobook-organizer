@@ -29,13 +29,14 @@ const (
 	attrReason  = attribute.Key("reason")
 	attrLane    = attribute.Key("lane")
 	attrFamily  = attribute.Key("family")
+	attrTrigger = attribute.Key("trigger")
 )
 
 // Attributes are the attribute keys the executor's instruments use, for the
 // scope the kernel builds (Provider.Core("ops", executor.Attributes()...)).
 // Name coined by F2-03.
 func Attributes() []attribute.Key {
-	return []attribute.Key{attrDefID, attrOutcome, attrModule, attrPrio, attrReason, attrLane, attrFamily}
+	return []attribute.Key{attrDefID, attrOutcome, attrModule, attrPrio, attrReason, attrLane, attrFamily, attrTrigger}
 }
 
 // Bucket lists: HEAD's for the two histograms that exist at HEAD
@@ -53,7 +54,7 @@ func refLockWaitBuckets() []float64 {
 }
 
 // Instrument names under the scope prefix (<ns>.ops): HEAD's names for the
-// HEAD families, 5T.11's for the new ones. 18 in all.
+// HEAD families, 5T.11's for the new ones. 19 in all.
 const (
 	insRuns         = "runs"
 	insRunDuration  = "run.duration"
@@ -73,14 +74,15 @@ const (
 	insYields       = "yields"
 	insScheduleErrs = "schedule_errors"
 	insUndecodable  = "undecodable_records"
+	insDispatchWait = "dispatch_wait"
 )
 
-// InstrumentNames are the 18 instrument names under the scope prefix, for
+// InstrumentNames are the 19 instrument names under the scope prefix, for
 // the metrics tests (05-metrics §12's executor cell). Name coined by F2-03.
 func InstrumentNames() []string {
 	return []string{insRuns, insRunDuration, insItems, insInflight, insProgressAge, insProgressTO, insZombies,
 		insScheduleLag, insScheduleMiss, insQueueDepth, insDeferred, insCPUSlots, insLaneInUse, insRefLockWait,
-		insHeldRuns, insYields, insScheduleErrs, insUndecodable}
+		insHeldRuns, insYields, insScheduleErrs, insUndecodable, insDispatchWait}
 }
 
 // instruments are the task-run instruments of 5T.11. A nil *instruments
@@ -155,13 +157,14 @@ func newInstruments(sc *metrics.Scope, e *executor) (*instruments, error) {
 	cpu := obs(insCPUSlots, "{slot}", "core.tasks.cpu_slots slots held by CPU() items.")
 	lanes := obs(insLaneInUse, "{lease}", "Lane leases held, by lane.")
 	held := obs(insHeldRuns, "{run}", "Unfinished runs of disabled modules (held), by module, as of boot.")
+	dwait := obsF(insDispatchWait, "Seconds the longest-waiting queued run of a def_id has been held by a dispatch gate, by def_id, reason and trigger, as of the last dispatch pass.")
 	if err != nil {
 		return nil, fmt.Errorf("executor: instrument: %w", err)
 	}
 	_, err = m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		in.observe(o, inflight, progAge, progTO, zombies, queue, cpu, lanes, held)
+		in.observe(o, inflight, progAge, progTO, zombies, queue, cpu, lanes, held, dwait)
 		return nil
-	}, inflight, progAge, progTO, zombies, queue, cpu, lanes, held)
+	}, inflight, progAge, progTO, zombies, queue, cpu, lanes, held, dwait)
 	if err != nil {
 		return nil, fmt.Errorf("executor: instrument callback: %w", err)
 	}
@@ -174,7 +177,7 @@ func set(kvs ...attribute.KeyValue) metric.MeasurementOption {
 
 // observe is the one collection callback of the observable gauges.
 func (in *instruments) observe(o metric.Observer, inflight metric.Int64ObservableGauge, progAge, progTO metric.Float64ObservableGauge,
-	zombies, queue, cpu, lanes, held metric.Int64ObservableGauge) {
+	zombies, queue, cpu, lanes, held metric.Int64ObservableGauge, dwait metric.Float64ObservableGauge) {
 	e := in.e
 	now := e.now()
 	type perKind struct {
@@ -207,6 +210,7 @@ func (in *instruments) observe(o metric.Observer, inflight metric.Int64Observabl
 	maps.Copy(q, in.queue)
 	heldBy := map[string]int64{}
 	maps.Copy(heldBy, e.heldCount)
+	waits := e.waits // replaced whole by each dispatch pass, never changed after
 	e.mu.Unlock()
 	for kind, k := range kinds {
 		attrs := set(attrDefID.String(string(kind)), attrModule.String(k.mod))
@@ -224,6 +228,25 @@ func (in *instruments) observe(o metric.Observer, inflight metric.Int64Observabl
 	}
 	for m, n := range heldBy {
 		o.ObserveInt64(held, n, set(attrModule.String(m)))
+	}
+	// The longest wait per (def_id, reason, trigger). A kind the executor has
+	// no definition for is not sampled: def_id stays the closed set of
+	// registered kinds (5T.11), and such a run is only ever held.
+	type waitKey struct {
+		kind    tasks.Kind
+		reason  string
+		trigger tasks.Trigger
+	}
+	longest := map[waitKey]time.Duration{}
+	for _, w := range waits {
+		if e.defs[w.kind] == nil {
+			continue
+		}
+		k := waitKey{w.kind, w.reason, w.trigger}
+		longest[k] = max(longest[k], now.Sub(w.since))
+	}
+	for k, d := range longest {
+		o.ObserveFloat64(dwait, d.Seconds(), set(attrDefID.String(string(k.kind)), attrReason.String(k.reason), attrTrigger.String(string(k.trigger))))
 	}
 }
 
