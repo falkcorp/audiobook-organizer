@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -198,7 +199,8 @@ func TestAutoResolveEligible(t *testing.T) {
 		if err := es.UpsertLabeledExample(database.LabeledExample{
 			CandidateID: 42,
 			Label:       "true_dup",
-			LabelReason: "whole-book signatures match",
+			LabelReason: dataset.ReasonWholeBookSignatureMatch,
+			LabelSource: "rule", SignatureRelation: "match",
 		}); err != nil {
 			t.Fatalf("UpsertLabeledExample: %v", err)
 		}
@@ -207,6 +209,35 @@ func TestAutoResolveEligible(t *testing.T) {
 			t.Fatalf("expected eligible via label fallback, got: %s", reason)
 		}
 	})
+
+	// The fallback admits a pair only on a label the deterministic rule wrote:
+	// exact reason, LabelSource "rule", SignatureRelation "match".
+	for _, tc := range []struct {
+		name string
+		id   int64
+		ex   database.LabeledExample
+	}{
+		{"human label with the rule's words", 51, database.LabeledExample{LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "human", SignatureRelation: "match"}},
+		{"llm_judge label with the rule's words", 52, database.LabeledExample{LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "llm_judge", SignatureRelation: "match"}},
+		{"rule label but disjoint relation", 53, database.LabeledExample{LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "rule", SignatureRelation: "disjoint"}},
+		{"rule label but empty relation", 54, database.LabeledExample{LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "rule"}},
+		{"reason that only contains the phrase", 55, database.LabeledExample{LabelReason: "Hush: whole-book signatures match, says Batman", LabelSource: "rule", SignatureRelation: "match"}},
+	} {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			c := base()
+			c.ID = tc.id
+			c.ScoreBreakdown = certainBreakdown("A", "B", unified.SigExactFile)
+			tc.ex.CandidateID = tc.id
+			tc.ex.Label = "true_dup"
+			if err := es.UpsertLabeledExample(tc.ex); err != nil {
+				t.Fatalf("UpsertLabeledExample: %v", err)
+			}
+			d := engine.autoResolveEligible(c, bookA, bookB)
+			if d.Eligible || d.Guard != guardCorroborationInsufficient {
+				t.Fatalf("expected insufficient-corroboration refusal, got eligible=%v guard=%q reason=%q", d.Eligible, d.Guard, d.Reason)
+			}
+		})
+	}
 
 	t.Run("supporting signals do not count as primary", func(t *testing.T) {
 		c := base()

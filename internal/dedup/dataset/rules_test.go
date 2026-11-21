@@ -14,10 +14,11 @@ import (
 
 func TestCatchers(t *testing.T) {
 	cases := []struct {
-		name      string
-		ex        database.LabeledExample
-		wantFires bool
-		wantLabel string
+		name       string
+		ex         database.LabeledExample
+		wantFires  bool
+		wantLabel  string
+		wantReason string // exact reason when set
 	}{
 		{
 			name: "part vs whole by duration ratio",
@@ -45,7 +46,7 @@ func TestCatchers(t *testing.T) {
 				B:                 database.BookFeatures{FilesExist: true, WholeBookSigPresent: true, TotalDurationSec: 36000},
 				SignatureRelation: "match", DurationRatio: 1.0,
 			},
-			wantFires: true, wantLabel: "true_dup",
+			wantFires: true, wantLabel: "true_dup", wantReason: ReasonWholeBookSignatureMatch,
 		},
 		{
 			name: "no rule fires",
@@ -132,6 +133,9 @@ func TestCatchers(t *testing.T) {
 			}
 			if fires && label != tc.wantLabel {
 				t.Fatalf("label=%q want %q (reason=%q)", label, tc.wantLabel, reason)
+			}
+			if fires && tc.wantReason != "" && reason != tc.wantReason {
+				t.Fatalf("reason=%q want %q", reason, tc.wantReason)
 			}
 		})
 	}

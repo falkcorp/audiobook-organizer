@@ -17,6 +17,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -263,16 +264,19 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 // Guard identifiers: which rule of autoResolveEligible decided a pair. They are
 // stored in the dry-run plan, so they are stable strings, not display text.
 const (
-	guardBookUnreadable            = "book_unreadable"
-	guardBookSoftDeleted           = "book_soft_deleted"
-	guardAutomatedRefusal          = "automated_refusal"
-	guardBand                      = "band"
-	guardNoBreakdown               = "no_breakdown"
-	guardSuppressors               = "suppressors"
-	guardPairEligibility           = "pair_eligibility"
-	guardPlausibleAudio            = "plausible_audio"
-	guardIdentifiersConflict       = "identifiers_conflict"
-	guardCorroborationSignals      = "corroboration_signals"
+	guardBookUnreadable       = "book_unreadable"
+	guardBookSoftDeleted      = "book_soft_deleted"
+	guardAutomatedRefusal     = "automated_refusal"
+	guardBand                 = "band"
+	guardNoBreakdown          = "no_breakdown"
+	guardSuppressors          = "suppressors"
+	guardPairEligibility      = "pair_eligibility"
+	guardPlausibleAudio       = "plausible_audio"
+	guardIdentifiersConflict  = "identifiers_conflict"
+	guardCorroborationSignals = "corroboration_signals"
+	// guardCorroborationLabel admits a pair on a stored label only when the
+	// deterministic rule wrote it: exact dataset.ReasonWholeBookSignatureMatch,
+	// LabelSource "rule" and SignatureRelation "match".
 	guardCorroborationLabel        = "corroboration_signature_label"
 	guardCorroborationInsufficient = "corroboration_insufficient"
 )
@@ -353,11 +357,16 @@ func (de *Engine) autoResolveEligible(c database.DedupCandidate, bookA, bookB *d
 	}
 
 	// Fallback: a whole-book-signature oracle label. Reuse the already-labeled
-	// example — do not recompute. GetLabeledExample errors are non-fatal: log
+	// example — do not recompute. It counts only when the deterministic rule
+	// wrote it: the exact shared reason (not a substring of free text a human or
+	// LLM-judge label could also carry), LabelSource "rule", and
+	// SignatureRelation "match". GetLabeledExample errors are non-fatal: log
 	// and fall through to the (failed) count-based decision.
 	if ex, err := de.embedStore.GetLabeledExample(c.ID); err != nil {
 		slog.Warn("dedup auto-resolve: GetLabeledExample failed", "candidate", c.ID, "err", err)
-	} else if ex != nil && ex.Label == "true_dup" && strings.Contains(ex.LabelReason, "whole-book signatures match") {
+	} else if ex != nil && ex.Label == "true_dup" &&
+		ex.LabelReason == dataset.ReasonWholeBookSignatureMatch &&
+		ex.LabelSource == "rule" && ex.SignatureRelation == "match" {
 		return autoResolveDecision{Eligible: true, Reason: "whole-book-signature true_dup label", Guard: guardCorroborationLabel}
 	}
 

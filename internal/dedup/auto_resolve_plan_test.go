@@ -20,6 +20,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/dataset"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 )
@@ -190,7 +191,7 @@ func TestAutoResolveDryRun_WritesNothing(t *testing.T) {
 	mustSeed(t, es, "A2", "B2", unified.BandCertain, unified.SigExactAcoustID, unified.SigMetaSrcHash)
 	mustSeed(t, es, "A3", "B3", unified.BandCertain, unified.SigExactFile)
 	// A labelled example takes the one read-through path in the rule.
-	require.NoError(t, es.UpsertLabeledExample(database.LabeledExample{CandidateID: 3, Label: "true_dup", LabelReason: "whole-book signatures match"}))
+	require.NoError(t, es.UpsertLabeledExample(database.LabeledExample{CandidateID: 3, Label: "true_dup", LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "rule", SignatureRelation: "match"}))
 
 	before := dumpDB(t, s)
 	require.NotEmpty(t, before)
@@ -287,10 +288,21 @@ func TestAutoResolveEligible_NamesTheDecidingGuard(t *testing.T) {
 		c, a, b := good()
 		c.ID = 42
 		c.ScoreBreakdown = certainBreakdown("A", "B", unified.SigExactFile)
-		require.NoError(t, es.UpsertLabeledExample(database.LabeledExample{CandidateID: 42, Label: "true_dup", LabelReason: "whole-book signatures match"}))
+		require.NoError(t, es.UpsertLabeledExample(database.LabeledExample{CandidateID: 42, Label: "true_dup", LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "rule", SignatureRelation: "match"}))
 		d := engine.autoResolveEligible(c, a, b)
 		require.True(t, d.Eligible)
 		require.Equal(t, guardCorroborationLabel, d.Guard)
+	})
+
+	t.Run("same words from a human label stay insufficient", func(t *testing.T) {
+		engine, _, es := setupTestEngine(t)
+		c, a, b := good()
+		c.ID = 43
+		c.ScoreBreakdown = certainBreakdown("A", "B", unified.SigExactFile)
+		require.NoError(t, es.UpsertLabeledExample(database.LabeledExample{CandidateID: 43, Label: "true_dup", LabelReason: dataset.ReasonWholeBookSignatureMatch, LabelSource: "human", SignatureRelation: "match"}))
+		d := engine.autoResolveEligible(c, a, b)
+		require.False(t, d.Eligible)
+		require.Equal(t, guardCorroborationInsufficient, d.Guard)
 	})
 }
 

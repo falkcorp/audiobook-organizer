@@ -229,8 +229,9 @@ type AutoResolveDryRunReport struct {
 	RefusedByGuard   map[string]int         `json:"refused_by_guard"`
 	// PlannedByGuard counts every pair the plan would merge by the corroboration
 	// clause that admitted it (listed or not). corroboration_signature_label is
-	// the pairs admitted only by a labelled example's free-text reason; see
-	// todo.d for why that clause must be tightened before apply is enabled.
+	// the pairs admitted only by a stored rule label (exact whole-book-signature
+	// reason, LabelSource "rule", SignatureRelation "match"). Whether to keep
+	// that clause at all awaits a production dry-run count.
 	PlannedByGuard map[string]int `json:"planned_by_guard"`
 	NotEvaluated   []string       `json:"not_evaluated"`
 	// ApplyDescription is AutoResolveApplyDescription.
