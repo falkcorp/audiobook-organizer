@@ -71,6 +71,19 @@ var ErrCorrupt = errors.New("journal: the revocation journal is corrupt")
 // never extended. The boot sets such a file aside before it opens a journal.
 var ErrOtherInstall = errors.New("journal: the revocation journal belongs to another install")
 
+// ErrOtherApp reports a journal whose header names another app than the one
+// opening it (F4-08 Q6d). The journal's name carries the app's archive prefix,
+// so two apps sharing a backup directory never share one (05-backup §5B.3.6 row
+// "Where"); a header that names another app is a file this app did not start:
+// placed there by hand, or written by a build with another prefix. Its lines are
+// never extended, and nothing is written to the file. Unlike another install's
+// journal the boot does not set it aside: the install matches and the lines
+// verify under this store's keyring, so they are this store's revocations, and
+// the boot reports the journal broken (revocation_journal_broken) for the
+// operator to resolve. Two installs that share one db_path, and so one install
+// ID, are not told apart by this check; that stays a documented limit.
+var ErrOtherApp = errors.New("journal: the revocation journal belongs to another app")
+
 // ErrLocked reports a journal another open File holds (flock(2) LOCK_EX on
 // the file, in this process or another): two writers would reuse seqs.
 var ErrLocked = errors.New("journal: another writer holds the revocation journal")
@@ -106,7 +119,9 @@ type FileOptions struct {
 	// it, and a file whose header names another install is refused
 	// (ErrOtherInstall).
 	InstallID string
-	// App is the app's archive prefix, written into a new header.
+	// App is the app's archive prefix, required: it is written into a new
+	// header, and a file whose header names another app is refused
+	// (ErrOtherApp).
 	App string
 	// Clock stamps a new header; nil is time.Now.
 	Clock func() time.Time
@@ -189,13 +204,14 @@ type lineFile interface {
 //     below the store's committed journal_head, or the line at that head is
 //     not the one the store committed; nothing is written to such a file;
 //   - ErrOtherInstall: the header names another install; nothing is written;
+//   - ErrOtherApp: the header names another app; nothing is written;
 //   - the incomplete last line cannot be cut, or the header line cannot be
 //     written or made durable (a full disk).
 //
 // When the file was opened, the broken File keeps it locked until Close, so
 // no second writer numbers it meanwhile; the kernel closes it before it sets
 // the file aside or reopens the path. Only a caller's mistake (an empty path,
-// another owner's keyspace, no Keys, no install ID) returns a nil File.
+// another owner's keyspace, no Keys, no install ID, no app) returns a nil File.
 func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 	switch {
 	case o.Path == "":
@@ -206,6 +222,8 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 		return nil, errors.New("journal: OpenFile without Keys (there is no unauthenticated journal)")
 	case o.InstallID == "":
 		return nil, errors.New("journal: OpenFile without the store's install ID")
+	case o.App == "":
+		return nil, errors.New("journal: OpenFile without the app's archive prefix")
 	}
 	j := &File{path: o.Path, fsys: orOS(o.FS), ks: o.Keyspace, keys: o.Keys, source: o.Source, install: o.InstallID, app: o.App, now: o.Clock}
 	if j.now == nil {
@@ -233,6 +251,8 @@ func OpenFile(ctx context.Context, o FileOptions) (*File, error) {
 		return j.fail(fmt.Errorf("%s: %w: %w", o.Path, ErrCorrupt, chain.Break))
 	case chain.HasHeader && chain.Header.InstallID != o.InstallID:
 		return j.fail(fmt.Errorf("%s: %w: it names install %q, the store's is %q", o.Path, ErrOtherInstall, chain.Header.InstallID, o.InstallID))
+	case chain.HasHeader && chain.Header.App != o.App:
+		return j.fail(fmt.Errorf("%s: %w: it names app %q, this one is %q", o.Path, ErrOtherApp, chain.Header.App, o.App))
 	}
 	if end := chain.IntactEnd(); head.Seq > end {
 		return j.fail(fmt.Errorf("%w: %s ends at seq %d, below the store's %s %d (the file was deleted, truncated or replaced)",

@@ -158,7 +158,6 @@ type reapplyInput struct {
 	// BackupDir and JournalPath are the effective ones; required.
 	Overrides bool
 	Install   string // c/storage/install
-	App       string // the app's archive prefix, for the header of a journal the boot starts
 	Identity  storage.StoreIdentity
 	DBPath    string
 	StateDir  string
@@ -494,7 +493,10 @@ func (in reapplyInput) setAside(ctx context.Context, path string, head journal.H
 	if err := syncDirOf(path); err != nil {
 		return false, err
 	}
-	hdr := journal.Header{InstallID: in.Install, App: in.App, StartedAt: in.now()}
+	// The app is the component's, the one source of the expected app: Bind
+	// refuses a header that names another (journal.ErrOtherApp), so the journal
+	// started here and the one Bind opens next cannot disagree.
+	hdr := journal.Header{InstallID: in.Install, App: in.Journal.App(), StartedAt: in.now()}
 	if err := journal.CreateBased(path, in.Keys, hdr, head); err != nil {
 		return false, fmt.Errorf("kernel: start the new journal: %w", err)
 	}
@@ -518,7 +520,15 @@ func syncDirOf(path string) error {
 // is nothing after the head to apply, but it is reported broken. A bind failure
 // is not a reason here (the caller reports it); the verified lines do not
 // depend on it.
-func (in reapplyInput) untrusted(chain *journal.Chain, head journal.Head, res *reapplyResult) bool {
+//
+// What it records is logged here, with the journal's path: the journal's health
+// names the token only, never the cause, whose text can name files (F4-08 Q6c).
+func (in reapplyInput) untrusted(chain *journal.Chain, head journal.Head, res *reapplyResult) (refused bool) {
+	defer func() {
+		if res.Broken != nil {
+			in.log().Error("kernel: the revocation journal is broken", "path", res.Path, "refused", refused, "err", res.Broken)
+		}
+	}()
 	switch {
 	case chain.Break != nil:
 		res.Broken = chain.Break
@@ -988,6 +998,11 @@ func (in reapplyInput) settleUnapplied(ctx context.Context, restoring bool, res 
 		return fmt.Errorf("kernel: read the unapplied-revocation queue: %w", err)
 	}
 	res.Unapplied = len(entries)
+	// Any boot, a restore boot too, reports the count it ends with: info
+	// revocation_journal_queued while entries wait, cleared once the queue is
+	// empty (F4-08 Q6a). The token carries the count only; an entry's kind is a
+	// newer build's string.
+	in.Journal.NoteUnapplied(len(entries))
 	if len(entries) == 0 {
 		return nil
 	}

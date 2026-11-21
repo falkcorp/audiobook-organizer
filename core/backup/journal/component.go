@@ -25,12 +25,17 @@ var ErrNotBound = errors.New("journal: the revocation journal is not bound to a 
 
 // The health tokens the component reports (05-backup §5B.5, §5B.3.6). The
 // kernel registers them on the authenticated health endpoints (F4-08); this
-// package only computes them.
+// package only computes them. None is ever on the unauthenticated /health
+// (core/health's TestPostureTokensGolden).
 const (
 	HealthUnwritable = "revocation_journal_unwritable" // degraded: Append fails, or a gap is open
-	HealthBroken     = "revocation_journal_broken"     // degraded: the chain does not verify, or is truncated below the store's head
+	HealthBroken     = "revocation_journal_broken"     // degraded: the chain does not verify, is truncated below the store's head, or names another install or app
 	HealthReset      = "revocation_journal_reset"      // info: another install's journal was set aside at this boot
 	HealthColocated  = "revocation_journal_colocated"  // info: the journal sits on the store's filesystem device
+	// HealthQueued is info: revocation lines of a kind this build cannot apply
+	// wait in the unapplied queue (c/backup/journal_unapplied/) for a build that
+	// can (F4-08 Q6a; the kernel notes the count at P4d step 2, NoteUnapplied).
+	HealthQueued = "revocation_journal_queued"
 )
 
 // Severity is how a Health entry shows in a health report.
@@ -41,7 +46,10 @@ const (
 	SeverityDegraded Severity = "degraded"
 )
 
-// Health is one token the component reports and why.
+// Health is one token the component reports and why. Detail is a fixed
+// sentence, or one with a count: never an error's text, which names files (an
+// open or a write failure carries the journal's path), and a health report names
+// no file path (F4-08 Q6c). The boot that records the condition logs the error.
 type Health struct {
 	Token    string
 	Severity Severity
@@ -62,7 +70,11 @@ type ComponentOptions struct {
 	Keys Keys
 	// InstallID is the store's c/storage/install.
 	InstallID string
-	// App is the app's archive prefix, written into a new header.
+	// App is the app's archive prefix, required: it is written into the header
+	// of a journal the component (or the boot's set-aside, which reads it with
+	// App) starts, and Bind refuses a journal whose header names another app
+	// (ErrOtherApp, health revocation_journal_broken). It is the one source of
+	// the expected app for the boot.
 	App string
 	// Source is the writing binary's ID, stamped on lines that carry none.
 	Source string
@@ -104,6 +116,7 @@ type Component struct {
 	reset   bool
 	broken  error // a chain break the boot found and failed closed on (NoteBroken)
 	held    error // Hold: no line is taken until Resume; a state of the component, so it outlives a Bind
+	queued  int   // entries in the unapplied queue when the boot ended (NoteUnapplied)
 	closed  bool
 	started bool
 	quit    chan struct{}
@@ -126,6 +139,8 @@ func NewComponent(o ComponentOptions) (*Component, error) {
 		return nil, errors.New("journal: NewComponent without Keys")
 	case o.InstallID == "":
 		return nil, errors.New("journal: NewComponent without the store's install ID")
+	case o.App == "":
+		return nil, errors.New("journal: NewComponent without the app's archive prefix")
 	}
 	if o.Clock == nil {
 		o.Clock = time.Now
@@ -145,8 +160,9 @@ func NewComponent(o ComponentOptions) (*Component, error) {
 // Bind opens the journal at path and holds it (P4d step 2), replacing a file
 // bound before. A non-nil error is OpenFile's: the component then holds the
 // broken File it returned, so Gap still works and Close releases its lock,
-// and Health reports why (unwritable, or broken for a chain that does not
-// verify).
+// and Health reports the token (unwritable, or broken for a chain that does
+// not verify or names another install or app). The error names the file; the
+// caller logs it, Health does not repeat it.
 func (c *Component) Bind(ctx context.Context, path string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -165,6 +181,10 @@ func (c *Component) Bind(ctx context.Context, path string) error {
 	}
 	return errors.Join(err, closeErr)
 }
+
+// App is the app's archive prefix the component was built with: what a new
+// header names and what Bind compares an existing header with.
+func (c *Component) App() string { return c.o.App }
 
 // Path is the bound journal file's path ("" before Bind).
 func (c *Component) Path() string {
@@ -335,6 +355,16 @@ func (c *Component) NoteBroken(err error) {
 	c.broken = err
 }
 
+// NoteUnapplied records how many entries the unapplied-revocation queue holds
+// when the boot's re-apply ended (the kernel's reapplyResult.Unapplied): a
+// non-zero count reports revocation_journal_queued, zero clears it. The queue
+// changes only at a boot, so the boot's count holds until the next one.
+func (c *Component) NoteUnapplied(n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.queued = max(n, 0)
+}
+
 // SyncAnchor rewrites backup.location.json's head from the committed
 // c/backup/journal_head when that moved (the committed-head anchor, DATA6-4).
 // It reads only committed state, so the anchor may lag the store and is never
@@ -482,38 +512,71 @@ func (c *Component) Close(ctx context.Context) error {
 	return err
 }
 
-// Health reports the tokens the journal's state calls for. It reads no store
-// and writes nothing.
+// The Details of Health: fixed sentences, so no error text (and no file path
+// in it) reaches a health report.
+const (
+	detailBrokenNoted  = "the boot found the journal broken (it does not verify, is cut short, was replaced or could not be moved); the log names the cause"
+	detailCorrupt      = "the journal does not verify, or ends below the store's head: it takes no line"
+	detailOtherInstall = "the journal names another install: it takes no line until the boot sets it aside"
+	detailOtherApp     = "the journal names another app: it takes no line"
+	detailWriteFailed  = "the journal could not be opened or written: it takes no line; the log names the cause"
+	detailHeld         = "the journal takes no line until a replaced store's restore hooks have run"
+	detailReset        = "another install's journal was set aside and a new one started"
+	detailColocated    = "the journal and the store share a filesystem device: a volume snapshot rollback reverts both"
+)
+
+// Health reports the tokens the journal's state calls for. It reads no store,
+// writes nothing and logs nothing (it runs on every health request). Each
+// Detail is a fixed sentence or a count (see Health).
 func (c *Component) Health() []Health {
 	c.mu.Lock()
-	f, path, reset, broken, held := c.file, c.path, c.reset, c.broken, c.held
+	f, path, reset, broken, held, queued := c.file, c.path, c.reset, c.broken, c.held, c.queued
 	c.mu.Unlock()
 	var out []Health
 	if broken != nil {
-		out = append(out, Health{HealthBroken, SeverityDegraded, broken.Error()})
+		out = append(out, Health{HealthBroken, SeverityDegraded, detailBrokenNoted})
 	}
 	if f != nil {
 		st := f.Status()
 		switch {
-		case st.Broken != nil && (errors.Is(st.Broken, ErrCorrupt) || errors.Is(st.Broken, ErrOtherInstall)):
+		case st.Broken != nil && brokenDetail(st.Broken) != "":
 			if broken == nil {
-				out = append(out, Health{HealthBroken, SeverityDegraded, st.Broken.Error()})
+				out = append(out, Health{HealthBroken, SeverityDegraded, brokenDetail(st.Broken)})
 			}
 		case st.Broken != nil:
-			out = append(out, Health{HealthUnwritable, SeverityDegraded, st.Broken.Error()})
+			out = append(out, Health{HealthUnwritable, SeverityDegraded, detailWriteFailed})
 		case held != nil:
-			out = append(out, Health{HealthUnwritable, SeverityDegraded, held.Error()})
+			out = append(out, Health{HealthUnwritable, SeverityDegraded, detailHeld})
 		case st.OpenGaps > 0:
 			out = append(out, Health{HealthUnwritable, SeverityDegraded, fmt.Sprintf("%d interval(s) may hold a revocation the journal lacks", st.OpenGaps)})
 		}
 	}
 	if reset {
-		out = append(out, Health{HealthReset, SeverityInfo, "another install's journal was set aside and a new one started"})
+		out = append(out, Health{HealthReset, SeverityInfo, detailReset})
 	}
 	if path != "" && c.colocated(path) {
-		out = append(out, Health{HealthColocated, SeverityInfo, "the journal and the store share a filesystem device: a volume snapshot rollback reverts both"})
+		out = append(out, Health{HealthColocated, SeverityInfo, detailColocated})
+	}
+	if queued > 0 {
+		out = append(out, Health{HealthQueued, SeverityInfo, fmt.Sprintf("%d revocation line(s) wait in the unapplied queue for a build that can apply them", queued)})
 	}
 	return out
+}
+
+// brokenDetail is the Detail of a file error that makes the journal broken,
+// not merely unwritable: a chain that does not verify, another install's
+// journal, another app's. "" for any other error (a failed open, lock or
+// write), which is revocation_journal_unwritable.
+func brokenDetail(err error) string {
+	switch {
+	case errors.Is(err, ErrOtherApp):
+		return detailOtherApp
+	case errors.Is(err, ErrOtherInstall):
+		return detailOtherInstall
+	case errors.Is(err, ErrCorrupt):
+		return detailCorrupt
+	}
+	return ""
 }
 
 // colocated reports whether the journal's directory and the store's are on one

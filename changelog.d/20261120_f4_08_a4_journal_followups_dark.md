@@ -1,0 +1,3 @@
+### Added
+
+- The revocation journal now refuses a journal file whose header names another app (`journal.ErrOtherApp`; the app is a required option of the journal component and of `OpenFile`, and the boot's set-aside takes it from the component), reports it as `revocation_journal_broken`, and writes nothing to it (F4-08 A4, dark). A non-empty unapplied-revocation queue raises a new info token, `revocation_journal_queued`, carrying the count only, on authenticated endpoints only. Every `revocation_journal_*` health Detail is now a fixed sentence or a count and never names a file; the boot logs the cause with the path. Nothing binds the journal at boot until F4-08's flip, so the running binary behaves exactly as before.

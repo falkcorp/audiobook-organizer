@@ -243,6 +243,7 @@ func TestOpenFile_HeaderAndRecovery(t *testing.T) {
 		"an empty path":            func(o *FileOptions) { o.Path = "" },
 		"no keys":                  func(o *FileOptions) { o.Keys = nil },
 		"no install ID":            func(o *FileOptions) { o.InstallID = "" },
+		"no app":                   func(o *FileOptions) { o.App = "" },
 	} {
 		oo := o
 		mut(&oo)

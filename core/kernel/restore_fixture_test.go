@@ -212,7 +212,7 @@ func (fx *rxFx) stores() hookStores {
 // input is step 2's input for this boot; mut adjusts it.
 func (fx *rxFx) input(mut func(*reapplyInput)) reapplyInput {
 	in := reapplyInput{
-		Journal: fx.comp, KS: fx.bks(), Keys: fx.keys, Overrides: true, Install: fx.install, App: rxApp,
+		Journal: fx.comp, KS: fx.bks(), Keys: fx.keys, Overrides: true, Install: fx.install,
 		Identity: fx.db.Admin().StoreIdentity(), DBPath: fx.dbPath, StateDir: fx.state, BackupDir: fx.backup,
 		JournalPath: fx.journalPath(), Apply: reapplyApplyFor(fx.stores()), Clock: fx.clock.now,
 		Log: slog.New(slog.DiscardHandler),
