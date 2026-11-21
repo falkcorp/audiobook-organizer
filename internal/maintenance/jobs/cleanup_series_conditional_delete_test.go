@@ -502,6 +502,74 @@ func TestCleanupSeriesRun_Phase1KeepsAHeldSeries(t *testing.T) {
 	}
 }
 
+func TestCleanupSeriesRun_Phase1SkipsASeriesHeldAtTheRead(t *testing.T) {
+	store := newCsCondStore(
+		[]database.Series{{ID: 7, Name: "The Long Halloween", HeldBy: "repair"}},
+		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+	)
+	rep := &csPhase1Reporter{}
+
+	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if b := store.books["long-halloween-1"]; b.SeriesID == nil || *b.SeriesID != 7 {
+		t.Fatalf("a held series' book lost its link: %v", b.SeriesID)
+	}
+	if !store.hasSeries(7) || len(store.conditionalCalls) != 0 {
+		t.Fatalf("series kept=%v, conditional deletes=%v: a held series must not even be offered to the delete", store.hasSeries(7), store.conditionalCalls)
+	}
+	if !csLogContains(rep, "1 single-book series were held when this run started") {
+		t.Fatalf("the held-at-read count must be in the warn line, got %v", rep.logs)
+	}
+	if csLogContains(rep, "renamed, re-authored or held after") {
+		t.Fatalf("a hold seen at the read is not the after-the-read race: %v", rep.logs)
+	}
+}
+
+func TestCleanupSeriesRun_DryRunDoesNotReportAHeldSeriesAsACandidate(t *testing.T) {
+	store := newCsCondStore(
+		[]database.Series{{ID: 7, Name: "The Long Halloween", HeldBy: "repair"}},
+		database.Book{ID: "long-halloween-1", SeriesID: intp(7)},
+	)
+	rep := &csPhase1Reporter{}
+
+	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, true); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !csLogContains(rep, "1 single-book series were held when this run started") {
+		t.Fatalf("a dry run must still name the held series, got %v", rep.logs)
+	}
+	if !csLogContains(rep, "Kept 1-book series 7") {
+		t.Fatalf("the per-series warn line is missing: %v", rep.logs)
+	}
+}
+
+func TestCleanupSeriesRun_AHeldSeriesWithANameTwinIsNotMergedAway(t *testing.T) {
+	// Series 7 is held and has a normalized-name twin, 8, with more books. The
+	// held skip must settle 7: otherwise phase 2 groups it and re-homes its book
+	// onto 8 before the conditional delete refuses the row.
+	store := newCsCondStore(
+		[]database.Series{{ID: 7, Name: "Court of Owls", HeldBy: "repair"}, {ID: 8, Name: "court of owls"}},
+		database.Book{ID: "court-of-owls-1", SeriesID: intp(7)},
+		database.Book{ID: "night-of-owls-1", SeriesID: intp(8), SeriesSequence: intp(2)},
+		database.Book{ID: "night-of-owls-2", SeriesID: intp(8), SeriesSequence: intp(3)},
+	)
+	rep := &csPhase1Reporter{}
+
+	if err := (&cleanupSeriesJob{}).Run(context.Background(), store, rep, false); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if b := store.books["court-of-owls-1"]; b.SeriesID == nil || *b.SeriesID != 7 {
+		t.Fatalf("phase 2 re-homed the book of a held series: %v", b.SeriesID)
+	}
+	if !store.hasSeries(7) || len(store.conditionalCalls) != 0 {
+		t.Fatalf("series 7 kept=%v, conditional deletes=%v", store.hasSeries(7), store.conditionalCalls)
+	}
+}
+
 func TestCleanupSeriesRun_Phase1CountsASeriesAlreadyDeletedBySomeoneElse(t *testing.T) {
 	store := newCsCondStore(
 		[]database.Series{{ID: 7, Name: "The Long Halloween"}, {ID: 8, Name: "Haunted Knight"}},
