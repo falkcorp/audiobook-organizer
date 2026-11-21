@@ -547,6 +547,12 @@ const adminKeyScopeRefusal = "admin role required: this API key's scopes do not 
 // request records, so a later stage that re-marks the request cannot lift the
 // key's narrowing.
 func APIKeyMayActAsAdmin(c *gin.Context) bool {
+	// Under core identity (legacyauth.WithIdentity, F4-08 B7c) the key is the
+	// principal stage 12 bound, not a record on this context: it may act as an
+	// admin when it holds every atom, which is HEAD's test in core's terms.
+	if may, bridged := legacyauth.KeyMayActAsAdmin(c.Request.Context()); bridged {
+		return may
+	}
 	key, hasKey := CurrentAPIKey(c)
 	if !hasKey {
 		return CurrentAuthMethod(c) != auth.MethodAPIKey
