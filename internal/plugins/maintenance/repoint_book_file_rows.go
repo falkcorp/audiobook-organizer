@@ -66,9 +66,7 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -303,7 +301,7 @@ func (p *Plugin) runRepointBookFileRows(ctx context.Context, raw json.RawMessage
 	}
 	// Fail closed: without resolvable iTunes roots the op cannot prove a path
 	// is outside them.
-	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+	roots, err := itunesProtectedRoots()
 	if err != nil {
 		return fmt.Errorf("%s: resolve iTunes roots: %w", rbfOpName, err)
 	}

@@ -13,8 +13,6 @@ import (
 	"sync"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -345,7 +343,7 @@ func runRepairLibraryStateCore(ctx context.Context, in libraryStateRepairInput, 
 		// worst possible answer: indistinguishable from "already repaired".
 		return libraryStateRepairResult{}, fmt.Errorf("repair-library-state: RootDir is empty; refusing to run")
 	}
-	itunesRoots, itErr := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+	itunesRoots, itErr := itunesProtectedRoots()
 	if itErr != nil {
 		return libraryStateRepairResult{}, fmt.Errorf("repair-library-state: resolve iTunes roots: %w", itErr)
 	}
