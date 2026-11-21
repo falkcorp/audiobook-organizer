@@ -1,10 +1,10 @@
-// file: web/src/components/layout/operationProgress.test.ts
+// file: core/web/packages/shell/test/layout/operationProgress.test.ts
 // version: 0.1.0
 // guid: 0d4f7b93-8c26-4e51-b9a0-e3c1d6a5f748
 // last-edited: 2026-11-21
 
 import { describe, expect, it } from 'vitest';
-import { formatProgressCounts } from './operationProgress';
+import { formatProgressCounts } from '../../src/layout/operationProgress';
 
 describe('formatProgressCounts', () => {
   it('shows counts and a rounded percentage when there is a total', () => {
