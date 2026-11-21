@@ -8,12 +8,17 @@ package m4_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -288,8 +293,9 @@ func TestCutover_V1RowsSetAside(t *testing.T) {
 
 // TestCutover_V1OperationRowsSetAside: an operation row whose own ID is not the
 // ID in its key, one whose type is no kind, and a v1 operation whose ID is also
-// a v2 operation row with no v3 record (the v2 row is an orphan; the v1 row
-// must not import over it and delete it unread) are all quarantined whole.
+// a v2 operation row with no v3 record (the v2 row is a stray of the v1
+// operation; the v1 row must not import over it and delete it unread) are all
+// quarantined whole.
 func TestCutover_V1OperationRowsSetAside(t *testing.T) {
 	done := tptr(epoch.Add(time.Hour))
 	raw := map[string]string{}
@@ -315,6 +321,91 @@ func TestCutover_V1OperationRowsSetAside(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestCutover_V1OperationBesideAnOrphanV2RowInEitherOrder: a v1 operation whose
+// ID also has a v2 operation row and no v3 record is set aside whole, the same
+// way whichever of its two rows a shard steps first. The step runs its shards
+// in parallel, so either order happens in production. The v2-first case pins
+// the order the parallel runner reaches only sometimes: two shards, and the v1
+// row's worker waits until the v2 row's shard has stepped its next row, which
+// it does only after the v2 row's chunk committed (chunks are one row here).
+// Before the fix that order let the v2 row go to the quarantine as an orphan
+// on its own and then imported the v1 operation, because the v2 row was no
+// longer there to make the v1 row an orphan too.
+func TestCutover_V1OperationBesideAnOrphanV2RowInEitherOrder(t *testing.T) {
+	done := tptr(epoch.Add(time.Hour))
+	op1, op2, log1 := "operation:"+runID(3), "opv2:op:"+runID(3), fmt.Sprintf("operationlog:%s:%d:1", runID(3), epoch.Add(time.Second).UnixNano())
+	// next sorts after op2, so it is the v2 shard's next chunk; it is an
+	// orphan of its own (no v1 or v3 row names it).
+	next := "opv2:op:" + runID(9)
+	for _, tc := range []struct {
+		name    string
+		v2First bool
+	}{{"v1_row_first", false}, {"v2_row_first", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := map[string]string{}
+			v1Op{id: runID(3), typ: "dedup.book-scan", status: "completed", done: done, logs: 1}.put(raw)
+			raw[op2] = `{"ID":"` + runID(3) + `","Status":"completed"}`
+			raw[next] = `{"ID":"` + runID(9) + `","Status":"completed"}`
+			r := newRig(t, withRaw(raw))
+			var reached atomic.Bool // the v1 row waited for the v2 shard
+			r.parallelism = func(dm *datamigrate.DataMigration) {
+				if !tc.v2First {
+					dm.Parallelism = fixedOne() // key order: operation: sorts before opv2:
+					return
+				}
+				// Two shards: the plan's boundary is the middle sampled key, op2,
+				// so op1 and its log line are one shard and op2 and next the other.
+				dm.Parallelism = tasks.Fixed(2, "test: the v1 and v2 rows in two shards")
+				step := dm.Step
+				committed := make(chan struct{})
+				var once sync.Once
+				dm.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+					switch string(kv.Key) {
+					case op1:
+						select {
+						case <-committed:
+							reached.Store(true)
+						case <-time.After(30 * time.Second):
+							return errors.New("test: the v2 shard never stepped its next row: the shards are not the ones this test plans")
+						}
+					case next:
+						once.Do(func() { close(committed) })
+					}
+					return step(ctx, kv, w)
+				}
+			}
+			r.runObserve(t, func(ctx context.Context, s *snap) {
+				if tc.v2First && !reached.Load() {
+					t.Fatal("the v1 row was stepped before the v2 row's chunk committed: the order under test was not forced")
+				}
+				got := map[string]string{}
+				for _, q := range s.Quarantine {
+					got[q.Key] = q.Reason
+				}
+				for k, want := range map[string]string{
+					op1:  "no v3 run record to import them under",
+					op2:  "belongs to a run that is quarantined",
+					log1: "belongs to a run that is quarantined",
+					next: "belongs to no run record",
+				} {
+					if !strings.Contains(got[k], want) {
+						t.Errorf("%s: reason %q, want one saying %q (quarantine %v)", k, got[k], want, got)
+					}
+				}
+				if _, err := s.Stores.Runs.Get(ctx, tasks.RunID(runID(3))); err == nil {
+					t.Error("the v1 operation was imported beside its orphan v2 row")
+				}
+				if len(s.Left) != 0 {
+					t.Errorf("left %v", keysOf(s.Left))
+				}
+				if s.Verify.Quarantined != 4 || s.Verify.Written != 0 {
+					t.Errorf("report: %+v", s.Verify)
+				}
+			})
+		})
+	}
 }
 
 // TestCutover_V1StrayRowsQuarantineTheOperation: a v1 operation is the only

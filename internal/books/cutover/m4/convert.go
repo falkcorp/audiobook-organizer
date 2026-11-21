@@ -710,12 +710,15 @@ func convertV1(rr *runRows) (*converted, string) {
 	}
 	// A v1 operation is the only record of its ID, so no v3 or v2 row can be
 	// imported under it; any such row is a stray the whole run is set aside for.
+	// The v2 operation row is one of them: with no v3 record it is an orphan
+	// HEAD's reconcile could not repair, and importing the v1 row would delete
+	// it unread (see driverOf for why the v1 row, not the v2 row, decides).
 	for _, fam := range [][]storage.KV{rr.evt, rr.intent, rr.item, rr.log, rr.snap, rr.mark, rr.rowmark, rr.row, rr.rowix, rr.log2, rr.err2} {
 		if len(fam) > 0 {
 			return nil, reasonV1Stray
 		}
 	}
-	for _, one := range []*storage.KV{rr.prog, rr.ckpt, rr.ledger, rr.state2} {
+	for _, one := range []*storage.KV{rr.prog, rr.ckpt, rr.ledger, rr.op2, rr.state2} {
 		if one != nil {
 			return nil, reasonV1Stray
 		}
