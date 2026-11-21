@@ -39,6 +39,12 @@ type ClientAddrTrust struct {
 	// request is the key's, and the gin binder never marks it verified, so its
 	// CF-Connecting-IP is not believed either. Nil means no request does.
 	KeyPresented func(r *http.Request) bool
+	// IsLANAddr reports whether an address is one device's own on the local
+	// network (a ULA, link-local or loopback address, or a global address in an
+	// on-link prefix of this host), which ClientBucket keys on the full address
+	// so LAN devices sharing one /64 do not share a failure budget. Nil counts
+	// only private, link-local and loopback addresses.
+	IsLANAddr func(netip.Addr) bool
 }
 
 // AccessClientAddr returns the client address r's CF-Connecting-IP names and
@@ -90,4 +96,65 @@ func connectingIP(v string) (netip.Addr, bool) {
 		return netip.Addr{}, false
 	}
 	return a.Unmap(), true
+}
+
+// ClientBucket is the failure-throttle bucket a request is charged to under
+// core identity (F4-08 B10b1): the address of the visitor, grouped as HEAD's
+// loginThrottleKey groups it, so the bucket is the one HEAD's gin copy named
+// for the same request. It is "" only when no address can be established, and
+// the caller then keys on the peer it already has.
+//
+// The address is, in order:
+//
+//  1. stage0, when attributed: the client address core's stage 0 resolved from
+//     a configured connector's CF-Connecting-IP (httpapi.ClientAddrFrom);
+//  2. AccessClientAddr: a local peer behind a verified Access assertion;
+//  3. the TCP peer, whatever headers the caller sends, so a header a caller
+//     made up never picks its bucket.
+//
+// A public IPv6 address is keyed on its /64 (a caller who owns one could
+// otherwise rotate for a fresh budget per attempt); an IPv4 or LAN address on
+// itself. Nothing it reads is logged.
+func (t ClientAddrTrust) ClientBucket(r *http.Request, stage0 netip.Addr, attributed bool) string {
+	if r == nil {
+		return ""
+	}
+	var a netip.Addr
+	switch {
+	case attributed && stage0.IsValid():
+		a = stage0
+	default:
+		if v, ok := t.AccessClientAddr(r); ok {
+			a = v
+		} else {
+			a = peerAddr(r.RemoteAddr)
+		}
+	}
+	if !a.IsValid() {
+		return ""
+	}
+	a = a.WithZone("").Unmap()
+	if a.Is6() && !t.isLAN(a) {
+		return netip.PrefixFrom(a, 64).Masked().String()
+	}
+	return a.String()
+}
+
+func (t ClientAddrTrust) isLAN(a netip.Addr) bool {
+	if t.IsLANAddr != nil {
+		return t.IsLANAddr(a)
+	}
+	return a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLoopback()
+}
+
+// peerAddr parses a raw RemoteAddr ("host:port", or a bare address) to the
+// zero Addr when it does not parse.
+func peerAddr(remote string) netip.Addr {
+	if ap, err := netip.ParseAddrPort(remote); err == nil {
+		return ap.Addr()
+	}
+	if a, err := netip.ParseAddr(strings.TrimSpace(remote)); err == nil {
+		return a
+	}
+	return netip.Addr{}
 }
