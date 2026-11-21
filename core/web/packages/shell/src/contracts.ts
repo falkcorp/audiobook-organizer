@@ -78,20 +78,18 @@ export interface ToastApi {
   error(message: string): void;
 }
 
-// Tasks (05-tasks TaskRunView, hand-typed until core.json carries it).
+// Tasks: the wire shape of a run and its states are core's (tasks.RunPayload,
+// tasks.RunState); the one definition lives in providers/taskRuns.ts and these
+// are the names the tracker and the public API use for it.
 
-export type TaskRunState = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
-export interface TaskRunView {
-  id: string;
-  kind: string;
-  state: TaskRunState;
-  progress?: { done: number; total: number };
-  message?: string;
-  error?: string;
-  started_at?: string;
-  finished_at?: string;
-  [extra: string]: unknown;
-}
+import {
+  TERMINAL_RUN_STATES,
+  type TaskRunStateName,
+  type TaskRunWire,
+} from './providers/taskRuns';
 
-/** The terminal states: a run in one of them never changes again. */
-export const TERMINAL_TASK_STATES: ReadonlySet<TaskRunState> = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
+export type TaskRunState = TaskRunStateName;
+export type TaskRunView = TaskRunWire;
+
+/** The terminal states: a run in one of them never changes again (tasks.RunState.Terminal). */
+export const TERMINAL_TASK_STATES: ReadonlySet<TaskRunState> = TERMINAL_RUN_STATES;

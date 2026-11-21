@@ -13,11 +13,11 @@
 // yet, so it is hand-typed here; when the generated client carries it, replace
 // this interface with the generated type and keep the helpers.
 //
-// NOTE for the F9-01 follow-up: contracts.ts's TaskRunView and
-// TERMINAL_TASK_STATES predate this and differ from the wire (a flat done/total
-// rather than `progress`, `canceled` not `cancelled`, and no timed_out,
-// waiting_deps, stopping, interrupted_quiesced, awaiting_decision or
-// interrupted_dropped). Nothing in this file imports them.
+//
+// contracts.ts's TaskRunView, TaskRunState and TERMINAL_TASK_STATES (what useTask
+// polls) are aliases of what is defined here, so the shell has one vocabulary.
+// test/taskRuns.core.test.ts parses core/tasks/client.go and fails if either
+// list drifts from it.
 
 /** Every state tasks.RunState can take (core/tasks/client.go). */
 export const TASK_RUN_STATES = [
@@ -65,7 +65,27 @@ export interface TaskRunWire {
   current?: string;
 }
 
-const TERMINAL: ReadonlySet<string> = new Set<TaskRunStateName>(['succeeded', 'failed', 'timed_out', 'canceled', 'interrupted_dropped']);
+/**
+ * The states a run never leaves: tasks.RunState.Terminal (core/tasks/client.go),
+ * verbatim. Why each is in or out, by core's own semantics:
+ *
+ *   in  succeeded, failed          the executor's two outcomes.
+ *   in  timed_out                  the run exceeded its limit and was stopped for good.
+ *   in  canceled                   a cancel finished (one l, as core spells it).
+ *   in  interrupted_dropped        resume policy Drop, or Decide(Drop): it is never run again.
+ *   out queued, waiting_deps       not started yet (waiting_deps: Requires/NotWhile unmet).
+ *   out running, stopping          stopping is still winding down (cancel, quiesce or shutdown).
+ *   out interrupted                the resume policy decides at the next boot, so it can resume.
+ *   out interrupted_quiesced       stood down; core re-queues it when the hold is released.
+ *   out awaiting_decision          ResumeAsk: an operator's resume, finish or drop decision moves it on.
+ */
+export const TERMINAL_RUN_STATES: ReadonlySet<TaskRunStateName> = new Set<TaskRunStateName>([
+  'succeeded',
+  'failed',
+  'timed_out',
+  'canceled',
+  'interrupted_dropped',
+]);
 
 /**
  * True for a state a run never leaves: tasks.RunState.Terminal. An unknown
@@ -73,7 +93,7 @@ const TERMINAL: ReadonlySet<string> = new Set<TaskRunStateName>(['succeeded', 'f
  * and polled rather than hiding it.
  */
 export function isTerminalRunState(state: string): boolean {
-  return TERMINAL.has(state);
+  return (TERMINAL_RUN_STATES as ReadonlySet<string>).has(state);
 }
 
 /** True for the interrupted family: interrupted, interrupted_quiesced and interrupted_dropped. */
