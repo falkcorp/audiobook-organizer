@@ -198,7 +198,7 @@ func run() int {
 	// (05-storage §5S.3.7). The flags are core's: app.FastExit answers them.
 	// Handled before cobra for the same stdout reason as
 	// --print-storage-format.
-	if handled, err := app.FastExit(fastExitArgs(os.Args), os.Stdout, books.Module()); handled {
+	if handled, err := app.FastExit(fastExitArgs(os.Args), os.Stdout, books.FastExitModule()); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
