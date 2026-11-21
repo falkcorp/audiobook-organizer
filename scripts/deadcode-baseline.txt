@@ -1024,6 +1024,7 @@ internal/books/cutover/m4.SourceRanges
 internal/books/cutover/m4.Steps
 internal/books/cutover/m4.attrFields
 internal/books/cutover/m4.batchOpType
+internal/books/cutover/m4.clockGroup
 internal/books/cutover/m4.completionKey.subject
 internal/books/cutover/m4.convert
 internal/books/cutover/m4.convertV1
@@ -1064,6 +1065,7 @@ internal/books/cutover/m4.runExtrasRow.empty
 internal/books/cutover/m4.runRows.all
 internal/books/cutover/m4.scanRows
 internal/books/cutover/m4.settingValue
+internal/books/cutover/m4.splitKinds
 internal/books/cutover/m4.subjectPrefix
 internal/books/cutover/m4.subjectRef
 internal/books/cutover/m4.trigger
