@@ -271,7 +271,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	}
 	if err != nil {
 		deadline := time.Now().Add(budget)
-		return errors.Join(err, k.stopCoreServices(ctx, deadline), k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
+		return errors.Join(err, k.stopCoreServices(ctx, deadline), k.closeEvents(ctx, deadline), k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
 			k.closeCore(ctx, deadline))
 	}
 	served := make(chan error, 1)

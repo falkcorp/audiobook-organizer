@@ -6,10 +6,12 @@
 package kernel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,9 +29,19 @@ import (
 // depsProbe is what the probe module kept of its boot: the Deps it was handed
 // and the identity events it saw.
 type depsProbe struct {
-	deps    module.Deps
-	rbacEv  chan rbacChangedPayload
-	invalEv chan principalInvalidatedPayload
+	deps     module.Deps
+	rbacEv   chan rbacChangedPayload
+	invalEv  chan principalInvalidatedPayload
+	signalEv chan signalLit
+}
+
+// signalLit is the payload of the probe module's own topic.
+type signalLit struct {
+	Reason string `json:"reason"`
+}
+
+func signalTopic() events.Topic[signalLit] {
+	return events.NewTopic[signalLit]("alfred.signal.lit.v1")
 }
 
 // probeHost is identityHost with a module that keeps the Deps it was handed and
@@ -40,11 +52,13 @@ func probeHost(t *testing.T, switchOn bool) (*swapHost, Config, *depsProbe) {
 	h := newSwapHost(t)
 	c := h.envConfig(nil)
 	c.IdentityBoot = switchOn
-	p := &depsProbe{rbacEv: make(chan rbacChangedPayload, 8), invalEv: make(chan principalInvalidatedPayload, 8)}
+	p := &depsProbe{rbacEv: make(chan rbacChangedPayload, 8), invalEv: make(chan principalInvalidatedPayload, 8), signalEv: make(chan signalLit, 8)}
 	c.Modules = []module.Module{storageMod("alfred", func(r *module.Registrar) error {
 		p.deps = r.Deps()
 		if switchOn {
+			r.Topics(signalTopic().Spec(events.TopicSpec{Permission: rbac.Need("alfred:signal")}))
 			r.Subscribe(
+				events.On(signalTopic(), "alfred.watch-signal", func(_ context.Context, e events.Envelope[signalLit]) { p.signalEv <- e.Payload }),
 				events.On(rbacChangedTopic(), "alfred.watch-rbac", func(_ context.Context, e events.Envelope[rbacChangedPayload]) { p.rbacEv <- e.Payload }),
 				events.On(principalInvalidatedTopic(), "alfred.watch-sessions", func(_ context.Context, e events.Envelope[principalInvalidatedPayload]) { p.invalEv <- e.Payload }),
 			)
@@ -80,6 +94,27 @@ func TestIdentityP5_SwitchOnBuildsServicesAndHandsDeps(t *testing.T) {
 	}
 	if _, ok := p.deps.AuthAdmin.(*auth.Service); ok {
 		t.Error("Deps.AuthAdmin is the raw *auth.Service")
+	}
+}
+
+// TestIdentityP5_DepsAuditAndEventsAreTheModulesOwn: the Audit a module holds
+// is the namespaced logger (a core.* action is refused before it reaches the
+// store), and its Events scope publishes on its own declared topic through the
+// bus P7 froze and Run opens.
+func TestIdentityP5_DepsAuditAndEventsAreTheModulesOwn(t *testing.T) {
+	_, p := bootOpened(t)
+	err := p.deps.Audit.Record(t.Context(), audit.Event{Action: "core.user.create", Outcome: audit.Success})
+	if !errors.Is(err, ErrAuditNamespace) {
+		t.Errorf("Deps.Audit.Record(core.*) = %v, want ErrAuditNamespace", err)
+	}
+	events.Publish(p.deps.Events, t.Context(), signalTopic(), "cave", signalLit{Reason: "bat signal"})
+	select {
+	case got := <-p.signalEv:
+		if got.Reason != "bat signal" {
+			t.Errorf("delivered %+v", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("an event published through Deps.Events was not delivered")
 	}
 }
 
@@ -300,7 +335,8 @@ func (r *recordingAudit) Emit(_ context.Context, e audit.Event) { r.got = append
 // logger passes only "<ID>." actions and never an Actor the module set.
 func TestModuleAudit_RefusesAnotherNamespaceAndDropsTheActor(t *testing.T) {
 	inner := &recordingAudit{}
-	l := newModuleAudit("alfred", inner)
+	var logged bytes.Buffer
+	l := newModuleAudit("alfred", inner, slog.New(slog.NewTextHandler(&logged, nil)))
 	foreign := audit.Event{Action: "core.user.create", Outcome: audit.Success}
 	if err := l.Record(t.Context(), foreign); !errors.Is(err, ErrAuditNamespace) {
 		t.Errorf("Record(core.*) = %v, want ErrAuditNamespace", err)
@@ -314,6 +350,9 @@ func TestModuleAudit_RefusesAnotherNamespaceAndDropsTheActor(t *testing.T) {
 	}
 	if len(inner.got) != 0 {
 		t.Fatalf("a foreign action reached the store: %+v", inner.got)
+	}
+	if !strings.Contains(logged.String(), "core.user.create") {
+		t.Errorf("the dropped Emit left no log line: %q", logged.String())
 	}
 	own := audit.Event{Action: "alfred.signal", Outcome: audit.Success, Actor: audit.Actor{UserID: "u-joker"}}
 	if err := l.Record(t.Context(), own); err != nil {
