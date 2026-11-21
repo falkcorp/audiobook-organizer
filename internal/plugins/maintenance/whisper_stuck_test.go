@@ -366,7 +366,7 @@ func TestFileIntroRun_ReportsProgressWhileAWhisperRequestIsOutstanding(t *testin
 	fx.whisp.texts[p] = goodIntro
 	fx.whisp.delay = 120 * time.Millisecond
 
-	rep := &recordingRep{fileIntroRep: fileIntroRep{id: "run-hb"}}
+	rep := &recordingRep{id: "run-hb"}
 	if err := fx.p.runFileIntroTranscribe(context.Background(), liveTranscribeParams(""), rep); err != nil {
 		t.Fatal(err)
 	}

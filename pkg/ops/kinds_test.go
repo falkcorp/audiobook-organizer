@@ -74,7 +74,7 @@ func ordinalFixer(titles map[string]string, guard Guard) Definition {
 		guards = []Guard{guard}
 	}
 	return Fixer("maintenance.normalize-letter-l-ordinals", FixerSpec[NoParams, database.Book]{
-		Common: Common{Title: "Letter-l ordinals", Effects: Writes(ResBooks, ResFieldStates), Permission: auth.PermSettingsManage},
+		Title: "Letter-l ordinals", Effects: Writes(ResBooks, ResFieldStates), Permission: auth.PermSettingsManage,
 		Candidates: func(*RC, NoParams) (Source[database.Book], error) {
 			var out []database.Book
 			for id, title := range titles {
@@ -179,7 +179,7 @@ func TestPipelineRunsTheDAG(t *testing.T) {
 	scan, enrich, report, cleanup := okTask("p.scan"), okTask("p.enrich"), okTask("p.report"), okTask("p.cleanup")
 	type res struct{ N int }
 	def := Pipeline("p.all", PipelineSpec[struct{ Limit int }]{
-		Common: Common{Title: "all", Permission: auth.PermSettingsManage},
+		Title: "all", Permission: auth.PermSettingsManage,
 		Stages: []Stage[struct{ Limit int }]{
 			{Name: "scan", Def: scan},
 			{Name: "enrich", Def: enrich, After: []string{"scan"}, Params: func(p struct{ Limit int }, r Results) (any, error) {

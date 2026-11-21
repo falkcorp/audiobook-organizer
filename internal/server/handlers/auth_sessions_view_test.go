@@ -70,7 +70,7 @@ func TestLegacySessionsList_NoToken(t *testing.T) {
 	require.NoError(t, err)
 
 	var sess []*database.Session
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		s, err := store.CreateSession(user.ID, "127.0.0.1", "ua", time.Hour, 0)
 		require.NoError(t, err)
 		sess = append(sess, s)

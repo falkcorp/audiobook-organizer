@@ -37,7 +37,7 @@ func TestBackfillExternalIDs_BookPassYieldsAndResumesAfterCursor(t *testing.T) {
 	setITunesXMLPath(t, "")
 	m := NewMockBackfillStore()
 	const books = 3*backfillChunkSize + 500
-	for i := 0; i < books; i++ {
+	for i := range books {
 		id := fmt.Sprintf("b%06d", i)
 		pid := fmt.Sprintf("pid-%06d", i)
 		m.books[id] = database.Book{ID: id, Title: id, ITunesPersistentID: &pid}
@@ -79,8 +79,8 @@ func syntheticAlbumsXML(albums int) string {
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>Tracks</key><dict>
 `)
-	for a := 0; a < albums; a++ {
-		for tr := 0; tr < 2; tr++ {
+	for a := range albums {
+		for tr := range 2 {
 			n := a*2 + tr
 			fmt.Fprintf(&b, "<key>%d</key><dict><key>Track ID</key><integer>%d</integer><key>Persistent ID</key><string>T%07d</string><key>Name</key><string>Part %d</string><key>Album</key><string>Album %05d</string><key>Track Number</key><integer>%d</integer></dict>\n", n, n, n, tr+1, a, tr+1)
 		}
@@ -98,7 +98,7 @@ func TestBackfillITunesTrackPIDs_YieldsAtAlbumBoundaryAndResumesAtIndex(t *testi
 	setITunesXMLPath(t, xmlPath)
 
 	m := NewMockBackfillStore()
-	for a := 0; a < albums; a++ {
+	for a := range albums {
 		title := fmt.Sprintf("Album %05d", a)
 		id := fmt.Sprintf("b%05d", a)
 		m.books[id] = database.Book{ID: id, Title: title}

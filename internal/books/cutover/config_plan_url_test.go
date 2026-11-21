@@ -314,9 +314,8 @@ func urlLeaves() []urlLeaf {
 	var out []urlLeaf
 	var walk func(t reflect.Type, top string, segs []string)
 	walk = func(t reflect.Type, top string, segs []string) {
-		for i := range t.NumField() {
-			f := t.Field(i)
-			tag := strings.Split(f.Tag.Get("json"), ",")[0]
+		for f := range t.Fields() {
+			tag, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 			if tag == "" || tag == "-" {
 				continue
 			}
@@ -344,7 +343,7 @@ func urlLeaves() []urlLeaf {
 			}
 		}
 	}
-	walk(reflect.TypeOf(headConfig{}), "", nil)
+	walk(reflect.TypeFor[headConfig](), "", nil)
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out
 }

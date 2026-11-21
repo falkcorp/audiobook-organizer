@@ -238,7 +238,7 @@ func validateCron(expr string) error {
 
 func parseCronField(f string, bounds [2]int) (uint64, error) {
 	var set uint64
-	for _, part := range strings.Split(f, ",") {
+	for part := range strings.SplitSeq(f, ",") {
 		rng, stepStr, hasStep := strings.Cut(part, "/")
 		step := 1
 		if hasStep {

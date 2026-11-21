@@ -420,7 +420,7 @@ func TestOpchangeListIndex_PropertyMatchesScan(t *testing.T) {
 			rng := rand.New(rand.NewSource(seed))
 			p := newOpChangeTestStore(t)
 			opOf := map[string]string{} // a row id keeps its operation: the key has it
-			for step := 0; step < 400; step++ {
+			for range 400 {
 				id := fmt.Sprintf("c%d", rng.Intn(60))
 				op, ok := opOf[id]
 				if !ok {

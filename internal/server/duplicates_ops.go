@@ -161,7 +161,7 @@ type headDedupOps struct {
 }
 
 func (s *Server) headDedupOps() headDedupOps {
-	return headDedupOps{headT7Activity: headT7Activity{w: s.activityWriter}, s: s}
+	return headDedupOps{w: s.activityWriter, s: s}
 }
 
 // mergeSvc is the server's merge service. Without one, a fresh Service has no

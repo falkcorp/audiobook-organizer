@@ -159,7 +159,7 @@ func TestRunPurge_PreviewAgreesWithRunAndChangesNothing(t *testing.T) {
 func TestRunPurge_ProgressIsCalledConcurrentlySafely(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	const n = purgeProgressEvery*2 + 50
-	for i := 0; i < n; i++ {
+	for i := range n {
 		softDeleted(t, store, fmt.Sprintf("b%04d", i), "")
 	}
 
@@ -318,7 +318,7 @@ func TestUndoShells_RebuildsOnlyWhenAJournalWasWritten(t *testing.T) {
 
 	rowA, _ := store.GetBookByID("a")
 	rowB, _ := store.GetBookByID("b")
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, held, err := u.Holds(rowA)
 		require.NoError(t, err)
 		assert.False(t, held)

@@ -531,8 +531,8 @@ func declaresApplyKey(job maintenance.MaintenanceJob) bool {
 	if t == nil || t.Kind() != reflect.Struct {
 		return false
 	}
-	for i := 0; i < t.NumField(); i++ {
-		if name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ","); name == "apply" {
+	for field := range t.Fields() {
+		if name, _, _ := strings.Cut(field.Tag.Get("json"), ","); name == "apply" {
 			return true
 		}
 	}

@@ -57,7 +57,7 @@ func stripeFixture(t *testing.T) (*database.PebbleStore, *database.Book) {
 // write could land after the other writer's row write and leave the column on
 // one narrator and the junction on the other.
 func TestUpdateAudiobook_NarratorRowAndJoinAgreeUnderConcurrentColumnWrite(t *testing.T) {
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		ps, book := stripeFixture(t)
 		svc := NewAudiobookService(ps)
 		var wg sync.WaitGroup
@@ -90,7 +90,7 @@ func TestUpdateAudiobook_NarratorRowAndJoinAgreeUnderConcurrentColumnWrite(t *te
 // Two writers of the same join, one through the edit and one through
 // SetBookNarrators: the final join is one writer's complete cast, never a mix.
 func TestUpdateAudiobook_NarratorJoinIsOneCompleteWriteUnderRace(t *testing.T) {
-	for i := 0; i < 25; i++ {
+	for range 25 {
 		ps, book := stripeFixture(t)
 		svc := NewAudiobookService(ps)
 		a, err := ps.CreateNarrator("Barbara Gordon")

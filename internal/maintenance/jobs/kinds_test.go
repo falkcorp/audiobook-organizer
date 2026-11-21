@@ -392,14 +392,12 @@ func TestKindShell_ProgressIsConcurrencySafe(t *testing.T) {
 	p := newRCProgress(rc)
 	p.SetTotal(400)
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < 50; i++ {
+	for range 8 {
+		wg.Go(func() {
+			for range 50 {
 				p.Increment()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	h.mu.Lock()

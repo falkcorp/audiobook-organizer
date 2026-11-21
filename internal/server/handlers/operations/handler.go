@@ -179,8 +179,7 @@ func (h *Handler) holdRevertWriteSet(c *gin.Context, id string) (release func(),
 	}
 	release, err = h.revertGate.HoldWriteSet("revert:"+id, "the revert of operation "+id, writes)
 	if err != nil {
-		var conflict *opsregistry.WriteSetConflict
-		if errors.As(err, &conflict) {
+		if conflict, ok := errors.AsType[*opsregistry.WriteSetConflict](err); ok {
 			httputil.RespondWithConflict(c, "this operation cannot be reverted right now: "+conflict.Error()+
 				", which it also writes. Try again when that finishes.")
 			return noop, false

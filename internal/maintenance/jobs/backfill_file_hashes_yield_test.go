@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -38,7 +39,7 @@ func hbNormalized(rows []hbReportRow, root string) []hbReportRow {
 // hbWantCounts is what an uninterrupted run over hbMixedLibrary(n) reports.
 func hbWantCounts(n int) hbCounts {
 	want := hbCounts{}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		switch {
 		case i%10 == 0:
 			want["hashed"]++
@@ -75,17 +76,11 @@ func TestBackfillFileHashes_WorkerCountDoesNotChangeTheResult(t *testing.T) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		hashes := map[string]string{}
-		for id, v := range h.hashCalls {
-			hashes[id] = v
-		}
+		maps.Copy(hashes, h.hashCalls)
 		writes := map[string]int{}
-		for id, v := range h.writes {
-			writes[id] = v
-		}
+		maps.Copy(writes, h.writes)
 		recomputes := map[string]int{}
-		for id, v := range h.recomputes {
-			recomputes[id] = v
-		}
+		maps.Copy(recomputes, h.recomputes)
 		return result{counts: c, rows: rows, hashes: hashes, writes: writes, recomputes: recomputes}
 	}
 	for _, dryRun := range []bool{false, true} {

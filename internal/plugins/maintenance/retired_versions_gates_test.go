@@ -264,7 +264,7 @@ func TestRetiredVersions_CombineUndoAwareRidesEveryCategory(t *testing.T) {
 	rf.trashed("labelled", "g", 30, rf.file("g/a.mp3"))
 	b, err := rf.st.GetBookByID(rf.ids["labelled"])
 	require.NoError(t, err)
-	b.LibraryState = retiredPtr("deleted")
+	b.LibraryState = new("deleted")
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(t, err)
 	rf.trashed("no-files", "g", 30)
@@ -481,7 +481,7 @@ func TestRetiredVersions_PathOwnerMustBeLive(t *testing.T) {
 	rf.trashed("shell-a", "g", 30, p, rf.file("g/a.mp3"))
 	rf.trashed("shell-b", "g", 30, p)
 	q := rf.file("g/labelled.mp3")
-	rf.add("labelled-holder", &database.Book{Title: "labelled-holder", FilePath: "/lib/lh", LibraryState: retiredPtr("deleted")}, q)
+	rf.add("labelled-holder", &database.Book{Title: "labelled-holder", FilePath: "/lib/lh", LibraryState: new("deleted")}, q)
 	rf.trashed("shell-c", "g", 30, q)
 	r := rf.file("g/live.mp3")
 	rf.live("live-holder", "", r)
@@ -504,9 +504,9 @@ func TestRetiredVersions_PathOwnerMustBeLive(t *testing.T) {
 func TestRetiredVersions_LabelledTrashIsNotLive(t *testing.T) {
 	rf := newRetiredFixture(t)
 	labelled := func(name, group string) string {
-		b := &database.Book{Title: name, FilePath: "/lib/" + name, LibraryState: retiredPtr("deleted")}
+		b := &database.Book{Title: name, FilePath: "/lib/" + name, LibraryState: new("deleted")}
 		if group != "" {
-			b.VersionGroupID = retiredPtr(group)
+			b.VersionGroupID = new(group)
 		}
 		return rf.add(name, b, rf.file("lab/"+name+".mp3"))
 	}
@@ -776,7 +776,7 @@ func TestRetiredVersions_PlanClassifiesConcurrently(t *testing.T) {
 		rf.trashed(fmt.Sprintf("shell-%d", i), "g", 30, rf.file(fmt.Sprintf("g/%d.mp3", i)))
 	}
 	g := &gatedOps{PebbleStore: rf.st}
-	rf.withDeps(gatedDeps{fakeDeps: fakeDeps{store: rf.st}, ops: g})
+	rf.withDeps(gatedDeps{store: rf.st, ops: g})
 	rows := rf.plan()
 	require.Len(t, rows, 6)
 	require.GreaterOrEqual(t, g.peak.Load(), int32(2), "the plan read one book at a time")

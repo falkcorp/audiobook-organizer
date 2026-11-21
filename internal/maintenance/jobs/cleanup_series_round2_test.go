@@ -63,7 +63,7 @@ func csCaptureLogs(t *testing.T) (done func() map[string]any, text func() string
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return func() map[string]any {
 		t.Helper()
-		for _, line := range strings.Split(sink.String(), "\n") {
+		for line := range strings.SplitSeq(sink.String(), "\n") {
 			if !strings.Contains(line, `"msg":"Done single_found`) {
 				continue
 			}
@@ -102,11 +102,11 @@ func csDoneBool(t *testing.T, done map[string]any, key string) bool {
 func csHushStore() *csCondStore {
 	return newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Batman: Hush"}, {ID: 8, Name: "batman hush"}},
-		database.Book{ID: "hush-1", SeriesID: intp(7)},
-		database.Book{ID: "hush-2", SeriesID: intp(8)},
-		database.Book{ID: "hush-3", SeriesID: intp(8)},
-		database.Book{ID: "hush-4", SeriesID: intp(8)},
-		database.Book{ID: "hush-5", SeriesID: intp(8)},
+		database.Book{ID: "hush-1", SeriesID: new(7)},
+		database.Book{ID: "hush-2", SeriesID: new(8)},
+		database.Book{ID: "hush-3", SeriesID: new(8)},
+		database.Book{ID: "hush-4", SeriesID: new(8)},
+		database.Book{ID: "hush-5", SeriesID: new(8)},
 	)
 }
 
@@ -116,10 +116,10 @@ func csHushStore() *csCondStore {
 func csOwlsTripleStore() *csCondStore {
 	return newCsCondStore(
 		[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"}, {ID: 9, Name: "COURT OF OWLS"}},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(8)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(8)},
-		database.Book{ID: "court-of-owls-3", SeriesID: intp(9), SeriesSequence: intp(2)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(7), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(8)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(8)},
+		database.Book{ID: "court-of-owls-3", SeriesID: new(9), SeriesSequence: new(2)},
 	)
 }
 
@@ -251,8 +251,8 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 			build: func() *csCondStore {
 				s := newCsCondStore(
 					[]database.Series{{ID: 7, Name: "Batman: Hush"}},
-					database.Book{ID: "hush-1", SeriesID: intp(7)},
-					database.Book{ID: "hush-trashed", SeriesID: intp(7)},
+					database.Book{ID: "hush-1", SeriesID: new(7)},
+					database.Book{ID: "hush-trashed", SeriesID: new(7)},
 				)
 				s.trashed = map[string]bool{"hush-trashed": true}
 				return s
@@ -272,10 +272,10 @@ func TestCleanupSeriesRun_DoneLineBuckets(t *testing.T) {
 			build: func() *csCondStore {
 				s := newCsCondStore(
 					[]database.Series{{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"}},
-					database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
-					database.Book{ID: "court-of-owls-trashed", SeriesID: intp(7)},
-					database.Book{ID: "night-of-owls-1", SeriesID: intp(8)},
-					database.Book{ID: "night-of-owls-2", SeriesID: intp(8)},
+					database.Book{ID: "court-of-owls-1", SeriesID: new(7), SeriesSequence: new(2)},
+					database.Book{ID: "court-of-owls-trashed", SeriesID: new(7)},
+					database.Book{ID: "night-of-owls-1", SeriesID: new(8)},
+					database.Book{ID: "night-of-owls-2", SeriesID: new(8)},
 				)
 				s.trashed = map[string]bool{"court-of-owls-trashed": true}
 				return s
@@ -514,9 +514,9 @@ func TestCleanupSeriesRun_Phase1StopsAtTheFirstDeleteTheStoreCannotAnswer(t *tes
 		t.Run(c.name, func(t *testing.T) {
 			store := newCsCondStore(
 				[]database.Series{{ID: 7, Name: "Year One"}, {ID: 8, Name: "Zero Year"}, {ID: 9, Name: "Endgame"}},
-				database.Book{ID: "year-one-1", SeriesID: intp(7)},
-				database.Book{ID: "zero-year-1", SeriesID: intp(8)},
-				database.Book{ID: "endgame-1", SeriesID: intp(9)},
+				database.Book{ID: "year-one-1", SeriesID: new(7)},
+				database.Book{ID: "zero-year-1", SeriesID: new(8)},
+				database.Book{ID: "endgame-1", SeriesID: new(9)},
 			)
 			cause := csStoreWideErr(c.sentinel)
 			store.deleteIfErr = cause
@@ -561,12 +561,12 @@ func TestCleanupSeriesRun_Phase2StopsAtTheFirstDeleteTheStoreCannotAnswer(t *tes
 					{ID: 7, Name: "Court of Owls"}, {ID: 8, Name: "court of owls"},
 					{ID: 9, Name: "Night of Owls"}, {ID: 10, Name: "night of owls"},
 				},
-				database.Book{ID: "court-of-owls-1", SeriesID: intp(7), SeriesSequence: intp(2)},
-				database.Book{ID: "court-of-owls-2", SeriesID: intp(8)},
-				database.Book{ID: "court-of-owls-3", SeriesID: intp(8)},
-				database.Book{ID: "night-of-owls-1", SeriesID: intp(9), SeriesSequence: intp(2)},
-				database.Book{ID: "night-of-owls-2", SeriesID: intp(10)},
-				database.Book{ID: "night-of-owls-3", SeriesID: intp(10)},
+				database.Book{ID: "court-of-owls-1", SeriesID: new(7), SeriesSequence: new(2)},
+				database.Book{ID: "court-of-owls-2", SeriesID: new(8)},
+				database.Book{ID: "court-of-owls-3", SeriesID: new(8)},
+				database.Book{ID: "night-of-owls-1", SeriesID: new(9), SeriesSequence: new(2)},
+				database.Book{ID: "night-of-owls-2", SeriesID: new(10)},
+				database.Book{ID: "night-of-owls-3", SeriesID: new(10)},
 			)
 			cause := csStoreWideErr(c.sentinel)
 			store.deleteIfErr = cause
@@ -617,10 +617,10 @@ func TestCleanupSeriesRun_Phase2DoesNotRunAfterPhase1Stopped(t *testing.T) {
 			{ID: 7, Name: "Year One"},
 			{ID: 8, Name: "Court of Owls"}, {ID: 9, Name: "court of owls"},
 		},
-		database.Book{ID: "year-one-1", SeriesID: intp(7)},
-		database.Book{ID: "court-of-owls-1", SeriesID: intp(8), SeriesSequence: intp(2)},
-		database.Book{ID: "night-of-owls-1", SeriesID: intp(9)},
-		database.Book{ID: "night-of-owls-2", SeriesID: intp(9)},
+		database.Book{ID: "year-one-1", SeriesID: new(7)},
+		database.Book{ID: "court-of-owls-1", SeriesID: new(8), SeriesSequence: new(2)},
+		database.Book{ID: "night-of-owls-1", SeriesID: new(9)},
+		database.Book{ID: "night-of-owls-2", SeriesID: new(9)},
 	)
 	cause := csStoreWideErr(database.ErrMemdbIncomplete)
 	store.deleteIfErr = cause

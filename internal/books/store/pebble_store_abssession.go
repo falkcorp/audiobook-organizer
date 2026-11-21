@@ -75,7 +75,7 @@ type ABSSession struct {
 	LastUsedAt time.Time `json:"last_used_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	// GraceUntil bounds how long PrevRefreshTokenHash stays acceptable.
-	GraceUntil time.Time `json:"grace_until,omitempty"`
+	GraceUntil time.Time `json:"grace_until"`
 
 	Revoked bool `json:"revoked"`
 

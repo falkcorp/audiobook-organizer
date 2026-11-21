@@ -531,8 +531,8 @@ func (o retireOpRead) PlanShell(shellID string) (*merge.RetireReversal, error) {
 func (u retireUndoer) LockRetireOps(opIDs []string) (func(), error) {
 	var releases []func()
 	releaseAll := func() {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
+		for _, release := range slices.Backward(releases) {
+			release()
 		}
 	}
 	for _, id := range opIDs {

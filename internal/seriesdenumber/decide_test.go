@@ -11,8 +11,6 @@ import (
 	"testing"
 )
 
-func ip(n int) *int { return &n }
-
 // confirmed is the run verdict of a series whose siblings form a run of single
 // books with distinct titles.
 var confirmed = RunVerdict{State: RunConfirmed}
@@ -57,7 +55,7 @@ func TestDecide_CreateTargetOnlyWhenABookMoves(t *testing.T) {
 	}{
 		{"no books at all: nothing is created", Group{BaseName: "Hush", Sources: []Source{{Run: confirmed, FromID: 1, Position: 1}}}, false},
 		{"a source with a book creates the base", Group{BaseName: "Hush", Sources: []Source{{Run: confirmed, FromID: 1, Position: 1, Books: []Book{{ID: "b1"}}}}}, true},
-		{"every book held: nothing is created", Group{BaseName: "Hush", Sources: []Source{{Run: confirmed, FromID: 1, Position: 1, Books: []Book{{ID: "b1", Seq: ip(9)}}}}}, false},
+		{"every book held: nothing is created", Group{BaseName: "Hush", Sources: []Source{{Run: confirmed, FromID: 1, Position: 1, Books: []Book{{ID: "b1", Seq: new(9)}}}}}, false},
 		{"existing target is never 'created'", Group{TargetID: 7, BaseName: "Hush", Sources: []Source{{Run: confirmed, FromID: 1, Position: 1, Books: []Book{{ID: "b1"}}}}}, false},
 	}
 	for _, tc := range cases {
@@ -73,7 +71,7 @@ func TestDecide_CreateTargetOnlyWhenABookMoves(t *testing.T) {
 func TestDecide_OwnPositionDifferingIsHeld(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Knightfall", AuthorID: 3,
-		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{{ID: "b1", Seq: ip(2)}}}},
+		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{{ID: "b1", Seq: new(2)}}}},
 	})
 	r := res.Sources[0]
 	if len(r.Moves) != 0 {
@@ -93,10 +91,10 @@ func TestDecide_ASourceHoldingSeveralBooksIsHeldWhole(t *testing.T) {
 		name  string
 		books []Book
 	}{
-		{"one at the name's position, others elsewhere (a comic run)", []Book{{ID: "n1", Seq: ip(1)}, {ID: "n2", Seq: ip(2)}, {ID: "n3", Seq: ip(3)}, {ID: "n4", Seq: ip(4)}}},
-		{"one with a position, one without", []Book{{ID: "b1", Seq: ip(1)}, {ID: "b2"}}},
+		{"one at the name's position, others elsewhere (a comic run)", []Book{{ID: "n1", Seq: new(1)}, {ID: "n2", Seq: new(2)}, {ID: "n3", Seq: new(3)}, {ID: "n4", Seq: new(4)}}},
+		{"one with a position, one without", []Book{{ID: "b1", Seq: new(1)}, {ID: "b2"}}},
 		{"two with no position", []Book{{ID: "b1"}, {ID: "b2"}}},
-		{"both at the name's position", []Book{{ID: "b1", Seq: ip(3)}, {ID: "b2", Seq: ip(3)}}},
+		{"both at the name's position", []Book{{ID: "b1", Seq: new(3)}, {ID: "b2", Seq: new(3)}}},
 		{"a book and a version of another book", []Book{{ID: "b1", Identity: "g1"}, {ID: "b1-alt", Identity: "g1"}, {ID: "b2", Identity: "g2"}}},
 	}
 	for _, tc := range cases {
@@ -168,7 +166,7 @@ func TestDecide_ATargetWithUnseenMembersHoldsEveryMove(t *testing.T) {
 func TestDecide_ATrashedMemberAtThePositionCollides(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Hush", AuthorID: 3,
-		Existing: []Book{{ID: "trashed", Seq: ip(2)}},
+		Existing: []Book{{ID: "trashed", Seq: new(2)}},
 		Sources:  []Source{{Run: confirmed, FromID: 41, Position: 2, Books: []Book{{ID: "b1"}}}},
 	})
 	if r := res.Sources[0]; len(r.Moves) != 0 || r.Held[0].Code != HoldCollision {
@@ -198,7 +196,7 @@ func TestDecide_MoversFromDifferentSourcesAtOnePosition(t *testing.T) {
 func TestDecide_ExistingBookAtPositionHoldsTheMover(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Court of Owls", AuthorID: 3,
-		Existing: []Book{{ID: "e1", Seq: ip(4)}, {ID: "e2", Seq: ip(9)}, {ID: "e3"}},
+		Existing: []Book{{ID: "e1", Seq: new(4)}, {ID: "e2", Seq: new(9)}, {ID: "e3"}},
 		Sources: []Source{
 			{Run: confirmed, FromID: 41, Position: 4, Books: []Book{{ID: "b1"}}},
 			{Run: confirmed, FromID: 42, Position: 5, Books: []Book{{ID: "b2"}}},
@@ -217,8 +215,8 @@ func TestDecide_ExistingBookAtPositionHoldsTheMover(t *testing.T) {
 func TestDecide_PreNumberedMoverCollidesWithExisting(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Court of Owls", AuthorID: 3,
-		Existing: []Book{{ID: "e1", Seq: ip(4)}},
-		Sources:  []Source{{Run: confirmed, FromID: 41, Position: 4, Books: []Book{{ID: "b1", Seq: ip(4)}}}},
+		Existing: []Book{{ID: "e1", Seq: new(4)}},
+		Sources:  []Source{{Run: confirmed, FromID: 41, Position: 4, Books: []Book{{ID: "b1", Seq: new(4)}}}},
 	})
 	if len(res.Sources[0].Moves) != 0 {
 		t.Fatalf("moves = %+v, want none", res.Sources[0].Moves)
@@ -230,7 +228,7 @@ func TestDecide_PreNumberedMoverCollidesWithExisting(t *testing.T) {
 func TestDecide_VersionsOfOneBookMoveTogether(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Court of Owls", AuthorID: 3,
-		Existing: []Book{{ID: "e1", Seq: ip(9), Identity: "vg-e"}, {ID: "e1-alt", Seq: ip(9), Identity: "vg-e"}},
+		Existing: []Book{{ID: "e1", Seq: new(9), Identity: "vg-e"}, {ID: "e1-alt", Seq: new(9), Identity: "vg-e"}},
 		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{
 			{ID: "b1", Identity: "vg-b"}, {ID: "b1-alt", Identity: "vg-b"},
 		}}},
@@ -246,7 +244,7 @@ func TestDecide_VersionHeldHoldsTheWholeBook(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Court of Owls", AuthorID: 3,
 		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{
-			{ID: "b1", Identity: "vg-b"}, {ID: "b1-alt", Seq: ip(2), Identity: "vg-b"},
+			{ID: "b1", Identity: "vg-b"}, {ID: "b1-alt", Seq: new(2), Identity: "vg-b"},
 		}}},
 	})
 	if len(res.Sources[0].Moves) != 0 || !slices.Equal(heldIDs(res.Sources[0]), []string{"b1", "b1-alt"}) {
@@ -322,7 +320,7 @@ func TestDecide_LoneUncorroboratedSeriesIsHeldWithItsReason(t *testing.T) {
 func TestDecide_OwnPositionEqualToTheNameDoesNotCorroborate(t *testing.T) {
 	res := Decide(Group{
 		BaseName: "Court of Owls", AuthorID: 3,
-		Sources: []Source{{FromID: 41, Position: 5, Books: []Book{{ID: "b1", Seq: ip(5)}}}},
+		Sources: []Source{{FromID: 41, Position: 5, Books: []Book{{ID: "b1", Seq: new(5)}}}},
 	})
 	r := res.Sources[0]
 	if len(r.Moves) != 0 || res.CreateTarget || len(r.Held) != 1 || r.Held[0].Code != HoldUncorroborated {
@@ -334,7 +332,7 @@ func TestDecide_OwnPositionEqualToTheNameDoesNotCorroborate(t *testing.T) {
 func TestDecide_ARunMovesABookAtTheNamesPositionAndKeepsIt(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Court of Owls", AuthorID: 3,
-		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{{ID: "b1", Seq: ip(5)}}}},
+		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{{ID: "b1", Seq: new(5)}}}},
 	})
 	r := res.Sources[0]
 	if len(r.Moves) != 1 || r.Moves[0].SetSeq || len(r.Held) != 0 {
@@ -347,7 +345,7 @@ func TestDecide_VersionsOfAMoverMoveTogetherUnderARun(t *testing.T) {
 	res := Decide(Group{
 		TargetID: 90, BaseName: "Court of Owls", AuthorID: 3,
 		Sources: []Source{{Run: confirmed, FromID: 41, Position: 5, Books: []Book{
-			{ID: "primary", Identity: "g1", Seq: ip(5)}, {ID: "rip", Identity: "g1"},
+			{ID: "primary", Identity: "g1", Seq: new(5)}, {ID: "rip", Identity: "g1"},
 		}}},
 	})
 	if got := movedIDs(res.Sources[0]); !slices.Equal(got, []string{"primary", "rip"}) {

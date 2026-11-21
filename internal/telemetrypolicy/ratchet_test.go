@@ -178,7 +178,7 @@ func readRatchetBaseline(t *testing.T) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "<!--") {
 			continue

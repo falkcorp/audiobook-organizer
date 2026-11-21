@@ -202,7 +202,7 @@ func (r *retiringSource) n() int64      { return r.calls.Load() }
 // nothing, so its own retired guard never runs, and the cover pass used to buy a
 // vision answer and write the author onto the retired row.
 func TestResolveProductionAuthorOp_BookRetiredMidRunOnNoResultPathIsNotWritten(t *testing.T) {
-	src := &retiringSource{countingSource: countingSource{name: "SrcA"}}
+	src := &retiringSource{name: "SrcA"}
 	r := runResolve(t, src, true, nil)
 
 	require.Positive(t, r.sourceN, "the book was live at the start, so the search ran")

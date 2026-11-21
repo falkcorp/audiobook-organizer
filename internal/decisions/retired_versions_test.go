@@ -357,14 +357,12 @@ func TestRecordRetired_ConcurrentRetriesWriteOnce(t *testing.T) {
 	ids := make([]string, workers)
 	var wg sync.WaitGroup
 	for i := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			rec, err := RecordRetiredApplied(s, ev)
 			if err == nil {
 				ids[i] = rec.ID
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	for _, id := range ids {

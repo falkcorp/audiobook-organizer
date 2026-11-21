@@ -130,11 +130,11 @@ func TestListQueryNarrows(t *testing.T) {
 
 func batmanSeries() *SeriesWithCountsResponse {
 	return &SeriesWithCountsResponse{Items: []SeriesWithCount{
-		{Series: database.Series{ID: 1, Name: "Year One"}, BookCount: 1, AuthorName: "Frank Miller"},
-		{Series: database.Series{ID: 2, Name: "The Long Halloween"}, BookCount: 3, AuthorName: "Jeph Loeb"},
-		{Series: database.Series{ID: 3, Name: "hush"}, BookCount: 0, AuthorName: "Jeph Loeb"},
-		{Series: database.Series{ID: 4, Name: "Knightfall"}, BookCount: 3},
-		{Series: database.Series{ID: 5, Name: "Court of Owls"}, BookCount: 0, AuthorName: "Scott Snyder"},
+		{ID: 1, Name: "Year One", BookCount: 1, AuthorName: "Frank Miller"},
+		{ID: 2, Name: "The Long Halloween", BookCount: 3, AuthorName: "Jeph Loeb"},
+		{ID: 3, Name: "hush", BookCount: 0, AuthorName: "Jeph Loeb"},
+		{ID: 4, Name: "Knightfall", BookCount: 3},
+		{ID: 5, Name: "Court of Owls", BookCount: 0, AuthorName: "Scott Snyder"},
 	}, Count: 5, Total: 5}
 }
 

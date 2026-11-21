@@ -61,8 +61,7 @@ func TestProbeDurationSeconds_ExitErrorIsPlain(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := ProbeDurationSeconds(context.Background(), bad, "/lib/Year One/01.m4b")
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) {
+	if _, ok := errors.AsType[*exec.ExitError](err); !ok {
 		t.Fatalf("want an *exec.ExitError, got %v", err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, exec.ErrNotFound) {

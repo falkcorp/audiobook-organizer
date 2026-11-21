@@ -8,6 +8,7 @@ package seqnum
 import (
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -363,10 +364,8 @@ next:
 // nothing (a text with "parts" has "part"), so it is dropped, and the one-rune
 // strings are searched for together.
 func stringsRequirement(strs []string) *requirement {
-	for _, s := range strs {
-		if s == "" {
-			return nil
-		}
+	if slices.Contains(strs, "") {
+		return nil
 	}
 	var runes strings.Builder
 	var lits []string

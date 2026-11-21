@@ -231,8 +231,7 @@ func masterListDisplayName(filename string) string {
 // respondMasterListReadError answers a failed body read: 413 for the size cap,
 // 400 for anything else the client sent wrong.
 func respondMasterListReadError(c *gin.Context, err error, limit int64, what string) {
-	var tooBig *http.MaxBytesError
-	if errors.As(err, &tooBig) {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		httputil.RespondWithError(c, http.StatusRequestEntityTooLarge, fmt.Sprintf("the list is larger than %d bytes", limit), "REQUEST_TOO_LARGE")
 		return
 	}

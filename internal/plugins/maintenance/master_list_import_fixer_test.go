@@ -468,7 +468,7 @@ func TestMasterListImport_ManyRowsPlanConcurrently(t *testing.T) {
 	l := newMLLab(t)
 	var csvRows []string
 	const n = 100
-	for i := 0; i < n; i++ {
+	for i := range n {
 		asin := fmt.Sprintf("B0%08d", i)
 		l.book(fmt.Sprintf("b%d", i), mlBook{title: fmt.Sprintf("Synthetic Title %d", i), author: "Pat Many", asin: asin, minutes: 300})
 		csvRows = append(csvRows, csvLine(fmt.Sprintf("Synthetic Title %d", i), "Pat Many", asin, "", "", "", "", "300", "finished", "2026-09-01T10:00:00Z"))

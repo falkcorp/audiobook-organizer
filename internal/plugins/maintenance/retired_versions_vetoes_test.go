@@ -30,7 +30,7 @@ func (rf *retiredFixture) retireInto(shell, holder string) (versionID, rowID str
 	require.NoError(rf.t, rf.st.CreateBookFile(row))
 	v, err := rf.st.CreateBookVersion(&database.BookVersion{
 		BookID: rf.ids[holder], Status: database.BookVersionStatusRetired, Format: "mp3", Source: "retired_book",
-		RetiredFromBookID: rf.ids[shell], RetireOpID: "op-retire", RetiredAt: retiredPtr(rf.now),
+		RetiredFromBookID: rf.ids[shell], RetireOpID: "op-retire", RetiredAt: new(rf.now),
 	})
 	require.NoError(rf.t, err)
 	require.NoError(rf.t, rf.st.RetireBookFiles([]database.BookFileMove{{FileIDs: []string{row.ID}, SourceBookID: rf.ids[shell]}}, rf.ids[holder], v.ID))
@@ -58,8 +58,8 @@ func (rf *retiredFixture) trash(name string) {
 	rf.t.Helper()
 	b, err := rf.st.GetBookByID(rf.ids[name])
 	require.NoError(rf.t, err)
-	b.MarkedForDeletion = retiredPtr(true)
-	b.MarkedForDeletionAt = retiredPtr(rf.now.Add(-30 * 24 * time.Hour))
+	b.MarkedForDeletion = new(true)
+	b.MarkedForDeletionAt = new(rf.now.Add(-30 * 24 * time.Hour))
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(rf.t, err)
 }

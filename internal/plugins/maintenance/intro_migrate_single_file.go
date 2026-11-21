@@ -172,30 +172,28 @@ func (p *Plugin) runIntroMigrateSingleFile(ctx context.Context, rawParams json.R
 // preview, so a preview run counts and writes nothing.
 func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(introMigrateSingleFileKind, tasks.TaskSpec[introMigrateNativeParams, introMigrateResult]{
-		Common: tasks.Common{
-			Title: "Migrate intro transcripts to single-file books",
-			Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write.",
-			// UpdateBookFile whole-row write-back on BookFile rows. books: every
-			// UpdateBookFile recomputes the book's aggregates afterwards
-			// (updateBookFile with recomputeAggregates -> RecomputeBookAggregates ->
-			// ModifyBook), which commits the book row when the stored aggregate has
-			// drifted (the shared UpdateBookFile row, kinds_resources.go; stack parity
-			// review P1). It was declared as a read of books until then.
-			// The recompute reaches ModifyBook, so the row is the whole ModifyBook row:
-			// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
-			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
-			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
-			// internal/arch: overwrite is off by default, so a re-run skips a row that already carries a transcript), so the 05-tasks mapping is
-			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
-			Resume:          tasks.ResumeFromZero,
-			Priority:        tasks.PriorityLow,
-			ConcurrencyKey:  tasks.Key("books.maintenance.intro-migrate-single-file"),
-			Timeout:         2 * time.Hour,
-			ProgressTimeout: 5 * time.Minute,
-			Schedule:        sched,
-			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Migrate intro transcripts to single-file books",
+		Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write.",
+		// UpdateBookFile whole-row write-back on BookFile rows. books: every
+		// UpdateBookFile recomputes the book's aggregates afterwards
+		// (updateBookFile with recomputeAggregates -> RecomputeBookAggregates ->
+		// ModifyBook), which commits the book row when the stored aggregate has
+		// drifted (the shared UpdateBookFile row, kinds_resources.go; stack parity
+		// review P1). It was declared as a read of books until then.
+		// The recompute reaches ModifyBook, so the row is the whole ModifyBook row:
+		// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
+		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+		// internal/arch: overwrite is off by default, so a re-run skips a row that already carries a transcript), so the 05-tasks mapping is
+		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+		Resume:          tasks.ResumeFromZero,
+		Priority:        tasks.PriorityLow,
+		ConcurrencyKey:  tasks.Key("books.maintenance.intro-migrate-single-file"),
+		Timeout:         2 * time.Hour,
+		ProgressTimeout: 5 * time.Minute,
+		Schedule:        sched,
+		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in introMigrateNativeParams) (introMigrateResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return introMigrateResult{}, err

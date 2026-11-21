@@ -14,6 +14,7 @@ import (
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -387,13 +388,13 @@ func clipFingerprintVerdict(rec clipFingerprint, gotOut, gotSrc string) clipVerd
 // the version hash would silently ignore.
 func TestClipStoredProjectionCoversEveryField(t *testing.T) {
 	stored := map[string]bool{}
-	st := reflect.TypeOf(clipStoredFields{})
-	for i := 0; i < st.NumField(); i++ {
-		stored[st.Field(i).Name] = true
+	st := reflect.TypeFor[clipStoredFields]()
+	for field := range st.Fields() {
+		stored[field.Name] = true
 	}
-	ct := reflect.TypeOf(ClipParse{})
-	for i := 0; i < ct.NumField(); i++ {
-		name := ct.Field(i).Name
+	ct := reflect.TypeFor[ClipParse]()
+	for field := range ct.Fields() {
+		name := field.Name
 		if name == "Reason" {
 			continue // the one field that is not stored (see ClipParse)
 		}
@@ -519,9 +520,7 @@ func literalEdit(t *testing.T, src map[string]string, unitName string) (map[stri
 
 func maps2(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 
@@ -563,7 +562,7 @@ func TestClipGrammarSourceHashSeesTheLegacyRulesAndLocalKeywordLists(t *testing.
 	}
 	reached := map[string]bool{}
 	for _, n := range names {
-		for _, part := range strings.Split(n, ",") {
+		for part := range strings.SplitSeq(n, ",") {
 			reached[part] = true
 		}
 	}

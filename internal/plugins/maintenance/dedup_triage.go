@@ -380,20 +380,18 @@ type dedupExactTriageNativeParams struct {
 // there is no Live-only error: a preview classifies and dismisses nothing.
 func (p *Plugin) dedupExactTriageKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(dedupExactTriageKind, tasks.TaskSpec[dedupExactTriageNativeParams, TriageReport]{
-		Common: tasks.Common{
-			Title: "Dedup exact-pending triage (dry-run / apply)",
-			Help:  "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. A preview (the default) deletes nothing. Started in live mode, it dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
-			// Dismissing a candidate is a status update on a dedup candidate row,
-			// which lives in the embedding store.
-			Effects:        tasks.Writes(t6g4Res(ops.ResEmbeddings)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.dedup-exact-triage"),
-			Timeout:        30 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Dedup exact-pending triage (dry-run / apply)",
+		Help:  "Classifies all pending exact-layer dedup candidates into 5 populations (genuine/stub/fragment/title_leak/unknown) and reports counts. A preview (the default) deletes nothing. Started in live mode, it dismisses every purgeable candidate (stub/title_leak) via a status update; genuine/fragment/unknown candidates are never touched.",
+		// Dismissing a candidate is a status update on a dedup candidate row,
+		// which lives in the embedding store.
+		Effects:        tasks.Writes(t6g4Res(ops.ResEmbeddings)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.dedup-exact-triage"),
+		Timeout:        30 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in dedupExactTriageNativeParams) (TriageReport, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return TriageReport{}, err
