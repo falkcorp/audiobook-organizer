@@ -25,7 +25,10 @@ import (
 // line did not name, bumps no epoch, derives no restriction of its own, and
 // appends no journal line (the lines are already journaled). A line that names
 // no row (a restore, gap or restore_aborted line, a role kind) is ignored; role
-// kinds are rbac's StageReapply.
+// kinds are rbac's StageReapply. A user.enabled line is ignored too (a
+// malformed one is still an error): the lines past a store's head are ones
+// whose batches never committed, and re-enabling from one would open what the
+// store never opened (F4-08 Q6b; only PostRestore's clamped replay applies it).
 //
 // b must be an indexed batch over the identity keyspace (RestoreDeps.NewBatch
 // builds one); the caller commits it and, on storage.ErrConflict, calls

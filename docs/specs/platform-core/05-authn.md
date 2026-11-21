@@ -1151,6 +1151,19 @@ the config cutover, 05-config §1.12.2).
   fails, the revocation still commits and `Revocations.Gap(b, at)` is staged into the same batch
   (05-backup §5B.3.6), so a restore over that interval treats the journal as incomplete. (`Object`
   and `Detail` are 05-backup's SEC2-10 additions; role kinds are 05-rbac §7.1's.)
+- **Re-enables are journaled (F4-08 Q6b, owner ruling 2026-11-20).** An admin's re-enable of a disabled
+  user appends `user.enabled` (`Subject` the user, `Epoch` the epoch the enable set) before its
+  `credential_epoch.bumped` line, through the same pre-commit `Append`. It is the one auth kind whose replay
+  opens access, and its line exists even when its batch then fails, so only §4.14's hook applies it, and
+  only when the restore has a pre-swap store: the lines are applied in journal order (never by `At`), so an
+  enable after a disable re-opens the user and a disable after it closes the user again, and step 2's
+  pre-swap clamp then re-disables any user whose pre-swap row is not active, which undoes an enable whose
+  batch never committed. A restore with no pre-swap store, the boot's same-store re-apply (05-backup
+  §5B.3.6 step 3) and the unapplied-queue drain ignore it: the lines past a store's head never committed,
+  and nothing else proves an enable did. A malformed line (no user subject, a non-positive epoch) fails the
+  replay; an enable re-opens only a disabled user (a deleted, pending or `_system` user is left as it is).
+  A line out of journal order breaks the chain (05-backup's seq check), which closes coverage. 05-backup's
+  kind list gains `user.enabled` once F3-07 releases that file.
 - **Hook lines name their restore (DATA8-7).** A line the post-restore hook (§4.14) appends carries the
   seq of its restore's `restore` line in the field `Revocation.RestoreSeq` (JSON `restore_seq`, 05-backup
   §5B.3.6); its `Detail` keeps only the kind-specific elements. The

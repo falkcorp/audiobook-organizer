@@ -438,6 +438,13 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 			}
 			details = map[string]any{"links_deleted": links}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDisabled, Subject: subject, Epoch: up.CredentialEpoch})
+		} else {
+			// The re-enable is journaled too (F4-08 Q6b), so a restore that
+			// re-applies an earlier disable sees the enable after it in journal
+			// order. The line is written before the commit like every line;
+			// only a replay clamped by the pre-swap store applies it
+			// (restorePlan.enable), so a batch that never commits opens nothing.
+			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserEnabled, Subject: subject, Epoch: up.CredentialEpoch})
 		}
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject, Details: details})

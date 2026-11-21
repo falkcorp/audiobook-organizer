@@ -30,10 +30,19 @@ import (
 type Kind string
 
 const (
-	APIKeyRevoked         Kind = "apikey.revoked"
-	APIKeyDisabled        Kind = "apikey.disabled" // any status change away from active, needs_confirmation included
-	UserDisabled          Kind = "user.disabled"
-	UserDeleted           Kind = "user.deleted"
+	APIKeyRevoked  Kind = "apikey.revoked"
+	APIKeyDisabled Kind = "apikey.disabled" // any status change away from active, needs_confirmation included
+	UserDisabled   Kind = "user.disabled"
+	UserDeleted    Kind = "user.deleted"
+	// UserEnabled is an admin's re-enable of a disabled user (F4-08 Q6b, owner
+	// ruling 2026-11-20): Subject user, Epoch the epoch the enable set. It is
+	// the one kind whose replay can open access, so it is applied only where
+	// the replay is clamped by the pre-swap store (auth.PostRestore with a
+	// pre-swap store), which proves the enable committed; every other replay
+	// (the same-store tail, the queue drain, a restore with no pre-swap store)
+	// ignores it, so an enable whose batch never committed never takes effect
+	// (05-backup §5B.3.6 "Re-enables").
+	UserEnabled           Kind = "user.enabled"
 	CredentialEpochBumped Kind = "credential_epoch.bumped"
 	PasswordChanged       Kind = "password.changed"  // change or reset (SEC2-11; DATA2-7's credential.changed)
 	IdentityUnlinked      Kind = "identity.unlinked" // Detail = [provider]
