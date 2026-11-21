@@ -1106,8 +1106,12 @@ func (w *fileIntroWorker) boundCall(ctx context.Context) (context.Context, conte
 		return ctx, func() {}
 	}
 	cctx, cancel := context.WithCancelCause(ctx)
-	stop := make(chan struct{})
+	// Read once, here: the watcher must not read the package variable after
+	// the call it watches has ended.
+	pause := fileIntroPauseInterval
+	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(done)
 		for {
 			wait := time.Until(dl.Add(-w.callMargin))
 			if wait <= 0 {
@@ -1115,7 +1119,7 @@ func (w *fileIntroWorker) boundCall(ctx context.Context) (context.Context, conte
 					cancel(errFileIntroYieldNow)
 					return
 				}
-				wait = fileIntroPauseInterval
+				wait = pause
 			}
 			t := time.NewTimer(wait)
 			select {
@@ -1129,7 +1133,12 @@ func (w *fileIntroWorker) boundCall(ctx context.Context) (context.Context, conte
 			}
 		}
 	}()
-	return cctx, func() { close(stop); cancel(nil) }
+	// The release joins the watcher: when it returns, no goroutine of this
+	// call is left running. Before, release only signalled stop, so the
+	// watcher could outlive the call (and the run), still reading
+	// fileIntroPauseInterval while a test's cleanup restored it, which -race
+	// reported under load.
+	return cctx, func() { close(stop); cancel(nil); <-done }
 }
 
 func (w *fileIntroWorker) progress(msg string) {
