@@ -71,9 +71,15 @@ type identityInputs struct {
 	// 3 says they declare nothing.
 	Modules []identityModule
 
-	Users       *authstore.Store
-	Roles       *rbacstore.Store
-	Audit       audit.Logger
+	Users *authstore.Store
+	Roles *rbacstore.Store
+	// Audit is the boot's one audit store (buildAudit, before P4b); a
+	// concrete pointer, so a nil store is caught here and not passed on as
+	// a non-nil audit.Logger.
+	Audit *audit.Store
+	// Revocations is the journal component, an interface so tests can
+	// inject one. A typed-nil component passes the check below: B3 passes
+	// the bound *journal.Component or refuses to serve first.
 	Revocations journal.RevocationJournal
 
 	// AuthOptions is app.Options.Auth; Authenticators is
