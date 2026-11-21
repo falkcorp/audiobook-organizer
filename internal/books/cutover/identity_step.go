@@ -31,8 +31,10 @@ import (
 // M7 and the step before). cfg.StepID is IdentityCutoverID, and may be left
 // empty.
 //
-// Nothing registers it: F4-08 adds it to the cutover's step list, beside the
-// importers and the catalog only the booted core has. The step is a cutover
+// NewFlip builds it into the cutover list when FlipOptions.Identity is set,
+// beside the importers and the catalog only the booted core has; ABO leaves
+// that switch off until the release that turns the identity cutover on. The
+// step is a cutover
 // step (Breaking, BootBlocking) over the identity families' retired claims
 // and the idx: sub-claims beneath them (m3.SourceRanges).
 func IdentityStep(cfg m3.Config, raisesLevel int, after ...storage.StepRef) (datamigrate.DataMigration, error) {
