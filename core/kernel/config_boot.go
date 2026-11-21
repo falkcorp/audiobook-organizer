@@ -66,7 +66,7 @@ func (k *Kernel) bootCoreConfig(ctx context.Context) error {
 		return err
 	}
 	k.cfgBoot = cb
-	// A store is opened when a module declares storage or the app compiled in
+	// A store is opened when the app wants one (Config.WantsStore) or compiled in
 	// a path (Config.StoragePath); either way it keeps its state, the keyring
 	// first, in the directory step 0 chose.
 	if k.cfg.WantsStore() || k.cfg.StoragePath != "" {
