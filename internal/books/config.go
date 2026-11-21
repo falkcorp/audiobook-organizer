@@ -448,6 +448,29 @@ type schedulerSchedules struct {
 	Reconcile                tasks.ScheduleConfig `json:"reconcile"`
 	ResolveProductionAuthors tasks.ScheduleConfig `json:"resolve_production_authors"`
 	SeriesPrune              tasks.ScheduleConfig `json:"series_prune"`
+
+	// F5-14: the tasks HEAD scheduled with no scheduled.<entry> setting, at
+	// HEAD's cadence (internal/scheduler/testdata/cadence.golden) and its
+	// maintenanceOrder index as Order in the nightly window.
+	AcoustIDOnlineLookup      tasks.ScheduleConfig `json:"acoustid_online_lookup"`
+	AIJournalPrune            tasks.ScheduleConfig `json:"ai_journal_prune"`
+	CleanupActivityLog        tasks.ScheduleConfig `json:"cleanup_activity_log"`
+	CleanupOldBackups         tasks.ScheduleConfig `json:"cleanup_old_backups"`
+	CollectionsRefresh        tasks.ScheduleConfig `json:"collections_refresh"`
+	DedupLLMReview            tasks.ScheduleConfig `json:"dedup_llm_review"`
+	FileIntegrityCheck        tasks.ScheduleConfig `json:"file_integrity_check"`
+	IdentificationAdvance     tasks.ScheduleConfig `json:"identification_advance"`
+	LibraryOrganize           tasks.ScheduleConfig `json:"library_organize"`
+	LibrarySizeRefresh        tasks.ScheduleConfig `json:"library_size_refresh"`
+	NightlyActivityCompaction tasks.ScheduleConfig `json:"nightly_activity_compaction"`
+	OrphanBookFilesCleanup    tasks.ScheduleConfig `json:"orphan_book_files_cleanup"`
+	PurgeDeleted              tasks.ScheduleConfig `json:"purge_deleted"`
+	ReportsPrune              tasks.ScheduleConfig `json:"reports_prune"`
+	SeriesNormalize           tasks.ScheduleConfig `json:"series_normalize"`
+	TempFileCleanup           tasks.ScheduleConfig `json:"temp_file_cleanup"`
+	TombstoneCleanup          tasks.ScheduleConfig `json:"tombstone_cleanup"`
+	TranscodeTempCleanup      tasks.ScheduleConfig `json:"transcode_temp_cleanup"`
+	TrashCleanup              tasks.ScheduleConfig `json:"trash_cleanup"`
 }
 
 type schedulerSettings struct {
@@ -881,6 +904,26 @@ func schedulerDefaults() schedulerSettings {
 			Reconcile:                tasks.ScheduleConfig{Enabled: false},
 			ResolveProductionAuthors: tasks.ScheduleConfig{Enabled: false},
 			SeriesPrune:              tasks.ScheduleConfig{Enabled: false},
+
+			AcoustIDOnlineLookup:      tasks.ScheduleConfig{Enabled: false},
+			AIJournalPrune:            tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour), Window: "nightly", Order: 11},
+			CleanupActivityLog:        tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour), Window: "nightly", Order: 10},
+			CleanupOldBackups:         tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 12},
+			CollectionsRefresh:        tasks.ScheduleConfig{Enabled: true, Every: dur(time.Hour)},
+			DedupLLMReview:            tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 2},
+			FileIntegrityCheck:        tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 5},
+			IdentificationAdvance:     tasks.ScheduleConfig{Enabled: true, Every: dur(5 * time.Minute)},
+			LibraryOrganize:           tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 18},
+			LibrarySizeRefresh:        tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 16},
+			NightlyActivityCompaction: tasks.ScheduleConfig{Enabled: true, DailyAt: "00:10"},
+			OrphanBookFilesCleanup:    tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 6},
+			PurgeDeleted:              tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour), Window: "nightly", Order: 8},
+			ReportsPrune:              tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour), Window: "nightly", Order: 15},
+			SeriesNormalize:           tasks.ScheduleConfig{Enabled: false},
+			TempFileCleanup:           tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 13},
+			TombstoneCleanup:          tasks.ScheduleConfig{Enabled: true, Every: dur(24 * time.Hour), Window: "nightly", Order: 7},
+			TranscodeTempCleanup:      tasks.ScheduleConfig{Enabled: true, Every: dur(time.Hour)},
+			TrashCleanup:              tasks.ScheduleConfig{Enabled: true, Window: "nightly", Order: 14},
 		},
 	}
 }
