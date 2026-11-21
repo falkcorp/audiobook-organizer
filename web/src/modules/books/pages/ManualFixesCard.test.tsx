@@ -5,10 +5,10 @@
 
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ManualFixesCard } from './MaintenanceTab';
-import * as api from '../../services/api';
+import { ManualFixesCard } from './ManualFixesCard';
+import * as api from '../../../services/api';
 
-vi.mock('../../services/api', () => ({
+vi.mock('../../../services/api', () => ({
   listMaintenanceJobs: vi.fn(),
   runMaintenanceJob: vi.fn(),
   pollOperation: vi.fn(),
