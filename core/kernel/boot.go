@@ -133,6 +133,11 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 			return nil, err
 		}
 	}
+	if f := k.cfg.beforeP5; f != nil && !describe {
+		if err := f(k); err != nil {
+			return nil, err
+		}
+	}
 	if err := k.phase(phaseP5, func() error { return k.services(ctx, describe) }); err != nil {
 		return nil, err
 	}

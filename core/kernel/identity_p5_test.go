@@ -110,6 +110,21 @@ func TestIdentityP5_P7CommitsSeedsAndFeedsImportedRoleIDs(t *testing.T) {
 	}
 }
 
+// TestIdentityP5_ImportersRefuseAfterFreeze: once P5 built and froze rbac the
+// role importer refuses: an import can only land at P4b, before the catalog
+// the role cache is loaded from is fixed.
+func TestIdentityP5_ImportersRefuseAfterFreeze(t *testing.T) {
+	h, c, _ := probeHost(t, true)
+	k := h.mustBoot(c)
+	defer h.close(k)
+	b := k.ident.roles.NewBatch()
+	defer func() { _ = b.Close() }()
+	late := &rbac.Role{Name: "custom.robin", Origin: rbac.OriginCustom, Added: []rbac.Permission{"alfred:signal"}}
+	if err := k.importers().values().Roles.ImportRole(b, late); err == nil {
+		t.Fatal("a role import after Freeze was accepted")
+	}
+}
+
 // bootOpened boots with the switch on and opens the bus the way Run's step 4
 // does.
 func bootOpened(t *testing.T) (*Kernel, *depsProbe) {

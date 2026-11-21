@@ -128,16 +128,29 @@ func TestLateImporters_IdentityRefusesBeforeBind(t *testing.T) {
 	imp.Audit.Emit(ctx, audit.Event{}) // drops: it must not panic
 }
 
-// TestIdentityBoot_ImportersForwardToTheServiceStores: after P4b the importer a
+// TestIdentityBoot_ImportersForwardToTheServiceStores: at P4b the importer a
 // Cutover func holds writes to the very store instances the P5 services are
 // built over, not copies: what an importer commits is readable through
 // k.ident, and an imported role naming the module's declared permission is
 // accepted while one naming an undeclared scope is refused (the early catalog).
 func TestIdentityBoot_ImportersForwardToTheServiceStores(t *testing.T) {
 	h, c := identityHost(t)
-	k := h.mustBoot(c)
+	// The checks run between P4d and P5, where a Cutover step's importers
+	// still reach an unfrozen rbac; a failure is the boot's.
+	c.beforeP5 = func(k *Kernel) error {
+		importersForwardToTheServiceStores(t, k)
+		return nil
+	}
+	h.close(h.mustBoot(c))
+}
+
+func importersForwardToTheServiceStores(t *testing.T, k *Kernel) {
+	t.Helper()
 	ctx := t.Context()
 	imp := k.importers().values()
+	if u, r, _ := k.importers().identity(); u != k.ident.users || r != k.ident.roles {
+		t.Fatalf("the bound importers are not the identity boot's store instances: %v, %v", u, r)
+	}
 
 	b := k.ident.roles.NewBatch()
 	good := &rbac.Role{Name: "custom.robin", Origin: rbac.OriginCustom, Added: []rbac.Permission{"alfred:signal"}}
