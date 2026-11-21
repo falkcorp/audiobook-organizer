@@ -123,3 +123,61 @@ func TestKernelBoot_CoreConfigUsesSeamCache(t *testing.T) {
 		t.Errorf("a second boot over the same cache holds %d templates, want %d: it built the core sections again", got, first)
 	}
 }
+
+// TestKernelBoot_EveryConfigStoreUsesSeamCache: every config store a boot over
+// a section cache makes is built over that cache, step 0's scratch judgement
+// store included, and a second boot over it builds no template the first did
+// not. The Len check of TestKernelBoot_CoreConfigUsesSeamCache cannot see a
+// store that bypasses the cache (it builds uncached and leaves Len alone);
+// step 0's CheckConfig store did exactly that once, because it spelled its
+// options out by hand and lost SectionCache, and the hello crash matrix ran
+// three times slower until it timed out in CI.
+func TestKernelBoot_EveryConfigStoreUsesSeamCache(t *testing.T) {
+	cache := config.NewSectionCache()
+	var stores, bypassed int
+	orig := newConfigStore
+	newConfigStore = func(o config.Options) (*config.Store, error) {
+		stores++
+		if o.SectionCache != cache {
+			bypassed++
+		}
+		return orig(o)
+	}
+	t.Cleanup(func() { newConfigStore = orig })
+
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{SectionCache: cache})
+	state := t.TempDir()
+	boot := func() {
+		t.Helper()
+		c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
+		c.StateDirDefault = state
+		k, err := newKCtx(t, ctx, c)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := k.closeCore(context.Background(), time.Now().Add(defaultShutdownBudget)); err != nil {
+			t.Errorf("close: %v", err)
+		}
+		ents, err := os.ReadDir(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			if err := os.RemoveAll(filepath.Join(state, e.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	boot()
+	if stores < 2 {
+		t.Fatalf("the boot made %d config stores, want step 0's store and its judgement store at least", stores)
+	}
+	if bypassed != 0 {
+		t.Errorf("%d of the boot's %d config stores were built without the section cache in its context", bypassed, stores)
+	}
+	first := cache.Len()
+	boot()
+	if got := cache.Len(); got != first {
+		t.Errorf("a second boot over the same cache holds %d templates, want %d", got, first)
+	}
+}

@@ -101,7 +101,7 @@ func (k *Kernel) coreConfig() (*coreConfig, error) {
 // newCoreConfig builds the defaults-only store over coreSections(). cache, when
 // non-nil, is where it gets its sections built (config.Options.SectionCache).
 func newCoreConfig(appID string, d CoreDefaults, cache *config.SectionCache) (*coreConfig, error) {
-	st, err := config.NewStore(config.Options{
+	st, err := newConfigStore(config.Options{
 		AppID:        appID,
 		Environ:      []string{}, // no environment layer: os.Environ is not read
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
