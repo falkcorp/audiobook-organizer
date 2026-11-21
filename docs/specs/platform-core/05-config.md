@@ -1571,7 +1571,7 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 | `deluge_move_enabled` | blob | `modules.books.download.move_enabled` | k | |
 | `protected_paths` | blob | `core.library.protected_paths` | i | 05-library §5L.10 |
 | `auto_update` | blob | `core.updater.*` | k | sub-key rows below |
-| `maintenance` | blob | `core.tasks.windows.nightly.*`, `modules.books.maintenance.*` | k | sub-key rows below |
+| `maintenance` | blob | `core.tasks.windows.nightly.*`, `core.log.journal.prune_in_window`, `modules.books.maintenance.*` | k | sub-key rows below |
 | `download_client` | blob | `download/deluge` instance | i | sub-key rows below |
 | `auto_rename_on_apply` | blob | `modules.books.organize.auto_rename_on_apply` | k | |
 | `auto_write_tags_on_apply` | blob | `modules.books.tags.auto_write_tags_on_apply` | k | |
@@ -1592,7 +1592,8 @@ of M6, `o` operator-only at HEAD (nothing to migrate; its retired names follow �
 |---|---|---|---|---|
 | `itunes.path_mappings` | blob | `core.library.mappings` entries, `Source: "itunes"` | i | 05-library §5L.10 |
 | `maintenance.enabled`, `maintenance.window_start`, `maintenance.window_end` | blob | `core.tasks.windows.nightly.{enabled, start, end}` | k | 05-tasks |
-| every other `maintenance.<field>` (15: the window's job switches and `acoustid_nightly_limit`) | blob | `modules.books.maintenance.<field>` | k | |
+| `maintenance.purge_old_logs` | blob | `core.log.journal.prune_in_window` | k | HEAD's log purge is core's `core.log.journal.prune`; the switch gates its window run (05-logging §5, F5-14b) |
+| every other `maintenance.<field>` (14: the window's job switches and `acoustid_nightly_limit`) | blob | `modules.books.maintenance.<field>` | k | |
 | `auto_update.enabled` | blob | `core.updater.mode` | k | `true` → `check` (unattended apply stays check-only, 05-updater), `false` → `off` |
 | `auto_update.channel` | blob | `core.updater.channel` | k | `develop` → `prerelease` |
 | `auto_update.check_minutes` | blob | `core.updater.schedules.check` | k | `{enabled: true, every: <minutes>}` |
