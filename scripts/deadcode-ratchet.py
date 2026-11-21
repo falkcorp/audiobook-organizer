@@ -146,6 +146,7 @@ TEST_HELPER_DIRS = {
     "metricstest",
     "writertest",
     "searchindextest",
+    "tooltest",
 }
 EXCLUDED_PKG_NAMES = {"testutil", "conformance", "rapidgen"} | TEST_HELPER_DIRS
 
