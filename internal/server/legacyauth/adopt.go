@@ -138,6 +138,42 @@ func AdminRefused(ctx context.Context) bool {
 	return ok && !b.AdminHeld(ctx)
 }
 
+// KeyMayActAsAdmin is HEAD's APIKeyMayActAsAdmin under core identity (F4-08
+// B7c), and bridged reports whether the request runs under core identity at
+// all (false: HEAD's own test decides, may is meaningless). A principal that is
+// not an API key may use the admin role, as a request with no key did. An API
+// key may only when it holds every legacy atom, judged through the checker
+// stage 12 bound: HEAD refused a key whose non-empty scopes leave out an atom
+// and passed a key with empty scopes, which holds all of its owner's
+// permissions, and an admin owner holds every atom, so the two agree. A
+// missing principal fails closed.
+func KeyMayActAsAdmin(ctx context.Context) (may, bridged bool) {
+	b, ok := BridgeFrom(ctx)
+	if !ok {
+		return false, false
+	}
+	p, ok := coreauth.PrincipalFrom(ctx)
+	if !ok {
+		return false, true
+	}
+	if p.Method != coreauth.MethodAPIKey {
+		return true, true
+	}
+	return b.keyHoldsEveryAtom(ctx), true
+}
+
+// keyHoldsEveryAtom reports whether the caller satisfies the table entry of
+// every atom internal/auth defines (auth.All). An atom the table does not know
+// is not held.
+func (b *Bridge) keyHoldsEveryAtom(ctx context.Context) bool {
+	for _, p := range auth.All() {
+		if !b.Can(ctx, string(p)) {
+			return false
+		}
+	}
+	return true
+}
+
 // Authenticate is the adapter of HEAD's RequireAuth (05-http-api §8.3
 // RequireAuth row). It authenticates nothing: it fills HEAD's context values
 // from the principal stage 12 bound (FromCorePrincipal) and hands the user to
