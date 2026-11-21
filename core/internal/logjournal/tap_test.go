@@ -329,13 +329,15 @@ func TestJournal_PruneScheduleKeyDeclared(t *testing.T) {
 	}
 
 	// The settings keep the tags the kernel's declaration had: enabled and
-	// queue_size are restart keys, min_level is an enum, retention 0 keeps.
+	// queue_size are restart keys, min_level is an enum, retention 0 keeps;
+	// prune_in_window (F5-14b) is live.
 	st := reflect.TypeFor[logjournal.Settings]()
 	for name, want := range map[string][2]string{
 		"Enabled":       {"enabled", "restart"},
 		"MinLevel":      {"min_level", ""},
 		"RetentionDays": {"retention_days", ""},
 		"QueueSize":     {"queue_size", "restart"},
+		"PruneInWindow": {"prune_in_window", ""},
 	} {
 		f, ok := st.FieldByName(name)
 		if !ok || f.Tag.Get("json") != want[0] || f.Tag.Get("reload") != want[1] {
