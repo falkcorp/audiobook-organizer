@@ -1,7 +1,7 @@
 // file: core/integrations/download/harness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: e73fd165-bbea-420c-b1e0-e9822c051be7
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package download_test
 
@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/download"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/internal/instancestore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -135,7 +136,7 @@ func newHarness(t testing.TB, extra ...integrations.Descriptor) *harness {
 		builds:  map[integrations.InstanceID]int{},
 		fakes:   map[integrations.InstanceID]*coretest.FakeDownloadClient{},
 	}
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: keyspaceOf(t, db, secretsOwner), AppID: "gotham", Now: h.clock.now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: keyspaceOf(t, db, secretsOwner), AppID: "gotham", Now: h.clock.now})
 	if err != nil {
 		t.Fatalf("open secrets: %v", err)
 	}

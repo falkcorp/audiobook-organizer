@@ -1,7 +1,7 @@
 // file: core/internal/confighttp/env_test.go
-// version: 1.0.1
+// version: 1.0.2
 // guid: aee43407-160f-4883-ad9b-997aadb09143
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package confighttp
 
@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -25,6 +24,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/config/configtest"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -130,7 +130,7 @@ func newRig(t *testing.T, o config.Options) *rig {
 		o.AppID = "gotham"
 	}
 	o.Logger = slog.New(slog.DiscardHandler)
-	o.BootRecordRoot = func(string) (*os.Root, error) { return os.OpenRoot(dir) }
+	o.BootRecordRoot = func(string) (config.StateFiles, error) { return statefs.Open(context.Background(), dir) }
 	st, err := config.NewStore(o)
 	if err != nil {
 		t.Fatal(err)

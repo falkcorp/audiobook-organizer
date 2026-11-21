@@ -70,7 +70,6 @@ INITIALS FORMATTING: Always use spaces after periods in initials: "C. B. Lee" no
 Return ONLY valid JSON: {"suggestions": [{"group_index": N, "action": "merge|split|rename|skip|alias|reclassify", "canonical_name": "Correct Name", "reason": "brief explanation using book title evidence", "confidence": "high|medium|low", "roles": {"author": {"name": "Name", "variants": ["V1"], "reason": "why"}, "narrator": {"name": "Name", "ids": [], "reason": "why"}, "publisher": {"name": "Name", "ids": [], "reason": "why"}}}]}`
 
 func runDedupBenchPass2(cmd *cobra.Command, args []string) error {
-	config.InitConfig()
 	apiKey := config.AppConfig.OpenAIAPIKey
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY env var required")

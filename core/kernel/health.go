@@ -1,7 +1,7 @@
 // file: core/kernel/health.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: c95c4573-5303-4883-ab14-5c79d5e895ea
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -47,6 +47,10 @@ type enginePinger interface {
 type kernelReporters struct {
 	Storage health.Reporter // core.storage
 	Secrets health.Reporter // core.secrets
+	// Config is core.config, registered push-only when the boot built a config
+	// store (config_boot.go): the store's tokens, pushed once
+	// P4d has attached the DB layer.
+	Config health.Reporter
 }
 
 // buildHealth builds the App's health.Registry and registers core.storage and

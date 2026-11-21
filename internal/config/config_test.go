@@ -11,73 +11,47 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestInitConfig tests configuration initialization with defaults
-func TestInitConfig(t *testing.T) {
-	// Arrange
-	viper.Reset()
+// TestFactoryDefaultsCore pins the shipped core defaults of a fresh install.
+func TestFactoryDefaultsCore(t *testing.T) {
+	d := factoryDefaultConfigForTest()
 
-	// Act
-	InitConfig()
-
-	// Assert - Verify database defaults
-	dbType := viper.GetString("database_type")
-	if dbType != "pebble" {
-		t.Errorf("Expected database_type to be 'pebble', got '%s'", dbType)
+	if d.DatabaseType != "pebble" {
+		t.Errorf("Expected database_type to be 'pebble', got '%s'", d.DatabaseType)
 	}
-
-	// Verify organization strategy defaults
-	orgStrategy := viper.GetString("organization_strategy")
-	if orgStrategy != "auto" {
-		t.Errorf("Expected organization_strategy to be 'auto', got '%s'", orgStrategy)
+	if d.OrganizationStrategy != "auto" {
+		t.Errorf("Expected organization_strategy to be 'auto', got '%s'", d.OrganizationStrategy)
 	}
-
-	if scanOnStartup := viper.GetBool("scan_on_startup"); scanOnStartup {
+	if d.ScanOnStartup {
 		t.Error("Expected scan_on_startup to be false by default")
 	}
-
-	if autoOrganize := viper.GetBool("auto_organize"); !autoOrganize {
+	if !d.AutoOrganize {
 		t.Error("Expected auto_organize to be true by default")
 	}
-
-	// Verify naming patterns
-	expectedFolderPattern := "{author}/{series}/{title} ({print_year})"
-	folderPattern := viper.GetString("folder_naming_pattern")
-	if folderPattern != expectedFolderPattern {
-		t.Errorf("Expected folder_naming_pattern to be '%s', got '%s'", expectedFolderPattern, folderPattern)
+	if want := "{author}/{series}/{title} ({print_year})"; d.FolderNamingPattern != want {
+		t.Errorf("Expected folder_naming_pattern to be '%s', got '%s'", want, d.FolderNamingPattern)
 	}
-
-	expectedFilePattern := "{title} - {track:02d}"
-	filePattern := viper.GetString("file_naming_pattern")
-	if filePattern != expectedFilePattern {
-		t.Errorf("Expected file_naming_pattern to be '%s', got '%s'", expectedFilePattern, filePattern)
+	if want := "{title} - {track:02d}"; d.FileNamingPattern != want {
+		t.Errorf("Expected file_naming_pattern to be '%s', got '%s'", want, d.FileNamingPattern)
 	}
-
-	// Verify backup defaults
-	if createBackups := viper.GetBool("create_backups"); !createBackups {
+	if !d.CreateBackups {
 		t.Error("Expected create_backups to be true by default")
 	}
 }
 
 // TestStorageQuotaDefaults tests storage quota default values
 func TestStorageQuotaDefaults(t *testing.T) {
-	// Arrange-Act-Assert: Test disk quota defaults
-	viper.Reset()
-	InitConfig()
+	d := factoryDefaultConfigForTest()
 
-	if enableDiskQuota := viper.GetBool("enable_disk_quota"); enableDiskQuota {
+	if d.EnableDiskQuota {
 		t.Error("Expected enable_disk_quota to be false by default")
 	}
-
-	diskQuotaPercent := viper.GetInt("disk_quota_percent")
-	if diskQuotaPercent != 80 {
-		t.Errorf("Expected disk_quota_percent to be 80, got %d", diskQuotaPercent)
+	if d.DiskQuotaPercent != 80 {
+		t.Errorf("Expected disk_quota_percent to be 80, got %d", d.DiskQuotaPercent)
 	}
-
-	if enableUserQuotas := viper.GetBool("enable_user_quotas"); enableUserQuotas {
+	if d.EnableUserQuotas {
 		t.Error("Expected enable_user_quotas to be false by default")
 	}
 }
@@ -85,8 +59,7 @@ func TestStorageQuotaDefaults(t *testing.T) {
 // TestMetadataDefaults tests metadata configuration defaults
 func TestMetadataDefaults(t *testing.T) {
 	// Arrange-Act-Assert: Test metadata defaults
-	viper.Reset()
-	InitConfig()
+	AppConfig := factoryDefaultConfigForTest()
 
 	// Verify metadata sources are populated
 	if len(AppConfig.MetadataSources) == 0 {
@@ -107,41 +80,27 @@ func TestMetadataDefaults(t *testing.T) {
 
 // TestAIParsingDefaults tests AI parsing configuration defaults
 func TestAIParsingDefaults(t *testing.T) {
-	// Arrange-Act-Assert: Test AI defaults
-	viper.Reset()
-	InitConfig()
+	d := factoryDefaultConfigForTest()
 
-	if enableAI := viper.GetBool("enable_ai_parsing"); !enableAI {
+	if !d.EnableAIParsing {
 		t.Error("Expected enable_ai_parsing to be true by default")
 	}
-
-	apiKey := viper.GetString("openai_api_key")
-	if apiKey != "" {
-		t.Errorf("Expected openai_api_key to be empty by default, got '%s'", apiKey)
+	if d.OpenAIAPIKey != "" {
+		t.Errorf("Expected openai_api_key to be empty by default, got '%s'", d.OpenAIAPIKey)
 	}
 }
 
 // TestPerformanceDefaults tests performance configuration defaults
 func TestPerformanceDefaults(t *testing.T) {
-	// Arrange-Act-Assert: Test performance defaults
-	viper.Reset()
-	InitConfig()
-
-	concurrentScans := viper.GetInt("concurrent_scans")
-	if concurrentScans < 4 {
-		t.Errorf("Expected concurrent_scans to be >= 4, got %d", concurrentScans)
+	if got := factoryDefaultConfigForTest().ConcurrentScans; got < 4 {
+		t.Errorf("Expected concurrent_scans to be >= 4, got %d", got)
 	}
 }
 
 // TestLoggingDefaults tests logging configuration defaults
 func TestLoggingDefaults(t *testing.T) {
-	// Arrange-Act-Assert: Test logging defaults
-	viper.Reset()
-	InitConfig()
-
-	logLevel := viper.GetString("log_level")
-	if logLevel != "info" {
-		t.Errorf("Expected log_level to be 'info', got '%s'", logLevel)
+	if got := factoryDefaultConfigForTest().LogLevel; got != "info" {
+		t.Errorf("Expected log_level to be 'info', got '%s'", got)
 	}
 }
 
@@ -209,9 +168,7 @@ func TestMetadataSourceStructure(t *testing.T) {
 
 // TestSupportedExtensionsDefaults tests supported extensions defaults
 func TestSupportedExtensionsDefaults(t *testing.T) {
-	// Arrange-Act
-	viper.Reset()
-	InitConfig()
+	AppConfig := factoryDefaultConfigForTest()
 
 	// Assert
 	extensions := AppConfig.SupportedExtensions
@@ -237,32 +194,14 @@ func TestSupportedExtensionsDefaults(t *testing.T) {
 	}
 }
 
-// TestDatabaseTypeNormalization tests SQLite3 to SQLite normalization
-func TestDatabaseTypeNormalization(t *testing.T) {
-	// Arrange
-	viper.Reset()
-	viper.Set("database_type", "sqlite3")
-
-	// Act
-	InitConfig()
-
-	// Assert
-	if AppConfig.DatabaseType != "sqlite" {
-		t.Errorf("Expected database_type to be normalized to 'sqlite', got '%s'", AppConfig.DatabaseType)
-	}
-}
-
 // TestDefaultMetadataSources tests the default metadata sources configuration
 func TestDefaultMetadataSources(t *testing.T) {
 	// Arrange
-	viper.Reset()
-
-	// Act
-	InitConfig()
+	AppConfig := factoryDefaultConfigForTest()
 
 	// Assert
 	if len(AppConfig.MetadataSources) < 5 {
-		t.Errorf("Expected at least 5 default metadata sources, got %d", len(AppConfig.MetadataSources))
+		t.Fatalf("Expected at least 5 default metadata sources, got %d", len(AppConfig.MetadataSources))
 	}
 
 	// Verify Audible is first priority (best for audiobook search, no auth needed)
@@ -287,8 +226,7 @@ func TestDefaultMetadataSources(t *testing.T) {
 // TestConfigurationValidation tests basic configuration validation
 func TestConfigurationValidation(t *testing.T) {
 	// Arrange-Act-Assert: Verify that invalid database types are handled
-	viper.Reset()
-	InitConfig()
+	AppConfig := factoryDefaultConfigForTest()
 
 	// Verify valid database types
 	validTypes := []string{"pebble", "sqlite"}
@@ -454,10 +392,8 @@ func TestAppConfigRace_MutateSnapshot(t *testing.T) {
 	wg.Wait()
 }
 
-func TestInitConfig_EmbeddingDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
+func TestFactoryDefaults_EmbeddingDefaults(t *testing.T) {
+	snap := factoryDefaultConfigForTest()
 
 	assert.True(t, snap.Embedding.Enabled)
 	assert.Equal(t, "text-embedding-3-large", snap.Embedding.Model)
@@ -470,45 +406,21 @@ func TestInitConfig_EmbeddingDefaults(t *testing.T) {
 	assert.Equal(t, "hnsw", snap.Embedding.VectorBackend)
 }
 
-func TestInitConfig_EmbeddingFromEnv(t *testing.T) {
-	t.Setenv("EMBEDDING_ENABLED", "false")
-	t.Setenv("EMBEDDING_BASE_URL", "http://localhost:11434/v1")
-	t.Setenv("EMBEDDING_MODEL", "bge-m3")
-	t.Setenv("EMBEDDING_DIMENSIONS", "1024")
-	// Deliberately "chromem", not "hnsw": hnsw is now the default, so asserting
-	// hnsw here would pass whether or not the env binding still works. The
-	// non-default value is the only one that proves VECTOR_INDEX_BACKEND is live.
-	t.Setenv("VECTOR_INDEX_BACKEND", "chromem")
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
-
-	assert.False(t, snap.Embedding.Enabled)
-	assert.Equal(t, "http://localhost:11434/v1", snap.Embedding.BaseURL)
-	assert.Equal(t, "bge-m3", snap.Embedding.Model)
-	assert.Equal(t, 1024, snap.Embedding.Dimensions)
-	assert.Equal(t, "chromem", snap.Embedding.VectorBackend)
-}
-
-// TestInitConfig_AIBackendLocalBaseURLDefaultsEmpty locks the fresh-install
+// TestFactoryDefaults_AIBackendLocalBaseURLDefaultsEmpty locks the fresh-install
 // default for ai_backend.local_base_url at empty string. It previously
 // hardcoded one developer's own LAN Ollama host
 // (http://192.168.0.20:11434/v1), which every other install silently
 // inherited as a dead endpoint default (TASK-018). It must never be
 // reinstated as a shipped default; see the SetDefault call site and
 // ResetToDefaultsForTest in config.go for the full rationale.
-func TestInitConfig_AIBackendLocalBaseURLDefaultsEmpty(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
+func TestFactoryDefaults_AIBackendLocalBaseURLDefaultsEmpty(t *testing.T) {
+	snap := factoryDefaultConfigForTest()
 
 	assert.Equal(t, "", snap.AIBackend.LocalBaseURL)
 }
 
-func TestInitConfig_MetadataScoringDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
+func TestFactoryDefaults_MetadataScoringDefaults(t *testing.T) {
+	snap := factoryDefaultConfigForTest()
 	assert.False(t, snap.MetadataScoring.EmbeddingEnabled)
 	assert.Equal(t, 0.82, snap.MetadataScoring.EmbeddingMinScore)
 	assert.Equal(t, 0.88, snap.MetadataScoring.EmbeddingBestMatch)
@@ -517,45 +429,18 @@ func TestInitConfig_MetadataScoringDefaults(t *testing.T) {
 	assert.Equal(t, 5, snap.MetadataScoring.LLMRerankTopK)
 }
 
-func TestInitConfig_MetadataScoringFromEnv(t *testing.T) {
-	t.Setenv("METADATA_SCORING_EMBEDDING_ENABLED", "true")
-	t.Setenv("METADATA_SCORING_LLM_RERANK_TOP_K", "10")
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
-	assert.True(t, snap.MetadataScoring.EmbeddingEnabled)
-	assert.Equal(t, 10, snap.MetadataScoring.LLMRerankTopK)
-}
-
 // The incremental iTunes sync was removed on 2026-10-08 (import is manual
 // only), and with it the sync_enabled / sync_interval settings.
-func TestInitConfig_ITunesHasNoSyncSettings(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	typ := reflect.TypeOf(Snapshot().ITunes)
+func TestITunesConfigHasNoSyncSettings(t *testing.T) {
+	typ := reflect.TypeOf(ITunesConfig{})
 	for _, name := range []string{"SyncEnabled", "SyncInterval"} {
 		_, ok := typ.FieldByName(name)
 		assert.False(t, ok, "ITunesConfig must carry no %s: there is no iTunes sync", name)
 	}
 }
 
-func TestInitConfig_ITunesFromEnv(t *testing.T) {
-	t.Setenv("ITUNES_SYNC_ENABLED", "true")
-	t.Setenv("ITUNES_SYNC_INTERVAL", "60")
-	t.Setenv("ITUNES_AUTO_WRITE_BACK", "true")
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
-	assert.Equal(t, "", snap.ITunes.LibraryReadPath)
-	// ITUNES_SYNC_ENABLED / ITUNES_SYNC_INTERVAL (sync removed 2026-10-08) and
-	// ITUNES_AUTO_WRITE_BACK (write-back removed 2026-10-07) are removed
-	// settings: an environment that still sets them must load cleanly.
-}
-
-func TestInitConfig_MaintenanceDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
+func TestFactoryDefaults_MaintenanceDefaults(t *testing.T) {
+	snap := factoryDefaultConfigForTest()
 	assert.True(t, snap.Maintenance.Enabled)
 	assert.Equal(t, 1, snap.Maintenance.WindowStart)
 	assert.Equal(t, 4, snap.Maintenance.WindowEnd)
@@ -564,20 +449,8 @@ func TestInitConfig_MaintenanceDefaults(t *testing.T) {
 	assert.Equal(t, 5000, snap.Maintenance.AcoustIDNightlyLimit)
 }
 
-func TestInitConfig_MaintenanceFromEnv(t *testing.T) {
-	t.Setenv("MAINTENANCE_ENABLED", "true")
-	t.Setenv("MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT", "100")
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
-	assert.True(t, snap.Maintenance.Enabled)
-	assert.Equal(t, 100, snap.Maintenance.AcoustIDNightlyLimit)
-}
-
-func TestInitConfig_ScheduledDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
+func TestFactoryDefaults_ScheduledDefaults(t *testing.T) {
+	snap := factoryDefaultConfigForTest()
 	assert.False(t, snap.Scheduled.DedupRefresh.Enabled)
 	assert.Equal(t, 360, snap.Scheduled.DedupRefresh.Interval)
 	assert.Equal(t, 1440, snap.Scheduled.DbOptimize.Interval)
@@ -586,113 +459,11 @@ func TestInitConfig_ScheduledDefaults(t *testing.T) {
 	assert.False(t, snap.Scheduled.ResolveProductionAuthors.Enabled)
 }
 
-func TestInitConfig_ScheduledFromEnv(t *testing.T) {
-	t.Setenv("SCHEDULED_DEDUP_REFRESH_ENABLED", "true")
-	t.Setenv("SCHEDULED_AI_DEDUP_BATCH_INTERVAL", "720")
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
-	assert.True(t, snap.Scheduled.DedupRefresh.Enabled)
-	assert.Equal(t, 720, snap.Scheduled.AIDedupBatch.Interval)
-}
-
-func TestInitConfig_AutoUpdateDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
+func TestFactoryDefaults_AutoUpdateDefaults(t *testing.T) {
+	snap := factoryDefaultConfigForTest()
 	assert.False(t, snap.AutoUpdate.Enabled)
 	assert.Equal(t, "stable", snap.AutoUpdate.Channel)
 	assert.Equal(t, 60, snap.AutoUpdate.CheckMinutes)
 	assert.Equal(t, 2, snap.AutoUpdate.WindowStart)
 	assert.Equal(t, 5, snap.AutoUpdate.WindowEnd)
-}
-
-func TestInitConfig_AutoUpdateFromEnv(t *testing.T) {
-	t.Setenv("AUTO_UPDATE_ENABLED", "true")
-	t.Setenv("AUTO_UPDATE_CHANNEL", "beta")
-	viper.Reset()
-	InitConfig()
-	snap := Snapshot()
-	assert.True(t, snap.AutoUpdate.Enabled)
-	assert.Equal(t, "beta", snap.AutoUpdate.Channel)
-}
-
-// TestInitConfig_AcoustIDAPIKeyFromEnv locks the 2026-08-20 os.Getenv-to-viper
-// consolidation: ACOUSTID_API_KEY now flows through viper.BindEnv into
-// AppConfig.AcoustIDAPIKey rather than a live os.Getenv read at each call site
-// (internal/plugins/acoustid/online_lookup.go).
-func TestInitConfig_AcoustIDAPIKeyFromEnv(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	assert.Equal(t, "", Snapshot().AcoustIDAPIKey)
-
-	t.Setenv("ACOUSTID_API_KEY", "test-acoustid-key")
-	viper.Reset()
-	InitConfig()
-	assert.Equal(t, "test-acoustid-key", Snapshot().AcoustIDAPIKey)
-}
-
-// TestInitConfig_ActivityBackendFromEnv locks the environment binding that
-// production relies on: its unit file sets ACTIVITY_BACKEND=pebble, and
-// AutomaticEnv() is not active in this codebase, so the value only reaches the
-// field through config.go's explicit viper.BindEnv. Pebble is the only
-// activity backend since 01-P75; the binding stays so that the production
-// value keeps loading and a leftover "sqlite" is seen and refused by Validate
-// instead of being invisible.
-func TestInitConfig_ActivityBackendFromEnv(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-	assert.Equal(t, "pebble", Snapshot().ActivityBackend, "default backend is pebble")
-
-	t.Setenv("ACTIVITY_BACKEND", "pebble")
-	viper.Reset()
-	InitConfig()
-	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
-		"ACTIVITY_BACKEND did not reach Config.ActivityBackend — check viper.BindEnv")
-
-	// The DB-persisted config blob replaces the whole struct at boot
-	// (LoadConfigFromDatabase). Simulate that wipe, then confirm the
-	// env-authoritative re-apply restores the environment value.
-	Mutate(func(c *Config) { c.ActivityBackend = "" })
-	ApplyEnvAuthoritativeConfig()
-	assert.Equal(t, "pebble", Snapshot().ActivityBackend,
-		"ACTIVITY_BACKEND dropped after DB-blob overlay — add it to applyEnvAuthoritativeConfig")
-	assert.NoError(t, ValidateActivityBackend(Snapshot().ActivityBackend))
-}
-
-// TestInitConfig_RetiredDownloadClientKeysAreIgnored pins that a config file
-// written while two more download clients were settings still loads: the retired
-// download_client.torrent.qbittorrent and download_client.usenet blocks are
-// reported as removed (see removed_keys_test.go), and the kept Deluge fallback keys still decode.
-func TestInitConfig_RetiredDownloadClientKeysAreIgnored(t *testing.T) {
-	fileInitConfig(t, `
-download_client:
-  torrent:
-    type: deluge
-    deluge:
-      host: 192.0.2.10
-      port: 58846
-      username: deluge-user
-      password: deluge-test-pass
-    qbittorrent:
-      host: 192.0.2.11
-      port: 8080
-      username: qbit-user
-      password: qbit-test-pass
-      use_https: true
-  usenet:
-    type: sabnzbd
-    sabnzbd:
-      host: 192.0.2.12
-      port: 8085
-      api_key: sab-test-key
-      use_https: true
-`, nil)
-
-	dc := Snapshot().DownloadClient.Torrent
-	assert.Equal(t, "deluge", dc.Type)
-	assert.Equal(t, "192.0.2.10", dc.Deluge.Host)
-	assert.Equal(t, 58846, dc.Deluge.Port)
-	assert.Equal(t, "deluge-user", dc.Deluge.Username)
-	assert.Equal(t, "deluge-test-pass", dc.Deluge.Password)
 }

@@ -43,7 +43,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -258,7 +257,7 @@ func repointUnrecordedRenamesCore(ctx context.Context, apply bool, env repointUn
 	if apply && env.Writer == nil {
 		return repointUnrecordedRenamesResult{}, fmt.Errorf("repoint-unrecorded-renames: no writer for a live run")
 	}
-	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+	roots, err := itunesProtectedRoots()
 	if err != nil {
 		return repointUnrecordedRenamesResult{}, fmt.Errorf("repoint-unrecorded-renames: %w", err)
 	}

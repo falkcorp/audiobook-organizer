@@ -1,7 +1,7 @@
 // file: core/coretest/harness.go
-// version: 1.0.4
+// version: 1.0.5
 // guid: a95c80b7-1b2c-4c57-aa24-2ea9397da171
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 // Package coretest is core's public test kit (06 §6.4.8): an in-process App
 // harness that boots core through app.New, a client that sends requests to

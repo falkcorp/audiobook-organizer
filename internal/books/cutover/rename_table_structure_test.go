@@ -40,14 +40,14 @@ func topCounts(t *RenameTable) (top int, byClass map[Class]int, twoTarget int) {
 }
 
 // TestRenameTable_Counts: the generated table's counts are the spec's
-// (05-config §1.12.3): 173 top-level rows, 134 k, 11 s, 9 i, 16 o, 3 x, and
+// (05-config §1.12.3): 173 top-level rows, 135 k, 11 s, 9 i, 16 o, 2 x, and
 // two rows with two targets (oauth_allowed_emails and maintenance).
 func TestRenameTable_Counts(t *testing.T) {
 	top, by, two := topCounts(Table())
 	if top != 173 {
 		t.Errorf("top-level rows = %d, want 173", top)
 	}
-	for c, want := range map[Class]int{ClassKey: 134, ClassSecret: 11, ClassInput: 9, ClassEnv: 16, ClassDropped: 3} {
+	for c, want := range map[Class]int{ClassKey: 135, ClassSecret: 11, ClassInput: 9, ClassEnv: 16, ClassDropped: 2} {
 		if by[c] != want {
 			t.Errorf("class %s rows = %d, want %d", c, by[c], want)
 		}
@@ -116,6 +116,35 @@ func TestRenameTable_RetiredNamesAreValidForConfig(t *testing.T) {
 	for _, r := range retired {
 		if r.Canonical != "" && !validTarget(string(r.Canonical)) {
 			t.Errorf("retired %q: canonical %q is neither a config path nor an integrations path", r.Name, r.Canonical)
+		}
+	}
+}
+
+// TestRenameTable_UnreadEnvNamesWarnWithTheirReason: AUDIOBOOK_ROOT_DIR, which
+// the shipped unit and README set and no build ever read, is a retired env
+// name that core only warns about (no canonical key: a refusal would stop a
+// service whose stale unit sets it, for a name that never did anything) and
+// whose warning tells the operator to delete it. It is retired under root_dir,
+// whose ROOT_DIR still refuses.
+func TestRenameTable_UnreadEnvNamesWarnWithTheirReason(t *testing.T) {
+	var got []config.RetiredName
+	for _, r := range RetiredConfigNames() {
+		if r.Name == "AUDIOBOOK_ROOT_DIR" || r.Name == "ROOT_DIR" {
+			got = append(got, r)
+		}
+	}
+	want := []config.RetiredName{
+		{Name: "ROOT_DIR", Canonical: "core.library.roots"},
+		{Name: "AUDIOBOOK_ROOT_DIR", Message: "delete it: no build ever read it; the library root is the stored setting"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("retired = %+v\nwant %+v", got, want)
+	}
+	for _, row := range Table().Rows {
+		for _, e := range row.Retired {
+			if e.Name == "AUDIOBOOK_ROOT_DIR" && (row.Head != "root_dir" || e.Verdict != VerdictWarn || e.File) {
+				t.Errorf("AUDIOBOOK_ROOT_DIR: row %s, %+v; want an env name of root_dir with verdict warn", row.Head, e)
+			}
 		}
 	}
 }

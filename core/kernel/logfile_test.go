@@ -52,7 +52,7 @@ func fileSettings() *log.Settings {
 func TestLogOutput_FileUnderStateDir(t *testing.T) {
 	dir := t.TempDir()
 	tee := &teeBuffer{}
-	k, err := New(t.Context(), Config{AppID: "gotham", LogDir: dir, LogOutput: tee, Log: fileSettings()})
+	k, err := newK(t, Config{AppID: "gotham", LogDir: dir, LogOutput: tee, Log: fileSettings()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestLogOutput_LevelAppliesAndBadSettingsFailBoot(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := log.DefaultSettings()
 			tc.mut(&s)
-			_, err := New(t.Context(), Config{AppID: "gotham", LogDir: tc.dir, LogOutput: &teeBuffer{}, Log: &s})
+			_, err := newK(t, Config{AppID: "gotham", LogDir: tc.dir, LogOutput: &teeBuffer{}, Log: &s})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("New error = %v, want one naming %q", err, tc.want)
 			}

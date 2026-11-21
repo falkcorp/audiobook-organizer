@@ -1,7 +1,7 @@
 // file: internal/books/cutover/rename_data.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b874765a-43e8-4e15-a309-3879bf7e2e64
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -80,6 +80,13 @@ func tk(path string, conv string) Target { return Target{Kind: TargetKey, Path: 
 func tkc(path string, conv string) Target {
 	return Target{Kind: TargetKey, Path: path, Convert: conv, Coined: true}
 }
+
+// tmember is a member of the registered map-valued key mapKey: rel is the dotted
+// path below it ("nightly.start").
+func tmember(mapKey, rel, conv string) Target {
+	return Target{Kind: TargetMember, Path: mapKey + "." + rel, Map: mapKey, Convert: conv}
+}
+
 func ts(path string) Target { return Target{Kind: TargetSecret, Path: path} }
 func tsc(path string) Target {
 	return Target{Kind: TargetSecret, Path: path, Coined: true}
@@ -121,12 +128,12 @@ var explicitRows = []explicitRow{
 	{head: "otel_metrics_otlp_insecure", targets: []Target{tk("core.metrics.otlp.insecure", "")}, admin: true},
 	{head: "telemetry_environment", targets: []Target{tk("core.metrics.environment", "")}},
 	{head: "ai_endpoints", class: ClassInput, targets: []Target{tinst("ai/<row id> instances")}, note: "05-ai §10"},
-	{head: "ai_endpoints_routing", class: ClassDropped, note: "not a router input (05-ai §10)"},
+	{head: "ai_endpoints_routing", class: ClassDropped, note: "behaviour change: routing is always on after the flip (the one path is the router over ai_endpoints, 05-ai §10); an install that never turned it on moves from the legacy single-backend path to the routed one"},
 	{head: "operation_timeout_minutes", targets: []Target{tk("modules.books.operations.stale_threshold_minutes", "")}, note: "read at HEAD only as the staleness threshold of books' GET /api/v1/operations/stale"},
 	{head: "log_retention_days", targets: []Target{tk("core.log.journal.retention_days", ConvertLogRetention)}, note: "0 -> 90, negative -> 0 (keep)"},
 	{head: "operation_log_retention_days", targets: []Target{tk("core.tasks.history_retention", ConvertDaysToDuration)}, note: "days -> duration"},
 	{head: "ai_journal_retention_days", targets: []Target{tkc("core.ai.journal_retention", ConvertDaysToDuration)}, note: "days -> duration"},
-	{head: "ai_backend", class: ClassDropped, note: "its scalars are already folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend", targets: []Target{tk("modules.books.ai.*", "")}, note: "sub-key rows below"},
 	{head: "api_rate_limit_per_minute", targets: []Target{tk("core.http.rate_limit.per_minute", "")}},
 	{head: "json_body_limit_mb", targets: []Target{tk("core.http.body.json_max_bytes", ConvertMiBToBytes)}, note: "MiB -> bytes"},
 	{head: "upload_body_limit_mb", targets: []Target{tk("core.http.body.upload_max_bytes", ConvertMiBToBytes)}, note: "MiB -> bytes"},
@@ -151,7 +158,7 @@ var explicitRows = []explicitRow{
 	{head: "smtp_username", targets: []Target{tpass("integrations.notify.email.username", false)}},
 	{head: "smtp_password", class: ClassSecret, targets: []Target{tpassSecret("integrations.notify.email.password")}},
 	{head: "smtp_from", targets: []Target{tpass("integrations.notify.email.from", false)}},
-	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}},
+	{head: "public_base_url", targets: []Target{tkc("core.http.public_base_url", "")}, admin: true, note: "HEAD's file-only key becomes a storable key; ProtectAdmin like its sibling core.auth.oidc.redirect_base_url (F3-07)"},
 	{head: "invite_email_service_token", targets: []Target{tk("modules.books.cfguests.invite_email_service_token", "")}},
 	{head: "tunnel_connector_addrs", targets: []Target{tk("core.http.trusted_proxies", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
 	{head: "allowed_peer_cidrs", targets: []Target{tk("core.http.peer_allowlist", ConvertCSVList)}, admin: true, note: "comma list -> list; a storable admin key from F3 (§1.3.7)"},
@@ -209,9 +216,17 @@ type subRow struct {
 // subRows are the explicit rows of struct-typed fields' sub-keys.
 var subRows = []subRow{
 	{head: "itunes.path_mappings", class: ClassInput, targets: []Target{tentry("core.library.mappings", "core.library.mappings entries, Source: \"itunes\"")}, note: "05-library §5L.10; core.library.mappings is ProtectInteractive, so its retired name warns although HEAD classed the field FieldServerPath"},
-	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.enabled", "")}},
-	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.start", "")}},
-	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tk("core.tasks.windows.nightly.end", "")}},
+	{head: "maintenance.enabled", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.enabled", "")}},
+	{head: "maintenance.window_start", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.start", "")}},
+	{head: "maintenance.window_end", class: ClassKey, targets: []Target{tmember("core.tasks.windows", "nightly.end", "")}},
+	{head: "ai_backend.embedding_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.llm_mode", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.local_base_url", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.local_embedding_model", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.local_llm_model", class: ClassDropped, note: "folded into ai_endpoints by HEAD's codec (05-ai §10)"},
+	{head: "ai_backend.parse_batch_size", class: ClassKey, targets: []Target{tk("modules.books.ai.parse_batch_size", "")}, note: "not folded: read by the scanner's AI batch phase (ResolveAIParseBatch), 0 = its default"},
+	{head: "ai_backend.parse_batch_timeout_seconds", class: ClassKey, targets: []Target{tk("modules.books.ai.parse_batch_timeout_seconds", "")}, note: "not folded: read by the scanner's AI batch phase, 0 = its default"},
+	{head: "ai_backend.parse_batch_workers", class: ClassKey, targets: []Target{tk("modules.books.ai.parse_batch_workers", "")}, note: "not folded: read by the scanner's AI batch phase, 0 = its default"},
 	{head: "auto_update.enabled", class: ClassKey, targets: []Target{tk("core.updater.mode", ConvertUpdaterMode)}, admin: true, note: "true -> check (unattended apply stays check-only, 05-updater), false -> off"},
 	{head: "auto_update.channel", class: ClassKey, targets: []Target{tk("core.updater.channel", ConvertUpdaterChannel)}, admin: true, note: "develop -> prerelease"},
 	{head: "auto_update.check_minutes", class: ClassKey, targets: []Target{tk("core.updater.schedules.check", ConvertUpdaterCheck)}, note: "{enabled: true, every: <minutes>}"},
@@ -239,6 +254,59 @@ var virtualRows = []subRow{
 	{head: "ai_endpoints[]", class: ClassInput, targets: []Target{tinst("ai/<row id> instances")}, note: "no secret of their own (05-metadata M1.10)"},
 }
 
+// HeadMaintenanceWindow is the window HEAD's maintenance order ran in: core's
+// tasks.NightlyWindow (this package does not import core/tasks; a books test
+// holds the two equal).
+const HeadMaintenanceWindow = "nightly"
+
+// headMaintenanceOrder is HEAD's maintenanceOrder, every task by its
+// position (FROZEN COPY of internal/scheduler/scheduler.go's list at
+// 748fd787a), keyed by schedule-key name: HEAD's task reconcile_scan is the
+// key reconcile and author_split_scan is author_split; every other task's key
+// has its task's name. These are the tasks HEAD's window op ran, in that
+// order, besides any timer; a schedule key of one of them keeps the placement
+// (window, order), so the task stays in the nightly window after the flip.
+// Whether it runs there on a given night is still the maintenance toggle's
+// call. Six of them are HEAD scheduled.* entries, whose rename-table targets
+// carry the placement; books' section defaults place every key it declares
+// for one of them (purge_old_logs is core's, with no books key).
+var headMaintenanceOrder = map[string]int{
+	"reconcile":                 0,
+	"dedup_refresh":             1,
+	"dedup_llm_review":          2,
+	"author_split":              3,
+	"series_prune":              4,
+	"file_integrity_check":      5,
+	"orphan_book_files_cleanup": 6,
+	"tombstone_cleanup":         7,
+	"purge_deleted":             8,
+	"purge_old_logs":            9,
+	"cleanup_activity_log":      10,
+	"ai_journal_prune":          11,
+	"cleanup_old_backups":       12,
+	"temp_file_cleanup":         13,
+	"trash_cleanup":             14,
+	"reports_prune":             15,
+	"library_size_refresh":      16,
+	"db_optimize":               17,
+	"library_organize":          18,
+	"library_scan":              19,
+}
+
+// HeadMaintenanceOrder is headMaintenanceOrder's position for the scheduled
+// entry name, and whether HEAD's window ran it (books' scheduler section
+// defaults take their placement from it).
+func HeadMaintenanceOrder(name string) (int, bool) {
+	n, ok := headMaintenanceOrder[name]
+	return n, ok
+}
+
+// scheduledZeroDaily are the standard entries whose interval 0 HEAD runs as
+// 24h (GetInterval's fallback) instead of as no timer.
+var scheduledZeroDaily = map[string]bool{
+	"ai_dedup_batch": true,
+}
+
 // scheduledIntervalOnly are the scheduled entries HEAD reads only for their
 // interval: the task runs iff the interval is above 0 (config.go:1016-1045).
 var scheduledIntervalOnly = map[string]bool{
@@ -250,7 +318,9 @@ var scheduledIntervalOnly = map[string]bool{
 
 // scheduledExtraTarget are scheduled entries with a second target.
 var scheduledExtraTarget = map[string]Target{
-	"db_optimize": tk("core.storage.schedules.compact", ConvertScheduleStandard),
+	// core's compact key: placed as core's default places it (window-only in
+	// the nightly window, core/kernel core_sections.go), at no position.
+	"db_optimize": {Kind: TargetKey, Path: "core.storage.schedules.compact", Convert: ConvertScheduleStandard, Window: HeadMaintenanceWindow},
 }
 
 // bindAlias maps a bound viper key that is not a field of Config to the row
@@ -298,6 +368,19 @@ var headProtected = []string{
 	"itunes.library_write_path", "itunes.library_read_path", "itunes.windows_root_path", "itunes.media_root",
 	"itunes.path_mappings", "itunes.libraries.original", "itunes.libraries.ao", "itunes.libraries.pointed_at",
 	"itunes.libraries.import_source",
+}
+
+// unreadEnvNames are env names no build of the app ever read that deployments
+// set anyway, retired under the row whose setting they look like so that a boot
+// that finds one says so (canonical "": a warning, never a refusal) and the
+// deploy check reports it. AUDIOBOOK_ROOT_DIR was in the shipped systemd unit
+// and README while the library root came from ROOT_DIR (AutomaticEnv) or the
+// stored settings; the deploy files dropped it in F3-07, but a live unit
+// installed from an older helper bundle may still set it.
+var unreadEnvNames = []struct {
+	env, row, message string
+}{
+	{"AUDIOBOOK_ROOT_DIR", "root_dir", "delete it: no build ever read it; the library root is the stored setting"},
 }
 
 // processNames are the two ABK_* names HEAD reads outside viper

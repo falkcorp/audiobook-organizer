@@ -1,7 +1,7 @@
 // file: web/src/components/settings/DedupSettingsSection.tsx
-// version: 1.3.0
+// version: 1.4.0
 // guid: b2c3d4e5-f6a7-8901-bcde-f12345678901
-// last-edited: 2026-10-12
+// last-edited: 2026-11-19
 
 import { useEffect, useState } from 'react';
 import {
@@ -16,44 +16,66 @@ import {
   Divider,
 } from '@mui/material';
 import * as api from '../../services/api';
+import type { SecretStatus } from '../../services/configView';
+import { canClearSecret, describeSecretStatus } from '../../utils/secretStatus';
+import { describeLock } from '../../utils/settingLocks';
 
 interface DedupSettingsSectionProps {
   config: api.DedupConfig;
   onChange: (patch: Partial<api.DedupConfig>) => void;
-  /** The masked AcoustID.org key from the config Settings already loaded. */
-  acoustidKeyMask?: string;
+  /** What the secret store says about the AcoustID.org key (from the config Settings already loaded). */
+  acoustidKeyStatus?: SecretStatus;
+  /** What locks the AcoustID.org key (`setting_locks.acoustid_api_key`), when something does. */
+  acoustidKeyLock?: string;
 }
 
 export function DedupSettingsSection({
   config,
   onChange,
-  acoustidKeyMask: loadedMask = '',
+  acoustidKeyStatus: loadedStatus,
+  acoustidKeyLock,
 }: DedupSettingsSectionProps) {
   // The AcoustID.org key is saved on its own (PUT /config), not through the
-  // dedup Save button. The server returns it masked, so the input only ever
-  // holds what the user is typing now; the key is never logged or toasted.
+  // dedup Save button. It is write-only: the server returns its status and
+  // never its value, so the input only ever holds what the user is typing now;
+  // the key is never logged or toasted.
   const [acoustidKey, setAcoustidKey] = useState('');
-  const [acoustidKeyMask, setAcoustidKeyMask] = useState(loadedMask);
+  const [acoustidStatusMeta, setAcoustidStatusMeta] = useState(loadedStatus);
   const [acoustidKeySaving, setAcoustidKeySaving] = useState(false);
   const [acoustidStatus, setAcoustidStatus] = useState<{
     severity: 'success' | 'error';
     text: string;
   } | null>(null);
 
-  // Follow the page's own load; a save below overrides it with the new mask.
-  useEffect(() => setAcoustidKeyMask(loadedMask), [loadedMask]);
+  // Follow the page's own load; a save below overrides it with the new status.
+  useEffect(() => setAcoustidStatusMeta(loadedStatus), [loadedStatus]);
 
   const handleSaveAcoustIDKey = async () => {
     if (!acoustidKey.trim()) return;
     setAcoustidKeySaving(true);
     setAcoustidStatus(null);
     try {
-      const cfg = await api.updateConfig({ acoustid_api_key: acoustidKey.trim() });
-      setAcoustidKeyMask(cfg.acoustid_api_key || '');
+      const cfg = await api.updateConfig({ secrets: { acoustid_api_key: acoustidKey.trim() } });
+      setAcoustidStatusMeta(cfg.secret_status?.acoustid_api_key);
       setAcoustidKey('');
       setAcoustidStatus({ severity: 'success', text: 'AcoustID API key saved.' });
     } catch {
       setAcoustidStatus({ severity: 'error', text: 'Failed to save the AcoustID API key.' });
+    } finally {
+      setAcoustidKeySaving(false);
+    }
+  };
+
+  const handleClearAcoustIDKey = async () => {
+    setAcoustidKeySaving(true);
+    setAcoustidStatus(null);
+    try {
+      const cfg = await api.updateConfig({ clear_secrets: ['acoustid_api_key'] });
+      setAcoustidStatusMeta(cfg.secret_status?.acoustid_api_key);
+      setAcoustidKey('');
+      setAcoustidStatus({ severity: 'success', text: 'AcoustID API key cleared.' });
+    } catch {
+      setAcoustidStatus({ severity: 'error', text: 'Failed to clear the AcoustID API key.' });
     } finally {
       setAcoustidKeySaving(false);
     }
@@ -334,21 +356,35 @@ export function DedupSettingsSection({
               autoComplete="off"
               value={acoustidKey}
               onChange={(e) => setAcoustidKey(e.target.value)}
-              placeholder={acoustidKeyMask || 'Not set'}
+              placeholder={acoustidStatusMeta?.set ? 'Saved' : 'Not set'}
+              disabled={!!acoustidKeyLock}
               helperText={
-                acoustidKeyMask
-                  ? `Saved key: ${acoustidKeyMask}. Type a new key to replace it.`
-                  : 'Used by "Look up fingerprints online" in the Dedup menu.'
+                acoustidKeyLock
+                  ? `Locked: set by ${describeLock(acoustidKeyLock)}, which overrides any saved key.`
+                  : describeSecretStatus(
+                      acoustidStatusMeta,
+                      'Used by "Look up fingerprints online" in the Dedup menu.'
+                    )
               }
               sx={{ minWidth: 320 }}
             />
             <Button
               variant="outlined"
               onClick={() => void handleSaveAcoustIDKey()}
-              disabled={acoustidKeySaving || !acoustidKey.trim()}
+              disabled={acoustidKeySaving || !!acoustidKeyLock || !acoustidKey.trim()}
             >
               Save key
             </Button>
+            {canClearSecret(acoustidStatusMeta) && !acoustidKeyLock && (
+              <Button
+                variant="text"
+                color="error"
+                onClick={() => void handleClearAcoustIDKey()}
+                disabled={acoustidKeySaving}
+              >
+                Clear key
+              </Button>
+            )}
           </Box>
           {acoustidStatus && (
             <Alert severity={acoustidStatus.severity} sx={{ mt: 1 }}>

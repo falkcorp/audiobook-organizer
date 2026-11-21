@@ -1,7 +1,7 @@
 // file: internal/books/options.go
-// version: 1.3.0
+// version: 1.5.0
 // guid: 3c47c7cc-6394-498f-977b-0d0fb19df982
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package books
 
@@ -11,9 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,9 +60,13 @@ type ServeInputs struct {
 	// Register), so the OTLP endpoints, interval and environment come from
 	// where they always did.
 	Telemetry config.Config
-	// ShutdownBudget is core.shutdown.budget as serve read it from
-	// ABO_CORE_SHUTDOWN_BUDGET (R1-33). Zero is core's default (25s).
-	ShutdownBudget time.Duration
+	// Boot is the command line's contribution to core's config boot: the flags
+	// the operator set and the --config file (BootInputs). The zero value is
+	// the environment and the compiled defaults alone.
+	Boot BootInputs
+	// FromRelease is the pre-freeze release's tag main embeds (09 §9.2.1), the
+	// from_release the pre-migration checkpoint records. "" = none embedded.
+	FromRelease string
 	// LogOut is the stream the log pipeline prints to, beside the file when
 	// there is one; nil is os.Stdout, where HEAD's lines went.
 	LogOut io.Writer
@@ -74,16 +76,15 @@ type ServeInputs struct {
 // §1.12.1), for mod, the value Module returned:
 //
 //   - ABO's identity and build version;
-//   - the store core opens: R1StoragePath is HEAD's database path, made
-//     absolute (a database_type other than Pebble, or no path, refuses);
-//     StateDir is the secure state directory ABO resolves (EnsureSecureStateDir,
-//     HEAD's resolver, ABK_STATE_DIR and its fallback beside the database),
-//     which core's ResolveStateDir must agree with; StorageStateFiles is the
-//     state-file table the first-boot checkpoint copies (StateFiles);
-//   - R1Values: the listener and perimeter values of the effective config
-//     (stored settings and env overrides applied), which the kernel reads
-//     once at start step 7; ShutdownBudget is ServeInputs.ShutdownBudget
-//     (serve's ABO_CORE_SHUTDOWN_BUDGET reading, 0 = core's default);
+//   - the store core opens: the one core's step 0 resolves from the layers
+//     (ResolveBootPaths; no compiled database path is handed over). StateDir is
+//     the state directory it chose, which core's ResolveStateDir must agree
+//     with; StorageStateFiles is the state-file table the first-boot
+//     checkpoint copies (StateFiles);
+//   - CoreDefaults: ABO's compiled defaults of core.http.listen and
+//     core.http.client_ip_header (coreDefaults); the listener, perimeter and
+//     shutdown budget are core config keys, read by the kernel at start step
+//     7 from the layered store (serve's flags are flag layers, BootInputs);
 //   - R1Listen: HEAD's listener stack behind the perimeter shim
 //     (internal/server R1Listener);
 //   - Telemetry: HEAD's OTLP tracing and metric push and its environment;
@@ -111,18 +112,20 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	m.steps = cfg.StartupSteps
 	m.cfg.Store(&cfg)
 
+	// One resolver owns the store path and the state directory: core's step
+	// 0 over the environment, the flags and the operator file. Books asks it
+	// here, before app.New, because its state-file table, its swap check and
+	// its Manifest need both; the boot resolves the same layers again and
+	// must agree.
+	var dbPath string
 	if err := m.steps.Run("EnsureSecureStateDir", func() error {
-		dir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
+		db, dir, err := ResolveBootPaths(context.Background(), mod, in.Boot)
 		if err != nil {
-			return fmt.Errorf("failed to create state directory %q: %w", dir, err)
+			return fmt.Errorf("failed to resolve the store and the state directory: %w", err)
 		}
-		m.stateDir = dir
+		m.stateDir, dbPath = dir, db
 		return nil
 	}); err != nil {
-		return app.Options{}, err
-	}
-	dbPath, err := storeLocation(m.stateDir)
-	if err != nil {
 		return app.Options{}, err
 	}
 	m.dbPath, m.version = dbPath, telemetry.Version()
@@ -136,7 +139,18 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// Before app.New runs P0a: whether it may swap the store, which voids
 	// the HNSW clean-stop marker Register takes (swapVoidReason).
 	m.swapVoid = swapVoidReason(m.stateDir)
+	// The store is whatever the layers named, which core's step 0 resolves
+	// again to the path ResolveBootPaths returned. StateDir is that step's
+	// result, so the log directory (app.ResolveStateDir, environment only)
+	// agrees with it when the default could not be created and the state sits
+	// beside a store named by a flag.
+	o := bootOptions(in.Boot)
 	return app.Options{
+		RetiredConfigNames:    o.RetiredConfigNames,
+		ConfigEnvBindings:     o.ConfigEnvBindings,
+		ConfigPassthrough:     o.ConfigPassthrough,
+		ConfigFile:            o.ConfigFile,
+		ConfigFlags:           o.ConfigFlags,
 		AppID:                 AppID,
 		MetricNamespace:       metricNamespace,
 		ServiceName:           serviceName,
@@ -144,43 +158,16 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		Version:               m.version,
 		ReservedAPINamespaces: reservedAPINamespaces(),
 		LegacyAuthGinUntil:    ID,
-		R1Values:              func() app.R1Values { return r1Values(cfg, config.Snapshot(), in.ShutdownBudget) },
+		CoreDefaults:          coreDefaults,
 		R1Listen:              m.r1Listen,
 		Telemetry:             telemetryFromConfig(in.Telemetry),
 		LogOutput:             logStream(in.LogOut),
 		R1Log:                 &logCfg,
 		ProcessDefaults:       true,
 		StateDir:              m.stateDir,
-		R1StoragePath:         dbPath,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
+		FromRelease:           in.FromRelease,
 	}, nil
-}
-
-// storeLocation is HEAD's database path as core.storage.path, checked
-// against the state directory ABO resolved: a database_type other than
-// Pebble or an empty path refuses, and so does a core state directory that
-// is not stateDir. One state directory per process (OPS4-8): core resolves
-// it again in New (its explicit ABO_CORE_PATHS_STATE_DIR first, then this
-// default), and HEAD's key, the checkpoint's state files and core's own
-// state files must not land in two places.
-func storeLocation(stateDir string) (string, error) {
-	snap := config.Snapshot()
-	if err := database.ValidateDatabaseType(snap.DatabaseType); err != nil {
-		return "", err
-	}
-	dbPath, err := storagePath(snap.DatabasePath)
-	if err != nil {
-		return "", err
-	}
-	coreDir, err := app.ResolveStateDir(app.Options{AppID: AppID, StateDir: stateDir})
-	if err != nil {
-		return "", err
-	}
-	if filepath.Clean(coreDir) != filepath.Clean(stateDir) {
-		return "", fmt.Errorf("books: core's state directory %q is not ABO's %q (%s); set one, or set both to the same path",
-			coreDir, stateDir, config.SecureStateDirEnv)
-	}
-	return dbPath, nil
 }
 
 // OfflineOptions is ABO's app.Options for core's offline commands
@@ -192,24 +179,30 @@ func storeLocation(stateDir string) (string, error) {
 // (backup.ExtractStore). It reads the loaded config (the root command's
 // PersistentPreRun loads it) and builds no server, logging pipeline or
 // telemetry.
-func OfflineOptions() (app.Options, error) {
-	stateDir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
-	if err != nil {
-		return app.Options{}, fmt.Errorf("failed to create state directory %q: %w", stateDir, err)
-	}
-	dbPath, err := storeLocation(stateDir)
+func OfflineOptions(boot BootInputs) (app.Options, error) {
+	dbPath, stateDir, err := ResolveBootPaths(context.Background(), Module(), boot)
 	if err != nil {
 		return app.Options{}, err
 	}
+	// The offline commands that read the loaded config (scan, diagnostics,
+	// the CLI's own prints) get the store the layers named, as HEAD's
+	// InitConfig gave them the database_path it resolved.
+	config.Mutate(func(c *config.Config) { c.DatabasePath, c.DatabaseType = dbPath, "pebble" })
 	coreOpts := updater.FetchOptions()
+	o := bootOptions(boot)
 	return app.Options{
-		AppID: AppID,
+		RetiredConfigNames: o.RetiredConfigNames,
+		ConfigEnvBindings:  o.ConfigEnvBindings,
+		ConfigPassthrough:  o.ConfigPassthrough,
+		ConfigFile:         o.ConfigFile,
+		ConfigFlags:        o.ConfigFlags,
+		CoreDefaults:       coreDefaults,
+		AppID:              AppID,
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve
 		// boot computes, or its P0a rejects the intent as another binary's.
-		Version:       telemetry.Version(),
-		StateDir:      stateDir,
-		R1StoragePath: dbPath,
+		Version:  telemetry.Version(),
+		StateDir: stateDir,
 		// The state files serve's checkpoints copy (the encryption key):
 		// storage restore-offline puts a checkpoint's copies back over them,
 		// and the offline open reads the same table serve's open does.
@@ -234,6 +227,44 @@ func OfflineOptions() (app.Options, error) {
 		// hands the kernel the same.
 		Updater: &coreOpts,
 	}, nil
+}
+
+// OfflineModule is the books module core's offline commands run over
+// (app.OfflineCommands' mods): Module() with the database and state directory
+// opts names (OfflineOptions' StateDir and Version, and the store its layers
+// resolve to). An offline command reads the module's Manifest to plan the same
+// migration list serve boots with, and the flip's steps (the level step, M2,
+// M8, the retired claims) are declared only for a module that knows its
+// database (declaresFlip), so a module built without it would plan none of them
+// and `storage migrate --dry-run` would report a list serve does not run. With
+// opts that name no state directory (the help listing's identity-only Options)
+// it is Module(), and no I/O happens. If the store cannot be resolved here
+// (OfflineStorePath) the module names no database, and the command's own open
+// reports the failure.
+func OfflineModule(opts app.Options) module.Module {
+	m := Module().(*booksModule)
+	if opts.StateDir == "" {
+		return m
+	}
+	dbPath, err := OfflineStorePath(opts)
+	if err != nil {
+		return m
+	}
+	m.dbPath, m.stateDir, m.version = dbPath, opts.StateDir, opts.Version
+	return m
+}
+
+// OfflineStorePath is the store path an offline command over opts (the value
+// OfflineOptions returned) opens: core's step 0 over the layers opts carries,
+// the resolution OfflineOptions asked for and an offline open repeats, so they
+// agree by construction. It is "" when opts name no state directory (the help
+// listing's identity-only Options).
+func OfflineStorePath(opts app.Options) (string, error) {
+	if opts.StateDir == "" {
+		return "", nil
+	}
+	dbPath, _, err := app.ResolveStorage(context.Background(), opts, []module.Module{Module()}, "")
+	return dbPath, err
 }
 
 // swapVoidReason is why a boot must not trust the HNSW clean-stop marker
@@ -294,68 +325,36 @@ func storagePath(dbPath string) (string, error) {
 // config.yaml beside the database. A file that does not exist is skipped by
 // the checkpoint.
 func StateFiles(stateDir, dbPath string) []storage.StateFile {
-	keyDir := database.FindEncryptionKey(stateDir, filepath.Dir(dbPath))
+	keyDir := database.FindEncryptionKey(stateDir, legacyKeyDir(dbPath))
 	if keyDir == "" {
 		keyDir = stateDir
 	}
 	return []storage.StateFile{
 		{Label: "encryption_key", Path: database.EncryptionKeyPath(keyDir)},
-		{Label: "gap_fill", Path: filepath.Join(filepath.Dir(dbPath), "config.yaml")},
+		{Label: "gap_fill", Path: gapFillPath(dbPath)},
 	}
 }
 
-// r1Values maps serve's flags and the effective config onto R1Values (05-config
-// §1.12.1): HEAD's --host/--port and TLS flags, ALLOWED_PEER_CIDRS,
-// TUNNEL_CONNECTOR_ADDRS with the header they set, the rate limit and the body
-// limits (MiB to bytes), and the shutdown budget serve read from
-// ABO_CORE_SHUTDOWN_BUDGET.
-func r1Values(cfg server.ServerConfig, c config.Config, shutdownBudget time.Duration) app.R1Values {
-	return app.R1Values{
-		Listen:         net.JoinHostPort(cfg.Host, cfg.Port),
-		TLSCertFile:    cfg.TLSCertFile,
-		TLSKeyFile:     cfg.TLSKeyFile,
-		PeerAllowlist:  splitList(c.AllowedPeerCIDRs),
-		TrustedProxies: connectorAddrs(c.TunnelConnectorAddrs),
-		// The connectors set CF-Connecting-IP (client_trust.go).
-		ClientIPHeader: "CF-Connecting-IP",
-		// HEAD's rule: enable_rate_limit is the switch and a positive
-		// api_rate_limit_per_minute the threshold; both must hold.
-		RateLimitEnabled:   c.EnableRateLimit && c.APIRateLimitPerMinute > 0,
-		RateLimitPerMinute: c.APIRateLimitPerMinute,
-		JSONMaxBytes:       int64(c.JSONBodyLimitMB) << 20,
-		UploadMaxBytes:     int64(c.UploadBodyLimitMB) << 20,
-		ShutdownBudget:     shutdownBudget,
-	}
-}
+// legacyKeyDir is where HEAD kept the settings encryption key before it had a
+// state directory: beside the store. The boot (bootSettings) and the checkpoint's
+// state-file table (StateFiles) both look there second, through this one rule, so
+// they cannot name different files for the key.
+func legacyKeyDir(dbPath string) string { return filepath.Dir(dbPath) }
 
-// connectorAddrs is TUNNEL_CONNECTOR_ADDRS under HEAD's rule
-// (client_trust.go parseConnectorPeers): a connector is trusted by its exact
-// address, so an entry that is not one, a CIDR range included, is dropped.
-// Core's stage 0 accepts prefixes as trusted proxies; passing a range through
-// would trust every host in it to name the client. The warning for a dropped
-// entry is client_trust.go's reportConnectorRejects, which parses the same
-// setting with the same netip.ParseAddr rule; a second one here would show
-// the operator every warning twice.
-func connectorAddrs(csv string) []string {
-	var out []string
-	for _, e := range splitList(csv) {
-		if _, err := netip.ParseAddr(e); err == nil {
-			out = append(out, e)
-		}
-	}
-	return out
-}
+// gapFillPath is HEAD's config.yaml beside the database (config.ConfigFilePath):
+// the file the checkpoint copies and M2 imports the gap-fill values of.
+func gapFillPath(dbPath string) string { return filepath.Join(filepath.Dir(dbPath), "config.yaml") }
 
-// splitList splits a comma-separated setting into its trimmed, non-empty
-// entries.
-func splitList(s string) []string {
-	var out []string
-	for _, f := range strings.Split(s, ",") {
-		if f = strings.TrimSpace(f); f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
+// coreDefaults is ABO's compiled defaults of the core keys whose default the
+// specs leave to the app (05-http-api section 10). core.http.listen defaults
+// to one interface, as --host always did ("localhost"), and
+// core.http.client_ip_header to the header the tunnel connectors set
+// (CF-Connecting-IP, client_trust.go): core's own defaults, all interfaces and
+// the peer's address, would widen a bare install and blind the trusted-proxy
+// list. An operator value, a flag or a stored value beats both.
+var coreDefaults = app.CoreDefaults{
+	HTTPListen:         "localhost:8484",
+	HTTPClientIPHeader: "CF-Connecting-IP",
 }
 
 // telemetryFromConfig is HEAD's InitOTEL configuration as app.Telemetry:
@@ -417,6 +416,7 @@ func Attach(mod module.Module, a *app.App) error {
 	}
 	if store := m.store.Load(); store != nil {
 		store.AttachStorageAdmin(a.StorageAdmin())
+		m.storageAdmin.Store(a.StorageAdmin())
 		// Process-scoped, so the throttle registry's store lifetime matches
 		// the process; after the server is built, as before. Deliberately
 		// NOT inside NewServer (see AttachProviderThrottleStore).
@@ -431,6 +431,7 @@ func Attach(mod module.Module, a *app.App) error {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
 	tapActivity(a, srv.ActivityLogWriter())
+	srv.SetConfigAtoms(atomsWithScope)
 	srv.SetPostureTokens(func() []system.PostureToken {
 		h, err := a.CheckpointHealth()
 		return checkpointPosture(h, err, time.Now())

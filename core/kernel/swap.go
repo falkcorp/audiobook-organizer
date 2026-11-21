@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.10
+// version: 1.0.14
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
@@ -53,20 +54,34 @@ type kernelSwap struct {
 	// hookOwed: a ResetFactory swap whose app declares a reset hook reached
 	// P4b, so hook_done is the hook's (Run step (2), reset.go), not P4b's.
 	hookOwed bool
+	// appliedBeforeRewrite: a restore boot journaled applied ahead of M8
+	// (restoreAppliedBeforeRewrite), so the restore is complete and a failure
+	// after it is M8's, never the restore's (swapFailed).
+	appliedBeforeRewrite atomic.Bool
 }
 
 // swapWanted gates P0a: a state directory, and not Describe, which performs
-// no I/O and never opens the store (COR2-13).
+// no I/O and never opens the store (COR2-13). P0 sets the state directory
+// together with the store path (bootCoreConfig), so a swap always has the
+// store it swaps (R1-21 review m10: a swap with no store would start a staged
+// restore and wait at swapped, in flight, on every boot).
 func (k *Kernel) swapWanted(describe bool) bool { return !describe && k.cfg.StateDir != "" }
 
 // storageOwners is the store's owners: core's own (the audit log, F2-07, and
-// the task keyspace, F2-03/F2-02, both enabled whatever the apps) and every
+// the task keyspace, F2-03/F2-02, both enabled whatever the apps; config and
+// secrets too, 05-config 1.3.3 and 2.3) and every
 // module that declares storage, enabled or not (a disabled module's claims stay
 // validated and its keyspace reserved). Core's two are claimed in every app's
 // store at its first P4b, whether or not tasks start: the keyspace is storage's
 // to register, the start rule is the kernel's (tasks.go).
 func (k *Kernel) storageOwners() []storage.OwnerSpec {
-	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec()}
+	// c/config/ and c/secrets/ (05-config 1.3.3, 2.3) are claimed in every
+	// app's store. Every reader of the owners reads this one function: P0a's
+	// swapper, the P2 open, the offline opens and the dry run.
+	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec(), configOwnerSpec(), secretsOwnerSpec()}
+	// Core's half of M7 (core_level.go): registered when a manifest declares a
+	// cutover, so a build with none raises no level.
+	owners = append(owners, k.coreOwners()...)
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})
@@ -160,12 +175,6 @@ func (p refuseProbe) Writable(dir string) error           { return p.refuse(dir)
 // reset, another service or any other opener), no two P0a runs overlap,
 // and neither offline swap starts while this process may use the store.
 func (k *Kernel) runP0a(ctx context.Context) error {
-	if k.cfg.StoragePath == "" {
-		// A swap applies to a store (R1-21 review m10): run with none, a
-		// staged restore would start and wait at swapped, in flight, on
-		// every boot. Refused before the state directory is read.
-		return errors.New("kernel: Config.StateDir is set without Config.StoragePath; the pre-boot swap (P0a) needs the store it swaps")
-	}
 	lock, err := k.lockSwapForP0a(ctx)
 	if err != nil {
 		return err
@@ -177,7 +186,7 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 	}
 	clock := bootClock(ctx)
 	sw, err := restoreswap.New(restoreswap.Options{FS: fs, StateDir: k.cfg.StateDir, BuildID: build, Clock: clock,
-		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap")})
+		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap"), RewriteStep: k.rewriteID()})
 	if err != nil {
 		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	}
@@ -267,9 +276,12 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 	case out.Boot == restoreswap.BootRestore && phase == phaseP2:
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
+		// M8's hook may have journaled it already; the call is idempotent, and a
+		// build with no M8 does it here.
 		err = s.RestoreApplied(ctx, out.ID)
-	case out.Boot == restoreswap.BootReset && phase == phaseP4a:
-		err = s.ResetApplied(ctx, out.ID)
+	// A reset's applied record is not written here: bindCoreStores journals it,
+	// after secrets.Open rewrote the keyring header and the reset's fresh rows
+	// are committed (SEC8-5), so the swap is not applied until both are durable.
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
 		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {
 			k.swap.hookOwed = true
@@ -303,6 +315,14 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 		return errors.Join(cause, fmt.Errorf("kernel: step x of %s needs the store closed: %w", out.ID, err))
 	}
 	k.store = nil
+	// A failure after applied is M8's. The restore is complete and its in-flight
+	// file gone, so there is nothing for step x to swap back: the boot fails
+	// without serving, and the next boot finds M8 pending (or its own in-flight
+	// rewrite journal) and resumes it. The pre-restore store stays under
+	// restore/<id>/previous for an operator to roll back by hand until M8 is done.
+	if k.swap.appliedBeforeRewrite.Load() {
+		return fmt.Errorf("kernel: restore %s is applied; the store rewrite (M8) failed in %s and retries at the next boot: %w", out.ID, phase, cause)
+	}
 	if phase == phaseP4b && out.Intent.Kind == restorejournal.KindCheckpoint {
 		if _, ok := errors.AsType[*storage.StepError](cause); !ok {
 			return cause
@@ -313,4 +333,20 @@ func (k *Kernel) swapFailed(ctx context.Context, phase string, cause error) erro
 		return fmt.Errorf("%w (journal %s): %w", ErrCheckpointRestoreFailedHere, out.ID, cause)
 	}
 	return k.swap.s.SwapBack(ctx, out.ID, fmt.Errorf("%s: %w", phase, cause))
+}
+
+// restoreAppliedBeforeRewrite is DataMigrationsConfig.BeforeRewrite: on a
+// restore boot, the restore's applied record (and the in-flight file's
+// removal) is journaled once every data migration has run and before M8
+// starts, because M8's own swap refuses while a restore holds the intent
+// slot (restorejournal.ErrSwapPending). Any other boot does nothing.
+func (k *Kernel) restoreAppliedBeforeRewrite(ctx context.Context) error {
+	if k.swap == nil || k.swap.out.Boot != restoreswap.BootRestore {
+		return nil
+	}
+	if err := k.swap.s.RestoreApplied(ctx, k.swap.out.ID); err != nil {
+		return fmt.Errorf("kernel: swap journal %s before the store rewrite: %w", k.swap.out.ID, err)
+	}
+	k.swap.appliedBeforeRewrite.Store(true)
+	return nil
 }

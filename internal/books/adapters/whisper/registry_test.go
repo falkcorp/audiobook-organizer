@@ -89,7 +89,7 @@ func newRegistryRig(t testing.TB) *registryRig {
 	}
 	t.Cleanup(func() { _ = root.Close() })
 	now := func() time.Time { return regNoon }
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: ks(secretsOwner), AppID: "gotham", Now: now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: secrets.RootStateFiles(root), Keyspace: ks(secretsOwner), AppID: "gotham", Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

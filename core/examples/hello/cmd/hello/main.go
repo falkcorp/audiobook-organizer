@@ -1,7 +1,7 @@
 // file: core/examples/hello/cmd/hello/main.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 04a21a08-0f99-4dac-9ee2-0a0f6beac486
-// last-edited: 2026-11-07
+// last-edited: 2026-11-19
 
 // Command hello serves the hello example app (06 §6.12.5), or, as
 // `hello openapi [--out <file>]`, writes core's OpenAPI document (06 §6.4.5

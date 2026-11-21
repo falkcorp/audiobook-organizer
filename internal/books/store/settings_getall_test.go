@@ -55,8 +55,8 @@ func TestGetAllSettings_EmptyKeyspaceIsNotAnError(t *testing.T) {
 	}
 }
 
-// A corrupt config_blob row used to be skipped, so LoadConfigFromDatabase saw
-// "no blob", ran on defaults, and the next SaveConfigToDatabase overwrote it.
+// A corrupt config_blob row used to be skipped, so HEAD's settings loader saw
+// "no blob", ran on defaults, and the next settings save overwrote it.
 func TestGetAllSettings_CorruptConfigBlobFails(t *testing.T) {
 	store, cleanup := setupPebbleTestDB(t)
 	defer cleanup()

@@ -1,7 +1,7 @@
 // file: core/httpapi/perimeter/perimeter_test.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 9328a91c-0e8b-4b68-b822-f6d8af5531f2
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package perimeter_test
 
@@ -203,7 +203,7 @@ func (c *capture) access() []map[string]string {
 
 // TestChain_OrderGolden: the recorded stage order of a routed request equals
 // 05-http-api §4.2's table, outermost first, with stage 8 (the Basic gate)
-// absent because it stays in gin until F3.
+// absent because no gate is installed (TestChain_OrderGoldenBasicGate has it).
 func TestChain_OrderGolden(t *testing.T) {
 	var got []int
 	c, err := httpmw.New(httpmw.Deps{Trace: func(s int) { got = append(got, s) }}, httpmw.Settings{})
@@ -224,6 +224,53 @@ func TestChain_OrderGolden(t *testing.T) {
 	}
 	if order := c.Order(); !slices.Equal(order, want[:len(want)-1]) {
 		t.Fatalf("Order() = %v, want %v", order, want[:len(want)-1])
+	}
+}
+
+// TestChain_OrderGoldenBasicGate: with a gate installed stage 8 runs between
+// stage 7 and stage 9, around the router, so an admitted request runs 0-7, 8,
+// 9, 10, 11, handler, and a refused one stops at 8: it never reaches stage 9,
+// the route or the handler, and its 401 carries what stages 5 and 6 set.
+func TestChain_OrderGoldenBasicGate(t *testing.T) {
+	var got []int
+	c, err := httpmw.New(httpmw.Deps{Trace: func(s int) { got = append(got, s) }}, httpmw.Settings{
+		AllowedOrigins: []string{"https://batcave.example.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit := false
+	gate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !admit {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Gotham"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	route := c.Route(httpmw.RouteSpec{Pattern: "/api/v1/cases/{id}", Class: "default", MaxBody: -1},
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { got = append(got, 14) }))
+	h := c.OuterGated(route, gate)
+	req := func() *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/cases/7", nil)
+		r.Header.Set("Origin", "https://batcave.example.test")
+		return r
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req())
+	if want := []int{0, 1, 2, 3, 4, 5, 6, 7, 8}; !slices.Equal(got, want) {
+		t.Fatalf("refused request stage order = %v, want %v", got, want)
+	}
+	if rec.Code != http.StatusUnauthorized || rec.Header().Get("X-Content-Type-Options") != "nosniff" ||
+		rec.Header().Get("Access-Control-Allow-Origin") != "https://batcave.example.test" ||
+		!slices.Contains(rec.Header().Values("Vary"), "Origin") {
+		t.Fatalf("refused answer = %d %v, want 401 with stage 5 and 6 headers and Vary: Origin", rec.Code, rec.Header())
+	}
+	got, admit = nil, true
+	h.ServeHTTP(httptest.NewRecorder(), req())
+	if want := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14}; !slices.Equal(got, want) {
+		t.Fatalf("admitted request stage order = %v, want %v", got, want)
 	}
 }
 

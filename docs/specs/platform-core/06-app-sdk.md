@@ -1,7 +1,7 @@
 <!-- file: docs/specs/platform-core/06-app-sdk.md -->
-<!-- version: 1.14.5 -->
+<!-- version: 1.14.6 -->
 <!-- guid: d581911c-8f90-48bb-a307-5cd6288a9695 -->
-<!-- last-edited: 2026-11-11 -->
+<!-- last-edited: 2026-11-19 -->
 
 # 06 — App SDK: `module`, `kernel`, `app`, `coretest`
 
@@ -1728,14 +1728,15 @@ the same PR; a durable write in this range that is not listed is a defect.
 | Phase | Writer | Durable effect | State machine (05-storage diagram) |
 |---|---|---|---|
 | P0a | restoreswap's swap and set-aside (05-backup §5B.3.4) | `restore/<id>/journal.json` steps; `pending.json` → `inflight.json` before the first rename of any kind (R9-7); the copy-if-exists copy of `backup.location.json` into `restore/<id>/` (R10-6); the swap or set-aside renames and their swap-back or move-back, including the failure exits between the in-flight rename and the first journalled move (`rechecked` → `swapped_back`, `staged` → `rejected`; DATA10-4); `restore_rejected` / `rejected` records and `rejected.json` | swap journal |
-| P0 | `config.Store.Boot` | an unparsable `config.boot.json` renamed `.bad` | — (fail-open quarantine, 05-config) |
+| P0 (from R2's config flip) | step 0, `config.ResolveStateDir` | the state directory (0700) created when it does not exist, through the labelled state filesystem (`config.statedir.mkdir`; F3-07) | — |
+| P0 | `config.Store.Boot` | an unparsable `config.boot.json` renamed `.bad`, then the directory fsynced (`config.bootrecord.quarantine`; F3-07) | — (fail-open quarantine, 05-config) |
 | P2 | storage open | Pebble's own files; the store guard's reader-level check writes nothing | — |
 | P2 (restore boot) | the kernel | journal `opened` once the restored store opens at the intent's `db_path` (05-backup §5B.3.4 step g) | swap journal |
 | P2, P4a, P4b (a restore boot that fails) | the kernel and restoreswap: step x, the swap-back (05-backup §5B.3.4 step x) | the store closed; the mark `restore/<id>/swapback.started` written first, so a later boot continues the swap-back instead of resuming forward; the restored items moved to `failed/` beside them (`<db parent>/.mediacore-restore/<id>/failed/` for DB-side items), then the mark `swapback.moved`; `previous/` renamed back; the saved `backup.location.json` renamed back when step c saved one; the sidecars rewritten from the original store's stamps; journal `swapped_back`; `inflight.json` deleted; the boot exits and the restart boots the original store | swap journal |
 | P2 to Run step 8 (a boot that fails after P2) | storage close | Pebble's last WAL sync as the failed boot closes the store (after readiness the close is the shutdown's, outside this table) | — |
 | P4a, first (before the headroom check) | garbage sweep (05-storage §5S.3.12 "How") | the deletion of a record-less checkpoint directory, and of nothing that has a record or lies in the scratch area | — (a directory without a record is garbage; the next boot repeats the sweep) |
 | P4a | checkpoint or fresh-install batch | the checkpoint directory (0700, files 0600) and its record; on an empty store one batch (install marker, levels, applied steps, the floor's `Requires` IDs) | checkpoint record (05-storage §5S.3.12; a checkpoint is consumed or kept, DATA3-1) |
-| P4b, first | `secrets.Open` (from R2's config flip) | `c/secrets/meta`; on the reset boot the keyring header's `install_id` | swap journal |
+| P4b, first | `secrets.Open` (from R2's config flip) | a stale keyring temporary file removed (`secrets.keyring.stale`); the keyring file created (temp 0600, no-replace link, directory fsync), its mode fixed to 0600, and on the reset boot its header's `install_id` rewritten (`secrets.keyring`); `c/secrets/meta` (`secrets.meta`). Labels coined by F3-07 | swap journal |
 | P4b, first (reset boot) | the kernel | journal `applied` right after `secrets.Open` (in release R1 at the same point) | swap journal |
 | P4b | the migration list (M1, M7, M2–M6, M8) | each step's batch with its version bump (books' legacy and versioned migrations included); `BootBlocking` shard cursors; the level step's batch and the level sidecar; each cutover chunk's batch (importer writes, deletions of HEAD's rows, quarantine copies, the residual-blob rewrite of M2, the cursor); the claim ledger and store generation | cutover cursors; level sidecar |
 | P4b (F3+) | M2b (05-config §1.12.2; CONFORM-3, XFILE-3) | the gap-fill file `<db parent>/config.yaml` rewritten without its managed keys (temp file + fsync + rename + directory fsync) through the labelled state filesystem, or deleted when nothing is left | cutover cursors |

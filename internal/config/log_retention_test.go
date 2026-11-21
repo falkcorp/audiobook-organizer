@@ -12,30 +12,20 @@
 package config
 
 import (
-	"encoding/json"
 	"testing"
 
 	logging "github.com/falkcorp/mediacore/log"
-	"github.com/spf13/viper"
 )
 
-func TestInitConfigReadsLogRetentionDefault(t *testing.T) {
-	restoreAppConfig(t)
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	InitConfig()
-	if got := Snapshot().LogRetentionDays; got != logging.DefaultLogRetentionDays {
-		t.Fatalf("LogRetentionDays after InitConfig = %d, want %d (the purge_old_logs task is disabled at 0)",
+func TestFactoryDefaultsLogRetention(t *testing.T) {
+	if got := factoryDefaultConfigForTest().LogRetentionDays; got != logging.DefaultLogRetentionDays {
+		t.Fatalf("factory default LogRetentionDays = %d, want %d (the purge_old_logs task is disabled at 0)",
 			got, logging.DefaultLogRetentionDays)
 	}
 }
 
 func TestValidateNormalizesZeroLogRetention(t *testing.T) {
-	restoreAppConfig(t)
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	InitConfig()
-	cfg := Snapshot()
+	cfg := factoryDefaultConfigForTest()
 	for _, tc := range []struct{ in, want int }{
 		{in: 0, want: logging.DefaultLogRetentionDays},
 		{in: logging.LogRetentionKeepForever, want: logging.LogRetentionKeepForever},
@@ -47,71 +37,5 @@ func TestValidateNormalizesZeroLogRetention(t *testing.T) {
 		if c.LogRetentionDays != tc.want {
 			t.Errorf("Validate left log_retention_days=%d as %d, want %d", tc.in, c.LogRetentionDays, tc.want)
 		}
-	}
-}
-
-func TestBlobLogRetentionMigration(t *testing.T) {
-	cases := []struct {
-		name        string
-		blob        string
-		markerSet   bool
-		want        int
-		wantRewrite bool
-	}{
-		{name: "stored 0 is dropped and the default applies", blob: `{"log_retention_days":0}`, want: logging.DefaultLogRetentionDays, wantRewrite: true},
-		{name: "stored value kept", blob: `{"log_retention_days":30}`, want: 30},
-		{name: "keep forever kept", blob: `{"log_retention_days":-1}`, want: logging.LogRetentionKeepForever},
-		{name: "absent key gets the default", blob: `{"root_dir":"/mnt/books"}`, want: logging.DefaultLogRetentionDays},
-		// After the marker, the blob is not rewritten again; a 0 that somehow
-		// came back is still normalized in memory on load.
-		{name: "marker set: no rewrite, still normalized", blob: `{"log_retention_days":0}`, markerSet: true, want: logging.DefaultLogRetentionDays},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			restoreAppConfig(t)
-			viper.Reset()
-			t.Cleanup(viper.Reset)
-			InitConfig()
-
-			store := storeWithBlob(t, tc.blob)
-			if tc.markerSet {
-				if err := store.SetSetting(logRetentionZeroMigratedKey, "true", "bool", false); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := LoadConfigFromDatabase(store); err != nil {
-				t.Fatalf("LoadConfigFromDatabase: %v", err)
-			}
-			if got := Snapshot().LogRetentionDays; got != tc.want {
-				t.Errorf("LogRetentionDays = %d, want %d", got, tc.want)
-			}
-			if m, _ := store.GetSetting(logRetentionZeroMigratedKey); m == nil {
-				t.Error("migration marker not recorded")
-			}
-
-			// Other one-shot migrations (ai_endpoints derivation) also rewrite
-			// the blob, so compare only this key, before and after.
-			keyOf := func(blob string) (string, bool) {
-				var raw map[string]json.RawMessage
-				if err := json.Unmarshal([]byte(blob), &raw); err != nil {
-					t.Fatalf("blob %s: %v", blob, err)
-				}
-				v, ok := raw["log_retention_days"]
-				return string(v), ok
-			}
-			stored, _ := store.GetSetting("config_blob")
-			before, hadKey := keyOf(tc.blob)
-			after, hasKey := keyOf(stored.Value)
-			if tc.wantRewrite {
-				if hasKey {
-					t.Errorf("stored log_retention_days=%s still present after migration", after)
-				}
-				return
-			}
-			if hadKey != hasKey || before != after {
-				t.Errorf("log_retention_days changed in the stored blob: before %q (present=%v), after %q (present=%v)",
-					before, hadKey, after, hasKey)
-			}
-		})
 	}
 }

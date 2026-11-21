@@ -1665,6 +1665,11 @@ In order, each phase recorded in M8's own `c/storage/dm/` state:
 4. **Delete.** The set-aside old directory is deleted at once (not kept for
    `core.storage.swap.keep_previous`), then M8 is `done` and the journal `applied`.
 
+**M8 on a restore boot (F3-07).** A restore boot's `applied` is journaled just before M8 runs, not after P4b, so
+the intent slot is free for M8's own swap; if M8 then fails, the boot fails without serving and M8 retries from its
+own journal at the next boot, with the restore left applied and its `previous/` kept (05-backup §5B.3.4, "A restore
+boot whose build carries M8").
+
 A kill in phases 1–2 reruns from phase 1 (a partial `.rewrite.tmp/` is removed first); a kill in phase 3
 is resumed forward or swapped back by P0a as any swap (machine 1). **M8 derives its phase from the swap
 journal, not from the copy**, whose own state reads `copied`: before phase 3 it reads the `KindRewrite`

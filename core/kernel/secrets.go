@@ -1,7 +1,7 @@
 // file: core/kernel/secrets.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 77d1e3c5-0f7d-4832-9d4c-79a5db3dd150
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -17,29 +17,29 @@ import (
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
 // This file is the kernel's handling of the secret store (05-config Part 2;
-// 06 P4b). It is DARK: nothing in boot.go, kernel.go, storage.go or swap.go
-// calls openSecrets, storageOwners does not list secretsOwnerSpec, and no boot
-// creates secrets.keyring or writes a c/secrets/ row. F3-07 wires it, for
-// every app (hello included), with the boot-writer row of 06 §6.5.1 and the
-// crash-matrix cells together (09 §9.3):
+// 06 P4b). It is wired in every boot (config_boot.go), which opens the keyring
+// and writes the c/secrets/ rows; the boot-writer rows of 06 §6.5.1 and the
+// crash-matrix cells cover them (09 §9.3):
 //
 //  1. storageOwners appends secretsOwnerSpec() (P2 Open and P4a Prepare read
 //     the owners, so the keyspace exists once Prepare returns);
-//  2. openSecrets at the start of P4b, after the P4a checkpoint and before
-//     the migration list (06 §6.5.1 "Write rule"), with ResetBoot set on the
-//     reset boot of a factory reset, before the KindReset journal is marked
-//     applied (DATA7-17); the store becomes module.Importers.Secrets and
-//     module.Deps.Secrets (scoped);
-//  3. secretsMetrics after P5, when the Provider exists;
-//  4. RetireUnused in P5 with the backup service's in-use check (F8-01), then
-//     reportSecretsHealth on core.secrets (and again after every change that
-//     can move a token: a Put that replaces an unreadable marker, an export).
+//  2. openSecrets runs at the start of P4b (bindCoreStores), after the P4a
+//     checkpoint and before the migration list (06 §6.5.1 "Write rule"), with
+//     ResetBoot set on the reset boot of a factory reset, before the KindReset
+//     journal is marked applied (DATA7-17); the store becomes
+//     module.Importers.Secrets and module.Deps.Secrets (scoped);
+//  3. secretsMetrics after P5, when the Provider exists (coreStoreMetrics);
+//  4. reportSecretsHealth on core.secrets at P4c (registerCoreStoreHealth);
+//     RetireUnused in P5 with the backup service's in-use check is F8-01's,
+//     and the report is repeated after every change that can move a token
+//     (a Put that replaces an unreadable marker, an export) once F8 wires it.
 //
 // The offline commands below (rotate-derive, set-install-id) are live: they
 // run inside OpenOffline and touch only the keyring file.
@@ -60,7 +60,7 @@ const (
 // keyspace, Serialized as a whole, so every record write carries an Expect
 // (Put and Stage read the record with GetForUpdate; c/secrets/meta is written
 // expecting it absent). No claims, no migrations. Registering it takes the
-// claim ledger's one-time write at P4b: F3-07's change, with the call.
+// claim ledger's one-time write at P4b: storageOwners appends it.
 func secretsOwnerSpec() storage.OwnerSpec {
 	return storage.OwnerSpec{Owner: secretsOwnerID, Spec: storage.Spec{Keyspace: true, Serialized: []string{""}}, Enabled: true}
 }
@@ -83,11 +83,12 @@ type secretsInput struct {
 	Now           func() time.Time
 }
 
-// kernelSecrets is the open secret store with the state directory root it
-// reads the keyring through; the kernel closes both at shutdown.
+// kernelSecrets is the open secret store with the state directory it reads
+// the keyring through (the labelled state filesystem, statefs); the kernel
+// closes both at shutdown.
 type kernelSecrets struct {
 	store *secrets.Store
-	root  *os.Root
+	root  *statefs.Dir
 }
 
 // close closes the store (wiping its key material), then the root.
@@ -96,7 +97,8 @@ func (s *kernelSecrets) close() error {
 }
 
 // openSecrets is P4b's secrets step (05-config §2.4 step 1; 06 §6.5.1): it
-// opens the state directory as an os.Root and calls secrets.Open over the
+// opens the state directory through statefs (an os.Root in production, the
+// crash matrix's filesystem under its seam) and calls secrets.Open over the
 // c/secrets/ keyspace with the store's install marker, so the keyring header
 // carries it (and a reset boot rewrites it). It must run after the P4a
 // checkpoint: Open writes c/secrets/meta and, on a first run, the keyring.
@@ -111,7 +113,7 @@ func openSecrets(ctx context.Context, in secretsInput) (*kernelSecrets, error) {
 	if !ok {
 		return nil, fmt.Errorf("kernel: secrets: owner %s has no keyspace: append secretsOwnerSpec() to storageOwners (F3-07)", secretsOwnerID)
 	}
-	root, err := os.OpenRoot(in.StateDir)
+	root, err := statefs.Open(ctx, in.StateDir)
 	if err != nil {
 		return nil, fmt.Errorf("kernel: secrets: open the state directory: %w", err)
 	}

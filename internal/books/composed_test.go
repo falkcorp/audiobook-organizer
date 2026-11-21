@@ -1,7 +1,7 @@
 // file: internal/books/composed_test.go
-// version: 1.6.0
+// version: 1.6.1
 // guid: 4b8f2e61-9a3d-4c75-a0e2-6d1f8b3c5e97
-// last-edited: 2026-11-10
+// last-edited: 2026-11-18
 
 package books
 
@@ -38,8 +38,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
+	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks/taskstest/parity"
 )
@@ -132,9 +134,7 @@ func checkClaimViolations(t *testing.T, a *app.App, c *composed) {
 // bootComposed boots the composition with the ABS surface on or off; edit,
 // when set, adjusts the config before the store opens. pre, when set, runs
 // on books' store in Register, after core's migrations and before the
-// settings boot and the server (a stored settings blob, say). The settings
-// boot's loader and env sync are stubbed (stubSettingsLoad); a test of
-// either sets the seam back. Cleanup releases the unstarted server and the
+// settings boot and the server (a stored settings blob, say). Cleanup releases the unstarted server and the
 // store and puts the process defaults back.
 func bootComposed(t *testing.T, abs bool, edit func(*config.Config), pre func(*database.PebbleStore)) *composed {
 	t.Helper()
@@ -151,14 +151,21 @@ func bootComposedIn(t *testing.T, abs bool, stateDir string, edit func(*config.C
 }
 
 // bootComposedWith is bootComposedIn with opt, when set, adjusting the App's
-// options after books.Options builds them and before app.New.
-func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options)) *composed {
+// options after books.Options builds them and before app.New, and each wrap,
+// in order, wrapping the module app.New registers (preFlip boots the build
+// that predates the flip). Attach and the composition's handles still reach
+// the books module inside.
+func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), wrap ...func(module.Module) module.Module) *composed {
 	t.Helper()
 	mod, opts, newLog := composedOptions(t, abs, stateDir, edit, pre)
 	if opt != nil {
 		opt(&opts)
 	}
-	a, err := app.New(t.Context(), opts, mod)
+	var registered module.Module = mod
+	for _, w := range wrap {
+		registered = w(registered)
+	}
+	a, err := app.New(t.Context(), opts, registered)
 	var c *composed
 	if a != nil {
 		// Registered first, so it runs last, once the app has stopped and
@@ -217,8 +224,25 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 		edit(&c)
 	}
 	withConfig(t, c)
+	// The store path is a layer now (core.storage.path), not the loaded
+	// config's database_path: name the one the fixture's config holds.
+	t.Setenv(storagePathEnv, c.DatabasePath)
+	require.NoError(t, os.MkdirAll(filepath.Dir(c.DatabasePath), 0o700))
+	// The ABS signing secret is an operator-only secret (class o): its layer is
+	// the environment, not the loaded config the fixture also sets.
+	if c.ABSJWTSecret != "" {
+		t.Setenv("ABO_BOOKS_ABS_JWT_SECRET", c.ABSJWTSecret)
+	}
+	// Sign-in is core's auth mode (class k, fail-closed): a fixture whose
+	// config leaves auth off names it the way an operator does, in the
+	// environment. A fixture that turns it on leaves core's default (required).
+	if !c.EnableAuth {
+		t.Setenv("ABO_CORE_AUTH_MODE", "disabled")
+	}
+	if !c.BasicAuthEnabled {
+		t.Setenv("ABO_CORE_HTTP_BASIC_GATE_ENABLED", "false")
+	}
 	sandboxStateDirAt(t, stateDir)
-	stubSettingsLoad(t)
 	t.Cleanup(func() {
 		database.SetGlobalStore(nil)
 		scanner.SetStore(nil)
@@ -233,8 +257,11 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 		}
 	}
 	newLog := &syncBuffer{}
+	// The listener binds core.http.listen (start step 7), not the server
+	// config's host and port: an environment layer puts it on a free loopback
+	// port, where ABO's compiled default (localhost:8484) would collide.
+	t.Setenv("ABO_CORE_HTTP_LISTEN", "127.0.0.1:0")
 	cfg := server.GetDefaultServerConfig()
-	cfg.Host, cfg.Port = "127.0.0.1", "0"
 	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot(), LogOut: newLog})
 	require.NoError(t, err)
 	opts.StorageFS = storage.MemFS()
@@ -264,17 +291,6 @@ func sandboxStateDirAt(t *testing.T, dir string) string {
 	return dir
 }
 
-// stubSettingsLoad stubs the settings boot's loader and env sync for the
-// test, which otherwise apply the process's viper state over the config the
-// test set. A test of the loader sets loadConfigFromDB back.
-func stubSettingsLoad(t *testing.T) {
-	t.Helper()
-	origLoad, origSync := loadConfigFromDB, syncConfigFromEnv
-	loadConfigFromDB = func(database.SettingsStore) error { return nil }
-	syncConfigFromEnv = func() {}
-	t.Cleanup(func() { loadConfigFromDB, syncConfigFromEnv = origLoad, origSync })
-}
-
 // runningApp is a composition whose App runs as serve runs it, with its
 // listener on a loopback port opened by books' R1Listen.
 type runningApp struct {
@@ -293,19 +309,19 @@ func runComposed(t *testing.T) *runningApp {
 	return runComposedWith(t, nil, nil, nil, nil)
 }
 
-// runComposedWith is runComposed with edit, pre and opt as bootComposedWith
-// takes them, and booted, when set, called with the composition after
+// runComposedWith is runComposed with edit, pre, opt and wrap as
+// bootComposedWith takes them, and booted, when set, called with the composition after
 // app.New and before Run. When it returns, Run has opened the listener, so
 // every start hook has returned (06 §6.5.2 start steps (2) and (7)).
-func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+func runComposedWith(t *testing.T, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed), wrap ...func(module.Module) module.Module) *runningApp {
 	t.Helper()
-	return runComposedIn(t, "", edit, pre, opt, booted)
+	return runComposedIn(t, "", edit, pre, opt, booted, wrap...)
 }
 
 // runComposedIn is runComposedWith over the state directory stateDir ("" is
 // a fresh temporary one), so two boots of one store share their swap slot
 // and keys.
-func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed)) *runningApp {
+func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre func(*database.PebbleStore), opt func(*app.Options), booted func(*composed), wrap ...func(module.Module) module.Module) *runningApp {
 	t.Helper()
 	addrs := make(chan net.Addr, 1)
 	c := bootComposedWith(t, false, stateDir, edit, pre, func(o *app.Options) {
@@ -320,7 +336,7 @@ func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre
 			}
 			return srv, err
 		}
-	})
+	}, wrap...)
 	if booted != nil {
 		booted(c)
 	}
@@ -368,71 +384,6 @@ func (c *composed) serve(method, path string, body []byte) *httptest.ResponseRec
 	w := httptest.NewRecorder()
 	c.app.Handler().ServeHTTP(w, req)
 	return w
-}
-
-// configBlob is the stored config_blob, decoded by key.
-func configBlob(t *testing.T, store *database.PebbleStore) map[string]json.RawMessage {
-	t.Helper()
-	s, err := store.GetSetting("config_blob")
-	require.NoError(t, err)
-	require.NotNil(t, s, "no config_blob stored")
-	var m map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(s.Value), &m))
-	return m
-}
-
-// TestR1AppConfigFromBlob (06 §6.10; COR4-1, R4-6): in R1 a value set only in
-// the settings blob is effective after boot (in AppConfig, and in the
-// R1Values the kernel reads at start step 7), and a PUT /api/v1/config that
-// changes one field leaves every other blob field byte-identical.
-func TestR1AppConfigFromBlob(t *testing.T) {
-	defaults := config.Snapshot()
-	const rate, jsonMB = 37, 9
-	require.NotEqual(t, rate, defaults.APIRateLimitPerMinute)
-	require.NotEqual(t, jsonMB, defaults.JSONBodyLimitMB)
-
-	c := bootComposed(t, false, nil, func(store *database.PebbleStore) {
-		blob := fmt.Sprintf(`{"api_rate_limit_per_minute":%d,"json_body_limit_mb":%d}`, rate, jsonMB)
-		require.NoError(t, store.SetSetting("config_blob", blob, "json", false))
-		// The settings boot's loadConfigFromDB, which this harness stubs.
-		require.NoError(t, config.LoadConfigFromDatabase(store))
-	})
-	snap := config.Snapshot()
-	assert.Equal(t, rate, snap.APIRateLimitPerMinute, "blob-only value not effective in AppConfig")
-	assert.Equal(t, jsonMB, snap.JSONBodyLimitMB, "blob-only value not effective in AppConfig")
-	opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap})
-	require.NoError(t, err)
-	v := opts.R1Values()
-	assert.Equal(t, rate, v.RateLimitPerMinute, "R1Values ignores the blob")
-	assert.Equal(t, int64(jsonMB)<<20, v.JSONMaxBytes, "R1Values ignores the blob")
-
-	put := func(field string, value int) {
-		t.Helper()
-		w := c.serve(http.MethodPut, "/api/v1/config", []byte(fmt.Sprintf(`{%q:%d}`, field, value)))
-		require.Equal(t, http.StatusOK, w.Code, "PUT /api/v1/config: %s", w.Body.String())
-	}
-	put("concurrent_scans", 3)
-	first := configBlob(t, c.store)
-	assert.JSONEq(t, strconv.Itoa(rate), string(first["api_rate_limit_per_minute"]))
-	assert.Equal(t, strconv.Itoa(rate), string(first["api_rate_limit_per_minute"]), "a blob-only field changed bytes")
-	assert.Equal(t, strconv.Itoa(jsonMB), string(first["json_body_limit_mb"]), "a blob-only field changed bytes")
-	assert.Equal(t, "3", string(first["concurrent_scans"]))
-
-	// The PUT wrote the whole config; a second one-field PUT must leave every
-	// other field of that full blob byte-identical.
-	put("concurrent_scans", 4)
-	second := configBlob(t, c.store)
-	require.Greater(t, len(first), 50, "the blob after a PUT is not the whole config")
-	for k, before := range first {
-		if k == "concurrent_scans" {
-			continue
-		}
-		if !bytes.Equal(before, second[k]) {
-			t.Errorf("blob field %s changed on a PUT of concurrent_scans: %s -> %s", k, before, second[k])
-		}
-	}
-	assert.Equal(t, "4", string(second["concurrent_scans"]))
-	assert.Len(t, second, len(first), "the PUT added or dropped blob fields")
 }
 
 // TestABOMetricsGatherNoDuplicate (05-metrics §6; F2-03 extends it): the
@@ -546,15 +497,11 @@ func TestServeComposition_HostileOTLPEnvNeverLogged(t *testing.T) {
 		}
 		return
 	}
-	// serve reads the environment into AppConfig (cmd/root.go InitConfig)
-	// and snapshots the telemetry config before the stored settings load.
-	config.InitConfig()
-	env := config.Snapshot()
-	require.NotEmpty(t, env.OTelExporterOTLPEndpoint, "OTEL_EXPORTER_OTLP_ENDPOINT not read")
-	require.NotEmpty(t, env.OTelMetricsOTLPEndpoint, "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT not read")
+	// The telemetry config serve snapshots carries the endpoints; the hostile
+	// OTEL_EXPORTER_OTLP_* values stay in the environment for the OTel SDK.
 	c := bootComposed(t, false, func(c *config.Config) {
-		c.OTelExporterOTLPEndpoint = env.OTelExporterOTLPEndpoint
-		c.OTelMetricsOTLPEndpoint = env.OTelMetricsOTLPEndpoint
+		c.OTelExporterOTLPEndpoint = "http://192.0.2.1:4317"
+		c.OTelMetricsOTLPEndpoint = "http://192.0.2.1:4317"
 		c.OTelMetricsOTLPInsecure = true
 	}, nil)
 	logged := c.newLog.String()
@@ -702,15 +649,88 @@ func TestComposedApp_SystemdSignals(t *testing.T) {
 	}
 }
 
-// ServeInputs.ShutdownBudget (serve's ABO_CORE_SHUTDOWN_BUDGET reading) reaches
-// R1Values.ShutdownBudget, which the kernel reads as core.shutdown.budget; zero
-// stays zero so core's default applies (R1-33).
-func TestOptions_ShutdownBudgetReachesR1Values(t *testing.T) {
+// ABO_CORE_SHUTDOWN_BUDGET is core's own name for core.shutdown.budget: serve
+// no longer reads it and hands the value on (R1-33), the config boot does, so
+// a value that is not a positive duration refuses the boot naming the key, and
+// a good one boots.
+func TestOptions_ShutdownBudgetEnvIsCoreConfig(t *testing.T) {
+	t.Run("a bad value is refused naming the key", func(t *testing.T) {
+		mod, opts, _ := composedOptions(t, false, "", nil, nil)
+		t.Cleanup(func() { Release(mod) })
+		t.Setenv("ABO_CORE_SHUTDOWN_BUDGET", "after-the-batsignal")
+		a, err := app.New(t.Context(), opts, mod)
+		if a != nil {
+			t.Cleanup(func() { _ = a.Close(context.Background()) })
+		}
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "core.shutdown.budget")
+	})
+	t.Run("a good value boots", func(t *testing.T) {
+		t.Setenv("ABO_CORE_SHUTDOWN_BUDGET", "40s")
+		bootComposed(t, false, nil, nil)
+	})
+}
+
+// ABO's compiled core defaults (coreDefaults) are what core.http.listen and
+// core.http.client_ip_header resolve to with no operator layer: one interface,
+// as --host always defaulted, and the header the tunnel connectors set. An
+// operator layer beats them.
+func TestOptions_CoreDefaultsAreTheEffectiveValues(t *testing.T) {
+	// bootComposedWith restores the process defaults the App installs; edit
+	// runs after the harness set its environment and before app.New.
+	lookup := func(t *testing.T, edit func()) func(coreconfig.Path) coreconfig.KeyState {
+		c := bootComposedWith(t, false, "", nil, nil, func(*app.Options) { edit() })
+		in := c.mod.gapFillIn.Load()
+		require.NotNil(t, in, "the books module has no config access")
+		return func(p coreconfig.Path) coreconfig.KeyState {
+			st, ok := in.acc.Lookup(p)
+			require.True(t, ok, "%s is not registered", p)
+			return st
+		}
+	}
+	t.Run("no operator layer", func(t *testing.T) {
+		get := lookup(t, func() { require.NoError(t, os.Unsetenv("ABO_CORE_HTTP_LISTEN")) })
+		assert.JSONEq(t, `"localhost:8484"`, string(get("core.http.listen").Effective))
+		assert.JSONEq(t, `"CF-Connecting-IP"`, string(get("core.http.client_ip_header").Effective))
+	})
+	t.Run("an operator layer beats them", func(t *testing.T) {
+		get := lookup(t, func() {
+			t.Setenv("ABO_CORE_HTTP_LISTEN", "192.0.2.8:9000")
+			t.Setenv("ABO_CORE_HTTP_CLIENT_IP_HEADER", "X-Wayne-Client")
+		})
+		assert.JSONEq(t, `"192.0.2.8:9000"`, string(get("core.http.listen").Effective))
+		assert.JSONEq(t, `"X-Wayne-Client"`, string(get("core.http.client_ip_header").Effective))
+	})
+}
+
+// ServeInputs.FromRelease (the pre-freeze tag main embeds) becomes
+// app.Options.FromRelease, which the pre-migration checkpoint records as
+// from_release (09 §9.2.1).
+func TestOptions_FromReleaseReachesCore(t *testing.T) {
 	c := bootComposed(t, false, nil, nil)
 	snap := config.Snapshot()
-	for _, want := range []time.Duration{0, 40 * time.Second} {
-		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, ShutdownBudget: want})
+	for _, want := range []string{"", "v0.232.0"} {
+		opts, err := Options(c.mod, ServeInputs{Server: c.mod.serveConfig(), Telemetry: snap, FromRelease: want})
 		require.NoError(t, err)
-		assert.Equal(t, want, opts.R1Values().ShutdownBudget)
+		assert.Equal(t, want, opts.FromRelease)
 	}
+}
+
+// storageEnv is the core.storage.path layer a fixture that replaces
+// app.Options.Env must keep: the path the fixture's config holds, which
+// composedOptions put in the process environment for ResolveBootPaths.
+func storageEnv() string { return storagePathEnv + "=" + os.Getenv(storagePathEnv) }
+
+// absEnv is the ABS layers (flag and signing secret, both operator-only) a
+// fixture that replaces app.Options.Env keeps when its config serves the ABS
+// surface: the module reads the flag from the process environment, and the
+// config boot must see the same value or the boot refuses (errABSFlagDrift).
+func absEnv() []string {
+	var env []string
+	for _, k := range []string{absEnabledEnv, "ABO_BOOKS_ABS_JWT_SECRET"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	return env
 }

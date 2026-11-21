@@ -357,7 +357,7 @@ var durationTierMismatchWarnOnce sync.Once
 // scoringKnobs resolves every extracted scoring literal (INIT-3-T1) from
 // config.AppConfig.MetadataScoring, with defaults exactly equal to the
 // pre-extraction hardcoded literals — so a zero-value MetadataScoringConfig
-// (e.g. a test that never calls config.InitConfig) reproduces today's scores
+// (e.g. a test that never loads a config or the factory defaults) reproduces today's scores
 // bit-for-bit.
 //
 // Per-knob fail-open semantics (spec C2, normative — a blanket

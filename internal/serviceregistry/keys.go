@@ -14,7 +14,6 @@ const (
 	KeyAudiobook      = "audiobook"
 	KeyBatch          = "batch"
 	KeyConfig         = "config"
-	KeyConfigUpdate   = "configupdate"
 	KeyDashboard      = "dashboard"
 	KeyDedup          = "dedup"
 	KeyEmbeddingStore = "embeddingstore"

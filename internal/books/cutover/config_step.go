@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/secrets"
@@ -94,6 +95,11 @@ type ConfigStepOptions struct {
 	// (quarantined sealed, their names marked unreadable) instead of
 	// stopping the upgrade. nil = false.
 	AllowKeyRegen func() bool
+	// OperatorSet reports whether an operator layer sets a core or books key
+	// for this boot, and which one (module.Importers.OperatorSet). M2 asks it
+	// for core.auth.oidc.providers before it would write a provider list with
+	// an empty allow-list (oauthBlocker). nil = no layer sets anything.
+	OperatorSet func(path string) (by string, set bool)
 	// Files is the filesystem for config.yaml; nil = the OS.
 	Files FileOps
 	// Logger receives the step's report lines: names, counts and classes,
@@ -142,6 +148,13 @@ type configStep struct {
 
 	mu   sync.Mutex
 	last *datamigrate.StepWriter
+
+	// This boot's accounting of the Source rows outside the Residual (the four
+	// encrypted rows), for Verify's report: read is every row present, and each
+	// lands in exactly one of written (its own value imported), quarantined
+	// (its bytes moved to quarantine) and deleted (removed by rule with nothing
+	// to import: an empty row).
+	read, written, quarantined, deleted atomic.Int64
 }
 
 // ConfigStep is M2. cfg and sec are core's importers (config.Store.Importer,
@@ -330,15 +343,54 @@ func (s *configStep) preflight(ctx context.Context, r storage.Reader) ([]datamig
 		return blockers, err
 	}
 	var unrep *unrepresentableError
-	if _, err := buildPlan(in); errors.As(err, &unrep) {
+	if p, err := buildPlan(in); errors.As(err, &unrep) {
 		return []datamigrate.Blocker{{Key: []byte(headConfigFileName), Family: "file", Reason: err.Error(),
 			Fix: "give each of those keys a plain value in config.yaml (a whole number for concurrent_scans), or remove the line: the settings blob does not hold them, so nothing else would carry the setting"}}, nil
 	} else if err != nil {
 		return []datamigrate.Blocker{{Key: blobKey(), Family: "setting", Reason: err.Error(),
 			Fix: "repair or restore the settings blob on the pre-freeze release: it refuses to run on this blob too"}}, nil
+	} else if b, refused := s.oauthBlocker(p); refused {
+		return []datamigrate.Blocker{b}, nil
 	}
 	return nil, nil
 }
+
+// oidcProvidersKey is the core key the OAuth fold writes.
+const oidcProvidersKey = "core.auth.oidc.providers"
+
+// oauthBlocker stops the upgrade, writing nothing, when the plan would turn
+// HEAD's enabled OAuth sign-in into provider entries whose allow-list is
+// empty while no operator layer supplies the provider list. HEAD reads an
+// empty oauth_allowed_emails as "nobody", so the entries would refuse every
+// OAuth sign-in; and an install whose allow-list came from HEAD's
+// OAUTH_ALLOWED_EMAILS environment variable has the list only there, which M2
+// does not read and the flipped boot refuses by name. The fix names the keys,
+// never a value: the remedy is the operator's provider list
+// (core.auth.oidc.providers, with each provider's allowed_emails and
+// default_role) and the Cloudflare Access allow-list
+// (modules.books.cfaccess.allowed_emails), which HEAD read from the same name.
+func (s *configStep) oauthBlocker(p *plan) (datamigrate.Blocker, bool) {
+	if p == nil || !p.OAuthEmptyAllowList {
+		return datamigrate.Blocker{}, false
+	}
+	if s.opts.OperatorSet != nil {
+		if _, set := s.opts.OperatorSet(oidcProvidersKey); set {
+			return datamigrate.Blocker{}, false
+		}
+	}
+	return datamigrate.Blocker{Key: blobKey(), Family: "setting", Reason: errOAuthEmptyAllowList.Error(), Fix: oauthFix}, true
+}
+
+// errOAuthEmptyAllowList is oauthBlocker's reason, and the step's own refusal
+// when the kernel skipped Preflight (a step that had already started).
+var errOAuthEmptyAllowList = errors.New("the stored settings enable OAuth sign-in with a client id but an empty oauth_allowed_emails, " +
+	"and no operator layer sets " + oidcProvidersKey + ": the cutover would write providers that admit nobody, and an allow-list that came from OAUTH_ALLOWED_EMAILS would be lost")
+
+// oauthFix is the remedy oauthBlocker names.
+const oauthFix = "set " + oidcProvidersKey + " in an operator layer (ABO_CORE_AUTH_OIDC_PROVIDERS, a JSON list, or the operator file), " +
+	"one entry per enabled provider with its id, kind, client_id, allowed_emails and default_role, " +
+	"and set modules.books.cfaccess.allowed_emails (ABO_BOOKS_CFACCESS_ALLOWED_EMAILS) to the same allow-list; " +
+	"or save a non-empty allow-list in the settings on the pre-freeze release; then start again"
 
 // headConfigFileName is the operator's file's name, the blocker key of an
 // unreadable one.
@@ -504,6 +556,9 @@ func (s *configStep) step(ctx context.Context, kv storage.KV, w *datamigrate.Ste
 	if err != nil {
 		return fmt.Errorf("%w: %v", errConfigStep, err)
 	}
+	if _, refused := s.oauthBlocker(p); refused {
+		return fmt.Errorf("%w: %v; %s", errConfigStep, errOAuthEmptyAllowList, oauthFix)
+	}
 	if p.empty() {
 		w.Count("already-current")
 		return nil
@@ -522,12 +577,29 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 	b := w.Batch()
 	var quarantine []quarantined
 	quarantine = append(quarantine, p.Quarantines...)
+	// The report's accounting of the four encrypted rows (Verify), each bucket
+	// counted on its own so Verify can check they add up to the rows read: a
+	// value imported from a row carries the row's key as its Source (written),
+	// a row quarantined under its own key (quarantined), and a row deleted
+	// with no value imported from it (deleted by rule: an empty row). Blob
+	// members (the Residual) are no rows of it, and the w.Count totals, which
+	// include them, are not used.
+	isRow := map[string]bool{}
+	for _, n := range headSecretRows() {
+		isRow[string(settingKey(n))] = true
+	}
+	importedFrom := map[string]bool{}
+	var written, quarantinedRows, deleted int64
 
 	for _, sw := range p.Secrets {
 		err := s.sec.ImportSecret(ctx, b, secrets.Write{Name: sw.Name, Value: secrets.NewValue(sw.Value), By: by})
 		switch {
 		case err == nil:
 			w.Count("secret-imported")
+			if isRow[string(sw.Source)] {
+				written++
+				importedFrom[string(sw.Source)] = true
+			}
 		case errors.Is(err, storage.ErrImportConflict) && sw.FromFile:
 			// config.yaml gap-fills only an empty value, and this name holds one.
 			s.log.Info("cutover: config.yaml's value was not applied: the name already holds a value", "step", ConfigCutoverID, "secret", string(sw.Name))
@@ -546,17 +618,24 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 	}
 	for _, st := range p.Stages {
 		err := s.cfg.Stage(b, st.Path, st.Value, by)
+		reason := ""
 		switch {
 		case err == nil:
 			w.Count("key-staged")
 		case errors.Is(err, config.ErrUnknownKey):
-			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reasonRefusedUnknown})
+			reason = reasonRefusedUnknown
 		case errors.Is(err, config.ErrInvalid) && !isFieldError(err):
-			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reasonRefusedStore})
+			reason = reasonRefusedStore
 		case isFieldError(err) || errors.Is(err, config.ErrInvalid):
-			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reasonRefusedValue})
+			reason = reasonRefusedValue
 		default:
 			return fmt.Errorf("%w: staging %s failed: %v", errConfigStep, st.Path, errClass(err))
+		}
+		if reason != "" {
+			quarantine = append(quarantine, quarantined{Key: quarantineKey(st.Member), Raw: st.Original, Reason: reason})
+			for _, m := range st.Also {
+				quarantine = append(quarantine, quarantined{Key: quarantineKey(m.Member), Raw: m.Original, Reason: reason})
+			}
 		}
 	}
 	moved := map[string]bool{} // quarantining a source key deletes it in the same batch
@@ -564,8 +643,13 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 		if err := w.Quarantine(q.Key, q.Raw, q.Reason); err != nil {
 			return fmt.Errorf("%w: quarantine failed: %v", errConfigStep, errClass(err))
 		}
+		// Quarantine counts the row itself (its key in the report); a
+		// second Count here counted each one twice, the second time under the
+		// chunk's source key with no member named.
 		moved[string(q.Key)] = true
-		w.Count("quarantined")
+		if isRow[string(q.Key)] {
+			quarantinedRows++
+		}
 	}
 	for _, key := range p.DeleteRows {
 		if moved[string(key)] {
@@ -575,6 +659,9 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 			return fmt.Errorf("%w: delete failed: %v", errConfigStep, errClass(err))
 		}
 		w.Count("row-deleted")
+		if isRow[string(key)] && !importedFrom[string(key)] {
+			deleted++
+		}
 	}
 	if p.BlobNew != nil {
 		if err := w.SetIfUnchanged(p.BlobKey, p.BlobExpect, p.BlobNew); err != nil {
@@ -593,6 +680,10 @@ func (s *configStep) apply(ctx context.Context, p *plan, w *datamigrate.StepWrit
 	for _, note := range p.Reported {
 		s.log.Info("cutover: "+note, "step", ConfigCutoverID)
 	}
+	s.read.Add(int64(p.RowsRead))
+	s.written.Add(written)
+	s.quarantined.Add(quarantinedRows)
+	s.deleted.Add(deleted)
 	return nil
 }
 
@@ -604,12 +695,21 @@ func isFieldError(err error) bool {
 
 // ---- Verify ----
 
-// verify is the step's invariant gate, over the store alone: the four rows
-// are gone and the blob holds no member that moved. That the config oracle
-// holds (effective config before = after) is a test, not a runtime check: it
-// needs the registry the step does not have.
+// verify is the step's invariant gate, over the store: the four rows are gone
+// and the blob holds no member that moved. That the config oracle holds
+// (effective config before = after) is a test, not a runtime check: it needs
+// the registry the step does not have.
+//
+// Its counts are this boot's (apply's accounting of the four encrypted rows,
+// M5's rule): a boot that resumed after the chunk committed reads, writes and
+// quarantines nothing. Written + Quarantined + the rows deleted by rule must
+// equal Read: a row counted in no bucket, or in two, fails it.
 func (s *configStep) verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
-	var rep datamigrate.VerifyReport
+	rep := datamigrate.VerifyReport{Read: s.read.Load(), Written: s.written.Load(), Quarantined: s.quarantined.Load()}
+	if del := s.deleted.Load(); rep.Written+rep.Quarantined+del != rep.Read {
+		rep.Failures = append(rep.Failures, fmt.Sprintf("read %d rows but imported %d, quarantined %d and deleted %d by rule",
+			rep.Read, rep.Written, rep.Quarantined, del))
+	}
 	for _, name := range headSecretRows() {
 		v, err := get(ctx, r, settingKey(name))
 		if err != nil {

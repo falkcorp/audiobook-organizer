@@ -1,7 +1,7 @@
 // file: core/app/offline_secrets.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 8c1d4e7a-2b95-4f30-a6e8-d07c3b9f5a14
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package app
 
@@ -82,7 +82,11 @@ func exportKeyringCommand(opts Options, mods []module.Module) Command {
 			if strings.TrimSpace(*out) == "" {
 				return errors.New("secrets export-keyring: --out is required")
 			}
-			dbPath, stateDir, err := storagePath(opts, mods)
+			c, err := kernelConfig(opts, mods)
+			if err != nil {
+				return err
+			}
+			dbPath, stateDir, err := kernel.ResolveStorage(ctx, c, "secrets export-keyring")
 			if err != nil {
 				return err
 			}
@@ -128,7 +132,7 @@ func rotateDeriveCommand(opts Options, mods []module.Module) Command {
 			if help, err := parseFlags(fl, args, stdout, "secrets rotate-derive", rotateDeriveLong); help || err != nil {
 				return err
 			}
-			c, err := offlineConfig(opts, mods)
+			c, err := offlineConfig(ctx, opts, mods, "secrets rotate-derive")
 			if err != nil {
 				return err
 			}
@@ -160,7 +164,7 @@ func setInstallIDCommand(opts Options, mods []module.Module) Command {
 			if strings.TrimSpace(*id) == "" {
 				return errors.New("secrets set-install-id: --install-id is required")
 			}
-			c, err := offlineConfig(opts, mods)
+			c, err := offlineConfig(ctx, opts, mods, "secrets set-install-id")
 			if err != nil {
 				return err
 			}

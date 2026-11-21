@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/run.go
-// version: 1.0.6
+// version: 1.1.0
 // guid: 20df00da-4b40-4e5b-9987-4ef6293f76dd
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package crashmatrix
 
@@ -268,8 +268,8 @@ func (fr *fixtureRun) matrix() {
 			jobs = append(jobs, func() { fr.kill(b, c) })
 		}
 		for _, ev := range br.events {
-			if ev.Pebble() || ev.Label == bootseamtest.LabelNone {
-				continue // decision D12; an unlabelled operation already failed the census
+			if !injectable(ev) {
+				continue
 			}
 			for _, errno := range errnos() {
 				fr.stats.errorRuns++
@@ -288,6 +288,19 @@ func (fr *fixtureRun) matrix() {
 		}()
 	}
 	wg.Wait()
+}
+
+// injectable reports whether the error mode returns an errno from ev. It does
+// not for Pebble's own operations (decision D12; an unlabelled operation
+// already failed the census), nor for one Pebble issues inside its WAL
+// rotation (ev.Fatal): Pebble treats an I/O error there as fatal and panics,
+// so in production an ENOSPC at that point behaves like a process kill (an
+// M8 rewrite's Flush of the copy store reaches it). Kill mode still takes a
+// clone before each such operation, so recovery from it stays tested. The
+// skip is only the rotation's own operations: an ordinary WAL commit outside
+// one still gets the error, which Pebble returns to its caller.
+func injectable(ev bootseamtest.Event) bool {
+	return !ev.Pebble() && !ev.Fatal() && ev.Label != bootseamtest.LabelNone
 }
 
 // kill reboots the crash clone taken before census boot b's operation, and

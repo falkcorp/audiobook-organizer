@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/invariants.go
-// version: 1.0.4
+// version: 1.1.0
 // guid: bc10682b-4c38-446d-a7dd-4fb4b2cc676b
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 package crashmatrix
 
@@ -45,7 +45,13 @@ import (
 //     the rows of the store the swap would have replaced, never a mix
 //     (fixtureRun.legal). An applied end also leaves the original store
 //     opening in previous/ (the only undo), and a restore that ended back
-//     leaves the staged store opening in failed/ or staging.
+//     leaves the staged store opening in failed/ or staging. The one
+//     exception is M8's KindRewrite swap, which keeps no previous/ by design
+//     (05-storage 5S.3.13 phase 4: the set-aside is deleted before the
+//     journal says applied): there an applied end leaves NO store opening in
+//     previous/, the reverse of a restore's rule, so a rewrite that
+//     journaled applied with the old store still set aside, or whose delete
+//     left a half store, is still a breach.
 //   - I3: the level sidecar equals the stamps after recovery, and at every
 //     kill point it is never below a stamp (machine 2: sidecar first).
 //   - I5: readiness within maxBoots boots, or the fixture's Refusal where
@@ -92,15 +98,45 @@ func endOf(j journal) string {
 }
 
 // endOfAll is the end class of every journal and the id that decides it.
+//
+// M8's KindRewrite journals are one swap's attempts, not separate swaps: a
+// boot that finds a rewrite killed before its set-aside (or after its copy
+// failed to open) swaps it back, and M8 then runs again under a new journal
+// (05-storage 5S.3.13: M8 counts the swap-backs of one attempt). So the
+// rewrite journals are folded into one, the last by id, which must be the one
+// that decides the end class, and every earlier rewrite journal must have
+// ended back (swapped_back or rejected): an earlier one that applied and a
+// later one that ran is a second rewrite over an already rewritten store, and
+// stays endMixed, as does an earlier one that never ended.
 func endOfAll(js map[string]journal) (end, id string) {
 	end = endNone
+	var rewrites []string
 	for _, jid := range slices.Sorted(maps.Keys(js)) {
+		if js[jid].rewrite {
+			rewrites = append(rewrites, jid)
+			continue
+		}
 		switch c := endOf(js[jid]); {
 		case end == endNone:
 			end, id = c, jid
 		case c != end:
 			return endMixed, ""
 		}
+	}
+	if len(rewrites) == 0 {
+		return end, id
+	}
+	last := rewrites[len(rewrites)-1]
+	for _, jid := range rewrites[:len(rewrites)-1] {
+		if endOf(js[jid]) != endBack {
+			return endMixed, ""
+		}
+	}
+	switch c := endOf(js[last]); {
+	case end == endNone:
+		return c, last
+	case c != end:
+		return endMixed, ""
 	}
 	return end, id
 }
@@ -127,6 +163,10 @@ type journal struct {
 	kind     restorejournal.Kind
 	last     string
 	inflight bool
+	// rewrite is set when the journal's staged record names KindRewrite (M8's
+	// swap): unlike kind, which only an in-flight journal knows, the staged
+	// record is there for every journal, so a terminal rewrite is recognised.
+	rewrite bool
 }
 
 // storageStamps is c/storage/level/<owner>'s prefix (05-storage §5S.3.7).
@@ -305,6 +345,7 @@ func readSlot(fsys vfs.FS, stateDir string) (map[string]journal, bool, error) {
 		j := journal{}
 		if len(recs) > 0 {
 			j.last = recs[len(recs)-1].Step
+			j.rewrite = recs[0].Step == restoreswap.StepStaged && recs[0].Note == string(restorejournal.KindRewrite)
 		}
 		_, serr := fsys.Stat(fsys.PathJoin(p, restorejournal.InflightName))
 		if serr != nil && !errors.Is(serr, fs.ErrNotExist) {
@@ -501,6 +542,13 @@ func (fr *fixtureRun) storeViolations(o outcome) []string {
 		out = append(out, fmt.Sprintf("I2: the swap ended %s with the DB path holding %s; the legal ends are %s", o.end, rowsOf(o), fr.legalEnds()))
 	}
 	switch {
+	case o.end == endApplied && o.journals[o.endID].rewrite:
+		// M8's KindRewrite keeps no previous/: the old store is deleted before
+		// the journal says applied, so a store opening there is a delete that
+		// never ran (or a journal that lied), not an undo to protect.
+		if o.previous != "" {
+			out = append(out, fmt.Sprintf("I2: rewrite journal %s applied, and previous/ still holds %s: the old store's deletion (phase 4) did not run before applied", o.endID, o.previous))
+		}
 	case o.end == endApplied && fr.hadStore && o.previous != fr.initial:
 		held := o.previous
 		if held == "" {

@@ -103,12 +103,10 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/linkintegrity"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
-	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
@@ -491,7 +489,7 @@ func (p *Plugin) runRepointMissingToFolderAudio(ctx context.Context, raw json.Ra
 	}
 	// Fail closed like repoint-unrecorded-renames: with no resolvable iTunes
 	// roots the op cannot prove a path is outside them.
-	roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+	roots, err := itunesProtectedRoots()
 	if err != nil {
 		return fmt.Errorf("%s: resolve iTunes roots: %w", rfOpName, err)
 	}
@@ -546,7 +544,7 @@ func (p *Plugin) repointMissingToFolderAudioNative(deps t6g7Deps, sched func(tas
 			}
 			// Fail closed like repoint-unrecorded-renames: with no resolvable iTunes
 			// roots the op cannot prove a path is outside them.
-			roots, err := merge.ITunesProtectedRoots(config.Snapshot().ITunes)
+			roots, err := itunesProtectedRoots()
 			if err != nil {
 				return rfReport{}, fmt.Errorf("%s: resolve iTunes roots: %w", rfOpName, err)
 			}

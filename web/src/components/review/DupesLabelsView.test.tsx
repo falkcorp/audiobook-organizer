@@ -1,7 +1,7 @@
 // file: web/src/components/review/DupesLabelsView.test.tsx
-// version: 1.2.1
+// version: 1.2.2
 // guid: 6d1e8b35-4a92-4c07-9f58-3b7a0c2e6d81
-// last-edited: 2026-11-07
+// last-edited: 2026-11-19
 //
 // The Labels / Suspicious rendering, driven through the real hook against a
 // stubbed fetch. Ported from pages/__tests__/DedupLabels.test.tsx (abbreviated
@@ -42,6 +42,12 @@ import {
 } from './lanes/useDupesLabels';
 
 const LIBROOT = '/lib/root';
+
+// GET /config answers keys, one per setting (class i for root_dir).
+const configView = {
+  generation: 1,
+  keys: [{ name: 'root_dir', class: 'i', value: LIBROOT }],
+};
 
 function json(body: unknown, status = 200) {
   return Promise.resolve({
@@ -126,7 +132,7 @@ beforeEach(() => {
   };
   fetchMock = vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes('/config')) return json({ data: { config: { root_dir: LIBROOT } } });
+    if (url.includes('/config')) return json({ data: configView });
     if (url.includes('/override'))
       return json({ data: { status: 'updated', label: 'not_dup', label_source: 'human' } });
     if (url.includes('/dedup/labels/stats')) return respond.stats();
@@ -242,7 +248,7 @@ describe('DupesLabelsView: Labels', () => {
       if (url.includes('/override')) return json({}, 500);
       if (url.includes('/dedup/labels/stats')) return respond.stats();
       if (url.includes('/dedup/labels')) return respond.labels();
-      return json({ data: { config: { root_dir: LIBROOT } } });
+      return json({ data: configView });
     });
     renderView();
     await screen.findByText('Book One');
@@ -417,7 +423,7 @@ describe('DupesLabelsView: unlabeled rows and the full filter lists', () => {
     });
     fetchMock.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/config')) return json({ data: { config: { root_dir: LIBROOT } } });
+      if (url.includes('/config')) return json({ data: configView });
       if (url.includes('/dedup/labels/stats')) return respond.stats();
       if (url.includes('/dedup/labels?'))
         return url.includes('label=unlabeled')

@@ -1,20 +1,15 @@
 // file: internal/config/config.go
-// version: 1.176.4
+// version: 1.178.0
 // guid: 7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package config
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,8 +18,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/audioext"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
-	logging "github.com/falkcorp/mediacore/log"
-	"github.com/spf13/viper"
 )
 
 // Defaults for the exact db census op (maintenance.db-census-exact).
@@ -59,90 +52,6 @@ type PathAlias struct {
 	Windows string `json:"windows"` // "W:"            -> W:\Author\Title\
 	UNC     string `json:"unc"`     // `\\host\books`  -> \\host\books\Author\Title\
 	SMBURL  string `json:"smb_url"` // "smb://host/books"
-}
-
-// normalizeWindowsPrefix turns a raw iTunes path-mapping prefix into a Windows
-// path prefix. Mappings arrive in three shapes and only the first is already
-// usable: a bare drive letter ("W:"), a drive plus directories written with
-// forward slashes ("W:/audiobook-organizer"), and the percent-encoded URL that
-// extractPathPrefixes produces and the Settings UI auto-populates the From
-// field with ("file://localhost/W:/itunes/iTunes%20Media" -- see the
-// ITunesPathMap doc comment above). Copying a raw value of the latter two
-// shapes into PathAlias.Windows renders a path like
-// "file://localhost/W:/itunes/iTunes%20Media\Author\Title.m4b" on the review
-// page, presented with a label and a copy button as though it were valid.
-//
-// A prefix that cannot be percent-decoded is kept as-is rather than rejected:
-// an odd mapping must degrade to a wrong-looking path, never break config load.
-func normalizeWindowsPrefix(prefix string) string {
-	s := strings.TrimPrefix(prefix, "file://localhost/")
-	if s == prefix {
-		s = strings.TrimPrefix(prefix, "file:///")
-	}
-	// Decode per segment, after splitting on the real separators. Decoding the
-	// whole string first would turn an encoded literal slash (%2F) into a
-	// separator indistinguishable from a real one -- which would also make the
-	// drift guard read two genuinely different prefixes as agreement.
-	parts := strings.Split(s, "/")
-	for i, p := range parts {
-		if decoded, err := url.PathUnescape(p); err == nil {
-			parts[i] = decoded
-		}
-	}
-	return strings.TrimRight(strings.Join(parts, `\`), `\`)
-}
-
-// normalizeRoot trims trailing separators from a POSIX root so the two sides of
-// the drift guard compare the same way the frontend matches. trimRoot in
-// web/src/utils/pathAliases.ts does exactly this; keeping them symmetric is the
-// point, so a root configured either way behaves identically.
-func normalizeRoot(root string) string {
-	return strings.TrimRight(root, "/")
-}
-
-// SeedPathAliases returns aliases unchanged when any are configured. Otherwise
-// it derives one alias per complete ITunes path mapping, so the W: fact is
-// entered once and copied rather than retyped into a second config field.
-// Seeded aliases carry no UNC or SMBURL, so the Windows line appears while the
-// smb:// anchor and UNC line stay dark until a share is configured.
-func SeedPathAliases(aliases []PathAlias, mappings []ITunesPathMap) []PathAlias {
-	if len(aliases) > 0 {
-		return aliases
-	}
-	seeded := make([]PathAlias, 0, len(mappings))
-	for _, m := range mappings {
-		if m.From == "" || m.To == "" {
-			continue
-		}
-		seeded = append(seeded, PathAlias{Root: normalizeRoot(m.To), Windows: normalizeWindowsPrefix(m.From)})
-	}
-	return seeded
-}
-
-// ValidatePathAliases reports a contradiction between the two places the
-// Windows prefix for a root can be recorded. Seeding copies the fact once;
-// nothing stops a later edit to one field alone, so this turns that drift into
-// a failure rather than a silently wrong path in the review UI.
-func ValidatePathAliases(aliases []PathAlias, mappings []ITunesPathMap) error {
-	byRoot := make(map[string]string, len(mappings))
-	for _, m := range mappings {
-		if m.From != "" && m.To != "" {
-			byRoot[normalizeRoot(m.To)] = m.From
-		}
-	}
-	for _, a := range aliases {
-		want, ok := byRoot[normalizeRoot(a.Root)]
-		// Compare normalized: the same prefix written two ways (a file:// URL
-		// vs a backslashed path) is agreement, not drift. Comparing raw here
-		// would make every correctly-seeded install report a contradiction.
-		if ok && a.Windows != "" && normalizeWindowsPrefix(a.Windows) != normalizeWindowsPrefix(want) {
-			return fmt.Errorf(
-				"path alias for %q maps to %q but itunes.path_mappings maps it to %q; "+
-					"these must agree or the review page will render a path the importer disagrees with",
-				a.Root, a.Windows, want)
-		}
-	}
-	return nil
 }
 
 // MetadataSource represents a metadata provider configuration
@@ -308,9 +217,9 @@ type DedupSignalConfig struct {
 	// whether ComposeScore should start doing so). Since 2026-09-02 this map
 	// DOES reach the live engine's ScoreConfig.Signals — via
 	// DedupSignalConfig.ScoreConfig (dedup_score_config.go) → dedup.NewEngine
-	// at startup, and → Engine.SetScoreConfig through the UpdateService's
-	// dedup-score sink on every PUT /api/v1/config (which then queues the
-	// dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
+	// at startup, and → Engine.SetScoreConfig through the dedup plugin's
+	// config Facade UpdateHook on every PUT /api/v1/config (which then queues
+	// the dedup.rescore op to re-band stored rows) or → Engine.ReloadScoreConfig
 	// on a calibrate apply, which is already inside an op and so re-bands
 	// inline — the same channel the band_*_min fields use. So once ComposeScore starts
 	// clamping there is nothing left to wire; until then the bounds are
@@ -546,35 +455,6 @@ type MetadataScoringConfig struct {
 	// so exceeding the source count buys nothing and only deepens the queue.
 	// Default 4; 0 or negative falls back to the compiled-in default.
 	SourceFanoutWorkers int `json:"source_fanout_workers" mapstructure:"source_fanout_workers"`
-}
-
-// getFloat64Slice reads a []float64 out of viper. Viper has no
-// GetFloat64Slice; SetDefault stores our []float64 default verbatim, but a
-// value loaded from YAML/JSON typically comes back as []any with each
-// element as float64 (or int for whole numbers), so this normalizes both
-// shapes defensively. Any other shape (missing key, wrong type) returns nil
-// — the metafetch-side resolver treats nil/mismatched-length as "unset" and
-// falls back to the built-in duration tier table.
-func getFloat64Slice(vp *viper.Viper, key string) []float64 {
-	switch v := vp.Get(key).(type) {
-	case []float64:
-		return v
-	case []any:
-		out := make([]float64, 0, len(v))
-		for _, item := range v {
-			switch n := item.(type) {
-			case float64:
-				out = append(out, n)
-			case int:
-				out = append(out, float64(n))
-			default:
-				return nil
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 // AIBackend mode constants. They control, independently for embeddings and
@@ -1136,9 +1016,10 @@ type Config struct {
 
 	// AcoustIDAPIKey is the acoustid.org client ID used by the
 	// acoustid.lookup-online op. Persisted to the settings DB (masked
-	// in API responses). Also settable via the ACOUSTID_API_KEY env var
-	// (viper.BindEnv, see InitConfig) so ops-only deployments don't need
-	// to touch the settings DB.
+	// in API responses). Also settable by an operator layer
+	// (ABO_BOOKS_ACOUSTID_API_KEY, a secret, or the operator file;
+	// see the rename table) so ops-only deployments don't need to touch the
+	// settings DB.
 	AcoustIDAPIKey string `json:"acoustid_api_key"`
 
 	// FPParallelWorkers is the number of parallel fpcalc workers used by the
@@ -1316,7 +1197,7 @@ type Config struct {
 
 	// WhisperRemoteURL points batch transcription at a remote faster-whisper
 	// server (e.g. "http://192.168.1.x:8000"); empty uses the local uv path.
-	// Environment-authoritative (WHISPER_REMOTE_URL) — see applyEnvAuthoritativeConfig.
+	// Bound to WHISPER_REMOTE_URL.
 	WhisperRemoteURL string `json:"whisper_remote_url" mapstructure:"whisper_remote_url"`
 
 	// WhisperEndpoints declares a pool of remote faster-whisper servers. When
@@ -1389,8 +1270,8 @@ type Config struct {
 	// off, and because 0 is also what any partially-populated Config carries, a
 	// stray zero silently stopped multi-file grouping for eleven days (12,525
 	// books imported without book_file rows). Read it through
-	// ResolveChapterConsolidationThresholdMin; Validate and SaveConfigToDatabase
-	// rewrite a stored zero to the default with a warning.
+	// ResolveChapterConsolidationThresholdMin, which maps a zero to the
+	// default with a warning.
 	ChapterConsolidationThresholdMin int `json:"chapter_consolidation_threshold_min" mapstructure:"chapter_consolidation_threshold_min"`
 	// RepairChapterMaxMin is the longest a single file may run (minutes) and
 	// still count as a chapter when a REPAIR JOB (the fragment consolidation
@@ -1616,8 +1497,7 @@ type Config struct {
 	// ── Audiobookshelf-compatible sync API (design spec Phase 1) ─────────────
 	//
 	// Environment-authoritative, like the OAuth/Cloudflare keys above: they are set
-	// from a systemd Environment= drop-in and re-applied on top of the DB config blob
-	// by applyEnvAuthoritativeConfig. The ABS secret must never live in the blob.
+	// from a systemd Environment= drop-in. The ABS secret must never live in the blob.
 	//
 	// ABSAPIEnabled is the master feature flag and defaults to FALSE: with it unset,
 	// no ABS route is registered at all and the server behaves exactly as it did
@@ -1667,8 +1547,7 @@ type Config struct {
 	// ── Invitation email and guest access (env_only_settings.go) ────────────
 	//
 	// ENVIRONMENT-ONLY and `json:"-"`: never in GET /config, never in the blob,
-	// refused by PUT /config. Re-applied after the blob load by
-	// applyEnvAuthoritativeConfig (applyInviteEnv).
+	// refused by PUT /config. Read from the environment by applyInviteEnv.
 	//
 	// SMTP transport for invitation email. Unconfigured (no host or no From)
 	// means no mail is sent and the admin copies the link by hand. A username
@@ -1783,9 +1662,9 @@ type Config struct {
 	// ProtectedPaths is an explicit list of filesystem path prefixes that must
 	// never be edited in-place (tag writes, renames, deletes). These are merged
 	// with the Deluge save_path set at runtime. iTunes media paths belong here.
-	// In a config file it is a list. In the environment, PROTECTED_PATHS is a
-	// comma-separated list (/a,/b) or a JSON array ('["/a","/b"]'); whitespace
-	// is not a separator, since paths contain spaces (see viperPathList).
+	// It is a list: a JSON array in the environment
+	// (ABO_CORE_LIBRARY_PROTECTED_PATHS='["/a","/b"]') and a list in the operator
+	// file.
 	ProtectedPaths []string `json:"protected_paths"` // default: empty
 
 	// Auto-update
@@ -1887,13 +1766,11 @@ type Config struct {
 	// deliberately narrow because each index taxes scan insert throughput; see
 	// the SetDefault call for the reasoning.
 	//
-	// BOOT-ONLY. cmd/root.go hands the value InitConfig read from viper
-	// (default, config file or the ENABLED_SORT_INDEXES environment variable,
-	// space-separated) to SetEnabledSortIndexes BEFORE any store opens, then
+	// BOOT-ONLY. books.ApplyStoreTunables hands the operator layers' value
+	// (modules.books.search.enabled_sort_indexes, a JSON list in the
+	// environment) to SetEnabledSortIndexes BEFORE any store opens, then
 	// writes back the set that was actually built (unknown names dropped).
-	// That is the value for the life of the process: LoadConfigFromDatabase
-	// pins it over whatever the stored blob holds (pinBootOnlySettings), and
-	// UpdateConfig refuses a PUT that changes it. So GET /api/v1/config always
+	// That is the value for the life of the process. So GET /api/v1/config always
 	// reports the built set. To change it, edit the config file or the
 	// environment and restart. An explicit empty list in the config file
 	// means "no optional indexes".
@@ -2010,7 +1887,30 @@ func KeptSweepApplyEnabled() bool {
 
 // Mutate applies fn to AppConfig under a write lock.
 // ALL write sites (startup init, update service, test setups) must use this.
+//
+// With a Facade installed the change is a persisted write as the process's own
+// actor and it can be refused; Mutate has no error to return, so the refusal is
+// logged once. A caller that must tell its own caller whether the change took
+// uses MutateChecked or MutatePersist.
 func Mutate(fn func(*Config)) {
+	if err := MutateChecked(fn); err != nil {
+		mutateRefused(err)
+	}
+}
+
+// MutateChecked is Mutate that returns the Facade's refusal. With no Facade
+// installed it changes memory only and never fails.
+func MutateChecked(fn func(*Config)) error {
+	if f := Current(); f != nil {
+		return f.Mutate(fn)
+	}
+	mutateLocal(fn)
+	return nil
+}
+
+// mutateLocal is Mutate on the process-wide Config: what runs with no Facade
+// installed, and what Project uses to publish the Facade's projection.
+func mutateLocal(fn func(*Config)) {
 	mu.Lock()
 	defer mu.Unlock()
 	// Deferred after the Unlock defer so it runs first, still under the lock:
@@ -2036,36 +1936,6 @@ var generation atomic.Uint64
 // convention forbids) are not seen.
 func Generation() uint64 { return generation.Load() }
 
-// applyEnvAuthoritativeConfig re-applies the environment-authoritative config keys on
-// top of an already-populated Config, so a systemd Environment= value wins over a
-// persisted config_blob. It exists because LoadConfigFromDatabase restores the whole
-// Config from the DB blob (*c = loaded), which overwrites the env-derived values that
-// InitConfig set. Call it LAST in the DB-load path (after the blob and secret rows are
-// applied) via Mutate.
-//
-// There are TWO categories here and they need DIFFERENT tests. Do not collapse them.
-//
-//  1. AUTH-SURFACE keys (OAuth / Cloudflare Access / ABS): the blob must NEVER win,
-//     even when the environment is silent. These are externally-reachable auth
-//     switches, and the blob is untrusted input — it must not be able to enable an
-//     auth surface or supply its credentials. `viper.IsSet` is the right test
-//     precisely BECAUSE every one of these keys has a registered SetDefault, which
-//     makes IsSet permanently true and so makes the assignment unconditional. That
-//     is deliberate; TestABSConfig_BlobCannotEnableOrCredentialTheABSAPI asserts it.
-//
-//  2. OPERATIONAL keys that the UI may also set (database_path): the environment
-//     wins only when it ACTUALLY supplies the key; otherwise the persisted blob
-//     value must survive. These need envSupplied(), NOT viper.IsSet.
-//
-// The comment that stood here until 2026-09-07 claimed "viper.IsSet is true only when
-// a real override layer supplied the key, NOT for SetDefault, so a UI-set value that
-// lives only in the blob is left untouched." That is FALSE — viper's IsSet is
-// Get(key) != nil and a registered default is a value, so IsSet is true with an empty
-// environment. Every category-2 key guarded by IsSet was therefore overwritten with
-// its default on EVERY boot, silently destroying the persisted value: a dead lever.
-//
-// UI-managed keys (itunes.*, scheduled.*, etc.) are excluded entirely — they belong
-// to the blob and must not appear in this function at all.
 // WhisperEndpoint declares one remote Whisper server for the dispatch pool.
 // Mirror of transcribe.Endpoint kept as a plain config struct so this package
 // never imports internal/transcribe.
@@ -2102,39 +1972,22 @@ type WhisperEndpoint struct {
 	Capabilities []string `json:"capabilities" mapstructure:"capabilities"`
 }
 
-// ParseLabelList splits a comma-separated capability label list, trimming and
-// lowercasing each entry and dropping empties. Returns nil for an empty or
-// all-blank input so that "no requirement" is a nil slice rather than a
-// one-element slice containing "" — which would be a requirement no endpoint
-// could ever satisfy, taking the whole pool down.
-func ParseLabelList(s string) []string {
-	var out []string
-	for part := range strings.SplitSeq(s, ",") {
-		if l := strings.ToLower(strings.TrimSpace(part)); l != "" {
-			out = append(out, l)
-		}
+// DefaultMetadataSources is the metadata source list a settings blob without
+// metadata_sources runs with: HEAD's configFromViper fallback (the list it
+// used when the key was not set), carried by books' projection base
+// (appConfigBase) since F3-07, so an unset metadata_sources still means these
+// six and a stored list, even an empty one, replaces them.
+func DefaultMetadataSources() []MetadataSource {
+	return []MetadataSource{
+		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, Credentials: map[string]string{}},
+		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 2, Credentials: map[string]string{}},
+		{ID: "audnexus", Name: "Audnexus", Enabled: true, Priority: 3, Credentials: map[string]string{}},
+		{ID: "google-books", Name: "Google Books", Enabled: false, Priority: 4, RequiresAuth: true, Credentials: map[string]string{"apiKey": ""}},
+		{ID: "hardcover", Name: "Hardcover", Enabled: false, Priority: 5, RequiresAuth: true, Credentials: map[string]string{}},
+		// Disabled by default: Wikipedia's API returns 403.
+		{ID: "wikipedia", Name: "Wikipedia", Enabled: false, Priority: 6, Credentials: map[string]string{}},
 	}
-	return out
 }
-
-// ParseWhisperEndpoints decodes the WHISPER_ENDPOINTS JSON array string.
-// Empty input or malformed JSON yields nil, which falls back to the
-// single-URL (or local) path rather than failing startup — the endpoint list
-// is an optimization, not a correctness requirement.
-func ParseWhisperEndpoints(s string) []WhisperEndpoint {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	var endpoints []WhisperEndpoint
-	if err := json.Unmarshal([]byte(s), &endpoints); err != nil {
-		fmt.Fprintf(os.Stderr, "config: ignoring malformed whisper_endpoints (%v)\n", err)
-		return nil
-	}
-	return endpoints
-}
-
-// viperDecodeJSON and viperPathList live in viper_decode.go.
 
 // ValidateActivityBackend reports whether v is an accepted ActivityBackend
 // value: empty (a config that predates the setting) or "pebble", compared
@@ -2153,1696 +2006,6 @@ func ValidateActivityBackend(v string) error {
 		return fmt.Errorf("activity_backend: %q is not a supported value; the only activity backend is pebble "+
 			"(remove activity_backend or set it to pebble)", v)
 	}
-}
-
-// envSupplied reports whether the process environment actually provided a value for
-// an environment variable bound via viper.BindEnv.
-//
-// viper.IsSet CANNOT answer this question. InitConfig registers a SetDefault for most
-// bound keys, and viper.IsSet is `Get(key) != nil` — a registered default is a value,
-// so IsSet stays true with a completely empty environment. Measured against this
-// repo's viper: SetDefault("<key>", "") alone yields IsSet=true, Get="".
-//
-// An empty value counts as "not supplied" on purpose: systemd `Environment=FOO=` and
-// an unset variable should not behave differently, and an empty override could only
-// ever blank a persisted setting.
-func envSupplied(envVar string) bool {
-	v, ok := os.LookupEnv(envVar)
-	return ok && v != ""
-}
-
-// explicitFlags records the config keys whose command-line flag was actually
-// typed by the operator, as opposed to sitting at its registered default.
-//
-// This exists because neither viper.IsSet nor viper.Get can answer the question
-// for a bound flag. Measured against this repo's viper, for a --db bound with
-// BindPFlag and NOT typed:
-//
-//	BindPFlag only:              IsSet=false  GetString="audiobooks.pebble"
-//	BindPFlag + SetDefault(""):  IsSet=true   GetString=""
-//
-// Read both rows before touching this. The first says IsSet and Get DISAGREE:
-// IsSet skips the "fall back to the flag's default" branch that Get takes, so a
-// guard derived from the VALUE is wrong even where IsSet happens to look right.
-// The second says a single SetDefault line -- of the kind InitConfig registers
-// for most keys -- flips IsSet permanently true AND
-// makes Get return the empty default instead of the flag's, because SetDefault
-// outranks a bound flag's default. Adding it would silently re-open this bug.
-//
-// cobra's Flags().Changed() is the only signal no later SetDefault can corrupt.
-//
-// Populated once from cmd/root.go after flag parsing, read only during
-// applyEnvAuthoritativeConfig. Guarded because tests may run parsing
-// concurrently with config reads.
-var (
-	explicitFlagsMu sync.RWMutex
-	explicitFlags   = map[string]bool{}
-)
-
-// MarkFlagExplicit records that the operator supplied the flag bound to this
-// config key. Call it from the command layer after flags are parsed, once per
-// key that was actually changed.
-func MarkFlagExplicit(configKey string) {
-	explicitFlagsMu.Lock()
-	defer explicitFlagsMu.Unlock()
-	explicitFlags[configKey] = true
-}
-
-// flagSupplied reports whether the operator explicitly passed the flag bound to
-// configKey on this invocation.
-func flagSupplied(configKey string) bool {
-	explicitFlagsMu.RLock()
-	defer explicitFlagsMu.RUnlock()
-	return explicitFlags[configKey]
-}
-
-// ResetExplicitFlagsForTest clears the explicit-flag registry. Test-only.
-func ResetExplicitFlagsForTest() {
-	explicitFlagsMu.Lock()
-	defer explicitFlagsMu.Unlock()
-	explicitFlags = map[string]bool{}
-}
-
-// envLockedSettings maps a config JSON key to the environment variable that makes it
-// read-only. When that variable is supplied, applyEnvAuthoritativeConfig re-applies
-// the environment's value over the persisted blob on every boot, so a value saved
-// from the UI is silently discarded.
-//
-// Only category-2 keys belong here — the operator-OR-UI settings the Settings page
-// actually renders. The category-1 auth keys (OAuth, CF Access, ABS secrets) are
-// deliberately absent: they have no UI control to annotate, and naming a secret's
-// environment variable in an API response buys nothing. The non-secret ABS keys
-// are absent for the same reason (no control renders them); their write refusal
-// lives in absEnvOnlySettings.
-//
-// The Deluge keys are the one secret-bearing exception, by owner decision
-// (2026-10-11): the Deluge tab renders them, so a locked one must say so.
-// deluge_web_password is listed with its variable NAME only — the name is public
-// documentation, and the value still reaches the client only masked
-// (UpdateService.MaskSecrets). Nothing in this file may log or return the value.
-var envLockedSettings = map[string]string{
-	"activity_backend": "ACTIVITY_BACKEND",
-	// The main database. Annotated read-only in the UI whenever the operator
-	// supplies DATABASE_PATH, so the Settings page cannot present a field that
-	// silently discards what you type on the next boot.
-	"database_path": "DATABASE_PATH",
-	// Deluge connection settings. Env-OR-config-file authoritative — see
-	// configFileLockedSettings for the second half.
-	"deluge_web_url":           "DELUGE_WEB_URL",
-	"deluge_web_password":      "DELUGE_WEB_PASSWORD",
-	"deluge_discovery_label":   "DELUGE_DISCOVERY_LABEL",
-	"deluge_discovery_enabled": "DELUGE_DISCOVERY_ENABLED",
-	"deluge_move_enabled":      "DELUGE_MOVE_ENABLED",
-}
-
-// absEnvOnlySettings are the Audiobookshelf API keys that only the environment (or
-// the registered default) can set. applyEnvAuthoritativeConfig re-applies viper's
-// value for each on every load, and because every one has a registered default,
-// viper ALWAYS has a value: a value written through PUT /api/v1/config is stored
-// in the blob and then discarded at the next boot, whether or not the variable is
-// set. That is deliberate (the ABS API is an externally reachable sign-in surface
-// and only the operator's environment may configure it), so UpdateService refuses
-// a PUT that changes one rather than accept a write that can never take effect.
-//
-// These keys are NOT reported in env_locked / setting_locks. That list tells the
-// Settings page "an environment variable is forcing this control", which is false
-// for a key whose variable is unset, and the Settings page renders no ABS key, so
-// there is no control to annotate either way. The PUT refusal is the enforcement.
-// abs_jwt_secret is absent because it is never serialized.
-var absEnvOnlySettings = map[string]string{
-	"abs_api_enabled":        "ABS_API_ENABLED",
-	"abs_auth_modes":         "ABS_AUTH_MODES",
-	"abs_access_token_ttl":   "ABS_ACCESS_TOKEN_TTL",
-	"abs_refresh_token_ttl":  "ABS_REFRESH_TOKEN_TTL",
-	"abs_refresh_grace":      "ABS_REFRESH_GRACE",
-	"abs_session_max_ttl":    "ABS_SESSION_MAX_TTL",
-	"abs_server_version":     "ABS_SERVER_VERSION",
-	"abs_default_library_id": "ABS_DEFAULT_LIBRARY_ID",
-}
-
-// EnvOnlySettingsRefusedMessage is the 400 for a PUT /config that changes a key
-// in absEnvOnlySettings.
-const EnvOnlySettingsRefusedMessage = "these settings can only be set through the server's environment; a value saved here would be discarded at the next restart, so nothing was saved"
-
-// LockedByConfigFile is the SettingLocks value for a key that the server's config
-// file locks, followed by " <path>" when viper knows which file it read. It is not
-// an environment variable name and does not start with "--", so a client can tell
-// the three mechanisms apart (it contains a space, which no variable name can).
-//
-// The file is the one viper loaded: the --config flag, else
-// $HOME/.audiobook-organizer.yaml. It is NOT the <database dir>/config.yaml that
-// SaveConfigToFile writes and LoadConfigFromFile reads; those never lock anything.
-const LockedByConfigFile = "config file"
-
-// configFileLockReason is the SettingLocks value for a config-file lock.
-func configFileLockReason() string {
-	if path := viper.ConfigFileUsed(); path != "" {
-		return LockedByConfigFile + " " + path
-	}
-	return LockedByConfigFile
-}
-
-// configFileLockedSettings is the set of locked keys that a value in the server's
-// config file ALSO locks, in addition to the environment variable named in
-// envLockedSettings. Same effect as the environment: applyEnvAuthoritativeConfig
-// re-applies the file's value over the persisted blob on every load, and the UI shows
-// the field read-only.
-//
-// Only the Deluge keys are here. The other envLockedSettings keys are
-// environment-only on purpose (a systemd unit is where an operator pins a path);
-// the Deluge keys were reachable from the config file before the owner decision of
-// 2026-10-11, and a stored blob silently outranked it.
-//
-// Precedence between the two sources is viper's own: environment over file.
-var configFileLockedSettings = map[string]bool{
-	"deluge_web_url":           true,
-	"deluge_web_password":      true,
-	"deluge_discovery_label":   true,
-	"deluge_discovery_enabled": true,
-	"deluge_move_enabled":      true,
-}
-
-// configFileSupplied reports whether the server's config file sets key to a real
-// value. Only the file layer counts: viper.IsSet and viper.Get are also true for a
-// registered default (see envSupplied), while viper.InConfig answers for the parsed
-// file alone.
-//
-// An empty string, or a key present with no value, is not a lock — the same rule as
-// an empty environment variable. A boolean false IS a lock: forcing a toggle off from
-// the file is a legitimate operator choice, as DELUGE_MOVE_ENABLED=false is.
-func configFileSupplied(key string) bool {
-	if !configFileLockedSettings[key] || !viper.InConfig(key) {
-		return false
-	}
-	switch v := viper.Get(key).(type) {
-	case nil:
-		return false
-	case string:
-		return v != ""
-	default:
-		return true
-	}
-}
-
-// flagLockedSettings maps a config JSON key to the command-line flag that, when
-// explicitly supplied, makes the key read-only for the same reason as
-// envLockedSettings: applyEnvAuthoritativeConfig re-applies the operator's value
-// over the persisted blob on every boot.
-//
-// Separate from envLockedSettings because the two are detected differently — an
-// environment variable is readable from the running process, an explicit flag is
-// only knowable at parse time and must be recorded via MarkFlagExplicit.
-var flagLockedSettings = map[string]string{
-	"database_path": "--db",
-}
-
-// EnvLockedSettings returns the JSON field names of the settings the operator is
-// currently forcing — through the environment, an explicit flag, or (for the Deluge
-// keys) the server's config file — sorted so the response is stable. The name is the
-// wire name of the API field ("env_locked") and was kept when the file source was
-// added.
-//
-// This exists so the UI cannot lie. Production sets DATABASE_PATH in its systemd
-// unit; without this list the path control renders as an ordinary editable field
-// whose saved value is overwritten on the next boot — the edit appears to take, and
-// then quietly does not. A control the operator cannot actually change must say so.
-func EnvLockedSettings() []string {
-	locked := make([]string, 0, len(envLockedSettings)+len(flagLockedSettings))
-	for key, envVar := range envLockedSettings {
-		if envSupplied(envVar) || configFileSupplied(key) {
-			locked = append(locked, key)
-		}
-	}
-	// A key can be locked by an explicit flag as well as by the environment, and
-	// a key locked by both must appear once, not twice — the UI renders this list
-	// directly.
-	for key := range flagLockedSettings {
-		if flagSupplied(key) && !slices.Contains(locked, key) {
-			locked = append(locked, key)
-		}
-	}
-	slices.Sort(locked)
-	return locked
-}
-
-// SettingLockedBy names what makes key read-only — the environment variable, the
-// command-line flag, or LockedByConfigFile (plus the file's path) — or "" when the key is freely settable
-// from the UI. When several apply the environment wins, then the flag, then the file.
-// The UI uses it to say WHY a field is disabled; "locked" with no reason is a
-// support ticket.
-func SettingLockedBy(key string) string {
-	if envVar, ok := envLockedSettings[key]; ok && envSupplied(envVar) {
-		return envVar
-	}
-	if flag, ok := flagLockedSettings[key]; ok && flagSupplied(key) {
-		return flag
-	}
-	if configFileSupplied(key) {
-		return configFileLockReason()
-	}
-	return ""
-}
-
-// SettingLocks returns every currently-locked setting mapped to what locks it.
-// Same membership as EnvLockedSettings, with the reason attached.
-//
-// EnvLockedSettings is kept as-is beside this: the UI's existing checks are
-// membership tests, and a bare list is the right shape for those. This map is
-// for the copy that has to name the mechanism — telling an operator to remove
-// an environment variable when the real cause is a --db on the ExecStart line
-// sends them to edit the wrong thing.
-func SettingLocks() map[string]string {
-	locks := make(map[string]string, len(envLockedSettings)+len(flagLockedSettings))
-	for _, key := range EnvLockedSettings() {
-		locks[key] = SettingLockedBy(key)
-	}
-	return locks
-}
-
-// lockedBool returns the boolean a locked key resolves to. viper turns a value that
-// is not a boolean ("yes", "maybe", a typo) into false without a word, so a locked
-// toggle would be silently forced off; this logs a Warn naming the source first.
-// The accepted spellings are strconv.ParseBool's. The value is a toggle, not a
-// secret, so it is safe to log.
-func lockedBool(key string) bool {
-	if raw, ok := viper.Get(key).(string); ok {
-		if _, err := strconv.ParseBool(raw); err != nil {
-			configLog.Warn("%s: %q from %s is not a boolean (true/false/1/0/t/f); treating it as false",
-				key, raw, SettingLockedBy(key))
-		}
-	}
-	return viper.GetBool(key)
-}
-
-func applyEnvAuthoritativeConfig(c *Config) {
-	if viper.IsSet("oauth_enabled") {
-		c.OAuthEnabled = viper.GetBool("oauth_enabled")
-	}
-	if viper.IsSet("oauth_github_client_id") {
-		c.OAuthGithubClientID = viper.GetString("oauth_github_client_id")
-	}
-	if viper.IsSet("oauth_github_client_secret") {
-		c.OAuthGithubClientSecret = viper.GetString("oauth_github_client_secret")
-	}
-	if viper.IsSet("oauth_google_client_id") {
-		c.OAuthGoogleClientID = viper.GetString("oauth_google_client_id")
-	}
-	if viper.IsSet("oauth_google_client_secret") {
-		c.OAuthGoogleClientSecret = viper.GetString("oauth_google_client_secret")
-	}
-	if viper.IsSet("oauth_redirect_base_url") {
-		c.OAuthRedirectBaseURL = viper.GetString("oauth_redirect_base_url")
-	}
-	if viper.IsSet("oauth_allowed_emails") {
-		c.OAuthAllowedEmails = viper.GetString("oauth_allowed_emails")
-	}
-	if viper.IsSet("oauth_default_role") {
-		c.OAuthDefaultRole = viper.GetString("oauth_default_role")
-	}
-	if viper.IsSet("cf_access_team_domain") {
-		c.CFAccessTeamDomain = viper.GetString("cf_access_team_domain")
-	}
-	if viper.IsSet("cf_access_aud") {
-		c.CFAccessAUD = viper.GetString("cf_access_aud")
-	}
-	if viper.IsSet("owner_email") {
-		c.OwnerEmail = viper.GetString("owner_email")
-	}
-	if viper.IsSet("whisper_remote_url") {
-		c.WhisperRemoteURL = viper.GetString("whisper_remote_url")
-	}
-	if viper.IsSet("whisper_endpoints") {
-		c.WhisperEndpoints = ParseWhisperEndpoints(viper.GetString("whisper_endpoints"))
-	}
-	// Audiobookshelf sync API. Env-authoritative for the same reason as the OAuth keys:
-	// LoadConfigFromDatabase replaces the whole struct with the blob, so without these
-	// a systemd Environment=ABS_JWT_SECRET would be silently dropped and the ABS API
-	// would fail closed at boot despite being configured.
-	if viper.IsSet("abs_api_enabled") {
-		c.ABSAPIEnabled = viper.GetBool("abs_api_enabled")
-	}
-	if viper.IsSet("abs_auth_modes") {
-		c.ABSAuthModes = viper.GetString("abs_auth_modes")
-	}
-	if viper.IsSet("abs_jwt_secret") {
-		c.ABSJWTSecret = viper.GetString("abs_jwt_secret")
-	}
-	if viper.IsSet("abs_access_token_ttl") {
-		c.ABSAccessTokenTTL = viper.GetString("abs_access_token_ttl")
-	}
-	if viper.IsSet("abs_refresh_token_ttl") {
-		c.ABSRefreshTokenTTL = viper.GetString("abs_refresh_token_ttl")
-	}
-	if viper.IsSet("abs_refresh_grace") {
-		c.ABSRefreshGrace = viper.GetString("abs_refresh_grace")
-	}
-	if viper.IsSet("abs_session_max_ttl") {
-		c.ABSSessionMaxTTL = viper.GetString("abs_session_max_ttl")
-	}
-	if viper.IsSet("abs_server_version") {
-		c.ABSServerVersion = viper.GetString("abs_server_version")
-	}
-	if viper.IsSet("abs_default_library_id") {
-		c.ABSDefaultLibraryID = viper.GetString("abs_default_library_id")
-	}
-	// Invitation email and guest access: environment-only, never in the blob.
-	applyInviteEnv(c, viper.GetViper())
-	// Activity-log backend name. Env-authoritative for the same reason as the
-	// ABS keys: LoadConfigFromDatabase replaces the whole struct with the persisted
-	// blob. The registered SetDefault keeps IsSet permanently true, so with the
-	// environment silent this writes the "pebble" default over whatever the blob
-	// holds, and production's Environment=ACTIVITY_BACKEND=pebble keeps working.
-	// A config file or environment value of "sqlite" reaches the field and is
-	// then refused by Validate (see ValidateActivityBackend).
-	if viper.IsSet("activity_backend") {
-		c.ActivityBackend = viper.GetString("activity_backend")
-	}
-	// The MAIN database path. Category 2 (see the doc comment): the UI may
-	// set it, but an explicit --db or DATABASE_PATH from the operator wins.
-	//
-	// This was missing entirely and it took production down on 2026-09-09. The
-	// databases were relocated off a full root pool onto NVMe; the unit was
-	// updated to pass --db <new path> and Environment=DATABASE_PATH=<new path>;
-	// and the app still refused to start with
-	//
-	//   invalid configuration: database_path parent directory
-	//   "/var/lib/audiobook-organizer" does not exist
-	//
-	// because LoadConfigFromDatabase replaces the whole struct with the persisted
-	// blob (persistence.go applySetting, case "database_path") and nothing here
-	// re-applied the operator's value on top. A path stored months ago silently
-	// outranked the one typed on the command line at boot.
-	//
-	// The failure mode that did NOT happen is the one that makes this urgent:
-	// the stale path pointed somewhere that no longer existed, so it failed
-	// loudly. Had it pointed at a directory that still existed, the app would
-	// have opened — or created — the WRONG database, quietly, with the operator
-	// looking at a --db flag saying otherwise.
-	//
-	// flagSupplied, not viper.IsSet: --db carries a default, and the guard has to
-	// survive someone later adding a SetDefault for this key. See the measured
-	// table on explicitFlags above.
-	if flagSupplied("database_path") || envSupplied("DATABASE_PATH") {
-		c.DatabasePath = viper.GetString("database_path")
-	}
-	// Deluge connection settings (owner decision 2026-10-11). Category 2 like
-	// database_path: with neither the environment nor the config file setting a
-	// key, the stored blob (the UI / PUT /config) wins unchanged. When one does, it
-	// beats the blob — INCLUDING a stored empty value, which the blob writes for
-	// every field it knows and which used to mask env and file on any install that
-	// had ever saved settings. SettingLockedBy is the single test, so the value the
-	// server applies and the lock the UI shows cannot disagree. viper.GetString
-	// resolves the environment-over-file order.
-	if SettingLockedBy("deluge_web_url") != "" {
-		c.DelugeWebURL = viper.GetString("deluge_web_url")
-	}
-	if SettingLockedBy("deluge_web_password") != "" {
-		c.DelugeWebPassword = viper.GetString("deluge_web_password")
-	}
-	if SettingLockedBy("deluge_discovery_label") != "" {
-		c.DelugeDiscoveryLabel = viper.GetString("deluge_discovery_label")
-	}
-	if SettingLockedBy("deluge_discovery_enabled") != "" {
-		c.DelugeDiscoveryEnabled = lockedBool("deluge_discovery_enabled")
-	}
-	if SettingLockedBy("deluge_move_enabled") != "" {
-		c.DelugeMoveEnabled = lockedBool("deluge_move_enabled")
-	}
-	// NOT root_dir, deliberately. It is the same shape and the same argument
-	// applies in the abstract, but the base unit ships a generic
-	// AUDIOBOOK_ROOT_DIR=/var/lib/audiobooks that does NOT exist on the
-	// production host, where the correct value (/mnt/bigdata/books/…) lives in
-	// the database. Making the environment authoritative for root_dir would
-	// point the library at a non-existent directory on the next boot. If that is
-	// ever wanted, fix the unit first and change this second — in that order.
-}
-
-// ApplyEnvAuthoritativeConfig applies the environment-authoritative overrides to the
-// global AppConfig under the write lock. Exported for the DB-load path in persistence.go.
-func ApplyEnvAuthoritativeConfig() {
-	Mutate(applyEnvAuthoritativeConfig)
-}
-
-// InitConfig initializes the application configuration
-
-func InitConfig() {
-	// viper ignores unknown keys silently; a retired setting still present in
-	// the config file or environment gets a WARN here instead. Never an error:
-	// a stale key must not stop the server starting.
-	warnRemovedViperKeys()
-
-	v := viper.GetViper()
-	registerConfigDefaults(v)
-
-	// WHY Mutate: whole-struct init; correct even if tests call InitConfig concurrently.
-	cfg := configFromViper(v)
-	Mutate(func(c *Config) { *c = cfg })
-}
-
-// defaultRegistrar is the part of *viper.Viper that declaring the shipped
-// defaults needs. InitConfig passes the process-wide viper; factoryDefaultConfigForTest
-// passes a registrar whose BindEnv does nothing, so one list of keys and
-// defaults feeds both and neither can drift from the other.
-type defaultRegistrar interface {
-	SetDefault(key string, value any)
-	BindEnv(input ...string) error
-}
-
-// noEnvRegistrarForTest registers every default on a private viper and ignores the
-// environment bindings, so a value read back from it is the shipped default
-// whatever the process environment holds.
-type noEnvRegistrarForTest struct{ v *viper.Viper }
-
-func (n noEnvRegistrarForTest) SetDefault(key string, value any) { n.v.SetDefault(key, value) }
-func (noEnvRegistrarForTest) BindEnv(...string) error            { return nil }
-
-// registerConfigDefaults declares every shipped default (and environment
-// binding) for the Config. It is the single source of truth for defaults: the
-// Config that boot builds and the one a factory reset restores both read these
-// keys, so a default added here reaches both.
-func registerConfigDefaults(r defaultRegistrar) {
-
-	// Set core defaults
-	r.SetDefault("database_type", "pebble")
-	// Sort indexes for the ABS library browser.
-	//
-	// Without one of these the handler maps sort=media.metadata.publishedYear
-	// to "year" and the store STILL iterates unordered: 200 OK, right rows,
-	// arbitrary order, nothing logged. So the mapping in the ABS handler and
-	// this list have to move together.
-	//
-	// DELIBERATELY NARROW. "year" is the reported bug. "created_at" (Date Added,
-	// ABS "Recently Added") was switched ON 2026-10-11 by owner decision: it is
-	// the one newest-first browse sort, and unindexed it sorted the whole visible
-	// set per request (~30-39 ms, ~78 MB) versus ~7 µs indexed. The client's
-	// menu also offers Last Updated / Duration / File Size, and the store could
-	// index all three -- they are left OFF because each memdb sorted index costs
-	// ~19 MB at ~48.9k books AND go-memdb path-copies nodes on every insert, so
-	// each one taxes the scan write path. A library scan is the heaviest write
-	// workload here (~456k items in a full run), and scan ingest is the thing
-	// currently being debugged, so speculative indexes are not worth an
-	// unattributable throughput regression. Enabling one later is this line.
-	//
-	// Read at store-open and boot-only: changing it requires the config file or
-	// environment plus a restart; PUT /api/v1/config refuses it.
-	// "author" was removed from this default on 2026-08-25. It named an index
-	// that could not be correct: a memdb indexer sees only *Book, and
-	// stripBookForMemdb nils Book.Author, so the index ordered every row in
-	// the library under the same empty key. Sorting by author now resolves the
-	// name from the authors table on the materialise-and-sort path instead.
-	// Leaving it here would print an "unknown entry ignored" warning on every
-	// startup, for a value the application itself shipped.
-	r.SetDefault("enabled_sort_indexes", []string{"year", "created_at"})
-	r.SetDefault("search.result_cache.enabled", true)
-	r.SetDefault("search.result_cache.max_bytes", int64(128<<20))
-	r.SetDefault("search.result_cache.wait_seconds", 20)
-	r.SetDefault("setup_complete", false)
-
-	// Set library organization defaults
-	r.SetDefault("organization_strategy", "auto")
-	r.SetDefault("scan_on_startup", false)
-	r.SetDefault("auto_organize", true)
-	r.SetDefault("auto_scan_enabled", false)
-	r.SetDefault("auto_scan_debounce_seconds", 30)
-	r.SetDefault("folder_naming_pattern", DefaultFolderNamingPattern)
-	r.SetDefault("file_naming_pattern", DefaultFileNamingPattern)
-	r.SetDefault("create_backups", true)
-	// gzip, not zstd: this default also applies to every existing install on
-	// upgrade, and changing the archive format underneath someone silently is
-	// not a default's job. zstd is opt-in.
-	r.SetDefault("backup_compression", "gzip")
-
-	// Set storage quota defaults
-	r.SetDefault("enable_disk_quota", false)
-	r.SetDefault("disk_quota_percent", 80)
-	r.SetDefault("enable_user_quotas", false)
-
-	// Set metadata defaults
-	r.SetDefault("write_back_metadata", false)
-	r.SetDefault("embed_cover_art", true)
-
-	// Managed external-tool lifecycle (tools.*). Until 2026-10-11 InitConfig
-	// assigned these as constants and never consulted viper; the defaults are
-	// those same constants, so nothing changes unless a config file sets them.
-	r.SetDefault("tools.managed_dir", "/var/lib/audiobook-organizer/tools")
-	r.SetDefault("tools.ollama.mode", string(tools.ToolModeSystem))
-	r.SetDefault("tools.fpcalc.mode", string(tools.ToolModeSystem))
-	r.SetDefault("tools.allow_periodic_ollama", false)
-	r.SetDefault("tools.ollama_debounce_min", 10)
-
-	// Open Library dump defaults
-	r.SetDefault("openlibrary_dump_enabled", false)
-	r.SetDefault("openlibrary_dump_dir", "")
-
-	// Hardcover.app defaults
-	r.SetDefault("hardcover_api_token", "")
-
-	// Set AI parsing defaults
-	r.SetDefault("enable_ai_parsing", true)
-	r.SetDefault("openai_api_key", "")
-	r.SetDefault("acoustid_api_key", "")
-	r.BindEnv("acoustid_api_key", "ACOUSTID_API_KEY") //nolint:errcheck
-
-	// 2026-08-20 os.Getenv-to-viper consolidation: previously ad-hoc
-	// os.Getenv() reads scattered across their respective packages.
-	r.SetDefault("fp_parallel_workers", 4)
-	r.SetDefault("fingerprint_remote_workers_enabled", false)
-	r.SetDefault("fingerprint_window_reference_tools", "")
-	r.SetDefault("fingerprint_length_sec", 120)
-	r.SetDefault("whisper_clip_cache_dir", "")
-	r.SetDefault("whisper_batch_sleep_ms", 8000)
-	r.SetDefault("whisper_batch_size", 16)
-	r.SetDefault("whisper_max_in_flight", 0)
-	r.SetDefault("openai_base_url", "")
-	r.SetDefault("abs_auth_probe_enabled", false)
-	r.SetDefault("authority_evidence_enabled", false)
-	r.SetDefault("retire_versions_apply_enabled", false)
-	r.SetDefault("kept_sweep_apply_enabled", false)
-	r.SetDefault("abs_itunes_position_backfill_user_id", "")
-	r.SetDefault("otel_exporter_otlp_endpoint", "")
-	r.SetDefault("otel_metrics_otlp_endpoint", "")
-	r.SetDefault("otel_metrics_otlp_interval", "60s")
-	r.SetDefault("otel_metrics_otlp_insecure", false)
-	r.SetDefault("telemetry_environment", "prod")
-	r.SetDefault("list_warmer_heap_delta_mb", 4096)
-	r.SetDefault("list_warmer_trickle_interval_ms", 10000)
-	r.SetDefault("library_counts_cache_min_interval_seconds", 600)
-	r.SetDefault("bleve_description_max_chars", 500)
-	// Metadata-provider base URL overrides, backfilled onto MetadataSources[i].BaseURL
-	// below (viper.BindEnv doesn't address slice elements directly).
-	r.SetDefault("audible_base_url", "")
-	r.SetDefault("openlibrary_base_url", "")
-	r.SetDefault("audnexus_base_url", "")
-	r.SetDefault("google_books_base_url", "")
-	r.BindEnv("fp_parallel_workers", "FP_PARALLEL_WORKERS")                                   //nolint:errcheck
-	r.BindEnv("fingerprint_length_sec", "FP_LENGTH_SEC")                                      //nolint:errcheck
-	r.BindEnv("whisper_clip_cache_dir", "WHISPER_CLIP_CACHE_DIR")                             //nolint:errcheck
-	r.BindEnv("whisper_batch_sleep_ms", "WHISPER_BATCH_SLEEP_MS")                             //nolint:errcheck
-	r.BindEnv("whisper_batch_size", "WHISPER_BATCH_SIZE")                                     //nolint:errcheck
-	r.BindEnv("whisper_max_in_flight", "WHISPER_MAX_IN_FLIGHT")                               //nolint:errcheck
-	r.BindEnv("openai_base_url", "OPENAI_BASE_URL")                                           //nolint:errcheck
-	r.BindEnv("abs_auth_probe_enabled", "ABS_AUTH_PROBE")                                     //nolint:errcheck
-	r.BindEnv("retire_versions_apply_enabled", "RETIRE_VERSIONS_APPLY_ENABLED")               //nolint:errcheck
-	r.BindEnv("kept_sweep_apply_enabled", "KEPT_SWEEP_APPLY_ENABLED")                         //nolint:errcheck
-	r.BindEnv("abs_itunes_position_backfill_user_id", "ABS_ITUNES_POSITION_BACKFILL_USER_ID") //nolint:errcheck
-	r.BindEnv("otel_exporter_otlp_endpoint", "OTEL_EXPORTER_OTLP_ENDPOINT")                   //nolint:errcheck
-	r.BindEnv("otel_metrics_otlp_endpoint", "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")            //nolint:errcheck
-	r.BindEnv("otel_metrics_otlp_interval", "OTEL_METRIC_EXPORT_INTERVAL")                    //nolint:errcheck
-	r.BindEnv("otel_metrics_otlp_insecure", "OTEL_EXPORTER_OTLP_METRICS_INSECURE")            //nolint:errcheck
-	// Deluge: bound explicitly so the environment reaches viper where AutomaticEnv
-	// is off. The names are the ones SettingLocks reports (envLockedSettings).
-	r.BindEnv("deluge_web_url", "DELUGE_WEB_URL")                     //nolint:errcheck
-	r.BindEnv("deluge_web_password", "DELUGE_WEB_PASSWORD")           //nolint:errcheck
-	r.BindEnv("deluge_discovery_label", "DELUGE_DISCOVERY_LABEL")     //nolint:errcheck
-	r.BindEnv("deluge_discovery_enabled", "DELUGE_DISCOVERY_ENABLED") //nolint:errcheck
-	r.BindEnv("deluge_move_enabled", "DELUGE_MOVE_ENABLED")           //nolint:errcheck
-	// LIST_WARMER_MAX_HEAP_MB is a legacy alias for the same setting — viper
-	// checks env var names in the order given, so the current name wins when
-	// both are set.
-	r.BindEnv("list_warmer_heap_delta_mb", "LIST_WARMER_HEAP_DELTA_MB", "LIST_WARMER_MAX_HEAP_MB")      //nolint:errcheck
-	r.BindEnv("list_warmer_trickle_interval_ms", "LIST_WARMER_TRICKLE_INTERVAL_MS")                     //nolint:errcheck
-	r.BindEnv("library_counts_cache_min_interval_seconds", "LIBRARY_COUNTS_CACHE_MIN_INTERVAL_SECONDS") //nolint:errcheck
-	r.BindEnv("bleve_description_max_chars", "BLEVE_DESCRIPTION_MAX_CHARS")                             //nolint:errcheck
-	r.BindEnv("audible_base_url", "AUDIBLE_BASE_URL")                                                   //nolint:errcheck
-	r.BindEnv("openlibrary_base_url", "OPENLIBRARY_BASE_URL")                                           //nolint:errcheck
-	r.BindEnv("audnexus_base_url", "AUDNEXUS_BASE_URL")                                                 //nolint:errcheck
-	r.BindEnv("google_books_base_url", "GOOGLE_BOOKS_BASE_URL")                                         //nolint:errcheck
-
-	// Per-feature model defaults — gpt-5-mini preserves historical behavior.
-	// dedup_review_model has moved to dedup.review_model (nested DedupConfig).
-	r.SetDefault("dedup.review_model", "gpt-5-mini")
-	r.SetDefault("metadata_review_model", "gpt-5-mini")
-	r.SetDefault("filename_parse_model", "gpt-5-mini")
-	r.SetDefault("cover_art_model", "gpt-5-mini")
-
-	// Set performance defaults — scale with available CPUs
-	defaultWorkers := max(runtime.NumCPU(), 4)
-	r.SetDefault("concurrent_scans", defaultWorkers)
-	r.SetDefault("scan_standdown_grace_seconds", 45)
-	r.SetDefault("chapter_consolidation_threshold_min", DefaultChapterConsolidationThresholdMin)
-	r.SetDefault("repair_chapter_max_min", 120)
-	r.SetDefault("fragment_window_containment_min", DefaultFragmentWindowContainmentMin)
-	r.SetDefault("operation_timeout_minutes", 30)
-	r.SetDefault("db_census_exact_read_mb_per_sec", DefaultDBCensusExactReadMBPerSec)
-	r.SetDefault("db_census_exact_cooldown_hours", DefaultDBCensusExactCooldownHours)
-	r.SetDefault("log_retention_days", logging.DefaultLogRetentionDays)
-	// operation_log_retention_days, activity_log_compaction_days and
-	// activity_log_retention_{change,debug}_days have NO viper default on
-	// purpose: each consumer maps 0 (or less) to its effective default
-	// (90 / 14 / 90 / 30), so 0 is "use the default" and changes nothing.
-	// InitConfig reads them so a config file or environment value reaches them.
-	r.SetDefault("activity_log_nightly_compaction_enabled", true)
-	r.SetDefault("activity_log_full_detail_days", 0)
-	r.SetDefault("ai_journal_retention_days", 30)
-
-	// API security/runtime limits
-	r.SetDefault("api_rate_limit_per_minute", 100)
-	r.SetDefault("json_body_limit_mb", 1)
-	r.SetDefault("upload_body_limit_mb", 10)
-	r.SetDefault("master_list_retention", 10)
-	r.SetDefault("enable_auth", true)
-	r.SetDefault("enable_rate_limit", true)
-	// Fail-safe ceiling for one bulk apply; see Config.BulkApplyMaxItems.
-	r.SetDefault("bulk_apply_max_items", 5000)
-	r.SetDefault("basic_auth_enabled", false)
-	r.SetDefault("basic_auth_username", "")
-	r.SetDefault("basic_auth_password", "")
-
-	// OAuth / OIDC + Cloudflare Access defaults (all off / empty unless configured).
-	r.SetDefault("oauth_enabled", false)
-	r.SetDefault("oauth_github_client_id", "")
-	r.SetDefault("oauth_github_client_secret", "")
-	r.SetDefault("oauth_google_client_id", "")
-	r.SetDefault("oauth_google_client_secret", "")
-	r.SetDefault("oauth_redirect_base_url", "")
-	r.SetDefault("oauth_allowed_emails", "")
-	r.SetDefault("oauth_default_role", "viewer")
-	r.SetDefault("cf_access_team_domain", "")
-	r.SetDefault("cf_access_aud", "")
-	r.SetDefault("owner_email", "")
-	r.BindEnv("oauth_enabled", "OAUTH_ENABLED")                           //nolint:errcheck
-	r.BindEnv("oauth_github_client_id", "OAUTH_GITHUB_CLIENT_ID")         //nolint:errcheck
-	r.BindEnv("oauth_github_client_secret", "OAUTH_GITHUB_CLIENT_SECRET") //nolint:errcheck
-	r.BindEnv("oauth_google_client_id", "OAUTH_GOOGLE_CLIENT_ID")         //nolint:errcheck
-	r.BindEnv("oauth_google_client_secret", "OAUTH_GOOGLE_CLIENT_SECRET") //nolint:errcheck
-	r.BindEnv("oauth_redirect_base_url", "OAUTH_REDIRECT_BASE_URL")       //nolint:errcheck
-	r.BindEnv("oauth_allowed_emails", "OAUTH_ALLOWED_EMAILS")             //nolint:errcheck
-	r.BindEnv("oauth_default_role", "OAUTH_DEFAULT_ROLE")                 //nolint:errcheck
-	r.BindEnv("cf_access_team_domain", "CF_ACCESS_TEAM_DOMAIN")           //nolint:errcheck
-	r.BindEnv("cf_access_aud", "CF_ACCESS_AUD")                           //nolint:errcheck
-	r.BindEnv("owner_email", "OWNER_EMAIL")                               //nolint:errcheck
-
-	registerABSDefaults(r)
-	registerInviteDefaults(r)
-
-	// Transcription: remote faster-whisper server URL (env-authoritative).
-	r.SetDefault("whisper_remote_url", "")
-	r.BindEnv("whisper_remote_url", "WHISPER_REMOTE_URL") //nolint:errcheck
-	// Multi-endpoint pool, JSON array string (env-authoritative; wins over
-	// whisper_remote_url when non-empty).
-	r.SetDefault("whisper_endpoints", "")
-	r.BindEnv("whisper_endpoints", "WHISPER_ENDPOINTS") //nolint:errcheck
-	r.BindEnv("whisper_requires", "WHISPER_REQUIRES")   //nolint:errcheck
-
-	// Set memory management defaults
-	r.SetDefault("metadata_fetch_cache_ttl_days", DefaultMetadataFetchCacheTTLDays)
-	// The metadata_fetch.* defaults come from DefaultMetadataFetchConfig, the
-	// one place the shipped block is written down (tests and the cache-TTL
-	// reset use it directly).
-	mf := DefaultMetadataFetchConfig()
-	r.SetDefault("metadata_fetch.shared_cache", mf.SharedCache)
-	r.SetDefault("identification_advance_enabled", false)
-	r.SetDefault("metadata_fetch.catalog_stage", mf.CatalogStage)
-	r.SetDefault("metadata_fetch.folder_parse_person_title", mf.FolderParsePersonTitle)
-	r.SetDefault("metadata_fetch.negative_ttl_days.audible", mf.NegativeTTLDays.Audible)
-	r.SetDefault("metadata_fetch.negative_ttl_days.audnexus", mf.NegativeTTLDays.Audnexus)
-	r.SetDefault("metadata_fetch.negative_ttl_days.openlibrary", mf.NegativeTTLDays.OpenLibrary)
-	r.SetDefault("metadata_fetch.negative_ttl_days.google", mf.NegativeTTLDays.Google)
-	// No defaults for bootstrap_key_ttl / bootstrap_key_ttl_days: an empty
-	// bootstrap_key_ttl resolves to coreauth.DefaultBootstrapKeyTTL in code, and a
-	// default for the legacy days key would make it look set on every boot
-	// (see ResolveBootstrapKeyTTL). Bound explicitly so BOOTSTRAP_KEY_TTL /
-	// BOOTSTRAP_KEY_TTL_DAYS reach them even where AutomaticEnv is not on.
-	r.BindEnv("bootstrap_key_ttl", "BOOTSTRAP_KEY_TTL")           //nolint:errcheck
-	r.BindEnv("bootstrap_key_ttl_days", "BOOTSTRAP_KEY_TTL_DAYS") //nolint:errcheck
-
-	// Lifecycle / retention defaults
-	r.SetDefault("purge_soft_deleted_after_days", 30)
-	r.SetDefault("backup_retention_days", 0)
-	r.SetDefault("purge_soft_deleted_delete_files", false)
-
-	// Set logging defaults
-	r.SetDefault("log_level", "info")
-
-	// Scheduled task defaults (nested under "scheduled.*.*")
-	// library_scan ships ENABLED at a 6-hour interval. Every other member of
-	// this family defaults off, but this one is the ONLY thing that discovers
-	// newly added books unattended: before it existed the library_scan task's
-	// GetInterval returned a hard-coded 0, so scheduler.Start never created a
-	// ticker for it and a book copied into an import path stayed invisible
-	// until someone pressed Scan by hand. 360 min bounds worst-case discovery
-	// latency at 6h while keeping the walk cost modest on a large library
-	// (the scan is incremental — unchanged files are skipped via the scan
-	// cache). auto_scan_enabled's fsnotify watchers are the low-latency path
-	// on top of this, not a replacement for it.
-	r.SetDefault("scheduled.library_scan.enabled", true)
-	r.SetDefault("scheduled.library_scan.interval", 360)
-	r.SetDefault("scheduled.library_scan.on_startup", false)
-	// The full sweep ships ENABLED but does NOT run on first boot: with no
-	// stored timestamp the scheduler seeds one and waits a full period, so
-	// deploying this never kicks off an unannounced multi-hour re-hash.
-	r.SetDefault("scheduled.library_scan_full.enabled", true)
-	r.SetDefault("scheduled.library_scan_full.interval", 60)
-	r.SetDefault("scheduled.library_scan_full.period_hours", 168)
-	r.SetDefault("scheduled.dedup_refresh.enabled", false)
-	r.SetDefault("scheduled.dedup_refresh.interval", 360)
-	r.SetDefault("scheduled.dedup_refresh.on_startup", false)
-	r.SetDefault("scheduled.acoustid_backfill.enabled", false)
-	r.SetDefault("scheduled.acoustid_backfill.interval", 1440)
-	r.SetDefault("scheduled.acoustid_backfill.on_startup", false)
-	// metadata_upgrade: scheduled whenever interval > 0 (Enabled is not read,
-	// see ScheduledTasksConfig.MetadataUpgrade). Ships off.
-	r.SetDefault("scheduled.metadata_upgrade.interval", 0)
-	r.SetDefault("scheduled.metadata_upgrade.on_startup", false)
-	// asin_backfill: scheduled whenever interval > 0 (minutes; see
-	// ScheduledTasksConfig.ASINBackfill). Ships ON at 6h.
-	r.SetDefault("scheduled.asin_backfill.interval", 360)
-	// candidate_fetch: scheduled whenever interval > 0 (minutes; see
-	// ScheduledTasksConfig.CandidateFetch). Ships ON at 6h.
-	r.SetDefault("scheduled.candidate_fetch.interval", 360)
-	// catalog_harvest: scheduled whenever interval > 0 and catalog.enabled
-	// (minutes; see ScheduledTasksConfig.CatalogHarvest). Ships ON at 6h.
-	r.SetDefault("scheduled.catalog_harvest.interval", 360)
-	// label_refinement ships DISABLED (INIT-1 T6): the scheduled dry-run chain
-	// (dedup.rebuild-gold-labels → dedup.calibrate-composite) only runs when an
-	// owner flips enabled=true. Interval is weekly (10080 min).
-	r.SetDefault("scheduled.label_refinement.enabled", false)
-	r.SetDefault("scheduled.label_refinement.interval", 10080)
-	r.SetDefault("scheduled.label_refinement.on_startup", false)
-	r.SetDefault("scheduled.author_split.enabled", false)
-	r.SetDefault("scheduled.author_split.interval", 0)
-	r.SetDefault("scheduled.author_split.on_startup", false)
-	r.SetDefault("scheduled.db_optimize.enabled", false)
-	r.SetDefault("scheduled.db_optimize.interval", 1440)
-	r.SetDefault("scheduled.db_optimize.on_startup", false)
-	r.SetDefault("scheduled.metadata_refresh.enabled", false)
-	r.SetDefault("scheduled.metadata_refresh.interval", 0)
-	r.SetDefault("scheduled.metadata_refresh.on_startup", false)
-	r.SetDefault("scheduled.resolve_production_authors.enabled", false)
-	r.SetDefault("scheduled.resolve_production_authors.interval", 0)
-	r.SetDefault("scheduled.series_prune.enabled", false)
-	r.SetDefault("scheduled.series_prune.interval", 0)
-	r.SetDefault("scheduled.series_prune.on_startup", false)
-	r.SetDefault("scheduled.ai_dedup_batch.enabled", false)
-	r.SetDefault("scheduled.ai_dedup_batch.interval", 1440)
-	r.SetDefault("scheduled.ai_dedup_batch.on_startup", false)
-	r.SetDefault("scheduled.reconcile.enabled", false)
-	r.SetDefault("scheduled.reconcile.interval", 0)
-	r.SetDefault("scheduled.reconcile.on_startup", false)
-	// BindEnv maps env vars so SCHEDULED_* overrides work even without AutomaticEnv.
-	r.BindEnv("scheduled.library_scan.enabled", "SCHEDULED_LIBRARY_SCAN_ENABLED")                               //nolint:errcheck
-	r.BindEnv("scheduled.library_scan.interval", "SCHEDULED_LIBRARY_SCAN_INTERVAL")                             //nolint:errcheck
-	r.BindEnv("scheduled.library_scan.on_startup", "SCHEDULED_LIBRARY_SCAN_ON_STARTUP")                         //nolint:errcheck
-	r.BindEnv("scheduled.library_scan_full.enabled", "SCHEDULED_LIBRARY_SCAN_FULL_ENABLED")                     //nolint:errcheck
-	r.BindEnv("scheduled.library_scan_full.interval", "SCHEDULED_LIBRARY_SCAN_FULL_INTERVAL")                   //nolint:errcheck
-	r.BindEnv("scheduled.library_scan_full.period_hours", "SCHEDULED_LIBRARY_SCAN_FULL_PERIOD_HOURS")           //nolint:errcheck
-	r.BindEnv("scheduled.dedup_refresh.enabled", "SCHEDULED_DEDUP_REFRESH_ENABLED")                             //nolint:errcheck
-	r.BindEnv("scheduled.dedup_refresh.interval", "SCHEDULED_DEDUP_REFRESH_INTERVAL")                           //nolint:errcheck
-	r.BindEnv("scheduled.dedup_refresh.on_startup", "SCHEDULED_DEDUP_REFRESH_ON_STARTUP")                       //nolint:errcheck
-	r.BindEnv("scheduled.acoustid_backfill.enabled", "SCHEDULED_ACOUSTID_BACKFILL_ENABLED")                     //nolint:errcheck
-	r.BindEnv("scheduled.acoustid_backfill.interval", "SCHEDULED_ACOUSTID_BACKFILL_INTERVAL")                   //nolint:errcheck
-	r.BindEnv("scheduled.acoustid_backfill.on_startup", "SCHEDULED_ACOUSTID_BACKFILL_ON_STARTUP")               //nolint:errcheck
-	r.BindEnv("scheduled.metadata_upgrade.interval", "SCHEDULED_METADATA_UPGRADE_INTERVAL")                     //nolint:errcheck
-	r.BindEnv("scheduled.metadata_upgrade.on_startup", "SCHEDULED_METADATA_UPGRADE_ON_STARTUP")                 //nolint:errcheck
-	r.BindEnv("scheduled.asin_backfill.interval", "SCHEDULED_ASIN_BACKFILL_INTERVAL")                           //nolint:errcheck
-	r.BindEnv("scheduled.catalog_harvest.interval", "SCHEDULED_CATALOG_HARVEST_INTERVAL")                       //nolint:errcheck
-	r.BindEnv("scheduled.label_refinement.enabled", "SCHEDULED_LABEL_REFINEMENT_ENABLED")                       //nolint:errcheck
-	r.BindEnv("scheduled.label_refinement.interval", "SCHEDULED_LABEL_REFINEMENT_INTERVAL")                     //nolint:errcheck
-	r.BindEnv("scheduled.label_refinement.on_startup", "SCHEDULED_LABEL_REFINEMENT_ON_STARTUP")                 //nolint:errcheck
-	r.BindEnv("scheduled.author_split.enabled", "SCHEDULED_AUTHOR_SPLIT_ENABLED")                               //nolint:errcheck
-	r.BindEnv("scheduled.author_split.interval", "SCHEDULED_AUTHOR_SPLIT_INTERVAL")                             //nolint:errcheck
-	r.BindEnv("scheduled.author_split.on_startup", "SCHEDULED_AUTHOR_SPLIT_ON_STARTUP")                         //nolint:errcheck
-	r.BindEnv("scheduled.db_optimize.enabled", "SCHEDULED_DB_OPTIMIZE_ENABLED")                                 //nolint:errcheck
-	r.BindEnv("scheduled.db_optimize.interval", "SCHEDULED_DB_OPTIMIZE_INTERVAL")                               //nolint:errcheck
-	r.BindEnv("scheduled.db_optimize.on_startup", "SCHEDULED_DB_OPTIMIZE_ON_STARTUP")                           //nolint:errcheck
-	r.BindEnv("scheduled.metadata_refresh.enabled", "SCHEDULED_METADATA_REFRESH_ENABLED")                       //nolint:errcheck
-	r.BindEnv("scheduled.metadata_refresh.interval", "SCHEDULED_METADATA_REFRESH_INTERVAL")                     //nolint:errcheck
-	r.BindEnv("scheduled.metadata_refresh.on_startup", "SCHEDULED_METADATA_REFRESH_ON_STARTUP")                 //nolint:errcheck
-	r.BindEnv("scheduled.resolve_production_authors.enabled", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_ENABLED")   //nolint:errcheck
-	r.BindEnv("scheduled.resolve_production_authors.interval", "SCHEDULED_RESOLVE_PRODUCTION_AUTHORS_INTERVAL") //nolint:errcheck
-	r.BindEnv("scheduled.series_prune.enabled", "SCHEDULED_SERIES_PRUNE_ENABLED")                               //nolint:errcheck
-	r.BindEnv("scheduled.series_prune.interval", "SCHEDULED_SERIES_PRUNE_INTERVAL")                             //nolint:errcheck
-	r.BindEnv("scheduled.series_prune.on_startup", "SCHEDULED_SERIES_PRUNE_ON_STARTUP")                         //nolint:errcheck
-	r.BindEnv("scheduled.ai_dedup_batch.enabled", "SCHEDULED_AI_DEDUP_BATCH_ENABLED")                           //nolint:errcheck
-	r.BindEnv("scheduled.ai_dedup_batch.interval", "SCHEDULED_AI_DEDUP_BATCH_INTERVAL")                         //nolint:errcheck
-	r.BindEnv("scheduled.ai_dedup_batch.on_startup", "SCHEDULED_AI_DEDUP_BATCH_ON_STARTUP")                     //nolint:errcheck
-	r.BindEnv("scheduled.reconcile.enabled", "SCHEDULED_RECONCILE_ENABLED")                                     //nolint:errcheck
-	r.BindEnv("scheduled.reconcile.interval", "SCHEDULED_RECONCILE_INTERVAL")                                   //nolint:errcheck
-	r.BindEnv("scheduled.reconcile.on_startup", "SCHEDULED_RECONCILE_ON_STARTUP")                               //nolint:errcheck
-
-	// iTunes import defaults (nested under "itunes.*"). The sync keys
-	// (itunes.sync_enabled / sync_interval and their env vars) were removed
-	// on 2026-10-08 with the incremental sync; a stored value is ignored.
-	r.SetDefault("itunes.library_write_path", "")
-	r.SetDefault("itunes.library_read_path", "")
-	r.SetDefault("itunes.path_trim_enabled", false)
-	r.SetDefault("itunes.windows_root_path", "")
-	r.SetDefault("itunes.media_root", "")
-
-	// Auto-update defaults
-	r.SetDefault("auto_update.enabled", false)
-	r.SetDefault("auto_update.channel", "stable")
-	r.SetDefault("auto_update.check_minutes", 60)
-	r.SetDefault("auto_update.window_start", 2)
-	r.SetDefault("auto_update.window_end", 5)
-	r.BindEnv("auto_update.enabled", "AUTO_UPDATE_ENABLED")             //nolint:errcheck
-	r.BindEnv("auto_update.channel", "AUTO_UPDATE_CHANNEL")             //nolint:errcheck
-	r.BindEnv("auto_update.check_minutes", "AUTO_UPDATE_CHECK_MINUTES") //nolint:errcheck
-	r.BindEnv("auto_update.window_start", "AUTO_UPDATE_WINDOW_START")   //nolint:errcheck
-	r.BindEnv("auto_update.window_end", "AUTO_UPDATE_WINDOW_END")       //nolint:errcheck
-
-	// Maintenance window defaults
-	r.SetDefault("maintenance.enabled", true)
-	r.SetDefault("maintenance.window_start", 1)
-	r.SetDefault("maintenance.window_end", 4)
-	// Per-task defaults — most maintenance tasks default true
-	r.SetDefault("maintenance.dedup_refresh", true)
-	r.SetDefault("maintenance.series_prune", true)
-	r.SetDefault("maintenance.author_split", true)
-	r.SetDefault("maintenance.tombstone_cleanup", true)
-	r.SetDefault("maintenance.reconcile", true)
-	r.SetDefault("maintenance.purge_deleted", true)
-	r.SetDefault("maintenance.purge_old_logs", true)
-	r.SetDefault("maintenance.db_optimize", true)
-	// Non-maintenance tasks default false
-	r.SetDefault("maintenance.library_scan", false)
-	r.SetDefault("maintenance.library_organize", false)
-	r.SetDefault("maintenance.metadata_refresh", false)
-	// FS-walk-based on-disk size refresh — true by default (cheap, runs nightly,
-	// keeps the FS-side cache fresh for any caller that queries physical sizes).
-	r.SetDefault("maintenance.library_size_refresh", true)
-	// AcoustID online lookup is OFF by default — uses third-party quota
-	r.SetDefault("maintenance.acoustid_online_lookup", false)
-	r.SetDefault("maintenance.acoustid_nightly_limit", 5000)
-	// AcoustID (local) fingerprint backfill is OFF by default as of 2026-08-11.
-	// The nightly op spawns fpcalc/ffmpeg per book file and loads the entire
-	// book table into memory before it can start; in production it held ~862 MB
-	// of live heap and was implicated in three OOM kills in one night. Opt in
-	// deliberately once the memory profile of the load phase is fixed.
-	r.SetDefault("maintenance.acoustid_backfill", false)
-	// BindEnv maps env vars so MAINTENANCE_ENABLED etc. override even without AutomaticEnv.
-	r.BindEnv("maintenance.enabled", "MAINTENANCE_ENABLED")                               //nolint:errcheck
-	r.BindEnv("maintenance.window_start", "MAINTENANCE_WINDOW_START")                     //nolint:errcheck
-	r.BindEnv("maintenance.window_end", "MAINTENANCE_WINDOW_END")                         //nolint:errcheck
-	r.BindEnv("maintenance.acoustid_online_lookup", "MAINTENANCE_ACOUSTID_ONLINE_LOOKUP") //nolint:errcheck
-	r.BindEnv("maintenance.acoustid_nightly_limit", "MAINTENANCE_ACOUSTID_NIGHTLY_LIMIT") //nolint:errcheck
-	r.BindEnv("maintenance.acoustid_backfill", "MAINTENANCE_ACOUSTID_BACKFILL")           //nolint:errcheck
-
-	// Download client defaults
-	r.SetDefault("download_client.torrent.type", "")
-	r.SetDefault("download_client.torrent.deluge.host", "")
-	r.SetDefault("download_client.torrent.deluge.port", 0)
-	r.SetDefault("download_client.torrent.deluge.username", "")
-	r.SetDefault("download_client.torrent.deluge.password", "")
-	// Path formatting & apply pipeline defaults
-	r.SetDefault("auto_rename_on_apply", true)
-	r.SetDefault("auto_write_tags_on_apply", true)
-	r.SetDefault("verify_after_write", true)
-	r.SetDefault("write_startup_readonly_key", true) // SEC-2: opt-out to disable file write
-
-	// Embedding + vector index defaults (nested under "embedding.*").
-	// BindEnv maps each dot-notation key to its uppercase env var name so that
-	// EMBEDDING_ENABLED, EMBEDDING_MODEL, etc. override the defaults even when
-	// AutomaticEnv() is not active (e.g. in unit tests that call InitConfig directly).
-	r.SetDefault("embedding.enabled", true)
-	r.SetDefault("embedding.model", "text-embedding-3-large")
-	r.SetDefault("embedding.dimensions", 3072)
-	r.SetDefault("embedding.base_url", "")
-	// "hnsw" (coder/hnsw graph, sub-linear) is the default: "chromem" is a
-	// brute-force O(n·d) cosine scan whose per-query cost grows linearly with
-	// the corpus. Measured at 1024 dims with the is_primary_version filter:
-	// 10K vectors 9.18ms vs 0.51ms (18x), 50K vectors 111.9ms vs 0.53ms (210x).
-	// At ~61K books and roughly one query per book, dedup.full-scan is the
-	// difference between ~32s and ~1.9 CPU-hours. chromem stays selectable as
-	// the simple fallback; it is no longer the silent default.
-	r.SetDefault("embedding.vector_backend", "hnsw")
-	// 0, not 30: ResolveEmbeddingRequestTimeout owns the fallback, so an unset
-	// key stays distinguishable from an explicit 30 in the persisted blob.
-	r.SetDefault("embedding.request_timeout_seconds", 0)
-	r.BindEnv("embedding.enabled", "EMBEDDING_ENABLED")                                 //nolint:errcheck
-	r.BindEnv("embedding.model", "EMBEDDING_MODEL")                                     //nolint:errcheck
-	r.BindEnv("embedding.dimensions", "EMBEDDING_DIMENSIONS")                           //nolint:errcheck
-	r.BindEnv("embedding.base_url", "EMBEDDING_BASE_URL")                               //nolint:errcheck
-	r.BindEnv("embedding.vector_backend", "VECTOR_INDEX_BACKEND")                       //nolint:errcheck
-	r.BindEnv("embedding.request_timeout_seconds", "EMBEDDING_REQUEST_TIMEOUT_SECONDS") //nolint:errcheck
-
-	// Dedup threshold + behaviour defaults (nested under "dedup.*").
-	r.SetDefault("dedup.book_high_threshold", 0.95)
-	r.SetDefault("dedup.book_low_threshold", 0.85)
-	r.SetDefault("dedup.author_high_threshold", 0.92)
-	r.SetDefault("dedup.author_low_threshold", 0.80)
-	r.SetDefault("dedup.auto_merge_enabled", true)
-	r.SetDefault("dedup.embeddings_enabled", true)              // opt-out: set false on no-internet boxes
-	r.SetDefault("dedup.llm_auto_merge_high_confidence", false) // opt-in
-	r.SetDefault("dedup.on_import_via_scheduler", false)        // opt-in — keep eager path until M4 confirmed
-	r.SetDefault("dedup.chromem_lazy", false)
-	r.BindEnv("dedup.chromem_lazy", "DEDUP_CHROMEM_LAZY") //nolint:errcheck
-
-	// Activity-log store backend name. Bound explicitly to ACTIVITY_BACKEND (set
-	// to pebble in production's unit file). cmd's initConfig also calls
-	// viper.AutomaticEnv(), but the explicit bind keeps the lookup working
-	// where InitConfig runs without it (tests, other entry points). Pebble is the only backend; any other value is refused by
-	// Validate (ValidateActivityBackend).
-	r.SetDefault("activity_backend", "pebble")
-	r.BindEnv("activity_backend", "ACTIVITY_BACKEND") //nolint:errcheck
-
-	// Author catalog (nested under "catalog.*"). Off by default.
-	r.SetDefault("catalog.enabled", false)
-	r.SetDefault("catalog.language", "english")
-	r.SetDefault("catalog.marketplace", "us")
-	r.SetDefault("catalog.harvest_rate_fraction", 0.5)
-	r.SetDefault("catalog.max_products_per_author", 2000)
-
-	// Dedup boilerplate-blocklist extras (nested under "dedup_boilerplate.*",
-	// INIT-4 T5). Empty by default — the compiled-in blocklist in
-	// internal/dedup/boilerplate.go is always active regardless.
-	r.SetDefault("dedup_boilerplate.extra_title_patterns", []string{})
-	r.SetDefault("dedup_boilerplate.extra_prefix_patterns", []string{})
-
-	// Metadata candidate scoring defaults (nested under "metadata_scoring.*").
-	// BindEnv maps env vars so METADATA_SCORING_* overrides even without AutomaticEnv.
-	r.SetDefault("metadata_scoring.embedding_enabled", false)
-	r.SetDefault("metadata_scoring.embedding_min_score", 0.82)
-	r.SetDefault("metadata_scoring.embedding_best_match", 0.88)
-	r.SetDefault("metadata_scoring.llm_enabled", false)
-	r.SetDefault("metadata_scoring.llm_rerank_epsilon", 0.05)
-	r.SetDefault("metadata_scoring.llm_rerank_top_k", 5)
-	// Scoring literals extracted into config (INIT-3-T1) — defaults equal
-	// today's hardcoded literals so behavior is bit-identical until an
-	// operator tunes a knob. See MetadataScoringConfig for field docs.
-	r.SetDefault("metadata_scoring.transcription_title_exact_boost", 2.0)
-	r.SetDefault("metadata_scoring.transcription_title_substr_boost", 1.4)
-	r.SetDefault("metadata_scoring.transcription_author_boost", 1.6)
-	r.SetDefault("metadata_scoring.transcription_narrator_boost", 1.4)
-	r.SetDefault("metadata_scoring.compilation_penalty", 0.15)
-	r.SetDefault("metadata_scoring.rich_metadata_field_bonus", 0.05)
-	r.SetDefault("metadata_scoring.rich_metadata_bonus_cap", 0.15)
-	r.SetDefault("metadata_scoring.f1_min_score", 0.35)
-	r.SetDefault("metadata_scoring.series_name_match_boost", 1.4)
-	r.SetDefault("metadata_scoring.series_number_exact_boost", 2.0)
-	r.SetDefault("metadata_scoring.series_number_wrong_penalty", 0.5)
-	r.SetDefault("metadata_scoring.duration_tier_multipliers", []float64{1.30, 1.20, 1.10, 1.00, 0.75, 0.50})
-	r.SetDefault("metadata_scoring.duration_tier_scores", []float64{20, 15, 10, 0, -10, -20})
-	r.SetDefault("metadata_scoring.bulk_fetch_workers", 4)
-	r.SetDefault("metadata_scoring.write_back_workers", 4)
-
-	// AI backend-mode toggle. Modes default empty (resolved from legacy fields
-	// by EffectiveEmbeddingMode / EffectiveLLMMode). LocalBaseURL defaults to
-	// empty, NOT a real endpoint: it previously hardcoded one developer's own
-	// LAN Ollama host (http://192.168.0.20:11434/v1), which every other
-	// install silently inherited as a dead default. An empty LocalBaseURL
-	// falls through cleanly in EffectiveLLMMode/EffectiveEmbeddingMode to the
-	// next mode (OpenAI if configured, else disabled) rather than selecting
-	// local mode against an unreachable address — see config.go's
-	// EffectiveLLMMode/EffectiveEmbeddingMode. Must never be reinstated as a
-	// shipped default; a real local endpoint belongs in gitignored local
-	// config or an explicit env var (AI_BACKEND_LOCAL_BASE_URL below).
-	r.SetDefault("ai_backend.embedding_mode", "")
-	r.SetDefault("ai_backend.llm_mode", "")
-	r.SetDefault("ai_backend.local_base_url", "")
-	r.SetDefault("ai_backend.local_embedding_model", "bge-m3")
-	r.SetDefault("ai_backend.local_llm_model", "qwen2.5:7b-instruct")
-	// 0, not the real defaults: ResolveAIParseBatch owns the fallback, so there
-	// is exactly one place that decides what "unset" means. Seeding 20/30 here
-	// too would make an operator setting 0 (a plausible "use the default") land
-	// on a different path than an operator omitting the key entirely.
-	r.SetDefault("ai_backend.parse_batch_size", 0)
-	r.SetDefault("ai_backend.parse_batch_timeout_seconds", 0)
-	r.SetDefault("ai_backend.parse_batch_workers", 0)
-	r.BindEnv("ai_backend.embedding_mode", "AI_BACKEND_EMBEDDING_MODE")               //nolint:errcheck
-	r.BindEnv("ai_backend.llm_mode", "AI_BACKEND_LLM_MODE")                           //nolint:errcheck
-	r.BindEnv("ai_backend.local_base_url", "AI_BACKEND_LOCAL_BASE_URL")               //nolint:errcheck
-	r.BindEnv("ai_backend.local_embedding_model", "AI_BACKEND_LOCAL_EMBEDDING_MODEL") //nolint:errcheck
-	r.BindEnv("ai_backend.local_llm_model", "AI_BACKEND_LOCAL_LLM_MODEL")             //nolint:errcheck
-	r.BindEnv("ai_backend.parse_batch_size", "AI_BACKEND_PARSE_BATCH_SIZE")           //nolint:errcheck
-	r.BindEnv("ai_backend.parse_batch_timeout_seconds",                               //nolint:errcheck
-		"AI_BACKEND_PARSE_BATCH_TIMEOUT_SECONDS")
-	r.BindEnv("ai_backend.parse_batch_workers", "AI_BACKEND_PARSE_BATCH_WORKERS") //nolint:errcheck
-
-	r.BindEnv("metadata_scoring.embedding_enabled", "METADATA_SCORING_EMBEDDING_ENABLED")                               //nolint:errcheck
-	r.BindEnv("metadata_scoring.embedding_min_score", "METADATA_SCORING_EMBEDDING_MIN_SCORE")                           //nolint:errcheck
-	r.BindEnv("metadata_scoring.embedding_best_match", "METADATA_SCORING_EMBEDDING_BEST_MATCH")                         //nolint:errcheck
-	r.BindEnv("metadata_scoring.llm_enabled", "METADATA_SCORING_LLM_ENABLED")                                           //nolint:errcheck
-	r.BindEnv("metadata_scoring.llm_rerank_epsilon", "METADATA_SCORING_LLM_RERANK_EPSILON")                             //nolint:errcheck
-	r.BindEnv("metadata_scoring.llm_rerank_top_k", "METADATA_SCORING_LLM_RERANK_TOP_K")                                 //nolint:errcheck
-	r.BindEnv("metadata_scoring.transcription_title_exact_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_EXACT_BOOST")   //nolint:errcheck
-	r.BindEnv("metadata_scoring.transcription_title_substr_boost", "METADATA_SCORING_TRANSCRIPTION_TITLE_SUBSTR_BOOST") //nolint:errcheck
-	r.BindEnv("metadata_scoring.transcription_author_boost", "METADATA_SCORING_TRANSCRIPTION_AUTHOR_BOOST")             //nolint:errcheck
-	r.BindEnv("metadata_scoring.transcription_narrator_boost", "METADATA_SCORING_TRANSCRIPTION_NARRATOR_BOOST")         //nolint:errcheck
-	r.BindEnv("metadata_scoring.compilation_penalty", "METADATA_SCORING_COMPILATION_PENALTY")                           //nolint:errcheck
-	r.BindEnv("metadata_scoring.rich_metadata_field_bonus", "METADATA_SCORING_RICH_METADATA_FIELD_BONUS")               //nolint:errcheck
-	r.BindEnv("metadata_scoring.rich_metadata_bonus_cap", "METADATA_SCORING_RICH_METADATA_BONUS_CAP")                   //nolint:errcheck
-	r.BindEnv("metadata_scoring.f1_min_score", "METADATA_SCORING_F1_MIN_SCORE")                                         //nolint:errcheck
-	r.BindEnv("metadata_scoring.series_name_match_boost", "METADATA_SCORING_SERIES_NAME_MATCH_BOOST")                   //nolint:errcheck
-	r.BindEnv("metadata_scoring.series_number_exact_boost", "METADATA_SCORING_SERIES_NUMBER_EXACT_BOOST")               //nolint:errcheck
-	r.BindEnv("metadata_scoring.series_number_wrong_penalty", "METADATA_SCORING_SERIES_NUMBER_WRONG_PENALTY")           //nolint:errcheck
-	r.BindEnv("metadata_scoring.bulk_fetch_workers", "METADATA_SCORING_BULK_FETCH_WORKERS")                             //nolint:errcheck
-	r.BindEnv("metadata_scoring.write_back_workers", "METADATA_SCORING_WRITE_BACK_WORKERS")                             //nolint:errcheck
-
-	// Unified dedup scoring defaults (SPEC 1 §3–4, T011).
-	// Read by internal/dedup/unified.LoadScoreConfig via Viper as the layer
-	// under the persisted dedup.signals block; DedupSignalConfig.ScoreConfig
-	// (dedup_score_config.go) hands the merged result to the live engine
-	// (registry_wire.go at startup; the UpdateService dedup-score sink on
-	// PUT /api/v1/config and dedup.calibrate-composite apply at runtime).
-	// Overridable per-kind in config.yaml under dedup.signals.<kind>.*
-	r.SetDefault("dedup.signals.band_certain_min", 97.0)
-	r.SetDefault("dedup.signals.band_high_min", 90.0)
-	r.SetDefault("dedup.signals.band_medium_min", 75.0)
-	r.SetDefault("dedup.signals.band_review_min", 60.0)
-	// Per-kind boost defaults for supporting signals.
-	r.SetDefault("dedup.signals.duration.boost", 4.0)
-	r.SetDefault("dedup.signals.folder_path.boost", 3.0)
-
-	// Sourced from internal/audioext so the shipped default and every
-	// downstream predicate cannot drift apart. See that package's doc comment.
-	r.SetDefault("supported_extensions", audioext.Default())
-	r.SetDefault("exclude_patterns", []string{})
-}
-
-// configFromViper builds a Config from every key v holds: the one place a viper
-// value (shipped default, config file, environment) becomes a Config field.
-// InitConfig calls it on the process-wide viper; factoryDefaultConfigForTest on a
-// private viper holding only the defaults.
-func configFromViper(v *viper.Viper) Config {
-	var cfg Config
-	c := &cfg
-
-	// 🔴 len > 0, NOT viper.IsSet. IsSet is true for `supported_extensions: []`
-	// in config.yaml, so the old guard let a user's empty list through and
-	// AppConfig.SupportedExtensions became empty — after which every
-	// audioext.Resolve call falls back and every raw reader sees nothing.
-	// internal/config/persistence.go already guards its own load with len > 0;
-	// this path had simply never been given the same treatment.
-	supportedExtensions := audioext.Default()
-	if configured := v.GetStringSlice("supported_extensions"); len(configured) > 0 {
-		supportedExtensions = configured
-	}
-	excludePatterns := v.GetStringSlice("exclude_patterns")
-
-	// WHY Mutate: whole-struct init; correct even if tests call InitConfig concurrently.
-	*c = Config{
-		// Core paths
-		RootDir:       v.GetString("root_dir"),
-		DatabasePath:  v.GetString("database_path"),
-		DatabaseType:  v.GetString("database_type"),
-		PlaylistDir:   v.GetString("playlist_dir"),
-		SetupComplete: v.GetBool("setup_complete"),
-
-		// Library organization
-		OrganizationStrategy:    v.GetString("organization_strategy"),
-		ScanOnStartup:           v.GetBool("scan_on_startup"),
-		AutoOrganize:            v.GetBool("auto_organize"),
-		AutoScanEnabled:         v.GetBool("auto_scan_enabled"),
-		AutoScanDebounceSeconds: v.GetInt("auto_scan_debounce_seconds"),
-		FolderNamingPattern:     v.GetString("folder_naming_pattern"),
-		FileNamingPattern:       v.GetString("file_naming_pattern"),
-		CreateBackups:           v.GetBool("create_backups"),
-		BackupDir:               v.GetString("backup_dir"),
-		BackupMaxTotalBytes:     v.GetInt64("backup_max_total_bytes"),
-		BackupCompression:       v.GetString("backup_compression"),
-		BackupCompressionLevel:  v.GetInt("backup_compression_level"),
-
-		// Storage quotas
-		EnableDiskQuota:  v.GetBool("enable_disk_quota"),
-		DiskQuotaPercent: v.GetInt("disk_quota_percent"),
-		EnableUserQuotas: v.GetBool("enable_user_quotas"),
-
-		// Metadata
-		WriteBackMetadata: v.GetBool("write_back_metadata"),
-		EmbedCoverArt:     v.GetBool("embed_cover_art"),
-
-		// Open Library dumps
-		OpenLibraryDumpEnabled: v.GetBool("openlibrary_dump_enabled"),
-		OpenLibraryDumpDir:     v.GetString("openlibrary_dump_dir"),
-
-		// Hardcover.app
-		HardcoverAPIToken: v.GetString("hardcover_api_token"),
-
-		// Google Books
-		GoogleBooksAPIKey: v.GetString("google_books_api_key"),
-
-		// Read explicitly: this literal is the ONLY place viper values reach
-		// AppConfig, and omitting the key left it nil even on an install
-		// with no stored blob, so the shipped default never took effect.
-		EnabledSortIndexes: v.GetStringSlice("enabled_sort_indexes"),
-
-		// AI parsing
-		EnableAIParsing:    v.GetBool("enable_ai_parsing"),
-		AIEndpointsRouting: v.GetBool("ai_endpoints_routing"),
-		// Usually UI-managed through the stored blob, which wins on load;
-		// read here so a config-file list is not silently dropped.
-		AIEndpoints:    viperDecodeJSON[[]AIEndpoint](v, "ai_endpoints"),
-		OpenAIAPIKey:   v.GetString("openai_api_key"),
-		AcoustIDAPIKey: v.GetString("acoustid_api_key"),
-
-		// Activity-log store backend. Read from viper here so config.yaml's
-		// activity_backend AND the ACTIVITY_BACKEND env (BindEnv above) reach
-		// the field, and a leftover "sqlite" is refused by Validate rather
-		// than dropped — the mapstructure tag is inert because this config is
-		// built by explicit GetString calls, not viper.Unmarshal. Also
-		// re-applied in applyEnvAuthoritativeConfig so the env value survives
-		// the DB-blob config overlay (see the ABS keys there).
-		ActivityBackend: v.GetString("activity_backend"),
-
-		FPParallelWorkers:                    v.GetInt("fp_parallel_workers"),
-		FingerprintRemoteWorkersEnabled:      v.GetBool("fingerprint_remote_workers_enabled"),
-		FingerprintWorkerToolVersions:        v.GetStringSlice("fingerprint_worker_tool_versions"),
-		FingerprintWindowReferenceTools:      v.GetString("fingerprint_window_reference_tools"),
-		FingerprintLengthSec:                 v.GetInt("fingerprint_length_sec"),
-		WhisperClipCacheDir:                  v.GetString("whisper_clip_cache_dir"),
-		WhisperBatchSleepMS:                  v.GetInt("whisper_batch_sleep_ms"),
-		WhisperBatchSize:                     v.GetInt("whisper_batch_size"),
-		WhisperMaxInFlight:                   v.GetInt("whisper_max_in_flight"),
-		OpenAIBaseURL:                        v.GetString("openai_base_url"),
-		ABSAuthProbeEnabled:                  v.GetBool("abs_auth_probe_enabled"),
-		AuthorityEvidenceEnabled:             v.GetBool("authority_evidence_enabled"),
-		RetireVersionsApplyEnabled:           v.GetBool("retire_versions_apply_enabled"),
-		KeptSweepApplyEnabled:                v.GetBool("kept_sweep_apply_enabled"),
-		ABSItunesPositionBackfillUserID:      v.GetString("abs_itunes_position_backfill_user_id"),
-		OTelExporterOTLPEndpoint:             v.GetString("otel_exporter_otlp_endpoint"),
-		OTelMetricsOTLPEndpoint:              v.GetString("otel_metrics_otlp_endpoint"),
-		OTelMetricsOTLPInterval:              v.GetString("otel_metrics_otlp_interval"),
-		OTelMetricsOTLPInsecure:              v.GetBool("otel_metrics_otlp_insecure"),
-		TelemetryEnvironment:                 v.GetString("telemetry_environment"),
-		ListWarmerHeapDeltaMB:                v.GetInt("list_warmer_heap_delta_mb"),
-		ListWarmerTrickleIntervalMS:          v.GetInt("list_warmer_trickle_interval_ms"),
-		LibraryCountsCacheMinIntervalSeconds: v.GetInt("library_counts_cache_min_interval_seconds"),
-		BleveDescriptionMaxChars:             v.GetInt("bleve_description_max_chars"),
-		MetadataReviewModel:                  v.GetString("metadata_review_model"),
-		FilenameParseModel:                   v.GetString("filename_parse_model"),
-		CoverArtModel:                        v.GetString("cover_art_model"),
-
-		// Performance
-		ConcurrentScans:                     v.GetInt("concurrent_scans"),
-		ScanProgressEvery:                   v.GetInt("scan_progress_every"),
-		ScanStandDownGraceSeconds:           v.GetInt("scan_standdown_grace_seconds"),
-		ChapterConsolidationThresholdMin:    v.GetInt("chapter_consolidation_threshold_min"),
-		RepairChapterMaxMin:                 v.GetInt("repair_chapter_max_min"),
-		FragmentWindowContainmentMin:        v.GetFloat64("fragment_window_containment_min"),
-		MetadataCandidateFetchWorkers:       v.GetInt("metadata_candidate_fetch_workers"),
-		IdentificationAdvanceEnabled:        v.GetBool("identification_advance_enabled"),
-		GoogleBooksFallbackDailyLimit:       v.GetInt("google_books_fallback_daily_limit"),
-		GoogleBooksDailyLimit:               v.GetInt("google_books_daily_limit"),
-		GoogleBooksBackgroundDailyLimit:     v.GetInt("google_books_background_daily_limit"),
-		CoalesceShatteredSiblings:           v.GetBool("coalesce_shattered_siblings"),
-		OperationTimeoutMinutes:             v.GetInt("operation_timeout_minutes"),
-		DBCensusExactReadMBPerSec:           v.GetInt("db_census_exact_read_mb_per_sec"),
-		DBCensusExactCooldownHours:          v.GetInt("db_census_exact_cooldown_hours"),
-		MinBookSizeBytes:                    v.GetInt64("min_book_size_bytes"),
-		MinRescanAgeHours:                   v.GetInt("min_rescan_age_hours"),
-		APIRateLimitPerMinute:               v.GetInt("api_rate_limit_per_minute"),
-		JSONBodyLimitMB:                     v.GetInt("json_body_limit_mb"),
-		UploadBodyLimitMB:                   v.GetInt("upload_body_limit_mb"),
-		MasterListRetention:                 v.GetInt("master_list_retention"),
-		EnableAuth:                          v.GetBool("enable_auth"),
-		ActivityLogNightlyCompactionEnabled: v.GetBool("activity_log_nightly_compaction_enabled"),
-		ActivityLogFullDetailDays:           v.GetInt("activity_log_full_detail_days"),
-		ActivityLogCompactionDays:           v.GetInt("activity_log_compaction_days"),
-		ActivityLogRetentionChangeDays:      v.GetInt("activity_log_retention_change_days"),
-		ActivityLogRetentionDebugDays:       v.GetInt("activity_log_retention_debug_days"),
-		LogRetentionDays:                    v.GetInt("log_retention_days"),
-		OperationLogRetentionDays:           v.GetInt("operation_log_retention_days"),
-		AIJournalRetentionDays:              v.GetInt("ai_journal_retention_days"),
-		EnableRateLimit:                     v.GetBool("enable_rate_limit"),
-		ReviewApplyEnabled:                  v.GetBool("review_apply_enabled"),
-		BulkApplyMaxItems:                   v.GetInt("bulk_apply_max_items"),
-		BasicAuthEnabled:                    v.GetBool("basic_auth_enabled"),
-		BasicAuthUsername:                   v.GetString("basic_auth_username"),
-		BasicAuthPassword:                   v.GetString("basic_auth_password"),
-
-		// OAuth / Cloudflare Access. These are environment-authoritative in prod
-		// (systemd Environment= drop-in) but read here via viper like everything
-		// else — the BindEnv bindings above make viper.GetX honor the env. The DB
-		// config-blob load later overwrites this whole struct, so the env values are
-		// re-applied on top of the blob by applyEnvAuthoritativeConfig (persistence.go).
-		OAuthEnabled:            v.GetBool("oauth_enabled"),
-		OAuthGithubClientID:     v.GetString("oauth_github_client_id"),
-		OAuthGithubClientSecret: v.GetString("oauth_github_client_secret"),
-		OAuthGoogleClientID:     v.GetString("oauth_google_client_id"),
-		OAuthGoogleClientSecret: v.GetString("oauth_google_client_secret"),
-		OAuthRedirectBaseURL:    v.GetString("oauth_redirect_base_url"),
-		OAuthAllowedEmails:      v.GetString("oauth_allowed_emails"),
-		OAuthDefaultRole:        v.GetString("oauth_default_role"),
-		CFAccessTeamDomain:      v.GetString("cf_access_team_domain"),
-		CFAccessAUD:             v.GetString("cf_access_aud"),
-		OwnerEmail:              v.GetString("owner_email"),
-		WhisperRemoteURL:        v.GetString("whisper_remote_url"),
-		WhisperEndpoints:        ParseWhisperEndpoints(v.GetString("whisper_endpoints")),
-		WhisperRequires:         ParseLabelList(v.GetString("whisper_requires")),
-
-		// Audiobookshelf sync API (feature-flagged OFF by default).
-		ABSAPIEnabled:       v.GetBool("abs_api_enabled"),
-		ABSAuthModes:        v.GetString("abs_auth_modes"),
-		ABSJWTSecret:        v.GetString("abs_jwt_secret"),
-		ABSAccessTokenTTL:   v.GetString("abs_access_token_ttl"),
-		ABSRefreshTokenTTL:  v.GetString("abs_refresh_token_ttl"),
-		ABSRefreshGrace:     v.GetString("abs_refresh_grace"),
-		ABSSessionMaxTTL:    v.GetString("abs_session_max_ttl"),
-		ABSServerVersion:    v.GetString("abs_server_version"),
-		ABSDefaultLibraryID: v.GetString("abs_default_library_id"),
-
-		// Memory management
-		CacheInvalidateOnBookUpdate: v.GetBool("cache_invalidate_on_book_update"),
-		MetadataFetchCacheTTLDays:   v.GetInt("metadata_fetch_cache_ttl_days"),
-		BootstrapKeyTTL:             v.GetString("bootstrap_key_ttl"),
-		BootstrapKeyTTLDays:         v.GetInt("bootstrap_key_ttl_days"),
-
-		// Shared provider-answer cache (metadata_fetch.*)
-		MetadataFetch: MetadataFetchConfig{
-			SharedCache:            v.GetBool("metadata_fetch.shared_cache"),
-			CatalogStage:           v.GetBool("metadata_fetch.catalog_stage"),
-			FolderParsePersonTitle: v.GetBool("metadata_fetch.folder_parse_person_title"),
-			NegativeTTLDays: MetadataFetchNegativeTTLDays{
-				Audible:     v.GetInt("metadata_fetch.negative_ttl_days.audible"),
-				Audnexus:    v.GetInt("metadata_fetch.negative_ttl_days.audnexus"),
-				OpenLibrary: v.GetInt("metadata_fetch.negative_ttl_days.openlibrary"),
-				Google:      v.GetInt("metadata_fetch.negative_ttl_days.google"),
-			},
-		},
-
-		// Lifecycle / retention
-		PurgeSoftDeletedAfterDays:   v.GetInt("purge_soft_deleted_after_days"),
-		PurgeSoftDeletedDeleteFiles: v.GetBool("purge_soft_deleted_delete_files"),
-		BackupRetentionDays:         v.GetInt("backup_retention_days"),
-
-		// Logging
-		LogLevel: v.GetString("log_level"),
-
-		// Auto-update
-		AutoUpdate: AutoUpdateConfig{
-			Enabled:      v.GetBool("auto_update.enabled"),
-			Channel:      v.GetString("auto_update.channel"),
-			CheckMinutes: v.GetInt("auto_update.check_minutes"),
-			WindowStart:  v.GetInt("auto_update.window_start"),
-			WindowEnd:    v.GetInt("auto_update.window_end"),
-		},
-
-		// Maintenance window (nested sub-struct)
-		Maintenance: MaintenanceConfig{
-			Enabled:              v.GetBool("maintenance.enabled"),
-			WindowStart:          v.GetInt("maintenance.window_start"),
-			WindowEnd:            v.GetInt("maintenance.window_end"),
-			DedupRefresh:         v.GetBool("maintenance.dedup_refresh"),
-			SeriesPrune:          v.GetBool("maintenance.series_prune"),
-			AuthorSplit:          v.GetBool("maintenance.author_split"),
-			TombstoneCleanup:     v.GetBool("maintenance.tombstone_cleanup"),
-			Reconcile:            v.GetBool("maintenance.reconcile"),
-			PurgeDeleted:         v.GetBool("maintenance.purge_deleted"),
-			PurgeOldLogs:         v.GetBool("maintenance.purge_old_logs"),
-			DbOptimize:           v.GetBool("maintenance.db_optimize"),
-			LibraryScan:          v.GetBool("maintenance.library_scan"),
-			LibraryOrganize:      v.GetBool("maintenance.library_organize"),
-			MetadataRefresh:      v.GetBool("maintenance.metadata_refresh"),
-			LibrarySizeRefresh:   v.GetBool("maintenance.library_size_refresh"),
-			AcoustIDOnlineLookup: v.GetBool("maintenance.acoustid_online_lookup"),
-			AcoustIDNightlyLimit: v.GetInt("maintenance.acoustid_nightly_limit"),
-			AcoustIDBackfill:     v.GetBool("maintenance.acoustid_backfill"),
-		},
-
-		// iTunes import (nested sub-struct)
-		ITunes: ITunesConfig{
-			LibraryITLPath:  v.GetString("itunes.library_write_path"),
-			LibraryReadPath: v.GetString("itunes.library_read_path"),
-			PathTrimEnabled: v.GetBool("itunes.path_trim_enabled"),
-			WindowsRootPath: v.GetString("itunes.windows_root_path"),
-			MediaRoot:       v.GetString("itunes.media_root"),
-			// Usually UI-managed through the stored blob, which wins on load;
-			// read here so a config-file list is not silently dropped.
-			PathMappings: viperDecodeJSON[[]ITunesPathMap](v, "itunes.path_mappings"),
-			Libraries: LibrarySet{
-				Original: LibraryRef{
-					ITLPath: v.GetString("itunes.libraries.original.itl_path"),
-					XMLPath: v.GetString("itunes.libraries.original.xml_path"),
-					Frozen:  v.GetBool("itunes.libraries.original.frozen"),
-				},
-				AO: LibraryRef{
-					ITLPath: v.GetString("itunes.libraries.ao.itl_path"),
-					XMLPath: v.GetString("itunes.libraries.ao.xml_path"),
-					Frozen:  v.GetBool("itunes.libraries.ao.frozen"),
-				},
-				PointedAt:    v.GetString("itunes.libraries.pointed_at"),
-				ImportSource: v.GetString("itunes.libraries.import_source"),
-			},
-		},
-
-		// Download client integration
-		DownloadClient: DownloadClientConfig{
-			Torrent: TorrentClientConfig{
-				Type: v.GetString("download_client.torrent.type"),
-				Deluge: DelugeConfig{
-					Host:     v.GetString("download_client.torrent.deluge.host"),
-					Port:     v.GetInt("download_client.torrent.deluge.port"),
-					Username: v.GetString("download_client.torrent.deluge.username"),
-					Password: v.GetString("download_client.torrent.deluge.password"),
-				},
-			},
-		},
-
-		// Path formatting & apply pipeline
-		AutoRenameOnApply:       v.GetBool("auto_rename_on_apply"),
-		AutoWriteTagsOnApply:    v.GetBool("auto_write_tags_on_apply"),
-		VerifyAfterWrite:        v.GetBool("verify_after_write"),
-		WriteStartupReadOnlyKey: v.GetBool("write_startup_readonly_key"),
-
-		SupportedExtensions: supportedExtensions,
-		ExcludePatterns:     excludePatterns,
-
-		// Deluge integration. Read here so the config file and environment
-		// reach it. A value they supply is locked and beats the stored blob
-		// on load (applyEnvAuthoritativeConfig); with neither set the blob
-		// wins, like every other UI-managed key.
-		DelugeWebURL:           v.GetString("deluge_web_url"),
-		DelugeWebPassword:      v.GetString("deluge_web_password"),
-		DelugeDiscoveryLabel:   v.GetString("deluge_discovery_label"),
-		DelugeDiscoveryEnabled: v.GetBool("deluge_discovery_enabled"),
-		DelugeMoveEnabled:      v.GetBool("deluge_move_enabled"),
-		ProtectedPaths:         viperPathList(v, "protected_paths"),
-
-		// Usually UI-managed through the stored blob, which wins on load;
-		// read here so a config-file value is not silently dropped.
-		PathAliases: viperDecodeJSON[[]PathAlias](v, "path_aliases"),
-		Plugins:     viperDecodeJSON[map[string]PluginConfig](v, "plugins"),
-
-		DisablePerUserSearchFilters: v.GetBool("disable_per_user_search_filters"),
-
-		// Embedding pipeline (nested sub-struct)
-		Embedding: EmbeddingConfig{
-			Enabled:               v.GetBool("embedding.enabled"),
-			Model:                 v.GetString("embedding.model"),
-			Dimensions:            v.GetInt("embedding.dimensions"),
-			BaseURL:               v.GetString("embedding.base_url"),
-			VectorBackend:         v.GetString("embedding.vector_backend"),
-			RequestTimeoutSeconds: v.GetInt("embedding.request_timeout_seconds"),
-		},
-
-		// Dedup thresholds + behaviour (nested sub-struct)
-		Dedup: DedupConfig{
-			BookHighThreshold:          v.GetFloat64("dedup.book_high_threshold"),
-			BookLowThreshold:           v.GetFloat64("dedup.book_low_threshold"),
-			AuthorHighThreshold:        v.GetFloat64("dedup.author_high_threshold"),
-			AuthorLowThreshold:         v.GetFloat64("dedup.author_low_threshold"),
-			AutoMergeEnabled:           v.GetBool("dedup.auto_merge_enabled"),
-			EmbeddingsEnabled:          v.GetBool("dedup.embeddings_enabled"),
-			LLMAutoMergeHighConfidence: v.GetBool("dedup.llm_auto_merge_high_confidence"),
-			AutoResolveEnabled:         v.GetBool("dedup.auto_resolve_enabled"),
-			OnImportViaScheduler:       v.GetBool("dedup.on_import_via_scheduler"),
-			ReviewModel:                v.GetString("dedup.review_model"),
-			ChromemLazy:                v.GetBool("dedup.chromem_lazy"),
-			EmbeddingThresholdsByModel: viperDecodeJSON[map[string]EmbeddingModelThresholds](v, "dedup.embedding_thresholds_by_model"),
-			Signals: DedupSignalConfig{
-				BandCertainMin: v.GetFloat64("dedup.signals.band_certain_min"),
-				BandHighMin:    v.GetFloat64("dedup.signals.band_high_min"),
-				BandMediumMin:  v.GetFloat64("dedup.signals.band_medium_min"),
-				BandReviewMin:  v.GetFloat64("dedup.signals.band_review_min"),
-				// Keyed by signal kind, a lower-case identifier (not a
-				// name whose case matters), so the keys are folded the
-				// way viper folds every other dedup.signals.* key: a
-				// config-file "Exact_File:" still names exact_file.
-				Confidence: lowerMapKeys(viperDecodeJSON[map[string]DedupKindConfidence](v, "dedup.signals.confidence")),
-			},
-		},
-
-		// Author catalog (feature flag + harvest settings).
-		Catalog: CatalogConfig{
-			Enabled:              v.GetBool("catalog.enabled"),
-			Language:             v.GetString("catalog.language"),
-			Marketplace:          v.GetString("catalog.marketplace"),
-			HarvestRateFraction:  v.GetFloat64("catalog.harvest_rate_fraction"),
-			MaxProductsPerAuthor: v.GetInt("catalog.max_products_per_author"),
-		},
-
-		// Dedup boilerplate-blocklist extras (nested sub-struct, INIT-4 T5).
-		// Empty by default — see DedupBoilerplateConfig.
-		DedupBoilerplate: DedupBoilerplateConfig{
-			ExtraTitlePatterns:  v.GetStringSlice("dedup_boilerplate.extra_title_patterns"),
-			ExtraPrefixPatterns: v.GetStringSlice("dedup_boilerplate.extra_prefix_patterns"),
-		},
-
-		// Metadata candidate scoring + tag-write backup policy (nested sub-struct)
-		MetadataScoring: MetadataScoringConfig{
-			EmbeddingEnabled:   v.GetBool("metadata_scoring.embedding_enabled"),
-			EmbeddingMinScore:  v.GetFloat64("metadata_scoring.embedding_min_score"),
-			EmbeddingBestMatch: v.GetFloat64("metadata_scoring.embedding_best_match"),
-			LLMEnabled:         v.GetBool("metadata_scoring.llm_enabled"),
-			LLMRerankEpsilon:   v.GetFloat64("metadata_scoring.llm_rerank_epsilon"),
-			LLMRerankTopK:      v.GetInt("metadata_scoring.llm_rerank_top_k"),
-
-			TranscriptionTitleExactBoost:  v.GetFloat64("metadata_scoring.transcription_title_exact_boost"),
-			TranscriptionTitleSubstrBoost: v.GetFloat64("metadata_scoring.transcription_title_substr_boost"),
-			TranscriptionAuthorBoost:      v.GetFloat64("metadata_scoring.transcription_author_boost"),
-			TranscriptionNarratorBoost:    v.GetFloat64("metadata_scoring.transcription_narrator_boost"),
-
-			CompilationPenalty:     new(v.GetFloat64("metadata_scoring.compilation_penalty")),
-			RichMetadataFieldBonus: v.GetFloat64("metadata_scoring.rich_metadata_field_bonus"),
-			RichMetadataBonusCap:   new(v.GetFloat64("metadata_scoring.rich_metadata_bonus_cap")),
-			F1MinScore:             new(v.GetFloat64("metadata_scoring.f1_min_score")),
-
-			SeriesNameMatchBoost:     v.GetFloat64("metadata_scoring.series_name_match_boost"),
-			SeriesNumberExactBoost:   v.GetFloat64("metadata_scoring.series_number_exact_boost"),
-			SeriesNumberWrongPenalty: v.GetFloat64("metadata_scoring.series_number_wrong_penalty"),
-
-			DurationTierMultipliers: getFloat64Slice(v, "metadata_scoring.duration_tier_multipliers"),
-			DurationTierScores:      getFloat64Slice(v, "metadata_scoring.duration_tier_scores"),
-
-			BulkFetchWorkers:    v.GetInt("metadata_scoring.bulk_fetch_workers"),
-			SourceFanoutWorkers: v.GetInt("metadata_scoring.source_fanout_workers"),
-			WriteBackWorkers:    v.GetInt("metadata_scoring.write_back_workers"),
-		},
-
-		// AI backend-mode toggle (nested sub-struct). Modes default empty
-		// (resolved by EffectiveEmbeddingMode / EffectiveLLMMode); local
-		// endpoint coordinates carry Ollama-style defaults.
-		AIBackend: AIBackendConfig{
-			EmbeddingMode:            v.GetString("ai_backend.embedding_mode"),
-			LLMMode:                  v.GetString("ai_backend.llm_mode"),
-			LocalBaseURL:             v.GetString("ai_backend.local_base_url"),
-			LocalEmbeddingModel:      v.GetString("ai_backend.local_embedding_model"),
-			LocalLLMModel:            v.GetString("ai_backend.local_llm_model"),
-			ParseBatchSize:           v.GetInt("ai_backend.parse_batch_size"),
-			ParseBatchTimeoutSeconds: v.GetInt("ai_backend.parse_batch_timeout_seconds"),
-			ParseBatchWorkers:        v.GetInt("ai_backend.parse_batch_workers"),
-		},
-
-		Search: SearchConfig{
-			ResultCache: SearchResultCacheConfig{
-				Enabled:     v.GetBool("search.result_cache.enabled"),
-				MaxBytes:    v.GetInt64("search.result_cache.max_bytes"),
-				WaitSeconds: v.GetInt("search.result_cache.wait_seconds"),
-			},
-		},
-
-		// Scheduled background tasks (nested sub-struct)
-		Scheduled: ScheduledTasksConfig{
-			LibraryScan: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.library_scan.enabled"),
-				Interval:  v.GetInt("scheduled.library_scan.interval"),
-				OnStartup: v.GetBool("scheduled.library_scan.on_startup"),
-			},
-			LibraryScanFull: LibraryScanFullConfig{
-				Enabled:     v.GetBool("scheduled.library_scan_full.enabled"),
-				Interval:    v.GetInt("scheduled.library_scan_full.interval"),
-				PeriodHours: v.GetInt("scheduled.library_scan_full.period_hours"),
-			},
-			DedupRefresh: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.dedup_refresh.enabled"),
-				Interval:  v.GetInt("scheduled.dedup_refresh.interval"),
-				OnStartup: v.GetBool("scheduled.dedup_refresh.on_startup"),
-			},
-			AcoustIDBackfill: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.acoustid_backfill.enabled"),
-				Interval:  v.GetInt("scheduled.acoustid_backfill.interval"),
-				OnStartup: v.GetBool("scheduled.acoustid_backfill.on_startup"),
-			},
-			// For these four only Interval gates the task (0 turns it off);
-			// Enabled/OnStartup are read so the struct is uniform and a
-			// config-file value reaches GET, not because a consumer reads them.
-			MetadataUpgrade: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.metadata_upgrade.enabled"),
-				Interval:  v.GetInt("scheduled.metadata_upgrade.interval"),
-				OnStartup: v.GetBool("scheduled.metadata_upgrade.on_startup"),
-			},
-			ASINBackfill: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.asin_backfill.enabled"),
-				Interval:  v.GetInt("scheduled.asin_backfill.interval"),
-				OnStartup: v.GetBool("scheduled.asin_backfill.on_startup"),
-			},
-			CandidateFetch: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.candidate_fetch.enabled"),
-				Interval:  v.GetInt("scheduled.candidate_fetch.interval"),
-				OnStartup: v.GetBool("scheduled.candidate_fetch.on_startup"),
-			},
-			CatalogHarvest: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.catalog_harvest.enabled"),
-				Interval:  v.GetInt("scheduled.catalog_harvest.interval"),
-				OnStartup: v.GetBool("scheduled.catalog_harvest.on_startup"),
-			},
-			LabelRefinement: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.label_refinement.enabled"),
-				Interval:  v.GetInt("scheduled.label_refinement.interval"),
-				OnStartup: v.GetBool("scheduled.label_refinement.on_startup"),
-			},
-			AuthorSplit: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.author_split.enabled"),
-				Interval:  v.GetInt("scheduled.author_split.interval"),
-				OnStartup: v.GetBool("scheduled.author_split.on_startup"),
-			},
-			DbOptimize: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.db_optimize.enabled"),
-				Interval:  v.GetInt("scheduled.db_optimize.interval"),
-				OnStartup: v.GetBool("scheduled.db_optimize.on_startup"),
-			},
-			MetadataRefresh: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.metadata_refresh.enabled"),
-				Interval:  v.GetInt("scheduled.metadata_refresh.interval"),
-				OnStartup: v.GetBool("scheduled.metadata_refresh.on_startup"),
-			},
-			ResolveProductionAuthors: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.resolve_production_authors.enabled"),
-				Interval:  v.GetInt("scheduled.resolve_production_authors.interval"),
-				OnStartup: v.GetBool("scheduled.resolve_production_authors.on_startup"),
-			},
-			SeriesPrune: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.series_prune.enabled"),
-				Interval:  v.GetInt("scheduled.series_prune.interval"),
-				OnStartup: v.GetBool("scheduled.series_prune.on_startup"),
-			},
-			AIDedupBatch: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.ai_dedup_batch.enabled"),
-				Interval:  v.GetInt("scheduled.ai_dedup_batch.interval"),
-				OnStartup: v.GetBool("scheduled.ai_dedup_batch.on_startup"),
-			},
-			Reconcile: ScheduledTaskConfig{
-				Enabled:   v.GetBool("scheduled.reconcile.enabled"),
-				Interval:  v.GetInt("scheduled.reconcile.interval"),
-				OnStartup: v.GetBool("scheduled.reconcile.on_startup"),
-			},
-		},
-	}
-
-	// Invitation email and guest access (environment-only, json:"-").
-	applyInviteEnv(c, v)
-
-	// Managed external-tool lifecycle. These were hard-coded constants, so a
-	// config-file tools: section was ignored; they are now viper keys whose
-	// defaults are the same constants (see the tools.* SetDefault calls).
-	c.Tools = tools.ToolsConfig{
-		ManagedDir: v.GetString("tools.managed_dir"),
-		Ollama: tools.ToolConfig{
-			Mode:       tools.ToolMode(v.GetString("tools.ollama.mode")),
-			CustomPath: v.GetString("tools.ollama.custom_path"),
-		},
-		Fpcalc: tools.ToolConfig{
-			Mode:       tools.ToolMode(v.GetString("tools.fpcalc.mode")),
-			CustomPath: v.GetString("tools.fpcalc.custom_path"),
-		},
-		AllowPeriodicOllama: v.GetBool("tools.allow_periodic_ollama"),
-		OllamaDebounceMin:   v.GetInt("tools.ollama_debounce_min"),
-	}
-
-	// Default Open Library dump dir to {RootDir}/openlibrary-dumps if not set
-	if c.OpenLibraryDumpDir == "" && c.RootDir != "" {
-		c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
-	}
-
-	// API Keys (Goodreads deprecated Dec 2020, removed)
-
-	// Load metadata sources from config or use defaults
-	if v.IsSet("metadata_sources") {
-		v.UnmarshalKey("metadata_sources", &c.MetadataSources)
-	} else {
-		// Set default metadata sources
-		c.MetadataSources = []MetadataSource{
-			{
-				ID:           "audible",
-				Name:         "Audible",
-				Enabled:      true,
-				Priority:     1,
-				RequiresAuth: false,
-				Credentials:  make(map[string]string),
-			},
-			{
-				ID:           "openlibrary",
-				Name:         "Open Library",
-				Enabled:      true,
-				Priority:     2,
-				RequiresAuth: false,
-				Credentials:  make(map[string]string),
-			},
-			{
-				ID:           "audnexus",
-				Name:         "Audnexus",
-				Enabled:      true,
-				Priority:     3,
-				RequiresAuth: false,
-				Credentials:  make(map[string]string),
-			},
-			{
-				ID:           "google-books",
-				Name:         "Google Books",
-				Enabled:      false,
-				Priority:     4,
-				RequiresAuth: true,
-				Credentials: map[string]string{
-					"apiKey": "",
-				},
-			},
-			{
-				ID:           "hardcover",
-				Name:         "Hardcover",
-				Enabled:      false,
-				Priority:     5,
-				RequiresAuth: true,
-				Credentials:  make(map[string]string),
-			},
-			{
-				ID:           "wikipedia",
-				Name:         "Wikipedia",
-				Enabled:      false, // Disabled by default — Wikipedia API returns 403
-				Priority:     6,
-				RequiresAuth: false,
-				Credentials:  make(map[string]string),
-			},
-		}
-	}
-
-	// Provider *_BASE_URL env vars (viper.BindEnv above) backfill BaseURL for
-	// any source that doesn't already have one set — whether c.MetadataSources
-	// came from the hardcoded defaults above or from a persisted/config-file
-	// value that predates the BaseURL field. A source with an explicit BaseURL
-	// already set (e.g. from the config blob) is left untouched.
-	providerBaseURLEnv := map[string]string{
-		"audible":      v.GetString("audible_base_url"),
-		"openlibrary":  v.GetString("openlibrary_base_url"),
-		"audnexus":     v.GetString("audnexus_base_url"),
-		"google-books": v.GetString("google_books_base_url"),
-	}
-	for i := range c.MetadataSources {
-		if c.MetadataSources[i].BaseURL != "" {
-			continue
-		}
-		if v := providerBaseURLEnv[c.MetadataSources[i].ID]; v != "" {
-			c.MetadataSources[i].BaseURL = v
-		}
-	}
-
-	// Backward compatibility: map old flat viper key names to the nested struct.
-	// These keys were set directly (e.g. via viper.Set in tests or old config files)
-	// using the pre-Wave-4 flat names, which are no longer read in the struct literal.
-	if c.ITunes.LibraryITLPath == "" {
-		if v := v.GetString("itunes_library_write_path"); v != "" {
-			c.ITunes.LibraryITLPath = v
-		}
-	}
-	if c.ITunes.LibraryITLPath == "" {
-		c.ITunes.LibraryITLPath = v.GetString("itunes_library_itl_path")
-	}
-	if c.ITunes.LibraryReadPath == "" {
-		if v := v.GetString("itunes_library_read_path"); v != "" {
-			c.ITunes.LibraryReadPath = v
-		}
-	}
-	if c.ITunes.LibraryReadPath == "" {
-		c.ITunes.LibraryReadPath = v.GetString("itunes_library_xml_path")
-	}
-	// Normalize database type
-	if c.DatabaseType == "sqlite3" {
-		c.DatabaseType = "sqlite"
-	}
-	if c.DatabaseType == "" {
-		c.DatabaseType = "pebble"
-	}
-	return cfg
 }
 
 // validPatternPlaceholder accepts a naming-pattern placeholder, optionally
@@ -3916,7 +2079,17 @@ func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	if errs := c.Problems(); len(errs) > 0 {
+		return fmt.Errorf("invalid configuration: %s", strings.Join(errs, "; "))
+	}
+	return nil
+}
 
+// Problems is every structural problem Validate would report, one message
+// each, and the same normalisations Validate makes (a zero that means "the
+// default" is replaced). The settings write path asks for the list so it can
+// name each setting; Validate is the boot and one-error form of the same checks.
+func (c *Config) Problems() []string {
 	var errs []string
 
 	// iTunes 4-state model: derive the legacy path shims, then run the fail-closed
@@ -3946,8 +2119,8 @@ func (c *Config) Validate() error {
 	//
 	// The empty-string normalization is load-bearing, not cosmetic: an upgraded
 	// install whose stored config_blob predates the field gets "" from
-	// migrateEmbeddingBlob (persistence.go), and viper.SetDefault never sees
-	// that path. Without this line those installs would stay on chromem
+	// migrateEmbeddingBlob (persistence.go), and no default reaches that
+	// path. Without this line those installs would stay on chromem
 	// forever — or, once the enum check exists, fail to start outright.
 	if c.Embedding.VectorBackend == "" {
 		c.Embedding.VectorBackend = "hnsw"
@@ -4074,7 +2247,7 @@ func (c *Config) Validate() error {
 		}
 	}
 	// Syntax is not the only way a naming pattern destroys data; see
-	// naming_patterns.go. Empty means "unset, viper will supply the default",
+	// naming_patterns.go. Empty means "unset, the settings default applies",
 	// which is the convention the two blocks above already follow.
 	errs = append(errs, validateNamingPatterns(c.FolderNamingPattern, c.FileNamingPattern)...)
 
@@ -4096,69 +2269,12 @@ func (c *Config) Validate() error {
 	// (written by PUT /api/v1/config — the Settings → Dedup page — and by the
 	// dedup.calibrate-composite apply op), and the blob wins. An operator
 	// told to "fix config.yaml" for a value the UI persisted cannot repair it
-	// by editing config.yaml; they need to know to re-PUT a valid ladder (the
-	// UpdateService now rejects an invalid one with 400 before persisting, so
-	// this path is reached only by blobs written before that guard existed,
-	// or by a config.yaml edit).
+	// by editing config.yaml; they need to know to re-PUT a valid ladder.
 	if _, err := c.Dedup.Signals.ScoreConfig(); err != nil {
 		errs = append(errs, fmt.Sprintf("%v (effective value = config.yaml dedup.signals overlaid by the settings blob persisted in the database via PUT /api/v1/config / Settings → Dedup / calibrate-composite apply — the persisted blob wins, so re-save a valid ladder there, or delete the blob's dedup.signals keys, if config.yaml already looks right)", err))
 	}
 
-	if len(errs) > 0 {
-		return fmt.Errorf("invalid configuration: %s", strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-// factoryDefaultConfigForTest is the Config a fresh install gets from the shipped
-// defaults alone: the same registerConfigDefaults and configFromViper that
-// InitConfig runs, on a private viper with no config file and no environment
-// binding. Deriving it from them (instead of a second hand-written literal)
-// is the point: a key given a default there is restored here by construction.
-func factoryDefaultConfigForTest() Config {
-	v := viper.New()
-	registerConfigDefaults(noEnvRegistrarForTest{v})
-	return configFromViper(v)
-}
-
-// ResetToDefaultsForTest resets the AppConfig to factory defaults. It is a
-// test seam: HEAD's gin system and factory reset routes, its production
-// callers, are gone (R1-25), and the offline reset that replaces them never
-// resets a running config. It replaces the store with the service stopped,
-// so the next boot reads the shipped defaults from an empty settings store.
-//
-// The defaults are the shipped viper defaults only (see factoryDefaultConfigForTest):
-// not the config file, and not the process environment. The few settings the
-// host owns through the environment are put back afterwards by
-// applyEnvAuthoritativeConfig, exactly as at database load. The library paths
-// and the boot-only sort indexes are carried over from the running config.
-//
-// WHY Mutate: whole-struct reset; concurrent readers must not see a torn state.
-func ResetToDefaultsForTest() {
-	// Snapshot current paths before acquiring the write lock to avoid a
-	// deadlock (Mutate is not re-entrant).
-	cur := Snapshot()
-	defaults := factoryDefaultConfigForTest()
-	Mutate(func(c *Config) {
-		*c = defaults
-
-		// Core paths: preserve the existing ones; everything else resets.
-		c.RootDir = cur.RootDir
-		c.DatabasePath = cur.DatabasePath
-		c.PlaylistDir = cur.PlaylistDir
-
-		// Boot-only: the indexes the store built at open stay built until
-		// restart, so GET must keep reporting them (pinBootOnlySettings).
-		c.EnabledSortIndexes = slices.Clone(cur.EnabledSortIndexes)
-
-		// Host-set values win over a reset exactly as they win over the
-		// database at load: without this a system/factory reset cleared a
-		// host-set OWNER_EMAIL / CF_ACCESS_* (and every other
-		// environment-authoritative setting) until the next restart. The
-		// owner is set only on the host (plan D15), so a reset must not
-		// unset it.
-		applyEnvAuthoritativeConfig(c)
-	}) // end Mutate
+	return errs
 }
 
 // SearchConfig groups the search.* settings.

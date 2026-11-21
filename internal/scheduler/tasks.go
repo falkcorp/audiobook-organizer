@@ -61,6 +61,18 @@ const (
 // still missing an ASIN or ISBN, and skips without a request every one whose
 // no-match marker is inside retry_after_days, so a 6h tick costs reads plus
 // the books that changed since.
+// noRunOnStart is RunOnStart for a task with no operator-set start trigger. HEAD
+// let scheduled.<task>.on_startup start a task on boot; core's ScheduleConfig has
+// no such field (a kind's start trigger is declared in code, 05-tasks 5T.8.2:
+// RunOnStart becomes Schedule.OnStart), so a flipped Config holds every one at
+// false and nothing here reads them.
+func noRunOnStart() bool { return false }
+
+// fullSweepDueCheck is how often library_scan_full checks whether a sweep is due.
+// It was scheduled.library_scan_full.interval (default 60 minutes); the cadence
+// of the sweep itself is period_hours.
+const fullSweepDueCheck = time.Hour
+
 func asinBackfillInterval() time.Duration {
 	mins := config.AppConfig.Scheduled.ASINBackfill.Interval
 	if mins <= 0 {
@@ -328,7 +340,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart: func() bool {
-			return config.AppConfig.Scheduled.LibraryScan.OnStartup || config.AppConfig.ScanOnStartup
+			// scan_on_startup is the one run-on-start setting core carries
+			// (modules.books.scan.on_startup). scheduled.library_scan.on_startup
+			// has no place in core's schedule value, so it is not read.
+			return config.AppConfig.ScanOnStartup
 		},
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryScan },
 	})
@@ -475,12 +490,12 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if !config.AppConfig.Scheduled.LibraryScanFull.Enabled {
 				return 0
 			}
-			// Due-check cadence, NOT the sweep period.
-			mins := config.AppConfig.Scheduled.LibraryScanFull.Interval
-			if mins <= 0 {
-				return 0
-			}
-			return time.Duration(mins) * time.Minute
+			// Due-check cadence, NOT the sweep period. It is a scheduler detail
+			// with no setting: core's schedule value carries the sweep period
+			// (every) and nothing else (05-tasks 5T.8.2), so this does not read
+			// scheduled.library_scan_full.interval, which a flipped Config
+			// holds at zero.
+			return fullSweepDueCheck
 		},
 	})
 
@@ -585,7 +600,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.DedupRefresh.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DedupRefresh },
 	})
 
@@ -626,7 +641,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart: func() bool { return config.AppConfig.Scheduled.LabelRefinement.OnStartup },
+		RunOnStart: noRunOnStart,
 		// Intentionally NOT part of the maintenance window (also absent from
 		// maintenanceOrder): keeps the task fully inert under default config.
 		RunInMaintenanceWindow: func() bool { return false },
@@ -680,7 +695,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.SeriesPrune.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.SeriesPrune },
 	})
 
@@ -1093,7 +1108,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.AcoustIDBackfill.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return false },
 	})
 
@@ -1224,7 +1239,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.MetadataUpgrade.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return false },
 	})
 
@@ -1254,7 +1269,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.AuthorSplit.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.AuthorSplit },
 	})
 
@@ -1281,7 +1296,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.DbOptimize.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DbOptimize },
 	})
 
@@ -1481,7 +1496,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.MetadataRefresh.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
 	})
 
@@ -1509,7 +1524,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.Reconcile.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.Reconcile },
 	})
 
@@ -1539,7 +1554,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return time.Duration(mins) * time.Minute
 		},
-		RunOnStart:             func() bool { return config.AppConfig.Scheduled.AIDedupBatch.OnStartup },
+		RunOnStart:             noRunOnStart,
 		RunInMaintenanceWindow: func() bool { return false },
 	})
 

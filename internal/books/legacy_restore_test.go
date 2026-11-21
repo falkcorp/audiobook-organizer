@@ -89,7 +89,7 @@ func restoreOfflineWithCoreExtractor(t *testing.T, work string, args ...string) 
 		AppID:             AppID,
 		Version:           telemetry.Version(),
 		StateDir:          stateDir,
-		R1StoragePath:     storeDB(work),
+		Env:               []string{storagePathEnv + "=" + storeDB(work)},
 		StorageStateFiles: StateFiles(stateDir, storeDB(work)),
 		R1BeforeSwap:      database.DiscardHNSWCleanStop,
 		StorageFS:         storage.FS{},
@@ -171,7 +171,6 @@ func TestLegacyArchiveRestoreThenMigrate(t *testing.T) {
 		if c.name == "shaped" {
 			t.Skip("the shaped store is a size fixture; the staging half reads r0 and prefreeze-written")
 		}
-		steps := registeredCutoverSteps(t)
 		pristine := copyCorpus(t, c)
 		archive := legacyArchive(t, pristine)
 		pre := scanStore(t, storeDB(pristine), wholeStore())
@@ -184,6 +183,7 @@ func TestLegacyArchiveRestoreThenMigrate(t *testing.T) {
 			had := checkpoints(t, work)
 			edit, opt := cutoverBootConfig(t, work)
 			r := runComposedIn(t, filepath.Join(work, "state"), edit, nil, opt, nil)
+			steps := registeredCutoverSteps(t, r.composed.mod.Manifest())
 			require.NoError(t, r.stop())
 			cp, problem := upgradeCheckpoint(len(steps), had, checkpoints(t, work))
 			require.Empty(t, problem)

@@ -6,71 +6,16 @@
 package config
 
 import (
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"testing"
 
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mockSettingsStore implements database.SettingsStore for testing.
-type mockSettingsStore struct {
-	settings  map[string]*database.Setting
-	setErr    error
-	getAllErr error
-	getErr    error
-	deleteErr error
-}
-
-func newMockSettingsStore() *mockSettingsStore {
-	return &mockSettingsStore{settings: make(map[string]*database.Setting)}
-}
-
-func (m *mockSettingsStore) GetSetting(key string) (*database.Setting, error) {
-	if m.getErr != nil {
-		return nil, m.getErr
-	}
-	s, ok := m.settings[key]
-	if !ok {
-		return nil, fmt.Errorf("not found: %w", database.ErrSettingNotFound)
-	}
-	return s, nil
-}
-
-func (m *mockSettingsStore) SetSetting(key, value, typ string, isSecret bool) error {
-	if m.setErr != nil {
-		return m.setErr
-	}
-	m.settings[key] = &database.Setting{Key: key, Value: value, Type: typ, IsSecret: isSecret}
-	return nil
-}
-
-func (m *mockSettingsStore) GetAllSettings() ([]database.Setting, error) {
-	if m.getAllErr != nil {
-		return nil, m.getAllErr
-	}
-	var result []database.Setting
-	for _, s := range m.settings {
-		result = append(result, *s)
-	}
-	return result, nil
-}
-
-func (m *mockSettingsStore) DeleteSetting(key string) error {
-	if m.deleteErr != nil {
-		return m.deleteErr
-	}
-	delete(m.settings, key)
-	return nil
-}
 
 func TestHasBalancedBraces(t *testing.T) {
 	tests := []struct {
@@ -360,205 +305,127 @@ func TestConfigValidate(t *testing.T) {
 	})
 }
 
-func TestInitConfigDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
+func TestFactoryDefaultsShipped(t *testing.T) {
+	d := factoryDefaultConfigForTest()
 
 	t.Run("core defaults", func(t *testing.T) {
-		assert.Equal(t, "pebble", AppConfig.DatabaseType)
-		assert.False(t, AppConfig.SetupComplete)
+		assert.Equal(t, "pebble", d.DatabaseType)
+		assert.False(t, d.SetupComplete)
 	})
 
 	t.Run("library organization defaults", func(t *testing.T) {
-		assert.Equal(t, "auto", AppConfig.OrganizationStrategy)
-		assert.False(t, AppConfig.ScanOnStartup)
-		assert.True(t, AppConfig.AutoOrganize)
-		assert.False(t, AppConfig.AutoScanEnabled)
-		assert.Equal(t, 30, AppConfig.AutoScanDebounceSeconds)
-		assert.True(t, AppConfig.CreateBackups)
+		assert.Equal(t, "auto", d.OrganizationStrategy)
+		assert.False(t, d.ScanOnStartup)
+		assert.True(t, d.AutoOrganize)
+		assert.False(t, d.AutoScanEnabled)
+		assert.Equal(t, 30, d.AutoScanDebounceSeconds)
+		assert.True(t, d.CreateBackups)
 	})
 
 	t.Run("metadata defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.WriteBackMetadata)
-		assert.True(t, AppConfig.EmbedCoverArt)
+		assert.False(t, d.WriteBackMetadata)
+		assert.True(t, d.EmbedCoverArt)
 	})
 
 	t.Run("performance defaults", func(t *testing.T) {
 		expectedWorkers := max(runtime.NumCPU(), 4)
-		assert.Equal(t, expectedWorkers, AppConfig.ConcurrentScans)
-		assert.Equal(t, 30, AppConfig.OperationTimeoutMinutes)
+		assert.Equal(t, expectedWorkers, d.ConcurrentScans)
+		assert.Equal(t, 30, d.OperationTimeoutMinutes)
 	})
 
 	t.Run("embedding dedup defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.Embedding.Enabled)
-		assert.Equal(t, "text-embedding-3-large", AppConfig.Embedding.Model)
-		assert.InDelta(t, 0.95, AppConfig.Dedup.BookHighThreshold, 0.001)
-		assert.InDelta(t, 0.85, AppConfig.Dedup.BookLowThreshold, 0.001)
-		assert.InDelta(t, 0.92, AppConfig.Dedup.AuthorHighThreshold, 0.001)
-		assert.InDelta(t, 0.80, AppConfig.Dedup.AuthorLowThreshold, 0.001)
-		assert.True(t, AppConfig.Dedup.AutoMergeEnabled)
-		assert.False(t, AppConfig.Dedup.LLMAutoMergeHighConfidence)
+		assert.True(t, d.Embedding.Enabled)
+		assert.Equal(t, "text-embedding-3-large", d.Embedding.Model)
+		assert.InDelta(t, 0.95, d.Dedup.BookHighThreshold, 0.001)
+		assert.InDelta(t, 0.85, d.Dedup.BookLowThreshold, 0.001)
+		assert.InDelta(t, 0.92, d.Dedup.AuthorHighThreshold, 0.001)
+		assert.InDelta(t, 0.80, d.Dedup.AuthorLowThreshold, 0.001)
+		assert.True(t, d.Dedup.AutoMergeEnabled)
+		assert.False(t, d.Dedup.LLMAutoMergeHighConfidence)
 	})
 
 	t.Run("metadata scoring defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.MetadataScoring.EmbeddingEnabled)
-		assert.InDelta(t, 0.82, AppConfig.MetadataScoring.EmbeddingMinScore, 0.001)
-		assert.InDelta(t, 0.88, AppConfig.MetadataScoring.EmbeddingBestMatch, 0.001)
-		assert.False(t, AppConfig.MetadataScoring.LLMEnabled)
-		assert.InDelta(t, 0.05, AppConfig.MetadataScoring.LLMRerankEpsilon, 0.001)
-		assert.Equal(t, 5, AppConfig.MetadataScoring.LLMRerankTopK)
+		assert.False(t, d.MetadataScoring.EmbeddingEnabled)
+		assert.InDelta(t, 0.82, d.MetadataScoring.EmbeddingMinScore, 0.001)
+		assert.InDelta(t, 0.88, d.MetadataScoring.EmbeddingBestMatch, 0.001)
+		assert.False(t, d.MetadataScoring.LLMEnabled)
+		assert.InDelta(t, 0.05, d.MetadataScoring.LLMRerankEpsilon, 0.001)
+		assert.Equal(t, 5, d.MetadataScoring.LLMRerankTopK)
 	})
 
 	t.Run("API and auth defaults", func(t *testing.T) {
-		assert.Equal(t, 100, AppConfig.APIRateLimitPerMinute)
-		assert.Equal(t, 1, AppConfig.JSONBodyLimitMB)
-		assert.Equal(t, 10, AppConfig.UploadBodyLimitMB)
-		assert.Equal(t, 10, AppConfig.MasterListRetention)
-		assert.True(t, AppConfig.EnableAuth)
-		assert.False(t, AppConfig.BasicAuthEnabled)
+		assert.Equal(t, 100, d.APIRateLimitPerMinute)
+		assert.Equal(t, 1, d.JSONBodyLimitMB)
+		assert.Equal(t, 10, d.UploadBodyLimitMB)
+		assert.Equal(t, 10, d.MasterListRetention)
+		assert.True(t, d.EnableAuth)
+		assert.False(t, d.BasicAuthEnabled)
 	})
 
 	t.Run("logging defaults", func(t *testing.T) {
-		assert.Equal(t, "info", AppConfig.LogLevel)
+		assert.Equal(t, "info", d.LogLevel)
 	})
 
 	t.Run("maintenance window defaults", func(t *testing.T) {
-		assert.True(t, AppConfig.Maintenance.Enabled)
-		assert.Equal(t, 1, AppConfig.Maintenance.WindowStart)
-		assert.Equal(t, 4, AppConfig.Maintenance.WindowEnd)
-		assert.True(t, AppConfig.Maintenance.DedupRefresh)
-		assert.True(t, AppConfig.Maintenance.DbOptimize)
-		assert.False(t, AppConfig.Maintenance.LibraryScan)
-		assert.False(t, AppConfig.Maintenance.LibraryOrganize)
-		assert.False(t, AppConfig.Maintenance.MetadataRefresh)
+		assert.True(t, d.Maintenance.Enabled)
+		assert.Equal(t, 1, d.Maintenance.WindowStart)
+		assert.Equal(t, 4, d.Maintenance.WindowEnd)
+		assert.True(t, d.Maintenance.DedupRefresh)
+		assert.True(t, d.Maintenance.DbOptimize)
+		assert.False(t, d.Maintenance.LibraryScan)
+		assert.False(t, d.Maintenance.LibraryOrganize)
+		assert.False(t, d.Maintenance.MetadataRefresh)
 	})
 
 	t.Run("iTunes defaults", func(t *testing.T) {
-		assert.Equal(t, "", AppConfig.ITunes.LibraryReadPath)
-		assert.Equal(t, "", AppConfig.ITunes.LibraryITLPath)
+		assert.Equal(t, "", d.ITunes.LibraryReadPath)
+		assert.Equal(t, "", d.ITunes.LibraryITLPath)
 	})
 
 	t.Run("auto-update defaults", func(t *testing.T) {
-		assert.False(t, AppConfig.AutoUpdate.Enabled)
-		assert.Equal(t, "stable", AppConfig.AutoUpdate.Channel)
-		assert.Equal(t, 60, AppConfig.AutoUpdate.CheckMinutes)
+		assert.False(t, d.AutoUpdate.Enabled)
+		assert.Equal(t, "stable", d.AutoUpdate.Channel)
+		assert.Equal(t, 60, d.AutoUpdate.CheckMinutes)
 	})
 
 	t.Run("default metadata sources", func(t *testing.T) {
-		assert.GreaterOrEqual(t, len(AppConfig.MetadataSources), 3)
-		assert.Equal(t, "audible", AppConfig.MetadataSources[0].ID)
-		assert.True(t, AppConfig.MetadataSources[0].Enabled)
-		assert.Equal(t, "openlibrary", AppConfig.MetadataSources[1].ID)
+		require.GreaterOrEqual(t, len(d.MetadataSources), 3)
+		assert.Equal(t, "audible", d.MetadataSources[0].ID)
+		assert.True(t, d.MetadataSources[0].Enabled)
+		assert.Equal(t, "openlibrary", d.MetadataSources[1].ID)
 	})
 
 	t.Run("supported extensions default", func(t *testing.T) {
-		assert.Contains(t, AppConfig.SupportedExtensions, ".m4b")
-		assert.Contains(t, AppConfig.SupportedExtensions, ".mp3")
-		assert.Contains(t, AppConfig.SupportedExtensions, ".flac")
+		assert.Contains(t, d.SupportedExtensions, ".m4b")
+		assert.Contains(t, d.SupportedExtensions, ".mp3")
+		assert.Contains(t, d.SupportedExtensions, ".flac")
 	})
 
 	t.Run("path formatting defaults", func(t *testing.T) {
 		// path_format is gone — folder_naming_pattern + file_naming_pattern are
 		// the only path configuration. The file default carries {track:02d},
 		// which the naming-pattern validator must accept.
-		assert.Equal(t, "{author}/{series}/{title} ({print_year})", AppConfig.FolderNamingPattern)
-		assert.Equal(t, "{title} - {track:02d}", AppConfig.FileNamingPattern)
-		assert.NoError(t, validateNamingPattern(AppConfig.FileNamingPattern))
-		assert.True(t, AppConfig.AutoRenameOnApply)
-		assert.True(t, AppConfig.AutoWriteTagsOnApply)
-		assert.True(t, AppConfig.VerifyAfterWrite)
+		assert.Equal(t, "{author}/{series}/{title} ({print_year})", d.FolderNamingPattern)
+		assert.Equal(t, "{title} - {track:02d}", d.FileNamingPattern)
+		assert.NoError(t, validateNamingPattern(d.FileNamingPattern))
+		assert.True(t, d.AutoRenameOnApply)
+		assert.True(t, d.AutoWriteTagsOnApply)
+		assert.True(t, d.VerifyAfterWrite)
 	})
 
 	t.Run("tools defaults", func(t *testing.T) {
-		assert.Equal(t, "/var/lib/audiobook-organizer/tools", AppConfig.Tools.ManagedDir)
-		assert.Equal(t, tools.ToolModeSystem, AppConfig.Tools.Ollama.Mode)
-		assert.Equal(t, tools.ToolModeSystem, AppConfig.Tools.Fpcalc.Mode)
-		assert.False(t, AppConfig.Tools.AllowPeriodicOllama)
-		assert.Equal(t, 10, AppConfig.Tools.OllamaDebounceMin)
+		assert.Equal(t, "/var/lib/audiobook-organizer/tools", d.Tools.ManagedDir)
+		assert.Equal(t, tools.ToolModeSystem, d.Tools.Ollama.Mode)
+		assert.Equal(t, tools.ToolModeSystem, d.Tools.Fpcalc.Mode)
+		assert.False(t, d.Tools.AllowPeriodicOllama)
+		assert.Equal(t, 10, d.Tools.OllamaDebounceMin)
 	})
 }
 
-func TestInitConfigDatabaseTypeNormalization(t *testing.T) {
-	t.Run("sqlite3 normalized to sqlite", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("database_type", "sqlite3")
-		InitConfig()
-		assert.Equal(t, "sqlite", AppConfig.DatabaseType)
-	})
-
-	t.Run("empty normalized to pebble", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("database_type", "")
-		InitConfig()
-		assert.Equal(t, "pebble", AppConfig.DatabaseType)
-	})
-}
-
-func TestInitConfigITunesBackwardCompat(t *testing.T) {
-	t.Run("old itunes_library_itl_path maps to write path", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("itunes_library_itl_path", "/old/path.itl")
-		InitConfig()
-		assert.Equal(t, "/old/path.itl", AppConfig.ITunes.LibraryITLPath)
-	})
-
-	t.Run("old itunes_library_xml_path maps to read path", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("itunes_library_xml_path", "/old/library.xml")
-		InitConfig()
-		assert.Equal(t, "/old/library.xml", AppConfig.ITunes.LibraryReadPath)
-	})
-
-	t.Run("new path takes precedence over old", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("itunes_library_write_path", "/new/path.itl")
-		viper.Set("itunes_library_itl_path", "/old/path.itl")
-		InitConfig()
-		assert.Equal(t, "/new/path.itl", AppConfig.ITunes.LibraryITLPath)
-	})
-}
-
-// A configured ITL path no longer turns anything on: iTunes write-back was
-// removed on 2026-10-07, and the old rule that auto-enabled it whenever
-// library_write_path was set (overriding ITUNES_WRITE_BACK_ENABLED=false in
-// prod) went with it. The removed keys still load without error.
-func TestInitConfigITLPathEnablesNoWriteBack(t *testing.T) {
-	viper.Reset()
-	t.Setenv("ITUNES_WRITE_BACK_ENABLED", "true")
-	t.Setenv("ITUNES_AUTO_WRITE_BACK", "true")
-	t.Setenv("ITUNES_WRITEBACK_DRYRUN", "true")
-	viper.Set("itunes_library_write_path", "/some/path.itl")
-	viper.Set("itl_write_back_enabled", true)
-	viper.Set("itunes.write_back_enabled", true)
-	viper.Set("itunes.auto_write_back", true)
-	viper.Set("itunes.write_back_dry_run", true)
-	InitConfig()
-	assert.Equal(t, "/some/path.itl", AppConfig.ITunes.LibraryITLPath)
+// iTunes write-back was removed on 2026-10-07; the config carries no switch for it.
+func TestITunesConfigHasNoWriteBackSwitch(t *testing.T) {
 	_, ok := reflect.TypeFor[ITunesConfig]().FieldByName("WriteBackEnabled")
 	assert.False(t, ok, "ITunesConfig must carry no write-back switch")
-}
-
-func TestInitConfigOpenLibraryDumpDir(t *testing.T) {
-	t.Run("auto-set when root_dir present", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("root_dir", "/media/audiobooks")
-		InitConfig()
-		assert.Equal(t, "/media/audiobooks/openlibrary-dumps", AppConfig.OpenLibraryDumpDir)
-	})
-
-	t.Run("not set when root_dir empty", func(t *testing.T) {
-		viper.Reset()
-		InitConfig()
-		assert.Equal(t, "", AppConfig.OpenLibraryDumpDir)
-	})
-
-	t.Run("explicit value preserved", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("root_dir", "/media/audiobooks")
-		viper.Set("openlibrary_dump_dir", "/custom/dumps")
-		InitConfig()
-		assert.Equal(t, "/custom/dumps", AppConfig.OpenLibraryDumpDir)
-	})
 }
 
 func TestResetToDefaultsPreservesPaths(t *testing.T) {
@@ -594,578 +461,6 @@ func TestResetToDefaultsPreservesPaths(t *testing.T) {
 // ---------------------------------------------------------------------------
 // applySetting — comprehensive table-driven tests (26% -> ~100%)
 // ---------------------------------------------------------------------------
-
-func TestApplySettingStringKeys(t *testing.T) {
-	tests := []struct {
-		key   string
-		value string
-		field func() string
-	}{
-		{"root_dir", "/media/books", func() string { return AppConfig.RootDir }},
-		{"database_path", "/data/test.db", func() string { return AppConfig.DatabasePath }},
-		{"playlist_dir", "/playlists", func() string { return AppConfig.PlaylistDir }},
-		{"organization_strategy", "copy", func() string { return AppConfig.OrganizationStrategy }},
-		{"folder_naming_pattern", "{author}/{title}", func() string { return AppConfig.FolderNamingPattern }},
-		{"file_naming_pattern", "{title}", func() string { return AppConfig.FileNamingPattern }},
-		{"openlibrary_dump_dir", "/dumps", func() string { return AppConfig.OpenLibraryDumpDir }},
-		{"hardcover_api_token", "tok123", func() string { return AppConfig.HardcoverAPIToken }},
-		{"openai_api_key", "sk-abc", func() string { return AppConfig.OpenAIAPIKey }},
-		{"google_books_api_key", "gk-xyz", func() string { return AppConfig.GoogleBooksAPIKey }},
-		{"log_level", "debug", func() string { return AppConfig.LogLevel }},
-		{"auto_update_channel", "beta", func() string { return AppConfig.AutoUpdate.Channel }},
-		{"itunes_library_write_path", "/itl/path", func() string { return AppConfig.ITunes.LibraryITLPath }},
-		{"itunes_library_itl_path", "/itl/path2", func() string { return AppConfig.ITunes.LibraryITLPath }},
-		{"itunes_library_read_path", "/xml/path", func() string { return AppConfig.ITunes.LibraryReadPath }},
-		{"itunes_library_xml_path", "/xml/path2", func() string { return AppConfig.ITunes.LibraryReadPath }},
-		{"basic_auth_username", "admin", func() string { return AppConfig.BasicAuthUsername }},
-		{"basic_auth_password", "secret", func() string { return AppConfig.BasicAuthPassword }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			AppConfig = Config{}
-			err := applySetting(tt.key, tt.value, "string")
-			require.NoError(t, err)
-			assert.Equal(t, tt.value, tt.field())
-		})
-	}
-}
-
-func TestApplySettingBoolKeys(t *testing.T) {
-	tests := []struct {
-		key   string
-		field func() bool
-	}{
-		{"setup_complete", func() bool { return AppConfig.SetupComplete }},
-		{"scan_on_startup", func() bool { return AppConfig.ScanOnStartup }},
-		{"auto_organize", func() bool { return AppConfig.AutoOrganize }},
-		{"create_backups", func() bool { return AppConfig.CreateBackups }},
-		{"enable_disk_quota", func() bool { return AppConfig.EnableDiskQuota }},
-		{"enable_user_quotas", func() bool { return AppConfig.EnableUserQuotas }},
-		{"openlibrary_dump_enabled", func() bool { return AppConfig.OpenLibraryDumpEnabled }},
-		{"enable_ai_parsing", func() bool { return AppConfig.EnableAIParsing }},
-		{"enable_auth", func() bool { return AppConfig.EnableAuth }},
-		{"write_back_metadata", func() bool { return AppConfig.WriteBackMetadata }},
-		{"embed_cover_art", func() bool { return AppConfig.EmbedCoverArt }},
-		{"auto_scan_enabled", func() bool { return AppConfig.AutoScanEnabled }},
-		{"auto_update_enabled", func() bool { return AppConfig.AutoUpdate.Enabled }},
-		{"purge_soft_deleted_delete_files", func() bool { return AppConfig.PurgeSoftDeletedDeleteFiles }},
-		{"maintenance_window_enabled", func() bool { return AppConfig.Maintenance.Enabled }},
-		{"maintenance_window_dedup_refresh", func() bool { return AppConfig.Maintenance.DedupRefresh }},
-		{"maintenance_window_series_prune", func() bool { return AppConfig.Maintenance.SeriesPrune }},
-		{"maintenance_window_author_split", func() bool { return AppConfig.Maintenance.AuthorSplit }},
-		{"maintenance_window_tombstone_cleanup", func() bool { return AppConfig.Maintenance.TombstoneCleanup }},
-		{"maintenance_window_reconcile", func() bool { return AppConfig.Maintenance.Reconcile }},
-		{"maintenance_window_purge_deleted", func() bool { return AppConfig.Maintenance.PurgeDeleted }},
-		{"maintenance_window_purge_old_logs", func() bool { return AppConfig.Maintenance.PurgeOldLogs }},
-		{"maintenance_window_db_optimize", func() bool { return AppConfig.Maintenance.DbOptimize }},
-		{"maintenance_window_library_scan", func() bool { return AppConfig.Maintenance.LibraryScan }},
-		{"maintenance_window_library_organize", func() bool { return AppConfig.Maintenance.LibraryOrganize }},
-		{"maintenance_window_metadata_refresh", func() bool { return AppConfig.Maintenance.MetadataRefresh }},
-		{"basic_auth_enabled", func() bool { return AppConfig.BasicAuthEnabled }},
-		{"scheduled_dedup_refresh_enabled", func() bool { return AppConfig.Scheduled.DedupRefresh.Enabled }},
-		{"scheduled_dedup_refresh_on_startup", func() bool { return AppConfig.Scheduled.DedupRefresh.OnStartup }},
-		{"scheduled_author_split_enabled", func() bool { return AppConfig.Scheduled.AuthorSplit.Enabled }},
-		{"scheduled_author_split_on_startup", func() bool { return AppConfig.Scheduled.AuthorSplit.OnStartup }},
-		{"scheduled_db_optimize_enabled", func() bool { return AppConfig.Scheduled.DbOptimize.Enabled }},
-		{"scheduled_db_optimize_on_startup", func() bool { return AppConfig.Scheduled.DbOptimize.OnStartup }},
-		{"scheduled_metadata_refresh_enabled", func() bool { return AppConfig.Scheduled.MetadataRefresh.Enabled }},
-		{"scheduled_metadata_refresh_on_startup", func() bool { return AppConfig.Scheduled.MetadataRefresh.OnStartup }},
-		{"scheduled_resolve_production_authors_enabled", func() bool { return AppConfig.Scheduled.ResolveProductionAuthors.Enabled }},
-		{"scheduled_series_prune_enabled", func() bool { return AppConfig.Scheduled.SeriesPrune.Enabled }},
-		{"scheduled_series_prune_on_startup", func() bool { return AppConfig.Scheduled.SeriesPrune.OnStartup }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.key+"_true", func(t *testing.T) {
-			AppConfig = Config{}
-			err := applySetting(tt.key, "true", "bool")
-			require.NoError(t, err)
-			assert.True(t, tt.field())
-		})
-		t.Run(tt.key+"_false", func(t *testing.T) {
-			AppConfig = Config{}
-			err := applySetting(tt.key, "false", "bool")
-			require.NoError(t, err)
-			assert.False(t, tt.field())
-		})
-	}
-}
-
-func TestApplySettingBoolInvalidValue(t *testing.T) {
-	AppConfig = Config{}
-	// Invalid bool string should be silently ignored (no error returned)
-	err := applySetting("setup_complete", "notabool", "bool")
-	assert.NoError(t, err)
-	assert.False(t, AppConfig.SetupComplete)
-}
-
-func TestApplySettingIntKeys(t *testing.T) {
-	tests := []struct {
-		key   string
-		value string
-		field func() int
-	}{
-		{"disk_quota_percent", "80", func() int { return AppConfig.DiskQuotaPercent }},
-		{"concurrent_scans", "8", func() int { return AppConfig.ConcurrentScans }},
-		{"operation_timeout_minutes", "60", func() int { return AppConfig.OperationTimeoutMinutes }},
-		{"api_rate_limit_per_minute", "100", func() int { return AppConfig.APIRateLimitPerMinute }},
-		{"json_body_limit_mb", "5", func() int { return AppConfig.JSONBodyLimitMB }},
-		{"upload_body_limit_mb", "50", func() int { return AppConfig.UploadBodyLimitMB }},
-		{"master_list_retention", "3", func() int { return AppConfig.MasterListRetention }},
-		{"auto_scan_debounce_seconds", "10", func() int { return AppConfig.AutoScanDebounceSeconds }},
-		{"auto_update_check_minutes", "120", func() int { return AppConfig.AutoUpdate.CheckMinutes }},
-		{"auto_update_window_start", "2", func() int { return AppConfig.AutoUpdate.WindowStart }},
-		{"auto_update_window_end", "5", func() int { return AppConfig.AutoUpdate.WindowEnd }},
-		{"purge_soft_deleted_after_days", "30", func() int { return AppConfig.PurgeSoftDeletedAfterDays }},
-		{"backup_retention_days", "10", func() int { return AppConfig.BackupRetentionDays }},
-		{"maintenance_window_start", "3", func() int { return AppConfig.Maintenance.WindowStart }},
-		{"maintenance_window_end", "6", func() int { return AppConfig.Maintenance.WindowEnd }},
-		{"scheduled_dedup_refresh_interval", "24", func() int { return AppConfig.Scheduled.DedupRefresh.Interval }},
-		{"scheduled_author_split_interval", "12", func() int { return AppConfig.Scheduled.AuthorSplit.Interval }},
-		{"scheduled_db_optimize_interval", "48", func() int { return AppConfig.Scheduled.DbOptimize.Interval }},
-		{"scheduled_metadata_refresh_interval", "72", func() int { return AppConfig.Scheduled.MetadataRefresh.Interval }},
-		{"scheduled_resolve_production_authors_interval", "96", func() int { return AppConfig.Scheduled.ResolveProductionAuthors.Interval }},
-		{"scheduled_series_prune_interval", "168", func() int { return AppConfig.Scheduled.SeriesPrune.Interval }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			AppConfig = Config{}
-			err := applySetting(tt.key, tt.value, "int")
-			require.NoError(t, err)
-			expected := 0
-			fmt.Sscanf(tt.value, "%d", &expected)
-			assert.Equal(t, expected, tt.field())
-		})
-	}
-}
-
-func TestApplySettingIntInvalidValue(t *testing.T) {
-	AppConfig = Config{}
-	err := applySetting("concurrent_scans", "notanint", "int")
-	assert.NoError(t, err)
-	assert.Equal(t, 0, AppConfig.ConcurrentScans)
-}
-
-func TestApplySettingJSONKeys(t *testing.T) {
-	t.Run("supported_extensions", func(t *testing.T) {
-		AppConfig = Config{}
-		err := applySetting("supported_extensions", `[".m4b",".mp3"]`, "json")
-		require.NoError(t, err)
-		assert.Equal(t, []string{".m4b", ".mp3"}, AppConfig.SupportedExtensions)
-	})
-
-	t.Run("supported_extensions_empty_array_ignored", func(t *testing.T) {
-		AppConfig = Config{SupportedExtensions: []string{".flac"}}
-		err := applySetting("supported_extensions", `[]`, "json")
-		require.NoError(t, err)
-		assert.Equal(t, []string{".flac"}, AppConfig.SupportedExtensions)
-	})
-
-	t.Run("supported_extensions_invalid_json", func(t *testing.T) {
-		AppConfig = Config{SupportedExtensions: []string{".m4b"}}
-		err := applySetting("supported_extensions", `not json`, "json")
-		require.NoError(t, err)
-		assert.Equal(t, []string{".m4b"}, AppConfig.SupportedExtensions)
-	})
-
-	t.Run("exclude_patterns", func(t *testing.T) {
-		AppConfig = Config{}
-		err := applySetting("exclude_patterns", `["*.tmp",".*"]`, "json")
-		require.NoError(t, err)
-		assert.Equal(t, []string{"*.tmp", ".*"}, AppConfig.ExcludePatterns)
-	})
-
-	t.Run("exclude_patterns_empty_array_clears", func(t *testing.T) {
-		AppConfig = Config{ExcludePatterns: []string{"*.bak"}}
-		err := applySetting("exclude_patterns", `[]`, "json")
-		require.NoError(t, err)
-		assert.Empty(t, AppConfig.ExcludePatterns)
-	})
-
-	t.Run("metadata_sources", func(t *testing.T) {
-		AppConfig = Config{}
-		sources := []MetadataSource{{ID: "audible", Name: "Audible", Enabled: true}}
-		data, _ := json.Marshal(sources)
-		err := applySetting("metadata_sources", string(data), "json")
-		require.NoError(t, err)
-		require.Len(t, AppConfig.MetadataSources, 1)
-		assert.Equal(t, "audible", AppConfig.MetadataSources[0].ID)
-	})
-
-	t.Run("metadata_sources_empty_ignored", func(t *testing.T) {
-		orig := []MetadataSource{{ID: "x"}}
-		AppConfig = Config{MetadataSources: orig}
-		err := applySetting("metadata_sources", `[]`, "json")
-		require.NoError(t, err)
-		assert.Equal(t, orig, AppConfig.MetadataSources)
-	})
-
-	t.Run("itunes_path_mappings", func(t *testing.T) {
-		AppConfig = Config{}
-		mappings := []ITunesPathMap{{From: "/itunes", To: "/local"}}
-		data, _ := json.Marshal(mappings)
-		err := applySetting("itunes_path_mappings", string(data), "json")
-		require.NoError(t, err)
-		require.Len(t, AppConfig.ITunes.PathMappings, 1)
-		assert.Equal(t, "/itunes", AppConfig.ITunes.PathMappings[0].From)
-	})
-}
-
-func TestApplySettingUnknownKey(t *testing.T) {
-	err := applySetting("totally_unknown_key", "value", "string")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown setting key")
-}
-
-func TestApplySettingInternalStateKeys(t *testing.T) {
-	// These should return nil without error
-	for _, key := range []string{"maintenance_window_migrated", "maintenance_window_last_run", "maintenance_window_update_completed"} {
-		t.Run(key, func(t *testing.T) {
-			err := applySetting(key, "true", "bool")
-			assert.NoError(t, err)
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// ConfigFilePath
-// ---------------------------------------------------------------------------
-
-func TestConfigFilePathVariants(t *testing.T) {
-	t.Run("database path set", func(t *testing.T) {
-		AppConfig = Config{DatabasePath: "/data/audiobooks.pebble"}
-		path := ConfigFilePath()
-		assert.Equal(t, "/data/config.yaml", path)
-	})
-
-	t.Run("root dir fallback", func(t *testing.T) {
-		AppConfig = Config{RootDir: "/media/books"}
-		path := ConfigFilePath()
-		assert.Equal(t, "/media/books/config.yaml", path)
-	})
-
-	t.Run("both empty", func(t *testing.T) {
-		AppConfig = Config{}
-		path := ConfigFilePath()
-		assert.Empty(t, path)
-	})
-
-	t.Run("database path takes precedence", func(t *testing.T) {
-		AppConfig = Config{DatabasePath: "/db/test.pebble", RootDir: "/root"}
-		path := ConfigFilePath()
-		assert.Equal(t, "/db/config.yaml", path)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// LoadConfigFromFile
-// ---------------------------------------------------------------------------
-
-func TestLoadConfigFromFileUnit(t *testing.T) {
-	t.Run("no path returns nil", func(t *testing.T) {
-		AppConfig = Config{}
-		err := LoadConfigFromFile()
-		assert.NoError(t, err)
-	})
-
-	t.Run("nonexistent file returns nil", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		AppConfig = Config{DatabasePath: filepath.Join(tmpDir, "test.db")}
-		err := LoadConfigFromFile()
-		assert.NoError(t, err)
-	})
-
-	t.Run("loads string fallbacks", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, "config.yaml")
-		content := "openai_api_key: sk-test123\n"
-		require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
-
-		AppConfig = Config{DatabasePath: filepath.Join(tmpDir, "test.db")}
-		err := LoadConfigFromFile()
-		assert.NoError(t, err)
-		assert.Equal(t, "sk-test123", AppConfig.OpenAIAPIKey)
-	})
-
-	t.Run("does not overwrite existing values", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, "config.yaml")
-		content := "openai_api_key: sk-fromfile\n"
-		require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
-
-		AppConfig = Config{DatabasePath: filepath.Join(tmpDir, "test.db"), OpenAIAPIKey: "sk-existing"}
-		err := LoadConfigFromFile()
-		assert.NoError(t, err)
-		assert.Equal(t, "sk-existing", AppConfig.OpenAIAPIKey)
-	})
-
-	t.Run("loads enable_ai_parsing", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, "config.yaml")
-		content := "enable_ai_parsing: true\n"
-		require.NoError(t, os.WriteFile(configPath, []byte(content), 0o600))
-
-		AppConfig = Config{DatabasePath: filepath.Join(tmpDir, "test.db")}
-		err := LoadConfigFromFile()
-		assert.NoError(t, err)
-		assert.True(t, AppConfig.EnableAIParsing)
-	})
-
-	t.Run("invalid yaml returns nil with warning", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, "config.yaml")
-		require.NoError(t, os.WriteFile(configPath, []byte(":::invalid"), 0o600))
-
-		AppConfig = Config{DatabasePath: filepath.Join(tmpDir, "test.db")}
-		err := LoadConfigFromFile()
-		assert.NoError(t, err)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// SaveConfigToFile
-// ---------------------------------------------------------------------------
-
-func TestSaveConfigToFileUnit(t *testing.T) {
-	t.Run("no path returns error", func(t *testing.T) {
-		AppConfig = Config{}
-		err := SaveConfigToFile()
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "cannot determine config file path")
-	})
-
-	t.Run("writes config file", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		AppConfig = Config{
-			DatabasePath: filepath.Join(tmpDir, "test.db"),
-			RootDir:      "/media",
-			OpenAIAPIKey: "sk-test",
-			LogLevel:     "debug",
-		}
-		err := SaveConfigToFile()
-		assert.NoError(t, err)
-
-		configPath := filepath.Join(tmpDir, "config.yaml")
-		data, err := os.ReadFile(configPath)
-		require.NoError(t, err)
-		assert.Contains(t, string(data), "root_dir")
-		assert.Contains(t, string(data), "openai_api_key")
-	})
-
-	t.Run("omits empty secrets", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		AppConfig = Config{
-			DatabasePath: filepath.Join(tmpDir, "test.db"),
-		}
-		err := SaveConfigToFile()
-		assert.NoError(t, err)
-
-		configPath := filepath.Join(tmpDir, "config.yaml")
-		data, err := os.ReadFile(configPath)
-		require.NoError(t, err)
-		assert.NotContains(t, string(data), "openai_api_key")
-	})
-}
-
-// ---------------------------------------------------------------------------
-// SaveConfigToDatabase
-// ---------------------------------------------------------------------------
-
-func TestSaveConfigToDatabaseUnit(t *testing.T) {
-	t.Run("nil store", func(t *testing.T) {
-		err := SaveConfigToDatabase(nil)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "store is nil")
-	})
-
-	t.Run("saves settings successfully", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		AppConfig = Config{
-			DatabasePath:         filepath.Join(tmpDir, "test.db"),
-			RootDir:              "/media",
-			OrganizationStrategy: "auto",
-			ConcurrentScans:      4,
-		}
-		store := newMockSettingsStore()
-		err := SaveConfigToDatabase(store)
-		assert.NoError(t, err)
-		assert.Greater(t, len(store.settings), 0)
-		blobSetting, ok := store.settings["config_blob"]
-		if assert.True(t, ok, "config_blob should be saved") {
-			var loaded Config
-			if assert.NoError(t, json.Unmarshal([]byte(blobSetting.Value), &loaded)) {
-				assert.Equal(t, "/media", loaded.RootDir)
-				assert.Equal(t, 4, loaded.ConcurrentScans)
-			}
-		}
-	})
-
-	t.Run("preserves empty secrets from DB", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		AppConfig = Config{
-			DatabasePath: filepath.Join(tmpDir, "test.db"),
-			OpenAIAPIKey: "", // empty in AppConfig
-		}
-		store := newMockSettingsStore()
-		// Pre-populate store with existing secret
-		store.settings["openai_api_key"] = &database.Setting{
-			Key: "openai_api_key", Value: "sk-existing", Type: "string", IsSecret: true,
-		}
-
-		err := SaveConfigToDatabase(store)
-		assert.NoError(t, err)
-		// Existing value should be preserved
-		assert.Equal(t, "sk-existing", store.settings["openai_api_key"].Value)
-	})
-
-	t.Run("blob save error is returned", func(t *testing.T) {
-		tmpDir := t.TempDir()
-		AppConfig = Config{
-			DatabasePath: filepath.Join(tmpDir, "test.db"),
-		}
-		store := newMockSettingsStore()
-		store.setErr = fmt.Errorf("write failed")
-
-		err := SaveConfigToDatabase(store)
-		assert.Error(t, err) // blob save failure propagates
-	})
-}
-
-// ---------------------------------------------------------------------------
-// LoadConfigFromDatabase
-// ---------------------------------------------------------------------------
-
-func TestLoadConfigFromDatabaseUnit(t *testing.T) {
-	t.Run("nil store", func(t *testing.T) {
-		err := LoadConfigFromDatabase(nil)
-		assert.Error(t, err)
-	})
-
-	t.Run("getAllSettings error is returned", func(t *testing.T) {
-		// Fatal at startup: running on defaults would let the next whole-struct
-		// SaveConfigToDatabase overwrite the stored config_blob.
-		store := newMockSettingsStore()
-		store.getAllErr = fmt.Errorf("read failed")
-		err := LoadConfigFromDatabase(store)
-		assert.ErrorIs(t, err, store.getAllErr)
-	})
-
-	t.Run("applies settings from store", func(t *testing.T) {
-		AppConfig = Config{}
-		store := newMockSettingsStore()
-		store.settings["root_dir"] = &database.Setting{Key: "root_dir", Value: "/loaded", Type: "string"}
-		store.settings["concurrent_scans"] = &database.Setting{Key: "concurrent_scans", Value: "12", Type: "int"}
-		store.settings["auto_organize"] = &database.Setting{Key: "auto_organize", Value: "true", Type: "bool"}
-		// mark migration as done to skip migration logic
-		store.settings["maintenance_window_migrated"] = &database.Setting{Key: "maintenance_window_migrated", Value: "true", Type: "bool"}
-
-		err := LoadConfigFromDatabase(store)
-		assert.NoError(t, err)
-		assert.Equal(t, "/loaded", AppConfig.RootDir)
-		assert.Equal(t, 12, AppConfig.ConcurrentScans)
-		assert.True(t, AppConfig.AutoOrganize)
-	})
-
-	t.Run("unknown key logs warning but continues", func(t *testing.T) {
-		AppConfig = Config{}
-		store := newMockSettingsStore()
-		store.settings["unknown_key_xyz"] = &database.Setting{Key: "unknown_key_xyz", Value: "val", Type: "string"}
-		store.settings["maintenance_window_migrated"] = &database.Setting{Key: "maintenance_window_migrated", Value: "true", Type: "bool"}
-
-		err := LoadConfigFromDatabase(store)
-		assert.NoError(t, err)
-	})
-
-	t.Run("derives OpenLibraryDumpDir from RootDir", func(t *testing.T) {
-		AppConfig = Config{}
-		store := newMockSettingsStore()
-		store.settings["root_dir"] = &database.Setting{Key: "root_dir", Value: "/media/audio", Type: "string"}
-		store.settings["maintenance_window_migrated"] = &database.Setting{Key: "maintenance_window_migrated", Value: "true", Type: "bool"}
-
-		err := LoadConfigFromDatabase(store)
-		assert.NoError(t, err)
-		assert.Equal(t, "/media/audio/openlibrary-dumps", AppConfig.OpenLibraryDumpDir)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// MigrateMaintenanceWindow
-// ---------------------------------------------------------------------------
-
-func TestMigrateMaintenanceWindow(t *testing.T) {
-	t.Run("already migrated", func(t *testing.T) {
-		store := newMockSettingsStore()
-		store.settings["maintenance_window_migrated"] = &database.Setting{
-			Key: "maintenance_window_migrated", Value: "true", Type: "bool",
-		}
-		AppConfig = Config{Maintenance: MaintenanceConfig{WindowStart: 0, WindowEnd: 0}}
-		MigrateMaintenanceWindow(store)
-		// Should not change defaults since migration was already done
-		assert.Equal(t, 0, AppConfig.Maintenance.WindowStart)
-	})
-
-	t.Run("migrates from auto-update window", func(t *testing.T) {
-		store := newMockSettingsStore()
-		AppConfig = Config{
-			AutoUpdate:  AutoUpdateConfig{WindowStart: 2, WindowEnd: 5},
-			Maintenance: MaintenanceConfig{WindowStart: 0, WindowEnd: 0},
-		}
-		MigrateMaintenanceWindow(store)
-		assert.Equal(t, 2, AppConfig.Maintenance.WindowStart)
-		assert.Equal(t, 5, AppConfig.Maintenance.WindowEnd)
-		assert.Equal(t, "true", store.settings["maintenance_window_migrated"].Value)
-	})
-
-	t.Run("defaults when both zero", func(t *testing.T) {
-		store := newMockSettingsStore()
-		AppConfig = Config{}
-		MigrateMaintenanceWindow(store)
-		assert.Equal(t, 1, AppConfig.Maintenance.WindowStart)
-		assert.Equal(t, 4, AppConfig.Maintenance.WindowEnd)
-	})
-}
-
-// ---------------------------------------------------------------------------
-// SyncConfigFromEnv
-// ---------------------------------------------------------------------------
-
-func TestSyncConfigFromEnvUnit(t *testing.T) {
-	t.Run("overrides from env", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("root_dir", "/env/root")
-		viper.Set("openai_api_key", "sk-env")
-		viper.Set("google_books_api_key", "gk-env")
-		viper.Set("enable_ai_parsing", true)
-
-		AppConfig = Config{}
-		SyncConfigFromEnv()
-
-		assert.Equal(t, "/env/root", AppConfig.RootDir)
-		assert.Equal(t, "sk-env", AppConfig.OpenAIAPIKey)
-		assert.Equal(t, "gk-env", AppConfig.GoogleBooksAPIKey)
-		assert.True(t, AppConfig.EnableAIParsing)
-	})
-
-	t.Run("empty env values do not override", func(t *testing.T) {
-		viper.Reset()
-		viper.Set("root_dir", "")
-		viper.Set("openai_api_key", "")
-
-		AppConfig = Config{RootDir: "/existing", OpenAIAPIKey: "sk-existing"}
-		SyncConfigFromEnv()
-
-		assert.Equal(t, "/existing", AppConfig.RootDir)
-		assert.Equal(t, "sk-existing", AppConfig.OpenAIAPIKey)
-	})
-
-	t.Run("unset keys do not override", func(t *testing.T) {
-		viper.Reset()
-		AppConfig = Config{RootDir: "/keep", OpenAIAPIKey: "sk-keep"}
-		SyncConfigFromEnv()
-
-		assert.Equal(t, "/keep", AppConfig.RootDir)
-		assert.Equal(t, "sk-keep", AppConfig.OpenAIAPIKey)
-	})
-}
 
 func TestMinBookSizeBytesDefault(t *testing.T) {
 	c := &Config{MinBookSizeBytes: 0}

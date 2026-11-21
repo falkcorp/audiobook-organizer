@@ -1,7 +1,7 @@
 // file: internal/books/cutover/rename_table_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 3b8c8f9e-e2d4-4c55-8d7b-6a0f0e1f8a52
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package cutover
 
@@ -28,9 +28,9 @@ const goldenPath = "testdata/rename_table.golden"
 // bump goldenVersion and goldenEdited with every change to the table, and
 // regenerate with -update.
 const (
-	goldenVersion = "1.2.0"
+	goldenVersion = "1.3.0"
 	goldenGUID    = "7024f723-334e-4210-95d6-bcd11fc9cd7d"
-	goldenEdited  = "2026-11-11"
+	goldenEdited  = "2026-11-18"
 )
 
 // repoRoot is the module root, found from the test's working directory (the
@@ -227,6 +227,12 @@ func formatTable(t testing.TB, tab *RenameTable, literals, dynamic []string) str
 			list := ""
 			if tg.List != "" {
 				list = " list=" + tg.List
+			}
+			if tg.Map != "" {
+				list += " map=" + tg.Map
+			}
+			if tg.Window != "" {
+				list += fmt.Sprintf(" window=%s order=%d", tg.Window, tg.Order)
 			}
 			fmt.Fprintf(&b, "target %s %s convert=%s%s%s env=%s\n", tg.Kind, tg.Path, dash(tg.Convert), list, flags, env)
 		}

@@ -1,7 +1,7 @@
 // file: internal/books/cutover/harness_test.go
-// version: 1.4.0
+// version: 1.4.3
 // guid: 2f6d7b3a-71c4-4a7c-b6a3-1e4f2b9c0d05
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package cutover
 
@@ -31,6 +31,7 @@ import (
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/codec"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/storage/keys"
 )
@@ -189,6 +190,10 @@ func newFailClosedStore(o config.Options) (*config.Store, error) {
 	return st, nil
 }
 
+// coreWindowsDefault is core.tasks.windows' default in core: one window, nightly,
+// hours 1 to 4, enabled (HEAD's maintenance window).
+const coreWindowsDefault = `{"nightly":{"enabled":true,"end":4,"start":1}}`
+
 // stageCall is one Importer.Stage call M2 made.
 type stageCall struct {
 	Path  string
@@ -224,11 +229,16 @@ func newTableImporter(real config.Importer, target rowStore) *tableImporter {
 				ti.allowed[t.Path] = true
 				if def, ok := headDefault(r.Head); ok && !r.Container {
 					if raw, err := json.Marshal(def); err == nil {
-						if out, _, err := Convert(t.Convert, raw); err == nil {
+						if out, _, err := Convert(t, raw); err == nil {
 							ti.defaults[t.Path] = out
 						}
 					}
 				}
+			case TargetMember:
+				// Core registers the map, not its members. Its default declares
+				// the nightly window (core/kernel core_schedule_defaults.go).
+				ti.allowed[t.Map] = true
+				ti.defaults[t.Map] = json.RawMessage(coreWindowsDefault)
 			case TargetEntry, TargetFold:
 				ti.allowed[t.List] = true
 				ti.defaults[t.List] = json.RawMessage(`[]`)
@@ -416,7 +426,10 @@ type rig struct {
 	mutate     func(t testing.TB, lr storage.LegacyRange)
 	files      FileOps
 	allowRegen bool
-	noKeyDir   bool // the state directory has no key file once the store is seeded
+	// operatorSet is ConfigStepOptions.OperatorSet: the keys an operator
+	// layer sets for this boot, by path, with the layer's name.
+	operatorSet map[string]string
+	noKeyDir    bool // the state directory has no key file once the store is seeded
 	// afterSeed edits the state directory once the store is seeded (seeding
 	// itself seals rows with HEAD's key, so the key is only broken after it).
 	afterSeed func(t testing.TB, stateDir string)
@@ -486,11 +499,6 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// settingRows are the four encrypted rows and the blob, the keys M2 reads.
-func settingRows() []string {
-	return []string{"setting:" + blobRowName, "setting:basic_auth_password", "setting:google_books_api_key", "setting:hardcover_api_token", "setting:openai_api_key"}
-}
-
 // spec is books' storage spec for the build: the pre-cutover one (the four rows
 // read-write, no level step), or the cutover build's (books at its cutover
 // level behind books' level step, the four rows' claims retired).
@@ -499,15 +507,8 @@ func (r *rig) spec(cutover bool) storage.Spec {
 	if !cutover {
 		return spec
 	}
-	spec.Level = BooksCutoverLevel
-	spec.Migrations = append(spec.Migrations, BooksLevelStep(r.levelVersion(), BooksCutoverLevel))
-	for i := range spec.Claims {
-		k := spec.Claims[i].Key
-		if k != "" && k != "setting:"+blobRowName && slices.Contains(settingRows(), k) {
-			spec.Claims[i].Mode = storage.ClaimRetired
-		}
-	}
-	return spec
+	// The shipped manifest's own function, so the rig cannot drift from it.
+	return Flip{Level: BooksLevelStep(r.levelVersion(), BooksCutoverLevel)}.Spec(spec)
 }
 
 // levelVersion is books' next contiguous version after its versioned steps.
@@ -536,8 +537,12 @@ func (r *rig) migration() datamigrate.DataMigration {
 		ConfigFile:       r.confFile,
 		Legacy:           func() storage.Reader { _, _, l := r.h.get(); return l },
 		AllowKeyRegen:    func() bool { return r.allowRegen },
-		Files:            r.files,
-		Logger:           slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		OperatorSet: func(p string) (string, bool) {
+			by, ok := r.operatorSet[p]
+			return by, ok
+		},
+		Files:  r.files,
+		Logger: slog.New(slog.NewTextHandler(r.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	return ConfigStep(lazyConfig{r.h}, lazySecrets{r.h}, opts)
 }
@@ -673,7 +678,7 @@ func (r *rig) boot(ctx context.Context, fsys vfs.FS, migs []datamigrate.DataMigr
 	}
 	secKS, _ := db.Keyspace("core/secrets")
 	cfgKS, _ := db.Keyspace("core/config")
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: secKS, AppID: rigAppID, Now: crashmatrix.Now, AllowKeyRegen: r.allowRegen})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: secrets.RootStateFiles(root), Keyspace: secKS, AppID: rigAppID, Now: crashmatrix.Now, AllowKeyRegen: r.allowRegen})
 	if err != nil {
 		return errors.Join(err, root.Close(), db.Close())
 	}
@@ -721,8 +726,20 @@ type snapshot struct {
 	Legacy     map[string][]byte
 	RawCore    map[string][]byte // every row of core's config, secrets and storage keyspaces, "<owner>/<key>"
 	State      string
-	Calls      []stageCall
-	cfg        *tableImporter
+	// Report is M2's stored VerifyReport (c/storage/dm/<id>/report, Verify's
+	// last report as the runner keeps it); Reported is false when no report
+	// record exists.
+	Report   datamigrate.VerifyReport
+	Reported bool
+	Calls    []stageCall
+	cfg      *tableImporter
+}
+
+// dmReportRecord is the stored shape of a data migration's report record
+// (core/internal/storagemigrate's reportRecord).
+type dmReportRecord struct {
+	State  string                   `json:"state"`
+	Report datamigrate.VerifyReport `json:"report"`
 }
 
 // Effective is the value of key path with no operator layer: staged, else its
@@ -799,6 +816,18 @@ func read(ctx context.Context, e *bootEnv) (*snapshot, error) {
 			return nil, err
 		}
 		s.State = rec.State
+	}
+	raw, err = sks.Get(ctx, append(storage.DataMigrationKey(ConfigCutoverID), keys.Join(keys.Str("report"))...))
+	switch {
+	case errors.Is(err, storage.ErrNotFound):
+	case err != nil:
+		return nil, err
+	default:
+		rec, err := codec.JSON[dmReportRecord](1).Decode(raw)
+		if err != nil {
+			return nil, fmt.Errorf("M2's report record does not decode: %w", err)
+		}
+		s.Report, s.Reported = rec.Report, true
 	}
 	s.Calls = e.cfg.staged()
 	s.cfg = e.cfg

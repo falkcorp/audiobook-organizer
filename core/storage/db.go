@@ -1,7 +1,7 @@
 // file: core/storage/db.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 30500128-a267-4af7-ba39-fae150d4e708
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package storage
 
@@ -36,9 +36,13 @@ const storageOwner Owner = "core/storage"
 const coreLevelOwner Owner = "core"
 
 // coreOrder is the kernel's fixed core subsystem order, the DAG's tie-break
-// (§5S.3.5 "Order"). A core owner absent from it may declare no step.
+// (§5S.3.5 "Order"). A core owner absent from it may declare no step. "levels"
+// is the kernel's own owner for core's level steps (kernel.coreLevelsOwner,
+// F3-07 d): storage's own owner cannot be declared, so core's half of M7 sits on
+// core/levels, second so that a flip's core level step precedes every other core
+// subsystem's step of the same boot.
 func coreOrder() []string {
-	return []string{"storage", "secrets", "config", "log", "auth", "rbac", "audit", "tasks", "outbox", "index",
+	return []string{"storage", "levels", "secrets", "config", "log", "auth", "rbac", "audit", "tasks", "outbox", "index",
 		"library", "providerhttp", "integrations", "ai", "download", "indexer", "notify", "acquire", "backup",
 		"updater", "health", "arrfacade"}
 }

@@ -1,18 +1,21 @@
 // file: web/src/utils/settingLocks.ts
-// version: 1.1.0
+// version: 2.0.0
 // guid: 6c1f9e24-8a3d-4b75-9d02-5e7a1c8b3f46
-// last-edited: 2026-10-11
+// last-edited: 2026-11-19
 
 /**
- * What GET /api/v1/config reports in `setting_locks` for a key the server's
- * config file locks: this text, followed by " <path>" when the server knows which
- * file it read. Mirrors config.LockedByConfigFile in internal/config; it is not an
- * environment variable name (it has a space) and does not start with `--`.
+ * What GET /api/v1/config reports as a key's `locked_by` (and the page keeps in
+ * `setting_locks`): which operator layer forces the key's value.
  *
- * The file is the one the server was started with (`--config`, by default
- * `~/.audiobook-organizer.yaml`), not the `config.yaml` kept next to the database.
+ *   `env ABO_CORE_LOG_LEVEL`   an environment variable
+ *   `flag --db`                a command-line flag
+ *   `file <name>`              the config file the server read (`<name>` is its path)
+ *
+ * Mirrors the strings core's config Locks produce.
  */
-export const LOCKED_BY_CONFIG_FILE = 'config file';
+const ENV_PREFIX = 'env ';
+const FLAG_PREFIX = 'flag ';
+const FILE_PREFIX = 'file ';
 
 /**
  * describeLock turns a lock mechanism into the sentence fragment that tells the
@@ -23,11 +26,16 @@ export const LOCKED_BY_CONFIG_FILE = 'config file';
  */
 export function describeLock(mechanism: string | undefined): string {
   if (!mechanism) return 'the server configuration';
-  if (mechanism === LOCKED_BY_CONFIG_FILE) return "the server's config file";
-  if (mechanism.startsWith(`${LOCKED_BY_CONFIG_FILE} `)) {
-    return `the server's config file (${mechanism.slice(LOCKED_BY_CONFIG_FILE.length + 1)})`;
+  if (mechanism.startsWith(ENV_PREFIX)) {
+    return `the ${mechanism.slice(ENV_PREFIX.length)} environment variable on the server`;
   }
-  return mechanism.startsWith('--')
-    ? `the ${mechanism} flag on the server's start-up command`
-    : `the ${mechanism} environment variable on the server`;
+  if (mechanism.startsWith(FLAG_PREFIX)) {
+    return `the ${mechanism.slice(FLAG_PREFIX.length)} flag on the server's start-up command`;
+  }
+  if (mechanism === 'file') return "the server's config file";
+  if (mechanism.startsWith(FILE_PREFIX)) {
+    return `the server's config file (${mechanism.slice(FILE_PREFIX.length)})`;
+  }
+  // A layer this page does not know by name: say what the server said.
+  return mechanism;
 }

@@ -1777,8 +1777,7 @@ func TestParseBatch_ObservedEmptyResultsThroughFakeServer(t *testing.T) {
 			defer srv.Close()
 
 			origBaseURL := config.AppConfig.OpenAIBaseURL
-			t.Setenv("OPENAI_BASE_URL", srv.URL)
-			config.InitConfig()
+			config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = srv.URL })
 			t.Cleanup(func() {
 				config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
 			})
@@ -2299,12 +2298,10 @@ func TestParseAudiobook_WithFakeServer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// Point OPENAI_BASE_URL to our fake server
+	// Point the configured OpenAI base URL at our fake server
 	origBaseURL := config.AppConfig.OpenAIBaseURL
-	os.Setenv("OPENAI_BASE_URL", server.URL)
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = server.URL })
 	defer func() {
-		os.Unsetenv("OPENAI_BASE_URL")
 		config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
 	}()
 
@@ -2379,10 +2376,8 @@ func TestParseAudiobook_MinimalContext(t *testing.T) {
 	defer server.Close()
 
 	origBaseURL := config.AppConfig.OpenAIBaseURL
-	os.Setenv("OPENAI_BASE_URL", server.URL)
-	config.InitConfig()
+	config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = server.URL })
 	defer func() {
-		os.Unsetenv("OPENAI_BASE_URL")
 		config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
 	}()
 
@@ -2510,8 +2505,7 @@ func TestOpenAIParser_UsesConfiguredModels(t *testing.T) {
 			defer srv.Close()
 
 			origBaseURL := config.AppConfig.OpenAIBaseURL
-			t.Setenv("OPENAI_BASE_URL", srv.URL)
-			config.InitConfig()
+			config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = srv.URL })
 			t.Cleanup(func() {
 				config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = origBaseURL })
 			})

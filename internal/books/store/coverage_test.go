@@ -11,7 +11,11 @@
 package store
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -34,7 +38,7 @@ func TestInitializeStoreAndClose(t *testing.T) {
 	if _, err := InitializeStoreWith("pebble", pebbleDir, StandaloneOptions{}); err != nil {
 		t.Fatalf("unexpected pebble init error: %v", err)
 	}
-	if err := CloseStore(); err != nil {
+	if err := globalStore.Close(); err != nil {
 		t.Fatalf("failed to close pebble store: %v", err)
 	}
 	globalStore = nil
@@ -63,16 +67,12 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncryptValue failed: %v", err)
 	}
-	dec, err := DecryptValue(enc)
+	dec, err := decryptForTest(enc)
 	if err != nil {
-		t.Fatalf("DecryptValue failed: %v", err)
+		t.Fatalf("decrypt failed: %v", err)
 	}
 	if dec != "secret" {
 		t.Fatalf("expected decrypted value, got %q", dec)
-	}
-
-	if got := MaskSecret("12345678"); got != "********" {
-		t.Fatalf("unexpected mask: %q", got)
 	}
 
 	store, cleanup := setupPebbleTestDB(t)
@@ -105,9 +105,34 @@ func TestEncryptionHelpersAndSettings(t *testing.T) {
 	if !secret.IsSecret || secret.Value == "shh" {
 		t.Fatalf("secret setting stored in plain text: %+v", secret)
 	}
-	if got, err := DecryptValue(secret.Value); err != nil || got != "shh" {
-		t.Fatalf("DecryptValue(secret) = %q, %v; want %q", got, err, "shh")
+	if got, err := decryptForTest(secret.Value); err != nil || got != "shh" {
+		t.Fatalf("decrypt(secret) = %q, %v; want %q", got, err, "shh")
 	}
+}
+
+// decryptForTest opens a value EncryptValue sealed: base64 of the GCM nonce
+// followed by the ciphertext, under the package key. HEAD's stored secrets
+// are in this format and the cutover reads them (internal/books/cutover's
+// headDecrypt), so the round trip pins it; production no longer decrypts
+// here (F3-07 deleted DecryptValue with HEAD's settings loader).
+func decryptForTest(encrypted string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(encrypted)
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(encryptionKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < gcm.NonceSize() {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	plain, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
+	return string(plain), err
 }
 
 // TestMockStore_AllMethods tests all 133 methods of MockStore to ensure 100% coverage.
@@ -507,16 +532,3 @@ func TestMockStore_WithCustomFuncs(t *testing.T) {
 // NOTE(fable5 T022): TestGetOrCreateAuthor, TestGetOrCreateSeries, and
 // TestCloseWithDB removed — they tested SQLite-backed helpers (Initialize,
 // DB, GetOrCreateAuthor, GetOrCreateSeries, Close) that were removed.
-
-// TestCloseStoreWithNilStore tests CloseStore when globalStore is nil
-func TestCloseStoreWithNilStore(t *testing.T) {
-	origStore := globalStore
-	defer func() {
-		globalStore = origStore
-	}()
-
-	globalStore = nil
-	if err := CloseStore(); err != nil {
-		t.Errorf("CloseStore() with nil store returned error: %v", err)
-	}
-}

@@ -1,7 +1,7 @@
 // file: core/app/offline_prune.go
-// version: 1.0.3
+// version: 1.0.5
 // guid: 7435e2a1-aaaa-450e-96a6-35082ffd5d60
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package app
 
@@ -14,6 +14,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -81,7 +82,11 @@ func pruneCheckpointsCommand(opts Options, mods []module.Module) Command {
 // pruneCheckpoints resolves the app's store path and state directory and
 // prunes, writing one line per checkpoint deleted or kept.
 func pruneCheckpoints(ctx context.Context, opts Options, mods []module.Module, includeOpen bool, stdout io.Writer) error {
-	dbPath, stateDir, err := storagePath(opts, mods)
+	c, err := kernelConfig(opts, mods)
+	if err != nil {
+		return err
+	}
+	dbPath, stateDir, err := kernel.ResolveStorage(ctx, c, "storage prune-checkpoints")
 	if err != nil {
 		return err
 	}

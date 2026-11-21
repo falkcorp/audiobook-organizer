@@ -6,19 +6,14 @@
 package config
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"maps"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // AIEndpoint is one AI server row in the capability-routing settings
@@ -85,9 +80,6 @@ const (
 	LocalUVEndpointURL = "local:uv-openai-whisper"
 )
 
-// knownAIAuthRefs are the secret names an endpoint row may reference.
-var knownAIAuthRefs = []string{"openai_api_key"}
-
 // DispatchEndpoint converts the stored row into the dispatcher's input type.
 // Used by the status API and, when ai_endpoints_routing is on, by the routed
 // call sites in internal/ai.
@@ -142,16 +134,21 @@ func cloneStringMap(m map[string]string) map[string]string {
 	return out
 }
 
+// knownAIAuthRefs are the secret names an endpoint row may reference.
+var knownAIAuthRefs = []string{"openai_api_key"}
+
 // normalizeEndpointURL is the form used for the (protocol, URL) uniqueness
 // check: trimmed, case-folded, without a trailing slash.
 func normalizeEndpointURL(u string) string {
 	return strings.TrimRight(strings.ToLower(strings.TrimSpace(u)), "/")
 }
 
-// validateAIEndpoints checks a submitted ai_endpoints list. It runs only on a
+// ValidateAIEndpoints checks a submitted ai_endpoints list. It runs only on a
 // PUT that carries the key, so rows stored by a newer binary (with capability
-// IDs this one does not know) never block an unrelated settings save.
-func validateAIEndpoints(rows []AIEndpoint) error {
+// IDs this one does not know) never block an unrelated settings save. The
+// config Engine calls it on the list a write carries; HEAD called it from the
+// update service this replaced.
+func ValidateAIEndpoints(rows []AIEndpoint) error {
 	var errs []string
 	ids := make(map[string]int, len(rows))
 	pairs := make(map[string]string, len(rows))
@@ -221,334 +218,4 @@ func capabilityIDProblem(id string) string {
 		return fmt.Sprintf("unknown capability %q (see GET /api/v1/ai/capabilities)", id)
 	}
 	return ""
-}
-
-// MaskAIEndpoints returns a deep copy of rows with auth_ref masked. The copy
-// is required for the same reason as maskMetadataSourceCredentials: MaskSecrets
-// makes a shallow struct copy, so masking in place would rewrite the live
-// config's rows.
-func MaskAIEndpoints(rows []AIEndpoint) []AIEndpoint {
-	if rows == nil {
-		return nil
-	}
-	out := make([]AIEndpoint, len(rows))
-	for i, r := range rows {
-		r.Capabilities = slices.Clone(r.Capabilities)
-		r.Labels = slices.Clone(r.Labels)
-		r.Features = slices.Clone(r.Features)
-		r.CapabilityModels = cloneStringMap(r.CapabilityModels)
-		r.HostRoots = cloneStringMap(r.HostRoots)
-		if r.AuthRef != "" {
-			r.AuthRef = database.MaskSecret(r.AuthRef)
-		}
-		out[i] = r
-	}
-	return out
-}
-
-// unmaskAIEndpointAuthRefs turns an auth_ref that GET masked back into the
-// secret name it stands for, so a GET-then-PUT round trip validates.
-func unmaskAIEndpointAuthRefs(rows []AIEndpoint) {
-	for i := range rows {
-		ref := rows[i].AuthRef
-		if ref == "" || slices.Contains(knownAIAuthRefs, ref) {
-			continue
-		}
-		for _, name := range knownAIAuthRefs {
-			if database.MaskSecret(name) == ref {
-				rows[i].AuthRef = name
-				break
-			}
-		}
-	}
-}
-
-// aiEndpointsSeed carries what the ai_endpoints migration needs beyond the
-// blob itself. The blob never contains the OpenAI key, and on prod
-// WHISPER_ENDPOINTS lives in the environment, which LoadConfigFromDatabase
-// applies AFTER the migration chain. A migration that read only the blob
-// would see no whisper servers and hand transcribe.batch to local uv.
-type aiEndpointsSeed struct {
-	// Base is the config the blob is unmarshalled onto (Snapshot at load),
-	// so defaults for keys absent from the blob match what load produces.
-	Base *Config
-	// HasOpenAIKey reports a stored or env-supplied OpenAI key.
-	HasOpenAIKey bool
-	// EnvWhisperEndpoints / EnvWhisperRemoteURL are non-nil when the env
-	// sets them; they win over the blob, as in applyEnvAuthoritativeConfig.
-	EnvWhisperEndpoints *[]WhisperEndpoint
-	EnvWhisperRemoteURL *string
-}
-
-// migrateAIEndpointsBlob writes the ai_endpoints list derived from the legacy
-// fields (PLAN section 5) into a blob that has none. Idempotent: a blob that
-// already has ai_endpoints (even an empty list the operator saved) is
-// returned unchanged. A null value, which a save from before this field
-// existed cannot produce but a hand edit can, is treated as absent.
-//
-// The legacy fields are left in place and keep being written, and nothing
-// reads ai_endpoints for dispatch in this PR.
-func migrateAIEndpointsBlob(blob string, seed aiEndpointsSeed) (string, bool) {
-	// Every failure below is logged: a migration that silently never runs
-	// leaves ai_endpoints empty with nothing in the boot log to say why.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(blob), &raw); err != nil || raw == nil {
-		slog.Warn("config: ai_endpoints migration skipped: blob is not a JSON object", "err", err)
-		return blob, false
-	}
-	if v, ok := raw["ai_endpoints"]; ok && !bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-		return blob, false
-	}
-
-	cfg := &Config{}
-	if seed.Base != nil {
-		cfg = seed.Base.Clone()
-	}
-	if err := json.Unmarshal([]byte(blob), cfg); err != nil {
-		slog.Warn("config: ai_endpoints migration skipped: blob does not decode into Config", "err", err)
-		return blob, false
-	}
-	if seed.EnvWhisperEndpoints != nil {
-		cfg.WhisperEndpoints = *seed.EnvWhisperEndpoints
-	}
-	if seed.EnvWhisperRemoteURL != nil {
-		cfg.WhisperRemoteURL = *seed.EnvWhisperRemoteURL
-	}
-	hasKey := seed.HasOpenAIKey || cfg.OpenAIAPIKey != ""
-	if hasKey && cfg.OpenAIAPIKey == "" {
-		// The effective-mode helpers look at the key field itself.
-		cfg.OpenAIAPIKey = "present"
-	}
-
-	enc, err := json.Marshal(buildMigratedAIEndpoints(cfg, hasKey))
-	if err != nil {
-		slog.Warn("config: ai_endpoints migration skipped: encoding rows failed", "err", err)
-		return blob, false
-	}
-	raw["ai_endpoints"] = enc
-	out, err := json.Marshal(raw)
-	if err != nil {
-		slog.Warn("config: ai_endpoints migration skipped: encoding blob failed", "err", err)
-		return blob, false
-	}
-	return string(out), true
-}
-
-// tick adds c to row's capabilities if the migration is allowed to tick it.
-// The migration may tick ONLY capabilities in aidispatch.MigrationBaseline; a
-// capability registered later starts with no servers until an operator ticks
-// it. This helper is the single enforcement point for that rule.
-func tick(row *AIEndpoint, c aidispatch.Capability) {
-	if !aidispatch.InMigrationBaseline(c) {
-		return
-	}
-	if !slices.Contains(row.Capabilities, c.ID()) {
-		row.Capabilities = append(row.Capabilities, c.ID())
-	}
-}
-
-// buildMigratedAIEndpoints derives the rows from resolved legacy config so
-// that, for every call site in PLAN section 1, selection over the rows picks
-// the endpoint the site uses today. Known divergences are listed in the PR 2
-// description and in ai_endpoints_migration_test.go. Never returns nil, so
-// the migrated blob holds [] rather than null and the migration cannot re-run.
-func buildMigratedAIEndpoints(cfg *Config, hasOpenAIKey bool) []AIEndpoint {
-	rows := []AIEndpoint{}
-	llmMode := cfg.EffectiveLLMMode()
-	embedMode := cfg.EffectiveEmbeddingMode()
-	llmLocal := llmMode == AIBackendModeLocal || llmMode == AIBackendModeOpenAIFallbackLocal
-	llmCloud := llmMode == AIBackendModeOpenAI || llmMode == AIBackendModeOpenAIFallbackLocal
-	embedLocal := embedMode == AIBackendModeLocal || embedMode == AIBackendModeOpenAIFallbackLocal
-	embedCloud := embedMode == AIBackendModeOpenAI || embedMode == AIBackendModeOpenAIFallbackLocal
-
-	// One local OpenAI-compatible row: chat and embeddings share the base URL
-	// today (LocalBaseURL, falling back to Embedding.BaseURL).
-	localURL := cfg.AIBackend.LocalBaseURL
-	if localURL == "" {
-		localURL = cfg.Embedding.BaseURL
-	}
-	if localURL != "" {
-		embedModel := cfg.AIBackend.LocalEmbeddingModel
-		if embedModel == "" {
-			embedModel = cfg.Embedding.Model
-		}
-		row := AIEndpoint{
-			ID:         AIEndpointIDLocalLLM,
-			Label:      "Local LLM (migrated from ai_backend.local_base_url)",
-			Protocol:   string(aidispatch.ProtocolOpenAICompat),
-			URL:        localURL,
-			ChatModel:  cfg.AIBackend.LocalLLMModel,
-			EmbedModel: embedModel,
-			Priority:   10,
-			// Not enforced until the call sites move onto the dispatcher.
-			Concurrency:  4,
-			Enabled:      true,
-			Capabilities: []string{},
-		}
-		if llmLocal {
-			// The chat sites that honour llm_mode today. Batch-API work
-			// (dedup_review, author_dedup_batch) is never ticked here: it
-			// requires the batch_api feature, which Ollama does not have.
-			tick(&row, aidispatch.LLMFilenameParse)
-			tick(&row, aidispatch.LLMAuthorReview)
-			tick(&row, aidispatch.LLMAuthorDiscovery)
-			tick(&row, aidispatch.LLMMetadataRerank)
-		}
-		if embedLocal {
-			tick(&row, aidispatch.EmbedText)
-		}
-		rows = append(rows, row)
-	}
-
-	if hasOpenAIKey {
-		base := cfg.OpenAIBaseURL
-		if base == "" {
-			base = DefaultOpenAIBaseURL
-		}
-		prio := 20
-		if llmMode == AIBackendModeOpenAIFallbackLocal {
-			prio = 5 // cloud first, local second
-		}
-		models := map[string]string{}
-		for id, m := range map[aidispatch.Capability]string{
-			aidispatch.LLMFilenameParse:  cfg.FilenameParseModel,
-			aidispatch.LLMAudiobookParse: cfg.FilenameParseModel,
-			aidispatch.LLMCoverArtVision: cfg.CoverArtModel,
-			aidispatch.LLMMetadataRerank: cfg.MetadataReviewModel,
-			aidispatch.LLMDedupReview:    cfg.Dedup.ReviewModel,
-		} {
-			if m != "" {
-				models[id.ID()] = m
-			}
-		}
-		if len(models) == 0 {
-			models = nil
-		}
-		row := AIEndpoint{
-			ID:               AIEndpointIDOpenAI,
-			Label:            "OpenAI (migrated from openai_api_key)",
-			Protocol:         string(aidispatch.ProtocolOpenAICompat),
-			URL:              base,
-			ChatModel:        DefaultOpenAIChatModel,
-			EmbedModel:       cfg.Embedding.Model,
-			CapabilityModels: models,
-			Priority:         prio,
-			Concurrency:      4,
-			Enabled:          true,
-			Capabilities:     []string{},
-			Features:         []string{aidispatch.FeatureBatchAPI, aidispatch.FeatureVision},
-			AuthRef:          "openai_api_key",
-		}
-		// Owner decision 1: pre-tick the sites that call OpenAI directly
-		// whenever a key exists, regardless of llm_mode.
-		tick(&row, aidispatch.LLMFilenameParse)
-		tick(&row, aidispatch.LLMAudiobookParse)
-		// Owner decision 5 ("vision is cloud only") was REVERSED on
-		// 2026-09-26: vision runs on the local LLM pool rows, which an
-		// operator ticks for llm.cover_art_vision together with the "vision"
-		// feature and a capability_models entry. The local row above is not
-		// ticked here because the migration cannot know its model can see.
-		// This cloud tick is kept so an install that already relied on it
-		// keeps working; with a higher priority number than the local rows it
-		// is only a fallback, and unticking it makes vision local-only.
-		tick(&row, aidispatch.LLMCoverArtVision)
-		tick(&row, aidispatch.LLMAuthorReview)
-		tick(&row, aidispatch.LLMAuthorDiscovery)
-		tick(&row, aidispatch.LLMAuthorDedupBatch)
-		tick(&row, aidispatch.LLMDiagnostics)
-		// The intro-clip fallback is whisper-1 over OpenAI today. The
-		// dispatcher refuses it on openai_compat until PR 3 adds the protocol
-		// mapping; the tick records the intent.
-		tick(&row, aidispatch.TranscribeIntroClip)
-		if llmCloud {
-			tick(&row, aidispatch.LLMMetadataRerank)
-			tick(&row, aidispatch.LLMDedupReview)
-		}
-		if embedCloud {
-			tick(&row, aidispatch.EmbedText)
-		}
-		if embedMode == AIBackendModeOpenAI {
-			tick(&row, aidispatch.EmbedTextBatch)
-		}
-		rows = append(rows, row)
-	}
-
-	// Whisper servers, with poolEndpoints' precedence: a non-empty
-	// whisper_endpoints list, else whisper_remote_url as one server.
-	whisper := make([]AIEndpoint, 0, len(cfg.WhisperEndpoints))
-	seen := map[string]bool{}
-	for _, w := range cfg.WhisperEndpoints {
-		if w.URL == "" || seen[w.URL] {
-			continue
-		}
-		seen[w.URL] = true
-		row := AIEndpoint{
-			Label:        w.Label,
-			Protocol:     string(aidispatch.ProtocolWhisperServer),
-			URL:          w.URL,
-			Priority:     w.Priority,
-			Concurrency:  max(w.Concurrency, 1),
-			Enabled:      true,
-			Capabilities: []string{},
-			Labels:       slices.Clone(w.Capabilities),
-			RequireGPU:   w.RequireGPU,
-		}
-		tick(&row, aidispatch.TranscribeBatch)
-		whisper = append(whisper, row)
-	}
-	if len(whisper) == 0 && cfg.WhisperRemoteURL != "" {
-		row := AIEndpoint{
-			Label:        "Whisper server (migrated from whisper_remote_url)",
-			Protocol:     string(aidispatch.ProtocolWhisperServer),
-			URL:          cfg.WhisperRemoteURL,
-			Concurrency:  1,
-			Enabled:      true,
-			Capabilities: []string{},
-		}
-		tick(&row, aidispatch.TranscribeBatch)
-		whisper = append(whisper, row)
-	}
-	assignWhisperIDs(whisper)
-	rows = append(rows, whisper...)
-
-	// The in-process uv runner: today's intro-clip path when uv is on PATH,
-	// and the batch path only when no whisper server is configured.
-	uv := AIEndpoint{
-		ID:           AIEndpointIDLocalUV,
-		Label:        "Local uv/openai-whisper",
-		Protocol:     string(aidispatch.ProtocolLocalProcess),
-		URL:          LocalUVEndpointURL,
-		Priority:     100,
-		Concurrency:  1,
-		Enabled:      true,
-		Capabilities: []string{},
-	}
-	tick(&uv, aidispatch.TranscribeIntroClip)
-	if len(whisper) == 0 {
-		tick(&uv, aidispatch.TranscribeBatch)
-	}
-	rows = append(rows, uv)
-	return rows
-}
-
-// assignWhisperIDs names each row whisper-<port>, or whisper-<n> (1-based
-// position) when the URL has no port or two rows share one.
-func assignWhisperIDs(rows []AIEndpoint) {
-	ports := map[string]int{}
-	portOf := make([]string, len(rows))
-	for i, r := range rows {
-		if u, err := url.Parse(r.URL); err == nil {
-			portOf[i] = u.Port()
-		}
-		if portOf[i] != "" {
-			ports[portOf[i]]++
-		}
-	}
-	for i := range rows {
-		if p := portOf[i]; p != "" && ports[p] == 1 {
-			rows[i].ID = "whisper-" + p
-		} else {
-			rows[i].ID = "whisper-" + strconv.Itoa(i+1)
-		}
-	}
 }

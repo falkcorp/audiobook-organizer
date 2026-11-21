@@ -28,9 +28,14 @@ import (
 //
 // opts.Env defaults to an empty environment, so the caller's process env
 // cannot change what the test builds; a nil opts.LogOutput discards the
-// boot's log lines unless opts.Logger is set.
+// boot's log lines unless opts.Logger is set. Every boot runs the config boot
+// and keeps its keyring and boot record in a state directory (F3-07), so an
+// unset opts.StateDir defaults to t.TempDir().
 func MetricsProvider(t testing.TB, opts app.Options) *metrics.Provider {
 	t.Helper()
+	if opts.StateDir == "" {
+		opts.StateDir = t.TempDir()
+	}
 	p, err := NewMetricsProvider(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("coretest.MetricsProvider: %v", err)
@@ -49,7 +54,10 @@ func MetricsProvider(t testing.TB, opts app.Options) *metrics.Provider {
 // that outlives one test: a package's TestMain that seeds process-global
 // instruments once (they bind to the first MeterProvider installed as the OTel
 // global and never rebind). The caller shuts the Provider down. The defaults
-// are MetricsProvider's.
+// are MetricsProvider's, except the state directory: it has no testing.TB to
+// make and remove one, so the caller names it (opts.StateDir, or
+// CORETEST_CORE_PATHS_STATE_DIR in opts.Env) and removes it; with neither the
+// boot fails naming core.paths.state_dir.
 func NewMetricsProvider(ctx context.Context, opts app.Options) (*metrics.Provider, error) {
 	if opts.AppID == "" {
 		opts.AppID = "coretest"

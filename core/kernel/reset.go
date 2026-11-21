@@ -15,7 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/configstore"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -194,6 +196,69 @@ func checkResetPlan(req storage.ResetRequest, plan storage.ResetPlan) error {
 		if restorejournal.InTree(plan.LibraryRoot, p) {
 			return fmt.Errorf("%w: hook path %s holds the library root %s and delete_library_files is not set", storage.ErrResetRequestInvalid, p, plan.LibraryRoot)
 		}
+	}
+	return nil
+}
+
+// resetFreshRowsBy is the By of the fresh rows a reset boot stores, after
+// the intent's ID (05-config §1.3.3 Override.By).
+const resetFreshRowsBy = "core/storage reset "
+
+// labelResetFreshRows is the crash-point label of the reset boot's fresh
+// rows batch (06 §6.5.1's writer table, P4b after secrets.Open on a reset
+// boot; coretest/crashmatrix lists it). Name coined by SEC8-5's fix.
+const labelResetFreshRows = "config.reset.fresh_rows"
+
+// writeResetFreshRows is the reset boot's fresh rows (SEC8-5; 05-storage
+// §5S.3.15 "Next boot", 06 P0a): on the boot that sets a KindReset swap aside,
+// of either kind, every registered FailClosed key (05-config §1.3.5) is
+// stored at its default in one synced batch through the config Importer,
+// which stages a FailClosed key's default although C4 skips every other
+// default. The fresh store then holds the stored value the FailClosed rule
+// compares an operator value with, so a stale <APP>_CORE_AUTH_MODE=disabled
+// left in a unit loses to the stored "required" after a reset, as HEAD's
+// reset stored factoryDefaultConfig's enable_auth=true; without the row the
+// operator value alone would be in play and win. A key whose default is
+// already its least restrictive value (core.http.basic_gate.enabled, off)
+// gets an inert row, and the default is stored, never the strictest value:
+// the reset restores factory settings, it does not tighten them.
+//
+// An ordinary fresh install writes none (05-config §1.3.5: "with only one of
+// them set, that one"), so an operator who installs with auth disabled gets
+// what they set. After a reset the owner can still remove the row through
+// Apply, whose FailClosed rule accepts an unset (failClosedApply), and the
+// operator value is effective again; no later boot rewrites it, because only
+// the BootReset boot calls this and it marks the journal applied right after.
+// A crash before that mark repeats the reset boot and with it this write,
+// which stores the same rows again.
+func writeResetFreshRows(ctx context.Context, db *storage.DB, cs *config.Store, id string) (err error) {
+	ks, ok := db.Keyspace(configstore.Owner)
+	if !ok {
+		return fmt.Errorf("kernel: reset fresh rows: owner %s has no keyspace", configstore.Owner)
+	}
+	var paths []config.Path
+	for p, st := range cs.Keys() {
+		if st.FailClosed {
+			paths = append(paths, p)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	imp := cs.Importer()
+	b := ks.NewBatch()
+	defer func() { err = errors.Join(err, b.Close()) }()
+	for _, p := range paths {
+		def, err := imp.Default(p)
+		if err != nil {
+			return fmt.Errorf("kernel: reset fresh rows: %s: %w", p, err)
+		}
+		if err := imp.Stage(b, p, def, resetFreshRowsBy+id); err != nil {
+			return fmt.Errorf("kernel: reset fresh rows: %s: %w", p, err)
+		}
+	}
+	if err := bootseam.Labelled(bootseam.From(ctx), labelResetFreshRows, func() error { return b.Commit(ctx, storage.Sync) }); err != nil {
+		return fmt.Errorf("kernel: reset fresh rows: %w", err)
 	}
 	return nil
 }

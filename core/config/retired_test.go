@@ -159,7 +159,7 @@ func TestRetiredName_OtherWarns(t *testing.T) {
 	}
 	want := []config.RetiredUse{
 		{Name: "GOTHAM_LOG_LEVEL", Canonical: kLevel, CanonicalEnv: "GOTHAM_CORE_BATCAVE_LEVEL"},
-		{Name: "GOTHAM_BAT_SIGNAL"},
+		{Name: "GOTHAM_BAT_SIGNAL", Message: "the signal moved to the roof"},
 		{Name: "watch", File: true, Canonical: "modules.gotham.watch", CanonicalEnv: "GOTHAM_GOTHAM_WATCH"},
 	}
 	if got := r.st.RetiredSet(); !slices.Equal(got, want) {
@@ -184,6 +184,40 @@ func TestRetiredName_OtherWarns(t *testing.T) {
 	clean.start()
 	if len(clean.st.RetiredSet()) != 0 || config.RetiredGauge(clean.st) != 0 || slices.Contains(clean.st.HealthTokens(), "config_retired_name_ignored") {
 		t.Error("an empty retired name counts as set")
+	}
+}
+
+// TestRetiredName_RefusalCarriesTheMessage (05-config §1.3.6): the app's
+// reason for a retired name travels with its use, so a refused boot's error
+// prints it beside the canonical name (the operator reads the reason where
+// the service stopped, not only in a warning), and RetiredSet carries it.
+func TestRetiredName_RefusalCarriesTheMessage(t *testing.T) {
+	const why = "the cave moved under the manor"
+	r := retiredRig(t, []string{"BATCAVE_PATH=/srv/cave", "BATCAVE_KEY=alfred"}, "",
+		config.RetiredName{Name: "BATCAVE_PATH", Canonical: kPath, Message: why},
+		config.RetiredName{Name: "BATCAVE_KEY", Canonical: kAPIKey})
+	_, err := r.st.Boot(context.Background())
+	re, ok := errors.AsType[*config.RetiredNameError](err)
+	if !ok {
+		t.Fatalf("Boot: err = %v, want *RetiredNameError", err)
+	}
+	if !strings.Contains(err.Error(), "BATCAVE_PATH (now env "+config.CanonicalEnvName("GOTHAM", kPath)+" or file key "+string(kPath)+"): "+why) {
+		t.Errorf("the refusal does not print the reason after its name: %v", err)
+	}
+	if strings.Count(err.Error(), why) != 1 {
+		t.Errorf("the reason is printed for a use that has none: %v", err)
+	}
+	byName := map[string]string{}
+	for _, u := range re.Uses {
+		byName[u.Name] = u.Message
+	}
+	if byName["BATCAVE_PATH"] != why || byName["BATCAVE_KEY"] != "" {
+		t.Errorf("Uses messages = %v", byName)
+	}
+	for _, u := range r.st.RetiredSet() {
+		if u.Message != byName[u.Name] {
+			t.Errorf("RetiredSet %s message = %q, want %q", u.Name, u.Message, byName[u.Name])
+		}
 	}
 }
 

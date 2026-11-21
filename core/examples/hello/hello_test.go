@@ -1,7 +1,7 @@
 // file: core/examples/hello/hello_test.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: 9824ef03-77bf-470b-bc4d-e48e03ef10d5
-// last-edited: 2026-11-07
+// last-edited: 2026-11-19
 
 package hello_test
 
@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/examples/hello"
 )
@@ -31,11 +32,12 @@ func TestHelloEndToEnd(t *testing.T) {
 	capture := logcapture.New(t)
 	stateDir := t.TempDir()
 	a, err := app.New(t.Context(), app.Options{
-		AppID:    "hello",
-		Logger:   capture.Logger(),
-		StateDir: stateDir,
-		Env:      []string{}, // no HELLO_CORE_* variable of the host leaks in
-		R1Values: func() app.R1Values { return app.R1Values{Listen: "localhost:0"} },
+		AppID:       "hello",
+		Logger:      capture.Logger(),
+		StateDir:    stateDir,
+		Env:         []string{}, // no HELLO_CORE_* variable of the host leaks in
+		ConfigFlags: map[config.Path]string{"core.http.listen": "localhost:0"},
+		// hello boots through the config boot, as cmd/hello does (F3-07).
 	}, hello.New())
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +73,11 @@ func TestHelloEndToEnd(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "storage", "main.pebble")); err != nil {
 		t.Fatalf("the store is not at <state_dir>/storage/main.pebble: %v", err)
+	}
+	// The config boot opened the secret store at P4b: the keyring is in the
+	// state directory, a regular file at 0600 (05-config §2.4 step 1).
+	if fi, err := os.Lstat(filepath.Join(stateDir, "secrets.keyring")); err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("keyring = %v, %v; want a regular 0600 file in the state directory", fi, err)
 	}
 	if code, body := get(""); code != http.StatusUnprocessableEntity {
 		t.Fatalf("empty name = %d %s, want 422", code, body)

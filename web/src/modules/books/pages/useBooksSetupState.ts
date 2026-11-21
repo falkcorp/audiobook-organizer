@@ -180,22 +180,19 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
     setSaving(true);
 
     try {
-      // Step 1: Save library path to config
+      // Step 1: Save the setup in ONE request. The server lets an unauthenticated
+      // first-run caller write exactly these keys, and only until setup_complete
+      // is set: a key sent in a later request is refused once setup is complete,
+      // so the OpenAI key and AI parsing travel with setup_complete, never after.
+      const key = (openaiKey || '').trim();
       await api.updateConfig({
         root_dir: libraryPath,
         playlist_dir: `${libraryPath}/playlists`,
+        ...(key ? { secrets: { openai_api_key: openaiKey }, enable_ai_parsing: true } : {}),
         setup_complete: true,
       });
 
-      // Step 2: Save OpenAI key if provided
-      if ((openaiKey || '').trim()) {
-        await api.updateConfig({
-          openai_api_key: openaiKey,
-          enable_ai_parsing: true,
-        });
-      }
-
-      // Step 3: Add import folders
+      // Step 2: Add import folders
       for (const path of importFolders) {
         try {
           await api.addImportPath(path, path.split('/').pop() || path);
@@ -204,7 +201,7 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
         }
       }
 
-      // Step 4: Trigger iTunes import if configured
+      // Step 3: Trigger iTunes import if configured
       if (iTunesEnabled && iTunesPath) {
         // Persist iTunes settings so the Settings page can see them
         const activeMappings = pathMappings.filter((m) => m.from && m.to);
@@ -250,7 +247,11 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
       }
     } catch (error) {
       console.error('Failed to complete setup:', error);
-      alert('Failed to save settings. Please check the console for details.');
+      // Name the server's reason: a library root can now be refused (a 422 that
+      // names the field, a 403 for a caller short of the admin role), and
+      // "check the console" hides which.
+      const reason = error instanceof Error && error.message ? `\n\n${error.message}` : '';
+      alert(`Failed to save settings.${reason}`);
     } finally {
       setSaving(false);
     }

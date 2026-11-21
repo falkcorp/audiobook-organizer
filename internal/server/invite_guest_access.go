@@ -30,10 +30,9 @@ const guestPolicySyncTimeout = 30 * time.Second
 // inviteGrantAllowed returns the legacyoauth.Config.ExtraAllowed check for SSO
 // grants written by accepted invites, or nil when the store cannot answer.
 //
-// Why not edit OAuthAllowedEmails: that setting is environment-authoritative
-// (applyEnvAuthoritativeConfig rewrites it from OAUTH_ALLOWED_EMAILS on every
-// boot, so a stored value is discarded), it is an owner trust-root field
-// (UpdateService refuses changes from anyone but the owner), and the
+// Why not edit OAuthAllowedEmails: that setting comes from the environment
+// (OAUTH_ALLOWED_EMAILS), it is an owner trust-root field (only the owner may
+// change it), and the
 // allowlist is parsed once at wiring, so a runtime edit would reach no login
 // path until a restart. The grant instead lives in the store, written in the
 // same batch as the accept.

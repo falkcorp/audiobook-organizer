@@ -1,7 +1,7 @@
 // file: core/app/offline_config_test.go
-// version: 1.0.1
+// version: 1.2.0
 // guid: 26a3e540-e2ae-454a-95cb-b251137091ff
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package app
 
@@ -18,6 +18,8 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -91,7 +93,7 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	opts.StateDir = filepath.Join(t.TempDir(), "state")
 	opts.RetiredConfigNames = []config.RetiredName{
 		{Name: "GOTHAM_DB_PATH", Canonical: "core.storage.path"},
-		{Name: "GOTHAM_JOURNAL_DAYS", Canonical: "core.log.journal.retention_days"},
+		{Name: "GOTHAM_JOURNAL_DAYS", Canonical: "core.log.journal.retention_days", Message: "the journal keeps its own days"},
 		{Name: "GOTHAM_BAT_SIGNAL", Message: "the signal moved to the roof"},
 		{Name: "GOTHAM_NOT_SET", Canonical: "core.log.journal.min_level"},
 		{Name: "GOTHAM_ORACLE_SECRET", Canonical: "modules.oracle.auth.secret"},
@@ -113,7 +115,7 @@ func TestConfigCheck_ListsRetiredNamesOpensNoStore(t *testing.T) {
 	for i, want := range [][]string{
 		{"env GOTHAM_DB_PATH", "STOPS THE SERVICE FROM STARTING", "GOTHAM_CORE_STORAGE_PATH", "core.storage.path"},
 		{"env GOTHAM_ORACLE_SECRET", "NOT CHECKED", "GOTHAM_ORACLE_AUTH_SECRET", "modules.oracle.auth.secret"},
-		{"env GOTHAM_JOURNAL_DAYS", "ignored", "GOTHAM_CORE_LOG_JOURNAL_RETENTION_DAYS", "core.log.journal.retention_days"},
+		{"env GOTHAM_JOURNAL_DAYS", "ignored", "GOTHAM_CORE_LOG_JOURNAL_RETENTION_DAYS", "core.log.journal.retention_days", "(the journal keeps its own days)"},
 		{"env GOTHAM_BAT_SIGNAL", "ignored", "removed", "the signal moved to the roof"},
 		{"4 retired config names set, 1 of them would stop the service from starting, 1 not checked"},
 	} {
@@ -202,8 +204,12 @@ func TestOptions_ConfigOptionsCopies(t *testing.T) {
 		Env:                []string{"GCPD_CORE_LOG_JOURNAL_RETENTION_DAYS=7"},
 		RetiredConfigNames: []config.RetiredName{{Name: "GCPD_DAYS", Canonical: "core.log.journal.retention_days"}},
 		ConfigEnvBindings:  []config.EnvName{{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Path: "core.tracing.otlp.endpoint"}},
+		ConfigPassthrough:  func(p config.Path) bool { return p == "integrations.ai.penguin.api_key" },
 	}
 	o := opts.configOptions()
+	if o.Passthrough == nil || !o.Passthrough("integrations.ai.penguin.api_key") || o.Passthrough("integrations.ai.riddler.api_key") {
+		t.Fatal("configOptions does not carry ConfigPassthrough into config.Options.Passthrough")
+	}
 	if o.AppID != "gotham" || o.EnvPrefix != "GCPD" || o.FilePath != "/etc/gotham.yaml" || o.Logger == nil ||
 		!slices.Equal(o.Environ, opts.Env) || !slices.Equal(o.Retired, opts.RetiredConfigNames) ||
 		!slices.Equal(o.EnvBindings, opts.ConfigEnvBindings) {
@@ -216,5 +222,47 @@ func TestOptions_ConfigOptionsCopies(t *testing.T) {
 	t.Setenv("GOTHAM_BATCAVE", "1")
 	if env := (Options{AppID: "gotham"}).configOptions().Environ; !slices.Contains(env, "GOTHAM_BATCAVE=1") {
 		t.Error("a nil Options.Env does not fall back to os.Environ")
+	}
+}
+
+// vaultSettings is a module section with a credential, so a retired name that
+// lands on it stops the service from starting.
+type vaultSettings struct {
+	Combination secrets.Ref `json:"combination" protect:"admin"`
+}
+
+// TestConfigCheck_RetiredModuleSecretStopsTheService (05-config 1.3.6; F3-07
+// d): the compiled modules' sections reach config check, so a retired module
+// secret prints STOPS THE SERVICE FROM STARTING and exits non-zero, for an
+// enabled module and for a disabled one (a disabled module's keys stay
+// recognised, coordinator decision 2026-11-19); a module with no section
+// stays NOT CHECKED.
+func TestConfigCheck_RetiredModuleSecretStopsTheService(t *testing.T) {
+	vault := config.Define("modules.vault.safe", vaultSettings{})
+	for _, enabled := range []bool{true, false} {
+		opts := offlineOpts(t)
+		opts.StateDir = filepath.Join(t.TempDir(), "state")
+		opts.RetiredConfigNames = []config.RetiredName{
+			{Name: "GOTHAM_VAULT_COMBINATION", Canonical: "modules.vault.safe.combination"},
+			{Name: "GOTHAM_ORACLE_SECRET", Canonical: "modules.oracle.auth.secret"},
+		}
+		opts.Env = []string{"GOTHAM_VAULT_COMBINATION=zatanna", "GOTHAM_ORACLE_SECRET=barbara"}
+		keeper := manifestOnly{ID: "vault", Version: "1.0.0", DefaultEnabled: enabled, Settings: []module.SettingsSection{module.Settings(vault)}}
+		check := secretsCmd(t, OfflineCommands(opts, keeper, offlineKeeper()), "config check")
+		var out bytes.Buffer
+		err := check.Run(t.Context(), nil, &out)
+		if err == nil || !strings.Contains(err.Error(), "1 retired config names would stop the service") {
+			t.Fatalf("enabled=%v: config check err = %v, want a refusal naming one name", enabled, err)
+		}
+		lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+		if len(lines) < 3 || !strings.Contains(lines[0], "env GOTHAM_VAULT_COMBINATION") || !strings.Contains(lines[0], "STOPS THE SERVICE FROM STARTING") {
+			t.Errorf("enabled=%v: first line %q, want the vault secret stopping the service:\n%s", enabled, lines[0], out.String())
+		}
+		if !strings.Contains(lines[1], "GOTHAM_ORACLE_SECRET") || !strings.Contains(lines[1], "NOT CHECKED") {
+			t.Errorf("enabled=%v: second line %q, want the section-less module NOT CHECKED", enabled, lines[1])
+		}
+		if strings.Contains(out.String(), "zatanna") || strings.Contains(out.String(), "barbara") {
+			t.Errorf("enabled=%v: the output prints a value:\n%s", enabled, out.String())
+		}
 	}
 }

@@ -210,6 +210,15 @@ service stopped, run the **previous** binary's `storage restore-offline
 --checkpoint <name>` (the one command admitted while that file exists), then
 start the service.
 
+**Plan the disk space a restore keeps.** An in-place restore deletes nothing it
+replaces. It sets the store it replaced aside under
+`<db parent>/.mediacore-restore/<id>/previous/`, and the state files under
+`<state dir>/restore/<id>/previous/`. That is the restore's only undo. After a
+rollback past the F3-07 config flip, previous/ holds the whole flipped store:
+about 18 GB on the 2026-11-21 prod-copy rehearsal. It stays on the store's pool
+until it is pruned, and `storage prune-checkpoints` deletes checkpoints, not a
+restore's previous/. Check the pool has that room before you roll back.
+
 ## memdb Warmup Recovery
 
 On server start, all books are loaded from PebbleDB into the in-memory query layer (memdb). For a 50K-book library, this takes approximately 30 seconds. During warmup:

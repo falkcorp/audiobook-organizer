@@ -180,7 +180,7 @@ func TestP0aFailedDowngradeStopsTheBoot(t *testing.T) {
 	lost := errors.New("joker took the lock between the drop and the shared take")
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{BuildID: swapBuild,
 		SwapLock: func(l bootseam.SwapLock) bootseam.SwapLock { return failingDowngrade{SwapLock: l, err: lost} }})
-	k, err := New(ctx, h.config(nil))
+	k, err := newKCtx(t, ctx, h.config(nil))
 	if err == nil {
 		h.close(k)
 		t.Fatal("a boot whose Downgrade failed booted")

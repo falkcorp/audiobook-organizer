@@ -117,6 +117,30 @@ type StandaloneOptions struct {
 	// no lock, for a store the swap never touches (a test's temporary store,
 	// a copy taken for inspection).
 	StateDir string
+	// Spec transforms books' storage spec before the open (nil: as is). A
+	// build that has declared F3's cutover passes the transform that adds the
+	// level step and raises Spec.Level (books.StandaloneSpec): a store the
+	// serve boot has raised carries that level, and an open that plans none
+	// refuses it as written by a newer build.
+	Spec func(storage.Spec) storage.Spec
+	// ExtraOwners are storage owners opened beside books: core's level owner
+	// (core/levels) once the cutover is declared, whose level a flipped store
+	// carries and an open that registers no owner for refuses as newer.
+	ExtraOwners []storage.OwnerSpec
+}
+
+// owners are the storage owners an open registers.
+func (o StandaloneOptions) owners(ran func() error) []storage.OwnerSpec {
+	return append([]storage.OwnerSpec{{Owner: BooksOwner, Enabled: true, Spec: o.spec(ran)}}, o.ExtraOwners...)
+}
+
+// spec is books' storage spec for an open, ran being the migration observer.
+func (o StandaloneOptions) spec(ran func() error) storage.Spec {
+	s := BooksSpec(ran)
+	if o.Spec != nil {
+		s = o.Spec(s)
+	}
+	return s
 }
 
 // claimGuardedClose is the close a standalone store hands newCoreStore. In a
@@ -208,9 +232,8 @@ func OpenStandalone(path string, o StandaloneOptions) (_ *PebbleStore, err error
 		FS:         o.FS,
 		Build:      build,
 		StateFiles: o.StateFiles,
-		Owners: []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true,
-			Spec: BooksSpec(func() error { migrated.Store(true); return nil })}},
-		Logger: logger.FromContext(ctx).With("subsystem", "storage"),
+		Owners:     o.owners(func() error { migrated.Store(true); return nil }),
+		Logger:     logger.FromContext(ctx).With("subsystem", "storage"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open PebbleDB: %w", err)
@@ -254,14 +277,22 @@ func OpenStandalone(path string, o StandaloneOptions) (_ *PebbleStore, err error
 	return store, nil
 }
 
-// VerifyStoreOpens opens the store directory dir read-only through core
-// storage, with books as the only owner and this build's guard and claims,
-// and closes it (05-backup's VerifyOpen in its R1 form): ABO's restore
-// stager (backup.StageRestore) runs it on an extracted archive, so a store
-// this build cannot open is never staged. It writes nothing (Pebble
-// read-only, nothing created) and leaves pending migrations to the restore
-// boot, which runs them.
-func VerifyStoreOpens(ctx context.Context, dir string) error {
+// VerifyStoreOpensWith opens the store directory dir read-only through core
+// storage, with books and the extra owners o names (its Spec and ExtraOwners;
+// nothing else is read) and this build's guard and claims, and closes it
+// (05-backup's VerifyOpen): ABO's restore stager (backup.StageRestore) runs
+// it on an extracted archive, so a store this build cannot open is never
+// staged, and an archive taken after the cutover raised the levels opens. It
+// writes nothing (Pebble read-only, nothing created) and leaves pending
+// migrations to the restore boot, which runs them. (Its zero-options form,
+// VerifyStoreOpens, went when the stager moved to the cutover spec, F3-07.)
+func VerifyStoreOpensWith(o StandaloneOptions) func(ctx context.Context, dir string) error {
+	return func(ctx context.Context, dir string) error {
+		return verifyStoreOpens(ctx, dir, o)
+	}
+}
+
+func verifyStoreOpens(ctx context.Context, dir string, so StandaloneOptions) error {
 	build, err := standaloneBuildID()
 	if err != nil {
 		return fmt.Errorf("pebble store: %w", err)
@@ -276,7 +307,7 @@ func VerifyStoreOpens(ctx context.Context, dir string) error {
 		// calls Migrate), and the store is the staged copy, whose HNSW
 		// marker no boot reads. The live store's marker is voided by the
 		// stager and by the boot that swaps (books' restoreStager, Register).
-		Owners: []storage.OwnerSpec{{Owner: BooksOwner, Enabled: true, Spec: BooksSpec(nil)}},
+		Owners: so.owners(nil),
 		Logger: logger.FromContext(ctx).With("subsystem", "storage"),
 	})
 	if err != nil {

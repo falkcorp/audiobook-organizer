@@ -91,9 +91,18 @@ func TestConfigCutover_EffectiveConfigUnchanged(t *testing.T) {
 					if tg.Kind != TargetKey || !isConcretePath(tg.Path) {
 						continue
 					}
-					want, _, err := Convert(tg.Convert, raw)
+					want, _, err := Convert(tg, raw)
 					if errors.Is(err, ErrNotStaged) {
 						notStaged++
+						continue
+					}
+					if errors.Is(err, ErrNullUnset) {
+						// R0's effective value is a nil list or map (JSON null): unset, so
+						// M2 stages nothing and R2 holds the zero value.
+						compared++
+						if got, zero := snap.Effective(tg.Path); !zero && !isZeroJSON(got) {
+							t.Errorf("%s: R0's %s is a null (unset), R2's effective value is %s", tg.Path, row.Head, got)
+						}
 						continue
 					}
 					if err != nil {
@@ -267,7 +276,7 @@ func TestConfigCutover_EffectiveConfigUnchanged_EveryKeyNonDefault(t *testing.T)
 			if tg.Kind != TargetKey || !isConcretePath(tg.Path) {
 				continue
 			}
-			out, _, err := Convert(tg.Convert, raw)
+			out, _, err := Convert(tg, raw)
 			if errors.Is(err, ErrNotStaged) {
 				continue
 			}

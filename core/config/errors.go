@@ -104,8 +104,8 @@ func (e *PostCommitError) Unwrap() error { return e.Err }
 // opens (retired.go).
 type RetiredNameError struct{ Uses []RetiredUse }
 
-// Error lists each refused name with its canonical env name and its key in
-// the operator file.
+// Error lists each refused name with its canonical env name, its key in the
+// operator file and the app's reason when it gave one.
 func (e *RetiredNameError) Error() string {
 	parts := make([]string, 0, len(e.Uses))
 	for _, u := range e.Uses {
@@ -113,7 +113,11 @@ func (e *RetiredNameError) Error() string {
 		if u.File {
 			kind = "file key"
 		}
-		parts = append(parts, fmt.Sprintf("%s %s (now env %s or file key %s)", kind, u.Name, u.CanonicalEnv, u.Canonical))
+		part := fmt.Sprintf("%s %s (now env %s or file key %s)", kind, u.Name, u.CanonicalEnv, u.Canonical)
+		if u.Message != "" {
+			part += ": " + u.Message
+		}
+		parts = append(parts, part)
 	}
 	return "config: retired names of protected or secret keys are set; they are never read, so the service stops rather than run without them: " + strings.Join(parts, "; ")
 }

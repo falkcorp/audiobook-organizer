@@ -1,11 +1,12 @@
 // file: cmd/root.go
-// version: 1.30.3
+// version: 1.31.0
 // guid: 6a7b8c9d-0e1f-2a3b-4c5d-6e7f8a9b0c1d
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,6 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
@@ -22,33 +22,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 )
-
-// shutdownBudgetEnv is the R1 reading of core.shutdown.budget's operator name (05-health §5H.4;
-// 05-config §1.12.1). F3 deletes it with R1Values: core config reads the variable from then on.
-// serve reads it first thing and passes it as books.ServeInputs.ShutdownBudget, which books.Options
-// sets as R1Values.ShutdownBudget.
-const shutdownBudgetEnv = "ABO_CORE_SHUTDOWN_BUDGET"
-
-// shutdownBudgetFromEnv returns 0 (core's default) when the variable is unset or empty, the parsed
-// duration when it is a positive time.ParseDuration value, and an error naming the variable otherwise.
-func shutdownBudgetFromEnv(lookup func(string) (string, bool)) (time.Duration, error) {
-	raw, ok := lookup(shutdownBudgetEnv)
-	if !ok || raw == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("%s: %w", shutdownBudgetEnv, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("%s: %q must be a positive duration", shutdownBudgetEnv, raw)
-	}
-	return d, nil
-}
 
 var cfgFile string
 var rootDir string
@@ -57,26 +34,6 @@ var databaseType string
 var playlistDir string
 var logLevel string
 var metadataInspectFile string
-
-// persistentFlagConfigKeys maps each root persistent flag to the config key it
-// feeds. It drives BOTH viper.BindPFlag and the explicit-flag capture in
-// initConfig, deliberately: those two loops have to agree about which flags
-// exist, and a table is the only way to guarantee they still agree after
-// someone adds the next flag.
-//
-// The capture exists because viper flattens flags, environment, config file and
-// the persisted DB blob into one namespace and remembers only the winning
-// VALUE, never who supplied it. config.LoadConfigFromDatabase later overlays
-// the blob on top, at which point "the operator typed --db" is unrecoverable —
-// and neither viper.IsSet nor viper.Get can recover it, for reasons measured and
-// tabulated on config.explicitFlags. cobra's Changed() is the only API that
-// answers the question, and only while the parse is fresh.
-var persistentFlagConfigKeys = map[string]string{
-	"dir":       "root_dir",
-	"db":        "database_path",
-	"db-type":   "database_type",
-	"playlists": "playlist_dir",
-}
 
 // removedSQLiteFlag is the CLI flag TASK-020 (#3268) deleted. It is still
 // registered — hidden, deprecated, and bound to nothing — so that an off-repo
@@ -94,7 +51,6 @@ var (
 	processBooks           = scanner.ProcessBooks  // func([]Book, logger.Logger) error
 	generatePlaylists      = playlist.GeneratePlaylistsForSeries
 	updateSeriesTags       = tagger.UpdateSeriesTags
-	loadConfigFromDB       = config.LoadConfigFromDatabase
 	newServer              = server.NewServer
 	getDefaultServerConfig = server.GetDefaultServerConfig
 	// runApp is serve's composition root (serve_app.go): app.New(ctx, opts,
@@ -260,13 +216,6 @@ var serveCmd = &cobra.Command{
 	Short: "Start the web server",
 	Long:  `Start the web server to provide a web interface for audiobook management.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// An invalid ABO_CORE_SHUTDOWN_BUDGET refuses the start, before the
-		// store opens or anything binds (R1-33).
-		shutdownBudget, err := shutdownBudgetFromEnv(os.LookupEnv)
-		if err != nil {
-			return fmt.Errorf("serve: %w", err)
-		}
-
 		// Lines before app.New installs the log pipeline at P5 (the config
 		// load here, and the kernel's store open, checkpoint and migrations at
 		// P2 to P4b) go to standard output at log_level, as the rest of serve's
@@ -314,7 +263,10 @@ var serveCmd = &cobra.Command{
 			}
 		}
 
-		// TLS configuration (defaults to snake oil certs)
+		// TLS: the files reach the listener as core.http.tls.* (the flags are
+		// flag layers, serveBootInputs); these two only describe the process
+		// to the server config until the listener's address and files replace
+		// them.
 		cfg.TLSCertFile = cmd.Flag("tls-cert").Value.String()
 		cfg.TLSKeyFile = cmd.Flag("tls-key").Value.String()
 		cfg.HTTP3Port = cmd.Flag("http3-port").Value.String()
@@ -322,9 +274,21 @@ var serveCmd = &cobra.Command{
 		// Public-facing origin for absolute link generation (e.g. temp-login URLs).
 		cfg.ExternalURL = cmd.Flag("external-url").Value.String()
 
-		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, ShutdownBudget: shutdownBudget})
+		boot, err := serveBootInputs(cmd.Flags())
+		if err != nil {
+			return err
+		}
+		return runApp(cmd.Context(), books.ServeInputs{Server: cfg, Telemetry: telemetryCfg, FromRelease: fromRelease, Boot: boot})
 	},
 }
+
+// fromRelease is the pre-freeze release's tag main embeds (09 §9.2.1); serve
+// hands it to books as ServeInputs.FromRelease.
+var fromRelease string
+
+// SetFromRelease records the pre-freeze release's tag. Called from main before
+// Execute, like SetVersion.
+func SetFromRelease(tag string) { fromRelease = tag }
 
 // SetVersion sets the version string on the root command.
 // Called from main before Execute so --version and the version command work.
@@ -345,11 +309,11 @@ func init() {
 	// cobra.OnInitialize hook, so it knows which command is running and can
 	// skip commands annotated skipAppInitAnnotation (fp-worker). No
 	// subcommand defines its own PersistentPreRun, so this one runs for all.
-	rootCmd.PersistentPreRun = func(cmd *cobra.Command, _ []string) {
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if cmd.Annotations[skipAppInitAnnotation] == "true" {
-			return
+			return nil
 		}
-		initConfig()
+		return initConfig()
 	}
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.audiobook-organizer.yaml)")
@@ -359,10 +323,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&playlistDir, "playlists", "playlists", "directory to store generated playlists")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
 
-	for flagName, configKey := range persistentFlagConfigKeys {
-		viper.BindPFlag(configKey, rootCmd.PersistentFlags().Lookup(flagName))
-	}
-
 	// The removed --enable-sqlite3-i-know-the-risks flag: accepted, ignored,
 	// and warned about, never an error. Passing it makes pflag print
 	// "Flag --enable-sqlite3-i-know-the-risks has been deprecated, <message>"
@@ -371,9 +331,7 @@ func init() {
 	// launchd plists to their .err file, so that one line is the warning;
 	// there is deliberately no second slog line.
 	//
-	// It is bound to nothing: no variable, and NOT in persistentFlagConfigKeys.
-	// A viper binding would expose enable_sqlite3_i_know_the_risks to
-	// config.warnRemovedViperKeys and log the removed-key WARN a second time.
+	// It is bound to nothing: no variable and no config layer.
 	rootCmd.PersistentFlags().Bool(removedSQLiteFlag, false, "removed; ignored (PebbleDB is the only database backend)")
 	if err := rootCmd.PersistentFlags().MarkDeprecated(removedSQLiteFlag, removedSQLiteFlagMessage); err != nil {
 		panic(err)
@@ -390,7 +348,7 @@ func init() {
 	rootCmd.AddCommand(diagnosticsCmd)
 	rootCmd.AddCommand(metadataInspectCmd)
 	rootCmd.AddCommand(seedCmd)
-	addOfflineCommands(rootCmd, func() []module.Module { return []module.Module{books.Module()} })
+	addOfflineCommands(rootCmd, func(o app.Options) []module.Module { return []module.Module{books.OfflineModule(o)} })
 
 	// Add serve command specific flags
 	serveCmd.Flags().String("port", "8484", "port to run the web server on")
@@ -398,8 +356,8 @@ func init() {
 	serveCmd.Flags().String("read-timeout", "0s", "read timeout (0s disables timeout for SSE compatibility)")
 	serveCmd.Flags().String("write-timeout", "0s", "write timeout (0s disables timeout for SSE compatibility)")
 	serveCmd.Flags().String("idle-timeout", "120s", "idle timeout (e.g. 60s, 2m)")
-	serveCmd.Flags().String("tls-cert", "certs/localhost.crt", "TLS certificate file for HTTPS/HTTP2/HTTP3")
-	serveCmd.Flags().String("tls-key", "certs/localhost.key", "TLS key file for HTTPS/HTTP2/HTTP3")
+	serveCmd.Flags().String("tls-cert", "", "TLS certificate file for HTTPS/HTTP2/HTTP3 (core.http.tls.cert_file; with --tls-key; none = HTTP only)")
+	serveCmd.Flags().String("tls-key", "", "TLS key file for HTTPS/HTTP2/HTTP3 (core.http.tls.key_file)")
 	serveCmd.Flags().String("http3-port", "8484", "HTTP/3 (QUIC) port on UDP (same as --port for best compatibility)")
 	serveCmd.Flags().String("external-url", "", "public-facing origin used in generated links, e.g. https://books.example.com (prevents Host-header injection)")
 	serveCmd.Flags().Int("workers", 2, "number of background operation workers")
@@ -467,36 +425,41 @@ broken tags or filename fallbacks without running a full scan.`,
 }
 
 // skipAppInitAnnotation marks a command that must not run initConfig: no
-// config file, no viper.AutomaticEnv, no playlist or database directories.
+// config projection, no playlist or database directories.
 const skipAppInitAnnotation = "audiobook-organizer/skip-app-init"
 
-func initConfig() {
-	// FIRST: record which flags the operator actually typed, before any config
-	// layer is loaded. cobra.OnInitialize runs after flag parsing and before the
-	// command body, so this is the earliest point where Changed() is both
-	// populated and still ahead of every consumer.
-	for flagName, configKey := range persistentFlagConfigKeys {
-		if rootCmd.PersistentFlags().Changed(flagName) {
-			config.MarkFlagExplicit(configKey)
-		}
+func initConfig() error {
+	// The operator layers alone (ABO's compiled defaults, the operator file
+	// --config or ABO_CONFIG names, the ABO_* environment and the flags the
+	// operator set), projected into HEAD's Config by the books module's own
+	// Engine (F3-07 slice 3): no store is opened, no boot record read and no
+	// directory created, so a retired name that would refuse the boot
+	// refuses here first. serve's Facade replaces this projection with the
+	// stored settings once the App boots.
+	boot, err := rootBootInputs()
+	if err != nil {
+		return err
 	}
-
-	if cfgFile != "" {
-		viper.SetConfigFile(cfgFile)
-	} else {
-		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
-
-		viper.AddConfigPath(home)
-		viper.SetConfigType("yaml")
-		viper.SetConfigName(".audiobook-organizer")
+	cfg, err := books.OperatorAppConfig(context.Background(), books.Module(), boot)
+	if err != nil {
+		return err
 	}
-
-	viper.AutomaticEnv()
-
-	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+	// --dir and --playlists are not core keys (the library root and the
+	// playlist directory are stored settings), so they feed the commands that
+	// read them here, as HEAD's flag binding did: only when set.
+	flags := rootCmd.PersistentFlags()
+	if f := flags.Lookup("dir"); f != nil && f.Changed {
+		cfg.RootDir = rootDir
 	}
+	if f := flags.Lookup("playlists"); f != nil && f.Changed {
+		cfg.PlaylistDir = playlistDir
+	}
+	// The library root an operator layer names (--dir, or
+	// ABO_CORE_LIBRARY_ROOTS / the operator file, which the projection
+	// overlays on root_dir) overrides the stored one in the offline reset
+	// plan, as the boot's lock would.
+	config.SetOperatorRootDir(cfg.RootDir)
+	config.Project(cfg)
 
 	// Create playlist directory if it doesn't exist
 	if playlistDir != "" {
@@ -515,40 +478,17 @@ func initConfig() {
 		}
 	}
 
-	config.InitConfig()
-	if logLevel != "" {
-		config.Mutate(func(c *config.Config) { c.LogLevel = logLevel })
-	}
 	if err := config.AppConfig.Validate(); err != nil {
 		fmt.Printf("Warning: configuration validation failed: %v\n", err)
 	}
 
-	// Select which library sort fields get a memdb sorted index. This MUST
-	// happen before any store is opened: memdbSchema() reads the enabled set
-	// once, when NewMemStore builds the schema. Doing it here — right after
-	// config load, in the single cobra.OnInitialize hook — covers every
-	// command that later calls openCLIStore, rather than being repeated
-	// at each of the four call sites and eventually missed at one.
-	//
-	// Unknown names are warned about rather than ignored: a typo in config
-	// would otherwise silently leave a sort on the slow path with no
-	// indication why.
-	if unknown := database.SetEnabledSortIndexes(config.AppConfig.EnabledSortIndexes); len(unknown) > 0 {
-		fmt.Printf("Warning: unknown enabled_sort_indexes entries ignored: %v "+
-			"(the environment form is space-separated: ENABLED_SORT_INDEXES=\"year created_at\")\n", unknown)
-	}
-	// Report what was BUILT, not what was asked for. enabled_sort_indexes is
-	// boot-only: this is the value GET /api/v1/config shows for the life of
-	// the process, LoadConfigFromDatabase pins it over whatever the stored
-	// blob holds, and UpdateConfig refuses a PUT that changes it. Writing the
-	// accepted set back drops unknown names, so a typo is not reported as an
-	// enabled index.
-	builtSortIndexes := database.EnabledSortIndexFields()
-	config.Mutate(func(c *config.Config) { c.EnabledSortIndexes = builtSortIndexes })
-
-	// Same import-cycle constraint as SetEnabledSortIndexes above:
-	// internal/books/store can't import internal/config directly.
-	database.SetLibraryCountsCacheMinInterval(config.AppConfig.LibraryCountsCacheMinIntervalSeconds)
+	// The store tunables every CLI open path reads (openCLIStore, the
+	// op-runner child): memdbSchema() reads the enabled sort indexes once,
+	// when NewMemStore builds the schema, so they are set before any store
+	// opens. serve sets them again in books' Register from the booted store,
+	// whose stored value this projection cannot see.
+	books.ApplyStoreTunables(config.AppConfig.EnabledSortIndexes, config.AppConfig.LibraryCountsCacheMinIntervalSeconds)
+	return nil
 }
 
 func printMetadataField(label, value string) {

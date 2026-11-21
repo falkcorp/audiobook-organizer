@@ -1,7 +1,7 @@
 # file: deploy/local.conf.example
-# version: 1.7.0
+# version: 1.8.0
 # guid: b3c5d7e9-f1a3-4b5c-9d7e-1f3a5b7c9d1e
-# last-edited: 2026-11-09
+# last-edited: 2026-11-18
 #
 # TEMPLATE — the environment drop-in for audiobook-organizer.service.
 # Copy to deploy/local.conf (gitignored) and fill in your own endpoints.
@@ -51,30 +51,35 @@
 
 [Service]
 
-# Point at your own Windows GPU box (or other Ollama-compatible endpoint)
-# running bge-m3 (1024-dim embeddings) and qwen2.5:7b-instruct. See
-# scripts/manage-ollama-windows.py for keeping that box's Ollama instance
-# alive.
-Environment=WHISPER_REMOTE_URL=http://192.168.0.20:8000
-Environment=OLLAMA_BASE_URL=http://192.168.0.20:11434/v1
+# Every name below is a canonical ABO_<PATH> name; the names this file used
+# before are retired and no longer read. A key that holds a list takes JSON,
+# wholly inside single quotes on its line (the deploy helper refuses a double
+# quote or a space in an unquoted value).
+#
+# Point at your own Windows GPU box running the whisper service. The Ollama
+# endpoint (bge-m3 embeddings, qwen2.5:7b-instruct) is an AI endpoint set in
+# Settings, not an environment variable. See scripts/manage-ollama-windows.py
+# for keeping that box's Ollama instance alive.
+Environment=ABO_BOOKS_WHISPER_REMOTE_URL=http://192.168.0.20:8000
 
 # Who may open a connection to this origin. The listener binds every interface,
 # so without this any peer that can route to the port is answered. List the
 # networks that should reach it directly (the LAN, which also covers this
 # host's own LAN address, and a Prometheus scraper) as comma-separated CIDRs or
-# bare addresses. Loopback and every address in TUNNEL_CONNECTOR_ADDRS are
-# always allowed; everything else gets 403 before routing. Unset allows every
-# peer and logs a startup warning. An entry that cannot be parsed stops the
-# service starting. 192.0.2.0/24 is a placeholder.
-#Environment=ALLOWED_PEER_CIDRS=192.0.2.0/24
-#Environment=TUNNEL_CONNECTOR_ADDRS=192.0.2.10,192.0.2.11
+# bare addresses, as a JSON array. Loopback and every address in
+# ABO_CORE_HTTP_TRUSTED_PROXIES are always allowed; everything else gets 403
+# before routing. Unset allows every peer and logs a startup warning. An entry
+# that cannot be parsed stops the service starting. 192.0.2.0/24 is a
+# placeholder.
+#Environment='ABO_CORE_HTTP_PEER_ALLOWLIST=["192.0.2.0/24"]'
+#Environment='ABO_CORE_HTTP_TRUSTED_PROXIES=["192.0.2.10","192.0.2.11"]'
 
 # Password logins admitted while the login failure ceilings are spent each cost
 # an argon2id derivation (a name that does not exist too), so they are admitted
-# at a service-wide rate: LOGIN_SATURATED_RATE logins per second (0.01 to
-# 50; default 2) with a burst of LOGIN_SATURATED_BURST (1 to 200; default
-# 8). Beyond it a login is answered 429 with Retry-After. Cloudflare Access
-# logins are not counted (they still run the password check, under the
-# per-visitor throttle). An unusable value stops the service starting.
-#Environment=LOGIN_SATURATED_RATE=2
-#Environment=LOGIN_SATURATED_BURST=8
+# at a service-wide rate: ABO_CORE_AUTH_LOGIN_SATURATED_RATE logins per second
+# (0.01 to 50; default 2) with a burst of ABO_CORE_AUTH_LOGIN_SATURATED_BURST
+# (1 to 200; default 8). Beyond it a login is answered 429 with Retry-After.
+# Cloudflare Access logins are not counted (they still run the password check,
+# under the per-visitor throttle). An unusable value stops the service starting.
+#Environment=ABO_CORE_AUTH_LOGIN_SATURATED_RATE=2
+#Environment=ABO_CORE_AUTH_LOGIN_SATURATED_BURST=8

@@ -1,6 +1,7 @@
 # file: docker-compose.yml
-# version: 1.2.1
+# version: 1.3.0
 # guid: 08a9b7c6-d5e4-4f3a-b2c1-0d9e8f7a6b5c
+# last-edited: 2026-11-18
 
 services:
   audiobook-organizer:
@@ -13,13 +14,16 @@ services:
       - "${AO_PORT:-8484}:8484"
     volumes:
       - ao-data:/data
-      - ${AUDIOBOOK_ROOT_DIR:-./audiobooks}:/audiobooks:ro
+      # The host's library folder, mounted read-only at /audiobooks. Set the
+      # library root to /audiobooks in Settings (the core.library.roots key).
+      - ${LIBRARY_HOST_DIR:-./audiobooks}:/audiobooks:ro
     environment:
-      - AO_DIR=/audiobooks
-      - AO_DB=/data/audiobooks.pebble
-      - BASIC_AUTH_ENABLED=${BASIC_AUTH_ENABLED:-false}
-      - BASIC_AUTH_USERNAME=${BASIC_AUTH_USERNAME:-admin}
-      - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD:-}
+      # Basic-gate variables: a bare name passes the host's value through only
+      # when it is set on the host. Nothing here defaults the gate off, so a
+      # gate enabled in Settings stays on.
+      - ABO_CORE_HTTP_BASIC_GATE_ENABLED
+      - ABO_CORE_HTTP_BASIC_GATE_USERNAME
+      - ABO_CORE_HTTP_BASIC_GATE_PASSWORD
       - ABO_CORE_SHUTDOWN_BUDGET=25s
     restart: unless-stopped
     stop_grace_period: 60s

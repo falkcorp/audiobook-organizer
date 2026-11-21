@@ -1,7 +1,7 @@
 // file: core/kernel/core_sections_test.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 9d2c7a54-61f0-4b8e-a3d5-0c1b7e6f4a92
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package kernel
 
@@ -174,6 +174,8 @@ var ownerKeys = []string{
 	"core.ai.kind_limits.text", "core.ai.kind_limits.embed", "core.ai.kind_limits.transcribe",
 	"core.ai.structured.repair_attempts", "core.ai.caps_ttl", "core.ai.batch_parallelism",
 	"core.ai.batch_max_apply_attempts", "core.ai.log_no_capable_every",
+	// 05-config §1.12.3, rows coined there (seams.d/F2-09.md "Not declared"; F3-07)
+	"core.ai.journal_retention", "core.http.public_base_url",
 	// 05-authn §8
 	"core.auth.mode", "core.auth.disabled_allow_remote",
 	"core.auth.session.ttl", "core.auth.session.remember_ttl", "core.auth.session.idle_timeout",
@@ -215,7 +217,7 @@ var ownerKeys = []string{
 	"core.http.cors.allowed_origins", "core.http.body.json_max_bytes", "core.http.body.upload_max_bytes",
 	"core.http.rate_limit.enabled", "core.http.rate_limit.per_minute", "core.http.rate_limit.burst",
 	"core.http.rate_limit.max_clients", "core.http.basic_gate.enabled", "core.http.basic_gate.username",
-	"core.http.basic_gate.password",
+	"core.http.basic_gate.password", "core.http.tls.cert_file", "core.http.tls.key_file",
 	"core.http.openapi.public", "core.http.read_header_timeout", "core.http.idle_timeout",
 	// 05-library §5L.7 (core.library.mappings is also 05-download §7's row)
 	"core.library.roots", "core.library.mappings", "core.library.protected_paths",
@@ -474,6 +476,8 @@ func TestCoreSections_ReloadAndProtection(t *testing.T) {
 		"core.library.mappings":              {config.ReloadLive, config.ProtectInteractive},
 		"core.library.roots":                 {config.ReloadLive, config.ProtectAdmin},
 		"core.http.trusted_proxies":          {config.ReloadLive, config.ProtectAdmin},
+		"core.http.public_base_url":          {config.ReloadLive, config.ProtectAdmin},
+		"core.ai.journal_retention":          {config.ReloadLive, config.ProtectNone},
 		"core.http.basic_gate.enabled":       {config.ReloadLive, config.ProtectAdmin},
 		"core.http.basic_gate.password":      {config.ReloadLive, config.ProtectAdmin},
 		"core.log.file.path":                 {config.ReloadRestart, config.ProtectAdmin},
@@ -589,6 +593,8 @@ func TestCoreSections_Defaults(t *testing.T) {
 		{"core.ai", "core.ai.cooldown_base", 30 * time.Second},
 		{"core.ai", "core.ai.quota_cooldown", 30 * time.Minute},
 		{"core.ai", "core.ai.batch_parallelism", int64(2)},
+		{"core.ai", "core.ai.journal_retention", 30 * 24 * time.Hour},
+		{"core.http", "core.http.public_base_url", ""},
 		{"core.ai", "core.ai.kind_limits.embed", int64(0)},
 		{"core.auth", "core.auth.mode", "required"},
 		{"core.auth", "core.auth.session.ttl", 24 * time.Hour},

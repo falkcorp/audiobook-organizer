@@ -177,27 +177,35 @@ func pointConfigAtStore(c *config.Config, work string) {
 	c.OpenLibraryDumpDir = filepath.Join(c.RootDir, "openlibrary-dumps")
 }
 
-// loadStoredConfigAt makes the boot's loadConfigFromDB, for this test only,
-// load the stored settings as serve does, point each path setting at the copy
-// at work (pointConfigAtStore), and then apply env, the boot's own
-// environment-authoritative settings. The re-apply is needed because
-// LoadConfigFromDatabase re-applies those keys from the process-wide viper,
-// not from this boot's environment: if a test left viper's defaults
-// registered (initConfigForTest is how a test should run InitConfig, and it
-// undoes them), abs_api_enabled reads as set, to false, the stored true is
-// overwritten, and Register refuses the boot (errABSFlagDrift).
-func loadStoredConfigAt(t *testing.T, work string, env func(*config.Config)) {
+// pointEnvAtStore is pointConfigAtStore for a flipped boot. The flip is always
+// declared, so the first boot imports the corpus' stored settings into core
+// config, where the config.Config edit no longer outranks them: the stored
+// path settings name the builder's scratch checkout of stage 1, and only the
+// environment layer outranks the store. Each class-k path setting
+// pointConfigAtStore names goes through its environment name
+// (cutover/testdata/rename_table.golden), to the same place. The store itself
+// is not edited. root_dir has no such name: it is class i, M2 leaves it in the
+// settings blob for M6, and the booted projection reads it from that blob
+// (repointCorpusPaths points it at the copy's library before the boot).
+func pointEnvAtStore(t *testing.T, work string) {
 	t.Helper()
-	prev := loadConfigFromDB
-	t.Cleanup(func() { loadConfigFromDB = prev })
-	loadConfigFromDB = func(s database.SettingsStore) error {
-		if err := config.LoadConfigFromDatabase(s); err != nil {
-			return err
-		}
-		pointConfigAtStore(&config.AppConfig, work)
-		env(&config.AppConfig)
-		return nil
+	var c config.Config
+	pointConfigAtStore(&c, work)
+	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", c.PlaylistDir)
+	t.Setenv("ABO_BOOKS_OPENLIBRARY_DUMP_DIR", c.OpenLibraryDumpDir)
+}
+
+// storedBlobRoot is the root_dir the booted store's settings blob holds.
+func storedBlobRoot(t *testing.T, s *database.PebbleStore) string {
+	t.Helper()
+	row, err := s.GetSetting("config_blob")
+	require.NoError(t, err)
+	require.NotNil(t, row, "the booted store holds no settings blob")
+	var blob struct {
+		RootDir string `json:"root_dir"`
 	}
+	require.NoError(t, json.Unmarshal([]byte(row.Value), &blob))
+	return blob.RootDir
 }
 
 // shapedBootEnv is the shaped boot's environment-authoritative config: the
@@ -217,21 +225,17 @@ func shapedBootEnv(c *config.Config) {
 func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) ([]shapedPhase, float64) {
 	t.Helper()
 	stateDir := filepath.Join(work, "state")
+	// The corpus' stored path settings name the directories its builder ran
+	// in (a scratch checkout of stage 1): point each at the copy's real
+	// location, so the boot never touches, or depends on, the builder's
+	// (pointEnvAtStore, as the cutover suite's boot does).
+	pointEnvAtStore(t, work)
 	edit := func(c *config.Config) {
-		c.DatabasePath = filepath.Join(work, "db", "audiobooks.pebble")
-		c.RootDir = filepath.Join(work, "library")
+		pointConfigAtStore(c, work)
 		shapedBootEnv(c)
 	}
 	opt := func(o *app.Options) {
 		o.StorageFS = storage.FS{}
-		// The stored settings are a blob the corpus' builder saved, and its
-		// path settings name the directories it ran in (a scratch checkout of
-		// stage 1). They are the one thing about the store that is not
-		// portable: a runner that never had those directories refuses to boot
-		// (config.Validate wants the parent of database_path and playlist_dir).
-		// Load them as serve does, then point each path at the copy's real
-		// location, so the boot never touches, or depends on, the builder's.
-		loadStoredConfigAt(t, work, shapedBootEnv)
 		// The harness writes its own key into the state directory; the corpus'
 		// secrets are encrypted under the one stage 1 holds.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
@@ -250,8 +254,19 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	}
 	seconds := time.Since(start).Seconds()
 	snap := config.Snapshot()
-	for name, path := range map[string]string{"database_path": snap.DatabasePath, "root_dir": snap.RootDir, "playlist_dir": snap.PlaylistDir} {
-		require.Truef(t, strings.HasPrefix(path, work+string(filepath.Separator)), "%s %q is outside the store copy %q", name, path, work)
+	// The root is the one the settings blob holds, with no environment
+	// naming it: the flip leaves root_dir in the blob until M6 (a booted root
+	// read from anywhere else, or empty, is the 2026-11-21 rehearsal's lost
+	// root). Every path, the root among them, stays inside the store copy;
+	// each is checked, so one red does not hide another.
+	assert.Equal(t, storedBlobRoot(t, r.store), snap.RootDir, "the booted root is not the settings blob's root_dir")
+	for name, path := range map[string]string{"database_path": snap.DatabasePath, "root_dir": snap.RootDir, "playlist_dir": snap.PlaylistDir,
+		"openlibrary_dump_dir": snap.OpenLibraryDumpDir} {
+		assert.Truef(t, strings.HasPrefix(path, work+string(filepath.Separator)), "%s %q is outside the store copy %q", name, path, work)
+	}
+	if t.Failed() {
+		require.NoError(t, r.stop())
+		t.FailNow()
 	}
 	phases := shapedBootPhases(t, r.app)
 	require.NoError(t, r.stop())
@@ -292,6 +307,15 @@ func TestProductionShapedStore_BootTime(t *testing.T) {
 	key, err := os.ReadFile(database.EncryptionKeyPath(filepath.Join(work, "state")))
 	require.NoError(t, err, "the store holds no settings key")
 
+	// root_dir has no environment name: the flipped boot reads it from the
+	// settings blob, which names the builder's library. The copy's blob is
+	// pointed at the copy's library offline, once, before the first boot
+	// opens the store: the Engine projects the blob before any composed-boot
+	// hook runs, so a hook's edit would land after the boot had used the
+	// builder's root, and after the first boot the store is at a level the
+	// offline opener refuses. No operator layer names the root, as in
+	// production.
+	repointCorpusPaths(t, work)
 	phases, ready := bootShapedStore(t, work, key, wait)
 	_, steady := bootShapedStore(t, work, key, wait)
 

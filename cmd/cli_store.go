@@ -16,7 +16,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -69,7 +68,11 @@ func openOfflineStore(ctx context.Context, readOnly bool) (cliStore, func(), err
 	if err != nil {
 		return nil, nil, err
 	}
-	o, err := app.OpenOffline(ctx, opts, readOnly, books.Module())
+	dbPath, err := books.OfflineStorePath(opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	o, err := app.OpenOffline(ctx, opts, readOnly, books.OfflineModule(opts))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -82,7 +85,7 @@ func openOfflineStore(ctx context.Context, readOnly bool) (cliStore, func(), err
 		// open, so a refused open leaves it, and under the store lock that
 		// open holds, so no serve writes it again until this process closes.
 		// A marker that may still vouch refuses the open.
-		if err := database.DiscardHNSWCleanStop(opts.R1StoragePath); err != nil {
+		if err := database.DiscardHNSWCleanStop(dbPath); err != nil {
 			return nil, nil, errors.Join(fmt.Errorf("discard the HNSW clean-stop marker before writing: %w", err), o.Close())
 		}
 	}
@@ -125,7 +128,7 @@ func commandContext(cmd *cobra.Command) context.Context {
 // must work on a store the guard refuses): they open the store directory
 // itself, so they must at least not touch one a staged or in-flight swap is
 // about to replace or has half replaced. A slot that cannot be read refuses
-// too. The state directory is resolved first (config.EnsureSecureStateDir),
+// too. The state directory is resolved first (resolveCLIPaths, core's step 0),
 // as books.OfflineOptions resolves it for restore-offline: where the default
 // cannot be created it falls back to the database directory, and the slot a
 // staged swap is in is there, not under the unresolved default. It returns
@@ -133,7 +136,7 @@ func commandContext(cmd *cobra.Command) context.Context {
 // --delete) applies the owner rule to the same one
 // (storage.RefuseNotStateDirOwner).
 func refuseBusySwapSlot() (stateDir string, err error) {
-	dir, err := config.EnsureSecureStateDir(config.Snapshot().DatabasePath)
+	_, dir, err := resolveCLIPaths()
 	if err != nil {
 		return "", fmt.Errorf("resolve the state directory %s, where the swap slot is: %w", dir, err)
 	}

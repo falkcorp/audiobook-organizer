@@ -1,5 +1,5 @@
 // file: internal/books/atoms.go
-// version: 1.0.2
+// version: 1.0.3
 // guid: f821dd40-ccb5-403a-8b4e-f606f72723da
 // last-edited: 2026-11-08
 
@@ -8,6 +8,7 @@ package books
 import (
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
@@ -72,6 +73,19 @@ func AtomTable() []Atom {
 		atomRow("requests.approve", "books:request.approve"),
 		atomRow("fingerprint.worker", "books:fingerprint.worker"),
 	}
+}
+
+// atomsWithScope is the settings routes' permission lookup (system.ConfigPermissionAtoms):
+// the HEAD atoms of the table whose native scopes include perm. An Actor holding
+// one of them holds the permission a core section asks for.
+func atomsWithScope(perm string) []string {
+	var out []string
+	for _, a := range AtomTable() {
+		if slices.Contains(a.Scopes, rbac.Permission(perm)) {
+			out = append(out, a.Name)
+		}
+	}
+	return out
 }
 
 // routeRequirement resolves a legacy route's recorded requirement against

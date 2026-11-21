@@ -238,8 +238,8 @@ func (s *Store) checkRetired(final bool) error {
 		} else {
 			args = append(args, "dropped", true)
 		}
-		if msg := s.retiredMessage(k); msg != "" {
-			args = append(args, "message", msg)
+		if u.Message != "" {
+			args = append(args, "message", u.Message)
 		}
 		if u.Unchecked {
 			args = append(args, "unchecked", "its module registers no settings at this boot")
@@ -269,7 +269,7 @@ func (s *Store) judgeRetired(fileKeys []string, final bool) (uses, refused []Ret
 		if v == retiredLater {
 			continue
 		}
-		u := RetiredUse{Name: r.Name, File: r.File, Canonical: r.Canonical, Refused: v == retiredRefuse, Unchecked: v == retiredUnchecked}
+		u := RetiredUse{Name: r.Name, File: r.File, Canonical: r.Canonical, Refused: v == retiredRefuse, Unchecked: v == retiredUnchecked, Message: r.Message}
 		if r.Canonical != "" {
 			u.CanonicalEnv = envName(s.prefix, r.Canonical)
 		}
@@ -279,14 +279,4 @@ func (s *Store) judgeRetired(fileKeys []string, final bool) (uses, refused []Ret
 		}
 	}
 	return uses, refused
-}
-
-// retiredMessage is the app's reason for the retired name k, "" when none.
-func (s *Store) retiredMessage(k retiredKey) string {
-	for _, r := range s.o.Retired {
-		if r.Name == k.name && r.File == k.file {
-			return r.Message
-		}
-	}
-	return ""
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/mediacore/module"
 )
 
 // r0Tag is release R0, the production release OWNER-02 cut and kept
@@ -258,6 +259,12 @@ func r0RawRows(t *testing.T, out string) map[string]int {
 // guarded open and lists every book, and after that open every row R1
 // left is still there: `make rollback` to R0 loses nothing.
 //
+// R1 is the build that predates the flip (preFlip): this tree's composed boot
+// declares F3's cutover whenever a database is named, and the cutover's level
+// step raises books and core so that R0 refuses the store (09 §9.2.2, row M7).
+// That refusal is TestCutoverRefusedByOlderBuilds'; this test keeps R1's own
+// rollback promise, which holds until R3 deletes it.
+//
 // It needs the R0 binary: downloaded from the R0 release (network), or
 // $ABO_R0_BINARY. Not run under -short.
 func TestR0OpensR1Store(t *testing.T) {
@@ -269,7 +276,7 @@ func TestR0OpensR1Store(t *testing.T) {
 	path := filepath.Join(tempDir(t), "gotham.pebble")
 	seed := headStoreAt(t, path, nil)
 	edit, disk := onDisk(path)
-	r := runComposedWith(t, edit, nil, disk, nil)
+	r := runComposedWith(t, edit, nil, disk, nil, func(m module.Module) module.Module { return preFlip{m} })
 	served, err := r.store.CreateBook(&database.Book{Title: "The Long Halloween", FilePath: filepath.Join(filepath.Dir(path), "library", "The Long Halloween.m4b")})
 	require.NoError(t, err)
 	require.NoError(t, r.stop())

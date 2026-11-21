@@ -50,7 +50,7 @@ func TestLazyCoreConfig_BuiltOnlyWhenTasksNeedIt(t *testing.T) {
 			if tc.seeds != nil {
 				ctx = bootseam.With(ctx, &bootseam.Seams{TaskRuns: tc.seeds})
 			}
-			k, err := New(ctx, tc.cfg(t))
+			k, err := newKCtx(t, ctx, tc.cfg(t))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestLazyCoreConfig_BuiltOnlyWhenTasksNeedIt(t *testing.T) {
 // builds is the one coreConfig keeps, and the build itself, which a boot with
 // no kind no longer runs, still succeeds over the core sections.
 func TestLazyCoreConfig_StillBuildsAndKeepsOneStore(t *testing.T) {
-	c, err := newCoreConfig("batcave", nil)
+	c, err := newCoreConfig("batcave", CoreDefaults{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

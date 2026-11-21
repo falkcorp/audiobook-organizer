@@ -1,7 +1,7 @@
 // file: core/app/app.go
-// version: 1.5.5
+// version: 1.5.7
 // guid: 5afb1db8-55c9-498d-8a73-d5b71909b728
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 // Package app is core's composition root (06 §6.4.5, 03 §3.3 row app): an
 // app's main builds Options and its modules and calls New, then Run. Signal
@@ -24,7 +24,6 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -66,10 +65,10 @@ func New(ctx context.Context, opts Options, mods ...module.Module) (*App, error)
 		return nil, err
 	}
 	c.StorageFS = opts.StorageFS
-	if c.StoragePath, c.StateDir, err = storagePath(opts, mods); err != nil {
-		return nil, err
-	}
-	if c.StoragePath != "" {
+	// c.StoragePath and c.StateDir stay empty: core's P0 resolves both from the
+	// config layers (kernel.bootCoreConfig), as an offline command's
+	// kernel.ResolveStorage does, so serve and offline cannot disagree.
+	if declaresStorage(mods) {
 		if c.StorageClaimsShadow, err = claimsShadow(opts); err != nil {
 			return nil, err
 		}
@@ -309,56 +308,10 @@ func lookupEnv(env []string, name string) string {
 	return ""
 }
 
-// storagePath is core.storage.path and P0a's state directory for New when
-// a module of the app declares storage, both "" otherwise, so an app without
-// storage needs no state directory and creates none (R1: storage lands
-// dark). Until config (F3) the store path's one operator layer is the
-// environment: an absolute <EnvPrefix>_CORE_STORAGE_PATH, a relative one
-// refused (05-storage §5S.4 step 1); otherwise the compiled default
-// <state_dir>/storage/main.pebble (05-storage §5S.7). The state directory is
-// ResolveStateDir's, made absolute, resolved once from pre-boot inputs only,
-// even when <EnvPrefix>_CORE_STORAGE_PATH names the store (06 §6.5.1).
-// Describe never calls it.
-func storagePath(opts Options, mods []module.Module) (dbPath, stateDir string, err error) {
-	if !slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) }) {
-		return "", "", nil
-	}
-	prefix, err := envPrefix(opts)
-	if err != nil {
-		return "", "", err
-	}
-	env := opts.Env
-	if env == nil {
-		env = os.Environ()
-	}
-	dbVar := prefix + "_CORE_STORAGE_PATH"
-	dbPath = lookupEnv(env, dbVar)
-	if dbPath != "" && !filepath.IsAbs(dbPath) {
-		return "", "", fmt.Errorf("app: %s %q is not an absolute path (core.storage.path)", dbVar, dbPath)
-	}
-	if r1 := opts.R1StoragePath; r1 != "" {
-		if !filepath.IsAbs(r1) {
-			return "", "", fmt.Errorf("app: Options.R1StoragePath %q is not an absolute path (core.storage.path)", r1)
-		}
-		// Two sources naming two stores would let serve and the app's own
-		// offline commands open different databases: refuse rather than
-		// pick one.
-		if dbPath != "" && filepath.Clean(dbPath) != filepath.Clean(r1) {
-			return "", "", fmt.Errorf("app: %s %q and the app's database path %q (Options.R1StoragePath) name different stores; set one, or set both to the same path",
-				dbVar, dbPath, r1)
-		}
-		dbPath = r1
-	}
-	if stateDir, err = ResolveStateDir(opts); err != nil {
-		return "", "", err
-	}
-	if stateDir, err = filepath.Abs(stateDir); err != nil {
-		return "", "", fmt.Errorf("app: state directory: %w", err)
-	}
-	if dbPath != "" {
-		return filepath.Clean(dbPath), stateDir, nil
-	}
-	return filepath.Join(stateDir, "storage", "main.pebble"), stateDir, nil
+// declaresStorage reports whether any module of the app declares storage: the
+// condition under which the app has a store, whatever path resolves it.
+func declaresStorage(mods []module.Module) bool {
+	return slices.ContainsFunc(mods, func(m module.Module) bool { return m != nil && kernel.DeclaresStorage(m.Manifest()) })
 }
 
 // claimsShadow is core.storage.claims.mode (05-storage §5S.0 D-S2, §5S.9.4
@@ -421,10 +374,13 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		Modules:               slices.Clone(mods),
 		UI:                    opts.UI,
 		UIOptions:             opts.UIOptions,
+		FromRelease:           opts.FromRelease,
 	}
-	if f := opts.R1Values; f != nil {
-		c.R1Values = func() kernel.R1Values { return kernel.R1Values(f()) }
-	}
+	// The config boot's operator layers and the state directory's compiled
+	// default; the store path and the state directory are P0's.
+	c.ConfigOptions = opts.configOptions()
+	c.StateDirDefault = opts.StateDir
+	c.CoreDefaults = kernel.CoreDefaults(opts.CoreDefaults)
 	if opts.Logger == nil {
 		c.LogOutput = opts.LogOutput
 		if opts.R1Log != nil {

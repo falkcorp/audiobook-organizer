@@ -76,13 +76,11 @@ func FindEncryptionKey(dirs ...string) string {
 // InitEncryption loads the settings encryption key from dataDir, falling back
 // to legacyDirs, and generates a new one only when no key exists anywhere.
 //
-// GENERATING A KEY IS DESTRUCTIVE when encrypted settings already exist.
-// LoadConfigFromDatabase tries to decrypt every IsSecret row; on failure it
-// re-encrypts the four secrets it can recover from the config file
-// (openai_api_key, google_books_api_key, hardcover_api_token,
-// basic_auth_password) and calls DeleteSetting on every other one. So a key
-// that silently regenerates does not surface as an error -- it surfaces weeks
-// later as "why do I have to re-enter that credential again".
+// GENERATING A KEY IS DESTRUCTIVE when encrypted settings already exist:
+// every IsSecret row stored under the old key becomes unreadable, and the
+// cutover, which decrypts them with this key, cannot carry them over. A key
+// that silently regenerates does not surface as an error -- it surfaces later
+// as "why do I have to re-enter that credential again".
 //
 // Three branches, and the two that are NOT the happy path are the point:
 //
@@ -210,90 +208,6 @@ func EncryptValue(plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// DecryptValue decrypts an encrypted value
-func DecryptValue(encrypted string) (string, error) {
-	if encryptionKey == nil {
-		return "", fmt.Errorf("encryption key not initialized")
-	}
-
-	ciphertext, err := base64.StdEncoding.DecodeString(encrypted)
-	if err != nil {
-		return "", err
-	}
-
-	block, err := aes.NewCipher(encryptionKey)
-	if err != nil {
-		return "", err
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-
-	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return string(plaintext), nil
-}
-
-// secretMask is what MaskSecret returns for every secret shorter than
-// secretMaskRevealMinLen characters, and the prefix it returns for longer ones.
-const secretMask = "********"
-
-// secretMaskRevealMinLen is the length (in characters) at which MaskSecret
-// starts showing a suffix; secretMaskRevealChars is how many it shows.
-const (
-	secretMaskRevealMinLen = 16
-	secretMaskRevealChars  = 2
-)
-
-// MaskSecret returns a masked version of a secret (for display).
-//
-// The amount revealed is independent of how short the secret is, so a short
-// password never leaks most of itself: a secret under 16 characters becomes
-// exactly "********", and a secret of 16 or more becomes "********" followed
-// by only its last 2 characters. No prefix is ever shown. Lengths are counted
-// in characters (runes), not bytes, so a multi-byte suffix is not split.
-//
-// Callers that recognise an echoed mask compare against MaskSecret(stored)
-// rather than a literal, so this is the only place the shape is defined. The
-// result is not injective by design (every short secret masks the same), which
-// is why a client echoing the mask back must be treated as "unchanged".
-func MaskSecret(secret string) string {
-	runes := []rune(secret)
-	if len(runes) < secretMaskRevealMinLen {
-		return secretMask
-	}
-	return secretMask + string(runes[len(runes)-secretMaskRevealChars:])
-}
-
-// IsEchoedMask reports whether incoming is exactly the mask MaskSecret
-// produces for the stored secret, i.e. a client handed the masked value back
-// unchanged. Only the current mask shape is recognised; earlier shapes
-// (first 3 + "****" + last 4, or "****") are deliberately not, so a stale
-// client's echo is never mistaken for "unchanged". An empty stored secret has
-// no mask to echo.
-func IsEchoedMask(incoming, stored string) bool {
-	return stored != "" && incoming == MaskSecret(stored)
-}
-
-// LooksLikeMask reports whether s contains a run of four or more asterisks,
-// the signature of a masked value of any shape. Such a value is never a real
-// secret to store; the update path rejects it unless IsEchoedMask says it is
-// the current echo of the stored secret.
-func LooksLikeMask(s string) bool {
-	return strings.Contains(s, "****")
-}
-
 // PebbleDB implementation
 func (s *PebbleStore) GetSetting(key string) (*Setting, error) {
 	data, closer, err := s.db.Get([]byte("setting:" + key))
@@ -341,14 +255,11 @@ func (s *PebbleStore) SetSetting(key, value, typ string, isSecret bool) error {
 
 // GetAllSettings returns every row under the "setting:" prefix.
 //
-// It fails rather than returning a partial list. Callers act on what is
-// ABSENT from the result: config.LoadConfigFromDatabase falls back to
-// defaults (and then the legacy per-key path) when config_blob is missing,
-// and SaveConfigToDatabase writes the whole config struct back, so a row that
-// silently drops out of this list is overwritten on the next settings save.
-// cmd's guardAgainstKeyRegeneration uses the list to decide whether any
-// encrypted secret exists before generating a new key, so a dropped secret
-// row there means a new key and the loss of every stored secret.
+// It fails rather than returning a partial list, because its caller acts on
+// what is ABSENT from the result: books' guardAgainstKeyRegeneration uses the
+// list to decide whether any encrypted secret exists before generating a new
+// key, so a dropped secret row there means a new key and the loss of every
+// stored secret.
 //
 // Every writer under the prefix (SetSetting, EmbeddingStore's index flag)
 // stores the JSON Setting envelope, so a row that does
@@ -421,8 +332,8 @@ func collectSettings(iter settingsIter) (settings []Setting, err error) {
 // from an iterator or close error (which wraps the Pebble error instead)
 // because the remedy is different: the store itself is readable, and the named
 // rows have to be repaired or removed. No startup override helps, because every
-// startup path that reads settings (cmd's key-regeneration guard and
-// config.LoadConfigFromDatabase) fails on the same rows. Use errors.As.
+// startup path that reads settings (books' key-regeneration guard) fails on
+// the same rows. Use errors.As.
 //
 // Keys are the setting names without the "setting:" prefix, in key order. The
 // error never carries stored bytes; a value may be an encrypted secret.

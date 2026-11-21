@@ -9,8 +9,6 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
-	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 func TestResolveBootstrapKeyTTL(t *testing.T) {
@@ -30,6 +28,13 @@ func TestResolveBootstrapKeyTTL(t *testing.T) {
 		{"legacy days honoured and warned", "", 1, 24 * time.Hour, true},
 		{"legacy old default 30 capped at 24h", "", 30, 24 * time.Hour, true},
 		{"new setting wins over legacy, with a warning", "4h", 30, 4 * time.Hour, true},
+		// A flipped boot fills both from core.auth.bootstrap.key_ttl: equal
+		// values ignore nothing, so they are not warned about. Unequal whole
+		// days still are.
+		{"legacy days equal to the duration: no warning", "24h", 1, 24 * time.Hour, false},
+		{"legacy days unequal to a whole-day duration warn", "24h", 2, 24 * time.Hour, true},
+		{"legacy days against a part-day duration warn", "12h", 1, 12 * time.Hour, true},
+		{"a days value whose days*24h wraps to 24h warns", "24h", 1 + 1<<48, 24 * time.Hour, true},
 		{"non-positive legacy is unset", "", -5, 8 * time.Hour, false},
 	}
 	for _, tc := range cases {
@@ -68,57 +73,5 @@ func TestBootstrapKeyTTL_NotReadFromConfigBlob(t *testing.T) {
 		if _, ok := m[k]; ok {
 			t.Errorf("%s must not be written to the config blob / GET /config", k)
 		}
-	}
-}
-
-// The real init path, with a clean viper: the removed viper default is what
-// makes "nothing set" mean 8h, and the env names in the docs must reach it.
-func TestResolveBootstrapKeyTTL_ThroughInitConfig(t *testing.T) {
-	cases := []struct {
-		name     string
-		env      map[string]string
-		want     time.Duration
-		wantWarn bool
-	}{
-		{"nothing set", nil, 8 * time.Hour, false},
-		{"legacy env days", map[string]string{"BOOTSTRAP_KEY_TTL_DAYS": "30"}, 24 * time.Hour, true},
-		{"new env duration", map[string]string{"BOOTSTRAP_KEY_TTL": "2h"}, 2 * time.Hour, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			resetViper(t)
-			orig := Snapshot()
-			t.Cleanup(func() { Mutate(func(c *Config) { *c = orig }) })
-			for k, v := range tc.env {
-				t.Setenv(k, v)
-			}
-			InitConfig()
-			snap := Snapshot()
-			got, warn := snap.ResolveBootstrapKeyTTL()
-			if got != tc.want || (warn != "") != tc.wantWarn {
-				t.Errorf("ttl=%v warn=%q; want ttl=%v warning=%v", got, warn, tc.want, tc.wantWarn)
-			}
-		})
-	}
-}
-
-// A stored config blob from before 2026-10-07 carries the old materialized
-// default "bootstrap_key_ttl_days": 30. Loading it must leave the 8h default
-// in force.
-func TestResolveBootstrapKeyTTL_OldBlobIgnored(t *testing.T) {
-	resetViper(t)
-	orig := Snapshot()
-	t.Cleanup(func() { Mutate(func(c *Config) { *c = orig }) })
-	InitConfig()
-	store := newMockSettingsStore()
-	if err := store.SetSetting("config_blob", `{"bootstrap_key_ttl_days":30}`, "json", false); err != nil {
-		t.Fatal(err)
-	}
-	if err := LoadConfigFromDatabase(store); err != nil {
-		t.Fatal(err)
-	}
-	snap := Snapshot()
-	if got, warn := snap.ResolveBootstrapKeyTTL(); got != coreauth.DefaultBootstrapKeyTTL || warn != "" {
-		t.Errorf("after loading an old blob: ttl=%v warn=%q, want %v and no warning", got, warn, coreauth.DefaultBootstrapKeyTTL)
 	}
 }

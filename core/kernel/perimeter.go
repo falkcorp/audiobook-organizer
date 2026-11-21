@@ -6,45 +6,44 @@
 package kernel
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 )
 
-// setPerimeter hands the perimeter values of v to the router before the
-// first listener opens (06 §6.5.2 start step 7; 05-config §1.12.1: "Stages
-// 0, 10 and 11, built at P8, read the returned values through one pointer
-// the kernel sets before step (7)"). configured is false when the app has
-// no R1Values, and every key is then at core's default (05-http-api §10).
-// An allow-list entry that is not a prefix or an address fails boot, as
-// HEAD's ALLOWED_PEER_CIDRS check did: serving with an entry dropped would
-// refuse peers the operator listed. A trusted-proxy entry that cannot be
-// used is logged and left out (HEAD's TUNNEL_CONNECTOR_ADDRS rule).
-func (k *Kernel) setPerimeter(v R1Values, configured bool) error {
-	allow, aerrs := parsePeers(v.PeerAllowlist)
+// setPerimeter hands the perimeter values of core.http to the router (06
+// §6.5.2 start step 7: stages 0, 10 and 11, built at P8, read them through
+// one pointer the kernel sets before the first listener opens; 05-http-api
+// §10). An allow-list entry that is not a prefix or an address is refused, as
+// HEAD's ALLOWED_PEER_CIDRS check refused it: serving with an entry dropped
+// would turn away peers the operator listed. At start the refusal fails boot;
+// after a change (followPerimeter) the previous values stay in force. A
+// trusted-proxy entry that cannot be used is logged and left out (HEAD's
+// TUNNEL_CONNECTOR_ADDRS rule).
+func (k *Kernel) setPerimeter(s *httpSettings) error {
+	allow, aerrs := parsePeers(s.PeerAllowlist)
 	if err := errors.Join(aerrs...); err != nil {
 		return fmt.Errorf("core.http.peer_allowlist: %w", err)
 	}
-	trusted, terrs := parsePeers(v.TrustedProxies)
+	trusted, terrs := parsePeers(s.TrustedProxies)
 	for _, e := range terrs {
 		k.coreLog("http").Warn("kernel: core.http.trusted_proxies entry ignored", "error", e)
 	}
 	o := httpapi.Options{
 		PeerAllowlist:  allow,
 		TrustedProxies: trusted,
-		ClientIPHeader: v.ClientIPHeader,
+		ClientIPHeader: s.ClientIPHeader,
 		Limits: httpapi.LimitOptions{
-			RateLimitEnabled:   true,
-			RateLimitPerMinute: v.RateLimitPerMinute,
-			JSONMaxBytes:       v.JSONMaxBytes,
-			UploadMaxBytes:     v.UploadMaxBytes,
+			RateLimitEnabled:   s.RateLimit.Enabled,
+			RateLimitPerMinute: s.RateLimit.PerMinute,
+			JSONMaxBytes:       int64(s.Body.JSONMaxBytes),
+			UploadMaxBytes:     int64(s.Body.UploadMaxBytes),
 		},
-	}
-	if configured {
-		o.Limits.RateLimitEnabled = v.RateLimitEnabled
 	}
 	// An entry the router cannot use (a link-local address without a zone,
 	// a zone naming no interface, which is retried as requests arrive, or a
@@ -53,6 +52,18 @@ func (k *Kernel) setPerimeter(v R1Values, configured bool) error {
 		k.coreLog("http").Warn("kernel: core.http perimeter entry ignored", "error", err)
 	}
 	return nil
+}
+
+// followPerimeter keeps the router's perimeter in step with core.http: these
+// keys are live (05-http-api §10), so a change committed after start reaches
+// stages 0, 10 and 11 without a restart. The subscription ends with the
+// kernel (closeCore).
+func (k *Kernel) followPerimeter(h *config.Handle[httpSettings]) {
+	k.perimeterStop = h.OnChange(func(ctx context.Context, _, next *httpSettings) {
+		if err := k.setPerimeter(next); err != nil {
+			k.coreLog("http").WarnContext(ctx, "kernel: core.http change refused; the previous perimeter stays in force", "error", err)
+		}
+	})
 }
 
 // parsePeers parses prefixes ("192.0.2.0/24") and single addresses, which

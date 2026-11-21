@@ -12,6 +12,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -23,13 +24,17 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
+	"github.com/spf13/pflag"
 )
 
 // isolateCLIStore points the loaded config and the secure state directory at
@@ -42,6 +47,8 @@ func isolateCLIStore(t *testing.T) (stateDir, dbPath string) {
 	orig := config.AppConfig
 	config.AppConfig.DatabaseType, config.AppConfig.DatabasePath = "pebble", dbPath
 	t.Cleanup(func() { config.AppConfig = orig })
+	// The store path is a layer (core.storage.path), as the env a unit sets.
+	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 	return stateDir, dbPath
 }
 
@@ -58,7 +65,7 @@ func isolateStateDir(t *testing.T) string {
 	return stateDir
 }
 
-// fallbackStateDir leaves ABK_STATE_DIR unset where the default state
+// fallbackStateDir leaves ABO_CORE_PATHS_STATE_DIR unset where the default state
 // directory cannot be created, so config.EnsureSecureStateDir falls back to
 // the database directory, and returns that directory: what a developer box
 // or a bare container resolves, and where storage restore-offline stages a
@@ -77,6 +84,7 @@ func fallbackStateDir(t *testing.T) string {
 	orig := config.AppConfig
 	config.AppConfig.DatabaseType, config.AppConfig.DatabasePath = "pebble", filepath.Join(dbDir, "books.pebble")
 	t.Cleanup(func() { config.AppConfig = orig })
+	t.Setenv("ABO_CORE_STORAGE_PATH", config.AppConfig.DatabasePath)
 	return dbDir
 }
 
@@ -107,18 +115,69 @@ func TestCLIStoreIsTheSubcommandsCalls(t *testing.T) {
 	}
 }
 
-// seedStarted makes the store at dbPath one the service has started once:
-// the standalone opener runs core's Prepare and Migrate over it, which is
-// what a first serve boot leaves behind.
+// restoreRootFlags puts the root command's persistent flags back to their
+// defaults, unset, when the test ends. A flag a test passes on rootCmd's
+// command line stays Changed in this process, and bootInputs reads only
+// changed flags as layers, so a later test's store path would be that one's.
+func restoreRootFlags(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		rootCmd.PersistentFlags().VisitAll(func(f *pflag.Flag) {
+			if f.Changed {
+				_ = f.Value.Set(f.DefValue)
+				f.Changed = false
+			}
+		})
+	})
+}
+
+// seedStarted makes the store at dbPath one the service has started once: it
+// boots the composition the way serve does (books.Options, app.New), which runs
+// core's Prepare, books' steps, the level step and the cutover's data steps,
+// then closes it without serving. That is the store the offline commands
+// accept: one a standalone HEAD open made carries those steps pending, and
+// app.OpenOffline refuses it with "start serve once first".
 func seedStarted(t *testing.T, dbPath string) {
 	t.Helper()
-	s, err := database.NewPebbleStore(dbPath)
+	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatalf("seed the store: %v", err)
+	}
+	cfg := server.GetDefaultServerConfig()
+	cfg.Host, cfg.Port = "127.0.0.1", "0"
+	mod := books.Module()
+	opts, err := books.Options(mod, books.ServeInputs{Server: cfg, Telemetry: config.Snapshot(), LogOut: io.Discard})
 	if err != nil {
 		t.Fatalf("seed the store: %v", err)
 	}
-	if err := s.Close(); err != nil {
+	a, err := app.New(context.Background(), opts, mod)
+	if a != nil {
+		t.Cleanup(func() { books.Release(mod) })
+	}
+	if err != nil {
+		t.Fatalf("seed the store: %v", err)
+	}
+	// The App claims the process defaults (logger, metrics) as it is built; put
+	// them back so the next boot in this process may claim them.
+	restore, err := app.InstallProcessDefaults(a)
+	if err != nil {
+		t.Fatalf("seed the store: %v", err)
+	}
+	defer restore()
+	if err := a.Close(context.Background()); err != nil {
 		t.Fatalf("close the seeded store: %v", err)
 	}
+	books.Release(mod)
+	database.SetGlobalStore(nil)
+}
+
+// startedStore is seedStarted's store opened for a test to write rows into: a
+// standalone open that plans the level step the serve boot raised the store to
+// (books.StandaloneSpec), since the plain opener refuses that level.
+func startedStore(t *testing.T, dbPath string) (*database.PebbleStore, error) {
+	t.Helper()
+	seedStarted(t, dbPath)
+	return database.OpenStandalone(dbPath, books.StandaloneOptions(database.StandaloneOptions{}))
 }
 
 // stageSwap stages an archive restore in the one swap slot under stateDir,

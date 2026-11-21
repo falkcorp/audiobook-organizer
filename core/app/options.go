@@ -1,7 +1,7 @@
 // file: core/app/options.go
-// version: 1.6.0
+// version: 1.7.0
 // guid: 55e09ad5-34c8-4d0f-b8d5-117718ebf0ed
-// last-edited: 2026-11-18
+// last-edited: 2026-11-19
 
 package app
 
@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"time"
 
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -60,6 +59,11 @@ type Options struct {
 	// later); an app that touches state files before or outside New calls
 	// ResolveStateDir.
 	StateDir string
+	// CoreDefaults are the app's compiled defaults of the core keys whose
+	// default the specs leave to the app (05-http-api §10). A zero field is
+	// core's own default. Like StateDir they are defaults: an operator value,
+	// a flag or a stored value beats them, and they lock nothing.
+	CoreDefaults CoreDefaults
 	// ConfigFile is optional; layered under env/flags/DB overrides
 	// (05-config). Read once config lands (F3).
 	ConfigFile string
@@ -78,19 +82,29 @@ type Options struct {
 	// config.Options.EnvBindings; core and module keys declare theirs with
 	// config.EnvBinding (05-config §1.3.1). From F3; ABO passes it from F3-07.
 	ConfigEnvBindings []config.EnvName
+	// ConfigPassthrough reports the operator-layer paths config reads raw and
+	// owns no section for (ABO: the integrations.<kind>.<instance>.<field>
+	// paths its rename table stages, 05-metadata M1), handed to
+	// config.Options.Passthrough. Core places an env binding only onto a path
+	// a registered section owns or this accepts, so an app that lists a
+	// ConfigEnvBindings entry for an integrations path must set it too: with
+	// the binding's env name set and no predicate, boot fails "which no
+	// registered section owns". nil accepts no path. From F3-07.
+	ConfigPassthrough func(config.Path) bool
+	// ConfigFlags are the flags the operator set on the command line, by the
+	// config path each one sets (05-config §1.3.3): the app builds them with
+	// config.FromFlagSet's rule (only a flag the operator explicitly set, never
+	// a default, so a default never locks a key) and its own table of flag name
+	// to path. They are the highest operator layer, handed to
+	// config.Options.Flags. A flag that names a secret key is refused when the
+	// config loads (it would show in the process list). Copied, so the
+	// caller's map stays its own. From F3-07.
+	ConfigFlags map[config.Path]string
 	// Args/Env feed the flag and env layers; nil means
 	// os.Args[1:]/os.Environ(). At R1's skeleton only ResolveStateDir reads
 	// Env; the flag layer arrives with config (F3).
 	Args []string
 	Env  []string
-
-	// R1Values delivers ABO's stored listener and perimeter values to the
-	// kernel in release R1, when core config has no DB layer (05-config
-	// §1.12.1 owns the type and the rule). The kernel calls it once per boot
-	// at 06 §6.5.2 start step (7), after the module start hooks of step (2)
-	// and before the first listener opens. nil = every key at core's default
-	// (hello). Release R1 only: F3's PR deletes the field and the type.
-	R1Values func() R1Values
 
 	// LegacyAuthGinUntil names the one module whose LegacyMount may use
 	// httpapi.LegacyAuthGin (ABO: "books" in R1). R2's identity flip clears it
@@ -101,19 +115,18 @@ type Options struct {
 	// from config (05-logging §4).
 	Logger *slog.Logger
 
-	// R1StoragePath is the app's own resolved database path, absolute (ABO:
-	// its config's database path, HEAD's --db / DATABASE_PATH, made absolute).
-	// It names core.storage.path when <EnvPrefix>_CORE_STORAGE_PATH is unset,
-	// so the store core opens is the one HEAD opened; both set to different
-	// paths fails New. "" = core's rule alone. Release R1 only: F3's config
-	// carries the renamed key (05-config's rename table) and deletes it.
-	R1StoragePath string
 	// StorageStateFiles is the state-file table (05-config §2.4): the files
 	// the pre-migration checkpoint copies beside the store, each by its label
 	// and resolved absolute path; one that does not exist is skipped. The app
 	// resolves them at R1 (ABO: HEAD's .encryption_key and the gap-fill
 	// config.yaml); from F3 core config builds the table.
 	StorageStateFiles []storage.StateFile
+	// FromRelease is the pre-freeze release's tag the build embeds (09 §9.2.1;
+	// ABO: the one tag line of ci/prefreeze_release.txt). The pre-migration
+	// checkpoint records it as from_release, because HEAD's store records no
+	// app version, and `make rollback-restore` names it. "" = the build embeds
+	// none (a build without cutover steps).
+	FromRelease string
 	// R1BeforeSwap runs in storage restore-offline (in place) and storage
 	// reset after every check passed and before the first write that stages
 	// or moves anything, with core.storage.path (kernel.Config.BeforeSwap).
@@ -165,7 +178,7 @@ type Options struct {
 
 	// R1Listen opens the listener of 06 §6.5.2 start step (7) in release R1,
 	// in place of httpapi.Listen: the kernel still decides when it opens
-	// (after the hooks, the workers and R1Values) and drains it first in the
+	// (after the hooks and the workers) and drains it first in the
 	// stop order, within min(core.shutdown.http_drain, remaining). ABO keeps
 	// HEAD's listener stack behind it (HTTP/3, the port-80 redirect, the TLS
 	// fallback, its timeouts, Alt-Svc and the peer allow-list) until core's
@@ -210,6 +223,19 @@ type Options struct {
 	Updater *updater.Options
 }
 
+// CoreDefaults is the value of Options.CoreDefaults. It mirrors
+// kernel.CoreDefaults field for field, so New converts one into the other.
+type CoreDefaults struct {
+	// HTTPListen is core.http.listen's default (core: ":8484"). ABO names one
+	// interface, "localhost:8484", as its --host flag always defaulted: a
+	// bare install must not start listening on every interface.
+	HTTPListen string
+	// HTTPClientIPHeader is core.http.client_ip_header's default (core: "",
+	// the peer's own address). ABO's tunnel connectors name the client in
+	// "CF-Connecting-IP".
+	HTTPClientIPHeader string
+}
+
 // R1Server is one listener R1Listen opens: what the supervisor drives.
 // Serve blocks until the listener stops (nil after Shutdown); Shutdown
 // drains within ctx and closes what is left when ctx ends.
@@ -226,18 +252,4 @@ type Telemetry struct {
 	Tracing     *metrics.OTLPTracing // nil = the no-op TracerProvider
 	Environment string               // deployment.environment; "" = metrics.DefaultEnvironment
 	InstanceID  string               // service.instance.id; "" = a random one per Provider
-}
-
-// R1Values is the release-R1-only value Options.R1Values returns (05-config
-// §1.12.1). Deleted in F3.
-type R1Values struct {
-	Listen                       string        // HEAD's --host and --port → core.http.listen
-	TLSCertFile, TLSKeyFile      string        // HEAD's --tls-cert, --tls-key
-	PeerAllowlist                []string      // ALLOWED_PEER_CIDRS → core.http.peer_allowlist
-	TrustedProxies               []string      // TUNNEL_CONNECTOR_ADDRS → core.http.trusted_proxies
-	ClientIPHeader               string        // the header TrustedProxies set (ABO: CF-Connecting-IP) → core.http.client_ip_header
-	RateLimitEnabled             bool          // enable_rate_limit → core.http.rate_limit.enabled
-	RateLimitPerMinute           int           // api_rate_limit_per_minute → core.http.rate_limit.per_minute
-	JSONMaxBytes, UploadMaxBytes int64         // json_body_limit_mb, upload_body_limit_mb (MiB → bytes)
-	ShutdownBudget               time.Duration // ABO_CORE_SHUTDOWN_BUDGET; 0 = core's default (05-health §5H.4)
 }

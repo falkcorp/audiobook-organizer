@@ -1,22 +1,39 @@
 // file: core/config/types.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: e2e5754c-03e1-42ea-83cb-5ae606cfee3a
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package config
 
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"iter"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
+
+// StateFiles is the state directory as the boot record reads and writes it:
+// the labelled state filesystem the kernel opens (core/internal/statefs: an
+// *os.Root in production, the crash matrix's filesystem under its seam,
+// COR10-7). Names are relative to the directory, and one that leaves it is
+// refused, as os.Root refuses it. Each mutating call takes its crash-point
+// label (06 §6.5.1's writer table). Name coined by F3-07.
+type StateFiles interface {
+	ReadFile(name string) ([]byte, error)
+	// WriteNew creates name exclusively with perm, writes data, fsyncs and
+	// closes it; after a failed write the caller removes the file.
+	WriteNew(label, name string, data []byte, perm fs.FileMode) error
+	Rename(label, oldname, newname string) error
+	Remove(label, name string) error
+	SyncDir(label, name string) error
+	Close() error
+}
 
 // Options configures a Store (05-config §1.3.3). The kernel builds it from
 // app.Options.
@@ -31,11 +48,13 @@ type Options struct {
 	// BootRecordRoot is called by Boot with core.paths.state_dir as
 	// ResolveStateDir resolved it (env, flags, compiled default, HEAD's
 	// fallback; never the file or the record it locates, §1.7); the kernel
-	// opens and returns the os.Root that holds config.boot.json (§1.3.5). The
-	// Store closes the root at Close. nil = no boot record (an app without a
-	// state directory): boot keys then keep their operator or default value
-	// and Apply refuses them.
-	BootRecordRoot func(stateDir string) (*os.Root, error)
+	// opens and returns the state directory that holds config.boot.json
+	// (§1.3.5), as the labelled state filesystem (StateFiles; 05-config
+	// §1.3.3 says *os.Root, which the crash matrix cannot see, COR10-7). The
+	// Store closes it at Close. nil = no boot record (an app without a state
+	// directory): boot keys then keep their operator or default value and
+	// Apply refuses them.
+	BootRecordRoot func(stateDir string) (StateFiles, error)
 	// Passthrough reports the operator-layer paths config reads raw and does
 	// not own: the integrations.<kind>.<instance>.<field> paths of
 	// 05-metadata M1 (C11).
@@ -92,6 +111,9 @@ type RetiredUse struct {
 	Canonical    Path   // "" for a dropped key
 	CanonicalEnv string // the canonical env name, "" for a dropped key
 	Refused      bool   // a protected or secret key: this boot was refused
+	// Message is the app's reason (RetiredName.Message), "" when it gave
+	// none. The warning, the refusal and config check all print it.
+	Message string
 	// Unchecked: a module key of a module that registered no section (not
 	// enabled at this boot, or config check without the module's sections),
 	// so its class is unknown; the use is ignored with a warning.

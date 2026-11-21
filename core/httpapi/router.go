@@ -1,7 +1,7 @@
 // file: core/httpapi/router.go
-// version: 1.2.1
+// version: 1.3.1
 // guid: 592b4b18-11e9-41ab-b2a5-23b0c23383c2
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package httpapi
 
@@ -79,9 +79,8 @@ type Router struct {
 
 // Options configure a Router. The perimeter fields (PeerAllowlist,
 // TrustedProxies, ClientIPHeader, CORS, Limits) can change after Build
-// through SetPerimeter: in release R1 the kernel sets them once, from
-// app.Options.R1Values, before the first listener opens (05-config
-// §1.12.1).
+// through SetPerimeter: the kernel sets them from core.http.* before the
+// first listener opens (05-config §1.12.1) and again on every change.
 type Options struct {
 	CoreGroupBase string // "/api/core/v1" when empty
 	// PeerAllowlist is stage 0's allow-list (core.http.peer_allowlist):
@@ -215,6 +214,10 @@ type LegacyMount struct {
 	SPAShared         []string                   // top-level segments shared with SPA pages, excluded from NonSPA (§3.5, SEC3-16)
 	BuildID           string                     // stage 5's X-App-Build until the shell flip (FE3-2, FE4-1, R5-7)
 	BasicExemptAssets func(path string) bool     // stage 8 exempts these paths while the mount owns "/" (COR4-9)
+	// BasicGate is stage 8's inputs: when set, Build puts the Basic gate
+	// around the whole router, between stages 7 and 9 (basicGateStage). At
+	// most one mount carries it; nil is no gate.
+	BasicGate *BasicGateOptions
 }
 
 // LegacyRoute is one entry of a legacy mount's manifest (05-http-api §8.2).
@@ -246,7 +249,7 @@ func NewRouter(opts Options, deps Deps) *Router {
 // ignored) on the router and on the handler of its last Build. Requests
 // see the old or the new values, never a mix (05-http-api §9). The kernel
 // calls it at 06 §6.5.2 start step (7), before the first listener opens,
-// with the values app.Options.R1Values returned (05-config §1.12.1). After
+// with the values core.http.* resolves to (05-config §1.12.1). After
 // Build, an entry the chain cannot use (a zone naming no interface) is left
 // out and returned, joined, for the caller to log; the rest apply. Before
 // Build it returns nil, and Build logs what it cannot use.
@@ -682,6 +685,11 @@ func (r *Router) Build() (http.Handler, error) {
 		return nil, err
 	}
 	r.built, r.gateMux, r.gateAssets = true, mux, r.rootAssets()
+	gate, err := r.basicGateStage()
+	if err != nil {
+		r.built, r.gateMux, r.gateAssets = false, nil, nil
+		return nil, err
+	}
 	root := r.rootHandler()
 	d := &dispatcher{
 		mux:            mux,
@@ -694,7 +702,7 @@ func (r *Router) Build() (http.Handler, error) {
 		chain:          r.chain,
 		log:            r.deps.Log,
 	}
-	return r.chain.Outer(d), nil
+	return r.chain.OuterGated(d, gate), nil
 }
 
 // newChain builds the perimeter for this Build from the router's options and
@@ -763,6 +771,10 @@ func (r *Router) policyOf() func(*http.Request) *httpmw.Policy {
 	if _, owner := r.rootOwner(); owner != "" && owner != "core" {
 		root = policies[owner]
 	}
+	// A path a mount's Redirects cover is that mount's answer too: stage 8
+	// refuses it before the dispatcher labels the redirect (HEAD's gin chain
+	// wrote the same headers on the refusal as on the 301).
+	redirect, redirectPolicy := r.legacyRedirect(), r.redirectPolicy()
 	of := func(owner string) *httpmw.Policy {
 		if p := policies[owner]; p != nil {
 			return p
@@ -774,6 +786,11 @@ func (r *Router) policyOf() func(*http.Request) *httpmw.Policy {
 		for _, c := range claims {
 			if p == strings.TrimSuffix(c.prefix, "/") || (strings.HasSuffix(c.prefix, "/") && strings.HasPrefix(p, c.prefix)) || p == c.prefix {
 				return of(c.owner)
+			}
+		}
+		if redirect != nil {
+			if _, covered := redirect(req); covered {
+				return redirectPolicy
 			}
 		}
 		if root != nil && firstSegment(p) != "api" {

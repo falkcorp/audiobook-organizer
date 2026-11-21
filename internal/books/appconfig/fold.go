@@ -1,0 +1,158 @@
+// file: internal/books/appconfig/fold.go
+// version: 1.0.0
+// guid: 0b6d4e82-7a13-4c59-9e0f-3d5a8c1b7f26
+// last-edited: 2026-11-19
+
+package appconfig
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
+	coreconfig "github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/secrets"
+)
+
+// foldInto turns the oauth_* values of an Update into the one write the OIDC
+// provider list takes (cutover.FoldOIDC), merged into the list as it stands.
+// The list is rewritten only when a value names one of its fields or a
+// provider's client secret is being set (so its entry can reference it). byPath
+// and also name, for the response and for errors, the HEAD fields the list
+// stands for.
+//
+// A value that cannot be merged (the existing providers disagree on the
+// allow-list or role) is a field error naming the first field of the group,
+// never a partial write.
+func (e *Engine) foldInto(ctx context.Context, patch *coreconfig.Patch, byPath map[coreconfig.Path]string, also map[coreconfig.Path][]string,
+	foldVals map[string]json.RawMessage, secretSets []secretOp) error {
+	oidcSecretSet := map[string]bool{}
+	for _, op := range secretSets {
+		for id, name := range e.oidcSecret {
+			if string(op.name) == name {
+				oidcSecretSet[id] = true
+			}
+		}
+	}
+	for id, name := range e.oidcSecret {
+		if _, in := patch.Set[coreconfig.Path(name)]; in {
+			oidcSecretSet[id] = true // a registered secret key written by Apply itself
+		}
+	}
+	if len(foldVals) == 0 && len(oidcSecretSet) == 0 {
+		return nil
+	}
+	heads := slices.Sorted(maps.Keys(foldVals))
+	if len(heads) == 0 {
+		heads = []string{"oauth_" + slices.Sorted(maps.Keys(oidcSecretSet))[0] + "_client_secret"}
+	}
+	st, ok := e.acc.Lookup(oidcProvidersKey)
+	if !ok {
+		return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: errors.New("the OIDC providers key is not registered")}
+	}
+	list := listOrEmpty(st.Effective)
+	if len(foldVals) > 0 {
+		var err error
+		if list, err = cutover.FoldOIDC(foldVals, list); err != nil {
+			return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: err}
+		}
+	}
+	list, err := e.withSecretRefs(ctx, list, oidcSecretSet)
+	if err != nil {
+		return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: err}
+	}
+	e.claim(patch, byPath, also, oidcProvidersKey, heads, list)
+	return nil
+}
+
+// claim adds one list write to the patch and names its HEAD fields.
+func (e *Engine) claim(patch *coreconfig.Patch, byPath map[coreconfig.Path]string, also map[coreconfig.Path][]string,
+	key string, heads []string, value json.RawMessage) {
+	p := coreconfig.Path(key)
+	patch.Set[p] = value
+	byPath[p] = heads[0]
+	also[p] = heads[1:]
+}
+
+func listOrEmpty(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`[]`)
+	}
+	return raw
+}
+
+// withSecretRefs gives every HEAD provider entry that has none the reference to
+// its client secret, when that secret is set (or is being set by this Update):
+// the fold builds an entry without one, because the secret is stored by name.
+// An entry that already has a reference keeps it.
+func (e *Engine) withSecretRefs(ctx context.Context, list json.RawMessage, setting map[string]bool) (json.RawMessage, error) {
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(list, &entries); err != nil {
+		return nil, fmt.Errorf("the provider list is not a list of objects: %w", err)
+	}
+	changed := false
+	for _, ent := range entries {
+		var id string
+		if err := json.Unmarshal(ent["id"], &id); err != nil {
+			return nil, fmt.Errorf("a provider entry's id is not a string: %w", err)
+		}
+		name, known := e.oidcSecret[id]
+		if !known {
+			continue
+		}
+		if _, has := ent["client_secret"]; has {
+			continue
+		}
+		set := setting[id]
+		if !set {
+			_, meta, err := e.acc.Secret(ctx, secrets.Name(name))
+			set = err == nil && meta.Set
+		}
+		if set {
+			ent["client_secret"] = mustMarshal(map[string]string{"secret": name})
+			changed = true
+		}
+	}
+	if !changed {
+		return list, nil
+	}
+	return json.Marshal(entries)
+}
+
+// memberInto adds the writes of the member rows (TargetMember) to the patch: one
+// write per registered map-valued key, the map as the store holds it with each
+// named member replaced. Reading the effective value here, not the projection,
+// keeps the members the update does not name exactly as core has them.
+func (e *Engine) memberInto(patch *coreconfig.Patch, byPath map[coreconfig.Path]string, also map[coreconfig.Path][]string, vals map[string]json.RawMessage) error {
+	if len(vals) == 0 {
+		return nil
+	}
+	byKey := map[string][]string{}
+	for head := range vals {
+		p := e.byHead[head]
+		byKey[p.target.Map] = append(byKey[p.target.Map], head)
+	}
+	for _, key := range slices.Sorted(maps.Keys(byKey)) {
+		heads := byKey[key]
+		slices.Sort(heads)
+		st, ok := e.acc.Lookup(coreconfig.Path(key))
+		if !ok {
+			return &coreconfig.FieldError{Path: coreconfig.Path(heads[0]), Err: fmt.Errorf("the key %s that stores it is not registered", key)}
+		}
+		whole := st.Effective
+		for _, head := range heads {
+			p := e.byHead[head]
+			var err error
+			if whole, err = cutover.WithMember(whole, strings.TrimPrefix(p.target.Path, p.target.Map+"."), vals[head]); err != nil {
+				return &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err}
+			}
+		}
+		e.claim(patch, byPath, also, key, heads, whole)
+	}
+	return nil
+}

@@ -1,14 +1,18 @@
 // file: core/app/offline_storage_test.go
-// version: 1.0.3
+// version: 1.1.0
 // guid: 1805cd97-f796-434f-9fa0-32dc6931c03b
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package app
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,7 +22,11 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/kernel"
+	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // quarantineBuild is the binary ID the test hands the kernel through bootseam,
@@ -178,5 +186,145 @@ func TestQuarantineCommandsCLI(t *testing.T) {
 	}
 	if events != 1 {
 		t.Errorf("core.storage.quarantine_purge audit events = %d, want 1", events)
+	}
+}
+
+// The cutover build of the keeper "alfred" for storage migrate --dry-run: a
+// stand-in for books' M2 over the keeper's legacy "case:" range (retired for
+// this build) in Manifest.Cutover, and M8 in Manifest.Rewrite. The step reads
+// its legacy row, stages a core config key and imports a secret, so it needs
+// every importer the offline command binds over the scratch copy.
+const (
+	flipStepID    = "alfred.case-files"
+	flipRewriteID = "alfred.rewrite"
+	flipRow       = "case:file/001"
+	flipRowValue  = "The Long Halloween, part 1"
+)
+
+func flipKeeper(mode storage.ClaimMode, cutover bool) manifestOnly {
+	m := manifestOnly{ID: "alfred", Version: "1.0.0", DefaultEnabled: true,
+		Storage: storage.Spec{Keyspace: true, Claims: []storage.Claim{
+			{Prefix: "case:", Mode: mode, Description: "the GCPD's case files (a synthetic legacy family)"}}}}
+	if !cutover {
+		return m
+	}
+	rw := storage.NewRewriteStep("alfred", flipRewriteID)
+	m.Rewrite = &rw
+	m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
+		return []datamigrate.DataMigration{{
+			ID: flipStepID, Owner: "alfred", Description: "import the GCPD's case files, as M2 does",
+			Source:      []storage.Range{{Start: []byte("case:"), End: []byte("case;")}},
+			Parallelism: tasks.Fixed(1, "test: one shard"), Mode: datamigrate.BootBlocking,
+			Compat: storage.Breaking, Cutover: true,
+			Step: func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+				r := imp.Legacy("alfred")
+				if r == nil {
+					return errors.New("the legacy range is not bound")
+				}
+				got, err := r.Get(ctx, []byte(flipRow))
+				if err != nil || string(got) != flipRowValue {
+					return fmt.Errorf("the legacy read = %q, %v", got, err)
+				}
+				b := w.Batch()
+				if err := imp.Config.Stage(b, "core.backup.retention.max_count", []byte("7"), "alfred.probe"); err != nil {
+					return fmt.Errorf("stage a config key: %w", err)
+				}
+				if err := imp.Secrets.ImportSecret(ctx, b, secrets.Write{
+					Name: "core.alfred.batphone", Value: secrets.NewValue("Gotham Gazette hotline"), By: "alfred.probe"}); err != nil {
+					return fmt.Errorf("import a secret: %w", err)
+				}
+				w.Count("imported")
+				return nil
+			},
+		}}
+	}
+	return m
+}
+
+// hashTree is every regular file under dir with its content's SHA-256.
+func hashTree(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		rel, _ := filepath.Rel(dir, p)
+		out[rel] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestMigrateCommand_DryRunPlansTheManifestsCutover is F3-07 e1's acceptance
+// at the command: over a fixture data directory served by a build with no
+// cutover step, storage migrate --dry-run of the cutover build prints M2's
+// step with its counts and M8's copy, and no byte of the state directory
+// (store, swap lock, and the keyring above all) changes. kernel's TestWireDryRun_* own the wiring's cells.
+func TestMigrateCommand_DryRunPlansTheManifestsCutover(t *testing.T) {
+	opts := offlineOpts(t)
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{BuildID: quarantineBuild})
+	a, err := New(ctx, opts, flipKeeper(storage.ClaimReadWrite, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path:   filepath.Join(opts.StateDir, "storage", "main.pebble"),
+		Owners: []storage.OwnerSpec{{Owner: "alfred", Enabled: true, Spec: flipKeeper(storage.ClaimReadWrite, false).Storage}},
+		Build:  quarantineBuild, MustExist: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := o.Offline()
+	if err != nil {
+		_ = o.Close()
+		t.Fatal(err)
+	}
+	lr, ok := db.Legacy("alfred")
+	if !ok {
+		t.Fatal("no legacy range for alfred")
+	}
+	b := lr.NewBatch()
+	if err := b.Set([]byte(flipRow), []byte(flipRowValue)); err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(b.Commit(ctx, storage.Sync), db.Close()); err != nil {
+		t.Fatal(err)
+	}
+
+	migrate := command(t, OfflineCommands(opts, flipKeeper(storage.ClaimRetired, true)), "storage migrate")
+	before := hashTree(t, opts.StateDir)
+	var out bytes.Buffer
+	if err := migrate.Run(ctx, []string{"--dry-run"}, &out); err != nil {
+		t.Fatalf("storage migrate --dry-run: %v (output %q)", err, out.String())
+	}
+	report := out.String()
+	for _, want := range []string{"step " + flipStepID + ": state=done", "  imported: 1", "M8 store rewrite:"} {
+		if !strings.Contains(report, want) {
+			t.Errorf("the dry run report lacks %q:\n%s", want, report)
+		}
+	}
+	after := hashTree(t, opts.StateDir)
+	for name, sum := range before {
+		if got, ok := after[name]; !ok || got != sum {
+			t.Errorf("the dry run changed %s (removed %t)", name, !ok)
+		}
+	}
+	for name := range after {
+		if _, ok := before[name]; !ok {
+			t.Errorf("the dry run created %s", name)
+		}
 	}
 }

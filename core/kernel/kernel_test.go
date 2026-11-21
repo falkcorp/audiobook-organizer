@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
@@ -70,10 +71,59 @@ func testConfig(t *testing.T, mods ...module.Module) Config {
 	return Config{AppID: "gotham", Logger: logcapture.New(t).Logger(), Modules: mods}
 }
 
+// withCore sets core config keys on c as flag layers, the one layer a test
+// can set without an environment, and so turns the config boot on. Pairs are
+// dotted path then value ("core.http.listen", "localhost:0").
+func withCore(c *Config, kv ...string) {
+	if len(kv)%2 != 0 {
+		panic("withCore: odd number of arguments")
+	}
+	if c.ConfigOptions.Environ == nil {
+		c.ConfigOptions.Environ = []string{}
+	}
+	if c.ConfigOptions.Flags == nil {
+		c.ConfigOptions.Flags = map[config.Path]string{}
+	}
+	for i := 0; i < len(kv); i += 2 {
+		c.ConfigOptions.Flags[config.Path(kv[i])] = kv[i+1]
+	}
+}
+
+// withState is c with what every boot now needs and a test rarely cares
+// about: a state directory (the compiled default, a fresh temporary one, unless
+// the test named one with StateDir or StateDirDefault) and an environment
+// layer that is not the process's. Core's P0 runs for every app (05-config
+// section 1.7), so there is no boot without them.
+func withState(t testing.TB, c Config) Config {
+	t.Helper()
+	if c.StateDirDefault == "" {
+		c.StateDirDefault = c.StateDir
+	}
+	if c.StateDirDefault == "" {
+		c.StateDirDefault = t.TempDir()
+	}
+	if c.ConfigOptions.Environ == nil {
+		c.ConfigOptions.Environ = []string{}
+	}
+	return c
+}
+
+// newK is New over withState(t, c), with the test's context.
+func newK(t testing.TB, c Config) (*Kernel, error) {
+	t.Helper()
+	return New(t.Context(), withState(t, c))
+}
+
+// newKCtx is newK with the caller's context (a boot seam, a cancellation).
+func newKCtx(t testing.TB, ctx context.Context, c Config) (*Kernel, error) {
+	t.Helper()
+	return New(ctx, withState(t, c))
+}
+
 // mustNew boots c or fails the test.
 func mustNew(t *testing.T, c Config) *Kernel {
 	t.Helper()
-	k, err := New(t.Context(), c)
+	k, err := newK(t, c)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -133,7 +183,7 @@ func TestCatalog_EnablementAndDisabledClaims(t *testing.T) {
 	}
 	// A disabled module's claims stay reserved (06 §6.5.1 P1).
 	thief := mod("selina", nil).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/manor/vault"} })
-	_, err := New(t.Context(), testConfig(t, wayne, thief))
+	_, err := newK(t, testConfig(t, wayne, thief))
 	if !hasKind(err, module.ProblemLegacyPrefixCollision) || !errors.Is(err, httpapi.ErrPrefixCollision) {
 		t.Fatalf("claim inside a disabled module's prefix = %v, want ProblemLegacyPrefixCollision", err)
 	}
@@ -148,7 +198,7 @@ func TestModuleRootsClaimed(t *testing.T) {
 	joker := mod("joker", nil).with(func(m *module.Manifest) {
 		m.LegacyPrefixes = []string{"/api/bane/", "/api/core/", "/api/alfred/venom"}
 	})
-	_, err := New(t.Context(), testConfig(t, bane, joker, mod("alfred", nil)))
+	_, err := newK(t, testConfig(t, bane, joker, mod("alfred", nil)))
 	if !errors.Is(err, httpapi.ErrPrefixCollision) {
 		t.Fatalf("New = %v, want ErrPrefixCollision", err)
 	}
@@ -244,7 +294,7 @@ func TestValidation_ProblemKinds(t *testing.T) {
 			if tc.cfg != nil {
 				tc.cfg(&c)
 			}
-			k, err := New(t.Context(), c)
+			k, err := newK(t, c)
 			if k != nil || !hasKind(err, tc.kind) {
 				t.Fatalf("New = %v, %v; want nil and a %s problem", k, err, tc.kind)
 			}
@@ -257,7 +307,7 @@ func TestValidation_ProblemKinds(t *testing.T) {
 
 func TestValidation_AllProblemsJoined(t *testing.T) {
 	// P1: three manifests, three problems, one error.
-	_, err := New(t.Context(), testConfig(t,
+	_, err := newK(t, testConfig(t,
 		mod("Batman", nil),
 		mod("api", nil),
 		mod("joker", nil).with(func(m *module.Manifest) { m.MinCoreVersion = "9.0.0" }),
@@ -272,7 +322,7 @@ func TestValidation_AllProblemsJoined(t *testing.T) {
 	}
 	// P6: every module registers; their problems and Register's errors join.
 	escaped := errors.New("Joker escaped")
-	_, err = New(t.Context(), testConfig(t,
+	_, err = newK(t, testConfig(t,
 		mod("alfred", func(r *module.Registrar) error { r.Hook(module.Hook{Name: "tea"}); return nil }),
 		mod("bane", func(r *module.Registrar) error { r.Worker(module.Worker{Name: "venom"}); return nil }),
 		mod("joker", func(*module.Registrar) error { return escaped }),
@@ -298,7 +348,7 @@ func TestModuleAuthMethod_CannotBeInteractive(t *testing.T) {
 		"owner verifier":         {Method: "batcave.cowl", OwnerVerifier: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := New(t.Context(), testConfig(t, mod("batcave", func(r *module.Registrar) error { r.AuthMethod(spec); return nil })))
+			_, err := newK(t, testConfig(t, mod("batcave", func(r *module.Registrar) error { r.AuthMethod(spec); return nil })))
 			if !errors.Is(err, module.ErrAuthMethod) {
 				t.Fatalf("New = %v, want ErrAuthMethod", err)
 			}
@@ -319,7 +369,7 @@ func TestLegacyAuthGinOnlyNamedModule(t *testing.T) {
 	}
 	c := testConfig(t, mod("batcave", mount), mod("arkham", mount))
 	c.LegacyAuthGinUntil = "batcave"
-	_, err := New(t.Context(), c)
+	_, err := newK(t, c)
 	got := problems(t, err)
 	if len(got) != 1 || got[0].Module != "arkham" || got[0].Kind != module.ProblemLegacyAuth {
 		t.Fatalf("problems = %v, want one ProblemLegacyAuth for arkham", got)
@@ -334,18 +384,18 @@ func TestReservedIDsIncludeLegacyTopSegments(t *testing.T) {
 	batcave := mod("batcave", nil).with(func(m *module.Manifest) { m.LegacyPrefixes = []string{"/robin/", "/batcave/"} })
 	// Another manifest's LegacyPrefixes first segment is reserved; a module's
 	// own is not.
-	_, err := New(t.Context(), testConfig(t, batcave, mod("robin", nil)))
+	_, err := newK(t, testConfig(t, batcave, mod("robin", nil)))
 	got := problems(t, err)
 	if len(got) != 1 || got[0].Module != "robin" || got[0].Kind != module.ProblemReservedID {
 		t.Fatalf("problems = %v, want ProblemReservedID for robin only", got)
 	}
 	c := testConfig(t, mod("joker", nil))
 	c.ReservedAPINamespaces = []string{"joker"}
-	if _, err := New(t.Context(), c); !hasKind(err, module.ProblemReservedID) {
+	if _, err := newK(t, c); !hasKind(err, module.ProblemReservedID) {
 		t.Fatalf("ID in ReservedAPINamespaces = %v, want ProblemReservedID", err)
 	}
 	// P7 re-checks IDs against every mount's TopSegments and SPAShared.
-	_, err = New(t.Context(), testConfig(t, mod("robin", nil), mod("arkham", func(r *module.Registrar) error {
+	_, err = newK(t, testConfig(t, mod("robin", nil), mod("arkham", func(r *module.Registrar) error {
 		r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthCore, SPAShared: []string{"robin"}})
 		return nil
 	})))
@@ -467,7 +517,7 @@ func TestRegistrarContextCancelled(t *testing.T) {
 		<-r.Context().Done()
 		return r.Context().Err()
 	}))
-	if _, err := New(ctx, c); !errors.Is(err, context.Canceled) {
+	if _, err := newKCtx(t, ctx, c); !errors.Is(err, context.Canceled) {
 		t.Fatalf("New with its ctx cancelled during Register = %v, want context.Canceled", err)
 	}
 }
@@ -541,7 +591,7 @@ func TestKernelFamiliesGathered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"P1", "P2", "P4a", "P4b", "P4c", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
+	if want := []string{"P0", "P0a", "P1", "P2", "P3", "P4a", "P4b", "P4c", "P4d", "P5", "P6", "P7", "P8"}; !slices.Equal(phases, want) {
 		t.Fatalf("boot phases recorded = %v, want %v", phases, want)
 	}
 }
@@ -559,10 +609,10 @@ func wholeResetHook() *storage.ResetHook {
 // TestCatalog_OneResetHook: one declared hook passes P1, and a disabled
 // module's hook still counts against a second.
 func TestCatalog_OneResetHook(t *testing.T) {
-	if _, err := New(t.Context(), testConfig(t, mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() }))); err != nil {
+	if _, err := newK(t, testConfig(t, mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() }))); err != nil {
 		t.Fatalf("one reset hook: %v", err)
 	}
-	_, err := New(t.Context(), testConfig(t,
+	_, err := newK(t, testConfig(t,
 		mod("batcave", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook(); m.DefaultEnabled = false }),
 		mod("arkham", nil).with(func(m *module.Manifest) { m.ResetHook = wholeResetHook() })))
 	if !hasKind(err, module.ProblemResetHook) {

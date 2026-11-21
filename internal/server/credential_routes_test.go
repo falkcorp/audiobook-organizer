@@ -1,7 +1,7 @@
 // file: internal/server/credential_routes_test.go
-// version: 1.9.3
+// version: 1.9.4
 // guid: 6d2f9a40-3b75-4e18-9c6a-8f1e0b4d27c3
-// last-edited: 2026-11-05
+// last-edited: 2026-11-19
 
 // Route-table coverage for the credential guard (2026-10-07 security review,
 // "sibling-path gate parity"): every state-changing route in the real router
@@ -48,10 +48,10 @@ var exemptRoutes = map[string]string{
 	"DELETE /api/v1/auth/sessions/:id": "revokes one of the caller's own sessions",
 	"DELETE /api/v1/auth/api-keys/:id": "revokes a key",
 	"DELETE /api/v1/users/invites/:id": "revokes an invite",
-	// Settings changed field by field: PUT /config refuses protected fields
-	// (config.ChangedProtectedFields) for a non-interactive caller inside
-	// UpdateService, on the decoded config.
-	"PUT /api/v1/config": "protected fields refused in config.UpdateService",
+	// Settings changed key by key: PUT /config hands the Actor to config.Facade,
+	// whose core protection refuses a key that needs a session or the admin
+	// role for a non-interactive caller, whatever value it carries.
+	"PUT /api/v1/config": "protected keys refused by core protection through config.Facade",
 	// Data, not credentials or paths.
 	"POST /api/v1/backup/create":                                "writes a backup to the configured backup_dir",
 	"DELETE /api/v1/backup/:filename":                           "deletes a backup file in backup_dir",

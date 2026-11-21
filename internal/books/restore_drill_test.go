@@ -26,10 +26,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/codec"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
 // The restore drill (F2-15; 05-storage §5S.10 TestRollbackRestoreBootsPreviousBuild,
@@ -70,10 +74,6 @@ func TestRollbackRestoreBootsPreviousBuild(t *testing.T) {
 			}
 			t.Skipf("%s is not set: no pre-freeze binary to boot after the restore", r2PrefreezeBinEnv)
 		}
-		steps := registeredCutoverSteps(t)
-		if len(steps) == 0 {
-			t.Log("no cutover step registered: the drill restores R1's own boot")
-		}
 		want := c.answers
 		if c.name == "prefreeze-written" {
 			want = prefreezeAnswers(t)
@@ -84,7 +84,10 @@ func TestRollbackRestoreBootsPreviousBuild(t *testing.T) {
 		t.Run("checkpoint", func(t *testing.T) {
 			work := copyCorpus(t, c)
 			had := checkpoints(t, work)
-			upgradeAndMark(t, work)
+			steps := registeredCutoverSteps(t, upgradeAndMark(t, work))
+			if len(steps) == 0 {
+				t.Log("no cutover step registered: the drill restores R1's own boot")
+			}
 			cp, problem := upgradeCheckpoint(len(steps), had, checkpoints(t, work))
 			require.Empty(t, problem)
 			if cp == "" {
@@ -108,14 +111,17 @@ func wholeStore() scanSpec { return scanSpec{keepRows: true, hashCore: true} }
 
 // upgradeAndMark runs the build under test on the copy at work to readiness
 // (the upgrade), writes the drill's marker playlist through books' store
-// while it serves, and stops it.
-func upgradeAndMark(t *testing.T, work string) {
+// while it serves, and stops it. It returns the booted module's manifest,
+// whose cutover steps the upgrade ran.
+func upgradeAndMark(t *testing.T, work string) module.Manifest {
 	t.Helper()
 	edit, opt := cutoverBootConfig(t, work)
 	r := runComposedIn(t, filepath.Join(work, "state"), edit, nil, opt, nil)
+	man := r.composed.mod.Manifest()
 	_, err := r.composed.store.CreatePlaylist(drillMarker, nil, "")
 	require.NoError(t, err, "the marker row")
 	require.NoError(t, r.stop())
+	return man
 }
 
 // restoreOffline runs the build's own `storage restore-offline` (the command
@@ -128,7 +134,7 @@ func restoreOffline(t *testing.T, work string, args ...string) {
 		AppID:             AppID,
 		Version:           telemetry.Version(),
 		StateDir:          stateDir,
-		R1StoragePath:     storeDB(work),
+		Env:               []string{storagePathEnv + "=" + storeDB(work)},
 		StorageStateFiles: StateFiles(stateDir, storeDB(work)),
 		R1BeforeSwap:      database.DiscardHNSWCleanStop,
 		R1ArchiveExtract:  backup.ExtractStore,
@@ -460,6 +466,11 @@ var fakeCases = []fakeCase{
 	{name: "deletes-a-ledger-row", mut: "ledger-delete", bites: []string{"bookkeeping"}},
 	{name: "lowers-the-schema-version", mut: "db-version-down", bites: []string{"bookkeeping"}},
 	{name: "lowers-the-preference-counter", mut: "counter-down", bites: []string{"bookkeeping"}},
+	// The fake step is no level step, so the legacy projection and books'
+	// level stamp must not move: raising them is the level step's alone.
+	{name: "raises-the-storage-format-without-a-level-step", mut: "storage-format-up", bites: []string{"level"}},
+	{name: "lowers-the-storage-format", mut: "storage-format-down", bites: []string{"bookkeeping", "level"}},
+	{name: "raises-books-level-without-a-level-step", mut: "level-up", bites: []string{"level"}},
 }
 
 // testCutoverSelftest proves every check of the suite fails when a cutover
@@ -496,6 +507,7 @@ func testCutoverSelftest(t *testing.T) {
 						"refs":        refProblems(t, storeDB(work), steps, before, after),
 						"bytes":       byteProblems(before, after),
 						"bookkeeping": bookkeepingProblems(before, after),
+						"level":       levelProblems(selftestOwner, steps, selftestProjection(), before, after),
 					}
 					bites := fc.bites
 					if fc.mut == "drop-prefreeze" && referenced {
@@ -512,7 +524,63 @@ func testCutoverSelftest(t *testing.T) {
 	t.Run("references", testReferencesSelftest)
 	t.Run("id-resolution", testIDResolutionSelftest)
 	t.Run("checkpoint-guard", testCheckpointGuardSelftest)
+	t.Run("residual", testResidualSelftest)
+	t.Run("completion", testCompletionSelftest)
+	t.Run("surviving-cases", testSurvivingCasesSelftest)
 }
+
+// testSurvivingCasesSelftest proves casesSurvivingWrites resolves an overlay
+// case only when the writes removed its fault: a rewritten row, or a
+// rewritten blob without the member. An untouched row, or a rewritten blob
+// still naming the member, keeps the case.
+func testSurvivingCasesSelftest(t *testing.T) {
+	const (
+		secret, blob = "setting:basic_auth_password", "setting:config_blob"
+		member       = blob + "#batcomputer_uplink_mode"
+	)
+	cases := []r2Stage2Case{
+		{Label: "corrupt-secret", Keys: []string{secret}, Outcome: "quarantined"},
+		{Label: "unmapped-field", Keys: []string{member}, Outcome: "quarantined"},
+	}
+	baseRows := map[string]string{secret: `{"value":"not-ciphertext"}`, blob: `{"value":"{\"batcomputer_uplink_mode\":\"cave\",\"gotham\":1}"}`}
+	write := func(t *testing.T, rows map[string]string) string {
+		dir := filepath.Join(t.TempDir(), "db")
+		db, err := pebble.Open(dir, &pebble.Options{})
+		require.NoError(t, err)
+		for k, v := range rows {
+			require.NoError(t, db.Set([]byte(k), []byte(v), pebble.Sync))
+		}
+		require.NoError(t, db.Close())
+		return dir
+	}
+	for name, tc := range map[string]struct {
+		after    map[string]string
+		resolved []string
+	}{
+		"untouched":                   {after: baseRows},
+		"the-secret-re-saved":         {after: map[string]string{secret: `{"value":"sealed"}`, blob: baseRows[blob]}, resolved: []string{"corrupt-secret"}},
+		"the-secret-deleted":          {after: map[string]string{blob: baseRows[blob]}, resolved: []string{"corrupt-secret"}},
+		"the-blob-rewritten-without":  {after: map[string]string{secret: baseRows[secret], blob: `{"value":"{\"gotham\":2}"}`}, resolved: []string{"unmapped-field"}},
+		"the-blob-rewritten-but-kept": {after: map[string]string{secret: baseRows[secret], blob: `{"value":"{\"batcomputer_uplink_mode\":\"cave\",\"gotham\":2}"}`}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			kept, resolved := casesSurvivingWrites(t, write(t, baseRows), write(t, tc.after), cases)
+			var got []string
+			for _, qc := range resolved {
+				got = append(got, qc.Label)
+			}
+			require.Equal(t, tc.resolved, got)
+			require.Len(t, kept, len(cases)-len(got))
+		})
+	}
+}
+
+// selftestOwner is books' module ID, which its level stamp and data migration
+// IDs are keyed by; selftestProjection is the legacy projection the flip's
+// manifest declares (LegacyMaxFormat+1).
+const selftestOwner = "books"
+
+func selftestProjection() int64 { return legacyProjection(flipOn().Manifest()) }
 
 // fakeDataMigration stands in for datamigrate.DataMigration in the manifest
 // selftest: the enumeration reads only its Cutover flag.
@@ -522,8 +590,45 @@ type fakeDataMigration struct {
 }
 
 // testManifestSelftest proves cutoverStepsOf sees a step wherever a manifest
-// can register one, and only a cutover one.
+// can register one, and only a cutover one: the flip's manifest yields
+// exactly F3's list (M7's books half, M2, M8) with M2's Source and Residual,
+// a module.Manifest's Cutover step without the Cutover flag is refused, and a
+// manifest of any other shape that populates a step field fails rather than
+// passing unseen.
 func testManifestSelftest(t *testing.T) {
+	t.Run("the-flip", func(t *testing.T) {
+		steps, err := cutoverStepsOf(flipOn().Manifest())
+		require.NoError(t, err)
+		var got []string
+		for _, st := range steps {
+			got = append(got, string(st.Kind)+" "+st.ID)
+		}
+		require.Equal(t, []string{
+			"level " + storage.LevelStepName(cutover.BooksOwner, cutover.BooksCutoverLevel),
+			"data " + cutover.ConfigCutoverID,
+			"rewrite " + cutover.RewriteID,
+		}, got)
+		level, m2 := steps[0], steps[1]
+		require.Equal(t, booksLevelStepVersion, level.Version)
+		require.Equal(t, cutover.BooksCutoverLevel, level.Level)
+		for _, k := range []string{"setting:openai_api_key", "setting:google_books_api_key", "setting:hardcover_api_token", "setting:basic_auth_password"} {
+			require.Truef(t, m2.inSource([]byte(k)), "%s is not a drained row of M2's Source", k)
+		}
+		require.False(t, m2.inSource([]byte("setting:config_blob")), "the blob is M2's Residual, rewritten, not drained")
+		require.True(t, m2.residualMember([]byte("setting:config_blob#batcomputer_uplink_mode")))
+		require.False(t, m2.inSource([]byte("setting:repairs_last_plan_op:01ARKHAM")), "a setting M2 does not move")
+	})
+	t.Run("a-cutover-step-without-the-flag", func(t *testing.T) {
+		man := flipOn().Manifest()
+		inner := man.Cutover
+		man.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
+			ds := inner(imp)
+			ds[0].Cutover = false
+			return ds
+		}
+		_, err := cutoverStepsOf(man)
+		require.Error(t, err)
+	})
 	type cutoverField struct{ Cutover []int }
 	type cutoverFunc struct{ Cutover func() }
 	type dms struct{ DataMigrations []fakeDataMigration }
@@ -538,7 +643,8 @@ func testManifestSelftest(t *testing.T) {
 		manifest any
 		fails    bool
 	}{
-		"the-build":                     {manifest: Module().Manifest()},
+		"a-build-that-declares-no-flip": {manifest: Module().Manifest()},
+		"a-nil-module-manifest":         {manifest: (*module.Manifest)(nil), fails: true},
 		"no-field":                      {manifest: struct{ ID string }{"books"}},
 		"empty-cutover":                 {manifest: cutoverField{}},
 		"a-cutover-step":                {manifest: cutoverField{Cutover: []int{1}}, fails: true},
@@ -561,6 +667,202 @@ func testManifestSelftest(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.Empty(t, steps)
+		})
+	}
+}
+
+// syntheticScan is a scan of the given rows as the real tests scan a store.
+func syntheticScan(t *testing.T, steps []cutoverStep, rows map[string][]byte) *storeScan {
+	t.Helper()
+	spec := scanSpec{steps: steps, shared: loadSharedFamilies(t), keepRows: true}
+	s := newStoreScan(spec)
+	fi := newFamilyIndex()
+	for _, k := range sortedKeys(rows) {
+		s.add(fi, spec, []byte(k), rows[k])
+	}
+	return s
+}
+
+// quarantineRow is a quarantine record row naming key for step n, in
+// storage's codec envelope.
+func quarantineRow(t *testing.T, step string, n int, key string) (string, []byte) {
+	t.Helper()
+	raw, err := codec.JSON[quarantineRecord](1).Encode(quarantineRecord{Key: []byte(key), Step: step, Reason: "selftest: refused"})
+	require.NoError(t, err)
+	return fmt.Sprintf("c/storage/quarantine/%s/%06d", step, n), raw
+}
+
+// testResidualSelftest proves the count and quarantine checks over a step
+// with a Residual key, M2's shape: the blob is rewritten in place, a field of
+// it the step cannot move is quarantined under "<blob>#<member>", and only
+// the drained rows are the count rule's rows. The step is M2 as the flip's
+// manifest declares it; the stores are synthetic.
+func testResidualSelftest(t *testing.T) {
+	steps, err := cutoverStepsOf(flipOn().Manifest())
+	require.NoError(t, err)
+	var m2 cutoverStep
+	for _, st := range steps {
+		if st.ID == cutover.ConfigCutoverID {
+			m2 = st
+		}
+	}
+	require.NotEmpty(t, m2.ID)
+	const (
+		blob, member = "setting:config_blob", "setting:config_blob#batcomputer_uplink_mode"
+		row, drained = "setting:basic_auth_password", "setting:hardcover_api_token"
+	)
+	cases := []r2Stage2Case{
+		{Label: "corrupt-secret", Keys: []string{row}, Outcome: "quarantined"},
+		{Label: "unmapped-field", Keys: []string{member}, Outcome: "quarantined"},
+	}
+	before := map[string][]byte{blob: []byte(`{"key":"config_blob"}`), row: []byte(`{}`), drained: []byte(`{}`)}
+	for name, tc := range map[string]struct {
+		records []string // keys quarantine records name
+		left    []string // Source rows still present after
+		report  stepReport
+		bites   []string
+	}{
+		"clean": {records: []string{row, member}, report: stepReport{Read: 2, Imported: 1, Quarantined: 1}},
+		"a-member-quarantined-in-error": {records: []string{row, member, "setting:config_blob#oracle_frequency"},
+			report: stepReport{Read: 2, Imported: 1, Quarantined: 1}, bites: []string{"quarantine"}},
+		"a-case-member-left-in-the-blob": {records: []string{row}, report: stepReport{Read: 2, Imported: 1, Quarantined: 1}, bites: []string{"quarantine"}},
+		"a-member-counted-as-a-row": {records: []string{row, member}, report: stepReport{Read: 2, Imported: 0, Quarantined: 2},
+			bites: []string{"counts"}},
+		"the-whole-residual-quarantined": {records: []string{row, member, blob}, report: stepReport{Read: 2, Imported: 1, Quarantined: 1},
+			bites: []string{"counts", "quarantine"}},
+		"a-drained-row-left": {records: []string{row, member}, left: []string{drained}, report: stepReport{Read: 2, Imported: 1, Quarantined: 1},
+			bites: []string{"counts"}},
+		"a-report-with-no-counts": {records: []string{row, member}, report: stepReport{}, bites: []string{"counts"}},
+		"a-held-row":              {records: []string{row, member}, report: stepReport{Read: 2, Quarantined: 1, Held: 1}, bites: []string{"counts"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := m2
+			r := tc.report
+			r.Deleted = r.Read - r.Imported - r.Quarantined - r.Held // a stored report's remainder
+			st.Report = r
+			after := map[string][]byte{blob: []byte(`{"key":"config_blob","value":"{}"}`)}
+			for _, k := range tc.left {
+				after[k] = before[k]
+			}
+			for i, k := range tc.records {
+				qk, qv := quarantineRow(t, st.ID, i+1, k)
+				after[qk] = qv
+			}
+			ss := []cutoverStep{st}
+			b, a := syntheticScan(t, ss, before), syntheticScan(t, ss, after)
+			requireBites(t, map[string][]string{
+				"counts":     countProblems(ss, b, a),
+				"quarantine": quarantineProblems(ss, cases, a.Quarantine),
+			}, tc.bites)
+		})
+	}
+}
+
+// testCompletionSelftest proves completionProblems and levelProblems bite on
+// what the flip's boot stores: F3's steps as the flip's manifest enumerates
+// them over a synthetic before and after store, where the clean store is what
+// a completed flip leaves, and each case drops a step from the enumeration or
+// breaks one record.
+func testCompletionSelftest(t *testing.T) {
+	all, err := cutoverStepsOf(flipOn().Manifest())
+	require.NoError(t, err)
+	enc := func(v any) []byte {
+		var raw []byte
+		var err error
+		switch v := v.(type) {
+		case storage.DataMigrationRecord:
+			raw, err = codec.JSON[storage.DataMigrationRecord](1).Encode(v)
+		case dmReportRecord:
+			raw, err = codec.JSON[dmReportRecord](1).Encode(v)
+		case levelStamp:
+			raw, err = codec.JSON[levelStamp](1).Encode(v)
+		}
+		require.NoError(t, err)
+		return raw
+	}
+	pref := func(key, value string) []byte {
+		raw, err := json.Marshal(map[string]any{"id": 1, "key": key, "value": value})
+		require.NoError(t, err)
+		return raw
+	}
+	var level cutoverStep
+	for _, st := range all {
+		if st.Kind == stepLevel {
+			level = st
+		}
+	}
+	ledger := fmt.Sprintf("preference:migration_%d", level.Version)
+	done := storage.DataMigrationRecord{State: storage.DataMigrationDone}
+	before := map[string][]byte{storageFormatRow: pref("storage_format", `{"version":1}`)}
+	clean := func() map[string][]byte {
+		after := map[string][]byte{
+			storageFormatRow: pref("storage_format", fmt.Sprintf(`{"version":%d}`, selftestProjection())),
+			ledger: pref(strings.TrimPrefix(ledger, "preference:"),
+				fmt.Sprintf(`{"version":%d,"description":%q,"compat":"breaking","raises_level":%d}`, level.Version, level.ID, level.Level)),
+			levelStampKey(selftestOwner): enc(levelStamp{Level: level.Level}),
+		}
+		for _, st := range all {
+			if st.Kind == stepLevel {
+				continue
+			}
+			after[dmStateKey(st.ID)] = enc(done)
+			if st.Kind == stepData {
+				after[dmReportKey(st.ID)] = enc(dmReportRecord{State: storage.DataMigrationDone})
+			}
+		}
+		return after
+	}
+	without := func(kind stepKind) []cutoverStep {
+		return slices.DeleteFunc(slices.Clone(all), func(s cutoverStep) bool { return s.Kind == kind })
+	}
+	m2 := cutover.ConfigCutoverID
+	for name, tc := range map[string]struct {
+		steps  []cutoverStep
+		other  map[string]bool
+		mutate func(after map[string][]byte)
+		bites  []string
+	}{
+		"a-completed-flip":              {},
+		"m8-not-enumerated":             {steps: without(stepRewrite), bites: []string{"completion"}},
+		"m2-not-enumerated":             {steps: without(stepData), bites: []string{"completion"}},
+		"the-level-step-not-enumerated": {steps: without(stepLevel), bites: []string{"level"}},
+		"m2-not-done": {mutate: func(a map[string][]byte) {
+			a[dmStateKey(m2)] = enc(storage.DataMigrationRecord{State: "running"})
+		}, bites: []string{"completion"}},
+		"m8-never-ran":        {mutate: func(a map[string][]byte) { delete(a, dmStateKey(cutover.RewriteID)) }, bites: []string{"completion"}},
+		"m2-stored-no-report": {mutate: func(a map[string][]byte) { delete(a, dmReportKey(m2)) }, bites: []string{"completion"}},
+		"an-undeclared-books-migration-completed": {mutate: func(a map[string][]byte) {
+			a[dmStateKey("books.batcave-index")] = enc(done)
+		}, bites: []string{"completion"}},
+		"a-declared-books-migration-completed": {other: map[string]bool{"books.batcave-index": true}, mutate: func(a map[string][]byte) {
+			a[dmStateKey("books.batcave-index")] = enc(done)
+		}},
+		"another-owner's-migration-completed": {mutate: func(a map[string][]byte) {
+			a[dmStateKey("core/tasks.gotham-clock")] = enc(done)
+		}},
+		"the-projection-not-raised": {mutate: func(a map[string][]byte) { a[storageFormatRow] = before[storageFormatRow] }, bites: []string{"level"}},
+		"the-marker-left-set": {mutate: func(a map[string][]byte) {
+			a[storageMigrationRow] = pref("storage_migration", `{"projection":2}`)
+		}, bites: []string{"level"}},
+		"the-level-not-raised": {mutate: func(a map[string][]byte) { delete(a, levelStampKey(selftestOwner)) }, bites: []string{"level"}},
+		"no-ledger-row":        {mutate: func(a map[string][]byte) { delete(a, ledger) }, bites: []string{"level"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			steps := tc.steps
+			if steps == nil {
+				steps = slices.Clone(all)
+			}
+			after := clean()
+			if tc.mutate != nil {
+				tc.mutate(after)
+			}
+			b, a := syntheticScan(t, steps, before), syntheticScan(t, steps, after)
+			stored := attachStored(steps, a)
+			requireBites(t, map[string][]string{
+				"stored":     stored,
+				"completion": completionProblems(selftestOwner, steps, tc.other, b, a),
+				"level":      levelProblems(selftestOwner, steps, selftestProjection(), b, a),
+			}, tc.bites)
 		})
 	}
 }
@@ -804,6 +1106,26 @@ func moveUsers(t *testing.T, dir, mut string, c corpus) (cutoverStep, bool) {
 		require.NoError(t, b.Set([]byte("preference:db_version"), raw, nil))
 	case "counter-down":
 		require.NoError(t, b.Set([]byte("counter:preference"), []byte("1"), nil))
+	case "storage-format-up", "storage-format-down":
+		k, v := firstKey(t, db, storageFormatRow)
+		require.Equal(t, storageFormatRow, string(k))
+		ver, ok := preferenceVersion(v)
+		require.True(t, ok, "%s = %q", k, v)
+		next := ver + 1
+		if mut == "storage-format-down" {
+			require.Positive(t, ver, "the corpus' stamp is already 0: nothing lower to write")
+			next = ver - 1
+		}
+		var row map[string]any
+		require.NoError(t, json.Unmarshal(v, &row))
+		row["value"] = fmt.Sprintf(`{"version":%d,"updated_at":"2026-11-10T00:00:00Z"}`, next)
+		raw, err := json.Marshal(row)
+		require.NoError(t, err)
+		require.NoError(t, b.Set(k, raw, nil))
+	case "level-up":
+		raw, err := codec.JSON[levelStamp](1).Encode(levelStamp{Level: 1})
+		require.NoError(t, err)
+		require.NoError(t, b.Set([]byte(levelStampKey(selftestOwner)), raw, nil))
 	case "touch-outside":
 		k, v := firstKey(t, db, "author:")
 		require.NoError(t, b.Set(k, append(v, ' '), nil))

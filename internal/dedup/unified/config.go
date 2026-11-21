@@ -11,8 +11,6 @@ import (
 	"maps"
 	"slices"
 	"strings"
-
-	"github.com/spf13/viper"
 )
 
 // KindConfig holds per-signal-kind calibration values. All fields have
@@ -181,7 +179,7 @@ type KindConfidenceOverride struct {
 }
 
 // ScoreOverrides carries the DB-persisted (config-blob) scoring values the
-// caller wants layered on top of Viper and the compiled-in defaults. It is
+// caller wants layered on top of the compiled-in defaults. It is
 // the ONLY way persisted values reach LoadScoreConfig.
 //
 // WHY an explicit parameter and not package-level setters: until 2026-09-02
@@ -195,7 +193,7 @@ type KindConfidenceOverride struct {
 // removes the second, disconnected way of configuring scoring.
 //
 // A band field at exactly zero, and a confidence entry with a bound at exactly
-// zero, mean "not set" — that value falls through to Viper / DefaultScoreConfig.
+// zero, mean "not set" — that value falls through to DefaultScoreConfig.
 // Any OTHER value, including a negative one, is an override and is checked by
 // Validate; a negative band used to read as "not set" and silently take the
 // default, which hid the mistake instead of rejecting it.
@@ -209,28 +207,17 @@ type ScoreOverrides struct {
 	Confidence map[string]KindConfidenceOverride
 }
 
-// LoadScoreConfig builds the effective ScoreConfig from, in ascending
-// precedence, DefaultScoreConfig, Viper (config.yaml dedup.signals.*), and
-// the caller-supplied DB-persisted overrides. Returns an error if the
-// resulting config fails Validate — callers must treat that as fatal, never
-// fall back to defaults (an invalid persisted config would otherwise
-// silently revert auto-resolve to the compiled-in bands).
+// LoadScoreConfig builds the effective ScoreConfig from DefaultScoreConfig
+// and the caller-supplied overrides (the effective dedup.signals settings,
+// whatever layer set them). Until F3-07 it also read config.yaml's
+// dedup.signals.* through viper, including per-kind base/scale/boost values
+// no settings key carries; the flip dropped that file and viper with it.
+// Returns an error if the resulting config fails Validate — callers must
+// treat that as fatal, never fall back to defaults (an invalid persisted
+// config would otherwise silently revert auto-resolve to the compiled-in
+// bands).
 func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 	cfg := DefaultScoreConfig()
-
-	// Merge band thresholds if overridden via Viper (config.yaml / env vars).
-	if viper.IsSet("dedup.signals.band_certain_min") {
-		cfg.BandCertainMin = viper.GetFloat64("dedup.signals.band_certain_min")
-	}
-	if viper.IsSet("dedup.signals.band_high_min") {
-		cfg.BandHighMin = viper.GetFloat64("dedup.signals.band_high_min")
-	}
-	if viper.IsSet("dedup.signals.band_medium_min") {
-		cfg.BandMediumMin = viper.GetFloat64("dedup.signals.band_medium_min")
-	}
-	if viper.IsSet("dedup.signals.band_review_min") {
-		cfg.BandReviewMin = viper.GetFloat64("dedup.signals.band_review_min")
-	}
 
 	// Override with DB-persisted band values. Exactly zero means "not set";
 	// everything else — negatives included — is an override that Validate
@@ -248,40 +235,10 @@ func LoadScoreConfig(ov ScoreOverrides) (ScoreConfig, error) {
 		cfg.BandReviewMin = ov.BandReviewMin
 	}
 
-	// Merge per-kind overrides.
-	for _, kind := range []SignalKind{
-		SigExactFile, SigExactAcoustID, SigISBNASIN,
-		SigLSHAcoustID, SigEmbedHigh, SigMetaSrcHash,
-		SigMetaFuzzy, SigEmbedMedium, SigChapterStructure,
-		SigDuration, SigFolderPath, SigWindowAcoustID,
-	} {
-		key := "dedup.signals." + string(kind)
-		if !viper.IsSet(key) {
-			continue
-		}
-		kc := cfg.Signals[string(kind)]
-		if viper.IsSet(key + ".base") {
-			kc.Base = viper.GetFloat64(key + ".base")
-		}
-		if viper.IsSet(key + ".scale") {
-			kc.Scale = viper.GetFloat64(key + ".scale")
-		}
-		if viper.IsSet(key + ".min_confidence") {
-			kc.MinConfidence = viper.GetFloat64(key + ".min_confidence")
-		}
-		if viper.IsSet(key + ".max_confidence") {
-			kc.MaxConfidence = viper.GetFloat64(key + ".max_confidence")
-		}
-		if viper.IsSet(key + ".boost") {
-			kc.Boost = viper.GetFloat64(key + ".boost")
-		}
-		cfg.Signals[string(kind)] = kc
-	}
-
 	// Merge DB-persisted per-kind confidence overrides (highest precedence,
-	// mirroring the band thresholds above: DB override > Viper > defaults).
+	// mirroring the band thresholds above: override > defaults).
 	// Within one override entry, an exactly-zero MinConfidence/MaxConfidence
-	// field is "not set" and leaves that particular bound at its Viper/default
+	// field is "not set" and leaves that particular bound at its default
 	// value — only the non-zero bound(s) in an entry are applied. The map is
 	// operator-written (the calibrate op's Round-2 advisory tells them what to
 	// write), so a kind DefaultScoreConfig does not seed is a typo, and a typo

@@ -1,7 +1,7 @@
 // file: core/app/storage_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: cd83307e-c3ce-4393-b440-9d8ba60a7afb
-// last-edited: 2026-11-08
+// last-edited: 2026-11-18
 
 package app
 
@@ -24,26 +24,27 @@ type manifestOnly module.Manifest
 func (m manifestOnly) Manifest() module.Manifest          { return module.Manifest(m) }
 func (m manifestOnly) Register(r *module.Registrar) error { return nil }
 
-// TestStoragePath_Rule: core.storage.path is resolved only when a module
+// TestResolveStorage_Rule: core.storage.path is resolved only when a module
 // declares storage; an absolute <EnvPrefix>_CORE_STORAGE_PATH wins and a
 // relative one is refused (05-storage §5S.4 step 1); otherwise
 // <state_dir>/storage/main.pebble, absolute even for a relative state
 // directory. The state directory comes back with it, absolute, in both
-// cases: New resolves it once (R1-21 review n4).
-func TestStoragePath_Rule(t *testing.T) {
+// cases: step 0 resolves it once (R1-21 review n4).
+func TestResolveStorage_Rule(t *testing.T) {
 	t.Chdir(t.TempDir())
-	plain := manifestOnly{ID: "alfred", Version: "1.0.0"}
+	ctx := t.Context()
+	plain := manifestOnly{ID: "lucius", Version: "1.0.0"}
 	keeper := manifestOnly{ID: "alfred", Version: "1.0.0", Storage: storage.Spec{Keyspace: true}}
 	opts := Options{AppID: "gotham", StateDir: "gotham-state", Env: []string{}}
 
-	if p, dir, err := storagePath(opts, []module.Module{plain}); err != nil || p != "" || dir != "" {
+	if p, dir, err := ResolveStorage(ctx, opts, []module.Module{plain}, ""); err != nil || p != "" || dir != "" {
 		t.Fatalf("no module declares storage: path %q, state %q, %v; want none", p, dir, err)
 	}
 	if _, err := os.Stat("gotham-state"); !os.IsNotExist(err) {
 		t.Fatalf("an app without storage created its state directory: %v", err)
 	}
 
-	p, dir, err := storagePath(opts, []module.Module{plain, keeper})
+	p, dir, err := ResolveStorage(ctx, opts, []module.Module{plain, keeper}, "")
 	wd, _ := os.Getwd()
 	state := filepath.Join(wd, "gotham-state")
 	if want := filepath.Join(state, "storage", "main.pebble"); err != nil || p != want || dir != state {
@@ -52,12 +53,12 @@ func TestStoragePath_Rule(t *testing.T) {
 
 	abs := filepath.Join(t.TempDir(), "batcave.pebble")
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + abs}
-	if p, dir, err := storagePath(opts, []module.Module{keeper}); err != nil || p != abs || dir != state {
+	if p, dir, err := ResolveStorage(ctx, opts, []module.Module{keeper}, ""); err != nil || p != abs || dir != state {
 		t.Fatalf("env path = %q, state %q, %v; want %q, state %q", p, dir, err, abs, state)
 	}
 
 	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=batcave.pebble"}
-	if _, _, err := storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+	if _, _, err := ResolveStorage(ctx, opts, []module.Module{keeper}, ""); err == nil || !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("relative env path = %v, want a refusal", err)
 	}
 }
@@ -117,30 +118,6 @@ func TestStorageFSKeepsTheStoreOffDisk(t *testing.T) {
 				t.Fatalf("store on disk = %v (%v), want %v", onDisk, err, tc.onDisk)
 			}
 		})
-	}
-}
-
-// TestStoragePath_R1StoragePath: the app's own database path names the store
-// when the env is unset, and the env naming a different store fails rather
-// than letting serve and the app's offline commands open two databases.
-func TestStoragePath_R1StoragePath(t *testing.T) {
-	keeper := manifestOnly{ID: "alfred", Version: "1.0.0", Storage: storage.Spec{Keyspace: true}}
-	cave := filepath.Join(t.TempDir(), "batcave.pebble")
-	opts := Options{AppID: "gotham", StateDir: t.TempDir(), Env: []string{}, R1StoragePath: cave}
-	if p, _, err := storagePath(opts, []module.Module{keeper}); err != nil || p != cave {
-		t.Fatalf("R1StoragePath alone = %q, %v; want %q", p, err, cave)
-	}
-	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + cave + "/"}
-	if p, _, err := storagePath(opts, []module.Module{keeper}); err != nil || p != cave {
-		t.Fatalf("env and R1StoragePath naming one store = %q, %v; want %q", p, err, cave)
-	}
-	opts.Env = []string{"GOTHAM_CORE_STORAGE_PATH=" + filepath.Join(t.TempDir(), "arkham.pebble")}
-	if _, _, err := storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "name different stores") {
-		t.Fatalf("env and R1StoragePath naming two stores = %v, want a refusal", err)
-	}
-	opts.Env, opts.R1StoragePath = []string{}, "batcave.pebble"
-	if _, _, err := storagePath(opts, []module.Module{keeper}); err == nil || !strings.Contains(err.Error(), "not an absolute path") {
-		t.Fatalf("relative R1StoragePath = %v, want a refusal", err)
 	}
 }
 
@@ -228,12 +205,28 @@ func TestClaimsModeDial(t *testing.T) {
 // TestStorageAdminNilWithoutAStore: an app with no storage has no admin.
 func TestStorageAdminNilWithoutAStore(t *testing.T) {
 	plain := manifestOnly{ID: "alfred", Version: "1.0.0"}
-	a, err := New(t.Context(), Options{AppID: "gotham", Args: []string{}, Env: []string{}}, plain)
+	a, err := New(t.Context(), Options{StateDir: t.TempDir(), AppID: "gotham", Args: []string{}, Env: []string{}}, plain)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = a.Close(context.Background()) }()
 	if a.StorageAdmin() != nil {
 		t.Fatal("StorageAdmin() != nil with no store")
+	}
+}
+
+// TestKernelConfig_CarriesFromRelease: Options.FromRelease is the tag the
+// pre-migration checkpoint records as from_release (05-storage §5S.3.12
+// "How"), so kernelConfig, which New and every offline open build their kernel
+// config from, hands it on unchanged; an app that embeds none leaves it empty.
+func TestKernelConfig_CarriesFromRelease(t *testing.T) {
+	for _, tag := range []string{"", "v0.232.0"} {
+		c, err := kernelConfig(Options{AppID: "gotham", FromRelease: tag}, nil)
+		if err != nil {
+			t.Fatalf("kernelConfig(%q): %v", tag, err)
+		}
+		if c.FromRelease != tag {
+			t.Fatalf("kernel FromRelease = %q, want %q", c.FromRelease, tag)
+		}
 	}
 }

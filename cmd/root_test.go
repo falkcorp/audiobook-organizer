@@ -8,6 +8,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -20,15 +21,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
-	"github.com/spf13/viper"
 )
 
 // TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning pins the #3268
 // follow-up: a command line that still carries the removed
 // --enable-sqlite3-i-know-the-risks flag must parse through the real Execute
 // path (before this, cobra failed startup with "unknown flag"), print the
-// deprecation warning, stay out of --help, and not leak into viper, where
-// config.warnRemovedViperKeys would log the removal a second time.
+// deprecation warning, and stay out of --help.
 func TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning(t *testing.T) {
 	flag := rootCmd.PersistentFlags().Lookup(removedSQLiteFlag)
 	if flag == nil {
@@ -78,11 +77,6 @@ func TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning(t *testing.T) {
 	if strings.Contains(rootCmd.UsageString(), removedSQLiteFlag) {
 		t.Errorf("root usage lists --%s", removedSQLiteFlag)
 	}
-	for _, key := range []string{"enable_sqlite3_i_know_the_risks", "enable_sqlite"} {
-		if viper.IsSet(key) {
-			t.Errorf("viper.IsSet(%q) = true after parsing the flag; it must stay unbound", key)
-		}
-	}
 }
 
 func TestFormatMetadataValue(t *testing.T) {
@@ -94,33 +88,153 @@ func TestFormatMetadataValue(t *testing.T) {
 	}
 }
 
-func TestInitConfigWithViper(t *testing.T) {
-	tempDir := t.TempDir()
-	configFile := filepath.Join(tempDir, "config.yaml")
+// isolateInitConfig gives initConfig a process with no operator settings: a
+// temporary HOME (no HEAD home file) and state directory, the root flags
+// unset, and AppConfig and the store tunables restored afterwards.
+func isolateInitConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(config.SecureStateDirEnv, filepath.Join(t.TempDir(), "state"))
+	t.Chdir(t.TempDir())
+	origCfgFile, origDBPath, origPlaylistDir, origRootDir := cfgFile, databasePath, playlistDir, rootDir
+	orig := config.Snapshot()
+	t.Cleanup(func() {
+		cfgFile, databasePath, playlistDir, rootDir = origCfgFile, origDBPath, origPlaylistDir, origRootDir
+		for _, name := range []string{"config", "db", "dir", "playlists", "log-level"} {
+			if fl := rootCmd.PersistentFlags().Lookup(name); fl != nil {
+				_ = fl.Value.Set(fl.DefValue)
+				fl.Changed = false
+			}
+		}
+		config.Project(orig)
+		config.SetOperatorRootDir("")
+		database.SetEnabledSortIndexes(nil)
+	})
+	playlistDir, databasePath = "", ""
+}
 
-	// Create a config file with some settings
-	configContent := `root_dir: /tmp/audiobooks
-database_path: /tmp/test.db
-`
-	if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
-		t.Fatalf("failed to write config: %v", err)
+// setRootFlag sets a root persistent flag as the command line would.
+func setRootFlag(t *testing.T, name, value string) {
+	t.Helper()
+	if err := rootCmd.PersistentFlags().Set(name, value); err != nil {
+		t.Fatal(err)
 	}
+}
 
-	origCfgFile := cfgFile
-	origConfig := config.AppConfig
-	defer func() {
-		cfgFile = origCfgFile
-		config.AppConfig = origConfig
-		viper.Reset()
-	}()
+// TestInitConfig_ProjectsTheOperatorLayers (F3-07 slice 3): AppConfig is the
+// projection of the operator layers: the canonical environment, the flags set
+// (--log-level as core.log.level, --dir as the library root), an operator
+// secret through its kept ecosystem name, and the defaults for the rest.
+func TestInitConfig_ProjectsTheOperatorLayers(t *testing.T) {
+	isolateInitConfig(t)
+	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", "/srv/gotham/playlists")
+	t.Setenv("OPENAI_API_KEY", "sk-joker-test")
+	setRootFlag(t, "log-level", "debug")
+	setRootFlag(t, "dir", "/srv/gotham/library")
 
-	cfgFile = configFile
+	if err := initConfig(); err != nil {
+		t.Fatal(err)
+	}
+	got := config.Snapshot()
+	if got.PlaylistDir != "/srv/gotham/playlists" {
+		t.Errorf("PlaylistDir = %q, want the environment's", got.PlaylistDir)
+	}
+	if got.LogLevel != "debug" {
+		t.Errorf("LogLevel = %q, want --log-level's debug", got.LogLevel)
+	}
+	if got.OpenAIAPIKey != "sk-joker-test" {
+		t.Errorf("OpenAIAPIKey not projected from OPENAI_API_KEY (len %d)", len(got.OpenAIAPIKey))
+	}
+	if got.RootDir != "/srv/gotham/library" {
+		t.Errorf("RootDir = %q, want --dir", got.RootDir)
+	}
+	if v, ok := config.RootDirOverride(); !ok || v != "/srv/gotham/library" {
+		t.Errorf("RootDirOverride = %q, %v; want --dir", v, ok)
+	}
+	if got.DatabaseType != "pebble" {
+		t.Errorf("DatabaseType = %q, want the base's pebble", got.DatabaseType)
+	}
+}
 
-	initConfig()
+// TestInitConfig_NoOperatorRootIsNoOverride: with no layer naming a root, the
+// offline reset plan keeps the stored one.
+func TestInitConfig_NoOperatorRootIsNoOverride(t *testing.T) {
+	isolateInitConfig(t)
+	config.SetOperatorRootDir("/stale")
+	if err := initConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := config.RootDirOverride(); ok {
+		t.Errorf("RootDirOverride = %q with no operator root", v)
+	}
+}
 
-	// Verify config was loaded
-	if config.AppConfig.RootDir != "/tmp/audiobooks" {
-		t.Fatalf("expected root_dir to be set from config file")
+// TestInitConfig_RefusesARetiredName: a retired name that refuses the boot
+// refuses initConfig, naming it, before any directory is created.
+func TestInitConfig_RefusesARetiredName(t *testing.T) {
+	isolateInitConfig(t)
+	t.Setenv("PLAYLIST_DIR", "/srv/gotham/playlists")
+	playlistDir = "made-by-init"
+	err := initConfig()
+	if err == nil || !strings.Contains(err.Error(), "PLAYLIST_DIR") {
+		t.Fatalf("initConfig = %v, want a refusal naming PLAYLIST_DIR", err)
+	}
+	if _, serr := os.Stat("made-by-init"); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("a refused initConfig created the playlist directory (%v)", serr)
+	}
+}
+
+// TestConfigCheck_ReportsWhatInitConfigRefuses: config check does not run the
+// config load, so a boot-refusing retired name is reported, not hidden behind
+// the load's refusal.
+func TestConfigCheck_ReportsWhatInitConfigRefuses(t *testing.T) {
+	isolateInitConfig(t)
+	t.Setenv("PLAYLIST_DIR", "/srv/gotham/playlists")
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"config", "check"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	err := rootCmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "would stop the service from starting") {
+		t.Fatalf("config check = %v, want its own refusal count\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "PLAYLIST_DIR") || !strings.Contains(out.String(), "ABO_BOOKS_PLAYLIST_DIR") {
+		t.Errorf("config check did not report PLAYLIST_DIR and its successor:\n%s", out.String())
+	}
+	if _, serr := os.Stat(os.Getenv(config.SecureStateDirEnv)); !errors.Is(serr, os.ErrNotExist) {
+		t.Errorf("config check created the state directory (%v)", serr)
+	}
+	// No filesystem side effect at all: HEAD's initConfig made ./playlists
+	// (rehearsal finding 4).
+	ents, rerr := os.ReadDir(".")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	for _, e := range ents {
+		t.Errorf("config check created %q in the working directory", e.Name())
+	}
+}
+
+// TestConfigCheck_CleanLayersCreateNothing: with nothing retired set, config
+// check passes and still creates nothing in the working directory.
+func TestConfigCheck_CleanLayersCreateNothing(t *testing.T) {
+	isolateInitConfig(t)
+	playlistDir = "playlists"
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"config", "check"})
+	t.Cleanup(func() { rootCmd.SetArgs(nil); rootCmd.SetOut(nil); rootCmd.SetErr(nil) })
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config check = %v\n%s", err, out.String())
+	}
+	ents, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		t.Errorf("config check created %q in the working directory", e.Name())
 	}
 }
 
@@ -128,25 +242,11 @@ database_path: /tmp/test.db
 // be the set the store builds: initConfig writes back the accepted names, with
 // an unknown entry dropped rather than reported as an enabled index.
 func TestInitConfigReportsTheBuiltSortIndexSet(t *testing.T) {
-	tempDir := t.TempDir()
-	configFile := filepath.Join(tempDir, "config.yaml")
-	configContent := "enabled_sort_indexes: [Year, bogus, created_at, year]\n"
-	if err := os.WriteFile(configFile, []byte(configContent), 0o644); err != nil {
-		t.Fatalf("failed to write config: %v", err)
+	isolateInitConfig(t)
+	t.Setenv("ABO_BOOKS_SEARCH_ENABLED_SORT_INDEXES", `["Year","bogus","created_at","year"]`)
+	if err := initConfig(); err != nil {
+		t.Fatal(err)
 	}
-
-	origCfgFile := cfgFile
-	origConfig := config.Snapshot()
-	t.Cleanup(func() {
-		cfgFile = origCfgFile
-		config.Mutate(func(c *config.Config) { *c = origConfig })
-		viper.Reset()
-		database.SetEnabledSortIndexes(nil)
-	})
-	cfgFile = configFile
-
-	initConfig()
-
 	got := config.Snapshot().EnabledSortIndexes
 	if strings.Join(got, ",") != "year,created_at" {
 		t.Fatalf("AppConfig.EnabledSortIndexes = %#v, want [year created_at] (the built set)", got)
@@ -156,91 +256,35 @@ func TestInitConfigReportsTheBuiltSortIndexSet(t *testing.T) {
 	}
 }
 
-func TestInitConfigDefaults(t *testing.T) {
+func TestInitConfigCreatesDirectories(t *testing.T) {
+	isolateInitConfig(t)
 	tempDir := t.TempDir()
-
-	origCfgFile := cfgFile
-	origDBPath := databasePath
-	origPlaylistDir := playlistDir
-	origConfig := config.AppConfig
-	defer func() {
-		cfgFile = origCfgFile
-		databasePath = origDBPath
-		playlistDir = origPlaylistDir
-		config.AppConfig = origConfig
-		viper.Reset()
-	}()
-
-	cfgFile = ""
-	databasePath = filepath.Join(tempDir, "test.db")
+	databasePath = filepath.Join(tempDir, "db", "test.db")
 	playlistDir = filepath.Join(tempDir, "playlists")
 
-	initConfig()
-
-	// Verify directories were created
+	if err := initConfig(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(filepath.Dir(databasePath)); err != nil {
-		t.Fatal("database directory should be created")
-	}
-	if _, err := os.Stat(playlistDir); err != nil {
-		t.Fatal("playlist directory should be created")
-	}
-}
-
-func TestInitConfigCreatesDirectories(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "db", "test.db")
-	playlistsPath := filepath.Join(tempDir, "playlists")
-
-	origCfgFile := cfgFile
-	origDBPath := databasePath
-	origPlaylistDir := playlistDir
-	origConfig := config.AppConfig
-	defer func() {
-		cfgFile = origCfgFile
-		databasePath = origDBPath
-		playlistDir = origPlaylistDir
-		config.AppConfig = origConfig
-	}()
-
-	cfgFile = filepath.Join(tempDir, "config.yaml")
-	databasePath = dbPath
-	playlistDir = playlistsPath
-
-	initConfig()
-
-	if _, err := os.Stat(filepath.Dir(dbPath)); err != nil {
 		t.Fatalf("expected database directory to exist: %v", err)
 	}
-	if _, err := os.Stat(playlistsPath); err != nil {
+	if _, err := os.Stat(playlistDir); err != nil {
 		t.Fatalf("expected playlist directory to exist: %v", err)
 	}
 }
 
-func TestInitConfigUsesHomeConfig(t *testing.T) {
-	tempDir := t.TempDir()
-	configPath := filepath.Join(tempDir, ".audiobook-organizer.yaml")
-	if err := os.WriteFile(configPath, []byte("root_dir: /tmp\n"), 0o644); err != nil {
-		t.Fatalf("failed to write config: %v", err)
+// TestInitConfigRefusesTheHEADHomeFile: HEAD read ~/.audiobook-organizer.yaml
+// by default; nothing reads it now, so its settings would be dropped without
+// a word. initConfig refuses, naming the file.
+func TestInitConfigRefusesTheHEADHomeFile(t *testing.T) {
+	isolateInitConfig(t)
+	home := os.Getenv("HOME")
+	if err := os.WriteFile(filepath.Join(home, ".audiobook-organizer.yaml"), []byte("root_dir: /tmp\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-
-	origCfgFile := cfgFile
-	origDBPath := databasePath
-	origPlaylistDir := playlistDir
-	origConfig := config.AppConfig
-	defer func() {
-		cfgFile = origCfgFile
-		databasePath = origDBPath
-		playlistDir = origPlaylistDir
-		config.AppConfig = origConfig
-	}()
-
-	t.Setenv("HOME", tempDir)
-	cfgFile = ""
-	databasePath = ""
-	playlistDir = ""
-
-	viper.Reset()
-	initConfig()
+	if err := initConfig(); err == nil || !strings.Contains(err.Error(), ".audiobook-organizer.yaml") {
+		t.Fatalf("initConfig = %v, want a refusal naming the home file", err)
+	}
 }
 
 func TestPrintMetadataField(t *testing.T) {
