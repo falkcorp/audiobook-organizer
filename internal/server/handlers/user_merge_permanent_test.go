@@ -45,15 +45,17 @@ func TestUserMergeRoutes_FlippedJournalActionsArePermanent(t *testing.T) {
 	r.journal(t, "j-applying", journalJSON("j-applying", usermerge.StatusApplying))
 	r.journal(t, "j-applied", journalJSON("j-applied", usermerge.StatusApplied))
 	r.journal(t, "j-undone", journalJSON("j-undone", usermerge.StatusUndone))
-	// Reading and a new merge are not reversals: they stand (checked before the
-	// undecodable row below, which ListJournals itself cannot read past).
+	// Reading is not a reversal: it stands (checked before the undecodable row
+	// below, which ListJournals itself cannot read past). A new merge is not
+	// available until B10l ports it onto core (user_merge_unavailable_test.go).
 	if w, _ := r.do(t, http.MethodGet, "/users/merges", nil); w.Code != http.StatusOK {
 		t.Errorf("listing merges after the flip: %d", w.Code)
 	}
-	r.previewDigest(t)
 	r.journal(t, "j-garbled", `{not json`)
 	for _, jid := range []string{"j-applying", "j-applied", "j-undone", "j-garbled"} {
-		for _, action := range []string{"undo", "resume"} {
+		// A resume is answered by the B10l guard first (user_merge_unavailable_test.go);
+		// only an undo reaches the permanence check, so only it is pinned here.
+		for _, action := range []string{"undo"} {
 			w, _ := r.do(t, http.MethodPost, "/users/merges/"+jid+"/"+action, nil)
 			if w.Code != http.StatusConflict {
 				t.Errorf("%s %s after the flip: %d %s, want 409", action, jid, w.Code, w.Body.String())

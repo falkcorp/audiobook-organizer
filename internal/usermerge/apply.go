@@ -118,6 +118,9 @@ func failText(err error) string {
 // A refusal or a digest mismatch writes nothing except that the absorbed account
 // is left locked (its sessions ended): the admin previews again.
 func (s *Service) Apply(ctx context.Context, req ApplyRequest, prog Progress) (*Journal, error) {
+	if err := s.CheckAvailable(); err != nil {
+		return nil, err
+	}
 	runMu.Lock()
 	defer runMu.Unlock()
 	if err := s.refuseIfOpenJournal(req.SurvivorID, req.AbsorbedID); err != nil {
@@ -183,6 +186,9 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest, prog Progress) (*
 // Resume continues an unfinished apply from its journal's cursor. It is only
 // ever reached by an admin's click (a merge is never resumed automatically).
 func (s *Service) Resume(ctx context.Context, journalID string, prog Progress) (*Journal, error) {
+	if err := s.CheckAvailable(); err != nil {
+		return nil, err
+	}
 	runMu.Lock()
 	defer runMu.Unlock()
 	j, err := s.LoadJournal(journalID)
