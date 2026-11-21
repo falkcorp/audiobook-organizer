@@ -30,7 +30,7 @@ func TestActivityTap_AccessLinesMakeNoEntries(t *testing.T) {
 		t.Errorf("an access record became an Activity entry: %+v", e)
 	}
 	var access []string
-	for _, l := range strings.Split(c.newLog.String(), "\n") {
+	for l := range strings.SplitSeq(c.newLog.String(), "\n") {
 		if strings.Contains(l, `msg="http access"`) {
 			access = append(access, l)
 		}
