@@ -134,6 +134,17 @@ type Options struct {
 	// read until F4-08's boot wiring.
 	Auth auth.Options
 
+	// IdentityBoot declares the identity flip (F4-08): boot builds rbac and
+	// auth over core's own identity stores, serves audit, opens the events bus
+	// and runs P4d steps 2-4 (the revocation re-apply, the restore hooks,
+	// auth.BootWrites). It is the one signal, and nothing else stands in for
+	// it: Auth's zero value is what hello and new apps pass, and ABO sets Auth
+	// (and Authenticators) before the flip, so neither field says "the app
+	// wants core identity". false, the default, boots exactly as before the
+	// flip. Temporary like the F3 config gate it follows: B10 (the ABO switch)
+	// makes identity unconditional and deletes the field.
+	IdentityBoot bool
+
 	// Logger overrides the default slog handler construction (tests); nil =
 	// from config (05-logging §4).
 	Logger *slog.Logger
