@@ -39,6 +39,9 @@ import (
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/codec"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/storage/keys"
 )
 
 // The R2 cutover suite (F2-15; 09 §9.4 R2 "Verification", 05-storage
@@ -168,21 +171,67 @@ func prefixRange(p string) keyRange {
 	return keyRange{Lo: []byte(p)}
 }
 
-// cutoverStep is the harness' view of one registered cutover step: what a
-// books datamigrate.DataMigration declares (ID, Source, Residual) and what its
-// runner stored after Verify (05-storage §5S.3.13: read = imported +
-// quarantined + deleted-by-rule, per family; OrphanedRefs per referencing
-// family).
+// stepKind is what a cutover step does, which decides the checks it gets
+// (03 §3.8's list: M7, then M2-M6, then M8).
+type stepKind string
+
+const (
+	// stepData is a cutover data migration (M2-M6): it drains its Source
+	// (rewriting its Residual keys in place) and stores a VerifyReport. The
+	// selftest's fake step leaves Kind empty, which means the same.
+	stepData stepKind = "data"
+	// stepLevel is books' level step (M7's books half): a versioned step that
+	// writes no row of its own; its stamp batch raises books' level and the
+	// legacy projection (§5S.3.7).
+	stepLevel stepKind = "level"
+	// stepRewrite is M8, the store rewrite: it moves no row and stores no
+	// report, only its state record.
+	stepRewrite stepKind = "rewrite"
+)
+
+// cutoverStep is the harness' view of one registered cutover step: what the
+// manifest declares (a data step's ID, Source and Residual; the level step's
+// version and level; M8's ID) and what the boot stored for it (a data step's
+// VerifyReport, 05-storage §5S.3.13: read = imported + quarantined +
+// deleted-by-rule, per family, OrphanedRefs per referencing family; the
+// state record of a data step and of M8).
 type cutoverStep struct {
 	ID       string
+	Kind     stepKind
 	Source   []keyRange
 	Residual [][]byte
-	Report   stepReport
+	// Version and Level are a level step's books version and the level its
+	// stamp batch raises books to.
+	Version, Level int
+	Report         stepReport
+	// State is the step's c/storage/dm/<id> record after the boot (data and
+	// rewrite steps; attachStored), "" when there is none.
+	State string
 }
 
+// data reports a step whose rows the count, quarantine and byte checks see.
+func (s cutoverStep) data() bool { return s.Kind == "" || s.Kind == stepData }
+
+// stepReport is a data step's report. A stored one is a
+// datamigrate.VerifyReport (fromVerifyReport), which carries no deleted-by-rule
+// count of its own: what a step read and neither wrote, held nor quarantined
+// is what its rule deleted (M4 and M6 report exactly that way), so Deleted is
+// that remainder and the count rule can only catch it going negative, a row
+// counted twice. Read against the Source scan and Quarantined against the
+// quarantine records are the independent checks (countProblems).
 type stepReport struct {
-	Read, Imported, Quarantined, Deleted int64
-	OrphanedRefs                         map[string]int64
+	Read, Imported, Quarantined, Deleted, Held int64
+	OrphanedRefs                               map[string]int64
+	// Stored: read from the step's c/storage/dm/<id>/report record.
+	Stored bool
+}
+
+func fromVerifyReport(v datamigrate.VerifyReport) stepReport {
+	return stepReport{
+		Read: v.Read, Imported: v.Written, Quarantined: v.Quarantined, Held: v.Held,
+		Deleted:      v.Read - v.Written - v.Quarantined - v.Held,
+		OrphanedRefs: v.OrphanedRefs, Stored: true,
+	}
 }
 
 // inSource reports whether key lies in the step's Source and is not one of
@@ -201,33 +250,56 @@ func (s cutoverStep) inSource(key []byte) bool {
 	return false
 }
 
-// registeredCutoverSteps enumerates the cutover steps the build under test
-// registers, through the one channel 06 §6.4.2 gives a module for them:
-// module.Manifest.Cutover (and Manifest.DataMigrations, F2-16's field for the
-// kernel's DAG). It hard-codes no step: it reads the build's manifest. While
-// neither field exists, or both are empty, the build registers no step and
-// the suite checks the "nothing moved" outcome. The moment either carries a
-// step this fails, naming the wiring to add here (F3-07: call books'
-// Cutover with the kernel's importers and adapt each DataMigration's ID,
-// Source and Residual and its stored report into cutoverStep), so a
-// registered step is never silently left out of the suite.
-func registeredCutoverSteps(t *testing.T) []cutoverStep {
+// residualMember reports a quarantine key that names one member of one of the
+// step's Residual keys: "<residual key>#<member>", the key M2 gives a blob
+// field it could not move (cutover.quarantineKey). The Residual row itself is
+// rewritten, never quarantined whole, so a member is the only thing of it a
+// record may name.
+func (s cutoverStep) residualMember(key []byte) bool {
+	for _, r := range s.Residual {
+		if len(key) > len(r)+1 && bytes.HasPrefix(key, r) && key[len(r)] == '#' {
+			return true
+		}
+	}
+	return false
+}
+
+// registeredCutoverSteps enumerates the cutover steps of man, the manifest of
+// the module the suite booted (cutoverBoot, upgradeAndMark): never a module
+// built apart from the boot, which could declare a different flip (Module()
+// alone names no database and so declares none, declaresFlip). It hard-codes
+// no step: it reads the manifest. A manifest that registers no step gets the
+// "nothing moved" checks.
+func registeredCutoverSteps(t *testing.T, man module.Manifest) []cutoverStep {
 	t.Helper()
-	steps, err := cutoverStepsOf(Module().Manifest())
+	steps, err := cutoverStepsOf(man)
 	require.NoError(t, err)
 	return steps
 }
 
-// cutoverStepsOf enumerates the cutover steps a module manifest registers. It
-// takes any value so the selftest can hand it manifests the build does not
-// have yet. Two places can hold them: a Cutover field (F3-07) and a
-// DataMigrations field (F2-16) whose elements carry datamigrate's Cutover
-// flag; a data migration with Cutover unset is not a cutover step. Neither
-// exists at F2, so the answer is no step. A populated field fails until this
-// function is wired to turn its steps into cutoverSteps (each one's Source,
-// Residual and stored VerifyReport, F3-07): the suite must never pass by
+// cutoverStepsOf enumerates the cutover steps a module manifest registers,
+// in 03 §3.8's order: the level step (M7's books half, a level step on
+// Storage.Migrations), the data steps of Manifest.Cutover (M2-M6, built with
+// importers that refuse every call: the func is pure, 06 §6.4.2) and any
+// DataMigrations element with Cutover set, then Manifest.Rewrite (M8). Each
+// data step keeps its ID, Source and Residual; its stored VerifyReport and
+// state are attached after the boot (attachStored).
+//
+// It takes any value so the selftest can hand it manifests of other shapes:
+// a value that is not a module.Manifest and still populates a Cutover or
+// DataMigrations field (or a DataMigrations element with Cutover set) is an
+// error, because its steps cannot be adapted: the suite must never pass by
 // failing to see a step.
 func cutoverStepsOf(manifest any) ([]cutoverStep, error) {
+	switch man := manifest.(type) {
+	case module.Manifest:
+		return manifestSteps(man)
+	case *module.Manifest:
+		if man == nil {
+			return nil, errors.New("a nil manifest")
+		}
+		return manifestSteps(*man)
+	}
 	m := reflect.ValueOf(manifest)
 	for m.Kind() == reflect.Pointer || m.Kind() == reflect.Interface {
 		if m.IsNil() {
@@ -252,11 +324,133 @@ func cutoverStepsOf(manifest any) ([]cutoverStep, error) {
 		}
 	}
 	if len(found) > 0 {
-		return nil, fmt.Errorf("the manifest registers cutover steps in %s: wire cutoverStepsOf "+
-			"(internal/books/cutover_suite_test.go) to enumerate them, with each step's Source, Residual "+
-			"and stored VerifyReport, before this build can pass the R2 cutover suite (F3-07)", strings.Join(found, ", "))
+		return nil, fmt.Errorf("a %T registers cutover steps in %s: cutoverStepsOf "+
+			"(internal/books/cutover_suite_test.go) adapts only a module.Manifest's, with each step's Source, "+
+			"Residual and stored VerifyReport", manifest, strings.Join(found, ", "))
 	}
 	return nil, nil
+}
+
+// manifestSteps is cutoverStepsOf over a module.Manifest.
+func manifestSteps(man module.Manifest) ([]cutoverStep, error) {
+	var out []cutoverStep
+	owner := storage.Owner(man.ID)
+	for _, mg := range man.Storage.Migrations {
+		if mg.RaisesLevel > 0 && mg.Compat == storage.Breaking && mg.Name == storage.LevelStepName(owner, mg.RaisesLevel) {
+			out = append(out, cutoverStep{ID: mg.Name, Kind: stepLevel, Version: mg.Version, Level: mg.RaisesLevel})
+		}
+	}
+	var data []datamigrate.DataMigration
+	if man.Cutover != nil {
+		for _, d := range man.Cutover(module.Importers{}) {
+			if !d.Cutover {
+				return nil, fmt.Errorf("Manifest.Cutover returns %s, whose Cutover flag is unset: the count rule assumes a cutover step's contract (§5S.3.13)", d.ID)
+			}
+			data = append(data, d)
+		}
+	}
+	for _, d := range man.DataMigrations {
+		if d.Cutover {
+			data = append(data, d)
+		}
+	}
+	for _, d := range data {
+		st := cutoverStep{ID: d.ID, Kind: stepData}
+		for _, r := range d.Source {
+			st.Source = append(st.Source, keyRange{Lo: bytes.Clone(r.Start), Hi: bytes.Clone(r.End)})
+		}
+		for _, k := range d.Residual {
+			st.Residual = append(st.Residual, bytes.Clone(k))
+		}
+		if len(st.Source) == 0 {
+			return nil, fmt.Errorf("cutover step %s declares no Source", d.ID)
+		}
+		out = append(out, st)
+	}
+	if man.Rewrite != nil {
+		out = append(out, cutoverStep{ID: man.Rewrite.ID, Kind: stepRewrite})
+	}
+	return out, nil
+}
+
+// otherDataMigrations are the IDs of man's data migrations that are not
+// cutover steps: their records may appear in a boot too (completionProblems).
+func otherDataMigrations(man module.Manifest) map[string]bool {
+	out := map[string]bool{}
+	for _, d := range man.DataMigrations {
+		if !d.Cutover {
+			out[d.ID] = true
+		}
+	}
+	return out
+}
+
+// legacyProjection is the storage_format stamp a raised books store holds
+// (LegacyMaxFormat+1, §5S.3.7), 0 when the manifest declares no legacy guard.
+func legacyProjection(man module.Manifest) int64 {
+	if g := man.Storage.LegacyGuard; g != nil {
+		return int64(g.LegacyMaxFormat) + 1
+	}
+	return 0
+}
+
+// The c/storage/ records attachStored and levelProblems read, built with
+// storage's own key encoding (storage.DataMigrationKey; levelKey and
+// reportKey are storage's unexported spellings of the same segments).
+const storageKeyspace = "c/storage/"
+
+func dmStateKey(id string) string { return storageKeyspace + string(storage.DataMigrationKey(id)) }
+func dmReportKey(id string) string {
+	return dmStateKey(id) + string(keys.Join(keys.Str("report")))
+}
+func levelStampKey(owner string) string {
+	return storageKeyspace + string(keys.Join(keys.Str("level"), keys.Str(owner)))
+}
+
+// dmReportRecord is the stored shape of a data migration's report record
+// (core/internal/storagemigrate's reportRecord: Verify's last report).
+type dmReportRecord struct {
+	State  string                   `json:"state"`
+	Report datamigrate.VerifyReport `json:"report"`
+	Error  string                   `json:"error,omitempty"`
+}
+
+// levelStamp is a c/storage/level/<owner> record.
+type levelStamp struct {
+	Level int `json:"level"`
+}
+
+// attachStored fills each step's State and, for a data step, its Report from
+// the records the boot stored in after. A record that does not decode is a
+// problem; a missing one leaves State "" and Report unstored, which
+// completionProblems reports.
+func attachStored(steps []cutoverStep, after *storeScan) []string {
+	var out []string
+	for i := range steps {
+		st := &steps[i]
+		if st.Kind == stepLevel {
+			continue
+		}
+		if raw, ok := after.storageRows[dmStateKey(st.ID)]; ok {
+			rec, err := codec.JSON[storage.DataMigrationRecord](1).Decode(raw)
+			if err != nil {
+				out = append(out, fmt.Sprintf("%s: its state record does not decode: %v", st.ID, err))
+			}
+			st.State = rec.State
+		}
+		if st.Kind != stepData {
+			continue
+		}
+		if raw, ok := after.storageRows[dmReportKey(st.ID)]; ok {
+			rec, err := codec.JSON[dmReportRecord](1).Decode(raw)
+			if err != nil {
+				out = append(out, fmt.Sprintf("%s: its report record does not decode: %v", st.ID, err))
+				continue
+			}
+			st.Report = fromVerifyReport(rec.Report)
+		}
+	}
+	return out
 }
 
 // emptyField reports a field that registers nothing: a nil or empty slice or
@@ -612,16 +806,20 @@ func cutoverBootEnv(c *config.Config) {
 // checkpoint and the whole migration DAG, the cutover steps included) and
 // Close, with no module run. The harness' role seeding (composedOptions'
 // auth.SeedRoles) is a no-op here, the corpus carrying the seed roles; a write
-// would show in the scans.
-func cutoverBoot(t *testing.T, work string) {
+// would show in the scans. It returns the booted module's manifest, the one
+// whose cutover steps the boot ran (registeredCutoverSteps).
+func cutoverBoot(t *testing.T, work string) module.Manifest {
 	t.Helper()
 	edit, opt := cutoverBootConfig(t, work)
+	var man module.Manifest
 	t.Run("boot", func(t *testing.T) {
 		c := bootComposedWith(t, false, filepath.Join(work, "state"), edit, nil, opt)
+		man = c.mod.Manifest()
 		require.NoError(t, c.app.Close(t.Context()))
 		Release(c.mod)
 	})
 	require.False(t, t.Failed(), "the cutover boot failed")
+	return man
 }
 
 // checkpoints lists the pre-migration checkpoints beside the store copy's
@@ -716,7 +914,11 @@ type storeScan struct {
 	// quarantinedIDs are the last ':' segments of the quarantined keys.
 	quarantinedIDs map[string]bool
 	Quarantine     []quarantineRecord
-	rows           map[string][]byte // every books key, small stores only
+	// storageRows are storage's own records (c/storage/: the data
+	// migrations' state and reports, the level stamps), kept at every size:
+	// storage's keyspace holds tens of rows, not a family's thousands.
+	storageRows map[string][]byte
+	rows        map[string][]byte // every books key, small stores only
 }
 
 type scanSpec struct {
@@ -785,6 +987,7 @@ func newStoreScan(spec scanSpec) *storeScan {
 		Bookkeeping:    map[string][]byte{},
 		coreTokens:     map[string]bool{},
 		quarantinedIDs: map[string]bool{},
+		storageRows:    map[string][]byte{},
 	}
 	if spec.keepRows {
 		s.rows = map[string][]byte{}
@@ -801,6 +1004,9 @@ func (s *storeScan) add(fi familyIndex, spec scanSpec, key, val []byte) {
 	if coreFamily(fam) {
 		for _, tok := range keyTokens(key) {
 			s.coreTokens[tok] = true
+		}
+		if bytes.HasPrefix(key, []byte(storageKeyspace)) {
+			s.storageRows[string(key)] = slices.Clone(val)
 		}
 		if bytes.HasPrefix(key, []byte("c/storage")) && bytes.Contains(key, []byte("quarantine")) {
 			if q, ok := decodeQuarantine(val); ok {
@@ -882,33 +1088,49 @@ func decodeQuarantine(v []byte) (quarantineRecord, bool) {
 
 // ---------------------------------------------------------------- the checks
 
-// countProblems: per step, 05-storage §5S.3.13 Verify's count rule, checked
-// against an independent scan rather than the step's own numbers alone (rule
-// 3): the report's read equals the keys the before-scan found in the Source,
-// read = imported + quarantined + deleted, every Source range is empty after
-// (Residual keys excepted), and the quarantine records naming the step are as
-// many as its report says.
+// countProblems: per data step, 05-storage §5S.3.13 Verify's count rule,
+// checked against an independent scan rather than the step's own numbers
+// alone (rule 3): the report's read equals the rows the before-scan found in
+// the Source (Residual keys, rewritten in place and neither imported,
+// quarantined nor deleted, are not rows of the rule), read = imported +
+// quarantined + deleted with nothing held (a cutover step may not Hold), every
+// Source range is empty after (Residual keys excepted), and the quarantine
+// records naming the step that name a Source row are as many as its report
+// says it quarantined. A record naming a member of a Residual key (M2's
+// unmovable blob fields) is no row: the quarantine report check matches it
+// against the overlay's cases. A record naming anything else is outside the
+// step's Source.
 func countProblems(steps []cutoverStep, before, after *storeScan) []string {
 	var out []string
 	for _, st := range steps {
+		if !st.data() {
+			continue
+		}
 		r := st.Report
 		if got := before.InSource[st.ID]; got != r.Read {
 			out = append(out, fmt.Sprintf("%s: the report read %d rows, the Source held %d", st.ID, r.Read, got))
 		}
-		if sum := r.Imported + r.Quarantined + r.Deleted; sum != r.Read {
-			out = append(out, fmt.Sprintf("%s: read %d != imported %d + quarantined %d + deleted %d", st.ID, r.Read, r.Imported, r.Quarantined, r.Deleted))
+		if sum := r.Imported + r.Quarantined + r.Deleted + r.Held; r.Deleted < 0 || sum != r.Read {
+			out = append(out, fmt.Sprintf("%s: read %d != imported %d + quarantined %d + deleted %d + held %d", st.ID, r.Read, r.Imported, r.Quarantined, r.Deleted, r.Held))
+		}
+		if r.Held != 0 {
+			out = append(out, fmt.Sprintf("%s: the report holds %d rows: a cutover step's Source drains, Hold is refused", st.ID, r.Held))
 		}
 		if left := after.InSource[st.ID]; left != 0 {
 			out = append(out, fmt.Sprintf("%s: %d rows are left in its Source", st.ID, left))
 		}
 		var q int64
 		for _, rec := range after.Quarantine {
-			if rec.Step == st.ID {
+			switch {
+			case rec.Step != st.ID, st.residualMember(rec.Key):
+			case st.inSource(rec.Key):
 				q++
+			default:
+				out = append(out, fmt.Sprintf("%s: a quarantine record names %q, which is outside its Source", st.ID, rec.Key))
 			}
 		}
 		if q != r.Quarantined {
-			out = append(out, fmt.Sprintf("%s: the report quarantined %d rows, the store holds %d quarantine records", st.ID, r.Quarantined, q))
+			out = append(out, fmt.Sprintf("%s: the report quarantined %d rows, the store holds %d quarantine records of Source rows", st.ID, r.Quarantined, q))
 		}
 	}
 	return out
@@ -921,12 +1143,25 @@ func countProblems(steps []cutoverStep, before, after *storeScan) []string {
 // naming that entity (a run's opv2:op: and opv3:run: rows are one run, so a
 // record of either covers it). A case's secondary rows (its idx: entries, a
 // run's events) go with their entity and need no record of their own. A
-// record no case accounts for is a row quarantined in error.
+// record no case accounts for is a row quarantined in error. A case key of the
+// form "<row>#<member>" names one member of a row; when the row is a step's
+// Residual key (M2's settings blob, rewritten in place, never quarantined
+// whole), the record must name that member exactly, the key M2 writes
+// (cutover.quarantineKey), so a member quarantined in error, or a case's
+// member left in the rewritten row, is reported too.
 func quarantineProblems(steps []cutoverStep, cases []r2Stage2Case, recs []quarantineRecord) []string {
 	var out []string
 	inAnySource := func(k string) bool {
 		for _, st := range steps {
 			if st.inSource([]byte(k)) {
+				return true
+			}
+		}
+		return false
+	}
+	isMember := func(k string) bool {
+		for _, st := range steps {
+			if st.residualMember([]byte(k)) {
 				return true
 			}
 		}
@@ -942,6 +1177,10 @@ func quarantineProblems(steps []cutoverStep, cases []r2Stage2Case, recs []quaran
 	want := map[string]string{} // entity -> case label
 	for _, c := range cases {
 		for _, k := range c.Keys {
+			if isMember(k) {
+				owner[k] = c.Label
+				continue
+			}
 			row, _, _ := strings.Cut(k, "#")
 			if !inAnySource(row) {
 				continue
@@ -1138,21 +1377,34 @@ func refProblems(t *testing.T, dir string, steps []cutoverStep, before, after *s
 }
 
 // monotonicBookkeeping are the bookkeeping rows whose value is a number that
-// may only grow: the legacy ledger's schema version and the preference ID
-// counter each new ledger row bumps.
+// may only grow: the legacy ledger's schema version, the preference ID
+// counter each new ledger row bumps, and the legacy guard's storage_format
+// stamp, which a level step raises to the projection that makes HEAD refuse
+// the store (§5S.3.7, §5S.9.1 row 10; levelProblems pins what it must read).
 var monotonicBookkeeping = map[string]func([]byte) (int64, bool){
 	"preference:db_version": func(v []byte) (int64, bool) {
-		var row struct{ Value string }
-		var inner struct{ Version int64 }
-		if json.Unmarshal(v, &row) != nil || json.Unmarshal([]byte(row.Value), &inner) != nil || inner.Version == 0 {
-			return 0, false
-		}
-		return inner.Version, true
+		n, ok := preferenceVersion(v)
+		return n, ok && n != 0
 	},
+	"preference:storage_format": preferenceVersion,
 	"counter:preference": func(v []byte) (int64, bool) {
 		n, err := strconv.ParseInt(strings.TrimSpace(string(v)), 10, 64)
 		return n, err == nil
 	},
+}
+
+// preferenceVersion reads a HEAD preference row whose value is a
+// DatabaseVersion ({"version":n,...}), the shape of db_version and of the
+// storage_format stamp.
+func preferenceVersion(v []byte) (int64, bool) {
+	var row struct{ Value string }
+	var inner struct {
+		Version *int64 `json:"version"`
+	}
+	if json.Unmarshal(v, &row) != nil || json.Unmarshal([]byte(row.Value), &inner) != nil || inner.Version == nil {
+		return 0, false
+	}
+	return *inner.Version, true
 }
 
 // bookkeepingProblems: the legacy track's bookkeeping (the golden's
@@ -1209,6 +1461,159 @@ func upgradeCheckpoint(steps int, had, now []string) (cp, problem string) {
 		problem = fmt.Sprintf("the boot ran %d cutover step(s) and took no pre-migration checkpoint (05-storage §5S.3.12)", steps)
 	}
 	return cp, problem
+}
+
+// The bookkeeping rows a level step's stamp batch writes (§5S.3.7, §5S.9.1
+// row 10): the legacy guard's storage_format stamp and its storage_migration
+// marker.
+const (
+	storageFormatRow    = "preference:storage_format"
+	storageMigrationRow = "preference:storage_migration"
+)
+
+// ledgerRow is a books legacy ledger record (preference:migration_<n>), as
+// booksBookkeeping stages it for every versioned step, the level step
+// included.
+type ledgerRow struct {
+	Description string `json:"description"`
+	Compat      string `json:"compat"`
+	RaisesLevel int    `json:"raises_level"`
+}
+
+// levelProblems: M7's books half (05-storage §5S.3.7 "The level step
+// procedure", §5S.3.13 "The list"; 03 §3.8 row M7). With a level step
+// enumerated, the boot left books' level stamp (c/storage/level/books) at the
+// highest level a level step raises it to, recorded each level step in books'
+// legacy ledger (preference:migration_<version>, its name, Breaking, its
+// level), raised the storage_format stamp to the legacy projection the
+// manifest declares (projection: LegacyMaxFormat+1, which every pre-guard
+// build refuses) and cleared the storage_migration marker (it marks an
+// unfinished conversion; the boot that leaves no cutover step pending clears
+// it, §5S.4 step 9). With none, the boot changed neither books' level nor the
+// stamp. owner is the module ID books' stamp is keyed by.
+func levelProblems(owner string, steps []cutoverStep, projection int64, before, after *storeScan) []string {
+	var out []string
+	readLevel := func(s *storeScan) (int, bool) {
+		raw, ok := s.storageRows[levelStampKey(owner)]
+		if !ok {
+			return 0, true
+		}
+		st, err := codec.JSON[levelStamp](1).Decode(raw)
+		if err != nil {
+			out = append(out, fmt.Sprintf("books' level stamp does not decode: %v", err))
+			return 0, false
+		}
+		return st.Level, true
+	}
+	lb, okB := readLevel(before)
+	la, okA := readLevel(after)
+	want, raised := lb, false
+	for _, st := range steps {
+		if st.Kind != stepLevel {
+			continue
+		}
+		raised = true
+		want = max(want, st.Level)
+		k := fmt.Sprintf("preference:migration_%d", st.Version)
+		raw, ok := after.Bookkeeping[k]
+		if !ok {
+			out = append(out, fmt.Sprintf("%s: books' ledger has no %s after the boot: the level step did not run", st.ID, k))
+			continue
+		}
+		var row struct{ Value string }
+		var rec ledgerRow
+		if json.Unmarshal(raw, &row) != nil || json.Unmarshal([]byte(row.Value), &rec) != nil {
+			out = append(out, fmt.Sprintf("%s: %s does not decode", st.ID, k))
+			continue
+		}
+		if rec.Description != st.ID || rec.Compat != storage.Breaking.String() || rec.RaisesLevel != st.Level {
+			out = append(out, fmt.Sprintf("%s: %s records %q (compat %q, raises %d), not the level step (breaking, raises %d)",
+				st.ID, k, rec.Description, rec.Compat, rec.RaisesLevel, st.Level))
+		}
+	}
+	if okB && okA && la != want {
+		if raised {
+			out = append(out, fmt.Sprintf("books' level is %d after the boot, the level steps raise it to %d", la, want))
+		} else {
+			out = append(out, fmt.Sprintf("books' level went from %d to %d with no level step enumerated", lb, la))
+		}
+	}
+	sb, sa := before.Bookkeeping[storageFormatRow], after.Bookkeeping[storageFormatRow]
+	switch {
+	case !raised && !bytes.Equal(sb, sa):
+		out = append(out, fmt.Sprintf("%s changed with no level step enumerated (%q, then %q)", storageFormatRow, sb, sa))
+	case raised && projection == 0:
+		out = append(out, "a level step is enumerated and the manifest declares no legacy guard: nothing makes HEAD refuse the raised store")
+	case raised:
+		if v, ok := preferenceVersion(sa); !ok || v != projection {
+			out = append(out, fmt.Sprintf("%s reads %q after the boot, want the legacy projection %d", storageFormatRow, sa, projection))
+		}
+		if m, ok := after.Bookkeeping[storageMigrationRow]; ok {
+			out = append(out, fmt.Sprintf("%s is still set after a boot that left no step pending (%q)", storageMigrationRow, m))
+		}
+	}
+	return out
+}
+
+// completionProblems: "every step completes" (05-storage §5S.3.13 "Tests";
+// 14 E1), checked against the records the boot stored, so a step the suite
+// fails to enumerate is seen too. Every enumerated data step and M8 has a
+// done state record and every data step a stored report; and every data
+// migration of owner's that this boot completed (a done record that was not
+// done before) is an enumerated step or one of other, the manifest's data
+// migrations that are not cutover steps. Level steps are levelProblems'.
+func completionProblems(owner string, steps []cutoverStep, other map[string]bool, before, after *storeScan) []string {
+	var out []string
+	enumerated := map[string]bool{}
+	for _, st := range steps {
+		if st.Kind == stepLevel {
+			continue
+		}
+		enumerated[st.ID] = true
+		if st.State != storage.DataMigrationDone {
+			out = append(out, fmt.Sprintf("%s: its state after the boot is %q, not %s", st.ID, st.State, storage.DataMigrationDone))
+		}
+		if st.data() && !st.Report.Stored {
+			out = append(out, fmt.Sprintf("%s: no stored VerifyReport (c/storage/dm/%s/report)", st.ID, st.ID))
+		}
+	}
+	done := func(s *storeScan, k string) bool {
+		raw, ok := s.storageRows[k]
+		if !ok {
+			return false
+		}
+		rec, err := codec.JSON[storage.DataMigrationRecord](1).Decode(raw)
+		return err == nil && rec.State == storage.DataMigrationDone
+	}
+	for _, k := range sortedKeys(after.storageRows) {
+		id := dmIDOf(k)
+		if !strings.HasPrefix(id, owner+".") || !done(after, k) || done(before, k) {
+			continue
+		}
+		if !enumerated[id] && !other[id] {
+			out = append(out, fmt.Sprintf("the boot completed %s, which the suite does not enumerate as a step", id))
+		}
+	}
+	return out
+}
+
+// dmIDOf returns the data migration ID of a state record key
+// (c/storage/ + storage.DataMigrationKey(id)), "" for any other key (a
+// migration's plan, report or shard records sit one segment deeper). A
+// data migration ID is "<owner>.<name>" with name [a-z][a-z0-9-]*, which the
+// key encoding never escapes, so the ID is the one segment after "dm".
+func dmIDOf(k string) string {
+	term := string(keys.Join(keys.Str(""))) // a segment's terminator
+	head := strings.TrimSuffix(dmStateKey(""), term)
+	rest, ok := strings.CutPrefix(k, head)
+	if !ok || !strings.HasSuffix(rest, term) || strings.Count(rest, term) != 1 {
+		return ""
+	}
+	id := strings.TrimSuffix(rest, term)
+	if dmStateKey(id) != k {
+		return ""
+	}
+	return id
 }
 
 // byteProblems: 14 E3, every books family outside the steps' Source and the
@@ -1292,6 +1697,14 @@ type cutoverResult struct {
 	checkpoint    string // "" = the boot took none
 	// checkpointProblem is upgradeCheckpoint's refusal.
 	checkpointProblem string
+	// From the booted manifest: its module ID (books' stamp and data
+	// migration IDs are keyed by it), its data migrations that are not cutover
+	// steps, and the legacy projection a level step stamps.
+	owner      string
+	otherDMs   map[string]bool
+	projection int64
+	// storedProblems are attachStored's: a step record that does not decode.
+	storedProblems []string
 }
 
 var cutoverRuns struct {
@@ -1307,7 +1720,6 @@ func runCutover(t *testing.T, c corpus) *cutoverResult {
 	if r := cutoverRuns.m[c.name]; r != nil {
 		return r
 	}
-	steps := registeredCutoverSteps(t)
 	shared := loadSharedFamilies(t)
 	pristine := copyCorpus(t, c)
 	// Shared by the tests that use this result, so not under one test's
@@ -1317,7 +1729,8 @@ func runCutover(t *testing.T, c corpus) *cutoverResult {
 	cutoverRuns.dirs = append(cutoverRuns.dirs, work)
 	require.NoError(t, copyCorpusTo(c, work))
 	had := checkpoints(t, work)
-	cutoverBoot(t, work)
+	man := cutoverBoot(t, work)
+	steps := registeredCutoverSteps(t, man)
 	small := c.name != "shaped"
 	spec := scanSpec{steps: steps, shared: shared, keepRows: small, plain: len(steps) == 0}
 	cp, problem := upgradeCheckpoint(len(steps), had, checkpoints(t, work))
@@ -1325,7 +1738,9 @@ func runCutover(t *testing.T, c corpus) *cutoverResult {
 		steps: steps, shared: shared, work: work,
 		before: scanStore(t, storeDB(pristine), spec), after: scanStore(t, storeDB(work), spec),
 		checkpoint: cp, checkpointProblem: problem,
+		owner: string(man.ID), otherDMs: otherDataMigrations(man), projection: legacyProjection(man),
 	}
+	r.storedProblems = attachStored(r.steps, r.after)
 	if cutoverRuns.m == nil {
 		cutoverRuns.m = map[string]*cutoverResult{}
 	}
@@ -1345,11 +1760,12 @@ func requireNoProblems(t *testing.T, what string, problems []string) {
 
 // TestCutoverOnR0Corpus (05-storage §5S.3.13 "Tests"; 14 E1): on the R0-written
 // corpus with the overlay, every registered step completes (the boot
-// succeeds), per-family counts hold, and the quarantine report equals exactly
-// the overlay's quarantine cases (09 §9.3). With no step registered, the
-// corpus boots and no books family changed except the legacy track's
-// bookkeeping. The booted copy then runs to readiness. selftest/ proves the
-// checks bite.
+// succeeds, and the store records each step done: completionProblems, the
+// level step's stamp and projection: levelProblems), per-family counts hold,
+// and the quarantine report equals exactly the overlay's quarantine cases
+// (09 §9.3). With no step registered, the corpus boots and no books family
+// changed except the legacy track's bookkeeping. The booted copy then runs to
+// readiness. selftest/ proves the checks bite.
 func TestCutoverOnR0Corpus(t *testing.T) {
 	if testing.Short() {
 		t.Skip("boots the composition on the R2 corpus (extraction-gates r2-cutover-suite)")
@@ -1361,11 +1777,17 @@ func TestCutoverOnR0Corpus(t *testing.T) {
 				require.Truef(t, r.before.rows[k] != nil, "the pre-freeze binary's row %s is not in the corpus", k)
 			}
 		}
+		for _, st := range r.steps {
+			t.Logf("step %s (%s): state %q, report %+v", st.ID, st.Kind, st.State, st.Report)
+		}
 		if len(r.steps) == 0 {
 			t.Log("no cutover step registered: checking that the corpus boots and no family changed")
 			requireNoProblems(t, "no family may change without a cutover step", byteProblems(r.before.plainView(), r.after.plainView()))
 			require.Empty(t, r.after.Quarantine, "a quarantine record without a cutover step")
 		}
+		requireNoProblems(t, "the step records", r.storedProblems)
+		requireNoProblems(t, "the steps completed", completionProblems(r.owner, r.steps, r.otherDMs, r.before, r.after))
+		requireNoProblems(t, "the level step", levelProblems(r.owner, r.steps, r.projection, r.before, r.after))
 		requireNoProblems(t, "the legacy bookkeeping (grow-only)", bookkeepingProblems(r.before, r.after))
 		requireNoProblems(t, "per-family counts", countProblems(r.steps, r.before, r.after))
 		requireNoProblems(t, "the quarantine report", quarantineProblems(r.steps, c.quarantineCases, r.after.Quarantine))
