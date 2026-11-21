@@ -6,14 +6,9 @@
 // The Settings page's form state, shared by every books panel, the save bar and the
 // settings hooks.
 
-export interface UiMetadataSource {
-  id: string;
-  name: string;
-  enabled: boolean;
-  priority: number;
-  requiresAuth: boolean;
-  credentials: { [key: string]: string };
-}
+import type { UiMetadataSource } from '../../../utils/metadataSources';
+
+export type { UiMetadataSource };
 
 export interface SettingsState {
   libraryPath: string;
@@ -43,8 +38,6 @@ export interface SettingsState {
   autoUpdateEnabled: boolean;
   autoUpdateChannel: string;
   autoUpdateCheckMinutes: number;
-  autoUpdateWindowStart: number;
-  autoUpdateWindowEnd: number;
   maintenanceWindowEnabled: boolean;
   maintenanceWindowStart: number;
   maintenanceWindowEnd: number;

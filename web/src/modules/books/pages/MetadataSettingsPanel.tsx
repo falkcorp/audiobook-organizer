@@ -12,17 +12,19 @@ export function MetadataSettingsPanel() {
   const {
     expandedSource,
     handleChange,
+    handleClearOpenAIKey,
     handleCredentialChange,
     handleSourceReorder,
     handleSourceToggle,
     handleTestAIConnection,
     handleTestMetadataSource,
+    handleToggleClearCredential,
     openaiKeyError,
+    openaiKeyStatus,
     openaiTestState,
-    savedApiKeyMask,
     setExpandedSource,
-    setSavedApiKeyMask,
     setSettings,
+    settingLocks,
     settings,
     sourceTestStatus,
   } = useBooksSettings();
@@ -36,13 +38,15 @@ export function MetadataSettingsPanel() {
       setExpandedSource={setExpandedSource}
       openaiTestState={openaiTestState}
       openaiKeyError={openaiKeyError}
-      savedApiKeyMask={savedApiKeyMask}
-      setSavedApiKeyMask={setSavedApiKeyMask}
+      openaiKeyStatus={openaiKeyStatus}
+      openaiKeyLock={settingLocks.openai_api_key}
+      handleClearOpenAIKey={handleClearOpenAIKey}
       sourceTestStatus={sourceTestStatus}
       handleTestAIConnection={handleTestAIConnection}
       handleSourceToggle={handleSourceToggle}
       handleTestMetadataSource={handleTestMetadataSource}
       handleCredentialChange={handleCredentialChange}
+      handleToggleClearCredential={handleToggleClearCredential}
       handleSourceReorder={handleSourceReorder}
     />
   );
