@@ -8,6 +8,7 @@ package app
 import (
 	"testing"
 
+	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -50,5 +51,26 @@ func TestKernelConfig_PlumbsResolveAtomAndDisplayName(t *testing.T) {
 	}
 	if off.ResolveAtom != nil || off.DisplayName != "" {
 		t.Errorf("unset options reached the kernel as ResolveAtom=%v DisplayName=%q, want nil and empty", off.ResolveAtom != nil, off.DisplayName)
+	}
+}
+
+// TestKernelConfig_PlumbsTheAccountResolverHandle: the app's late handle is
+// the very pointer the kernel binds (a copy would leave the extension that
+// holds the original refusing forever), and unset stays nil.
+func TestKernelConfig_PlumbsTheAccountResolverHandle(t *testing.T) {
+	late := oidc.NewLateResolver()
+	on, err := kernelConfig(Options{AppID: "gotham", AccountResolver: late}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on.AccountResolver != late {
+		t.Error("kernel.Config.AccountResolver is not the handle the app passed")
+	}
+	off, err := kernelConfig(Options{AppID: "gotham"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.AccountResolver != nil {
+		t.Error("an app with no handle reached the kernel with one")
 	}
 }

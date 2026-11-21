@@ -81,7 +81,10 @@ func (k *Kernel) buildIdentityServices(ctx context.Context) error {
 		return err
 	}
 	id.svc = svc
-	return k.registerAuthHealth()
+	if err := k.registerAuthHealth(); err != nil {
+		return err
+	}
+	return k.bindAccountResolver(ctx)
 }
 
 // buildEvents is the App's bus over core.events (queue size and close drain).
