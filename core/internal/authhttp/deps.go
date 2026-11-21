@@ -87,22 +87,19 @@ type Flow interface {
 
 // ProfileUpdate is a PATCH /me: the fields the caller set. A nil field is left
 // as it is.
-type ProfileUpdate struct {
-	DisplayName *string
-	Email       *string
-}
+type ProfileUpdate = auth.ProfileUpdate
 
 // Profiles writes the caller's own profile. An e-mail change is an identity
 // change (it is what an SSO sign-in links on): an implementation must clear
-// EmailVerified, hold the account e-mail lock around the uniqueness check and
-// revoke the access an old address granted, as HEAD's UpdateMe does.
+// EmailVerified and hold the account e-mail lock around the uniqueness check.
+// *auth.Service does (UpdateProfile).
 type Profiles interface {
 	UpdateProfile(ctx context.Context, actor *auth.Principal, in ProfileUpdate) (*auth.User, error)
 }
 
 // FromService fills the identity dependencies from one auth.Service and the
-// rbac.Service that decides dominance; the kernel adds Flow, Profiles, Audit,
-// Client and the callback base.
+// rbac.Service that decides dominance; the kernel adds Flow, Audit, Client and
+// the callback base.
 func FromService(svc *auth.Service, rb *rbac.Service) Deps {
-	return Deps{Entry: svc, Cookies: svc, Self: svc, Accounts: svc, Invites: svc, Users: svc, Dominance: rb}
+	return Deps{Entry: svc, Cookies: svc, Self: svc, Accounts: svc, Invites: svc, Users: svc, Dominance: rb, Profiles: svc}
 }

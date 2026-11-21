@@ -71,8 +71,8 @@ type Deps struct {
 	// provider list and answers the start and callback routes 404, as a
 	// provider that does not exist.
 	Flow Flow
-	// Profiles writes PATCH /me. *auth.Service has no profile writer at this
-	// release (seams.d/F4-05.md): nil answers 501 profile_edit_unavailable.
+	// Profiles writes PATCH /me; *auth.Service is one (UpdateProfile) and
+	// FromService fills it. nil answers 501 profile_edit_unavailable.
 	Profiles Profiles
 	// Audit records the 403 dominance_required refusals this package writes
 	// (05-rbac §8 core.permission.deny, "recorded where the 403 is written").

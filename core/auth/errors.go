@@ -23,11 +23,18 @@ var (
 	ErrDominance          = errors.New("auth: actor does not dominate the target user") // wraps rbac.ErrDominance
 	ErrLastAdmin          = errors.New("auth: change would leave no active core:admin holder")
 	ErrEmailInUse         = errors.New("auth: email belongs to an account this provider may not link")
-	ErrStoreUnavailable   = errors.New("auth: credential store unavailable")
-	ErrMergeConflict      = errors.New("auth: an identity row changed since the merge preview")
-	ErrConfined           = errors.New("auth: confined credential outside its scopes")
-	ErrResetRequired      = errors.New("auth: password reset required before password sign-in")
-	ErrMethodSpec         = errors.New("auth: compat method must be <moduleID>.<name>, non-interactive, without credential or owner rights")
+	// ErrEmailNotPlain: the address is not printable ASCII, or differs from its
+	// normalized form by more than case (see PlainEmail). NormalizeEmail folds
+	// compatibility characters (the Kelvin sign, fullwidth letters) onto ASCII,
+	// so a different identity at the provider, or a typed look-alike, could
+	// otherwise read as another person's address. The OIDC resolver and the
+	// profile writer both refuse with it.
+	ErrEmailNotPlain    = errors.New("auth: the e-mail is not a plain ASCII address")
+	ErrStoreUnavailable = errors.New("auth: credential store unavailable")
+	ErrMergeConflict    = errors.New("auth: an identity row changed since the merge preview")
+	ErrConfined         = errors.New("auth: confined credential outside its scopes")
+	ErrResetRequired    = errors.New("auth: password reset required before password sign-in")
+	ErrMethodSpec       = errors.New("auth: compat method must be <moduleID>.<name>, non-interactive, without credential or owner rights")
 )
 
 // Errors coined by F4-02 (seams.d/F4-02.md): refusals the §3.2 methods need

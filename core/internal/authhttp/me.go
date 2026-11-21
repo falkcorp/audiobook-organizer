@@ -172,6 +172,9 @@ type createKeyReq struct {
 func (r *createKeyReq) Validate() error { return r.Body.validate() }
 
 func (k KeyCreate) validate() error {
+	if err := k.bothExpiries(); err != nil {
+		return err
+	}
 	var fields []httpapi.FieldError
 	if k.Name == "" {
 		fields = append(fields, httpapi.Field("/body/name", "required", "a key needs a name"))
@@ -179,13 +182,27 @@ func (k KeyCreate) validate() error {
 	if len(k.Scopes) == 0 {
 		fields = append(fields, httpapi.Field("/body/scopes", "required", "a key needs at least one scope"))
 	}
-	if k.ExpiresIn != "" {
-		if _, ok := positiveDuration(k.ExpiresIn); !ok {
+	if k.ExpiresIn != nil && *k.ExpiresIn != "" {
+		if _, ok := positiveDuration(*k.ExpiresIn); !ok {
 			fields = append(fields, httpapi.Field("/body/expires_in", "invalid", "a positive duration such as 720h"))
 		}
 	}
+	if k.ExpiresAt != nil && k.ExpiresAt.IsZero() {
+		fields = append(fields, httpapi.Field("/body/expires_at", "invalid", "an RFC 3339 instant in the future"))
+	}
 	if len(fields) > 0 {
 		return httpapi.Invalid(fields...)
+	}
+	return nil
+}
+
+// bothExpiries refuses a body that sends expires_in and expires_at together.
+// It tests presence, not value: an empty or zero expires_in next to an
+// expires_at is still two answers to one question, as HEAD's expires_in_days 0
+// next to expires_at is (400).
+func (k KeyCreate) bothExpiries() error {
+	if k.ExpiresIn != nil && k.ExpiresAt != nil {
+		return &httpapi.Error{Status: http.StatusBadRequest, Code: "bad_request", Detail: "send expires_in or expires_at, not both"}
 	}
 	return nil
 }
@@ -200,16 +217,27 @@ func positiveDuration(s string) (time.Duration, bool) {
 // already refused a bad expiry; this refuses it again rather than send the
 // Service a zero that means "the default lifetime".
 func (k KeyCreate) keySpec(owner auth.UserID) (auth.KeySpec, error) {
+	if err := k.bothExpiries(); err != nil {
+		return auth.KeySpec{}, err
+	}
 	spec := auth.KeySpec{Owner: owner, Name: k.Name}
 	for _, s := range k.Scopes {
 		spec.Scopes = append(spec.Scopes, rbac.Permission(s))
 	}
-	if k.ExpiresIn != "" {
-		d, ok := positiveDuration(k.ExpiresIn)
+	if k.ExpiresIn != nil && *k.ExpiresIn != "" {
+		d, ok := positiveDuration(*k.ExpiresIn)
 		if !ok {
 			return auth.KeySpec{}, httpapi.Invalid(httpapi.Field("/body/expires_in", "invalid", "a positive duration such as 720h"))
 		}
 		spec.ExpiresIn = d
+	}
+	if k.ExpiresAt != nil {
+		// The zero time is KeySpec's "unset", which would mint the default
+		// lifetime: an instant that is year 1 is refused here, never passed on.
+		if k.ExpiresAt.IsZero() {
+			return auth.KeySpec{}, httpapi.Invalid(httpapi.Field("/body/expires_at", "invalid", "an RFC 3339 instant in the future"))
+		}
+		spec.ExpiresAt = k.ExpiresAt.UTC()
 	}
 	return spec, nil
 }

@@ -48,7 +48,17 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 		return "", nil, fmt.Errorf("%w: %w", ErrBadInput, err)
 	}
 	st := s.settings()
+	now := s.now().UTC()
 	ttl := spec.ExpiresIn
+	if !spec.ExpiresAt.IsZero() {
+		if ttl != 0 {
+			return "", nil, fmt.Errorf("%w: set an expiry as a lifetime or as an instant, not both", ErrBadInput)
+		}
+		if !spec.ExpiresAt.After(now) {
+			return "", nil, fmt.Errorf("%w: the expiry is not in the future", ErrBadInput)
+		}
+		ttl = spec.ExpiresAt.Sub(now)
+	}
 	switch {
 	case ttl < 0:
 		return "", nil, fmt.Errorf("%w: a negative expiry", ErrBadInput)
@@ -57,7 +67,6 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 	case ttl > st.KeyMaxTTL:
 		return "", nil, fmt.Errorf("%w: expiry %s exceeds the maximum %s", ErrBadInput, ttl, st.KeyMaxTTL)
 	}
-	now := s.now().UTC()
 	expires := now.Add(ttl)
 	owner := spec.Owner
 	if owner == "" {

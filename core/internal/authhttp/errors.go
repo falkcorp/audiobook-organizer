@@ -87,6 +87,10 @@ func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string
 		return &httpapi.Error{Status: http.StatusConflict, Code: "last_admin", Detail: "this would leave no active administrator"}
 	case errors.Is(err, auth.ErrKeyRevoked):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "key_revoked", Detail: "a revoked key stays revoked"}
+	case errors.Is(err, auth.ErrEmailInUse):
+		return &httpapi.Error{Status: http.StatusConflict, Code: "email_in_use", Detail: "that e-mail address belongs to another account"}
+	case errors.Is(err, auth.ErrEmailNotPlain):
+		return httpapi.Invalid(httpapi.Field("/body/email", "not_plain", "use a plain ASCII address: letters, digits and punctuation, no spaces"))
 	case errors.Is(err, auth.ErrUserExists):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "user_exists", Detail: "that username or e-mail address is taken"}
 	case errors.Is(err, auth.ErrStaleEpoch):
@@ -174,7 +178,7 @@ func oidcRedirectCode(err error) string {
 		return "oauth_exchange_failed"
 	case errors.Is(err, oidc.ErrMintFailed):
 		return "oauth_code_mint_failed"
-	case errors.Is(err, oidc.ErrEmailNotVerified), errors.Is(err, oidc.ErrEmailNotPlain), errors.Is(err, oidc.ErrEmailNotAllowed),
+	case errors.Is(err, oidc.ErrEmailNotVerified), errors.Is(err, auth.ErrEmailNotPlain), errors.Is(err, oidc.ErrEmailNotAllowed),
 		errors.Is(err, auth.ErrInactiveUser), errors.Is(err, auth.ErrResetRequired), errors.Is(err, oidc.ErrSetupRequired):
 		return "oauth_not_authorized"
 	}

@@ -36,12 +36,6 @@ var (
 	ErrExchange = errors.New("oidc: code exchange failed")
 	// ErrEmailNotVerified: the provider did not vouch for the address.
 	ErrEmailNotVerified = errors.New("oidc: the identity's e-mail is not verified")
-	// ErrEmailNotPlain: the address is not printable ASCII, or differs from its
-	// normalized form by more than case. NormalizeEmail folds compatibility
-	// characters (the Kelvin sign, fullwidth letters) onto ASCII, so a
-	// different identity at the provider could otherwise read as another
-	// person's address: the same rule IsOwnerEmail applies to the owner.
-	ErrEmailNotPlain = errors.New("oidc: the identity's e-mail is not a plain ASCII address")
 	// ErrEmailNotAllowed: the address is neither on the provider's allowlist
 	// nor invited.
 	ErrEmailNotAllowed = errors.New("oidc: e-mail is not allowed to sign in")

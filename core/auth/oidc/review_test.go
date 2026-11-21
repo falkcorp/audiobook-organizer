@@ -35,7 +35,7 @@ func TestOIDC_NonPlainAddressNeverActsAsTheAsciiAddress(t *testing.T) {
 			f := newFx(t)
 			holder := f.put(&auth.User{ID: "01JBATCAVE0000000000000020", Username: "kate", Email: "kate@wayne.example.test", EmailVerified: true, Roles: []rbac.RoleName{rbac.RoleViewer}})
 			_, err := resolve(t, f, trusting(), claims("sub-impostor", tc.email))
-			mustIs(t, err, ErrEmailNotPlain)
+			mustIs(t, err, auth.ErrEmailNotPlain)
 			if _, err := f.identity("gotham", "sub-impostor"); !errors.Is(err, auth.ErrNotFound) {
 				t.Fatalf("identity linked to the holder: %v", err)
 			}
@@ -47,7 +47,7 @@ func TestOIDC_NonPlainAddressNeverActsAsTheAsciiAddress(t *testing.T) {
 			f := newFx(t)
 			sq := f.put(&auth.User{ID: "01JBATCAVE0000000000000021", Username: "squatter", Email: "kate@wayne.example.test", Roles: []rbac.RoleName{rbac.RoleViewer}})
 			_, err := resolve(t, f, trusting(), claims("sub-impostor", tc.email))
-			mustIs(t, err, ErrEmailNotPlain)
+			mustIs(t, err, auth.ErrEmailNotPlain)
 			if got := f.user(string(sq.ID)); got.Email != "kate@wayne.example.test" {
 				t.Fatalf("the squatter lost the address to a non-plain claim: %+v", got)
 			}
@@ -61,7 +61,7 @@ func TestOIDC_NonPlainAddressNeverActsAsTheAsciiAddress(t *testing.T) {
 			f := newFx(t)
 			r := f.resolver(func(_ context.Context, email string) (bool, error) { return email == "kate@wayne.example.test", nil })
 			_, err := r.Resolve(context.Background(), Policy{Provider: "gotham"}, claims("sub-impostor", tc.email))
-			mustIs(t, err, ErrEmailNotPlain)
+			mustIs(t, err, auth.ErrEmailNotPlain)
 			if f.countUsers() != 0 {
 				t.Fatal("an account was created for a non-plain claim")
 			}

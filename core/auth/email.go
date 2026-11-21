@@ -57,3 +57,27 @@ func SameEmail(a, b string) bool {
 	na := NormalizeEmail(a)
 	return na != "" && na == NormalizeEmail(b)
 }
+
+// PlainEmail returns raw in the one form an address is compared, stored or
+// admitted in by a path that has no verified owner behind it: it must be
+// printable ASCII (no byte <= ' ' or > '~', IsOwnerEmail's rule) and equal to
+// NormalizeEmail(raw) after ASCII lowercasing. NormalizeEmail folds
+// compatibility characters onto ASCII (the Kelvin sign, the long s, fullwidth
+// letters), so without this a different address reads as another person's and
+// could link, displace or be admitted as them. An empty raw is ("", true) and
+// is the caller's to refuse. A false result is ErrEmailNotPlain.
+func PlainEmail(raw string) (string, bool) {
+	if raw == "" {
+		return "", true
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] <= ' ' || raw[i] > '~' {
+			return "", false
+		}
+	}
+	lower := strings.ToLower(raw)
+	if lower != NormalizeEmail(raw) {
+		return "", false
+	}
+	return lower, true
+}

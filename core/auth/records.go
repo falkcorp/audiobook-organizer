@@ -84,6 +84,14 @@ type KeySpec struct {
 	Name      string
 	Scopes    []rbac.Permission // REQUIRED non-empty, no wildcards (05-rbac §4.5); the stored record is never empty (R3-1)
 	ExpiresIn time.Duration     // 0 = default; > max = error
+	// ExpiresAt is the key's last instant, as the caller wants it. It is
+	// converted to a lifetime against the service's own clock (ExpiresIn =
+	// ExpiresAt - now), so it must be after now and within the same maximum as
+	// ExpiresIn, and the key-actor clamp still applies after the conversion.
+	// The zero time is unset; setting it together with a non-zero ExpiresIn is
+	// ErrBadInput (a caller that must refuse "both fields present" even when
+	// one is zero checks presence itself, as authhttp does).
+	ExpiresAt time.Time
 	// Purpose and Module are deferred-build members (§3.5).
 }
 

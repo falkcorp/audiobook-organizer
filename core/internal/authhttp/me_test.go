@@ -82,7 +82,7 @@ func TestUpdateMe_NeedsAProfileWriter(t *testing.T) {
 	bruce := e.user("bruce", "brucebruce", rbac.RoleAdmin)
 	name := "Batman"
 	p := e.session(bruce)
-	_, err := call(specMeEd(), e.api().updateMe, p, updateMeReq{Body: ProfilePatch{DisplayName: &name}})
+	_, err := call(specMeEd(), e.api(func(d *Deps) { d.Profiles = nil }).updateMe, p, updateMeReq{Body: ProfilePatch{DisplayName: &name}})
 	wantErr(t, err, http.StatusNotImplemented, "profile_edit_unavailable")
 	w := &fakeProfiles{}
 	a := e.api(func(d *Deps) { d.Profiles = w })
@@ -159,7 +159,7 @@ func TestMyKeys_TheKeyIsShownOnceAndNeverListed(t *testing.T) {
 	bruce := e.user("bruce", "brucebruce", rbac.RoleAdmin)
 	a := e.api()
 	p := e.session(bruce)
-	created, err := call(specMeKeyCreate(), a.createMyKey, p, createKeyReq{Body: KeyCreate{Name: "utility belt", Scopes: []string{"core:self"}, ExpiresIn: "24h"}})
+	created, err := call(specMeKeyCreate(), a.createMyKey, p, createKeyReq{Body: KeyCreate{Name: "utility belt", Scopes: []string{"core:self"}, ExpiresIn: new("24h")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestMyKeys_CreateRefusals(t *testing.T) {
 	wantErr(t, err, http.StatusForbidden, "scope_escalation")
 	// A wildcard, an empty list and a bad expiry are refused by Validate.
 	for _, k := range []KeyCreate{
-		{Name: "", Scopes: []string{"core:self"}}, {Name: "n"}, {Name: "n", Scopes: []string{"core:self"}, ExpiresIn: "soon"}, {Name: "n", Scopes: []string{"core:self"}, ExpiresIn: "-1h"},
+		{Name: "", Scopes: []string{"core:self"}}, {Name: "n"}, {Name: "n", Scopes: []string{"core:self"}, ExpiresIn: new("soon")}, {Name: "n", Scopes: []string{"core:self"}, ExpiresIn: new("-1h")},
 	} {
 		if (&createKeyReq{Body: k}).Validate() == nil {
 			t.Errorf("%+v validates", k)
