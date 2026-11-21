@@ -229,9 +229,12 @@ func run() int {
 		return 0
 	}
 
+	// A boot's refusal (a blocked cutover, a store too new, a store below the
+	// upgrade floor) exits 78, which systemd's RestartPreventExitStatus=78
+	// keeps from restarting and launchd is slowed on; a floor refusal's last
+	// stderr line is "install <tag> first". Any other failure exits 1.
 	if err := executeCmd(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		return app.ExitStatus(err, os.Stderr, nil, nil)
 	}
 	return 0
 }
