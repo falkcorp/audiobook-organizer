@@ -718,6 +718,14 @@ func (g *generator) attachRetired() {
 		}
 	}
 	g.attachFlatAliasRetired(push, eco)
+	for _, u := range unreadEnvNames {
+		i, ok := g.idx[u.row]
+		if !ok {
+			g.fail("the unread env name %s is retired under %s, which is no row of the table", u.env, u.row)
+			continue
+		}
+		push(&g.rows[i], RetiredEntry{Name: u.env, Verdict: VerdictWarn, Message: u.message})
+	}
 }
 
 // attachFlatAliasRetired retires the flat viper keys no row is named for

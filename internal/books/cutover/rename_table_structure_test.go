@@ -120,6 +120,35 @@ func TestRenameTable_RetiredNamesAreValidForConfig(t *testing.T) {
 	}
 }
 
+// TestRenameTable_UnreadEnvNamesWarnWithTheirReason: AUDIOBOOK_ROOT_DIR, which
+// the shipped unit and README set and no build ever read, is a retired env
+// name that core only warns about (no canonical key: a refusal would stop a
+// service whose stale unit sets it, for a name that never did anything) and
+// whose warning tells the operator to delete it. It is retired under root_dir,
+// whose ROOT_DIR still refuses.
+func TestRenameTable_UnreadEnvNamesWarnWithTheirReason(t *testing.T) {
+	var got []config.RetiredName
+	for _, r := range RetiredConfigNames() {
+		if r.Name == "AUDIOBOOK_ROOT_DIR" || r.Name == "ROOT_DIR" {
+			got = append(got, r)
+		}
+	}
+	want := []config.RetiredName{
+		{Name: "ROOT_DIR", Canonical: "core.library.roots"},
+		{Name: "AUDIOBOOK_ROOT_DIR", Message: "delete it: no build ever read it; the library root is the stored setting"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("retired = %+v\nwant %+v", got, want)
+	}
+	for _, row := range Table().Rows {
+		for _, e := range row.Retired {
+			if e.Name == "AUDIOBOOK_ROOT_DIR" && (row.Head != "root_dir" || e.Verdict != VerdictWarn || e.File) {
+				t.Errorf("AUDIOBOOK_ROOT_DIR: row %s, %+v; want an env name of root_dir with verdict warn", row.Head, e)
+			}
+		}
+	}
+}
+
 // TestRenameTable_RetiredEnvNamesNeverCollideWithCanonicalOnes: no retired env
 // name is also a canonical name the deploy files may set.
 func TestRenameTable_RetiredEnvNamesNeverCollideWithCanonicalOnes(t *testing.T) {
