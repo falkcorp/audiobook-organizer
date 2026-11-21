@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -225,7 +227,7 @@ func newAuth(t testing.TB) *env {
 	if e.svc, err = auth.New(ctx, auth.Options{}, auth.Deps{
 		Store: e.st, NewBatch: e.st.NewBatch, RBAC: e.rb, Audit: sink{}, Revocations: revJournal{},
 		Clock:  func() time.Time { return e.now },
-		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64}),
+		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
 	}); err != nil {
 		t.Fatal(err)
 	}

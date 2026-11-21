@@ -2106,6 +2106,9 @@ func (s *Server) seedRolesAndTokens() {
 		slog.Error("api key expiry stamp failed; will retry next start", "err", err)
 	}
 	logBootstrapKeyTTLConfig()
+	// How many legacy bcrypt passwords remain (a count, no names), so the owner
+	// can see when bcrypt verification can be dropped.
+	logLegacyBcryptPasswordCount(s.storeForWiring())
 
 	// Initialize the one-time bootstrap token and startup read-only key.
 	//

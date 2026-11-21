@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -116,7 +118,7 @@ func newFx(t testing.TB) *fx {
 	}
 	f.svc, err = auth.New(ctx, auth.Options{}, auth.Deps{
 		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: &journalFake{},
-		Clock: f.clock, Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64}),
+		Clock: f.clock, Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
 	})
 	if err != nil {
 		t.Fatal(err)

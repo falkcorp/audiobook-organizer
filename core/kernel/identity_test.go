@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/auth/password"
@@ -147,7 +149,7 @@ func (f *idFx) inputs() identityInputs {
 		Audit:       f.audit,
 		Revocations: f.jrnl,
 		Settings:    read,
-		Hasher:      password.New(password.Options{Time: 1, MemoryKiB: 64}),
+		Hasher:      password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
 		Clock:       f.clock,
 	}
 }

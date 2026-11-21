@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -94,7 +96,7 @@ func s13RealAuth(t *testing.T) *auth.Service {
 	}
 	svc, err := auth.New(ctx, auth.Options{}, auth.Deps{
 		Store: st, NewBatch: st.NewBatch, RBAC: rb, Audit: s13Audit{}, Revocations: s13Journal{},
-		Clock: func() time.Time { return now }, Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64}),
+		Clock: func() time.Time { return now }, Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
 	})
 	if err != nil {
 		t.Fatal(err)

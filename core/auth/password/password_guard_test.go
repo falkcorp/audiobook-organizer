@@ -17,6 +17,7 @@ func TestNewRefusesLoweredCostOutsideATestBinary(t *testing.T) {
 		"time":    {Time: 1},
 		"memory":  {MemoryKiB: 8},
 		"compute": {Compute: func([]byte, []byte, uint32, uint32, uint8, uint32) []byte { return nil }},
+		"bcrypt":  {BcryptCost: 4},
 	} {
 		func() {
 			defer func() {

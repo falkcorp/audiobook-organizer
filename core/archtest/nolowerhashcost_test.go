@@ -25,6 +25,9 @@ var h = password.New(password.Options{Time: 1})`, []string{"3: Options.Time"}},
 import pw "github.com/falkcorp/mediacore/auth/password"
 var h = pw.New(pw.Options{Permits: 2, MemoryKiB: 8,
 	Compute: nil})`, []string{"3: Options.MemoryKiB", "4: Options.Compute"}},
+		{"bcrypt dummy cost", `package p
+import "github.com/falkcorp/mediacore/auth/password"
+var h = password.New(password.Options{Permits: 1, BcryptCost: 4})`, []string{"3: Options.BcryptCost"}},
 		{"dot import", `package p
 import . "github.com/falkcorp/mediacore/auth/password"
 var o = Options{Time: 1}`, []string{"3: Options.Time"}},

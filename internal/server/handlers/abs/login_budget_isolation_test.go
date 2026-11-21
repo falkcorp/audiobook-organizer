@@ -7,13 +7,18 @@ package abs_test
 
 import (
 	"net/http"
-	"sort"
+	"net/http/httptest"
+	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	abshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/abs"
 	coreauth "github.com/falkcorp/mediacore/auth"
+	authpw "github.com/falkcorp/mediacore/auth/password"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // S1: refresh failures have a budget of their own (key "refresh:"+visitor).
@@ -80,41 +85,139 @@ func TestRefreshBudget_ASuccessfulLoginDoesNotRefundIt(t *testing.T) {
 	}
 }
 
-// S3: a failed ABS login takes as long for a name that does not exist as for a
-// real account with the wrong password (a real argon2id derivation either way).
+// absLoginWork is the password work one ABS login spent: argon2id
+// derivations and KiB-passes, bcrypt comparisons and rounds. The counters are
+// process-wide, so it is only meaningful in a test that is not t.Parallel().
+type absLoginWork struct{ derivations, kibPasses, compares, rounds uint64 }
+
+func absWorkOf(fn func()) absLoginWork {
+	n0, c0 := absauth.Passwords.Derivations()
+	b0, r0 := absauth.Passwords.BcryptCompares()
+	fn()
+	n1, c1 := absauth.Passwords.Derivations()
+	b1, r1 := absauth.Passwords.BcryptCompares()
+	return absLoginWork{n1 - n0, c1 - c0, b1 - b0, r1 - r0}
+}
+
+// seedTimingAccounts seeds the account shapes a failed login can land on:
+// "owner" (argon2id), "oracle" (a legacy bcrypt row), "huntress" (an OAuth
+// user with no password) and "clayface" (an argon2id row that does not parse).
+// Any other name has no user.
+func seedTimingAccounts(t *testing.T, h *harness) {
+	t.Helper()
+	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
+	legacy, err := bcrypt.GenerateFromPassword([]byte("pw-pw-pw-pw"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.store.addUser(&database.User{ID: "u2", Username: "oracle", Status: "active",
+		PasswordHashAlgo: authpw.AlgoBcrypt, PasswordHash: string(legacy)})
+	h.store.addUser(&database.User{ID: "u3", Username: "huntress", Status: "active",
+		PasswordHashAlgo: authpw.AlgoOAuth})
+	h.store.addUser(&database.User{ID: "u4", Username: "clayface", Status: "active",
+		PasswordHashAlgo: authpw.AlgoArgon2id, PasswordHash: "$argon2id$v=19$m=8192,t=1,p=2$!!!$!!!"})
+}
+
+// S3, structurally: a failed ABS login spends the same password work, and
+// answers with the same bytes, whether the name is a real argon2id account,
+// a legacy bcrypt account, an account with no password, an account whose hash
+// does not parse, or no account at all: one argon2id derivation and one
+// bcrypt comparison each, and the same status, body and headers (no
+// Set-Cookie). Load cannot move these counts, so this is the test that names
+// a path which stopped spending the dummy work.
+func TestLogin_FailedAbsLoginSpendsTheSameWorkAndAnswersTheSameBytes(t *testing.T) {
+	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
+	seedTimingAccounts(t, h)
+	type answer struct {
+		code   int
+		body   string
+		header http.Header
+	}
+	var base absLoginWork
+	var baseAnswer answer
+	for i, name := range []string{"owner", "ghost", "oracle", "huntress", "clayface"} {
+		var w *httptest.ResponseRecorder
+		got := absWorkOf(func() {
+			w, _ = h.do(t, request{
+				method: http.MethodPost, path: "/login",
+				body:    map[string]any{"username": name, "password": "wrong-password"},
+				headers: map[string]string{visitorHeader: "198.51.100." + strconv.Itoa(10+i)},
+			})
+		})
+		a := answer{w.Code, w.Body.String(), w.Header().Clone()}
+		t.Logf("%s: %+v %d %s", name, got, a.code, a.body)
+		if i == 0 {
+			base, baseAnswer = got, a
+			if got.derivations != 1 || got.kibPasses == 0 || got.compares != 1 || got.rounds == 0 {
+				t.Fatalf("a wrong password for a real account spent %+v, want one derivation and one bcrypt comparison", got)
+			}
+			if a.code != http.StatusUnauthorized || len(w.Result().Cookies()) != 0 {
+				t.Fatalf("a wrong password for a real account: %d, cookies %v", a.code, w.Result().Cookies())
+			}
+			continue
+		}
+		if got != base {
+			t.Errorf("%s spent %+v, a real account's wrong password %+v: the work gives the name away", name, got, base)
+		}
+		if !reflect.DeepEqual(a, baseAnswer) {
+			t.Errorf("%s answered %+v, a real account's wrong password %+v: the response gives the name away", name, a, baseAnswer)
+		}
+	}
+}
+
+// S3, end to end: a failed ABS login takes as long for a name that does not
+// exist, or a legacy bcrypt account, as for a real argon2id account with the
+// wrong password. Before the dummy verification the unknown name answered in
+// microseconds and the real one after a full derivation, a gap of two orders
+// of magnitude.
+//
+// Wall clock on a loaded machine is noisy: on 2026-11-21 a full -p 4 run
+// gave medians of 24.79 ms (real) against 9.71 ms (unknown) from five
+// pairs, real always first, while both paths ran one identical derivation
+// (50 rotated pairs on the same code: the real name slower in 25, the
+// unknown/real ratio 1.01 at p50). So, as in the web login's timing tests,
+// each case's FASTEST sample is compared (contention only ever adds time, so
+// the minimum estimates the work a path does), over enough rounds that every
+// case meets a quiet moment, with the order rotated every round so a periodic
+// burst cannot land on one case, and a fresh visitor per request so no
+// source budget is spent. The bounds (within 2x either way) pass noise and
+// fail the missing-dummy shape by about 100x.
 func TestLogin_FailedAbsLoginTimingDoesNotRevealWhetherTheNameExists(t *testing.T) {
 	h := newHarness(t, "cf,jwt", nil, withVisitorThrottleKey(), func(o *abshandler.Options) { o.Throttle = quickThrottle() })
-	h.seedPasswordUser(t, "u1", "owner", "pw-pw-pw-pw")
-	const samples = 5
-	timeLogin := func(name string, i int) time.Duration {
-		start := time.Now()
-		w, _ := h.do(t, request{
-			method: http.MethodPost, path: "/login",
-			body:    map[string]any{"username": name, "password": "wrong-password"},
-			headers: map[string]string{visitorHeader: "198.51.100." + string(rune('1'+i%9))},
-		})
-		d := time.Since(start)
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("%s: %d, want 401", name, w.Code)
+	seedTimingAccounts(t, h)
+	const rounds = 25
+	names := []string{"owner", "ghost", "oracle"}
+	fastest := map[string]time.Duration{}
+	visitor := 0
+	for r := 0; r < rounds; r++ {
+		for k := range names {
+			name := names[(r+k)%len(names)]
+			visitor++
+			start := time.Now()
+			w, _ := h.do(t, request{
+				method: http.MethodPost, path: "/login",
+				body:    map[string]any{"username": name, "password": "wrong-password"},
+				headers: map[string]string{visitorHeader: "timing-visitor-" + strconv.Itoa(visitor)},
+			})
+			d := time.Since(start)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("%s: %d, want 401", name, w.Code)
+			}
+			if prev, ok := fastest[name]; !ok || d < prev {
+				fastest[name] = d
+			}
 		}
-		return d
 	}
-	var realD, ghostD []time.Duration
-	for i := 0; i < samples; i++ { // interleaved so drift hits both alike
-		realD = append(realD, timeLogin("owner", i))
-		ghostD = append(ghostD, timeLogin("ghost", i))
-	}
-	median := func(ds []time.Duration) time.Duration {
-		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
-		return ds[len(ds)/2]
-	}
-	r, g := median(realD), median(ghostD)
-	t.Logf("median: real=%v unknown=%v", r, g)
-	if int64(g) < int64(r)/2 {
-		t.Fatalf("an unknown name answered in %v, a real one in %v: timing gives the name away", g, r)
-	}
-	if int64(g) > int64(r)*3 {
-		t.Fatalf("an unknown name answered in %v, a real one in %v: not wildly slower", g, r)
+	real := fastest["owner"]
+	t.Logf("fastest of %d: real=%v unknown=%v bcrypt=%v", rounds, real, fastest["ghost"], fastest["oracle"])
+	for _, name := range []string{"ghost", "oracle"} {
+		got := fastest[name]
+		if got < real/2 {
+			t.Errorf("%s answered in %v at best, a real account in %v: timing gives the name away", name, got, real)
+		}
+		if got > real*2 {
+			t.Errorf("%s answered in %v at best, a real account in %v: timing gives the name away (slower)", name, got, real)
+		}
 	}
 }
 

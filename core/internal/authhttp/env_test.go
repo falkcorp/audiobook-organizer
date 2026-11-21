@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -185,7 +187,7 @@ func (e *env) rebuild() {
 	e.t.Helper()
 	svc, err := auth.New(context.Background(), auth.Options{}, auth.Deps{
 		Store: e.st, NewBatch: e.st.NewBatch, RBAC: e.rb, Audit: e.audit, Revocations: e.jrnl, Clock: e.clock,
-		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64}), Settings: e.settings,
+		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}), Settings: e.settings,
 	})
 	if err != nil {
 		e.t.Fatal(err)
@@ -206,7 +208,7 @@ func (e *env) user(name, pw string, roles ...rbac.RoleName) *auth.User {
 		e.rebuild()
 	}
 	if pw != "" {
-		_, h, err := password.New(password.Options{Time: 1, MemoryKiB: 64}).Hash(pw)
+		_, h, err := password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}).Hash(pw)
 		if err != nil {
 			e.t.Fatal(err)
 		}

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	authpw "github.com/falkcorp/mediacore/auth/password"
 )
@@ -27,11 +29,14 @@ import (
 // does in production. absauth's own tests do not lower the cost (apart from the
 // ones proving the setter's guards, which panic before changing anything): they
 // pin the production parameters and the one-derivation-per-login property.
+// Every login verification also runs one bcrypt comparison (against a dummy
+// unless the account is a legacy bcrypt row); BcryptCost lowers that dummy
+// from DefaultCost the same way.
 //
 // SetHashCostForTest panics outside a test binary and once the dummy hash is
 // built, so it must be the first thing here, before any test code runs.
 func TestMain(m *testing.M) {
-	absauth.Passwords = authpw.New(authpw.Options{Time: 1, MemoryKiB: 64})
+	absauth.Passwords = authpw.New(authpw.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost})
 	os.Exit(m.Run())
 }
 

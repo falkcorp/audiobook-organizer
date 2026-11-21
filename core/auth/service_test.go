@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/archtest"
@@ -134,7 +136,7 @@ func newFxRoleStore(t testing.TB, wrap func(rbac.Store) rbac.Store) *fx {
 		}
 	})
 	f := &fx{t: t, audit: &auditFake{}, jrnl: &journalFake{}, inval: &invalFake{}, now: time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC),
-		hasher: password.New(password.Options{Time: 1, MemoryKiB: 64})}
+		hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost})}
 	aks, _ := db.Keyspace(authstore.Owner)
 	rks, _ := db.Keyspace(rbacstore.Owner)
 	if f.st, err = authstore.New(aks, authstore.Options{Now: f.clock}); err != nil {

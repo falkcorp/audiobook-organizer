@@ -8,6 +8,14 @@
 // m=64 MiB, t=3, p=2, 16-byte salt, PHC string; bcrypt verify-only with a
 // transparent rehash; an "oauth" or empty hash never authenticates.
 //
+// A login verification (VerifyLogin*, SpendVerification) costs the same
+// whatever the submitted name resolves to: one argon2id derivation and one
+// bcrypt comparison, each against the stored hash when it is of that kind and
+// against a dummy of the Hasher's own cost otherwise, under one permit. A
+// name with no user, an account with no usable password, a malformed stored
+// hash, an argon2id account and a legacy bcrypt account therefore all spend
+// one of each, and the response time does not say which it was.
+//
 // Every argon2id derivation, hashing and verifying, runs under the Hasher's
 // bounded semaphore, because each one allocates the hash's m= cost: an
 // unbounded login burst would exhaust memory before any throttle tripped
@@ -87,6 +95,11 @@ type Options struct {
 	// derivations overlap), for test binaries only like Time and MemoryKiB.
 	// Nil is argon2.IDKey.
 	Compute func(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte
+	// BcryptCost lowers the cost of the dummy bcrypt hash a login verification
+	// compares against when the account has no bcrypt hash of its own, for
+	// test binaries only like Time and MemoryKiB. Zero means
+	// bcrypt.DefaultCost, the cost the legacy bcrypt rows were written at.
+	BcryptCost int
 }
 
 // Hasher hashes and verifies passwords under one bounded semaphore. Safe for
@@ -99,10 +112,19 @@ type Hasher struct {
 	compute func(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte
 
 	derivations, cost atomic.Uint64
+	// bcryptCompares counts bcrypt comparisons and bcryptRounds sums their
+	// key-schedule rounds (2^cost each), as derivations and cost do for
+	// argon2id.
+	bcryptCompares, bcryptRounds atomic.Uint64
 
-	// dummy is the hash a login with no usable credential verifies against
-	// (newDummy). It is set by New and never changes.
-	dummy string
+	// dummy is the argon2id hash a login with no usable argon2id hash
+	// verifies against (newDummy), and dummyParams is it parsed. Both are set
+	// by New and never change.
+	dummy       string
+	dummyParams argonParams
+	// dummyBcrypt is the bcrypt hash a login with no usable bcrypt hash
+	// compares against (newDummyBcrypt). Set by New, never changes.
+	dummyBcrypt string
 }
 
 // New returns a Hasher. It panics when o sets Time, MemoryKiB or Compute
@@ -114,8 +136,8 @@ func New(o Options) *Hasher { return newHasher(o, testing.Testing) }
 // newHasher is New with the test-binary probe passed in, so a test can stand
 // in for a production binary without a package-level variable.
 func newHasher(o Options, isTestBinary func() bool) *Hasher {
-	if (o.Time != 0 || o.MemoryKiB != 0 || o.Compute != nil) && !isTestBinary() {
-		panic("password: Options.Time, MemoryKiB and Compute lower the hash cost; they are for test binaries only")
+	if (o.Time != 0 || o.MemoryKiB != 0 || o.Compute != nil || o.BcryptCost != 0) && !isTestBinary() {
+		panic("password: Options.Time, MemoryKiB, Compute and BcryptCost lower the hash cost; they are for test binaries only")
 	}
 	permits := o.Permits
 	if permits <= 0 {
@@ -132,6 +154,19 @@ func newHasher(o Options, isTestBinary func() bool) *Hasher {
 		h.compute = argon2.IDKey
 	}
 	h.dummy = newDummy(h.time, h.memory)
+	p, ok := parseArgon2id(h.dummy)
+	if !ok {
+		panic("password: the dummy argon2id hash does not parse") // a broken invariant
+	}
+	h.dummyParams = p
+	bcryptCost := o.BcryptCost
+	if bcryptCost == 0 {
+		bcryptCost = bcrypt.DefaultCost
+	}
+	if bcryptCost < bcrypt.MinCost || bcryptCost > bcrypt.MaxCost {
+		panic(fmt.Sprintf("password: Options.BcryptCost %d is outside %d..%d", bcryptCost, bcrypt.MinCost, bcrypt.MaxCost))
+	}
+	h.dummyBcrypt = newDummyBcrypt(bcryptCost)
 	return h
 }
 
@@ -144,6 +179,13 @@ func (h *Hasher) Permits() int { return cap(h.sem) }
 // pays the same derivation a wrong password does).
 func (h *Hasher) Derivations() (count, kibPasses uint64) {
 	return h.derivations.Load(), h.cost.Load()
+}
+
+// BcryptCompares reports how many bcrypt comparisons this Hasher has run and
+// their summed key-schedule rounds (2^cost each). Both only grow, like
+// Derivations, which a test reads alongside it.
+func (h *Hasher) BcryptCompares() (count, rounds uint64) {
+	return h.bcryptCompares.Load(), h.bcryptRounds.Load()
 }
 
 // acquire takes a permit. wait < 0 blocks until one is free or ctx ends;
@@ -261,8 +303,13 @@ func (h *Hasher) VerifyWithin(ctx context.Context, wait time.Duration, algo, has
 		return ok, false, err
 	case AlgoBcrypt, "":
 		// An empty algo predates HEAD's column being populated; those rows
-		// are bcrypt.
-		if bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) != nil {
+		// are bcrypt. A comparison is CPU work like a derivation, so it runs
+		// under a permit too, and a busy Hasher refuses it as it refuses one.
+		if err := h.acquire(ctx, wait); err != nil {
+			return false, false, err
+		}
+		defer h.release()
+		if !h.bcryptMatches(hash, plain) {
 			return false, false, nil
 		}
 		return true, true, nil
@@ -271,40 +318,118 @@ func (h *Hasher) VerifyWithin(ctx context.Context, wait time.Duration, algo, has
 	}
 }
 
-// verifyArgon2id parses a PHC argon2id hash and compares in constant time.
-// Any malformed field is a failure, never a panic and never a pass.
-func (h *Hasher) verifyArgon2id(ctx context.Context, wait time.Duration, encoded, plain string) (bool, error) {
+// argonParams is a parsed PHC argon2id hash.
+type argonParams struct {
+	time, memory uint32
+	threads      uint8
+	salt, want   []byte
+}
+
+// parseArgon2id parses a PHC argon2id hash. Any malformed field, or an m=
+// above argonMaxMemory, is ok=false, never a panic.
+func parseArgon2id(encoded string) (p argonParams, ok bool) {
 	parts := strings.Split(encoded, "$")
 	// ["", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash]
 	if len(parts) != 6 || parts[0] != "" || parts[1] != AlgoArgon2id {
-		return false, nil
+		return p, false
 	}
 	var version int
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argonVersion {
-		return false, nil
+		return p, false
 	}
-	var memory, time uint32
-	var threads uint8
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
-		return false, nil
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.memory, &p.time, &p.threads); err != nil {
+		return p, false
 	}
-	if memory == 0 || time == 0 || threads == 0 || memory > argonMaxMemory {
-		return false, nil
+	if p.memory == 0 || p.time == 0 || p.threads == 0 || p.memory > argonMaxMemory {
+		return p, false
 	}
-	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil || len(salt) == 0 {
-		return false, nil
+	var err error
+	if p.salt, err = base64.RawStdEncoding.DecodeString(parts[4]); err != nil || len(p.salt) == 0 {
+		return p, false
 	}
-	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(want) == 0 {
+	if p.want, err = base64.RawStdEncoding.DecodeString(parts[5]); err != nil || len(p.want) == 0 {
+		return p, false
+	}
+	return p, true
+}
+
+// argonMatches runs one derivation for plain at p's parameters and compares
+// it with p's key in constant time. The caller holds a permit.
+func (h *Hasher) argonMatches(p argonParams, plain string) bool {
+	got := h.derive([]byte(plain), p.salt, p.time, p.memory, p.threads, uint32(len(p.want)))
+	return subtle.ConstantTimeCompare(got, p.want) == 1
+}
+
+// verifyArgon2id parses a PHC argon2id hash and compares in constant time.
+// Any malformed field is a failure, never a panic and never a pass.
+func (h *Hasher) verifyArgon2id(ctx context.Context, wait time.Duration, encoded, plain string) (bool, error) {
+	p, ok := parseArgon2id(encoded)
+	if !ok {
 		return false, nil
 	}
 	if err := h.acquire(ctx, wait); err != nil {
 		return false, err
 	}
 	defer h.release() // a derivation that panics must not keep its permit
-	got := h.derive([]byte(plain), salt, time, memory, threads, uint32(len(want)))
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	return h.argonMatches(p, plain), nil
+}
+
+// bcryptAlphabet is bcrypt's base64 alphabet (x/crypto/bcrypt's, unexported
+// there).
+const bcryptAlphabet = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// bcryptHashLen is the length of every bcrypt hash x/crypto writes:
+// "$2a$NN$" plus a 22-character salt plus a 31-character key.
+const bcryptHashLen = 60
+
+// bcryptUsable reports whether comparing against hash runs bcrypt's full key
+// schedule. x/crypto returns early, having done no work, when the version,
+// cost or length does not parse or the salt does not decode; such a row
+// would answer in microseconds, so a login treats it as no credential and
+// spends the dummy instead. Only the "$2a$"/"$2b$"/"$2y$" shape x/crypto
+// writes is accepted.
+func bcryptUsable(hash string) bool {
+	if len(hash) != bcryptHashLen || AlgoOf(hash) != AlgoBcrypt {
+		return false
+	}
+	if _, err := bcrypt.Cost([]byte(hash)); err != nil {
+		return false
+	}
+	for i := 7; i < len(hash); i++ {
+		if strings.IndexByte(bcryptAlphabet, hash[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// bcryptMatches compares plain with a bcrypt hash and counts the comparison.
+// The caller holds a permit.
+func (h *Hasher) bcryptMatches(hash, plain string) bool {
+	h.bcryptCompares.Add(1)
+	if cost, err := bcrypt.Cost([]byte(hash)); err == nil {
+		h.bcryptRounds.Add(uint64(1) << uint(cost))
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) == nil
+}
+
+// newDummyBcrypt returns the bcrypt hash a login with no usable bcrypt hash
+// compares against, discarding the answer: "$2a$", the cost, then 53
+// random characters of bcrypt's alphabet (a 22-character salt and a
+// 31-character key). Comparing against it runs the full key schedule at that
+// cost, exactly as a legacy bcrypt row does, and no input matches it (its
+// key is random, not a bcrypt output). Like newDummy it derives nothing, so
+// New does no bcrypt work and no first login pays for it.
+func newDummyBcrypt(cost int) string {
+	rnd := make([]byte, bcryptHashLen-7)
+	_, _ = rand.Read(rnd) // crypto/rand.Read never fails (Go 1.24+)
+	var b strings.Builder
+	b.Grow(bcryptHashLen)
+	fmt.Fprintf(&b, "$2a$%02d$", cost)
+	for _, r := range rnd {
+		b.WriteByte(bcryptAlphabet[int(r)%len(bcryptAlphabet)]) // 256 is a multiple of 64: uniform
+	}
+	return b.String()
 }
 
 // newDummy returns the hash a login for a name with no usable password
@@ -324,22 +449,28 @@ func newDummy(time, memory uint32) string {
 	return encodeArgon2id(time, memory, salt, key)
 }
 
-// SpendVerification does one verification's work against the dummy hash and
-// discards the result. It blocks for a permit, so the work is always spent.
+// SpendVerification does one login verification's work, both kinds against
+// the dummies, and discards the result: what a login for a name with no user
+// costs. It blocks for a permit, so the work is always spent.
 func (h *Hasher) SpendVerification(plain string) {
 	if err := h.spendWithin(context.Background(), -1, plain); err != nil {
-		// verifyArgon2id fails only when the permit wait ends, and an
-		// unbounded wait on a background context never does: a broken
-		// invariant, not a refusal to report.
+		// The only error is the permit wait's, and an unbounded wait on a
+		// background context never ends early: a broken invariant, not a
+		// refusal to report.
 		panic(fmt.Sprintf("password: an unbounded permit wait ended: %v", err))
 	}
 }
 
-// spendWithin verifies plain against the dummy hash within wait; the only
-// error is the permit wait's.
+// spendWithin spends one login verification's work against the dummies
+// within wait; the only error is the permit wait's.
 func (h *Hasher) spendWithin(ctx context.Context, wait time.Duration, plain string) error {
-	_, err := h.verifyArgon2id(ctx, wait, h.dummy, plain)
-	return err
+	if err := h.acquire(ctx, wait); err != nil {
+		return err
+	}
+	defer h.release()
+	h.argonMatches(h.dummyParams, plain)
+	h.bcryptMatches(h.dummyBcrypt, plain)
+	return nil
 }
 
 // HasCredential reports whether a stored (algo, hash) pair is one Verify does
@@ -355,9 +486,18 @@ func HasCredential(algo, hash string) bool {
 	return false
 }
 
-// VerifyLogin is Verify for the login paths: when the account has no password
-// credential (no hash, an OAuth user, an unknown algorithm) it spends the
-// same work on the dummy hash before answering false.
+// VerifyLogin is Verify for the login paths. Whatever the account holds, it
+// spends one argon2id derivation and one bcrypt comparison (see the package
+// comment): the stored hash's own kind against the stored hash, the other
+// kind against the dummy, and both against the dummies when the account has
+// no usable hash (none, an OAuth user, an unknown algorithm, a hash that
+// does not parse). It does so on success too, so a correct password for an
+// account the caller then refuses (disabled, reset required) costs what a
+// wrong one does.
+//
+// What it cannot equalise: a stored hash whose own cost differs from the
+// dummy's (an argon2id row written before a cost change, a bcrypt row not
+// written at bcrypt.DefaultCost) costs its own parameters.
 func (h *Hasher) VerifyLogin(algo, hash, plain string) (ok, needsRehash bool) {
 	ok, needsRehash, err := h.VerifyLoginWithin(context.Background(), -1, algo, hash, plain)
 	if err != nil {
@@ -367,10 +507,35 @@ func (h *Hasher) VerifyLogin(algo, hash, plain string) (ok, needsRehash bool) {
 	return ok, needsRehash
 }
 
-// VerifyLoginWithin is VerifyLogin with a bounded wait for a permit.
+// VerifyLoginWithin is VerifyLogin with a bounded wait for the one permit
+// all of its work runs under; err is ErrBusy or the context's error, with
+// ok false and no work spent, whatever the account holds.
 func (h *Hasher) VerifyLoginWithin(ctx context.Context, wait time.Duration, algo, hash, plain string) (ok, needsRehash bool, err error) {
-	if !HasCredential(algo, hash) {
-		return false, false, h.spendWithin(ctx, wait, plain)
+	argon, bcryptHash := h.dummyParams, h.dummyBcrypt
+	kind := ""
+	if HasCredential(algo, hash) {
+		switch strings.ToLower(strings.TrimSpace(algo)) {
+		case AlgoArgon2id:
+			if p, parsed := parseArgon2id(hash); parsed {
+				argon, kind = p, AlgoArgon2id
+			}
+		default: // AlgoBcrypt, or "" (HasCredential admits only those besides argon2id)
+			if bcryptUsable(hash) {
+				bcryptHash, kind = hash, AlgoBcrypt
+			}
+		}
 	}
-	return h.VerifyWithin(ctx, wait, algo, hash, plain)
+	if err := h.acquire(ctx, wait); err != nil {
+		return false, false, err
+	}
+	defer h.release() // a derivation that panics must not keep its permit
+	argonOK := h.argonMatches(argon, plain)
+	bcryptOK := h.bcryptMatches(bcryptHash, plain)
+	switch kind {
+	case AlgoArgon2id:
+		return argonOK, false, nil
+	case AlgoBcrypt:
+		return bcryptOK, bcryptOK, nil
+	}
+	return false, false, nil
 }
