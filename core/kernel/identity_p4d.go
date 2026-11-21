@@ -162,15 +162,6 @@ func ensureBackupDir(fsys journal.FS, dir string) error {
 	return nil
 }
 
-// errRestoreBootNeedsDerivation refuses an identity boot that is also a restore
-// boot. P4d step 2 and 3 take a *restoreBoot derived from the P0a outcome (the
-// source's boundary, the pre-swap store's directory, the restore journal's
-// edges), and that derivation is not built: running them as a plain boot would
-// misread the restore (its line is never appended, so every revocation journaled
-// since the backup is lost to the hooks). Refusing is fail-closed, and no app
-// declares identity before F4-08's later slices.
-var errRestoreBootNeedsDerivation = errors.New("kernel: a restore boot cannot run the identity restore steps yet: the restore boot derivation is not built")
-
 // runIdentityP4d is the identity boot's P4d: steps 2 (the revocation re-apply),
 // 3 (the restore hooks) and 4 (auth's boot writes), through runP4dSteps. Any
 // error wraps errP4dRefuse and the boot fails: nothing is served.
@@ -184,8 +175,13 @@ func (k *Kernel) runIdentityP4d(ctx context.Context) error {
 	if id == nil || k.store == nil || k.store.db == nil || k.sec == nil || k.cfgBoot == nil || k.audit == nil {
 		return errors.New("kernel: identity: P4d needs the P4c stores, the audit store, the secret store and the config boot")
 	}
+	var restore *restoreBoot
 	if k.swap != nil && k.swap.out.Boot == restoreswap.BootRestore {
-		return fmt.Errorf("%w: %w", errP4dRefuse, errRestoreBootNeedsDerivation)
+		rb, err := k.deriveRestoreBoot(ctx)
+		if err != nil {
+			return fmt.Errorf("%w: %w", errP4dRefuse, err)
+		}
+		restore = rb
 	}
 	db := k.store.db
 	jfs, err := journalfs.From(ctx)
@@ -233,7 +229,7 @@ func (k *Kernel) runIdentityP4d(ctx context.Context) error {
 			Journal: comp, KS: bks, Keys: k.sec.store, Overrides: true, Install: install,
 			Identity: db.Admin().StoreIdentity(), DBPath: k.cfg.StoragePath, StateDir: k.cfg.StateDir,
 			BackupDir: backupDir, JournalPath: filepath.Join(backupDir, prefix+"revocations.journal"),
-			SwappedBack: k.swappedBackFor, Apply: reapplyApplyFor(stores), Clock: clock, Log: log, FS: jfs,
+			Restore: restore, SwappedBack: k.swappedBackFor, Apply: reapplyApplyFor(stores), Clock: clock, Log: log, FS: jfs,
 		},
 		OpenPrevious: func(ctx context.Context, dir string) (previousView, error) {
 			return db.Admin().OpenReadOnly(ctx, dir)
