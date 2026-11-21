@@ -27,10 +27,7 @@ import (
 // Before 2026-09-14 the refusal landed in Failed, so every seeding file with a
 // movement atom read as a cleanup failure.
 func TestStripMovementAtoms_ProtectedFileCountedAsSkippedNotFailed(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
+	ffmpeg := requireUsableFFmpeg(t)
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
