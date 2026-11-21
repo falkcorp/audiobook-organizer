@@ -753,6 +753,7 @@ func (s *Schedule) OnStartWhen(gate func() bool) *Schedule // the start trigger 
 func (s *Schedule) WindowWhen(gate func() bool) *Schedule  // closes window membership only; the interval keeps running (F5-14)
 func (s *Schedule) IntervalWhen(gate func() bool) *Schedule // closes the timing (Every/DailyAt/Cron) only, as a disabled key would; window and start keep running (F5-14)
 func (s *Schedule) Params(p any) *Schedule
+func (s *Schedule) ParamsFunc(fn func() any) *Schedule      // params built at each start (a config value read at fire time); not beside Params (F5-14)
 func (s *Schedule) Live() *Schedule
 func (s *Schedule) Preview() *Schedule
 func (s *Schedule) Missed(p MissedPolicy) *Schedule
@@ -835,7 +836,10 @@ HEAD ticked on `scheduled.library_scan.enabled` but admitted the task to the win
 `scan_on_startup`, so `modules.books.scheduler.schedules.library_scan` stays `enabled: true` and
 `modules.books.scan.periodic_enabled` (M2's target for `scheduled.library_scan.enabled`) is the timer's switch:
 `.IntervalWhen(periodic_enabled)`, `.WindowWhen(maintenance.library_scan && (periodic_enabled || scan.on_startup))`,
-`.OnStartWhen(scan.on_startup)`. A closed `IntervalWhen` is decide's disabled path for the timing alone (no clock
+`.OnStartWhen(scan.on_startup)`. A `TriggerFn` that reads config into its params at each fire →
+`.ParamsFunc(fn)`, built at each start on every trigger (`candidate_fetch`'s `MarkDirtyOnly` from
+`identification_advance_enabled`, `acoustid_online_lookup`'s `limit` from `maintenance.acoustid_nightly_limit`); a
+value that does not encode is a refused start (`ErrScheduleParams`: the clock advances alone, the error is counted). A closed `IntervalWhen` is decide's disabled path for the timing alone (no clock
 at first sight, `GateClosedAt` once, the re-open edge), not `When`'s gated fire; window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
 → `Window: "nightly", Order: idx`, and a definition that also has an interval keeps it beside the slot
 (`Every: d, Window: "nightly", Order: idx`; owner ruling 2026-11-20, "Allow both in core"). Under HEAD's
