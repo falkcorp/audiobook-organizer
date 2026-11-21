@@ -196,12 +196,10 @@ type Config struct {
 	// ResolveAtom is the app's atom table for stage 13: it resolves the
 	// rbac.LegacyAtom and rbac.LegacyCheck requirements of its legacy-mounted
 	// routes (httpapi.Stage13Options.ResolveAtom). nil refuses every such
-	// requirement. Read only when IdentityBoot is true. Kernel-only until B10
-	// plumbs it from app.Options.
+	// requirement. Read only when IdentityBoot is true. app.Options.ResolveAtom.
 	ResolveAtom httpapi.AtomResolver
 	// DisplayName is the app's human name (app.Options.DisplayName), reported
 	// by GET /api/core/v1/modules. Read only when IdentityBoot is true.
-	// Kernel-only until B10 plumbs it.
 	DisplayName string
 	// ArchivePrefix is app.Options.ArchivePrefix: the prefix of the app's
 	// backup archives and of its revocation journal's file name and header

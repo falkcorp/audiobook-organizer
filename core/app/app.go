@@ -370,6 +370,8 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		UIOptions:             opts.UIOptions,
 		FromRelease:           opts.FromRelease,
 		IdentityBoot:          opts.IdentityBoot,
+		ResolveAtom:           opts.ResolveAtom,
+		DisplayName:           opts.DisplayName,
 		ArchivePrefix:         opts.ArchivePrefix,
 		AuthOptions:           opts.Auth,
 		Authenticators:        slices.Clone(opts.Authenticators),
