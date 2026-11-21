@@ -1,7 +1,7 @@
 // file: web/src/services/api.ts
-// version: 2.211.0
+// version: 2.211.1
 // guid: a0b1c2d3-e4f5-6789-abcd-ef0123456789
-// last-edited: 2026-11-18
+// last-edited: 2026-11-21
 
 // API service layer for audiobook-organizer backend
 // Provides typed functions for all backend endpoints
@@ -6395,7 +6395,7 @@ export async function startReconcile(
     match_type?: ReconcileMatch['match_type'];
   }>
 ): Promise<Operation> {
-  return wrapTrigger('library.reconcile', async () => {
+  return wrapTrigger('reconcile.apply', async () => {
     const response = await apiFetch(`${API_BASE}/operations/reconcile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -6407,7 +6407,7 @@ export async function startReconcile(
 }
 
 export async function startReconcileScan(): Promise<Operation> {
-  return wrapTrigger('library.reconcile-scan', async () => {
+  return wrapTrigger('reconcile.scan', async () => {
     const response = await apiFetch(`${API_BASE}/operations/reconcile/scan`, {
       method: 'POST',
     });
@@ -7421,7 +7421,7 @@ function normalizeOpIdResponse(raw: unknown): Operation {
 // 15s background sweep — that wait is what made fast scans look invisible
 // after the user clicked "Re-scan" or "Re-embed All".
 export async function triggerDedupScan(): Promise<Operation> {
-  return wrapTrigger('dedup.scan', async () => {
+  return wrapTrigger('dedup.full-scan', async () => {
     const response = await apiFetch(`${API_BASE}/dedup/scan`, { method: 'POST' });
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger dedup scan');
     return normalizeOpIdResponse((await response.json()).data);
@@ -7460,7 +7460,7 @@ export interface DedupRunAllResult {
 }
 
 export async function triggerDedupLLM(): Promise<Operation> {
-  return wrapTrigger('dedup.scan-llm', async () => {
+  return wrapTrigger('dedup.llm-review', async () => {
     const response = await apiFetch(`${API_BASE}/dedup/scan-llm`, { method: 'POST' });
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger dedup LLM scan');
     return normalizeOpIdResponse((await response.json()).data);
@@ -7555,7 +7555,7 @@ export async function purgeStaleCandidates(): Promise<{ op_id: string }> {
 }
 
 export async function triggerEmbedScan(): Promise<Operation> {
-  return wrapTrigger('dedup.embed', async () => {
+  return wrapTrigger('dedup.embed-scan', async () => {
     const response = await apiFetch(`${API_BASE}/dedup/embed`, { method: 'POST' });
     if (!response.ok) throw await buildApiError(response, 'Failed to trigger embedding scan');
     return normalizeOpIdResponse((await response.json()).data);
