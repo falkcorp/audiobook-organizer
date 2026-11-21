@@ -185,13 +185,51 @@ func pointConfigAtStore(c *config.Config, work string) {
 // pointConfigAtStore names goes through its environment name
 // (cutover/testdata/rename_table.golden), to the same place. The store itself
 // is not edited. root_dir has no such name: it is class i, M2 leaves it in the
-// blob for M6, and the booted projection reads it from core.library.roots.
+// settings blob for M6, and the booted projection reads it from that blob
+// (pointBlobRootAtStore points it at the copy's library).
 func pointEnvAtStore(t *testing.T, work string) {
 	t.Helper()
 	var c config.Config
 	pointConfigAtStore(&c, work)
 	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", c.PlaylistDir)
 	t.Setenv("ABO_BOOKS_OPENLIBRARY_DUMP_DIR", c.OpenLibraryDumpDir)
+}
+
+// pointBlobRootAtStore is pointEnvAtStore for root_dir: the store copy's
+// settings blob row names the builder's scratch library, and a flipped boot
+// takes the root from that row (no operator layer sets it in production:
+// no --dir, no ABO_CORE_LIBRARY_ROOTS), so the copy's row is pointed at the
+// copy's library, the one place the boot may walk. It runs as the composed
+// boot's pre hook, on the copy only; the generated store is never written.
+func pointBlobRootAtStore(t *testing.T, work string) func(*database.PebbleStore) {
+	t.Helper()
+	return func(s *database.PebbleStore) {
+		row, err := s.GetSetting("config_blob")
+		require.NoError(t, err, "read the store copy's settings blob")
+		require.NotNil(t, row, "the store copy holds no settings blob: the corpus stores its root there")
+		var blob map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(row.Value), &blob), "the settings blob is not a JSON object")
+		require.Contains(t, blob, "root_dir", "the corpus' settings blob holds no root_dir")
+		root, err := json.Marshal(filepath.Join(work, "library"))
+		require.NoError(t, err)
+		blob["root_dir"] = root
+		out, err := json.Marshal(blob)
+		require.NoError(t, err)
+		require.NoError(t, s.SetSetting("config_blob", string(out), row.Type, row.IsSecret))
+	}
+}
+
+// storedBlobRoot is the root_dir the booted store's settings blob holds.
+func storedBlobRoot(t *testing.T, s *database.PebbleStore) string {
+	t.Helper()
+	row, err := s.GetSetting("config_blob")
+	require.NoError(t, err)
+	require.NotNil(t, row, "the booted store holds no settings blob")
+	var blob struct {
+		RootDir string `json:"root_dir"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(row.Value), &blob))
+	return blob.RootDir
 }
 
 // shapedBootEnv is the shaped boot's environment-authoritative config: the
@@ -227,7 +265,7 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(stateDir), key, 0o600))
 	}
 	start := time.Now()
-	r := runComposedIn(t, stateDir, edit, nil, opt, nil)
+	r := runComposedIn(t, stateDir, edit, pointBlobRootAtStore(t, work), opt, nil)
 	var ready bool
 	for deadline := start.Add(wait); ; time.Sleep(50 * time.Millisecond) {
 		var err error
@@ -240,9 +278,19 @@ func bootShapedStore(t *testing.T, work string, key []byte, wait time.Duration) 
 	}
 	seconds := time.Since(start).Seconds()
 	snap := config.Snapshot()
+	// The root is the one the settings blob holds, with no environment
+	// naming it: the flip leaves root_dir in the blob until M6 (a booted root
+	// read from anywhere else, or empty, is the 2026-11-21 rehearsal's lost
+	// root). Every path, the root among them, stays inside the store copy;
+	// each is checked, so one red does not hide another.
+	assert.Equal(t, storedBlobRoot(t, r.store), snap.RootDir, "the booted root is not the settings blob's root_dir")
 	for name, path := range map[string]string{"database_path": snap.DatabasePath, "root_dir": snap.RootDir, "playlist_dir": snap.PlaylistDir,
 		"openlibrary_dump_dir": snap.OpenLibraryDumpDir} {
-		require.Truef(t, strings.HasPrefix(path, work+string(filepath.Separator)), "%s %q is outside the store copy %q", name, path, work)
+		assert.Truef(t, strings.HasPrefix(path, work+string(filepath.Separator)), "%s %q is outside the store copy %q", name, path, work)
+	}
+	if t.Failed() {
+		require.NoError(t, r.stop())
+		t.FailNow()
 	}
 	phases := shapedBootPhases(t, r.app)
 	require.NoError(t, r.stop())
