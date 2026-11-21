@@ -457,6 +457,7 @@ func (e *executor) stageStart(ctx context.Context, b *storage.Batch, p prepared)
 	if err := e.runs.Insert(ctx, b, rec); err != nil {
 		return tasks.RunRef{}, err
 	}
+	e.emitRunChanged(ctx, rec)
 	if idemKey != nil {
 		if err := e.stageIdem(b, idemKey, id); err != nil {
 			return tasks.RunRef{}, err
@@ -537,6 +538,7 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 			if err := e.runs.AppendEvent(ctx, b, cur.ID, next.Seq.Event, ev); err != nil {
 				return tasks.RunRef{}, false, err
 			}
+			e.emitRunChanged(ctx, next)
 		}
 		return tasks.RunRef{ID: cur.ID, Existing: true}, true, nil
 	}

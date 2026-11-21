@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/internal/sdnotify"
 	"github.com/falkcorp/mediacore/metrics"
@@ -145,6 +146,21 @@ type Options struct {
 	// OnTerminal is called inside every terminal transition's batch
 	// (5T.4 step 3, COR2-3); its error aborts that commit.
 	OnTerminal func(ctx context.Context, b *storage.Batch, v tasks.RunView) error
+
+	// Events is where the executor publishes core.task.run-changed.v1,
+	// core.task.log-appended.v1 and core.task.finished.v1 after each run
+	// commit (F5-18 slice E6b). It must publish as core: the kernel passes
+	// its *events.Bus, or bus.Scope("core"); a Scope bound to a module is
+	// refused by the bus, because core declares these topics. Nil publishes
+	// nothing and costs nothing: nothing wires it before F4-08, and a nil
+	// *events.Bus or zero events.Scope is a no-op too. Publication never
+	// holds an executor lock and never blocks a commit (see publish.go).
+	Events events.Publisher
+
+	// sink replaces the bus as the destination of every emission: a test seam
+	// (the executor package's tests read each emission with its run, kind and
+	// event sequence). It is called from the drainer goroutine only.
+	sink func(emission)
 
 	// Metrics is the core ops scope (<ns>.ops); InstrumentsOff creates no
 	// instrument (ABO before F5, 05-tasks §5T.11). A nil scope with
