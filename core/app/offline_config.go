@@ -165,4 +165,3 @@ func writeRetiredReport(w io.Writer, uses []config.RetiredUse) error {
 	_, err := io.WriteString(w, b.String())
 	return err
 }
-
