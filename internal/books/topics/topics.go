@@ -151,10 +151,14 @@ type BookUnquarantinedV1 struct {
 // The typed topics. Functions, not package variables (R5: no mutable globals).
 
 // BookImported is the typed topic of books.book.imported.v1.
-func BookImported() events.Topic[BookImportedV1] { return events.NewTopic[BookImportedV1](BookImportedName) }
+func BookImported() events.Topic[BookImportedV1] {
+	return events.NewTopic[BookImportedV1](BookImportedName)
+}
 
 // BookDeleted is the typed topic of books.book.deleted.v1.
-func BookDeleted() events.Topic[BookDeletedV1] { return events.NewTopic[BookDeletedV1](BookDeletedName) }
+func BookDeleted() events.Topic[BookDeletedV1] {
+	return events.NewTopic[BookDeletedV1](BookDeletedName)
+}
 
 // MetadataApplied is the typed topic of books.metadata.applied.v1.
 func MetadataApplied() events.Topic[MetadataAppliedV1] {
@@ -162,7 +166,9 @@ func MetadataApplied() events.Topic[MetadataAppliedV1] {
 }
 
 // TagsWritten is the typed topic of books.tags.written.v1.
-func TagsWritten() events.Topic[TagsWrittenV1] { return events.NewTopic[TagsWrittenV1](TagsWrittenName) }
+func TagsWritten() events.Topic[TagsWrittenV1] {
+	return events.NewTopic[TagsWrittenV1](TagsWrittenName)
+}
 
 // FileOrganized is the typed topic of books.file.organized.v1.
 func FileOrganized() events.Topic[FileOrganizedV1] {
@@ -175,7 +181,9 @@ func DedupDetected() events.Topic[DedupDetectedV1] {
 }
 
 // DedupMerged is the typed topic of books.dedup.merged.v1.
-func DedupMerged() events.Topic[DedupMergedV1] { return events.NewTopic[DedupMergedV1](DedupMergedName) }
+func DedupMerged() events.Topic[DedupMergedV1] {
+	return events.NewTopic[DedupMergedV1](DedupMergedName)
+}
 
 // CoverChanged is the typed topic of books.cover.changed.v1.
 func CoverChanged() events.Topic[CoverChangedV1] {

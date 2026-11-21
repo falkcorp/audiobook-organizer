@@ -218,7 +218,11 @@ func RunBooksIndexRebuiltAtCutover(t *testing.T, o Oracle, regex func(text strin
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	t.Cleanup(func() { _ = ix.Close() })
+	t.Cleanup(func() {
+		if err := ix.Close(); err != nil {
+			t.Errorf("close the opened index: %v", err)
+		}
+	})
 
 	want := IndexDir(dbParent, searchindex.Module, searchindex.Name)
 	if _, err := os.Stat(want); err != nil {
