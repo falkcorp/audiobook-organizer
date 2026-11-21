@@ -321,6 +321,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if legacy == (storage.LegacyRange{}) {
 		return nil
 	}
+	// The memdb sort indexes and the counts-cache interval are read once, as
+	// the store opens. cmd's initConfig set them from the operator layers;
+	// the booted store's effective values (a stored one included) win here.
+	if acc := r.Deps().Config; acc != nil {
+		idx, interval, err := storeTunablesFrom(acc)
+		if err != nil {
+			return err
+		}
+		ApplyStoreTunables(idx, interval)
+	}
 	store, err := database.NewBooksStore(legacy)
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
