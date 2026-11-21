@@ -172,6 +172,12 @@ func RestoreOffline(ctx context.Context, c Config, req RestoreOfflineRequest) (r
 		if escape, err = sw.CheckOffline(c.StoragePath, kind); err != nil {
 			return res, fmt.Errorf("kernel: %w", err)
 		}
+		// Under the exclusive swap lock, with the slot check passed, no
+		// stager runs and no intent is about to link: what an earlier
+		// restore staged and never linked an intent for (one killed before
+		// Stage, or a killed escape) is found here, before this restore
+		// stages anything or is refused for any later reason.
+		res.Warnings = append(res.Warnings, k.sweepOrphanStaging(fs, req)...)
 	}
 	cps, err := storage.CheckpointsOf(storage.FSOf(fs), c.StoragePath, "", k.coreLog("storage"))
 	if err != nil {
@@ -404,7 +410,7 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 		src.Kind, src.Store, src.HooksOwed, src.InstallID = restorejournal.KindCheckpoint, cp.Store(), cp.HooksOwed, cp.InstallID
 		for _, f := range cp.StateFiles {
 			staged := restorejournal.StagingDest(k.cfg.StateDir, dbPath, id, f.Path, f.Label)
-			if err := mkdirPrivate(fs, filepath.Dir(staged)); err != nil {
+			if err := mkdirStaging(fs, filepath.Dir(staged)); err != nil {
 				return src, nil, err
 			}
 			if err := copyVerified(fs, cp.StateCopy(f.Label), staged, f.SHA256); err != nil {
@@ -415,7 +421,7 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 		return src, nil, nil
 	}
 	store := filepath.Join(restorejournal.StagingDir(dbPath, id), "db")
-	if err := mkdirPrivate(fs, store); err != nil {
+	if err := mkdirStaging(fs, store); err != nil {
 		return src, nil, err
 	}
 	archiveID, err := k.cfg.ArchiveExtract(ctx, req.Archive, store)
@@ -429,7 +435,7 @@ func (k *Kernel) stageSource(ctx context.Context, fs vfs.FS, cp storage.Checkpoi
 	files, warnings := k.archiveStateFiles(archiveID, req)
 	for _, f := range files {
 		staged := restorejournal.StagingDest(k.cfg.StateDir, dbPath, id, f.to, f.label)
-		if err := mkdirPrivate(fs, filepath.Dir(staged)); err != nil {
+		if err := mkdirStaging(fs, filepath.Dir(staged)); err != nil {
 			return src, nil, err
 		}
 		if err := copyOperatorFile(fs, f.from, staged, f.max, f.private); err != nil {
@@ -605,6 +611,40 @@ func mkdirPrivate(fs vfs.FS, dir string) error {
 	return restorejournal.ChmodFS(fs, dir, 0o700)
 }
 
+// mkdirStaging creates dir, a directory inside a restore's private
+// .mediacore-restore/<id>/ (restorejournal.StagingDest, StagingDir), and
+// its missing parents, mode 0700 at every level from the .mediacore-restore
+// element down, and fsyncs every level from the directory that holds that
+// element (restorejournal.MkdirAllSynced, the swap's own durableRoot rule).
+// Once step c set a live state file aside, step d renames the staged copy
+// onto it; a copy whose directory chain a power loss dropped is gone, step
+// d's rename finds neither name and moves nothing, and the restore would
+// finish with the state file missing.
+func mkdirStaging(fs vfs.FS, dir string) error {
+	dir = filepath.Clean(dir)
+	aside := ""
+	for d := dir; filepath.Dir(d) != d; d = filepath.Dir(d) {
+		if filepath.Base(d) == restorejournal.AsideDirName {
+			aside = d
+			break
+		}
+	}
+	if aside == "" {
+		return fmt.Errorf("kernel: %s is not inside a restore's %s directory", dir, restorejournal.AsideDirName)
+	}
+	if err := restorejournal.MkdirAllSynced(fs, filepath.Dir(aside), dir); err != nil {
+		return fmt.Errorf("kernel: create %s: %w", dir, err)
+	}
+	for d := dir; ; d = filepath.Dir(d) {
+		if err := restorejournal.ChmodFS(fs, d, 0o700); err != nil {
+			return err
+		}
+		if d == aside {
+			return nil
+		}
+	}
+}
+
 // chmodTree makes every directory under root 0700 and every file 0600
 // (05-storage §5S.3.12 "Scratch copies").
 func chmodTree(fs vfs.FS, root string) error {
@@ -641,7 +681,11 @@ func copyVerified(fs vfs.FS, src, dst, want string) (err error) {
 		return fmt.Errorf("kernel: state file copy %s: %w", src, err)
 	}
 	defer func() { _ = in.Close() }() // read side
-	out, err := fs.Create(dst, vfs.WriteCategoryUnspecified)
+	// 0600 from the moment it exists (createPrivate), not only once the
+	// copy is verified: a state file's copy (the encryption key among them)
+	// that a kill leaves for sweepOrphanStaging is never readable by
+	// another user meanwhile.
+	out, err := createPrivate(fs, dst)
 	if err != nil {
 		return fmt.Errorf("kernel: stage %s: %w", dst, err)
 	}

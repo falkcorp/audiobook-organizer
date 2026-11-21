@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,6 +176,10 @@ func offlineRestoreKillMatrix(t *testing.T, kh killHost) {
 			t.Errorf("kill %d at %s: cave %q, key %q, slot %+v, boot errors %v; want both the original's or both the checkpoint's, slot empty",
 				i, label, cave, key, st, bootErrs)
 		}
+		// The operator reruns restore-offline, restored or refused: the
+		// staging the killed run left with no intent linked is swept.
+		_ = restore(h, name)(h.ctx)
+		h.assertNoOrphanStaging(fmt.Sprintf("kill %d at %s, then a rerun", i, label))
 	}
 }
 
@@ -260,6 +265,7 @@ func escapeKillMatrix(t *testing.T, kh killHost) {
 				t.Errorf("kill %d at %s: boot = %v; rerunning the escape = %v, want it to finish", i, label, bootErr, err)
 				continue
 			}
+			h.assertNoOrphanStaging(fmt.Sprintf("kill %d at %s, then the escape's rerun", i, label))
 		}
 		cave := h.readCave()
 		key, _ := os.ReadFile(h.keyFile())
