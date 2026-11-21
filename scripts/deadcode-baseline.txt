@@ -931,7 +931,9 @@ internal/books/topics.ScanCompleted
 internal/books/topics.Specs
 internal/books/topics.TagsWritten
 internal/books/topics.notifiable
+internal/cfaccess.ClientAddrTrust.AccessClientAddr
 internal/cfaccess.Extension
+internal/cfaccess.connectingIP
 internal/cfaccess.extension.Authenticate
 internal/cfaccess.extension.Name
 internal/cfaccess.extension.authenticate
