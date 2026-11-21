@@ -11,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/events"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -87,4 +89,46 @@ func TestRegistrar_TopicsAndSubscribeAfterClose(t *testing.T) {
 func TestDeps_ZeroEventsScopeDropsPublishes(t *testing.T) {
 	var d Deps
 	events.Publish(d.Events, context.Background(), events.NewTopic[signalLit]("batcave.signal.lit.v1"), "", signalLit{Reason: "bat signal"})
+}
+
+// compatStub is the handle the kernel's Compat hook returns.
+type compatStub struct{ auth.Compat }
+
+// TestRegistrar_AuthMethodSetsAuthCompatOnDeps: with RegistrarConfig.Compat
+// set, the first AuthMethod gives the registrar's Deps an AuthCompat built from
+// that spec, and a second one does not replace it. Without the hook, or before
+// any AuthMethod, AuthCompat is nil, and a refused spec (checked before the
+// hook) gets none.
+func TestRegistrar_AuthMethodSetsAuthCompatOnDeps(t *testing.T) {
+	var specs []auth.MethodSpec
+	handle := compatStub{}
+	router := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
+	build := func(compat func(auth.MethodSpec) auth.Compat) *Registrar {
+		return NewRegistrar(RegistrarConfig{Context: t.Context(), Deps: Deps{Module: "batcave"},
+			HTTP: router.ModuleGroup("batcave"), Compat: compat})
+	}
+	hook := func(s auth.MethodSpec) auth.Compat { specs = append(specs, s); return handle }
+
+	r := build(hook)
+	if r.Deps().AuthCompat != nil {
+		t.Fatal("AuthCompat is set before any AuthMethod")
+	}
+	r.AuthMethod(auth.MethodSpec{Method: "batcave.cowl", Interactive: true}) // refused: Interactive
+	if r.Deps().AuthCompat != nil || len(specs) != 0 {
+		t.Fatalf("a refused spec reached the hook: compat=%v specs=%v", r.Deps().AuthCompat, specs)
+	}
+	r.AuthMethod(auth.MethodSpec{Method: "batcave.signal"})
+	if r.Deps().AuthCompat != handle {
+		t.Fatalf("AuthCompat = %v, want the hook's handle", r.Deps().AuthCompat)
+	}
+	r.AuthMethod(auth.MethodSpec{Method: "batcave.beacon"})
+	if len(specs) != 1 || specs[0].Method != "batcave.signal" {
+		t.Errorf("hook calls = %v, want only the first method", specs)
+	}
+
+	bare := build(nil)
+	bare.AuthMethod(auth.MethodSpec{Method: "batcave.signal"})
+	if bare.Deps().AuthCompat != nil {
+		t.Error("AuthCompat is set with no Compat hook")
+	}
 }

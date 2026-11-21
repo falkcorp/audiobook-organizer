@@ -35,8 +35,9 @@ type Registrar struct {
 	http          *httpapi.Group
 	legacyAuthGin bool
 	settings      map[config.Path]any
+	compat        func(auth.MethodSpec) auth.Compat
 
-	mu         sync.Mutex // guards closed and problems against a late call from another goroutine
+	mu         sync.Mutex // guards closed, problems and deps.AuthCompat against a late call from another goroutine
 	closed     bool
 	problems   []Problem
 	rec        Registrations
@@ -60,6 +61,15 @@ type RegistrarConfig struct {
 	// AfterClose, when set, receives each ProblemRegistrarClosed recorded
 	// after Close, which no Err call reads any more: the kernel logs it.
 	AfterClose func(Problem)
+	// Compat returns the auth.Compat handle bound to a method this module
+	// registered with Registrar.AuthMethod (the kernel hands the specs to auth
+	// at P7, so the handle it returns here is late-bound: it refuses until
+	// then). Registrar.Deps().AuthCompat is it for the module's first
+	// registered method from that call on, and nil before it, so the field is
+	// non-nil only for a module that registered one (SEC-1). nil: no module
+	// gets a handle (app.Describe, an app that did not declare the identity
+	// flip).
+	Compat func(auth.MethodSpec) auth.Compat
 }
 
 // Registrations is what one module recorded. Kernel-only: the kernel reads
@@ -94,7 +104,7 @@ func NewRegistrar(c RegistrarConfig) *Registrar {
 		ctx = context.Background()
 	}
 	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP, legacyAuthGin: c.LegacyAuthGin,
-		settings: c.Settings, afterClose: c.AfterClose}
+		settings: c.Settings, afterClose: c.AfterClose, compat: c.Compat}
 }
 
 // Close ends registration and returns what was recorded. Kernel-only. It is
@@ -147,9 +157,14 @@ func (r *Registrar) problem(kind ProblemKind, format string, args ...any) {
 func (r *Registrar) Context() context.Context { return r.ctx }
 
 // Deps returns the module-scoped dependency handles (see Deps for which are
-// nil: Config, AuthCompat and, until F4-08 wires the identity services, Auth,
-// AuthAdmin and Audit).
-func (r *Registrar) Deps() Deps { return r.deps }
+// nil: Config, AuthCompat and, on an app that did not declare the identity
+// flip, Auth, AuthAdmin and Audit). AuthCompat is set by the first AuthMethod
+// call, so a Deps read before it has none.
+func (r *Registrar) Deps() Deps {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.deps
+}
 
 // HTTP returns the module's route group rooted at /api/<ID>/v1 (05-http-api
 // §3.1). Register routes with httpapi.Handle(r.HTTP(), httpapi.Route{...},
@@ -210,6 +225,9 @@ func (r *Registrar) AuthMethod(spec auth.MethodSpec) {
 			return
 		}
 		r.rec.AuthMethods = append(r.rec.AuthMethods, spec)
+		if r.deps.AuthCompat == nil && r.compat != nil {
+			r.deps.AuthCompat = r.compat(spec)
+		}
 	})
 }
 
