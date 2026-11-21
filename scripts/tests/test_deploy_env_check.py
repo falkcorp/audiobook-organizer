@@ -117,13 +117,21 @@ class RetiredInTheUnitTemplate(Tmp):
         self.assertIn("WHISPER_REMOTE_URL", err)
 
     def test_the_real_unit_template_is_scanned_by_default(self):
+        # The subject is a name the real template sets today, read from it, so
+        # the test keeps proving the default scan whichever names the template
+        # carries: with no --unit-template the checker must still find it, in
+        # the real file and not in the local.conf (which sets nothing listed).
+        names = chk.env_names(chk.UNIT_TEMPLATE.read_text(encoding="utf-8"))
+        self.assertTrue(names, f"{chk.UNIT_TEMPLATE} sets no Environment= name to test with")
+        subject = names[0]
         out, err = io.StringIO(), io.StringIO()
-        lp = self.write("retired.txt", LIST_ENFORCED + "DATABASE_PATH\trefuse\t-\n")
+        lp = self.write("retired.txt", LIST_ENFORCED + f"{subject}\trefuse\t-\n")
         c = self.write("local.conf", "[Service]\nEnvironment=BATCAVE=1\n")
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = chk.main(["retired", "--local-conf", str(c), "--list", str(lp)], environ={})
         self.assertEqual(rc, 1, err.getvalue())
-        self.assertIn("DATABASE_PATH", err.getvalue())
+        self.assertIn(f"{chk.UNIT_TEMPLATE}: {subject}:", err.getvalue())
+        self.assertNotIn(f"{c}:", err.getvalue())
 
 
 class Retired(Tmp):
