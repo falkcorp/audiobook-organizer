@@ -108,7 +108,7 @@ func TestReapply_TheJournalsCauseGoesToTheLog(t *testing.T) {
 		t.Fatalf("broken %v, health %v: want a broken journal", res.Broken, fx.health())
 	}
 	var brokenLog string
-	for _, l := range strings.Split(logs.String(), "\n") {
+	for l := range strings.SplitSeq(logs.String(), "\n") {
 		if strings.Contains(l, "the revocation journal is broken\"") {
 			brokenLog = l
 		}
