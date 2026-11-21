@@ -40,7 +40,7 @@ func scheduleKeys() map[string]tasks.ScheduleConfig {
 		"core.integrations.schedules.health":      every(5 * time.Minute),
 		"core.library.schedules.quarantine_prune": every(24 * time.Hour),
 		"core.library.schedules.transfer_recover": every(24 * time.Hour),
-		"core.log.schedules.journal_prune":        every(24 * time.Hour),
+		"core.log.schedules.journal_prune":        {Enabled: true, Every: config.Duration(168 * time.Hour), Window: "nightly", Order: 9},
 		"core.tasks.schedules.prune":              every(24 * time.Hour),
 		"core.updater.schedules.check":            every(time.Hour),
 		"core.storage.schedules.compact":          {Enabled: true, Window: "nightly"},

@@ -321,7 +321,6 @@ type maintenanceSettings struct {
 	LibrarySizeRefresh   bool `json:"library_size_refresh"`
 	MetadataRefresh      bool `json:"metadata_refresh"`
 	PurgeDeleted         bool `json:"purge_deleted"`
-	PurgeOldLogs         bool `json:"purge_old_logs"`
 	Reconcile            bool `json:"reconcile"`
 	SeriesPrune          bool `json:"series_prune"`
 	TombstoneCleanup     bool `json:"tombstone_cleanup"`
@@ -755,7 +754,6 @@ func maintenanceDefaults() maintenanceSettings {
 		LibrarySizeRefresh:   true,
 		MetadataRefresh:      false,
 		PurgeDeleted:         true,
-		PurgeOldLogs:         true,
 		Reconcile:            true,
 		SeriesPrune:          true,
 		TombstoneCleanup:     true,

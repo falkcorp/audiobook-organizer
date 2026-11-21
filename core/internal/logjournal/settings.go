@@ -30,11 +30,17 @@ type Settings struct {
 	// QueueSize is the tap's queue; a full queue drops the newest records and
 	// counts them under mediacore_log_dropped_total{sink="journal"}.
 	QueueSize int `json:"queue_size" reload:"restart" schema:"minimum=64"`
+	// PruneInWindow lets core.log.journal.prune run in the maintenance window
+	// that core.log.schedules.journal_prune names, besides its interval. Off,
+	// only the interval runs it. The kernel's default is on, as HEAD's
+	// nightly window ran its log purge.
+	PruneInWindow bool `json:"prune_in_window"`
 }
 
 // Schedules is core.log.schedules (05-logging §8, R2-7): the journal's one
 // scheduled task, whose key the prune task reads. The kernel's default is
-// every 24 hours.
+// every 168 hours and a member of the nightly window (HEAD's log purge: a
+// weekly timer, and a nightly window run that Settings.PruneInWindow gates).
 type Schedules struct {
 	JournalPrune tasks.ScheduleConfig `json:"journal_prune"`
 }
