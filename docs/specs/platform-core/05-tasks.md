@@ -731,8 +731,11 @@ func ScheduleFromConfig(key string) *Schedule
 // true it sets one of Every, DailyAt, Cron and Window, or Every and Window
 // together (owner ruling 2026-11-20): such a kind is polled on its interval
 // and is also a member of the window, and fires on whichever comes due. A
-// fire that finds a run of the kind active folds into it, so one due moment
-// never starts two runs. Window with DailyAt or Cron is refused.
+// fire that finds a run of the kind active folds into it under the kind's
+// DedupePolicy, so the default policy starts one run for one due moment. A
+// DedupePolicy.Key kind never folds into a running run (the start queues
+// behind it), and a run that has finished does not suppress the other
+// trigger. Window with DailyAt or Cron is refused.
 type ScheduleConfig struct {
 	Enabled bool          `json:"enabled"`
 	Every   config.Duration `json:"every,omitempty"`  // >= core.tasks.schedule_poll; a string such as "24h" in defaults and files (05-config)
@@ -824,10 +827,10 @@ default; `RunOnStart` → `.OnStart()`; `IsEnabled` → the key's `enabled` (or 
 are not schedule settings); window membership (`maintenanceOrder`, `internal/scheduler/scheduler.go:197-246`)
 → `Window: "nightly", Order: idx`, and a definition that also has an interval keeps it beside the slot
 (`Every: d, Window: "nightly", Order: idx`; owner ruling 2026-11-20, "Allow both in core"). Under HEAD's
-shipped defaults five definitions tick on an interval and sit in `maintenanceOrder` (`tombstone_cleanup`,
-`reports_prune`, `purge_deleted`, `cleanup_activity_log`, `ai_journal_prune`) and HEAD fires each on
-either; its window skips a task whose op is active (`isTaskRunning`) and leaves the interval clock alone,
-which the fold below reproduces. The window does not stamp a member's interval clock. A window member's
+shipped defaults six definitions tick on an interval and sit in `maintenanceOrder` (`tombstone_cleanup`,
+`reports_prune`, `purge_deleted`, `cleanup_activity_log`, `ai_journal_prune` and `purge_old_logs`, 168 h,
+order 9) and HEAD fires each on either; its window skips a task whose op is active (`isTaskRunning`) and
+leaves the interval clock alone, which the fold below reproduces under the default `DedupePolicy`. The window does not stamp a member's interval clock. A window member's
 `.OnStart()` fires at boot like any other (HEAD's `RunOnStart` on `temp_file_cleanup` and `purge_deleted`). `transcode` (enqueues nothing) is deleted; `batch_poller` becomes the
 schedule of the core kind `core.ai.batch-poll` ([05-ai](05-ai.md)), registered from F5 by its minimal owner
 registration (5T.8.2) and extended by the AI flip F7. The definitions' bodies and these
@@ -2558,9 +2561,11 @@ an approve with no caller identity is refused.
 
 F5-14 pre-slice (2026-11-20, owner ruling "Allow both in core"): 5T.3.8's `ScheduleConfig` accepts `Every`
 together with `Window`. Such a kind is polled on its interval and is also a member of the window, so it fires
-on whichever comes due, and a start that finds a run of the kind active folds into it (the existing fold), so
-one due moment never starts two runs; `Window` with `DailyAt` or `Cron` stays refused. The conversion rule for
-window membership keeps a definition's interval beside its slot (`Every`, `Window`, `Order`), because HEAD's
-`tombstone_cleanup`, `reports_prune`, `purge_deleted`, `cleanup_activity_log` and `ai_journal_prune` fire on
-both under the shipped defaults, and a window member's `OnStart` fires at boot (HEAD's `temp_file_cleanup`,
+on whichever comes due, and a start that finds a run of the kind active folds into it under the kind's
+`DedupePolicy` (the existing fold), so the default policy starts one run for one due moment; a `Key` policy never
+folds into a running run and a finished run does not suppress the other trigger; `Window` with `DailyAt` or
+`Cron` stays refused. The conversion rule for window membership keeps a definition's interval beside its slot
+(`Every`, `Window`, `Order`), because HEAD's `tombstone_cleanup`, `reports_prune`, `purge_deleted`,
+`cleanup_activity_log`, `ai_journal_prune` and `purge_old_logs` fire on both under the shipped defaults (the
+pre-slice text listed five and missed `purge_old_logs`; corrected by F5-14a), and a window member's `OnStart` fires at boot (HEAD's `temp_file_cleanup`,
 `purge_deleted`). Recorded in `docs/agent-tasks/platform-core/seams.d/F5-14.md`.

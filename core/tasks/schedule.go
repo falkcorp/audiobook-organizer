@@ -72,8 +72,11 @@ func checkScheduleKey(key string) error {
 // and Window together. With both, the kind fires on its interval and again as
 // a member of the window, as HEAD's TaskDefinitions that tick on an interval
 // and also sit in maintenanceOrder did (owner ruling 2026-11-20, F5-14 pre-slice):
-// a fire that finds a run of the kind active folds into it, so the two never
-// start two runs for one due moment.
+// a fire that finds a run of the kind active folds into it under the kind's
+// DedupePolicy, so the default policy starts one run for one due moment. Two
+// cases still start a second run: a DedupePolicy.Key kind never folds into a
+// running run (the start queues behind it), and a run that has already finished
+// does not suppress the other trigger (HEAD's window skips only an active run).
 type ScheduleConfig struct {
 	Enabled bool            `json:"enabled"`
 	Every   config.Duration `json:"every,omitempty"`    // >= core.tasks.schedule_poll; a string such as "24h" in defaults and files (05-config)
