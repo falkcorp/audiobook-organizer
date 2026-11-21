@@ -9,8 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
-	"net/http"
 	"net/netip"
 	"strings"
 	"sync"
@@ -18,7 +18,6 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
-	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
@@ -66,7 +65,12 @@ func (k *Kernel) buildIdentityServices(ctx context.Context) error {
 		Settings:      id.settings,
 		OnRoleChange:  publishRBACChanged(ke.bus),
 		OnInvalidated: publishPrincipalInvalidated(ke.bus),
-		Client:        clientInfo, Reach: k.reach, StateFiles: id.stateFiles,
+		// Client is nil on purpose: auth then builds the connection from the TCP
+		// peer and treats every forwarding header as not-direct, so the loopback
+		// exceptions fail closed. httpapi's trusted-proxy-aware resolver is the
+		// route wiring's (B4), and a resolver looser than that fallback would
+		// widen them.
+		Reach: k.reach, StateFiles: id.stateFiles,
 		Clock:   bootClock(ctx),
 		RBACLog: k.coreLog("rbac"), AuthLog: k.coreLog("auth"),
 		RBACMetrics: rbacSc, AuthMetrics: authSc,
@@ -132,40 +136,6 @@ func listenIsLoopback(listen string) bool {
 	return a.IsLoopback()
 }
 
-// clientInfo is auth.Deps.Client: the connection's ClientInfo from what stage 0
-// resolved. Addr is the address stage 0 attributed (through a trusted proxy's
-// client-IP header) or the TCP peer; TrustedProxy is whether it was
-// attributed. HTTPS is the connection's own TLS and never a forwarded header,
-// and OnLink is false: the perimeter's HTTPS rule for a TLS-terminating proxy
-// and the on-link prefix check are the route wiring's (B4), which owns the
-// session cookie that reads them.
-func clientInfo(r *http.Request) auth.ClientInfo {
-	peer := peerAddr(r.RemoteAddr)
-	addr, attributed := httpapi.ClientAddrFrom(r.Context())
-	if !addr.IsValid() {
-		addr = peer
-	}
-	return auth.ClientInfo{
-		Addr: addr, Peer: peer, UserAgent: r.UserAgent(),
-		Forwarded:    r.Header.Get("Forwarded") != "" || r.Header.Get("X-Forwarded-For") != "" || r.Header.Get("X-Real-Ip") != "",
-		TrustedProxy: attributed, HTTPS: r.TLS != nil,
-	}
-}
-
-// peerAddr is the TCP peer's address, without its port or zone; the zero
-// address when it does not parse.
-func peerAddr(remote string) netip.Addr {
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		host = remote
-	}
-	a, err := netip.ParseAddr(host)
-	if err != nil {
-		return netip.Addr{}
-	}
-	return a.WithZone("")
-}
-
 // ErrAuditNamespace refuses a module's audit event whose action is outside the
 // module's namespace "<ID>." (Deps.Audit, 05-rbac §3.5).
 var ErrAuditNamespace = errors.New("kernel: audit action outside the module's namespace")
@@ -176,12 +146,14 @@ var ErrAuditNamespace = errors.New("kernel: audit action outside the module's na
 // context carries (audit.WithActor, bound by stage 12): an Event.Actor the
 // module set is dropped, so a module cannot record an event as another user.
 type moduleAudit struct {
+	id     module.ID
 	prefix string
 	inner  audit.Logger
+	log    *slog.Logger
 }
 
-func newModuleAudit(id module.ID, inner audit.Logger) audit.Logger {
-	return moduleAudit{prefix: string(id) + ".", inner: inner}
+func newModuleAudit(id module.ID, inner audit.Logger, log *slog.Logger) audit.Logger {
+	return moduleAudit{id: id, prefix: string(id) + ".", inner: inner, log: log}
 }
 
 func (m moduleAudit) scoped(e audit.Event) (audit.Event, error) {
@@ -208,11 +180,12 @@ func (m moduleAudit) RecordIn(ctx context.Context, b *storage.Batch, e audit.Eve
 	return m.inner.RecordIn(ctx, b, e)
 }
 
-// Emit drops an event outside the module's namespace: it returns nothing, and
-// the writer counts only what it queued.
+// Emit drops an event outside the module's namespace: it returns nothing, so
+// the drop is logged, by module and action only (no event payload).
 func (m moduleAudit) Emit(ctx context.Context, e audit.Event) {
 	e, err := m.scoped(e)
 	if err != nil {
+		m.log.WarnContext(ctx, "kernel: a module's audit event outside its namespace was dropped", "module", string(m.id), "action", e.Action)
 		return
 	}
 	m.inner.Emit(ctx, e)
@@ -311,7 +284,7 @@ func (k *Kernel) applyIdentityDeps(d *module.Deps, id module.ID) {
 	}
 	d.Auth = identitiesOnly{k.ident.svc.Auth}
 	d.AuthAdmin = adminOnly{k.ident.svc.Auth}
-	d.Audit = newModuleAudit(id, k.audit)
+	d.Audit = newModuleAudit(id, k.audit, k.coreLog("audit"))
 	d.Events = k.events.scope(id)
 }
 
