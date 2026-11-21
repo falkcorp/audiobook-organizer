@@ -186,6 +186,12 @@ type Config struct {
 	// CoreDefaults are the app's compiled defaults of the core keys whose
 	// default is the app's to name (app.Options.CoreDefaults).
 	CoreDefaults CoreDefaults
+	// IdentityBoot is app.Options.IdentityBoot: the app declares the identity
+	// flip, so boot builds rbac, auth, audit serving and the events bus and runs
+	// P4d steps 2-4 (identity_boot.go). false, the default, builds none of it:
+	// the app boots as it did before F4-08. Temporary, as the F3 config gate
+	// was: B10 deletes it with the flip that makes identity unconditional.
+	IdentityBoot bool
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
