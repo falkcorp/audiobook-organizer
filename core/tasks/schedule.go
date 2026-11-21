@@ -35,10 +35,12 @@ type Schedule struct {
 	// intervalWhen is IntervalWhen's gate: it closes the timing trigger only.
 	intervalWhen func() bool
 	params       json.RawMessage
-	live         bool
-	preview      bool
-	missed       MissedPolicy
-	problems     []string
+	// paramsFn is ParamsFunc's function: the params are built at each fire.
+	paramsFn func() any
+	live     bool
+	preview  bool
+	missed   MissedPolicy
+	problems []string
 }
 
 // ScheduleFromConfig is the standard schedule (SIMP-6). Its timing is a config
@@ -257,6 +259,30 @@ func (s *Schedule) Params(p any) *Schedule {
 	return c
 }
 
+// ParamsFunc returns a copy whose scheduled runs get the params fn returns at
+// each fire, JSON-encoded then: a value read from config at fire time stays
+// live across a settings change, where Params freezes it when the schedule
+// is built. It is HEAD's TriggerFn reading config at each fire (F5-14:
+// candidate_fetch's MarkDirtyOnly from identification_advance_enabled,
+// acoustid_online_lookup's limit from maintenance.acoustid_nightly_limit).
+// A value that does not encode is a refused start (ErrScheduleParams): the
+// clock advances and the failure is counted, as HEAD stamped its clock before
+// its trigger failed. A nil fn, or ParamsFunc together with Params, is a
+// problem.
+func (s *Schedule) ParamsFunc(fn func() any) *Schedule {
+	c := s.clone()
+	if fn == nil {
+		c.problems = append(c.problems, "Schedule.ParamsFunc: nil func")
+		return c
+	}
+	c.paramsFn = fn
+	return c
+}
+
+// ErrScheduleParams is a ParamsFunc value that did not encode; the scheduler
+// treats the start as refused.
+var ErrScheduleParams = errors.New("tasks: schedule params do not encode")
+
 // Live returns a copy that runs scheduled runs in ModeLive. A scheduled
 // writer must state Live or Preview (v3 rule D8); stating both is a problem.
 func (s *Schedule) Live() *Schedule { c := s.clone(); c.live = true; return c }
@@ -309,9 +335,28 @@ func (s *Schedule) WindowOpen() bool {
 	return s.Open() && (s.windowWhen == nil || s.windowWhen())
 }
 
-// RunParams is a copy of the encoded Params (nil when unset). Accessor coined
-// by F2-01.
+// RunParams is a copy of the encoded Params (nil when unset, and with
+// ParamsFunc, whose value only ResolveParams builds). Accessor coined by
+// F2-01.
 func (s *Schedule) RunParams() json.RawMessage { return slices.Clone(s.params) }
+
+// HasParamsFunc reports whether the params are built at each fire
+// (ParamsFunc). Accessor coined by F5-14.
+func (s *Schedule) HasParamsFunc() bool { return s.paramsFn != nil }
+
+// ResolveParams is the params of a run starting now: ParamsFunc's value
+// encoded at this call, or a copy of the static Params. An encoding error
+// wraps ErrScheduleParams. Accessor coined by F5-14.
+func (s *Schedule) ResolveParams() (json.RawMessage, error) {
+	if s.paramsFn == nil {
+		return slices.Clone(s.params), nil
+	}
+	raw, err := json.Marshal(s.paramsFn())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrScheduleParams, err)
+	}
+	return raw, nil
+}
 
 // IsLive reports Live. Accessor coined by F2-01.
 func (s *Schedule) IsLive() bool { return s.live }
@@ -328,6 +373,9 @@ func (s *Schedule) problemsFor(writer bool) []string {
 	out := append([]string(nil), s.problems...)
 	if s.live && s.preview {
 		out = append(out, "Schedule: both Live() and Preview()")
+	}
+	if s.paramsFn != nil && s.params != nil {
+		out = append(out, "Schedule: both Params and ParamsFunc")
 	}
 	if writer && !s.live && !s.preview {
 		out = append(out, "Schedule: a scheduled writer must state Live() or Preview() (D8)")
