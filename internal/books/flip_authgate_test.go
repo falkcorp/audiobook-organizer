@@ -37,7 +37,7 @@ func flippedOfflineABO(t *testing.T, env *[]string) *offlineABO {
 	h.disk = func(o *app.Options) {
 		o.StorageFS = storage.FS{}
 		o.StateDir = h.state
-		o.Env = append([]string{storageEnv()}, *env...)
+		o.Env = bootEnv(*env...)
 	}
 	h.marker = filepath.Join(filepath.Dir(h.path), "hnsw", "hnsw.clean-stop")
 	h.boot()
