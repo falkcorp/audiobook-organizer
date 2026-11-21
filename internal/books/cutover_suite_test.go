@@ -673,9 +673,76 @@ func prefreezeWrittenCorpus(t *testing.T) corpus {
 	require.NotEmpty(t, wrote.User.ID, "no user written")
 	require.NotEmpty(t, wrote.APIKey.ID, "no API key written")
 	require.NotEmpty(t, wrote.Scan.OpID, "no scan run written")
-	c := corpus{name: "prefreeze-written", dir: out, quarantineCases: base.quarantineCases, wrote: &wrote}
+	kept, resolved := casesSurvivingWrites(t, storeDB(base.dir), storeDB(out), base.quarantineCases)
+	for _, qc := range resolved {
+		t.Logf("prefreeze-written: the pre-freeze binary rewrote the row(s) of overlay case %s (%v) and its fault is gone: not expected in the quarantine report", qc.Label, qc.Keys)
+	}
+	c := corpus{name: "prefreeze-written", dir: out, quarantineCases: kept, wrote: &wrote}
 	prefreeze.c = &c
 	return c
+}
+
+// casesSurvivingWrites splits the overlay's quarantine cases by whether the
+// fault each plants is still in the store the pre-freeze binary wrote into
+// (written) or that binary's own writes removed it. The binary saves a
+// setting through the config route, and HEAD's save rewrites the settings
+// blob from its Config (a field no Config field names is not written back)
+// and re-saves the secret rows: the planted faults the overlay put in those
+// rows are legitimately gone, so M2 has nothing to quarantine there.
+//
+// A case is resolved only on evidence: a row its keys name differs from the
+// base corpus' bytes and, for a blob member case ("<row>#<member>"), the
+// member's name no longer occurs in the rewritten row. Every other case is
+// kept. A resolved case's fault that survived anyway would still be caught:
+// M2 would quarantine it, and quarantineProblems refuses a record no case
+// owns.
+func casesSurvivingWrites(t *testing.T, base, written string, cases []r2Stage2Case) (kept, resolved []r2Stage2Case) {
+	t.Helper()
+	read := func(dir string, keys map[string]bool) map[string][]byte {
+		db, err := pebble.Open(dir, &pebble.Options{ReadOnly: true})
+		require.NoError(t, err)
+		defer func() { require.NoError(t, db.Close()) }()
+		out := map[string][]byte{}
+		for k := range keys {
+			v, closer, err := db.Get([]byte(k))
+			if errors.Is(err, pebble.ErrNotFound) {
+				continue
+			}
+			require.NoError(t, err)
+			out[k] = bytes.Clone(v)
+			require.NoError(t, closer.Close())
+		}
+		return out
+	}
+	rows := map[string]bool{}
+	for _, qc := range cases {
+		for _, k := range qc.Keys {
+			row, _, _ := strings.Cut(k, "#")
+			rows[row] = true
+		}
+	}
+	before, after := read(base, rows), read(written, rows)
+	for _, qc := range cases {
+		gone := len(qc.Keys) > 0
+		for _, k := range qc.Keys {
+			row, member, isMember := strings.Cut(k, "#")
+			b, hadRow := before[row]
+			require.Truef(t, hadRow, "overlay case %s: the base corpus holds no %s row", qc.Label, row)
+			a, has := after[row]
+			switch {
+			case has && bytes.Equal(a, b):
+				gone = false // untouched: the planted fault is still there
+			case isMember && has && bytes.Contains(a, []byte(member)):
+				gone = false // rewritten, but the member survived
+			}
+		}
+		if gone {
+			resolved = append(resolved, qc)
+		} else {
+			kept = append(kept, qc)
+		}
+	}
+	return kept, resolved
 }
 
 // prefreezeAnswers records the pre-freeze binary's answers on the
