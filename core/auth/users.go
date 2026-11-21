@@ -326,7 +326,7 @@ func (s *Service) ChangeOwnPassword(ctx context.Context, actor *Principal, curre
 		return err
 	}
 	now := s.now().UTC()
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		cur, err := s.d.Store.GetUser(ctx, self)
 		if err != nil {
 			return err
@@ -342,12 +342,14 @@ func (s *Service) ChangeOwnPassword(ctx context.Context, actor *Principal, curre
 		if err := s.d.Store.SetPassword(b, &up, hash); err != nil {
 			return err
 		}
-		if err := s.restampOwnSession(ctx, b, actor, up.CredentialEpoch); err != nil {
+		kept, err := s.restampOwnSession(ctx, b, actor, up.CredentialEpoch)
+		if err != nil {
 			return err
 		}
 		subject := ref(refKindUser, string(self))
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.PasswordChanged, Subject: subject, Epoch: up.CredentialEpoch})
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
+		s.invalidateSessions(ctx, inv, self, kept, journal.PasswordChanged)
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionUserPassword, Outcome: audit.Success, Target: subject,
 			Details: map[string]any{"self": true},
@@ -356,23 +358,24 @@ func (s *Service) ChangeOwnPassword(ctx context.Context, actor *Principal, curre
 }
 
 // restampOwnSession re-stamps the session actor presented with epoch in b
-// (HEAD's keepSessionID). A principal that did not come from a session of its
-// own user keeps nothing; a session already gone keeps nothing either.
-func (s *Service) restampOwnSession(ctx context.Context, b *storage.Batch, actor *Principal, epoch int64) error {
+// (HEAD's keepSessionID) and returns its public ID, the session the write
+// keeps. A principal that did not come from a session of its own user keeps
+// nothing (""); a session already gone keeps nothing either.
+func (s *Service) restampOwnSession(ctx context.Context, b *storage.Batch, actor *Principal, epoch int64) (string, error) {
 	if !actor.Method.sessionMethod() || actor.CredentialID == "" {
-		return nil
+		return "", nil
 	}
 	rec, err := s.d.Store.SessionByPublicID(ctx, actor.CredentialID)
 	if errors.Is(err, ErrNotFound) {
-		return nil
+		return "", nil
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 	if rec.UserID != actor.User.ID {
-		return nil
+		return "", nil
 	}
-	return s.d.Store.RestampSession(b, rec, epoch)
+	return rec.PublicID, s.d.Store.RestampSession(b, rec, epoch)
 }
 
 // SetStatus disables or re-enables a user (§3.2): core:users.manage through
@@ -399,7 +402,7 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 		return err
 	}
 	now := s.now().UTC()
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		u, err := s.d.Store.GetUser(ctx, id)
 		if err != nil {
 			return err
@@ -438,6 +441,7 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 			}
 			details = map[string]any{"links_deleted": links}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDisabled, Subject: subject, Epoch: up.CredentialEpoch})
+			inv.user(id, journal.UserDisabled)
 		} else {
 			// The re-enable is journaled too (F4-08 Q6b), so a restore that
 			// re-applies an earlier disable sees the enable after it in journal
@@ -467,7 +471,7 @@ func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) e
 	if err := s.mayManageUsers(actor, "delete a user"); err != nil {
 		return err
 	}
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		u, err := s.d.Store.GetUser(ctx, id)
 		if err != nil {
 			return err
@@ -489,6 +493,7 @@ func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) e
 		}
 		subject := ref(refKindUser, string(id))
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDeleted, Subject: subject})
+		inv.user(id, journal.UserDeleted)
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionUserDelete, Outcome: audit.Success, Target: subject,
 			Details: map[string]any{"username": u.Username},

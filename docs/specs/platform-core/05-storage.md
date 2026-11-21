@@ -392,7 +392,8 @@ journal (§5S.9.1) and calls the auth participant (`auth.Admin.StageUserMerge(ct
 in [05-authn](05-authn.md)), which binds `c/auth/` and stages the identity half with an `Expect` on every
 identity row it read. A record changed since the plan was built fails the commit with
 `storage.ErrConflict`, which auth reports as `auth.ErrMergeConflict` (DATA10-9). Books commits once; all of
-it lands or none does. The same shape serves `outbox.Stage`, `index.MarkDirty`,
+it lands or none does. After that commit succeeds books runs the `auth.AfterCommit` the call returned,
+which publishes the source user's invalidation (05-authn §4.12; F4-08 A15). The same shape serves `outbox.Stage`, `index.MarkDirty`,
 `library.Manager.TransferIn` and the cutover's importers, which stage into a chunk's batch (§5S.3.13).
 
 **Participant APIs take `*storage.Batch` (COR2-12).** `Bind` records the handle on the batch the

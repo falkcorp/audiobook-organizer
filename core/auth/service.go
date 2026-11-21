@@ -246,8 +246,9 @@ func (s Settings) withDefaults() Settings {
 // settings through a function rather than importing config, receives the
 // app's identity extensions (app.Options.Authenticators) from the kernel,
 // and reads the client address httpapi resolved through Client, because
-// auth (L4) may not import httpapi (L6). Secrets and Events join with the
-// rows that use them (OIDC, invalidation events).
+// auth (L4) may not import httpapi (L6). Secrets joins with the rows that
+// use it (OIDC). Invalidation events go out through OnInvalidated, a
+// callback rather than the bus, as rbac's OnChange does (F4-08 A15).
 type Deps struct {
 	Store       Store
 	NewBatch    func() *storage.Batch // an indexed batch over Store's keyspace (authstore.Store.NewBatch)
@@ -281,6 +282,14 @@ type Deps struct {
 	// read once, by New, and only when core.auth.mode is "disabled". Nil
 	// means unknown, which is treated as remote-reachable.
 	Reach func() Reach
+	// OnInvalidated publishes core.principal.invalidated.v1 (§4.12): the
+	// kernel binds it to its bus (kernel.publishPrincipalInvalidated). The
+	// service calls it once per credential a write revoked, after that
+	// write's batch commits and never for a batch that does not; an empty
+	// credentialID covers every credential of the user. reason is the
+	// revocation's journal kind. It must not block (the bus's Publish never
+	// does). Nil publishes nothing.
+	OnInvalidated func(ctx context.Context, userID, credentialID, reason string)
 }
 
 // Service is core's authentication service (05-authn §3.2).
@@ -537,6 +546,20 @@ func (s *Service) commitRetrying(ctx context.Context, stage func(b *storage.Batc
 // A commit that conflicts on every try returns ErrContended wrapping the last
 // conflict, so a handler answers 503 busy and not 500.
 func (s *Service) commitRetryingN(ctx context.Context, attempts int, stage func(b *storage.Batch) error) error {
+	return s.commitInvalidatingN(ctx, attempts, func(b *storage.Batch, _ *invalidations) error { return stage(b) })
+}
+
+// commitInvalidating is commitRetrying for a revoking write: stage also
+// records, in inv, the credentials the write revokes, and they are published
+// (Deps.OnInvalidated) once the attempt's commit returns nil. A stage error,
+// a failed commit or a conflicting attempt publishes nothing; each retry
+// starts from an empty inv, so only the attempt that commits is published.
+func (s *Service) commitInvalidating(ctx context.Context, stage func(b *storage.Batch, inv *invalidations) error) error {
+	return s.commitInvalidatingN(ctx, conflictRetries, stage)
+}
+
+// commitInvalidatingN is commitInvalidating over attempts tries.
+func (s *Service) commitInvalidatingN(ctx context.Context, attempts int, stage func(b *storage.Batch, inv *invalidations) error) error {
 	err := storage.RetryOnConflict(ctx, attempts, func(ctx context.Context) (err error) {
 		b := s.d.NewBatch()
 		defer func() {
@@ -544,10 +567,18 @@ func (s *Service) commitRetryingN(ctx context.Context, attempts int, stage func(
 				err = cerr
 			}
 		}()
-		if err := stage(b); err != nil {
+		inv := &invalidations{}
+		if err := stage(b, inv); err != nil {
 			return err
 		}
-		return b.Commit(ctx, storage.Sync)
+		if err := b.Commit(ctx, storage.Sync); err != nil {
+			return err
+		}
+		// Published here, on the commit's own success: the deferred Close
+		// can still turn the attempt's result into an error, but the
+		// revocation is durable by now.
+		s.publishInvalidations(ctx, inv)
+		return nil
 	})
 	if errors.Is(err, storage.ErrConflict) {
 		return fmt.Errorf("%w: %w", ErrContended, err)

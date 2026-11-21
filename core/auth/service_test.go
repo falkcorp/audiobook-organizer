@@ -42,6 +42,9 @@ type fx struct {
 	svc     *auth.Service
 	audit   *auditFake
 	jrnl    *journalFake
+	// inval records Deps.OnInvalidated's calls; nil builds a service
+	// with no callback.
+	inval *invalFake
 	// hasher is a lowered-cost hasher (test binaries only) whose derivations
 	// the sign-in tests count.
 	hasher *password.Hasher
@@ -128,7 +131,7 @@ func newFxRoleStore(t testing.TB, wrap func(rbac.Store) rbac.Store) *fx {
 			t.Errorf("close store: %v", err)
 		}
 	})
-	f := &fx{t: t, audit: &auditFake{}, jrnl: &journalFake{}, now: time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC),
+	f := &fx{t: t, audit: &auditFake{}, jrnl: &journalFake{}, inval: &invalFake{}, now: time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC),
 		hasher: password.New(password.Options{Time: 1, MemoryKiB: 64})}
 	aks, _ := db.Keyspace(authstore.Owner)
 	rks, _ := db.Keyspace(rbacstore.Owner)
@@ -185,7 +188,7 @@ func (f *fx) rebuild() {
 	f.t.Helper()
 	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
 		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
-		Hasher: f.hasher, Settings: f.liveSettings,
+		Hasher: f.hasher, Settings: f.liveSettings, OnInvalidated: f.inval.callback(),
 	})
 	if err != nil {
 		f.t.Fatal(err)

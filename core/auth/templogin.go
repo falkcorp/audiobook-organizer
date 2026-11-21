@@ -98,7 +98,7 @@ func (s *Service) mintTempLogin(ctx context.Context, actor *Principal, target Us
 	ttl := s.settings().TempLoginTTL
 	now := s.now().UTC()
 	var token string
-	err := s.commitRetrying(ctx, func(b *storage.Batch) error {
+	err := s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		u, err := s.d.Store.GetUser(ctx, target)
 		if err != nil {
 			return err
@@ -136,6 +136,7 @@ func (s *Service) mintTempLogin(ctx context.Context, actor *Principal, target Us
 				creator = &up // a self-reset: the creator's epoch is the bumped one
 			}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: ref(refKindUser, string(u.ID)), Epoch: epoch})
+			s.invalidateSessions(ctx, inv, u.ID, "", journal.CredentialEpochBumped)
 		}
 		t := &OneTimeToken{
 			Kind: OneTimeTempLogin, UserID: u.ID, CreatedBy: creator.ID, CredentialEpoch: epoch,
@@ -216,7 +217,7 @@ func (s *Service) ConsumeTempLogin(ctx context.Context, token, newPassword strin
 	now := s.now().UTC()
 	var out *IssuedSession
 	var refusal error
-	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
+	err = s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		refusal = nil
 		t, err := s.d.Store.TakeOneTime(b, OneTimeTempLogin, Token(token)) // parsed by lookupOneTime
 		if errors.Is(err, ErrNotFound) {
@@ -268,6 +269,9 @@ func (s *Service) ConsumeTempLogin(ctx context.Context, token, newPassword strin
 			}
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.PasswordChanged, Subject: target, Epoch: up.CredentialEpoch})
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: target, Epoch: up.CredentialEpoch})
+			// Before stageSession: the session this consume issues is in b,
+			// not the store, so it is never named.
+			s.invalidateSessions(ctx, inv, u.ID, "", journal.PasswordChanged)
 			u = &up
 		} else if err := s.d.Store.GuardUser(b, u); err != nil {
 			// A plain link writes no user row, so nothing else would notice a

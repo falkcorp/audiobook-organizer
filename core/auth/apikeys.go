@@ -219,7 +219,7 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 	if !st.valid() || st == KeyNeedsConfirmation {
 		return fmt.Errorf("%w: key status %q", ErrBadInput, st)
 	}
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		k, err := s.d.Store.APIKeyByID(ctx, id)
 		if err != nil {
 			return err
@@ -252,8 +252,10 @@ func (s *Service) SetAPIKeyStatus(ctx context.Context, actor *Principal, id stri
 		switch st {
 		case KeyRevoked:
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.APIKeyRevoked, Subject: ref(refKindAPIKey, k.ID)})
+			inv.credential(k.Owner, k.ID, journal.APIKeyRevoked)
 		case KeyDisabled:
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.APIKeyDisabled, Subject: ref(refKindAPIKey, k.ID)})
+			inv.credential(k.Owner, k.ID, journal.APIKeyDisabled)
 		}
 		// A revocation is its own action (05-rbac §8: core.apikey.revoke);
 		// every other change is core.apikey.set_status.

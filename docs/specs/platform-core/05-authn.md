@@ -210,9 +210,17 @@ type Admin interface {
 	// (DATA4-9). The caller commits. A record changed since the plan was built
 	// fails the commit with storage.ErrConflict, which the caller reports as
 	// auth.ErrMergeConflict (DATA10-9; HEAD's UserMergeConflictError,
-	// internal/database/user_merge.go:507-545).
-	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) error
+	// internal/database/user_merge.go:507-545). After its commit succeeds
+	// the caller runs the returned AfterCommit, which publishes Source's
+	// core.principal.invalidated.v1 (§4.12): auth cannot see a commit it
+	// does not make. AfterCommit re-reads Source and publishes only when the
+	// store shows the merge's write, so running it after a failed commit
+	// publishes nothing (F4-08 A15). It is nil whenever the error is not.
+	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (AfterCommit, error)
 }
+
+// AfterCommit is a staging method's post-commit step (StageUserMerge).
+type AfterCommit func(ctx context.Context)
 
 // Compat is the method-bound handle for an app compatibility surface that
 // authenticates itself (ABO: the ABS API, OwnAuth routes; §4.10, SEC-1). A
@@ -295,7 +303,7 @@ type Deps struct {
 	RBAC     *rbac.Service  // checker compilation, CanAssign, Dominates
 	Audit    audit.Logger
 	Secrets  secrets.Store  // OIDC client secrets, derived keys (05-config)
-	Events   *events.Bus    // publishes core.principal.invalidated.v1
+	OnInvalidated func(ctx context.Context, userID, credentialID, reason string) // publishes core.principal.invalidated.v1 (§4.12); the kernel binds it to its bus, as rbac's OnChange (F4-08 A15)
 	Revocations journal.RevocationJournal // §4.12: Append(ctx, b, r) into the revoking batch b before it commits (05-backup §5B.3.6)
 	Clock    func() time.Time
 	Log      *slog.Logger
@@ -1141,6 +1149,14 @@ the config cutover, 05-config §1.12.2).
   generation counter (05-rbac §9), so changes apply on the next request.
 - Every revocation publishes `core.principal.invalidated.v1{user_id, credential_id?, reason}` on
   `events`; `realtime` closes affected streams (05-realtime §4.6), `Revalidate` uses it.
+  It is published through `Deps.OnInvalidated` after the revoking batch commits, never for a batch
+  that does not, and it names only credentials the write revoked, because realtime's close is final
+  for the client (F4-08 A15): a key revoked or disabled names that key; a session revoked names that
+  session; a user disabled, deleted or merged away is user-wide (no `credential_id`); a credential
+  epoch bump (sign-out everywhere, password change or reset, a reset link minted) names each stored
+  session of the user except the one the write re-stamps. It is never user-wide, since API keys
+  survive the bump. An `ext:` principal's stream ends at its next heartbeat. A re-enable, a role
+  change and a restore's re-applied lines (boot, before the bus freezes) publish nothing.
 - Every restriction is first recorded with `Deps.Revocations.Append(ctx, b, journal.Revocation{At, Kind,
   Subject, Object, Detail, Epoch})` — `b` is the revoking batch, into which `Append` stages
   `c/backup/journal_head` — **before** that batch commits. Auth's kinds: `apikey.revoked`,

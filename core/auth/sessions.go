@@ -123,7 +123,7 @@ func (s *Service) RevokeSession(ctx context.Context, actor *Principal, publicID 
 	if _, err := actorUser(actor); err != nil {
 		return err
 	}
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		rec, err := s.d.Store.SessionByPublicID(ctx, publicID)
 		if err != nil {
 			return err
@@ -135,6 +135,7 @@ func (s *Service) RevokeSession(ctx context.Context, actor *Principal, publicID 
 			return err
 		}
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.SessionRevoked, Subject: ref(refKindSession, rec.PublicID)})
+		inv.credential(rec.UserID, rec.PublicID, journal.SessionRevoked)
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionSessionRevoke, Outcome: audit.Success, Target: ref(refKindSession, rec.PublicID),
 			Details: map[string]any{"user": string(rec.UserID)},
@@ -166,7 +167,7 @@ func (s *Service) RevokeAllSessions(ctx context.Context, actor *Principal, user 
 		return fmt.Errorf("%w: signing out everywhere needs an interactive sign-in", ErrDenied)
 	}
 	now := s.now().UTC()
-	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+	return s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		if err := s.mayManage(ctx, actor, user); err != nil {
 			return err
 		}
@@ -202,6 +203,7 @@ func (s *Service) RevokeAllSessions(ctx context.Context, actor *Principal, user 
 			if err := s.d.Store.DeleteSession(b, rec); err != nil {
 				return err
 			}
+			inv.credential(user, rec.PublicID, journal.CredentialEpochBumped)
 			revoked++
 		}
 		links, err := s.deleteCreatedLinks(ctx, b, user)
