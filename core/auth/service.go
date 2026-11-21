@@ -445,7 +445,7 @@ func (s *Service) knownMethod(m Method) bool {
 // compatMethod reports whether m is a registered app compatibility method
 // (RegisterCompat): registered, and not an identity extension's "ext:" one.
 func (s *Service) compatMethod(m Method) bool {
-	if strings.HasPrefix(string(m), extensionPrefix) {
+	if m.isExtension() {
 		return false
 	}
 	s.methodsMu.RLock()

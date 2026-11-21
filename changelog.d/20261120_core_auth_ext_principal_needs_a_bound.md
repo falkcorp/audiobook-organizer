@@ -1,0 +1,3 @@
+### Security
+
+- `core/auth`: an identity-extension (`ext:`) principal with no `notAfter` bound is now refused as expired by `Revalidate` and `Refresh`. Only stage 12 sets the bound, but `Service.PrincipalFor` is exported and built an `ext:` principal without one, which would have stood on the credential epoch alone and let a long-lived stream outlive its credential. No production path builds one (stage 12 always sets the bound), so no live principal changes; this narrows access only. New tests pin the refusal, the `ext:` exclusion in the compat password-reset rule on `Refresh`, and a negative `extension_max_age` taking the 24 h default (F4-08 A0, #4828 post-merge review).

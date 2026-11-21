@@ -408,3 +408,25 @@ func TestRefresh_StoreFailureIsTransient(t *testing.T) {
 		}
 	}
 }
+
+// TestRefresh_ExtensionPrincipalIsNotACompatSurface: the password-reset rule
+// is a compat surface's own (compatSurfaceStanding). An identity extension's
+// principal is not one, and stage 12 binds it for a user who must reset (only
+// SignInRestricted refuses), so Refresh follows stage 12 and answers it; a
+// ext: method that read as a compat one would end its stream at the next beat.
+func TestRefresh_ExtensionPrincipalIsNotACompatSurface(t *testing.T) {
+	f := newFx(t)
+	ctx := context.Background()
+	dick := f.user("dick-grayson", rbac.RoleViewer)
+	svc, p := extPrincipal(t, f, &auth.Assertion{User: dick.ID, CredentialID: "cf-perch"}, false)
+
+	f.edit(dick, func(u *auth.User) { u.PasswordResetRequired = true })
+	_, got := serve(t, svc, request("", ""))
+	if got.p == nil || got.p.Method != "ext:oracle" {
+		t.Fatalf("stage 12 for a user who must reset bound %+v (refusal %+v), want an ext:oracle principal", got.p, got.fail)
+	}
+	refreshed(t, svc, p)
+	if err := svc.Revalidate(ctx, p); err != nil {
+		t.Fatalf("Revalidate of an extension principal whose user must reset: %v", err)
+	}
+}
