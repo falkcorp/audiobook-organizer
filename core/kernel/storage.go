@@ -55,9 +55,26 @@ type kernelStore struct {
 }
 
 // DeclaresStorage reports whether m declares any storage: a keyspace, legacy
-// claims, migrations or any other member of storage.Spec. Package app
-// resolves core.storage.path only when a module of the app declares storage.
+// claims, migrations or any other member of storage.Spec. It answers "does
+// this MODULE declare storage" (its owner, its keyspace, its handles); "does
+// this APP have a store" is Config.WantsStore, which also counts the identity
+// boot.
 func DeclaresStorage(m module.Manifest) bool { return !reflect.ValueOf(m.Storage).IsZero() }
+
+// WantsStore reports whether the app c describes has a store: a module of it
+// declares storage (enabled or not), or it declared the identity boot
+// (Config.IdentityBoot), whose users, roles, sessions and revocation journal
+// live in core's store even when no module owns a keyspace. It is the one
+// answer to "does this app have a store" at every site that asks: P0's path
+// and state directory resolution, the offline commands' resolution, and
+// package app's claims mode and state-file table. Sites that mean "this
+// module declares storage" (a module's owner spec, its handles) use
+// DeclaresStorage instead and are not changed by the identity boot.
+func (c Config) WantsStore() bool {
+	return c.IdentityBoot || slices.ContainsFunc(c.Modules, func(m module.Module) bool {
+		return m != nil && DeclaresStorage(m.Manifest())
+	})
+}
 
 // storageWanted gates P2 to P4: Config.StoragePath set, and not Describe,
 // which never opens the store. P0 sets the path for every app whose modules

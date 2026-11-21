@@ -91,7 +91,7 @@ func pruneCheckpoints(ctx context.Context, opts Options, mods []module.Module, i
 		return err
 	}
 	if dbPath == "" {
-		return errors.New("storage prune-checkpoints: no module of this app declares storage, so it has no checkpoints")
+		return errors.New("storage prune-checkpoints: this app has no store (no module declares storage and the identity boot is not declared), so it has no checkpoints")
 	}
 	// The owner rule (seams.d/R1-25.md D29): it takes the checkpoint
 	// directory's sweep lock, and the lock file its first take creates

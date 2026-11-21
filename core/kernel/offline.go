@@ -178,7 +178,7 @@ func offlineKernel(c Config) (*Kernel, error) {
 	}
 	switch {
 	case c.StoragePath == "":
-		return nil, errors.Join(errors.New("kernel: no module of this app declares storage, so there is no store to open offline (core.storage.path)"), k.closeOffline(context.Background()))
+		return nil, errors.Join(errors.New("kernel: this app has no store (no module declares storage and the identity boot is not declared), so there is none to open offline (core.storage.path)"), k.closeOffline(context.Background()))
 	case c.StateDir == "":
 		return nil, errors.Join(errors.New("kernel: an offline open needs the state directory (core.paths.state_dir), where the swap slot is"), k.closeOffline(context.Background()))
 	}
