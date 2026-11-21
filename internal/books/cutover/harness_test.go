@@ -508,7 +508,7 @@ func (r *rig) spec(cutover bool) storage.Spec {
 		return spec
 	}
 	// The shipped manifest's own function, so the rig cannot drift from it.
-	return Flip{Level: BooksLevelStep(r.levelVersion(), BooksCutoverLevel)}.Spec(spec)
+	return NewFlipShape(FlipOptions{LevelStepVersion: r.levelVersion()}).Spec(spec)
 }
 
 // levelVersion is books' next contiguous version after its versioned steps.

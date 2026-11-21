@@ -17,13 +17,14 @@ import (
 var stepNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // TestStepIDs_UniqueAndWellFormed: every reserved ID is "<owner>.<name>" with
-// the name matching [a-z][a-z0-9-]*, no two are equal, the seven IDs of
-// 03 §3.8's order are all there, in that order, and the level step's ID is
-// the one storage derives for books' level.
+// the name matching [a-z][a-z0-9-]*, no two are equal, the eight IDs of
+// 03 §3.8's order (the identity flip's level step between M2 and M3) are all
+// there, in that order, and each level step's ID is the one storage derives
+// for books' level.
 func TestStepIDs_UniqueAndWellFormed(t *testing.T) {
 	ids := StepIDs()
 	want := []string{
-		BooksCutoverLevelStepID, ConfigCutoverID, IdentityCutoverID, TasksCutoverID, LogCutoverID, IntegrationsCutoverID, RewriteID,
+		BooksCutoverLevelStepID, ConfigCutoverID, BooksIdentityLevelStepID, IdentityCutoverID, TasksCutoverID, LogCutoverID, IntegrationsCutoverID, RewriteID,
 	}
 	if len(ids) != len(want) {
 		t.Fatalf("StepIDs() lists %d IDs, want %d", len(ids), len(want))
@@ -52,6 +53,15 @@ func TestStepIDs_UniqueAndWellFormed(t *testing.T) {
 	}
 	if got := BooksLevelStep(69, BooksCutoverLevel).Name; got != BooksCutoverLevelStepID {
 		t.Errorf("BooksLevelStep names its step %q, want %q", got, BooksCutoverLevelStepID)
+	}
+	if BooksIdentityLevel != BooksCutoverLevel+1 {
+		t.Errorf("BooksIdentityLevel = %d, want the level after BooksCutoverLevel (%d)", BooksIdentityLevel, BooksCutoverLevel+1)
+	}
+	if got := storage.LevelStepName(BooksOwner, BooksIdentityLevel); got != BooksIdentityLevelStepID {
+		t.Errorf("BooksIdentityLevelStepID = %q, storage names books' level-%d step %q", BooksIdentityLevelStepID, BooksIdentityLevel, got)
+	}
+	if got := BooksLevelStep(70, BooksIdentityLevel).Name; got != BooksIdentityLevelStepID {
+		t.Errorf("BooksLevelStep names the identity level step %q, want %q", got, BooksIdentityLevelStepID)
 	}
 }
 

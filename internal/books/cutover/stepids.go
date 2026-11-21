@@ -39,6 +39,18 @@ const BooksCutoverLevel = 1
 // F3-07 knows.
 const BooksCutoverLevelStepID = "books.level-1"
 
+// BooksIdentityLevel is the books reader level of the identity flip (F4-08):
+// the level M3's RaisesLevel names, the one books.level-2 raises books to, and
+// the Spec.Level the flip declares once it is on. It is the next level after
+// BooksCutoverLevel and leaves that constant, and its step, as they were.
+const BooksIdentityLevel = 2
+
+// BooksIdentityLevelStepID is the ID of books' level step for the identity
+// flip: storage.LevelStepName(BooksOwner, BooksIdentityLevel). Its version is
+// books.level-1's plus one (Flip's contiguous-version rule), so M3 names it
+// through BooksLevelStepRef like M2 names books.level-1.
+const BooksIdentityLevelStepID = "books.level-2"
+
 // IDs of the cutover data steps.
 const (
 	// ConfigCutoverID is M2, config and secrets (03 §3.8 row M2; 05-config
@@ -72,11 +84,13 @@ const (
 const RewriteID = "books.rewrite"
 
 // StepIDs is every ID this file reserves, in 03 §3.8's order: M7's books
-// level step for F3's level, M2, M3, M4, M5, M6 and M8.
+// level step for F3's level, M2, M7's books level step for the identity
+// flip's level, M3, M4, M5, M6 and M8.
 func StepIDs() []string {
 	return []string{
 		BooksCutoverLevelStepID,
 		ConfigCutoverID,
+		BooksIdentityLevelStepID,
 		IdentityCutoverID,
 		TasksCutoverID,
 		LogCutoverID,
