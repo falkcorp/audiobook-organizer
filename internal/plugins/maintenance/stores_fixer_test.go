@@ -252,11 +252,11 @@ var _ FixerStores = recStores{}
 // this test knows it.
 func TestPluginFixerStores_IsThePluginsDepsAccessorForAccessor(t *testing.T) {
 	log := &tripLog{}
-	typ := reflect.TypeOf((*FixerStores)(nil)).Elem()
+	typ := reflect.TypeFor[FixerStores]()
 	require.Equal(t, 15, typ.NumMethod(), "the accessors the fixers read their stores through")
 	pf := pluginFixerStores{ServerDeps: tripDeps{log: log}}
-	for i := 0; i < typ.NumMethod(); i++ {
-		reflect.ValueOf(pf).MethodByName(typ.Method(i).Name).Call(nil)
+	for method := range typ.Methods() {
+		reflect.ValueOf(pf).MethodByName(method.Name).Call(nil)
 	}
 	require.Equal(t, 15, log.count(), "pluginFixerStores is the plugin's deps, accessor for accessor")
 }

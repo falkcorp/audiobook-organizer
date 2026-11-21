@@ -226,7 +226,7 @@ func sentinelArgs(m string, fn reflect.Value) []reflect.Value {
 		switch {
 		case pt.Kind() == reflect.String:
 			in[i] = reflect.ValueOf(fmt.Sprintf("s%d", i))
-		case pt.Kind() == reflect.Ptr:
+		case pt.Kind() == reflect.Pointer:
 			in[i] = reflect.New(pt.Elem())
 		case pt.Kind() == reflect.Slice:
 			s := reflect.MakeSlice(pt, 2, 2)
@@ -267,13 +267,12 @@ func sentinelArgs(m string, fn reflect.Value) []reflect.Value {
 // setOneField makes the struct v non-zero by setting its first settable
 // pointer, string or integer field.
 func setOneField(v reflect.Value) {
-	for j := 0; j < v.NumField(); j++ {
-		f := v.Field(j)
+	for _, f := range v.Fields() {
 		if !f.CanSet() {
 			continue
 		}
 		switch f.Kind() {
-		case reflect.Ptr:
+		case reflect.Pointer:
 			f.Set(reflect.New(f.Type().Elem()))
 		case reflect.String:
 			f.SetString("x")
@@ -296,7 +295,7 @@ func same(a, b any) bool {
 		return false
 	}
 	switch av.Kind() {
-	case reflect.Ptr, reflect.Func:
+	case reflect.Pointer, reflect.Func:
 		return av.Pointer() == bv.Pointer()
 	}
 	return reflect.DeepEqual(a, b)

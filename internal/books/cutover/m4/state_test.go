@@ -92,7 +92,7 @@ func TestCutover_StateTableImported(t *testing.T) {
 		switch c.want {
 		case "succeeded", "failed", "timed_out", "canceled", "interrupted_dropped":
 			if c.st != "stopping" { // HEAD never recorded a finish for a stopping run
-				s.completed = tptr(done)
+				s.completed = new(done)
 			}
 		}
 		specs = append(specs, s)

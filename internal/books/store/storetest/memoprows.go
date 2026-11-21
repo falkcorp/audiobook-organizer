@@ -8,6 +8,7 @@ package storetest
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -40,7 +41,7 @@ func (m *MemOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i
 		return errors.New("opv2: ReplaceOpRowsPrefix: empty row prefix (it would replace every namespace of the operation)")
 	}
 	set := make(map[string]database.OpRow, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		row, err := at(i)
 		if err != nil {
 			return err
@@ -64,9 +65,7 @@ func (m *MemOpRows) ReplaceOpRowsPrefix(opID, rowPrefix string, n int, at func(i
 			kept[id] = row
 		}
 	}
-	for id, row := range set {
-		kept[id] = row
-	}
+	maps.Copy(kept, set)
 	if len(kept) == 0 {
 		delete(m.rows, opID)
 		return nil

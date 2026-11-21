@@ -110,7 +110,7 @@ func TestLoginCeiling_ConnectorCeilingMarksSaturatedAndOthersAreNot(t *testing.T
 	l := newLoginCeiling()
 	code, saturated := http.StatusUnauthorized, false
 	r := ceilingRouter(l, &code, &saturated)
-	for i := 0; i < coreauth.LoginConnectorCeiling; i++ {
+	for i := range coreauth.LoginConnectorCeiling {
 		require.Equal(t, http.StatusUnauthorized, ceilingPost(r, throttleTestConnector+":4000", nil), "failure %d", i)
 		require.False(t, saturated, "failure %d", i)
 	}
@@ -125,7 +125,7 @@ func TestLoginCeiling_GlobalCeilingCoversEveryPeer(t *testing.T) {
 	l := newLoginCeiling()
 	code, saturated := http.StatusUnauthorized, false
 	r := ceilingRouter(l, &code, &saturated)
-	for i := 0; i < coreauth.LoginGlobalCeiling; i++ {
+	for i := range coreauth.LoginGlobalCeiling {
 		ceilingPost(r, fmt.Sprintf("192.0.2.%d:4000", i%200+1), nil)
 		require.False(t, saturated, "failure %d", i)
 	}
@@ -142,7 +142,7 @@ func TestLoginCeiling_OnlyFailuresCount(t *testing.T) {
 	r := ceilingRouter(l, &code, &saturated)
 	for _, c := range []int{http.StatusOK, http.StatusTooManyRequests, http.StatusBadRequest, http.StatusInternalServerError, http.StatusForbidden} {
 		code = c
-		for i := 0; i < 2*coreauth.LoginGlobalCeiling; i++ {
+		for i := range 2 * coreauth.LoginGlobalCeiling {
 			ceilingPost(r, "192.0.2.5:4000", nil)
 			require.False(t, saturated, "status %d request %d", c, i)
 		}
@@ -226,8 +226,7 @@ func TestLoginCeiling_SaturatedInFlightIsBoundedPerVisitor(t *testing.T) {
 		return postWithin(t, r, remote, 10*time.Second)
 	}
 	spawn := func(remote string) {
-		wg.Add(1)
-		go func() { defer wg.Done(); post(remote) }()
+		wg.Go(func() { ; post(remote) })
 	}
 	// One visitor: its third concurrent saturated request is refused.
 	for range coreauth.MaxSaturatedPerVisitor {
@@ -240,7 +239,7 @@ func TestLoginCeiling_SaturatedInFlightIsBoundedPerVisitor(t *testing.T) {
 	// A flood from many fresh visitors is all admitted (one each) while the
 	// service-wide bucket is off...
 	const flood = coreauth.MaxSaturatedSoft + 44
-	for i := 0; i < flood; i++ {
+	for i := range flood {
 		spawn(fmt.Sprintf("198.51.%d.%d:4000", 100+i/250, i%250+1))
 	}
 	for range flood {
@@ -319,7 +318,7 @@ func TestLoginCeiling_ExemptionNeedsAVerifiedAllowListedIdentity(t *testing.T) {
 	// An exempt request's failure does not count against the ceilings.
 	l2 := newLoginCeiling()
 	r2 := ceilingRouterWith(loginCeilingMiddleware(l2, exempt, nil, nil), &code, &saturated)
-	for i := 0; i < 3*coreauth.LoginGlobalCeiling; i++ {
+	for range 3 * coreauth.LoginGlobalCeiling {
 		ceilingPost(r2, "192.0.2.5:4000", map[string]string{cfaccess.CFAccessHeader: "jwt-ok"})
 	}
 	require.Zero(t, ceilingGlobalCount(l2))
@@ -369,7 +368,7 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 	// of the ceiling is taken directly, which is exactly what the remaining failures
 	// would have done.
 	const realFlood = 20
-	for i := 0; i < realFlood; i++ {
+	for i := range realFlood {
 		path := "/api/v1/auth/login"
 		if i%2 == 1 {
 			path = "/login"
@@ -406,7 +405,7 @@ func TestLoginCeiling_RealRouterFloodDoesNotLockOutVerifiedOrUntouchedAccounts(t
 	// the same is done to a name that does not exist: while saturated the answer
 	// must not tell the two apart.
 	for _, name := range []string{"synthetic-admin", "no-such-account"} {
-		for i := 0; i < coreauth.DefaultSoftThreshold; i++ {
+		for i := range coreauth.DefaultSoftThreshold {
 			path := "/api/v1/auth/login"
 			if i%2 == 1 {
 				path = "/login"
@@ -555,8 +554,7 @@ func TestLoginCeiling_PerVisitorInFlightCap(t *testing.T) {
 	})
 	var wg sync.WaitGroup
 	spawn := func(remote string) {
-		wg.Add(1)
-		go func() { defer wg.Done(); postWithin(t, r, remote, 20*time.Second) }()
+		wg.Go(func() { ; postWithin(t, r, remote, 20*time.Second) })
 	}
 	wait := func(why string) {
 		t.Helper()
@@ -757,11 +755,10 @@ func TestLoginCeiling_SaturatedBusyRefusalWordingAndRetryAfter(t *testing.T) {
 		c.Status(http.StatusOK)
 	})
 	var wg sync.WaitGroup
-	for i := 0; i < coreauth.MaxSaturatedPerVisitor; i++ {
-		wg.Add(1)
-		go func() { defer wg.Done(); postWithin(t, r, "192.0.2.5:4000", 20*time.Second) }()
+	for range coreauth.MaxSaturatedPerVisitor {
+		wg.Go(func() { ; postWithin(t, r, "192.0.2.5:4000", 20*time.Second) })
 	}
-	for i := 0; i < coreauth.MaxSaturatedPerVisitor; i++ {
+	for range coreauth.MaxSaturatedPerVisitor {
 		select {
 		case <-entered:
 		case <-time.After(10 * time.Second):

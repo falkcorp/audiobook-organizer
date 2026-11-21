@@ -557,7 +557,7 @@ func TestFolderBooksOwner_DuplicateTitleIsCarriedAndLinkedByTheOwner(t *testing.
 	seedTwin := func(t *testing.T, f *fragFixture, n int) {
 		author, err := f.s.GetAuthorByName("Alfred Pennyworth")
 		require.NoError(t, err)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			_, err := f.s.CreateBook(&database.Book{Title: "Arkham Asylum", AuthorID: &author.ID,
 				FilePath: f.path(fmt.Sprintf("elsewhere/Arkham Asylum %d.m4b", i))})
 			require.NoError(t, err)
@@ -607,7 +607,7 @@ func TestFolderBooksOwner_DuplicateTitleIsCarriedAndLinkedByTheOwner(t *testing.
 		f.seedOwnerRow(t, ownerShelf{base: fbITunes})
 		author, err := f.s.GetAuthorByName("Alfred Pennyworth")
 		require.NoError(t, err)
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			_, err = f.s.CreateBook(&database.Book{Title: "Dark Victory", AuthorID: &author.ID,
 				FilePath: f.path(fmt.Sprintf("elsewhere/Dark Victory %d.m4b", i))})
 			require.NoError(t, err)

@@ -775,8 +775,7 @@ func (r *retiredRun) vetoed(a, b string) (string, []decisions.UnresolvedID, erro
 	seen := map[string]bool{}
 	for _, fam := range []string{decisions.FamilySameWork, decisions.FamilySameCopy} {
 		v, err := r.vetoes.PairVetoed(retiredEntityBook, a, b, fam)
-		var ue *decisions.UnresolvableError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*decisions.UnresolvableError](err); ok {
 			for _, u := range ue.IDs {
 				if k := u.EntityType + "\x00" + u.ID; !seen[k] {
 					seen[k] = true
@@ -1121,12 +1120,7 @@ func (r *retiredRun) readPathOwners(fa *retiredFacts) error {
 }
 
 func retiredContains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }
 
 // countITunes counts, as evidence, the shell's rows that spell a path under

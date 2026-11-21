@@ -193,7 +193,7 @@ func TestPurgeSoftDeletedOp_RejectsConflictingModeSpellings(t *testing.T) {
 // ids) and says so; the counts stay exact.
 func TestPurgeResult_CappedKeepsCountsAndMarksTruncation(t *testing.T) {
 	r := &audiobookspkg.PurgeResult{SkippedOwnsFiles: 500}
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		r.SkippedOwnsFilesIDs = append(r.SkippedOwnsFilesIDs, fmt.Sprintf("id%d", i))
 	}
 	c := r.Capped(purgeResultCap)

@@ -7,6 +7,7 @@ package search
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -271,16 +272,12 @@ func looksAbsolute(raw string) bool {
 func HasRelativeDate(n Node) bool {
 	switch v := n.(type) {
 	case *AndNode:
-		for _, c := range v.Children {
-			if HasRelativeDate(c) {
-				return true
-			}
+		if slices.ContainsFunc(v.Children, HasRelativeDate) {
+			return true
 		}
 	case *OrNode:
-		for _, c := range v.Children {
-			if HasRelativeDate(c) {
-				return true
-			}
+		if slices.ContainsFunc(v.Children, HasRelativeDate) {
+			return true
 		}
 	case *NotNode:
 		return HasRelativeDate(v.Child)
@@ -297,10 +294,8 @@ func HasRelativeDate(n Node) bool {
 		if !IsDateField(v.Field) {
 			return false
 		}
-		for _, alt := range v.Values {
-			if isRelativeDateTerm(alt) {
-				return true
-			}
+		if slices.ContainsFunc(v.Values, isRelativeDateTerm) {
+			return true
 		}
 	}
 	return false

@@ -13,9 +13,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
-func ucF(v float64) *float64 { return &v }
-func ucS(v string) *string   { return &v }
-
 func ucEq(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -162,8 +159,8 @@ func TestRestoreRating_And_CheckRatingFollowCurrent(t *testing.T) {
 		n, _ := EncodeRating(new)
 		return &database.OperationChange{BookID: "r", OldValue: o, NewValue: n}
 	}
-	own := RatingSnapshot{Story: ucF(3)}
-	filled := RatingSnapshot{Story: ucF(3), Overall: ucF(4.5), Notes: ucS("loved it")}
+	own := RatingSnapshot{Story: new(float64(3))}
+	filled := RatingSnapshot{Story: new(float64(3)), Overall: new(4.5), Notes: new("loved it")}
 
 	t.Run("the survivor still holds what the retire wrote: the filled fields go back", func(t *testing.T) {
 		t.Parallel()
@@ -185,7 +182,7 @@ func TestRestoreRating_And_CheckRatingFollowCurrent(t *testing.T) {
 
 	t.Run("a field the retire filled was rated since: the whole row is refused", func(t *testing.T) {
 		t.Parallel()
-		edited := RatingSnapshot{Story: ucF(3), Overall: ucF(1), Notes: ucS("loved it")}
+		edited := RatingSnapshot{Story: new(float64(3)), Overall: new(float64(1)), Notes: new("loved it")}
 		_, err := RestoreRating(edited, row(own, filled))
 		if RefusalReason(err) != ReasonChangedSince {
 			t.Fatalf("err = %v", err)
@@ -195,12 +192,12 @@ func TestRestoreRating_And_CheckRatingFollowCurrent(t *testing.T) {
 	t.Run("a field the row did not touch may differ: it is kept, not blocking", func(t *testing.T) {
 		t.Parallel()
 		// Another operation filled performance after this one filled overall.
-		later := RatingSnapshot{Story: ucF(3), Overall: ucF(4.5), Notes: ucS("loved it"), Performance: ucF(5)}
+		later := RatingSnapshot{Story: new(float64(3)), Overall: new(4.5), Notes: new("loved it"), Performance: new(float64(5))}
 		got, err := RestoreRating(later, row(own, filled))
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := RatingSnapshot{Story: ucF(3), Performance: ucF(5)}
+		want := RatingSnapshot{Story: new(float64(3)), Performance: new(float64(5))}
 		if !got.Equal(want) {
 			t.Fatalf("got %+v, want %+v", got, want)
 		}
@@ -208,7 +205,7 @@ func TestRestoreRating_And_CheckRatingFollowCurrent(t *testing.T) {
 
 	t.Run("a field the row did not touch may even be edited by the owner", func(t *testing.T) {
 		t.Parallel()
-		edited := RatingSnapshot{Story: ucF(1), Overall: ucF(4.5), Notes: ucS("loved it")}
+		edited := RatingSnapshot{Story: new(float64(1)), Overall: new(4.5), Notes: new("loved it")}
 		got, err := RestoreRating(edited, row(own, filled))
 		if err != nil {
 			t.Fatal(err)
@@ -232,12 +229,12 @@ func TestRestoreRating_And_CheckRatingFollowCurrent(t *testing.T) {
 
 	t.Run("CheckRatingFollowCurrent is the same verdict from a book", func(t *testing.T) {
 		t.Parallel()
-		book := &database.Book{ID: "s", UserRatingStory: ucF(3), UserRatingOverall: ucF(4.5), UserRatingNotes: ucS("loved it")}
+		book := &database.Book{ID: "s", UserRatingStory: new(float64(3)), UserRatingOverall: new(4.5), UserRatingNotes: new("loved it")}
 		c := row(own, filled)
 		if err := CheckRatingFollowCurrent(book, c); err != nil {
 			t.Fatalf("err = %v", err)
 		}
-		book.UserRatingOverall = ucF(2)
+		book.UserRatingOverall = new(float64(2))
 		if RefusalReason(CheckRatingFollowCurrent(book, c)) != ReasonChangedSince {
 			t.Fatal("an edited field must refuse")
 		}

@@ -114,7 +114,7 @@ func inviteTestToken(i int) string { return fmt.Sprintf("%064d", i) }
 // exact count.
 func countAllowedUntilLimited(t *testing.T, max int, send func(i int) *httptest.ResponseRecorder) (allowed int, limited bool, last *httptest.ResponseRecorder) {
 	t.Helper()
-	for i := 0; i < max; i++ {
+	for i := range max {
 		w := send(i)
 		switch w.Code {
 		case http.StatusOK:
@@ -836,13 +836,11 @@ func TestInviteRateLimit_ConcurrentClientCannotDrainGlobal(t *testing.T) {
 	var admitted atomic.Int64
 	var wg sync.WaitGroup
 	for i := range 200 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if w := h.get(inviteTestToken(i), "198.51.100.5", nil); w.Code == http.StatusOK {
 				admitted.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	if n := admitted.Load(); n > inviteAuthRateBurst {

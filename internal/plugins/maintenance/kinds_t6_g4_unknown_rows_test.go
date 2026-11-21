@@ -146,7 +146,7 @@ func TestDurationBackfillNative_UnknownRowsAreRefusedWithoutBothWriteCapabilitie
 			dir := t.TempDir()
 			book := urBook(t, s, "Batman: Hush", dir)
 			var rows []database.BookFile
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				rows = append(rows, urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 }))
 			}
 			store, deferred := tc.wrap(s)
@@ -229,7 +229,7 @@ func TestDurationBackfillNative_UnknownRowsCancelledRunLeavesTheRestToARerun(t *
 	dir := t.TempDir()
 	book := urBook(t, s, "Batman: Hush", dir)
 	var rows []database.BookFile
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		rows = append(rows, urFile(t, s, book.ID, filepath.Join(dir, fmt.Sprintf("%02d.mp3", i)), func(f *database.BookFile) { f.TrackNumber = i + 1 }))
 	}
 
@@ -276,7 +276,7 @@ func TestDurationBackfillNative_UnknownRowsAPassOneBookIsRecomputedInItsOwnItem(
 	donor := urBook(t, s, "Batman: Year One", dir)
 	urFile(t, s, donor.ID, shared, func(f *database.BookFile) { f.Duration = database.Secs(30) })
 	var rows []database.BookFile
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		b := urBook(t, s, fmt.Sprintf("Batman: Issue %d", i+1), dir)
 		rows = append(rows, urFile(t, s, b.ID, shared, nil))
 	}

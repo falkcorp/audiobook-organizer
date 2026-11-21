@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -102,6 +103,9 @@ var reachHiddenExcluded = map[string]string{
 	reachFuncID(reachHandlersDir+"/user_merge.go", "UserHandler", "mergeActor"):            "pinned route by route by reachHandlerAdminFuncs",
 	reachFuncID(reachHandlersDir+"/abs/collections.go", "Handler", "canManageCollections"): "the ABS delegated surface, replayed by F4-07-ABS-REPLAY",
 	reachFuncID(reachHandlersDir+"/opsv3/handler.go", "", "StrictAuthz"):                   "the default for a handler the server did not wire; the wired Authz is opsV3Authz, a site",
+	// Seen once go fix turned its role loop into slices.Contains (the form
+	// reachIsPermissionCall matches); the loop form had always escaped the pin.
+	reachFuncID(reachSrvDir+"/guest_key_reissue.go", "", "guestKeyFirstKeyBlocked"): "tests the TARGET user's roles (an admin gets no first phone-app key), not the caller's; the caller is gated by the route's ownerCredRoute",
 }
 
 // reachIsPermissionCall matches auth.Can(...) and slices.Contains(<x>.Roles, adminRole
@@ -310,9 +314,7 @@ func TestReachHiddenSites_ThePinCatchesARenamedARemovedAndAnAddedSite(t *testing
 	}
 	mutate := func(file, from, to string) map[string][]byte {
 		out := map[string][]byte{}
-		for k, v := range files {
-			out[k] = v
-		}
+		maps.Copy(out, files)
 		src := string(files[file])
 		if !strings.Contains(src, from) {
 			t.Fatalf("%s does not contain %q", file, from)

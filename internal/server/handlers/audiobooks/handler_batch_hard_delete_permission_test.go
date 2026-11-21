@@ -8,6 +8,7 @@ package audiobookshandler_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -267,12 +268,7 @@ func TestBatchRoutes_PassTheCallersTrashGrantsToTheService(t *testing.T) {
 	}
 	holdsOnly := func(held ...auth.Permission) audiobookshandler.PermissionHolds {
 		return func(_ *gin.Context, p auth.Permission) bool {
-			for _, h := range held {
-				if h == p {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(held, p)
 		}
 	}
 	for _, rt := range routes {

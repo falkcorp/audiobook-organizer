@@ -167,21 +167,19 @@ func (p *Plugin) runFilePathCollisionReport(ctx context.Context, rawParams json.
 // so it is handed no writer.
 func (p *Plugin) filePathCollisionReportKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(filePathCollisionReportKind, tasks.TaskSpec[filePathCollisionReportParams, filePathCollisionReport]{
-		Common: tasks.Common{
-			Title: "Book.FilePath collision report",
-			Help: "Enumerates every book's FilePath and reports how many books share a " +
-				"FilePath with another book -- the population a future write path must check " +
-				"before trusting Book.FilePath as an identity signal (e.g. as a repoint source). " +
-				"REPORT-ONLY: takes no action and modifies nothing.",
-			Effects:        tasks.ReadOnly(),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.filepath-collision-report"),
-			Timeout:        30 * time.Minute,
-			Schedule:       sched,
-			Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Book.FilePath collision report",
+		Help: "Enumerates every book's FilePath and reports how many books share a " +
+			"FilePath with another book -- the population a future write path must check " +
+			"before trusting Book.FilePath as an identity signal (e.g. as a repoint source). " +
+			"REPORT-ONLY: takes no action and modifies nothing.",
+		Effects:        tasks.ReadOnly(),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.filepath-collision-report"),
+		Timeout:        30 * time.Minute,
+		Schedule:       sched,
+		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in filePathCollisionReportParams) (filePathCollisionReport, error) {
 			base, err := t6g4NativeBase(rc, deps, false)
 			if err != nil {

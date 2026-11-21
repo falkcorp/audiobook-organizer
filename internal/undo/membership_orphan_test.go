@@ -186,14 +186,12 @@ func TestJournalOrder_SequenceBeatsAWallClockThatSteppedBack(t *testing.T) {
 	require.Equal(t, "r2b", PairedRow([]*database.OperationChange{m2, r2, &late}, m2).ID)
 	// A marker stamped by a mark whose wall time is before a later row's creation
 	// but whose sequence is after it still stood when that row was written.
-	m1.RevertedAt, m1.RevertedSeq = ptr(base.Add(-3*time.Hour)), 250
+	m1.RevertedAt, m1.RevertedSeq = new(base.Add(-3*time.Hour)), 250
 	require.Equal(t, int64(250), RevertedKey(m1))
 	require.Equal(t, int64(0), RevertedKey(m2))
 	require.Equal(t, int64(100), CreatedKey(m1))
 	legacy := &database.OperationChange{CreatedAt: base}
 	require.Equal(t, base.UnixNano(), CreatedKey(legacy))
-	legacy.RevertedAt = ptr(base.Add(time.Second))
+	legacy.RevertedAt = new(base.Add(time.Second))
 	require.Equal(t, base.Add(time.Second).UnixNano(), RevertedKey(legacy))
 }
-
-func ptr[T any](v T) *T { return &v }

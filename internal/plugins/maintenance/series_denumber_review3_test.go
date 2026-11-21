@@ -174,7 +174,7 @@ func TestSeriesDenumber_Round3_B2d_ARunOfPartsOfOneBookIsHeld(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newDenumberLib(t)
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				sid := 60 + i
 				l.addSeries(sid, "Bane "+zero2(i+1), denumberAuthor)
 				l.addBookT(bookIDFor(sid, 0), sid, -1, "", tc.titles[i])

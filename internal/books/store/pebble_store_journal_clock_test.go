@@ -63,7 +63,7 @@ func TestJournalClock_StrictlyIncreasesUnderAFrozenAndSteppedBackWallClock(t *te
 	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
 	c.wall = wall.now
 	_, prev, _ := c.stamp(nil)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		switch {
 		case i%100 == 50:
 			wall.set(wall.now().Add(-time.Hour)) // stepped back
@@ -90,15 +90,13 @@ func TestJournalClock_ConcurrentValuesAreDistinct(t *testing.T) {
 	const workers, per = 16, 500
 	out := make(chan int64, workers*per)
 	var wg sync.WaitGroup
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < per; i++ {
+	for range workers {
+		wg.Go(func() {
+			for range per {
 				_, n, _ := c.stamp(nil)
 				out <- n
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(out)
@@ -132,7 +130,7 @@ func TestJournalClock_CeilingIsPersistedOncePerWindowAndBeforeAnyValueReachesIt(
 		return nil
 	}
 	var first int64
-	for i := 0; i < 10_000; i++ { // a frozen wall clock: each value is one nanosecond on
+	for i := range 10_000 { // a frozen wall clock: each value is one nanosecond on
 		_, n, err := c.stamp(persist)
 		if err != nil {
 			t.Fatal(err)
@@ -371,11 +369,9 @@ func TestJournalClock_ConcurrentCreatesNeverLeaveTheCeilingBehindACommittedRow(t
 	const writers, per = 12, 25
 	var wg sync.WaitGroup
 	var maxSeq atomic.Int64
-	for g := 0; g < writers; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < per; i++ {
+	for g := range writers {
+		wg.Go(func() {
+			for i := range per {
 				if i%5 == 0 {
 					wall.set(wall.now().Add(40 * time.Second)) // reaches the ceiling now and then
 				}
@@ -399,7 +395,7 @@ func TestJournalClock_ConcurrentCreatesNeverLeaveTheCeilingBehindACommittedRow(t
 					}
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	w.finish(t)
@@ -434,8 +430,8 @@ func TestJournalClock_ConcurrentMarksNeverLeaveTheCeilingBehindACommittedMark(t 
 	wall := &steppingClock{t: time.Unix(1_800_000_000, 0)}
 	p.SetJournalWallClock(wall.now)
 	const writers, per = 12, 20
-	for g := 0; g < writers; g++ {
-		for i := 0; i < per; i++ {
+	for g := range writers {
+		for i := range per {
 			if err := p.CreateOperationChange(listRow(fmt.Sprintf("op%d", g), fmt.Sprintf("c%d", i), "S", "collection-held:L")); err != nil {
 				t.Fatal(err)
 			}
@@ -446,11 +442,9 @@ func TestJournalClock_ConcurrentMarksNeverLeaveTheCeilingBehindACommittedMark(t 
 	w := watchCeiling(p)
 	var wg sync.WaitGroup
 	var maxSeq atomic.Int64
-	for g := 0; g < writers; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := 0; i < per; i++ {
+	for g := range writers {
+		wg.Go(func() {
+			for i := range per {
 				if i%4 == 0 {
 					wall.set(wall.now().Add(45 * time.Second))
 				}
@@ -476,7 +470,7 @@ func TestJournalClock_ConcurrentMarksNeverLeaveTheCeilingBehindACommittedMark(t 
 					}
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	w.finish(t)
@@ -928,9 +922,7 @@ func BenchmarkJournalWrite(b *testing.B) {
 			b.ResetTimer()
 			var wg sync.WaitGroup
 			for g := 0; g < tc.workers; g++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					for {
 						i := seq.Add(1)
 						if i > int64(b.N) {
@@ -949,7 +941,7 @@ func BenchmarkJournalWrite(b *testing.B) {
 							return
 						}
 					}
-				}()
+				})
 			}
 			wg.Wait()
 		})

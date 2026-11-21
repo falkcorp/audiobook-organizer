@@ -136,7 +136,7 @@ func ChainPathResolvers(resolvers ...PathResolver) PathResolver {
 	return func(entityType, id string) ([]string, error) {
 		cur := id
 		path := []string{id}
-		for hop := 0; hop < maxTombstoneHops; hop++ {
+		for range maxTombstoneHops {
 			moved := false
 			for _, r := range resolvers {
 				p, err := r(entityType, cur)

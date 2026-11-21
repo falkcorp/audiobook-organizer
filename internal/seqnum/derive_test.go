@@ -77,7 +77,7 @@ func TestDerive_NeverRejectsAMatch(t *testing.T) {
 	r := rand.New(rand.NewPCG(71, 73))
 	exprs, texts := scaled(4000), 160
 	withNeed, matchesUnderNeed, rejected := 0, 0, 0
-	for i := 0; i < exprs; i++ {
+	for range exprs {
 		expr := randomExpr(r, 4)
 		re, err := regexp.Compile(expr)
 		if err != nil {
@@ -87,7 +87,7 @@ func TestDerive_NeverRejectsAMatch(t *testing.T) {
 		if g.need != nil {
 			withNeed++
 		}
-		for j := 0; j < texts; j++ {
+		for range texts {
 			s := randomText(r)
 			if re.MatchString(s) {
 				if g.need != nil {

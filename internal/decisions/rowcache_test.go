@@ -189,7 +189,7 @@ func TestDecisionKeysHaveOneWriter(t *testing.T) {
 		if rerr != nil {
 			return rerr
 		}
-		for _, line := range strings.Split(string(src), "\n") {
+		for line := range strings.SplitSeq(string(src), "\n") {
 			if trimmed := strings.TrimSpace(line); apply.MatchString(line) && !strings.HasPrefix(trimmed, "//") {
 				inPackage++
 				require.Equal(t, "store.go", filepath.Base(path), "ApplyRawBatch outside store.go")

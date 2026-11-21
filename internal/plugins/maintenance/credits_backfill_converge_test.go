@@ -178,7 +178,7 @@ func cbCreatorEdit(t *testing.T, f *cbFixture, also func()) *cbInterleavingModif
 			t.Errorf("interleaved read: %v", err)
 			return
 		}
-		b.Narrator = strp("Selina Kyle")
+		b.Narrator = new("Selina Kyle")
 		if _, err := f.s.UpdateBook("z-solo", b); err != nil {
 			t.Errorf("interleaved edit: %v", err)
 		}
@@ -240,7 +240,7 @@ func TestCreditsBackfill_RecordOfAFailedCreatorIsDeletedNotLeftForTheSplitBook(t
 func TestCreditsBackfill_UnusedRecordThatGainedALinkIsKept(t *testing.T) {
 	f := cbSplitFixture(t, "z-solo", "a-split")
 	alfred := f.author("Alfred Pennyworth")
-	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = intp(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
+	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = new(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
 	link := func() {
 		n, err := f.s.GetNarratorByName("Renee Montoya")
 		if err != nil || n == nil {
@@ -344,7 +344,7 @@ func cbLeftoverFixture(t *testing.T, soloNamesHer bool) (*cbFixture, *database.N
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.Narrator = strp("Harvey Bullock")
+		b.Narrator = new("Harvey Bullock")
 		if _, err := f.s.UpdateBook("z-solo", b); err != nil {
 			t.Fatal(err)
 		}
@@ -522,7 +522,7 @@ func TestCreditsBackfill_LinkedRecordNamedByTheJournalIsNotALeftover(t *testing.
 	alfred := f.author("Alfred Pennyworth")
 	// f.book deletes the records the fixture did not register; this one is.
 	f.narrators[rec.ID] = true
-	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = intp(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
+	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = new(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
 	if err := f.s.SetBookNarrators("bystander", []database.BookNarrator{{BookID: "bystander", NarratorID: rec.ID, Role: "narrator"}}); err != nil {
 		t.Fatal(err)
 	}

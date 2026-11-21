@@ -166,10 +166,7 @@ func tkOracle(t testing.TB, m *MemStore, sortBy string, asc bool, limit, offset 
 	if offset >= len(matches) {
 		return []BookSummary{}
 	}
-	end := len(matches)
-	if offset+limit < end {
-		end = offset + limit
-	}
+	end := min(offset+limit, len(matches))
 	out := make([]BookSummary, 0, end-offset)
 	for i := offset; i < end; i++ {
 		out = append(out, bookToSummary(&matches[i]))

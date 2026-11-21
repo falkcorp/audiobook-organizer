@@ -201,7 +201,7 @@ func TestStart_LogsBasicGatePosture(t *testing.T) {
 				return
 			}
 			var line string
-			for _, l := range strings.Split(out, "\n") {
+			for l := range strings.SplitSeq(out, "\n") {
 				if strings.Contains(l, tc.wantLine) {
 					line = l
 					break

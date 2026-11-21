@@ -87,14 +87,12 @@ func (s *casStore) seriesOf(id string) int {
 	return 0
 }
 
-func intp(v int) *int { return &v }
-
 // --- phase 1 ---------------------------------------------------------------
 
 func TestCsUnlinkAndDeleteSeries_SkipsABookAnotherWriterMovedToAnotherSeries(t *testing.T) {
 	// "Batman 3" was listed in series 703 when the job read membership; the
 	// other writer filed it in series 900 before the unlink wrote.
-	store := newCasStore(database.Book{ID: "batman-3", SeriesID: intp(900), SeriesSequence: intp(3)})
+	store := newCasStore(database.Book{ID: "batman-3", SeriesID: new(900), SeriesSequence: new(3)})
 	members := database.SeriesBooksMap{703: {{ID: "batman-3"}}}
 
 	res, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "batman-3"}}, database.Series{ID: 703}, members)
@@ -122,7 +120,7 @@ func TestCsUnlinkAndDeleteSeries_SkipsABookAnotherWriterMovedToAnotherSeries(t *
 
 func TestCsUnlinkAndDeleteSeries_StillUnlinksABookThatNamesTheSeries(t *testing.T) {
 	// Positive control: without it a CAS that skips everything passes the test above.
-	store := newCasStore(database.Book{ID: "robin-1", SeriesID: intp(703), SeriesSequence: intp(1)})
+	store := newCasStore(database.Book{ID: "robin-1", SeriesID: new(703), SeriesSequence: new(1)})
 	members := database.SeriesBooksMap{703: {{ID: "robin-1"}}}
 
 	res, err := csUnlinkAndDeleteSeries(store, []database.BookCore{{ID: "robin-1"}}, database.Series{ID: 703}, members)
@@ -143,8 +141,8 @@ func TestCsUnlinkAndDeleteSeries_StillUnlinksABookThatNamesTheSeries(t *testing.
 
 func TestCsUnlinkAndDeleteSeries_UnlinksTheRestWhenOneBookMovedAway(t *testing.T) {
 	store := newCasStore(
-		database.Book{ID: "alfred-1", SeriesID: intp(703)},
-		database.Book{ID: "alfred-2", SeriesID: intp(900)},
+		database.Book{ID: "alfred-1", SeriesID: new(703)},
+		database.Book{ID: "alfred-2", SeriesID: new(900)},
 	)
 	members := database.SeriesBooksMap{703: {{ID: "alfred-1"}, {ID: "alfred-2"}}}
 
@@ -167,7 +165,7 @@ func TestCleanupSeriesRun_Phase1DoesNotClearTheLinkOfABookMovedSinceMembershipWa
 	var deleted []int
 	store := newCsPhase1Store(t, map[int]int{7: 1}, &deleted)
 	store.MockStore.GetBookByIDFunc = func(id string) (*database.Book, error) {
-		return &database.Book{ID: id, SeriesID: intp(900)}, nil
+		return &database.Book{ID: id, SeriesID: new(900)}, nil
 	}
 	var updated []string
 	store.MockStore.UpdateBookFunc = func(id string, b *database.Book) (*database.Book, error) {
@@ -199,7 +197,7 @@ func TestCsMergeSeriesGroup_DoesNotRehomeABookAnotherWriterMovedAway(t *testing.
 	// Series 7 is merged into keeper 1. "Batman 3" was listed in 7, but the other
 	// writer filed it in the plain series 900 first. Re-homing it onto 1 would be
 	// a wrong link.
-	store := newCasStore(database.Book{ID: "batman-3", SeriesID: intp(900)})
+	store := newCasStore(database.Book{ID: "batman-3", SeriesID: new(900)})
 	members := database.SeriesBooksMap{7: {{ID: "batman-3"}}}
 
 	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 1}, members)
@@ -227,7 +225,7 @@ func TestCsMergeSeriesGroup_DoesNotRehomeABookAnotherWriterMovedAway(t *testing.
 
 func TestCsMergeSeriesGroup_StillRehomesABookThatNamesTheSeries(t *testing.T) {
 	// Positive control.
-	store := newCasStore(database.Book{ID: "robin-1", SeriesID: intp(7)})
+	store := newCasStore(database.Book{ID: "robin-1", SeriesID: new(7)})
 	members := database.SeriesBooksMap{7: {{ID: "robin-1"}}}
 
 	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 1}, members)
@@ -244,7 +242,7 @@ func TestCsMergeSeriesGroup_StillRehomesABookThatNamesTheSeries(t *testing.T) {
 func TestCsMergeSeriesGroup_ABookAlreadyInTheKeeperIsNotASkip(t *testing.T) {
 	// A book already filed in the keeper is the old "nothing to write" case, not
 	// a concurrent mover: it counts as reassigned, not skipped.
-	store := newCasStore(database.Book{ID: "robin-1", SeriesID: intp(1)})
+	store := newCasStore(database.Book{ID: "robin-1", SeriesID: new(1)})
 	members := database.SeriesBooksMap{7: {{ID: "robin-1"}}}
 
 	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 1}, members)
@@ -260,7 +258,7 @@ func TestCsMergeSeriesGroup_ABookAlreadyInTheKeeperIsNotASkip(t *testing.T) {
 func TestCsMergeSeriesGroup_AHiddenRowStillRefusesTheDeleteWhenABookWasSkipped(t *testing.T) {
 	// refCounts says 3 rows reference series 7; the membership lists one, and that
 	// one moved away. Two rows are still unaccounted for, so the delete is refused.
-	store := newCasStore(database.Book{ID: "batman-3", SeriesID: intp(900)})
+	store := newCasStore(database.Book{ID: "batman-3", SeriesID: new(900)})
 	members := database.SeriesBooksMap{7: {{ID: "batman-3"}}}
 
 	res, err := csMergeSeriesGroup(store, 1, csSeries(7), map[int]int{7: 3}, members)

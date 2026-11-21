@@ -111,7 +111,7 @@ func TestTokens_NilSteps(t *testing.T) {
 func TestRun_ConcurrentRecordAndRead(t *testing.T) {
 	st := New().SetErrorLog(t.Logf)
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()

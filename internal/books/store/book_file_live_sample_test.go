@@ -55,7 +55,7 @@ func TestSampleLiveBookFilePathsUnder_ShortAnswerIsTheWholePopulation(t *testing
 	_, err := store.ModifyBook("trashed", func(b *Book) error { b.MarkedForDeletion = &yes; return nil })
 	require.NoError(t, err)
 
-	for i := 0; i < 20; i++ { // the start is random: every start must give the whole set
+	for range 20 { // the start is random: every start must give the whole set
 		got, err := store.SampleLiveBookFilePathsUnder(root, 50)
 		require.NoError(t, err)
 		require.Len(t, got, len(want), "%v", got)
@@ -70,12 +70,12 @@ func TestSampleLiveBookFilePathsUnder_ShortAnswerIsTheWholePopulation(t *testing
 // that read as "ready" cannot happen.
 func TestSampleLiveBookFilePathsUnder_FindsInRootFilesBehindManyOutsideOnes(t *testing.T) {
 	store := samplerStore(t)
-	for i := 0; i < 450; i++ {
+	for i := range 450 {
 		liveFile(t, store, fmt.Sprintf("out-%03d", i), fmt.Sprintf("/lib/Gotham/Arkham/%03d.m4b", i))
 	}
 	liveFile(t, store, "in-1", "/lib/Gotham/Wayne/hush.m4b")
 	liveFile(t, store, "in-2", "/lib/Gotham/Wayne/year-one.m4b")
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		got, err := store.SampleLiveBookFilePathsUnder("/lib/Gotham/Wayne", 50)
 		require.NoError(t, err)
 		assert.ElementsMatch(t, []string{"/lib/Gotham/Wayne/hush.m4b", "/lib/Gotham/Wayne/year-one.m4b"}, got)
@@ -86,7 +86,7 @@ func TestSampleLiveBookFilePathsUnder_FindsInRootFilesBehindManyOutsideOnes(t *t
 // over the library rather than being one run of neighbours.
 func TestSampleLiveBookFilePathsUnder_StopsAtKAndSpreads(t *testing.T) {
 	store := samplerStore(t)
-	for i := 0; i < 120; i++ {
+	for i := range 120 {
 		liveFile(t, store, fmt.Sprintf("b-%03d", i), fmt.Sprintf("/lib/Gotham/%c-Batcave/hush-%03d.m4b", 'A'+rune(i%26), i))
 	}
 	// A second file of an already-listed book is not a second sample.
@@ -164,12 +164,12 @@ func TestSampleLiveBookFilePathsUnder_EveryFolderIsSampledNotJustTheFirst(t *tes
 	store := samplerStore(t)
 	folders := []string{"Arkham", "Gotham", "Wayne"}
 	for _, folder := range folders {
-		for i := 0; i < 20; i++ {
+		for i := range 20 {
 			liveFile(t, store, fmt.Sprintf("%s-%02d", folder, i), fmt.Sprintf("/lib/Gotham/%s/hush-%02d.m4b", folder, i))
 		}
 	}
 	firstFolders := map[string]bool{}
-	for run := 0; run < 40; run++ {
+	for run := range 40 {
 		got, err := store.SampleLiveBookFilePathsUnder("/lib/Gotham", 5) // five chunks of one path
 		require.NoError(t, err)
 		require.Len(t, got, 5, "%v", got)
@@ -206,7 +206,7 @@ func TestSampleLiveBookFilePathsUnder_MemdbOffIsUnavailable(t *testing.T) {
 // ready library.
 func TestSampleLiveBookFilePathsUnder_ARowThatIsTheRootDoesNotHideTheLibrary(t *testing.T) {
 	store := samplerStore(t)
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		liveFile(t, store, fmt.Sprintf("b%02d", i), fmt.Sprintf("/lib/Gotham/Bruce Wayne/hush-%02d.m4b", i))
 	}
 	liveFile(t, store, "root-row", "/lib/Gotham/")

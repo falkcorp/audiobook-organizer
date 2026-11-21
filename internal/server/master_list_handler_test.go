@@ -339,7 +339,7 @@ func TestMasterListUpload_RetentionDefaultsWhenUnsetOrInvalid(t *testing.T) {
 		require.Equal(t, database.DefaultMasterListRetention, masterListRetention(), "retention %d", n)
 
 		var ids []string
-		for i := 0; i < database.DefaultMasterListRetention+2; i++ {
+		for i := range database.DefaultMasterListRetention + 2 {
 			resp := f.uploadMasterListID(t)
 			assert.Empty(t, resp.PruneError, "retention %d, upload %d", n, i)
 			ids = append(ids, resp.List.ID)

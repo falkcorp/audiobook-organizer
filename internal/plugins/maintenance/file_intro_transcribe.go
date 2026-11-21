@@ -483,32 +483,30 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 // preview, so a preview run counts and writes nothing.
 func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(fileIntroKind, tasks.TaskSpec[fileIntroNativeParams, fileIntroResult]{
-		Common: tasks.Common{
-			Title: "Transcribe file intros",
-			Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
-			// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
-			// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
-			// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
-			// books). ModifyBook also stamps the metadata cache stale on an identity
-			// change and stages the ident: rows (metadata_cache, indexes: the shared
-			// ModifyBook row, kinds_resources.go). The run's counters (the
-			// stats:transcribe-files key) have no pkg/ops constant and are written
-			// outside the gated writer on purpose: see t6g4StatsSink.
-			Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
-			Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:   tasks.ResumeContinue,
-			Priority: tasks.PriorityLow,
-			// HEAD's 30 days is above tasks.MaxTimeout. A timeout is terminal, so the
-			// run does not wait for it: it stops starting batches and yields
-			// (tasks.ErrContinueInPlace) fileIntroYieldMargin before the deadline,
-			// and the next attempt continues from the checkpoint. See
-			// fileIntroBatchLoop.run for what can still reach the timeout.
-			ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
-			Timeout:         tasks.MaxTimeout,
-			ProgressTimeout: 30 * time.Minute,
-			Schedule:        sched,
-			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Transcribe file intros",
+		Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
+		// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
+		// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
+		// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
+		// books). ModifyBook also stamps the metadata cache stale on an identity
+		// change and stages the ident: rows (metadata_cache, indexes: the shared
+		// ModifyBook row, kinds_resources.go). The run's counters (the
+		// stats:transcribe-files key) have no pkg/ops constant and are written
+		// outside the gated writer on purpose: see t6g4StatsSink.
+		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:   tasks.ResumeContinue,
+		Priority: tasks.PriorityLow,
+		// HEAD's 30 days is above tasks.MaxTimeout. A timeout is terminal, so the
+		// run does not wait for it: it stops starting batches and yields
+		// (tasks.ErrContinueInPlace) fileIntroYieldMargin before the deadline,
+		// and the next attempt continues from the checkpoint. See
+		// fileIntroBatchLoop.run for what can still reach the timeout.
+		ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
+		Timeout:         tasks.MaxTimeout,
+		ProgressTimeout: 30 * time.Minute,
+		Schedule:        sched,
+		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fileIntroNativeParams) (fileIntroResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileIntroResult{}, err

@@ -32,7 +32,7 @@ func movementResumeFixture(t *testing.T, n int) *Server {
 	// "Batman" and "Batman-Begins" straddle '/' in string order: the case a
 	// cursor over a raw WalkDir order gets wrong.
 	dirs := []string{"Batman", "Batman-Begins", "Robin", "Batman/Year One"}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		f := filepath.Join(root, dirs[i%len(dirs)], fmt.Sprintf("book-%03d.m4b", i))
 		require.NoError(t, os.MkdirAll(filepath.Dir(f), 0o755))
 		require.NoError(t, os.WriteFile(f, []byte("not a real m4b"), 0o644))

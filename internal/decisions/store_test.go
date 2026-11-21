@@ -473,12 +473,10 @@ func TestRecord_ConcurrentOnOneSubjectKeepsOneLinearChain(t *testing.T) {
 	recs := make([]*Record, n)
 	errs := make([]error, n)
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			d := []Decision{DecisionApplied, DecisionSkip, DecisionApprove, DecisionUndone}[i%4]
 			recs[i], errs[i] = s.Record(labelInput(d, "b1", "b2"))
-		}()
+		})
 	}
 	wg.Wait()
 	require.NoError(t, errors.Join(errs...)) // asserted here: FailNow is not allowed off the test goroutine
@@ -506,16 +504,14 @@ func TestRecord_ConcurrentRejectAndUnrejectOnDifferentSubjectsLeaveNoEdges(t *te
 	var wg sync.WaitGroup
 	errs := make([]error, 16)
 	for i := range 16 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			a, b, c := fmt.Sprintf("a%02d", i), fmt.Sprintf("b%02d", i), "shared"
 			if _, err := s.Record(humanReject(a, b, c)); err != nil {
 				errs[i] = err
 				return
 			}
 			_, errs[i] = s.Record(labelInput(DecisionUnreject, a, b, c))
-		}()
+		})
 	}
 	wg.Wait()
 	require.NoError(t, errors.Join(errs...))

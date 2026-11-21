@@ -41,7 +41,7 @@ var prefreezeRelease string
 // '#', trimmed. No such line, or more than one, is an error.
 func prefreezeTag(raw string) (string, error) {
 	tag := ""
-	for _, line := range strings.Split(raw, "\n") {
+	for line := range strings.SplitSeq(raw, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

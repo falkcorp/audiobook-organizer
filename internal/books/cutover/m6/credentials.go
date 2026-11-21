@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -278,9 +279,7 @@ func RepairMetadataCredentials(ctx context.Context, cfg RepairConfig) (RepairRes
 func repairRow(ctx context.Context, cfg RepairConfig, by string, row integrations.StoredInstance, plan foldPlan) error {
 	ref := row.Config.Ref
 	settings := make(map[string]any, len(row.Config.Settings))
-	for k, v := range row.Config.Settings {
-		settings[k] = v
-	}
+	maps.Copy(settings, row.Config.Settings)
 	for _, d := range plan.drop {
 		delete(settings, d.field)
 	}

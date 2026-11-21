@@ -52,8 +52,8 @@ func newLockedCasStore(locked, unreadable []string, rows ...database.Book) *lock
 
 func TestCsUnlinkAndDeleteSeries_LeavesAUserLockedBookAndKeepsTheSeries(t *testing.T) {
 	st := newLockedCasStore([]string{"locked-1"}, nil,
-		database.Book{ID: "locked-1", SeriesID: intp(703), SeriesSequence: intp(1)},
-		database.Book{ID: "free-1", SeriesID: intp(703), SeriesSequence: intp(1)},
+		database.Book{ID: "locked-1", SeriesID: new(703), SeriesSequence: new(1)},
+		database.Book{ID: "free-1", SeriesID: new(703), SeriesSequence: new(1)},
 	)
 	members := database.SeriesBooksMap{703: {{ID: "locked-1"}, {ID: "free-1"}}}
 
@@ -86,7 +86,7 @@ func TestCsUnlinkAndDeleteSeries_LeavesAUserLockedBookAndKeepsTheSeries(t *testi
 
 func TestCsUnlinkAndDeleteSeries_UnreadableLocksWriteNothingAndAbort(t *testing.T) {
 	st := newLockedCasStore(nil, []string{"bad-1"},
-		database.Book{ID: "bad-1", SeriesID: intp(703)},
+		database.Book{ID: "bad-1", SeriesID: new(703)},
 	)
 	members := database.SeriesBooksMap{703: {{ID: "bad-1"}}}
 
@@ -104,8 +104,8 @@ func TestCsUnlinkAndDeleteSeries_UnreadableLocksWriteNothingAndAbort(t *testing.
 
 func TestCsMergeSeriesGroup_LeavesAUserLockedBookAndKeepsTheMergedFromSeries(t *testing.T) {
 	st := newLockedCasStore([]string{"locked-1"}, nil,
-		database.Book{ID: "locked-1", SeriesID: intp(7)},
-		database.Book{ID: "free-1", SeriesID: intp(7)},
+		database.Book{ID: "locked-1", SeriesID: new(7)},
+		database.Book{ID: "free-1", SeriesID: new(7)},
 	)
 	members := database.SeriesBooksMap{7: {{ID: "locked-1"}, {ID: "free-1"}}}
 
@@ -130,7 +130,7 @@ func TestCsMergeSeriesGroup_LeavesAUserLockedBookAndKeepsTheMergedFromSeries(t *
 
 func TestCsMergeSeriesGroup_UnreadableLocksWriteNothingAndStopTheGroup(t *testing.T) {
 	st := newLockedCasStore(nil, []string{"bad-1"},
-		database.Book{ID: "bad-1", SeriesID: intp(7)},
+		database.Book{ID: "bad-1", SeriesID: new(7)},
 	)
 	members := database.SeriesBooksMap{7: {{ID: "bad-1"}}}
 
