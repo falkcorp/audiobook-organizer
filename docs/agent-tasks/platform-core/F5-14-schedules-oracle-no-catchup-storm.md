@@ -236,6 +236,9 @@ nothing reads `ScheduleFor` before F5-18.
 
 - Q-C is decided (D15): `deluge.protected-paths-sync` stays manual. If 05-download §10 still says it "gets a real
   schedule", 05-tasks §5T.3.8 and 14 §14.3.2 Q-C win; report the stale line to the lead.
-- `purge_old_logs`' HEAD default is 168 h while `core.log.schedules.journal_prune` defaults to 24 h (05-logging §5):
-  the parity test will show the difference unless M2's rename table carries HEAD's value into the core key; if it
-  does not, report it as a spec gap rather than changing either default.
+- `purge_old_logs`' HEAD schedule (a 168 h timer plus a nightly window run gated by `maintenance.purge_old_logs`,
+  both gated by a positive log retention) was core's 24 h interval with no window until F5-14b's follow-up:
+  `core.log.schedules.journal_prune` now defaults to 168 h in the nightly window at order 9, with
+  `core.log.journal.prune_in_window` (M2 carries `maintenance.purge_old_logs` into it) and a retention gate,
+  checked by `TestJournalPruneParity_HeadGolden` (books) and `TestJournalPruneParity` (core/kernel) over
+  `core/kernel/testdata/journal_prune_parity.json`.

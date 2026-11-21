@@ -230,7 +230,7 @@ var ownerKeys = []string{
 	"core.log.file.path", "core.log.file.max_size_mb", "core.log.file.max_files", "core.log.file.tee_stderr",
 	"core.log.add_source", "core.log.redact_keys",
 	"core.log.journal.enabled", "core.log.journal.min_level", "core.log.journal.retention_days",
-	"core.log.journal.queue_size",
+	"core.log.journal.queue_size", "core.log.journal.prune_in_window",
 	// 05-metadata M1.7, M2.7
 	"core.integrations.egress.lan_allow", "core.integrations.health_parallelism",
 	"core.integrations.probe_timeout", "core.integrations.drain_timeout",
@@ -637,6 +637,7 @@ func TestCoreSections_Defaults(t *testing.T) {
 		{"core.log", "core.log.file.max_files", int64(7)},
 		{"core.log.journal", "core.log.journal.retention_days", int64(90)},
 		{"core.log.journal", "core.log.journal.queue_size", int64(4096)},
+		{"core.log.journal", "core.log.journal.prune_in_window", true},
 		{"core.integrations", "core.integrations.max_instances_per_kind", int64(32)},
 		{"core.providerhttp", "core.providerhttp.fallback.rps", 2.0},
 		{"core.providerhttp", "core.providerhttp.hold.max", 24 * time.Hour},

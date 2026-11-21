@@ -1572,8 +1572,9 @@ retired env MAINTENANCE.PURGE_DELETED -> modules.books.maintenance.purge_deleted
 
 ## maintenance.purge_old_logs
 top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
-target key modules.books.maintenance.purge_old_logs convert=- env=ABO_BOOKS_MAINTENANCE_PURGE_OLD_LOGS
-retired env MAINTENANCE.PURGE_OLD_LOGS -> modules.books.maintenance.purge_old_logs warn
+target key core.log.journal.prune_in_window convert=- coined env=ABO_CORE_LOG_JOURNAL_PRUNE_IN_WINDOW
+note HEAD's log purge is core's core.log.journal.prune, whose window run this gates (books has no key for it)
+retired env MAINTENANCE.PURGE_OLD_LOGS -> core.log.journal.prune_in_window warn
 
 ## maintenance.db_optimize
 top=false stored=blob class=k blob=maintenance admin=false fail-closed=false url=false
