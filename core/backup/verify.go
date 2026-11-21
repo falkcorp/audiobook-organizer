@@ -97,12 +97,15 @@ func (s *Svc) verifyWith(ctx context.Context, path string, id ArchiveID, l Verif
 }
 
 // runVerify verifies the archive at path and returns the SHA-256 of the archive
-// file it vouched for: the sidecar-checked digest, or a legacy archive's scan
-// digest (which must equal the sidecar's when both exist). That digest is what
-// binds a legacy-abo/0 restore to the bytes verified, the archive having no MAC
-// and no per-entry digests (StageRestore). It is "" when the verification read
-// no digest: no sidecar, and a level that does not scan. With any error it is
-// "": a verification that failed vouches for nothing.
+// file it vouched for: at the checksum level the sidecar-checked digest; at the
+// entries and open levels the digest of the bytes the entries pass read (a
+// mediacore-backup/1 archive's tee, a legacy archive's scan), which must equal
+// the sidecar's when both exist. That digest is what binds a restore's staging
+// to the bytes verified (StageRestore): a legacy-abo/0 archive has no MAC and no
+// per-entry digests, and a foreign mediacore-backup/1 archive's MAC proves
+// nothing, so for both it is the only tie. It is "" only when the verification
+// read no digest: a checksum-level verification of an archive with no sidecar.
+// With any error it is "": a verification that failed vouches for nothing.
 func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum bool) (string, error) {
 	sum := ""
 	if !skipSum {
@@ -129,7 +132,7 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 		if err := a.consume(ctx, nil, ""); err != nil {
 			return "", err
 		}
-		return sum, nil
+		return vouch(a, sum)
 	}
 	if s.o.Inspector == nil {
 		return "", errors.New("backup: verify at the open level needs an Inspector")
@@ -157,6 +160,10 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 	if cerr != nil {
 		return "", cerr
 	}
+	read, err := vouch(a, sum)
+	if err != nil {
+		return "", err
+	}
 	info, err := s.o.Inspector.Inspect(ctx, scratch)
 	if err != nil {
 		return "", openRefusal("the archived store does not open", err)
@@ -164,7 +171,24 @@ func (s *Svc) runVerify(ctx context.Context, path string, l VerifyLevel, skipSum
 	if err := matchManifest(a.Manifest, info); err != nil {
 		return "", err
 	}
-	return sum, nil
+	return read, nil
+}
+
+// vouch is the digest a passing entries or open level vouches for: the SHA-256
+// of the bytes its entries pass read (a's tee, whole once consume finished).
+// When the sidecar check ran (checked != ""), that pass must have read the same
+// bytes: an archive replaced between the two reads would otherwise vouch for a
+// checksum whose file nobody checked the entries of, so it is refused, as
+// verifyLegacy refuses a scan of other bytes.
+func vouch(a *openedArchive, checked string) (string, error) {
+	read, err := a.fileSHA256()
+	if err != nil {
+		return "", err
+	}
+	if checked != "" && !strings.EqualFold(read, checked) {
+		return "", fmt.Errorf("%w: %w: the entries pass read other bytes than the checksum check", ErrChecksumMismatch, backuparchive.ErrChanged)
+	}
+	return read, nil
 }
 
 // matchManifest is VerifyOpen's comparison: the store read from the archive
