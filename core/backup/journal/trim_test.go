@@ -587,7 +587,11 @@ type faultFS struct {
 	cur   string
 	fail  map[string]error
 	crash map[string]bool
-	seen  []string
+	// flip, when set, makes every write inside the named label land with one
+	// byte changed and report success: the silent corruption a verified read
+	// back exists to catch.
+	flip string
+	seen []string
 	open  []FSFile
 }
 
@@ -691,6 +695,14 @@ func (w *faultFile) Write(p []byte) (int, error) {
 	if err := w.fs.hit("write"); err != nil {
 		return 0, err
 	}
+	w.fs.mu.Lock()
+	flip := w.fs.flip != "" && w.fs.flip == w.fs.cur
+	w.fs.mu.Unlock()
+	if flip && len(p) > 0 {
+		q := bytes.Clone(p)
+		q[len(q)/2] ^= 0x01
+		return w.FSFile.Write(q)
+	}
 	return w.FSFile.Write(p)
 }
 
@@ -757,6 +769,32 @@ func TestTrim_FailureBeforeTheRenameLeavesTheJournalUntouchedAndUsable(t *testin
 				t.Errorf("retry = %+v, %v", res, err)
 			}
 		})
+	}
+}
+
+// TestTrim_ACorruptCopyIsNeverRenamedIntoPlace: a copy that reads back different
+// from what was written (a write that reported success and landed wrong) is
+// removed, not renamed over the journal, and the journal is untouched and usable.
+func TestTrim_ACorruptCopyIsNeverRenamedIntoPlace(t *testing.T) {
+	ffs := newFaultFS()
+	fx, j := openFaulty(t, 5, ffs)
+	orig, err := os.ReadFile(fx.path)
+	must(t, err)
+	ffs.flip = LabelTrimCopy
+	if res, err := j.Trim(context.Background(), 3); err == nil {
+		t.Fatalf("Trim = %+v, nil; want the mismatch refused", res)
+	}
+	if ffs.saw(LabelTrimRename + ":rename") {
+		t.Error("the corrupt copy was renamed")
+	}
+	if got, _ := os.ReadFile(fx.path); !bytes.Equal(got, orig) {
+		t.Error("the journal changed")
+	}
+	fx.noTemp(t)
+	ffs.flip = ""
+	fx.commitRevoke(t, j, trimCast[5])
+	if res, err := j.Trim(context.Background(), 3); err != nil || res.Base != 3 {
+		t.Errorf("retry = %+v, %v", res, err)
 	}
 }
 
