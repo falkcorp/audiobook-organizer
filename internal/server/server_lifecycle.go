@@ -2712,10 +2712,31 @@ func allSet(keys []string, settingTrue func(key string) bool) bool {
 }
 
 func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
+	// Under core identity (WithIdentity, F4-08 B7) the atom's table entry
+	// decides, through the principal stage 12 bound. Books' EnableAuth is not
+	// read: core's mode is what makes a request anonymous, and the
+	// auth-disabled principal is judged by its own checker.
+	if s.identity != nil {
+		return s.identity.Bridge.RequirePerm(string(p))
+	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
 	return servermiddleware.RequirePermission(s.storeForWiring(), p)
+}
+
+// requireAuth is HEAD's RequireAuth on a gin route, or its adapter under core
+// identity (F4-08 B7): the bridge authenticates nothing itself, it hands HEAD's
+// handlers the user stage 12 resolved. With auth disabled and no identity it is
+// a pass-through, as it was.
+func (s *Server) requireAuth() gin.HandlerFunc {
+	if s.identity != nil {
+		return s.identity.Bridge.Authenticate(servermiddleware.BindCurrentUser)
+	}
+	if !config.AppConfig.EnableAuth {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return servermiddleware.RequireAuth(s.storeForWiring())
 }
 
 // versionedAPIPrefix matches the paths reserved for versioned APIs,
@@ -2805,10 +2826,7 @@ func (s *Server) setupRoutes() {
 	// is demanded: the payload is aggregate counters and Go runtime stats with
 	// no per-book or per-user labels, so gating it further would add operator
 	// friction without protecting anything more.
-	metricsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
-	if config.AppConfig.EnableAuth {
-		metricsAuth = servermiddleware.RequireAuth(s.storeForWiring())
-	}
+	metricsAuth := s.requireAuth()
 	s.router.GET("/metrics", buildTopLevelAuthChain(cfMW, metricsAuth,
 		gin.WrapH(s.MetricsHandler()))...)
 
@@ -2841,10 +2859,7 @@ func (s *Server) setupRoutes() {
 	// identity arrives only in that header — so EventSource 401'd in a reconnect
 	// loop and the UI showed a permanent "Connection lost" banner while every
 	// /api/v1 call succeeded.
-	eventsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
-	if config.AppConfig.EnableAuth {
-		eventsAuth = servermiddleware.RequireAuth(s.storeForWiring())
-	}
+	eventsAuth := s.requireAuth()
 	// endStreamsOnShutdown first: the stream ends when the stop closes the
 	// event streams, before the listener drains (R1-15).
 	s.router.GET("/api/events", append([]gin.HandlerFunc{s.endStreamsOnShutdown()},
@@ -2881,12 +2896,8 @@ func (s *Server) setupRoutes() {
 	if apiGroupHookForTest != nil {
 		bodyLimitMiddleware = chainHandlers(apiGroupHookForTest, bodyLimitMiddleware)
 	}
-	authMiddleware := gin.HandlerFunc(func(c *gin.Context) {
-		c.Next()
-	})
-	if config.AppConfig.EnableAuth {
-		authMiddleware = servermiddleware.RequireAuth(s.storeForWiring())
-	} else {
+	authMiddleware := s.requireAuth()
+	if s.identity == nil && !config.AppConfig.EnableAuth {
 		slog.Warn("authentication is disabled (enable_authfalse) — do not expose this server to untrusted networks")
 	}
 	if !config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
