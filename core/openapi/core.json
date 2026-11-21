@@ -4,9 +4,3901 @@
     "title": "core",
     "version": "0.1.0"
   },
-  "paths": {},
+  "paths": {
+    "/api/core/v1/api-keys": {
+      "get": {
+        "operationId": "core_listAllAPIKeys",
+        "summary": "List every user's API keys",
+        "description": "Each key carries its owner's username. Never the key or its hash. Lists the caller's own keys and those of owners whose roles the caller dominates; the rest are left out before the page is cut, so the total does not count them. A key whose owner no longer exists needs core:admin.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_APIKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage"
+      }
+    },
+    "/api/core/v1/api-keys/{id}": {
+      "delete": {
+        "operationId": "core_revokeAPIKey",
+        "summary": "Revoke any key by ID",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      },
+      "get": {
+        "operationId": "core_getAPIKey",
+        "summary": "Read one API key by ID",
+        "description": "The owner's, or a manager's who dominates the owner. Any other caller gets the answer a missing key gets.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.APIKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      },
+      "patch": {
+        "operationId": "core_setAPIKeyStatus",
+        "summary": "Disable, re-enable or revoke any key by ID",
+        "description": "Re-enabling needs an interactive sign-in; another user's key needs an interactiveOnly() manager who dominates the owner.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.KeyStatus"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.APIKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      }
+    },
+    "/api/core/v1/audit": {
+      "get": {
+        "operationId": "core_listAudit",
+        "summary": "Query the audit log, newest first",
+        "description": "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage, who also alone sees actor.credential_id and actor.client_addr. A caller without core:users.manage has withheld records read and dropped by the query, at most 10,000 per request: a page may then be short or empty with a next_cursor, and the client follows cursors until there is none. The auth-disabled principal is refused with 401.",
+        "tags": [
+          "audit"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.CursorPage_AuditRecord"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:audit.view"
+      }
+    },
+    "/api/core/v1/audit/export": {
+      "get": {
+        "operationId": "core_exportAudit",
+        "summary": "Export the audit log as NDJSON",
+        "description": "The same filters as the query, without a cursor or limit; one JSON record per line, newest first, each as the query returns it. The export is recorded (core.audit.export) before the first line and does not start if that record cannot be written. A read that fails part-way ends the stream with the line {\"error\":\"export_incomplete\"}.",
+        "tags": [
+          "audit"
+        ],
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:audit.view"
+      }
+    },
+    "/api/core/v1/auth/bootstrap": {
+      "post": {
+        "operationId": "core_redeemBootstrapToken",
+        "summary": "Exchange the bootstrap token for an administrator API key",
+        "description": "The key and a generated password (when the account is created) are shown once. A wrong, expired or spent token is the same 401 bootstrap_invalid.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.BootstrapRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.BootstrapResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/invites/accept": {
+      "post": {
+        "operationId": "core_acceptInvite",
+        "summary": "Accept an invite: create the account and open a session",
+        "description": "Sets the session cookie. The invite is re-checked at this moment: its creator must still exist and still be able to assign its role.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.InviteAccept"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.SessionOpened"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/invites/lookup": {
+      "post": {
+        "operationId": "core_lookupInvite",
+        "summary": "Show what an invite token would create",
+        "description": "The token travels in the body. An unknown, spent or expired token is the same 401 link_invalid.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.InviteLookup"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.InvitePreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/login": {
+      "post": {
+        "operationId": "core_login",
+        "summary": "Sign in with a username and password",
+        "description": "Sets the session cookie; the body carries no token. An unknown name, a wrong password and an account without a password are the same 401 invalid_credentials.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.SessionOpened"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/logout": {
+      "post": {
+        "operationId": "core_logout",
+        "summary": "End the current session and clear its cookie",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      }
+    },
+    "/api/core/v1/auth/oidc/{provider}/callback": {
+      "get": {
+        "operationId": "core_completeOIDC",
+        "summary": "Finish a sign-in at the provider's redirect",
+        "description": "Opens a web session, or on the native-app branch mints the app's code before any session exists and redirects to the app.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/oidc/{provider}/start": {
+      "get": {
+        "operationId": "core_startOIDC",
+        "summary": "Send the browser to an identity provider",
+        "description": "redirect_uri (alias callback) with code_challenge selects the native-app branch: an unlisted redirect_uri is an inline 400 with no Location, a method other than S256 is a 400.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "return",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "redirect_uri",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "callback",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code_challenge_method",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/providers": {
+      "get": {
+        "operationId": "core_listAuthProviders",
+        "summary": "List the enabled OIDC providers",
+        "description": "Ids and kinds only: never a client id or a secret.",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Providers"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/setup": {
+      "post": {
+        "operationId": "core_setupFirstAdmin",
+        "summary": "Create the first administrator",
+        "description": "Open only while no user exists, and then only with the bootstrap token or from a local request (05-authn §4.6). Once setup is closed (a user exists, or the caller may not use it) the answer is 403 setup_closed whatever the body says, so a closed setup reveals nothing. While it is open, a wrong, expired or spent bootstrap token is 401 bootstrap_invalid.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.SetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/status": {
+      "get": {
+        "operationId": "core_getAuthStatus",
+        "summary": "Whether the app has users and whether authentication is on",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Status"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/auth/temp-login/consume": {
+      "post": {
+        "operationId": "core_consumeTempLogin",
+        "summary": "Spend a temp-login or reset link and open a session",
+        "description": "Sets the session cookie. A reset link needs new_password, a plain link refuses it.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.TempLoginConsume"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.SessionOpened"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/me": {
+      "get": {
+        "operationId": "core_getMe",
+        "summary": "The signed-in user, its scopes and how it signed in",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Me"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      },
+      "patch": {
+        "operationId": "core_updateMe",
+        "summary": "Change the caller's own profile",
+        "description": "An e-mail change is an identity change: it clears the verified mark and revokes what the old address granted.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.ProfilePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/me/api-keys": {
+      "get": {
+        "operationId": "core_listMyAPIKeys",
+        "summary": "List the caller's API keys",
+        "description": "Never the key itself or its hash.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_APIKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      },
+      "post": {
+        "operationId": "core_createMyAPIKey",
+        "summary": "Mint an API key for the caller",
+        "description": "The key is shown once. Every scope must be held by the caller now; a key mints only for itself and only within its own expiry (05-authn §4.4).",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.KeyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.KeyCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      }
+    },
+    "/api/core/v1/me/api-keys/{id}": {
+      "delete": {
+        "operationId": "core_revokeMyAPIKey",
+        "summary": "Revoke one of the caller's keys",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      },
+      "patch": {
+        "operationId": "core_setMyAPIKeyStatus",
+        "summary": "Disable, re-enable or revoke one of the caller's keys",
+        "description": "A key manages only keys it may create; re-enabling needs an interactive sign-in, disabling and revoking do not (a restriction widens nothing).",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.KeyStatus"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.APIKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      }
+    },
+    "/api/core/v1/me/password": {
+      "put": {
+        "operationId": "core_changeMyPassword",
+        "summary": "Change the caller's own password",
+        "description": "Self only: {current, new}. There is no target-user field; an admin sends a reset link instead. Every other session of the account ends.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.PasswordChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/me/sessions": {
+      "get": {
+        "operationId": "core_listMySessions",
+        "summary": "List the caller's open sessions",
+        "description": "Public IDs only, never a token.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_Session"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self"
+      }
+    },
+    "/api/core/v1/me/sessions/{publicID}": {
+      "delete": {
+        "operationId": "core_revokeMySession",
+        "summary": "End one of the caller's sessions",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "publicID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:self",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/modules": {
+      "get": {
+        "operationId": "core_listModules",
+        "summary": "The server manifest: core and app identity, the enabled modules and what UI each may contribute",
+        "description": "The shell intersects this list with its compile-time registry and drops what is not declared (07 §7.5). A disabled module is absent from modules; disabled_modules lists them for a caller holding core:admin and is absent for every other caller.",
+        "tags": [
+          "modules"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.ModulesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      }
+    },
+    "/api/core/v1/openapi/{file}": {
+      "get": {
+        "operationId": "core_getOpenAPIDocument",
+        "summary": "The OpenAPI 3.1 document of one owner, as <owner>.json",
+        "description": "Takes <owner>.json, the owner being core or a module ID. A caller who is not signed in gets 401 unless core.http.openapi.public is true; an unknown owner is 404. The body is the document the build produced, byte for byte.",
+        "tags": [
+          "modules"
+        ],
+        "parameters": [
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/roles": {
+      "get": {
+        "operationId": "core_listRoles",
+        "summary": "List the roles, seed and custom, with their permissions and pending seed additions",
+        "description": "Newest release additions waiting for an administrator are in pending_seed (05-rbac §4.8). A stored role that cannot be decoded is left out and logged.",
+        "tags": [
+          "roles"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_RbacRole"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:roles.view"
+      },
+      "post": {
+        "operationId": "core_createRole",
+        "summary": "Create a custom role",
+        "description": "name is custom.<slug>. The caller must hold every permission it names (a wildcard needs the pattern itself or core:admin): 403 scope_escalation otherwise. A name in use is 409 role_exists.",
+        "tags": [
+          "roles"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.RbacRoleCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.RbacRole"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:roles.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/roles/{name}": {
+      "delete": {
+        "operationId": "core_deleteRole",
+        "summary": "Delete an unassigned custom role",
+        "description": "Needs If-Match: the role's version. A role any user holds is 409 role_in_use: ?reassign= is not built, so take the role from its holders first. admin is 409 role_locked and a seed role 409 seed_role_locked.",
+        "tags": [
+          "roles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:roles.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      },
+      "get": {
+        "operationId": "core_getRole",
+        "summary": "Read a role",
+        "description": "version is what a write names in If-Match.",
+        "tags": [
+          "roles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.RbacRole"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:roles.view"
+      },
+      "patch": {
+        "operationId": "core_updateRole",
+        "summary": "Change a custom role's title, description or permissions",
+        "description": "Needs If-Match: the role's version (428 without it, 412 when it is stale). A field the body omits keeps its value; permissions replaces the set. The caller must hold every permission of the old and the new set (403 scope_escalation). admin is 409 role_locked and a seed role 409 seed_role_locked. A change that takes core:admin from the last role that grants it to an active user is 409 last_admin.",
+        "tags": [
+          "roles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.RbacRolePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.RbacRole"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:roles.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/roles/{name}/accept-seed": {
+      "post": {
+        "operationId": "core_acceptRoleSeed",
+        "summary": "Make a seed role's pending release additions effective",
+        "description": "The one write a seed role allows (05-rbac §4.8). Needs If-Match: the role's version. The caller must hold every permission of the resulting set (403 scope_escalation). A role with nothing pending is 409 no_pending_seed.",
+        "tags": [
+          "roles"
+        ],
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.RbacRole"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:roles.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/settings": {
+      "get": {
+        "operationId": "core_getSettings",
+        "summary": "Every key of the sections the caller may read, as {path: key state}",
+        "description": "A secret key shows only whether a value is set, its source and who wrote it; never a value, a mask or a hash.",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.SettingsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      },
+      "patch": {
+        "operationId": "core_updateSettings",
+        "summary": "Store and unset settings in one commit",
+        "description": "Body {set: {path: value}, unset: [path]}. 400 unknown_key; 403 permission_denied (need: key to the section's write permission) or protection_required (need: key to the protection level); 409 locked (locked_by: key to the operator layer); 422 validation_failed (one error per key); 500 on a storage failure. 200 carries restart_pending and post_commit_error when present. A secret key's value is a JSON string and is never returned.",
+        "tags": [
+          "settings"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.SettingsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.SettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      }
+    },
+    "/api/core/v1/settings/schema": {
+      "get": {
+        "operationId": "core_getSettingsSchema",
+        "summary": "The settings schema (JSON Schema 2020-12), one property per section the caller may read",
+        "description": "Vendor keywords: x-mediacore-reload, x-mediacore-protect, x-mediacore-secret, x-mediacore-fail-closed; secret keys carry writeOnly.",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Value"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      }
+    },
+    "/api/core/v1/system/factory-reset": {
+      "post": {
+        "operationId": "core_factoryReset",
+        "summary": "Stage a factory reset; it runs when the service restarts",
+        "description": "Body {kind: \"factory\" (default) or \"store\", confirm: \"RESET\", delete_library_files?: bool (default false), library_root?, library_file_count?}. 422 confirm_required without the confirm; 422 library_files_confirm_required, carrying the current library_root and library_file_count, when delete_library_files is true and they do not match the preflight; 422 reset_request_invalid; 400 reset_refused; 409 swap_pending. Nothing is staged on any refusal. 200 {reset_id, message} plus library_root and library_file_count when files will be deleted. Files deleted by a reset are not restored.",
+        "tags": [
+          "system"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.ResetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.FactoryResetResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:admin",
+        "x-mediacore-guards": [
+          "interactive",
+          "owner"
+        ]
+      }
+    },
+    "/api/core/v1/ui/csp-report": {
+      "post": {
+        "operationId": "core_reportCSPViolation",
+        "summary": "Receive a browser's Content-Security-Policy violation report",
+        "description": "Accepts application/csp-report (report-uri), application/reports+json (Reporting API, an array) and application/json, at most ten reports per request. Public because a browser sends a report with no credential. Only the violated directive is read, matched against the CSP directive names (anything else is counted as other); no URL or blocked-uri is logged or kept. Answers 204 for any well-formed request, whether or not it held a report.",
+        "tags": [
+          "ui"
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/ui/diagnostics": {
+      "post": {
+        "operationId": "core_reportUIDiagnostic",
+        "summary": "Report one UI diagnostic",
+        "description": "The shell reports each diagnostic kind once per page load (07 §7.5.2). Only kind and module are read, and both are matched against closed lists: an unknown kind or module is counted as other, and no submitted text is logged or kept. Answers 204 whether or not the server accepts diagnostics.",
+        "tags": [
+          "ui"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.UIDiagnostic"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      }
+    },
+    "/api/core/v1/users": {
+      "get": {
+        "operationId": "core_listUsers",
+        "summary": "List users",
+        "description": "Filter by status or role.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.view"
+      }
+    },
+    "/api/core/v1/users/invites": {
+      "get": {
+        "operationId": "core_listInvites",
+        "summary": "List open invites",
+        "description": "Never a token or a link.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_Invite"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage"
+      },
+      "post": {
+        "operationId": "core_createInvite",
+        "summary": "Invite a user",
+        "description": "The role must be one the caller may assign. The link is shown once.",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.InviteCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.InviteCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/invites/{id}": {
+      "delete": {
+        "operationId": "core_deleteInvite",
+        "summary": "Delete an open invite",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}": {
+      "delete": {
+        "operationId": "core_deleteUser",
+        "summary": "Delete a user",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      },
+      "get": {
+        "operationId": "core_getUser",
+        "summary": "Read one user",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.view"
+      }
+    },
+    "/api/core/v1/users/{id}/api-keys": {
+      "get": {
+        "operationId": "core_listUserAPIKeys",
+        "summary": "List one user's API keys",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_APIKey"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage"
+      },
+      "post": {
+        "operationId": "core_createUserAPIKey",
+        "summary": "Mint an API key for another user",
+        "description": "Needs dominance over the user and scopes the user's roles hold too. The key is shown once.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.KeyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.KeyCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/disable": {
+      "post": {
+        "operationId": "core_disableUser",
+        "summary": "Disable a user",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/enable": {
+      "post": {
+        "operationId": "core_enableUser",
+        "summary": "Enable a user",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/reset-password": {
+      "post": {
+        "operationId": "core_resetUserPassword",
+        "summary": "Mint a password reset link for a user",
+        "description": "There is no route that sets another user's password. The link is shown once and ends every session of the user.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.LinkCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/review-admin": {
+      "post": {
+        "operationId": "core_acknowledgeAdminReview",
+        "summary": "Acknowledge one core:admin holder a restore listed for review",
+        "description": "After a restore with no pre-swap store every core:admin holder is listed for review, and health reports restore_admins_review until an interactive core:admin session has acknowledged each one (05-rbac 7.1); this route acknowledges the holder in the path and audits core.role.review_admin. The holder is looked up in the restore report, not among the users: an account that is not listed (never listed, already acknowledged, or deleted and acknowledged since) is 404 not_found, so acknowledging twice answers 404 the second time and records nothing. Acknowledging yourself is allowed.",
+        "tags": [
+          "roles"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:admin",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/roles": {
+      "put": {
+        "operationId": "core_setUserRoles",
+        "summary": "Replace a user's roles",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/core.RolesReplace"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/sessions": {
+      "get": {
+        "operationId": "core_listUserSessions",
+        "summary": "List a user's open sessions",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_Session"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage"
+      }
+    },
+    "/api/core/v1/users/{id}/sessions/{publicID}": {
+      "delete": {
+        "operationId": "core_revokeUserSession",
+        "summary": "End one of a user's sessions",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "publicID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/users/{id}/temp-login": {
+      "post": {
+        "operationId": "core_mintTempLogin",
+        "summary": "Mint a temp-login link for a user",
+        "description": "The link is shown once.",
+        "tags": [
+          "auth"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.LinkCreated"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "core:users.manage",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    }
+  },
   "components": {
     "schemas": {
+      "core.APIKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "owner_username": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "revoked_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "last_used_ip": {
+            "type": "string"
+          },
+          "use_count": {
+            "type": "integer"
+          },
+          "imported": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "owner",
+          "name",
+          "scopes",
+          "status",
+          "created_at",
+          "use_count",
+          "imported"
+        ],
+        "additionalProperties": false
+      },
+      "core.BootstrapRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "additionalProperties": false
+      },
+      "core.BootstrapResult": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "email_verified": {
+                "type": "boolean"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "roles": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string"
+              },
+              "has_password": {
+                "type": "boolean"
+              },
+              "password_reset_required": {
+                "type": "boolean"
+              },
+              "sign_in_restricted": {
+                "type": "boolean"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "username",
+              "email_verified",
+              "roles",
+              "status",
+              "has_password",
+              "password_reset_required",
+              "sign_in_restricted",
+              "created_at",
+              "updated_at"
+            ],
+            "additionalProperties": false
+          },
+          "generated_password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "key_id",
+          "expires_at",
+          "user"
+        ],
+        "additionalProperties": false
+      },
+      "core.CursorPage_AuditRecord": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "id": {
+                  "type": "string"
+                },
+                "time": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "actor": {
+                  "type": "object",
+                  "properties": {
+                    "user_id": {
+                      "type": "string"
+                    },
+                    "username": {
+                      "type": "string"
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "credential_id": {
+                      "type": "string"
+                    },
+                    "client_addr": {
+                      "type": "string"
+                    },
+                    "user_agent": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "user_id",
+                    "username",
+                    "method",
+                    "credential_id",
+                    "client_addr",
+                    "user_agent"
+                  ],
+                  "additionalProperties": false
+                },
+                "target": {
+                  "type": "object",
+                  "properties": {
+                    "module": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "module",
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false
+                },
+                "permission": {
+                  "type": "string"
+                },
+                "route": {
+                  "type": "string"
+                },
+                "request_id": {
+                  "type": "string"
+                },
+                "trace_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "details": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "coalesced": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 4294967295
+                }
+              },
+              "required": [
+                "seq",
+                "id",
+                "time",
+                "action",
+                "outcome",
+                "actor",
+                "target",
+                "permission",
+                "route",
+                "request_id",
+                "trace_id",
+                "reason",
+                "coalesced"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "core.FactoryResetResponse": {
+        "type": "object",
+        "properties": {
+          "reset_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "library_root": {
+            "type": "string"
+          },
+          "library_file_count": {
+            "type": [
+              "null",
+              "integer"
+            ]
+          }
+        },
+        "required": [
+          "reset_id",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "core.InviteAccept": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ],
+        "additionalProperties": false
+      },
+      "core.InviteCreate": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "role"
+        ],
+        "additionalProperties": false
+      },
+      "core.InviteCreated": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string"
+          },
+          "invite": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "created_by": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "username",
+              "role",
+              "created_by",
+              "created_at",
+              "expires_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "link",
+          "invite"
+        ],
+        "additionalProperties": false
+      },
+      "core.InviteLookup": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "additionalProperties": false
+      },
+      "core.InvitePreview": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "username",
+          "role",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "core.KeyCreate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_in": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "scopes"
+        ],
+        "additionalProperties": false
+      },
+      "core.KeyCreated": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "api_key": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "owner_username": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "scopes": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_at": {
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "format": "date-time"
+              },
+              "revoked_at": {
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "format": "date-time"
+              },
+              "last_used_at": {
+                "type": [
+                  "null",
+                  "string"
+                ],
+                "format": "date-time"
+              },
+              "last_used_ip": {
+                "type": "string"
+              },
+              "use_count": {
+                "type": "integer"
+              },
+              "imported": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "owner",
+              "name",
+              "scopes",
+              "status",
+              "created_at",
+              "use_count",
+              "imported"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "key",
+          "api_key"
+        ],
+        "additionalProperties": false
+      },
+      "core.KeyStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "core.LinkCreated": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "link"
+        ],
+        "additionalProperties": false
+      },
+      "core.LoginRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "remember": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "additionalProperties": false
+      },
+      "core.Me": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "email_verified": {
+                "type": "boolean"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "roles": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string"
+              },
+              "has_password": {
+                "type": "boolean"
+              },
+              "password_reset_required": {
+                "type": "boolean"
+              },
+              "sign_in_restricted": {
+                "type": "boolean"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "username",
+              "email_verified",
+              "roles",
+              "status",
+              "has_password",
+              "password_reset_required",
+              "sign_in_restricted",
+              "created_at",
+              "updated_at"
+            ],
+            "additionalProperties": false
+          },
+          "permissions": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "method": {
+            "type": "string"
+          },
+          "owner_verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "user",
+          "permissions",
+          "method",
+          "owner_verified"
+        ],
+        "additionalProperties": false
+      },
+      "core.ModulesResponse": {
+        "type": "object",
+        "properties": {
+          "core": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "app": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "ui_build_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "display_name",
+              "version",
+              "ui_build_id"
+            ],
+            "additionalProperties": false
+          },
+          "restart_required": {
+            "type": "boolean"
+          },
+          "modules": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "ui": {
+                  "type": "object",
+                  "properties": {
+                    "pages": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "nav": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "settings_panels": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "widgets": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "banners": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "top_bar_items": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "user_page": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "activity_panes": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "setup_steps": {
+                      "type": [
+                        "null",
+                        "array"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "pages",
+                    "nav",
+                    "settings_panels",
+                    "widgets",
+                    "banners",
+                    "top_bar_items",
+                    "user_page",
+                    "activity_panes",
+                    "setup_steps"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "version",
+                "display_name",
+                "ui"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "disabled_modules": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "core",
+          "app",
+          "restart_required",
+          "modules"
+        ],
+        "additionalProperties": false
+      },
+      "core.Page_APIKey": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "owner_username": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "scopes": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "status": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "format": "date-time"
+                },
+                "revoked_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "format": "date-time"
+                },
+                "last_used_at": {
+                  "type": [
+                    "null",
+                    "string"
+                  ],
+                  "format": "date-time"
+                },
+                "last_used_ip": {
+                  "type": "string"
+                },
+                "use_count": {
+                  "type": "integer"
+                },
+                "imported": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "owner",
+                "name",
+                "scopes",
+                "status",
+                "created_at",
+                "use_count",
+                "imported"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "core.Page_Invite": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "username": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "created_by": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "username",
+                "role",
+                "created_by",
+                "created_at",
+                "expires_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "core.Page_RbacRole": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "locked": {
+                  "type": "boolean"
+                },
+                "permissions": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "pending_seed": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "version": {
+                  "type": "integer"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "name",
+                "title",
+                "description",
+                "origin",
+                "locked",
+                "permissions",
+                "pending_seed",
+                "version",
+                "created_at",
+                "updated_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "core.Page_Session": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "public_id": {
+                  "type": "string"
+                },
+                "user_agent": {
+                  "type": "string"
+                },
+                "client_addr": {
+                  "type": "string"
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "last_seen": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "current": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "public_id",
+                "origin",
+                "created_at",
+                "last_seen",
+                "expires_at",
+                "current"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "core.Page_User": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "username": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "email_verified": {
+                  "type": "boolean"
+                },
+                "display_name": {
+                  "type": "string"
+                },
+                "roles": {
+                  "type": [
+                    "null",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "status": {
+                  "type": "string"
+                },
+                "has_password": {
+                  "type": "boolean"
+                },
+                "password_reset_required": {
+                  "type": "boolean"
+                },
+                "sign_in_restricted": {
+                  "type": "boolean"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "id",
+                "username",
+                "email_verified",
+                "roles",
+                "status",
+                "has_password",
+                "password_reset_required",
+                "sign_in_restricted",
+                "created_at",
+                "updated_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "core.PasswordChange": {
+        "type": "object",
+        "properties": {
+          "current": {
+            "type": "string"
+          },
+          "new": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "current",
+          "new"
+        ],
+        "additionalProperties": false
+      },
       "core.Problem": {
         "type": "object",
         "properties": {
@@ -69,7 +3961,582 @@
           "request_id"
         ],
         "additionalProperties": false
-      }
+      },
+      "core.ProfilePatch": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "email": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "core.Providers": {
+        "type": "object",
+        "properties": {
+          "providers": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "providers"
+        ],
+        "additionalProperties": false
+      },
+      "core.RbacRole": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "locked": {
+            "type": "boolean"
+          },
+          "permissions": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "pending_seed": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "version": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "description",
+          "origin",
+          "locked",
+          "permissions",
+          "pending_seed",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "core.RbacRoleCreate": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "permissions": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "title",
+          "description",
+          "permissions"
+        ],
+        "additionalProperties": false
+      },
+      "core.RbacRolePatch": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "permissions": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "core.ResetRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "confirm": {
+            "type": "string"
+          },
+          "delete_library_files": {
+            "type": "boolean"
+          },
+          "library_root": {
+            "type": "string"
+          },
+          "library_file_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "confirm"
+        ],
+        "additionalProperties": false
+      },
+      "core.RolesReplace": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "roles"
+        ],
+        "additionalProperties": false
+      },
+      "core.SessionOpened": {
+        "type": "object",
+        "properties": {
+          "public_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "username": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "email_verified": {
+                "type": "boolean"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "roles": {
+                "type": [
+                  "null",
+                  "array"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "string"
+              },
+              "has_password": {
+                "type": "boolean"
+              },
+              "password_reset_required": {
+                "type": "boolean"
+              },
+              "sign_in_restricted": {
+                "type": "boolean"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "username",
+              "email_verified",
+              "roles",
+              "status",
+              "has_password",
+              "password_reset_required",
+              "sign_in_restricted",
+              "created_at",
+              "updated_at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "public_id",
+          "expires_at"
+        ],
+        "additionalProperties": false
+      },
+      "core.SettingsRequest": {
+        "type": "object",
+        "properties": {
+          "set": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "unset": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "core.SettingsResponse": {
+        "type": "object",
+        "properties": {
+          "generation": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "applied": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "restart_pending": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "post_commit_error": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "section": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "section",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "generation",
+          "applied"
+        ],
+        "additionalProperties": false
+      },
+      "core.SettingsView": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string"
+            },
+            "schema": true,
+            "effective": true,
+            "source": {
+              "type": "string"
+            },
+            "locked_by": {
+              "type": "string"
+            },
+            "reload": {
+              "type": "string"
+            },
+            "protection": {
+              "type": "string"
+            },
+            "fail_closed": {
+              "type": "boolean"
+            },
+            "pending": {
+              "type": "boolean"
+            },
+            "quarantined": {
+              "type": "boolean"
+            },
+            "secret": {
+              "type": [
+                "null",
+                "object"
+              ],
+              "properties": {
+                "set": {
+                  "type": "boolean"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_by": {
+                  "type": "string"
+                },
+                "unavailable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "set"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "path",
+            "section",
+            "schema",
+            "source",
+            "reload",
+            "protection"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "core.SetupRequest": {
+        "type": "object",
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "bootstrap_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "additionalProperties": false
+      },
+      "core.Status": {
+        "type": "object",
+        "properties": {
+          "has_users": {
+            "type": "boolean"
+          },
+          "auth_disabled": {
+            "type": "boolean"
+          },
+          "setup_required": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "has_users",
+          "auth_disabled",
+          "setup_required"
+        ],
+        "additionalProperties": false
+      },
+      "core.TempLoginConsume": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "additionalProperties": false
+      },
+      "core.UIDiagnostic": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "core.User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "email_verified": {
+            "type": "boolean"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "roles": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "has_password": {
+            "type": "boolean"
+          },
+          "password_reset_required": {
+            "type": "boolean"
+          },
+          "sign_in_restricted": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "email_verified",
+          "roles",
+          "status",
+          "has_password",
+          "password_reset_required",
+          "sign_in_restricted",
+          "created_at",
+          "updated_at"
+        ],
+        "additionalProperties": false
+      },
+      "core.Value": true
     },
     "securitySchemes": {
       "bearer": {
