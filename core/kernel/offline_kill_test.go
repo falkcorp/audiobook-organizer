@@ -43,8 +43,9 @@ func (k *killer) Enter(label string) func() {
 // killAt runs fn under a killer at kill point nth and returns the label it
 // was killed at, or "" with fn's error when it ran to the end. Every defer
 // of the offline command runs as the panic unwinds, as the process's exit
-// releases its locks.
-func killAt(fn func(ctx context.Context) error, build string, nth int) (label string, err error) {
+// releases its locks. probe (nil = the real filesystem's) is the swap's
+// device probe, a cross-device cell's model of a second filesystem.
+func killAt(fn func(ctx context.Context) error, build string, probe restorejournal.Probe, nth int) (label string, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			k, ok := r.(killed)
@@ -54,18 +55,33 @@ func killAt(fn func(ctx context.Context) error, build string, nth int) (label st
 			label = k.label
 		}
 	}()
-	ctx := bootseam.With(context.Background(), &bootseam.Seams{BuildID: build, Labels: &killer{nth: nth}})
+	ctx := bootseam.With(context.Background(), &bootseam.Seams{BuildID: build, Labels: &killer{nth: nth}, Probe: probe})
 	return "", fn(ctx)
 }
 
-// cleanLabels is every labelled operation of one clean run of fn, in order.
-func cleanLabels(t *testing.T, fn func(ctx context.Context) error, build string) []string {
+// cleanLabels is every labelled operation of one clean run of fn, in order,
+// with probe as killAt's.
+func cleanLabels(t *testing.T, fn func(ctx context.Context) error, build string, probe restorejournal.Probe) []string {
 	t.Helper()
-	probe := &killer{nth: -1}
-	if err := fn(bootseam.With(context.Background(), &bootseam.Seams{BuildID: build, Labels: probe})); err != nil {
+	k := &killer{nth: -1}
+	if err := fn(bootseam.With(context.Background(), &bootseam.Seams{BuildID: build, Labels: k, Probe: probe})); err != nil {
 		t.Fatalf("the clean run: %v", err)
 	}
-	return probe.labels
+	return k.labels
+}
+
+// killHost is one kill-matrix cell's host: newSwapHost's one filesystem, or
+// newCrossDeviceHost's state directory on another filesystem than the store
+// (the packaged layout, where the state files are staged on the state
+// directory's side), with the probe its kill runs pass to killAt.
+type killHost struct {
+	name string
+	host func(t *testing.T) (*swapHost, restorejournal.Probe)
+}
+
+var killHosts = []killHost{
+	{"one filesystem", func(t *testing.T) (*swapHost, restorejournal.Probe) { return newSwapHost(t), nil }},
+	{"state dir on another filesystem", newCrossDeviceHost},
 }
 
 // skippedKill is a label an in-process panic cannot model: storage.close is
@@ -86,10 +102,20 @@ var upgradedStep = storage.Migration{Version: 2, Name: "upgraded", Compat: stora
 // the in-flight rename moved after the renames (a kill mid-swap with no
 // in-flight file boots a half-swapped store) and applied_offline dropped
 // from the terminal steps (a kill before the in-flight file's delete halts
-// every boot).
+// every boot). Each cell runs on one filesystem and with the state directory
+// on another filesystem than the store, where the state file is staged on
+// the state directory's side and the store's copy beside the store.
 func TestOfflineRestoreKillMatrix(t *testing.T) {
+	for _, kh := range killHosts {
+		t.Run(kh.name, func(t *testing.T) { offlineRestoreKillMatrix(t, kh) })
+	}
+}
+
+func offlineRestoreKillMatrix(t *testing.T, kh killHost) {
+	var probe restorejournal.Probe
 	setup := func(t *testing.T) (*swapHost, string) {
-		h := newSwapHost(t)
+		var h *swapHost
+		h, probe = kh.host(t)
 		if err := os.MkdirAll(h.state, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +142,7 @@ func TestOfflineRestoreKillMatrix(t *testing.T) {
 		}
 	}
 	h, name := setup(t)
-	labels := cleanLabels(t, restore(h, name), swapBuild)
+	labels := cleanLabels(t, restore(h, name), swapBuild, probe)
 	if len(labels) < 10 {
 		t.Fatalf("a clean restore made %d labelled operations (%v); the matrix would prove nothing", len(labels), labels)
 	}
@@ -125,7 +151,7 @@ func TestOfflineRestoreKillMatrix(t *testing.T) {
 			continue
 		}
 		h, name := setup(t)
-		label, err := killAt(restore(h, name), swapBuild, i)
+		label, err := killAt(restore(h, name), swapBuild, probe, i)
 		if label == "" {
 			t.Fatalf("kill %d (%s): the restore ran to the end (%v); the clean run's labels changed", i, want, err)
 		}
@@ -159,11 +185,22 @@ func TestOfflineRestoreKillMatrix(t *testing.T) {
 // --checkpoint finishes it; a kill before the escape started leaves the
 // failed restore for the previous build to resume. Either way the store
 // ends the checkpoint's, the state file the checkpoint's once the escape
-// moved anything, and the slot empty.
+// moved anything, and the slot empty. Each cell runs on one filesystem and
+// with the state directory on another filesystem than the store, as
+// TestOfflineRestoreKillMatrix's do: the escape validates its placements of
+// the staged state files too.
 func TestEscapeKillMatrix(t *testing.T) {
+	for _, kh := range killHosts {
+		t.Run(kh.name, func(t *testing.T) { escapeKillMatrix(t, kh) })
+	}
+}
+
+func escapeKillMatrix(t *testing.T, kh killHost) {
 	const id, prevBuild = "r-checkpoint", "batcomputer-r0"
+	var probe restorejournal.Probe
 	setup := func(t *testing.T) (*swapHost, string) {
-		h := newSwapHost(t)
+		var h *swapHost
+		h, probe = kh.host(t)
 		if err := os.MkdirAll(h.state, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -179,7 +216,7 @@ func TestEscapeKillMatrix(t *testing.T) {
 		if err := os.WriteFile(h.keyFile(), []byte("joker"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		h.ctx = bootseam.With(t.Context(), &bootseam.Seams{BuildID: prevBuild})
+		h.ctx = bootseam.With(t.Context(), &bootseam.Seams{BuildID: prevBuild, Probe: probe})
 		return h, h.pointer()
 	}
 	escape := func(h *swapHost, name string) func(ctx context.Context) error {
@@ -189,7 +226,7 @@ func TestEscapeKillMatrix(t *testing.T) {
 		}
 	}
 	h, name := setup(t)
-	labels := cleanLabels(t, escape(h, name), prevBuild)
+	labels := cleanLabels(t, escape(h, name), prevBuild, probe)
 	if !strings.Contains(strings.Join(labels, " "), "swap.escape.place") {
 		t.Fatalf("a clean escape made no placement (%v)", labels)
 	}
@@ -198,7 +235,7 @@ func TestEscapeKillMatrix(t *testing.T) {
 			continue
 		}
 		h, name := setup(t)
-		label, err := killAt(escape(h, name), prevBuild, i)
+		label, err := killAt(escape(h, name), prevBuild, probe, i)
 		if label == "" {
 			t.Fatalf("kill %d (%s): the escape ran to the end (%v); the clean run's labels changed", i, want, err)
 		}

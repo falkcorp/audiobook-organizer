@@ -118,14 +118,17 @@ func (h *swapHost) slot() restorejournal.SlotState {
 }
 
 // assertNothingStaged fails when the slot holds a swap or a staging
-// directory was left beside the store.
+// directory was left beside the store or in the state directory (where a
+// state file under it is staged, restorejournal.StagingDest).
 func (h *swapHost) assertNothingStaged() {
 	h.t.Helper()
 	if st := h.slot(); st.Busy() {
 		h.t.Fatalf("slot = %+v, want empty", st)
 	}
-	if names, _ := os.ReadDir(filepath.Join(filepath.Dir(h.db), ".mediacore-restore")); len(names) > 0 {
-		h.t.Fatalf(".mediacore-restore holds %v, want nothing staged", names)
+	for _, dir := range []string{filepath.Dir(h.db), h.state} {
+		if names, _ := os.ReadDir(filepath.Join(dir, ".mediacore-restore")); len(names) > 0 {
+			h.t.Fatalf("%s/.mediacore-restore holds %v, want nothing staged", dir, names)
+		}
 	}
 }
 

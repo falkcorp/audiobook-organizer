@@ -69,17 +69,75 @@ func StagingDir(dbPath, id string) string {
 	return filepath.Join(filepath.Dir(dbPath), asideDir, id, leafStage)
 }
 
-// AsideRoots are the private directories a swap of id may create: the state
-// directory's restore/<id>, the DB parent's .mediacore-restore/<id>, and
-// one beside each target outside both. The swap's own bookkeeping goes in
-// the first.
+// stateLeaf is the directory under a staging directory that holds a
+// restore's staged state files, one per label, apart from the store an
+// archive extracts into staging/db.
+const stateLeaf = "state"
+
+// StagingDest is where a restore's stager stages the file that step d
+// renames onto target, label its state-file label (one path segment): the
+// twin of SetAsideDest, so the staged file lies on target's own filesystem
+// and the rename passes Validate. A target under the state directory is
+// staged at <stateDir>/.mediacore-restore/<id>/staging/state/<label>, a
+// target under the DB's parent at <db parent>/.mediacore-restore/<id>/
+// staging/state/<label> (StagingDir's state/), and every other target beside
+// itself, at <its parent>/.mediacore-restore/<id>/staging/state/<label>. The
+// state directory's first, as SetAsideDest's rule reads it.
+//
+// The state directory's staging is its private directory, not restore/<id>:
+// a staged item inside restore/ is refused (ValidateTargets), Stage refuses
+// an id whose restore/<id> exists, and an escape stages under a fresh id but
+// journals under the failed restore's.
+//
+// A packaged install keeps its state directory (/var/lib/app) on one
+// filesystem and its store on another; staging every state file beside the
+// store made the rename onto each one cross filesystems, and the checkpoint
+// restore, the only way back after an upgrade, was refused at staging.
+func StagingDest(stateDir, dbPath, id, target, label string) string {
+	return filepath.Join(stagingRoot(stateDir, dbPath, id, target), leafStage, stateLeaf, label)
+}
+
+// stagingRoot is the swap's private directory of id that StagingDest stages
+// target in.
+func stagingRoot(stateDir, dbPath, id, target string) string {
+	switch {
+	case under(target, stateDir):
+		return filepath.Join(filepath.Clean(stateDir), asideDir, id)
+	case under(target, filepath.Dir(filepath.Clean(dbPath))):
+		return filepath.Join(filepath.Dir(filepath.Clean(dbPath)), asideDir, id)
+	}
+	return filepath.Join(filepath.Dir(filepath.Clean(target)), asideDir, id)
+}
+
+// AsideRoots are the private directories a swap of id may create, its
+// stager's staging included: the state directory's restore/<id>, the DB
+// parent's .mediacore-restore/<id>, the state directory's
+// .mediacore-restore/<id> when a target lies under it (StagingDest), and one
+// beside each target outside both. The swap's own bookkeeping goes in the
+// first; every SetAsideDest, FailedDest and StagingDest of the targets lies
+// in one of them.
 func AsideRoots(stateDir, dbPath, id string, targets []string) []string {
 	out := []string{JournalDir(stateDir, id), filepath.Join(filepath.Dir(dbPath), asideDir, id)}
 	for _, t := range targets {
-		if !under(t, stateDir) && !under(t, filepath.Dir(dbPath)) {
-			if r := filepath.Join(filepath.Dir(t), asideDir, id); !slices.Contains(out, r) {
+		if under(t, stateDir) || !under(t, filepath.Dir(dbPath)) {
+			if r := stagingRoot(stateDir, dbPath, id, t); !slices.Contains(out, r) {
 				out = append(out, r)
 			}
+		}
+	}
+	return out
+}
+
+// StagingRoots are the private directories a restore's stager of id stages
+// into for targets (each StagingDest's, and StagingDir's for the store): the
+// aside roots outside restore/, which Stage alone creates. Every one holds
+// only what this stager wrote until Stage links the intent, since id is
+// fresh, so a stager that is refused before then removes each whole.
+func StagingRoots(stateDir, dbPath, id string, targets []string) []string {
+	var out []string
+	for _, r := range AsideRoots(stateDir, dbPath, id, targets) {
+		if r != JournalDir(stateDir, id) {
+			out = append(out, r)
 		}
 	}
 	return out
