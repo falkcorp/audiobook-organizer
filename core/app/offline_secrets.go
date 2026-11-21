@@ -91,7 +91,7 @@ func exportKeyringCommand(opts Options, mods []module.Module) Command {
 				return err
 			}
 			if dbPath == "" {
-				return errors.New("secrets export-keyring: no module of this app declares storage, so it has no secret store and no keyring")
+				return errors.New("secrets export-keyring: this app has no store (no module declares storage and the identity boot is not declared), so it has no secret store and no keyring")
 			}
 			if err := storage.RefuseNotStateDirOwner(ctx, stateDir, "secrets export-keyring"); err != nil {
 				return err
