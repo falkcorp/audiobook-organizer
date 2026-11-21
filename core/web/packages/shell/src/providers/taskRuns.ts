@@ -70,7 +70,11 @@ export interface TaskRunWire {
    * so it is absent for a run that is not queued or that pass did not defer.
    */
   deferred?: string;
-  /** The running run behind a `key` or `writeset` deferral (the other reasons name none). */
+  /**
+   * The running run behind a `key` or `writeset` deferral (the other reasons name none).
+   * Absent when the caller may not view the blocker's kind, and always absent on the
+   * realtime stream (only GET /runs carries it).
+   */
   blocked_by?: string;
   /** RFC 3339: when the run's unbroken deferral began. */
   deferred_since?: string;

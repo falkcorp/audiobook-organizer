@@ -2238,7 +2238,9 @@ pass, feeds two read-only outputs and nothing else: the run view (`RunView.Defer
 `DeferredSince`, and the matching `RunPayload` keys `deferred`, `blocked_by`, `deferred_since`), computed at
 read time for a queued run exactly as `Held` is and never stored, so no dispatch pass writes a run row; and
 the `dispatch_wait` gauge, the longest wait per `def_id`, `reason` and `trigger` of a registered kind. The
-blocking run's ID is on the view only, never a metric label. Which runs are deferred, the reasons, and the
+blocking run's ID is on the view only, never a metric label, and only for a caller who may view the blocker's kind (the
+same `View` rule `Get` and `Runs` apply to a run, checked against the blocker's definition); a caller who may not still
+sees the reason and the start of the wait, and the realtime stream, which cannot ask, never carries `blocked_by`. Which runs are deferred, the reasons, and the
 counter are unchanged.
 The two histograms default to HEAD's bucket lists (`0.1 … 86400`, `views.go:42`; `1 … 86400`,
 `views.go:58`), declared as plain numbers through `Scope.View`, so `le` values do not change;

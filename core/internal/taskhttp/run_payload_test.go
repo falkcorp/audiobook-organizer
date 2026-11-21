@@ -20,7 +20,10 @@ import (
 // that subscriber after the topic's own Redact, key for key, so the SPA reads a
 // run one way over REST and over the stream. The view sets every field (the
 // guard below fails when a new one is not), so whatever field the redaction
-// rule covers, now or later, is compared on both paths.
+// rule covers, now or later, is compared on both paths. The one key that
+// differs is blocked_by: GET /runs carries what Client.Get/Runs decided for the
+// caller (they know the blocker's kind), and the stream, which cannot ask, never
+// carries it, so the comparison drops it from REST after checking it is there.
 func TestGetRun_SameJSONAsTheTopicPayload(t *testing.T) {
 	for _, c := range []struct {
 		who string
@@ -32,6 +35,7 @@ func TestGetRun_SameJSONAsTheTopicPayload(t *testing.T) {
 			v.Done, v.Total, v.Reason, v.Held = 2, 5, "fixed_token", true
 			v.Parent, v.PlanRef, v.Actor.System = "run-0", "run-plan", "core.scheduler"
 			v.Started, v.Finished = v.Created.Add(time.Minute), v.Created.Add(time.Hour)
+			v.Deferred, v.BlockedBy, v.DeferredSince = "writeset", "run-blocker", v.Created.Add(30*time.Second)
 			if z := zeroFields(reflect.ValueOf(tasks.NewRunPayload(v)), ""); len(z) != 0 {
 				t.Fatalf("fixture: the run leaves %v zero, so the comparison would not cover them", z)
 			}
@@ -52,6 +56,13 @@ func TestGetRun_SameJSONAsTheTopicPayload(t *testing.T) {
 			var stream map[string]any
 			if err := json.Unmarshal(tasks.RunChangedTopicSpec().Redact(p.Perms, payload), &stream); err != nil {
 				t.Fatal(err)
+			}
+			if rest["blocked_by"] != "run-blocker" {
+				t.Errorf("REST blocked_by = %v, want what the client set", rest["blocked_by"])
+			}
+			delete(rest, "blocked_by")
+			if _, kept := stream["blocked_by"]; kept {
+				t.Errorf("the stream carries blocked_by %v", stream["blocked_by"])
 			}
 			if !reflect.DeepEqual(rest, stream) {
 				t.Errorf("REST and stream differ:\nREST   %v\nstream %v", rest, stream)

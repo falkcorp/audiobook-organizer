@@ -114,10 +114,10 @@ func (e *executor) dispatchOnce(ctx context.Context) {
 	// deferAs counts the deferral (once per run and reason, deferRun) and
 	// records it for the run view and the wait gauge. Visibility only: it never
 	// changes whether the run is deferred.
-	deferAs := func(rec tasks.RunRecord, reason string, blocker tasks.RunID) {
+	deferAs := func(rec tasks.RunRecord, reason string, by blocker) {
 		e.deferRun(rec, reason)
 		if reason != "" {
-			waits[rec.ID] = newWait(rec, reason, blocker, now, prev)
+			waits[rec.ID] = newWait(rec, reason, by, now, prev)
 		}
 	}
 	for _, c := range cands {
@@ -126,24 +126,24 @@ func (e *executor) dispatchOnce(ctx context.Context) {
 		}
 		if c.d == nil {
 			if e.held(c.rec.Kind) {
-				deferAs(c.rec, deferHeld, "")
+				deferAs(c.rec, deferHeld, blocker{})
 			}
 			continue // unknown kind: the resume sweep's to drop at next boot
 		}
 		if e.held(c.rec.Kind) {
-			deferAs(c.rec, deferHeld, "")
+			deferAs(c.rec, deferHeld, blocker{})
 			continue
 		}
 		ws, err := e.writeSet(c.d, c.rec.Params)
 		if err != nil {
 			ws = c.d.writes
 		}
-		if reason, blocker, blocked := e.gate(c, ws); blocked {
+		if reason, by, blocked := e.gate(c, ws); blocked {
 			if reason == "notwhile" {
 				e.toWaitingDeps(ctx, c.rec)
 				continue
 			}
-			deferAs(c.rec, reason, blocker)
+			deferAs(c.rec, reason, by)
 			continue
 		}
 		e.claim(ctx, c, ws)
@@ -155,29 +155,29 @@ func (e *executor) dispatchOnce(ctx context.Context) {
 // run returns its deferral reason and, for a key or write-set deferral, the
 // running run behind it (any one of them when several qualify: the scan is in
 // map order, as the reason's choice between key and writeset always was).
-func (e *executor) gate(c candidate, ws []entity.Ref) (string, tasks.RunID, bool) {
+func (e *executor) gate(c candidate, ws []entity.Ref) (string, blocker, bool) {
 	cfg := e.config()
 	if !e.ready(c.d) {
-		return deferReady, "", true
+		return deferReady, blocker{}, true
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.paused {
-		return deferPaused, "", true
+		return deferPaused, blocker{}, true
 	}
 	if _, inProc := e.running[c.rec.ID]; inProc {
-		return "", "", true // a zombie of this run's last attempt, or a claim in flight
+		return "", blocker{}, true // a zombie of this run's last attempt, or a claim in flight
 	}
 	if h := e.holds[c.d.key]; h != nil && h.liveLocked(e.now()) {
-		return deferStandDown, "", true
+		return deferStandDown, blocker{}, true
 	}
 	live, nonSystem, perModule := 0, 0, 0
 	for _, a := range e.running {
 		if a.d.key == c.d.key {
-			return deferKey, a.id, true // zombies keep their key until their goroutine exits
+			return deferKey, blocker{id: a.id, kind: a.rec.Kind}, true // zombies keep their key until their goroutine exits
 		}
 		if overlapsSet(a.writes, ws) {
-			return deferWriteSet, a.id, true
+			return deferWriteSet, blocker{id: a.id, kind: a.rec.Kind}, true
 		}
 		if a.zombie {
 			continue
@@ -191,23 +191,23 @@ func (e *executor) gate(c candidate, ws []entity.Ref) (string, tasks.RunID, bool
 		}
 	}
 	if limit := cfg.ModuleMaxConcurrent[c.d.module]; limit > 0 && perModule >= limit {
-		return deferModuleCap, "", true
+		return deferModuleCap, blocker{}, true
 	}
 	if e.zombies[c.d.module] >= cfg.ZombieCap {
-		return deferZombieCap, "", true
+		return deferZombieCap, blocker{}, true
 	}
 	for _, a := range e.running {
 		if !a.zombie && slices.Contains(c.d.c.NotWhile, a.d.kind) {
-			return "notwhile", "", true
+			return "notwhile", blocker{}, true
 		}
 	}
 	if live >= cfg.Workers {
-		return "", "", true
+		return "", blocker{}, true
 	}
 	if c.rec.Priority != tasks.PrioritySystem && nonSystem >= cfg.Workers-cfg.SystemWorkers {
-		return "", "", true
+		return "", blocker{}, true
 	}
-	return "", "", false
+	return "", blocker{}, false
 }
 
 // overlapsSet is the write-set conflict rule (5T.3.4): some ref of one set
@@ -248,8 +248,17 @@ type wait struct {
 	kind    tasks.Kind
 	trigger tasks.Trigger
 	reason  string
-	blocker tasks.RunID // running run behind a key or writeset deferral; "" otherwise
-	since   time.Time   // start of this run's unbroken deferral, whatever the reasons
+	blocker blocker   // running run behind a key or writeset deferral; zero otherwise
+	since   time.Time // start of this run's unbroken deferral, whatever the reasons
+}
+
+// blocker is the running run behind a key or write-set deferral. Its kind rides
+// with its ID because the ID may only be shown to a caller who may view that
+// kind (view's BlockedBy rule, viewAs): the waiting run's own kind says nothing
+// about whether its blocker's is visible.
+type blocker struct {
+	id   tasks.RunID
+	kind tasks.Kind
 }
 
 // newWait is rec's wait record for a pass at now that deferred it for reason.
@@ -257,12 +266,12 @@ type wait struct {
 // run held for hours shows its whole wait, and a reason or blocker change
 // (a key holder replaced by a write-set holder, one blocker by another) does
 // not restart it.
-func newWait(rec tasks.RunRecord, reason string, blocker tasks.RunID, now time.Time, prev map[tasks.RunID]wait) wait {
+func newWait(rec tasks.RunRecord, reason string, by blocker, now time.Time, prev map[tasks.RunID]wait) wait {
 	since := now
 	if p, ok := prev[rec.ID]; ok {
 		since = p.since
 	}
-	return wait{kind: rec.Kind, trigger: rec.Trigger, reason: reason, blocker: blocker, since: since}
+	return wait{kind: rec.Kind, trigger: rec.Trigger, reason: reason, blocker: by, since: since}
 }
 
 // waitsNow is the last published pass record. The map is replaced whole by

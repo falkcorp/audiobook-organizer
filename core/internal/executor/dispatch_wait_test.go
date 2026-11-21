@@ -18,6 +18,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -462,4 +463,92 @@ func TestDispatchWait_ConcurrentDeferralsReadersAndCancels(t *testing.T) {
 	if got := waitSamples(t, p); len(got) != 0 {
 		t.Errorf("wait gauge after every run left the queue = %+v, want none", got)
 	}
+}
+
+// TestRunView_BlockedByNamesOnlyAViewableBlocker: the ID of the run behind a
+// deferral is shown only to a caller who may view the blocker's kind. The
+// waiter's own deferral (reason and start) is the caller's to see, but the
+// ID of a run of a kind the caller may not view, and through it that run's
+// existence and timing, is not. Every read path with a caller applies it: Get,
+// Runs and Timeline (which reads through Runs).
+func TestRunView_BlockedByNamesOnlyAViewableBlocker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 1)
+		// Arkham's evidence run needs core:system.manage to be viewed; the
+		// forgery run uses the default (core:tasks.view).
+		secret := func(c *tasks.Common) { c.Perms.View = rbac.Need("core:system.manage") }
+		h := newHarness(t, []tasks.Definition{
+			taskDef("gotham.evidence", blockUntilCtx(started), secret),
+			taskDef("gotham.forgery", okBody),
+		}, func(o *Options) {
+			synctestConfig(o)
+			withPrincipal(o)
+		})
+		holder := h.start("gotham.evidence", tasks.StartRequest{})
+		<-started
+		waiter := h.start("gotham.forgery", tasks.StartRequest{})
+		h.stays(waiter, tasks.StateQueued, 5*time.Second)
+
+		manager := asUser("lucius", scopeTasksView, "core:system.manage")
+		viewer := asUser("barbara", scopeTasksView)
+
+		get := func(ctx context.Context) tasks.RunView {
+			t.Helper()
+			v, err := h.x.Get(ctx, waiter)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			return v
+		}
+		listed := func(ctx context.Context) tasks.RunView {
+			t.Helper()
+			for v, err := range h.x.Runs(ctx, tasks.RunQuery{}) {
+				if err != nil {
+					t.Fatalf("runs: %v", err)
+				}
+				if v.ID == waiter {
+					return v
+				}
+			}
+			t.Fatalf("run %s not listed", waiter)
+			return tasks.RunView{}
+		}
+		timeline := func(ctx context.Context) tasks.RunView {
+			t.Helper()
+			vs, err := h.x.Timeline(ctx, tasks.TimelineQuery{})
+			if err != nil {
+				t.Fatalf("timeline: %v", err)
+			}
+			for _, v := range vs {
+				if v.ID == waiter {
+					return v
+				}
+			}
+			t.Fatalf("run %s not on the timeline", waiter)
+			return tasks.RunView{}
+		}
+		paths := map[string]func(context.Context) tasks.RunView{"Get": get, "Runs": listed, "Timeline": timeline}
+		for name, read := range paths {
+			if v := read(manager); v.BlockedBy != holder || v.Deferred != deferWriteSet || v.DeferredSince.IsZero() {
+				t.Errorf("%s as a caller who may view the blocker = deferred %q blocked by %q since %v, want %q behind %q", name, v.Deferred, v.BlockedBy, v.DeferredSince, deferWriteSet, holder)
+			}
+			if v := read(viewer); v.BlockedBy != "" || v.Deferred != deferWriteSet || v.DeferredSince.IsZero() {
+				t.Errorf("%s as a caller who may not view the blocker = deferred %q blocked by %q since %v, want %q behind no one, with its start", name, v.Deferred, v.BlockedBy, v.DeferredSince, deferWriteSet)
+			}
+		}
+		// The blocker itself is invisible to the viewer, so nothing about it
+		// can have reached them another way.
+		if _, err := h.x.Get(viewer, holder); err == nil {
+			t.Errorf("the viewer can get the blocker %s", holder)
+		}
+		// The view with no caller on it (OnTerminal and any event projection are
+		// built this way) never names the blocker.
+		rec, err := h.e.runs.Get(context.Background(), waiter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := h.e.view(rec); v.BlockedBy != "" || v.Deferred != deferWriteSet {
+			t.Errorf("view without a caller = deferred %q blocked by %q, want %q behind no one", v.Deferred, v.BlockedBy, deferWriteSet)
+		}
+	})
 }

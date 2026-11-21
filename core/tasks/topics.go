@@ -101,8 +101,18 @@ func NewRunPayload(v RunView) RunPayload {
 // error text a later version adds) is therefore blanked on the stream exactly
 // as GET /runs[/{id}] blanks it (runView there is
 // NewRunPayload(RedactRunView(v))), and the two cannot diverge.
+//
+// One field is blanked here and not in RedactRunView: BlockedBy. Whether a
+// caller may see the blocking run's ID depends on the blocker's kind, which a
+// checker alone cannot answer and a stream subscriber's payload does not carry,
+// so the stream never carries it. Client.Get and Runs, which know the kinds,
+// decide it per caller before the view reaches GET /runs.
 func RedactRunPayload(who rbac.Checker, p RunPayload) RunPayload {
-	return redactPayloadWith(p, func(v RunView) RunView { return RedactRunView(who, v) })
+	return redactPayloadWith(p, func(v RunView) RunView {
+		v = RedactRunView(who, v)
+		v.BlockedBy = ""
+		return v
+	})
 }
 
 // redactPayloadWith is RedactRunPayload over any rule: p as a RunView, through
