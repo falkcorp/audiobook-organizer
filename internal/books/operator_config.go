@@ -28,8 +28,11 @@ import (
 // every command that never boots the App (cmd's initConfig projects it). The
 // fields only the store holds (the class-i residual: library roots, metadata
 // sources, AI endpoints, plugins) are zero here, except a residual field an
-// operator layer sets through its passthrough name (the Deluge connection),
-// which is the operator's value, as the booted Facade has it. A retired name
+// operator layer sets through its passthrough name (the Deluge connection)
+// and the library root an operator layer names in core.library.roots
+// (ABO_CORE_LIBRARY_ROOTS, which the projection overlays on root_dir and
+// path_aliases), which are the operator's values, as the booted Facade has
+// them. A retired name
 // that would refuse the boot refuses here, naming it, and so do the HEAD-era
 // settings files ResolveBootPaths refuses.
 func OperatorAppConfig(ctx context.Context, mod module.Module, boot BootInputs) (config.Config, error) {

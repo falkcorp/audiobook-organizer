@@ -504,25 +504,23 @@ func TestEngine_ConvertersAndBase(t *testing.T) {
 
 // TestEngine_FoldsProject: the OIDC providers list unfolds into the oauth_*
 // fields (the allow-list the Cloudflare key also holds is overridden by the
-// fold), library roots into root_dir and path_aliases; with no providers
-// sign-in is off.
+// fold); with no providers sign-in is off. (The library roots are not a fold
+// until M6: roots_test.go.)
 func TestEngine_FoldsProject(t *testing.T) {
 	f := newFake()
 	f.vals["core.auth.oidc.providers"] = json.RawMessage(`[]`)
-	f.vals["core.library.roots"] = json.RawMessage(`[]`)
 	f.vals["modules.books.cfaccess.allowed_emails"] = json.RawMessage(`"cf@example.test"`)
 	e := New(f, nil)
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if got := e.Snapshot(); got.OAuthEnabled || got.OAuthAllowedEmails != "cf@example.test" || got.RootDir != "" {
-		t.Fatalf("no providers, no roots: enabled=%v emails=%q root=%q", got.OAuthEnabled, got.OAuthAllowedEmails, got.RootDir)
+	if got := e.Snapshot(); got.OAuthEnabled || got.OAuthAllowedEmails != "cf@example.test" {
+		t.Fatalf("no providers: enabled=%v emails=%q", got.OAuthEnabled, got.OAuthAllowedEmails)
 	}
 	f.vals["core.auth.oidc.providers"] = json.RawMessage(`[
 	  {"id":"github","client_id":"gh-id","allowed_emails":["bruce@example.test","alfred@example.test"],"default_role":"viewer"},
 	  {"id":"google","client_id":"goog-id","allowed_emails":["bruce@example.test","alfred@example.test"],"default_role":"viewer"}]`)
 	f.locked["core.auth.oidc.providers"] = "env ABO_CORE_AUTH_OIDC_PROVIDERS"
-	f.vals["core.library.roots"] = json.RawMessage(`[{"id":"books-library","path":"/srv/library","aliases":[{"windows":"Z:\\\\library","unc":"","smb_url":""}]}]`)
 	if err := e.Rebuild(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -533,9 +531,6 @@ func TestEngine_FoldsProject(t *testing.T) {
 			E          bool
 			G, O, M, R string
 		}{got.OAuthEnabled, got.OAuthGithubClientID, got.OAuthGoogleClientID, got.OAuthAllowedEmails, got.OAuthDefaultRole})
-	}
-	if got.RootDir != "/srv/library" || len(got.PathAliases) != 1 || got.PathAliases[0].Root != "/srv/library" {
-		t.Fatalf("roots unfold: root=%q aliases=%+v", got.RootDir, got.PathAliases)
 	}
 	if e.Locks()["oauth_enabled"] == "" || e.Locks()["oauth_default_role"] == "" {
 		t.Fatalf("the providers key's lock did not reach its fields: %v", e.Locks())

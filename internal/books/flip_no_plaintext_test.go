@@ -118,6 +118,9 @@ func filesHolding(t *testing.T, needle string, exclude []string, roots ...string
 type flipFixture struct {
 	root, stateDir, dbDir, dbPath, gapFill string
 	key                                    []byte
+	// env is more of the boot's environment (NAME=value), beside the store
+	// path runFlipped always sets.
+	env []string
 }
 
 // newFlipFixture writes the HEAD store through seed (which writes the settings
@@ -155,7 +158,7 @@ func (fx *flipFixture) runFlipped(t *testing.T, atReady func(*composed)) {
 	}, nil, func(o *app.Options) {
 		o.StorageFS = storage.FS{}
 		o.StateDir = fx.stateDir
-		o.Env = []string{storagePathEnv + "=" + fx.dbPath}
+		o.Env = append([]string{storagePathEnv + "=" + fx.dbPath}, fx.env...)
 		// sandboxStateDirAt wrote a fixed key; the rows are sealed under this one.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(fx.stateDir), fx.key, 0o600))
 	}, nil)

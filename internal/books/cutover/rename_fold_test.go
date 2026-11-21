@@ -8,8 +8,6 @@ package cutover
 import (
 	"encoding/json"
 	"errors"
-	"slices"
-	"strings"
 	"testing"
 )
 
@@ -175,161 +173,6 @@ func TestFoldOIDC_Refusals(t *testing.T) {
 	}
 }
 
-// ---- roots ----
-
-func rootsOK(t *testing.T, dir, aliases, prev string) json.RawMessage {
-	t.Helper()
-	got, err := FoldRoots(dir, json.RawMessage(aliases), json.RawMessage(prev))
-	if err != nil {
-		t.Fatalf("FoldRoots(%q, %s, %s): %v", dir, aliases, prev, err)
-	}
-	return got
-}
-
-func aliasJSON(t *testing.T, a ...headPathAlias) string {
-	t.Helper()
-	b, err := json.Marshal(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
-}
-
-func TestFoldRoots_IsM6sEntry(t *testing.T) {
-	archive := headPathAlias{Root: "/gotham/archive", Windows: "W:", UNC: `\\wayne\archive`, SMBURL: "smb://wayne/archive"}
-	for _, c := range []struct {
-		dir     string
-		aliases []headPathAlias
-	}{
-		{"/gotham/archive", nil},
-		{"/gotham/archive", []headPathAlias{archive}},
-		{"/gotham/archive", []headPathAlias{{Root: "/gotham/archive/", Windows: "W:"}}},
-	} {
-		want := forwardRoots(t, c.dir, nil, c.aliases)
-		wantJSON(t, rootsOK(t, c.dir, aliasJSON(t, c.aliases...), ``), string(want))
-	}
-	// With no root_dir there is nothing.
-	wantJSON(t, rootsOK(t, "", ``, ``), `[]`)
-	wantJSON(t, rootsOK(t, "  ", `null`, `null`), `[]`)
-}
-
-func TestFoldRoots_RoundTripsBothWays(t *testing.T) {
-	archive := headPathAlias{Root: "/gotham/archive", Windows: "W:", UNC: `\\wayne\archive`, SMBURL: "smb://wayne/archive"}
-	one := headPathAlias{Root: "/gotham/imports/one", Windows: "X:"}
-	// Fold -> Unfold, onto a prev that already holds an import root.
-	prev := forwardRoots(t, "", map[int]string{1: "/gotham/imports/one"}, nil)
-	entries := rootsOK(t, "/gotham/archive", aliasJSON(t, archive, one), string(prev))
-	dir, aliases, err := UnfoldRoots(entries)
-	if err != nil || dir != "/gotham/archive" {
-		t.Fatalf("UnfoldRoots = %q, %v", dir, err)
-	}
-	var got []headPathAlias
-	if err := json.Unmarshal(aliases, &got); err != nil || !slices.Equal(got, []headPathAlias{archive, one}) {
-		t.Errorf("aliases = %s, %v", aliases, err)
-	}
-	// Unfold -> Fold gives the entries back.
-	for _, e := range []json.RawMessage{
-		forwardRoots(t, "/gotham/archive", nil, nil),
-		forwardRoots(t, "/gotham/archive", map[int]string{1: "/gotham/imports/one", 3: "/gotham/imports/three"}, []headPathAlias{archive, one}),
-		forwardRoots(t, "", map[int]string{1: "/gotham/imports/one"}, []headPathAlias{one}),
-	} {
-		dir, aliases, err := UnfoldRoots(e)
-		if err != nil {
-			t.Fatal(err)
-		}
-		wantJSON(t, rootsOK(t, dir, string(aliases), string(e)), string(e))
-	}
-}
-
-const (
-	importOne = `{"id":"import-1","path":"/gotham/imports/one","role":"import","owner":"books","watch":"auto","sentinel":"bootstrap","min_free":-1}`
-	dropbox   = `{"id":"dropbox-2","path":"/gotham/dropbox","role":"external","owner":"core","aliases":[{"windows":"V:"}]}`
-	tunedBook = `{"id":"books-library","path":"/gotham/archive","role":"library","owner":"books","watch":"auto","min_free":5000,"quarantine":".failed","aliases":[{"windows":"W:"}]}`
-)
-
-func TestFoldRoots_MergesIntoPrev(t *testing.T) {
-	prev := `[` + tunedBook + `,` + importOne + `,` + dropbox + `]`
-	// A new root_dir changes the path and nothing the operator tuned; the aliases
-	// are replaced by path_aliases, and the other roots are carried over, a
-	// non-HEAD root's aliases included.
-	got := rootsOK(t, "/gotham/cave", aliasJSON(t, headPathAlias{Root: "/gotham/cave", UNC: `\\wayne\cave`}), prev)
-	wantJSON(t, got, `[{"id":"books-library","path":"/gotham/cave","role":"library","owner":"books","watch":"auto","min_free":5000,"quarantine":".failed","aliases":[{"unc":"\\\\wayne\\cave"}]},`+importOne+`,`+dropbox+`]`)
-	// An alias goes to an import root when its root is that root's path.
-	got = rootsOK(t, "/gotham/archive", aliasJSON(t, headPathAlias{Root: "/gotham/imports/one/", SMBURL: "smb://wayne/one"}), prev)
-	wantJSON(t, got, `[{"id":"books-library","path":"/gotham/archive","role":"library","owner":"books","watch":"auto","min_free":5000,"quarantine":".failed"},
-	  {"id":"import-1","path":"/gotham/imports/one","role":"import","owner":"books","watch":"auto","sentinel":"bootstrap","min_free":-1,"aliases":[{"smb_url":"smb://wayne/one"}]},`+dropbox+`]`)
-	// A new books-library goes first.
-	got = rootsOK(t, "/gotham/archive", ``, `[`+importOne+`]`)
-	var list []map[string]any
-	if err := json.Unmarshal(got, &list); err != nil || len(list) != 2 || list[0]["id"] != "books-library" || list[1]["id"] != "import-1" {
-		t.Errorf("got %s, %v", got, err)
-	}
-}
-
-func TestFoldRoots_RemovesTheBooksRoot(t *testing.T) {
-	prev := `[` + tunedBook + `,` + importOne + `,` + dropbox + `]`
-	wantJSON(t, rootsOK(t, "", ``, prev), `[`+importOne+`,`+dropbox+`]`)
-	wantJSON(t, rootsOK(t, "", ``, `[`+importOne+`]`), `[`+importOne+`]`)
-	// With no books root, an alias for it names no root.
-	if _, err := FoldRoots("", json.RawMessage(aliasJSON(t, headPathAlias{Root: "/gotham/archive", Windows: "W:"})), json.RawMessage(prev)); !errors.Is(err, ErrNotRepresentable) {
-		t.Errorf("alias of a removed root: %v", err)
-	}
-}
-
-func TestFoldRoots_Refusals(t *testing.T) {
-	prev := `[` + tunedBook + `,` + importOne + `,` + dropbox + `]`
-	for _, c := range []struct {
-		name, dir, aliases, prev string
-		want                     error
-	}{
-		{"relative root_dir", "gotham/archive", ``, ``, ErrNotRepresentable},
-		{"NUL in root_dir", "/gotham/\x00archive", ``, ``, ErrNotRepresentable},
-		{"root_dir is another root", "/gotham/imports/one/", ``, prev, ErrNotRepresentable},
-		{"root_dir is a native root", "/gotham/dropbox", ``, prev, ErrNotRepresentable},
-		{"alias with no root", "/gotham/archive", `[{"windows":"W:"}]`, ``, ErrNotRepresentable},
-		{"alias of no root", "/gotham/archive", `[{"root":"/gotham/elsewhere","windows":"W:"}]`, ``, ErrNotRepresentable},
-		{"alias of a native root", "/gotham/archive", `[{"root":"/gotham/dropbox","windows":"W:"}]`, prev, ErrNotRepresentable},
-		{"aliases not a list", "/gotham/archive", `{"root":"/x"}`, ``, ErrConvertInput},
-		{"prev not a list", "/gotham/archive", ``, `{"id":"books-library"}`, ErrConvertInput},
-		{"prev holds null", "/gotham/archive", ``, `[null]`, ErrConvertInput},
-		{"two books-library entries", "/gotham/archive", ``, `[` + tunedBook + `,` + tunedBook + `]`, ErrConvertInput},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			got, err := FoldRoots(c.dir, json.RawMessage(c.aliases), json.RawMessage(c.prev))
-			if !errors.Is(err, c.want) || got != nil {
-				t.Errorf("FoldRoots = %s, %v; want %v", got, err, c.want)
-			}
-			if err != nil && strings.Contains(err.Error(), "gotham") {
-				t.Errorf("the error carries a value: %v", err)
-			}
-		})
-	}
-}
-
-func TestFoldRoots_AliasesListIsWhole(t *testing.T) {
-	// path_aliases is HEAD's whole list: a root it no longer mentions loses its
-	// aliases.
-	prev := `[` + tunedBook + `,{"id":"import-1","path":"/gotham/imports/one","aliases":[{"windows":"X:"}]}]`
-	got := rootsOK(t, "/gotham/archive", aliasJSON(t, headPathAlias{Root: "/gotham/imports/one", Windows: "Y:"}), prev)
-	wantJSON(t, got, `[{"id":"books-library","path":"/gotham/archive","role":"library","owner":"books","watch":"auto","min_free":5000,"quarantine":".failed"},
-	  {"id":"import-1","path":"/gotham/imports/one","aliases":[{"windows":"Y:"}]}]`)
-}
-
-func TestFoldRoots_AliasOrderWithinARoot(t *testing.T) {
-	a := headPathAlias{Root: "/gotham/archive", Windows: "W:"}
-	b := headPathAlias{Root: "/gotham/archive", SMBURL: "smb://wayne/archive"}
-	got := rootsOK(t, "/gotham/archive", aliasJSON(t, b, a), ``)
-	var list []struct {
-		Aliases []struct {
-			Windows string `json:"windows"`
-			SMBURL  string `json:"smb_url"`
-		} `json:"aliases"`
-	}
-	if err := json.Unmarshal(got, &list); err != nil || len(list) != 1 || len(list[0].Aliases) != 2 || list[0].Aliases[0].SMBURL == "" || list[0].Aliases[1].Windows == "" {
-		t.Errorf("got %s, %v", got, err)
-	}
-}
-
 // The access policy is never dropped by a write that does not name it.
 func TestFoldOIDC_PartialWriteKeepsPolicy(t *testing.T) {
 	prev := `[` + ghEntry + `,` + goEntry + `]`
@@ -402,36 +245,6 @@ func TestFoldOIDC_CorruptPrevIsAnError(t *testing.T) {
 	}
 }
 
-// No aliases at all means keep; any JSON list is HEAD's whole list.
-func TestFoldRoots_AbsentAliasesKeepPrev(t *testing.T) {
-	prev := `[` + tunedBook + `,` + importOne + `,` + dropbox + `]`
-	for _, none := range []string{``} {
-		got, err := FoldRoots("/gotham/archive", json.RawMessage(none), json.RawMessage(prev))
-		if err != nil {
-			t.Fatal(err)
-		}
-		wantJSON(t, got, prev)
-	}
-	// An explicit empty list or null clears the HEAD-derived roots' aliases only.
-	for _, clear := range []string{`[]`, `null`} {
-		got := rootsOK(t, "/gotham/archive", clear, prev)
-		wantJSON(t, got, `[{"id":"books-library","path":"/gotham/archive","role":"library","owner":"books","watch":"auto","min_free":5000,"quarantine":".failed"},`+importOne+`,`+dropbox+`]`)
-	}
-}
-
-// A root whose id or path is not a string is a corrupt prev, an error.
-func TestFoldRoots_CorruptEntryFieldsAreErrors(t *testing.T) {
-	for _, prev := range []string{
-		`[{"id":3,"path":"/gotham/archive"}]`,
-		`[{"id":"books-library","path":["/gotham/archive"]}]`,
-		`[{"id":"import-1","path":null,"role":"import"},{"id":"x","path":7}]`,
-	} {
-		if got, err := FoldRoots("/gotham/archive", nil, json.RawMessage(prev)); !errors.Is(err, ErrConvertInput) || got != nil {
-			t.Errorf("FoldRoots(prev %s) = %s, %v; want ErrConvertInput", prev, got, err)
-		}
-	}
-}
-
 func TestFoldOIDC_NonStringIDIsAnError(t *testing.T) {
 	if got, err := FoldOIDC(vals(t, map[string]any{}), json.RawMessage(`[{"id":7,"client_id":"a"}]`)); !errors.Is(err, ErrConvertInput) || got != nil {
 		t.Errorf("= %s, %v", got, err)
@@ -444,18 +257,4 @@ func TestFoldOIDC_PartialWriteLeavesPolicyUntouched(t *testing.T) {
 	prev := `[{"id":"github","kind":"github","issuer":"","client_id":"gh-batman","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`
 	got := foldOK(t, vals(t, map[string]any{"oauth_github_client_id": "gh-nightwing"}), prev)
 	wantJSON(t, got, `[{"id":"github","kind":"github","issuer":"","client_id":"gh-nightwing","scopes":[],"allowed_domains":[],"link_existing_by_email":false,"allowed_emails":[" Bruce@batcave.example "],"default_role":" editor "}]`)
-}
-
-func TestFoldRoots_AnAliasWithNoRootNeverMatchesARootWithNoPath(t *testing.T) {
-	prev := `[{"id":"import-1","path":"","role":"import"}]`
-	got, err := FoldRoots("", json.RawMessage(`[{"windows":"W:"}]`), json.RawMessage(prev))
-	if !errors.Is(err, ErrNotRepresentable) || got != nil {
-		t.Errorf("FoldRoots = %s, %v; want ErrNotRepresentable", got, err)
-	}
-}
-
-func TestFoldRoots_AliasGoesToTheFirstRootAtItsPath(t *testing.T) {
-	prev := `[{"id":"import-1","path":"/gotham/imports/one"},{"id":"import-2","path":"/gotham/imports/one/"}]`
-	got := rootsOK(t, "", aliasJSON(t, headPathAlias{Root: "/gotham/imports/one", Windows: "Y:"}), prev)
-	wantJSON(t, got, `[{"id":"import-1","path":"/gotham/imports/one","aliases":[{"windows":"Y:"}]},{"id":"import-2","path":"/gotham/imports/one/"}]`)
 }

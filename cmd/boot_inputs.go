@@ -20,9 +20,10 @@ import (
 
 // flagConfigPaths maps each root persistent flag that names a core config key
 // onto its canonical path (05-config section 1.12.4 "Flags"). --dir and
-// --playlists are not here: their settings are blob keys under
-// core.library.roots and the playlist directory, not scalar core keys, so
-// they feed the commands that read them, not the layered store. --config is
+// --playlists are not here: root_dir is a class-i row of the settings blob
+// (M6 moves it into core.library.roots at F7) and the playlist directory is a
+// stored setting, not scalar core keys, so they feed the commands that read
+// them, not the layered store. --config is
 // core.config.file and --db-type is checked and dropped (bootInputs).
 var flagConfigPaths = map[string]coreconfig.Path{
 	"db":        "core.storage.path",
