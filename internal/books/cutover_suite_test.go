@@ -774,11 +774,12 @@ func cutoverBootConfig(t *testing.T, work string) (func(*config.Config), func(*a
 	require.NoError(t, err, "the corpus holds no settings key")
 	// The flip is always declared, so the boot imports the corpus' stored
 	// settings and the module registers over them, and the builder's scratch
-	// directory the blob names (playlist_dir) is gone: the environment layer
-	// points it at the copy. The store is not edited, because the drills
-	// compare it with the corpus byte for byte (a standalone open would also
-	// run the legacy migrations before the boot's own checkpoint).
-	t.Setenv("ABO_BOOKS_PLAYLIST_DIR", filepath.Join(work, "playlists"))
+	// directories the blob names (playlist_dir, openlibrary_dump_dir) are
+	// gone: the environment layer points them at the copy (pointEnvAtStore).
+	// The store is not edited, because the drills compare it with the corpus
+	// byte for byte (a standalone open would also run the legacy migrations
+	// before the boot's own checkpoint).
+	pointEnvAtStore(t, work)
 	edit := func(c *config.Config) {
 		pointConfigAtStore(c, work)
 		cutoverBootEnv(c)
