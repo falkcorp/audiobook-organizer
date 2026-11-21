@@ -552,3 +552,101 @@ func TestRunView_BlockedByNamesOnlyAViewableBlocker(t *testing.T) {
 		}
 	})
 }
+
+// TestRunView_BlockedByNamesOnlyAViewableKeyHolder: the same authorization on
+// the key gate, whose blocker is found by a different branch of the gate than
+// the write-set one: the key holder's ID is shown to a caller who may view the
+// holder's kind and withheld from one who may not, with the deferral reason
+// kept for both.
+func TestRunView_BlockedByNamesOnlyAViewableKeyHolder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 1)
+		key := func(c *tasks.Common) { c.ConcurrencyKey = "gotham.signal" }
+		secret := func(c *tasks.Common) { c.Perms.View = rbac.Need("core:system.manage") }
+		h := newHarness(t, []tasks.Definition{
+			taskDef("gotham.watch", blockUntilCtx(started), key, writesOf("lab"), secret),
+			taskDef("gotham.beacon", okBody, key, writesOf("vault")),
+		}, func(o *Options) {
+			synctestConfig(o)
+			withPrincipal(o)
+		})
+		holder := h.start("gotham.watch", tasks.StartRequest{})
+		<-started
+		waiter := h.start("gotham.beacon", tasks.StartRequest{})
+		h.stays(waiter, tasks.StateQueued, 3*time.Second)
+		seen := func(ctx context.Context) tasks.RunView {
+			t.Helper()
+			v, err := h.x.Get(ctx, waiter)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			return v
+		}
+		if v := seen(asUser("lucius", scopeTasksView, "core:system.manage")); v.Deferred != deferKey || v.BlockedBy != holder {
+			t.Errorf("caller who may view the holder: deferred %q blocked by %q, want %q behind %q", v.Deferred, v.BlockedBy, deferKey, holder)
+		}
+		if v := seen(asUser("barbara", scopeTasksView)); v.Deferred != deferKey || v.BlockedBy != "" {
+			t.Errorf("caller who may not view the holder: deferred %q blocked by %q, want %q behind no one", v.Deferred, v.BlockedBy, deferKey)
+		}
+	})
+}
+
+// TestRunView_OnlyAQueuedRunReadsDeferred: the pass record is replaced each
+// pass, so a run that left the queue since the last pass can still have an
+// entry for a moment; the view must not show it for a run that is no longer
+// queued.
+func TestRunView_OnlyAQueuedRunReadsDeferred(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 1)
+		h := newHarness(t, []tasks.Definition{
+			taskDef("gotham.evidence", blockUntilCtx(started)),
+			taskDef("gotham.forgery", okBody),
+		}, synctestConfig)
+		h.start("gotham.evidence", tasks.StartRequest{})
+		<-started
+		waiter := h.start("gotham.forgery", tasks.StartRequest{})
+		h.stays(waiter, tasks.StateQueued, 3*time.Second)
+		if _, ok := h.e.waitsNow()[waiter]; !ok {
+			t.Fatal("fixture: the waiter has no entry in the pass record")
+		}
+		rec := h.get(waiter)
+		for _, st := range []tasks.RunState{tasks.StateRunning, tasks.StateCanceled, tasks.StateSucceeded} {
+			r := rec
+			r.State = st
+			if v := h.e.view(r); v.Deferred != "" || v.BlockedBy != "" || !v.DeferredSince.IsZero() {
+				t.Errorf("a %s run with a stale pass entry reads back deferred: %+v", st, v)
+			}
+		}
+	})
+}
+
+// TestDispatchWait_GaugeIsTheLongestWaitOfTheKind: many queued runs of one kind
+// held by one gate for one trigger are one sample, the oldest wait, not
+// whichever run the pass record happens to list last.
+func TestDispatchWait_GaugeIsTheLongestWaitOfTheKind(t *testing.T) {
+	clk := newFakeClock()
+	started := make(chan tasks.RunID, 1)
+	h, p := metricHarness(t, []tasks.Definition{
+		taskDef("gotham.evidence", blockUntilCtx(started)),
+		taskDef("gotham.forgery", okBody),
+	}, clk)
+	h.start("gotham.evidence", tasks.StartRequest{})
+	<-started
+	const runs = 20
+	for n := range runs {
+		id := h.start("gotham.forgery", tasks.StartRequest{Params: mustParams(t, fmt.Sprintf("case-%d", n)), Trigger: tasks.TriggerManual})
+		eventually(t, "the run to be deferred", func() bool { return h.viewOf(id).Deferred != "" })
+		clk.Advance(10 * time.Minute)
+	}
+	clk.Advance(time.Minute)
+	oldest := float64(runs*10+1) * 60
+	eventually(t, "the kind's one sample", func() bool { return len(waitSamples(t, p)) == 1 })
+	// Every gather, not one that happens to be right: the pass record is a map,
+	// so an observe that kept whichever run it saw last would pass some gathers.
+	for i := range 40 {
+		ss := waitSamples(t, p)
+		if len(ss) != 1 || ss[0].seconds < oldest || ss[0].seconds > oldest+60 {
+			t.Fatalf("gather %d: samples %+v, want one of about %v s, the oldest wait", i, ss, oldest)
+		}
+	}
+}
