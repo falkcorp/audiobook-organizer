@@ -122,23 +122,62 @@ func (b *Bridge) resolve(atom string, readSide bool) (rbac.Requirement, error) {
 // (05-authn §4.11).
 func authDisabled(p *coreauth.Principal) bool { return p.Method == coreauth.MethodAuthDisabled }
 
-// legacyMethod maps a core method to HEAD's. The three core credential
-// methods carry the same names and meaning at HEAD. Every other method is
-// refused (ErrUnmappedMethod) rather than guessed: HEAD's checks mix
-// allowlists (Interactive, MayChangeCredentials, opsv3's verifiedForApproval)
-// with denylists (APIKeyMayActAsAdmin, the empty-scope key rule, both
-// "!= api_key"), so no single legacy value is the narrowest for an unknown
-// method, and HEAD records an ABS-surface key as api_key, which a compat
-// principal's method does not say. The flip decides cf_access and the ABS
-// methods with the information it has.
-func legacyMethod(m coreauth.Method) (auth.Method, bool) {
-	switch m {
+// The two methods ABO registers beside core's own (F4-08 B10b1). They are
+// spelled here, not imported, because this package never imports
+// internal/books or internal/cfaccess; TestMethodNamesMatchTheirRegistrations
+// keeps them equal to what each registers.
+const (
+	// MethodBooksABS is the compat method books registers for the ABS surface
+	// (internal/books/module.go absAuthMethod, SEC2-17). Compat.PrincipalFor
+	// and Compat.AuthenticateKey build principals of this method.
+	MethodBooksABS coreauth.Method = "books.abs"
+	// MethodExtCFAccess is the Cloudflare Access identity extension's method
+	// (internal/cfaccess/extension.go).
+	MethodExtCFAccess coreauth.Method = "ext:cfaccess"
+)
+
+// legacyMethod maps a principal's method to the HEAD method whose behaviour
+// it must reproduce, so every HEAD reader of auth.MethodFromContext (the
+// credential guard, the owner proof, the key rules, the audit label) treats
+// the credential exactly as HEAD treated it. Matching is by exact name, never
+// by prefix: a method the table does not list is refused (ErrUnmappedMethod)
+// rather than guessed, because HEAD's checks mix allowlists (Interactive,
+// MayChangeCredentials, opsv3's verifiedForApproval) with denylists
+// (APIKeyMayActAsAdmin, the empty-scope key rule, both "!= api_key"), so no
+// single legacy value is the narrowest for an unknown method.
+//
+//   - session, session_delegated and api_key carry the same names and meaning
+//     at HEAD.
+//   - ext:cfaccess is HEAD's cf_access (cfaccess/binder.go): a verified Access
+//     sign-in resolved to an allow-listed user. HEAD's cf_access is
+//     interactive and may change credentials (auth/context.go), and it is the
+//     one method the owner proof accepts. The proof also needs the verified
+//     Access e-mail (auth.WithAccessEmail), which FromCorePrincipal does not
+//     fill, so under this mapping the owner proof still refuses: the method
+//     alone never proves the owner.
+//   - books.abs is HEAD's abs for an ABS token or refresh session
+//     (middleware/absauth.go Bind), which is neither interactive nor allowed
+//     to change credentials, and HEAD's api_key for an ABS-surface key, which
+//     Bind records so that "it meets every key restriction on this surface
+//     too". A compat key principal carries the key's ID as CredentialID
+//     (core/auth/middleware.go resolveKey) and a surface-verified user carries
+//     none; a principal that names a credential is judged as the key it is,
+//     which is the narrower of the two on every key rule.
+func legacyMethod(p *coreauth.Principal) (auth.Method, bool) {
+	switch p.Method {
 	case coreauth.MethodSession:
 		return auth.MethodSession, true
 	case coreauth.MethodSessionDelegated:
 		return auth.MethodSessionDelegated, true
 	case coreauth.MethodAPIKey:
 		return auth.MethodAPIKey, true
+	case MethodExtCFAccess:
+		return auth.MethodCFAccess, true
+	case MethodBooksABS:
+		if p.CredentialID != "" {
+			return auth.MethodAPIKey, true
+		}
+		return auth.MethodABS, true
 	}
 	return auth.MethodNone, false
 }
@@ -170,7 +209,7 @@ func (b *Bridge) FromCorePrincipal(ctx context.Context) (context.Context, error)
 	if p.User == nil {
 		return ctx, fmt.Errorf("%w: principal has no user", ErrUnauthenticated)
 	}
-	method, ok := legacyMethod(p.Method)
+	method, ok := legacyMethod(p)
 	if !ok {
 		return ctx, fmt.Errorf("%w: %q", ErrUnmappedMethod, p.Method)
 	}
