@@ -206,7 +206,7 @@ func TestRebuildReleasesTheWriterLockWhenItPanics(t *testing.T) {
 	i.duringRebuild = func() { panic("the Batcomputer overheated") }
 	func() {
 		defer func() { _ = recover() }()
-		_, _ = r.e.runRebuild(taskstest.NewFakeRun(t.Context(), RebuildKind).RC(),
+		_, _ = r.e.Rebuild(taskstest.NewFakeRun(t.Context(), RebuildKind).RC(),
 			RebuildParams{Module: string(indextest.Module), Index: indextest.Signal})
 	}()
 	if !i.op.TryLock() {

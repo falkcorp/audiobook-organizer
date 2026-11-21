@@ -36,7 +36,7 @@ type idx struct {
 	name    string
 	spec    index.Spec
 	path    string
-	kinds   map[string]index.FieldKind
+	fields  map[string]fieldInfo // the Spec's fields, for the translation and the sort check
 	stored  []string
 	dirty   *index.DirtySet
 	log     *slog.Logger
@@ -291,7 +291,7 @@ func (i *idx) Search(ctx context.Context, q index.Query, page index.Page) (index
 	req.Fields = i.stored
 	res, err := bi.SearchInContext(ctx, req)
 	if err != nil {
-		return index.Result{}, fmt.Errorf("bleveindex: search %s/%s: %w", i.module, i.name, err)
+		return index.Result{}, i.searchErr("search", err)
 	}
 	out := index.Result{Total: res.Total, Hits: make([]index.Hit, 0, len(res.Hits))}
 	for _, h := range res.Hits {
@@ -339,7 +339,7 @@ func (i *idx) Count(ctx context.Context, q index.Query) (uint64, error) {
 	defer cancel()
 	res, err := bi.SearchInContext(ctx, bleve.NewSearchRequestOptions(bq, 0, 0, false))
 	if err != nil {
-		return 0, fmt.Errorf("bleveindex: count %s/%s: %w", i.module, i.name, err)
+		return 0, i.searchErr("count", err)
 	}
 	return res.Total, nil
 }
@@ -375,7 +375,7 @@ func (i *idx) Facets(ctx context.Context, q index.Query, fields []string, size i
 	}
 	res, err := bi.SearchInContext(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("bleveindex: facets %s/%s: %w", i.module, i.name, err)
+		return nil, i.searchErr("facets", err)
 	}
 	out := make(map[string][]index.FacetValue, len(fields))
 	for _, f := range fields {
@@ -389,6 +389,20 @@ func (i *idx) Facets(ctx context.Context, q index.Query, fields []string, size i
 		out[f] = vals
 	}
 	return out, nil
+}
+
+// searchErr wraps an error of a Search, Count or Facets call. bleve reports the
+// term-searcher cap (callCtx) as a plain error whose text starts with
+// "TooManyTermSearchers" (bleve/v2 search/term_limit.go, RecordTermSearcher)
+// and exports no value to compare it with, so the text is the only handle;
+// TestTooBroadIsTyped pins it, so a bleve upgrade that rewords it fails a test
+// instead of turning ErrTooBroad into an opaque failure.
+func (i *idx) searchErr(verb string, err error) error {
+	if strings.Contains(err.Error(), "TooManyTermSearchers") {
+		return fmt.Errorf("%w: %s %s/%s expands past the cap of %d terms (narrow the prefix or wildcard): %v",
+			index.ErrTooBroad, verb, i.module, i.name, i.e.maxTermSearchers(), err)
+	}
+	return fmt.Errorf("bleveindex: %s %s/%s: %w", verb, i.module, i.name, err)
 }
 
 // callCtx bounds one Search, Count or Facets call: bleve's term-searcher cap is
@@ -412,7 +426,7 @@ func (i *idx) checkSort(keys []string) error {
 		if name == "_score" || name == "_id" {
 			continue
 		}
-		if _, ok := i.kinds[name]; !ok {
+		if _, ok := i.fields[name]; !ok {
 			return fmt.Errorf("%w: sort key %q names no field of the index", index.ErrInvalidQuery, k)
 		}
 	}
@@ -433,7 +447,7 @@ func (i *idx) query(q index.Query) (query.Query, error) {
 	if err != nil {
 		return nil, err
 	}
-	return translate(i.kinds, n)
+	return translate(i.fields, n)
 }
 
 // MarkDirty records id in the durable dirty set inside b, the entity's own

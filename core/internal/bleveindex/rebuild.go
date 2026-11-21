@@ -57,11 +57,16 @@ func (e *Engine) RebuildTask() tasks.Definition {
 		Perms:   tasks.Permissions{Start: rbac.Need("core:system.manage")},
 		Resume:  tasks.ResumeFromZero,
 		Timeout: 24 * time.Hour,
-		Run:     e.runRebuild,
+		Run:     e.Rebuild,
 	})
 }
 
-func (e *Engine) runRebuild(rc *tasks.RC, p RebuildParams) (RebuildResult, error) {
+// Rebuild runs one full rebuild of the open index p names, on rc: it is
+// RebuildTask's Run, exported for a caller that drives the run itself rather
+// than through the task executor (coretest.IndexEngine, so a module's test can
+// rebuild an index it opened on the real engine). The kernel registers
+// RebuildTask; it does not call this directly.
+func (e *Engine) Rebuild(rc *tasks.RC, p RebuildParams) (RebuildResult, error) {
 	if p.Module == "" || p.Index == "" {
 		return RebuildResult{}, errors.New("bleveindex: rebuild needs a module and an index")
 	}

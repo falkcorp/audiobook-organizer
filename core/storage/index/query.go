@@ -7,6 +7,7 @@ package index
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -18,15 +19,16 @@ type Query interface{ isQuery() }
 type Op uint8
 
 const (
-	OpInvalid Op = iota
-	OpMatch      // Field, Text: analysed match
-	OpTerm       // Field, Text: one exact term
-	OpPrefix     // Field, Text: terms starting with Text
-	OpRange      // Field, Min, Max: inclusive bounds, either may be nil
-	OpAnd        // Children
-	OpOr         // Children
-	OpNot        // Children[0]
-	OpString     // Text: the engine's user query syntax
+	OpInvalid  Op = iota
+	OpMatch       // Field, Text: analysed match
+	OpTerm        // Field, Text: one exact term
+	OpPrefix      // Field, Text: terms starting with Text
+	OpRange       // Field, Min, Max: inclusive bounds, either may be nil
+	OpAnd         // Children
+	OpOr          // Children
+	OpNot         // Children[0]
+	OpString      // Text: the engine's user query syntax
+	OpWildcard    // Field, Text: terms matching a * / ? pattern (Wildcard)
 )
 
 // Node is the engine-facing view of a Query: a plain tree an engine translates.
@@ -53,11 +55,45 @@ func (badQuery) isQuery() {}
 // Match is an analysed match of text against field.
 func Match(field, text string) Query { return leaf(OpMatch, field, text) }
 
-// Term is an exact term of field.
+// Term is an exact term of field: value is matched against the index's terms
+// without analysis, except that on a Text or Keyword field whose analyzer
+// lowercases, the engine lowercases value first (an uppercase term could
+// never match there).
 func Term(field, value string) Query { return leaf(OpTerm, field, value) }
 
-// Prefix matches terms of field that start with prefix.
+// Prefix matches terms of field that start with prefix. As with Term, the
+// prefix is not analysed, except that it is lowercased on a field whose
+// analyzer lowercases.
 func Prefix(field, prefix string) Query { return leaf(OpPrefix, field, prefix) }
+
+// Wildcard matches terms of field against pattern, where * stands for any
+// run of characters (none included) and ? for exactly one; every other
+// character is literal, and there is no escape for * and ?. Unlike a
+// QueryString, it may start with * or ?, so "*man" and "*bat*" are allowed:
+// it is the explicit opt-in to a pattern with no literal prefix.
+//
+// Cost. A pattern with a literal prefix ("bat*") narrows the term dictionary
+// like Prefix. One that starts with * or ? cannot: the engine walks every
+// term of the field (in every index segment) through the pattern's automaton,
+// which is linear in the field's distinct terms, then searches each term that
+// matched. That walk is cheap per term but unbounded by the pattern, so the
+// engine bounds what follows it: every matched term counts against the
+// engine's term-searcher cap for the whole search (1024 by default), and a
+// search over the cap fails with ErrTooBroad instead of running; each
+// Wildcard node also costs more of the query's node budget than a Term (see
+// the engine). A pattern must hold at least one literal character ("*" alone
+// enumerates the whole field and is refused).
+//
+// Case: on a field whose analyzer lowercases, the engine lowercases pattern;
+// no other analysis runs (no stemming, no character filter), so a caller
+// whose analyzer splits on a character, such as CharUnderscoreToSpace, splits
+// the pattern itself and And-s the parts.
+func Wildcard(field, pattern string) Query {
+	if strings.Trim(pattern, "*?") == "" {
+		return badQuery{fmt.Errorf("%w: wildcard %q has no literal character", ErrInvalidQuery, pattern)}
+	}
+	return leaf(OpWildcard, field, pattern)
+}
 
 func leaf(op Op, field, text string) Query {
 	if field == "" {

@@ -885,7 +885,7 @@ func TestRebuildWaitEndsWithItsContext(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.e.runRebuild(taskstest.NewFakeRun(ctx, RebuildKind).RC(),
+		_, err := r.e.Rebuild(taskstest.NewFakeRun(ctx, RebuildKind).RC(),
 			RebuildParams{Module: string(indextest.Module), Index: indextest.Signal})
 		done <- err
 	}()
