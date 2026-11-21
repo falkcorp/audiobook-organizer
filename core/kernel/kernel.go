@@ -548,6 +548,7 @@ func (k *Kernel) catalog(describe bool) error {
 	}
 	slices.SortFunc(k.entries, func(a, b *entry) int { return strings.Compare(string(a.man.ID), string(b.man.ID)) })
 	probs = append(probs, resetHookProblems(k.entries)...)
+	probs = append(probs, importedRoleProblems(k.entries)...)
 	// Every manifest's TaskLedger and DataMigrations, enabled or not: they stay
 	// known while the module is disabled (06 §6.4.2).
 	probs = append(probs, ledgerProblems(k.entries)...)
