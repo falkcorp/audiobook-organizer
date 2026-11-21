@@ -174,7 +174,7 @@ func TestStage13_BehindRealStage12(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/api/core/v1/gotham", nil)
 			r.RemoteAddr = "192.0.2.10:4000"
 			if c.bearer {
-				r.Header.Set("Authorization", "Bearer joker-card")
+				r.Header.Set("Authorization", "Bearer "+string(auth.KindSession)+"joker-card")
 			} else {
 				r.AddCookie(&http.Cookie{Name: cookieName, Value: "penguin-umbrella"})
 			}
