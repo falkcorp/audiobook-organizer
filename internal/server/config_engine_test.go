@@ -53,18 +53,6 @@ func (s *engineStore) Generation() uint64 {
 	return s.gen
 }
 
-func (s *engineStore) ListSecrets(_ context.Context, prefix string) ([]secrets.Meta, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []secrets.Meta
-	for n := range s.secrets {
-		if strings.HasPrefix(string(n), prefix) {
-			out = append(out, secrets.Meta{Name: n, Set: true, Source: secrets.SourceStored, Fingerprint: "abcd1234"})
-		}
-	}
-	return out, nil
-}
-
 func (s *engineStore) OnCommit(fn func(uint64)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
