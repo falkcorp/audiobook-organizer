@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/models"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 
 // Golden bytes captured BEFORE internal/models was merged into
@@ -22,16 +22,16 @@ const goldenCandRecJSON = `{"et":"book","a":"book-batman-1","b":"book-batman-2",
 
 const goldenDedupCandidateJSON = `{"id":7,"entity_type":"book","entity_a_id":"book-batman-1","entity_b_id":"book-batman-2","layer":"exact","similarity":0.97,"status":"pending","created_at":"2026-11-20T01:02:03Z","updated_at":"2026-11-20T01:02:03Z","score_breakdown":{"pair":["book-batman-1","book-batman-2"],"score":96.25,"band":"HIGH","signals":[{"kind":"exact_file","raw":1,"confidence":0.99,"evidence":"whole-file hash 9af3 both sides"},{"kind":"lsh_acoustid","raw":0.93,"confidence":0.9,"evidence":"hamming 0.93","fp_version":"fp-v2"},{"kind":"exact_rule","raw":0,"confidence":0,"evidence":"isbn 9780000000001","rule":"isbn_asin"},{"kind":"same_path","raw":0,"confidence":0,"evidence":"same_path"}],"suppressors":["series_volume_differs"],"formula":"unified_v1","computed_at":"2026-11-21T03:04:05.123456789Z"},"band":"HIGH","formula_version":"unified_v1"}`
 
-func goldenStoreScore() *models.UnifiedDedupScore {
-	return &models.UnifiedDedupScore{
+func goldenStoreScore() *unified.UnifiedDedupScore {
+	return &unified.UnifiedDedupScore{
 		Pair:  [2]string{"book-batman-1", "book-batman-2"},
 		Score: 96.25,
 		Band:  "HIGH",
-		Signals: []models.Signal{
+		Signals: []unified.Signal{
 			{Kind: "exact_file", Raw: 1, Confidence: 0.99, Evidence: "whole-file hash 9af3 both sides"},
 			{Kind: "lsh_acoustid", Raw: 0.93, Confidence: 0.9, Evidence: "hamming 0.93", FPVersion: "fp-v2"},
-			{Kind: models.SignalKindExactRule, Evidence: "isbn 9780000000001", Rule: "isbn_asin"},
-			{Kind: models.SignalKindSamePath, Evidence: "same_path"},
+			{Kind: unified.SigExactRule, Evidence: "isbn 9780000000001", Rule: "isbn_asin"},
+			{Kind: unified.SigSamePath, Evidence: "same_path"},
 		},
 		Suppressors: []string{"series_volume_differs"},
 		Formula:     "unified_v1",

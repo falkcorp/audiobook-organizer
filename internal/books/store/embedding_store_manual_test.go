@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/models"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/stretchr/testify/require"
 )
 
@@ -276,7 +276,7 @@ func TestUpsertCandidateNew_PinnedScannerRowKeepsScore(t *testing.T) {
 	sim1, sim2 := 0.81, 0.93
 	id, _, err := s.UpsertCandidateNew(DedupCandidate{
 		EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Similarity: &sim1,
-		ScoreBreakdown: &models.UnifiedDedupScore{Score: 70, Band: "REVIEW", Formula: "v1"},
+		ScoreBreakdown: &unified.UnifiedDedupScore{Score: 70, Band: "REVIEW", Formula: "v1"},
 		Band:           "REVIEW", FormulaVersion: "v1",
 	})
 	require.NoError(t, err)
@@ -285,7 +285,7 @@ func TestUpsertCandidateNew_PinnedScannerRowKeepsScore(t *testing.T) {
 
 	_, isNew, err := s.UpsertCandidateNew(DedupCandidate{
 		EntityType: "book", EntityAID: "b2", EntityBID: "b1", Layer: "embedding", Similarity: &sim2,
-		ScoreBreakdown: &models.UnifiedDedupScore{Score: 99, Band: "CERTAIN", Formula: "v2"},
+		ScoreBreakdown: &unified.UnifiedDedupScore{Score: 99, Band: "CERTAIN", Formula: "v2"},
 		Band:           "CERTAIN", FormulaVersion: "v2",
 		LLMVerdict: "duplicate", LLMReason: "same book",
 	})
@@ -316,7 +316,7 @@ func TestUpsertCandidateNew_PinnedRowWithoutBandStaysUnbanded(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = s.UpsertCandidateNew(DedupCandidate{
 		EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding",
-		ScoreBreakdown: &models.UnifiedDedupScore{Score: 99, Band: "CERTAIN"}, Band: "CERTAIN", FormulaVersion: "v2",
+		ScoreBreakdown: &unified.UnifiedDedupScore{Score: 99, Band: "CERTAIN"}, Band: "CERTAIN", FormulaVersion: "v2",
 	})
 	require.NoError(t, err)
 	got, err := s.GetCandidateByID(id)
@@ -351,14 +351,14 @@ func TestUpdateCandidateScore_RefusesManualRow(t *testing.T) {
 	plain, _, err := s.UpsertCandidateNew(DedupCandidate{EntityType: "book", EntityAID: "c1", EntityBID: "c2", Layer: "embedding", Band: "REVIEW"})
 	require.NoError(t, err)
 
-	err = s.UpdateCandidateScore(pinned, &models.UnifiedDedupScore{Score: 99, Band: "CERTAIN"}, "CERTAIN", "v2")
+	err = s.UpdateCandidateScore(pinned, &unified.UnifiedDedupScore{Score: 99, Band: "CERTAIN"}, "CERTAIN", "v2")
 	require.ErrorIs(t, err, ErrManualCandidateProtected)
 	got, err := s.GetCandidateByID(pinned)
 	require.NoError(t, err)
 	require.Equal(t, "REVIEW", got.Band)
 	require.Nil(t, got.ScoreBreakdown)
 
-	require.NoError(t, s.UpdateCandidateScore(plain, &models.UnifiedDedupScore{Score: 99, Band: "CERTAIN"}, "CERTAIN", "v2"))
+	require.NoError(t, s.UpdateCandidateScore(plain, &unified.UnifiedDedupScore{Score: 99, Band: "CERTAIN"}, "CERTAIN", "v2"))
 	got, err = s.GetCandidateByID(plain)
 	require.NoError(t, err)
 	require.Equal(t, "CERTAIN", got.Band)

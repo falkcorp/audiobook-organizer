@@ -8,24 +8,24 @@ package store
 import (
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/models"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 )
 
-func provenanceScore(rule, evidence string) *models.UnifiedDedupScore {
-	return &models.UnifiedDedupScore{
+func provenanceScore(rule, evidence string) *unified.UnifiedDedupScore {
+	return &unified.UnifiedDedupScore{
 		Pair: [2]string{"a", "b"},
-		Signals: []models.Signal{{
-			Kind: models.SignalKindExactRule, Rule: rule, Evidence: evidence,
+		Signals: []unified.Signal{{
+			Kind: unified.SigExactRule, Rule: rule, Evidence: evidence,
 		}},
 	}
 }
 
-func certainScore() *models.UnifiedDedupScore {
-	return &models.UnifiedDedupScore{
+func certainScore() *unified.UnifiedDedupScore {
+	return &unified.UnifiedDedupScore{
 		Pair:  [2]string{"a", "b"},
 		Score: 99.5,
 		Band:  "CERTAIN",
-		Signals: []models.Signal{{
+		Signals: []unified.Signal{{
 			Kind: "isbn_asin", Raw: 1, Confidence: 0.98, Evidence: "isbn match",
 		}},
 		Formula: "unified-v1",
@@ -41,13 +41,13 @@ func candidateFor(t *testing.T, s *EmbeddingStore) DedupCandidate {
 	return cands[0]
 }
 
-func rules(sb *models.UnifiedDedupScore) []string {
+func rules(sb *unified.UnifiedDedupScore) []string {
 	var out []string
 	if sb == nil {
 		return out
 	}
 	for _, s := range sb.Signals {
-		if s.Kind == models.SignalKindExactRule {
+		if s.Kind == unified.SigExactRule {
 			out = append(out, s.Rule)
 		}
 	}
@@ -72,7 +72,7 @@ func TestUpsert_ProvenanceMergesIntoProtectedExactRow(t *testing.T) {
 		t.Fatalf("rules after first merge = %v", got)
 	}
 	// Second rule: appended. Same rule again: replaced, not duplicated.
-	for _, sb := range []*models.UnifiedDedupScore{
+	for _, sb := range []*unified.UnifiedDedupScore{
 		provenanceScore("title_author", "same title"),
 		provenanceScore("isbn_asin", "shared ASIN X (refreshed)"),
 	} {
@@ -165,7 +165,7 @@ func TestIsProvenanceOnly(t *testing.T) {
 	if certainScore().IsProvenanceOnly() {
 		t.Fatal("scored breakdown is not provenance-only")
 	}
-	var nilScore *models.UnifiedDedupScore
+	var nilScore *unified.UnifiedDedupScore
 	if nilScore.IsProvenanceOnly() {
 		t.Fatal("nil is not provenance-only")
 	}

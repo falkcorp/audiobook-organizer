@@ -10,8 +10,6 @@ import (
 	"reflect"
 	"testing"
 	"time"
-
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
 
 // goldenScoreJSON is the byte-exact JSON of goldenScore. It was captured from
@@ -81,7 +79,7 @@ func mustJSON(t *testing.T, v any) string {
 // TestUnifiedDedupScoreJSONRoundTrip pins the persisted shape of the score:
 // the golden bytes decode into the same value and re-encode to the same bytes,
 // and the provenance helpers return the same bytes they returned before the
-// type moved here from internal/models.
+// type moved here from internal/
 func TestUnifiedDedupScoreJSONRoundTrip(t *testing.T) {
 	if got := mustJSON(t, goldenScore()); got != goldenScoreJSON {
 		t.Fatalf("score JSON changed\n got: %s\nwant: %s", got, goldenScoreJSON)
@@ -110,10 +108,10 @@ func TestUnifiedDedupScoreJSONRoundTrip(t *testing.T) {
 }
 
 func TestProvenanceHelpersGoldenBytes(t *testing.T) {
-	if got := mustJSON(t, models.MergeProvenance(goldenScore(), goldenIncoming())); got != goldenMergedJSON {
+	if got := mustJSON(t, MergeProvenance(goldenScore(), goldenIncoming())); got != goldenMergedJSON {
 		t.Fatalf("MergeProvenance output changed\n got: %s\nwant: %s", got, goldenMergedJSON)
 	}
-	if got := mustJSON(t, models.CarryProvenance(goldenScore(), goldenNext())); got != goldenCarriedJSON {
+	if got := mustJSON(t, CarryProvenance(goldenScore(), goldenNext())); got != goldenCarriedJSON {
 		t.Fatalf("CarryProvenance output changed\n got: %s\nwant: %s", got, goldenCarriedJSON)
 	}
 
@@ -130,7 +128,7 @@ func TestProvenanceHelpersGoldenBytes(t *testing.T) {
 	if nilScore.IsProvenanceOnly() {
 		t.Fatal("nil breakdown reported provenance-only")
 	}
-	if !models.IsProvenanceKind(SigExactRule) || !models.IsProvenanceKind(SigSamePath) || models.IsProvenanceKind(SigExactFile) {
+	if !IsProvenanceKind(SigExactRule) || !IsProvenanceKind(SigSamePath) || IsProvenanceKind(SigExactFile) {
 		t.Fatal("IsProvenanceKind classification changed")
 	}
 }

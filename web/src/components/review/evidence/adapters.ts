@@ -47,7 +47,7 @@ export type CandidateDetailState = 'pending' | 'loaded' | 'failed';
  * reasoning docs/evidence-panel-audit.md used to REJECT a bar for the metadata
  * lane, so this lane does not get one either.
  *
- * The field names below are the Go JSON tags (models.Signal). They are not
+ * The field names below are the Go JSON tags (unified.Signal). They are not
  * interchangeable: `confidence` is what the scorer consumes and `raw` is the
  * measurement kept for auditing, so mapping `raw` into the headline slot would
  * show a cosine distance where a probability belongs.

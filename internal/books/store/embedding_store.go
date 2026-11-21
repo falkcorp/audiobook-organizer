@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
+	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -121,9 +121,9 @@ type candRec struct {
 
 	// Unified scoring fields (T015, SPEC 1 §3). All omitempty so pre-T015
 	// rows round-trip without growing their stored size.
-	ScoreBreakdown *models.UnifiedDedupScore `json:"sb,omitempty"`
-	Band           string                    `json:"band,omitempty"`
-	FormulaVersion string                    `json:"fv,omitempty"`
+	ScoreBreakdown *unified.UnifiedDedupScore `json:"sb,omitempty"`
+	Band           string                     `json:"band,omitempty"`
+	FormulaVersion string                     `json:"fv,omitempty"`
 
 	// Source / SourceNote mark a candidate a human put in the review queue by
 	// hand (POST /api/v1/dedup/candidates). omitempty so scanner rows keep
@@ -175,9 +175,9 @@ type DedupCandidate struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 
 	// Unified scoring fields (T015, SPEC 1 §3). Nil/empty on pre-T015 rows.
-	ScoreBreakdown *models.UnifiedDedupScore `json:"score_breakdown,omitempty"`
-	Band           string                    `json:"band,omitempty"`
-	FormulaVersion string                    `json:"formula_version,omitempty"`
+	ScoreBreakdown *unified.UnifiedDedupScore `json:"score_breakdown,omitempty"`
+	Band           string                     `json:"band,omitempty"`
+	FormulaVersion string                     `json:"formula_version,omitempty"`
 
 	// Source is CandidateSourceManual for a pair a human enqueued by hand, and
 	// empty for every scanner-produced row. SourceNote is the reason the
@@ -850,7 +850,7 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 		existing.Similarity = c.Similarity
 	}
 	// A provenance-only breakdown (the exact-layer rules' record of WHY a pair
-	// exists, models.UnifiedDedupScore.IsProvenanceOnly) is MERGED rather than
+	// exists, unified.UnifiedDedupScore.IsProvenanceOnly) is MERGED rather than
 	// written over the row, and even into a protected row: it carries no score,
 	// so folding it in cannot change what the row scores, and "exact" rows are
 	// protected, so replacing-only would leave every pre-existing exact row
@@ -858,13 +858,13 @@ func (s *EmbeddingStore) UpsertCandidateNew(c DedupCandidate) (id int64, isNew b
 	// other writer.
 	incomingProvenance := c.ScoreBreakdown.IsProvenanceOnly()
 	if incomingProvenance && !scoreFrozen {
-		existing.ScoreBreakdown = models.MergeProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
+		existing.ScoreBreakdown = unified.MergeProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
 	}
 	if !protected && !scoreFrozen {
 		// Carry forward unified-scoring fields when the incoming write has them.
 		// A replacement keeps the provenance signals the old breakdown had.
 		if c.ScoreBreakdown != nil && !incomingProvenance {
-			existing.ScoreBreakdown = models.CarryProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
+			existing.ScoreBreakdown = unified.CarryProvenance(existing.ScoreBreakdown, c.ScoreBreakdown)
 		}
 		if c.Band != "" {
 			existing.Band = c.Band
@@ -1648,7 +1648,7 @@ func (s *EmbeddingStore) writeCandidateStatusLocked(id int64, rec candRec, statu
 // EnqueueManualCandidate holds, so a pin landing after the caller listed the
 // row is still honoured. A missing row is a no-op, as before. Bulk callers
 // should use UpdateCandidateScores + SyncCandidateWrites instead.
-func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDedupScore, band, formulaVersion string) error {
+func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *unified.UnifiedDedupScore, band, formulaVersion string) error {
 	var guardErr error
 	err := s.updateCandidateIf(id, func(rec *candRec) bool {
 		if rec.Source == CandidateSourceManual {
@@ -1656,8 +1656,8 @@ func (s *EmbeddingStore) UpdateCandidateScore(id int64, score *models.UnifiedDed
 			return false
 		}
 		// A new score replaces the old one, but never the record of which
-		// exact rule created the row (models.CarryProvenance).
-		rec.ScoreBreakdown = models.CarryProvenance(rec.ScoreBreakdown, score)
+		// exact rule created the row (unified.CarryProvenance).
+		rec.ScoreBreakdown = unified.CarryProvenance(rec.ScoreBreakdown, score)
 		rec.Band = band
 		rec.FormulaVersion = formulaVersion
 		rec.UpdatedAt = time.Now().UnixNano()
@@ -1705,7 +1705,7 @@ func (s *EmbeddingStore) UpdateCandidateLLM(id int64, verdict, reason string) er
 // CandidateScoreUpdate is one row's re-computed score for UpdateCandidateScores.
 type CandidateScoreUpdate struct {
 	ID             int64
-	Score          *models.UnifiedDedupScore
+	Score          *unified.UnifiedDedupScore
 	Band           string
 	FormulaVersion string
 }
@@ -1768,7 +1768,7 @@ func (s *EmbeddingStore) UpdateCandidateScores(updates []CandidateScoreUpdate) (
 		if rec.Source == CandidateSourceManual {
 			continue
 		}
-		rec.ScoreBreakdown = models.CarryProvenance(rec.ScoreBreakdown, u.Score)
+		rec.ScoreBreakdown = unified.CarryProvenance(rec.ScoreBreakdown, u.Score)
 		rec.Band = u.Band
 		rec.FormulaVersion = u.FormulaVersion
 		rec.UpdatedAt = now

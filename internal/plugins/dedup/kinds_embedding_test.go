@@ -25,7 +25,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -257,7 +256,7 @@ func (s *embeddingSpy) ScorePairsForBook(ctx context.Context, aID string, inputs
 			Pair:    [2]string{aID, in.OtherID},
 			Score:   4.0,
 			Formula: "noisy_or_v1",
-			Signals: []models.Signal{{Kind: unified.SigDuration, Raw: 1.0, Evidence: "duration match"}},
+			Signals: []unified.Signal{{Kind: unified.SigDuration, Raw: 1.0, Evidence: "duration match"}},
 		}
 	}
 	return out, nil

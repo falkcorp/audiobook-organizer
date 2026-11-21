@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
-	"github.com/falkcorp/audiobook-organizer/internal/models"
 )
 
 func seedCandidate(t *testing.T, s *EmbeddingStore, i int) int64 {
@@ -43,7 +42,7 @@ func TestUpdateCandidateScores_WritesBatchAndReportsMissing(t *testing.T) {
 	id1 := seedCandidate(t, s, 1)
 	id2 := seedCandidate(t, s, 2)
 
-	score := &models.UnifiedDedupScore{Score: 98, Band: unified.BandCertain, Formula: "unified_v1"}
+	score := &unified.UnifiedDedupScore{Score: 98, Band: unified.BandCertain, Formula: "unified_v1"}
 	applied, failed, err := s.UpdateCandidateScores([]CandidateScoreUpdate{
 		{ID: id1, Score: score, Band: unified.BandCertain, FormulaVersion: "unified_v1"},
 		{ID: id2, Score: score, Band: unified.BandCertain, FormulaVersion: "unified_v1"},
@@ -89,7 +88,7 @@ func TestUpdateCandidateScores_SerializesWithUpsert(t *testing.T) {
 	for i := range 20 {
 		ids = append(ids, seedCandidate(t, s, i))
 	}
-	score := &models.UnifiedDedupScore{Score: 98, Band: unified.BandCertain, Formula: "unified_v1"}
+	score := &unified.UnifiedDedupScore{Score: 98, Band: unified.BandCertain, Formula: "unified_v1"}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
