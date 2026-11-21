@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audioext"
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
+	appconfig "github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/secrets"
@@ -129,7 +132,7 @@ type booksEmbeddingModelThresholds struct {
 }
 
 // booksWhisperEndpoint is one entry of modules.books.whisper.endpoints. Only
-// url is required: HEAD's WHISPER_ENDPOINTS JSON (config.ParseWhisperEndpoints)
+// url is required: HEAD's WHISPER_ENDPOINTS JSON (HEAD's ParseWhisperEndpoints)
 // accepted an entry with any other field left out, at its zero value, so the
 // schema must too or an operator's HEAD-form value refuses the boot (F3-07
 // rehearsal finding 2).
@@ -426,9 +429,15 @@ type scanSettings struct {
 	MinBookSizeBytes          int64    `json:"min_book_size_bytes"`
 	MinRescanAgeHours         int      `json:"min_rescan_age_hours"`
 	OnStartup                 bool     `json:"on_startup"`
-	ProgressEvery             int      `json:"progress_every"`
-	StanddownGraceSeconds     int      `json:"standdown_grace_seconds"`
-	SupportedExtensions       []string `json:"supported_extensions"`
+	// PeriodicEnabled is HEAD's scheduled.library_scan.enabled: whether
+	// library_scan's timer runs and, with on_startup, whether its nightly
+	// window run does (HEAD's IsEnabled was enabled || scan_on_startup).
+	// schedules.library_scan itself stays enabled; its runtime gates read
+	// this key (F3-07 / F5-14b form A).
+	PeriodicEnabled       bool     `json:"periodic_enabled"`
+	ProgressEvery         int      `json:"progress_every"`
+	StanddownGraceSeconds int      `json:"standdown_grace_seconds"`
+	SupportedExtensions   []string `json:"supported_extensions"`
 }
 
 type schedulerSchedules struct {
@@ -737,22 +746,30 @@ func masterListDefaults() masterListSettings {
 	}
 }
 
+// metadataFetchDefaults is the metadata_fetch block's defaults, from the one
+// literal internal/config keeps (config.DefaultMetadataFetchConfig), so the
+// section and the tests that seed the block cannot disagree.
+func metadataFetchDefaults() metadataFetch {
+	d := appconfig.DefaultMetadataFetchConfig()
+	return metadataFetch{
+		CatalogStage:           d.CatalogStage,
+		FolderParsePersonTitle: d.FolderParsePersonTitle,
+		NegativeTTLDays: metadataFetchNegativeTTLDays{
+			Audible:     d.NegativeTTLDays.Audible,
+			Audnexus:    d.NegativeTTLDays.Audnexus,
+			Google:      d.NegativeTTLDays.Google,
+			OpenLibrary: d.NegativeTTLDays.OpenLibrary,
+		},
+		SharedCache: d.SharedCache,
+	}
+}
+
 // metadata
 func metadataDefaults() metadataSettings {
 	return metadataSettings{
-		AuthorityEvidenceEnabled: false,
-		CandidateFetchWorkers:    0,
-		Fetch: metadataFetch{
-			CatalogStage:           false,
-			FolderParsePersonTitle: true,
-			NegativeTTLDays: metadataFetchNegativeTTLDays{
-				Audible:     14,
-				Audnexus:    14,
-				Google:      7,
-				OpenLibrary: 30,
-			},
-			SharedCache: true,
-		},
+		AuthorityEvidenceEnabled:        false,
+		CandidateFetchWorkers:           0,
+		Fetch:                           metadataFetchDefaults(),
 		FetchCacheTTLDays:               180,
 		GoogleBooksBackgroundDailyLimit: 0,
 		GoogleBooksDailyLimit:           0,
@@ -855,9 +872,10 @@ func scanDefaults() scanSettings {
 		MinBookSizeBytes:          0,
 		MinRescanAgeHours:         0,
 		OnStartup:                 false,
+		PeriodicEnabled:           true,
 		ProgressEvery:             0,
 		StanddownGraceSeconds:     45,
-		SupportedExtensions:       []string{".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma", ".opus", ".oga", ".wav", ".aiff", ".aif", ".mka", ".aax", ".aaxc"},
+		SupportedExtensions:       audioext.Default(),
 	}
 }
 
@@ -868,21 +886,35 @@ func schedulerDefaults() schedulerSettings {
 			AcoustIDBackfill:         tasks.ScheduleConfig{Enabled: false, Every: dur(24 * time.Hour)},
 			AIDedupBatch:             tasks.ScheduleConfig{Enabled: false, Every: dur(24 * time.Hour)},
 			ASINBackfill:             tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour)},
-			AuthorSplit:              tasks.ScheduleConfig{Enabled: false},
+			AuthorSplit:              nightly("author_split", tasks.ScheduleConfig{Enabled: false}),
 			CandidateFetch:           tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour)},
 			CatalogHarvest:           tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour)},
-			DBOptimize:               tasks.ScheduleConfig{Enabled: false, Every: dur(24 * time.Hour)},
-			DedupRefresh:             tasks.ScheduleConfig{Enabled: false, Every: dur(6 * time.Hour)},
+			DBOptimize:               nightly("db_optimize", tasks.ScheduleConfig{Enabled: false, Every: dur(24 * time.Hour)}),
+			DedupRefresh:             nightly("dedup_refresh", tasks.ScheduleConfig{Enabled: false, Every: dur(6 * time.Hour)}),
 			LabelRefinement:          tasks.ScheduleConfig{Enabled: false, Every: dur(168 * time.Hour)},
-			LibraryScan:              tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour)},
+			LibraryScan:              nightly("library_scan", tasks.ScheduleConfig{Enabled: true, Every: dur(6 * time.Hour)}),
 			LibraryScanFull:          tasks.ScheduleConfig{Enabled: true, Every: dur(168 * time.Hour)},
 			MetadataRefresh:          tasks.ScheduleConfig{Enabled: false},
 			MetadataUpgrade:          tasks.ScheduleConfig{Enabled: false},
-			Reconcile:                tasks.ScheduleConfig{Enabled: false},
+			Reconcile:                nightly("reconcile", tasks.ScheduleConfig{Enabled: false}),
 			ResolveProductionAuthors: tasks.ScheduleConfig{Enabled: false},
-			SeriesPrune:              tasks.ScheduleConfig{Enabled: false},
+			SeriesPrune:              nightly("series_prune", tasks.ScheduleConfig{Enabled: false}),
 		},
 	}
+}
+
+// nightly places c in the nightly window at the position HEAD's maintenance
+// order gave the scheduled entry name (cutover.HeadMaintenanceOrder): the
+// tasks HEAD's window op ran keep their window membership and their order.
+// M2 writes the same placement into a converted value, so a HEAD entry equal
+// to HEAD's default stages nothing.
+func nightly(name string, c tasks.ScheduleConfig) tasks.ScheduleConfig {
+	order, ok := cutover.HeadMaintenanceOrder(name)
+	if !ok {
+		panic("books: " + name + " is not in HEAD's maintenance order")
+	}
+	c.Window, c.Order = cutover.HeadMaintenanceWindow, order
+	return c
 }
 
 // search

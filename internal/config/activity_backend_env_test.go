@@ -6,47 +6,16 @@
 package config
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/spf13/viper"
 )
 
-// TestActivityBackend_SQLiteFromConfFailsValidate is the fail-loud guarantee of
-// 01-P75: a conf that still says activity_backend: sqlite, in the config file or
-// the environment, loads into the field and is then refused by Validate (which
-// runs at startup and on every PUT) with a message saying what to do. It must
-// never load quietly and run on Pebble.
-func TestActivityBackend_SQLiteFromConfFailsValidate(t *testing.T) {
-	t.Run("config file", func(t *testing.T) {
-		resetViper(t)
-		t.Setenv("ACTIVITY_BACKEND", "")
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		if err := os.WriteFile(path, []byte("activity_backend: sqlite\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		viper.SetConfigFile(path)
-		if err := viper.ReadInConfig(); err != nil {
-			t.Fatal(err)
-		}
-		InitConfig()
-		assertSQLiteRefused(t, Snapshot())
-	})
-	t.Run("environment", func(t *testing.T) {
-		resetViper(t)
-		t.Setenv("ACTIVITY_BACKEND", "sqlite")
-		InitConfig()
-		assertSQLiteRefused(t, Snapshot())
-	})
-}
-
-func assertSQLiteRefused(t *testing.T, c Config) {
-	t.Helper()
-	if c.ActivityBackend != "sqlite" {
-		t.Fatalf("ActivityBackend = %q, want the conf's \"sqlite\" to reach the field so it can be refused", c.ActivityBackend)
-	}
+// TestActivityBackend_SQLiteFailsValidate is the fail-loud guarantee of 01-P75:
+// a Config that still says activity_backend: sqlite is refused by Validate
+// (which runs at startup and on every PUT) with a message saying what to do.
+// It must never load quietly and run on Pebble.
+func TestActivityBackend_SQLiteFailsValidate(t *testing.T) {
+	c := Config{ActivityBackend: "sqlite"}
 	err := c.Validate()
 	if err == nil {
 		t.Fatal("Validate accepted activity_backend: sqlite; startup would run on Pebble with the conf ignored")

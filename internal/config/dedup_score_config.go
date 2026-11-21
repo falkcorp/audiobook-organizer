@@ -14,7 +14,7 @@ import (
 // ScoreConfig builds the effective unified.ScoreConfig the dedup engine must
 // score with from this persisted dedup.signals block (config.yaml merged with
 // the DB config blob — the struct AppConfig.Dedup.Signals holds), layered over
-// Viper and unified.DefaultScoreConfig.
+// unified.DefaultScoreConfig.
 //
 // This is the ONE conversion from DedupSignalConfig to unified.ScoreOverrides,
 // and every consumer of the ladder goes through it:
@@ -28,7 +28,7 @@ import (
 //
 // It lives in this package, not in internal/dedup, because the write boundary
 // (UpdateConfig) is here and config → unified is a legal import (unified pulls
-// in only viper and internal/models); the reverse, unified → config, would be a
+// in only internal/models); the reverse, unified → config, would be a
 // cycle, which is why the conversion cannot live in unified itself.
 //
 // A returned error means the effective config failed unified.Validate

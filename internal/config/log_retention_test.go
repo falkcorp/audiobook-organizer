@@ -15,26 +15,17 @@ import (
 	"testing"
 
 	logging "github.com/falkcorp/mediacore/log"
-	"github.com/spf13/viper"
 )
 
-func TestInitConfigReadsLogRetentionDefault(t *testing.T) {
-	restoreAppConfig(t)
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	InitConfig()
-	if got := Snapshot().LogRetentionDays; got != logging.DefaultLogRetentionDays {
-		t.Fatalf("LogRetentionDays after InitConfig = %d, want %d (the purge_old_logs task is disabled at 0)",
+func TestFactoryDefaultsLogRetention(t *testing.T) {
+	if got := factoryDefaultConfigForTest().LogRetentionDays; got != logging.DefaultLogRetentionDays {
+		t.Fatalf("factory default LogRetentionDays = %d, want %d (the purge_old_logs task is disabled at 0)",
 			got, logging.DefaultLogRetentionDays)
 	}
 }
 
 func TestValidateNormalizesZeroLogRetention(t *testing.T) {
-	restoreAppConfig(t)
-	viper.Reset()
-	t.Cleanup(viper.Reset)
-	InitConfig()
-	cfg := Snapshot()
+	cfg := factoryDefaultConfigForTest()
 	for _, tc := range []struct{ in, want int }{
 		{in: 0, want: logging.DefaultLogRetentionDays},
 		{in: logging.LogRetentionKeepForever, want: logging.LogRetentionKeepForever},

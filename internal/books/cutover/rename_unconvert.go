@@ -63,10 +63,23 @@ var errUnknownConverter = errors.New(errUnknownConverterMessage)
 // there.
 const headLogRetentionKeepForever = -1
 
+// Unconvert is Convert's inverse for t: the HEAD value of t's row that
+// the canonical value in determines. A schedule's window placement is HEAD's
+// own (its maintenance order), so a value placed where t's placement says, or
+// in no window, is representable and anything else is refused.
+func Unconvert(t Target, in json.RawMessage) (json.RawMessage, error) {
+	if isScheduleConvert(t.Convert) {
+		bad := func(what string) error { return fmt.Errorf("%w: %s: %s", ErrConvertInput, t.Convert, what) }
+		unrep := func(what string) error { return fmt.Errorf("%w: %s: %s", ErrNotRepresentable, t.Convert, what) }
+		return unconvertSchedule(t, in, bad, unrep)
+	}
+	return unconvert(t.Convert, in)
+}
+
 // Unconvert applies the inverse of converter name to in, a canonical key's
 // JSON, and returns HEAD's value. The converters that stage nothing return
 // ErrNotApplicable.
-func Unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
+func unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
 	bad := func(what string) error { return fmt.Errorf("%w: %s: %s", ErrConvertInput, name, what) }
 	unrep := func(what string) error { return fmt.Errorf("%w: %s: %s", ErrNotRepresentable, name, what) }
 	switch name {
@@ -142,7 +155,7 @@ func Unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
 		}
 		return mustJSON(s), nil
 	case ConvertUpdaterCheck:
-		c, err := decodeCanonSchedule(in, bad, unrep)
+		c, err := decodeCanonSchedule(Target{}, in, bad, unrep)
 		if err != nil {
 			return nil, err
 		}
@@ -158,8 +171,8 @@ func Unconvert(name string, in json.RawMessage) (json.RawMessage, error) {
 			return nil, unrep("HEAD counts whole minutes")
 		}
 		return mustJSON(min), nil
-	case ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan:
-		return unconvertSchedule(name, in, bad, unrep)
+	case ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertScheduleZeroDaily, ConvertScheduleLibraryScan:
+		return unconvertSchedule(Target{Convert: name}, in, bad, unrep)
 	case ConvertCSVList:
 		var list []string
 		if err := json.Unmarshal(in, &list); err != nil {
@@ -213,9 +226,10 @@ type scheduleIntent struct {
 }
 
 // decodeCanonSchedule reads a ScheduleConfig and refuses what HEAD's entries
-// cannot say: a time of day, a cron line or a maintenance window, and a
+// cannot say: a time of day, a cron line, a window or position other than
+// t's placement (HEAD's maintenance order, which no entry holds), and a
 // negative interval.
-func decodeCanonSchedule(in json.RawMessage, bad, unrep func(string) error) (scheduleIntent, error) {
+func decodeCanonSchedule(t Target, in json.RawMessage, bad, unrep func(string) error) (scheduleIntent, error) {
 	var out scheduleIntent
 	var c canonSchedule
 	dec := json.NewDecoder(bytes.NewReader(in))
@@ -223,8 +237,14 @@ func decodeCanonSchedule(in json.RawMessage, bad, unrep func(string) error) (sch
 	if err := dec.Decode(&c); err != nil {
 		return out, bad("want a schedule object")
 	}
-	if c.DailyAt != "" || c.Cron != "" || c.Window != "" || c.Order != 0 {
+	if c.DailyAt != "" || c.Cron != "" {
 		return out, unrep("HEAD schedules by interval only")
+	}
+	switch {
+	case c.Window == "" && c.Order != 0:
+		return out, unrep("a position with no window")
+	case c.Window != "" && (c.Window != t.Window || (c.Order != 0 && c.Order != t.Order)):
+		return out, unrep("HEAD's maintenance order fixes each task's window and position")
 	}
 	if c.Every.Std() < 0 {
 		return out, unrep("a negative interval")
@@ -235,8 +255,9 @@ func decodeCanonSchedule(in json.RawMessage, bad, unrep func(string) error) (sch
 
 // unconvertSchedule is the inverse of convertSchedule: the fields of HEAD's
 // scheduled entry the canonical ScheduleConfig determines.
-func unconvertSchedule(name string, in json.RawMessage, bad, unrep func(string) error) (json.RawMessage, error) {
-	c, err := decodeCanonSchedule(in, bad, unrep)
+func unconvertSchedule(t Target, in json.RawMessage, bad, unrep func(string) error) (json.RawMessage, error) {
+	name := t.Convert
+	c, err := decodeCanonSchedule(t, in, bad, unrep)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +270,17 @@ func unconvertSchedule(name string, in json.RawMessage, bad, unrep func(string) 
 		}
 		if c.Every == 0 {
 			return nil, unrep("an enabled entry needs an interval")
+		}
+		min, ok := wholeUnits(c.Every, minutesPerScheduleUnit)
+		if !ok {
+			return nil, unrep("HEAD counts whole minutes")
+		}
+		return mustJSON(map[string]any{"interval": min}), nil
+	case ConvertScheduleLibraryScan:
+		// The entry's enabled is its own row (periodic_enabled); a key turned
+		// off stops every trigger, which no HEAD setting says.
+		if !c.Enabled {
+			return nil, unrep("library_scan's schedule is always on in HEAD's reading; scan.periodic_enabled turns its timer off")
 		}
 		min, ok := wholeUnits(c.Every, minutesPerScheduleUnit)
 		if !ok {

@@ -318,7 +318,7 @@ func TestFlipConfigNames_BootsWithTheOpenAIBindings(t *testing.T) {
 // TestOptions_CarriesTheConfigLists: serve's Options hands the retired names,
 // OPENAI bindings and passthrough predicate to app.Options.
 func TestOptions_CarriesTheConfigLists(t *testing.T) {
-	initConfigForTest(t)
+	restoreConfigForTest(t)
 	sandboxStateDir(t)
 	config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "gotham.pebble")
 	t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)

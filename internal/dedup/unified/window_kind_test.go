@@ -6,10 +6,7 @@
 package unified
 
 import (
-	"strings"
 	"testing"
-
-	"github.com/spf13/viper"
 )
 
 // 02-PR8: SigWindowAcoustID is a supporting kind with a configurable boost.
@@ -57,20 +54,17 @@ func TestSupportingKind_WindowIsSupportingWithDefaultBoost(t *testing.T) {
 }
 
 // TestLoadScoreConfig_WindowBoostZeroDisables is the rollback lever: a
-// config.yaml boost of 0 for the kind makes the signal inert.
+// boost of 0 for the kind makes the signal inert.
 func TestLoadScoreConfig_WindowBoostZeroDisables(t *testing.T) {
-	resetViper(t)
-	t.Cleanup(viper.Reset)
-	viper.SetConfigType("yaml")
-	if err := viper.ReadConfig(strings.NewReader("dedup:\n  signals:\n    window_acoustid:\n      boost: 0\n")); err != nil {
-		t.Fatal(err)
-	}
 	cfg, err := LoadScoreConfig(ScoreOverrides{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	kc := cfg.Signals[string(SigWindowAcoustID)]
+	kc.Boost = 0
+	cfg.Signals[string(SigWindowAcoustID)] = kc
 	if got := cfg.BoostFor(SigWindowAcoustID); got != 0 {
-		t.Fatalf("boost after config.yaml 0 = %v, want 0", got)
+		t.Fatalf("boost after setting 0 = %v, want 0", got)
 	}
 	base := ComposeScore([]Signal{{Kind: SigEmbedMedium, Confidence: 0.70}}, nil, cfg, defaultPair)
 	with := ComposeScore([]Signal{{Kind: SigEmbedMedium, Confidence: 0.70}, {Kind: SigWindowAcoustID, Confidence: 0.97}}, nil, cfg, defaultPair)

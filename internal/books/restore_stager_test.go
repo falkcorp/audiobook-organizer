@@ -23,7 +23,7 @@ import (
 
 // TestRestoreStagerRefusesAStoreThisBuildCannotOpen (05-backup §5B.3.4
 // "VerifyOpen"): books' stager opens the extracted store with this build's
-// guard before it stages (database.VerifyStoreOpens), so an archive whose
+// guard before it stages (database.VerifyStoreOpensWith), so an archive whose
 // store the boot after the swap would refuse is refused now, the slot left
 // empty and nothing extracted left behind. The archive here holds a HEAD
 // store with core keys and no install marker (the crash matrix's

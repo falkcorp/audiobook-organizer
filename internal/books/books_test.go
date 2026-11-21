@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/viper"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
@@ -68,23 +67,13 @@ func withConfig(t *testing.T, c config.Config) {
 	t.Setenv(absEnabledEnv, strconv.FormatBool(c.ABSAPIEnabled))
 }
 
-// initConfigForTest runs config.InitConfig as serve does and puts back what
-// it changes for the whole process: config.AppConfig (withConfig) and the
-// process-wide viper. InitConfig registers every shipped default and env
-// binding on viper and nothing undoes them, so without the restore every
-// later boot in the package reads those defaults instead of the config the
-// test set (abs_api_enabled reads as set, to false, and Register can refuse
-// with errABSFlagDrift). viper cannot be snapshotted, so restoring it
-// means returning it to empty. The helper fails unless viper is empty when it
-// starts, which keeps the restore exact and catches the next test that leaks.
-func initConfigForTest(t *testing.T) {
+// restoreConfigForTest puts config.AppConfig back after the test (withConfig),
+// so a test that edits it directly cannot leak into later boots in the
+// package (abs_api_enabled reads as set, to false, and Register can refuse
+// with errABSFlagDrift).
+func restoreConfigForTest(t *testing.T) {
 	t.Helper()
-	if keys := viper.AllKeys(); len(keys) > 0 {
-		t.Fatalf("viper already holds %d keys (%v...): an earlier test leaked its config", len(keys), keys[:min(len(keys), 5)])
-	}
 	withConfig(t, config.AppConfig)
-	t.Cleanup(viper.Reset)
-	config.InitConfig()
 }
 
 // semver parses MAJOR.MINOR.PATCH.
@@ -491,14 +480,14 @@ func TestR1Listen_NoServerUsesCoreListener(t *testing.T) {
 	}
 }
 
-// TestTelemetry_TracerFromEnv: with OTEL_EXPORTER_OTLP_ENDPOINT set, the
-// config serve snapshots yields Telemetry tracing, and after
+// TestTelemetry_TracerFromEnv: with the OTLP tracing endpoint set in the
+// config serve snapshots, it yields Telemetry tracing, and after
 // app.InstallProcessDefaults the global tracer provider is the App's SDK
 // provider, not the no-op one, so production traces survive the move to the
 // App's Provider.
 func TestTelemetry_TracerFromEnv(t *testing.T) {
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://192.0.2.1:4317")
-	initConfigForTest(t)
+	restoreConfigForTest(t)
+	config.Mutate(func(c *config.Config) { c.OTelExporterOTLPEndpoint = "http://192.0.2.1:4317" })
 	tel := telemetryFromConfig(config.Snapshot())
 	if tel.Tracing == nil || tel.Tracing.Endpoint != "http://192.0.2.1:4317" {
 		t.Fatalf("Telemetry.Tracing = %+v, want the env endpoint", tel.Tracing)

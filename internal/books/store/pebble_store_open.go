@@ -277,21 +277,15 @@ func OpenStandalone(path string, o StandaloneOptions) (_ *PebbleStore, err error
 	return store, nil
 }
 
-// VerifyStoreOpens opens the store directory dir read-only through core
-// storage, with books as the only owner and this build's guard and claims,
-// and closes it (05-backup's VerifyOpen in its R1 form): ABO's restore
-// stager (backup.StageRestore) runs it on an extracted archive, so a store
-// this build cannot open is never staged. It writes nothing (Pebble
-// read-only, nothing created) and leaves pending migrations to the restore
-// boot, which runs them.
-func VerifyStoreOpens(ctx context.Context, dir string) error {
-	return VerifyStoreOpensWith(StandaloneOptions{})(ctx, dir)
-}
-
-// VerifyStoreOpensWith is VerifyStoreOpens over the spec and owners o names
-// (its Spec and ExtraOwners; nothing else is read): the verify a build that has
-// declared the cutover hands the stager, so an archive taken after the levels
-// were raised opens.
+// VerifyStoreOpensWith opens the store directory dir read-only through core
+// storage, with books and the extra owners o names (its Spec and ExtraOwners;
+// nothing else is read) and this build's guard and claims, and closes it
+// (05-backup's VerifyOpen): ABO's restore stager (backup.StageRestore) runs
+// it on an extracted archive, so a store this build cannot open is never
+// staged, and an archive taken after the cutover raised the levels opens. It
+// writes nothing (Pebble read-only, nothing created) and leaves pending
+// migrations to the restore boot, which runs them. (Its zero-options form,
+// VerifyStoreOpens, went when the stager moved to the cutover spec, F3-07.)
 func VerifyStoreOpensWith(o StandaloneOptions) func(ctx context.Context, dir string) error {
 	return func(ctx context.Context, dir string) error {
 		return verifyStoreOpens(ctx, dir, o)
