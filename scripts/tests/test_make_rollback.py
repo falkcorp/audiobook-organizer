@@ -195,7 +195,13 @@ class FakeHost:
             }
             doc.update(record or {})
             (self.cp_area / f"{CHECKPOINT}.json").write_text(json.dumps(doc))
-        self._install_helpers({"stage_bin": str(self.stage), **(config or {})})
+        self._install_helpers(
+            {
+                "stage_bin": str(self.stage),
+                "stage_local_conf": str(self.stage.parent / "audiobook-organizer-local.conf"),
+                **(config or {}),
+            }
+        )
         self._install_environment(env_snapshot)
         self.server = fake_ssh.HealthServer([READY])
         tc.addCleanup(self.server.close)
@@ -393,6 +399,8 @@ class FakeHost:
             "RELEASE": "",
             "ROLLBACK_ENV": "",
             "ROLLBACK_GUARD": str(guard or GUARD),
+            # A developer's own deploy/local.conf is never uploaded by a test.
+            "DEPLOY_LOCAL_CONF": str(self.root / "no-local.conf"),
         }
         variables.update(overrides)
         env = dict(self.h["env"])
@@ -409,6 +417,9 @@ class FakeHost:
 
     def ssh(self) -> list[str]:
         return [e["command"] for e in self.calls() if e["kind"] == "ssh"]
+
+    def scps(self) -> list[dict]:
+        return [e for e in self.calls() if e["kind"] == "scp"]
 
     def index(self, needle: str) -> int:
         """Position of the first ssh command containing needle, or -1."""
@@ -1147,6 +1158,113 @@ class DeployReleaseTest(unittest.TestCase):
         p = host.make("deploy-release", RELEASE="v0.232.1")
         self.assertEqual(p.returncode, 0, out(p))
         self.assertEqual(host.installed(), "fetched-v0.232.1")
+
+    LOCAL_CONF = (
+        "[Service]\nEnvironment=ABO_CORE_PEERS=198.51.100.0/24\nEnvironment=BATCAVE_LEVEL=9\n"
+    )
+
+    def local_conf(self, host: FakeHost, text: str | None = None) -> Path:
+        path = host.root / "deploy-local.conf"
+        path.write_text(self.LOCAL_CONF if text is None else text)
+        return path
+
+    def test_local_conf_is_uploaded_rendered_and_the_replaced_one_kept(self) -> None:
+        host = self.host()
+        replaced = hashlib.sha256(host.bin.read_bytes()).hexdigest()
+        conf = self.local_conf(host)
+        p = host.make("deploy-release", RELEASE=self.TAG, DEPLOY_LOCAL_CONF=str(conf))
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(
+            host.conf_lines(),
+            ["Environment=ABO_CORE_PEERS=198.51.100.0/24", "Environment=BATCAVE_LEVEL=9"],
+        )
+        [up] = host.scps()
+        self.assertEqual((up["host"], up["src"]), (HOST, str(conf)))
+        self.assertEqual(up["dest"], str(host.stage.parent / "audiobook-organizer-local.conf"))
+        self.assert_order(
+            host,
+            "install-staged unit",
+            "install-staged local-conf",
+            f"{host.stage} --print-capabilities",
+            "install-staged binary",
+            "systemctl restart",
+        )
+        gen = json.loads((host.envgen / f"{replaced}.json").read_text())
+        self.assertIn("ABO_CORE_PEERS=192.0.2.0/24", gen["local_conf"]["text"])
+        self.assertEqual(host.installed(), f"fetched-{self.TAG}")
+
+    def test_without_a_local_conf_nothing_is_uploaded_and_the_host_one_stays(self) -> None:
+        host = self.host()
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(host.scps(), [])
+        self.assertFalse(any("install-staged local-conf" in c for c in host.ssh()))
+        self.assertEqual(host.conf_lines(), host.CUR_CONF.splitlines()[1:])
+
+    def test_stage_local_conf_is_required_when_there_is_a_file_to_upload(self) -> None:
+        host = self.host(config={"stage_local_conf": None})
+        p = host.make(
+            "deploy-release", RELEASE=self.TAG, DEPLOY_LOCAL_CONF=str(self.local_conf(host))
+        )
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("stage_local_conf", out(p))
+        self.assertEqual(host.index("updater fetch-release"), -1)
+        self.assertEqual(host.scps(), [])
+
+    def test_a_failed_upload_leaves_the_binary_and_local_conf_alone(self) -> None:
+        host = self.host(
+            rules=[{"match": r"^scp ", "responses": [{"exit": 1, "stderr": "lost\n"}]}]
+        )
+        p = host.make(
+            "deploy-release", RELEASE=self.TAG, DEPLOY_LOCAL_CONF=str(self.local_conf(host))
+        )
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("uploading", out(p))
+        self.assertEqual(self.installs(host), [])
+        self.assertEqual(host.conf_lines(), host.CUR_CONF.splitlines()[1:])
+        self.assertEqual(host.installed(), "current")
+        self.assertFalse(host.stage.exists())
+
+    def test_a_local_conf_the_helper_refuses_stops_before_the_binary(self) -> None:
+        host = self.host()
+        bad = self.local_conf(host, "[Service]\nExecStart=/bin/sh\n")
+        p = host.make("deploy-release", RELEASE=self.TAG, DEPLOY_LOCAL_CONF=str(bad))
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("installing local.conf through the helper failed", out(p))
+        self.assertEqual(self.installs(host), [])
+        self.assertEqual(host.conf_lines(), host.CUR_CONF.splitlines()[1:])
+        self.assertEqual(host.installed(), "current")
+
+    def test_deploy_env_check_runs_first_and_reads_the_local_conf_being_deployed(self) -> None:
+        host = self.host()
+        conf = self.local_conf(host)
+        p = subprocess.run(
+            [
+                "make",
+                "-n",
+                "-s",
+                "--no-print-directory",
+                "-C",
+                str(REPO_ROOT),
+                "deploy-release",
+                f"DEPLOY_HOST={HOST}",
+                f"DEPLOY_BIN={host.bin}",
+                f"DEPLOY_DB={host.db}",
+                "DEPLOY_URL=http://192.0.2.1:8484",
+                f"RELEASE={self.TAG}",
+                f"DEPLOY_LOCAL_CONF={conf}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        check = next(i for i, ln in enumerate(lines) if "deploy_env_check.py" in ln)
+        run = next(i for i, ln in enumerate(lines) if "deploy_rollback.py deploy" in ln)
+        self.assertLess(check, run)
+        self.assertIn(f'--local-conf "{conf}"', lines[check])
+        self.assertIn(f'--local-conf="{conf}"', "\n".join(lines[run:]))
 
     def test_a_binary_that_reports_another_version_is_deleted_and_nothing_changes(self) -> None:
         host = self.host(releases={self.TAG: {"version": "v0.231.0", "levels": R2}})
