@@ -146,6 +146,15 @@ export const BACKUP_REFUSAL_CODES = [
   'unknown_field',
   'validation_failed',
   'unavailable',
+  // httpapi's own mapping of an error with no route-specific code (core/httpapi/problem.go
+  // problemFor, and the dispatcher's not_found and method_not_allowed): a 500 that hides
+  // its cause, and the generic codes any route can answer with.
+  'internal',
+  'not_found',
+  'method_not_allowed',
+  'conflict',
+  'precondition_failed',
+  'throttled',
 ] as const;
 export type BackupRefusalCode = (typeof BACKUP_REFUSAL_CODES)[number];
 

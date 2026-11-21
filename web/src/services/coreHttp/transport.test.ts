@@ -10,7 +10,9 @@ import {
   DEFAULT_TIMEOUT_MS,
   MAX_RETRY_AFTER_MS,
   createTransport,
+  discardBody,
   parseRetryAfterMs,
+  readJsonBody,
   type Refusal,
 } from './transport';
 
@@ -91,6 +93,24 @@ function opaqueRedirect(): Response {
       },
     }
   ) as unknown as Response;
+}
+
+/** Headers arrive at once; the body then produces `first` and stalls for ever (fetch ignores the signal). */
+function stalledBody(
+  status = 200,
+  headers: Record<string, string> = { 'Content-Type': 'application/json' },
+  first?: string
+) {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      if (first !== undefined) c.enqueue(new TextEncoder().encode(first));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  return { res: new Response(body, { status, headers }), wasCancelled: () => cancelled };
 }
 
 let consoleSpies: Array<ReturnType<typeof vi.spyOn>> = [];
@@ -251,6 +271,19 @@ describe('SSO bounce', () => {
     ).toBeInstanceOf(Refused);
   });
 
+  it('response.redirected is never read on the 200 text/html path either', async () => {
+    const page = new Response('<html>log in</html>', {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' },
+    });
+    // On the prototype, so a read of the response send() builds is caught too, not only of the one fetch gave.
+    const redirected = vi.spyOn(Response.prototype, 'redirected', 'get');
+    expect(
+      await caught(make({ fetch: fake(page).fetch }).send('op', { method: 'GET', path: '/x' }))
+    ).toBeInstanceOf(ApiAuthRedirectError);
+    expect(redirected).not.toHaveBeenCalled();
+  });
+
   it('a 204 with no Content-Type is an answer, not a bounce', async () => {
     const res = await make({ fetch: fake(new Response(null, { status: 204 })).fetch }).send('op', {
       method: 'DELETE',
@@ -342,7 +375,10 @@ describe('deadline', () => {
     const add = vi.spyOn(ctl.signal, 'addEventListener');
     const remove = vi.spyOn(ctl.signal, 'removeEventListener');
     const t = make({ fetch: fake(jsonRes({})).fetch });
-    await t.send('op', { method: 'GET', path: '/x', signal: ctl.signal });
+    const res = await t.send('op', { method: 'GET', path: '/x', signal: ctl.signal });
+    // The deadline and the signal stay armed until the body has been read (#4819 r3 m2).
+    expect(vi.getTimerCount()).toBe(1);
+    await res.json();
     expect(vi.getTimerCount()).toBe(0);
     expect(remove.mock.calls[0][1]).toBe(add.mock.calls[0][1]);
     const boom: typeof fetch = () => Promise.reject(new TypeError('network down'));
@@ -351,6 +387,133 @@ describe('deadline', () => {
     );
     expect(vi.getTimerCount()).toBe(0);
     expect([add.mock.calls.length, remove.mock.calls.length]).toEqual([2, 2]);
+  });
+});
+
+describe('the body read is covered by the deadline and the caller signal', () => {
+  it('a body that stalls past the deadline is an ApiTimeoutError naming the endpoint only', async () => {
+    vi.useFakeTimers();
+    const stalled = stalledBody(200, { 'Content-Type': 'application/json' }, '{"half":');
+    const res = await make({
+      fetch: fake(stalled.res).fetch,
+      baseUrl: 'https://abo.example.test',
+    }).send('op', { method: 'GET', path: '/x?name=robin-secret', deadlineMs: 100 });
+    const p = caught(res.text());
+    await vi.advanceTimersByTimeAsync(99);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(2);
+    const e = (await p) as ApiTimeoutError;
+    expect(e).toBeInstanceOf(ApiTimeoutError);
+    expect(e.message).not.toContain('robin-secret');
+    expect(e.url).toBe('https://abo.example.test/x');
+    expect(stalled.wasCancelled()).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a body that stalls after the caller aborts is the caller AbortError, not a timeout', async () => {
+    const ctl = new AbortController();
+    const stalled = stalledBody();
+    const res = await make({ fetch: fake(stalled.res).fetch }).send('op', {
+      method: 'GET',
+      path: '/x',
+      signal: ctl.signal,
+    });
+    const p = caught(res.text());
+    ctl.abort();
+    const e = (await p) as Error;
+    expect(e).not.toBeInstanceOf(ApiTimeoutError);
+    expect(e.name).toBe('AbortError');
+    expect(stalled.wasCancelled()).toBe(true);
+  });
+
+  it('an error answer whose body stalls ends in the timeout, not a refusal with the status alone', async () => {
+    vi.useFakeTimers();
+    const stalled = stalledBody(503, { 'Content-Type': 'application/problem+json' });
+    const p = caught(
+      make({ fetch: fake(stalled.res).fetch }).send('op', {
+        method: 'GET',
+        path: '/x',
+        deadlineMs: 100,
+      })
+    );
+    await vi.advanceTimersByTimeAsync(101);
+    expect(await p).toBeInstanceOf(ApiTimeoutError);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a body read in time is unaffected and releases the timer and the listener', async () => {
+    vi.useFakeTimers();
+    const ctl = new AbortController();
+    const remove = vi.spyOn(ctl.signal, 'removeEventListener');
+    const res = await make({ fetch: fake(jsonRes({ ok: 'robin' })).fetch }).send('op', {
+      method: 'GET',
+      path: '/x',
+      signal: ctl.signal,
+    });
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 1);
+    await expect(res.json()).resolves.toEqual({ ok: 'robin' });
+    expect(vi.getTimerCount()).toBe(0);
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Type')).toBe('application/json');
+  });
+
+  it('discardBody releases the timer and the listener without reading', async () => {
+    vi.useFakeTimers();
+    const stalled = stalledBody();
+    const res = await make({ fetch: fake(stalled.res).fetch }).send('op', {
+      method: 'GET',
+      path: '/x',
+    });
+    expect(vi.getTimerCount()).toBe(1);
+    discardBody(res);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(stalled.wasCancelled()).toBe(true);
+  });
+
+  it('a 204 has no body to bound: nothing stays armed', async () => {
+    vi.useFakeTimers();
+    await make({ fetch: fake(new Response(null, { status: 204 })).fetch }).send('op', {
+      method: 'DELETE',
+      path: '/x',
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('with no deadline a stalled body ends only by the caller signal', async () => {
+    vi.useFakeTimers();
+    const ctl = new AbortController();
+    const res = await make({ fetch: fake(stalledBody().res).fetch }).send('op', {
+      method: 'GET',
+      path: '/x',
+      deadlineMs: 0,
+      signal: ctl.signal,
+    });
+    const p = caught(res.text());
+    await vi.advanceTimersByTimeAsync(24 * 3600 * 1000);
+    ctl.abort();
+    expect(((await p) as Error).name).toBe('AbortError');
+  });
+});
+
+describe('readJsonBody', () => {
+  it('reads JSON, and reports a body that is not JSON as ok:false', async () => {
+    expect(await readJsonBody(jsonRes({ a: 1 }))).toEqual({ ok: true, value: { a: 1 } });
+    expect(await readJsonBody(new Response('<html/>'))).toEqual({ ok: false });
+    expect(await readJsonBody(new Response(''))).toEqual({ ok: false });
+  });
+
+  it('rethrows the deadline and the caller abort instead of calling them "not JSON"', async () => {
+    vi.useFakeTimers();
+    const res = await make({ fetch: fake(stalledBody().res).fetch }).send('op', {
+      method: 'GET',
+      path: '/x',
+      deadlineMs: 50,
+    });
+    const p = caught(readJsonBody(res));
+    await vi.advanceTimersByTimeAsync(51);
+    expect(await p).toBeInstanceOf(ApiTimeoutError);
   });
 });
 
