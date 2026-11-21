@@ -94,6 +94,11 @@ type ConfigStepOptions struct {
 	// (quarantined sealed, their names marked unreadable) instead of
 	// stopping the upgrade. nil = false.
 	AllowKeyRegen func() bool
+	// OperatorSet reports whether an operator layer sets a core or books key
+	// for this boot, and which one (module.Importers.OperatorSet). M2 asks it
+	// for core.auth.oidc.providers before it would write a provider list with
+	// an empty allow-list (oauthBlocker). nil = no layer sets anything.
+	OperatorSet func(path string) (by string, set bool)
 	// Files is the filesystem for config.yaml; nil = the OS.
 	Files FileOps
 	// Logger receives the step's report lines: names, counts and classes,
@@ -330,15 +335,54 @@ func (s *configStep) preflight(ctx context.Context, r storage.Reader) ([]datamig
 		return blockers, err
 	}
 	var unrep *unrepresentableError
-	if _, err := buildPlan(in); errors.As(err, &unrep) {
+	if p, err := buildPlan(in); errors.As(err, &unrep) {
 		return []datamigrate.Blocker{{Key: []byte(headConfigFileName), Family: "file", Reason: err.Error(),
 			Fix: "give each of those keys a plain value in config.yaml (a whole number for concurrent_scans), or remove the line: the settings blob does not hold them, so nothing else would carry the setting"}}, nil
 	} else if err != nil {
 		return []datamigrate.Blocker{{Key: blobKey(), Family: "setting", Reason: err.Error(),
 			Fix: "repair or restore the settings blob on the pre-freeze release: it refuses to run on this blob too"}}, nil
+	} else if b, refused := s.oauthBlocker(p); refused {
+		return []datamigrate.Blocker{b}, nil
 	}
 	return nil, nil
 }
+
+// oidcProvidersKey is the core key the OAuth fold writes.
+const oidcProvidersKey = "core.auth.oidc.providers"
+
+// oauthBlocker stops the upgrade, writing nothing, when the plan would turn
+// HEAD's enabled OAuth sign-in into provider entries whose allow-list is
+// empty while no operator layer supplies the provider list. HEAD reads an
+// empty oauth_allowed_emails as "nobody", so the entries would refuse every
+// OAuth sign-in; and an install whose allow-list came from HEAD's
+// OAUTH_ALLOWED_EMAILS environment variable has the list only there, which M2
+// does not read and the flipped boot refuses by name. The fix names the keys,
+// never a value: the remedy is the operator's provider list
+// (core.auth.oidc.providers, with each provider's allowed_emails and
+// default_role) and the Cloudflare Access allow-list
+// (modules.books.cfaccess.allowed_emails), which HEAD read from the same name.
+func (s *configStep) oauthBlocker(p *plan) (datamigrate.Blocker, bool) {
+	if p == nil || !p.OAuthEmptyAllowList {
+		return datamigrate.Blocker{}, false
+	}
+	if s.opts.OperatorSet != nil {
+		if _, set := s.opts.OperatorSet(oidcProvidersKey); set {
+			return datamigrate.Blocker{}, false
+		}
+	}
+	return datamigrate.Blocker{Key: blobKey(), Family: "setting", Reason: errOAuthEmptyAllowList.Error(), Fix: oauthFix}, true
+}
+
+// errOAuthEmptyAllowList is oauthBlocker's reason, and the step's own refusal
+// when the kernel skipped Preflight (a step that had already started).
+var errOAuthEmptyAllowList = errors.New("the stored settings enable OAuth sign-in with a client id but an empty oauth_allowed_emails, " +
+	"and no operator layer sets " + oidcProvidersKey + ": the cutover would write providers that admit nobody, and an allow-list that came from OAUTH_ALLOWED_EMAILS would be lost")
+
+// oauthFix is the remedy oauthBlocker names.
+const oauthFix = "set " + oidcProvidersKey + " in an operator layer (ABO_CORE_AUTH_OIDC_PROVIDERS, a JSON list, or the operator file), " +
+	"one entry per enabled provider with its id, kind, client_id, allowed_emails and default_role, " +
+	"and set modules.books.cfaccess.allowed_emails (ABO_BOOKS_CFACCESS_ALLOWED_EMAILS) to the same allow-list; " +
+	"or save a non-empty allow-list in the settings on the pre-freeze release; then start again"
 
 // headConfigFileName is the operator's file's name, the blocker key of an
 // unreadable one.
@@ -503,6 +547,9 @@ func (s *configStep) step(ctx context.Context, kv storage.KV, w *datamigrate.Ste
 	p, err := buildPlan(in)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errConfigStep, err)
+	}
+	if _, refused := s.oauthBlocker(p); refused {
+		return fmt.Errorf("%w: %v; %s", errConfigStep, errOAuthEmptyAllowList, oauthFix)
 	}
 	if p.empty() {
 		w.Count("already-current")

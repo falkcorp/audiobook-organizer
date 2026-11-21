@@ -33,6 +33,9 @@ type lateImporters struct {
 	// (F3-07 d): bound after Prepare, at the start of P4b, with the rest.
 	legacy     func(storage.Owner) storage.Reader
 	allowRegen bool
+	// lookup backs Importers.OperatorSet: the config store's Lookup, bound
+	// with the importers (bindLookup); nil = unbound.
+	lookup func(config.Path) (config.KeyState, bool)
 }
 
 // values are the importers a Cutover func is handed.
@@ -40,7 +43,31 @@ func (l *lateImporters) values() module.Importers {
 	return module.Importers{
 		Config: lateConfig{l}, Secrets: lateSecrets{l},
 		Legacy: l.legacyReader, AllowKeyRegen: l.allowKeyRegen,
+		OperatorSet: l.operatorSet,
 	}
+}
+
+// bindLookup points Importers.OperatorSet at the config store's Lookup.
+func (l *lateImporters) bindLookup(f func(config.Path) (config.KeyState, bool)) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lookup = f
+}
+
+// operatorSet is Importers.OperatorSet: whether an operator layer locks p,
+// and which one. False while unbound or for an unregistered path.
+func (l *lateImporters) operatorSet(p config.Path) (string, bool) {
+	l.mu.RLock()
+	f := l.lookup
+	l.mu.RUnlock()
+	if f == nil {
+		return "", false
+	}
+	ks, ok := f(p)
+	if !ok || ks.LockedBy == "" {
+		return "", false
+	}
+	return ks.LockedBy, true
 }
 
 // bindLegacy points Importers.Legacy at db's legacy ranges and fixes

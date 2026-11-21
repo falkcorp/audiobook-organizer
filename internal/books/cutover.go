@@ -138,5 +138,8 @@ func (m *booksModule) flipOptions(imp module.Importers) cutover.FlipOptions {
 		opts.Legacy = func() storage.Reader { return imp.Legacy(cutover.BooksOwner) }
 	}
 	opts.AllowKeyRegen = imp.AllowKeyRegen
+	if imp.OperatorSet != nil {
+		opts.OperatorSet = func(p string) (string, bool) { return imp.OperatorSet(coreconfig.Path(p)) }
+	}
 	return cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion, Config: opts}
 }
