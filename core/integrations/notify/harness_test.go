@@ -1,7 +1,7 @@
 // file: core/integrations/notify/harness_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 0f6b7a2e-91c4-4d38-b5a7-3e8d12c64f90
-// last-edited: 2026-11-13
+// last-edited: 2026-11-19
 
 package notify_test
 
@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/instancestore"
 	"github.com/falkcorp/mediacore/internal/outboxstore"
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/outbox"
@@ -274,7 +275,7 @@ func newRig(t testing.TB, opts rigOpts) *rig {
 	root, err := os.OpenRoot(t.TempDir())
 	must(t, err)
 	t.Cleanup(func() { _ = root.Close() })
-	sec, err := secrets.Open(ctx, secrets.Options{StateDir: root, Keyspace: keyspace(t, db, secretsOwner), AppID: "gotham", Now: r.clock.now})
+	sec, err := secrets.Open(ctx, secrets.Options{StateDir: statefs.FromRoot(root), Keyspace: keyspace(t, db, secretsOwner), AppID: "gotham", Now: r.clock.now})
 	must(t, err)
 	aks := keyspace(t, db, auditOwner)
 	au, err := audit.New(ctx, audit.Options{}, audit.Deps{Keyspace: aks, Seq: aks.Sequence("seq"), Now: r.clock.now})

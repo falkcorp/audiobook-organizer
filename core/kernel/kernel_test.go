@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
@@ -68,6 +69,25 @@ func (m testModule) with(fn func(*module.Manifest)) testModule {
 func testConfig(t *testing.T, mods ...module.Module) Config {
 	t.Helper()
 	return Config{AppID: "gotham", Logger: logcapture.New(t).Logger(), Modules: mods}
+}
+
+// withCore sets core config keys on c as flag layers, the one layer a test
+// can set without an environment, and so turns the config boot on. Pairs are
+// dotted path then value ("core.http.listen", "localhost:0").
+func withCore(c *Config, kv ...string) {
+	if len(kv)%2 != 0 {
+		panic("withCore: odd number of arguments")
+	}
+	c.CoreConfigBoot = true
+	if c.ConfigOptions.Environ == nil {
+		c.ConfigOptions.Environ = []string{}
+	}
+	if c.ConfigOptions.Flags == nil {
+		c.ConfigOptions.Flags = map[config.Path]string{}
+	}
+	for i := 0; i < len(kv); i += 2 {
+		c.ConfigOptions.Flags[config.Path(kv[i])] = kv[i+1]
+	}
 }
 
 // mustNew boots c or fails the test.

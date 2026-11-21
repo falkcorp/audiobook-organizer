@@ -13,7 +13,6 @@
 package config
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -60,45 +59,4 @@ func TestValidateNormalizesZeroChapterThreshold(t *testing.T) {
 	c := Config{DatabaseType: "pebble", ChapterConsolidationThresholdMin: 7}
 	require.NoError(t, c.Validate())
 	require.Equal(t, 7, c.ChapterConsolidationThresholdMin, "a real value is left alone")
-}
-
-// TestLoadedBlobWithZeroChapterThresholdUsesDefault is the incident shape: a
-// blob that carries an explicit 0. It used to load as "disabled" and win over
-// viper's default on every boot.
-func TestLoadedBlobWithZeroChapterThresholdUsesDefault(t *testing.T) {
-	restoreAppConfig(t)
-	ResetToDefaultsForTest()
-
-	require.NoError(t, LoadConfigFromDatabase(storeWithBlob(t, `{"chapter_consolidation_threshold_min":0}`)))
-
-	require.Equal(t, DefaultChapterConsolidationThresholdMin, Snapshot().ChapterConsolidationThresholdMin)
-}
-
-// TestLoadedBlobKeepsARealChapterThreshold guards the other direction: the
-// normalization must not clobber an operator's real value.
-func TestLoadedBlobKeepsARealChapterThreshold(t *testing.T) {
-	restoreAppConfig(t)
-	ResetToDefaultsForTest()
-
-	require.NoError(t, LoadConfigFromDatabase(storeWithBlob(t, `{"chapter_consolidation_threshold_min":4}`)))
-
-	require.Equal(t, 4, Snapshot().ChapterConsolidationThresholdMin)
-}
-
-// TestSaveNeverPersistsZeroChapterThreshold: the blob is what the next boot
-// reads, so a zero that reached the live config (a test, a restored backup, a
-// struct literal) must be written as the default, not reloaded forever.
-func TestSaveNeverPersistsZeroChapterThreshold(t *testing.T) {
-	restoreAppConfig(t)
-	ResetToDefaultsForTest()
-	Mutate(func(c *Config) { c.ChapterConsolidationThresholdMin = 0 })
-
-	store := newMockSettingsStore()
-	require.NoError(t, SaveConfigToDatabase(store))
-
-	blob, ok := store.settings["config_blob"]
-	require.True(t, ok, "config_blob was not written")
-	var stored map[string]any
-	require.NoError(t, json.Unmarshal([]byte(blob.Value), &stored))
-	require.EqualValues(t, DefaultChapterConsolidationThresholdMin, stored["chapter_consolidation_threshold_min"])
 }

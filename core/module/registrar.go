@@ -1,7 +1,7 @@
 // file: core/module/registrar.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: b007ae28-2b2a-42a1-aa5a-047aa14d3b77
-// last-edited: 2026-11-11
+// last-edited: 2026-11-18
 
 package module
 
@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/tasks"
@@ -31,6 +32,7 @@ type Registrar struct {
 	deps          Deps
 	http          *httpapi.Group
 	legacyAuthGin bool
+	settings      map[config.Path]any
 
 	mu         sync.Mutex // guards closed and problems against a late call from another goroutine
 	closed     bool
@@ -47,6 +49,12 @@ type RegistrarConfig struct {
 	// LegacyAuthGin is true for the one module app.Options.LegacyAuthGinUntil
 	// names: only its MountLegacy may use httpapi.LegacyAuthGin (SEC2-17).
 	LegacyAuthGin bool
+	// Settings holds one entry per section the module's Manifest.Settings
+	// declares, keyed by path: the live *config.Handle[T] the kernel
+	// registered at P3, or nil when no live handle exists (app.Describe, a
+	// boot without core config). module.Setting reads it: a path absent
+	// here is an undeclared section.
+	Settings map[config.Path]any
 	// AfterClose, when set, receives each ProblemRegistrarClosed recorded
 	// after Close, which no Err call reads any more: the kernel logs it.
 	AfterClose func(Problem)
@@ -77,7 +85,7 @@ func NewRegistrar(c RegistrarConfig) *Registrar {
 		ctx = context.Background()
 	}
 	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP, legacyAuthGin: c.LegacyAuthGin,
-		afterClose: c.AfterClose}
+		settings: c.Settings, afterClose: c.AfterClose}
 }
 
 // Close ends registration and returns what was recorded. Kernel-only. It is

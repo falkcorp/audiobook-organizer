@@ -1,7 +1,7 @@
 // file: web/tests/e2e/settings-configuration.spec.ts
-// version: 1.3.0
+// version: 1.4.0
 // guid: ab83d28e-beb5-4288-821f-7bf82704f4b9
-// last-edited: 2026-08-09
+// last-edited: 2026-11-19
 
 import { test, expect, type Page } from '@playwright/test';
 import {
@@ -161,7 +161,7 @@ test.describe('Settings Configuration', () => {
     // Assert
     await expect(page.getByText('Settings saved successfully!')).toBeVisible();
     await expect(page.getByLabel('OpenAI API Key')).toHaveValue('');
-    await expect(page.getByPlaceholder(/key saved/i)).toBeVisible();
+    await expect(page.getByPlaceholder(/^Saved/)).toBeVisible();
   });
 
   test('tests OpenAI connection', async ({ page }) => {

@@ -1,11 +1,12 @@
 // file: core/kernel/core_sections.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 4514c014-7c87-4abb-836c-8bd6c5fa7b0b
-// last-edited: 2026-11-13
+// last-edited: 2026-11-18
 
 package kernel
 
 import (
+	"cmp"
 	"encoding/json"
 	"runtime"
 	"time"
@@ -64,7 +65,22 @@ func hashWorkersDefault() int { return min(4, runtime.NumCPU()) }
 // coreSections returns every core section of this row's key tables as a
 // config.Define value, in the order of the owners' specs. F2-16 hands the list
 // to the config store at boot; until then nothing calls it outside tests.
-func coreSections() []any {
+func coreSections() []any { return coreSectionsWith(CoreDefaults{}) }
+
+// CoreDefaults are the app's compiled defaults of the core keys whose default
+// is the app's to name (05-http-api §10: core.http.listen is ":8484" and
+// core.http.client_ip_header is "" for core, and an app that listens on one
+// interface by default or sits behind a tunnel that names the client in a
+// header says so here). A zero field is core's own default. Like
+// app.Options.StateDir it is a default and never locks a key: an operator
+// value, a flag or a stored value beats it.
+type CoreDefaults struct {
+	HTTPListen         string
+	HTTPClientIPHeader string
+}
+
+// coreSectionsWith is coreSections with d applied to the sections it names.
+func coreSectionsWith(d CoreDefaults) []any {
 	return []any{
 		// 05-ai §7
 		config.Define("core.ai", aiSettings{
@@ -78,6 +94,7 @@ func coreSections() []any {
 			BatchParallelism:      2,
 			BatchMaxApplyAttempts: 5,
 			LogNoCapableEvery:     dur(time.Minute),
+			JournalRetention:      dur(30 * 24 * time.Hour),
 			Schedules:             aiSchedules{BatchPoll: scheduleEvery(5 * time.Minute)},
 		}),
 
@@ -201,10 +218,11 @@ func coreSections() []any {
 
 		// 05-http-api §10
 		config.Define("core.http", httpSettings{
-			Listen:         ":8484",
+			Listen:         cmp.Or(d.HTTPListen, ":8484"),
 			PeerAllowlist:  []string{},
 			TrustedProxies: []string{},
-			ClientIPHeader: "",
+			ClientIPHeader: d.HTTPClientIPHeader,
+			TLS:            httpTLS{},
 			CORS:           httpCORS{AllowedOrigins: []string{}},
 			Body:           httpBody{JSONMaxBytes: 1 * mib, UploadMaxBytes: 10 * mib},
 			RateLimit: httpRateLimit{
@@ -412,7 +430,14 @@ type aiSettings struct {
 	BatchParallelism      int             `json:"batch_parallelism" schema:"minimum=1"`
 	BatchMaxApplyAttempts int             `json:"batch_max_apply_attempts"`
 	LogNoCapableEvery     config.Duration `json:"log_no_capable_every"`
-	Schedules             aiSchedules     `json:"schedules"`
+	// JournalRetention is how long an AI result stays in the books-owned
+	// result journal before the nightly prune deletes it; 0 keeps entries
+	// forever. HEAD's ai_journal_retention_days (default 30, bounded to 100
+	// years) as a duration (05-config §1.12.3: coined row, class k, "days ->
+	// duration"; F3-07 declares it). core/ai has no journal (05-ai §4 step 5):
+	// the books module reads the value through its handle on this section.
+	JournalRetention config.Duration `json:"journal_retention"`
+	Schedules        aiSchedules     `json:"schedules"`
 }
 
 // aiSchedules is core.ai.schedules (05-ai §7).
@@ -662,10 +687,21 @@ type diagnosticsSchedules struct {
 // ---- core.http (05-http-api §10) ----
 
 type httpSettings struct {
-	Listen            string          `json:"listen" reload:"restart" protect:"admin"`
-	PeerAllowlist     []string        `json:"peer_allowlist" protect:"admin"`  // CIDRs
-	TrustedProxies    []string        `json:"trusted_proxies" protect:"admin"` // CIDRs or addresses with an optional IPv6 zone
-	ClientIPHeader    string          `json:"client_ip_header" protect:"admin"`
+	Listen         string   `json:"listen" reload:"restart" protect:"admin"`
+	PeerAllowlist  []string `json:"peer_allowlist" protect:"admin"`  // CIDRs
+	TrustedProxies []string `json:"trusted_proxies" protect:"admin"` // CIDRs or addresses with an optional IPv6 zone
+	ClientIPHeader string   `json:"client_ip_header" protect:"admin"`
+	// TLS names the certificate and key the listener serves HTTPS with: both
+	// or neither (httpapi.ListenOptions). They are file names, not secrets;
+	// the files' contents are never read into config. Empty = plain HTTP.
+	TLS httpTLS `json:"tls"`
+	// PublicBaseURL is the origin invitation links point at; empty falls back
+	// to core.auth.oidc.redirect_base_url, then the request's own origin.
+	// HEAD's public_base_url (05-config §1.12.3: coined row, class o). The
+	// tables give it no class; ProtectAdmin follows its sibling
+	// core.auth.oidc.redirect_base_url, because the value decides where a
+	// link that signs someone in lands (F3-07 reading, seams.d/F3-07.md).
+	PublicBaseURL     string          `json:"public_base_url" protect:"admin" schema:"format=uri"`
 	CORS              httpCORS        `json:"cors"`
 	Body              httpBody        `json:"body"`
 	RateLimit         httpRateLimit   `json:"rate_limit"`
@@ -673,6 +709,13 @@ type httpSettings struct {
 	OpenAPI           httpOpenAPI     `json:"openapi"`
 	ReadHeaderTimeout config.Duration `json:"read_header_timeout" reload:"restart"`
 	IdleTimeout       config.Duration `json:"idle_timeout" reload:"restart"`
+}
+
+// httpTLS is core.http.tls: the listener's certificate and key files. A
+// change takes effect at the next start: the listener loads the pair once.
+type httpTLS struct {
+	CertFile string `json:"cert_file" reload:"restart" protect:"admin" schema:"format=path"`
+	KeyFile  string `json:"key_file" reload:"restart" protect:"admin" schema:"format=path"`
 }
 
 type httpCORS struct {

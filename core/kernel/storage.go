@@ -1,7 +1,7 @@
 // file: core/kernel/storage.go
-// version: 1.1.5
+// version: 1.1.9
 // guid: 129333ce-8ab8-40ac-a70a-ae2c593dfd6c
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
@@ -113,7 +114,7 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 		return storage.OpenOptions{}, fmt.Errorf("kernel: binary ID for the store's build fields: %w", err)
 	}
 	owners := k.storageOwners()
-	steps, err := k.dataSteps(owners, build, bootClock(ctx))
+	steps, err := k.dataSteps(ctx, owners, build, bootClock(ctx))
 	if err != nil {
 		return storage.OpenOptions{}, err
 	}
@@ -127,35 +128,94 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 		ExtendStart:  k.extendStart(coreOwner),
 		Clock:        bootClock(ctx),
 		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
+		FromRelease:  k.cfg.FromRelease,
 		ClaimsShadow: k.cfg.StorageClaimsShadow,
 	}, nil
 }
 
 // dataSteps builds the data-migration runner over every manifest's
-// DataMigrations, enabled or not (a disabled module's migration still blocks
-// its owner's later steps, 05-storage 5S.3.5), and returns its P4b steps. It
-// keeps the runner for P4a's preflight and P5's metrics. No manifest declaring
-// a migration is no runner: ABO's shape, before F3-07, adds nothing to the
-// plan. Quarantine, LevelStep, Preflight and M8 are F3-04's and F3-07's seams
-// (DataMigrationsConfig says which): until they land a migration that drops a
-// row or raises a level fails closed.
-func (k *Kernel) dataSteps(owners []storage.OwnerSpec, build string, clock func() time.Time) ([]storage.DataStep, error) {
+// DataMigrations and the steps its Cutover func returns, enabled or not (a
+// disabled module's migration still blocks its owner's later steps,
+// 05-storage 5S.3.5), and returns its P4b steps. Cutover is called with the
+// kernel's late-bound importers (cutover_importers.go), which refuse until P4b
+// binds them. The App's one Manifest.Rewrite is M8: the runner appends it last
+// and runs it through P0a's swapper (or, on an offline open, one built for it).
+// It keeps the runner for P4a's preflight and P5's metrics. No manifest
+// declaring a migration or a Rewrite is no runner: ABO's shape adds nothing to
+// the plan. Quarantine, LevelStep and Preflight are bound under
+// Config.CoreConfigBoot (config_boot.go); with it off a migration that drops a
+// sensitive row or raises a level fails closed.
+func (k *Kernel) dataSteps(ctx context.Context, owners []storage.OwnerSpec, build string, clock func() time.Time) ([]storage.DataStep, error) {
 	var migs []datamigrate.DataMigration
+	imp := k.importers().values()
 	for _, e := range k.entries {
-		migs = append(migs, e.man.DataMigrations...)
+		migs = append(migs, manifestMigrations(e.man, imp)...)
 	}
-	if len(migs) == 0 {
+	rw := k.rewriteStep()
+	if len(migs) == 0 && rw == nil {
 		k.dataMig = nil
 		return nil, nil
 	}
-	dm, err := NewDataMigrations(DataMigrationsConfig{
-		Build: build, Logger: k.coreLog("storage"), Clock: clock, ExtendStart: k.extendStart(coreOwner),
-	}, owners, migs...)
+	cfg := DataMigrationsConfig{
+		Build: build, Logger: k.coreLog("storage"), Clock: clock, ExtendStart: k.extendStart(coreOwner), Rewrite: rw,
+	}
+	if k.cfg.CoreConfigBoot {
+		// The three seams DataMigrationsConfig leaves to the config flip: the
+		// quarantine seals into the secret store (late-bound, it opens at P4b),
+		// a level step raises the owner's level, and P4a runs the cutover
+		// preflight. Gate off, ABO's boot declares no migration and needs none.
+		cfg.Quarantine = storage.QuarantineWriter(quarantineSealer{k})
+		cfg.LevelStep = LevelStep
+		cfg.Preflight = CutoverPreflight(k.coreLog("storage"))
+	}
+	if rw != nil {
+		sw, err := k.rewriteSwapper(ctx)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Swapper = sw
+	}
+	dm, err := NewDataMigrations(cfg, owners, migs...)
 	if err != nil {
 		return nil, err
 	}
 	k.dataMig = dm
 	return dm.Steps(), nil
+}
+
+// rewriteStep is the App's M8: the Rewrite of the first manifest that declares
+// one (P1 refuses a second, rewriteProblems), enabled or not; nil when none.
+func (k *Kernel) rewriteStep() *storage.RewriteStep {
+	for _, e := range k.entries {
+		if e.man.Rewrite != nil {
+			rw := *e.man.Rewrite
+			return &rw
+		}
+	}
+	return nil
+}
+
+// rewriteID is M8's step ID, the one restoreswap.Options.RewriteStep must
+// name ("" = the build has no M8).
+func (k *Kernel) rewriteID() string {
+	if rw := k.rewriteStep(); rw != nil {
+		return rw.ID
+	}
+	return ""
+}
+
+// rewriteSwapper is the swapper M8 runs through: the boot's own (P0a built it
+// with the same RewriteStep), else, on an offline open, a fresh one. M8 swaps
+// the store's directory under the state directory, so a build that declares
+// it needs one.
+func (k *Kernel) rewriteSwapper(ctx context.Context) (*restoreswap.Swapper, error) {
+	if k.cfg.StateDir == "" {
+		return nil, fmt.Errorf("kernel: module declares Rewrite (M8, %s) and kernel.Config.StateDir is not set; the store rewrite swaps the store's directory under it", k.rewriteID())
+	}
+	if k.swap != nil {
+		return k.swap.s, nil
+	}
+	return k.swapper(ctx)
 }
 
 // prepareStorage is P4a (06 §6.5.1; 05-storage §5S.4 steps 6-7): on an
@@ -195,6 +255,20 @@ func (k *Kernel) prepareStorage(ctx context.Context) error {
 // "storage".
 func (k *Kernel) migrateStorage(ctx context.Context) error {
 	db := k.store.db
+	// The secrets store opens first and the config store binds to c/config/
+	// (06 §6.5.1 P4b), under the gate (Config.CoreConfigBoot, config_boot.go).
+	if k.cfgBoot != nil {
+		if err := k.bindCoreStores(ctx); err != nil {
+			return err
+		}
+	}
+	// The Cutover importers bind before the first step can run (06 §6.5.1
+	// P4b); with no config or secrets store wired (the gate off) they stay
+	// unbound and a step that reaches one fails with module.ErrImporterNotBound.
+	k.importers().bind(k.importerCfg, k.importerSec)
+	// Importers.Legacy and AllowKeyRegen bind with them: the legacy ranges exist
+	// as soon as Prepare returned the DB, gate or no gate.
+	k.importers().bindLegacy(db, k.importerAllowRegen)
 	if err := db.Migrate(ctx); err != nil {
 		return fmt.Errorf("kernel: migrate storage (P4b): %w", err)
 	}
@@ -336,11 +410,15 @@ func (k *Kernel) markServed(now time.Time) error {
 // before logging (06 §6.5.2: storage closes regardless of the shutdown
 // budget, with its own core.storage.close_timeout to drain its leases).
 func (k *Kernel) closeStorage() error {
+	// The secret store writes through the store, so it closes first (wiping its
+	// key material); every close of the store goes through here, the failed
+	// restore boot's step x included.
+	serr := k.closeSecrets()
 	if k.store == nil || k.store.opened == nil {
-		return nil
+		return serr
 	}
 	if err := k.store.opened.Close(); err != nil && !errors.Is(err, storage.ErrClosed) {
-		return fmt.Errorf("kernel: storage close: %w", err)
+		return errors.Join(serr, fmt.Errorf("kernel: storage close: %w", err))
 	}
-	return nil
+	return serr
 }

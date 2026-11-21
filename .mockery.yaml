@@ -235,7 +235,6 @@ packages:
     interfaces:
       SystemStore:
       SystemService:
-      ConfigUpdateService:
       PluginHealthChecker:
       EventStreamer:
       OperationLogsProvider:

@@ -74,19 +74,3 @@ func ValidateDatabaseType(dbType string) error {
 		return fmt.Errorf("unsupported database type: %s (only 'pebble' is supported)", dbType)
 	}
 }
-
-// CloseStore closes the global store
-func CloseStore() error {
-	// Grab and nil the global ref under the write lock so a concurrent
-	// GetGlobalStore (which only takes the read lock) can never observe
-	// a store that CloseStore has already started closing.
-	globalStoreMu.Lock()
-	store := globalStore
-	globalStore = nil
-	globalStoreMu.Unlock()
-
-	if store != nil {
-		return store.Close()
-	}
-	return nil
-}

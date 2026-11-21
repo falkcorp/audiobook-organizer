@@ -1,7 +1,7 @@
 // file: web/src/components/wizard/WelcomeWizard.test.tsx
-// version: 1.1.0
+// version: 1.2.0
 // guid: 3f1a7d20-6c4e-4c8a-9a1b-2e5d7c0f9b34
-// last-edited: 2026-09-10
+// last-edited: 2026-11-19
 
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -25,6 +25,7 @@ vi.mock('../../services/api', async () => {
     getAppVersion: vi.fn(),
     getHomeDirectory: vi.fn(),
     validateOpenAIKey: vi.fn(),
+    updateConfig: vi.fn(),
   };
 });
 
@@ -110,5 +111,93 @@ describe('WelcomeWizard — OpenAI key validation stays server-side (SEC-9)', ()
     fireEvent.click(screen.getByRole('button', { name: /test connection/i }));
 
     expect(await screen.findByText(/Invalid API key or connection failed/i)).toBeInTheDocument();
+  });
+});
+
+describe('WelcomeWizard — a refused library root', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getAppVersion).mockResolvedValue('0.0.0-test');
+    vi.mocked(api.getHomeDirectory).mockResolvedValue('/home/tester');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('tells the person what the server said, and stays on the wizard', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const onComplete = vi.fn();
+    vi.mocked(api.updateConfig).mockRejectedValue(
+      new api.ApiError('root_dir: must be an absolute path that exists — nothing was saved', 422)
+    );
+    render(<WelcomeWizard open onComplete={onComplete} />);
+    await screen.findByText('AI Setup (Optional)');
+    for (let i = 0; i < 4; i++) {
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    }
+    fireEvent.click(await screen.findByRole('button', { name: /complete setup/i }));
+    await waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
+    expect(String(alertSpy.mock.calls[0][0])).toContain(
+      'root_dir: must be an absolute path that exists'
+    );
+    expect(onComplete).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
+  });
+});
+
+describe('WelcomeWizard — the setup is ONE config write', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getAppVersion).mockResolvedValue('0.0.0-test');
+    vi.mocked(api.getHomeDirectory).mockResolvedValue('/home/tester');
+    vi.mocked(api.updateConfig).mockResolvedValue({} as never);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function complete(typedKey: string) {
+    const onComplete = vi.fn();
+    render(<WelcomeWizard open onComplete={onComplete} />);
+    await screen.findByText('AI Setup (Optional)');
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    if (typedKey) {
+      fireEvent.change(await screen.findByLabelText(/OpenAI API Key/i), {
+        target: { value: typedKey },
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      fireEvent.click(screen.getByRole('button', { name: /^next$/i }));
+    }
+    fireEvent.click(await screen.findByRole('button', { name: /complete setup/i }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  }
+
+  // The server lets a first-run caller (no user yet) write only the wizard's keys,
+  // and only until setup_complete is set. A key in a LATER request is refused, and
+  // a new install would end with setup complete and no OpenAI key. So the key and
+  // AI parsing travel in the same request as setup_complete.
+  it('sends the OpenAI key and AI parsing in the same request as setup_complete', async () => {
+    await complete(TEST_KEY);
+    expect(api.updateConfig).toHaveBeenCalledTimes(1);
+    const body = vi.mocked(api.updateConfig).mock.calls[0][0] as Record<string, unknown>;
+    expect(body.setup_complete).toBe(true);
+    expect(body.secrets).toEqual({ openai_api_key: TEST_KEY });
+    expect(body.enable_ai_parsing).toBe(true);
+    expect(typeof body.root_dir).toBe('string');
+  });
+
+  it('sends no key and no AI parsing when none was typed, still in one request', async () => {
+    await complete('');
+    expect(api.updateConfig).toHaveBeenCalledTimes(1);
+    const body = vi.mocked(api.updateConfig).mock.calls[0][0] as Record<string, unknown>;
+    expect(body.setup_complete).toBe(true);
+    expect(body).not.toHaveProperty('secrets');
+    expect(body).not.toHaveProperty('enable_ai_parsing');
   });
 });

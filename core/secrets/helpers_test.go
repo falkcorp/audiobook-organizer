@@ -1,7 +1,7 @@
 // file: core/secrets/helpers_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: b12ecc65-7f52-400c-bdf2-3a5b4947b278
-// last-edited: 2026-11-10
+// last-edited: 2026-11-19
 
 package secrets
 
@@ -18,6 +18,7 @@ import (
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
+	"github.com/falkcorp/mediacore/internal/statefs"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -145,7 +146,7 @@ func newEnv(t testing.TB) *env {
 // opts is the Options the kernel would pass for e.
 func (e *env) opts() Options {
 	return Options{
-		StateDir:  e.root,
+		StateDir:  statefs.FromRoot(e.root),
 		Keyspace:  e.ks,
 		AppID:     testAppID,
 		InstallID: testInstallID,
@@ -176,7 +177,7 @@ func (e *env) keyringPath() string { return filepath.Join(e.dir, defaultKeyFile)
 // readKeyringFile decodes the default keyring file.
 func (e *env) readKeyringFile(t testing.TB) *keyringFile {
 	t.Helper()
-	f, err := readKeyring(e.root, defaultKeyFile)
+	f, err := readKeyring(statefs.FromRoot(e.root), defaultKeyFile)
 	if err != nil {
 		t.Fatalf("read the keyring: %v", err)
 	}

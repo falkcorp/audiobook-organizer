@@ -89,7 +89,7 @@ func oracleWriters(t *testing.T) map[string][]ops.Resource {
 		// The segment-field drop rewrites BookFile values.
 		"Sweep": {ops.ResBookFiles},
 		// Persisting a calibrated band config writes the config settings.
-		"ApplyConfigUpdates": settings,
+		"PersistBandThresholds": settings,
 	}
 }
 

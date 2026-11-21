@@ -257,7 +257,7 @@ func (p *Plugin) calibrateCompositeNative(d LabelKindDeps, sched func(tasks.Kind
 	c := kindCommon(calibrateCompositeKind, sched, false)
 	c.Title = "Calibrate composite scorer (report; apply gated)"
 	c.Help = calibrateCompositeHelp
-	// Writes found (apply only): config.UpdateService.ApplyUpdates writes the
+	// Writes found (apply only): PersistBandThresholds writes the
 	// dedup.signals.* blob (settings); Engine.ReloadScoreConfig re-bands every
 	// stored candidate (embeddings). Reads: the labeled examples and candidates
 	// are in the same embeddings keyspace.

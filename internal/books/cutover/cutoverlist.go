@@ -1,7 +1,7 @@
 // file: internal/books/cutover/cutoverlist.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 40719d00-78c0-4106-a0ca-975c1aa4405a
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package cutover
 
@@ -76,8 +76,8 @@ type ListEntry struct {
 }
 
 // LevelEntry is a level step (BooksLevelStep, storage.CoreLevelStep)
-// registered on owner's Spec.Migrations: books for books' half, core/storage
-// for core's.
+// registered on owner's Spec.Migrations: books for books' half, core/levels
+// (kernel.CoreOwners) for core's.
 func LevelEntry(owner storage.Owner, m storage.Migration) ListEntry {
 	return ListEntry{kind: entryLevel, owner: owner, level: m}
 }

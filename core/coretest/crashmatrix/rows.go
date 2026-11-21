@@ -50,6 +50,12 @@ type Row struct {
 // Scenario.Rows, in the same PR; Run fails on a label no row lists.
 func Rows() []Row {
 	return []Row{
+		{Phase: "P0 (Config.CoreConfigBoot)", Writer: "the kernel: step 0 creates the state directory candidate it resolves (05-config §1.7; config.ResolveStateDir's mkdir, through statefs)", Labels: []string{
+			"config.statedir.mkdir",
+		}},
+		{Phase: "P0 (Config.CoreConfigBoot)", Writer: "config.Store.Boot: an unparsable config.boot.json renamed config.boot.json.bad and the state directory synced (05-config §1.5, fail-open quarantine)", Labels: []string{
+			"config.bootrecord.quarantine",
+		}},
 		{Phase: "P0a", Writer: "restoreswap: the swap and the set-aside (05-backup §5B.3.4; 05-storage §5S.3.15)", Labels: []string{
 			"swap.journal.staged", "swap.journal.resync", "swap.journal.rechecked", "swap.slot.inflight", "swap.location.copy",
 			"swap.setaside.mkdir", "swap.setaside.mv", "swap.journal.previous_moved", "swap.place.mv",
@@ -78,7 +84,16 @@ func Rows() []Row {
 			"storage.checkpoint.rename", "storage.checkpoint.record", "storage.checkpoint.pointer",
 			"storage.marker.batch", "storage.ratchet",
 		}},
-		{Phase: "P4a (reset boot; R1 has no keyring, 06 §6.5.1 P4b first)", Writer: "the kernel: journal applied after the fresh install", Labels: []string{
+		{Phase: "P4a (reset boot; R1 has no keyring, 06 §6.5.1 P4b first; Config.CoreConfigBoot off)", Writer: "the kernel: journal applied after the fresh install", Labels: []string{
+			"swap.journal.applied",
+		}},
+		{Phase: "P4b, first (Config.CoreConfigBoot)", Writer: "secrets.Open: stale keyring temporary files removed, the keyring created (exclusive temp, fsync, link, directory fsync) or its mode fixed and its header's install_id written or rewritten (a reset boot), then c/secrets/meta's batch (05-config §2.4 step 1); a present keyring's directory is synced before it is trusted (secrets.keyring.load-sync: the boot that created it may have failed at its own directory fsync)", Labels: []string{
+			"secrets.keyring.stale", "secrets.keyring.load-sync", "secrets.keyring", "secrets.meta",
+		}},
+		{Phase: "P4b, after secrets.Open (reset boot; Config.CoreConfigBoot)", Writer: "the kernel: the reset's fresh rows, every FailClosed key stored at its default in one batch, before applied (05-storage §5S.3.15 \"Next boot\"; SEC8-5)", Labels: []string{
+			"config.reset.fresh_rows",
+		}},
+		{Phase: "P4b, after secrets.Open (reset boot; Config.CoreConfigBoot)", Writer: "the kernel: journal applied once the keyring header carries the fresh store's install ID and the fresh rows are committed (06 §6.5.1 P4b first; DATA7-17, SEC8-5)", Labels: []string{
 			"swap.journal.applied",
 		}},
 		{Phase: "P4b", Writer: "storage: the migration list (each step's batch, the level step's sidecar, completion)", Labels: []string{

@@ -7,6 +7,8 @@ package kernel
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"reflect"
 	"strings"
 
@@ -96,4 +98,41 @@ func (s tasksSettings) Validate() error {
 // Validate implements config.Validator (core.updater.schedules).
 func (s updaterSettings) Validate() error {
 	return validateSchedules("core.updater.schedules", s.Schedules)
+}
+
+// Validate implements config.Validator (core.http): the three values that
+// would stop the next start if a saved one were bad, so a bad one is refused
+// when config loads or applies it and never saved. The allow-list entries and
+// the listen address are the ones setPerimeter and the listener refuse boot
+// for; the TLS pair is the listener's both-or-neither rule. Config replaces
+// the message of a section that holds a secret with a fixed one on the key's
+// path (the basic gate's password makes this one), so the messages here name
+// the rule and never a value.
+func (s httpSettings) Validate() error {
+	var errs []error
+	if _, perrs := parsePeers(s.PeerAllowlist); len(perrs) > 0 {
+		errs = append(errs, &config.FieldError{Path: "core.http.peer_allowlist",
+			Err: fmt.Errorf("%d entries are neither a CIDR network nor an IP address", len(perrs))})
+	}
+	if s.Listen != "" {
+		if _, _, err := net.SplitHostPort(s.Listen); err != nil {
+			errs = append(errs, &config.FieldError{Path: "core.http.listen", Err: errors.New("must be host:port")})
+		}
+	}
+	if (s.TLS.CertFile == "") != (s.TLS.KeyFile == "") {
+		errs = append(errs, &config.FieldError{Path: "core.http.tls.cert_file",
+			Err: errors.New("cert_file and key_file are both set or both empty")})
+	}
+	return errors.Join(errs...)
+}
+
+// Validate implements config.Validator (core.shutdown): the budget bounds the
+// stop order, so it must be positive. Zero would stop everything at once and
+// a negative value has no meaning.
+func (s shutdownSettings) Validate() error {
+	var errs []error
+	if s.Budget.Std() <= 0 {
+		errs = append(errs, &config.FieldError{Path: "core.shutdown.budget", Err: errors.New("must be a positive duration")})
+	}
+	return errors.Join(errs...)
 }

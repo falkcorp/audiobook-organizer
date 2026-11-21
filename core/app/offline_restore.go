@@ -1,7 +1,7 @@
 // file: core/app/offline_restore.go
-// version: 1.0.2
+// version: 1.0.4
 // guid: 10f91970-5117-4c65-b504-d2c27759490c
-// last-edited: 2026-11-12
+// last-edited: 2026-11-19
 
 package app
 
@@ -85,7 +85,7 @@ func restoreOfflineCommand(opts Options, mods []module.Module) Command {
 			if req.GapFill, err = absPath(*gapFill); err != nil {
 				return err
 			}
-			c, err := offlineConfig(opts, mods)
+			c, err := offlineConfig(ctx, opts, mods, "storage restore-offline")
 			if err != nil {
 				return err
 			}

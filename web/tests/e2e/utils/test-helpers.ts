@@ -1,7 +1,7 @@
 // file: web/tests/e2e/utils/test-helpers.ts
-// version: 2.25.3
+// version: 2.26.0
 // guid: a1b2c3d4-e5f6-7890-abcd-e1f2a3b4c5d6
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 import { expect, Page } from '@playwright/test';
 
@@ -374,6 +374,74 @@ export async function skipWelcomeWizard(page: Page) {
  * @param page - Playwright test page object
  * @param options - Mock API options
  */
+/** Secrets the key-shaped /config serves as status, never as a value. */
+const MOCK_SECRET_KEYS = ['openai_api_key', 'acoustid_api_key'];
+
+/**
+ * GET /api/v1/config as the server answers it: one entry per setting. A secret
+ * carries only whether it is set; a metadata source's credentials keep their
+ * key names with blank values (and are left out when there are none).
+ */
+export function configToView(config: object) {
+  const keys = Object.entries(config as Record<string, unknown>).map(([name, value]) => {
+    if (MOCK_SECRET_KEYS.includes(name)) {
+      return { name, class: 's', secret: { set: Boolean(value), source: 'stored' } };
+    }
+    if (name === 'metadata_sources' && Array.isArray(value)) {
+      const served = (value as MockMetadataSource[]).map((src) => {
+        const { credentials, ...rest } = src;
+        const names = Object.entries(credentials ?? {})
+          .filter(([, v]) => v !== '')
+          .map(([k]) => k);
+        return names.length > 0
+          ? { ...rest, credentials: Object.fromEntries(names.map((k) => [k, ''])) }
+          : rest;
+      });
+      return { name, class: 'i', value: served };
+    }
+    return { name, class: 'k', value };
+  });
+  return { generation: 1, keys, naming_pattern_tokens: [] as string[] };
+}
+
+/**
+ * PUT /api/v1/config: {set, unset}. A secret is stored (or cleared by unset); a
+ * metadata source's credential is replaced when non-empty, kept when blank and
+ * deleted when null.
+ */
+export function applyConfigUpdate(
+  config: Record<string, unknown>,
+  body: { set?: Record<string, unknown>; unset?: string[] }
+) {
+  for (const [name, value] of Object.entries(body.set ?? {})) {
+    if (name === 'metadata_sources' && Array.isArray(value)) {
+      const before = (config.metadata_sources ?? []) as MockMetadataSource[];
+      config.metadata_sources = (value as Array<Record<string, unknown>>).map((src) => {
+        const old = before.find((b) => b.id === src.id)?.credentials ?? {};
+        const next: Record<string, string> = {};
+        const sent = (src.credentials ?? {}) as Record<string, string | null>;
+        for (const k of new Set([...Object.keys(old), ...Object.keys(sent)])) {
+          if (sent[k] === null) continue;
+          const v = sent[k] !== undefined && sent[k] !== '' ? sent[k] : old[k];
+          if (v) next[k] = v as string;
+        }
+        return { ...src, credentials: next };
+      });
+      continue;
+    }
+    const segs = name.split('.');
+    let node = config;
+    for (const seg of segs.slice(0, -1)) {
+      if (typeof node[seg] !== 'object' || node[seg] === null) node[seg] = {};
+      node = node[seg] as Record<string, unknown>;
+    }
+    node[segs[segs.length - 1]] = value;
+  }
+  for (const name of body.unset ?? []) {
+    if (MOCK_SECRET_KEYS.includes(name)) config[name] = '';
+  }
+}
+
 export async function setupMockApiRoutes(
   page: Page,
   options: MockApiOptions = {}
@@ -696,8 +764,7 @@ export async function setupMockApiRoutes(
       if (method === 'GET') {
         const t = maybeTimeout(mockState.failures.getConfig); if (t) return t;
         const f = maybeFailStatus(mockState.failures.getConfig, 'Failed to fetch config'); if (f) return f;
-        const maskedConfig = { ...mockState.config };
-        return route.fulfill(jsonResponse({ config: maskedConfig }));
+        return route.fulfill(jsonResponse({ data: configToView(mockState.config) }));
       }
       if (method === 'PUT') {
         const t = maybeTimeout(mockState.failures.updateConfig); if (t) return t;
@@ -705,12 +772,12 @@ export async function setupMockApiRoutes(
         try {
           const body = route.request().postDataJSON();
           if (body && typeof body === 'object') {
-            Object.assign(mockState.config, body);
+            applyConfigUpdate(mockState.config as unknown as Record<string, unknown>, body);
           }
         } catch {
           // ignore parse errors
         }
-        return route.fulfill(jsonResponse({ config: mockState.config }));
+        return route.fulfill(jsonResponse({ data: configToView(mockState.config) }));
       }
     }
 

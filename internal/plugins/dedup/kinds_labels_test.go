@@ -124,8 +124,8 @@ func (s *labelSpy) DeleteLabeledExamplesBySource(sources ...string) (int, error)
 	}
 	return 3, nil
 }
-func (s *labelSpy) ApplyConfigUpdates(context.Context, map[string]any) error {
-	s.rec("ApplyConfigUpdates")
+func (s *labelSpy) PersistBandThresholds(context.Context, unified.ScoreConfig) error {
+	s.rec("PersistBandThresholds")
 	return s.applyErr
 }
 func (s *labelSpy) PersistedScoreConfig() (unified.ScoreConfig, error) {
@@ -521,7 +521,7 @@ func TestDedupLabels_CalibrateLiveAppliesBandsThenReloadsThroughTheWriter(t *tes
 	w := &sentinelWriter{}
 	h, err := runKind(t, labelNative(d)["calibrate"], tasks.ModeLive, w, `{"min_scored_pairs":10}`)
 	require.NoError(t, err)
-	require.Equal(t, []string{"ApplyConfigUpdates", "PersistedScoreConfig", "ReloadScoreConfig"}, spy.recorded())
+	require.Equal(t, []string{"PersistBandThresholds", "PersistedScoreConfig", "ReloadScoreConfig"}, spy.recorded())
 	require.Equal(t, []tasks.Writer{w}, spy.seenWriters())
 	require.Contains(t, h.lastNote(), "Applied band thresholds")
 	require.Contains(t, h.lastNote(), "inspected=7 changed=2")

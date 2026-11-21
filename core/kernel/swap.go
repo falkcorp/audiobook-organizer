@@ -1,7 +1,7 @@
 // file: core/kernel/swap.go
-// version: 1.0.10
+// version: 1.0.14
 // guid: 2fd2ee78-9c6b-4e9f-82de-80def73f26d5
-// last-edited: 2026-11-11
+// last-edited: 2026-11-19
 
 package kernel
 
@@ -60,13 +60,24 @@ type kernelSwap struct {
 func (k *Kernel) swapWanted(describe bool) bool { return !describe && k.cfg.StateDir != "" }
 
 // storageOwners is the store's owners: core's own (the audit log, F2-07, and
-// the task keyspace, F2-03/F2-02, both enabled whatever the apps) and every
+// the task keyspace, F2-03/F2-02, both enabled whatever the apps; config and
+// secrets too when Config.CoreConfigBoot is set) and every
 // module that declares storage, enabled or not (a disabled module's claims stay
 // validated and its keyspace reserved). Core's two are claimed in every app's
 // store at its first P4b, whether or not tasks start: the keyspace is storage's
 // to register, the start rule is the kernel's (tasks.go).
 func (k *Kernel) storageOwners() []storage.OwnerSpec {
 	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec()}
+	if k.cfg.CoreConfigBoot {
+		// c/config/ and c/secrets/ (05-config 1.3.3, 2.3): claimed only under
+		// the gate, so a build without it writes neither at its first P4b.
+		// Every reader of the owners reads this one function: P0a's swapper, the
+		// P2 open, the offline opens and the dry run.
+		owners = append(owners, configOwnerSpec(), secretsOwnerSpec())
+	}
+	// Core's half of M7 (core_level.go): registered when a manifest declares a
+	// cutover, so a build with none raises no level.
+	owners = append(owners, k.coreOwners()...)
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})
@@ -177,7 +188,7 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 	}
 	clock := bootClock(ctx)
 	sw, err := restoreswap.New(restoreswap.Options{FS: fs, StateDir: k.cfg.StateDir, BuildID: build, Clock: clock,
-		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap")})
+		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap"), RewriteStep: k.rewriteID()})
 	if err != nil {
 		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	}
@@ -268,7 +279,11 @@ func (k *Kernel) swapAfter(ctx context.Context, phase string) error {
 		err = s.Opened(ctx, out.ID)
 	case out.Boot == restoreswap.BootRestore && phase == phaseP4b:
 		err = s.RestoreApplied(ctx, out.ID)
-	case out.Boot == restoreswap.BootReset && phase == phaseP4a:
+	case out.Boot == restoreswap.BootReset && phase == phaseP4a && !k.cfg.CoreConfigBoot:
+		// Under Config.CoreConfigBoot applied is journalled in bindCoreStores
+		// instead, after secrets.Open rewrote the keyring header and the reset's
+		// fresh rows are committed (SEC8-5): the swap is not applied until both
+		// are durable.
 		err = s.ResetApplied(ctx, out.ID)
 	case (out.Boot == restoreswap.BootReset || out.Boot == restoreswap.BootResetApplied) && phase == phaseP4b:
 		if out.Intent.Reset == restorejournal.ResetFactory && k.resetEntry() != nil {

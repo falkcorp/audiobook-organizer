@@ -1,7 +1,7 @@
 // file: core/app/extendstart_test.go
-// version: 1.1.0
+// version: 1.1.1
 // guid: 0d057159-dd11-4c4f-a871-b20ed3ff5611
-// last-edited: 2026-11-08
+// last-edited: 2026-11-19
 
 //go:build !windows
 
@@ -19,9 +19,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/lifecycle"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
 // notifySocket binds a unix datagram socket and points NOTIFY_SOCKET at it
@@ -194,5 +196,35 @@ func TestFastExit_PrintStorageLevels(t *testing.T) {
 	out.Reset()
 	if handled, err := FastExit([]string{"batcomputer", "--print-storage-levels"}, &out); !handled || err != nil || out.String() != `{"core":0}`+"\n" {
 		t.Fatalf("no modules: FastExit = %v, %v, stdout %q, want core's vector alone", handled, err, out.String())
+	}
+}
+
+// cutoverModule is a storage module whose manifest declares an R2 cutover.
+type cutoverModule struct{ levelsModule }
+
+func (m cutoverModule) Manifest() module.Manifest {
+	man := m.levelsModule.Manifest()
+	man.Cutover = func(module.Importers) []datamigrate.DataMigration { return nil }
+	return man
+}
+
+// TestFastExit_PrintStorageLevels_CoreRisesWithACutover (F3-07 d): a build whose
+// manifest declares a cutover registers core's level step, so its supported
+// vector carries core at that level; the vector rollback's guard compares would
+// otherwise say core is still 0 while the store is stamped 1.
+func TestFastExit_PrintStorageLevels_CoreRisesWithACutover(t *testing.T) {
+	var out bytes.Buffer
+	handled, err := FastExit([]string{"batcomputer", "--print-storage-levels"}, &out,
+		cutoverModule{levelsModule{id: "batcave", level: 1}}, levelsModule{id: "gotham"})
+	if err != nil || !handled {
+		t.Fatalf("FastExit = %v, %v, want handled", handled, err)
+	}
+	var got map[string]int
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("stdout %q is not a JSON object: %v", out.String(), err)
+	}
+	want := map[string]int{"core": kernel.CoreCutoverLevel, "batcave": 1, "gotham": 0}
+	if !maps.Equal(got, want) {
+		t.Fatalf("levels = %v, want %v", got, want)
 	}
 }

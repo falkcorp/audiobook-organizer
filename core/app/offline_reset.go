@@ -1,7 +1,7 @@
 // file: core/app/offline_reset.go
-// version: 1.0.0
+// version: 1.0.2
 // guid: 452027d9-8145-4e24-87f4-b5d83dc57d89
-// last-edited: 2026-11-09
+// last-edited: 2026-11-19
 
 package app
 
@@ -60,7 +60,7 @@ func resetCommand(opts Options, mods []module.Module) Command {
 			}
 			req := storage.ResetRequest{Kind: restorejournal.ResetKind(strings.TrimSpace(*kind)), Confirm: *confirm,
 				DeleteLibraryFiles: *deleteFiles, LibraryRoot: *root, LibraryFileCount: *count}
-			c, err := offlineConfig(opts, mods)
+			c, err := offlineConfig(ctx, opts, mods, "storage reset")
 			if err != nil {
 				return err
 			}
