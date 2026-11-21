@@ -49,15 +49,15 @@ states are
               it at its next boot. Cannot be cleared.
   orphan      the journal verified clean and holds no such line, so nothing can
               ever apply the entry. Can be cleared.
-  poison      the row does not decode, or its key and entry disagree; every
-              boot that reads the queue fails on it. Can be cleared.
+  poison      the row does not decode; every boot that reads the queue fails
+              on it. Can be cleared.
   unverified  the journal is missing, unreadable, broken, another install's or
               disagrees with the store, so it cannot be shown whether the entry
               is owed. Cannot be cleared.
   malformed_key  the key names no seq; listed only.
 
 clear removes the one entry at <seq> when it is orphan or poison, in one batch
-with an audit record (core.journal_queue.clear, method offline), and refuses
+with an audit record (core.storage.journal_queue_clear, method offline), and refuses
 any other state, changing nothing. It requires --confirm: the entry is gone
 afterwards. A pending entry is never cleared by this command: boot a build that
 knows the kind, or restore the journal.`

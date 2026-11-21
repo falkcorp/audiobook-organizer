@@ -63,6 +63,9 @@ type OfflineResetDeps struct {
 	NewBatch func() *storage.Batch
 	// Audit records the write in the same batch; required.
 	Audit audit.Logger
+	// By names the operator (the OS user running the command) on the audit
+	// record's actor; empty records the method alone.
+	By string
 	// Revocations takes the two revocation lines; required. An Append that
 	// fails records a gap and the reset still commits (the journal's own
 	// contract: a disk problem never blocks a security action), and the
@@ -211,7 +214,7 @@ func ResetPasswordOffline(ctx context.Context, d OfflineResetDeps, username stri
 		}
 		if err := d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionUserPassword, Outcome: audit.Success, Target: target,
-			Actor: audit.Actor{Method: auditMethodOffline},
+			Actor: audit.Actor{Username: d.By, Method: auditMethodOffline},
 			Details: map[string]any{
 				"offline":                true,
 				"cleared_restriction":    cur.SignInRestricted,

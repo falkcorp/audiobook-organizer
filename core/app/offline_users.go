@@ -84,7 +84,7 @@ func resetPasswordCommand(opts Options, mods []module.Module) Command {
 			if err != nil {
 				return err
 			}
-			res, err := kernel.ResetPasswordOffline(ctx, c, name)
+			res, err := kernel.ResetPasswordOffline(ctx, c, name, operatorName())
 			if err != nil {
 				return fmt.Errorf("%s: %w", resetPasswordName, err)
 			}

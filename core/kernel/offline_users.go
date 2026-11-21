@@ -168,11 +168,12 @@ func (oi *offlineIdentity) reapply() reapplyInput {
 // clears the account's sign-in restriction and reset-required flag, bumps its
 // credential epoch (every session and one-time token of it dies), journals
 // password.changed and credential_epoch.bumped in the same batch and audits
-// it, Actor.Method "offline". The password is returned once, to be printed to
+// it, Actor.Method "offline" and Actor.Username by (the OS user running the
+// command). The password is returned once, to be printed to
 // the operator's standard output; it is never stored or logged. It writes no
 // external-identity link, API key, role or status. See auth.ResetPasswordOffline
 // for the rules of who may be reset.
-func ResetPasswordOffline(ctx context.Context, c Config, username string) (res auth.OfflineResetResult, err error) {
+func ResetPasswordOffline(ctx context.Context, c Config, username, by string) (res auth.OfflineResetResult, err error) {
 	oi, err := openOfflineIdentity(ctx, c, "users reset-password")
 	if err != nil {
 		return res, err
@@ -222,7 +223,7 @@ func ResetPasswordOffline(ctx context.Context, c Config, username string) (res a
 		log.Warn("kernel: the revocation journal is not usable for appends; the reset will record a gap", "path", comp.Path(), "err", err)
 	}
 	return auth.ResetPasswordOffline(ctx, auth.OfflineResetDeps{
-		Store: users, NewBatch: users.NewBatch, Audit: k.audit, Revocations: comp,
+		Store: users, NewBatch: users.NewBatch, Audit: k.audit, By: by, Revocations: comp,
 		Settings: settings, Clock: bootClock(ctx), Log: log,
 	}, username)
 }
@@ -298,7 +299,7 @@ func JournalQueueList(ctx context.Context, c Config) (out []JournalQueueEntry, e
 
 // JournalQueueClear is `storage journal-queue clear <seq>`: it removes the one
 // entry at seq when it is poison or provably orphaned, in one batch with its
-// audit record (core.journal_queue.clear, Actor.Method "offline"), and
+// audit record (core.storage.journal_queue_clear, Actor.Method "offline"), and
 // refuses any other (ErrJournalQueueNotClearable) or an absent one
 // (ErrJournalQueueNoEntry), changing nothing. The state is re-judged here, over
 // the open the delete runs under, not taken from an earlier list.
@@ -339,7 +340,7 @@ func JournalQueueClear(ctx context.Context, c Config, seq uint64, by string) (cl
 		details["kind"] = string(target.Kind)
 	}
 	if err := oi.k.audit.RecordIn(ctx, b, audit.Event{
-		Action:  "core.journal_queue.clear",
+		Action:  "core.storage.journal_queue_clear",
 		Outcome: audit.Success,
 		Actor:   audit.Actor{Username: by, Method: "offline"},
 		Target:  entity.Ref{Module: "core", Kind: "journal_queue_entry", ID: fmt.Sprintf("%d", target.Seq)},
@@ -386,33 +387,62 @@ type journalProof struct {
 }
 
 // readProof reads and judges the journal the way the serve boot's re-apply
-// does (readChain, checkAnchor, untrusted), without acting on any verdict.
+// does (readChain, checkAnchor, untrusted), without acting on any verdict, and
+// then asks for more: an absence is only proof when the journal is positively
+// this store's whole history. Every one of these leaves whyNot set, so no entry
+// can be called an orphan: the file is missing, is not a regular file, is empty
+// or has no verified header, is another install's, breaks anywhere, does not
+// reach (or disagrees with) the store's committed head, or the location file
+// that anchors it is unreadable or does not describe this store. It only reads:
+// nothing here renames, creates or truncates a file (the boot's set-aside is
+// not borrowed).
 func (oi *offlineIdentity) readProof(ctx context.Context, bks storage.Keyspace) journalProof {
 	in := oi.reapply()
 	path := oi.journalPath()
+	no := func(chain *journal.Chain, why string) journalProof {
+		if chain == nil {
+			chain = &journal.Chain{}
+		}
+		return journalProof{chain: chain, whyNot: why}
+	}
 	head, err := journal.ReadHead(ctx, bks)
 	if err != nil {
-		return journalProof{chain: &journal.Chain{}, whyNot: "the store's journal head cannot be read"}
+		return no(nil, "the store's journal head cannot be read")
 	}
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		return journalProof{chain: &journal.Chain{}, whyNot: "the journal file does not exist"}
+	fi, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return no(nil, "the journal file does not exist")
+	case err != nil:
+		return no(nil, "the journal file cannot be examined")
+	case !fi.Mode().IsRegular():
+		return no(nil, "the journal path is not a regular file")
 	}
 	chain := in.readChain(path, head)
-	if otherInstall(chain, oi.install) {
-		return journalProof{chain: chain, whyNot: "the journal file is another install's"}
-	}
-	loc, have, lerr := journal.ReadLocation(oi.k.cfg.StateDir, journal.WithFS(oi.jfs))
-	describes := lerr == nil && have && loc.Describes(oi.k.cfg.StoragePath, oi.install)
-	chain = in.checkAnchor(chain, loc, describes)
-	var res reapplyResult
-	refused := in.untrusted(chain, head, &res)
 	switch {
 	case chain.Break != nil:
-		return journalProof{chain: chain, whyNot: "the journal does not verify past a point (" + string(chain.Break.Reason) + ")"}
-	case refused || res.Broken != nil:
-		return journalProof{chain: chain, whyNot: "the journal does not agree with the store's head"}
+		return no(chain, "the journal does not verify past a point ("+string(chain.Break.Reason)+")")
+	case !chain.HasHeader:
+		return no(chain, "the journal file is empty or has no verified header")
+	case otherInstall(chain, oi.install):
+		return no(chain, "the journal file is another install's")
+	}
+	loc, have, lerr := journal.ReadLocation(oi.k.cfg.StateDir, journal.WithFS(oi.jfs))
+	switch {
 	case lerr != nil:
-		return journalProof{chain: chain, whyNot: "backup.location.json cannot be read"}
+		return no(chain, "backup.location.json cannot be read")
+	case !have || !loc.Describes(oi.k.cfg.StoragePath, oi.install):
+		return no(chain, "backup.location.json does not describe this store")
+	}
+	chain = in.checkAnchor(chain, loc, true)
+	var res reapplyResult
+	if in.untrusted(chain, head, &res) || res.Broken != nil || chain.Break != nil {
+		return no(chain, "the journal does not agree with the store's committed head")
+	}
+	if head.Seq > 0 {
+		if mac, ok := chain.MACAt(head.Seq); !ok || mac != head.MAC {
+			return no(chain, "the journal does not hold the line the store committed at its head")
+		}
 	}
 	return journalProof{chain: chain}
 }
@@ -427,19 +457,22 @@ func classifyRow(r journal.UnappliedRow, proof journalProof) JournalQueueEntry {
 	case r.Err != nil:
 		e.State, e.Reason = QueuePoison, "the row does not decode; every boot that reads the queue fails on it"
 		return e
-	case r.Entry.Seq != r.Seq:
-		e.State, e.Reason = QueuePoison, fmt.Sprintf("the row's key names seq %d and its entry names seq %d", r.Seq, r.Entry.Seq)
-		return e
 	}
 	e.Kind, e.At, e.Closed = r.Entry.Kind, r.Entry.At, r.Entry.Closed
-	if l, ok := proof.chain.LineAt(r.Seq); ok && l.MAC == r.Entry.MAC {
-		e.State, e.Reason = QueuePending, "the journal holds this line; a build that knows kind "+string(r.Entry.Kind)+" applies it at its next boot"
+	// The boot reads an entry by its own seq and mac, never its key's, so that
+	// is what is judged here; a key that names another seq is only noted.
+	note := ""
+	if r.Entry.Seq != r.Seq {
+		note = fmt.Sprintf(" (the key names seq %d, the entry seq %d; the boot reads the entry's)", r.Seq, r.Entry.Seq)
+	}
+	if l, ok := proof.chain.LineAt(r.Entry.Seq); ok && l.MAC == r.Entry.MAC {
+		e.State, e.Reason = QueuePending, "the journal holds this line; a build that knows kind "+string(r.Entry.Kind)+" applies it at its next boot"+note
 		return e
 	}
 	if proof.whyNot != "" {
-		e.State, e.Reason = QueueUnverified, proof.whyNot+", so the entry cannot be shown to be unreachable"
+		e.State, e.Reason = QueueUnverified, proof.whyNot+", so the entry cannot be shown to be unreachable"+note
 		return e
 	}
-	e.State, e.Reason = QueueOrphan, "the verified journal holds no line at this seq with this mac (dropped by retention, or another history); nothing can ever apply it"
+	e.State, e.Reason = QueueOrphan, "the verified journal holds no line at seq "+fmt.Sprint(r.Entry.Seq)+" with this mac (dropped by retention, or another history); nothing can ever apply it"+note
 	return e
 }

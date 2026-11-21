@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -151,7 +153,7 @@ func (fx *oiFx) auditRecords(t *testing.T, prefix string) (out []audit.Record) {
 func TestOfflineResetPassword_Effect(t *testing.T) {
 	fx := seedIdentity(t, nil)
 	before, oldHash := fx.user(t, "bruce")
-	res, err := ResetPasswordOffline(t.Context(), fx.c, "  BRUCE ")
+	res, err := ResetPasswordOffline(t.Context(), fx.c, "  BRUCE ", "ops")
 	if err != nil {
 		t.Fatalf("ResetPasswordOffline: %v", err)
 	}
@@ -207,6 +209,10 @@ func TestOfflineResetPassword_Effect(t *testing.T) {
 func TestOfflineResetPassword_Refusals(t *testing.T) {
 	fx := seedIdentity(t, nil)
 	linesBefore := len(fx.lines(t))
+	auditBefore := fx.auditRecords(t, "")
+	for _, r := range auditBefore {
+		t.Logf("audit record present before any command ran: %s (%s)", r.Action, r.Actor.Method)
+	}
 	for _, tc := range []struct {
 		name, user string
 		want       error
@@ -215,9 +221,10 @@ func TestOfflineResetPassword_Refusals(t *testing.T) {
 		{"empty", "  ", auth.ErrBadInput},
 		{"disabled", "harvey", auth.ErrResetPasswordTarget},
 		{"pending", "oswald", auth.ErrResetPasswordTarget},
+		{"system user", "_system", auth.ErrResetPasswordTarget},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			res, err := ResetPasswordOffline(t.Context(), fx.c, tc.user)
+			res, err := ResetPasswordOffline(t.Context(), fx.c, tc.user, "ops")
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -229,15 +236,15 @@ func TestOfflineResetPassword_Refusals(t *testing.T) {
 	if got := len(fx.lines(t)); got != linesBefore {
 		t.Errorf("refused resets appended %d journal line(s)", got-linesBefore)
 	}
-	if recs := fx.auditRecords(t, "core.user.reset_password"); len(recs) != 0 {
-		t.Errorf("refused resets audited %d record(s)", len(recs))
+	if recs := fx.auditRecords(t, ""); len(recs) != len(auditBefore) {
+		t.Errorf("refused resets, or the opens around them, changed the audit log: %d -> %d records", len(auditBefore), len(recs))
 	}
-	for _, name := range []string{"harvey", "oswald", "bruce"} {
+	for _, name := range []string{"harvey", "oswald", "bruce", "_system"} {
 		u, _ := fx.user(t, name)
 		if name == "bruce" && (!u.SignInRestricted || u.CredentialEpoch != 4) {
 			t.Errorf("bruce changed by a refused reset: %+v", u)
 		}
-		if name != "bruce" && u.CredentialEpoch != 0 {
+		if name != "bruce" && (u.CredentialEpoch != 0 || u.Version != 1) {
 			t.Errorf("%s changed: %+v", name, u)
 		}
 	}
@@ -246,7 +253,7 @@ func TestOfflineResetPassword_Refusals(t *testing.T) {
 func TestOfflineResetPassword_JournalAndAudit(t *testing.T) {
 	fx := seedIdentity(t, nil)
 	before := fx.lines(t)
-	res, err := ResetPasswordOffline(t.Context(), fx.c, "bruce")
+	res, err := ResetPasswordOffline(t.Context(), fx.c, "bruce", "ops")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +275,7 @@ func TestOfflineResetPassword_JournalAndAudit(t *testing.T) {
 		t.Fatalf("%d audit record(s), want 1: %+v", len(recs), recs)
 	}
 	r := recs[0]
-	if r.Actor.Method != "offline" || r.Outcome != audit.Success || r.Target.ID != "u-bruce" {
+	if r.Actor.Method != "offline" || r.Actor.Username != "ops" || r.Outcome != audit.Success || r.Target.ID != "u-bruce" {
 		t.Errorf("audit record = %+v", r)
 	}
 	if v, _ := r.Details["offline"].(bool); !v {
@@ -293,7 +300,7 @@ func detailStrings(m map[string]any) (out []string) {
 // under the state directory, the store, or the backup directory.
 func TestOfflineResetPassword_NoPlaintextOnDisk(t *testing.T) {
 	fx := seedIdentity(t, nil)
-	res, err := ResetPasswordOffline(t.Context(), fx.c, "bruce")
+	res, err := ResetPasswordOffline(t.Context(), fx.c, "bruce", "ops")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,16 +332,16 @@ func TestOfflineResetPassword_NoPlaintextOnDisk(t *testing.T) {
 }
 
 // TestOfflineIdentity_RunningServiceRefused: a store a serving kernel holds is
-// refused by every identity command, and nothing is written. Inside one process
-// the refusal is Pebble's own lock (a second process gets ErrStoreHeld from
-// OpenOffline's exclusion tests); either way the command returns before it
-// builds anything.
+// refused by every identity command, and nothing is written. The refusal is
+// OpenOffline's, whose own tests classify it (ErrStoreHeld across processes);
+// inside this process it is Pebble's lock error, which is all this pins: the
+// commands open the store before they read or write anything.
 func TestOfflineIdentity_RunningServiceRefused(t *testing.T) {
 	h, c := identityHost(t)
 	k := h.mustBoot(c)
 	defer h.close(k)
 	linesBefore := len(readLines(t, k))
-	if _, err := ResetPasswordOffline(t.Context(), c, "bruce"); err == nil {
+	if _, err := ResetPasswordOffline(t.Context(), c, "bruce", "ops"); err == nil {
 		t.Error("reset-password ran against a running service")
 	}
 	if _, err := JournalQueueList(t.Context(), c); err == nil {
@@ -361,7 +368,7 @@ func TestOfflineIdentity_NotDeclaredRefuses(t *testing.T) {
 	fx := seedIdentity(t, nil)
 	c := fx.c
 	c.IdentityBoot = false
-	if _, err := ResetPasswordOffline(t.Context(), c, "bruce"); !errors.Is(err, ErrIdentityNotDeclared) {
+	if _, err := ResetPasswordOffline(t.Context(), c, "bruce", "ops"); !errors.Is(err, ErrIdentityNotDeclared) {
 		t.Errorf("reset err = %v, want ErrIdentityNotDeclared", err)
 	}
 	if _, err := JournalQueueList(t.Context(), c); !errors.Is(err, ErrIdentityNotDeclared) {
@@ -384,7 +391,7 @@ func TestOfflineResetPassword_UnusableJournalRecordsGap(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The recorded location names the journal, so the open uses that path.
-	res, err := ResetPasswordOffline(t.Context(), fx.c, "bruce")
+	res, err := ResetPasswordOffline(t.Context(), fx.c, "bruce", "ops")
 	if err != nil {
 		t.Fatalf("a broken journal blocked the reset: %v", err)
 	}
@@ -444,6 +451,10 @@ func queueFx(t *testing.T) (fx *oiFx, pendingSeq uint64) {
 		}
 		must(b.In(jks).Set([]byte("journal_unapplied/00000000000000000007"), []byte("{not json")))
 		must(b.In(jks).Set([]byte("journal_unapplied/00000000000000000009"), []byte(`{"seq":8,"mac":"aa","kind":"x"}`)))
+		// A key that names another seq than its entry, the entry naming the live line:
+		// the boot reads the entry, so this is a pending line, not poison.
+		must(b.In(jks).Set([]byte("journal_unapplied/00000000000000000011"),
+			[]byte(`{"seq":`+strconv.FormatUint(last.Seq, 10)+`,"mac":"`+last.MAC+`","kind":"x"}`)))
 		must(b.In(jks).Set([]byte("journal_unapplied/zzz"), []byte(`{"seq":3,"mac":"aa","kind":"x"}`)))
 	})
 	return fx, pendingSeq
@@ -467,7 +478,8 @@ func TestJournalQueue_ListClassifies(t *testing.T) {
 	pk := keyOf(pending)
 	want := map[string]JournalQueueState{
 		pk: QueuePending, "00000000000000000500": QueueOrphan,
-		"00000000000000000007": QueuePoison, "00000000000000000009": QueuePoison, "zzz": QueueMalformedKey,
+		"00000000000000000007": QueuePoison, "00000000000000000009": QueueOrphan, "00000000000000000011": QueuePending,
+		"zzz": QueueMalformedKey,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("states = %v, want %v", got, want)
@@ -498,10 +510,13 @@ func TestJournalQueue_ClearOnlyOrphanAndPoison(t *testing.T) {
 	if _, err := JournalQueueClear(ctx, fx.c, 3, "ops"); !errors.Is(err, ErrJournalQueueNoEntry) {
 		t.Fatalf("clear by a malformed key's entry seq = %v, want ErrJournalQueueNoEntry", err)
 	}
-	if es, _ := JournalQueueList(ctx, fx.c); len(es) != 5 {
+	if _, err := JournalQueueClear(ctx, fx.c, 11, "ops"); !errors.Is(err, ErrJournalQueueNotClearable) {
+		t.Fatalf("clear of a row whose entry names a live line = %v, want ErrJournalQueueNotClearable", err)
+	}
+	if es, _ := JournalQueueList(ctx, fx.c); len(es) != 6 {
 		t.Fatalf("refused clears changed the queue: %d rows", len(es))
 	}
-	if recs := fx.auditRecords(t, "core.journal_queue."); len(recs) != 0 {
+	if recs := fx.auditRecords(t, "core.storage.journal_queue_"); len(recs) != 0 {
 		t.Fatalf("refused clears audited %d record(s)", len(recs))
 	}
 	for _, seq := range []uint64{500, 7, 9} {
@@ -517,71 +532,146 @@ func TestJournalQueue_ClearOnlyOrphanAndPoison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := entryStates(es); len(got) != 2 || got[keyOf(pending)] != QueuePending || got["zzz"] != QueueMalformedKey {
-		t.Errorf("rows left = %v, want the pending entry and the malformed key", got)
+	if got := entryStates(es); len(got) != 3 || got[keyOf(pending)] != QueuePending || got["00000000000000000011"] != QueuePending || got["zzz"] != QueueMalformedKey {
+		t.Errorf("rows left = %v, want the two pending entries and the malformed key", got)
 	}
-	recs := fx.auditRecords(t, "core.journal_queue.")
+	recs := fx.auditRecords(t, "core.storage.journal_queue_")
 	if len(recs) != 3 {
 		t.Fatalf("%d audit record(s), want 3", len(recs))
 	}
 	for _, r := range recs {
-		if r.Action != "core.journal_queue.clear" || r.Actor.Method != "offline" || r.Actor.Username != "ops" || r.Outcome != audit.Success {
+		if r.Action != "core.storage.journal_queue_clear" || r.Actor.Method != "offline" || r.Actor.Username != "ops" || r.Outcome != audit.Success {
 			t.Errorf("audit record = %+v", r)
 		}
 	}
 }
 
-// TestJournalQueue_NoJournalNothingIsOrphan: with the journal file gone the
-// entries cannot be shown to be unreachable, so none is clearable but poison.
-func TestJournalQueue_NoJournalNothingIsOrphan(t *testing.T) {
-	fx, pending := queueFx(t)
-	if err := os.Remove(fx.journalPath); err != nil {
-		t.Fatal(err)
-	}
-	es, err := JournalQueueList(t.Context(), fx.c)
+// snapshot is every file under dir with its bytes, for before/after equality.
+func snapshot(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			out[path] = "<dir>"
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		out[path] = string(raw)
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := entryStates(es)
-	if got[keyOf(pending)] != QueueUnverified || got["00000000000000000500"] != QueueUnverified {
-		t.Fatalf("states = %v, want the decodable entries unverified", got)
-	}
-	for _, seq := range []uint64{pending, 500} {
-		if _, err := JournalQueueClear(t.Context(), fx.c, seq, "ops"); !errors.Is(err, ErrJournalQueueNotClearable) {
-			t.Errorf("clear %d without a journal = %v, want ErrJournalQueueNotClearable", seq, err)
-		}
-	}
-	if got["00000000000000000007"] != QueuePoison {
-		t.Errorf("poison = %s, want poison whatever the journal says", got["00000000000000000007"])
+	return out
+}
+
+// TestJournalQueue_AJournalThatProvesNothingMakesNoOrphan: orphan means the
+// journal is positively this store's whole, verified history and holds no such
+// line. Each way the journal can fail to be that is made here, and in each the
+// decodable entries are unverified (never orphan), clear refuses, poison is
+// still poison, and listing or a refused clear leaves the journal directory
+// byte for byte as it was.
+func TestJournalQueue_AJournalThatProvesNothingMakesNoOrphan(t *testing.T) {
+	const orphanKey = "00000000000000000500"
+	for _, tc := range []struct {
+		name   string
+		damage func(t *testing.T, fx *oiFx)
+	}{
+		{"journal file missing", func(t *testing.T, fx *oiFx) { must(t, os.Remove(fx.journalPath)) }},
+		{"journal file empty", func(t *testing.T, fx *oiFx) { must(t, os.WriteFile(fx.journalPath, nil, 0o600)) }},
+		{"journal path is a directory", func(t *testing.T, fx *oiFx) {
+			must(t, os.Remove(fx.journalPath))
+			must(t, os.Mkdir(fx.journalPath, 0o700))
+		}},
+		{"journal truncated after its header", func(t *testing.T, fx *oiFx) {
+			raw, err := os.ReadFile(fx.journalPath)
+			must(t, err)
+			first, _, ok := bytes.Cut(raw, []byte("\n"))
+			if !ok {
+				t.Fatalf("journal has no complete header line: %q", raw)
+			}
+			must(t, os.WriteFile(fx.journalPath, append(first, '\n'), 0o600))
+		}},
+		{"journal line mac corrupted", func(t *testing.T, fx *oiFx) {
+			raw, err := os.ReadFile(fx.journalPath)
+			must(t, err)
+			i := bytes.LastIndex(raw, []byte(`"mac":"`))
+			if i < 0 {
+				t.Fatalf("no mac in the journal: %q", raw)
+			}
+			raw[i+len(`"mac":"`)] ^= 1
+			must(t, os.WriteFile(fx.journalPath, raw, 0o600))
+		}},
+		{"another install's journal", func(t *testing.T, fx *oiFx) {
+			fx.inspect(t, func(oi *offlineIdentity) {
+				ks, err := oi.keyspace()
+				must(t, err)
+				head, err := journal.ReadHead(t.Context(), ks)
+				must(t, err)
+				must(t, os.Remove(fx.journalPath))
+				must(t, journal.CreateBased(fx.journalPath, oi.k.sec.store,
+					journal.Header{InstallID: "arkham-install", App: "gotham", StartedAt: time.Now().UTC()}, head))
+			})
+		}},
+		{"location file unreadable", func(t *testing.T, fx *oiFx) {
+			must(t, os.WriteFile(filepath.Join(fx.c.StateDir, journal.LocationFile), []byte("{not json"), 0o600))
+		}},
+		{"location file missing", func(t *testing.T, fx *oiFx) {
+			must(t, os.Remove(filepath.Join(fx.c.StateDir, journal.LocationFile)))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fx, pending := queueFx(t)
+			tc.damage(t, fx)
+			dir := filepath.Dir(fx.journalPath)
+			before := snapshot(t, dir)
+			loc := filepath.Join(fx.c.StateDir, journal.LocationFile)
+			locBefore, locErr := os.ReadFile(loc)
+			es, err := JournalQueueList(t.Context(), fx.c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := entryStates(es)
+			if got[orphanKey] != QueueUnverified {
+				t.Errorf("orphan candidate = %s, want unverified (%v)", got[orphanKey], got)
+			}
+			if st := got[keyOf(pending)]; st == QueueOrphan {
+				t.Errorf("the live line's entry was called an orphan")
+			}
+			if got["00000000000000000009"] != QueueUnverified {
+				t.Errorf("entry naming a missing line = %s, want unverified", got["00000000000000000009"])
+			}
+			if got["00000000000000000007"] != QueuePoison {
+				t.Errorf("poison = %s, want poison whatever the journal says", got["00000000000000000007"])
+			}
+			for _, seq := range []uint64{500, 9} {
+				if _, err := JournalQueueClear(t.Context(), fx.c, seq, "ops"); !errors.Is(err, ErrJournalQueueNotClearable) {
+					t.Errorf("clear %d = %v, want ErrJournalQueueNotClearable", seq, err)
+				}
+			}
+			if after := snapshot(t, dir); !maps.Equal(before, after) {
+				t.Errorf("list and refused clears changed the journal directory:\nbefore %v\nafter  %v", fileNames(before), fileNames(after))
+			}
+			// A read never rewrites the location file that anchors the journal.
+			if locAfter, err := os.ReadFile(loc); string(locAfter) != string(locBefore) || (err == nil) != (locErr == nil) {
+				t.Errorf("list and refused clears changed %s", journal.LocationFile)
+			}
+		})
 	}
 }
 
-// TestJournalQueue_BrokenJournalNothingIsOrphan: a journal that does not
-// verify to its end proves no absence either.
-func TestJournalQueue_BrokenJournalNothingIsOrphan(t *testing.T) {
-	fx, _ := queueFx(t)
-	raw, err := os.ReadFile(fx.journalPath)
+func fileNames(m map[string]string) []string { return slices.Sorted(maps.Keys(m)) }
+
+func must(t *testing.T, err error) {
+	t.Helper()
 	if err != nil {
 		t.Fatal(err)
-	}
-	// Corrupt the last line's mac so the chain breaks at the line the entry names.
-	i := bytes.LastIndex(raw, []byte(`"mac":"`))
-	if i < 0 {
-		t.Fatalf("no mac in the journal: %q", raw)
-	}
-	raw[i+len(`"mac":"`)] ^= 1
-	if err := os.WriteFile(fx.journalPath, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	es, err := JournalQueueList(t.Context(), fx.c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := entryStates(es)["00000000000000000500"]; got != QueueUnverified {
-		t.Errorf("orphan candidate over a broken journal = %s, want unverified", got)
-	}
-	if _, err := JournalQueueClear(t.Context(), fx.c, 500, "ops"); !errors.Is(err, ErrJournalQueueNotClearable) {
-		t.Errorf("clear over a broken journal = %v, want ErrJournalQueueNotClearable", err)
 	}
 }
 
@@ -593,4 +683,50 @@ func keyOf(seq uint64) string {
 		seq /= 10
 	}
 	return string(d)
+}
+
+// TestOfflineResetPassword_RefusalCreatesNothing: the eligibility check runs
+// before the backup directory or a journal is created, so a refused reset in a
+// fresh state leaves neither behind (the kernel's own check, not auth's second
+// one, is what this pins).
+func TestOfflineResetPassword_RefusalCreatesNothing(t *testing.T) {
+	fx := seedIdentity(t, nil)
+	dir := filepath.Dir(fx.journalPath)
+	must(t, os.RemoveAll(dir))
+	for _, name := range []string{"harvey", "oswald", "_system", "joker"} {
+		if _, err := ResetPasswordOffline(t.Context(), fx.c, name, "ops"); err == nil {
+			t.Fatalf("%s: a refused target was reset", name)
+		}
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s: a refused reset created the backup directory (%v)", name, err)
+		}
+	}
+	// A reset that goes through creates it, and a journal in it.
+	if _, err := ResetPasswordOffline(t.Context(), fx.c, "bruce", "ops"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(fx.journalPath); err != nil {
+		t.Errorf("the successful reset left no journal at %s: %v", fx.journalPath, err)
+	}
+}
+
+// TestOfflineIdentity_NeverSetsABootRecordAside: the offline open resolves the
+// effective settings without reading config.boot.json, so a record a serve
+// boot would set aside is left exactly where it is, with no .bad beside it.
+func TestOfflineIdentity_NeverSetsABootRecordAside(t *testing.T) {
+	fx := seedIdentity(t, nil)
+	rec := filepath.Join(fx.c.StateDir, "config.boot.json")
+	must(t, os.WriteFile(rec, []byte("{this is not a boot record"), 0o600))
+	if _, err := ResetPasswordOffline(t.Context(), fx.c, "bruce", "ops"); err != nil {
+		t.Fatalf("a bad boot record blocked the reset: %v", err)
+	}
+	if _, err := JournalQueueList(t.Context(), fx.c); err != nil {
+		t.Fatalf("a bad boot record blocked the list: %v", err)
+	}
+	if raw, err := os.ReadFile(rec); err != nil || string(raw) != "{this is not a boot record" {
+		t.Errorf("the boot record was changed (%q, %v)", raw, err)
+	}
+	if _, err := os.Stat(rec + ".bad"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the boot record was set aside (%v)", err)
+	}
 }
