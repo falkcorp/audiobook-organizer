@@ -107,3 +107,43 @@ func stringMap[K ~string](m map[K]string) map[string]string {
 	}
 	return out
 }
+
+// serveLikeFlags is a flag set shaped like serve's own listener flags, at
+// their defaults.
+func serveLikeFlags() *pflag.FlagSet {
+	fs := pflag.NewFlagSet("serve", pflag.ContinueOnError)
+	fs.String("port", "8484", "")
+	fs.String("host", "localhost", "")
+	fs.String("tls-cert", "", "")
+	fs.String("tls-key", "", "")
+	return fs
+}
+
+// serve's listener flags are flag layers on their canonical keys, set only
+// when the operator passed them: --host and --port make one core.http.listen,
+// the flag the operator left alone keeping its default, and --tls-cert and
+// --tls-key name core.http.tls.cert_file and key_file. With none passed there
+// is no layer, so the environment and the stored value decide.
+func TestServeBootInputs_ListenerFlagsAreLayers(t *testing.T) {
+	restoreRootFlags(t)
+	for _, tc := range []struct {
+		name string
+		args []string
+		want map[string]string
+	}{
+		{name: "none passed", want: map[string]string{}},
+		{name: "port only", args: []string{"--port", "9000"}, want: map[string]string{"core.http.listen": "localhost:9000"}},
+		{name: "host only", args: []string{"--host", "192.0.2.5"}, want: map[string]string{"core.http.listen": "192.0.2.5:8484"}},
+		{name: "both, IPv6 host", args: []string{"--host", "::1", "--port", "9443"}, want: map[string]string{"core.http.listen": "[::1]:9443"}},
+		{name: "tls pair", args: []string{"--tls-cert", "/etc/wayne/batcave.crt", "--tls-key", "/etc/wayne/batcave.key"},
+			want: map[string]string{"core.http.tls.cert_file": "/etc/wayne/batcave.crt", "core.http.tls.key_file": "/etc/wayne/batcave.key"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := serveLikeFlags()
+			require.NoError(t, fs.Parse(tc.args))
+			in, err := serveBootInputs(fs)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, stringMap(in.Flags))
+		})
+	}
+}
