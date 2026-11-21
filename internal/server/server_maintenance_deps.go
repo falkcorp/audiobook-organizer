@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.77.0
+// version: 1.77.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-11-17
+// last-edited: 2026-11-21
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -143,6 +143,9 @@ func (s *Server) UserMerge() *usermerge.Service {
 				}
 			}))
 		}
+		// Merges are permanent once the account store is core's (A9): the
+		// wiring says so, here, where the service is built.
+		opts = append(opts, usermerge.WithIdentityFlipped(func() bool { return s.identity != nil }))
 		svc, err := usermerge.New(s.store, opts...)
 		if err != nil {
 			logger.New("usermerge").Warn("user merge unavailable: %v", err)

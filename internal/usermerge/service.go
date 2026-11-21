@@ -1,7 +1,7 @@
 // file: internal/usermerge/service.go
-// version: 1.2.2
+// version: 1.2.3
 // guid: 7b3e91d4-2c58-4a07-b6f1-0e94d5a8c3b2
-// last-edited: 2026-11-09
+// last-edited: 2026-11-21
 
 // Package usermerge is the admin "merge user B into user A" tool: it plans a
 // merge of one account's per-user data into another (a read-only preview with a
@@ -118,7 +118,10 @@ type Service struct {
 	newID          func() string
 	// audit, when set, is called once per completed apply or undo.
 	audit func(summary string, details map[string]any)
-	log   logger.Logger
+	// identityFlipped reports whether the store is at or past books' identity
+	// level (F4-08 A9); nil is HEAD's answer, false.
+	identityFlipped func() bool
+	log             logger.Logger
 }
 
 // Option configures a Service.
@@ -127,6 +130,14 @@ type Option func(*Service)
 // WithAudit sets the audit sink called after an apply or undo completes.
 func WithAudit(f func(summary string, details map[string]any)) Option {
 	return func(s *Service) { s.audit = f }
+}
+
+// WithIdentityFlipped sets how the service learns that the identity flip has
+// happened, which CheckAction needs: it is read at call time, from the wiring
+// that decides the account store (a server built with core identity), never
+// from a request.
+func WithIdentityFlipped(f func() bool) Option {
+	return func(s *Service) { s.identityFlipped = f }
 }
 
 // New resolves the capabilities the merge needs from store. A store without
