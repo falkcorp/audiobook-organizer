@@ -45,7 +45,7 @@ import {
 // error that named neither file. `import type` is erased at compile time, so the
 // Settings -> SettingsGeneral runtime import stays one-directional.
 // useSettingsHandlers.ts already imports the type this way.
-import type { SettingsState } from '../pages/Settings';
+import type { SettingsState } from '../modules/books/pages/settingsState';
 // ScanStatus is imported for the same reason: a local copy of the status union
 // silently rendered any status it lacked (such as `interrupted`) as the book count.
 import type { ScanStatus } from '../hooks/useSettingsHandlers';

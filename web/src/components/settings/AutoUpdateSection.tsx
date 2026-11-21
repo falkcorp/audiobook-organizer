@@ -22,7 +22,7 @@ import {
   DialogActions,
 } from '@mui/material';
 import * as api from '../../services/api';
-import type { SettingsState } from '../../pages/Settings';
+import type { SettingsState } from '../../modules/books/pages/settingsState';
 
 interface AutoUpdateSectionProps {
   settings: {
