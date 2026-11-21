@@ -123,7 +123,7 @@ var offCoreRows = []offRow{
 	{Route: "GET /api/core/v1/modules", Want: offAllow, Clause: clAnyAuth},
 	{Route: "GET /api/core/v1/openapi/{file}", Want: offAllow, Clause: clOpenAPI},
 	{Route: "POST /api/core/v1/ui/diagnostics", Body: `{"kind":"ui-missing","module":"alfred"}`, Want: offAllow, Clause: clUIReport},
-	{Route: "POST /api/core/v1/ui/csp-report", Want: offAllow, Clause: clPublic},
+	{Route: "POST /api/core/v1/ui/csp-report", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "POST /api/v1/csp-report"},
 
 	// ---- Public identity entry routes ----------------------------------------
 	{Route: "GET /api/core/v1/auth/status", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "GET /api/v1/auth/status"},
@@ -134,7 +134,7 @@ var offCoreRows = []offRow{
 	{Route: "POST /api/core/v1/auth/login", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "POST /api/v1/auth/login"},
 	{Route: "POST /api/core/v1/auth/logout", Want: offAllow, Clause: clAnyAuth, Head: "A", HeadRoute: "POST /api/v1/auth/logout"},
 	{Route: "POST /api/core/v1/auth/invites/accept", Want: offHandler, Code: "link_invalid", Clause: clPublicHandler, Head: "A", HeadRoute: "POST /api/v1/auth/accept-invite"},
-	{Route: "POST /api/core/v1/auth/temp-login/consume", Want: offHandler, Code: "link_invalid", Clause: clPublicHandler},
+	{Route: "POST /api/core/v1/auth/temp-login/consume", Want: offHandler, Code: "link_invalid", Clause: clPublicHandler, Head: "A", HeadRoute: "GET /auth/temp-login"},
 	{Route: "GET /api/core/v1/auth/oidc/{provider}/start", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "GET /api/v1/auth/oauth/:provider/start"},
 	{Route: "GET /api/v1/auth/oauth/{provider}/start", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "GET /api/v1/auth/oauth/:provider/start"},
 	{Route: "GET /api/v1/auth/oauth/{provider}/callback", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "GET /api/v1/auth/oauth/:provider/callback"},
