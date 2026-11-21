@@ -1,0 +1,3 @@
+### Changed
+
+- The system docs and the agent instructions (`docs/system/storage.md`, `README.md`, `architecture.md`, `components.md`, `.github/copilot-instructions.md`) now describe the activity log as it is: stored in the main PebbleDB under the `act:` key prefix, with Pebble as the only activity backend. They no longer point at the deleted NutsDB store, the removed SQLite activity backend or `dual_write_activity_store.go`, and `storage.md` documents the real key layout including the source, type and level filter indexes. SQLite is described as what it still is, a selectable main store (`database_type`).

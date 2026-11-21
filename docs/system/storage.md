@@ -5,7 +5,7 @@
 
 # Storage Architecture
 
-Audiobook Organizer uses three complementary storage tiers: PebbleDB (durable primary KV store), memdb (in-process in-memory query layer populated at startup), and NutsDB (append-optimized activity log). An optional SQLite tier exists for legacy/opt-in use.
+Audiobook Organizer uses three complementary storage tiers: PebbleDB (durable primary KV store, which also holds the activity log under the `act:` prefix) and memdb (in-process in-memory query layer populated at startup). SQLite can still be selected as the main store with `database_type`; it is no longer an activity backend.
 
 ## Storage Tiers at a Glance
 
@@ -13,17 +13,15 @@ Audiobook Organizer uses three complementary storage tiers: PebbleDB (durable pr
 graph TD
     subgraph "Durability"
         Pebble["PebbleDB\n/var/lib/audiobook-organizer/audiobooks.pebble\nSorted KV — primary source of truth"]
-        NutsDB["NutsDB\n/var/lib/audiobook-organizer/activity.nutsdb\nActivity log — append-optimized BTree buckets"]
     end
     subgraph "In-Process (non-durable)"
         MemDB["memdb\n(hashicorp/go-memdb)\nIn-memory query index — rebuilt on startup"]
     end
-    subgraph "Legacy / opt-in"
-        SQLite["SQLite\n(opt-in; legacy activity log)"]
+    subgraph "Opt-in main store"
+        SQLite["SQLite\n(database_type: sqlite)"]
     end
 
     Pebble -->|"startup load"| MemDB
-    Pebble --> NutsDB
 ```
 
 ## PebbleDB Key Conventions
@@ -144,23 +142,24 @@ At startup, PebbleDB data is loaded into `hashicorp/go-memdb` for O(1) index loo
 
 **Critical gotcha:** `GetAllBooksFrom` with the memdb path has cursor pagination that was silently capped at 2×limit (~400 books) before PR #1647. Use `ListBookIDs + RunItems` for full-library jobs; verify mid-library not just head/tail.
 
-## NutsDB Activity Log
+## Pebble Activity Store
 
-NutsDB stores the activity log in BTree buckets. The bucket naming convention:
+The activity log is stored in the main PebbleDB (`internal/books/store/pebble_activity_store.go`); there is no separate activity database file. Pebble is the only activity backend: `activity_backend` accepts an empty value or `pebble`, and `sqlite` fails validation (`ValidateActivityBackend`). The old `activity_db_path` setting is removed, and an existing `activity.sqlite` file is neither read nor deleted. Every key is scoped with `act:`:
 
-| Bucket pattern | Key format | Value |
-|---|---|---|
-| `act:<tier>` | `<20-digit-unix-nano>:<ulid>` | JSON `ActivityEntry` |
-| `act:op:<op_id>` | `<timekey>` | `<tier>:<timekey>` (op index) |
-| `act:bk:<book_id>` | `<timekey>` | `<tier>:<timekey>` (book index) |
+| Key | Value |
+|---|---|
+| `act:<tier>:<20-digit-unix-nano>:<ulid>` | JSON `ActivityEntry` (primary row) |
+| `act:op:<op_id>:<20-digit-unix-nano>:<ulid>` | `<tier>:<20-digit-unix-nano>:<ulid>` (operation index) |
+| `act:bk:<book_id>:<20-digit-unix-nano>:<ulid>` | same reference (book index) |
+| `act:src:<source>:<tier>:<20-digit-unix-nano>:<ulid>` | same reference (source filter index) |
+| `act:typ:<type>:<tier>:<20-digit-unix-nano>:<ulid>` | same reference (type filter index) |
+| `act:lvl:<level>:<tier>:<20-digit-unix-nano>:<ulid>` | same reference (level filter index) |
 
-Tiers map to activity types (scan, organize, metadata_apply, tag_write, etc.). Daily digest compaction is performed by `CompactByDay` (the nightly `maintenance.cleanup-activity-log` op and the `maintenance.compact-activity-log` op behind `POST /api/v1/activity/compact`). `POST /api/v1/operations/v2` with `{"def_id":"maintenance.recompact-activity-digests"}` starts the op that re-derives type/tier/tags on digest items compacted before enrichment existed (the old `POST /api/v1/admin/recompact-digests` route answers 410 Gone for one release). While the activity log is being migrated between backends, every one of these passes (compact, summarize, prune, recompact, index repair) runs on BOTH backends, because both receive every write.
+The source, type and level values are escaped so a `:` inside them cannot blur a key boundary (`internal/books/store/pebble_activity_filter_index.go`). Tiers map to activity types (scan, organize, metadata_apply, tag_write, etc.). Daily digest compaction is performed by `CompactByDay` (the nightly `maintenance.cleanup-activity-log` op and the `maintenance.compact-activity-log` op behind `POST /api/v1/activity/compact`). `POST /api/v1/operations/v2` with `{"def_id":"maintenance.recompact-activity-digests"}` starts the op that re-derives type/tier/tags on digest items compacted before enrichment existed (the old `POST /api/v1/admin/recompact-digests` route answers 410 Gone for one release).
 
-A dual-write adapter (`dual_write_activity_store.go`) bridges the legacy SQLite activity log during migration.
+## SQLite (opt-in main store)
 
-## SQLite (opt-in legacy)
-
-SQLite is available for the legacy activity log. New deployments use NutsDB exclusively. The SQLite path is disabled by default and exists for backward compatibility with pre-NutsDB deployments.
+`database_type` accepts `pebble` (the default) or `sqlite` for the main store. SQLite is not an activity backend: the activity log is always in Pebble.
 
 ## Filesystem Assets
 
@@ -169,7 +168,6 @@ Beyond the database, these filesystem paths are relevant:
 | Path | Contents |
 |---|---|
 | `/var/lib/audiobook-organizer/audiobooks.pebble` | PebbleDB data directory |
-| `/var/lib/audiobook-organizer/activity.nutsdb` | NutsDB activity log |
 | `/mnt/bigdata/books/audiobook-organizer/` | Organized audiobook library root |
 | `/mnt/bigdata/books/itunes/iTunes Library.xml` | iTunes XML (88K tracks / 11.7K albums) |
 | `covers/history/` | Archived cover art (SHA-256 dedup) |

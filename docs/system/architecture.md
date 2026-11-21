@@ -34,7 +34,7 @@ Audiobook Organizer is a single-binary Go server that embeds a compiled React/Ty
 │  │  Store Layer                  │                    │
 │  │  PebbleDB (primary)           │                    │
 │  │  memdb (in-memory query)      │                    │
-│  │  NutsDB (activity log)        │                    │
+│  │  Activity log (Pebble `act:`) │                    │
 │  └───────────────────────────────┘                    │
 └────────────────────────────────────────────────────────┘
 ```
@@ -61,7 +61,7 @@ flowchart TD
     OpHub --> Store
     Store --> Pebble["PebbleDB\n(primary KV store)"]
     Store --> MemDB["memdb\n(in-memory query layer)"]
-    Store -->|"activity log"| NutsDB["NutsDB\n(activity tiers)"]
+    Store -->|"activity log (act: keys)"| Pebble
     SvcReg --> Search["Bleve Full-text Search\ninternal/search"]
     SvcReg --> Embeddings["Vector Embeddings\ninternal/database (HNSW)"]
     SvcReg --> PluginReg["Plugin Registry\ninternal/plugin + internal/plugins"]
