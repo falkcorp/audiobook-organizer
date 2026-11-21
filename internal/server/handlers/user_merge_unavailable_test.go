@@ -18,7 +18,8 @@ import (
 // against rows books no longer holds, so preview and apply answer 409
 // merge_unavailable_under_identity before any account is resolved, any body is
 // read, any plan is built or any grant is minted. So does resume, before any
-// journal is read; an undo stays B10b2's merge_permanent.
+// journal is read, as does the footprint; an undo stays B10b2's merge_permanent
+// and the merge listing stays readable.
 
 func problemCode(t *testing.T, body []byte) string {
 	t.Helper()
@@ -39,6 +40,27 @@ func TestUserMergeRoutes_PreviewIsUnavailableUnderIdentity(t *testing.T) {
 		if w.Code != http.StatusConflict || problemCode(t, w.Body.Bytes()) != usermerge.ProblemUnavailableUnderIdentity {
 			t.Errorf("preview %s under identity: %d %s, want 409 %s", path, w.Code, w.Body.String(), usermerge.ProblemUnavailableUnderIdentity)
 		}
+	}
+}
+
+func TestUserMergeRoutes_FootprintIsUnavailableUnderIdentity(t *testing.T) {
+	r := newMergeRig(t)
+	// Before the flip the footprint reads.
+	if w, _ := r.do(t, http.MethodGet, "/users/"+r.absorbed.ID+"/footprint", nil); w.Code != http.StatusOK {
+		t.Fatalf("footprint before the flip: %d %s", w.Code, w.Body.String())
+	}
+	r.flipped(t, true)
+	// An account that does not exist: without the guard this is a 404 from the
+	// account lookup, so a 409 proves the guard ran before it.
+	for _, id := range []string{r.absorbed.ID, "u-nope"} {
+		w, _ := r.do(t, http.MethodGet, "/users/"+id+"/footprint", nil)
+		if w.Code != http.StatusConflict || problemCode(t, w.Body.Bytes()) != usermerge.ProblemUnavailableUnderIdentity {
+			t.Errorf("footprint %s under identity: %d %s, want 409 %s", id, w.Code, w.Body.String(), usermerge.ProblemUnavailableUnderIdentity)
+		}
+	}
+	// The merge history is accurate pre-flip data and stays readable.
+	if w, _ := r.do(t, http.MethodGet, "/users/merges", nil); w.Code != http.StatusOK {
+		t.Errorf("listing merges under identity: %d, want 200", w.Code)
 	}
 }
 
