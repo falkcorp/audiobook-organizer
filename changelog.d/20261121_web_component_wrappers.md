@@ -1,0 +1,3 @@
+### Changed
+
+- The old `web/` paths of the components that moved to `@mediacore/ui-kit` now point at the package (F9-05, dark: same behaviour, same legacy storage keys and endpoints). `BulkConfirmDialog`, `FilterTagBar` and `ErrorBoundary` are one-line re-exports. `KeyboardShortcutsDialog`, `AnnouncementBanner`, `useConfigurableTable` and `ServerFileBrowser` are thin wrappers that supply what ui-kit no longer knows: ABO's shortcut table, the `/api/v1/system/announcements` fetch with the `dismissed_announcements` key and the router, the `table_config_<name>` key, and the `/api/v1/filesystem` browse and exclusion calls. `uiKitWrappers.test.tsx` checks each wrapper for exactly that; `FilterTagBar.test.tsx` moved to ui-kit.

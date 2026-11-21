@@ -3,40 +3,21 @@
 // guid: c3d4e5f6-a7b8-9c0d-1e2f-3a4b5c6d7e8f
 // last-edited: 2026-11-07
 
-import { useState, useEffect, useCallback } from 'react';
+// Moved to @mediacore/ui-kit (F9-05). The banner takes its announcements, its
+// storage key and a navigate callback as props; this wrapper does the fetching
+// and the routing, and keeps the legacy dismissed-announcements key until the
+// shell adoption (F9-03).
+
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Alert, AlertTitle, Box, IconButton, Collapse } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
+import { AnnouncementBanner as UiKitAnnouncementBanner, type Announcement } from '@mediacore/ui-kit';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { apiFetch } from '../utils/apiFetch';
 import { unwrapData } from '../utils/apiResponse';
 
-interface Announcement {
-  id: string;
-  severity: 'info' | 'warning' | 'error';
-  message: string;
-  link?: string;
-}
-
-function getDismissed(): Set<string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEYS.DISMISSED_ANNOUNCEMENTS);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-function dismissAnnouncement(id: string) {
-  const dismissed = getDismissed();
-  dismissed.add(id);
-  localStorage.setItem(STORAGE_KEYS.DISMISSED_ANNOUNCEMENTS, JSON.stringify([...dismissed]));
-}
-
 export function AnnouncementBanner() {
   const navigate = useNavigate();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [dismissed, setDismissed] = useState<Set<string>>(getDismissed);
 
   const fetchAnnouncements = useCallback(async () => {
     try {
@@ -53,51 +34,11 @@ export function AnnouncementBanner() {
     fetchAnnouncements();
   }, [fetchAnnouncements]);
 
-  const handleDismiss = (id: string) => {
-    dismissAnnouncement(id);
-    setDismissed((prev) => new Set([...prev, id]));
-  };
-
-  const visible = announcements.filter((a) => !dismissed.has(a.id));
-
-  if (visible.length === 0) return null;
-
   return (
-    <Box sx={{ mb: 2 }}>
-      {visible.map((announcement) => (
-        <Collapse key={announcement.id} in>
-          <Alert
-            severity={announcement.severity}
-            sx={{
-              mb: 1,
-              cursor: announcement.link ? 'pointer' : 'default',
-            }}
-            onClick={() => {
-              if (announcement.link) navigate(announcement.link);
-            }}
-            action={
-              <IconButton
-                size="small"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDismiss(announcement.id);
-                }}
-              >
-                <CloseIcon fontSize="small" />
-              </IconButton>
-            }
-          >
-            <AlertTitle>
-              {announcement.severity === 'error'
-                ? 'Action Required'
-                : announcement.severity === 'warning'
-                  ? 'Attention'
-                  : 'Info'}
-            </AlertTitle>
-            {announcement.message}
-          </Alert>
-        </Collapse>
-      ))}
-    </Box>
+    <UiKitAnnouncementBanner
+      announcements={announcements}
+      storageKey={STORAGE_KEYS.DISMISSED_ANNOUNCEMENTS}
+      onNavigate={navigate}
+    />
   );
 }
