@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -187,16 +188,12 @@ func SplitTagTerms(n Node) (Node, []string, error) {
 func namesTagTerm(n Node) bool {
 	switch v := n.(type) {
 	case *AndNode:
-		for _, c := range v.Children {
-			if namesTagTerm(c) {
-				return true
-			}
+		if slices.ContainsFunc(v.Children, namesTagTerm) {
+			return true
 		}
 	case *OrNode:
-		for _, c := range v.Children {
-			if namesTagTerm(c) {
-				return true
-			}
+		if slices.ContainsFunc(v.Children, namesTagTerm) {
+			return true
 		}
 	case *NotNode:
 		return namesTagTerm(v.Child)

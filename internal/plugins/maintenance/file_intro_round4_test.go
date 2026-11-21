@@ -321,7 +321,7 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 	t.Run("fresh start keeps HEAD's refusal", func(t *testing.T) {
 		fx := newIntroFx(t)
 		q := &scanQueue{busy: true}
-		fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+		fx.p = New(queueDeps{store: fx.s, q: q})
 		fx.yieldFiles(fileIntroBatchGroups)
 		_, err := fx.yieldRun(context.Background(), fx.yieldEnv(&fileIntroRep{id: "run-fresh"}, &memCheckpoint{}, nil, fileIntroYieldMargin), true)
 		if err == nil || !strings.Contains(err.Error(), "refusing to start") {
@@ -333,7 +333,7 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 		fx := newIntroFx(t)
 		fileIntroSlots = func() int { return 1 }
 		q := &scanQueue{}
-		fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+		fx.p = New(queueDeps{store: fx.s, q: q})
 		paths := fx.yieldFiles(2*fileIntroBatchGroups + 1)
 		ck := &memCheckpoint{}
 
@@ -372,7 +372,7 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 		fx := newIntroFx(t)
 		fileIntroSlots = func() int { return 1 }
 		q := &scanQueue{}
-		fx.p = New(queueDeps{fakeDeps: fakeDeps{store: fx.s}, q: q})
+		fx.p = New(queueDeps{store: fx.s, q: q})
 		fx.yieldFiles(2*fileIntroBatchGroups + 1)
 		ck := &memCheckpoint{}
 		if _, err := fx.yieldRun(shortDeadline(t), fx.yieldEnv(&fileIntroRep{id: "run-resume-cancel"}, ck, nil, fileIntroYieldMargin), true); !errors.Is(err, tasks.ErrContinueInPlace) {

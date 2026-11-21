@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"maps"
 	"slices"
 	"sync"
 
@@ -145,9 +146,7 @@ func (f *fakeAccess) OnCommit(fn func(uint64)) {
 func (f *fakeAccess) PassthroughValues() iter.Seq2[coreconfig.Path, coreconfig.OperatorValue] {
 	f.mu.Lock()
 	cp := map[coreconfig.Path]coreconfig.OperatorValue{}
-	for k, v := range f.pass {
-		cp[k] = v
-	}
+	maps.Copy(cp, f.pass)
 	f.mu.Unlock()
 	return func(yield func(coreconfig.Path, coreconfig.OperatorValue) bool) {
 		for _, k := range slices.Sorted(mapKeys(cp)) {
@@ -232,9 +231,7 @@ func (r *fakeResidual) Load(_ context.Context, _ []string) (map[string]json.RawM
 		return nil, r.loadEr
 	}
 	out := map[string]json.RawMessage{}
-	for k, v := range r.vals {
-		out[k] = v
-	}
+	maps.Copy(out, r.vals)
 	return out, nil
 }
 
@@ -243,9 +240,7 @@ func (r *fakeResidual) Save(_ context.Context, set map[string]json.RawMessage, u
 		return r.saveEr
 	}
 	r.saves++
-	for k, v := range set {
-		r.vals[k] = v
-	}
+	maps.Copy(r.vals, set)
 	for _, k := range unset {
 		delete(r.vals, k)
 	}

@@ -200,8 +200,7 @@ func makeAbsolute(r string) (string, error) {
 // last resolved is not reported at all: it is a cached failed set still being
 // served for the rest of its window, and the folder is already fine.
 func ShouldLogProtectedPathError(err error) bool {
-	var re *RootError
-	if errors.As(err, &re) {
+	if re, ok := errors.AsType[*RootError](err); ok {
 		reportedRootFailuresMu.Lock()
 		defer reportedRootFailuresMu.Unlock()
 		if g, ok := clearedAtGen[re.Root]; ok && g > re.gen {

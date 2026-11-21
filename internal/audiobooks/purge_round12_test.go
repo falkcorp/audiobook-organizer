@@ -39,7 +39,7 @@ func TestLibraryRootReady_HungMountIsNotAskedAgainWhileItsStatsAreOutstanding(t 
 	require.Eventually(t, func() bool { return started.Load() == 2 }, 5*time.Second, 5*time.Millisecond, "the root and the sampled file were stat-ed")
 	assert.Equal(t, int64(2), rootStatsHung.Load(), "both are outstanding")
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		err := svc.libraryRootReady(config.AppConfig.RootDir)
 		require.ErrorIs(t, err, ErrLibraryRootNotReady)
 		assert.Contains(t, err.Error(), "still not answered")
@@ -91,7 +91,7 @@ func (s *failSampleAfterStore) SampleLiveBookFilePathsUnder(root string, k int) 
 func TestRunPurge_RootLostMidPassStopsThePassWithOneReason(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	const n = 400
-	for i := 0; i < n; i++ {
+	for i := range n {
 		softDeleted(t, store, fmt.Sprintf("b%03d", i), "")
 	}
 	failing := &failSampleAfterStore{PebbleStore: store, ok: 1} // the pass's own start check is the one good answer

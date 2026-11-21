@@ -104,7 +104,7 @@ func TestUnit_RestartPreventsRefusalExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for line := range strings.SplitSeq(string(b), "\n") {
 		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if ok && k == "RestartPreventExitStatus" && slices.Contains(strings.Fields(v), "78") {
 			return

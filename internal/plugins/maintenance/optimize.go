@@ -470,10 +470,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	// progress.
 	report := func(msg string, advance int) {
 		steps += advance
-		t := 2 * total
-		if steps > t {
-			t = steps
-		}
+		t := max(steps, 2*total)
 		env.Progress(steps, t, msg)
 	}
 	if native {

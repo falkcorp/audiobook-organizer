@@ -25,7 +25,7 @@ import (
 // returns the stored, now purge_failed, version.
 func escalate(t *testing.T, f *keptFixture, s KeptSweepStore) *database.BookVersion {
 	t.Helper()
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
+	for range PurgeUndecidedEscalateAfter {
 		sweep(t, s, testGuard)
 	}
 	cur := f.stored(t)
@@ -396,7 +396,7 @@ func TestSweepKeptFiles_SweepsTheKeptNotesOfAPurgeFailedVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	noRemovals(t)
-	for night := 0; night < PurgeUndecidedEscalateAfter+1; night++ {
+	for night := range PurgeUndecidedEscalateAfter + 1 {
 		rep := sweepReport(t, s, testGuard)
 		if rep.WouldRemove != 1 || len(rep.WouldRemoveFiles) != 1 || rep.WouldRemoveFiles[0].VersionID != f.ver.ID || rep.WouldRemoveFiles[0].Files[0].Path != owned {
 			t.Fatalf("night %d: report-only = %+v, want %s of the purge_failed version listed as would-remove", night, rep, owned)
@@ -428,7 +428,7 @@ func TestSweepKeptFiles_CountsAtMostOneNightPerCalendarDay(t *testing.T) {
 	s := &flakyOwnerStore{PebbleStore: f.store, path: p, down: true}
 
 	nextNight(t)
-	for run := 0; run < PurgeUndecidedEscalateAfter+2; run++ {
+	for run := range PurgeUndecidedEscalateAfter + 2 {
 		res := sweepSameNight(t, s, testGuard, run%2 == 0)
 		if len(res.Escalated) != 0 {
 			t.Fatalf("run %d of one day escalated: %+v", run+1, res.Escalated)

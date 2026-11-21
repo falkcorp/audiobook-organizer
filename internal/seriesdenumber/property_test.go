@@ -151,7 +151,7 @@ func genLibrary(rng *rand.Rand, render func(string) string) pLib {
 	specs := map[int]genAuthorSpec{}
 	nAuth := 2 + rng.Intn(2)
 	perm := rng.Perm(len(fixtures.authors))
-	for i := 0; i < nAuth; i++ {
+	for i := range nAuth {
 		spec := fixtures.authors[perm[i]]
 		specs[i+1] = spec
 		a := authorOf(spec, i+1)
@@ -410,7 +410,6 @@ func productionDecide(lib pLib) map[string]pMove {
 				g.TargetID = t.TargetID
 				g.UnseenExisting = t.Unseen
 				for i, pos := range t.Positions {
-					pos := pos
 					g.Existing = append(g.Existing, Book{ID: fmt.Sprintf("t%d-%d", t.TargetID, i), Seq: &pos})
 				}
 			} else if t.Elsewhere {
@@ -494,7 +493,7 @@ func TestProperty_ProductionMovesExactlyWhatTheOracleAllows(t *testing.T) {
 	rng := rand.New(rand.NewSource(20261117))
 	coverage := map[string]int{}
 	movedBooks := 0
-	for iter := 0; iter < propertyLibraries; iter++ {
+	for iter := range propertyLibraries {
 		form := norm.NFC
 		if rng.Intn(2) == 0 {
 			form = norm.NFD
@@ -558,7 +557,7 @@ func TestProperty_DecideAloneNeverSplitsASourceOrTrustsABareName(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	states := []RunState{RunNone, RunConfirmed, RunConfirmed, RunConfirmed, RunRejected}
 	moved, multiConfirmed := 0, 0
-	for iter := 0; iter < 4000; iter++ {
+	for iter := range 4000 {
 		g := Group{BaseName: "Court of Owls", AuthorID: 1}
 		var exists []int
 		if rng.Intn(3) == 0 {

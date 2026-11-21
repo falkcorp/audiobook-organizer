@@ -346,7 +346,7 @@ func TestListTorrentDetails_FilterAndChunking(t *testing.T) {
 	rec := &rpcRecorder{handler: func(rpcRequest, int) (string, string) { return `{}`, "" }}
 	c := rec.serve(t)
 	var hashes []string
-	for i := 0; i < 120; i++ {
+	for i := range 120 {
 		hashes = append(hashes, fmt.Sprintf("%040x", i+1))
 	}
 	if _, err := c.ListTorrentDetails(hashes); err != nil {
@@ -631,7 +631,7 @@ func TestCall_ConcurrentExpiredSessionLogsInOnce(t *testing.T) {
 
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		wg.Go(func() {
 			_, err := c.ListTorrentDetails([]string{hashA})
 			errs <- err

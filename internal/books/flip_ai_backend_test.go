@@ -153,7 +153,7 @@ func TestUnchangedSave_OverTheRealCoreStore(t *testing.T) {
 		}
 		require.True(t, errors.Is(err, config.ErrKeyReadOnly) || errors.Is(err, coreconfig.ErrUnknownKey), "an unchanged save was refused: %v", err)
 		names := err.Error()[strings.LastIndex(err.Error(), ": ")+2:]
-		for _, n := range strings.Split(names, ", ") {
+		for n := range strings.SplitSeq(names, ", ") {
 			require.Contains(t, set, n)
 			delete(set, n)
 			delete(sent, n)

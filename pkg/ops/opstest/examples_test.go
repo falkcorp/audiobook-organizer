@@ -35,12 +35,10 @@ type sizeResult struct {
 // The synthetic "size" of a file is the length of its path.
 func exampleSizeRefresh(books *FakeBooks) ops.Definition {
 	return ops.Task("library.size-refresh", ops.TaskSpec[ops.NoParams, sizeResult]{
-		Common: ops.Common{
-			Title:      "Library size refresh",
-			Help:       "Walks the library and import trees to refresh the on-disk size cache.",
-			Effects:    ops.ReadOnly(ops.ResFiles),
-			Permission: auth.PermLibraryEditMetadata,
-		},
+		Title:      "Library size refresh",
+		Help:       "Walks the library and import trees to refresh the on-disk size cache.",
+		Effects:    ops.ReadOnly(ops.ResFiles),
+		Permission: auth.PermLibraryEditMetadata,
 		Run: func(rc *ops.RC, _ ops.NoParams) (sizeResult, error) {
 			files, err := books.AllBookFiles()
 			if err != nil {
@@ -73,13 +71,11 @@ type lshResult struct {
 // ModifyBookFile with a no-op fn, as in the example.
 func exampleLSHBackfill(books *FakeBooks) ops.Definition {
 	return ops.Batch("acoustid.lsh-backfill", ops.BatchSpec[ops.NoParams, database.BookFile, lshResult]{
-		Common: ops.Common{
-			Title:      "Backfill LSH fingerprint index",
-			Help:       "Re-saves book files that have a whole-file fingerprint but no LSH index entry. Idempotent.",
-			Effects:    ops.Writes(ops.ResBookFiles, ops.ResIndexes),
-			Exclusive:  "acoustid.fingerprint",
-			Permission: auth.PermLibraryEditMetadata,
-		},
+		Title:      "Backfill LSH fingerprint index",
+		Help:       "Re-saves book files that have a whole-file fingerprint but no LSH index entry. Idempotent.",
+		Effects:    ops.Writes(ops.ResBookFiles, ops.ResIndexes),
+		Exclusive:  "acoustid.fingerprint",
+		Permission: auth.PermLibraryEditMetadata,
 		Source: func(*ops.RC, ops.NoParams) (ops.Source[database.BookFile], error) {
 			files, err := books.AllBookFiles()
 			return ops.Source[database.BookFile]{
@@ -128,12 +124,10 @@ func normalizeLetterL(title string) (string, bool) {
 // exampleLetterLOrdinals is Example 3, the trial -> approve -> apply Fixer.
 func exampleLetterLOrdinals(books *FakeBooks) ops.Definition {
 	return ops.Fixer("maintenance.normalize-letter-l-ordinals", ops.FixerSpec[ops.NoParams, database.Book]{
-		Common: ops.Common{
-			Title:      `Letter-l ordinals ("l Volume" -> "1 Volume")`,
-			Help:       "Rewrites a leading letter-l ordinal to digits.",
-			Effects:    ops.Writes(ops.ResBooks),
-			Permission: auth.PermLibraryEditMetadata,
-		},
+		Title:      `Letter-l ordinals ("l Volume" -> "1 Volume")`,
+		Help:       "Rewrites a leading letter-l ordinal to digits.",
+		Effects:    ops.Writes(ops.ResBooks),
+		Permission: auth.PermLibraryEditMetadata,
 		Candidates: func(*ops.RC, ops.NoParams) (ops.Source[database.Book], error) {
 			all, err := books.AllBooks()
 			var out []database.Book

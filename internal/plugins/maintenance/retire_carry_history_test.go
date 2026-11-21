@@ -250,11 +250,9 @@ func TestRetireCarry_ConcurrentRevertsOfOperationsSharingASurvivor(t *testing.T)
 			errs := make([]error, len(ops))
 			results := make([]*audiobooks.RevertResult, len(ops))
 			for n := range ops {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					results[n], errs[n] = audiobooks.NewRevertService(f.s).RevertOperation(fmt.Sprintf("op%d", n))
-				}()
+				})
 			}
 			wg.Wait()
 			for n := range ops {

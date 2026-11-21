@@ -149,9 +149,9 @@ func TestFoldTitleText_MatchesTheTwoPassForm(t *testing.T) {
 		}
 	}
 	// Every ASCII byte alone and in pairs: the shortcut is only taken for ASCII.
-	for a := 0; a < 128; a++ {
+	for a := range 128 {
 		check(string(rune(a)))
-		for b := 0; b < 128; b++ {
+		for b := range 128 {
 			check(string([]rune{rune(a), rune(b)}))
 		}
 	}

@@ -69,11 +69,11 @@ func TestBasicGate_ParityWithHEAD(t *testing.T) {
 	rows := []row{
 		{name: "disabled", enabled: false, user: "bwayne", stored: "Wayne-Manor-1", secret: "Wayne-Manor-1"},
 		{name: "enabled", enabled: true, user: "bwayne", stored: "Wayne-Manor-1", secret: "Wayne-Manor-1"},
-		{name: "enabled, saved wins over env", enabled: true, user: "bwayne", stored: "Wayne-Manor-1", env: strPtr("Env-Cave-2"), secret: "Wayne-Manor-1"},
-		{name: "env recovery", enabled: true, user: "bwayne", env: strPtr("Env-Cave-2"), secret: "Env-Cave-2"},
-		{name: "env recovery is trimmed", enabled: true, user: "bwayne", env: strPtr("  Env-Cave-2 \n"), secret: "Env-Cave-2"},
+		{name: "enabled, saved wins over env", enabled: true, user: "bwayne", stored: "Wayne-Manor-1", env: new("Env-Cave-2"), secret: "Wayne-Manor-1"},
+		{name: "env recovery", enabled: true, user: "bwayne", env: new("Env-Cave-2"), secret: "Env-Cave-2"},
+		{name: "env recovery is trimmed", enabled: true, user: "bwayne", env: new("  Env-Cave-2 \n"), secret: "Env-Cave-2"},
 		{name: "no password", enabled: true, user: "bwayne", secret: "Anything-3"},
-		{name: "blank env is no password", enabled: true, user: "bwayne", env: strPtr("   "), secret: "   "},
+		{name: "blank env is no password", enabled: true, user: "bwayne", env: new("   "), secret: "   "},
 		{name: "saved blanks are kept", enabled: true, user: "bwayne", stored: "  Bat Signal  ", secret: "  Bat Signal  "},
 		{name: "empty username", enabled: true, user: "", stored: "Wayne-Manor-1", secret: "Wayne-Manor-1"},
 	}
@@ -239,7 +239,7 @@ func TestBasicGate_NeverLogsThePassword(t *testing.T) {
 		stored string
 		env    *string
 		pass   string
-	}{{saved, nil, saved}, {saved, strPtr(env), saved}, {"", strPtr(env), env}, {"", nil, ""}} {
+	}{{saved, nil, saved}, {saved, new(env), saved}, {"", new(env), env}, {"", nil, ""}} {
 		setBasicGate(t, true, "bwayne", row.stored, row.env)
 		serve(basicHeader("bwayne:" + row.pass))
 		serve(basicHeader("bwayne:" + wrong))
@@ -248,7 +248,7 @@ func TestBasicGate_NeverLogsThePassword(t *testing.T) {
 	}
 	// Resolve through the posture reader as /health's source and the startup
 	// line do.
-	setBasicGate(t, true, "bwayne", "", strPtr(env))
+	setBasicGate(t, true, "bwayne", "", new(env))
 	_ = basicGateUsesEnvPassword()
 	_ = basicGateNoPassword()
 

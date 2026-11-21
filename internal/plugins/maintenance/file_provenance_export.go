@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -227,33 +228,31 @@ func (p *Plugin) fileProvenanceExportHeadEnv(reporter sdk.Reporter, apply bool) 
 // preview (it reads the ledger and verifies chains, writing nothing).
 func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(fileProvenanceExportKind, tasks.TaskSpec[fileProvExportNativeParams, fileProvExportResult]{
-		Common: tasks.Common{
-			Title: "Export the file provenance ledger to append-only JSONL",
-			Help: "Appends every provenance event newer than the durable export " +
-				"cursor to a JSONL file, so the ledger survives corruption of the database " +
-				"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
-				"missing rows as deletion evidence. Path is required: a file name in the library's " +
-				"ledger directory (root_dir/.ledger), such as ledger.jsonl; a path anywhere " +
-				"else, or one with a directory in it, is refused, and the library volume must be " +
-				"mounted. The directory is created if it is missing, on a preview too. A live run " +
-				"refuses a ledger file that does not continue where the cursor says it should " +
-				"(renamed aside and recreated, replaced, truncated); start_new=true carries on " +
-				"anyway and records the gap in the result and as a marker line. A preview " +
-				"(the default) appends nothing, start in live mode to write.",
-			// Appends the ledger to a JSONL file on disk (files) and moves the export
-			// cursor in the provenance keyspace, declared as t6g4ResProvenance.
-			Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
-			Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
-			Resume:         tasks.ResumeDrop,
-			Priority:       tasks.PriorityLow,
-			ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-export"),
-			// HEAD declares no Timeout (the registry's own default applies); the
-			// native kind states 120 minutes (F5-09 review, MINOR 13). Listed in
-			// the PR's Deviations.
-			Timeout:  120 * time.Minute,
-			Schedule: sched,
-			Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Export the file provenance ledger to append-only JSONL",
+		Help: "Appends every provenance event newer than the durable export " +
+			"cursor to a JSONL file, so the ledger survives corruption of the database " +
+			"it lives in. Never rewrites what it has written. Reports sequence gaps and " +
+			"missing rows as deletion evidence. Path is required: a file name in the library's " +
+			"ledger directory (root_dir/.ledger), such as ledger.jsonl; a path anywhere " +
+			"else, or one with a directory in it, is refused, and the library volume must be " +
+			"mounted. The directory is created if it is missing, on a preview too. A live run " +
+			"refuses a ledger file that does not continue where the cursor says it should " +
+			"(renamed aside and recreated, replaced, truncated); start_new=true carries on " +
+			"anyway and records the gap in the result and as a marker line. A preview " +
+			"(the default) appends nothing, start in live mode to write.",
+		// Appends the ledger to a JSONL file on disk (files) and moves the export
+		// cursor in the provenance keyspace, declared as t6g4ResProvenance.
+		Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Resume:         tasks.ResumeDrop,
+		Priority:       tasks.PriorityLow,
+		ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-export"),
+		// HEAD declares no Timeout (the registry's own default applies); the
+		// native kind states 120 minutes (F5-09 review, MINOR 13). Listed in
+		// the PR's Deviations.
+		Timeout:  120 * time.Minute,
+		Schedule: sched,
+		Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fileProvExportNativeParams) (fileProvExportResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileProvExportResult{}, err
@@ -581,12 +580,12 @@ func lastLedgerSeq(r io.ReaderAt, size int64) (seq uint64, found bool, err error
 			// one, and a cut-off write when it does not; neither is a line.
 			lines = lines[:len(lines)-1]
 		}
-		for i := len(lines) - 1; i >= 0; i-- {
+		for _, line := range slices.Backward(lines) {
 			var l struct {
 				Seq uint64 `json:"seq"`
 				Gap string `json:"gap"`
 			}
-			if json.Unmarshal(lines[i], &l) != nil || l.Seq == 0 || l.Gap != "" {
+			if json.Unmarshal(line, &l) != nil || l.Seq == 0 || l.Gap != "" {
 				continue
 			}
 			return l.Seq, true, nil

@@ -2243,9 +2243,7 @@ func (r *cbRun) result(ids []string, started time.Time) *creditsBackfillResult {
 	r.acc.mu.Lock()
 	defer r.acc.mu.Unlock()
 	res.CensusBefore = make(map[string]int, len(r.acc.census))
-	for k, v := range r.acc.census {
-		res.CensusBefore[k] = v
-	}
+	maps.Copy(res.CensusBefore, r.acc.census)
 	for _, n := range r.acc.newNames {
 		res.NarratorNames = append(res.NarratorNames, n)
 	}
@@ -2935,9 +2933,7 @@ func (r *cbRun) settleLibrary(eligible []string) cbLibrarySettle {
 	for pass := 1; ; pass++ {
 		st := cbLibrarySettle{refused: map[string]string{}, creators: map[string][]string{}, passes: pass}
 		st.canon = r.canonSpellings(live)
-		for k, c := range creatorCanon {
-			st.canon[k] = c
-		}
+		maps.Copy(st.canon, creatorCanon)
 		for id := range live {
 			pl := r.plans[id].plan
 			if !pl.narratorWrite {
@@ -4661,8 +4657,8 @@ type creditSpan struct{ start, n int }
 // pieces that name one person need not be spelled alike ("Renee Montoya" and
 // "RENÉE MONTOYA" differ in bytes).
 func replaceSpans(text string, spans []creditSpan, repl string) string {
-	for i := len(spans) - 1; i >= 0; i-- {
-		text = text[:spans[i].start] + repl + text[spans[i].start+spans[i].n:]
+	for _, span := range slices.Backward(spans) {
+		text = text[:span.start] + repl + text[span.start+span.n:]
 	}
 	return text
 }

@@ -97,7 +97,7 @@ func newBatmanSearchStore(tb testing.TB, books int) (*database.PebbleStore, int)
 	}
 
 	live := 0
-	for i := 0; i < books; i++ {
+	for i := range books {
 		title := fmt.Sprintf("%s Vol. %d", parityStorylines[i%len(parityStorylines)], i/len(parityStorylines)+1)
 		b := &database.Book{
 			Title:    title,

@@ -203,8 +203,8 @@ func ParseName(name string) (Parsed, Verdict, bool) {
 	rest := s[:start]
 
 	// A decimal point (".5", "2.5") is a fraction, not the position 5.
-	if strings.HasSuffix(rest, ".") {
-		if _, glued := markerWord(strings.TrimSuffix(rest, ".")); !glued {
+	if before, ok := strings.CutSuffix(rest, "."); ok {
+		if _, glued := markerWord(before); !glued {
 			return hold(CodeFractionalNumber, "a decimal point sits before the number, so it is a fraction, not a position")
 		}
 	}

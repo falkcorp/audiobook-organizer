@@ -462,7 +462,7 @@ func (l *denumberLib) run(params string) (*fakeReporter, error) {
 func (l *denumberLib) runCtx(ctx context.Context, params string) (*fakeReporter, error) {
 	l.t.Helper()
 	rep := &opIDReporter{id: denumberOpID}
-	l.cache = &spCacheDeps{fakeDeps: fakeDeps{store: l.restoring(), root: l.root}}
+	l.cache = &spCacheDeps{store: l.restoring(), root: l.root}
 	var deps ServerDeps = l.cache
 	if l.deps != nil {
 		deps = l.deps(l.cache)

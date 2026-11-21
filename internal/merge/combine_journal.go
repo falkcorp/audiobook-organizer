@@ -2659,8 +2659,8 @@ func (ms *Service) applyUndo(j *CombineJournal, rp *retirePlans) (*CombineUndoRe
 	if err != nil {
 		return res, err
 	}
-	for i := len(plans) - 1; i >= 0; i-- {
-		p := plans[i]
+	for _, p := range slices.Backward(plans) {
+
 		if p.problem != "" {
 			return res, errors.New(p.problem)
 		}

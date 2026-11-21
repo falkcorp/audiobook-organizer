@@ -143,8 +143,6 @@ func TestStuckTransportErrorSaysWorkerStuckNotUnreachable(t *testing.T) {
 
 // ── the gate ─────────────────────────────────────────────────────────────────
 
-func f64(v float64) *float64 { return &v }
-
 func TestStuckRefusal(t *testing.T) {
 	g := func(busy, limit *float64, probed bool) gatedEndpoint {
 		return gatedEndpoint{Probed: probed, Health: remoteHealth{BusySeconds: busy, BusyLimitSeconds: limit}}
@@ -154,16 +152,16 @@ func TestStuckRefusal(t *testing.T) {
 		g       gatedEndpoint
 		refused bool
 	}{
-		{"idle current worker", g(f64(0), nil, true), false},
-		{"inside its deadline", g(f64(50), f64(60), true), false},
-		{"past the deadline but inside the grace", g(f64(80), f64(60), true), false},
+		{"idle current worker", g(new(float64(0)), nil, true), false},
+		{"inside its deadline", g(new(float64(50)), new(float64(60)), true), false},
+		{"past the deadline but inside the grace", g(new(float64(80)), new(float64(60)), true), false},
 		// stuckGrace is 45 s: the parent reaps a killed decoder for up to 30 s
 		// (InferenceChild._kill) and busy_seconds keeps climbing meanwhile.
-		{"inside the grace that covers a 30 s reap", g(f64(100), f64(60), true), false},
-		{"just past the grace", g(f64(106), f64(60), true), true},
-		{"past deadline and grace", g(f64(500), f64(60), true), true},
+		{"inside the grace that covers a 30 s reap", g(new(float64(100)), new(float64(60)), true), false},
+		{"just past the grace", g(new(float64(106)), new(float64(60)), true), true},
+		{"past deadline and grace", g(new(float64(500)), new(float64(60)), true), true},
 		{"old worker reports nothing", g(nil, nil, true), false},
-		{"unprobed endpoint is not judged", g(f64(500), f64(60), false), false},
+		{"unprobed endpoint is not judged", g(new(float64(500)), new(float64(60)), false), false},
 	}
 	for _, tc := range cases {
 		if got := stuckRefusal(tc.g) != ""; got != tc.refused {

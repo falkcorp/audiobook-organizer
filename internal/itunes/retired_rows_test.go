@@ -47,10 +47,8 @@ func retiredBF(id, bookID, path, pid string) database.BookFileCore {
 func TestComputePIDIntegrityRetiredRowIsNotADuplicate(t *testing.T) {
 	primary := true
 	store := &retiredAwareMock{
-		pidCensusMock: pidCensusMock{
-			files: []database.BookFileCore{bf("f_live", "b_holder", "/mnt/x/h.m4b", "AAAA0001")},
-			books: map[string]*database.Book{"b_holder": {ID: "b_holder", IsPrimaryVersion: &primary}},
-		},
+		files: []database.BookFileCore{bf("f_live", "b_holder", "/mnt/x/h.m4b", "AAAA0001")},
+		books: map[string]*database.Book{"b_holder": {ID: "b_holder", IsPrimaryVersion: &primary}},
 		retired: []database.BookFileCore{
 			retiredBF("f_ret", "b_holder", "/mnt/x/shell.m4b", "AAAA0001"),
 			retiredBF("f_ret2", "b_holder", "/mnt/x/shell2.m4b", ""),
@@ -76,10 +74,8 @@ func TestComputePIDIntegrityRetiredRowIsNotADuplicate(t *testing.T) {
 func TestComputeMergeOrphanCensusRetiredOwner(t *testing.T) {
 	primary := true
 	store := &retiredAwareMock{
-		pidCensusMock: pidCensusMock{
-			files: []database.BookFileCore{bf("f_live", "b_holder", "/mnt/x/h.m4b", "AAAA0001")},
-			books: map[string]*database.Book{"b_holder": {ID: "b_holder", IsPrimaryVersion: &primary}},
-		},
+		files: []database.BookFileCore{bf("f_live", "b_holder", "/mnt/x/h.m4b", "AAAA0001")},
+		books: map[string]*database.Book{"b_holder": {ID: "b_holder", IsPrimaryVersion: &primary}},
 		retired: []database.BookFileCore{
 			retiredBF("f_r1", "b_holder", "/mnt/x/s1.m4b", "AAAA0001"), // same PID as the live row
 			retiredBF("f_r2", "b_holder", "/mnt/x/s2.m4b", "BBBB0002"), // only holder of BBBB0002
@@ -112,7 +108,7 @@ func TestComputeMergeOrphanCensusRetiredOwner(t *testing.T) {
 
 func TestComputePIDCoverageRetiredOnlyIsResolvedButNotFileLevel(t *testing.T) {
 	store := &retiredAwareMock{
-		pidCensusMock: pidCensusMock{files: []database.BookFileCore{bf("f_live", "b1", "/m/a.m4b", "AAAA0001")}},
+		files: []database.BookFileCore{bf("f_live", "b1", "/m/a.m4b", "AAAA0001")},
 		retired: []database.BookFileCore{
 			retiredBF("f_r", "b1", "/m/s.m4b", "BBBB0002"),
 			retiredBF("f_r_dup", "b1", "/m/s2.m4b", "AAAA0001"), // live row also holds it: not retired-only
@@ -145,16 +141,14 @@ func TestComputePIDCoverageRetiredOnlyIsResolvedButNotFileLevel(t *testing.T) {
 func TestComputeCrossTypeCollisionsRetiredOwner(t *testing.T) {
 	primary, notPrimary := true, false
 	store := &retiredAwareMock{
-		pidCensusMock: pidCensusMock{
-			files: []database.BookFileCore{
-				bf("f_live", "b_live", "/m/live.mp3", "BBBBBBBB00000002"),
-				bf("f_np", "b_np", "/m/np.mp3", "FFFFFFFF00000006"),
-			},
-			books: map[string]*database.Book{
-				"b_live": {ID: "b_live", Title: "Live", IsPrimaryVersion: &primary},
-				"b_np":   {ID: "b_np", Title: "Non-primary", IsPrimaryVersion: &notPrimary},
-				"b_hold": {ID: "b_hold", Title: "Holder", IsPrimaryVersion: &primary},
-			},
+		files: []database.BookFileCore{
+			bf("f_live", "b_live", "/m/live.mp3", "BBBBBBBB00000002"),
+			bf("f_np", "b_np", "/m/np.mp3", "FFFFFFFF00000006"),
+		},
+		books: map[string]*database.Book{
+			"b_live": {ID: "b_live", Title: "Live", IsPrimaryVersion: &primary},
+			"b_np":   {ID: "b_np", Title: "Non-primary", IsPrimaryVersion: &notPrimary},
+			"b_hold": {ID: "b_hold", Title: "Holder", IsPrimaryVersion: &primary},
 		},
 		retired: []database.BookFileCore{
 			retiredBF("f_r_same", "b_hold", "/m/r1.mp3", "BBBBBBBB00000002"),  // live row too: owner stays the live row

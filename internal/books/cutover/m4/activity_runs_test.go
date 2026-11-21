@@ -7,6 +7,7 @@ package m4_test
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -20,9 +21,9 @@ import (
 // is left naming a def ID the task store has no kind for without being listed.
 func TestCutover_RepairsFeedRowsFollowTheirRun(t *testing.T) {
 	done := epoch.Add(time.Hour)
-	plan := runSpec{id: runID(1), def: "repairs.plan", st: "succeeded", completed: tptr(done), params: map[string]any{"fixer_id": "hush"}}
-	apply := runSpec{id: runID(2), def: "repairs.apply", st: "succeeded", completed: tptr(done), params: map[string]any{"fixer_id": "two-face-asins", "plan_op_id": runID(1)}}
-	bad := runSpec{id: runID(3), def: "repairs.plan", st: "succeeded", completed: tptr(done), corruptRun: true}
+	plan := runSpec{id: runID(1), def: "repairs.plan", st: "succeeded", completed: new(done), params: map[string]any{"fixer_id": "hush"}}
+	apply := runSpec{id: runID(2), def: "repairs.apply", st: "succeeded", completed: new(done), params: map[string]any{"fixer_id": "two-face-asins", "plan_op_id": runID(1)}}
+	bad := runSpec{id: runID(3), def: "repairs.plan", st: "succeeded", completed: new(done), corruptRun: true}
 
 	raw := map[string]string{}
 	n := func(i int) string { return fmt.Sprintf("%020d", 1_700_000_000_000_000_000+int64(i)) }
@@ -38,9 +39,7 @@ func TestCutover_RepairsFeedRowsFollowTheirRun(t *testing.T) {
 		seedAct(raw, a)
 	}
 	before := map[string]string{}
-	for k, v := range raw {
-		before[k] = v
-	}
+	maps.Copy(before, raw)
 	r := newRig(t, withRuns(nil, plan, apply, bad), withRaw(raw))
 	s := r.runSteps(t)
 

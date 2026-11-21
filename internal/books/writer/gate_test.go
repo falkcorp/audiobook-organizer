@@ -215,9 +215,7 @@ func TestGate_ConcurrentCalls(t *testing.T) {
 	var mu sync.Mutex
 	admitted, refused := 0, 0
 	for i := range 64 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			m := "A"
 			if i%2 == 1 {
 				m = "B"
@@ -233,7 +231,7 @@ func TestGate_ConcurrentCalls(t *testing.T) {
 			default:
 				t.Errorf("%s: %v", m, err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	require.Equal(t, 32, admitted)

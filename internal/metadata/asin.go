@@ -33,7 +33,7 @@ func isCanonicalASIN(s string) bool {
 		}
 		return true
 	}
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		if s[i] < '0' || s[i] > '9' {
 			return false
 		}

@@ -73,7 +73,7 @@ func (st *advStats) sample(s string) {
 	if st.perKind == nil {
 		st.perKind = map[string]int{}
 	}
-	k := strings.SplitN(s, " ", 2)[0]
+	k, _, _ := strings.Cut(s, " ")
 	if st.perKind[k] < advSamplesPerKind {
 		st.perKind[k]++
 		st.samples = append(st.samples, s)
@@ -619,10 +619,7 @@ func advBudget(su advSuite) ([]uint64, int) {
 	if !testing.Short() {
 		return su.seeds, su.n
 	}
-	n := su.n / advShortDivisor
-	if n < 100 {
-		n = 100
-	}
+	n := max(su.n/advShortDivisor, 100)
 	return su.seeds[:1], n
 }
 

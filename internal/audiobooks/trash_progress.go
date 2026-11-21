@@ -852,8 +852,7 @@ func (svc *AudiobookService) DiscardProgressAndPurge(ctx context.Context, id, ac
 		// delete after only such a row went is still "erased", so the audit row
 		// is written and says so.
 		records := 0
-		var keptErr *merge.DiscardedBookKeptError
-		if errors.As(err, &keptErr) {
+		if keptErr, ok := errors.AsType[*merge.DiscardedBookKeptError](err); ok {
 			records = keptErr.Records
 		}
 		if aerr := rec.Record(database.ActivityEntry{

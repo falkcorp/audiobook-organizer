@@ -163,7 +163,7 @@ var equivalenceAlphabet = []string{
 func randomString(rng *rand.Rand, maxLen int) string {
 	n := rng.Intn(maxLen + 1)
 	var sb strings.Builder
-	for i := 0; i < n; i++ {
+	for range n {
 		sb.WriteString(equivalenceAlphabet[rng.Intn(len(equivalenceAlphabet))])
 	}
 	return sb.String()
@@ -218,7 +218,7 @@ func relatedTitle(rng *rand.Rand, title string) string {
 // unrelated titles and perturbed titles.
 func equivalencePairs(seed int64, n int, each func(a, b string)) {
 	rng := rand.New(rand.NewSource(seed))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		switch i % 3 {
 		case 0:
 			each(randomString(rng, 24), randomString(rng, 24))

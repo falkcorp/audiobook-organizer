@@ -46,9 +46,6 @@ import (
 // The facade the sections register on is core's, bound at every boot
 // (config_wire.go).
 
-// ptr returns a pointer to v, for the *float64 keys whose HEAD default is set.
-func ptr[T any](v T) *T { return &v }
-
 // dur converts a time.Duration into the declaration type.
 func dur(d time.Duration) config.Duration { return config.Duration(d) }
 
@@ -799,17 +796,17 @@ func metadataDefaults() metadataSettings {
 		ReviewModel:                     "gpt-5-mini",
 		Scoring: metadataScoring{
 			BulkFetchWorkers:              4,
-			CompilationPenalty:            ptr(0.15),
+			CompilationPenalty:            new(0.15),
 			DurationTierMultipliers:       []float64{1.3, 1.2, 1.1, 1, 0.75, 0.5},
 			DurationTierScores:            []float64{20, 15, 10, 0, -10, -20},
 			EmbeddingBestMatch:            0.88,
 			EmbeddingEnabled:              false,
 			EmbeddingMinScore:             0.82,
-			F1MinScore:                    ptr(0.35),
+			F1MinScore:                    new(0.35),
 			LLMEnabled:                    false,
 			LLMRerankEpsilon:              0.05,
 			LLMRerankTopK:                 5,
-			RichMetadataBonusCap:          ptr(0.15),
+			RichMetadataBonusCap:          new(0.15),
 			RichMetadataFieldBonus:        0.05,
 			SeriesNameMatchBoost:          1.4,
 			SeriesNumberExactBoost:        2,

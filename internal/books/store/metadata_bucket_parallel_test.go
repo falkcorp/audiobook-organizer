@@ -124,7 +124,7 @@ func mixedBucketEntries(t *testing.T) []metadataDupEntry {
 	for i := 0; i <= metadataFuzzyBucketCap; i++ {
 		add(5001, fmt.Sprintf("Batman Knightfall %d", i), fmt.Sprintf("oversize-%d", i))
 	}
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		add(5002, "Batman: The Long Halloween", fmt.Sprintf("same-%d", i))
 	}
 	return entries
@@ -179,7 +179,7 @@ func TestBucketMetadataDuplicatesParallelMatchesSerial(t *testing.T) {
 			metadataBucketWorkers = workers
 			// Repeat: an ordering bug depends on scheduling and may not show on
 			// the first run.
-			for rep := 0; rep < 5; rep++ {
+			for rep := range 5 {
 				got := bucketGroupIDs(bucketMetadataDuplicates(entries, threshold))
 				require.Equal(t, want, got, "threshold %v workers %d rep %d", threshold, workers, rep)
 			}
