@@ -89,14 +89,6 @@ type Seams struct {
 	// has no Seams); journalfs.From refuses a Seams with an in-memory FS and no
 	// Shared, so a test that builds one by hand sets it (&bootseam.Shared{}).
 	Shared *Shared
-	// RestoreWalk makes an identity boot walk a restore's journal edges the way
-	// the spec orders them (05-backup 5B.3.4 steps g and h: opened, restore_line,
-	// hooks_done, marker_written, applied), instead of the Owed edge swap.go takes
-	// at P4b (marker_written with HooksOwed, then applied, before P4d runs). It
-	// exists for the crash-matrix cell that compares the two end states (F4-08
-	// B10j, coretest/crashmatrix); false in every production boot, which has no
-	// Seams.
-	RestoreWalk bool
 }
 
 // Shared is a boot's store of per-boot state its adapters share, keyed by a
@@ -181,12 +173,6 @@ func FS(ctx context.Context) vfs.FS {
 		return s.FS
 	}
 	return vfs.Default
-}
-
-// RestoreWalk is Seams.RestoreWalk: false without Seams.
-func RestoreWalk(ctx context.Context) bool {
-	s := From(ctx)
-	return s != nil && s.RestoreWalk
 }
 
 // Region marks the durable operations until the returned exit as label's.

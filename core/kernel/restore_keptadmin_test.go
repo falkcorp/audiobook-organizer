@@ -44,15 +44,15 @@ func (s *kaScene) cannotApplyRemoval() func(*reapplyInput) {
 func crashAtRestriction(n int, after bool) func(*reapplyInput) {
 	return func(in *reapplyInput) {
 		inner, calls := in.Apply.RestrictLastAdmins, 0
-		in.Apply.RestrictLastAdmins = func(ctx context.Context, ids []string) error {
+		in.Apply.RestrictLastAdmins = func(ctx context.Context, ids []string, key string) error {
 			calls++
 			if calls < n {
-				return inner(ctx, ids)
+				return inner(ctx, ids, key)
 			}
 			if !after {
 				return errors.New("crash before the restriction")
 			}
-			if err := inner(ctx, ids); err != nil {
+			if err := inner(ctx, ids, key); err != nil {
 				return err
 			}
 			return errors.New("crash after the restriction")
@@ -289,9 +289,9 @@ func TestKeptAdminRestriction_EveryKeptAdminIsRestrictedInOneCall(t *testing.T) 
 	var calls [][]string
 	spy := func(in *reapplyInput) {
 		inner := in.Apply.RestrictLastAdmins
-		in.Apply.RestrictLastAdmins = func(ctx context.Context, ids []string) error {
+		in.Apply.RestrictLastAdmins = func(ctx context.Context, ids []string, key string) error {
 			calls = append(calls, slices.Clone(ids))
-			return inner(ctx, ids)
+			return inner(ctx, ids, key)
 		}
 	}
 	if _, _, err := fx.tryBoot(nil, uqWith(uqTail(1), spy), nil); err != nil {
@@ -378,9 +378,9 @@ func TestKeptAdminRestriction_AnAdminKeptTwiceIsRestrictedOnce(t *testing.T) {
 	var calls [][]string
 	count := func(in *reapplyInput) {
 		inner := in.Apply.RestrictLastAdmins
-		in.Apply.RestrictLastAdmins = func(ctx context.Context, ids []string) error {
+		in.Apply.RestrictLastAdmins = func(ctx context.Context, ids []string, key string) error {
 			calls = append(calls, slices.Clone(ids))
-			return inner(ctx, ids)
+			return inner(ctx, ids, key)
 		}
 	}
 	res, _, err := fx.tryBoot(nil, uqWith(uqTail(1), count), nil)

@@ -447,8 +447,10 @@ func (fx *rxFx) restoreLines() []journal.Line {
 type rxSteps struct {
 	mu     sync.Mutex
 	events []string
-	on     func(event string)
-	fail   map[string]error
+	// boundaries are the boundaries journaled, in order.
+	boundaries []uint64
+	on         func(event string)
+	fail       map[string]error
 }
 
 func (s *rxSteps) record(e string) error {
@@ -461,6 +463,15 @@ func (s *rxSteps) record(e string) error {
 		on(e)
 	}
 	return fail
+}
+
+// Boundary records the boundary a boot settled, apart from the edges: the edge
+// order a test reads (log) is the journal's machine-1 steps.
+func (s *rxSteps) Boundary(_ context.Context, _ string, seq uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.boundaries = append(s.boundaries, seq)
+	return s.fail["boundary"]
 }
 
 func (s *rxSteps) RestoreLine(_ context.Context, _ string, seq uint64) error {
