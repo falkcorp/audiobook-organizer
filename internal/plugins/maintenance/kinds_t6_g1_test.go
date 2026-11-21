@@ -713,22 +713,26 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		checkpoints bool
 		// readOnly: the two reports write nothing.
 		readOnly bool
+		// reworded: HEAD's Description tells the caller to pass dry_run=false or
+		// apply=true, keys the native kind refuses, so the native Help words the
+		// run mode instead (F5-18f). Checked against HEAD's own text below.
+		reworded bool
 	}
 	rows := []row{
 		{head: p.activityFilterIndexBackfillDef(), par: activityFilterIndexBackfillParallelism(0), wantPar: "cpu", checkpoints: true},
 		{head: p.pruneAIJournalDef()},
-		{head: p.authorSplitScanDef(), par: authorSplitScanParallelism(), wantPar: "fixed(4): "},
-		{head: p.resolveProductionAuthorsDef(), par: resolveProductionAuthorsParallelism(), wantPar: "fixed("},
-		{head: p.authorConjunctionRepairDef()},
-		{head: p.authorDuplicateMergeDef()},
-		{head: p.authorIDRepairDef(), par: authorIDRepairParallelism(), wantPar: "cpu"},
-		{head: p.authorPathLinkDef(), par: authorPathLinkParallelism(), wantPar: "cpu"},
-		{head: p.purgeEmptyAuthorsDef()},
-		{head: p.authorStripMergeDef()},
+		{head: p.authorSplitScanDef(), reworded: true, par: authorSplitScanParallelism(), wantPar: "fixed(4): "},
+		{head: p.resolveProductionAuthorsDef(), reworded: true, par: resolveProductionAuthorsParallelism(), wantPar: "fixed("},
+		{head: p.authorConjunctionRepairDef(), reworded: true},
+		{head: p.authorDuplicateMergeDef(), reworded: true},
+		{head: p.authorIDRepairDef(), reworded: true, par: authorIDRepairParallelism(), wantPar: "cpu"},
+		{head: p.authorPathLinkDef(), reworded: true, par: authorPathLinkParallelism(), wantPar: "cpu"},
+		{head: p.purgeEmptyAuthorsDef(), reworded: true},
+		{head: p.authorStripMergeDef(), reworded: true},
 		{head: p.authorTitleFragmentScanDef(), readOnly: true},
 		{head: p.authorWhitespaceCollisionReportDef(), readOnly: true},
-		{head: p.authorityBuildDef(), par: authorityBuildParallelism(0), wantPar: "cpu"},
-		{head: p.autoMatchTranscribedDef(), par: autoMatchTranscribedParallelism(), wantPar: "fixed(1): ", checkpoints: true},
+		{head: p.authorityBuildDef(), reworded: true, par: authorityBuildParallelism(0), wantPar: "cpu"},
+		{head: p.autoMatchTranscribedDef(), reworded: true, par: autoMatchTranscribedParallelism(), wantPar: "fixed(1): ", checkpoints: true},
 	}
 
 	seen := map[tasks.Kind]bool{}
@@ -740,7 +744,17 @@ func TestT6G1Kinds_MatchHEADDefs(t *testing.T) {
 		c := tasks.CommonOf(def)
 
 		require.Equal(t, r.head.DisplayName, c.Title, "%s title", id)
-		require.Equal(t, r.head.Description, c.Help, "%s help", id)
+		// HEAD's Description names a mode param a native run refuses on 10 of the
+		// 14; the flag is checked against HEAD's own text so it cannot drift, and
+		// no native Help ever names one.
+		require.Equal(t, r.reworded, t6g4NamesModeKey(r.head.Description), "%s: HEAD's Description names a mode param = row's reworded flag", id)
+		require.False(t, t6g4NamesModeKey(c.Help), "%s: native Help still names a mode param: %q", id, c.Help)
+		if r.reworded {
+			require.NotEmpty(t, c.Help, "%s help", id)
+			require.NotEqual(t, r.head.Description, c.Help, "%s: Help must be reworded", id)
+		} else {
+			require.Equal(t, r.head.Description, c.Help, "%s help", id)
+		}
 		wantPrio := tasks.PriorityNormal
 		switch r.head.DefaultPriority {
 		case sdk.PriorityLow:

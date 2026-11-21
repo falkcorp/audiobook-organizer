@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -290,7 +291,7 @@ func authorIDRepairParallelism() tasks.Parallelism { return tasks.CPU() }
 func (p *Plugin) authorIDRepairNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(authorIDRepairKind, sched)
 	c.Title = "Repair dangling and duplicate author ids"
-	c.Help = authorIDRepairHelp
+	c.Help = strings.Replace(authorIDRepairHelp, "Defaults to dry_run=true; pass dry_run=false to write.", "A run started in preview mode (the default) only reports; start it in live mode to write.", 1)
 	// metadata_cache and indexes: every path of this kind re-authors books through
 	// ModifyBook (directly or inside DeleteAuthor, MergeDeleteAuthor and MoveCredits),
 	// whose shared row (kinds_resources.go) also stamps the metadata cache stale on an

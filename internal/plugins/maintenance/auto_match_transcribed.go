@@ -167,7 +167,7 @@ func autoMatchTranscribedParallelism() tasks.Parallelism {
 func (p *Plugin) autoMatchTranscribedNative(deps t6g1Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	c := t6g1Common(autoMatchTranscribedKind, sched)
 	c.Title = "Auto-match transcribed books"
-	c.Help = autoMatchTranscribedHelp
+	c.Help = strings.Replace(autoMatchTranscribedHelp, "Dry-run by default — pass dry_run=false to apply.", "Preview by default — start it in live mode to apply.", 1)
 	// HEAD declared no write set. The apply is ApplyTranscriptionCandidate, which
 	// ends in metafetch's ApplyMetadataCandidateWithOptions, so the set is what
 	// that writes: the book row and its author credits (books, authors; the
