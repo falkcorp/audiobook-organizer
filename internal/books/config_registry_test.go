@@ -25,6 +25,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // The books half of F3-07's TestRenameTable_EveryKeyRegistered (05-config
@@ -283,7 +284,7 @@ func TestBooksSettings_DefaultsMatchHEAD(t *testing.T) {
 		var want any
 		switch {
 		case bt.target.Convert != "":
-			out, _, err := cutover.Convert(bt.target.Convert, scheduleInput(t, defaults, bt.head))
+			out, _, err := cutover.Convert(bt.target, scheduleInput(t, defaults, bt.head))
 			if err != nil {
 				t.Errorf("%s: convert %s of HEAD's default: %v", bt.path, bt.target.Convert, err)
 				continue
@@ -291,13 +292,20 @@ func TestBooksSettings_DefaultsMatchHEAD(t *testing.T) {
 			if err := json.Unmarshal(out, &want); err != nil {
 				t.Fatal(err)
 			}
-			// The converter writes only the fields it sets; the key's default
-			// is the whole ScheduleConfig, whose other fields are zero.
+			// The converter writes the fields HEAD's entry holds plus the
+			// target's window placement; the key's default is the whole
+			// ScheduleConfig, whose time of day and cron line are zero, and
+			// whose placement must be the target's (compared below).
 			g, _ := got.(map[string]any)
 			w, _ := want.(map[string]any)
-			for _, f := range []string{"daily_at", "cron", "window", "order"} {
+			for _, f := range []string{"daily_at", "cron"} {
 				if v, ok := g[f]; ok && !zeroJSON(v) {
 					t.Errorf("%s: default sets %s=%v, HEAD's entry has no such field", bt.path, f, v)
+				}
+			}
+			for _, f := range []string{"window", "order"} {
+				if v, ok := g[f]; ok && zeroJSON(v) {
+					delete(g, f)
 				}
 			}
 			if _, ok := w["every"]; !ok {
@@ -412,7 +420,7 @@ func TestBooksSettings_StagedValuesDecode(t *testing.T) {
 		var v json.RawMessage
 		if bt.target.Convert != "" {
 			in := json.RawMessage(`{"enabled":true,"interval":90,"period_hours":6}`)
-			out, _, err := cutover.Convert(bt.target.Convert, in)
+			out, _, err := cutover.Convert(bt.target, in)
 			if err != nil {
 				t.Errorf("%s: convert %s: %v", bt.path, bt.target.Convert, err)
 				continue
@@ -662,5 +670,13 @@ func TestBooksSettings_ScheduleKeysAreScheduleConfig(t *testing.T) {
 	}
 	if n != 16 {
 		t.Errorf("%d schedule keys, want the 16 scheduled entries", n)
+	}
+}
+
+// TestHeadMaintenanceWindowIsCoresNightly: the window name the cutover writes
+// into a scheduled entry's placement is core's nightly window.
+func TestHeadMaintenanceWindowIsCoresNightly(t *testing.T) {
+	if got, want := cutover.HeadMaintenanceWindow, tasks.NightlyWindow().Name; got != want {
+		t.Fatalf("cutover.HeadMaintenanceWindow = %q, core's nightly window is %q", got, want)
 	}
 }

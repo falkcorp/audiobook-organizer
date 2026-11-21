@@ -57,7 +57,7 @@ func TestConvert_Table(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, dropped, err := Convert(c.conv, json.RawMessage(c.in))
+			got, dropped, err := convert(c.conv, json.RawMessage(c.in))
 			if err != nil {
 				t.Fatalf("Convert(%q, %s): %v", c.conv, c.in, err)
 			}
@@ -81,7 +81,7 @@ func TestConvert_NotStaged(t *testing.T) {
 		{ConvertUpdaterCheck, `-5`},
 		{ConvertCSVList, `" , "`},
 	} {
-		if _, _, err := Convert(c.conv, json.RawMessage(c.in)); !errors.Is(err, ErrNotStaged) {
+		if _, _, err := convert(c.conv, json.RawMessage(c.in)); !errors.Is(err, ErrNotStaged) {
 			t.Errorf("Convert(%q, %s) error = %v, want ErrNotStaged", c.conv, c.in, err)
 		}
 	}
@@ -97,7 +97,7 @@ func TestConvert_RefusesTheWrongShapeWithoutTheValue(t *testing.T) {
 		ConvertUpdaterChannel, ConvertUpdaterCheck, ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertCSVList,
 	} {
 		in := json.RawMessage(`["` + marker + `",[1,2]]`)
-		_, _, err := Convert(conv, in)
+		_, _, err := convert(conv, in)
 		if !errors.Is(err, ErrConvertInput) {
 			t.Errorf("Convert(%q, an array) error = %v, want ErrConvertInput", conv, err)
 			continue
@@ -106,7 +106,7 @@ func TestConvert_RefusesTheWrongShapeWithoutTheValue(t *testing.T) {
 			t.Errorf("Convert(%q) error carries the value: %v", conv, err)
 		}
 	}
-	if _, _, err := Convert("no-such-converter", json.RawMessage(`1`)); !errors.Is(err, ErrConvertInput) {
+	if _, _, err := convert("no-such-converter", json.RawMessage(`1`)); !errors.Is(err, ErrConvertInput) {
 		t.Errorf("an unknown converter's error = %v, want ErrConvertInput", err)
 	}
 }
@@ -115,7 +115,7 @@ func TestConvert_RefusesTheWrongShapeWithoutTheValue(t *testing.T) {
 // or without padding. (A null is not refused: it is unset, below.)
 func TestConvert_AuthModeRefusesNonBooleans(t *testing.T) {
 	for _, in := range []string{`"true"`, `1`, `""`, `{}`, ``} {
-		if out, _, err := Convert(ConvertAuthMode, json.RawMessage(in)); !errors.Is(err, ErrConvertInput) {
+		if out, _, err := convert(ConvertAuthMode, json.RawMessage(in)); !errors.Is(err, ErrConvertInput) {
 			t.Errorf("Convert(auth-mode, %q) = %s, %v; want ErrConvertInput", in, out, err)
 		}
 	}
@@ -135,17 +135,17 @@ func TestConvert_ANullIsUnsetForEveryConverter(t *testing.T) {
 			if name == ConvertNeverStored || name == ConvertOIDCFold {
 				want = ErrNotStaged // these stage nothing for any input
 			}
-			out, dropped, err := Convert(name, json.RawMessage(in))
+			out, dropped, err := convert(name, json.RawMessage(in))
 			if !errors.Is(err, want) || out != nil || dropped != nil {
 				t.Errorf("Convert(%q, %q) = %s, %v, %v; want %v and nothing", name, in, out, dropped, err, want)
 			}
 		}
 	}
 	// Not a null: a string "null", and a value that merely starts with it.
-	if _, _, err := Convert(ConvertUpdaterChannel, json.RawMessage(`"null"`)); err != nil {
+	if _, _, err := convert(ConvertUpdaterChannel, json.RawMessage(`"null"`)); err != nil {
 		t.Errorf("the string \"null\" is a value: %v", err)
 	}
-	if _, _, err := Convert(ConvertAuthMode, json.RawMessage(`nullx`)); !errors.Is(err, ErrConvertInput) {
+	if _, _, err := convert(ConvertAuthMode, json.RawMessage(`nullx`)); !errors.Is(err, ErrConvertInput) {
 		t.Errorf("nullx: err = %v, want ErrConvertInput", err)
 	}
 }

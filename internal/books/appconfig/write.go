@@ -88,6 +88,49 @@ func (e *Engine) diff(before, after config.Config) (map[string]json.RawMessage, 
 	return set, nil
 }
 
+// expandHolders adds, for each set head whose field holds other rows' fields
+// (e.below), every such field the value carries and changes, under its own
+// head, so a write of a whole holder reaches the rows inside it: the holder's
+// converter has no place for them (scheduled.library_scan's enabled is
+// modules.books.scan.periodic_enabled, F3-07). A field the update names on
+// its own wins, and an unchanged one is left out, so an operator lock on it is
+// not tripped by a value that only repeats it.
+func (e *Engine) expandHolders(before config.Config, set map[string]json.RawMessage) map[string]json.RawMessage {
+	out := maps.Clone(set)
+	for head, raw := range set {
+		p, ok := e.byHead[head]
+		if !ok {
+			continue
+		}
+		for _, segs := range e.below[head] {
+			sub := strings.Join(segs, ".")
+			if _, named := set[sub]; named {
+				continue
+			}
+			v, has, err := cutover.MemberOf(raw, strings.Join(segs[len(p.segs):], "."))
+			if err != nil || !has {
+				continue
+			}
+			if f, ok := fieldAt(&before, segs); ok {
+				if cur, err := json.Marshal(f.Interface()); err == nil && sameJSON(cur, v) {
+					continue
+				}
+			}
+			out[sub] = v
+		}
+	}
+	return out
+}
+
+// sameJSON reports whether a and b decode to the same value.
+func sameJSON(a, b json.RawMessage) bool {
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
+}
+
 // write is Update's body under writeMu. hooks is true for the API write, which
 // runs the UpdateHooks; Mutate's internal writes do not.
 func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hooks bool) (config.UpdateResult, error) {
@@ -144,7 +187,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: errors.New("the value does not fit the setting")})
 				return
 			}
-			out, _, err := cutover.Convert(p.target.Convert, raw)
+			out, _, err := cutover.Convert(p.target, raw)
 			if err != nil {
 				invalid = append(invalid, &coreconfig.FieldError{Path: coreconfig.Path(head), Err: err})
 				return
@@ -251,7 +294,7 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 			patch.Unset = append(patch.Unset, path)
 			return
 		}
-		out, _, err := cutover.Convert(p.target.Convert, raw)
+		out, _, err := cutover.Convert(p.target, raw)
 		if errors.Is(err, cutover.ErrNotStaged) {
 			readOnly = append(readOnly, head)
 			return
@@ -262,8 +305,9 @@ func (e *Engine) write(ctx context.Context, a config.Actor, u config.Update, hoo
 		}
 		patch.Set[path] = out
 	}
-	for _, head := range slices.Sorted(maps.Keys(u.Set)) {
-		add(head, u.Set[head], false)
+	sets := e.expandHolders(before, u.Set)
+	for _, head := range slices.Sorted(maps.Keys(sets)) {
+		add(head, sets[head], false)
 	}
 	for _, head := range u.Unset {
 		if _, dup := u.Set[head]; dup {

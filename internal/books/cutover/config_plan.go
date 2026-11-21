@@ -684,7 +684,7 @@ func (pl *planner) keyMember(r *Row, val any) {
 			if strings.HasSuffix(t.Path, ".*") || !isConcretePath(t.Path) {
 				continue
 			}
-			out, dropped, err := Convert(t.Convert, raw)
+			out, dropped, err := Convert(t, raw)
 			switch {
 			case errors.Is(err, ErrNullUnset):
 				pl.nullUnset(r.Head)
@@ -781,7 +781,7 @@ func (pl *planner) stageMembers() {
 						ok = false
 						continue
 					}
-					conv, _, err := Convert(t.Convert, marshalAt(def))
+					conv, _, err := Convert(t, marshalAt(def))
 					if err != nil {
 						ok = false
 						continue

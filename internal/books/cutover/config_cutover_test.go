@@ -91,7 +91,7 @@ func TestConfigCutover_EffectiveConfigUnchanged(t *testing.T) {
 					if tg.Kind != TargetKey || !isConcretePath(tg.Path) {
 						continue
 					}
-					want, _, err := Convert(tg.Convert, raw)
+					want, _, err := Convert(tg, raw)
 					if errors.Is(err, ErrNotStaged) {
 						notStaged++
 						continue
@@ -276,7 +276,7 @@ func TestConfigCutover_EffectiveConfigUnchanged_EveryKeyNonDefault(t *testing.T)
 			if tg.Kind != TargetKey || !isConcretePath(tg.Path) {
 				continue
 			}
-			out, _, err := Convert(tg.Convert, raw)
+			out, _, err := Convert(tg, raw)
 			if errors.Is(err, ErrNotStaged) {
 				continue
 			}

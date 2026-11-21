@@ -13,7 +13,6 @@ import (
 	"time"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
-	"github.com/spf13/viper"
 )
 
 // Environment-only settings: invitation email and guest access, the tunnel
@@ -38,29 +37,11 @@ import (
 //     "environment only" message the ABS keys get (inviteEnvOnlyKeyInUpdate),
 //     instead of the generic unknown-key error.
 //
-// Every key needs an explicit viper.BindEnv: this codebase does not enable
-// viper.AutomaticEnv for these names.
-var inviteEnvOnlySettings = []struct {
-	key    string // viper / payload key
-	envVar string
-}{
-	{"smtp_host", "SMTP_HOST"},
-	{"smtp_port", "SMTP_PORT"},
-	{"smtp_username", "SMTP_USERNAME"},
-	{"smtp_password", "SMTP_PASSWORD"},
-	{"smtp_from", "SMTP_FROM"},
-	{"public_base_url", "PUBLIC_BASE_URL"},
-	{"cf_account_id", "CF_ACCOUNT_ID"},
-	{"cf_guests_policy_id", "CF_GUESTS_POLICY_ID"},
-	{"cf_policy_api_token", "CF_POLICY_API_TOKEN"},
-	{"cf_guest_service_tokens", "CF_GUEST_SERVICE_TOKENS"},
-	{"cf_service_auth_policy_id", "CF_SERVICE_AUTH_POLICY_ID"},
-	{"invite_email_service_token", "INVITE_EMAIL_SERVICE_TOKEN"},
-	{"tunnel_connector_addrs", "TUNNEL_CONNECTOR_ADDRS"},
-	{"allowed_peer_cidrs", "ALLOWED_PEER_CIDRS"},
-	{"login_saturated_rate", "LOGIN_SATURATED_RATE"},
-	{"login_saturated_burst", "LOGIN_SATURATED_BURST"},
-}
+// Since F3-07 their values come from the operator layers under the canonical
+// names the rename table gives (ABO_INTEGRATIONS_NOTIFY_EMAIL_*,
+// ABO_BOOKS_CFGUESTS_*, ABO_CORE_HTTP_*, ABO_CORE_AUTH_LOGIN_*), projected
+// into these fields by books' appconfig Engine; the HEAD names refuse the
+// boot by name.
 
 // The service-wide bound on password logins admitted while the aggregate login
 // ceilings are spent ("saturated"): every one of them still costs a real
@@ -109,45 +90,6 @@ func parseLoginSaturatedLimits(rawRate, rawBurst string) (rate float64, burst in
 	return rate, burst, nil
 }
 
-// DefaultSMTPPort is used when SMTP_HOST is set and SMTP_PORT is not.
-const DefaultSMTPPort = 587
-
-// registerInviteDefaults declares the invitation keys and binds each to its
-// environment variable. Called from InitConfig. Every default is empty (port:
-// DefaultSMTPPort), so an unconfigured server sends no mail, shows no headers
-// and never calls Cloudflare.
-func registerInviteDefaults(r defaultRegistrar) {
-	for _, s := range inviteEnvOnlySettings {
-		if s.key == "smtp_port" {
-			r.SetDefault(s.key, DefaultSMTPPort)
-		} else {
-			r.SetDefault(s.key, "")
-		}
-		r.BindEnv(s.key, s.envVar) //nolint:errcheck
-	}
-}
-
-// applyInviteEnv copies the invitation keys from viper onto c when the config
-// is built from viper (the blob never holds these).
-func applyInviteEnv(c *Config, v *viper.Viper) {
-	c.SMTPHost = strings.TrimSpace(v.GetString("smtp_host"))
-	c.SMTPPort = v.GetInt("smtp_port")
-	c.SMTPUsername = strings.TrimSpace(v.GetString("smtp_username"))
-	c.SMTPPassword = v.GetString("smtp_password")
-	c.SMTPFrom = strings.TrimSpace(v.GetString("smtp_from"))
-	c.PublicBaseURL = strings.TrimSpace(v.GetString("public_base_url"))
-	c.CFAccountID = strings.TrimSpace(v.GetString("cf_account_id"))
-	c.CFGuestsPolicyID = strings.TrimSpace(v.GetString("cf_guests_policy_id"))
-	c.CFPolicyAPIToken = strings.TrimSpace(v.GetString("cf_policy_api_token"))
-	c.CFGuestServiceTokens = parseEnvBool(v.GetString("cf_guest_service_tokens"))
-	c.CFServiceAuthPolicyID = strings.TrimSpace(v.GetString("cf_service_auth_policy_id"))
-	c.InviteEmailServiceToken = parseEnvBool(v.GetString("invite_email_service_token"))
-	c.TunnelConnectorAddrs = strings.TrimSpace(v.GetString("tunnel_connector_addrs"))
-	c.AllowedPeerCIDRs = strings.TrimSpace(v.GetString("allowed_peer_cidrs"))
-	c.LoginSaturatedRate = strings.TrimSpace(v.GetString("login_saturated_rate"))
-	c.LoginSaturatedBurst = strings.TrimSpace(v.GetString("login_saturated_burst"))
-}
-
 // TunnelConnectorAddrs returns tunnel_connector_addrs under the read lock: one
 // field, not a whole-struct Snapshot copy, because the public invite and
 // bootstrap routes read it on every request. The value is a comma-separated
@@ -193,17 +135,6 @@ func (c *Config) InviteMailConfigured() bool {
 // missing the feature is inert.
 func (c *Config) GuestPolicySyncConfigured() bool {
 	return c.CFAccountID != "" && c.CFGuestsPolicyID != "" && c.CFPolicyAPIToken != ""
-}
-
-// parseEnvBool reads a boolean environment switch. Only an explicit true
-// ("true", "1", "yes", "on", any case) turns it on; empty or anything
-// unrecognised is off, so a typo can never enable a credential-minting feature.
-func parseEnvBool(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
 }
 
 // GuestServiceTokensEnabled reports whether accepting an invitation mints a

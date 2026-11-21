@@ -254,6 +254,59 @@ var virtualRows = []subRow{
 	{head: "ai_endpoints[]", class: ClassInput, targets: []Target{tinst("ai/<row id> instances")}, note: "no secret of their own (05-metadata M1.10)"},
 }
 
+// HeadMaintenanceWindow is the window HEAD's maintenance order ran in: core's
+// tasks.NightlyWindow (this package does not import core/tasks; a books test
+// holds the two equal).
+const HeadMaintenanceWindow = "nightly"
+
+// headMaintenanceOrder is HEAD's maintenanceOrder, every task by its
+// position (FROZEN COPY of internal/scheduler/scheduler.go's list at
+// 748fd787a), keyed by schedule-key name: HEAD's task reconcile_scan is the
+// key reconcile and author_split_scan is author_split; every other task's key
+// has its task's name. These are the tasks HEAD's window op ran, in that
+// order, besides any timer; a schedule key of one of them keeps the placement
+// (window, order), so the task stays in the nightly window after the flip.
+// Whether it runs there on a given night is still the maintenance toggle's
+// call. Six of them are HEAD scheduled.* entries, whose rename-table targets
+// carry the placement; books' section defaults place every key it declares
+// for one of them (purge_old_logs is core's, with no books key).
+var headMaintenanceOrder = map[string]int{
+	"reconcile":                 0,
+	"dedup_refresh":             1,
+	"dedup_llm_review":          2,
+	"author_split":              3,
+	"series_prune":              4,
+	"file_integrity_check":      5,
+	"orphan_book_files_cleanup": 6,
+	"tombstone_cleanup":         7,
+	"purge_deleted":             8,
+	"purge_old_logs":            9,
+	"cleanup_activity_log":      10,
+	"ai_journal_prune":          11,
+	"cleanup_old_backups":       12,
+	"temp_file_cleanup":         13,
+	"trash_cleanup":             14,
+	"reports_prune":             15,
+	"library_size_refresh":      16,
+	"db_optimize":               17,
+	"library_organize":          18,
+	"library_scan":              19,
+}
+
+// HeadMaintenanceOrder is headMaintenanceOrder's position for the scheduled
+// entry name, and whether HEAD's window ran it (books' scheduler section
+// defaults take their placement from it).
+func HeadMaintenanceOrder(name string) (int, bool) {
+	n, ok := headMaintenanceOrder[name]
+	return n, ok
+}
+
+// scheduledZeroDaily are the standard entries whose interval 0 HEAD runs as
+// 24h (GetInterval's fallback) instead of as no timer.
+var scheduledZeroDaily = map[string]bool{
+	"ai_dedup_batch": true,
+}
+
 // scheduledIntervalOnly are the scheduled entries HEAD reads only for their
 // interval: the task runs iff the interval is above 0 (config.go:1016-1045).
 var scheduledIntervalOnly = map[string]bool{
@@ -265,7 +318,9 @@ var scheduledIntervalOnly = map[string]bool{
 
 // scheduledExtraTarget are scheduled entries with a second target.
 var scheduledExtraTarget = map[string]Target{
-	"db_optimize": tk("core.storage.schedules.compact", ConvertScheduleStandard),
+	// core's compact key: placed as core's default places it (window-only in
+	// the nightly window, core/kernel core_sections.go), at no position.
+	"db_optimize": {Kind: TargetKey, Path: "core.storage.schedules.compact", Convert: ConvertScheduleStandard, Window: HeadMaintenanceWindow},
 }
 
 // bindAlias maps a bound viper key that is not a field of Config to the row

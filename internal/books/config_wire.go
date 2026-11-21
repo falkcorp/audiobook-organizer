@@ -44,6 +44,9 @@ func appConfigBase(dbPath string) config.Config {
 	// routing on moves from the legacy single-backend path to the routed one.
 	// This is a behaviour change, named in the release-note table.
 	c.AIEndpointsRouting = true
+	// metadata_sources is a residual (class i) row: unset in the blob, it keeps
+	// this base value, HEAD's fallback list; a stored list replaces it.
+	c.MetadataSources = config.DefaultMetadataSources()
 	return c
 }
 
