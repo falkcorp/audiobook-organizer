@@ -172,7 +172,7 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		// restore_hooked is the record that the hooks completed, whatever the
 		// restore journal says: a crash before it re-runs them next boot.
 		for _, l := range in.hookedLines() {
-			if err := journal.MarkHooked(ctx, in.KS, l, in.now(), res.Counts); err != nil {
+			if err := bootseam.Labelled(bootseam.From(ctx), labelHooksMarkHooked, func() error { return journal.MarkHooked(ctx, in.KS, l, in.now(), res.Counts) }); err != nil {
 				return res, err
 			}
 		}
@@ -180,7 +180,7 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		// head back (reapplyResult.Held): the completed hooks are the record that
 		// now says it, so the head moves here and never before.
 		if r.Held.Seq > 0 {
-			if err := journal.CommitHead(ctx, in.KS, r.Held); err != nil {
+			if err := bootseam.Labelled(bootseam.From(ctx), labelHooksHeldHead, func() error { return journal.CommitHead(ctx, in.KS, r.Held) }); err != nil {
 				return res, fmt.Errorf("kernel: commit the held journal head: %w", err)
 			}
 		}
@@ -482,10 +482,12 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 		}
 		return []journal.RestoreHook{
 			func(ctx context.Context, rc journal.RestoreContext) (map[string]int, error) {
+				defer bootseam.Region(ctx, labelHookAuth)()
 				c, err := auth.PostRestore(ctx, authDeps, rc)
 				return c, err
 			},
 			func(ctx context.Context, rc journal.RestoreContext) (map[string]int, error) {
+				defer bootseam.Region(ctx, labelHookRBAC)()
 				rep, err := rbac.PostRestore(ctx, roleDeps, rc)
 				if err != nil {
 					return nil, err
@@ -493,7 +495,10 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 				env.Report.add(rep.KeptAdmins, rep.AdminsToReview)
 				return rep.Counts, nil
 			},
-			audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: env.RunKey, Log: s.Log}),
+			func(ctx context.Context, rc journal.RestoreContext) (map[string]int, error) {
+				defer bootseam.Region(ctx, labelHookAudit)()
+				return audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: env.RunKey, Log: s.Log})(ctx, rc)
+			},
 		}, nil
 	}
 }

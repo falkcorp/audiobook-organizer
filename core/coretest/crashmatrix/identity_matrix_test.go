@@ -7,7 +7,11 @@ package crashmatrix
 
 import (
 	"context"
+	"errors"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -18,6 +22,7 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
 // alfred is the smallest module that makes the boot open a store: one
@@ -55,7 +60,57 @@ func identityScenario(t *testing.T) Scenario {
 	if err := Boot(t, identityBuild, restart); err != nil {
 		t.Fatalf("building the restart fixture's first boot: %v", err)
 	}
-	return Scenario{Build: identityBuild, Fixtures: []Fixture{fresh, restart}}
+	return Scenario{Build: identityBuild, Fixtures: []Fixture{fresh, restart, revertRestore(t)}}
+}
+
+// revertRestore is a store the identity boot wrote, with a copy of itself
+// staged as a revert: P0a swaps the copy in, P4b journals the restore applied
+// with its hooks owed, and P4d derives the restore (restore_derive.go), appends
+// its restore line and runs the hooks, so the boot reaches the hooks' own
+// commits (restore_hooked, the restore line, served_boot after the hooks).
+func revertRestore(t *testing.T) Fixture {
+	t.Helper()
+	f := Fixture{Name: "wayne-manor-revert", StateDir: t.TempDir()}
+	if err := Boot(t, identityBuild, f); err != nil {
+		t.Fatalf("building the revert fixture's first boot: %v", err)
+	}
+	const id = "r-wayne-manor-revert"
+	staged := filepath.Join(restorejournal.StagingDir(f.dbPath(), id), "main.pebble")
+	copyStoreDir(t, f.dbPath(), staged)
+	in := restorejournal.Intent{ID: id, Kind: restorejournal.KindRevert, Targets: []restorejournal.Target{{From: staged, To: f.dbPath()}}}
+	if err := Stage(f, in); err != nil {
+		t.Fatalf("staging the revert fixture's restore: %v", err)
+	}
+	return f
+}
+
+// copyStoreDir copies the closed store at src to dst.
+func copyStoreDir(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		to := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(to, 0o700)
+		}
+		in, err := os.Open(p)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(to, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(out, in)
+		return errors.Join(err, out.Close())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestIdentityBootCrashMatrix is the matrix over the identity boot: every

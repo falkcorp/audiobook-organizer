@@ -125,13 +125,13 @@ func TestReapplyRegions_EveryCommitSiteCarriesItsLabel(t *testing.T) {
 		if res, hres := fx.boot(nil, nil); res.RestoreLine != 0 || !hres.Ran {
 			t.Fatalf("restore line %d, hooks ran %v: the scenario needs a run with no line", res.RestoreLine, hres.Ran)
 		}
-		expect(t, fx.labels.take(), labelHooksRunEnsure, labelHooksRunClear)
+		expect(t, fx.labels.take(), labelHooksRunEnsure, labelHooksRunClear, labelHooksHeldHead)
 	})
 	t.Run("a restore boot's restore line", func(t *testing.T) {
 		s := newRestoreScene(t, nil)
 		s.labels.take()
 		s.boot(archiveBoot("restore-1", "arch-1", s.previous, &rxSteps{}), nil)
-		expect(t, s.labels.take(), labelReapplyRestoreLine, labelReapplyServedBoot)
+		expect(t, s.labels.take(), labelReapplyRestoreLine, labelReapplyServedBoot, labelHooksMarkHooked)
 	})
 
 	for _, l := range append(ReapplyLabels(), HookRunLabels()...) {
