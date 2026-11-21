@@ -55,6 +55,7 @@ type Router struct {
 	sealed bool        // set when Build starts: a registration after it could never be served
 	built  bool        // set when Build succeeds, cleared when it starts: the gate's facts below are its own
 	legacy legacyState // legacy.go: manifests, admissions and built infos (R1-14)
+	auth   *routerAuth // auth.go: stages 12 and 13, nil until SetAuth
 
 	// gateMux and gateAssets are stage 8's route facts, recorded by the last
 	// successful Build (basicGateRoutes): the ServeMux that build serves,
@@ -859,12 +860,16 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 // request. /metrics is never compressed (stage 9: promhttp gzips itself).
 // r.mu is held.
 func (r *Router) wrapRoute(e *routeEntry) http.Handler {
+	h := e.handler
+	if r.authRuns(e) {
+		h = r.authWrap(e.info.Perm, e.info.Guards, routeLabel(e.info), h)
+	}
 	return r.chain.Route(httpmw.RouteSpec{
 		Pattern: e.info.Pattern,
 		Policy:  &httpmw.Policy{Owner: e.info.Owner, NoCompress: e.info.Kind == RouteKindInfra && e.info.Pattern == "/metrics"},
 		Class:   rateClassName(e.info.RateClass),
 		MaxBody: e.route.MaxBody,
-	}, e.handler)
+	}, h)
 }
 
 // checkClaims reports every pair of overlapping claims of two owners; r.mu
@@ -912,7 +917,9 @@ func (r *Router) checkPerm(e *routeEntry) []error {
 	default:
 		errs = append(errs, fmt.Errorf("%w: %s: requirement %s is for legacy routes only", ErrForeignScope, what, req))
 	}
-	errs = append(errs, fmt.Errorf("%w: %s requires %s", ErrNoAuthService, what, req))
+	if r.auth == nil {
+		errs = append(errs, fmt.Errorf("%w: %s requires %s", ErrNoAuthService, what, req))
+	}
 	return errs
 }
 
