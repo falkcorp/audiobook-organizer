@@ -72,6 +72,13 @@ type DataMigrationsConfig struct {
 	Preflight   func(ctx context.Context, o *storage.Opened, cutover []datamigrate.DataMigration) error
 	Rewrite     *storage.RewriteStep
 	Swapper     *restoreswap.Swapper
+	// BeforeRewrite runs immediately before M8's Run, after every other step of
+	// the plan has finished. The kernel journals a restore boot's applied
+	// record here (05-backup §5B.3.4 step h): M8 swaps the store directory
+	// through the one intent slot, and a restore's in-flight file holds that
+	// slot until applied, so M8 could never start under it. A failure refuses
+	// M8 and fails the boot. nil does nothing.
+	BeforeRewrite func(ctx context.Context) error
 }
 
 // DataMigrations is the kernel side of the runner, one per App (03 R5):
@@ -167,6 +174,15 @@ func (d *DataMigrations) Steps() []storage.DataStep {
 				return fmt.Errorf("kernel: M8 %s has no swapper (DataMigrationsConfig.Swapper)", rw.ID)
 			}
 			return d.cfg.Swapper.RunRewrite(ctx, db, *rw)
+		}
+	}
+	if before := d.cfg.BeforeRewrite; before != nil {
+		inner := run
+		run = func(ctx context.Context, db *storage.DB) error {
+			if err := before(ctx); err != nil {
+				return err
+			}
+			return inner(ctx, db)
 		}
 	}
 	return append(steps, storage.DataStep{Owner: rw.Owner, ID: rw.ID, After: after, Cutover: true, Rewrite: true, Run: run})

@@ -24,33 +24,16 @@ import (
 // (declaresFlip): the level step books.level-1 on its storage spec with the
 // spec's Level raised to match (M7), M2 in Manifest.Cutover, and M8 in
 // Manifest.Rewrite. Core's half of M7 is the kernel's, registered when a
-// manifest declares a cutover (kernel.CoreCutoverOwner).
-//
-// The flip is dark. Module() leaves booksModule.flip off, so the shipped
-// manifest is the one before this slice and the boot is the old one. Declared
-// without the config boot (app.Options.CoreConfigBoot) M2 would fail on its
-// unbound importers, and a books level step runs on any boot through the
-// versioned path, so the switch is books-side and single: slice (e) turns it on
-// with the gate.
+// manifest declares a cutover (kernel.CoreCutoverOwner). Every boot of the
+// module over a database declares them: the config boot they need is core's
+// own and always runs.
 
-// flipDeclared is the one switch: Module() copies it into booksModule.flip, and
-// Options and OfflineOptions read it for the config lists below. false until
-// slice (e) of F3-07, which sets it with app.Options.CoreConfigBoot and deletes
-// both. Tests that need the flip build the module with flip set, or set this
-// for the length of the test.
-var flipDeclared = true
-
-// flipConfigNames are the config lists app.Options carries once the flip is
-// declared: the retired env names and file keys (HEAD's names are retired only
-// when core config replaces them: until then HEAD still reads them, and a
-// config check that called them retired would be wrong) and the OPENAI
+// flipConfigNames are the config lists app.Options carries: the retired env
+// names and file keys (HEAD's names, which core config replaces) and the OPENAI
 // ecosystem bindings, with the predicate that lets core config place those
 // bindings (and the integrations values M2 stages) onto paths no registered
-// section owns (cutover.ConfigPassthrough). All nil while the flip is dark.
-func flipConfigNames(declared bool) (retired []coreconfig.RetiredName, bindings []coreconfig.EnvName, passthrough func(coreconfig.Path) bool) {
-	if !declared {
-		return nil, nil, nil
-	}
+// section owns (cutover.ConfigPassthrough).
+func flipConfigNames() (retired []coreconfig.RetiredName, bindings []coreconfig.EnvName, passthrough func(coreconfig.Path) bool) {
 	return cutover.RetiredConfigNames(), cutover.ConfigEnvBindings(), cutover.ConfigPassthrough
 }
 
@@ -62,13 +45,10 @@ const booksLevelStepVersion = database.LegacyCap + 3
 
 // StandaloneSpec is books' storage spec for the openers that plan no manifest
 // (the op-runner child's store, the restore stager's verify of an archive): the
-// R1 spec as is while the flip is dark, and with the level step and the level
-// the serve boot raises the store to once it is declared (cutover.Flip.Spec).
-// Without it those opens refuse a flipped store as written by a newer build.
+// R1 spec with the level step and the level the serve boot raises the store to
+// (cutover.Flip.Spec). Without it those opens refuse a flipped store as written
+// by a newer build.
 func StandaloneSpec(base storage.Spec) storage.Spec {
-	if !flipDeclared {
-		return base
-	}
 	// Only the level step and the claims are applied (Flip.Spec reads nothing
 	// else): the data steps need M2's inputs, which a standalone open has none
 	// of and never runs.
@@ -77,24 +57,22 @@ func StandaloneSpec(base storage.Spec) storage.Spec {
 }
 
 // StandaloneOptions is o with the flip's storage declarations added for an open
-// that plans no manifest: books' spec through StandaloneSpec and, once the flip
-// is declared, core's level owner (kernel.CoreOwners), so a store the serve boot
-// raised opens at both of its levels.
+// that plans no manifest: books' spec through StandaloneSpec and core's level
+// owner (kernel.CoreOwners), so a store the serve boot raised opens at both of
+// its levels.
 func StandaloneOptions(o database.StandaloneOptions) database.StandaloneOptions {
 	o.Spec = StandaloneSpec
-	if flipDeclared {
-		m := Module().(*booksModule)
-		m.dbPath = "standalone" // declaresFlip needs a database named; only the declaration is read
-		o.ExtraOwners = append(slices.Clone(o.ExtraOwners), kernel.CoreOwners(m)...)
-	}
+	m := Module().(*booksModule)
+	m.dbPath = "standalone" // declaresFlip needs a database named; only the declaration is read
+	o.ExtraOwners = append(slices.Clone(o.ExtraOwners), kernel.CoreOwners(m)...)
 	return o
 }
 
-// declaresFlip reports whether this manifest declares F3's cutover: the switch
-// is on and Options has named the database (the steps read HEAD's paths, and
-// the offline opens that never ran Options plan no cutover, so they never raise
-// a level without M2 behind it).
-func (m *booksModule) declaresFlip() bool { return m.flip && m.dbPath != "" }
+// declaresFlip reports whether this manifest declares F3's cutover: Options
+// has named the database (the steps read HEAD's paths, and a module built
+// without one, the help listing's, plans no cutover, so a dry run over it never
+// raises a level without M2 behind it).
+func (m *booksModule) declaresFlip() bool { return m.dbPath != "" }
 
 // storageSpec is books' storage declaration: the R1 spec, plus the level step,
 // its level and the retired claims of the rows M2 drains when the flip is

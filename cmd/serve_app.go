@@ -82,7 +82,7 @@ func runComposedApp(ctx context.Context, in books.ServeInputs) error {
 // built (06 §6.4.5), the metrics Provider among it, so its last OTLP export
 // and span batch are flushed rather than dropped at exit. After Run has
 // begun, App.Close does nothing and returns nil. No timeout is set here:
-// Close bounds itself with core.shutdown.budget (R1Values) and ignores ctx's
+// Close bounds itself with core.shutdown.budget and ignores ctx's
 // deadline, so a context bound would only read as one it does not have.
 func closeUnrunApp(a *app.App) {
 	if err := a.Close(context.Background()); err != nil {

@@ -38,8 +38,8 @@ import (
 // the tasks wiring reads it (a registered definition, or the start rule
 // holding), also for Describe, and closed by closeCore.
 //
-// With Config.CoreConfigBoot the store is the booted, layered one (cfgBoot's)
-// and the section handles are the ones P0 registered, so every adapter below
+// Over a boot the store is the booted, layered one (cfgBoot's) and the
+// section handles are the ones P0 registered, so every adapter below
 // reads the environment, file, boot-record and stored values through the same
 // Handle.Get; shared then marks a store the config boot owns, which close
 // leaves alone.
@@ -67,7 +67,7 @@ type cfgLeaf struct {
 }
 
 // coreConfig is the core config, built on the first call and kept: the layered
-// store when Config.CoreConfigBoot booted one, else the defaults-only one. Boot
+// store the config boot built, else (Describe) the defaults-only one. Boot
 // calls it at P7, which is single-threaded, from the two places
 // that read it: taskProblems when a definition exists (the schedule keys it
 // declares) and constructTasks when the start rule held (the executor's and

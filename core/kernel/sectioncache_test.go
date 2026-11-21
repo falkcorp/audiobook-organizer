@@ -7,6 +7,8 @@ package kernel
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -82,18 +84,30 @@ func TestNewCoreConfig_SharedCache(t *testing.T) {
 func TestKernelBoot_CoreConfigUsesSeamCache(t *testing.T) {
 	cache := config.NewSectionCache()
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{SectionCache: cache})
+	// core.paths defaults to the state directory, so a distinct directory per
+	// boot is a distinct template; the boots share one, emptied between them
+	// (each has a store of its own, and a keyring names its store).
+	state := t.TempDir()
 	boot := func(ctx context.Context) {
 		t.Helper()
 		c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
-		k, err := New(ctx, c)
+		c.StateDirDefault = state
+		k, err := newKCtx(t, ctx, c)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		t.Cleanup(func() {
-			if err := k.closeCore(context.Background(), time.Now().Add(defaultShutdownBudget)); err != nil {
-				t.Errorf("close: %v", err)
+		if err := k.closeCore(context.Background(), time.Now().Add(defaultShutdownBudget)); err != nil {
+			t.Errorf("close: %v", err)
+		}
+		ents, err := os.ReadDir(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range ents {
+			if err := os.RemoveAll(filepath.Join(state, e.Name())); err != nil {
+				t.Fatal(err)
 			}
-		})
+		}
 	}
 	boot(t.Context())
 	if got := cache.Len(); got != 0 {

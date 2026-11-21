@@ -55,9 +55,6 @@ func options(args []string) app.Options {
 		StateDir:    "hello-state",    // compiled default; HELLO_CORE_PATHS_STATE_DIR overrides it
 		UI:          hello.UIBundle(), // ui_embed.go (embed_frontend) or ui_nonembed.go
 		Args:        args,
-		// The config boot (F3-07): core config and the secret store are wired
-		// at P0, P3, P4b and P4d. Deleted with R1Values in F3-07's slice (e).
-		CoreConfigBoot: true,
 	}
 }
 

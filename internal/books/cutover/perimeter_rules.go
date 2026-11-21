@@ -12,9 +12,8 @@ import (
 )
 
 // Two rules HEAD applied when it read its perimeter settings, which core's
-// keys do not carry. Until the flip books' r1Values applied them on the way to
-// the kernel (internal/books/options.go); from the flip core reads
-// core.http.* itself, so M2 applies them once, to the values it moves.
+// keys do not carry. Core reads core.http.* itself,
+// so M2 applies them once, to the values it moves.
 
 // perimeterRules applies HEAD's two perimeter rules to the effective tree,
 // before the rename table converts it:
@@ -41,7 +40,11 @@ func (pl *planner) perimeterRules() {
 			} else {
 				pl.tree["tunnel_connector_addrs"] = strings.Join(kept, ",")
 			}
-			pl.p.Reported = append(pl.p.Reported, "tunnel_connector_addrs: "+countOf(dropped, "entry")+" that is not an exact address was not moved to core.http.trusted_proxies (HEAD ignored it too)")
+			what := "1 entry that is not an exact address was"
+			if dropped != 1 {
+				what = strconv.Itoa(dropped) + " entries that are not exact addresses were"
+			}
+			pl.p.Reported = append(pl.p.Reported, "tunnel_connector_addrs: "+what+" not moved to core.http.trusted_proxies (HEAD ignored them too)")
 			pl.p.count("perimeter-rules")
 		}
 	}
@@ -70,11 +73,4 @@ func connectorAddresses(csv string) (kept []string, dropped int) {
 		kept = append(kept, e)
 	}
 	return kept, dropped
-}
-
-func countOf(n int, noun string) string {
-	if n == 1 {
-		return "1 " + noun
-	}
-	return strconv.Itoa(n) + " " + noun + "s"
 }

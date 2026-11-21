@@ -160,7 +160,7 @@ func offlineRestoreKillMatrix(t *testing.T, kh killHost) {
 		var bootErrs []string
 		for range 3 {
 			var deps module.Deps
-			k, err := New(h.ctx, h.keyed(h.config(&deps, upgradedStep)))
+			k, err := newKCtx(h.t, h.ctx, h.keyed(h.config(&deps, upgradedStep)))
 			if err != nil {
 				bootErrs = append(bootErrs, err.Error())
 				continue
@@ -249,7 +249,7 @@ func escapeKillMatrix(t *testing.T, kh killHost) {
 		recs := h.journal(id)
 		last := recs[len(recs)-1].Step
 		var deps module.Deps
-		k, bootErr := New(h.ctx, h.keyed(h.config(&deps)))
+		k, bootErr := newKCtx(h.t, h.ctx, h.keyed(h.config(&deps)))
 		if started && last == restoreswap.StepFailed && !errors.Is(bootErr, restoreswap.ErrEscapeInterrupted) {
 			if k != nil {
 				h.close(k)

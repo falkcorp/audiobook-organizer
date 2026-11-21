@@ -6,6 +6,7 @@
 package books
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,28 +17,62 @@ import (
 
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/kernel"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
 
 // flipBootOn boots the flipped composition on the corpus copy at work and returns
-// app.New's error: with the config boot on, M2 and the level steps run and the
-// boot succeeds (the app is closed); with it off, the level step runs and M2 then
-// fails, which leaves the store a boot killed between the two would leave.
-func flipBootOn(t *testing.T, work string, configBoot bool) error {
+// app.New's error: M2 and the level steps run and the boot succeeds (the app is
+// closed). With failM2 M2's step fails once the level step has run, which leaves
+// the store a boot killed between the two would leave.
+func flipBootOn(t *testing.T, work string, failM2 bool) error {
 	t.Helper()
-	old := flipDeclared
-	flipDeclared = true
-	t.Cleanup(func() { flipDeclared = old })
 	repointCorpusPaths(t, work)
+	var wrap []func(module.Module) module.Module
+	if failM2 {
+		wrap = append(wrap, func(m module.Module) module.Module { return m2Killed{m} })
+	}
 	return bootAt(t, work, func(o *app.Options) {
-		o.CoreConfigBoot = configBoot
-		if configBoot {
-			o.Env = append([]string{storageEnv()}, absEnv()...)
+		o.Env = append([]string{storageEnv()}, absEnv()...)
+	}, wrap...)
+}
+
+// m2Killed wraps the flipped module so M2's step fails when it runs: the level
+// step has raised the stamps by then (M2 is After it), so the store is what a
+// boot killed between the two leaves. M2's preflight still passes, so the boot
+// reaches the step.
+type m2Killed struct{ module.Module }
+
+func (f m2Killed) Manifest() module.Manifest {
+	m := f.Module.Manifest()
+	inner := m.Cutover
+	m.Cutover = func(imp module.Importers) []datamigrate.DataMigration {
+		steps := inner(imp)
+		for i := range steps {
+			steps[i].Step = func(context.Context, storage.KV, *datamigrate.StepWriter) error {
+				return errors.New("the boot was killed after the level step")
+			}
 		}
-	})
+		return steps
+	}
+	return m
+}
+
+// preFlip wraps the books module as the build that predates the flip ships it:
+// the same storage declaration and migrations with no cutover step, no store
+// rewrite and no raised level. It is the pre-freeze release's module, which the
+// raised stamps must keep out.
+type preFlip struct{ module.Module }
+
+func (p preFlip) Manifest() module.Manifest {
+	m := p.Module.Manifest()
+	plain := (&booksModule{}).Manifest()
+	m.Storage, m.Cutover, m.Rewrite = plain.Storage, nil, nil
+	return m
 }
 
 // corpusBuilderDir is the directory the corpus' builder ran in (a scratch
@@ -64,7 +99,7 @@ func repointCorpusPaths(t *testing.T, work string) {
 
 // bootAt boots the composition on the corpus copy at work with opt applied and
 // returns app.New's error; a boot that succeeds is closed.
-func bootAt(t *testing.T, work string, opt func(*app.Options)) error {
+func bootAt(t *testing.T, work string, opt func(*app.Options), wrap ...func(module.Module) module.Module) error {
 	t.Helper()
 	edit, base := cutoverBootConfig(t, work)
 	mod, opts, _ := composedOptions(t, false, filepath.Join(work, "state"), edit, nil)
@@ -77,7 +112,11 @@ func bootAt(t *testing.T, work string, opt func(*app.Options)) error {
 	// These boots read the store, they do not need the globals.
 	opts.ProcessDefaults = false
 	opt(&opts)
-	a, err := app.New(t.Context(), opts, mod)
+	var m module.Module = mod
+	for _, w := range wrap {
+		m = w(m)
+	}
+	a, err := app.New(t.Context(), opts, m)
 	if err == nil {
 		require.NoError(t, a.Close(t.Context()))
 	}
@@ -142,17 +181,16 @@ func TestCutoverRefusedByOlderBuilds(t *testing.T) {
 
 	for _, tc := range []struct {
 		name        string
-		configBoot  bool
 		bootFailure bool
 	}{
-		{"after the cutover finished", true, false},
-		{"killed after the level step, before M2 finished", false, true},
+		{"after the cutover finished", false},
+		{"killed after the level step, before M2 finished", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			work := copyCorpus(t, r0Corpus(t))
-			err := flipBootOn(t, work, tc.configBoot)
+			err := flipBootOn(t, work, tc.bootFailure)
 			if tc.bootFailure {
-				require.Error(t, err, "the boot with no config boot completed M2")
+				require.Error(t, err, "the boot whose M2 step fails completed M2")
 				require.Contains(t, err.Error(), "config-cutover")
 			} else {
 				require.NoError(t, err)
@@ -171,11 +209,7 @@ func TestCutoverRefusedByOlderBuilds(t *testing.T) {
 
 			// The pre-flip build refuses, exit 78, and writes nothing.
 			beforeRows, beforeFiles := rawKVs(t, storeDB(work)), dirImage(t, work)
-			old := flipDeclared
-			flipDeclared = false
-			t.Cleanup(func() { flipDeclared = old })
-			err = bootAt(t, work, func(o *app.Options) {})
-			flipDeclared = old
+			err = bootAt(t, work, func(o *app.Options) {}, func(m module.Module) module.Module { return preFlip{m} })
 			require.Error(t, err, "a pre-flip build booted a store the flip raised")
 			var tooNew *storage.LevelTooNewError
 			require.True(t, errors.As(err, &tooNew), "%v", err)
