@@ -70,6 +70,13 @@ var roundTripCases = []roundTrip{
 	{name: "full scan due-check interval", conv: ConvertScheduleFullScan, head: `{"enabled":true,"interval":5,"period_hours":24}`,
 		back:  `{"enabled":true,"period_hours":24}`,
 		lossy: "schedule-full-scan: the due-check interval has no canonical field, so the inverse leaves it out"},
+	{name: "zero-daily with an interval", conv: ConvertScheduleZeroDaily, head: `{"enabled":true,"interval":120}`},
+	{name: "zero-daily interval 0 is daily", conv: ConvertScheduleZeroDaily, head: `{"enabled":true,"interval":0}`, back: `{"enabled":true,"interval":1440}`,
+		lossy: "schedule-zero-daily: HEAD runs interval 0 as 24h, which returns as 1440 minutes"},
+	{name: "library scan interval", conv: ConvertScheduleLibraryScan, head: `{"enabled":true,"interval":360}`, back: `{"interval":360}`,
+		lossy: "schedule-library-scan: enabled is the scheduled.library_scan.enabled row (scan.periodic_enabled), not this key"},
+	{name: "library scan disabled keeps its interval", conv: ConvertScheduleLibraryScan, head: `{"enabled":false,"interval":360}`, back: `{"interval":360}`,
+		lossy: "schedule-library-scan: enabled is the scheduled.library_scan.enabled row (scan.periodic_enabled), not this key"},
 	{name: "csv list", conv: ConvertCSVList, head: `"Gotham,Metropolis,Bludhaven"`},
 	{name: "csv list spacing and empties", conv: ConvertCSVList, head: `"Gotham, Metropolis ,,Bludhaven"`, back: `"Gotham,Metropolis,Bludhaven"`,
 		lossy: "csv empties: empty items are dropped and spacing is normalised to a bare comma"},
@@ -80,11 +87,11 @@ var roundTripCases = []roundTrip{
 func TestUnconvert_RoundTripsThroughConvert(t *testing.T) {
 	for _, c := range roundTripCases {
 		t.Run(c.name, func(t *testing.T) {
-			canon, _, err := Convert(c.conv, json.RawMessage(c.head))
+			canon, _, err := convert(c.conv, json.RawMessage(c.head))
 			if err != nil {
 				t.Fatalf("Convert(%q, %s): %v", c.conv, c.head, err)
 			}
-			back, err := Unconvert(c.conv, canon)
+			back, err := unconvert(c.conv, canon)
 			if err != nil {
 				t.Fatalf("Unconvert(%q, %s): %v", c.conv, canon, err)
 			}
@@ -137,7 +144,7 @@ func TestUnconvert_EveryTableConverterHasAnInverse(t *testing.T) {
 		t.Fatal("the rename table names no converter: the iteration is blind")
 	}
 	for name := range used {
-		if _, err := Unconvert(name, json.RawMessage(`null`)); errors.Is(err, errUnknownConverter) {
+		if _, err := unconvert(name, json.RawMessage(`null`)); errors.Is(err, errUnknownConverter) {
 			t.Errorf("converter %q is in the rename table and Unconvert does not know it: write its inverse", name)
 			continue
 		}
@@ -146,12 +153,12 @@ func TestUnconvert_EveryTableConverterHasAnInverse(t *testing.T) {
 		}
 		// No round-trip case: only a converter that stages nothing forward, for
 		// any input, may answer ErrNotApplicable instead.
-		if _, err := Unconvert(name, json.RawMessage(`null`)); !errors.Is(err, ErrNotApplicable) {
+		if _, err := unconvert(name, json.RawMessage(`null`)); !errors.Is(err, ErrNotApplicable) {
 			t.Errorf("converter %q is in the rename table with no round-trip case: add its inverse and a case", name)
 			continue
 		}
 		for _, in := range []string{`null`, `true`, `0`, `"x"`, `{}`} {
-			if _, _, err := Convert(name, json.RawMessage(in)); !errors.Is(err, ErrNotStaged) {
+			if _, _, err := convert(name, json.RawMessage(in)); !errors.Is(err, ErrNotStaged) {
 				t.Errorf("converter %q answers ErrNotApplicable but Convert(%s) = %v: it stages something, so it needs an inverse", name, in, err)
 			}
 		}
@@ -163,14 +170,14 @@ func TestUnconvert_EveryTableConverterHasAnInverse(t *testing.T) {
 		if !knownConvert(name) {
 			t.Fatalf("test list out of date: %q", name)
 		}
-		if _, err := Unconvert(name, json.RawMessage(`null`)); errors.Is(err, errUnknownConverter) {
+		if _, err := unconvert(name, json.RawMessage(`null`)); errors.Is(err, errUnknownConverter) {
 			t.Errorf("Unconvert does not know %q", name)
 		}
 	}
 }
 
 func TestUnconvert_UnknownName(t *testing.T) {
-	_, err := Unconvert("no-such-converter", json.RawMessage(`1`))
+	_, err := unconvert("no-such-converter", json.RawMessage(`1`))
 	for _, want := range []error{ErrNotApplicable, ErrConvertInput, errUnknownConverter} {
 		if !errors.Is(err, want) {
 			t.Errorf("unknown converter error %v does not wrap %v", err, want)
@@ -181,7 +188,7 @@ func TestUnconvert_UnknownName(t *testing.T) {
 // TestUnconvert_NotApplicable: the two converters that stage nothing.
 func TestUnconvert_NotApplicable(t *testing.T) {
 	for _, conv := range []string{ConvertNeverStored, ConvertOIDCFold} {
-		_, err := Unconvert(conv, json.RawMessage(`"/var/lib/batcave/gotham.db"`))
+		_, err := unconvert(conv, json.RawMessage(`"/var/lib/batcave/gotham.db"`))
 		if !errors.Is(err, ErrNotApplicable) || errors.Is(err, errUnknownConverter) {
 			t.Errorf("Unconvert(%q) = %v, want ErrNotApplicable", conv, err)
 		}
@@ -193,7 +200,7 @@ func TestUnconvert_NotApplicable(t *testing.T) {
 func TestUnconvert_LossyCases(t *testing.T) {
 	ok := func(t *testing.T, conv, in, want string) {
 		t.Helper()
-		got, err := Unconvert(conv, json.RawMessage(in))
+		got, err := unconvert(conv, json.RawMessage(in))
 		if err != nil {
 			t.Fatalf("Unconvert(%q, %s): %v", conv, in, err)
 		}
@@ -203,7 +210,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 	}
 	refused := func(t *testing.T, conv, in string, want error) {
 		t.Helper()
-		got, err := Unconvert(conv, json.RawMessage(in))
+		got, err := unconvert(conv, json.RawMessage(in))
 		if !errors.Is(err, want) {
 			t.Errorf("Unconvert(%q, %s) = %s, %v; want %v", conv, in, got, err, want)
 		}
@@ -223,7 +230,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 	})
 	t.Run("updater-check <= 0: forward stages nothing, inverse of a disabled check is 0", func(t *testing.T) {
 		for _, head := range []string{`0`, `-5`} {
-			if _, _, err := Convert(ConvertUpdaterCheck, json.RawMessage(head)); !errors.Is(err, ErrNotStaged) {
+			if _, _, err := convert(ConvertUpdaterCheck, json.RawMessage(head)); !errors.Is(err, ErrNotStaged) {
 				t.Fatalf("Convert(updater-check, %s) = %v, want ErrNotStaged", head, err)
 			}
 		}
@@ -242,7 +249,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 		refused(t, ConvertUpdaterCheck, `5`, ErrConvertInput)
 	})
 	t.Run("schedule on_startup: the inverse never writes it", func(t *testing.T) {
-		got, err := Unconvert(ConvertScheduleStandard, json.RawMessage(`{"enabled":true,"every":"30m"}`))
+		got, err := unconvert(ConvertScheduleStandard, json.RawMessage(`{"enabled":true,"every":"30m"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -285,7 +292,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 	})
 	t.Run("csv empties: an empty list is an empty string", func(t *testing.T) {
 		for _, head := range []string{`""`, `" , ,, "`} {
-			if _, _, err := Convert(ConvertCSVList, json.RawMessage(head)); !errors.Is(err, ErrNotStaged) {
+			if _, _, err := convert(ConvertCSVList, json.RawMessage(head)); !errors.Is(err, ErrNotStaged) {
 				t.Fatalf("Convert(csv-list, %s) = %v, want ErrNotStaged", head, err)
 			}
 		}
@@ -303,7 +310,7 @@ func TestUnconvert_LossyCases(t *testing.T) {
 	})
 	t.Run("days-to-duration: only whole days are HEAD's", func(t *testing.T) {
 		// Forward accepts 1.5 days and writes 36h; HEAD's field is an integer.
-		canon, _, err := Convert(ConvertDaysToDuration, json.RawMessage(`1.5`))
+		canon, _, err := convert(ConvertDaysToDuration, json.RawMessage(`1.5`))
 		if err != nil || string(canon) != `"36h"` {
 			t.Fatalf("Convert(1.5) = %s, %v", canon, err)
 		}

@@ -80,6 +80,13 @@ type Target struct {
 	// Shared marks a key two rows may both name (HEAD binds both to one
 	// setting); any other repeated path fails the generator.
 	Shared bool
+	// Window and Order are a schedule key's placement: the window HEAD's
+	// maintenance order ran the task in and its position there ("" when HEAD
+	// ran it on its timer only). Convert writes them into the value (config
+	// stores a schedule whole) and Unconvert accepts only them; they equal
+	// the key's default placement.
+	Window string
+	Order  int
 }
 
 // Row is one generated rename-table row.
@@ -413,9 +420,27 @@ func (g *generator) scheduledRows(t reflect.Type) {
 			conv = ConvertScheduleInterval
 		case name == "library_scan_full":
 			conv = ConvertScheduleFullScan
+		case scheduledZeroDaily[name]:
+			conv = ConvertScheduleZeroDaily
+		case name == "library_scan":
+			conv = ConvertScheduleLibraryScan
+		}
+		key := Target{Kind: TargetKey, Path: "modules.books.scheduler.schedules." + name, Convert: conv}
+		if order, ok := headMaintenanceOrder[name]; ok {
+			if conv != ConvertScheduleStandard && conv != ConvertScheduleLibraryScan {
+				panic("cutover: scheduled." + name + " is in HEAD's maintenance order but is not a standard entry")
+			}
+			key.Window, key.Order = HeadMaintenanceWindow, order
+		}
+		if conv == ConvertScheduleLibraryScan {
+			// Ahead of its holder, so M2 takes the member before the holder
+			// row takes (and removes) the whole entry.
+			g.add(Row{Head: "scheduled." + name + ".enabled", Class: ClassKey, Stored: StoredBlob, BlobField: "scheduled",
+				Targets: []Target{{Kind: TargetKey, Path: "modules.books.scan.periodic_enabled"}},
+				Note:    "library_scan's schedule stays enabled; this gates its timer and, with scan.on_startup, its window run"})
 		}
 		r := Row{Head: "scheduled." + name, Class: ClassKey, Stored: StoredBlob, BlobField: "scheduled",
-			Targets: []Target{{Kind: TargetKey, Path: "modules.books.scheduler.schedules." + name, Convert: conv}}}
+			Targets: []Target{key}}
 		if extra, ok := scheduledExtraTarget[name]; ok {
 			r.Targets = append(r.Targets, extra)
 			r.Note = "a second target: the same ScheduleConfig also seeds the core kind core.storage.compact's key"

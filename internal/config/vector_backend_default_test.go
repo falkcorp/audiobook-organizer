@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +17,7 @@ import (
 //
 // There are two independent places a fresh vector backend gets chosen:
 // viper.SetDefault("embedding.vector_backend", ...) in InitConfig, and the
-// hardcoded struct literal in ResetToDefaultsForTest. TestInitConfig_EmbeddingDefaults
+// hardcoded struct literal in ResetToDefaultsForTest. TestFactoryDefaults_EmbeddingDefaults
 // covers the first; it goes through viper and would stay green if only the
 // literal were wrong. This test never touches viper — it calls ResetToDefaultsForTest
 // and reads the resulting AppConfig — so the two are genuinely separate
@@ -102,17 +101,4 @@ func TestValidate_VectorBackendEnum(t *testing.T) {
 		assert.True(t, strings.Contains(err.Error(), "embedding.vector_backend must be 'hnsw' or 'chromem'"),
 			"unknown backend must be rejected, not silently downgraded to a brute-force scan; got: %v", err)
 	})
-}
-
-// TestInitConfig_VectorBackendDefaultViaViper is the viper-path twin of the
-// ResetToDefaultsForTest test above, kept here next to it so the pair is obvious.
-// TestInitConfig_EmbeddingDefaults asserts the same thing among the other
-// embedding fields; this one isolates the backend so a mutation of
-// viper.SetDefault reddens a test that names the failure.
-func TestInitConfig_VectorBackendDefaultViaViper(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-
-	assert.Equal(t, "hnsw", viper.GetString("embedding.vector_backend"),
-		"the viper default must be hnsw, not the brute-force chromem scan")
 }

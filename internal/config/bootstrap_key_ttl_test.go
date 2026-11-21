@@ -68,34 +68,3 @@ func TestBootstrapKeyTTL_NotReadFromConfigBlob(t *testing.T) {
 		}
 	}
 }
-
-// The real init path, with a clean viper: the removed viper default is what
-// makes "nothing set" mean 8h, and the env names in the docs must reach it.
-func TestResolveBootstrapKeyTTL_ThroughInitConfig(t *testing.T) {
-	cases := []struct {
-		name     string
-		env      map[string]string
-		want     time.Duration
-		wantWarn bool
-	}{
-		{"nothing set", nil, 8 * time.Hour, false},
-		{"legacy env days", map[string]string{"BOOTSTRAP_KEY_TTL_DAYS": "30"}, 24 * time.Hour, true},
-		{"new env duration", map[string]string{"BOOTSTRAP_KEY_TTL": "2h"}, 2 * time.Hour, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			resetViper(t)
-			orig := Snapshot()
-			t.Cleanup(func() { Mutate(func(c *Config) { *c = orig }) })
-			for k, v := range tc.env {
-				t.Setenv(k, v)
-			}
-			InitConfig()
-			snap := Snapshot()
-			got, warn := snap.ResolveBootstrapKeyTTL()
-			if got != tc.want || (warn != "") != tc.wantWarn {
-				t.Errorf("ttl=%v warn=%q; want ttl=%v warning=%v", got, warn, tc.want, tc.wantWarn)
-			}
-		})
-	}
-}

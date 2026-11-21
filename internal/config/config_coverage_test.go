@@ -6,28 +6,24 @@ package config
 
 import (
 	"testing"
-
-	"github.com/spf13/viper"
 )
 
 func TestCoverage_ITunesConfig(t *testing.T) {
-	viper.Reset()
-	InitConfig()
+	d := factoryDefaultConfigForTest()
 
 	// Test ITunes-related defaults exist
-	if AppConfig.ITunes.LibraryReadPath != "" {
-		t.Errorf("itunes.library_read_path defaults to %q, want empty", AppConfig.ITunes.LibraryReadPath)
+	if d.ITunes.LibraryReadPath != "" {
+		t.Errorf("itunes.library_read_path defaults to %q, want empty", d.ITunes.LibraryReadPath)
 	}
 }
 
 func TestCoverage_AutoUpdateDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
+	d := factoryDefaultConfigForTest()
 
 	// Verify auto-update defaults
-	if AppConfig.AutoUpdate.Channel != "" && AppConfig.AutoUpdate.Channel != "stable" {
+	if d.AutoUpdate.Channel != "" && d.AutoUpdate.Channel != "stable" {
 		// AutoUpdateChannel may or may not be set by default
-		t.Logf("AutoUpdateChannel = %q", AppConfig.AutoUpdate.Channel)
+		t.Logf("AutoUpdateChannel = %q", d.AutoUpdate.Channel)
 	}
 }
 
@@ -64,9 +60,6 @@ func TestCoverage_ITunesPathMap(t *testing.T) {
 }
 
 func TestCoverage_MaintenanceWindowDefaults(t *testing.T) {
-	viper.Reset()
-	InitConfig()
-
 	// MaintenanceWindow defaults should be sensible
 	// These are only set during migration, so test the struct
 	cfg := Config{

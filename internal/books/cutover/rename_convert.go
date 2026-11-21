@@ -25,25 +25,27 @@ import (
 
 // Converter names. "" is the identity.
 const (
-	ConvertNeverStored            = "never-stored"       // the value is never stored (database_path)
-	ConvertAuthMode               = "auth-mode"          // enable_auth bool -> core.auth.mode
-	ConvertDaysToDuration         = "days-to-duration"   // n days -> a duration
-	ConvertMiBToBytes             = "mib-to-bytes"       // n MiB -> bytes
-	ConvertLogRetention           = "log-retention"      // a negative value keeps forever (0)
-	ConvertOIDCFold               = "oidc-fold"          // the oauth_* rows folded into core.auth.oidc.providers
-	ConvertUpdaterMode            = "updater-mode"       // auto_update.enabled -> core.updater.mode
-	ConvertUpdaterChannel         = "updater-channel"    // develop -> prerelease
-	ConvertUpdaterCheck           = "updater-check"      // minutes -> {enabled, every}
-	ConvertScheduleStandard       = "schedule-standard"  // {enabled, interval(min), on_startup} -> tasks.ScheduleConfig
-	ConvertScheduleInterval       = "schedule-interval"  // an interval-only entry: enabled iff the interval is above 0
-	ConvertScheduleFullScan       = "schedule-full-scan" // library_scan_full: period_hours -> every
-	ConvertCSVList                = "csv-list"           // "a, b" -> ["a", "b"]
-	errNotStagedMessage           = "cutover: the value stages nothing"
-	errConvertInputMessage        = "cutover: converter input"
-	minutesPerScheduleUnit        = time.Minute
-	hoursPerSchedulePeriod        = time.Hour
-	hoursPerDay                   = 24 * time.Hour
-	bytesPerMiB             int64 = 1 << 20
+	ConvertNeverStored               = "never-stored"          // the value is never stored (database_path)
+	ConvertAuthMode                  = "auth-mode"             // enable_auth bool -> core.auth.mode
+	ConvertDaysToDuration            = "days-to-duration"      // n days -> a duration
+	ConvertMiBToBytes                = "mib-to-bytes"          // n MiB -> bytes
+	ConvertLogRetention              = "log-retention"         // a negative value keeps forever (0)
+	ConvertOIDCFold                  = "oidc-fold"             // the oauth_* rows folded into core.auth.oidc.providers
+	ConvertUpdaterMode               = "updater-mode"          // auto_update.enabled -> core.updater.mode
+	ConvertUpdaterChannel            = "updater-channel"       // develop -> prerelease
+	ConvertUpdaterCheck              = "updater-check"         // minutes -> {enabled, every}
+	ConvertScheduleStandard          = "schedule-standard"     // {enabled, interval(min), on_startup} -> tasks.ScheduleConfig
+	ConvertScheduleInterval          = "schedule-interval"     // an interval-only entry: enabled iff the interval is above 0
+	ConvertScheduleFullScan          = "schedule-full-scan"    // library_scan_full: period_hours -> every
+	ConvertScheduleZeroDaily         = "schedule-zero-daily"   // a standard entry whose interval 0 HEAD runs as 24h (ai_dedup_batch)
+	ConvertScheduleLibraryScan       = "schedule-library-scan" // library_scan: always enabled; its enabled is modules.books.scan.periodic_enabled
+	ConvertCSVList                   = "csv-list"              // "a, b" -> ["a", "b"]
+	errNotStagedMessage              = "cutover: the value stages nothing"
+	errConvertInputMessage           = "cutover: converter input"
+	minutesPerScheduleUnit           = time.Minute
+	hoursPerSchedulePeriod           = time.Hour
+	hoursPerDay                      = 24 * time.Hour
+	bytesPerMiB                int64 = 1 << 20
 )
 
 // ErrNotStaged is returned by a converter whose input means "use the
@@ -68,11 +70,59 @@ func knownConvert(name string) bool { return slices.Contains(converterNames, nam
 // so a test can run each of them against the same input.
 var converterNames = []string{"", ConvertNeverStored, ConvertAuthMode, ConvertDaysToDuration, ConvertMiBToBytes,
 	ConvertLogRetention, ConvertOIDCFold, ConvertUpdaterMode, ConvertUpdaterChannel, ConvertUpdaterCheck,
-	ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertCSVList}
+	ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertScheduleZeroDaily, ConvertScheduleLibraryScan, ConvertCSVList}
 
-// Convert applies converter name to in. dropped lists the input fields the
-// canonical value has no place for (named, never valued), which M2 logs.
-func Convert(name string, in json.RawMessage) (out json.RawMessage, dropped []string, err error) {
+// isScheduleConvert reports whether name converts a scheduled entry.
+func isScheduleConvert(name string) bool {
+	switch name {
+	case ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertScheduleZeroDaily, ConvertScheduleLibraryScan:
+		return true
+	}
+	return false
+}
+
+// Convert applies t's converter to in, the value of t's HEAD row. dropped
+// lists the input fields the canonical value has no place for (named, never
+// valued), which M2 logs. A scheduled entry's value also takes t's window
+// placement (placeSchedule): the converter alone writes only what HEAD's entry
+// holds, and config stores a schedule key's value whole, so a value without the
+// placement would take the task out of its window.
+func Convert(t Target, in json.RawMessage) (out json.RawMessage, dropped []string, err error) {
+	out, dropped, err = convert(t.Convert, in)
+	if err != nil || !isScheduleConvert(t.Convert) {
+		return out, dropped, err
+	}
+	return placeSchedule(t, out, dropped)
+}
+
+// placeSchedule completes a converted schedule value with t's placement: the
+// window HEAD ran the task in (its maintenanceOrder, frozen as
+// headMaintenanceOrder) and its position there. An entry HEAD held enabled
+// with no timer then runs window-only, as HEAD ran it; one with no timer and
+// no window HEAD never ran (its scheduler logged "can NEVER run"), so it is
+// carried disabled and its enabled is reported dropped: config refuses an
+// enabled schedule with no timing.
+func placeSchedule(t Target, out json.RawMessage, dropped []string) (json.RawMessage, []string, error) {
+	var v map[string]any
+	if err := json.Unmarshal(out, &v); err != nil {
+		return nil, nil, fmt.Errorf("%w: %s: the converted schedule is not an object", ErrConvertInput, t.Convert)
+	}
+	if t.Window != "" {
+		v["window"] = t.Window
+		if t.Order != 0 {
+			v["order"] = t.Order
+		}
+	}
+	if on, _ := v["enabled"].(bool); on && v["every"] == nil && v["window"] == nil {
+		v["enabled"] = false
+		dropped = append(dropped, "enabled")
+	}
+	return mustJSON(v), dropped, nil
+}
+
+// convert applies converter name to in (Convert without the target's
+// placement; the converters' own tests call it by name).
+func convert(name string, in json.RawMessage) (out json.RawMessage, dropped []string, err error) {
 	bad := func(what string) error { return fmt.Errorf("%w: %s: %s", ErrConvertInput, name, what) }
 	// A converter that stages nothing for any input says so for a null too.
 	if name == ConvertNeverStored || name == ConvertOIDCFold {
@@ -145,7 +195,7 @@ func Convert(name string, in json.RawMessage) (out json.RawMessage, dropped []st
 			return nil, nil, ErrNotStaged
 		}
 		return mustJSON(map[string]any{"enabled": true, "every": config.Duration(time.Duration(n * float64(minutesPerScheduleUnit)))}), nil, nil
-	case ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan:
+	case ConvertScheduleStandard, ConvertScheduleInterval, ConvertScheduleFullScan, ConvertScheduleZeroDaily, ConvertScheduleLibraryScan:
 		return convertSchedule(name, in, bad)
 	case ConvertCSVList:
 		var s string
@@ -196,13 +246,31 @@ func convertSchedule(name string, in json.RawMessage, bad func(string) error) (j
 		if e.PeriodHours > 0 {
 			out["every"] = config.Duration(time.Duration(e.PeriodHours) * hoursPerSchedulePeriod)
 		}
+	case ConvertScheduleLibraryScan:
+		// The key stays enabled: HEAD's entry enabled gates only the timer and,
+		// with scan_on_startup, the window run, and it moves to its own key
+		// (scheduled.library_scan.enabled -> modules.books.scan.periodic_enabled),
+		// which the kind's runtime gates read. HEAD's interval 0 is no timer.
+		out["enabled"] = true
+		if e.Interval > 0 {
+			out["every"] = config.Duration(time.Duration(e.Interval) * minutesPerScheduleUnit)
+		}
+	case ConvertScheduleZeroDaily:
+		// HEAD's GetInterval reads an interval at or below 0 as 24h
+		// (scheduler/tasks.go, ai_dedup_batch), so the entry always has a timer.
+		out["enabled"] = e.Enabled
+		every := time.Duration(e.Interval) * minutesPerScheduleUnit
+		if e.Interval <= 0 {
+			every = hoursPerDay
+		}
+		out["every"] = config.Duration(every)
 	default:
 		out["enabled"] = e.Enabled
 		if e.Interval > 0 {
 			out["every"] = config.Duration(time.Duration(e.Interval) * minutesPerScheduleUnit)
 		}
 	}
-	if e.OnStartup && name == ConvertScheduleStandard {
+	if e.OnStartup && (name == ConvertScheduleStandard || name == ConvertScheduleZeroDaily || name == ConvertScheduleLibraryScan) {
 		dropped = append(dropped, "on_startup")
 	}
 	return mustJSON(out), dropped, nil
