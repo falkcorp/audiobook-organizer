@@ -14,15 +14,34 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreaudit "github.com/falkcorp/mediacore/audit"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
 )
 
+// clientBucket is the visitor bucket of a request that runs under core
+// identity: Options.IdentityThrottleKey's answer, "" for a request that does
+// not (a server built without an identity, which keeps HEAD's keys) or when
+// the function cannot name the visitor.
+func (h *Handler) clientBucket(c *gin.Context) string {
+	if h.identityThrottleKeyFn == nil {
+		return ""
+	}
+	if _, bound := legacyauth.IdentityFrom(c.Request.Context()); !bound {
+		return ""
+	}
+	return strings.TrimSpace(h.identityThrottleKeyFn(c.Request))
+}
+
 // throttleKey is the bucket the failure throttle charges this request to:
+// under core identity Options.IdentityThrottleKey's answer; otherwise
 // Options.ThrottleKey's answer, else the peer address (c.ClientIP()).
 func (h *Handler) throttleKey(c *gin.Context) string {
+	if k := h.clientBucket(c); k != "" {
+		return k
+	}
 	if h.throttleKeyFn != nil {
 		if k := strings.TrimSpace(h.throttleKeyFn(c)); k != "" {
 			return k
