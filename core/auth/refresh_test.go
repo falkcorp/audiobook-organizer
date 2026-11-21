@@ -80,67 +80,94 @@ func TestRefresh_CoreKeyFollowsTheKeysScopes(t *testing.T) {
 	ctx := context.Background()
 	gordon := f.user("jim-gordon", roleCommissioner)
 	barbara := f.user("barbara-gordon", "gotham.detective") // patrol and cases.read
-	_, k := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
-	p := f.keyPrincipal(barbara, k)
+	raw, k := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
+	p := f.boundKey(raw)
 	np := refreshed(t, f.svc, p)
 	if !np.Perms.Has("gotham:patrol") || np.Perms.Has("gotham:cases.read") {
 		t.Fatalf("a patrol key rebuilt as %v: it widened to the owner's roles", np.Perms.Concrete())
 	}
 	// The answer is the scopes the principal was built with that the stored
-	// key still holds: never wider than the key (a principal carrying others
-	// is one Refresh must not trust) ...
-	wide, err := f.svc.PrincipalFor(ctx, barbara, auth.MethodAPIKey, []rbac.Permission{"gotham:patrol", "gotham:cases.read"}, barbara.CredentialEpoch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wide.CredentialID = k.ID
-	if np := refreshed(t, f.svc, wide); !np.Perms.Has("gotham:patrol") || np.Perms.Has("gotham:cases.read") {
+	// key still holds: never wider than the key (a key whose stored scopes are
+	// narrower than the principal's) ...
+	wideRaw, wk := f.mint(f.session(barbara), barbara.ID, "gotham:patrol", "gotham:cases.read")
+	wide := f.boundKey(wideRaw)
+	if np := refreshed(t, f.over(storeKeys(f.st, wk.ID, func(k *auth.APIKey) { k.Scopes = []rbac.Permission{"gotham:patrol"} })), wide); !np.Perms.Has("gotham:patrol") || np.Perms.Has("gotham:cases.read") {
 		t.Fatalf("rebuilt over %v, want the stored key's scope (patrol) only", np.Perms.Concrete())
 	}
-	// ... and never wider than the principal: one built narrower than its key
+	// ... and never wider than the principal: one bound narrower than its key
 	// stays that narrow, and one sharing no scope with the key is refused.
-	_, bk := f.mint(f.session(barbara), barbara.ID, "gotham:patrol", "gotham:cases.read")
-	narrow, err := f.svc.PrincipalFor(ctx, barbara, auth.MethodAPIKey, []rbac.Permission{"gotham:cases.read"}, barbara.CredentialEpoch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	narrow.CredentialID = bk.ID
-	if np := refreshed(t, f.svc, narrow); !np.Perms.Has("gotham:cases.read") || np.Perms.Has("gotham:patrol") {
+	// (A key's scopes are immutable through the service and its store, so
+	// these stored keys are what a differing store would answer.)
+	narrowRaw, nk := f.mint(f.session(barbara), barbara.ID, "gotham:cases.read")
+	narrow := f.boundKey(narrowRaw)
+	if np := refreshed(t, f.over(storeKeys(f.st, nk.ID, func(k *auth.APIKey) { k.Scopes = []rbac.Permission{"gotham:patrol", "gotham:cases.read"} })), narrow); !np.Perms.Has("gotham:cases.read") || np.Perms.Has("gotham:patrol") {
 		t.Fatalf("a principal narrower than its key rebuilt as %v: it widened to the key", np.Perms.Concrete())
 	}
-	disjoint, err := f.svc.PrincipalFor(ctx, barbara, auth.MethodAPIKey, []rbac.Permission{"gotham:cases.read"}, barbara.CredentialEpoch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	disjoint.CredentialID = k.ID // patrol only
-	_, err = f.svc.Refresh(ctx, disjoint)
+	disjointRaw, dk := f.mint(f.session(barbara), barbara.ID, "gotham:cases.read")
+	disjoint := f.boundKey(disjointRaw)
+	_, err := f.over(storeKeys(f.st, dk.ID, func(k *auth.APIKey) { k.Scopes = []rbac.Permission{"gotham:patrol"} })).Refresh(ctx, disjoint)
 	wantErr(t, "a key principal sharing no scope with its key", err, auth.ErrRevoked)
 
-	_, gk := f.mint(f.session(gordon), gordon.ID, "gotham:patrol")
-	borrowed := f.keyPrincipal(barbara, gk)
-	_, err = f.svc.Refresh(ctx, borrowed)
-	wantErr(t, "another user's key", err, auth.ErrRevoked)
+	borrowedRaw, bk := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
+	borrowed := f.boundKey(borrowedRaw)
+	_, err = f.over(storeKeys(f.st, bk.ID, func(k *auth.APIKey) { k.Owner = gordon.ID })).Refresh(ctx, borrowed)
+	wantErr(t, "a key that now belongs to another user", err, auth.ErrRevoked)
 
-	_, rk := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
-	revoked := f.keyPrincipal(barbara, rk)
+	revokedRaw, rk := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
+	revoked := f.boundKey(revokedRaw)
 	if err := f.svc.RevokeAPIKey(ctx, f.session(barbara), rk.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, err = f.svc.Refresh(ctx, revoked)
 	wantErr(t, "a revoked key", err, auth.ErrRevoked)
 
-	_, ek := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
-	expiring := f.keyPrincipal(barbara, ek)
+	expiringRaw, _ := f.mint(f.session(barbara), barbara.ID, "gotham:patrol")
+	expiring := f.boundKey(expiringRaw)
 	refreshed(t, f.svc, expiring)
 	f.advance(auth.DefaultKeyTTL + time.Minute)
 	_, err = f.svc.Refresh(ctx, expiring)
 	wantErr(t, "an expired key", err, auth.ErrExpired)
 
-	_, dk := f.mint(f.session(gordon), gordon.ID, "gotham:patrol")
-	disabledOwner := f.keyPrincipal(gordon, dk)
+	disabledRaw, _ := f.mint(f.session(gordon), gordon.ID, "gotham:patrol")
+	disabledOwner := f.boundKey(disabledRaw)
 	f.edit(gordon, func(u *auth.User) { u.Status = auth.StatusDisabled })
 	_, err = f.svc.Refresh(ctx, disabledOwner)
 	wantErr(t, "a deactivated owner's key", err, auth.ErrInactiveUser)
+	_ = k
+}
+
+// boundKey is the principal stage 12 binds for a request presenting the key
+// raw: the real path, so it carries what auth sealed (a principal a test
+// assembles through PrincipalFor and edits is one Refresh refuses).
+func (f *fx) boundKey(raw string) *auth.Principal {
+	f.t.Helper()
+	_, got := serve(f.t, f.svc, request(raw, ""))
+	if got.p == nil || got.p.Method != auth.MethodAPIKey {
+		f.t.Fatalf("the key bound %+v (refusal %+v)", got.p, got.fail)
+	}
+	return got.p
+}
+
+// keyEdited answers key id as edit leaves it (a copy: the stored record is
+// untouched), and every other read as the store does.
+type keyEdited struct {
+	auth.Store
+	id   string
+	edit func(*auth.APIKey)
+}
+
+func storeKeys(st auth.Store, id string, edit func(*auth.APIKey)) auth.Store {
+	return keyEdited{Store: st, id: id, edit: edit}
+}
+
+func (s keyEdited) APIKeyByID(ctx context.Context, id string) (*auth.APIKey, error) {
+	k, err := s.Store.APIKeyByID(ctx, id)
+	if err != nil || id != s.id {
+		return k, err
+	}
+	cp := *k
+	s.edit(&cp)
+	return &cp, nil
 }
 
 // TestRefresh_CompatPrincipals: a compat key principal is rebuilt over its
@@ -315,8 +342,8 @@ func TestRefresh_Concurrent(t *testing.T) {
 	f := newFx(t)
 	alfred := f.user("alfred-pennyworth", "gotham.detective")
 	sess := f.signedIn(alfred)
-	_, k := f.mint(f.session(alfred), alfred.ID, "gotham:patrol")
-	key := f.keyPrincipal(alfred, k)
+	raw, _ := f.mint(f.session(alfred), alfred.ID, "gotham:patrol")
+	key := f.boundKey(raw)
 	var wg sync.WaitGroup
 	for i := range 64 {
 		p := sess
@@ -384,19 +411,10 @@ func TestRefresh_StoreFailureIsTransient(t *testing.T) {
 	ctx := context.Background()
 	alfred := f.user("alfred-pennyworth", "gotham.detective")
 	sess := f.signedIn(alfred)
-	_, k := f.mint(f.session(alfred), alfred.ID, "gotham:patrol")
-	key := f.keyPrincipal(alfred, k)
+	raw, _ := f.mint(f.session(alfred), alfred.ID, "gotham:patrol")
+	key := f.boundKey(raw)
 	disk := errors.New("the Batcomputer is down")
-	over := func(st auth.Store) *auth.Service {
-		t.Helper()
-		svc, err := auth.New(ctx, auth.Options{}, auth.Deps{
-			Store: st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return svc
-	}
+	over := f.over
 	for _, tc := range []struct {
 		name string
 		st   failingReads
