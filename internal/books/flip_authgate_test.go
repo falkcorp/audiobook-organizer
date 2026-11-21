@@ -7,6 +7,7 @@ package books
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/mediacore/app"
+	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/stretchr/testify/require"
 
@@ -102,9 +104,12 @@ func (h *offlineABO) bootStoring(store func(config.Facade)) config.Config {
 // operator value is more restrictive is effective. Stored required with operator
 // disabled is on; stored disabled with operator required is on; and the same for
 // the gate. The stored value is written by one boot and read by the next, over
-// core's own store. (The retired ENABLE_AUTH and BASIC_AUTH_ENABLED names refuse
-// boot in the e8 cell, once ABO's main hands core its retired names; and the
-// fresh-install cell is TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn.)
+// core's own store. A set retired ENABLE_AUTH or BASIC_AUTH_ENABLED refuses boot
+// naming the canonical variable (05-authn 10): the names are the rename table's,
+// handed to core as app.Options.RetiredConfigNames, and the refusal is core's
+// *config.RetiredNameError, raised before the store opens, so the boot writes
+// nothing to the store or the state directory. (The fresh-install cell is
+// TestFactoryReset_StaleEnableAuthFalseKeepsAuthOn.)
 func TestAuthSwitch_MoreRestrictiveWins(t *testing.T) {
 	const (
 		authDisabled = "ABO_CORE_AUTH_MODE=disabled"
@@ -154,6 +159,81 @@ func TestAuthSwitch_MoreRestrictiveWins(t *testing.T) {
 			require.Equal(t, c.wantBasic, got.BasicAuthEnabled, "Basic gate switch")
 		})
 	}
+
+	// A set retired name is refused, whatever it says: a stale ENABLE_AUTH=false
+	// the operator's old unit still exports must stop the service, not be ignored
+	// (an ignored name would leave the stored value alone, which is auth's more
+	// restrictive side only by luck).
+	for _, r := range []struct{ name, canonicalEnv, canonical string }{
+		{"ENABLE_AUTH", "ABO_CORE_AUTH_MODE", "core.auth.mode"},
+		{"BASIC_AUTH_ENABLED", "ABO_CORE_HTTP_BASIC_GATE_ENABLED", "core.http.basic_gate.enabled"},
+	} {
+		t.Run("a set retired "+r.name+" refuses boot naming "+r.canonicalEnv, func(t *testing.T) {
+			env := []string{}
+			h := flippedOfflineABO(t, &env)
+			// A store with a stored switch in it, so a boot that ignored the name
+			// would have something to read and rewrite.
+			h.bootStoring(func(f config.Facade) {
+				_, err := f.Update(t.Context(), settingsAdmin, config.Update{Set: map[string]json.RawMessage{
+					"enable_auth": json.RawMessage("true"), "basic_auth_enabled": json.RawMessage("true"),
+				}})
+				require.NoError(t, err)
+			})
+			env = []string{r.name + "=false"}
+
+			var beforeRows map[string]string
+			var beforeStore, beforeState map[string]string
+			err := bootOnce(t, h.state, h.edit, h.disk, func() {
+				beforeRows = rawKVs(t, h.path)
+				beforeStore, beforeState = dirImage(t, filepath.Dir(h.path)), dirImage(t, h.state)
+			})
+			require.Error(t, err, "a boot with the retired %s set succeeded", r.name)
+
+			var retired *coreconfig.RetiredNameError
+			require.True(t, errors.As(err, &retired), "the refusal is not a *config.RetiredNameError: %v", err)
+			require.Len(t, retired.Uses, 1, "%v", err)
+			use := retired.Uses[0]
+			require.Equal(t, r.name, use.Name)
+			require.False(t, use.File, "the refused use is an env name")
+			require.True(t, use.Refused, "the use is reported as refused: %+v", use)
+			require.Equal(t, coreconfig.Path(r.canonical), use.Canonical)
+			require.Equal(t, r.canonicalEnv, use.CanonicalEnv)
+			// The message an operator reads names the variable they set and the one
+			// to set instead.
+			require.Contains(t, err.Error(), r.name)
+			require.Contains(t, err.Error(), r.canonicalEnv)
+
+			require.Equal(t, beforeRows, rawKVs(t, h.path), "the refused boot wrote rows")
+			require.Empty(t, imageDiff(beforeStore, dirImage(t, filepath.Dir(h.path))), "the refused boot wrote beside the store")
+			require.Empty(t, imageDiff(beforeState, dirImage(t, h.state)), "the refused boot wrote to the state directory")
+		})
+	}
+}
+
+// bootOnce runs app.New once over the composition whose state directory is
+// stateDir, with edit and opt applied the way a disk-backed boot applies them, and
+// returns its error; a boot that succeeds is closed. prep, when set, runs after the
+// composition is built and before app.New, which is where a cell reads the disk it
+// will compare. Nothing is served: the refusal cells need the boot alone.
+func bootOnce(t *testing.T, stateDir string, edit func(*config.Config), opt func(*app.Options), prep func()) error {
+	t.Helper()
+	mod, opts, _ := composedOptions(t, false, stateDir, edit, nil)
+	t.Cleanup(func() { Release(mod) })
+	// Options asks for the process defaults, which only a failed New or a
+	// restore puts back: a boot that succeeds and is merely closed would leave
+	// them taken for the next test.
+	opts.ProcessDefaults = false
+	if opt != nil {
+		opt(&opts)
+	}
+	if prep != nil {
+		prep()
+	}
+	a, err := app.New(t.Context(), opts, mod)
+	if err == nil {
+		require.NoError(t, a.Close(t.Context()))
+	}
+	return err
 }
 
 // bootServing is bootStoring that also hands the booted App to observe, which can
