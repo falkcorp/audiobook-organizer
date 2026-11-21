@@ -297,6 +297,37 @@ func TestITunesClone_MixedCloneFailureLeavesNothingBehind(t *testing.T) {
 	require.Equal(t, map[string]string{"F-f0": lib, "F-f1": it2, "F-f2": it3}, got)
 }
 
+// A clone that cannot be removed after a failed mixed apply is reported in the
+// group result, not dropped: left on disk with no row, the next scan would take
+// it for a new book.
+func TestITunesClone_MixedCleanupFailureIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a read-only folder does not stop root from removing a file")
+	}
+	f := newICFixture(t)
+	lib := filepath.Join(f.root, "Author", "Book G", "01.mp3")
+	it2, it3 := f.itunes("02.mp3"), f.itunes("03.mp3")
+	f.book(t, "G", "vg-g", "Book G", []string{lib, it2, it3})
+
+	dir := filepath.Join(f.root, "Author", "Book G")
+	calls := 0
+	f.reflink = func(src, dst string) error {
+		calls++
+		if calls == 2 {
+			// Lock the folder so the first clone cannot be removed.
+			require.NoError(t, os.Chmod(dir, 0o555))
+			return fmt.Errorf("%w: forced", fileops.ErrReflinkUnsupported)
+		}
+		return fileops.CopyFileIngestExclusive(src, dst)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	g := icGroup(t, f.run(t, icParams{Apply: true, GroupIDs: []string{"vg-g"}}), "vg-g")
+	require.Equal(t, icOutcomeFailed, g.Outcome)
+	require.Contains(t, g.Error, "reflink")
+	require.Contains(t, g.Error, "clone files left on disk")
+	require.Contains(t, g.Error, "02.mp3")
+}
+
 // A mixed book whose library file is not where the planner would put it is
 // a conflict: reported, never written.
 func TestITunesClone_MixedConflictIsReportOnly(t *testing.T) {
