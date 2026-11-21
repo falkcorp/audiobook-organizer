@@ -931,6 +931,14 @@ func TestJournalQueue_PoisonFailsClosedWhenTheJournalCannotSpeak(t *testing.T) {
 	}{
 		{"trusted journal with no line at the seq", func(live uint64) uint64 { return live + 40 }, func(*testing.T, *oiFx) {}},
 		{"journal file missing", func(live uint64) uint64 { return live }, func(t *testing.T, fx *oiFx) { must(t, os.Remove(fx.journalPath)) }},
+		{"intact journal holding the line, but backup.location.json describes another store", func(live uint64) uint64 { return live }, func(t *testing.T, fx *oiFx) {
+			loc, ok, err := journal.ReadLocation(fx.c.StateDir)
+			if err != nil || !ok {
+				t.Fatalf("location = %v, %v", ok, err)
+			}
+			loc.DBPath = filepath.Join(filepath.Dir(loc.DBPath), "arkham.db")
+			must(t, journal.WriteLocation(fx.c.StateDir, loc))
+		}},
 		{"journal line mac corrupted", func(live uint64) uint64 { return live }, func(t *testing.T, fx *oiFx) {
 			raw, err := os.ReadFile(fx.journalPath)
 			must(t, err)
