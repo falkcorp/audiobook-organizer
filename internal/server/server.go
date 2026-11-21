@@ -49,6 +49,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	diagflight "github.com/falkcorp/mediacore/health"
@@ -179,6 +180,10 @@ type narratorEntry struct {
 
 // Server represents the HTTP server
 type Server struct {
+	// identity is non-nil only on a server built to run under core identity
+	// (WithIdentity); every adopted auth site reads it, or the request's bound
+	// copy, and takes HEAD's path when it is nil.
+	identity *legacyauth.Identity
 	store database.Store
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
@@ -785,7 +790,21 @@ var activityStoreOverrideForTest database.ActivityStorer
 // ServerOption configures NewServer.
 type ServerOption func(*serverOptions)
 
-type serverOptions struct{ log *slog.Logger }
+type serverOptions struct {
+	log      *slog.Logger
+	identity *legacyauth.Identity
+}
+
+// WithIdentity builds the server to run under core identity
+// (httpapi.LegacyAuthCore, F4-08 B7): the gin auth chain and every adopted
+// in-handler check go through id's bridge, and no decision reads books' own
+// user store or EnableAuth. Without the option (and with nil) the server is
+// HEAD's, byte for byte: books mounts it with httpapi.LegacyAuthGin and the
+// flip's last commit (B10) passes the option together with LegacyAuthCore.
+// An incomplete Identity is a wiring fault and NewServer refuses it.
+func WithIdentity(id *legacyauth.Identity) ServerOption {
+	return func(o *serverOptions) { o.identity = id }
+}
 
 // WithLogger is the logger the operations registry (and through it every op
 // reporter's Logger()) and the flight recorder write to. nil, and the absence
@@ -862,6 +881,16 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// so a response this engine writes is told apart from one core's router
 	// writes itself.
 	router.Use(perimeterSeen())
+	// Under core identity (WithIdentity) the request is marked before any
+	// route-level middleware or handler runs, so every adopted site sees the
+	// mode; without it nothing is bound and HEAD's chain decides.
+	if so.identity != nil {
+		if err := so.identity.Validate(); err != nil {
+			slog.Error("NewServer: identity wiring is incomplete", "err", err)
+			os.Exit(1)
+		}
+		router.Use(so.identity.Bind())
+	}
 	if basicGateHookForTest != nil {
 		router.Use(basicGateHookForTest)
 	}
@@ -898,6 +927,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		stopped:                make(chan struct{}),
 		streamsClosing:         make(chan struct{}),
 		router:                 router,
+		identity:               so.identity,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
 		importService:          importer.NewImportService(store),
