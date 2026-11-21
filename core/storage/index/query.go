@@ -29,6 +29,8 @@ const (
 	OpNot         // Children[0]
 	OpString      // Text: the engine's user query syntax
 	OpWildcard    // Field, Text: terms matching a * / ? pattern (Wildcard)
+	OpAll         // no operands: every document (All)
+	OpMatchAny    // Text: analysed match against every Text and Keyword field at once (MatchAnyField)
 )
 
 // Node is the engine-facing view of a Query: a plain tree an engine translates.
@@ -94,6 +96,21 @@ func Wildcard(field, pattern string) Query {
 	}
 	return leaf(OpWildcard, field, pattern)
 }
+
+// All matches every document of the index. It is the query of a listing
+// with no search term (sort and page it with Page). It costs the engine a
+// walk of every document, so it counts in a query's node budget as a Not
+// does.
+func All() Query { return query{Node{Op: OpAll}} }
+
+// MatchAnyField is an analysed match of text against every Text and Keyword
+// field of the index at once (the engine's composite field), unweighted: the
+// unfielded fallback beside an Or of per-field Matches that carry the
+// fields' Boosts. text is analysed with the standard analyzer, not with each
+// field's own, and is matched against the terms each field's analyzer
+// indexed: on a stemming field a word matches only where the standard form
+// equals the stored stem ("famili" matches "family"; "families" does not).
+func MatchAnyField(text string) Query { return query{Node{Op: OpMatchAny, Text: text}} }
 
 func leaf(op Op, field, text string) Query {
 	if field == "" {

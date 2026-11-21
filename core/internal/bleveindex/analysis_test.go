@@ -250,6 +250,50 @@ func TestWildcardLeadingAndBounded(t *testing.T) {
 	}
 }
 
+// TestAllAndMatchAnyField: the match-all listing and the unfielded composite
+// match (T6's MatchAllQuery stand-in and its unfielded fan-out).
+func TestAllAndMatchAnyField(t *testing.T) {
+	_, ix := openCases(t, coretest.IndexEngineOptions{}, caseSpec(caseFields(true), bookish))
+	all := []string{"byline", "desc", "heading", "joker", "todd", "wayne"}
+	for name, tc := range map[string]struct {
+		q    index.Query
+		want []string
+	}{
+		"all":                       {index.All(), all},
+		"all and a term":            {index.And(index.All(), index.Term("format", "flac")), []string{"byline", "desc", "heading"}},
+		"not of all":                {index.Not(index.All()), []string{}},
+		"any field":                 {index.MatchAnyField("hush"), []string{"desc"}},
+		"any field keyword":         {index.MatchAnyField("M4B"), []string{"joker"}},
+		"any field author":          {index.MatchAnyField("gotham"), []string{"byline", "desc", "heading"}},
+		"any field is standard":     {index.MatchAnyField("families"), []string{}},
+		"any field sees stems":      {index.MatchAnyField("famili"), []string{"joker", "todd"}},
+		"any field sees plain text": {index.MatchAnyField("family"), []string{"joker", "todd"}}, // plain's unstemmed term
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := hitIDs(t, ix, tc.q, "_id"); !slices.Equal(got, tc.want) {
+				t.Fatalf("hits = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	if n, err := ix.Count(t.Context(), index.All()); err != nil || n != uint64(len(caseDocs)) {
+		t.Fatalf("Count(All) = %d, %v; want %d", n, err, len(caseDocs))
+	}
+	// All costs a Not's 64 nodes: 15 of them under one Or fit, 16 do not.
+	alls := func(n int) index.Query {
+		qs := make([]index.Query, n)
+		for i := range qs {
+			qs[i] = index.All()
+		}
+		return index.Or(qs...)
+	}
+	if _, err := ix.Count(t.Context(), alls(15)); err != nil {
+		t.Fatalf("15 Alls: %v", err)
+	}
+	if _, err := ix.Count(t.Context(), alls(16)); !errors.Is(err, index.ErrInvalidQuery) {
+		t.Fatalf("16 Alls: %v, want ErrInvalidQuery (over the node budget)", err)
+	}
+}
+
 // TestTooBroadIsTyped: a wildcard (or prefix) that expands past the engine's
 // term-searcher cap fails with ErrTooBroad, in Search, Count and Facets, and
 // one that stays under it answers. It also pins the bleve error text

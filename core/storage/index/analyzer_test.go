@@ -113,3 +113,12 @@ func TestWildcardConstructor(t *testing.T) {
 		t.Errorf("Wildcard with no field: %v, want ErrInvalidQuery", err)
 	}
 }
+
+func TestAllAndMatchAnyFieldConstructors(t *testing.T) {
+	if n, err := index.Describe(index.All()); err != nil || n.Op != index.OpAll || n.Field != "" {
+		t.Fatalf("All = %+v, %v", n, err)
+	}
+	if n, err := index.Describe(index.MatchAnyField("dark knight")); err != nil || n.Op != index.OpMatchAny || n.Field != "" || n.Text != "dark knight" {
+		t.Fatalf("MatchAnyField = %+v, %v", n, err)
+	}
+}

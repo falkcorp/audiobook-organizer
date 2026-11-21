@@ -5,7 +5,7 @@
 
 # F7-09 T6 core pre-PR: what books' search needs from `storage/index`
 
-The T6 builder (`internal/books/searchindex/**`, branch `agent/platform-core-f7-09-t6-searchindex`) reported five places where core's full-text contract could not express the books search that runs in production (`internal/search`). This core-only PR closes them. It is dark: nothing in the deployed binary opens core's index engine (ABO's `internal/search` keeps `library.bleve` until the fold), so no running code path changes. 05-storage §5S.3.8 carries the new Go block lines and a paragraph on analysis, weighting and wildcards.
+The T6 builder (`internal/books/searchindex/**`, merged as #4847) reported the places where core's full-text contract could not express the books search that runs in production (`internal/search`): five in the brief of this PR, and seven in `seams.d/F7-09-T6.md`'s "Switch at the fold" table (the same five plus a match-all and an `_all` field). This core-only PR closes all seven; the per-user `Mixed` shape in that table is books' own (F7-09 T7) and needs nothing from core. It is dark: nothing in the deployed binary opens core's index engine (ABO's `internal/search` keeps `library.bleve` until the fold), so no running code path changes. 05-storage §5S.3.8 carries the new Go block lines and a paragraph on analysis, weighting and wildcards.
 
 ## What it adds
 
@@ -18,6 +18,8 @@ The T6 builder (`internal/books/searchindex/**`, branch `agent/platform-core-f7-
 | 3. Field boosts | `index.Field.Boost float64` (0 means 1; negative, NaN and infinite are refused; Text and Keyword only). It multiplies the score of every `Match` node naming the field. It does not weight Term, Prefix, Wildcard or Range, and it does not weight a field named inside a `QueryString`. It is not part of the fingerprint, so changing it needs no rebuild. | `index.go`, `mapping.go` |
 | 4. Leading wildcards | `index.Wildcard(field, pattern)` / `index.OpWildcard`. `*` matches any run of characters, `?` matches one, and there is no escape. A pattern with no literal character (`*`, `*?*`, empty) is `ErrInvalidQuery`. `QueryString` still refuses a leading wildcard and every regexp, so `Wildcard` is the explicit opt-in. | `query.go`, `mapping.go` |
 | 4. Bounded cost | A leading wildcard walks the field's whole term dictionary in every segment through the pattern's automaton (linear in the field's distinct terms), then searches every term that matched. Each matched term counts against the engine's term-searcher cap for the whole search (`Options.MaxTermSearchers`, default 1024). Past the cap, Search, Count and Facets fail with the new typed **`index.ErrTooBroad`** instead of running. Each Wildcard node also costs `wildcardCost` = 32 of the query's 1024-node budget, so a query holds at most 31 of them beside its own group node. | `index.go` `ErrTooBroad`, `bleveindex/index.go` `searchErr` |
+| 6. Match-all | `index.All()` / `index.OpAll`: every document, for a listing with no search term. It counts 64 nodes (a Not's cost, `notCost`): it walks every document. T6's stand-in `Not(Term(format, <absent term>))` becomes `index.All()`. | `query.go`, `mapping.go` |
+| 7. `_all` | `index.MatchAnyField(text)` / `index.OpMatchAny`: an unweighted analysed match against every Text and Keyword field at once (bleve's composite `_all` field, which every text field mapping feeds by default). The text is analysed with the **standard** analyzer and compared with the terms each field's own analyzer stored, so on a stemming field it matches only where the standard form equals the stem (pinned: `families` finds nothing, `famili` and `family` find both "Family" titles). This is HEAD's unfielded child of `translateFreeText` (`bleve.NewMatchQuery(text)` with no field), with the same analysis. | `query.go`, `mapping.go` |
 | 5. Test support | `coretest.IndexOwner()` (the `c/index/` owner spec) and `coretest.NewIndexEngine(tb, st, coretest.IndexEngineOptions{Dir, MaxTermSearchers})` return the real engine over a `coretest.Store` booted with whatever owners and `storage.Spec.Derived` names the caller chose. Methods: `Opener(module)`, `Reconcile(ctx)`, `Rebuild(ctx, module, name) (docs, err)`, `PendingRebuilds()`, `Dir()`, `Path(module, name)` and an idempotent `Close()`. Nothing runs in the background. `bleveindex.Engine.Rebuild` is exported for it (it was `runRebuild`, the task's `Run`). It lives in `coretest`, not `indextest`, because bleveindex's in-package tests import `indextest` (an import cycle) and books' tests already import `coretest`. | `core/coretest/index.go`, `bleveindex/rebuild.go` |
 
 The pinning tests are `core/internal/bleveindex/analysis_test.go` (owner `arkham`, index `cases`, on `coretest.IndexEngine`), `core/internal/bleveindex/stamp_test.go` and `core/storage/index/analyzer_test.go`. They pin these behaviours:
@@ -29,6 +31,7 @@ The pinning tests are `core/internal/bleveindex/analysis_test.go` (owner `arkham
 - case-insensitive keyword terms, prefixes and facets, and case-sensitive `keyword`;
 - the boost ordering, with an unweighted control that shows the reverse order;
 - leading, double-ended and `?` wildcards, the no-literal refusal, the `QueryString` refusal, the 31/32 node budget, and `ErrTooBroad` from Search, Count and Facets;
+- `All` (every document, with a term, under Not, and its 15/16 node budget) and `MatchAnyField` (keyword, author and title terms, its standard analysis against stemmed and plain fields);
 - an analyzer edit recreating the index while a boost edit does not;
 - the fixture refusing a store with no `c/index/`.
 
@@ -46,14 +49,11 @@ The pinning tests are `core/internal/bleveindex/analysis_test.go` (owner `arkham
    ```
 
    There is no fallback to the stock English analyzer, unlike HEAD's `bookIndexMapping`. Core refuses a component it cannot build at Open (`ErrInvalidSpec`) rather than indexing with a default.
-2. **Boosts.** Put HEAD's `textFieldBoosts` on the fields: title 3, author 2, series 1.5, narrator 1.2, publisher 1, description 0.5, file_path 0.5. Free text becomes an `index.Or` of one `index.Match(field, text)` per boosted field. HEAD's unweighted unfielded child (`bleve.NewMatchQuery(text)` against `_all`) has no AST node. The two ways to keep it:
-   - append `index.QueryString(<text with query syntax escaped>)`. An unfielded `QueryString` term matches `_all` and is analysed with the **standard** analyzer, not the field's (pinned: unfielded `families` finds nothing where `title:families` stems; unfielded `famili` finds both);
-   - add Matches over the remaining Text and Keyword fields.
-
-   An unfielded `Match` node would be a further core addition (not in this PR).
-3. **Wildcards and prefixes.** Compile `*foo` and `*foo*` to `index.Wildcard(field, pattern)` and `foo*` to `index.Prefix`. Drop `patternTerm` for these: core lowercases on folding fields. Keep `underscorePatternQuery`'s split as books code (an `index.And` of Match, Prefix and Wildcard parts), because no char filter runs on pattern text. Fuzzy (`foo~`) and quoted phrases have no AST node. Route them through `QueryString` (`field:foo~`, `field:"..."`). A phrase gets the field's analyzer (pinned). A fuzzy term is not analysed, so books still lowercases it first, as HEAD's two `NewFuzzyQuery(patternTerm(...))` call sites do.
-4. **Errors.** Map `index.ErrTooBroad` to the same 400-class "narrow your search" answer the handler gives a bad query. It is not a failure, and it must not trigger the substring fallback that `Degraded` does.
-5. **Tests.** `TestBooksIndexRebuiltAtCutover` and T6's suites run on the real engine with these calls:
+2. **Boosts.** Put HEAD's `textFieldBoosts` on the fields: title 3, author 2, series 1.5, narrator 1.2, publisher 1, description 0.5, file_path 0.5. Free text becomes an `index.Or` of one `index.Match(field, text)` per boosted field plus `index.MatchAnyField(text)`, HEAD's unweighted unfielded child. That replaces T6's current per-term escaped query strings for boosted clauses and its OR-over-every-text-field fan-out for an unfielded term. An unfielded term inside a `QueryString` also reaches `_all`, with the same standard analysis (pinned).
+3. **Listing with no term.** Replace `MatchAllQuery()`'s `Not(Term(format, <absent term>))` with `index.All()`. A Not over a term costs the same 64 nodes but reads as a trick; `All` says what it means.
+4. **Wildcards and prefixes.** Compile `*foo` and `*foo*` to `index.Wildcard(field, pattern)` (T6 now answers them `ErrNotExpressible`; core's answer to "does a leading wildcard stay refused" is no, it is allowed and bounded) and `foo*` to `index.Prefix`. Drop `patternTerm` for these: core lowercases on folding fields. Keep `underscorePatternQuery`'s split as books code (an `index.And` of Match, Prefix and Wildcard parts), because no char filter runs on pattern text. Fuzzy (`foo~`) and quoted phrases have no AST node. Route them through `QueryString` (`field:foo~`, `field:"..."`). A phrase gets the field's analyzer (pinned). A fuzzy term is not analysed, so books still lowercases it first, as HEAD's two `NewFuzzyQuery(patternTerm(...))` call sites do.
+5. **Errors.** Map `index.ErrTooBroad` to the same 400-class "narrow your search" answer the handler gives a bad query. It is not a failure, and it must not trigger the substring fallback that `Degraded` does.
+6. **Tests.** Delete `searchindextest/opener.go` (the bleve stand-in). `RunBooksIndexRebuiltAtCutover`, `TestBooksIndexRebuiltAtCutover` and T6's suites run on the real engine with these calls:
    - `st := coretest.NewStore(t, <books owner spec with Derived{books, memdb, hnsw, chromem}>, coretest.IndexOwner())`
    - `x := coretest.NewIndexEngine(t, st, coretest.IndexEngineOptions{})`
    - `x.Opener("books").Open(ctx, spec)`, then `x.Rebuild(ctx, "books", "books")` and `x.Reconcile(ctx)`
@@ -76,6 +76,7 @@ The pinning tests are `core/internal/bleveindex/analysis_test.go` (owner `arkham
 
 ## Not done here
 
-- No unfielded `Match`, no phrase or fuzzy node, no query-level boost. Each is reachable through `QueryString` today, and each is listed above where T6 would want it.
+- No phrase or fuzzy node and no query-level boost. Each is reachable through `QueryString` today, and each is listed above where T6 would want it.
+- `_all` is bleve's default composition (every text field mapping has `IncludeInAll`), not a per-field declaration: a Spec cannot keep a field out of `MatchAnyField`. A `Field.ExcludeFromAll` would be the surface if one is ever needed.
 - No `Analyzer` components beyond what books needs and the tests pin: no stop filter, ASCII folding, n-grams or whitespace tokenizer. Each is one constant, one `Validate` case and one engine translation.
 - `indextest.Fixture` still hard-codes owner `gotham`. `coretest.NewIndexEngine` is the fixture with caller-chosen owners. `indextest` stays the in-module store fixture for bleveindex's own in-package tests.

@@ -281,22 +281,25 @@ func translate(fields map[string]fieldInfo, n index.Node) (query.Query, error) {
 	return translateNode(fields, n, 1, &nodes)
 }
 
-// notCost is what a Not node counts in the node budget: it is translated to
-// "match all, except", so each one scans every document (1.6s over 20k documents
+// notCost is what a Not node, and an All node, counts in the node budget: a
+// Not is translated to "match all, except", so each one scans every document (1.6s over 20k documents
 // for an Or of 510 of them), where a Term or a Match costs a dictionary lookup.
 const notCost = 64
 
 // wildcardCost is what a Wildcard node counts in the node budget: a pattern
 // that starts with * or ? walks the field's whole term dictionary through its
 // automaton before it searches anything, where a Term costs one lookup. At 32
-// a query holds at most 32 Wildcards (a free-text pattern fanned out over
-// seven fields, four times over, fits). What each one then expands to is
+// a query holds at most 31 Wildcards under one group node (a free-text
+// pattern fanned out over seven fields, four times over, fits). What each one then expands to is
 // bounded separately, by the term-searcher cap (ErrTooBroad).
 const wildcardCost = 32
 
+// allField is bleve's composite field, the target of index.MatchAnyField.
+const allField = "_all"
+
 func nodeCost(op index.Op) int {
 	switch op {
-	case index.OpNot:
+	case index.OpNot, index.OpAll:
 		return notCost
 	case index.OpWildcard:
 		return wildcardCost
@@ -446,6 +449,16 @@ func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *
 		return q, nil
 	case index.OpString:
 		return translateString(n.Text, depth, nodes)
+	case index.OpAll:
+		return bleve.NewMatchAllQuery(), nil
+	case index.OpMatchAny:
+		// bleve's composite field: every field mapped with IncludeInAll (a
+		// text field mapping's default) adds its analysed terms to it, and a
+		// match on it is analysed with the mapping's default analyzer
+		// (standard).
+		q := bleve.NewMatchQuery(n.Text)
+		q.SetField(allField)
+		return q, nil
 	}
 	return nil, bad("operator %d", n.Op)
 }
