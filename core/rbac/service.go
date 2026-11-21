@@ -1503,14 +1503,15 @@ func Can(ctx context.Context, s Permission) bool {
 	return c.Has(s) && c.Satisfies(r)
 }
 
-// Require is Can that returns ErrDenied wrapped with s, and records the
-// denial through the service Bind bound (an unbound context still denies).
+// Require is Can that returns a *DeniedError naming s (it matches ErrDenied),
+// and records the denial through the service Bind bound (an unbound context
+// still denies).
 func Require(ctx context.Context, s Permission) error {
 	if Can(ctx, s) {
 		return nil
 	}
 	denied(ctx, s)
-	return fmt.Errorf("%w: %s", ErrDenied, s)
+	return denial(s)
 }
 
 // RequireAll requires every one of s. No scope, or a malformed one, denies:
@@ -1518,7 +1519,7 @@ func Require(ctx context.Context, s Permission) error {
 func RequireAll(ctx context.Context, s ...Permission) error {
 	if AllOf(s...).IsZero() {
 		denied(ctx, "")
-		return fmt.Errorf("%w: no valid permission named", ErrDenied)
+		return &DeniedError{what: "no valid permission named"}
 	}
 	for _, p := range s {
 		if err := Require(ctx, p); err != nil {

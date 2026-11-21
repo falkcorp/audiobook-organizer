@@ -151,6 +151,7 @@ const problemTypeBase = "https://mediacore.dev/problems/"
 // needs. internal reports a plain error, whose cause is logged and withheld.
 func problemFor(err error) (p Problem, header http.Header, internal bool) {
 	var he *Error
+	var denied *rbac.DeniedError
 	switch {
 	case errors.As(err, &he):
 		p = Problem{Status: he.Status, Code: he.Code, Detail: he.Detail, Errors: he.Fields,
@@ -158,6 +159,11 @@ func problemFor(err error) (p Problem, header http.Header, internal bool) {
 		if he.retryAfter > 0 {
 			header = http.Header{"Retry-After": {strconv.Itoa(int((he.retryAfter + time.Second - 1) / time.Second))}}
 		}
+	// After *Error, so a handler that wrapped a denial in its own *Error
+	// (rbachttp's mapError) keeps its body. A bare rbac.ErrDenied is not a
+	// DeniedError and stays a 500 with its text withheld.
+	case errors.As(err, &denied):
+		p = Problem{Status: http.StatusForbidden, Code: "permission_denied", Required: string(denied.Permission)}
 	case errors.Is(err, ErrNotFound):
 		p = Problem{Status: http.StatusNotFound, Code: "not_found"}
 	case errors.Is(err, ErrConflict):
