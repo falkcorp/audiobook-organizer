@@ -54,7 +54,10 @@ func options(args []string) app.Options {
 		EnvPrefix:   "HELLO",          // the default, strings.ToUpper(AppID), spelled out
 		StateDir:    "hello-state",    // compiled default; HELLO_CORE_PATHS_STATE_DIR overrides it
 		UI:          hello.UIBundle(), // ui_embed.go (embed_frontend) or ui_nonembed.go
-		Args:        args,
+		// hello serves core's own identity (F4-08): rbac, auth and audit over
+		// core's stores, and core's identity routes in its OpenAPI document.
+		IdentityBoot: true,
+		Args:         args,
 	}
 }
 
