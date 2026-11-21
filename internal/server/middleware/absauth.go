@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	coreaudit "github.com/falkcorp/mediacore/audit"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/gin-gonic/gin"
@@ -282,6 +283,17 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 			"invalid Cloudflare Access assertion", ABSModeCF)
 	}
 
+	if _, bound := legacyauth.IdentityFrom(c.Request.Context()); bound {
+		// Under core identity the account record is core's, and resolving a
+		// person here reads and writes books' store: a JIT create would be a
+		// user outside core, a link or an e-mail mark a write to a record core
+		// no longer owns, and a lookup would answer from a record the identity
+		// cutover emptied. Nothing below runs. The allowlist still answers
+		// first, so a stranger gets HEAD's 403 and an allowed person the
+		// distinct one; neither creates, links or marks anything.
+		return nil, r.refuseCFUnderIdentity(claims)
+	}
+
 	user, err := r.oauthCfg.ResolveUser(r.store, *claims)
 	if err != nil {
 		// A verified identity that is not on the allowlist is 403 and provisions
@@ -304,6 +316,29 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		return nil, e
 	}
 	return &ABSIdentity{User: user, Mode: ABSModeCF, Email: claims.Email}, nil
+}
+
+// ABSReasonCFUnderIdentity is the audit reason of a verified person whose
+// Cloudflare Access sign-in the ABS surface cannot resolve under core identity.
+const ABSReasonCFUnderIdentity = "cf-resolve-unavailable-under-core-identity"
+
+// refuseCFUnderIdentity is ResolveCFAssertion's answer for a verified assertion
+// under core identity. It is terminal (a 403, never a fall-through to the
+// bearer or password path, which HEAD did not have for an assertion that
+// verified) and touches no store.
+func (r *ABSIdentityResolver) refuseCFUnderIdentity(claims *legacyoauth.IdentityClaims) *ABSAuthError {
+	if !claims.EmailVerified || !r.oauthCfg.IsEmailAllowed(claims.Email) {
+		return &ABSAuthError{
+			Status: http.StatusForbidden, Reason: "email-not-allowed",
+			Message: "identity is not authorized for this server",
+			Mode:    ABSModeCF, Email: claims.Email,
+		}
+	}
+	return &ABSAuthError{
+		Status: http.StatusForbidden, Reason: ABSReasonCFUnderIdentity,
+		Message: "single sign-on is not available on this surface",
+		Mode:    ABSModeCF, Email: claims.Email,
+	}
 }
 
 // ResolveBearer runs ONLY step 2 — our own access JWT plus its abs_sess record.
@@ -619,6 +654,14 @@ func serviceTokenPairingReason(hadPrevious bool) string {
 // through: either an identity is bound or the request is aborted with a JSON body.
 func ABSRequireAuth(r *ABSIdentityResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// A server built to run under core identity (server.WithIdentity)
+		// authenticates the surface through core's compat handle: the credential
+		// is core's, not books' store's. The mode is the wiring's, never the
+		// request's (legacyauth.Identity.Bind).
+		if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+			r.requireThroughCore(c, id)
+			return
+		}
 		id, authErr := r.Resolve(c)
 		if authErr != nil {
 			AbortABSAuth(c, "resolve", authErr)
@@ -643,6 +686,16 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 	if e == nil {
 		return
 	}
+	recordABSRefusal(c, action, e)
+	msg := e.Message
+	if msg == "" {
+		msg = http.StatusText(e.Status)
+	}
+	c.AbortWithStatusJSON(e.Status, gin.H{"error": msg})
+}
+
+// recordABSRefusal writes the audit record of a refused ABS attempt.
+func recordABSRefusal(c *gin.Context, action string, e *ABSAuthError) {
 	absauth.AttemptLog.Record(coreaudit.AuthAttempt{
 		Action:    action,
 		Outcome:   absOutcomeForStatus(e.Status),
@@ -656,11 +709,6 @@ func AbortABSAuth(c *gin.Context, action string, e *ABSAuthError) {
 		// only attribution the record can carry.
 		ServiceToken: ABSServiceToken(c),
 	})
-	msg := e.Message
-	if msg == "" {
-		msg = http.StatusText(e.Status)
-	}
-	c.AbortWithStatusJSON(e.Status, gin.H{"error": msg})
 }
 
 func absOutcomeForStatus(status int) coreaudit.Outcome {
