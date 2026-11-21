@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/falkcorp/mediacore/storage"
@@ -29,6 +30,7 @@ type Spec struct {
 	Name           string // "books"; on disk <db parent>/index/<module>/<name>.bleve
 	MappingVersion string // a change triggers drop + rebuild (today's bookMappingVersion)
 	Fields         []Field
+	Analyzers      []Analyzer                                              // the index's own analyzers, which a Field names in Analyzer; see Analyzer
 	Rebuild        func(ctx context.Context, w RebuildWriter) error        // full rebuild from the module's storage
 	Document       func(ctx context.Context, id string) (Doc, bool, error) // reconciler: load one doc, false = delete
 }
@@ -67,9 +69,18 @@ func (k FieldKind) String() string {
 type Field struct {
 	Name     string
 	Kind     FieldKind // Text, Keyword, Number, Date, Bool
-	Analyzer string    // "standard", "keyword", or a module-registered analyzer name; "" = standard for Text, keyword for Keyword
+	Analyzer string    // a built-in (AnalyzerStandard, AnalyzerKeyword, AnalyzerKeywordLowercase) or the Name of one of Spec.Analyzers; "" = standard for Text, keyword for Keyword
 	Store    bool      // returned in Hit.Fields
 	Facet    bool      // countable through Index.Facets (Text, Keyword or Bool only)
+	// Boost weights a Match on this field (Text and Keyword only): the score of
+	// a Match node naming the field is multiplied by it, so an Or of Matches
+	// over several fields ranks a hit in a heavier field first. 0 means 1 (no
+	// weight); a negative, NaN or infinite value is refused. It applies to
+	// OpMatch nodes only: Term, Prefix, Wildcard and Range keep their own
+	// score, and a field named inside a QueryString is not weighted. It is a
+	// query-time weight, so changing it needs no rebuild (it is not part of
+	// the mapping fingerprint).
+	Boost float64
 }
 
 // Doc is one document: field name to value (string, int64, float64,
@@ -173,6 +184,11 @@ var (
 	ErrDegraded = errors.New("index: degraded (open failed)")
 	// ErrClosed: the index was closed.
 	ErrClosed = errors.New("index: closed")
+	// ErrTooBroad: the query expands to more index terms than the engine
+	// allows one search (a Prefix or Wildcard that matches too many distinct
+	// terms, or many of them). The query is valid; a narrower one answers. A
+	// caller shows it as "refine the search", not as a failure.
+	ErrTooBroad = errors.New("index: query matches too many terms")
 )
 
 // Validate reports why s cannot declare an index, or nil. The engine runs it
@@ -194,6 +210,8 @@ func (s Spec) Validate() error {
 	if len(s.Fields) == 0 {
 		probs = append(probs, "at least one Field is required")
 	}
+	analyzers, aprobs := s.analyzerNames()
+	probs = append(probs, aprobs...)
 	seen := map[string]bool{}
 	for _, f := range s.Fields {
 		switch {
@@ -213,6 +231,15 @@ func (s Spec) Validate() error {
 		}
 		if f.Analyzer != "" && f.Kind != Text && f.Kind != Keyword {
 			probs = append(probs, fmt.Sprintf("field %q: an analyzer applies to Text and Keyword fields only", f.Name))
+		}
+		if f.Analyzer != "" && !builtinAnalyzer(f.Analyzer) && !analyzers[f.Analyzer] {
+			probs = append(probs, fmt.Sprintf("field %q: analyzer %q is neither a built-in (%s, %s, %s) nor declared in Analyzers", f.Name, f.Analyzer, AnalyzerStandard, AnalyzerKeyword, AnalyzerKeywordLowercase))
+		}
+		switch {
+		case math.IsNaN(f.Boost) || math.IsInf(f.Boost, 0) || f.Boost < 0:
+			probs = append(probs, fmt.Sprintf("field %q: boost %v must be a finite number >= 0 (0 means 1)", f.Name, f.Boost))
+		case f.Boost != 0 && f.Kind != Text && f.Kind != Keyword:
+			probs = append(probs, fmt.Sprintf("field %q: a boost applies to Text and Keyword fields only", f.Name))
 		}
 	}
 	if len(probs) > 0 {

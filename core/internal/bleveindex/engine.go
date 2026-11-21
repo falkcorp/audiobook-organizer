@@ -241,13 +241,12 @@ func (e *Engine) open(ctx context.Context, module string, s index.Spec) (index.I
 	}
 	i := &idx{
 		e: e, module: module, name: s.Name, spec: s, derived: derived, dirty: dirty,
-		path:  filepath.Join(e.o.Dir, module, s.Name+".bleve"),
-		kinds: make(map[string]index.FieldKind, len(s.Fields)),
-		log:   e.log,
-		op:    newOpLock(),
+		path:   filepath.Join(e.o.Dir, module, s.Name+".bleve"),
+		fields: fieldInfos(s),
+		log:    e.log,
+		op:     newOpLock(),
 	}
 	for _, f := range s.Fields {
-		i.kinds[f.Name] = f.Kind
 		if f.Store {
 			i.stored = append(i.stored, f.Name)
 		}

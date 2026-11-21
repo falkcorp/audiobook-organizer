@@ -9,13 +9,21 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/blevesearch/bleve/v2"
+	"github.com/blevesearch/bleve/v2/analysis/analyzer/custom"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/keyword"
 	"github.com/blevesearch/bleve/v2/analysis/analyzer/standard"
+	regexpchar "github.com/blevesearch/bleve/v2/analysis/char/regexp"
+	"github.com/blevesearch/bleve/v2/analysis/lang/en"
+	"github.com/blevesearch/bleve/v2/analysis/token/lowercase"
+	"github.com/blevesearch/bleve/v2/analysis/token/porter"
+	"github.com/blevesearch/bleve/v2/analysis/tokenizer/single"
+	"github.com/blevesearch/bleve/v2/analysis/tokenizer/unicode"
 	"github.com/blevesearch/bleve/v2/mapping"
 	"github.com/blevesearch/bleve/v2/search/query"
 
@@ -24,9 +32,15 @@ import (
 
 // buildMapping turns a Spec's fields into a bleve mapping. The mapping is
 // closed (Dynamic false): a document field the Spec did not declare is not
-// indexed, so the on-disk index is exactly what MappingVersion names.
+// indexed, so the on-disk index is exactly what MappingVersion names. The
+// Spec's own analyzers, and the built-in keyword_lowercase when a field uses
+// it, are registered in the mapping (bleve persists them inside the index, so
+// a reopen analyses with the definition the index was built with).
 func buildMapping(s index.Spec) (mapping.IndexMapping, error) {
 	im := bleve.NewIndexMapping()
+	if err := registerAnalyzers(im, s); err != nil {
+		return nil, err
+	}
 	doc := bleve.NewDocumentMapping()
 	doc.Dynamic = false
 	for _, f := range s.Fields {
@@ -34,14 +48,14 @@ func buildMapping(s index.Spec) (mapping.IndexMapping, error) {
 		switch f.Kind {
 		case index.Text:
 			fm = bleve.NewTextFieldMapping()
-			a, err := analyzerName(f.Analyzer, standard.Name)
+			a, err := analyzerName(s, f.Analyzer, standard.Name)
 			if err != nil {
 				return nil, fmt.Errorf("field %q: %w", f.Name, err)
 			}
 			fm.Analyzer = a
 		case index.Keyword:
 			fm = bleve.NewTextFieldMapping()
-			a, err := analyzerName(f.Analyzer, keyword.Name)
+			a, err := analyzerName(s, f.Analyzer, keyword.Name)
 			if err != nil {
 				return nil, fmt.Errorf("field %q: %w", f.Name, err)
 			}
@@ -63,36 +77,192 @@ func buildMapping(s index.Spec) (mapping.IndexMapping, error) {
 	return im, nil
 }
 
+// The bleve names of what registerAnalyzers adds to a mapping. A Spec's
+// analyzer is registered under specAnalyzerPrefix + its name, so no module
+// name can collide with an analyzer bleve registers globally ("en",
+// "standard", ...), and the built-in keyword_lowercase gets a name of its own
+// for the same reason.
+const (
+	specAnalyzerPrefix         = "core_spec_"
+	keywordLowercaseBleveName  = "core_keyword_lowercase"
+	underscoreToSpaceBleveName = "core_underscore_to_space"
+)
+
+// registerAnalyzers adds the Spec's analyzers, and the built-in
+// keyword_lowercase when a field names it, to im. A component this engine
+// cannot build is an ErrInvalidSpec, never a silent default.
+func registerAnalyzers(im *mapping.IndexMappingImpl, s index.Spec) error {
+	needUnderscore := false
+	for _, a := range s.Analyzers {
+		if slices.Contains(a.CharFilters, index.CharUnderscoreToSpace) {
+			needUnderscore = true
+		}
+	}
+	if needUnderscore {
+		if err := im.AddCustomCharFilter(underscoreToSpaceBleveName, map[string]any{
+			"type": regexpchar.Name, "regexp": "_", "replace": " ",
+		}); err != nil {
+			return fmt.Errorf("%w: char filter %s: %v", index.ErrInvalidSpec, index.CharUnderscoreToSpace, err)
+		}
+	}
+	if slices.ContainsFunc(s.Fields, func(f index.Field) bool { return f.Analyzer == index.AnalyzerKeywordLowercase }) {
+		if err := im.AddCustomAnalyzer(keywordLowercaseBleveName, map[string]any{
+			"type": custom.Name, "tokenizer": single.Name, "token_filters": []string{lowercase.Name},
+		}); err != nil {
+			return fmt.Errorf("%w: analyzer %s: %v", index.ErrInvalidSpec, index.AnalyzerKeywordLowercase, err)
+		}
+	}
+	for _, a := range s.Analyzers {
+		def, err := bleveAnalyzer(a)
+		if err != nil {
+			return err
+		}
+		if err := im.AddCustomAnalyzer(specAnalyzerPrefix+a.Name, def); err != nil {
+			return fmt.Errorf("%w: analyzer %q: %v", index.ErrInvalidSpec, a.Name, err)
+		}
+	}
+	return nil
+}
+
+// bleveAnalyzer translates one of core's analyzer declarations into bleve's
+// custom-analyzer config.
+func bleveAnalyzer(a index.Analyzer) (map[string]any, error) {
+	bad := func(what string, v fmt.Stringer) error {
+		return fmt.Errorf("%w: analyzer %q: %s %s", index.ErrInvalidSpec, a.Name, what, v)
+	}
+	var chars []string
+	for _, c := range a.CharFilters {
+		switch c {
+		case index.CharUnderscoreToSpace:
+			chars = append(chars, underscoreToSpaceBleveName)
+		default:
+			return nil, bad("char filter", c)
+		}
+	}
+	var tok string
+	switch a.Tokenizer {
+	case index.TokenizeUnicodeWords:
+		tok = unicode.Name
+	case index.TokenizeWholeValue:
+		tok = single.Name
+	default:
+		return nil, bad("tokenizer", a.Tokenizer)
+	}
+	var filters []string
+	for _, f := range a.TokenFilters {
+		switch f {
+		case index.FilterLowercase:
+			filters = append(filters, lowercase.Name)
+		case index.FilterEnglishPossessive:
+			filters = append(filters, en.PossessiveName)
+		case index.FilterPorterStem:
+			filters = append(filters, porter.Name)
+		default:
+			return nil, bad("token filter", f)
+		}
+	}
+	def := map[string]any{"type": custom.Name, "tokenizer": tok}
+	if len(chars) > 0 {
+		def["char_filters"] = chars
+	}
+	if len(filters) > 0 {
+		def["token_filters"] = filters
+	}
+	return def, nil
+}
+
 // mappingStamp is the content of the mapping marker: the Spec's MappingVersion
 // and a fingerprint of its field declarations, so a Fields change that forgot
 // the version bump still recreates the index instead of serving documents under
 // a mapping the Spec no longer describes. The fingerprint hashes the
-// declaration (name, kind, analyzer, store, facet, in order), not bleve's
-// marshalled mapping, so a bleve upgrade does not by itself force a
-// library-scale rebuild.
+// declaration (name, kind, analyzer, store, facet, in order, then each of the
+// Spec's analyzers, in order), not bleve's marshalled mapping, so a bleve
+// upgrade does not by itself force a library-scale rebuild. Field.Boost is
+// left out on purpose: it is a query-time weight and changes no indexed term.
+// A Spec that declares no analyzer hashes exactly what it did before
+// analyzers existed, so adding the feature recreated no index.
 func mappingStamp(s index.Spec) string {
 	var decl []byte
 	for _, f := range s.Fields {
 		decl = fmt.Appendf(decl, "%q %d %q %t %t\n", f.Name, f.Kind, f.Analyzer, f.Store, f.Facet)
 	}
+	for _, a := range s.Analyzers {
+		decl = fmt.Appendf(decl, "analyzer %q %v %d %v\n", a.Name, a.CharFilters, a.Tokenizer, a.TokenFilters)
+	}
 	sum := sha256.Sum256(decl)
 	return s.MappingVersion + "\n" + hex.EncodeToString(sum[:])
 }
 
-// analyzerName resolves a Field.Analyzer: "" is the kind's default, and
-// "standard" and "keyword" are bleve's stock analyzers. A module-registered
-// analyzer needs a registration surface the contract does not have yet, so any
-// other name is refused rather than silently indexed with the default.
-func analyzerName(name, def string) (string, error) {
+// analyzerName resolves a Field.Analyzer to the bleve name it is registered
+// under: "" is the kind's default, the three built-ins are bleve's standard
+// and keyword analyzers and registerAnalyzers' keyword_lowercase, and any
+// other name must be one of the Spec's analyzers (Validate refuses the rest;
+// this refuses them again, rather than silently indexing with the default).
+func analyzerName(s index.Spec, name, def string) (string, error) {
 	switch name {
 	case "":
 		return def, nil
-	case "standard":
+	case index.AnalyzerStandard:
 		return standard.Name, nil
-	case "keyword":
+	case index.AnalyzerKeyword:
 		return keyword.Name, nil
+	case index.AnalyzerKeywordLowercase:
+		return keywordLowercaseBleveName, nil
+	}
+	if slices.ContainsFunc(s.Analyzers, func(a index.Analyzer) bool { return a.Name == name }) {
+		return specAnalyzerPrefix + name, nil
 	}
 	return "", fmt.Errorf("%w: analyzer %q is not registered", index.ErrInvalidSpec, name)
+}
+
+// fieldInfo is what the translation needs to know about one declared field.
+type fieldInfo struct {
+	kind  index.FieldKind
+	fold  bool    // its analyzer lowercases: Term, Prefix and Wildcard text is lowercased
+	boost float64 // Field.Boost; 0 = none
+}
+
+// fieldInfos indexes s's fields for translate.
+func fieldInfos(s index.Spec) map[string]fieldInfo {
+	out := make(map[string]fieldInfo, len(s.Fields))
+	for _, f := range s.Fields {
+		out[f.Name] = fieldInfo{kind: f.Kind, fold: foldsCase(s, f), boost: f.Boost}
+	}
+	return out
+}
+
+// foldsCase reports whether f's analyzer lowercases its tokens: standard and
+// keyword_lowercase do, keyword does not, and a Spec analyzer does when it has
+// FilterLowercase.
+func foldsCase(s index.Spec, f index.Field) bool {
+	if f.Kind != index.Text && f.Kind != index.Keyword {
+		return false
+	}
+	switch f.Analyzer {
+	case "":
+		return f.Kind == index.Text // standard for Text, keyword for Keyword
+	case index.AnalyzerStandard, index.AnalyzerKeywordLowercase:
+		return true
+	case index.AnalyzerKeyword:
+		return false
+	}
+	for _, a := range s.Analyzers {
+		if a.Name == f.Analyzer {
+			return a.Lowercases()
+		}
+	}
+	return false
+}
+
+// foldText lowercases a Term, Prefix or Wildcard text for a field whose
+// analyzer lowercases; those queries match index terms without analysis, so
+// an uppercase letter would make them match nothing. strings.ToLower and
+// bleve's lowercase filter agree on everything but a final Greek sigma.
+func foldText(fi fieldInfo, text string) string {
+	if fi.fold {
+		return strings.ToLower(text)
+	}
+	return text
 }
 
 // translate turns an engine-neutral query into a bleve query over this index's
@@ -103,12 +273,12 @@ func analyzerName(name, def string) (string, error) {
 // tree are parsed during the translation, and what each costs is added to the
 // same node budget checkShape started (nodes), not to a fresh one per string: a
 // tree of a thousand OpString leaves must not get a thousand budgets.
-func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, error) {
+func translate(fields map[string]fieldInfo, n index.Node) (query.Query, error) {
 	nodes := 0
 	if err := checkShape(n, 1, &nodes); err != nil {
 		return nil, err
 	}
-	return translateNode(kinds, n, 1, &nodes)
+	return translateNode(fields, n, 1, &nodes)
 }
 
 // notCost is what a Not node counts in the node budget: it is translated to
@@ -116,9 +286,20 @@ func translate(kinds map[string]index.FieldKind, n index.Node) (query.Query, err
 // for an Or of 510 of them), where a Term or a Match costs a dictionary lookup.
 const notCost = 64
 
+// wildcardCost is what a Wildcard node counts in the node budget: a pattern
+// that starts with * or ? walks the field's whole term dictionary through its
+// automaton before it searches anything, where a Term costs one lookup. At 32
+// a query holds at most 32 Wildcards (a free-text pattern fanned out over
+// seven fields, four times over, fits). What each one then expands to is
+// bounded separately, by the term-searcher cap (ErrTooBroad).
+const wildcardCost = 32
+
 func nodeCost(op index.Op) int {
-	if op == index.OpNot {
+	switch op {
+	case index.OpNot:
 		return notCost
+	case index.OpWildcard:
+		return wildcardCost
 	}
 	return 1
 }
@@ -133,7 +314,7 @@ func checkShape(n index.Node, depth int, nodes *int) error {
 	}
 	*nodes += nodeCost(n.Op)
 	if *nodes > maxQueryNodes {
-		return fmt.Errorf("%w: query is over its budget of %d nodes (a Not counts as %d: it matches every document first)", index.ErrInvalidQuery, maxQueryNodes, notCost)
+		return fmt.Errorf("%w: query is over its budget of %d nodes (a Not counts as %d: it matches every document first; a Wildcard counts as %d: it walks the field's terms first)", index.ErrInvalidQuery, maxQueryNodes, notCost, wildcardCost)
 	}
 	if len(n.Text) > maxQueryStringBytes {
 		return fmt.Errorf("%w: query text is %d bytes, over %d", index.ErrInvalidQuery, len(n.Text), maxQueryStringBytes)
@@ -149,16 +330,18 @@ func checkShape(n index.Node, depth int, nodes *int) error {
 // translateNode translates n, which sits at depth in the tree. nodes is the
 // budget shared by the whole query: it holds what checkShape counted and grows
 // by what each parsed query string costs.
-func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, nodes *int) (query.Query, error) {
+func translateNode(fields map[string]fieldInfo, n index.Node, depth int, nodes *int) (query.Query, error) {
 	bad := func(format string, a ...any) error {
 		return fmt.Errorf("%w: %s", index.ErrInvalidQuery, fmt.Sprintf(format, a...))
 	}
+	var fi fieldInfo
 	field := func() (index.FieldKind, error) {
-		k, ok := kinds[n.Field]
+		f, ok := fields[n.Field]
 		if !ok {
 			return 0, bad("unknown field %q", n.Field)
 		}
-		return k, nil
+		fi = f
+		return f.kind, nil
 	}
 	switch n.Op {
 	case index.OpMatch:
@@ -171,6 +354,9 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, no
 		}
 		q := bleve.NewMatchQuery(n.Text)
 		q.SetField(n.Field)
+		if fi.boost > 0 {
+			q.SetBoost(fi.boost)
+		}
 		return q, nil
 	case index.OpTerm:
 		k, err := field()
@@ -179,7 +365,7 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, no
 		}
 		switch k {
 		case index.Text, index.Keyword:
-			q := bleve.NewTermQuery(n.Text)
+			q := bleve.NewTermQuery(foldText(fi, n.Text))
 			q.SetField(n.Field)
 			return q, nil
 		case index.Bool:
@@ -209,7 +395,21 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, no
 		if k != index.Text && k != index.Keyword {
 			return nil, bad("prefix on %s field %q", k, n.Field)
 		}
-		q := bleve.NewPrefixQuery(n.Text)
+		q := bleve.NewPrefixQuery(foldText(fi, n.Text))
+		q.SetField(n.Field)
+		return q, nil
+	case index.OpWildcard:
+		k, err := field()
+		if err != nil {
+			return nil, err
+		}
+		if k != index.Text && k != index.Keyword {
+			return nil, bad("wildcard on %s field %q", k, n.Field)
+		}
+		if strings.Trim(n.Text, "*?") == "" { // a Node built by hand, not by index.Wildcard
+			return nil, bad("wildcard %q has no literal character", n.Text)
+		}
+		q := bleve.NewWildcardQuery(foldText(fi, n.Text))
 		q.SetField(n.Field)
 		return q, nil
 	case index.OpRange:
@@ -221,7 +421,7 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, no
 	case index.OpAnd, index.OpOr:
 		qs := make([]query.Query, 0, len(n.Children))
 		for _, c := range n.Children {
-			q, err := translateNode(kinds, c, depth+1, nodes)
+			q, err := translateNode(fields, c, depth+1, nodes)
 			if err != nil {
 				return nil, err
 			}
@@ -235,7 +435,7 @@ func translateNode(kinds map[string]index.FieldKind, n index.Node, depth int, no
 		if len(n.Children) != 1 {
 			return nil, bad("not takes one query")
 		}
-		c, err := translateNode(kinds, n.Children[0], depth+1, nodes)
+		c, err := translateNode(fields, n.Children[0], depth+1, nodes)
 		if err != nil {
 			return nil, err
 		}

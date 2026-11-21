@@ -487,7 +487,7 @@ func TestRebuildStopsWhenCancelled(t *testing.T) {
 	go func() { <-started; time.Sleep(50 * time.Millisecond); cancel() }()
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.e.runRebuild(taskstest.NewFakeRun(ctx, RebuildKind).RC(), RebuildParams{Module: string(indextest.Module), Index: indextest.Signal})
+		_, err := r.e.Rebuild(taskstest.NewFakeRun(ctx, RebuildKind).RC(), RebuildParams{Module: string(indextest.Module), Index: indextest.Signal})
 		done <- err
 	}()
 	select {
@@ -511,7 +511,7 @@ func TestRebuildRefusals(t *testing.T) {
 		"not open":     {Module: "gotham", Index: "cave"},
 		"wrong module": {Module: "metropolis", Index: "signal"},
 	} {
-		if _, err := r.e.runRebuild(taskstest.NewFakeRun(t.Context(), RebuildKind).RC(), p); err == nil {
+		if _, err := r.e.Rebuild(taskstest.NewFakeRun(t.Context(), RebuildKind).RC(), p); err == nil {
 			t.Errorf("%s: rebuilt", name)
 		}
 	}

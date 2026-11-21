@@ -263,7 +263,7 @@ func (r *rig) ids(q index.Query) []string {
 
 func runRebuild(t testing.TB, e *Engine) (RebuildResult, error) {
 	t.Helper()
-	return e.runRebuild(taskstest.NewFakeRun(t.Context(), RebuildKind).RC(),
+	return e.Rebuild(taskstest.NewFakeRun(t.Context(), RebuildKind).RC(),
 		RebuildParams{Module: string(indextest.Module), Index: indextest.Signal})
 }
 
