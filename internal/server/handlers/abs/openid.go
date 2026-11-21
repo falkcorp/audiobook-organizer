@@ -1243,14 +1243,7 @@ func (h *Handler) openIDSessionThroughCore(c *gin.Context, id *legacyauth.Identi
 		return
 	}
 	u := p.User
-	h.issueSession(c, &database.User{
-		ID:              string(u.ID),
-		Username:        u.Username,
-		Email:           u.Email,
-		Status:          string(u.Status),
-		CredentialEpoch: u.CredentialEpoch,
-		CreatedAt:       u.CreatedAt,
-	}, nil, oidcAuthMethod, pending.Email, now)
+	h.issueSession(c, booksUserFromCore(u), nil, oidcAuthMethod, pending.Email, now)
 }
 
 // refuseOpenIDCore answers a PrincipalFor refusal: audited with a reason that

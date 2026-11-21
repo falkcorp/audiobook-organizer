@@ -13,12 +13,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
 
+	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 )
 
@@ -33,6 +35,10 @@ type coreLikeCompat struct {
 	calls   []coreCall
 	failure error // when set, returned instead of the check
 
+	verifies      []verifyCall
+	verifyFailure error // when set, VerifyPassword returns it instead of the check
+	verifyNil     bool  // when set, VerifyPassword answers (nil, nil)
+
 	// core, when non-nil, is core's own record of each account (by user ID)
 	// and the compat answers from it alone, never from the harness's books
 	// rows. A test that moves core's record without moving books' (or the
@@ -43,6 +49,14 @@ type coreLikeCompat struct {
 type coreRecord struct {
 	status string
 	epoch  int64
+	// username, password, email and created are core's own record of the
+	// account's sign-in: VerifyPassword answers from them when core owns the
+	// accounts. resetRequired is core's PasswordResetRequired.
+	username      string
+	password      string
+	email         string
+	created       time.Time
+	resetRequired bool
 }
 
 type coreCall struct {
@@ -51,8 +65,78 @@ type coreCall struct {
 	client coreauth.ClientInfo
 }
 
-func (*coreLikeCompat) VerifyPassword(context.Context, string, string, coreauth.ClientInfo) (*coreauth.User, error) {
-	return nil, errors.New("not used")
+// verifyCall is one VerifyPassword call as the handler made it.
+type verifyCall struct {
+	username string
+	password string
+	client   coreauth.ClientInfo
+}
+
+// VerifyPassword answers as core's compat does, in core's order: the
+// password (an unknown name is a wrong password), then status, then reset.
+// With core's records set it answers from them alone; without, from the
+// harness's books rows.
+func (c *coreLikeCompat) VerifyPassword(_ context.Context, username, password string, client coreauth.ClientInfo) (*coreauth.User, error) {
+	c.mu.Lock()
+	c.verifies = append(c.verifies, verifyCall{username: username, password: password, client: client})
+	failure, nilUser := c.verifyFailure, c.verifyNil
+	c.mu.Unlock()
+	if failure != nil {
+		return nil, failure
+	}
+	if nilUser {
+		return nil, nil
+	}
+	if c.core != nil {
+		return c.verifyFromCore(username, password)
+	}
+	cur, _ := c.h.store.GetUserByUsername(username)
+	if cur == nil {
+		return nil, fmt.Errorf("%w: unknown", coreauth.ErrInvalidCredentials)
+	}
+	c.h.store.mu.Lock()
+	hash, algo, status, epoch := cur.PasswordHash, cur.PasswordHashAlgo, cur.Status, cur.CredentialEpoch
+	c.h.store.mu.Unlock()
+	if ok, _ := absauth.Passwords.VerifyLogin(algo, hash, password); !ok {
+		return nil, fmt.Errorf("%w: bad password", coreauth.ErrInvalidCredentials)
+	}
+	if status != "active" {
+		return nil, fmt.Errorf("%w: %s", coreauth.ErrInactiveUser, cur.ID)
+	}
+	return &coreauth.User{
+		ID: coreauth.UserID(cur.ID), Username: cur.Username, Email: cur.Email,
+		Status: coreauth.StatusActive, CredentialEpoch: epoch, CreatedAt: cur.CreatedAt,
+	}, nil
+}
+
+// verifyFromCore is VerifyPassword over core's own records.
+func (c *coreLikeCompat) verifyFromCore(username, password string) (*coreauth.User, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, rec := range c.core {
+		if !strings.EqualFold(rec.username, strings.TrimSpace(username)) {
+			continue
+		}
+		switch {
+		case rec.password != password:
+			return nil, fmt.Errorf("%w: bad password", coreauth.ErrInvalidCredentials)
+		case rec.status != "active":
+			return nil, fmt.Errorf("%w: %s", coreauth.ErrInactiveUser, id)
+		case rec.resetRequired:
+			return nil, fmt.Errorf("%w: %s", coreauth.ErrResetRequired, id)
+		}
+		return &coreauth.User{
+			ID: coreauth.UserID(id), Username: rec.username, Email: rec.email,
+			Status: coreauth.StatusActive, CredentialEpoch: rec.epoch, CreatedAt: rec.created,
+		}, nil
+	}
+	return nil, fmt.Errorf("%w: unknown", coreauth.ErrInvalidCredentials)
+}
+
+func (c *coreLikeCompat) verified() []verifyCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]verifyCall(nil), c.verifies...)
 }
 
 func (*coreLikeCompat) AuthenticateKey(context.Context, string, coreauth.ClientInfo) (*coreauth.Principal, error) {
@@ -100,8 +184,12 @@ func (c *coreLikeCompat) answerFromCore(u *coreauth.User, epoch int64) (*coreaut
 	rec := c.core[string(u.ID)]
 	var status string
 	var current int64
+	name, email, created := "bruce", "", time.Time{}
 	if rec != nil {
-		status, current = rec.status, rec.epoch
+		status, current, email, created = rec.status, rec.epoch, rec.email, rec.created
+		if rec.username != "" {
+			name = rec.username
+		}
 	}
 	c.mu.Unlock()
 	switch {
@@ -114,7 +202,7 @@ func (c *coreLikeCompat) answerFromCore(u *coreauth.User, epoch int64) (*coreaut
 	}
 	return &coreauth.Principal{
 		Method: "books.abs",
-		User:   &coreauth.User{ID: u.ID, Username: "bruce", Status: coreauth.StatusActive, CredentialEpoch: current},
+		User:   &coreauth.User{ID: u.ID, Username: name, Email: email, Status: coreauth.StatusActive, CredentialEpoch: current, CreatedAt: created},
 	}, nil
 }
 

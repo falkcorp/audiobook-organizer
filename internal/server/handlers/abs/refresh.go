@@ -15,6 +15,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreaudit "github.com/falkcorp/mediacore/audit"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -262,6 +263,11 @@ func (h *Handler) rotateForCF(hash string, user *database.User, now time.Time) (
 // forward, so a session minted with an old password cannot be refreshed into one
 // that passes.
 func (h *Handler) refreshUser(c *gin.Context, ip string, session *database.ABSSession, mode string) (*database.User, bool) {
+	// Under core identity (F4-08 B10b1fu) the user, the epoch and the status
+	// are core's, not books' store's.
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		return h.refreshUserThroughCore(c, id, ip, session, mode)
+	}
 	sessionID := session.ID
 	user, err := h.store.GetUserByID(session.UserID)
 	if err != nil {
