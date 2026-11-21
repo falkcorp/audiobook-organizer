@@ -18,7 +18,9 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // Credential-changing routes are registered ONLY through credRoute and
@@ -83,6 +85,28 @@ func (s *Server) credRouteWhen(g *gin.RouterGroup, method, rel string, guarded f
 }
 
 func (s *Server) credGuardMiddleware(guarded func(*gin.Context) bool) gin.HandlerFunc {
+	// Under core identity (WithIdentity, F4-08 B7) the principal's method
+	// decides (coreauth.Method.MayChangeCredentials), and books' EnableAuth is
+	// not read: the auth-disabled principal is refused, as core tightens HEAD's
+	// pass-through on purpose (SEC5-8). A conditional route still consults
+	// guarded only for a request whose method may not change credentials.
+	if s.identity != nil {
+		refuse := legacyauth.RequireCredentialChange()
+		if guarded == nil {
+			return refuse
+		}
+		return func(c *gin.Context) {
+			if p, ok := coreauth.PrincipalFrom(c.Request.Context()); ok && p.Method.MayChangeCredentials() {
+				c.Next()
+				return
+			}
+			if !guarded(c) {
+				c.Next()
+				return
+			}
+			refuse(c)
+		}
+	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
