@@ -30,7 +30,9 @@ vi.mock('./components/system/MaintenanceTab', () => ({
   MaintenanceTab: () => <div data-testid="maintenance-tab-body">maintenance</div>,
 }));
 
-vi.mock('./services/api', async () => (await import('./test/appApiMock')).createAppApiMock());
+vi.mock('./services/api', async (importOriginal) =>
+  (await import('./test/appApiMock')).createAppApiMock(await importOriginal<typeof import('./services/api')>()),
+);
 
 function LocationProbe() {
   const { pathname, search, hash } = useLocation();

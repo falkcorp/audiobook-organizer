@@ -29,34 +29,10 @@ vi.mock('./services/eventSourceManager', () => ({
 vi.mock('./components/tools/ToolsPanel', () => ({ ToolsPanel: () => null }));
 vi.mock('./components/common/ServerFileBrowser', () => ({ ServerFileBrowser: () => null }));
 
-vi.mock('./services/api', () => ({
-  getAuthStatus: vi.fn().mockResolvedValue({ has_users: false, requires_auth: false, bootstrap_ready: false }),
-  getMe: vi.fn().mockResolvedValue(null),
-  login: vi.fn(),
-  logout: vi.fn(),
-  setupAdmin: vi.fn(),
+vi.mock('./services/api', async (importOriginal) => ({
+  ...(await import('./test/appApiMock')).createAppApiMock(await importOriginal<typeof import('./services/api')>()),
+  // this file starts with no config answer, so each test supplies its own
   getConfig: vi.fn(),
-  getHomeDirectory: vi.fn().mockResolvedValue('/home/user'),
-  getSystemStatus: vi.fn().mockResolvedValue({
-    status: 'ok',
-    library: { book_count: 0, folder_count: 1, total_size: 0 },
-    import_paths: { book_count: 0, folder_count: 0, total_size: 0 },
-    memory: {},
-    runtime: {},
-    operations: { recent: [] },
-  }),
-  getImportPaths: vi.fn().mockResolvedValue([{ path: '/tmp' }]),
-  countBooks: vi.fn().mockResolvedValue(0),
-  getOperationLogsTail: vi.fn().mockResolvedValue([]),
-  getAuthors: vi.fn().mockResolvedValue([]),
-  getSeries: vi.fn().mockResolvedValue([]),
-  getNarrators: vi.fn().mockResolvedValue([]),
-  getBooks: vi.fn().mockResolvedValue([]),
-  searchBooks: vi.fn().mockResolvedValue([]),
-  getSoftDeletedBooks: vi.fn().mockResolvedValue({ items: [], count: 0 }),
-  getAppVersion: vi.fn().mockResolvedValue('1.0.0-test'),
-  getOperationTimeline: vi.fn().mockResolvedValue([]),
-  openOperationsSSE: vi.fn().mockReturnValue({ close: vi.fn(), addEventListener: vi.fn(), removeEventListener: vi.fn() }),
 }));
 
 const renderApp = () =>
