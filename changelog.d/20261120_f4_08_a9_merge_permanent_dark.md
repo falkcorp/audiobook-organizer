@@ -1,0 +1,3 @@
+### Added
+
+- The user-merge package now has the check that refuses an undo or a resume of any merge journal once the identity flip has happened, built but not called (F4-08 A9, dark; the flip wires the handler's 409 and deletes HEAD's undo and resume of old journals). `usermerge.ErrMergePermanent`, problem code `merge_permanent`, and `(*Service).CheckMergeAction(action, journalID, identityFlipped)`: flipped, every journal of every status is refused, an undecodable one included, a missing one is still not-found, and a store read error refuses too. Not flipped, it refuses nothing. The running binary behaves exactly as before.
