@@ -1,0 +1,642 @@
+// file: web/src/modules/books/pages/AIDiagnosticsWidget.tsx
+// version: 0.1.0
+// guid: ad6c7bb2-4c5d-4a45-8a4c-3646ca0ecceb
+// last-edited: 2026-11-21
+
+// Books diagnostics widget (07 §7.11, "AI-dedup diagnostics"): the export and AI suggestion flow of the old Diagnostics page (F9-04 slice 3).
+
+import { useState, useCallback, useRef, useEffect } from 'react';
+import { useSearchParams } from 'react-router';
+import { applyOwnedParams } from '../../../hooks/useUrlState';
+import {
+  Alert,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Box,
+  Button,
+  Card,
+  CardActionArea,
+  CardContent,
+  Checkbox,
+  Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  FormControlLabel,
+  Grid,
+  LinearProgress,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
+} from '@mui/material';
+import BugReportIcon from '@mui/icons-material/BugReport';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import SpellcheckIcon from '@mui/icons-material/Spellcheck';
+import BuildIcon from '@mui/icons-material/Build';
+import DownloadIcon from '@mui/icons-material/Download';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import * as api from '../../../services/api';
+
+interface CategoryOption {
+  id: string;
+  label: string;
+  description: string;
+  icon: React.ReactNode;
+}
+
+const categories: CategoryOption[] = [
+  {
+    id: 'errors',
+    label: 'Error Analysis',
+    description: 'Analyze recent errors and operation failures',
+    icon: <BugReportIcon sx={{ fontSize: 40 }} />,
+  },
+  {
+    id: 'dedup',
+    label: 'Deduplication',
+    description: 'Find duplicate books, orphan tracks, and missing merges',
+    icon: <ContentCopyIcon sx={{ fontSize: 40 }} />,
+  },
+  {
+    id: 'metadata',
+    label: 'Metadata Quality',
+    description: 'Check for incorrect authors, bad titles, missing series',
+    icon: <SpellcheckIcon sx={{ fontSize: 40 }} />,
+  },
+  {
+    id: 'general',
+    label: 'General',
+    description: 'Full library diagnostic with all checks',
+    icon: <BuildIcon sx={{ fontSize: 40 }} />,
+  },
+];
+
+const actionLabels: Record<string, string> = {
+  merge_versions: 'Merge Versions',
+  delete_orphan: 'Delete Orphans',
+  fix_metadata: 'Fix Metadata',
+  reassign_series: 'Reassign Series',
+};
+
+
+export function AIDiagnosticsWidget() {
+  // The chosen category is `?category=<id>`, so a link can open the page with it
+  // already picked. An id the page does not list reads as no choice.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const categoryParam = searchParams.get('category');
+  const selectedCategory = categories.some((c) => c.id === categoryParam) ? categoryParam : null;
+  const setSelectedCategory = (id: string) =>
+    setSearchParams((prev) => applyOwnedParams(prev, { category: id }), { replace: true });
+  const [description, setDescription] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // Operation state
+  const [operationId, setOperationId] = useState<string | null>(null);
+  const [operationType, setOperationType] = useState<'export' | 'ai' | null>(null);
+  const [operationStatus, setOperationStatus] = useState<string | null>(null);
+  const [operationProgress, setOperationProgress] = useState(0);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // AI results
+  const [aiResults, setAiResults] = useState<api.DiagnosticsAIResults | null>(null);
+  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
+  const [showRaw, setShowRaw] = useState(false);
+  const [applyDialogOpen, setApplyDialogOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(
+    (opId: string, type: 'export' | 'ai') => {
+      stopPolling();
+      setOperationId(opId);
+      setOperationType(type);
+      setOperationStatus('running');
+      setOperationProgress(0);
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const op = await api.getOperationStatus(opId);
+          setOperationStatus(op.status);
+          if (op.progress !== undefined) setOperationProgress(op.progress);
+
+          if (op.status === 'completed') {
+            stopPolling();
+            if (type === 'export') {
+              // Trigger download
+              try {
+                const blob = await api.downloadDiagnosticsExport(opId);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `diagnostics-${opId}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                setSuccessMsg('Diagnostics export downloaded');
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Failed to download export');
+              }
+            } else if (type === 'ai') {
+              // Fetch AI results
+              try {
+                const results = await api.getDiagnosticsAIResults(opId);
+                setAiResults(results);
+                setSelectedSuggestions(new Set());
+                setSuccessMsg(
+                  `AI analysis complete: ${results.suggestions.length} suggestion(s) found`
+                );
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Failed to get AI results');
+              }
+            }
+            setOperationStatus('completed');
+          } else if (op.status === 'failed') {
+            stopPolling();
+            setError(`Operation failed: ${op.errors?.[0] || 'Unknown error'}`);
+            setOperationStatus('failed');
+          } else if (api.isOperationTerminal(op.status)) {
+            // Catch-all, and it must stay LAST: the 'completed' branch above
+            // does real work (fetching the AI results) that a generic terminal
+            // check placed first would skip.
+            //
+            // This was `op.status === 'cancelled'` (two Ls) against a backend
+            // that mints 'canceled', so cancelling never stopped the poll. It
+            // also missed every interrupted_* status. Store the real status
+            // rather than a fixed word — it is rendered directly as the status
+            // chip, so "interrupted_quiesced" should say so.
+            stopPolling();
+            setOperationStatus(op.status);
+          }
+        } catch (err) {
+          stopPolling();
+          setError(err instanceof Error ? err.message : 'Failed to poll operation');
+        }
+      }, 5000);
+    },
+    [stopPolling]
+  );
+
+  const handleExport = async () => {
+    if (!selectedCategory) return;
+    setError(null);
+    setSuccessMsg(null);
+    try {
+      const result = await api.startDiagnosticsExport(selectedCategory, description);
+      startPolling(result.operation_id, 'export');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start export');
+    }
+  };
+
+  const handleSubmitAI = async () => {
+    if (!selectedCategory) return;
+    setError(null);
+    setSuccessMsg(null);
+    setAiResults(null);
+    try {
+      const result = await api.submitDiagnosticsAI(selectedCategory, description);
+      // Was `${result.request_count} request(s)` — a field this response has
+      // never carried, so the toast read "undefined request(s)". The count is
+      // known only once the run has built its batch, and now arrives with the
+      // progress updates the poll below renders.
+      setSuccessMsg('AI analysis queued — progress appears below.');
+      startPolling(result.operation_id, 'ai');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to submit AI analysis');
+    }
+  };
+
+  const toggleSuggestion = (id: string) => {
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const selectAllInGroup = (suggestions: api.DiagnosticsSuggestion[]) => {
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
+      for (const s of suggestions) {
+        if (!s.applied) next.add(s.id);
+      }
+      return next;
+    });
+  };
+
+  const deselectAllInGroup = (suggestions: api.DiagnosticsSuggestion[]) => {
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
+      for (const s of suggestions) {
+        next.delete(s.id);
+      }
+      return next;
+    });
+  };
+
+  const handleApply = async () => {
+    if (!operationId || selectedSuggestions.size === 0) return;
+    setApplyDialogOpen(false);
+    setApplying(true);
+    setError(null);
+    try {
+      const result = await api.applyDiagnosticsSuggestions(
+        operationId,
+        Array.from(selectedSuggestions)
+      );
+      setSuccessMsg(
+        `Applied ${result.applied} suggestion(s)` +
+          (result.failed > 0 ? `, ${result.failed} failed` : '')
+      );
+      if (result.errors.length > 0) {
+        setError(result.errors.join('; '));
+      }
+      // Refresh results
+      //
+      // CodeQL js/trivial-conditional (alert #976): the early `if
+      // (!operationId || ...) return;` guard at the top of this handler
+      // already guarantees operationId is truthy for the rest of this
+      // closure (it is React state captured at call time and never
+      // reassigned within this function). Genuine dead conditional, not a
+      // false positive — removed rather than dismissed.
+      const results = await api.getDiagnosticsAIResults(operationId);
+      setAiResults(results);
+      setSelectedSuggestions(new Set());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to apply suggestions');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  // Group suggestions by action type
+  const groupedSuggestions = aiResults
+    ? Object.entries(
+        aiResults.suggestions.reduce(
+          (acc, s) => {
+            if (!acc[s.action]) acc[s.action] = [];
+            acc[s.action].push(s);
+            return acc;
+          },
+          {} as Record<string, api.DiagnosticsSuggestion[]>
+        )
+      )
+    : [];
+
+  const isRunning = operationStatus === 'running' || operationStatus === 'pending';
+
+  return (
+    <>
+      <Typography
+        variant="body2"
+        sx={{
+          color: 'text.secondary',
+          mb: 3,
+        }}
+      >
+        Export library data for analysis or submit to AI for automated suggestions.
+      </Typography>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+      {successMsg && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccessMsg(null)}>
+          {successMsg}
+        </Alert>
+      )}
+
+      {/* Category Selection */}
+      <Typography variant="h6" sx={{ mb: 1 }}>
+        Select Category
+      </Typography>
+      <Grid container spacing={2} sx={{ mb: 3 }}>
+        {categories.map((cat) => (
+          <Grid
+            key={cat.id}
+            size={{
+              xs: 12,
+              sm: 6,
+            }}
+          >
+            <Card
+              variant="outlined"
+              sx={[
+                selectedCategory === cat.id
+                  ? {
+                      border: 2,
+                    }
+                  : {
+                      border: 1,
+                    },
+                selectedCategory === cat.id
+                  ? {
+                      borderColor: 'primary.main',
+                    }
+                  : {
+                      borderColor: 'divider',
+                    },
+              ]}
+            >
+              <CardActionArea onClick={() => setSelectedCategory(cat.id)}>
+                <CardContent>
+                  <Stack
+                    direction="row"
+                    spacing={2}
+                    sx={{
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Box
+                      sx={[
+                        selectedCategory === cat.id
+                          ? {
+                              color: 'primary.main',
+                            }
+                          : {
+                              color: 'text.secondary',
+                            },
+                      ]}
+                    >
+                      {cat.icon}
+                    </Box>
+                    <Box>
+                      <Typography
+                        variant="subtitle1"
+                        sx={{
+                          fontWeight: 'bold',
+                        }}
+                      >
+                        {cat.label}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          color: 'text.secondary',
+                        }}
+                      >
+                        {cat.description}
+                      </Typography>
+                    </Box>
+                  </Stack>
+                </CardContent>
+              </CardActionArea>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
+      {/* Description */}
+      <TextField
+        label="Description"
+        placeholder="Describe what you're investigating (optional)"
+        multiline
+        minRows={2}
+        maxRows={4}
+        fullWidth
+        value={description}
+        onChange={(e) => setDescription(e.target.value)}
+        sx={{ mb: 3 }}
+      />
+      {/* Actions */}
+      <Stack direction="row" spacing={2} sx={{ mb: 3 }}>
+        <Button
+          variant="outlined"
+          startIcon={<DownloadIcon />}
+          disabled={!selectedCategory || isRunning}
+          onClick={handleExport}
+        >
+          Download ZIP
+        </Button>
+        <Button
+          variant="contained"
+          startIcon={<SmartToyIcon />}
+          disabled={!selectedCategory || isRunning}
+          onClick={handleSubmitAI}
+        >
+          Submit to AI
+        </Button>
+      </Stack>
+      {/* Progress */}
+      {isRunning && (
+        <Box sx={{ mb: 3 }}>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{
+              alignItems: 'center',
+              mb: 1,
+            }}
+          >
+            <Typography
+              variant="body2"
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
+              {operationType === 'export' ? 'Generating export...' : 'AI analysis in progress...'}
+            </Typography>
+            <Chip size="small" label={operationStatus} color="info" variant="outlined" />
+          </Stack>
+          <LinearProgress
+            variant={operationProgress > 0 ? 'determinate' : 'indeterminate'}
+            value={operationProgress}
+          />
+        </Box>
+      )}
+      {/* AI Results Panel */}
+      {aiResults && (
+        <Box sx={{ mt: 2 }}>
+          <Stack
+            direction="row"
+            sx={{
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              mb: 2,
+            }}
+          >
+            <Typography variant="h6">AI Suggestions ({aiResults.suggestions.length})</Typography>
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{
+                alignItems: 'center',
+              }}
+            >
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={showRaw}
+                    onChange={(e) => setShowRaw(e.target.checked)}
+                    size="small"
+                  />
+                }
+                label="View Raw"
+              />
+              <Button
+                variant="contained"
+                color="warning"
+                disabled={selectedSuggestions.size === 0 || applying}
+                onClick={() => setApplyDialogOpen(true)}
+              >
+                {applying ? 'Applying...' : `Apply Selected (${selectedSuggestions.size})`}
+              </Button>
+            </Stack>
+          </Stack>
+
+          {showRaw && (
+            <Box
+              component="pre"
+              sx={{
+                p: 2,
+                mb: 2,
+                bgcolor: 'grey.100',
+                borderRadius: 1,
+                overflow: 'auto',
+                maxHeight: 400,
+                fontSize: '0.75rem',
+              }}
+            >
+              {JSON.stringify(aiResults.raw_responses, null, 2)}
+            </Box>
+          )}
+
+          {groupedSuggestions.length === 0 && (
+            <Typography
+              sx={{
+                color: 'text.secondary',
+              }}
+            >
+              No suggestions found.
+            </Typography>
+          )}
+
+          {groupedSuggestions.map(([action, suggestions]) => (
+            <Accordion key={action} defaultExpanded>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  sx={{
+                    alignItems: 'center',
+                  }}
+                >
+                  <Typography
+                    variant="subtitle1"
+                    sx={{
+                      fontWeight: 'bold',
+                    }}
+                  >
+                    {actionLabels[action] || action}
+                  </Typography>
+                  <Chip size="small" label={suggestions.length} />
+                </Stack>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+                  <Button size="small" onClick={() => selectAllInGroup(suggestions)}>
+                    Select All
+                  </Button>
+                  <Button size="small" onClick={() => deselectAllInGroup(suggestions)}>
+                    Deselect All
+                  </Button>
+                </Stack>
+                <Stack spacing={1}>
+                  {suggestions.map((s) => (
+                    <Card key={s.id} variant="outlined">
+                      <CardContent
+                        sx={{
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 1,
+                          py: 1.5,
+                          '&:last-child': { pb: 1.5 },
+                        }}
+                      >
+                        <Checkbox
+                          checked={selectedSuggestions.has(s.id) || s.applied}
+                          disabled={s.applied}
+                          onChange={() => toggleSuggestion(s.id)}
+                          sx={{ mt: -0.5 }}
+                        />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography variant="body2">{s.reason}</Typography>
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: 'text.secondary',
+                            }}
+                          >
+                            Books: {s.book_ids.join(', ')}
+                            {s.primary_id && ` | Primary: ${s.primary_id}`}
+                          </Typography>
+                          {s.fix && (
+                            <Typography
+                              variant="caption"
+                              component="div"
+                              sx={{
+                                color: 'text.secondary',
+                              }}
+                            >
+                              Fix: {JSON.stringify(s.fix)}
+                            </Typography>
+                          )}
+                        </Box>
+                        {s.applied && (
+                          <Chip size="small" label="Applied" color="success" variant="outlined" />
+                        )}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          ))}
+        </Box>
+      )}
+
+      {/* Apply Confirmation Dialog */}
+      <Dialog open={applyDialogOpen} onClose={() => setApplyDialogOpen(false)}>
+        <DialogTitle>Apply Suggestions</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to apply {selectedSuggestions.size} selected suggestion(s)? This
+            will modify your library data.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setApplyDialogOpen(false)}>Cancel</Button>
+          <Button onClick={handleApply} color="warning" variant="contained">
+            Apply
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+    </>
+  );
+}
