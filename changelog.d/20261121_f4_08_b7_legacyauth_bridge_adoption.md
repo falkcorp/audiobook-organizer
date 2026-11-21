@@ -1,0 +1,4 @@
+### Changed
+
+- Books' gin routes behind the books mount engine can run under core identity. A server built with `server.WithIdentity` marks every request, and each permission, admin-role and credential site then asks the `legacyauth` bridge (the principal core's stage 12 bound) instead of books' own session, role names and `EnableAuth`. A server built without it behaves exactly as before; nothing changes while the mount stays on the books gin chain. Under core identity a refusal can only be wider-to-narrower than before: a principal must pass the old role-name test and, in addition, hold `core:admin` at `mergeActor`, `SetUserEmail`, `inviteTokenVisible` and the repairs owner apply, and an API key principal no longer acts as an admin.
+- `OpenIDCallback` reads the session epoch and the account's standing through core when core identity is live, so a code minted before a deactivation or an epoch bump is refused.
