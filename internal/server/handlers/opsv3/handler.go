@@ -40,6 +40,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -169,7 +170,14 @@ type Authz struct {
 func StrictAuthz() Authz {
 	return Authz{
 		Require: func(c *gin.Context, p auth.Permission) bool { return servermiddleware.CheckPermission(nil, c, p) },
-		Holds:   func(c *gin.Context, p auth.Permission) bool { return auth.Can(c.Request.Context(), p) },
+		Holds: func(c *gin.Context, p auth.Permission) bool {
+			// Under core identity (F4-08 B7) the atom's table entry is judged
+			// through the principal stage 12 bound.
+			if held, bridged := legacyauth.Held(c.Request.Context(), string(p)); bridged {
+				return held
+			}
+			return auth.Can(c.Request.Context(), p)
+		},
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -778,7 +779,11 @@ func (h *OperationsV2Handler) repairsStartAllowed(c *gin.Context, defID string, 
 // An unknown def_id deliberately skips the check and falls through to
 // EnqueueOp, preserving today's error response. Nothing runs either way.
 func (h *OperationsV2Handler) defPermissionsHeld(c *gin.Context, defID string) bool {
-	if !h.enforcePerms {
+	// Under core identity (F4-08 B7) auth off is the auth-disabled principal,
+	// not the wiring flag, and each permission is judged through the principal
+	// stage 12 bound; enforcePerms (books' EnableAuth at wiring) is not read.
+	_, bridged := legacyauth.BridgeFrom(c.Request.Context())
+	if !bridged && !h.enforcePerms {
 		return true
 	}
 	def, ok := h.registry.Def(defID)
@@ -790,7 +795,11 @@ func (h *OperationsV2Handler) defPermissionsHeld(c *gin.Context, defID string) b
 		required = []auth.Permission{auth.PermSettingsManage}
 	}
 	for _, p := range required {
-		if !auth.Can(c.Request.Context(), p) {
+		held, _ := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p))
+		if !bridged {
+			held = auth.Can(c.Request.Context(), p)
+		}
+		if !held {
 			httputil.RespondWithForbidden(c, "permission denied: "+string(p))
 			return false
 		}
