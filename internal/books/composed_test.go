@@ -38,6 +38,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
+	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/storage"
@@ -248,8 +249,11 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 		}
 	}
 	newLog := &syncBuffer{}
+	// The listener binds core.http.listen (start step 7), not the server
+	// config's host and port: an environment layer puts it on a free loopback
+	// port, where ABO's compiled default (localhost:8484) would collide.
+	t.Setenv("ABO_CORE_HTTP_LISTEN", "127.0.0.1:0")
 	cfg := server.GetDefaultServerConfig()
-	cfg.Host, cfg.Port = "127.0.0.1", "0"
 	opts, err := Options(mod, ServeInputs{Server: cfg, Telemetry: config.Snapshot(), LogOut: newLog})
 	require.NoError(t, err)
 	opts.StorageFS = storage.MemFS()
@@ -660,6 +664,38 @@ func TestOptions_ShutdownBudgetEnvIsCoreConfig(t *testing.T) {
 	t.Run("a good value boots", func(t *testing.T) {
 		t.Setenv("ABO_CORE_SHUTDOWN_BUDGET", "40s")
 		bootComposed(t, false, nil, nil)
+	})
+}
+
+// ABO's compiled core defaults (coreDefaults) are what core.http.listen and
+// core.http.client_ip_header resolve to with no operator layer: one interface,
+// as --host always defaulted, and the header the tunnel connectors set. An
+// operator layer beats them.
+func TestOptions_CoreDefaultsAreTheEffectiveValues(t *testing.T) {
+	// bootComposedWith restores the process defaults the App installs; edit
+	// runs after the harness set its environment and before app.New.
+	lookup := func(t *testing.T, edit func()) func(coreconfig.Path) coreconfig.KeyState {
+		c := bootComposedWith(t, false, "", nil, nil, func(*app.Options) { edit() })
+		in := c.mod.gapFillIn.Load()
+		require.NotNil(t, in, "the books module has no config access")
+		return func(p coreconfig.Path) coreconfig.KeyState {
+			st, ok := in.acc.Lookup(p)
+			require.True(t, ok, "%s is not registered", p)
+			return st
+		}
+	}
+	t.Run("no operator layer", func(t *testing.T) {
+		get := lookup(t, func() { require.NoError(t, os.Unsetenv("ABO_CORE_HTTP_LISTEN")) })
+		assert.JSONEq(t, `"localhost:8484"`, string(get("core.http.listen").Effective))
+		assert.JSONEq(t, `"CF-Connecting-IP"`, string(get("core.http.client_ip_header").Effective))
+	})
+	t.Run("an operator layer beats them", func(t *testing.T) {
+		get := lookup(t, func() {
+			t.Setenv("ABO_CORE_HTTP_LISTEN", "192.0.2.8:9000")
+			t.Setenv("ABO_CORE_HTTP_CLIENT_IP_HEADER", "X-Wayne-Client")
+		})
+		assert.JSONEq(t, `"192.0.2.8:9000"`, string(get("core.http.listen").Effective))
+		assert.JSONEq(t, `"X-Wayne-Client"`, string(get("core.http.client_ip_header").Effective))
 	})
 }
 

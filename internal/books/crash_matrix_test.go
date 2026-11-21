@@ -572,7 +572,7 @@ func readAboFlipState(fsys vfs.FS, f crashmatrix.Fixture) (*aboFlipState, error)
 		return nil, err
 	} else if ok {
 		st.levels = map[string]int{}
-		for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(string(b)), "\n") {
 			owner, n, found := strings.Cut(strings.TrimSpace(line), " ")
 			lvl, cerr := strconv.Atoi(strings.TrimSpace(n))
 			if !found || cerr != nil {

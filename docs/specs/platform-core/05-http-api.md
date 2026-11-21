@@ -1249,6 +1249,8 @@ locked by an operator value like any key (05-config refuses `FailClosed` on a st
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
 | `core.http.listen` | string | `:8484` (ABO default port, `server_lifecycle.go:2187`) | no | admin |
+| `core.http.tls.cert_file` | path. Both `cert_file` and `key_file` are set or both are empty (validation refuses one alone, naming `core.http.tls.cert_file`); both set = the listener serves TLS from the pair, loaded once at start; the files' contents are never read into config. ABO's `--tls-cert` flag is a locking flag layer over it, and a compiled `certs/localhost.crt` no longer implies TLS (F3-07, TLS option A) | `""` (plain HTTP) | no | admin |
+| `core.http.tls.key_file` | path; see `cert_file`. ABO's `--tls-key` flag is a locking flag layer over it | `""` | no | admin |
 | `core.http.peer_allowlist` | []CIDR | `[]` (warn: accept any peer) | yes | admin |
 | `core.http.trusted_proxies` | [](CIDR or address with optional IPv6 zone) | `[]` | yes | admin |
 | `core.http.client_ip_header` | string | `""` (ABO: `CF-Connecting-IP`) | yes | admin |
