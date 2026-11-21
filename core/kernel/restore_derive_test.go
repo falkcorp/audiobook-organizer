@@ -216,7 +216,15 @@ func TestDeriveRestoreBoot_RefusesASourceItCannotRead(t *testing.T) {
 			}
 		}, nil},
 		{"a manifest that is not the one the intent hashed", func(t *testing.T, h *swapHost, in restorejournal.Intent) {
-			if err := os.WriteFile(filepath.Join(in.Staging, backup.ManifestName), []byte(`{"format":"mediacore-backup/1"}`), 0o600); err != nil {
+			// A manifest that parses, with another journal sequence: only the intent's
+			// hash tells it from the one that was staged.
+			m := *newArchiveSource().manifest
+			m.JournalSeq = 9
+			raw, err := backup.MarshalManifest(&m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(in.Staging, backup.ManifestName), raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}, nil},
