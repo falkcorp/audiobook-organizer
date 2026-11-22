@@ -89,11 +89,10 @@ func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlippedWithoutCore(t *
 			return err
 		},
 		"Footprint": func(svc *Service) error {
-			_, err := svc.Footprint("bruce")
+			_, err := svc.Footprint(ctx, "bruce")
 			return err
 		},
-		"CheckFootprintAvailable": func(svc *Service) error { return svc.CheckFootprintAvailable() },
-		"CheckAvailable":          func(svc *Service) error { return svc.CheckAvailable() },
+		"CheckAvailable": func(svc *Service) error { return svc.CheckAvailable() },
 	}
 	for name, call := range entry {
 		t.Run(name, func(t *testing.T) {

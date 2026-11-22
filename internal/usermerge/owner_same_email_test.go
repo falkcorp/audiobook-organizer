@@ -104,7 +104,7 @@ func TestSameEmailAdmins_NothingMergesThemWithoutAnApply(t *testing.T) {
 		if _, err := f.svc.BuildPlan(ctx, PlanRequest{ActorID: dir[1], SurvivorID: dir[1], AbsorbedID: dir[0]}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.svc.Footprint(dir[0]); err != nil {
+		if _, err := f.svc.Footprint(context.Background(), dir[0]); err != nil {
 			t.Fatal(err)
 		}
 	}

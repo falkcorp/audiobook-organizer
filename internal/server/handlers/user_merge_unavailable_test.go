@@ -17,9 +17,10 @@ import (
 // A server wired for core identity WITHOUT the core handles the merge runs on
 // fails closed: preview and apply answer 409 merge_unavailable_under_identity
 // before any account is resolved, any body is read, any plan is built or any
-// grant is minted, and so does the footprint (which has no core read at all).
-// Resume and undo are B10b2's merge_permanent, and the merge listing stays
-// readable. With the handles wired, the merge runs (identity_merge_test.go).
+// grant is minted, and so does the footprint. Resume and undo are B10b2's
+// merge_permanent, and the merge listing stays readable. With the handles
+// wired, the merge runs (user_merge_identity_test.go) and so does the footprint
+// (F4-08 B10fp, user_merge_identity_footprint_test.go).
 
 func problemCode(t *testing.T, body []byte) string {
 	t.Helper()
@@ -43,15 +44,16 @@ func TestUserMergeRoutes_PreviewIsUnavailableUnderIdentity(t *testing.T) {
 	}
 }
 
-func TestUserMergeRoutes_FootprintIsUnavailableUnderIdentity(t *testing.T) {
+func TestUserMergeRoutes_FootprintIsUnavailableUnderIdentityWithoutCoreHandles(t *testing.T) {
 	r := newMergeRig(t)
 	// Before the flip the footprint reads.
 	if w, _ := r.do(t, http.MethodGet, "/users/"+r.absorbed.ID+"/footprint", nil); w.Code != http.StatusOK {
 		t.Fatalf("footprint before the flip: %d %s", w.Code, w.Body.String())
 	}
 	r.flipped(t, true)
-	// An account that does not exist: without the guard this is a 404 from the
-	// account lookup, so a 409 proves the guard ran before it.
+	// A flipped service with no core handles: an account that does not exist
+	// would be a 404 from the account lookup, so a 409 proves the guard ran
+	// before it.
 	for _, id := range []string{r.absorbed.ID, "u-nope"} {
 		w, _ := r.do(t, http.MethodGet, "/users/"+id+"/footprint", nil)
 		if w.Code != http.StatusConflict || problemCode(t, w.Body.Bytes()) != usermerge.ProblemUnavailableUnderIdentity {

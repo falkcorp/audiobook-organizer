@@ -29,7 +29,10 @@ const UserMergeOpID = usermerge.OpDefID
 
 // UserMergeService is what the merge routes need of usermerge.Service.
 type UserMergeService interface {
-	Footprint(userID string) (*usermerge.Footprint, error)
+	// Footprint reads the account's footprint: from the books store before the
+	// identity flip, and once accounts live in core through core's masked read
+	// as the request's principal in ctx (so ctx must be the request's).
+	Footprint(ctx context.Context, userID string) (*usermerge.Footprint, error)
 	// CheckAction refuses an undo or resume once the identity flip makes
 	// merges permanent (usermerge.ErrMergePermanent); the journal routes ask it
 	// before they read a journal.
@@ -41,13 +44,9 @@ type UserMergeService interface {
 	CheckUndo(ctx context.Context, journalID string) error
 	// CheckAvailable refuses (usermerge.ErrUnavailableUnderIdentity) only when
 	// the flip is wired and the service has no core handles to run the merge
-	// on (a wiring that left them out fails closed); preview and apply ask it
-	// before they resolve an account or build a plan.
+	// on (a wiring that left them out fails closed); preview, apply and the
+	// footprint ask it before they resolve an account or build a plan.
 	CheckAvailable() error
-	// CheckFootprintAvailable refuses the footprint read while the store is
-	// core's: sign-ins and keys are core's records and the footprint has no
-	// masked read of them.
-	CheckFootprintAvailable() error
 	// ResolveAccount resolves a user id from a request to the stored account's
 	// id (the books store's, or core's once the flip is wired).
 	ResolveAccount(ctx context.Context, raw string) (id string, found bool, err error)
@@ -145,18 +144,18 @@ func (h *UserHandler) UserFootprint(c *gin.Context) {
 	if _, ok := h.mergeActor(c); !ok {
 		return
 	}
-	// The footprint reads books' own copy of the account's sign-ins and
-	// credentials, which hold nothing once the store is core's (F4-08 B10l):
-	// 409, before any account is resolved.
-	if err := h.merge.CheckFootprintAvailable(); err != nil {
-		h.mergeError(c, "check footprint availability", err)
+	// The footprint is live under core identity (F4-08 B10fp): it reads core's
+	// masked footprint of the account as the request's principal. Only a
+	// flipped service with no core handles refuses, 409, before any account is
+	// resolved (mergeAvailable).
+	if !h.mergeAvailable(c) {
 		return
 	}
 	id, ok := h.accountID(c, c.Param("id"))
 	if !ok {
 		return
 	}
-	fp, err := h.merge.Footprint(id)
+	fp, err := h.merge.Footprint(c.Request.Context(), id)
 	if err != nil {
 		h.mergeError(c, "user footprint", err)
 		return
