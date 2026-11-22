@@ -35,7 +35,7 @@ const FamPositions = "positions"
 
 // Footprint reads userID's footprint. It writes nothing.
 func (s *Service) Footprint(userID string) (*Footprint, error) {
-	if err := s.CheckAvailable(); err != nil {
+	if err := s.CheckFootprintAvailable(); err != nil {
 		return nil, err
 	}
 	u, err := s.mustUser(userID, "user")

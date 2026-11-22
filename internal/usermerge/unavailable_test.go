@@ -64,11 +64,12 @@ func TestProblemUnavailableUnderIdentity_IsTheSpecsCode(t *testing.T) {
 	}
 }
 
-// F4-08 B10l guard: with the identity flip wired, no entry point plans, applies,
-// resumes or reads a footprint, and none calls into the store to find out. Each entry point is its
-// own subtest so a guard dropped from one of them (the others still refuse, one
+// A service wired for the flip with no core handles fails closed: no entry
+// point plans, applies or reads a footprint, resume is the permanence refusal,
+// and none calls into the store to find out. Each entry point is its own
+// subtest so a guard dropped from one of them (the others still refuse, one
 // layer down) is caught by its own check.
-func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlipped(t *testing.T) {
+func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlippedWithoutCore(t *testing.T) {
 	ctx := context.Background()
 	entry := map[string]func(*Service) error{
 		"BuildPlan": func(svc *Service) error {
@@ -87,15 +88,20 @@ func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlipped(t *testing.T) 
 			_, err := svc.Footprint("bruce")
 			return err
 		},
-		"CheckAvailable": func(svc *Service) error { return svc.CheckAvailable() },
+		"CheckFootprintAvailable": func(svc *Service) error { return svc.CheckFootprintAvailable() },
+		"CheckAvailable":          func(svc *Service) error { return svc.CheckAvailable() },
 	}
 	for name, call := range entry {
 		t.Run(name, func(t *testing.T) {
 			store := &touchedStore{journalRows: journalRows{rows: journalRow("j1", StatusApplying)}}
 			flipped := true
 			svc := &Service{store: store, identityFlipped: func() bool { return flipped }}
-			if err := call(svc); !errors.Is(err, ErrUnavailableUnderIdentity) {
-				t.Errorf("%s = %v, want ErrUnavailableUnderIdentity", name, err)
+			want := ErrUnavailableUnderIdentity
+			if name == "Resume" {
+				want = ErrMergePermanent // one batch: nothing to resume, ever
+			}
+			if err := call(svc); !errors.Is(err, want) {
+				t.Errorf("%s = %v, want %v", name, err, want)
 			}
 			if n := store.calls.Load(); n != 0 {
 				t.Errorf("%s called into the store %d time(s) before refusing", name, n)
