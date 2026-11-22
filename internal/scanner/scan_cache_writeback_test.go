@@ -99,9 +99,9 @@ func (before scanCacheCounters) delta() scanCacheCounters {
 // pin it OFF rather than depending on config.AppConfig happening to be zero.
 func withRescanAge(t *testing.T, hours int) {
 	t.Helper()
-	prev := config.AppConfig.MinRescanAgeHours
-	config.AppConfig.MinRescanAgeHours = hours
-	t.Cleanup(func() { config.AppConfig.MinRescanAgeHours = prev })
+	prev := config.Get().MinRescanAgeHours
+	config.SetForTest(func(c *config.Config) { c.MinRescanAgeHours = hours })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MinRescanAgeHours = prev }) })
 }
 
 func withStore(t *testing.T, s scannerStore) {

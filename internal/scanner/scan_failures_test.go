@@ -119,14 +119,18 @@ func TestProcessBooksParallelSurfacesUnreadableFile(t *testing.T) {
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	oldMin := config.AppConfig.MinBookSizeBytes
+	oldExts := config.Get().SupportedExtensions
+	oldMin := config.Get().MinBookSizeBytes
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = oldExts
-		config.AppConfig.MinBookSizeBytes = oldMin
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = oldExts
+			c.MinBookSizeBytes = oldMin
+		})
 	})
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	config.AppConfig.MinBookSizeBytes = 0 // the suspicious-file guard would short-circuit tiny fixtures
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".mp3"}
+		c.MinBookSizeBytes = 0
+	}) // the suspicious-file guard would short-circuit tiny fixtures
 
 	dir := t.TempDir()
 	good := filepath.Join(dir, "good.mp3")

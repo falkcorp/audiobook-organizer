@@ -144,7 +144,7 @@ func TestRacedRow_JoinsAsNonPrimaryAndHandsGroupPrimaryOn(t *testing.T) {
 		t.Fatal("the fixture never created the racing row; the raced-row branch was not exercised")
 	}
 
-	f := &vptest.Fixture{S: base, Root: config.AppConfig.RootDir}
+	f := &vptest.Fixture{S: base, Root: config.Get().RootDir}
 	racedRow, err := base.GetBookByID(raced.rowID)
 	if err != nil || racedRow == nil {
 		t.Fatalf("read raced row: %v", err)
@@ -198,7 +198,7 @@ func TestRacedRow_HeldGroupAndPartnerGroupAreBothHandedOn(t *testing.T) {
 		t.Fatal("the fixture never created the racing row; the raced-row branch was not exercised")
 	}
 
-	f := &vptest.Fixture{S: base, Root: config.AppConfig.RootDir}
+	f := &vptest.Fixture{S: base, Root: config.Get().RootDir}
 	racedRow, err := base.GetBookByID(raced.rowID)
 	if err != nil || racedRow == nil {
 		t.Fatalf("read raced row: %v", err)

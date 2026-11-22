@@ -67,9 +67,9 @@ func TestScanService_DetermineFolders_DisabledPathsExcluded(t *testing.T) {
 }
 
 func TestScanService_DetermineFolders_ForceUpdateIncludesRootDir(t *testing.T) {
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/library/root"
-	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/library/root" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 	mockDB := &database.MockStore{
 		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
@@ -94,9 +94,9 @@ func TestScanService_DetermineFolders_ForceUpdateIncludesRootDir(t *testing.T) {
 // "scan the whole library" and "re-hash every file in it" could not be asked for
 // separately.
 func TestScanService_DetermineFolders_IncludeRootDirWithoutForceUpdate(t *testing.T) {
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/library/root"
-	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/library/root" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 	mockDB := &database.MockStore{
 		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
@@ -115,9 +115,9 @@ func TestScanService_DetermineFolders_IncludeRootDirWithoutForceUpdate(t *testin
 
 // The default must not move. Neither flag set keeps the historical exclusion.
 func TestScanService_DetermineFolders_DefaultStillExcludesRootDir(t *testing.T) {
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/library/root"
-	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/library/root" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 	mockDB := &database.MockStore{
 		GetAllImportPathsFunc: func() ([]database.ImportPath, error) {
@@ -155,9 +155,9 @@ func TestScanService_IncludeRootDirDoesNotDisableTheScanCache(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			origRoot := config.AppConfig.RootDir
-			config.AppConfig.RootDir = root
-			t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+			origRoot := config.Get().RootDir
+			config.SetForTest(func(c *config.Config) { c.RootDir = root })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 			cacheAsked := false
 			mockDB := &database.MockStore{

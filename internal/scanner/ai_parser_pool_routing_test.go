@@ -15,14 +15,16 @@ import (
 
 func setLLMMode(t *testing.T, mode string, routing bool) {
 	t.Helper()
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "sk-test-key"
-	config.AppConfig.AIBackend.LLMMode = mode
-	config.AppConfig.AIBackend.LocalBaseURL = "http://192.0.2.10:11434/v1"
-	config.AppConfig.AIBackend.LocalLLMModel = "qwen2.5:7b-instruct"
-	config.AppConfig.AIEndpointsRouting = routing
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = "sk-test-key"
+		c.AIBackend.LLMMode = mode
+		c.AIBackend.LocalBaseURL = "http://192.0.2.10:11434/v1"
+		c.AIBackend.LocalLLMModel = "qwen2.5:7b-instruct"
+		c.AIEndpointsRouting = routing
+	})
 }
 
 // With ai_endpoints_routing on, the local and openai-fallback-local modes

@@ -46,10 +46,10 @@ func identityHoldFixture(t *testing.T) (*database.PebbleStore, func(name string)
 		database.SetGlobalStore(prevStore)
 		SetStore(nil)
 	})
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
 	write := func(name string) string {
 		t.Helper()
 		p := filepath.Join(root, name)

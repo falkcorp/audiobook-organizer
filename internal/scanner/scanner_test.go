@@ -33,9 +33,9 @@ func withTempBooks(t *testing.T, names []string) []Book {
 }
 
 func TestScanDirectoryParallelFiltersExtensions(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3"} })
 
 	dir := t.TempDir()
 	allowed := filepath.Join(dir, "keep.m4b")
@@ -60,14 +60,18 @@ func TestScanDirectoryParallelFiltersExtensions(t *testing.T) {
 }
 
 func TestProcessBooksParallelInvokesProgress(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	oldWorkers := config.AppConfig.ConcurrentScans
+	oldExts := config.Get().SupportedExtensions
+	oldWorkers := config.Get().ConcurrentScans
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = oldExts
-		config.AppConfig.ConcurrentScans = oldWorkers
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = oldExts
+			c.ConcurrentScans = oldWorkers
+		})
 	})
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.ConcurrentScans = 2
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b"}
+		c.ConcurrentScans = 2
+	})
 
 	books := withTempBooks(t, []string{"book1.m4b", "book2.m4b", "book3.m4b"})
 
@@ -171,9 +175,9 @@ func TestComputeFileHash(t *testing.T) {
 }
 
 func TestScanDirectory(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3"} })
 
 	dir := t.TempDir()
 	allowed := filepath.Join(dir, "test.m4b")
@@ -311,9 +315,9 @@ func TestExtractInfoFromPathVariants(t *testing.T) {
 }
 
 func TestProcessBooksParallelCancellation(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	books := withTempBooks(t, []string{"book1.m4b", "book2.m4b", "book3.m4b"})
 
@@ -338,9 +342,9 @@ func TestProcessBooksParallelCancellation(t *testing.T) {
 // a cancelled ctx; now it returns context.Canceled promptly. A tree with several
 // subdirectories exercises both the discovery walk and the dispatch loop.
 func TestScanDirectoryParallelCancellation(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	root := t.TempDir()
 	for i := range 12 {
@@ -366,9 +370,9 @@ func TestScanDirectoryParallelCancellation(t *testing.T) {
 }
 
 func TestScanDirectoryParallelNegativeWorkers(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.m4b")
@@ -386,9 +390,9 @@ func TestScanDirectoryParallelNegativeWorkers(t *testing.T) {
 }
 
 func TestProcessBooksParallelNegativeWorkers(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	books := withTempBooks(t, []string{"book1.m4b"})
 
@@ -464,14 +468,18 @@ func TestIdentifySeriesUsingExternalAPIs(t *testing.T) {
 }
 
 func TestProcessBooks(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	oldWorkers := config.AppConfig.ConcurrentScans
+	oldExts := config.Get().SupportedExtensions
+	oldWorkers := config.Get().ConcurrentScans
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = oldExts
-		config.AppConfig.ConcurrentScans = oldWorkers
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = oldExts
+			c.ConcurrentScans = oldWorkers
+		})
 	})
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.ConcurrentScans = 1
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b"}
+		c.ConcurrentScans = 1
+	})
 
 	books := withTempBooks(t, []string{"book1.m4b"})
 
@@ -500,14 +508,16 @@ func TestBookLibraryStateField(t *testing.T) {
 }
 
 func TestSuspiciousFileSkipped(t *testing.T) {
-	oldThreshold := config.AppConfig.MinBookSizeBytes
-	oldExts := config.AppConfig.SupportedExtensions
+	oldThreshold := config.Get().MinBookSizeBytes
+	oldExts := config.Get().SupportedExtensions
 	t.Cleanup(func() {
-		config.AppConfig.MinBookSizeBytes = oldThreshold
-		config.AppConfig.SupportedExtensions = oldExts
+		config.SetForTest(func(c *config.Config) {
+			c.MinBookSizeBytes = oldThreshold
+			c.SupportedExtensions = oldExts
+		})
 	})
-	config.AppConfig.MinBookSizeBytes = 1024 * 1024 // 1 MB threshold
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	config.SetForTest(func(c *config.Config) { c.MinBookSizeBytes = 1024 * 1024 }) // 1 MB threshold
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	smallFile := filepath.Join(dir, "tiny.mp3")
@@ -540,14 +550,16 @@ func TestSuspiciousFileSkipped(t *testing.T) {
 }
 
 func TestSuspiciousFileSkipDisabledWhenNegativeOne(t *testing.T) {
-	oldThreshold := config.AppConfig.MinBookSizeBytes
-	oldExts := config.AppConfig.SupportedExtensions
+	oldThreshold := config.Get().MinBookSizeBytes
+	oldExts := config.Get().SupportedExtensions
 	t.Cleanup(func() {
-		config.AppConfig.MinBookSizeBytes = oldThreshold
-		config.AppConfig.SupportedExtensions = oldExts
+		config.SetForTest(func(c *config.Config) {
+			c.MinBookSizeBytes = oldThreshold
+			c.SupportedExtensions = oldExts
+		})
 	})
-	config.AppConfig.MinBookSizeBytes = -1 // disabled
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	config.SetForTest(func(c *config.Config) { c.MinBookSizeBytes = -1 }) // disabled
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	smallFile := filepath.Join(dir, "tiny.mp3")

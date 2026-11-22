@@ -34,10 +34,10 @@ func newHoldFixture(t *testing.T) *holdFixture {
 		database.SetGlobalStore(prevStore)
 		SetStore(nil)
 	})
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
 	return &holdFixture{t: t, store: store, root: root}
 }
 

@@ -214,14 +214,16 @@ func TestChainAlwaysAttemptsTheFirstRung(t *testing.T) {
 //
 // So this asserts on the TYPE, which is the only place the difference lives.
 func TestFallbackLocalModeActuallyBuildsAChain(t *testing.T) {
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "sk-test-key"
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeOpenAIFallbackLocal
-	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:11434/v1"
-	config.AppConfig.AIBackend.LocalLLMModel = "qwen2.5:3b"
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = "sk-test-key"
+		c.AIBackend.LLMMode = config.AIBackendModeOpenAIFallbackLocal
+		c.AIBackend.LocalBaseURL = "http://127.0.0.1:11434/v1"
+		c.AIBackend.LocalLLMModel = "qwen2.5:3b"
+	})
 
 	parser, enabled := newAIParser(logger.New("test"))
 	require.True(t, enabled)
@@ -240,14 +242,16 @@ func TestFallbackLocalModeActuallyBuildsAChain(t *testing.T) {
 // builds and still works, it just has nothing to fall back TO. It must not
 // pretend a local rung exists, and it must not refuse to parse at all.
 func TestFallbackLocalModeWithNoLocalBackendConfigured(t *testing.T) {
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "sk-test-key"
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeOpenAIFallbackLocal
-	config.AppConfig.AIBackend.LocalBaseURL = ""
-	config.AppConfig.Embedding.BaseURL = ""
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = "sk-test-key"
+		c.AIBackend.LLMMode = config.AIBackendModeOpenAIFallbackLocal
+		c.AIBackend.LocalBaseURL = ""
+		c.Embedding.BaseURL = ""
+	})
 
 	parser, enabled := newAIParser(logger.New("test"))
 	require.True(t, enabled, "a missing local backend must not disable AI parsing outright")
@@ -262,14 +266,16 @@ func TestFallbackLocalModeWithNoLocalBackendConfigured(t *testing.T) {
 // above: with neither backend available the mode must decline, not hand back an
 // empty chain that fails once per batch for the whole scan.
 func TestFallbackLocalModeWithNothingConfigured(t *testing.T) {
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = ""
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeOpenAIFallbackLocal
-	config.AppConfig.AIBackend.LocalBaseURL = ""
-	config.AppConfig.Embedding.BaseURL = ""
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = ""
+		c.AIBackend.LLMMode = config.AIBackendModeOpenAIFallbackLocal
+		c.AIBackend.LocalBaseURL = ""
+		c.Embedding.BaseURL = ""
+	})
 
 	_, enabled := newAIParser(logger.New("test"))
 	require.False(t, enabled)

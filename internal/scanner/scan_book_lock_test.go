@@ -40,12 +40,14 @@ func newScanLockFixture(t *testing.T, rootDir string) scanLockFixture {
 	t.Cleanup(func() { database.SetGlobalStore(orig) })
 	useScannerStore(t, store)
 
-	oldMin, oldAI, oldRoot := config.AppConfig.MinBookSizeBytes, config.AppConfig.EnableAIParsing, config.AppConfig.RootDir
-	config.AppConfig.MinBookSizeBytes = 0
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.RootDir = rootDir
+	oldMin, oldAI, oldRoot := config.Get().MinBookSizeBytes, config.Get().EnableAIParsing, config.Get().RootDir
+	config.SetForTest(func(c *config.Config) {
+		c.MinBookSizeBytes = 0
+		c.EnableAIParsing = false
+		c.RootDir = rootDir
+	})
 	t.Cleanup(func() {
-		config.AppConfig.MinBookSizeBytes, config.AppConfig.EnableAIParsing, config.AppConfig.RootDir = oldMin, oldAI, oldRoot
+		config.SetForTest(func(c *config.Config) { c.MinBookSizeBytes, c.EnableAIParsing, c.RootDir = oldMin, oldAI, oldRoot })
 	})
 	return scanLockFixture{store: store, dir: t.TempDir()}
 }

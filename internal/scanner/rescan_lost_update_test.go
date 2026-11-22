@@ -80,11 +80,11 @@ func TestSaveBookToDatabase_RescanDoesNotRevertConcurrentWrite(t *testing.T) {
 		SetStore(nil)
 	})
 
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 
 	rootDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rootDir })
 
 	filePath := filepath.Join(rootDir, "raced-book.m4b")
 	if err := os.WriteFile(filePath, []byte("raced book content"), 0o644); err != nil {
@@ -179,11 +179,11 @@ func seedHashDupRace(t *testing.T, onRead func(base *database.PebbleStore, bookI
 		SetStore(nil)
 	})
 
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 
 	rootDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rootDir })
 
 	firstPath := filepath.Join(rootDir, "first-copy.m4b")
 	secondPath := filepath.Join(rootDir, "second-copy.m4b")

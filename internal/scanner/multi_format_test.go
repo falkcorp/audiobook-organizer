@@ -18,7 +18,9 @@ import (
 // TestMultiFormatSupport verifies that the scanner correctly identifies all supported formats
 func TestMultiFormatSupport(t *testing.T) {
 	// Initialize test configuration
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wma"}
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wma"}
+	})
 
 	testCases := []struct {
 		name     string
@@ -116,10 +118,12 @@ func TestMultiFormatSupport(t *testing.T) {
 // TestFormatConfiguration verifies the default configuration includes all required formats
 func TestFormatConfiguration(t *testing.T) {
 	requiredFormats := []string{".m4b", ".mp3", ".m4a", ".flac"}
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma"}
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".aac", ".ogg", ".flac", ".wma"}
+	})
 
 	for _, format := range requiredFormats {
-		found := slices.Contains(config.AppConfig.SupportedExtensions, format)
+		found := slices.Contains(config.Get().SupportedExtensions, format)
 		if !found {
 			t.Errorf("Required format %s not in configuration", format)
 		}
@@ -128,7 +132,7 @@ func TestFormatConfiguration(t *testing.T) {
 
 // TestParallelScanWithMixedFormats ensures parallel scanning works correctly with multiple formats
 func TestParallelScanWithMixedFormats(t *testing.T) {
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"} })
 
 	tmpDir, err := os.MkdirTemp("", "parallel-scan-test-*")
 	if err != nil {
@@ -185,7 +189,7 @@ func TestParallelScanWithMixedFormats(t *testing.T) {
 
 // TestFormatPreservation ensures file format is correctly stored in Book struct
 func TestFormatPreservation(t *testing.T) {
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"} })
 
 	tmpDir, err := os.MkdirTemp("", "format-test-*")
 	if err != nil {

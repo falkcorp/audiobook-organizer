@@ -92,9 +92,9 @@ func TestScanDirectoryParallel_ChecksInLongEnoughToSurviveTheWatchdog(t *testing
 		}
 	}
 
-	prev := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prev })
+	prev := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prev }) })
 
 	spy := &progressSpy{Logger: logger.New("test")}
 
@@ -137,9 +137,9 @@ func TestScanDirectoryParallel_ReportsInsideOneHugeDirectory(t *testing.T) {
 		}
 	}
 
-	prev := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prev })
+	prev := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prev }) })
 
 	spy := &progressSpy{Logger: logger.New("test")}
 
@@ -178,9 +178,9 @@ func TestScanDirectoryParallel_IndeterminatePhasesReportZeroTotal(t *testing.T) 
 			t.Fatalf("write: %v", err)
 		}
 	}
-	prev := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prev })
+	prev := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prev }) })
 
 	spy := &progressSpy{Logger: logger.New("test")}
 	if _, err := ScanDirectoryParallel(context.Background(), root, 4, spy); err != nil {
@@ -239,9 +239,9 @@ func TestScanFolder_ProgressStaysWithinDenominatorOnResume(t *testing.T) {
 		}
 	}
 
-	prevExt := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
+	prevExt := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prevExt }) })
 
 	prevSave := saveBook
 	saveBook = func(context.Context, *Book) (*ownershipSkip, error) { return nil, nil }
@@ -324,9 +324,9 @@ func TestScanFolder_SubStepsNeverReplaceTheScanCounters(t *testing.T) {
 	}
 	folders := []string{mkFolder(3), mkFolder(1)}
 
-	prevExt := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
+	prevExt := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prevExt }) })
 
 	prevSave := saveBook
 	saveBook = func(context.Context, *Book) (*ownershipSkip, error) { return nil, nil }
@@ -457,9 +457,9 @@ func TestScanFolder_SubStepsKeepCountersThroughTheRealReporterLogger(t *testing.
 	}
 	folders := []string{mkFolder(3), mkFolder(1)}
 
-	prevExt := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExt })
+	prevExt := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prevExt }) })
 
 	prevSave := saveBook
 	saveBook = func(context.Context, *Book) (*ownershipSkip, error) { return nil, nil }

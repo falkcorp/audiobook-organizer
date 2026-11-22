@@ -39,19 +39,23 @@ func TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline(t *testing
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	oldAI := config.AppConfig.EnableAIParsing
-	oldBackend := config.AppConfig.AIBackend
+	oldExts := config.Get().SupportedExtensions
+	oldAI := config.Get().EnableAIParsing
+	oldBackend := config.Get().AIBackend
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = oldExts
-		config.AppConfig.EnableAIParsing = oldAI
-		config.AppConfig.AIBackend = oldBackend
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = oldExts
+			c.EnableAIParsing = oldAI
+			c.AIBackend = oldBackend
+		})
 	})
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
-	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
-	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".mp3"}
+		c.EnableAIParsing = true
+		c.AIBackend.LLMMode = config.AIBackendModeLocal
+		c.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
+		c.AIBackend.LocalLLMModel = "test-model"
+	})
 
 	dir := t.TempDir()
 	segs := writeSegments(t, dir, "part01.mp3", "already-known.mp3")
@@ -169,22 +173,28 @@ func TestProcessBooksParallelReportsFailedInlineAIPhase(t *testing.T) {
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	oldAI := config.AppConfig.EnableAIParsing
-	oldBackend := config.AppConfig.AIBackend
+	oldExts := config.Get().SupportedExtensions
+	oldAI := config.Get().EnableAIParsing
+	oldBackend := config.Get().AIBackend
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = oldExts
-		config.AppConfig.EnableAIParsing = oldAI
-		config.AppConfig.AIBackend = oldBackend
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = oldExts
+			c.EnableAIParsing = oldAI
+			c.AIBackend = oldBackend
+		})
 	})
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".mp3"}
+		c.EnableAIParsing = true
+		c.AIBackend.LLMMode = config.AIBackendModeLocal
+	})
 	// Closed port: the batch call fails fast (connection refused) rather than
 	// timing out, the same fixture TestProcessBooksParallelQueuesAICandidatesInsteadOfParsingInline
 	// above uses to force a real failure without a fake parser.
-	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
-	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+	config.SetForTest(func(c *config.Config) {
+		c.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
+		c.AIBackend.LocalLLMModel = "test-model"
+	})
 
 	// No enqueue hook wired: enqueueAIParse returns ErrAIParseEnqueueUnavailable
 	// (the "no queue has been wired" default), which is what drives the inline
