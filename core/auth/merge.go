@@ -25,9 +25,14 @@ const reasonMerged = "merged"
 
 // Admin is the actor-checked identity participant handed to modules as
 // module.Deps.AuthAdmin (05-authn §3.1, 06 §6.4.4). *Service implements it.
-// Every method re-checks the ctx principal, so holding it grants nothing;
-// each stages into the caller's batch and never commits.
+// Every method re-checks the principal bound on ctx, so holding it grants
+// nothing. PlanUserMerge and StageUserMerge stage into the caller's batch and
+// never commit; the account methods of AccountAdmin (invites, set-email, the
+// admin user reads), which Admin embeds, are self-contained writes that commit
+// in their own batch with their audit record in it (F4-08 B10t).
 type Admin interface {
+	AccountAdmin
+
 	// PlanUserMerge previews folding source into target: it re-checks the
 	// principal exactly as StageUserMerge does, reads the records the merge
 	// moves, and returns the opaque plan StageUserMerge takes with a summary
@@ -124,7 +129,7 @@ func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan Use
 	if err != nil {
 		return nil, err
 	}
-	return s.mergeCommitted(plan.source, plan.target, epoch, len(ev.added) > 0), nil
+	return s.mergeCommitted(plan.source, plan.target, ev.src.Email, epoch, len(ev.added) > 0), nil
 }
 
 // mergeCommitted is StageUserMerge's AfterCommit: it publishes Source's
@@ -132,7 +137,11 @@ func (s *Service) StageUserMerge(ctx context.Context, b *storage.Batch, plan Use
 // merge moved roles, only when the store shows the merge's write, Source
 // disabled at the bumped epoch or later and marked merged into Target. A
 // caller whose commit failed and who runs it anyway publishes nothing.
-func (s *Service) mergeCommitted(src, tgt UserID, epoch int64, rolesMoved bool) AfterCommit {
+//
+// It also fires the registered Lifecycle.UserMergedAway for Source, on that
+// same condition. srcEmail is the address Source held when the merge was
+// evaluated, because the merge clears it from the committed row.
+func (s *Service) mergeCommitted(src, tgt UserID, srcEmail string, epoch int64, rolesMoved bool) AfterCommit {
 	return func(ctx context.Context) {
 		u, err := s.d.Store.GetUser(ctx, src)
 		if err != nil || u.Status != StatusDisabled || u.CredentialEpoch < epoch || u.MergedInto != tgt {
@@ -144,6 +153,8 @@ func (s *Service) mergeCommitted(src, tgt UserID, epoch int64, rolesMoved bool) 
 		if rolesMoved {
 			s.d.RBAC.AssignmentsChanged()
 		}
+		s.queueUserMergedAway(inv, UserMergedAway{UserID: src, Email: srcEmail, MergedInto: tgt})
+		afterCommit(inv.post).run(ctx)
 	}
 }
 
