@@ -357,7 +357,7 @@ func journalLines(mem *vfs.MemFS, f Fixture) []string {
 		return []string{"journal unreadable: " + err.Error()}
 	}
 	var out []string
-	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+	for line := range bytes.SplitSeq(buf.Bytes(), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}
@@ -869,7 +869,7 @@ func shortField(e endState, name string) string {
 	var out []string
 	for _, l := range e.Raw.Lines {
 		var seq, kind string
-		for _, part := range strings.Split(l, ",") {
+		for part := range strings.SplitSeq(l, ",") {
 			switch {
 			case strings.HasPrefix(part, "seq="):
 				seq = strings.TrimPrefix(part, "seq=")
