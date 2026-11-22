@@ -6,6 +6,7 @@
 package cutover_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,8 +16,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // The owner cells through the registered path (F4-08 B10e1r).
@@ -395,4 +398,256 @@ func TestReachRegisteredPath_OwnerAccessPolicy(t *testing.T) {
 			t.Fatalf("an unverifiable Access header beside a session: %d %s, want 401", res.Status, res.excerpt())
 		}
 	})
+}
+
+// setRoles replaces a user's roles through core's admin API, signed in as the
+// admin session.
+func setRoles(t *testing.T, h *Registered, userID string, roles ...string) {
+	t.Helper()
+	res := h.MustDo(t, h.Principal("session:admin"), http.MethodPut, "/api/core/v1/users/"+userID+"/roles", map[string]any{"roles": roles})
+	if res.Status != http.StatusOK {
+		t.Fatalf("PUT roles %v: %d %s", roles, res.Status, res.excerpt())
+	}
+}
+
+// coreUser is core's account as the admin list shows it.
+type coreUser struct {
+	ID         string   `json:"id"`
+	Username   string   `json:"username"`
+	Email      string   `json:"email"`
+	Roles      []string `json:"roles"`
+	Status     string   `json:"status"`
+	MergedInto string   `json:"merged_into_user_id"`
+}
+
+// coreAccounts is every core account by ID, as the admin session lists them.
+func coreAccounts(t *testing.T, h *Registered) map[string]coreUser {
+	t.Helper()
+	res := h.MustDo(t, h.Principal("session:admin"), http.MethodGet, "/api/core/v1/users?limit=500", nil)
+	var page struct {
+		Items []coreUser `json:"items"`
+	}
+	if err := json.Unmarshal(res.Body, &page); err != nil || res.Status != http.StatusOK || len(page.Items) == 0 {
+		t.Fatalf("GET /api/core/v1/users: %d %s", res.Status, res.excerpt())
+	}
+	out := map[string]coreUser{}
+	for _, u := range page.Items {
+		out[u.ID] = u
+	}
+	return out
+}
+
+// accessMe is GET /api/core/v1/me under an Access assertion and no other credential:
+// the status, the account it landed on (empty when refused), the method, and whether
+// the owner proof is set.
+func accessMe(t *testing.T, h *Registered, assertion string) (status int, user coreUser, method string, ownerVerified bool, res Result) {
+	t.Helper()
+	res = accessGet(h, "/api/core/v1/me", assertion)
+	var me struct {
+		User          coreUser `json:"user"`
+		Method        string   `json:"method"`
+		OwnerVerified bool     `json:"owner_verified"`
+	}
+	if res.Status == http.StatusOK {
+		if err := json.Unmarshal(res.Body, &me); err != nil {
+			t.Fatalf("GET /api/core/v1/me: %v: %s", err, res.excerpt())
+		}
+	}
+	return res.Status, me.User, me.Method, me.OwnerVerified, res
+}
+
+// The same-address install (F4-08 B10e1r, after B10e1c's composed-harness version):
+// two HEAD administrators hold the owner's address, both proven, and only one is
+// linked to Cloudflare Access, by the opaque sub the Access JWT carries.
+const (
+	sameEmailLinked = "lucius.fox" // the corpus admin; gets the address and the Access link
+	sameEmailTwin   = "batman"     // a second admin with the same address and no link
+	// sameEmailTwinID and sameEmailLinkID are ULIDs of the seeded rows.
+	sameEmailTwinID = "01R2SAMEMAIL00000000000T01"
+	sameEmailLinkID = "01R2SAMEMAIL00000000000K01"
+)
+
+// seedSameEmail writes the shared-address rows into the HEAD corpus, so M2 and M3
+// import them like any rows a HEAD build wrote. HEAD's own CreateUser refuses a
+// second proven holder of an address, which is the state this fixture needs, so the
+// rows are written raw: the corpus admin gets the owner's address (proof "setup") and
+// the Access identity (provider cfaccess, subject ownerSub), and a clone of its row
+// becomes the second administrator (proof "admin", no password, no link).
+func seedSameEmail(ctx context.Context, lr storage.LegacyRange) error {
+	uid, err := lr.Get(ctx, []byte("idx:user:username:"+sameEmailLinked))
+	if err != nil || len(uid) == 0 {
+		return fmt.Errorf("the corpus has no user %q: %v", sameEmailLinked, err)
+	}
+	raw, err := lr.Get(ctx, []byte("u:"+string(uid)))
+	if err != nil || len(raw) == 0 {
+		return fmt.Errorf("no row u:%s: %v", uid, err)
+	}
+	var row map[string]any
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return err
+	}
+	set := func(k string, v []byte) error {
+		if err := lr.Set(ctx, []byte(k), v); err != nil {
+			return fmt.Errorf("seed %s: %w", k, err)
+		}
+		return nil
+	}
+	row["email"], row["email_source"] = ownerEmail, "setup"
+	linked, _ := json.Marshal(row)
+	row["id"], row["username"], row["email_source"] = sameEmailTwinID, sameEmailTwin, "admin"
+	row["password_hash"], row["password_hash_algo"] = "", "oauth"
+	twin, _ := json.Marshal(row)
+	ident, _ := json.Marshal(map[string]any{
+		"id": sameEmailLinkID, "provider": "cfaccess", "subject": ownerSub, "email": ownerEmail,
+		"user_id": string(uid), "created_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	for _, kv := range []struct {
+		k string
+		v []byte
+	}{
+		{"u:" + string(uid), linked},
+		{"u:" + sameEmailTwinID, twin},
+		{"idx:user:username:" + sameEmailTwin, []byte(sameEmailTwinID)},
+		{"oauthid:" + sameEmailLinkID, ident},
+		{"idx:oauth:sub:cfaccess:" + ownerSub, []byte(sameEmailLinkID)},
+		{"idx:oauth:user:" + string(uid) + ":" + sameEmailLinkID, []byte("1")},
+	} {
+		if err := set(kv.k, kv.v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestReachRegisteredPath_OwnerSameEmail: two administrators hold the owner's
+// address and one is linked to Access. The Access sign-in lands on the linked one;
+// neither account is merged, displaced, re-linked or renamed; and the two other ways
+// an identity with that address could arrive, the address itself as the subject and
+// a subject the install has never seen, are refused and create nothing. The owner
+// cell of the same boot proves the fixture links at all.
+func TestReachRegisteredPath_OwnerSameEmail(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{Owner: true, Seed: seedSameEmail})
+	_, adminMe := h.principalMe(t, "session:admin")
+	linkedID := adminMe.ID
+	before := coreAccounts(t, h)
+
+	holders := func(users map[string]coreUser) (ids []string) {
+		for id, u := range users {
+			if strings.EqualFold(u.Email, ownerEmail) {
+				ids = append(ids, id)
+			}
+		}
+		slices.Sort(ids)
+		return ids
+	}
+	if got, want := holders(before), []string{linkedID, sameEmailTwinID}; !slices.Equal(got, want) {
+		t.Fatalf("the accounts holding %s are %v, want the two seeded administrators %v", ownerEmail, got, want)
+	}
+	for _, id := range []string{linkedID, sameEmailTwinID} {
+		if u := before[id]; !slices.Equal(u.Roles, []string{"admin"}) || u.Status != "active" || u.MergedInto != "" {
+			t.Fatalf("account %s (%s) before any sign-in: roles %v, status %q, merged into %q, want an active unmerged admin", id, u.Username, u.Roles, u.Status, u.MergedInto)
+		}
+	}
+
+	t.Run("the Access sign-in lands on the linked administrator", func(t *testing.T) {
+		res := h.MustDo(t, h.Principal(Owner), http.MethodGet, "/api/core/v1/me", nil)
+		var me struct {
+			User          coreUser `json:"user"`
+			Method        string   `json:"method"`
+			OwnerVerified bool     `json:"owner_verified"`
+		}
+		if err := json.Unmarshal(res.Body, &me); err != nil || res.Status != http.StatusOK {
+			t.Fatalf("owner GET /api/core/v1/me: %d %s", res.Status, res.excerpt())
+		}
+		if me.User.ID != linkedID || me.Method != "ext:cfaccess" || !me.OwnerVerified {
+			t.Fatalf("the Access sign-in is %s via %q owner-verified=%v, want the linked admin %s via ext:cfaccess owner-verified", me.User.ID, me.Method, me.OwnerVerified, linkedID)
+		}
+	})
+
+	t.Run("the address as the subject and a fresh subject are refused", func(t *testing.T) {
+		for name, jwt := range map[string]string{
+			"the address as the subject (the empty-sub fallback's form)": h.access.assertion(t, ownerEmail, ownerEmail),
+			"a subject the install has never seen":                       h.access.assertion(t, "r2reach-fresh-sub", ownerEmail),
+		} {
+			status, user, _, _, res := accessMe(t, h, jwt)
+			if status != http.StatusUnauthorized || res.Code != "authentication_required" || user.ID != "" {
+				t.Errorf("%s: %d %q (user %q) %s, want 401 authentication_required and no account", name, status, res.Code, user.ID, res.excerpt())
+			}
+		}
+	})
+
+	t.Run("neither administrator is merged, displaced or created beside", func(t *testing.T) {
+		after := coreAccounts(t, h)
+		if len(after) != len(before) {
+			t.Fatalf("%d accounts after the sign-ins, %d before", len(after), len(before))
+		}
+		for id, b := range before {
+			a, ok := after[id]
+			if !ok || a.Username != b.Username || a.Email != b.Email || !slices.Equal(a.Roles, b.Roles) || a.Status != b.Status || a.MergedInto != b.MergedInto {
+				t.Errorf("account %s changed across the sign-ins: before %+v, after %+v", id, b, a)
+			}
+		}
+	})
+}
+
+// principalMe is the account a principal's own session or key is bound to.
+func (h *Registered) principalMe(t *testing.T, name string) (Result, coreUser) {
+	t.Helper()
+	res := h.MustDo(t, h.Principal(name), http.MethodGet, "/api/core/v1/me", nil)
+	var me struct {
+		User coreUser `json:"user"`
+	}
+	if err := json.Unmarshal(res.Body, &me); err != nil || res.Status != http.StatusOK || me.User.ID == "" {
+		t.Fatalf("%s GET /api/core/v1/me: %d %s", name, res.Status, res.excerpt())
+	}
+	return res, me.User
+}
+
+// A second address on the Access allow-list: a person Access admits who is not the
+// owner. Core's resolver lets the allow-list in, so it signs in to a new viewer.
+const accessGuest = "alfred.pennyworth@example.invalid"
+
+// TestReachRegisteredPath_OwnerAccessNonOwner: an Access identity that is on the
+// allow-list but is not the owner e-mail is admitted as a person and never as the
+// owner, even with the admin role. This is the cell mutant (b) of the owner policy
+// (the extension minting the owner assurance for any verified identity) is killed by.
+func TestReachRegisteredPath_OwnerAccessNonOwner(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{Owner: true, AccessAllowed: []string{accessGuest}})
+	jwt := h.access.assertion(t, "r2reach-guest-sub", accessGuest)
+
+	status, user, method, ownerVerified, res := accessMe(t, h, jwt)
+	if status != http.StatusOK || method != "ext:cfaccess" || user.ID == "" || !slices.Equal(user.Roles, []string{"viewer"}) {
+		t.Fatalf("an allow-listed non-owner address: %d via %q as %+v %s, want 200 via ext:cfaccess as a new viewer", status, method, user, res.excerpt())
+	}
+	if ownerVerified {
+		t.Fatal("an allow-listed address that is not the owner is owner-verified: the owner assurance is not the owner e-mail's alone")
+	}
+
+	// Given the admin role it is still not the owner: the e-mail decides, not the role.
+	setRoles(t, h, user.ID, "admin")
+	status, user, _, ownerVerified, res = accessMe(t, h, jwt)
+	if status != http.StatusOK || !slices.Equal(user.Roles, []string{"admin"}) {
+		t.Fatalf("the promoted guest: %d as %+v %s, want 200 as an admin", status, user, res.excerpt())
+	}
+	if ownerVerified {
+		t.Fatal("the promoted non-owner admin is owner-verified")
+	}
+	// Every owner route refuses it. Today the Interactive guard answers first (B10y:
+	// stage 13 does not yet read the extension's MethodSpec), after B10y it is
+	// owner_required; either way the refusal is stage 13's and it is a 403.
+	refused := 0
+	for _, ri := range ownerRoutes(t, h) {
+		path := probePath(ri.Pattern)
+		req := httptest.NewRequest(ri.Method, path, nil)
+		req.Header.Set("Cf-Access-Jwt-Assertion", jwt)
+		r := h.Raw(req)
+		if r.Stage13 != Stage13Refused || r.Status != http.StatusForbidden || (r.Code != "owner_required" && r.Code != "interactive_required") {
+			t.Errorf("%s %s as an allow-listed admin who is not the owner: %d %q (%s) %s, want stage 13's 403", ri.Method, ri.Pattern, r.Status, r.Code, r.Stage13, r.excerpt())
+			continue
+		}
+		refused++
+	}
+	if refused != 9 {
+		t.Fatalf("%d of 9 owner routes refused the non-owner admin", refused)
+	}
 }
