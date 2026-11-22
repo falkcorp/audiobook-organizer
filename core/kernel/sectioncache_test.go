@@ -35,18 +35,18 @@ func TestBootSectionCache(t *testing.T) {
 	if _, err := bootSectionCache(bootseam.With(t.Context(), &bootseam.Seams{SectionCache: "bruce"})); err == nil {
 		t.Error("a Seams.SectionCache of the wrong type did not fail the boot")
 	}
-	// bootseam.WithSectionCache (the package's test helpers) reaches a boot
+	// bootseam.WithSectionCacheForTest (the package's test helpers) reaches a boot
 	// with no Seams, and one whose Seams name no cache; a Seams cache wins.
 	shared := config.NewSectionCache()
-	byCtx := bootseam.WithSectionCache(t.Context(), shared)
+	byCtx := bootseam.WithSectionCacheForTest(t.Context(), shared)
 	if got, err := bootSectionCache(byCtx); got != shared || err != nil {
-		t.Errorf("WithSectionCache, no Seams: (%v, %v), want the one given", got, err)
+		t.Errorf("WithSectionCacheForTest, no Seams: (%v, %v), want the one given", got, err)
 	}
 	if got, err := bootSectionCache(bootseam.With(byCtx, &bootseam.Seams{})); got != shared || err != nil {
-		t.Errorf("WithSectionCache under Seams with no cache: (%v, %v), want the one given", got, err)
+		t.Errorf("WithSectionCacheForTest under Seams with no cache: (%v, %v), want the one given", got, err)
 	}
 	if got, err := bootSectionCache(bootseam.With(byCtx, &bootseam.Seams{SectionCache: want})); got != want || err != nil {
-		t.Errorf("WithSectionCache under Seams with a cache: (%v, %v), want the Seams one", got, err)
+		t.Errorf("WithSectionCacheForTest under Seams with a cache: (%v, %v), want the Seams one", got, err)
 	}
 }
 
