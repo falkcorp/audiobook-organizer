@@ -178,6 +178,51 @@ E1 coreEvents preconditions, E2 consumer adapters (batcher, shutdown hook), E3 e
 cells, G4 Activity and system-log views onto the stream (after F5-18). If a slice has merged by your BASE, this PR does not
 redo it.
 
+## Amendment 2026-11-22 (state at pre-flip; read with the 2026-11-20 amendment)
+
+**Merged since 2026-11-20.**
+- #4813 (E1 + E2 + E3)
+- #4814 (E6a)
+- #4828 (E4)
+- #4829 (the server pre-slice, which replaced #4798, so STOP 3's "#4798 is merged" is satisfied by #4829)
+- The executor's publisher for the three `core.task.*` topics, landed on `main` as F5-18 slice E6b
+  (`core/internal/executor`, "publish core.task.run-changed, log-appended and finished after each run commit").
+
+STOP 5's publish half is therefore met on `main`. It is still a STOP if the topics are not declared in the kernel's core
+catalog at your BASE (F4-08 wires `declareCore`).
+
+**Base.** This PR is cut as a draft on the F5-18 flip head (which stacks on F4-08's), and re-cut on each move of that head.
+F4-08's module SDK has `Registrar.Topics`, `Registrar.Subscribe` and `Deps.Events`. It does **not** have
+`Manifest.OutboxConsumers` or `Registrar.OutboxHandler`, so this PR adds them.
+
+**Obligations added by the reviews of the merged slices.** Each is part of this PR unless a dark pre-PR has already done it.
+1. **Created events (#4813 m5).** The hub's `Coalesce: 250ms` on `books.book.changed.v1` folds created+updated into
+   updated, so the SPA's new-books chip misses the creation. Either the coalescing merge keeps `created`, or the topic
+   does not coalesce. Choose one, with a test.
+2. **Resync clear (#4813 r1).** The Library consumer calls `useBookChanges().clear()` when it issues its refetch.
+   `subscribeBookChanges` no longer clears on resync.
+3. **Wake wording (#4813 r2 m-a).** `connection.ts` and the changelog overclaim "a resumed laptop moves no deadline":
+   `performance.now` does not advance in sleep on macOS browsers. Reword it, or clear holds on `visibilitychange`/`online`.
+4. **Spec 07 §7.9 (#4813 m7).** Amend the `useResync` contract to the new pacing defaults, or record the difference in
+   seams.
+5. **Log redaction (#4814 r1 m1, r2 m1/m2).**
+   - Log redaction belongs inside `Client.Log` (05-tasks 5T.3.10), not only in `taskhttp.getLog`. Mind the
+     nil-checker difference.
+   - `RedactRunPayload` must pass every string field through `RedactRunView`, not only `Current`.
+   - Pin every wire key as a literal.
+6. **Relocation (#4829 m1-m5).**
+   - m1: the flip makes `pathUpdateNative` `ResumeFromZero` with a retryable `MoveStorage` error.
+   - m5: pin `Live` in `TestRelocationFollowUpDurable`.
+   - m2 (unused `from_path`/`to_path`), m3 (path to "" to path emits nothing) and m4 (`stageFold`'s O(N²) decodes):
+     done here unless a dark pre-PR has done them.
+7. **Writer-chain cell at the router (TODO "F6-03 G2 writer-chain cell at the router").** When `eventhttp.Register` is
+   mounted on `CoreGroup`, add a cell that opens a real stream through the full served stack (HTTP/1.1 and HTTP/2) and
+   asserts a per-write deadline is set and enforced.
+8. **Ring floor (TODO "F6-03 ring floor").** If the `core.realtime.ring_size` default is still 1024 at your BASE, raise it
+   to 4096 and delete `realtimeRingFloor`/`realtimeRingDefault` from `core/kernel/realtime.go`.
+9. **The rehearsal.** Adding the outbox storage owner may raise a level or change what an older build accepts. If it does,
+   this PR needs the production-copy rehearsal's older and restore stages, not only a smoke run. Say which in the PR.
+
 ## Goal
 
 1. **Wire** the outbox (relay kind registered, `Deps.Outbox`, `Registrar.OutboxHandler`, `Manifest.OutboxConsumers`, the
