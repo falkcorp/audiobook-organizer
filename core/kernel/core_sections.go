@@ -338,7 +338,7 @@ func coreSectionsWith(d CoreDefaults) []any {
 
 		// 05-realtime §8
 		config.Define("core.realtime", realtimeSettings{
-			RingSize:        1024,
+			RingSize:        4096,
 			ClientBuffer:    128,
 			MaxClients:      256,
 			MaxPerBucket:    16,
