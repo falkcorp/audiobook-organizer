@@ -866,27 +866,6 @@ var (
 	}
 )
 
-// registeredApprovalFixerPermitted: the one recorded approval, repairs.plan, answered
-// R0 A to the six imported principals below and the flip refuses them all in the
-// handler (403 "this run belongs to a Repairs fixer you may not use"), behind an
-// admit by stage 13. B10y found the cause: playlists.create has a zero Route, so it
-// is never held under identity and fixerPermitted (opaccess/repairs.go) fails its
-// auth.All() check for everyone. The fix is a real Route for playlists.create; until
-// it lands these cells are held red with the B10y family, not pinned.
-var registeredApprovalFixerPermitted = diffTable{
-	name:     "approval of a repairs.plan run: fixerPermitted refuses everyone (B10y)",
-	want:     6,
-	wantTwin: 4,
-	rows: []diffRow{
-		{
-			routes: []string{taskApproveKey + "repairs.plan"},
-			who:    []string{"session:admin", "session:custom-all", "key:admin:every", "key:admin:empty", "key:custom-all:every", "key:custom-all:empty"},
-			r0:     'A', flip: 'D', status: 403, handler: true,
-			why: "playlists.create has a zero Route, so fixerPermitted's auth.All() check fails for every principal",
-		},
-	},
-}
-
 // registeredAuthOffTightening: the 12 cells of the auth-disabled principal that HEAD
 // admitted and the flip refuses on purpose. Ruled by the coordinator (2026-11-22): these
 // are RECORDED TIGHTENINGS, not defects. 05-rbac.md section 4.11, "Auth-off tightenings
@@ -948,41 +927,15 @@ var registeredAuthOffNeedsUser = diffTable{
 	},
 }
 
-// registeredB10yFamily: the admin-key narrowings found by the registered-path sweep
-// (B10d-h2). Its 12 + 8 deluge/discover cells are not here: with the corpus's
-// deluge_discovery_enabled on, as R0 recorded it, they answer R0's letters. They are not ruled; B10y owns them, and
-// TestRegisteredReach_B10yCellsMatchHEAD (held red until B10y lands) holds each
-// cell to HEAD's verdict. The main oracle leaves them out of its exact diff.
+// registeredB10yFamily: the invite narrowings found by the registered-path sweep
+// (B10d-h2). Not ruled; B10y owns them. The main oracle leaves them out of its exact
+// diff and holds each to still differ, so the fix that makes one answer R0's letter
+// must delete it here.
 var registeredB10yFamily = diffTable{
-	name:     "B10y family: admin keys",
-	want:     38,
-	wantTwin: 38,
+	name:     "B10y family: keys on the invite routes",
+	want:     10,
+	wantTwin: 10,
 	rows: []diffRow{
-		{
-			routes: []string{
-				"GET /api/v1/admin/debug/book-files/:id", "GET /api/v1/admin/debug/books/:id", "GET /api/v1/admin/debug/edits",
-				"GET /api/v1/admin/debug/lookup", "POST /api/v1/admin/recompact-digests",
-			},
-			who: adminKeys, r0: 'A', flip: 'D', status: 403,
-			why: "admin-gated maintenance and debug reads: an admin's every-atom or empty-list key was admitted by HEAD's role check",
-		},
-		{
-			routes: []string{"POST /api/v1/cache/invalidate", "GET /api/v1/cache/stats/keys", "POST /api/v1/maintenance/wipe"},
-			who:    adminKeys, r0: 'A', flip: 'D', status: 403,
-			why: "admin-gated cache and wipe routes: same shape",
-		},
-		{
-			routes: []string{
-				"GET /api/v1/master-lists", "POST /api/v1/master-lists", "DELETE /api/v1/master-lists/:id", "GET /api/v1/master-lists/elsewhere",
-			},
-			who: adminKeys, r0: 'A', flip: 'D', status: 403,
-			why: "master lists: same shape",
-		},
-		{
-			routes: []string{"GET /api/v1/users/:id/footprint", "GET /api/v1/users/merges"},
-			who:    adminKeys, r0: 'A', flip: 'D', status: 403,
-			why: "user footprint and merge list: same shape",
-		},
 		{
 			routes: []string{"GET /api/v1/users/invites", "DELETE /api/v1/users/invites/:id"},
 			who:    []string{"key:admin:users", "key:admin:every", "key:admin:empty", "key:custom-all:every", "key:custom-all:empty"}, r0: 'A', flip: 'D', status: 403,
@@ -1154,7 +1107,7 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 		t.Logf("compared %d cells (%d route cells pinned)", compared, registeredAuthOnCells)
 		tables := []diffTable{registeredFPWorkerNarrowing, registeredHeadDrift, registeredRuledNarrowings, registeredBootstrapRefused}
 		heldRed := map[string]diffRow{}
-		for _, tb := range []diffTable{registeredB10yFamily, registeredApprovalFixerPermitted} {
+		for _, tb := range []diffTable{registeredB10yFamily} {
 			cells := tb.expand()
 			twin := h.twins(cells)
 			if len(cells) != tb.want || len(twin) != tb.wantTwin {

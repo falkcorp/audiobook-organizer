@@ -94,19 +94,12 @@ func stage13TwinTable(t *testing.T) map[string][]rbac.Permission {
 // test runs stage 13 over (core/httpapi s13Atoms) is AtomTable's route rows,
 // name for name and scope for scope. A row books adds, drops or changes fails
 // here until the core table follows, so the test's "the successor admits it" is
-// about the table books ships. The one atom missing from it, playlists.create,
-// is the row no route enforces (a zero route requirement), and it must stay
-// absent.
+// about the table books ships. Every atom is in it, playlists.create included:
+// no atom has a zero route requirement (TestAtomTable_NoZeroRoute).
 func TestAtomTable_MatchesStage13RandomRolesTable(t *testing.T) {
 	twin := stage13TwinTable(t)
 	routed := 0
 	for _, a := range AtomTable() {
-		if a.Route.IsZero() {
-			if _, in := twin[a.Name]; in {
-				t.Errorf("%s gates no route (zero route requirement) and must not be in the stage 13 table", a.Name)
-			}
-			continue
-		}
 		routed++
 		got, in := twin[a.Name]
 		switch {

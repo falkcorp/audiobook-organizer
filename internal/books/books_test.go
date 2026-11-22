@@ -160,11 +160,35 @@ func unionScopes(atoms ...string) []rbac.Permission {
 	return out
 }
 
+// TestAtomTable_NoZeroRoute: no atom's route requirement is zero (F4-08 B10y).
+// The in-handler bridge resolves an atom through its Route, so a zero one makes
+// the atom unholdable by anyone, and every check HEAD wrote as "holds every
+// atom" (APIKeyMayActAsAdmin over auth.All(), the Repairs unknown-fixer scope)
+// then fails for every caller: an admin's key on every admin-role route, the
+// admin session on approving a Repairs plan. playlists.create had one, because
+// no HEAD route enforces it; the next atom with that property must still carry
+// AllOf its scopes, and this fails instead of the all-atoms checks.
+func TestAtomTable_NoZeroRoute(t *testing.T) {
+	for _, a := range AtomTable() {
+		if a.Route.IsZero() {
+			t.Errorf("atom %s has a zero route requirement; give it AllOf%v (an all-atoms check would refuse everyone)", a.Name, a.Scopes)
+			continue
+		}
+		if a.Route.Kind() != rbac.KindAllOf || !slices.Equal(a.Route.Permissions(), a.Scopes) {
+			t.Errorf("atom %s route requirement = %s, want AllOf%v", a.Name, a.Route, a.Scopes)
+		}
+		req, ok := newAtomResolver().Requirement(a.Name, false)
+		if !ok || !reflect.DeepEqual(req, a.Route) {
+			t.Errorf("the bridge resolves %s to %s, %v; want its Route %s", a.Name, req, ok, a.Route)
+		}
+	}
+}
+
 // TestAtomTable_Golden (05-rbac §12) pins the 13 rows of §6.1 and the
 // every-atom row: every route requirement is AllOf all of its row's native
-// scopes, no single-scope requirement is AuthRequired, playlists.create has
-// none, users.manage alone has a read-side entry, and every scope the table
-// writes is one the catalog will hold.
+// scopes (playlists.create's too, though no route enforces it), no
+// single-scope requirement is AuthRequired, users.manage alone has a read-side
+// entry, and every scope the table writes is one the catalog will hold.
 func TestAtomTable_Golden(t *testing.T) {
 	want := map[string][]rbac.Permission{
 		"library.view":          {"books:view", "core:tasks.view"},
@@ -201,12 +225,6 @@ func TestAtomTable_Golden(t *testing.T) {
 			if !slices.Contains(catalog, s) {
 				t.Errorf("%s writes %s, which the catalog will not hold", a.Name, s)
 			}
-		}
-		if a.Name == "playlists.create" {
-			if !a.Route.IsZero() {
-				t.Errorf("playlists.create has route requirement %s, want none (no route enforces it)", a.Route)
-			}
-			continue
 		}
 		if a.Route.Kind() != rbac.KindAllOf || !slices.Equal(a.Route.Permissions(), a.Scopes) {
 			t.Errorf("%s route requirement = %s, want AllOf%v", a.Name, a.Route, a.Scopes)
@@ -363,7 +381,7 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 	}
 
 	t.Run("refusals", func(t *testing.T) {
-		for _, atom := range []string{"playlists.create", "Penguin's atom"} {
+		for _, atom := range []string{"Penguin's atom"} {
 			_, err := resolveRoutes([]httpapi.LegacyRoute{
 				{Method: http.MethodGet, GinPath: "/api/v1/health", Perm: rbac.AnyAuthenticated},
 				{Method: http.MethodPost, GinPath: "/api/v1/batcave", Perm: rbac.LegacyAtom(atom)},
