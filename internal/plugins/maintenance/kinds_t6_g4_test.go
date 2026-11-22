@@ -1083,13 +1083,25 @@ func t6g4CheckScheduleHookAndParallelism(t *testing.T) {
 		by[k] = s
 		return s
 	}
+	children := map[tasks.Kind]bool{}
+	for _, c := range batchChildKinds {
+		children[c.child] = true
+	}
 	for _, d := range t6g4KindsUnchecked(deps, hook) {
-		if got := tasks.CommonOf(d).Schedule; got == nil || !reflect.DeepEqual(got, by[d.Kind()]) {
+		got := tasks.CommonOf(d).Schedule
+		if children[d.Kind()] {
+			// A per-batch child is started only by its parent, never on a schedule.
+			if got != nil {
+				t.Errorf("%s: a batch child has a Schedule %v", d.Kind(), got)
+			}
+			continue
+		}
+		if got == nil || !reflect.DeepEqual(got, by[d.Kind()]) {
 			t.Errorf("%s: Schedule = %v, want the hook's value for that kind", d.Kind(), got)
 		}
 	}
-	if len(by) != t6g4DefCount() {
-		t.Errorf("hook called for %d kinds, want %d", len(by), t6g4DefCount())
+	if len(by) != len(t6g4Expected) || len(by) != t6g4DefCount()-len(batchChildKinds) {
+		t.Errorf("hook called for %d kinds, want %d (every kind but the batch children)", len(by), len(t6g4Expected))
 	}
 	for _, c := range []struct {
 		conc int

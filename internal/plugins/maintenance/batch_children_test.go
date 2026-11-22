@@ -31,8 +31,8 @@ import (
 // batchChildKinds are the three children and the parent each belongs to.
 var batchChildKinds = []struct{ parent, child tasks.Kind }{
 	{extractWAVClipsKind, extractWAVBatchChildKind},
-	{introMigrateSingleFileKind, introMigrateBatchChildKind},
 	{fileIntroKind, fileIntroBatchChildKind},
+	{introMigrateSingleFileKind, introMigrateBatchChildKind},
 }
 
 func batchDefs(t *testing.T) map[tasks.Kind]tasks.Definition {
@@ -232,8 +232,14 @@ func TestBatchAdmission_OnlyTheBatchIsHeld(t *testing.T) {
 			if overlapsAny(held, modify("bk-gordon")) {
 				t.Errorf("a metadata write to a book outside batch N is held behind the child (%v)", held)
 			}
-			if overlapsAny(held, holds(t, defs[k.child], nextBatch)) {
-				t.Errorf("two batches of one sweep overlap: the next batch's child could not be admitted alongside")
+			// Two batches of one sweep share no row. (The wav child also holds files
+			// whole-kind, for the clips and links it writes by path, so two wav
+			// children overlap there; the sweep runs one child at a time anyway.)
+			rowsOnly := func(rs []entity.Ref) []entity.Ref {
+				return slices.DeleteFunc(slices.Clone(rs), func(r entity.Ref) bool { return r.ID == "" })
+			}
+			if overlapsAny(rowsOnly(held), rowsOnly(holds(t, defs[k.child], nextBatch))) {
+				t.Errorf("two batches of one sweep overlap on a row: the next batch's child could not be admitted alongside")
 			}
 			for _, in := range []string{"bk-alfred", "bk-barbara"} {
 				if !overlapsAny(held, modify(in)) {
@@ -469,7 +475,7 @@ func TestBatchScope_ClearChildTouchesOnlyItsBatch(t *testing.T) {
 	res, err := (&Plugin{}).t6g4ClearFileIntros(rc.Context(), fileIntroClearIO{
 		reads: clearFixtureReads{cores: cores}, writes: w, writable: true, each: base.Each,
 		scope: map[string]string{"f-in": "bk-in", "f-not-this-run": "bk-in"},
-	}, nil, base.reporter(rc.Context()), "run-joker", false)
+	}, &fakeQueue{}, base.reporter(rc.Context()), "run-joker", false)
 	if err != nil {
 		t.Fatal(err)
 	}
