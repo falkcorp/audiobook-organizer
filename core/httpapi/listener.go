@@ -30,6 +30,13 @@ type ListenOptions struct {
 	TLSCertFile, TLSKeyFile string        // both or neither
 	ReadHeaderTimeout       time.Duration // core.http.read_header_timeout; 0 = 15s
 	IdleTimeout             time.Duration // core.http.idle_timeout; 0 = 120s
+
+	// OnShutdown functions are registered with http.Server.RegisterOnShutdown:
+	// Shutdown runs each on its own goroutine as soon as it begins, which is
+	// how the realtime hub tells open streams closed{shutdown} so the drain is
+	// not held open by them (05-realtime section 5). Every listener the kernel
+	// drives honours them.
+	OnShutdown []func()
 }
 
 // Listener is one bound HTTP listener: the listener lifecycle of 05-http-api
@@ -54,6 +61,9 @@ func Listen(o ListenOptions, h http.Handler, log *slog.Logger) (*Listener, error
 		o.IdleTimeout = defaultIdleTimeout
 	}
 	srv := &http.Server{Handler: h, ReadHeaderTimeout: o.ReadHeaderTimeout, IdleTimeout: o.IdleTimeout}
+	for _, f := range o.OnShutdown {
+		srv.RegisterOnShutdown(f)
+	}
 	if log != nil {
 		srv.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelWarn)
 	}
