@@ -39,6 +39,9 @@ type fileIntroClearIO struct {
 	writes   fileIntroClearWrites
 	writable bool
 	each     func(ctx context.Context, n int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error
+	// scope, when non-nil (a batch child), maps each file the rollback may touch
+	// to its book; the run's other files are left alone.
+	scope map[string]string
 }
 
 // fileIntroClearResult is what a rollback did (or, in a preview, would do).
@@ -86,8 +89,12 @@ func (p *Plugin) t6g4ClearFileIntros(ctx context.Context, io fileIntroClearIO, q
 		}
 		// A scan's unlocked read-modify-write can bring a cleared group back
 		// with its stale run id, so a live clear obeys the same gate as a run.
-		if err := fileIntroRefuseIfBusy(queue); err != nil {
-			return fileIntroClearResult{}, err
+		// A batch child (io.scope set) starts mid-sweep: the parent refused a busy
+		// library once, at the start, and each chunk below waits for a scan.
+		if io.scope == nil {
+			if err := fileIntroRefuseIfBusy(queue); err != nil {
+				return fileIntroClearResult{}, err
+			}
 		}
 	}
 
@@ -99,7 +106,7 @@ func (p *Plugin) t6g4ClearFileIntros(ctx context.Context, io fileIntroClearIO, q
 	type ref struct{ bookID, fileID string }
 	var refs []ref
 	for i := range cores {
-		if cores[i].IntroRunOpID == runID {
+		if cores[i].IntroRunOpID == runID && (io.scope == nil || inScope(io.scope, cores[i].BookID, cores[i].ID)) {
 			refs = append(refs, ref{cores[i].BookID, cores[i].ID})
 		}
 	}

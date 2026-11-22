@@ -24,7 +24,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -108,6 +107,11 @@ type fileIntroParams struct {
 	// opmode.ResolveDryRun.
 	DryRun      *bool `json:"dry_run,omitempty"`
 	DryRunCamel *bool `json:"dryRun,omitempty"`
+	// batch, set only by the per-batch child (F5-18h), confines the run to the
+	// files one batch's Subjects hold and stamps its results with the parent's
+	// run id. Never decoded: HEAD's shell and the whole-library parent leave it
+	// nil.
+	batch *batchScope
 }
 
 func (p *Plugin) fileIntroTranscribeDef() sdk.OperationDef {
@@ -203,6 +207,10 @@ type fileIntroSelectOpts struct {
 	// stat reports whether a path exists; a seam so selection is testable
 	// without files. nil means os.Stat.
 	stat func(string) bool
+	// scope, when non-nil (a batch child), maps each file the run may select to
+	// its book: any other file is left out of every group. Donors are still
+	// found library-wide: a donor is only read.
+	scope map[string]string
 }
 
 func isTranscribable(f *database.BookFileCore) bool {
@@ -260,6 +268,11 @@ func selectFileIntroWork(cores []database.BookFileCore, opts fileIntroSelectOpts
 			return files[i].FilePath < files[j].FilePath
 		})
 		for ord, f := range files {
+			// Ordinal is the file's place among ALL the book's files, scoped or not;
+			// only membership is confined.
+			if opts.scope != nil && !inScope(opts.scope, bookID, f.ID) {
+				continue
+			}
 			switch {
 			case f.Missing:
 				sel.skippedMissing++
@@ -479,29 +492,33 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 	return err
 }
 
-// fileIntroTranscribeKind is the native shell (rule R2 item 3). HEAD has a
-// preview, so a preview run counts and writes nothing.
+// fileIntroTranscribeKind is the native shell (rule R2 item 3), and since F5-18h
+// the PARENT of the per-batch children (batch_children.go). HEAD has a preview,
+// so a preview run counts and writes nothing (the shared core's own preview, run
+// by the parent); a live run writes nothing itself and starts one child run per
+// 100 books, one at a time, so the days-long run no longer holds books and
+// book_files for every other writer (TODO-F5-09-FILE-INTROS-WRITE-SET, option a).
 func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(fileIntroKind, tasks.TaskSpec[fileIntroNativeParams, fileIntroResult]{
 		Title: "Transcribe file intros",
-		Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced.",
-		// HEAD declares no Writes (see the long comment on fileIntroTranscribeDef).
-		// The body writes a file's intro group (SetBookFileIntro, ClearBookFileIntro,
-		// RecordIntroTimeout: book_files), a book's transcript fill (ModifyBook:
-		// books). ModifyBook also stamps the metadata cache stale on an identity
-		// change and stages the ident: rows (metadata_cache, indexes: the shared
-		// ModifyBook row, kinds_resources.go). The run's counters (the
-		// stats:transcribe-files key) have no pkg/ops constant and are written
-		// outside the gated writer on purpose: see t6g4StatsSink.
-		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced. A live run writes nothing itself: it starts one child run per 100 books, one at a time, and each child holds only its own books.",
+		// ReadOnly: the writes (a file's intro group: book_files; a book's transcript
+		// fill, ModifyBook: books, metadata_cache, indexes) are the children's, see
+		// fileIntroBatchKind. HEAD declared none, to keep a days-long run from
+		// queueing acoustid.backfill; the first native cut declared book_files and
+		// books for the whole run, which did the same. Now every child holds only its
+		// batch. The run's counters (the stats:transcribe-files key) have no pkg/ops
+		// constant and are written outside the gated writer, by the parent (see
+		// t6g4StatsSink).
+		Effects:  tasks.ReadOnly(),
 		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		// HEAD's 30 days is above tasks.MaxTimeout. A timeout is terminal, so the
-		// run does not wait for it: it stops starting batches and yields
-		// (tasks.ErrContinueInPlace) fileIntroYieldMargin before the deadline,
-		// and the next attempt continues from the checkpoint. See
-		// fileIntroBatchLoop.run for what can still reach the timeout.
+		// parent does not wait for it: it stops waiting on a child and starting one
+		// batchYieldMargin before the deadline and yields (tasks.ErrContinueInPlace),
+		// and the next attempt re-attaches to the child in flight and carries on
+		// from the cursor (batch_sweep.go).
 		ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
 		Timeout:         tasks.MaxTimeout,
 		ProgressTimeout: 30 * time.Minute,
@@ -511,17 +528,11 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileIntroResult{}, err
 			}
-			base, err := t6g4NativeBase(rc, deps, true)
+			base, err := t6g4NativeBase(rc, deps, false)
 			if err != nil {
 				return fileIntroResult{}, err
 			}
-			// Only the native shell sets the margins: HEAD's builds the env without
-			// either, so only a native run yields before its deadline (review M4)
-			// and cuts a whisper call before it (N16). A test drives this shell to a
-			// blocked call to pin that it hands both over (N32).
-			return p.runFileIntroTranscribeCore(rc.Context(), fileIntroParams{
-				OnlyMissing: in.OnlyMissing, RetryFailed: in.RetryFailed, ClearRunID: in.ClearRunID,
-			}, fileIntroEnv{t6g4Base: base, YieldMargin: fileIntroYieldMargin, CallMargin: fileIntroCallMargin()})
+			return p.fileIntroBatchParent(rc, base, in)
 		},
 	})
 }
@@ -539,9 +550,13 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	if store.HasOperationQueue() {
 		queue = store
 	}
+	var owners map[string]string // nil outside a batch: every file is in scope
+	if params.batch != nil {
+		owners = params.batch.fileOwners()
+	}
 	if params.ClearRunID != "" {
 		cleared, err := p.t6g4ClearFileIntros(ctx, fileIntroClearIO{
-			reads: store, writes: env.Writer, writable: store.FileIntroWritesAvailable(), each: env.Each,
+			reads: store, writes: env.Writer, writable: store.FileIntroWritesAvailable(), each: env.Each, scope: owners,
 		}, queue, reporter, params.ClearRunID, dryRun)
 		return fileIntroResult{DryRun: dryRun, RunID: params.ClearRunID, Cleared: &cleared}, err
 	}
@@ -576,7 +591,7 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	if err != nil {
 		return fileIntroResult{}, fmt.Errorf("%s: read book files: %w", fileIntroOpID, err)
 	}
-	sel := selectFileIntroWork(cores, fileIntroSelectOpts{onlyMissing: onlyMissing, retryFailed: retryFailed})
+	sel := selectFileIntroWork(cores, fileIntroSelectOpts{onlyMissing: onlyMissing, retryFailed: retryFailed, scope: owners})
 	cores = nil
 	res := fileIntroResult{DryRun: dryRun, Eligible: sel.eligible, Selected: sel.selected}
 
@@ -606,7 +621,11 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	// ctx only: it cannot yield again, because a yield needs this attempt to have
 	// completed a batch (the executor's progress proof), so a scan that outlasts
 	// a whole attempt ends the run timed_out, as a batch 0 parked in a wait does.
-	if resumed {
+	//
+	// A batch child waits the same way, for the same reason: it starts mid-sweep,
+	// possibly right after a scan did, and the parent refused a busy library once,
+	// at the start of the run (fileIntroBatchParent).
+	if resumed || params.batch != nil {
 		if err := waitWhileScanBusy(ctx, fileIntroOpID, queue, func(def string) {
 			env.Progress(base, base+1, mark+"paused — "+def+" is running; resumes when it finishes")
 		}); err != nil {
@@ -623,6 +642,12 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 
 	if resumed && prior.RunID != "" {
 		runID = prior.RunID
+	}
+	if params.batch != nil {
+		// The children have run ids of their own; the rows they stamp
+		// (IntroRunOpID) and the stats key name the parent's, which is what
+		// clear_run_id takes.
+		runID = params.batch.ParentRunID
 	}
 	res.RunID = runID
 
