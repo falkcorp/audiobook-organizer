@@ -173,8 +173,8 @@ func TestJournalPruneParity_HeadGolden(t *testing.T) {
 			edit: &edit{step: 24, set: map[string]any{"maintenance.purge_old_logs": true}}},
 	}
 
-	saved := hconfig.AppConfig
-	t.Cleanup(func() { hconfig.AppConfig = saved })
+	saved := hconfig.Snapshot()
+	t.Cleanup(func() { setHeadConfig(t, saved) })
 	for _, rw := range rows {
 		head := parityBase(t)
 		if rw.set != nil {
@@ -197,7 +197,7 @@ func TestJournalPruneParity_HeadGolden(t *testing.T) {
 			if rw.edit != nil && rw.edit.step == i {
 				head, boot = withHead(t, head, rw.edit.set), true
 			}
-			hconfig.AppConfig = head
+			setHeadConfig(t, head)
 			if boot {
 				rig.boot(at(i))
 				if i == 0 && g.Every == "" {
