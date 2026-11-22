@@ -4,10 +4,12 @@
 // last-edited: 2026-11-22
 
 // ABO's identity calls on core's native routes under /api/core/v1 (F4-08 B8):
-// sign-in, sign-up, the caller's own profile, password and API keys, user and
-// invite administration, and the three public one-time-link routes. Every call
-// goes through @mediacore/api-client's generated client, so the transport
-// rules (credentials, the login-page bounce, the stale-build rule, the Problem
+// sign-in, sign-up, the caller's own profile and password, user and
+// invite administration, and the three public one-time-link routes. API keys are
+// NOT here: they go through the books route (api.ts, /api/v1/auth/api-keys) so a
+// key carries the books ambient scopes; a native /api/core/v1 key call would
+// not. Every call goes through @mediacore/api-client's generated client, so the
+// transport rules (credentials, the login-page bounce, the stale-build rule, the Problem
 // envelope) are the client's, and core answers bare bodies (no `data` envelope).
 //
 // Nothing here logs, and no one-time token is ever placed in a URL: an invite or
@@ -17,8 +19,8 @@
 // its message, the HTTP status, and the Problem as `data`, so the SPA's existing
 // error handling (err.status, err.message) reads it unchanged.
 //
-// api.ts re-exports the account and key functions, so their importers did not
-// change; the types they return are api.ts's (AuthUser, APIKey, ...).
+// api.ts re-exports the account functions, so their importers did not change;
+// the types they return are api.ts's (AuthUser, ...).
 
 import {
   createCoreClient,
@@ -29,18 +31,14 @@ import {
 } from '@mediacore/api-client';
 import type {
   AdminUserSummary,
-  APIKey,
   AuthStatus,
   AuthUser,
-  CreateAPIKeyRequest,
-  CreateAPIKeyResponse,
   TempLoginTokenResponse,
 } from './api';
 import { ApiError } from './apiError';
 
 type Schemas = components['schemas'];
 type CoreUserBody = Schemas['core.User'];
-type CoreKeyBody = Schemas['core.APIKey'];
 
 /** core's list routes cap a page at 1000; every list here asks for the whole of it. */
 const PAGE = { limit: 1000 } as const;
@@ -348,94 +346,4 @@ export async function consumeTempLogin(token: string, newPassword?: string): Pro
     }),
     'Could not sign in with this link'
   );
-}
-
-// --- API keys --------------------------------------------------------------
-
-/** HEAD called a disabled key `inactive`; core calls it `disabled`. The UI keeps its word for it. */
-function keyStatusOf(status: string): APIKey['status'] {
-  if (status === 'disabled') return 'inactive';
-  return status === 'revoked' ? 'revoked' : 'active';
-}
-
-function daysSince(iso: string | null | undefined): number | null {
-  if (!iso) return null;
-  return Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-}
-
-function apiKeyOf(k: CoreKeyBody): APIKey {
-  return {
-    id: k.id,
-    user_id: k.owner,
-    name: k.name,
-    scopes: k.scopes ?? [],
-    status: keyStatusOf(k.status),
-    created_at: k.created_at,
-    use_count: k.use_count,
-    never_used: !k.last_used_at,
-    days_since_last_use: daysSince(k.last_used_at),
-    // A key has no stored prefix to show; its id is the handle the list and revoke use.
-    identifier: k.id,
-    ...(k.owner_username ? { username: k.owner_username } : {}),
-    ...(k.last_used_at ? { last_used_at: k.last_used_at } : {}),
-    ...(k.last_used_ip ? { last_used_ip: k.last_used_ip } : {}),
-    ...(k.expires_at ? { expires_at: k.expires_at } : {}),
-    ...(k.revoked_at ? { revoked_at: k.revoked_at } : {}),
-    ...(k.description ? { description: k.description } : {}),
-  };
-}
-
-/** The caller's own keys, or (all) every key the caller may see. */
-export async function listAPIKeys(all?: boolean): Promise<APIKey[]> {
-  const page = await body(
-    all
-      ? core().GET('/api/core/v1/api-keys', { params: { query: PAGE } })
-      : core().GET('/api/core/v1/me/api-keys', { params: { query: PAGE } }),
-    'Failed to list API keys'
-  );
-  return (page.items ?? []).map(apiKeyOf);
-}
-
-export async function getAPIKey(id: string): Promise<APIKey> {
-  return apiKeyOf(await body(core().GET('/api/core/v1/api-keys/{id}', { params: { path: { id } } }), 'Failed to get API key'));
-}
-
-export async function createAPIKey(request: CreateAPIKeyRequest): Promise<CreateAPIKeyResponse> {
-  const payload: Schemas['core.KeyCreate'] = {
-    name: request.name,
-    scopes: request.scopes ?? [],
-    ...(request.description ? { description: request.description } : {}),
-    ...(request.expires_in_days ? { expires_in: `${request.expires_in_days * 24}h` } : {}),
-    ...(request.expires_at ? { expires_at: request.expires_at } : {}),
-  };
-  const made = await body(
-    request.user_id
-      ? core().POST('/api/core/v1/users/{id}/api-keys', { params: { path: { id: request.user_id } }, body: payload })
-      : core().POST('/api/core/v1/me/api-keys', { body: payload }),
-    'Failed to create API key'
-  );
-  return {
-    id: made.api_key.id,
-    name: made.api_key.name,
-    token: made.key,
-    scopes: made.api_key.scopes ?? [],
-    created_at: made.api_key.created_at,
-    ...(made.api_key.expires_at ? { expires_at: made.api_key.expires_at } : {}),
-  };
-}
-
-export async function updateAPIKeyStatus(id: string, status: 'active' | 'inactive'): Promise<APIKey> {
-  return apiKeyOf(
-    await body(
-      core().PATCH('/api/core/v1/api-keys/{id}', {
-        params: { path: { id } },
-        body: { status: status === 'inactive' ? 'disabled' : 'active' },
-      }),
-      'Failed to update API key status'
-    )
-  );
-}
-
-export async function revokeAPIKey(id: string): Promise<void> {
-  await done(core().DELETE('/api/core/v1/api-keys/{id}', { params: { path: { id } } }), 'Failed to revoke API key');
 }

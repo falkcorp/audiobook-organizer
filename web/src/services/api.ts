@@ -36,7 +36,10 @@ import * as coreIdentity from './coreIdentity';
 export { ApiError };
 
 // Identity calls live in coreIdentity (core's /api/core/v1 routes); they are
-// re-exported here so importers of api.* did not change.
+// re-exported here so importers of api.* did not change. API keys are NOT among
+// them: a key is made and managed through the books route below
+// (/api/v1/auth/api-keys), so it carries the books ambient scopes (core:self,
+// books:reading, ...) that a key minted on core's native routes never gets.
 export const {
   getAuthStatus,
   setupAdmin,
@@ -49,11 +52,6 @@ export const {
   oidcStartPath,
   listAdminUsers,
   createTempLoginToken,
-  listAPIKeys,
-  getAPIKey,
-  createAPIKey,
-  updateAPIKeyStatus,
-  revokeAPIKey,
 } = coreIdentity;
 
 const API_BASE = '/api/v1';
@@ -7646,6 +7644,69 @@ export interface CreateAPIKeyResponse {
   created_at: string;
   /** Set when the server shortened the requested expiry (e.g. to the calling key's). */
   note?: string;
+}
+
+// Every API-key call goes to the books route, under identity as well as before
+// it: that route mints a key through the one shared scope rule, so the key holds
+// the ambient scopes an audiobook client needs to sync progress. Core's native
+// key routes do not add them (F4-08 B10sk); src/services/apiKeysRoute.guard.test.ts
+// fails if a call to one comes back.
+
+export async function createAPIKey(body: CreateAPIKeyRequest): Promise<CreateAPIKeyResponse> {
+  const response = await apiFetch(`${API_BASE}/auth/api-keys`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to create API key');
+  }
+  const body_data = await response.json();
+  return body_data.data;
+}
+
+export async function listAPIKeys(all?: boolean): Promise<APIKey[]> {
+  const url = all ? `${API_BASE}/auth/api-keys?all=true` : `${API_BASE}/auth/api-keys`;
+  const response = await apiFetch(url);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to list API keys');
+  }
+  const body_data = await response.json();
+  return body_data.data?.api_keys ?? [];
+}
+
+export async function getAPIKey(id: string): Promise<APIKey> {
+  const response = await apiFetch(`${API_BASE}/auth/api-keys/${id}`);
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to get API key');
+  }
+  const body_data = await response.json();
+  return body_data.data;
+}
+
+export async function updateAPIKeyStatus(
+  id: string,
+  status: 'active' | 'inactive'
+): Promise<APIKey> {
+  const response = await apiFetch(`${API_BASE}/auth/api-keys/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to update API key status');
+  }
+  const body_data = await response.json();
+  return body_data.data;
+}
+
+export async function revokeAPIKey(id: string): Promise<void> {
+  const response = await apiFetch(`${API_BASE}/auth/api-keys/${id}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw await buildApiError(response, 'Failed to revoke API key');
+  }
 }
 
 // Cache stats types and functions
