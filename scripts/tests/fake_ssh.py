@@ -145,6 +145,44 @@ def _scp_args(argv: list[str]) -> tuple[str, str, str]:
     return rest[0], host, dest
 
 
+def _scp_download_args(argv: list[str]) -> tuple[str, str, str] | None:
+    """(host, remote source, local destination) from `scp [options] --
+    host:source local`, the copy back from the host; None for any other shape
+    (an upload is `local host:destination`, which _scp_args reads)."""
+    i, rest = 0, []
+    while i < len(argv):
+        if argv[i] in ("-o", "-P", "-i", "-F", "-J"):
+            i += 2
+            continue
+        if not argv[i].startswith("-"):
+            rest.append(argv[i])
+        i += 1
+    if len(rest) != 2 or ":" not in rest[0] or rest[0].startswith("/") or ":" in rest[1]:
+        return None
+    host, _, remote = rest[0].partition(":")
+    return host, remote, rest[1]
+
+
+def _scp_download(sc: dict, host: str, remote: str, local: str) -> int:
+    """The copy back: the remote path (mapped) must lie inside the sandbox and
+    be a regular file that is not a symlink; the local one inside it too."""
+    src = remote
+    for host_path, sandbox_path in sc.get("map", []):
+        src = src.replace(host_path, sandbox_path)
+    root = os.path.realpath(sc["root"])
+    dest = os.path.realpath(local)
+    if not os.path.realpath(src).startswith(root + os.sep) or not dest.startswith(root + os.sep):
+        print(
+            f"fake_ssh: refusing to scp outside the sandbox: {remote} -> {local}", file=sys.stderr
+        )
+        return 255
+    if os.path.islink(src) or not os.path.isfile(src):
+        print(f"scp: {remote}: No such file or directory", file=sys.stderr)
+        return 1
+    Path(dest).write_bytes(Path(src).read_bytes())
+    return 0
+
+
 def main(argv: list[str]) -> int:
     scenario_path = os.environ.get("FAKE_SSH_SCENARIO")
     if not scenario_path:
@@ -152,7 +190,15 @@ def main(argv: list[str]) -> int:
         return 255
     sc = _load(scenario_path)
     is_scp = Path(sys.argv[0]).name == "scp"
-    if is_scp:
+    down = _scp_download_args(argv) if is_scp else None
+    if down is not None:
+        host, remote, local = down
+        command = f"scp {host}:{remote} {local}"
+        log_line(
+            sc["log"],
+            {"kind": "scp", "direction": "down", "host": host, "src": remote, "dest": local},
+        )
+    elif is_scp:
         src, host, dest = _scp_args(argv)
         if not src:
             print("fake_ssh: scp wants one source and host:destination", file=sys.stderr)
@@ -173,6 +219,8 @@ def main(argv: list[str]) -> int:
             sys.stdout.write(r.get("stdout", ""))
             sys.stderr.write(r.get("stderr", ""))
             return int(r.get("exit", 0))
+    if down is not None:
+        return _scp_download(sc, host, remote, local)
     if is_scp:
         # The destination is a host path: mapped, then held inside the sandbox.
         target = dest
@@ -262,6 +310,17 @@ if args[:2] == ["storage", "restore-offline"]:
         sys.stderr.write(IDENT.get("restore_stderr", "Error: restore refused") + "\\n")
         sys.exit(IDENT["restore_exit"])
     print("Restored (journal 20261109T000000Z-0badc0de); start the service.")
+    sys.exit(0)
+if args[:2] == ["secrets", "export-keyring"]:
+    # `secrets export-keyring --db D --out F`: writes F (mode 0600, never over an existing file).
+    rest = dict(zip(args[2::2], args[3::2]))
+    if IDENT.get("keyring_exit"):
+        sys.stderr.write("Error: export-keyring refused\\n")
+        sys.exit(IDENT["keyring_exit"])
+    fd = os.open(rest["--out"], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(fd, IDENT.get("keyring", "batcave keyring export").encode())
+    os.close(fd)
+    print("Wrote the keyring to " + rest["--out"])
     sys.exit(0)
 if args[:2] == ["updater", "fetch-release"]:
     # releases: tag -> the text of the fake binary that release is (fake_app_text).

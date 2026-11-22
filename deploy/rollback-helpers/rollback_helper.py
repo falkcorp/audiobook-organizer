@@ -25,6 +25,7 @@ it touches comes from CONFIG, a root-owned file the owner writes once:
     service_group = audiobook             (optional; defaults to service_user)
     stage_bin = /home/USER/audiobook-organizer                    (optional)
     stage_local_conf = /home/USER/audiobook-organizer-local.conf  (optional)
+    export_dir = /home/USER/aorg-export                           (optional; the export ops)
 
 CONFIG and its directory must be owned by root (or by the user running the
 helper) and not writable by group or others, or every operation refuses.
@@ -135,6 +136,29 @@ Operations (the stub name, then the subcommand):
                      drop-in `[Service]\\nEnvironment=ABK_PPROF_ADDR=localhost:6060\\n`
                      to /etc/systemd/system/<unit>.d/pprof.conf; off removes
                      it. Then `systemctl daemon-reload`.
+  export-keyring     no arguments, as root: `secrets export-keyring` of the live
+  export-install-    install, handed to the deploy user. export-install-secrets
+  secrets            does the same for the install's `.encryption_key` and its
+                     `config.yaml` (R2 runbook Step 1 and Step 7). Both need
+                     export_dir, a directory the deploy user owns, mode 0700
+                     (`mkdir -m 700`, as that user); neither stops the service,
+                     and neither needs it stopped: `secrets export-keyring`
+                     opens no store and takes no lock, and the other two are
+                     plain file reads. The work that needs the service user runs
+                     as service_user in a transient unit (EXPORT_UNIT,
+                     systemd-run --pipe, PrivateTmp, offline_env) whose stdout
+                     is a pipe to this process, never the restore log, which
+                     the deploy group can read. The unit's stdout is one framed
+                     file (`AORGEXPORT1 <length> <sha256>`, then the bytes), so
+                     anything else on it is refused rather than delivered. The
+                     files reach the deploy user only as files in export_dir,
+                     each created here with O_EXCL|O_NOFOLLOW relative to a
+                     directory fd that was opened with no symlink in any
+                     component and checked (owned by SUDO_UID, mode 0700),
+                     mode 0600, fchown-ed to SUDO_UID, under the fixed name
+                     aorg-<what>-<UTC stamp>[.yaml]. Each prints one line
+                     `EXPORTED <name> <bytes> <sha256>` (the hash of what it
+                     wrote). It refuses while the restore unit or its own runs.
 
 Exit 0 done; 1 refused or failed (the message says which step); 2 bad
 arguments. Standard library only. Tests: scripts/tests/test_rollback_helper.py.
@@ -154,6 +178,7 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 CONFIG = "/etc/audiobook-organizer/rollback.conf"
@@ -178,6 +203,21 @@ PPROF_TEXT = "[Service]\nEnvironment=ABK_PPROF_ADDR=localhost:6060\n"
 UNIT_LIMIT = 256 << 10
 UNIT_TEMPLATE = "audiobook-organizer.service"
 RECORD_LIMIT = 1 << 20
+# The export ops (export-keyring, export-install-secrets). EXPORT_UNIT is the
+# transient unit the service-user read runs in; it is its own name, so an
+# export never waits on a restore's, but it refuses while a restore runs.
+EXPORT_UNIT = "audiobook-organizer-rollback-export"
+EXPORT_LIMIT = 1 << 20
+# The worker's exit status for "this file does not exist" (config.yaml only).
+EXPORT_ABSENT = 4
+EXPORT_MAGIC = "AORGEXPORT1"
+EXPORT_FRAME = re.compile(rb"AORGEXPORT1 ([0-9]{1,7}) ([0-9a-f]{64})\n")
+# kind -> (file name prefix, suffix) of the file left in export_dir.
+EXPORT_NAMES = {
+    "keyring": ("aorg-keyring", ""),
+    "key": ("aorg-encryption-key", ""),
+    "config": ("aorg-config", ".yaml"),
+}
 # stub file name -> subcommand. Each stub is `exec /usr/bin/python3 -I
 # LIBDIR/rollback_helper.py <subcommand> "$@"`.
 STUBS = {
@@ -187,6 +227,8 @@ STUBS = {
     "unit-type": "unit-type",
     "install-staged": "install",
     "pprof": "pprof",
+    "export-keyring": "export-keyring",
+    "export-install-secrets": "export-install-secrets",
 }
 
 _NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
@@ -207,6 +249,7 @@ _KEYS = {
     "service_group": False,
     "stage_bin": False,
     "stage_local_conf": False,
+    "export_dir": False,
 }
 
 
@@ -266,6 +309,7 @@ def load_config() -> dict[str, str]:
         "checkpoint_dir",
         "stage_bin",
         "stage_local_conf",
+        "export_dir",
     ):
         v = cfg.get(key, "")
         if not v:
@@ -346,9 +390,9 @@ def op_record(args: list[str]) -> int:
     return 0
 
 
-def _transient_state() -> str:
+def _transient_state(unit: str = TRANSIENT_UNIT) -> str:
     p = subprocess.run(  # noqa: S603 (fixed argv)
-        [TOOLS["systemctl"], "show", "-p", "ActiveState", "--value", f"{TRANSIENT_UNIT}.service"],
+        [TOOLS["systemctl"], "show", "-p", "ActiveState", "--value", f"{unit}.service"],
         capture_output=True,
         text=True,
         check=False,
@@ -1214,10 +1258,11 @@ def _deploy_uid() -> int:
     return int(v) if v.isdigit() else os.getuid()
 
 
-def _open_no_symlinks(path: str) -> int:
+def _open_no_symlinks(path: str, directory: bool = False) -> int:
     """Open path for reading with no symlink in ANY component: O_NOFOLLOW
     alone guards only the last one, so each directory is opened in turn,
-    relative to the one before, with O_NOFOLLOW."""
+    relative to the one before, with O_NOFOLLOW. directory: path must be a
+    directory (opened O_DIRECTORY, not O_NONBLOCK)."""
     parts = [p for p in path.split("/") if p not in ("", ".")]
     if not path.startswith("/") or not parts or ".." in parts:
         raise RefusedError(f"{path} is not an absolute path")
@@ -1227,7 +1272,8 @@ def _open_no_symlinks(path: str) -> int:
             nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = nxt
-        return os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        last = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else os.O_NONBLOCK)
+        return os.open(parts[-1], last, dir_fd=fd)
     finally:
         os.close(fd)
 
@@ -2301,6 +2347,276 @@ def _install_prev(b: str, src: str) -> int:
     return 0
 
 
+# --- the export ops: service-user files, handed to the deploy user -----------
+#
+# export-keyring and export-install-secrets (R2 runbook Steps 7 and 1). The
+# deploy user may pass them any arguments, so they take none. The work that
+# needs the service user (running `secrets export-keyring`, reading
+# `.encryption_key` and `config.yaml`) is _export-worker, in a transient unit
+# with systemd-run --pipe: its stdout is a pipe to this process, the only place
+# the bytes travel. This process then writes each file into export_dir,
+# relative to a directory fd it opened and checked itself; it never follows a
+# path the deploy user can change, and never chowns or renames by path.
+
+
+def _export_stamp() -> str:
+    return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+
+def _export_dir_fd(cfg: dict[str, str]) -> int:
+    """export_dir, opened with no symlink in any component and checked: a
+    directory owned by the deploy user (SUDO_UID) and mode 0700. Every later
+    step is relative to this fd, so a rename or a swap of the path after this
+    point changes nothing."""
+    d = cfg.get("export_dir", "")
+    if not d:
+        raise RefusedError(
+            f"export_dir is not set in {CONFIG}. Set it (install_helpers --export-dir, or edit "
+            "the file as root) to a directory the deploy user owns, created as that user with "
+            "`mkdir -m 700`; nothing was exported"
+        )
+    try:
+        fd = _open_no_symlinks(d, directory=True)
+    except OSError as e:
+        raise RefusedError(
+            f"cannot open the export directory {d}: {e.strerror} (a symlink in any component of "
+            f"the path is refused). Create it as the deploy user: mkdir -m 700 {d}; "
+            "nothing was exported"
+        ) from e
+    st = os.fstat(fd)
+    uid = _deploy_uid()
+    problem = ""
+    if st.st_uid != uid:
+        problem = f"is owned by uid {st.st_uid}, not by the deploy user (uid {uid}) who must own it"
+    elif stat.S_IMODE(st.st_mode) != 0o700:
+        problem = f"has mode {stat.S_IMODE(st.st_mode):04o}, not 0700"
+    if problem:
+        os.close(fd)
+        raise RefusedError(f"the export directory {d} {problem}; nothing was exported")
+    return fd
+
+
+def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
+    """Run _export-worker KIND as the service user in the export unit and
+    return the file it framed on stdout; None when the worker reports the file
+    absent (EXPORT_ABSENT). Refuses, delivering nothing, on any other failure
+    or on stdout that is not exactly one frame."""
+    for unit in (TRANSIENT_UNIT, EXPORT_UNIT):
+        state = _transient_state(unit)
+        if state not in ("inactive", "failed"):
+            raise RefusedError(
+                f"{unit}.service is {state or 'in a state that cannot be read'}: a restore or an "
+                f"export may still be running (systemctl status {unit}). Nothing was started."
+            )
+    if _transient_state(EXPORT_UNIT) == "failed":
+        subprocess.run([TOOLS["systemctl"], "reset-failed", EXPORT_UNIT], check=False)  # noqa: S603
+    argv = [
+        TOOLS["systemd-run"],
+        "--pipe",
+        "--wait",
+        "--quiet",
+        "--collect",
+        f"--unit={EXPORT_UNIT}",
+        "--service-type=exec",
+        f"--uid={cfg['service_user']}",
+        "--property=PrivateTmp=yes",
+    ]
+    argv += [f"--setenv={tok}" for tok in cfg.get("offline_env", "").split()]
+    argv += ["--", TOOLS["python3"], "-I", os.path.abspath(__file__), "_export-worker", kind]
+    proc = subprocess.Popen(  # noqa: S603 (fixed argv built above)
+        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE
+    )
+    assert proc.stdout is not None
+    try:
+        raw = _read_all(proc.stdout.fileno(), EXPORT_LIMIT + 256)
+    finally:
+        proc.stdout.close()
+    if len(raw) >= EXPORT_LIMIT + 256:
+        proc.kill()
+        proc.wait()
+        raise RefusedError(
+            f"the export unit for {kind} wrote more than {EXPORT_LIMIT} bytes; nothing was exported"
+        )
+    rc = proc.wait()
+    if rc == EXPORT_ABSENT and kind == "config" and not raw:
+        return None
+    if rc != 0:
+        raise RefusedError(f"the export unit for {kind} exited {rc}; nothing was exported")
+    m = EXPORT_FRAME.match(raw)
+    body = raw[m.end() :] if m else b""
+    if (
+        m is None
+        or int(m.group(1)) == 0
+        or len(body) != int(m.group(1))
+        or hashlib.sha256(body).hexdigest() != m.group(2).decode()
+    ):
+        raise RefusedError(
+            f"the export unit for {kind} did not write exactly one framed file to its output "
+            "(something else wrote there, or it was cut short); nothing was exported"
+        )
+    return body
+
+
+def _export_deliver(dfd: int, kind: str, data: bytes, stamp: str) -> tuple[str, str]:
+    """Write data into the export directory under its fixed name, as the deploy
+    user's file: created O_EXCL|O_NOFOLLOW relative to dfd (so a planted name,
+    symlink or not, is refused and nothing it points at is touched), mode
+    0600, owned by SUDO_UID before any byte is written. Returns (name, sha256
+    of the bytes written)."""
+    prefix, suffix = EXPORT_NAMES[kind]
+    name = f"{prefix}-{stamp}{suffix}"
+    try:
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+    except OSError as e:
+        raise RefusedError(
+            f"cannot create {name} in the export directory ({e.strerror}); an existing name is "
+            "never overwritten or followed. Nothing was exported under that name"
+        ) from e
+    try:
+        os.fchown(fd, _deploy_uid(), _deploy_gid())
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view) :]
+        os.fsync(fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(name, dir_fd=dfd)
+        raise
+    finally:
+        os.close(fd)
+    return name, hashlib.sha256(data).hexdigest()
+
+
+def _export(cfg: dict[str, str], kinds: tuple[str, ...]) -> int:
+    dfd = _export_dir_fd(cfg)
+    done: list[str] = []
+    try:
+        # Every read finishes before the first file is written, so a refusal
+        # on the second leaves the export directory as it was.
+        got = [(kind, _export_collect(cfg, kind)) for kind in kinds]
+        stamp = _export_stamp()
+        lines = []
+        for kind, data in got:
+            if data is None:
+                lines.append(f"ABSENT {kind}")
+                continue
+            name, sha = _export_deliver(dfd, kind, data, stamp)
+            done.append(name)
+            lines.append(f"EXPORTED {name} {len(data)} {sha}")
+    except BaseException:
+        for name in done:
+            with contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=dfd)
+        raise
+    finally:
+        os.close(dfd)
+    print("\n".join(lines))
+    return 0
+
+
+def op_export_keyring(args: list[str]) -> int:
+    _arity(args, 0, "export-keyring (no arguments)")
+    return _export(load_config(), ("keyring",))
+
+
+def op_export_install_secrets(args: list[str]) -> int:
+    _arity(args, 0, "export-install-secrets (no arguments)")
+    return _export(load_config(), ("key", "config"))
+
+
+def _own_file(path: str, what: str) -> bytes:
+    """Read the service user's own regular file: no symlink in any component,
+    one link, owned by this user, under EXPORT_LIMIT bytes."""
+    try:
+        fd = _open_no_symlinks(path)
+    except OSError as e:
+        raise RefusedError(f"cannot open {what} {path}: {e.strerror}") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > EXPORT_LIMIT or st.st_size == 0:
+            raise RefusedError(
+                f"{what} {path} is not a non-empty regular file of at most {EXPORT_LIMIT} bytes"
+            )
+        if st.st_nlink != 1 or st.st_uid != os.geteuid():
+            raise RefusedError(
+                f"{what} {path} has {st.st_nlink} links and uid {st.st_uid}; it must have one link "
+                f"and belong to the service user (uid {os.geteuid()})"
+            )
+        return _read_all(fd, EXPORT_LIMIT + 1)
+    finally:
+        os.close(fd)
+
+
+def _worker_key(cfg: dict[str, str]) -> bytes:
+    """The install's .encryption_key where the checkpoint's state-file table
+    (internal/books/options.go StateFiles) takes it: the state directory's if
+    there is one, else the one beside the store (HEAD's old place)."""
+    for d in (cfg["state_dir"], os.path.dirname(cfg["db"])):
+        path = f"{d}/.encryption_key"
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            raise RefusedError(f"cannot inspect {path}: {e.strerror}") from e
+        return _own_file(path, "the encryption key")
+    raise RefusedError(
+        f"no .encryption_key in {cfg['state_dir']} or beside the store ({os.path.dirname(cfg['db'])})"
+    )
+
+
+def _worker_keyring(cfg: dict[str, str]) -> bytes:
+    """Run the current binary's `secrets export-keyring` into a private scratch
+    directory (the unit's PrivateTmp, removed here too) and read the file it
+    wrote. The binary writes its own report to our stderr, never our stdout."""
+    # realpath: a symlinked temp directory (a /tmp that is a link) is the host's
+    # own, and the scratch directory made in it is ours (mode 0700), so its
+    # resolved path is safe to walk with _own_file's no-symlink rule.
+    scratch = os.path.realpath(tempfile.mkdtemp(prefix="aorg-keyring-"))
+    try:
+        out = f"{scratch}/keyring.export"
+        argv = [cfg["bin"], "secrets", "export-keyring", "--db", cfg["db"], "--out", out]
+        rc = subprocess.run(argv, stdout=sys.stderr, check=False).returncode  # noqa: S603
+        if rc != 0:
+            raise RefusedError(f"`secrets export-keyring` exited {rc}")
+        data = _own_file(out, "the exported keyring")
+        if stat.S_IMODE(os.stat(out).st_mode) & 0o077:
+            raise RefusedError("the exported keyring is readable by group or others")
+        return data
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def op_export_worker(args: list[str]) -> int:
+    """Run in the export unit as the service user (never through sudo): write
+    one framed file on stdout (EXPORT_FRAME, then the bytes) and nothing else
+    there. EXPORT_ABSENT when config.yaml does not exist."""
+    _arity(args, 1, "_export-worker keyring|key|config")
+    kind = args[0]
+    if kind not in EXPORT_NAMES:
+        raise RefusedError("usage: _export-worker keyring|key|config", 2)
+    cfg = load_config()
+    if kind == "keyring":
+        data = _worker_keyring(cfg)
+    elif kind == "key":
+        data = _worker_key(cfg)
+    else:
+        path = f"{os.path.dirname(cfg['db'])}/config.yaml"
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            print(f"rollback helper: {path} does not exist: nothing to export", file=sys.stderr)
+            return EXPORT_ABSENT
+        except OSError as e:
+            raise RefusedError(f"cannot inspect {path}: {e.strerror}") from e
+        data = _own_file(path, "config.yaml")
+    sys.stdout.buffer.write(
+        f"{EXPORT_MAGIC} {len(data)} {hashlib.sha256(data).hexdigest()}\n".encode() + data
+    )
+    sys.stdout.buffer.flush()
+    return 0
+
+
 OPS = {
     "probe": op_probe,
     "record": op_record,
@@ -2308,6 +2624,9 @@ OPS = {
     "unit-type": op_unit_type,
     "install": op_install,
     "pprof": op_pprof,
+    "export-keyring": op_export_keyring,
+    "export-install-secrets": op_export_install_secrets,
+    "_export-worker": op_export_worker,
     "_into-worker": op_into_worker,
     "_report": op_report,
 }

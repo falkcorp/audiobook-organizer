@@ -486,6 +486,8 @@ root-owned config:
 | `unit-type` | root | `simple` or `notify` | writes or removes the fixed `Type=simple` drop-in, `daemon-reload` |
 | `install-staged` | root | `binary`, `prev`, `unit`, `local-conf` or `rollback` | installs `stage_bin` as the binary (atomically, the old one kept as `.prev`) or, with `prev`, as `.prev` alone (`make rollback-restore RELEASE=`; the binary is not touched); copies the bundle's root-owned `audiobook-organizer.service` as the unit; or renders the `[Service]` and `Environment=` lines of `stage_local_conf` as the `local.conf` drop-in; `binary`, `unit` and `local-conf` then run `daemon-reload` (`prev` reloads nothing and does not delete `stage_bin`; the recipe does). `unit` and `local-conf` first capture what they replace, and `binary` (with nothing or four words of facts about the staged build) commits the capture as a generation in `<bin>.envgen/`, named by the replaced binary's sha256, when it rotates `.prev`; `rollback list`, `rollback check prev\|SHA256 [GEN]` and `rollback apply SHA256 [GEN]` read, validate and install a generation with `.prev` (below) |
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
+| `export-keyring` | root, the export as the service user | none | `secrets export-keyring` of the live install, left in `export_dir` for the deploy user ([below](#the-export-helpers)) |
+| `export-install-secrets` | root, the reads as the service user | none | the install's `.encryption_key` and `config.yaml`, left in `export_dir` for the deploy user ([below](#the-export-helpers)) |
 
 `install-staged` never installs uploaded text as a unit file. systemd reads
 unit files and drop-ins as root, so a file the deploy user can shape is a way
@@ -678,7 +680,7 @@ make install-rollback-helpers APPLY=1 ROLLBACK_INSTALL_ARGS="..."    # installs 
 
 It takes `DEPLOY_BIN`, `DEPLOY_DB` and `DEPLOY_UNIT` from `Makefile.local` and
 the rest from `ROLLBACK_INSTALL_ARGS` (`--checkpoint-dir`, `--service-group` and
-`--offline-env` are optional). Without `APPLY=1` it prints what it would do
+`--offline-env` and `--export-dir` are optional). Without `APPLY=1` it prints what it would do
 (`create`, `replace`, `fix` or `unchanged` for each file) and changes nothing. With it
 the installer:
 
@@ -767,8 +769,9 @@ The installer renders `/etc/audiobook-organizer/rollback.conf` from the values
 given. To change it later, edit it as root (`bin`, `db`, `state_dir`,
 `unit`, `service_user`, `archive_dir`, `checkpoint_dir` if
 `core.storage.checkpoint_dir` is set, `service_group` if it differs from
-`service_user`, and the deploy's staging paths `stage_bin` and
-`stage_local_conf`, the files your `deploy` uploads with `scp`; a leftover
+`service_user`, the deploy's staging paths `stage_bin` and
+`stage_local_conf`, the files your `deploy` uploads with `scp`, and `export_dir`,
+where the [export helpers](#the-export-helpers) leave their files; a leftover
 `stage_unit` is refused as an unknown setting). The helpers
 refuse to run unless the file and its directory are root-owned and not
 writable by group or others, and neither `service_user` nor `service_group`
@@ -794,7 +797,9 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop audiobook-organizer.service,
     /usr/local/libexec/audiobook-organizer/rollback/restore-offline, \
     /usr/local/libexec/audiobook-organizer/rollback/unit-type, \
     /usr/local/libexec/audiobook-organizer/rollback/install-staged, \
-    /usr/local/libexec/audiobook-organizer/rollback/pprof
+    /usr/local/libexec/audiobook-organizer/rollback/pprof, \
+    /usr/local/libexec/audiobook-organizer/rollback/export-keyring "", \
+    /usr/local/libexec/audiobook-organizer/rollback/export-install-secrets ""
 deploy ALL=(audiobook) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-levels, \
     /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
     /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
@@ -812,6 +817,71 @@ time) only when they match a fixed grammar. `visudo -c` checks the syntax.
 
 Check it with `ssh HOST 'sudo -n /usr/local/libexec/audiobook-organizer/rollback/inflight-probe'`:
 it should print nothing (no swap in flight) and not ask for a password.
+
+### The export helpers
+
+`make export-keyring` and `make export-install-secrets` bring files only the
+service user can read to the machine you run `make` on, with no raw `sudo`
+(the R2 runbook's Step 7 and Step 1 forbid it). `export-keyring` runs
+`secrets export-keyring --out <file>`; `export-install-secrets` copies the
+install's `.encryption_key` (from `state_dir`, else the directory beside the
+store: the same two places the checkpoint's state-file table looks) and
+`<db parent>/config.yaml` (reported as absent when it does not exist, which is
+normal after a strip). Where each file is comes from `rollback.conf`, never
+from the command line.
+
+Both helpers take no arguments and are granted with `""`. They refuse to run at
+all unless `rollback.conf` sets `export_dir`, a directory you own, created as
+you with `mkdir -m 700 <export_dir>` (not under `/tmp`). They never stop the
+service and none of the three reads needs it stopped: `secrets export-keyring`
+opens no store and takes no lock (it reads the persistent `--db`'s sidecar
+files and the state directory's key), and the other two are plain file reads.
+They do refuse while the restore unit or an export unit is running.
+
+How a file reaches you, which is the part that has to be right because root
+writes it:
+
+- The reads run as `service_user` in a transient unit
+  (`audiobook-organizer-rollback-export`, `systemd-run --pipe`, `PrivateTmp`, the
+  `offline_env` variables), not as root, so root never opens a file the service
+  user could have swapped for a symlink. Each worker writes one framed file
+  (`AORGEXPORT1 <length> <sha256>` and the bytes) to its stdout, which is a
+  pipe to the helper, never the restore log: that log is readable by your
+  group. Anything else on that output, a short or long body or a wrong hash
+  is refused and nothing is delivered. A source file must be a regular file of
+  the service user with one link and no symlink in its path, under 1 MiB.
+- The helper opens `export_dir` itself with no symlink in any component and
+  checks that the directory is owned by the user who ran `sudo` (`SUDO_UID`,
+  which the caller cannot set) with mode 0700. Every later step is relative to that
+  open directory, so nothing you do to the path afterwards matters.
+- Each file is created there with `O_EXCL|O_NOFOLLOW`, mode 0600, `fchown`ed to
+  you before any byte is written, under a fixed name:
+  `aorg-keyring-<UTC stamp>`, `aorg-encryption-key-<UTC stamp>`,
+  `aorg-config-<UTC stamp>.yaml`. A name that already exists, symlink or not, is
+  refused and nothing it points at is touched. If the second file of a pair
+  cannot be made, the first is removed again.
+- Each file's line is `EXPORTED <name> <bytes> <sha256>`, the hash of what root
+  wrote. The make target (`scripts/export_offhost.py`) copies the files with
+  `scp` into `OFFHOST_DIR` (default `~/aorg-offhost/<UTC stamp>`, created
+  mode 0700), checks size and sha256 against those lines, renames them into place
+  (mode 0600) and only then deletes the remote copies, as you, with a plain `rm`
+  of the exact names. A mismatch keeps the remote copies and says where they are.
+
+**This does not widen what the deploy user can do.** The deploy user can
+already run any binary as the service user: `install-staged binary` installs the
+staged `stage_bin` as the service's binary, which the unit runs as
+`service_user`, and `install-staged unit` and `local-conf` accept its
+`ExecStart=` and `Environment=`. A caller who can do that can already read every
+file the service user can read, `.encryption_key` and the keyring included. The
+two new grants hand the deploy user nothing it could not already get; they only
+replace "ask an agent, or type `sudo`" with a fixed, tested path, and the files
+land as 0600 files owned by that user in a directory only that user can enter.
+The sudoers lines have no argument list and no wildcard.
+
+After upgrading the bundle, reinstall it (`make install-rollback-helpers
+APPLY=1`) with `--export-dir <export_dir>` in `ROLLBACK_INSTALL_ARGS`, so the
+new stubs, the sudoers lines and the `export_dir` setting exist; until then the
+make targets stop at "no export_dir" or at sudo's refusal.
 
 ### The service environment is part of a rollback
 
