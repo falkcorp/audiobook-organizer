@@ -495,7 +495,9 @@ with ceilings that may only fall. End state:
 | `testing` imported by non-test `internal/config` | low | precedent: `internal/books/store/pebble_store_open.go`; `testing.Testing()` registers no flags |
 | Test semantics: `SetForTest` is in-memory only, like the direct assignment it replaces. A test that relied on a write reaching the Facade or store was already broken | low | tests that mean "save" call `Mutate` |
 | A test reads `config.Get()` while another test's cleanup `ReplaceForTest`s | low | same exposure as today's shared global; packages that run `t.Parallel` with config writes need a per-test Source (none found in the prototype packages) |
-| The prototype's transitional mode diverges (direct `AppConfig` test writes are seen by `Get()` only at the next write) | prototype only | main never runs it; the sweep is one PR |
+| The prototype's transitional mode diverges (direct `AppConfig` test writes are seen by `Get()` only at the next write) | **measured: certain** on this branch (section 14) | main never runs it; the sweep is one PR. This branch's CI is red in unconverted packages that call the converted ones, by design |
+| A test-file pointer hand-off (`cfg(&config.AppConfig)`) silently writes the mirror instead of the snapshot | certain until fixed by hand | it is on the manual list; `apikey_credential_guard_test.go:81` alone turns 10 `internal/server` route tests red once the package is converted (section 14). Each becomes `config.SetForTest(cfg)` |
+| Codemod moves a call under the config write lock | removed | right-hand sides that call are hoisted (section 8) |
 
 ## 12. Rollback
 
@@ -545,9 +547,32 @@ and by the `-race` suite runs on the remote builders.
   were reworked by hand.
 - Guards: `internal/config/cow_test.go` and
   `internal/arch/config_cow_guard_test.go`.
-- Tests: `go test -race` is green for `internal/config`, `internal/scanner`,
-  `internal/dedup` and `internal/reconcile`; the arch guard tests pass; the
-  codemod has 14 unittest cases.
+- Evidence at `34f7ad97e`, run on the remote builder:
+  - Green: `go build ./...` and `go vet ./...`.
+  - Green under `-race`: `internal/config`, `internal/scanner`,
+    `internal/dedup` and `internal/reconcile`.
+  - Green without `-race`: the arch guard and ratchet tests, `./cmd/...`, and
+    (at `4946aacf6`) the `internal/books` Boot, Settings and Validate tests.
+  - The codemod has 15 unittest cases.
+- **Transitional mode, measured.** These are 8 unconverted packages whose
+  tests write `config.AppConfig` directly and call the converted packages.
+  - 5 pass: `server/handlers/system`, `audiobooks`, `decisions`, `importer`
+    and `metafetch`.
+  - 3 fail: `plugins/dedup` (1 test), `plugins/maintenance` (5) and
+    `internal/server` (5).
+  - Causal check: running the codemod over those three packages (not
+    committed) turns `plugins/dedup` and `plugins/maintenance` fully green.
+  - In `internal/server`, 4 of the 5 failures clear and 10 new route tests
+    fail. All 10 go through `setupCredGuardServerOpts`, whose
+    `cfg(&config.AppConfig)` (`apikey_credential_guard_test.go:81`) is one
+    of the 19 manual test hand-offs. It writes the mirror, which `Get()`
+    never reads.
+  - `TestCalculateLibrarySizes_ExcludesAppDirs` still fails and is not
+    diagnosed. On main, `appdirs.Current()` is itself a manual hand-off
+    (`&config.AppConfig`), so this is triage for slice E.
+  - This is the first data point for slice B's test triage: mechanical
+    conversion fixes the transitional failures, and the manual test
+    hand-offs are load-bearing.
 - Base: `origin/main`. On r10 the hand edits differ (sections 4 and 6), and
   the codemod output is regenerated, not merged. A whole-tree r10 run builds
   and vets clean (section 8).
