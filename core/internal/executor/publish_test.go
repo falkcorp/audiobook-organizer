@@ -1031,3 +1031,54 @@ func TestPublisher_ShutdownAbandonsAStuckSink(t *testing.T) {
 		t.Errorf("%d emissions were delivered after the shutdown gave up, want only the in-flight one", got)
 	}
 }
+
+// TestPublisher_SameRunCollectorsSerialiseThroughTheGate pins the ordering
+// guarantee directly. A collector that has staged an emission for a run holds
+// that run's gate until it commits, so a second collector staging for the same
+// run waits; it therefore commits, and enqueues, after the first. Collectors
+// for different runs never wait on each other.
+func TestPublisher_SameRunCollectorsSerialiseThroughTheGate(t *testing.T) {
+	var tp tape
+	p := newPublisher(tp.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { p.close(context.Background()) })
+
+	first := p.newPending()
+	first.stage(runEmission("robin", emitRunChanged, "running", 1))
+
+	staged := func(run tasks.RunID, done int) (<-chan struct{}, <-chan struct{}) {
+		stageDone, commitDone := make(chan struct{}), make(chan struct{})
+		go func() {
+			c := p.newPending()
+			c.stage(runEmission(run, emitRunChanged, "running", done))
+			close(stageDone)
+			c.commit()
+			close(commitDone)
+		}()
+		return stageDone, commitDone
+	}
+	otherStaged, otherCommitted := staged("alfred", 1)
+	select {
+	case <-otherCommitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a collector for a different run waited on robin's gate")
+	}
+	_ = otherStaged
+
+	secondStaged, secondCommitted := staged("robin", 2)
+	select {
+	case <-secondStaged:
+		t.Fatal("a second collector staged for robin while the first still held robin's gate")
+	case <-time.After(150 * time.Millisecond):
+	}
+	first.commit()
+	select {
+	case <-secondCommitted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the second collector never ran after the first committed")
+	}
+	p.close(context.Background())
+	got := tp.of(emitRunChanged, "robin")
+	if len(got) != 2 || got[0].view.Done != 1 || got[1].view.Done != 2 {
+		t.Errorf("robin's emissions left in order %+v, want commit order 1 then 2", got)
+	}
+}
