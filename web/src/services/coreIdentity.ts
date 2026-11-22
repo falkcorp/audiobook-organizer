@@ -381,6 +381,7 @@ function apiKeyOf(k: CoreKeyBody): APIKey {
     ...(k.last_used_ip ? { last_used_ip: k.last_used_ip } : {}),
     ...(k.expires_at ? { expires_at: k.expires_at } : {}),
     ...(k.revoked_at ? { revoked_at: k.revoked_at } : {}),
+    ...(k.description ? { description: k.description } : {}),
   };
 }
 
@@ -403,6 +404,7 @@ export async function createAPIKey(request: CreateAPIKeyRequest): Promise<Create
   const payload: Schemas['core.KeyCreate'] = {
     name: request.name,
     scopes: request.scopes ?? [],
+    ...(request.description ? { description: request.description } : {}),
     ...(request.expires_in_days ? { expires_in: `${request.expires_in_days * 24}h` } : {}),
     ...(request.expires_at ? { expires_at: request.expires_at } : {}),
   };
