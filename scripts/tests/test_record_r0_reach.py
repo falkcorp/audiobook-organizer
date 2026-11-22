@@ -556,7 +556,7 @@ class RecordPassTest(unittest.TestCase):
             self.assertEqual(len(col), len(self.rig.routes))
             self.assertTrue(all(isinstance(s, int) and 0 < s < 500 for s in col))
         doc = rec.build_verdicts(
-            {"r0_tag": "v0.0.0"}, self.rig.routes, self.rig.principals, out["columns"], {}
+            {"r0_commit": "9" * 40}, self.rig.routes, self.rig.principals, out["columns"], {}
         )
         for r in doc["routes"]:
             self.assertEqual(len(r["verdict"]), len(self.rig.principals))
