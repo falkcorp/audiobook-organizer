@@ -493,14 +493,16 @@ func (a *accessApp) assertion(t testing.TB, sub, email string) string {
 
 // bootRegistered boots the flipped build over the corpus and signs the principals
 // in. It fails the test unless M2, M3 and M8 ran at that boot and every
-// principal's canary answers what R0 recorded for it. Process-wide state it sets
+// principal signed in. The canary R0 recorded for each principal is asked by
+// TestRegisteredHarness_CanaryMatchesR0, not here: a pinned difference (the
+// fp-worker keys) is a fact about the flipped build, not a boot failure. Process-wide state it sets
 // (the selector, the environment, the HTTP transport when Owner is set, the
 // process defaults) is restored by the test's cleanup, so a test boots one
 // registered build at a time and none runs in parallel.
 func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	rows, canary := loadPrincipalTable(t)
+	rows, _ := loadPrincipalTable(t)
 
 	// The one switch the flipped build has until B10g (an arch test forbids any
 	// non-test caller). It stays on for the app's whole life: it is read at
@@ -650,7 +652,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	h.App, h.Handler = a, a.Handler()
 	h.Routes = slices.Collect(a.Routes())
 	h.requireCutoverRan()
-	h.signIn(rows, raws, access, canary)
+	h.signIn(rows, raws, access)
 	return h
 }
 
@@ -677,7 +679,7 @@ func (h *Registered) requireCutoverRan() {
 // loginRoute is core's sign-in route: the books gin one reads a store M3 emptied.
 const loginRoute = "/api/core/v1/auth/login"
 
-func (h *Registered) signIn(rows []reachPrincipalRow, raws map[string]string, access *accessApp, canary map[string]int) {
+func (h *Registered) signIn(rows []reachPrincipalRow, raws map[string]string, access *accessApp) {
 	h.t.Helper()
 	for i, r := range rows {
 		if (r.Kind == "authoff") != h.cfg.AuthOff {
@@ -894,9 +896,7 @@ func (h *Registered) Raw(req *http.Request) Result {
 	if req.RemoteAddr == "" || req.RemoteAddr == "192.0.2.1:1234" {
 		req.RemoteAddr = h.nextPeer()
 	}
-	rec := httptest.NewRecorder()
-	h.Handler.ServeHTTP(rec, req)
-	return resultOf(rec, nil)
+	return resultOf(h.serve(h.Handler, req), nil)
 }
 
 // excerpt is the start of the response body, for a failure message.
@@ -999,9 +999,35 @@ func (h *Registered) send(via http.Handler, p *Principal, method, path string, b
 	case p.access != "":
 		req.Header.Set("Cf-Access-Jwt-Assertion", p.access)
 	}
-	rec := httptest.NewRecorder()
-	via.ServeHTTP(rec, req)
+	rec := h.serve(via, req)
 	return resultOf(rec, ri), nil
+}
+
+// streamTimeout bounds one request. A route that streams (the SSE one) never ends
+// by itself: the harness ends it at its first flush, the answer's status already
+// being the verdict, and a handler that neither answers nor flushes is cut off here.
+const streamTimeout = 30 * time.Second
+
+// serve runs req through via and records the answer. The request's context is
+// cancelled at the first flush, so an event stream returns once it has begun.
+func (h *Registered) serve(via http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	ctx, cancel := context.WithTimeout(req.Context(), streamTimeout)
+	defer cancel()
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	via.ServeHTTP(rec, req.WithContext(ctx))
+	return rec.ResponseRecorder
+}
+
+// flushRecorder is a ResponseRecorder that ends the request's context when the
+// handler first flushes.
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	cancel context.CancelFunc
+}
+
+func (f *flushRecorder) Flush() {
+	f.ResponseRecorder.Flush()
+	f.cancel()
 }
 
 // resultOf reads a recorded answer, naming stage 13's refusal when it is one.
