@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/httpapi"
 )
 
 // The self-tests of the obligation table (reach_flip_obligations_test.go): each
@@ -371,56 +373,57 @@ func TestReachObligations_DroppingARowOrItsSeamsStatementFails(t *testing.T) {
 	}
 }
 
-// ---- the bars read the recording and the diff, never a row or a function name ----
+// ---- the bars read the recording and the manifest, never a row or a function name ----
 
-func TestReachObligations_HandlerRefusalsBarIsReadFromTheDiffNotTheRows(t *testing.T) {
+func TestReachObligations_HandlerRefusalsBarIsReadFromTheTableAndTheManifest(t *testing.T) {
 	in := reachObligationInputOf(t)
-	if len(reachBarHandlerRefusals(in)) != 8 {
-		t.Fatalf("premise: the bar holds %d cells", len(reachBarHandlerRefusals(in)))
+	if len(reachHandlerRefusalCells) != 8 || len(reachBarHandlerRefusals(in)) != 8 {
+		t.Fatalf("premise: %d table routes, the bar holds %d cells", len(reachHandlerRefusalCells), len(reachBarHandlerRefusals(in)))
 	}
-	// The round-4 C1: the rows are renamed or moved. The bar reads no row, so it
-	// is the same set and the row stays open.
-	if got := reachBarHandlerRefusals(in); len(got) != 8 {
-		t.Errorf("the bar moved with the rows: %d", len(got))
-	}
-	// A cell the router admits and R0's handler refused, for a principal other
-	// than the auth-off one, is not a handler refusal of the auth-off principal.
-	other := in
-	other.res.cells = append(slices.Clone(in.res.cells), reachCell{route: "GET /api/v1/batcave/gadgets", principal: "session:viewer", r0: 'D', r2: 'A'})
-	if len(reachBarHandlerRefusals(other)) != 8 {
-		t.Error("a cell of another principal entered the auth-off bar")
-	}
-	// A Public route's cell (login, refresh) is a recorder limit and is not in it.
-	for _, c := range in.res.cells {
-		if c.principal == reachAuthOffName && (c.route == "POST /login" || c.route == "POST /auth/refresh") {
-			for _, b := range reachBarHandlerRefusals(in) {
-				if strings.HasPrefix(b, c.route+"|") {
-					t.Errorf("the Public route %s is in the bar", c.route)
-				}
-			}
+	// The cells are the table's routes for the auth-off principal, nobody else's.
+	for _, c := range reachBarHandlerRefusals(in) {
+		if !strings.HasSuffix(c, "|"+reachAuthOffName) {
+			t.Errorf("%s is not an auth-off cell", c)
 		}
 	}
-	// The cells go when R2 stops differing (the routes are deleted or tightened):
-	// the bar is then empty and the row closes without a test, because nothing
-	// is left to prove.
+	// A route the manifest no longer carries is not a cell to prove.
+	const gone = "GET /api/v1/auth/me"
+	without := in
+	without.manifest = slices.DeleteFunc(slices.Clone(in.manifest), func(lr httpapi.LegacyRoute) bool { return lr.Method+" "+lr.GinPath == gone })
+	if got := reachBarHandlerRefusals(without); len(got) != 7 || slices.Contains(got, gone+"|"+reachAuthOffName) {
+		t.Errorf("deleting %s from the manifest left the bar at %d: %v", gone, len(got), got)
+	}
+	// A Public route's cell (login, refresh) is a recorder limit and is not in it,
+	// even if the table named it.
+	public := in
+	public.manifest = slices.Clone(in.manifest)
+	for i, lr := range public.manifest {
+		if lr.Method+" "+lr.GinPath == gone {
+			public.manifest[i].Public = true
+		}
+	}
+	if got := reachBarHandlerRefusals(public); len(got) != 7 {
+		t.Errorf("a Public route stayed in the bar: %v", got)
+	}
+	// With none of the routes left the bar is empty and the row closes without a
+	// test, because nothing is left to prove.
 	none := in
-	none.res.cells = slices.DeleteFunc(slices.Clone(in.res.cells), func(c reachCell) bool { return c.principal == reachAuthOffName })
+	none.manifest = nil
 	if got := reachBarHandlerRefusals(none); len(got) != 0 {
-		t.Errorf("no auth-off cell differs and the bar holds %v", got)
+		t.Errorf("no route is in the manifest and the bar holds %v", got)
 	}
 	if st := reachStateOf(t, none, "F4-07-HANDLER-REFUSALS"); st.open {
 		t.Errorf("an empty bar left the row open: %s", st.why)
 	}
 }
 
-// A doctored recording cannot empty a bar quietly: the oracle's own checks fail on
-// each doctoring (the delegated set, the uniform-404 pin).
-func TestReachObligations_ADoctoredRecordingIsStillCaughtByTheOracle(t *testing.T) {
-	pd, vd := reachLoad(t)
-	atoms := idAtoms()
-	res, _, _ := reachRun(t, pd, vd, atoms, atoms)
-	rows := reachOracleRows()
-	if p := reachChecks(vd, res, rows); len(p) != 0 {
+// A doctored recording cannot empty a bar quietly: the pins on the recording fail
+// on each doctoring (the delegated set, the uniform-404 pin).
+func TestReachObligations_ADoctoredRecordingIsStillCaughtByThePins(t *testing.T) {
+	_, vd := reachLoad(t)
+	manifest := reachManifest()
+	delegated := reachDelegatedRoutes(manifest)
+	if p := reachDelegatedProblems(vd, delegated); len(p) != 0 {
 		t.Fatalf("the unchanged recording already fails: %v", p)
 	}
 	noABS := *vd
@@ -428,36 +431,30 @@ func TestReachObligations_ADoctoredRecordingIsStillCaughtByTheOracle(t *testing.
 	for i := range noABS.Routes {
 		noABS.Routes[i].ABSOnly = false
 	}
-	if bar := reachBarABSReplay(reachObligationInput{vd: &noABS, res: res}); len(bar) != 0 {
+	if bar := reachBarABSReplay(reachObligationInput{vd: &noABS, manifest: manifest}); len(bar) != 0 {
 		t.Fatalf("premise: clearing abs_only empties the bar, got %d", len(bar))
 	}
-	noABSRes, _, _ := reachRun(t, pd, &noABS, atoms, atoms)
-	if p := reachChecks(&noABS, noABSRes, rows); len(p) == 0 {
-		t.Error("abs_only cleared on every route and the oracle passed")
+	if p := reachDelegatedProblems(&noABS, delegated); len(p) == 0 {
+		t.Error("abs_only cleared on every route and the delegated-set pin passed")
 	}
 	noHidden := *vd
 	noHidden.UniformNotFound = nil
-	if p := reachChecks(&noHidden, res, rows); len(p) == 0 {
-		t.Error("uniform_not_found emptied and the oracle passed")
+	if p := reachUniformNotFoundProblems(&noHidden); len(p) == 0 {
+		t.Error("uniform_not_found emptied and the uniform-404 pin passed")
 	}
 }
 
-// The owner predicate is one function. The obligations and the oracle's owner-set
-// comparison both read it, so a predicate that treats every principal as the owner
-// fails the comparison (the recording refuses them all) and, read by the OWNER-ALLOW
-// bar, changes nothing there: the recording holds no allowed cell for it.
-func TestReachObligations_OneOwnerPredicateFeedsTheModelAndTheBar(t *testing.T) {
-	pd, vd := reachLoad(t)
-	atoms := idAtoms()
-	res, _, r2 := reachRun(t, pd, vd, atoms, atoms)
-	in := reachObligationInputFrom(vd, res)
+// The owner predicate is one function. The obligations read it, so a predicate
+// that treats every principal as the owner moves nothing in the OWNER-ALLOW bar
+// while the recording holds no allowed cell for it, and a recorded allowed cell
+// for an owner-assured principal takes that route's admitted case off the bar.
+func TestReachObligations_OneOwnerPredicateFeedsTheBar(t *testing.T) {
+	_, vd := reachLoad(t)
+	in := reachObligationInputFrom(vd)
 	if fmt.Sprintf("%p", in.assured) != fmt.Sprintf("%p", reachOwnerAssured) {
 		t.Error("the obligation input does not read reachOwnerAssured")
 	}
 	everyone := func(string) bool { return true }
-	if p := reachOwnerSetProblems(vd, r2, everyone); len(p) == 0 {
-		t.Error("a predicate that makes every principal the owner passed the owner-set comparison")
-	}
 	allow := in
 	allow.assured = everyone
 	if got, want := len(reachBarOwnerAllow(allow)), len(reachBarOwnerAllow(in)); got != want {
@@ -473,7 +470,7 @@ func TestReachObligations_OneOwnerPredicateFeedsTheModelAndTheBar(t *testing.T) 
 	v[0] = 'A'
 	o.Routes[0].Verdict = string(v)
 	rec.OwnerSet = &o
-	withRec := reachObligationInput{vd: &rec, res: res, manifest: in.manifest, assured: func(p string) bool { return p == owner }}
+	withRec := reachObligationInput{vd: &rec, manifest: in.manifest, assured: func(p string) bool { return p == owner }}
 	if got, want := len(reachBarOwnerAllow(withRec)), len(reachBarOwnerAllow(in))-1; got != want {
 		t.Errorf("a recorded owner allow left the OWNER-ALLOW bar at %d, want %d", got, want)
 	}
