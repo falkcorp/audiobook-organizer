@@ -187,9 +187,7 @@ type Server struct {
 	identity *legacyauth.Identity
 	// accessVerifier is WithAccessVerifier's value (identityThrottleKey).
 	accessVerifier cfaccess.CFAssertionVerifier
-	// adminUsers reads other accounts under core identity (WithAdminUsers).
-	adminUsers legacyauth.AdminUsers
-	store      database.Store
+	store          database.Store
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind
@@ -804,19 +802,6 @@ type serverOptions struct {
 	// accessVerifier checks the Cloudflare Access assertion a request carries,
 	// for the failure throttle's visitor bucket under core identity.
 	accessVerifier cfaccess.CFAssertionVerifier
-	// adminUsers is WithAdminUsers' value.
-	adminUsers legacyauth.AdminUsers
-}
-
-// WithAdminUsers is the actor-checked reader of core's user records the guest
-// phone-app key routes read other accounts through under core identity (the
-// admin Reissue route and the Phone app keys panel). It is a separate option,
-// not a member of legacyauth.Identity, so no unchecked reader rides on the
-// identity. Without it, under identity, those routes refuse (fail closed) and
-// never fall back to books' user store, which holds no users after M3. It has
-// no effect without WithIdentity.
-func WithAdminUsers(r legacyauth.AdminUsers) ServerOption {
-	return func(o *serverOptions) { o.adminUsers = r }
 }
 
 // WithAccessVerifier is the verifier of the Cloudflare Access assertion the
@@ -965,7 +950,6 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		router:                 router,
 		identity:               so.identity,
 		accessVerifier:         so.accessVerifier,
-		adminUsers:             so.adminUsers,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
 		importService:          importer.NewImportService(store),

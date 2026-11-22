@@ -374,6 +374,7 @@ var (
 	}
 	reachWantR2Only = []string{
 		"POST /api/v1/admin/guest-service-tokens/:userId/reissue", // newer than the R0 tag: no baseline to compare with
+		"POST /api/v1/auth/phone-key/claim",                       // F4-08 B10s: the guest's one-time phone-app key under core identity; newer than the R0 tag
 	}
 )
 
