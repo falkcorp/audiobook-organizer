@@ -153,7 +153,7 @@ func TestExecutor_PublishesRunChangedAfterCommit(t *testing.T) {
 			taskDef("gotham.ambush", failBody, readOnly("gotham.ambush")),
 		}, func(o *Options) { o.sink = p.sink }, true)
 		var ids []tasks.RunID
-		for i := 0; i < 20; i++ {
+		for range 20 {
 			ids = append(ids, h.start("gotham.patrol", tasks.StartRequest{}), h.start("gotham.ambush", tasks.StartRequest{}))
 		}
 		for _, id := range ids {
@@ -692,7 +692,7 @@ func TestExecutor_StreamPayloadHasBlockedByBlank(t *testing.T) {
 func TestExecutor_PerRunOrderUnderConcurrentWorkers(t *testing.T) {
 	const runs, steps = 24, 12
 	var defs []tasks.Definition
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		kind := fmt.Sprintf("gotham.patrol%02d", i)
 		defs = append(defs, taskDef(kind, func(rc *tasks.RC, _ noParams) (string, error) {
 			for s := 1; s <= steps; s++ {
@@ -719,7 +719,7 @@ func TestExecutor_PerRunOrderUnderConcurrentWorkers(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ids []tasks.RunID
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		ids = append(ids, h.start(fmt.Sprintf("gotham.patrol%02d", i), tasks.StartRequest{}))
 	}
 	var wg sync.WaitGroup
@@ -727,12 +727,10 @@ func TestExecutor_PerRunOrderUnderConcurrentWorkers(t *testing.T) {
 		if i%2 == 0 {
 			continue // half of the runs are canceled mid-flight, racing their own writes
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			time.Sleep(time.Duration(rand.IntN(3000)) * time.Microsecond)
 			_ = h.x.Cancel(context.Background(), id) // may land after the run ended: ErrRunActive-style refusals are fine
-		}()
+		})
 	}
 	wg.Wait()
 	for _, id := range ids {
@@ -822,7 +820,7 @@ func TestExecutor_SlowSubscriberDoesNotStallTheExecutor(t *testing.T) {
 	t.Cleanup(unblock)
 	var ids []tasks.RunID
 	within(t, 10*time.Second, "starting runs behind a stuck sink", func() {
-		for i := 0; i < 6; i++ {
+		for range 6 {
 			ids = append(ids, h.start("gotham.patrol", tasks.StartRequest{}), h.start("gotham.ambush", tasks.StartRequest{}))
 		}
 	})
@@ -971,7 +969,7 @@ func TestPublisher_StalledSinkBoundsTheQueue(t *testing.T) {
 func TestPublisher_ShutdownDrainsThenExits(t *testing.T) {
 	var tp tape
 	p := newPublisher(tp.sink, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		publishOne(t, p, runEmission("robin", emitRunChanged, "running", i))
 	}
 	p.close(context.Background())
@@ -1001,12 +999,12 @@ func TestPublisher_ShutdownAbandonsAStuckSink(t *testing.T) {
 	// its first call; 5 more commits queue behind it. Both the rest of the
 	// batch in hand and the queue must be given up at shutdown.
 	c := p.newPending()
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		c.stage(runEmission(tasks.RunID(fmt.Sprintf("robin-%d", i)), emitRunChanged, "running", 0))
 	}
 	c.commit()
 	<-s.entered
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		publishOne(t, p, runEmission(tasks.RunID(fmt.Sprintf("alfred-%d", i)), emitRunChanged, "running", 0))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
