@@ -386,7 +386,7 @@ and the client relies on:
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
-| `core.realtime.ring_size` | int | 4096 | no | none |
+| `core.realtime.ring_size` | int | 1024 | no | none |
 | `core.realtime.client_buffer` | int | 128 | no | none |
 | `core.realtime.max_clients` | int | 256 | yes (new streams) | none |
 | `core.realtime.max_per_bucket` | int | 16 | yes | none |
