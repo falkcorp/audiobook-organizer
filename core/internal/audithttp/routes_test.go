@@ -189,31 +189,35 @@ func TestRegister_BuildFailsOnlyForWantOfAuth(t *testing.T) {
 
 // ---- the guards -----------------------------------------------------------
 
-// TestAuditRoutes_AuthDisabledIs401: the audit log holds user names, addresses
+// TestAuditRoutes_AuthDisabledIs403: the audit log holds user names, addresses
 // and key ids, so the auth-disabled principal (User nil, method auth_disabled)
-// is refused with 401 authentication_required (05-authn §4.11) even when its
-// checker would hold the scope, and so is a request with no principal. The
-// store is never read and no export is recorded.
-func TestAuditRoutes_AuthDisabledIs401(t *testing.T) {
+// is refused with 403 interactive_required (05-authn §4.11; F4-08 ruling
+// G5(a): a 401 would end a no-auth install's SPA session) even when its
+// checker would hold the scope. A request with no principal, or a session with
+// no user, is still 401 authentication_required. The store is never read and
+// no export is recorded.
+func TestAuditRoutes_AuthDisabledIs403(t *testing.T) {
 	everything := grants{held: []rbac.Permission{permView, permUsers}}
 	for _, c := range []struct {
-		name string
-		p    *auth.Principal
+		name   string
+		p      *auth.Principal
+		status int
+		code   string
 	}{
-		{"none", nil},
-		{"user nil", &auth.Principal{Method: auth.MethodAuthDisabled, Perms: everything}},
-		{"method only", &auth.Principal{User: &auth.User{ID: "u-ghost"}, Method: auth.MethodAuthDisabled, Perms: everything}},
-		{"user nil on a session", &auth.Principal{Method: auth.MethodSession, Perms: everything}},
+		{"none", nil, http.StatusUnauthorized, "authentication_required"},
+		{"user nil", &auth.Principal{Method: auth.MethodAuthDisabled, Perms: everything}, http.StatusForbidden, "interactive_required"},
+		{"method only", &auth.Principal{User: &auth.User{ID: "u-ghost"}, Method: auth.MethodAuthDisabled, Perms: everything}, http.StatusForbidden, "interactive_required"},
+		{"user nil on a session", &auth.Principal{Method: auth.MethodSession, Perms: everything}, http.StatusUnauthorized, "authentication_required"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			rd, rec := &fakeReader{}, &recorder{}
 			a := newAPI(rd, rec)
 			_, err := a.list(context.Background(), in(c.p, listReq{}))
-			wantStatus(t, err, http.StatusUnauthorized, "authentication_required")
+			wantStatus(t, err, c.status, c.code)
 
 			rr := exportOf(a, c.p, "")
-			if rr.Code != http.StatusUnauthorized || !strings.Contains(rr.Body.String(), "authentication_required") {
-				t.Errorf("export = %d %s, want 401 authentication_required", rr.Code, rr.Body)
+			if rr.Code != c.status || !strings.Contains(rr.Body.String(), c.code) {
+				t.Errorf("export = %d %s, want %d %s", rr.Code, rr.Body, c.status, c.code)
 			}
 			if rd.callCount() != 0 || len(rec.recorded()) != 0 {
 				t.Errorf("store read %d times and %d records written for a refused caller", rd.callCount(), len(rec.recorded()))

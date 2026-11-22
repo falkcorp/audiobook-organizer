@@ -203,8 +203,8 @@ func TestStage13_Decision(t *testing.T) {
 		{"a Sensitive scope refused to a key is interactive_required", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin)}, opts, s13Want{403, "interactive_required", "", false}},
 		{"without a catalog it is permission_denied", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin)}, noCatalog, s13Want{403, "permission_denied", "core:roles.manage", false}},
 		{"a Sensitive scope an interactive session lacks is permission_denied", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: robin}, opts, s13Want{403, "permission_denied", "core:roles.manage", false}},
-		{"auth-disabled refused an AuthRequired requirement is 401", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
-		{"auth-disabled refused a Sensitive requirement is 401", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
+		{"auth-disabled refused an AuthRequired requirement is 403 interactive_required (never the session-ending 401, G5(a))", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
+		{"auth-disabled refused a Sensitive requirement is 403 interactive_required (G5(a))", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
 		{"auth-disabled admitted a plain scope", AuthzRequest{Perm: rbac.Need("books:edit"), Principal: s13AuthOff(cat)}, opts, s13Want{}},
 
 		// 5. Legacy kinds, resolved before Satisfies.
@@ -221,8 +221,8 @@ func TestStage13_Decision(t *testing.T) {
 		{"legacy check write side refuses the read-side scope", AuthzRequest{Perm: rbac.LegacyCheck("users.manage", false), Principal: s13Session(cat, "core:users.view")}, opts, s13Want{403, "permission_denied", "core:users.manage", false}},
 		{"legacy check read side unknown for an atom is refused", AuthzRequest{Perm: rbac.LegacyCheck("library.view", true), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
 		{"auth-disabled keeps HEAD's s.perm reach on settings.manage", AuthzRequest{Perm: rbac.LegacyAtom("settings.manage"), Principal: s13AuthOff(cat)}, opts, s13Want{}},
-		{"auth-disabled is refused a legacy check it would satisfy", AuthzRequest{Perm: rbac.LegacyCheck("library.view", false), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
-		{"auth-disabled is refused an unresolvable atom with 401", AuthzRequest{Perm: rbac.LegacyAtom("joker.laugh"), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
+		{"auth-disabled is refused a legacy check it would satisfy", AuthzRequest{Perm: rbac.LegacyCheck("library.view", false), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
+		{"auth-disabled is refused an unresolvable atom with 403 interactive_required (G5(a))", AuthzRequest{Perm: rbac.LegacyAtom("joker.laugh"), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { s13Check(t, Authorize(c.req, c.opts), c.want) })

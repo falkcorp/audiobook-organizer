@@ -288,7 +288,9 @@ func holds(p *auth.Principal, perm rbac.Permission) bool {
 // SEC2-13) is the route's declared Guards.Session, so the router enforces it
 // and the OpenAPI document says it. The one rule of its own comes after
 // Authorize admits: a route other than the status route needs a user to name
-// as the actor, so the auth-disabled principal is answered 401 there. It
+// as the actor, so the auth-disabled principal is answered 403
+// interactive_required there (httpapi.UserRequired: a 401 would end a no-auth
+// install's SPA session, F4-08 ruling G5(a)). It
 // passes no rbac catalog, so a non-interactive principal missing a Sensitive
 // scope is told permission_denied where the router says interactive_required;
 // the router judges first, so a caller never sees the difference.
@@ -304,7 +306,7 @@ func authorise(p *auth.Principal, g gate) (string, error) {
 		return "", d.Refusal
 	}
 	if !g.anon && subject == "" {
-		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
+		return "", httpapi.UserRequired(p)
 	}
 	return subject, nil
 }
@@ -431,7 +433,7 @@ func (a *api) start(w http.ResponseWriter, r *http.Request, c caller) {
 	}
 	if c.subject == "" {
 		// The run's actor must be a user: the download is limited to it.
-		a.fail(w, r, &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"})
+		a.fail(w, r, httpapi.UserRequired(c.p))
 		return
 	}
 	id, err := a.enq.EnqueueExport(audit.WithActor(r.Context(), c.actor(r)), diagnostics.ExportParams{ActorID: c.subject, Perms: diagnostics.PermsOf(c.p.Perms), Sections: req.Sections}, c.subject)
