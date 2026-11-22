@@ -125,6 +125,8 @@ export interface UseImportFolderHandlersParams {
   cancelScanTarget: api.ImportPath | null;
   scanStatuses: Record<number, ScanStatus>;
   newFolderPath: string;
+  /** The SEC5-8 gate's refuse(): true when a failure was the auth-off refusal (shown as the notice, not logged). */
+  refuse?: (err: unknown) => boolean;
 }
 
 export interface UseImportFolderHandlersReturn {
@@ -152,6 +154,7 @@ export function useImportFolderHandlers(
     cancelScanTarget,
     scanStatuses,
     newFolderPath,
+    refuse,
   } = params;
 
   const loadImportFolders = async () => {
@@ -175,6 +178,7 @@ export function useImportFolderHandlers(
       setShowFolderBrowser(false);
       setAddFolderDialogOpen(false);
     } catch (error) {
+      if (refuse?.(error)) return;
       console.error('Failed to add import folder:', error);
     }
   };

@@ -23,6 +23,8 @@ import { emailBindingLabel, guestPolicyLabel, inviteLink, type AcceptedInvite } 
 import { UserFootprintDrawer } from './UserFootprintDrawer';
 import type { UsersPageExtensions } from './usersExtensions';
 import { errorText } from './userAccountParts';
+import { SignInRequiredNotice } from '../common/SignInRequiredNotice';
+import { apiErrorFromResponse, isSignInRequiredRefusal } from '../../utils/signInRequired';
 import {
   Box,
   Button,
@@ -86,7 +88,22 @@ interface User {
   merged_into_user_id?: string;
 }
 
-export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) {
+/**
+ * `authDisabled` is the host's reading of the server's auth setting (books: AuthContext.authEnabled
+ * === false; the shell: /auth/status auth_disabled). Under it core refuses invites, deactivate,
+ * reactivate and reset-password for the auth-disabled principal (SEC5-8), so the page says
+ * "Turn on sign-in to do this" and disables them rather than showing a raw 403.
+ */
+export function UsersPage({
+  extensions,
+  authDisabled = false,
+}: {
+  extensions?: UsersPageExtensions;
+  authDisabled?: boolean;
+}) {
+  // Set when a call came back refused anyway (the auth setting was unknown to the page).
+  const [signInRefused, setSignInRefused] = useState(false);
+  const signInBlocked = authDisabled || signInRefused;
   const [users, setUsers] = useState<User[]>([]);
   const [invites, setInvites] = useState<PendingInvite[]>([]);
   const [accepted, setAccepted] = useState<AcceptedInvite[]>([]);
@@ -166,11 +183,15 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
       try {
         return await action();
       } catch (err) {
+        if (isSignInRequiredRefusal(err, authDisabled)) {
+          setSignInRefused(true);
+          return null;
+        }
         setError(errorText(err, failureMessage));
         return null;
       }
     },
-    []
+    [authDisabled]
   );
 
   const handleDisable = useCallback(
@@ -215,7 +236,7 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
           const resp = await apiFetch(`${API_BASE}/users/invites/${encodeURIComponent(inv.id)}/resend`, {
             method: 'POST',
           });
-          if (!resp.ok) throw new Error(await responseErrorMessage(resp));
+          if (!resp.ok) throw await apiErrorFromResponse(resp, `HTTP ${resp.status}`);
           return true;
         }, 'Failed to resend invitation')
       ) {
@@ -241,11 +262,17 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h4">Users</Typography>
-        <Button variant="contained" startIcon={<InviteIcon />} onClick={() => setInviteOpen(true)}>
+        <Button
+          variant="contained"
+          startIcon={<InviteIcon />}
+          onClick={() => setInviteOpen(true)}
+          disabled={signInBlocked}
+        >
           Create Invite
         </Button>
       </Box>
 
+      {signInBlocked && <SignInRequiredNotice sx={{ mb: 2 }} />}
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
@@ -304,14 +331,14 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                 <TableCell align="right">
                   {u.status === 'active' && u.username !== '_system' && (
                     <Tooltip title="Deactivate">
-                      <IconButton size="small" onClick={() => handleDisable(u.id)}>
+                      <IconButton size="small" disabled={signInBlocked} onClick={() => handleDisable(u.id)}>
                         <BlockIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
                   {u.status === 'disabled' && !u.merged_into_user_id && (
                     <Tooltip title="Reactivate">
-                      <IconButton size="small" onClick={() => handleEnable(u.id)}>
+                      <IconButton size="small" disabled={signInBlocked} onClick={() => handleEnable(u.id)}>
                         <ActiveIcon fontSize="small" color="success" />
                       </IconButton>
                     </Tooltip>
@@ -352,7 +379,7 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                   )}
                   {u.username !== '_system' && (
                     <Tooltip title="Reset Password">
-                      <IconButton size="small" onClick={() => handleResetPassword(u)}>
+                      <IconButton size="small" disabled={signInBlocked} onClick={() => handleResetPassword(u)}>
                         <ResetIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -401,6 +428,7 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                             <IconButton
                               size="small"
                               aria-label={`Resend invitation email to ${inv.email}`}
+                              disabled={signInBlocked}
                               onClick={() => handleResend(inv)}
                             >
                               <EmailIcon fontSize="small" />
@@ -489,6 +517,8 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
         guestPolicySyncConfigured={settings.guestPolicySyncConfigured}
         onClose={() => setInviteOpen(false)}
         onCreated={load}
+        authDisabled={authDisabled}
+        onRefused={() => setSignInRefused(true)}
       />
       {emailUser && (
         <SetEmailDialog
@@ -607,6 +637,8 @@ function CreateInviteDialog({
   guestPolicySyncConfigured,
   onClose,
   onCreated,
+  authDisabled,
+  onRefused,
 }: {
   open: boolean;
   mailConfigured: boolean;
@@ -614,6 +646,9 @@ function CreateInviteDialog({
   guestPolicySyncConfigured: boolean;
   onClose: () => void;
   onCreated: () => void;
+  authDisabled: boolean;
+  /** The create came back refused for want of sign-in (SEC5-8); the page now shows the notice. */
+  onRefused: () => void;
 }) {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -655,13 +690,17 @@ function CreateInviteDialog({
         }),
       });
       if (!resp.ok) {
-        const reason = await responseErrorMessage(resp);
-        throw new Error(reason.startsWith('HTTP ') ? 'Failed to create invite' : reason);
+        throw await apiErrorFromResponse(resp, 'Failed to create invite');
       }
       const body = unwrapData<CreateInviteResult>(await resp.json());
       setResult(body);
       onCreated();
     } catch (err: unknown) {
+      if (isSignInRequiredRefusal(err, authDisabled)) {
+        onRefused();
+        handleClose();
+        return;
+      }
       setError(describeRequestError(err, (err as Error).message));
     }
   };

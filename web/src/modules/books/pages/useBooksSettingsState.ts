@@ -410,6 +410,7 @@ export function useBooksSettingsState() {
     handleDiscardNavigation,
     handleCancelNavigation,
     handleClearOpenAIKey,
+    signInGate,
   } = useSettingsHandlers({
     settings,
     setSettings,
@@ -489,6 +490,7 @@ export function useBooksSettingsState() {
   });
 
   return {
+    signInGate,
     acoustidKeyStatus,
     addFolderDialogOpen,
     aiBackendConfig,

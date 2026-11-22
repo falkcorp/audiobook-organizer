@@ -8,8 +8,16 @@
 // page and lazy-loads the module's extensions.
 
 import { UsersPage } from '../components/users/UsersPage';
+import { useOptionalAuth } from '../contexts/AuthContext';
+import { isAuthOff } from '../utils/signInRequired';
 import { booksUsersExtensions } from '../modules/books/pages/usersExtensions';
 
 export default function Users() {
-  return <UsersPage extensions={booksUsersExtensions} />;
+  const auth = useOptionalAuth();
+  return (
+    <UsersPage
+      extensions={booksUsersExtensions}
+      authDisabled={isAuthOff(auth?.authEnabled, auth?.initialized)}
+    />
+  );
 }
