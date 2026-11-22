@@ -368,6 +368,9 @@ func TestGuestPolicyIdentity_FullBoot(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		acc := post(t, h, "/api/core/v1/auth/invites/accept", map[string]string{"token": tok, "password": gpPass}, false)
 		require.Equal(t, http.StatusUnauthorized, acc.Code, acc.Body.String())
+		// Core's refusal, by name: HEAD accepted such an invitation and skipped the
+		// grant; core invalidates it (a known difference, nothing to grant or revoke).
+		assert.Contains(t, acc.Body.String(), "link_invalid")
 		assert.Nil(t, e.outcome(t, id))
 		assert.False(t, e.cf.has(gpJason))
 		assert.Nil(t, e.row(t, gpJason))
