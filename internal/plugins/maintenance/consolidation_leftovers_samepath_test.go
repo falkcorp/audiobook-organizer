@@ -616,9 +616,10 @@ func TestLeftoversSamePath_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	// The revert's hand-off reads the library root from config (as in
 	// prod), so the owner is an eligible incumbent and the settle reaches
 	// the demote it must refuse.
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.p.deps.RootDir()
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	cowV1 := f.p.deps.RootDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	rr, err := audiobooks.NewRevertService(f.s).RevertOperation("op-apply")
 	require.NoError(t, err)
 	require.Zero(t, rr.Failed, "%+v", rr)

@@ -464,10 +464,10 @@ func TestResolveProductionAuthors_ApplyFetchesConcurrently(t *testing.T) {
 // The pool size follows metadata_scoring.bulk_fetch_workers (the bulk metadata
 // fetch's setting), defaults to 4 when unset, and is capped at 8.
 func TestResolveProductionAuthorsWorkers(t *testing.T) {
-	prev := config.AppConfig.MetadataScoring.BulkFetchWorkers
-	t.Cleanup(func() { config.AppConfig.MetadataScoring.BulkFetchWorkers = prev })
+	prev := config.Get().MetadataScoring.BulkFetchWorkers
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.BulkFetchWorkers = prev }) })
 	for _, tc := range []struct{ set, want int }{{0, 4}, {-1, 4}, {2, 2}, {8, 8}, {50, 8}} {
-		config.AppConfig.MetadataScoring.BulkFetchWorkers = tc.set
+		config.SetForTest(func(c *config.Config) { c.MetadataScoring.BulkFetchWorkers = tc.set })
 		require.Equal(t, tc.want, resolveProductionAuthorsWorkers(), "bulk_fetch_workers=%d", tc.set)
 	}
 }

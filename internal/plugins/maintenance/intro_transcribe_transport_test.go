@@ -30,7 +30,7 @@ func transportTestFixture(t *testing.T, bookID, fileHash string) (*database.Mock
 	t.Helper()
 
 	cacheDir := t.TempDir()
-	origCacheDir := config.AppConfig.WhisperClipCacheDir
+	origCacheDir := config.Get().WhisperClipCacheDir
 	// The reset below loads every factory default, including the itunes.*
 	// block. Until 2026-10-08 that included itunes.sync_enabled=true with no
 	// library paths, which made the merge iTunes guard refuse every merge in

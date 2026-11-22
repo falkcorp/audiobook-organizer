@@ -1194,9 +1194,9 @@ func TestT6G5Native_RegroupPreviewWritesNothing(t *testing.T) {
 func TestT6G5Head_RegroupApplies(t *testing.T) {
 	s, u, plan, _ := regroupWithState(t)
 	loser, target := plan.DeleteBooks[0], plan.Groups[0].Target
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = rgRoot
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rgRoot })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	p := New(fakeDeps{store: s})
 	xml := t6g5RegroupXML(t)
 

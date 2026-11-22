@@ -112,9 +112,9 @@ func newTranscribeWriteStore(books map[string]*database.Book) *transcribeWriteSt
 // them, must not be refused by the server-decode switch, and must say what it
 // would do; a live run must write.
 func TestPreviewBehaviour_TranscribeBookIntros(t *testing.T) {
-	origCache := config.AppConfig.WhisperClipCacheDir
-	config.AppConfig.WhisperClipCacheDir = ""
-	t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = origCache })
+	origCache := config.Get().WhisperClipCacheDir
+	config.SetForTest(func(c *config.Config) { c.WhisperClipCacheDir = "" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.WhisperClipCacheDir = origCache }) })
 
 	for _, extra := range []string{``, `,"extract_only":true`} {
 		for _, tc := range []struct {
@@ -207,9 +207,9 @@ func TestIntroTranscribe_ProgressNamesTheMode(t *testing.T) {
 		t.Fatalf("markers changed (%q, %q): change scripts/transcribe_monitor.py's PREVIEW_MARKER and LIVE_MARKER with them",
 			introPreviewMarker, introLiveMarker)
 	}
-	origCache := config.AppConfig.WhisperClipCacheDir
-	config.AppConfig.WhisperClipCacheDir = ""
-	t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = origCache })
+	origCache := config.Get().WhisperClipCacheDir
+	config.SetForTest(func(c *config.Config) { c.WhisperClipCacheDir = "" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.WhisperClipCacheDir = origCache }) })
 
 	const preview, live = "PREVIEW (dry_run, nothing written) — ", "LIVE — "
 	for _, tc := range []struct {
@@ -292,9 +292,9 @@ func TestIntroTranscribe_CheckpointLeavesDryRunAlone(t *testing.T) {
 // with different values is refused. The declared Preview carries both keys,
 // so /api/v3/ops writes both when it resolves a mode.
 func TestIntroTranscribe_ResolvesBothSpellings(t *testing.T) {
-	origCache := config.AppConfig.WhisperClipCacheDir
-	config.AppConfig.WhisperClipCacheDir = ""
-	t.Cleanup(func() { config.AppConfig.WhisperClipCacheDir = origCache })
+	origCache := config.Get().WhisperClipCacheDir
+	config.SetForTest(func(c *config.Config) { c.WhisperClipCacheDir = "" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.WhisperClipCacheDir = origCache }) })
 
 	keys := (&Plugin{}).introTranscribeDef().Preview.ModeKeys()
 	if strings.Join(keys, ",") != "dry_run,dryRun" {

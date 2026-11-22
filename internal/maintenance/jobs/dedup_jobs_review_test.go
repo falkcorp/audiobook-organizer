@@ -375,9 +375,9 @@ func TestDedupBooks_DryRunHandoffMatchesApply(t *testing.T) {
 				// under the library root: seed G's members that way, created
 				// in order so the tie-break (earliest created) decides.
 				root := t.TempDir()
-				prevRoot := config.AppConfig.RootDir
-				config.AppConfig.RootDir = root
-				t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+				prevRoot := config.Get().RootDir
+				config.SetForTest(func(c *config.Config) { c.RootDir = root })
+				t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 				byTitle := map[string]*database.Book{}
 				for i, title := range []string{"M1", "M2", "M3"} {
 					path := filepath.Join(root, "G", title+".m4b")

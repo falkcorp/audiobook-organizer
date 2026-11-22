@@ -33,14 +33,16 @@ import (
 // silently no-ops.
 func withLibraryRoot(t *testing.T, root string, appDirs bool) {
 	t.Helper()
-	prevRoot := config.AppConfig.RootDir
-	prevBackup := config.AppConfig.BackupDir
-	prevDump := config.AppConfig.OpenLibraryDumpDir
-	prevDB, prevPlaylist := config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir
-	config.AppConfig.RootDir = root
+	prevRoot := config.Get().RootDir
+	prevBackup := config.Get().BackupDir
+	prevDump := config.Get().OpenLibraryDumpDir
+	prevDB, prevPlaylist := config.Get().DatabasePath, config.Get().PlaylistDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
 	if appDirs {
-		config.AppConfig.BackupDir = filepath.Join(root, "backups")
-		config.AppConfig.OpenLibraryDumpDir = filepath.Join(root, "openlibrary-dumps")
+		cowV1 := filepath.Join(root, "backups")
+		config.SetForTest(func(c *config.Config) { c.BackupDir = cowV1 })
+		cowV2 := filepath.Join(root, "openlibrary-dumps")
+		config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = cowV2 })
 	} else {
 		// Zero EVERY field appdirs.FromConfig reads, not just these two.
 		// backup.ResolveDir SYNTHESIZES "backups" when BackupDir is unset and
@@ -50,17 +52,21 @@ func withLibraryRoot(t *testing.T, root string, appDirs bool) {
 		// real guarantee: it fails loudly if FromConfig ever grows a source field
 		// that nobody zeroed here, instead of letting this subtest quietly stop
 		// testing the empty case while still passing.
-		config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
-		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
+		config.SetForTest(func(c *config.Config) {
+			c.BackupDir, c.OpenLibraryDumpDir = "", ""
+			c.DatabasePath, c.PlaylistDir = "", ""
+		})
 		if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
 			t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 		}
 	}
 	t.Cleanup(func() {
-		config.AppConfig.RootDir = prevRoot
-		config.AppConfig.BackupDir = prevBackup
-		config.AppConfig.OpenLibraryDumpDir = prevDump
-		config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = prevDB, prevPlaylist
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir = prevRoot
+			c.BackupDir = prevBackup
+			c.OpenLibraryDumpDir = prevDump
+			c.DatabasePath, c.PlaylistDir = prevDB, prevPlaylist
+		})
 	})
 }
 

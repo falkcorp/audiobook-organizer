@@ -371,7 +371,7 @@ func TestResolveITunesPositionBackfillUser_EnvOverrideWins(t *testing.T) {
 	newPositionUser(t, store, "first")
 	second := newPositionUser(t, store, "second")
 
-	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	original := config.Get().ABSItunesPositionBackfillUserID
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})
@@ -385,7 +385,7 @@ func TestResolveITunesPositionBackfillUser_RejectsUnknownOverride(t *testing.T) 
 	store := newSyncPebbleStore(t)
 	newPositionUser(t, store, "first")
 
-	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	original := config.Get().ABSItunesPositionBackfillUserID
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})
@@ -398,7 +398,7 @@ func TestResolveITunesPositionBackfillUser_SingleUser(t *testing.T) {
 	store := newSyncPebbleStore(t)
 	only := newPositionUser(t, store, "solo")
 
-	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	original := config.Get().ABSItunesPositionBackfillUserID
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})
@@ -413,7 +413,7 @@ func TestResolveITunesPositionBackfillUser_MultiUserIsDeterministic(t *testing.T
 	a := newPositionUser(t, store, "alpha")
 	b := newPositionUser(t, store, "bravo")
 
-	original := config.AppConfig.ABSItunesPositionBackfillUserID
+	original := config.Get().ABSItunesPositionBackfillUserID
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.ABSItunesPositionBackfillUserID = original })
 	})

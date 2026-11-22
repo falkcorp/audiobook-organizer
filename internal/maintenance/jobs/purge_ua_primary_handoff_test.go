@@ -23,9 +23,9 @@ import (
 // its twin in the same group.
 func TestPurgeUADuplicates_PurgedPrimaryHandsOn(t *testing.T) {
 	f := vptest.New(t)
-	old := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = old })
+	old := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = old }) })
 
 	content := bytes.Repeat([]byte{0xAB}, 1<<20)
 	mk := func(id, rel, primary string) string {

@@ -489,16 +489,20 @@ func TestRecover_SkipsAppOwnedDirsInInventory(t *testing.T) {
 // is the only thing that can exclude the decoy: BackupDir would otherwise
 // resolve to {root}/appdata/backups and pass this test for the wrong reason.
 func TestRecover_SkipsConfiguredDatabaseDirWithoutDot(t *testing.T) {
-	saved := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = saved })
+	saved := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(saved) })
 
 	root := t.TempDir()
 	elsewhere := t.TempDir()
-	config.AppConfig.RootDir = ""
-	config.AppConfig.DatabasePath = filepath.Join(root, "appdata", "x.pebble")
-	config.AppConfig.BackupDir = filepath.Join(elsewhere, "backups")
-	config.AppConfig.OpenLibraryDumpDir = ""
-	config.AppConfig.PlaylistDir = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	cowV1 := filepath.Join(root, "appdata", "x.pebble")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
+	cowV2 := filepath.Join(elsewhere, "backups")
+	config.SetForTest(func(c *config.Config) { c.BackupDir = cowV2 })
+	config.SetForTest(func(c *config.Config) {
+		c.OpenLibraryDumpDir = ""
+		c.PlaylistDir = ""
+	})
 
 	writeFile(t, filepath.Join(root, "appdata", "x.pebble", "000001.sst"), 4242)
 

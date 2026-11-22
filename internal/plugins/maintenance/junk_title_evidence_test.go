@@ -737,9 +737,9 @@ func TestJunkTitleFixer_ProviderTitleWithJunkAuthor(t *testing.T) {
 // or the folder's author when the stored one is junk, and a proposal two junk
 // rows share is a possible fragment for both.
 func TestJunkTitleFixer_DuplicateGuardWithJunkAuthor(t *testing.T) {
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/lib"
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/lib" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	l := newEvLib(t)
 	zed := l.author("Zed Writer")

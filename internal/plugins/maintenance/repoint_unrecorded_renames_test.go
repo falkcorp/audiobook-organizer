@@ -137,9 +137,9 @@ func runRepointParams(t *testing.T, p *Plugin, raw string) {
 }
 
 func TestRepointUnrecordedRenames(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.ITunes = config.ITunesConfig{}
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.ITunes = config.ITunesConfig{} })
 
 	dir := t.TempDir()
 	oldF1, newF1 := filepath.Join(dir, "old", "01.mp3"), filepath.Join(dir, "new", "01.mp3")

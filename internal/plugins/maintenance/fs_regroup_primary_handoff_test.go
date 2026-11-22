@@ -40,9 +40,9 @@ func fsLivePrimaries(t *testing.T, s *database.PebbleStore, gid string) []string
 func TestFsRegroupDuplicates_RetiredPrimaryShellHandsOnAndRevertRecrowns(t *testing.T) {
 	s := regroupStore(t)
 	root := t.TempDir()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	// The planner retires shells only in the owner's version group, so the
 	// owner (nil flag, not in the library) shares it with the primary shell
@@ -87,9 +87,9 @@ func TestFsRegroupDuplicates_RetiredPrimaryShellHandsOnAndRevertRecrowns(t *test
 func TestFsRegroupDuplicates_HandOffNeverWritesAnITunesMember(t *testing.T) {
 	s := regroupStore(t)
 	root := t.TempDir()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	owner, shells := seedDuplicates(t, s, "/lib/Ada Quill/Metal Swarm") // the helper names the folder
 	vg := "vg-shell-it"
@@ -167,9 +167,9 @@ func (s *extIDErrStore) GetExternalIDsForBook(bookID string) ([]database.Externa
 func TestFsRegroupDuplicates_HandOffFailedBeforeAnyWriteKeepsTheIncumbentOnRevert(t *testing.T) {
 	s := regroupStore(t)
 	root := t.TempDir()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	owner, shells := seedDuplicates(t, s, "/lib/Ada Quill/Metal Swarm")
 	vg := "vg-shell-readerr"
