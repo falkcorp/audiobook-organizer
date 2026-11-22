@@ -6,6 +6,7 @@
 package archtest
 
 import (
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -185,5 +186,87 @@ func Handlers() { _ = outbox.ConsumeRaw("core.tasks.x"); _ = outbox.ConsumeTx("c
 
 	t.Run("Core", func(t *testing.T) {
 		OutboxModuleConsumersAreTasks(t)
+	})
+}
+
+// appTree is a fixture application module over a fixture core (outboxTree):
+// every package of it is a module's. extra adds or replaces the app's files.
+func appTree(t *testing.T, extra map[string]string) string {
+	t.Helper()
+	core := outboxTree(t, nil)
+	files := map[string]string{
+		"go.mod": fmt.Sprintf("module example.test/wayne-app\n\ngo 1.27.0\n\nrequire github.com/falkcorp/mediacore v0.0.0\n\nreplace github.com/falkcorp/mediacore => %s\n", core),
+		"books/books.go": `package books
+
+import "github.com/falkcorp/mediacore/outbox"
+
+func Handlers() []outbox.Handler { return []outbox.Handler{outbox.ConsumeIntoTask("books.deluge.book-relocated")} }
+`,
+	}
+	maps.Copy(files, extra)
+	return writeModule(t, files)
+}
+
+// TestArchtest_ApplicationConsumeFlagged: F6-03 extends the guard to the
+// application's own module. ConsumeIntoTask is allowed; Consume, ConsumeTx and
+// ConsumeRaw are reported in any package of it, in every shape of reference;
+// a test file is exempt; a module that never imports outbox is refused as
+// vacuous. The real application is held to it by internal/arch.
+func TestArchtest_ApplicationConsumeFlagged(t *testing.T) {
+	t.Run("AllowedShapesNotReported", func(t *testing.T) {
+		got, err := OutboxApplicationConsumerFindings(appTree(t, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("the allowed tree reported:\n  %s", strings.Join(got, "\n  "))
+		}
+	})
+
+	t.Run("EveryShapeReported", func(t *testing.T) {
+		root := appTree(t, map[string]string{
+			"books/plain.go": `package books
+
+import "github.com/falkcorp/mediacore/outbox"
+
+func Plain() outbox.Handler { return outbox.Consume("books.x") }
+`,
+			"internal/deep/alias.go": `package deep
+
+import ob "github.com/falkcorp/mediacore/outbox"
+
+var build = ob.ConsumeTx
+
+func Raw() { _ = build; _ = ob.ConsumeRaw("books.y") }
+`,
+			"books/plain_test.go": `package books
+
+import (
+	"testing"
+
+	"github.com/falkcorp/mediacore/outbox"
+)
+
+func TestPlain(t *testing.T) { _ = outbox.Consume("books.test") }
+`,
+		})
+		got, err := OutboxApplicationConsumerFindings(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byFile := findingsByFile(root, got)
+		if byFile["books/plain.go"] != 1 || byFile["internal/deep/alias.go"] != 2 || byFile["books/plain_test.go"] != 0 || len(got) != 3 {
+			t.Fatalf("reports by file = %v:\n  %s", byFile, strings.Join(got, "\n  "))
+		}
+	})
+
+	t.Run("VacuousRefused", func(t *testing.T) {
+		root := writeModule(t, map[string]string{
+			"go.mod":       "module example.test/arkham-app\n\ngo 1.27.0\n",
+			"main/main.go": "package main\n\nfunc main() {}\n",
+		})
+		if _, err := OutboxApplicationConsumerFindings(root); err == nil {
+			t.Error("a module that never imports outbox passed")
+		}
 	})
 }
