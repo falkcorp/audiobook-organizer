@@ -23,9 +23,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 )
 
-// bindCoreOwner is bindCore for a principal that is the Access extension's,
-// carrying assurance a (AssuranceOwner for a verified owner token), the form in
-// which stage 12 hands the owner proof to a handler under core identity.
+// bindCoreOwner gives c a core principal of method m holding scopes and
+// carrying assurance a (AssuranceOwner for a verified owner token), as stage 12
+// binds it, and the Identity when id is non-nil. That is the form in which
+// stage 12 hands the owner proof to a handler under core identity. A nil id
+// leaves the request as a LegacyAuthGin server serves it.
 func bindCoreOwner(c *gin.Context, id *legacyauth.Identity, m coreauth.Method, a coreauth.Assurance, scopes ...rbac.Permission) {
 	chk := bridgeChecker(scopes)
 	p := &coreauth.Principal{Method: m, Perms: chk, Assurance: a}
