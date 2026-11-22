@@ -40,9 +40,8 @@ func t6g4RealDeps(p *Plugin, rec *t6g4Calls, handed *[]tasks.Writer) t6g4Deps {
 	prov := p.deps.FileProvenanceStore()
 	return t6g4Deps{
 		Store: headT6G4Store{OpsStore: store, deps: p.deps, prov: prov},
-		// fs-regroup's live apply parks the scan through the same service HEAD's shell
-		// uses: the plugin's own deps.
-		Scan: p.deps,
+		// fs-regroup's live apply parks the scan with the run's own stand-down.
+		StandDownKey: t6g4ScanKey,
 		// The stats keys are written outside the spy on purpose (t6g4StatsSink).
 		Stats: headT6G4Stats{store: store},
 		NewWriter: func(w tasks.Writer) t6g4Writer {

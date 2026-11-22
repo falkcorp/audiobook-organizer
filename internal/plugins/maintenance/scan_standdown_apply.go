@@ -14,9 +14,12 @@ package maintenance
 
 import (
 	"context"
+	"fmt"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // acquireScanStandDownForApply acquires the scan stand-down for an op's apply
@@ -59,4 +62,60 @@ func scanStandDownLostForApply(scan ScanController, holderID string, held bool) 
 		return false
 	}
 	return !scan.RenewScanStandDown(holderID)
+}
+
+// nativeScanStandDown is the ScanController of a native run: the apply helpers
+// above take their stand-down from it, and it takes the run's own, rc.StandDown
+// over the library scan's concurrency key (the lease the executor renews on the
+// run's progress and reaps when it lapses), instead of the operations registry's
+// controller, which the flip removes. One value serves one run's one hold.
+type nativeScanStandDown struct {
+	rc  *tasks.RC
+	key tasks.Key
+
+	mu   sync.Mutex
+	hold tasks.Hold
+	lost bool
+}
+
+// AcquireScanStandDown takes the run's hold on the scan key. holderOpID is
+// unused: the executor keys the hold by the run.
+func (n *nativeScanStandDown) AcquireScanStandDown(_ context.Context, _, reason string) (func(), error) {
+	if n.key == "" {
+		return nil, fmt.Errorf("no scan stand-down key configured, refusing to %s without it", reason)
+	}
+	h, err := n.rc.StandDown(n.key)
+	if err != nil {
+		return nil, fmt.Errorf("%s: the library scan did not stand down: %w", reason, err)
+	}
+	n.mu.Lock()
+	n.hold, n.lost = h, false
+	n.mu.Unlock()
+	return h.Release, nil
+}
+
+// RenewScanStandDown extends the hold and reports whether it is still held.
+func (n *nativeScanStandDown) RenewScanStandDown(string) bool {
+	n.mu.Lock()
+	h := n.hold
+	n.mu.Unlock()
+	if h == nil {
+		return false
+	}
+	if h.Renew() != nil {
+		n.mu.Lock()
+		n.lost = true
+		n.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// ScanStandDownValid reports whether the hold was taken and no renewal has found
+// it lost. Hold has no read that does not extend, so this is the last renewal's
+// answer.
+func (n *nativeScanStandDown) ScanStandDownValid(string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.hold != nil && !n.lost
 }

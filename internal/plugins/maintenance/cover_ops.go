@@ -236,6 +236,31 @@ type folderCoverBackfillEnv struct {
 	// ItemsFor returns the per-book loop on a pool of the given size (the
 	// core sizes it from the workers param and HEAD's default).
 	ItemsFor func(workers int) t6g3ItemsFunc
+	// StandDown parks the library scan for a live apply and returns the release,
+	// before the first read the apply acts on and so before its first write. Nil
+	// means none: HEAD's shell, which refuses while a scan is queued or running
+	// (t6g3RefuseWhileScan) and has no stand-down of its own. The native shell
+	// always sets it (t6g3NativeStandDown), so a scan that starts after the
+	// native run did is parked rather than writing the same rows beside it.
+	StandDown func() (release func(), err error)
+}
+
+// t6g3NativeStandDown is the native StandDown of the kinds whose live apply must
+// park the library scan: rc.StandDown over the scan's concurrency key. The key
+// is the owner's (t6g3Deps.StandDownKey); an unset one refuses the apply, as
+// credits-backfill's does (a scan writing under an apply is the thing being
+// prevented), rather than running unguarded.
+func t6g3NativeStandDown(kind tasks.Kind, rc *tasks.RC, key tasks.Key) func() (func(), error) {
+	return func() (func(), error) {
+		if key == "" {
+			return nil, fmt.Errorf("%s: t6g3Deps.StandDownKey is not set; a live apply does not run without the scan stand-down", kind)
+		}
+		h, err := rc.StandDown(key)
+		if err != nil {
+			return nil, fmt.Errorf("%s: the library scan did not stand down: %w", kind, err)
+		}
+		return h.Release, nil
+	}
 }
 
 // runFolderCoverBackfill is the v2 shell of maintenance.folder-cover-backfill.
@@ -290,7 +315,8 @@ func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *
 				return struct{}{}, err
 			}
 			return struct{}{}, folderCoverBackfillCore(rc.Context(), params, folderCoverBackfillEnv{
-				t6g3Base: base,
+				t6g3Base:  base,
+				StandDown: t6g3NativeStandDown(t6g3FolderCoverBackfillKind, rc, deps.StandDownKey),
 				ItemsFor: func(workers int) t6g3ItemsFunc {
 					return t6g3NativeItems(rc, tasks.Fixed(workers, "directory reads, image header decodes and one tag read per book: IO bound, sized by the workers param or twice the core count"))
 				},
@@ -309,8 +335,17 @@ func folderCoverBackfillCore(ctx context.Context, params coverOpParams, env fold
 	}
 	if dryRun {
 		env.Log(slog.LevelInfo, "DRY RUN — no cover is stored and no book is written")
-	} else if err := t6g3RefuseWhileScan(env.Store, opID); err != nil {
-		return err
+	} else {
+		if err := t6g3RefuseWhileScan(env.Store, opID); err != nil {
+			return err
+		}
+		if env.StandDown != nil {
+			release, err := env.StandDown()
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
 	}
 	books, err := coverOpBooks(env.Store, params)
 	if err != nil {

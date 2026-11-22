@@ -413,10 +413,13 @@ type t6g4Deps struct {
 	// (F5-18: internal/books/writer over rc.Writer()). The shell of a ReadOnly
 	// kind never calls it.
 	NewWriter func(tasks.Writer) t6g4Writer
-	// Scan is the scan stand-down service fs-regroup-xml's apply takes around
-	// its writes. Nil means none (HEAD's degraded caller, which runs unchanged
-	// where there is no scanner).
-	Scan ScanController
+	// StandDownKey is the concurrency key of the library scan kinds, which
+	// fs-regroup-xml's live apply parks (rc.StandDown) around its writes. Declared
+	// by the owner, as t6g3Deps.StandDownKey and repairs.Deps.StandDownKey are.
+	// Empty means none: a live apply then refuses rather than writing beside a
+	// scan. HEAD's shell does not read it (it takes the registry's controller
+	// through the plugin's own deps).
+	StandDownKey tasks.Key
 	// Stats persists the two transcribe kinds' counters, outside the gated writer
 	// (t6g4StatsSink says why). Required: t6g4Kinds refuses a nil one (a nil sink
 	// persists nothing, silently). No other kind reads it.

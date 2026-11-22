@@ -41,11 +41,11 @@ type t6g4BootHost interface {
 // Stats at registration so that a forgotten wiring fails at startup, and an
 // adapter that persists nothing would turn that refusal into silent loss of the
 // two transcribe kinds' counters.
-func newT6G4Deps(src OpsStore, host t6g4BootHost, scan ScanController) t6g4Deps {
+func newT6G4Deps(src OpsStore, host t6g4BootHost, standDownKey tasks.Key) t6g4Deps {
 	if src == nil {
 		return t6g4Deps{}
 	}
-	d := t6g4Deps{Scan: scan, Stats: booksT6G4Stats{src: src}}
+	d := t6g4Deps{StandDownKey: standDownKey, Stats: booksT6G4Stats{src: src}}
 	if host == nil {
 		return d
 	}

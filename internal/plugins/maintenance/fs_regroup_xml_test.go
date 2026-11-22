@@ -1581,40 +1581,34 @@ func TestFsRegroupKind_NativePreviewClassifiesAtDeclaredCPUParallelism(t *testin
 	}
 }
 
-// TestT6G4FSRegroupKind_LiveApplyStandsTheScanDown: the native kind hands its
-// apply the stand-down service from t6g4Deps.Scan (fsRegroupEnv.Scan), so a live
-// run over a real store with a fragments group to repair parks the scan once,
-// keeps the lease renewed while it writes, and releases it when the apply ends.
-// The apply's own tests call t6g4ApplyFSRepairPlan with a service they pass in;
-// none runs the kind, so a shell that wired Scan to nil (which the kind's own
-// "Scan is not set" refusal does not catch, because it reads deps.Scan) would
-// apply beside a running scan and pass all of them. The store is HEAD's
+// TestT6G4FSRegroupKind_LiveApplyStandsTheScanDown: the native kind parks the
+// scan with the run's own stand-down (rc.StandDown over t6g4Deps.StandDownKey,
+// not the registry's controller the flip removes), so a live run over a real
+// store with a fragments group to repair holds the scan key once, keeps the hold
+// renewed while it writes, and releases it when the apply ends. The apply's own
+// tests call t6g4ApplyFSRepairPlan with a service they pass in; none runs the
+// kind, so a shell that dropped the stand-down (which the kind's own
+// "StandDownKey is not set" refusal does not catch, because it reads the key)
+// would apply beside a running scan and pass all of them. The store is HEAD's
 // complete adapter over a real store, so the plan finds the group and the apply
 // writes it.
 func TestT6G4FSRegroupKind_LiveApplyStandsTheScanDown(t *testing.T) {
 	s := regroupStore(t)
 	seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
 	ops := New(fakeDeps{store: s}).deps.OpsStore()
-	scan := &recordingScanController{renewOK: true}
 	deps := t6g4Deps{
-		Store:     headT6G4Store{OpsStore: ops, deps: fakeDeps{store: s}},
-		Scan:      scan,
-		NewWriter: func(tasks.Writer) t6g4Writer { return headT6G4Writer{store: ops} },
+		Store:        headT6G4Store{OpsStore: ops, deps: fakeDeps{store: s}},
+		StandDownKey: t6g4ScanKey,
+		NewWriter:    func(tasks.Writer) t6g4Writer { return headT6G4Writer{store: ops} },
 	}
 	def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), fsRegroupKind)
-	_, rc := newT6G4RC(fsRegroupKind, tasks.ModeLive, &t6g4RunWriter{})
+	h, rc := newT6G4RC(fsRegroupKind, tasks.ModeLive, &t6g4RunWriter{})
 
 	_, err := runT6G4Kind(t, def, rc, "")
 
-	acq, rel, ren := scan.counts()
-	if acq != 1 || rel != 1 || ren < 1 {
-		t.Fatalf("stand-down acquires=%d releases=%d renews=%d, want 1/1/>=1 (run error: %v)", acq, rel, ren, err)
-	}
-	scan.mu.Lock()
-	holder, reason := scan.lastHolder, scan.lastReason
-	scan.mu.Unlock()
-	if holder != string(rc.RunID()) || reason != "fs-regroup-xml apply" {
-		t.Fatalf("stand-down held by %q for %q, want the run's id %q and the apply's reason", holder, reason, rc.RunID())
+	keys, renews, releases := h.standDownTally()
+	if !slices.Equal(keys, []tasks.Key{t6g4ScanKey}) || releases != 1 || renews < 1 {
+		t.Fatalf("stand-down keys=%v renews=%d releases=%d, want [%s] held once, renewed at least once, released once (run error: %v)", keys, renews, releases, t6g4ScanKey, err)
 	}
 	if err != nil {
 		t.Fatalf("the live apply failed: %v", err)

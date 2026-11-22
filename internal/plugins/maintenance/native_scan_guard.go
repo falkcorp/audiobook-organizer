@@ -17,10 +17,14 @@ import "github.com/falkcorp/mediacore/tasks"
 // a full sweep. The slice is a fresh copy so a definition cannot alias another's.
 //
 // What NotWhile does not cover is a scan that is only queued: it blocks while a
-// scan is running, where HEAD's read also refused on a queued one. The scan
-// stand-down hold each live apply takes before its first write is what stops a
-// scan that starts later (the flip wires its key); the HEAD shells' queue read
-// stays as it is until the flip deletes it.
+// scan is running, where HEAD's read also refused on a queued one. What stops a
+// scan that starts later is the scan stand-down hold the native live apply takes
+// before its first write (rc.StandDown over the owner's scan key). Each kind this
+// guard is wired on takes one by its own path: folder-cover-backfill
+// (t6g3NativeStandDown), fs-regroup-xml (nativeScanStandDown),
+// itunes-clone-into-library (t6g5NativeLease) and repoint-missing-to-folder-audio
+// (t6g7NativeStandDown). The HEAD shells' queue read stays as it is until the
+// flip deletes it.
 //
 // Literals, not kindrename.ScanKind and FullSweepKind: this package may not
 // import the cutover tree. TestNativeScanNotWhile_PinnedToTheRenameMap holds the
