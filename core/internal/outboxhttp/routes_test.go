@@ -744,10 +744,12 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 }
 
 // TestOutboxHTTP_PurgeNeedsInteractive: the purge answers 401 with no principal,
-// 403 to a holder of core:system.view alone, 403 to a holder of
-// core:system.manage whose credential is not an interactive one (an API key, a
-// delegated session, the auth-off principal: Guards.Interactive), and lets an
-// interactive session holding core:system.manage through.
+// 403 permission_denied to an interactive session holding core:system.view
+// alone, 403 interactive_required to a holder of core:system.manage whose
+// credential may not change credentials (an API key, the auth-off principal:
+// Guards.Interactive), and lets through a session holding core:system.manage
+// and a delegated session holding it (a delegated session may change
+// credentials, owner ruling 2026-11-06).
 func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 	const path = "/outbox/consumers/core.notify.deliver/backlog"
 	for _, cell := range []struct {
@@ -757,6 +759,10 @@ func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 		{noCaller, unauthenticated},
 		{viewer, lacking(permManage)},
 		{managerKey, interactiveOnly},
+		// A delegated session (temp-login, invite) may change credentials and so
+		// passes Guards.Interactive (owner ruling 2026-11-06, core/auth/method.go):
+		// it holds core:system.manage, so the purge is let through, as at HEAD.
+		{managerABS, letThrough},
 		{managerOff, interactiveOnly},
 		{manager, letThrough},
 	} {
@@ -764,18 +770,6 @@ func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 			wantStage13(t, stage13Do(t, http.MethodDelete, path, cell.caller), cell.want)
 		})
 	}
-	// The delegated session (temp-login, invite) is not in the table above yet:
-	// the route answers it 200, because Guards.Interactive is
-	// Principal.MayChangeCredentials and a delegated session may change
-	// credentials (core/auth/method.go, owner decision 2026-11-06), while this
-	// table was written to expect 403 interactive_required, and 05-events
-	// 5E.11 says only "interactive method". Which of the two is right is not
-	// this test's to decide: the cell lands as its ruling does, either pinned
-	// letThrough (the table is stale) or as interactiveOnly together with the
-	// route's move to Guards.Session.
-	t.Run(managerABS.name, func(t *testing.T) {
-		t.Skip("delegated session on the purge: spec question open (Guards.Interactive admits it, Guards.Session would refuse it)")
-	})
 }
 
 // TestOutboxHTTP_ConsumersAndTopicsNeedSystemView: both read routes answer 401
