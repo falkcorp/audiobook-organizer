@@ -17,13 +17,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-_spec = importlib.util.spec_from_file_location("config_cow_codemod", ROOT / "scripts" / "config_cow_codemod.py")
+_spec = importlib.util.spec_from_file_location(
+    "config_cow_codemod", ROOT / "scripts" / "config_cow_codemod.py"
+)
 cc = importlib.util.module_from_spec(_spec)
 sys.modules["config_cow_codemod"] = cc
 _spec.loader.exec_module(cc)
@@ -50,7 +51,11 @@ class MergeAdjacentSetsTest(unittest.TestCase):
 
     def test_three_adjacent_statements_fold_into_one_closure_in_order(self):
         src = b"\tA\n\tB\n\tC\n"
-        edits = [self._set(1, 2, "c.Joker = 1"), self._set(4, 5, "c.Bane = 2"), self._set(7, 8, "c.Riddler = 3")]
+        edits = [
+            self._set(1, 2, "c.Joker = 1"),
+            self._set(4, 5, "c.Bane = 2"),
+            self._set(7, 8, "c.Riddler = 3"),
+        ]
         out = cc.merge_adjacent_sets(src, edits)
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0].start, 1)
@@ -63,7 +68,11 @@ class MergeAdjacentSetsTest(unittest.TestCase):
 
     def test_blank_line_or_comment_keeps_statements_apart(self):
         src = b"\tA\n\n\tB\n\t// Alfred\n\tC\n"
-        edits = [self._set(1, 2, "c.Joker = 1"), self._set(5, 6, "c.Bane = 2"), self._set(18, 19, "c.Riddler = 3")]
+        edits = [
+            self._set(1, 2, "c.Joker = 1"),
+            self._set(5, 6, "c.Bane = 2"),
+            self._set(18, 19, "c.Riddler = 3"),
+        ]
         out = cc.merge_adjacent_sets(src, edits)
         self.assertEqual(len(out), 3)
 
@@ -76,8 +85,28 @@ class MergeAdjacentSetsTest(unittest.TestCase):
 class PlanAndSummaryTest(unittest.TestCase):
     def test_identical_edits_from_a_multi_assignment_are_kept_once(self):
         e = {"start": 0, "end": 10, "new": "config.SetForTest(...)"}
-        a = cc.Site.from_json({"file": "f_test.go", "line": 1, "col": 1, "kind": "test-set", "auto": True, "text": "", "edits": [e]})
-        b = cc.Site.from_json({"file": "f_test.go", "line": 1, "col": 30, "kind": "test-set", "auto": True, "text": "", "edits": [e]})
+        a = cc.Site.from_json(
+            {
+                "file": "f_test.go",
+                "line": 1,
+                "col": 1,
+                "kind": "test-set",
+                "auto": True,
+                "text": "",
+                "edits": [e],
+            }
+        )
+        b = cc.Site.from_json(
+            {
+                "file": "f_test.go",
+                "line": 1,
+                "col": 30,
+                "kind": "test-set",
+                "auto": True,
+                "text": "",
+                "edits": [e],
+            }
+        )
         plan = cc.plan_file_edits([a, b])
         self.assertEqual(len(plan["f_test.go"]), 1)
 
@@ -94,71 +123,85 @@ class PlanAndSummaryTest(unittest.TestCase):
         self.assertEqual(s["files_manual"], 1)
 
 
-NONTEST = textwrap.dedent(
-    """\
-    package gotham
+NONTEST = """\
+package gotham
 
-    import (
-    	"sort"
+import (
+	"sort"
 
-    	"github.com/falkcorp/audiobook-organizer/internal/config"
-    )
-
-    type organizer struct{ cfg *config.Config }
-
-    func reads() (string, int) {
-    	root := config.AppConfig.RootDir
-    	n := config.AppConfig.Dedup.Signals.Confidence["isbn"]
-    	_ = config.AppConfig.EffectiveEmbeddingMode()
-    	return root, int(n)
-    }
-
-    func copies() config.Config { return config.AppConfig }
-
-    func handoff() *organizer { return &organizer{cfg: &config.AppConfig} }
-
-    func fieldAddr() *[]string { return &config.AppConfig.SupportedExtensions }
-
-    func mutators() {
-    	_ = config.AppConfig.Validate()
-    	_ = append(config.AppConfig.SupportedExtensions, ".m4b")
-    	sort.Strings(config.AppConfig.SupportedExtensions)
-    	_ = config.AppConfig.SupportedExtensions[1:]
-    	config.AppConfig.RootDir = "/tmp/batcave"
-    }
-
-    func shadowed() {
-    	config := struct{ AppConfig struct{ RootDir string } }{}
-    	_ = config.AppConfig.RootDir
-    }
-    """
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
-TESTFILE = textwrap.dedent(
-    """\
-    package gotham
+type organizer struct{ cfg *config.Config }
 
-    import (
-    	"testing"
+func reads() (string, int) {
+	root := config.AppConfig.RootDir
+	n := config.AppConfig.Dedup.Signals.Confidence["isbn"]
+	_ = config.AppConfig.EffectiveEmbeddingMode()
+	return root, int(n)
+}
 
-    	cfgpkg "github.com/falkcorp/audiobook-organizer/internal/config"
-    )
+func copies() config.Config { return config.AppConfig }
 
-    func TestAlfred(t *testing.T) {
-    	orig := cfgpkg.AppConfig
-    	t.Cleanup(func() { cfgpkg.AppConfig = orig })
-    	cfgpkg.AppConfig.RootDir = "/tmp/wayne-manor"
-    	cfgpkg.AppConfig.EnableAIParsing = true
-    	cfgpkg.AppConfig.DatabaseType, cfgpkg.AppConfig.DatabasePath = "pebble", "/tmp/arkham"
-    	var other string
-    	other, cfgpkg.AppConfig.PlaylistDir = "x", "/tmp/gcpd"
-    	cfgpkg.AppConfig.ScanWorkers += 2
-    	cfgpkg.AppConfig.PlaylistDir = cfgpkg.AppConfig.RootDir
-    	cfgpkg.AppConfig.Hook = func() string { return cfgpkg.AppConfig.RootDir }
-    	_ = other
-    }
-    """
+func handoff() *organizer { return &organizer{cfg: &config.AppConfig} }
+
+func fieldAddr() *[]string { return &config.AppConfig.SupportedExtensions }
+
+func mutators() {
+	_ = config.AppConfig.Validate()
+	_ = append(config.AppConfig.SupportedExtensions, ".m4b")
+	sort.Strings(config.AppConfig.SupportedExtensions)
+	_ = config.AppConfig.SupportedExtensions[1:]
+	config.AppConfig.RootDir = "/tmp/batcave"
+}
+
+func shadowed() {
+	config := struct{ AppConfig struct{ RootDir string } }{}
+	_ = config.AppConfig.RootDir
+}
+"""
+
+TESTFILE = """\
+package gotham
+
+import (
+	"testing"
+
+	cfgpkg "github.com/falkcorp/audiobook-organizer/internal/config"
 )
+
+func TestAlfred(t *testing.T) {
+	orig := cfgpkg.AppConfig
+	t.Cleanup(func() { cfgpkg.AppConfig = orig })
+	cfgpkg.AppConfig.RootDir = "/tmp/wayne-manor"
+	cfgpkg.AppConfig.EnableAIParsing = true
+	cfgpkg.AppConfig.DatabaseType, cfgpkg.AppConfig.DatabasePath = "pebble", "/tmp/arkham"
+	var other string
+	other, cfgpkg.AppConfig.PlaylistDir = "x", "/tmp/gcpd"
+	cfgpkg.AppConfig.ScanWorkers += 2
+	cfgpkg.AppConfig.PlaylistDir = cfgpkg.AppConfig.RootDir
+	cfgpkg.AppConfig.Hook = func() string { return cfgpkg.AppConfig.RootDir }
+	_ = other
+}
+"""
+
+
+IN_PACKAGE = """\
+package config
+
+type Config struct{ RootDir string; AppConfig int }
+
+var AppConfig Config
+
+func root() string { return AppConfig.RootDir }
+
+func field(c Config) int { return c.AppConfig }
+
+func local() string {
+	AppConfig := Config{}
+	return AppConfig.RootDir
+}
+"""
 
 
 @unittest.skipUnless(HAVE_GO, "needs a Go toolchain to run the go/ast analyzer")
@@ -222,7 +265,11 @@ class EndToEndTest(unittest.TestCase):
         )
 
     def test_without_test_writes_every_test_write_is_manual(self):
-        got = [k for _, k, auto in self.kinds(self.sites(test_writes=False), "gotham_test.go") if not auto]
+        got = [
+            k
+            for _, k, auto in self.kinds(self.sites(test_writes=False), "gotham_test.go")
+            if not auto
+        ]
         self.assertEqual(got.count("write"), 9)
 
     def test_every_test_write_in_the_fixture_is_rewritten(self):
@@ -246,7 +293,7 @@ class EndToEndTest(unittest.TestCase):
         # Two adjacent single writes and the all-config multi-assignment fold
         # into one closure, in source order.
         self.assertIn(
-            '\tcfgpkg.SetForTest(func(c *cfgpkg.Config) {\n'
+            "\tcfgpkg.SetForTest(func(c *cfgpkg.Config) {\n"
             '\t\tc.RootDir = "/tmp/wayne-manor"\n'
             "\t\tc.EnableAIParsing = true\n"
             '\t\tc.DatabaseType, c.DatabasePath = "pebble", "/tmp/arkham"\n'
@@ -257,7 +304,9 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("c.ScanWorkers += 2", test)
         self.assertIn("c.PlaylistDir = c.RootDir", test)
         self.assertIn("c.Hook = func() string { return cfgpkg.Get().RootDir }", test)
-        gofmt = subprocess.run(["gofmt", "-l", str(self.dir)], capture_output=True, text=True, check=False)
+        gofmt = subprocess.run(
+            ["gofmt", "-l", str(self.dir)], capture_output=True, text=True, check=False
+        )
         self.assertEqual(gofmt.stdout.strip(), "")
 
         again = [s for s in self.sites() if s.auto]
@@ -266,26 +315,7 @@ class EndToEndTest(unittest.TestCase):
     def test_in_package_bare_identifier(self):
         pkg = Path(self.tmp.name) / "internal" / "config"
         pkg.mkdir(parents=True)
-        (pkg / "x.go").write_text(
-            textwrap.dedent(
-                """\
-                package config
-
-                type Config struct{ RootDir string; AppConfig int }
-
-                var AppConfig Config
-
-                func root() string { return AppConfig.RootDir }
-
-                func field(c Config) int { return c.AppConfig }
-
-                func local() string {
-                	AppConfig := Config{}
-                	return AppConfig.RootDir
-                }
-                """
-            )
-        )
+        (pkg / "x.go").write_text(IN_PACKAGE)
         sites, stderr, code = cc.run_analyzer([str(pkg / "x.go")], False)
         self.assertEqual(code, 0, stderr)
         self.assertEqual([(s.line, s.kind) for s in sites], [(7, "read")])

@@ -91,7 +91,7 @@ class Site:
     edits: list[Edit] = field(default_factory=list)
 
     @classmethod
-    def from_json(cls, obj: dict) -> "Site":
+    def from_json(cls, obj: dict) -> Site:
         return cls(
             file=obj["file"],
             line=obj["line"],
@@ -124,11 +124,21 @@ def collect_go_files(paths: list[str], excludes: list[str]) -> list[str]:
     return [f for f in out if "scripts/config_cow_codemod/" not in f.replace(os.sep, "/")]
 
 
-def run_analyzer(files: list[str], test_writes: bool, go: str = "go") -> tuple[list[Site], str, int]:
+def run_analyzer(
+    files: list[str], test_writes: bool, go: str = "go"
+) -> tuple[list[Site], str, int]:
     """Run the go/ast analyzer over files; return its sites, stderr and exit code."""
     if not files:
         return [], "", 0
-    cmd = [go, "run", "-tags", ANALYZER_TAG, ANALYZER_PKG, "-readonly-methods", ",".join(READONLY_METHODS)]
+    cmd = [
+        go,
+        "run",
+        "-tags",
+        ANALYZER_TAG,
+        ANALYZER_PKG,
+        "-readonly-methods",
+        ",".join(READONLY_METHODS),
+    ]
     if test_writes:
         cmd.append("-test-writes")
     abs_files = "\n".join(str(Path(f).resolve()) for f in files) + "\n"
@@ -151,7 +161,9 @@ def apply_edits(source: bytes, edits: list[Edit]) -> bytes:
     return bytes(out)
 
 
-_SET_PREFIX_RE = re.compile(r"^((?:\w+\.)?SetForTest\(func\(c \*(?:\w+\.)?Config\) \{ )(.*)( \}\))$", re.S)
+_SET_PREFIX_RE = re.compile(
+    r"^((?:\w+\.)?SetForTest\(func\(c \*(?:\w+\.)?Config\) \{ )(.*)( \}\))$", re.S
+)
 
 
 def merge_adjacent_sets(source: bytes, edits: list[Edit]) -> list[Edit]:
@@ -213,8 +225,15 @@ def plan_file_edits(sites: list[Site]) -> dict[str, list[Edit]]:
     # the statement's own edit; drop the nested read edit.
     for path, edits in by_file.items():
         by_file[path] = [
-            e for e in edits
-            if not any(o is not e and o.start <= e.start and e.end <= o.end and (o.start, o.end) != (e.start, e.end) for o in edits)
+            e
+            for e in edits
+            if not any(
+                o is not e
+                and o.start <= e.start
+                and e.end <= o.end
+                and (o.start, o.end) != (e.start, e.end)
+                for o in edits
+            )
         ]
     return by_file
 
@@ -232,7 +251,10 @@ def format_manual(sites: list[Site]) -> list[str]:
         text = " ".join(s.text.split())
         if len(text) > 140:
             text = text[:137] + "..."
-        lines.append(f"{relpath(s.file)}:{s.line}:{s.col}: {s.kind}: {text}" + (f"  -- {s.detail}" if s.detail else ""))
+        lines.append(
+            f"{relpath(s.file)}:{s.line}:{s.col}: {s.kind}: {text}"
+            + (f"  -- {s.detail}" if s.detail else "")
+        )
     return lines
 
 
@@ -257,14 +279,28 @@ def summarize(sites: list[Site]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("paths", nargs="+", help="files or directories to process")
-    ap.add_argument("--write", action="store_true", help="apply the automatic rewrites (default: dry run)")
-    ap.add_argument("--test-writes", action="store_true", help="also rewrite the simple write shapes in _test.go files")
-    ap.add_argument("--json", action="store_true", help="print every site as JSON lines instead of the report")
+    ap.add_argument(
+        "--write", action="store_true", help="apply the automatic rewrites (default: dry run)"
+    )
+    ap.add_argument(
+        "--test-writes",
+        action="store_true",
+        help="also rewrite the simple write shapes in _test.go files",
+    )
+    ap.add_argument(
+        "--json", action="store_true", help="print every site as JSON lines instead of the report"
+    )
     ap.add_argument("--summary", action="store_true", help="print only the counts")
-    ap.add_argument("--exclude", action="append", default=[], help="glob of files to skip (repeatable)")
-    ap.add_argument("--go", default=os.environ.get("GO", "go"), help="go binary (default: $GO or go)")
+    ap.add_argument(
+        "--exclude", action="append", default=[], help="glob of files to skip (repeatable)"
+    )
+    ap.add_argument(
+        "--go", default=os.environ.get("GO", "go"), help="go binary (default: $GO or go)"
+    )
     args = ap.parse_args(argv)
 
     if shutil.which(args.go) is None and not Path(args.go).exists():
@@ -278,7 +314,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json:
         for s in sites:
-            print(json.dumps({**s.__dict__, "file": relpath(s.file), "edits": [e.__dict__ for e in s.edits]}))
+            print(
+                json.dumps(
+                    {**s.__dict__, "file": relpath(s.file), "edits": [e.__dict__ for e in s.edits]}
+                )
+            )
         return 1 if code else 0
 
     changed: list[str] = []
@@ -290,7 +330,9 @@ def main(argv: list[str] | None = None) -> int:
                 Path(path).write_bytes(new)
                 changed.append(path)
         if changed:
-            fmt = subprocess.run(["gofmt", "-w", *changed], capture_output=True, text=True, check=False)
+            fmt = subprocess.run(
+                ["gofmt", "-w", *changed], capture_output=True, text=True, check=False
+            )
             if fmt.returncode:
                 sys.stderr.write(fmt.stderr)
                 return 1
@@ -302,8 +344,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"# MANUAL ({len(manual)} sites) -- refused, needs a human:")
             for line in manual:
                 print(line)
-    print(f"# {'rewrote' if args.write else 'would rewrite'} {summary['auto']} sites in {summary['files_auto']} files; "
-          f"{summary['manual']} manual sites in {summary['files_manual']} files")
+    print(
+        f"# {'rewrote' if args.write else 'would rewrite'} {summary['auto']} sites in {summary['files_auto']} files; "
+        f"{summary['manual']} manual sites in {summary['files_manual']} files"
+    )
     for kind, counts in summary["by_kind"].items():
         print(f"#   {kind}: nontest={counts.get('nontest', 0)} test={counts.get('test', 0)}")
     if args.write:
