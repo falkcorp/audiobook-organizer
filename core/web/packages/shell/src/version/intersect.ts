@@ -44,6 +44,7 @@ function clientIds(c: ModuleUI): Record<Slot, string[]> {
     user_page: [
       ...(c.userPageExtensions?.tabs ?? []).map((t) => t.id),
       ...(c.userPageExtensions?.rowActions ?? []).map((r) => r.id),
+      ...(c.userPageExtensions?.panels ?? []).map((p) => p.id),
     ],
     activity_panes: (c.activityPanes ?? []).map((a) => a.id),
     setup_steps: (c.setup?.steps ?? []).map((s) => s.id),
@@ -89,6 +90,7 @@ function dropUndeclared(c: ModuleUI, ui: ServerModuleUI, diagnostics: Diagnostic
     out.userPageExtensions = {
       ...(ext.tabs ? { tabs: ext.tabs.filter((t) => keep('user_page', t.id)) } : {}),
       ...(ext.rowActions ? { rowActions: ext.rowActions.filter((r) => keep('user_page', r.id)) } : {}),
+      ...(ext.panels ? { panels: ext.panels.filter((p) => keep('user_page', p.id)) } : {}),
     };
   }
   if (c.activityPanes) out.activityPanes = c.activityPanes.filter((a) => keep('activity_panes', a.id));
