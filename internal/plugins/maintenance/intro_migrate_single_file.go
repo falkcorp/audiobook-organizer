@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -18,7 +19,6 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -79,6 +79,10 @@ type introMigrateParams struct {
 	// Overwrite re-copies onto files that already carry a transcript. Off by
 	// default so re-runs are cheap and idempotent.
 	Overwrite *bool `json:"overwrite,omitempty"`
+	// batch, set only by the per-batch child (F5-18h), confines the run to one
+	// batch's books and the book_file rows its Subjects hold. Never decoded:
+	// HEAD's shell and the whole-library parent leave it nil.
+	batch *batchScope
 }
 
 // migrate outcome reasons — every book lands in exactly one, and the totals are
@@ -93,6 +97,10 @@ const (
 	migrateAlreadyPresent = "skip_file_already_has_transcript"
 	migrateNoAudio        = "skip_no_audio_file"
 	migrateWriteFailed    = "write_failed"
+	// migrateOutOfScope is a batch child's refusal to write a file its Subjects do
+	// not hold (the book's file set changed after the parent planned the batch).
+	// Never produced outside a batch.
+	migrateOutOfScope = "skip_file_outside_batch"
 )
 
 const introMigratePageSize = 500
@@ -168,29 +176,30 @@ func (p *Plugin) runIntroMigrateSingleFile(ctx context.Context, rawParams json.R
 	return err
 }
 
-// introMigrateSingleFileKind is the native shell (rule R2 item 3). HEAD has a
-// preview, so a preview run counts and writes nothing.
+// introMigrateSingleFileKind is the native shell (rule R2 item 3), and since
+// F5-18h the PARENT of the per-batch children (batch_children.go). HEAD has a
+// preview, so a preview run counts and writes nothing (the shared core's own
+// preview, run by the parent); a live run writes nothing itself and starts one
+// child run per 100 books, one at a time.
 func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(introMigrateSingleFileKind, tasks.TaskSpec[introMigrateNativeParams, introMigrateResult]{
 		Title: "Migrate intro transcripts to single-file books",
-		Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write.",
-		// UpdateBookFile whole-row write-back on BookFile rows. books: every
-		// UpdateBookFile recomputes the book's aggregates afterwards
-		// (updateBookFile with recomputeAggregates -> RecomputeBookAggregates ->
-		// ModifyBook), which commits the book row when the stored aggregate has
-		// drifted (the shared UpdateBookFile row, kinds_resources.go; stack parity
-		// review P1). It was declared as a read of books until then.
-		// The recompute reaches ModifyBook, so the row is the whole ModifyBook row:
-		// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
-		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write. A live run writes nothing itself: it starts one child run per 100 books, one at a time, and each child holds only its own books.",
+		// ReadOnly: the writes (UpdateBookFile's whole-row write-back on book_files,
+		// and the aggregate recompute it reaches: books, metadata_cache, indexes) are
+		// the children's, see introMigrateBatchKind. A ref lock cannot narrow an
+		// Effects hold, so the parent cannot hold them and still let a write to
+		// another book through.
+		Effects: tasks.ReadOnly(),
 		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
-		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
-		// internal/arch: overwrite is off by default, so a re-run skips a row that already carries a transcript), so the 05-tasks mapping is
-		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
-		Resume:          tasks.ResumeFromZero,
+		// ResumeContinue (HEAD is ResumeRestart with no checkpoint): the parent's
+		// cursor, the child in flight and the rolled-up counts are checkpointed
+		// (batch_sweep.go), so a restart resumes at the cursor, and the kernel only
+		// honours ErrContinueInPlace for a ResumeContinue kind.
+		Resume:          tasks.ResumeContinue,
 		Priority:        tasks.PriorityLow,
 		ConcurrencyKey:  tasks.Key("books.maintenance.intro-migrate-single-file"),
-		Timeout:         2 * time.Hour,
+		Timeout:         tasks.MaxTimeout,
 		ProgressTimeout: 5 * time.Minute,
 		Schedule:        sched,
 		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
@@ -198,13 +207,17 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return introMigrateResult{}, err
 			}
-			base, err := t6g4NativeBase(rc, deps, true)
+			base, err := t6g4NativeBase(rc, deps, false)
 			if err != nil {
 				return introMigrateResult{}, err
 			}
-			return p.runIntroMigrateSingleFileCore(rc.Context(), introMigrateParams{
-				LastBookID: in.LastBookID, Overwrite: in.Overwrite,
-			}, introMigrateEnv{t6g4Base: base})
+			if !base.Live {
+				// A preview reads only and writes through no writer: the shared core.
+				return p.runIntroMigrateSingleFileCore(rc.Context(), introMigrateParams{
+					LastBookID: in.LastBookID, Overwrite: in.Overwrite,
+				}, introMigrateEnv{t6g4Base: base})
+			}
+			return p.introMigrateBatchParent(rc, base, in)
 		},
 	})
 }
@@ -220,9 +233,15 @@ func (p *Plugin) runIntroMigrateSingleFileCore(ctx context.Context, params intro
 
 	log := env.Logger()
 
-	allIDs, err := store.ListBookIDs()
-	if err != nil {
-		return introMigrateResult{}, fmt.Errorf("list book ids: %w", err)
+	var allIDs []string
+	var writer t6g4IntroMigrateWrites = env.Writer
+	if params.batch != nil {
+		allIDs = params.batch.bookIDs()
+	} else {
+		var err error
+		if allIDs, err = store.ListBookIDs(); err != nil {
+			return introMigrateResult{}, fmt.Errorf("list book ids: %w", err)
+		}
 	}
 	startIdx := 0
 	if params.LastBookID != "" {
@@ -259,7 +278,11 @@ func (p *Plugin) runIntroMigrateSingleFileCore(ctx context.Context, params intro
 	// SAME row could interleave. Disjoint partitioning is what makes this safe,
 	// per the concurrency rules in CLAUDE.md — do not replace the page split with
 	// anything that lets two workers share a book.
-	err = env.Each(ctx, len(pages), t6g4EachOpts{
+	var owners map[string]string // nil outside a batch: every file is in scope
+	if params.batch != nil {
+		owners = params.batch.fileOwners()
+	}
+	err := env.Each(ctx, len(pages), t6g4EachOpts{
 		Concurrency:   8,
 		Reason:        "eight pages at once, HEAD's width: pages partition the library by book ID, so no two workers touch the same book_file row (UpdateBookFile is an unlocked read-modify-write)",
 		ProgressTotal: len(pages),
@@ -273,7 +296,11 @@ func (p *Plugin) runIntroMigrateSingleFileCore(ctx context.Context, params intro
 				return ctx.Err()
 			default:
 			}
-			reason := t6g4MigrateOneBook(store, env.Writer, log, id, dryRun, overwrite)
+			w := writer
+			if owners != nil {
+				w = scopedFileWriter{w: writer, owners: owners, bookID: id}
+			}
+			reason := t6g4MigrateOneBook(store, w, log, id, dryRun, overwrite)
 			record(reason, 1)
 		}
 		return nil
@@ -365,6 +392,9 @@ func t6g4MigrateOneBook(r t6g4IntroMigrateReads, w t6g4IntroMigrateWrites, log i
 
 	applyBookIntroFieldsToFile(target, *b)
 	if err := w.UpdateBookFile(target.ID, target); err != nil {
+		if errors.Is(err, errBatchOutOfScope) {
+			return migrateOutOfScope
+		}
 		log.Warn("intro-migrate: update failed", "book_id", bookID, "file_id", target.ID, "err", err)
 		return migrateWriteFailed
 	}
