@@ -654,6 +654,30 @@ func restoreLines(e endState) []string {
 type knownRow struct {
 	why       string
 	normalise func(endState) endState
+	// spec is text 05-backup.md must still hold for the row to stand as an
+	// exemption: the clause the row is measured against. The test fails when the
+	// file or a phrase is gone.
+	spec []string
+}
+
+// specPath is docs/specs/platform-core/05-backup.md, found from the package
+// directory (os.Getwd, not runtime.Caller: CI builds with -trimpath).
+func specPath() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		p := filepath.Join(dir, "docs", "specs", "platform-core", "05-backup.md")
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("docs/specs/platform-core/05-backup.md not found above the package directory")
+		}
+		dir = parent
+	}
 }
 
 // hostLossForwardRows (a host-loss restore: no live store, so no set-aside copy):
@@ -663,8 +687,23 @@ type knownRow struct {
 // no set-aside to prove the twin by, restoreswap.mv refuses (ErrSwapAmbiguous),
 // the restore is swapped back and the next boot is a fresh install. A swap
 // property reached only on a filesystem that can keep both names of a rename.
+// Spec: 05-backup 5B.3.4 step x sends a failure of a forward step to the
+// swap-back (restoreswap.forward -> SwapBack), and says "On a host with **no**
+// previous store, the journal records `no_previous` and storage refuses to
+// create a fresh store at that path until the operator resolves it, so a failed
+// host-loss restore never leaves an empty store behind": the row leaves a fresh
+// install, which the clause forbids, so it is a defect of the swap and not a
+// pass. The unprovable-twin rule is restoreswap/fsops.go mv (ErrSwapAmbiguous).
+// Granted as an exemption by the F4-08 coordinator on condition that it stays
+// stale-checked and cites this text: the test fails when the row converges or
+// when the cited clause leaves the spec.
 var hostLossForwardRows = map[string]knownRow{
-	"swap.place.mv #2": {why: "the dir sync after the staged store's rename into an empty place: the swap cannot prove the twin", normalise: nil},
+	"swap.place.mv #2": {why: "the dir sync after the staged store's rename into an empty place: the swap cannot prove the twin", normalise: nil,
+		spec: []string{
+			"On a host with **no** previous store, the journal records `no_previous`",
+			"so a failed host-loss restore never leaves an empty store behind",
+			"any failure after the in-flight rename that ends step b",
+		}},
 }
 
 // epochDriftRows (a restore with a pre-swap store): auth.PostRestore bumps every
@@ -686,6 +725,29 @@ func dropEpochs(e endState) endState {
 	}
 	e.Raw.Lines = lines
 	return e
+}
+
+// checkSpecCites fails when the spec no longer holds the text a known row cites.
+func checkSpecCites(t *testing.T, k string, kr knownRow) {
+	t.Helper()
+	if len(kr.spec) == 0 {
+		return
+	}
+	p, err := specPath()
+	if err != nil {
+		t.Errorf("kill point %s cites the spec: %v", k, err)
+		return
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Errorf("kill point %s cites the spec: %v", k, err)
+		return
+	}
+	for _, phrase := range kr.spec {
+		if !strings.Contains(string(raw), phrase) {
+			t.Errorf("kill point %s: the spec no longer says %q: the exemption's citation is gone", k, phrase)
+		}
+	}
 }
 
 // known is the known row for kill point k in the fixture.
@@ -730,6 +792,7 @@ func checkRestoreConverges(t *testing.T, res restoreResult, hostLoss bool) {
 	for _, k := range res.order {
 		r := res.rows[k]
 		if kr, ok := known(k, hostLoss); ok {
+			checkSpecCites(t, k, kr)
 			// The row must still differ, so a fix that closes it makes this entry
 			// stale; and it may differ in nothing the reason does not name.
 			if r.end.Ready && len(differ(r.end, e)) == 0 {
