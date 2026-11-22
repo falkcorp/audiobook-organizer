@@ -470,7 +470,9 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   is 1 when the account's own e-mail is on core's invite allow-list (core's allow-list rows have no owner, so HEAD's
   per-owner count cannot be kept; this is the merge preview's count), and the user object has no `email_source`
   member, which core's user does not carry. Active sessions count the unexpired ones whose credential epoch is the
-  account's current one, as core's session check does.
+  account's current one, as core's session check does. An API key that sends a protected setting unchanged in `PUT /api/v1/config` is now
+  refused (HEAD refused it only when the value changed): "An API key that sends a protected setting unchanged is now
+  refused; leave protected settings out of the request."
 
 ### 9.2.7 Metrics
 
