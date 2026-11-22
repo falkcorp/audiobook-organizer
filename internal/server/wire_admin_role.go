@@ -136,7 +136,7 @@ func adminManifestRequirement(method, fullPath string) (rbac.Requirement, bool) 
 // bridgedAdminGate is the admin gate of a route under core identity (WithIdentity,
 // F4-08 B7b): HEAD's role-name gate, adminRole or RequireAdmin by kind, with the
 // route's manifest requirement (05-rbac §6.2: books:admin.view, books:admin.debug,
-// core:admin or AllOf(core:users.manage, books:admin.view)) enforced first through
+// core:admin or AllOf(core:users.manage, core:roles.view, books:admin.view)) enforced first through
 // the bridge. It is resolved per request from the matched route, so a group-level
 // gate (the master-list group, admindebug's reads) and a per-route one take the same
 // path, and a route with no manifest row is refused with 403, never opened.

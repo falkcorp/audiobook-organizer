@@ -116,7 +116,7 @@ func (b *Bridge) RequirePerm(atom string) gin.HandlerFunc {
 // RequireAdmin is the adapter of HEAD's role-name RequireAdmin and adminRole
 // gates: the caller must satisfy perm, which is 05-rbac §6.2's permission for
 // the route's admin kind (books:admin.view, AllOf(core:users.manage,
-// books:admin.view), books:admin.debug or core:admin; the route's manifest
+// core:roles.view, books:admin.view), books:admin.debug or core:admin; the route's manifest
 // Perm). Auth-off reach follows from the auth-disabled checker. perm must be
 // an AllOf or AnyOf; any other value refuses every request.
 func (b *Bridge) RequireAdmin(perm rbac.Requirement) gin.HandlerFunc {

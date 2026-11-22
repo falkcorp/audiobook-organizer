@@ -202,7 +202,7 @@ func assertAdminKind(t *testing.T, srv *Server, key string, perm rbac.Requiremen
 		// (05-rbac §6.1); an admin row that carries it again is refused here
 		// (F4-07 F-2 moved GET /cache/stats/keys to books:admin.view).
 		assert.Equal(t, adminRouteReadOnly, kind, "%s", key)
-	case "all(core:users.manage,books:admin.view)":
+	case "all(core:users.manage,core:roles.view,books:admin.view)":
 		// The master-list group wires adminRole directly (read-only kind)
 		// with s.perm(users.manage) behind it.
 		assert.False(t, recorded, "%s: master-list routes are not adminRoute registrations", key)
