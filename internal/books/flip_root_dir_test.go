@@ -62,12 +62,13 @@ func TestFlipBlobOnlyRootDirIsTheBootedRoot(t *testing.T) {
 	lib := filepath.Join(tempDir(t), "gotham-library")
 	moved := filepath.Join(tempDir(t), "arkham-library")
 	blob := fmt.Sprintf(`{"root_dir":%q,"path_aliases":[{"root":%q,"windows":"Z:\\gotham","unc":"","smb_url":""}]}`, lib, lib)
-	fx := newFlipFixture(t, func(s *database.PebbleStore) {
+	work := copyR2Store(t)
+	r2StoreSeed(t, work, func(s *database.PebbleStore) {
 		require.NoError(t, s.SetSetting("config_blob", blob, "json", false))
-	}, "")
-	fx.env = []string{"AUDIOBOOK_ROOT_DIR=" + filepath.Join(tempDir(t), "stale-unit-library")}
+	})
+	t.Setenv("AUDIOBOOK_ROOT_DIR", filepath.Join(tempDir(t), "stale-unit-library"))
 
-	fx.runFlipped(t, func(c *composed) {
+	r2StoreRun(t, work, func(c *composed) {
 		logged := c.newLog.String()
 		require.Contains(t, logged, "AUDIOBOOK_ROOT_DIR", "the unread AUDIOBOOK_ROOT_DIR was not warned about")
 		require.Contains(t, logged, "delete it: no build ever read it; the library root is the stored setting")
@@ -124,13 +125,14 @@ func TestFlipBlobOnlyRootDirIsTheBootedRoot(t *testing.T) {
 func TestFlipOperatorLibraryRootOverlaysTheBlob(t *testing.T) {
 	stored := filepath.Join(tempDir(t), "gotham-library")
 	operator := filepath.Join(tempDir(t), "blackgate-library")
-	fx := newFlipFixture(t, func(s *database.PebbleStore) {
+	work := copyR2Store(t)
+	r2StoreSeed(t, work, func(s *database.PebbleStore) {
 		require.NoError(t, s.SetSetting("config_blob", fmt.Sprintf(`{"root_dir":%q}`, stored), "json", false))
-	}, "")
+	})
 	roots := fmt.Sprintf(`[{"id":"books-library","path":%q,"role":"library","owner":"books","min_free":0}]`, operator)
-	fx.env = []string{"ABO_CORE_LIBRARY_ROOTS=" + roots}
+	t.Setenv("ABO_CORE_LIBRARY_ROOTS", roots)
 
-	fx.runFlipped(t, func(c *composed) {
+	r2StoreRun(t, work, func(c *composed) {
 		require.Equal(t, operator, config.Snapshot().RootDir, "the operator's library root does not win over the stored one")
 		f := config.Current()
 		require.NotNil(t, f)

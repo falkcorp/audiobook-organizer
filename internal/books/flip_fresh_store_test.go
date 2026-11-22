@@ -30,12 +30,13 @@ import (
 // did not exist (root_dir is a residual row until M6), and the projection then
 // holds it.
 func TestFlipFreshStore(t *testing.T) {
-	fx := newFlipFixture(t, func(s *database.PebbleStore) {
+	work := copyR2Store(t)
+	r2StoreSeed(t, work, func(s *database.PebbleStore) {
 		require.NoError(t, s.DeleteSetting("config_blob"))
-	}, "")
+	})
 	lib := filepath.Join(tempDir(t), "gotham-library")
 
-	fx.runFlipped(t, func(c *composed) {
+	r2StoreRun(t, work, func(c *composed) {
 		snap := config.Snapshot()
 		require.Equal(t, "8h", snap.BootstrapKeyTTL, "the default bootstrap key lifetime is not projected")
 		require.Zero(t, snap.BootstrapKeyTTLDays)

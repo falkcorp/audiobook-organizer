@@ -40,21 +40,41 @@ func cleanStopTruth(string) (int, error) { return 1, nil }
 // embedding client).
 func plantCleanStop(t *testing.T, dir string) {
 	t.Helper()
-	s := database.NewHNSWEmbeddingStore(4)
-	require.NoError(t, s.Upsert(context.Background(), "book", "joker", []float32{1, 0, 0, 0}, nil))
+	plantCleanStopAs(t, dir, 4, "")
+}
+
+// plantCleanStopAs is plantCleanStop for a snapshot of dims-wide vectors whose
+// marker records model: the pair a store's own settings give the boot, which
+// the boot compares the marker with (a mismatch reconciles instead of
+// importing as current).
+func plantCleanStopAs(t *testing.T, dir string, dims int, model string) {
+	t.Helper()
+	vec := make([]float32, dims)
+	vec[0] = 1
+	s := database.NewHNSWEmbeddingStore(dims)
+	require.NoError(t, s.Upsert(context.Background(), "book", "joker", vec, nil))
 	s.SetComplete(true)
 	require.NoError(t, s.ExportWithTruth(dir, cleanStopTruth))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "hnsw.clean-stop"), []byte(`{"version":1,"model":""}`+"\n"), 0o644))
+	marker := fmt.Sprintf(`{"version":1,"model":%q}`, model) + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "hnsw.clean-stop"), []byte(marker), 0o644))
 }
 
 // seedCleanStopRows writes the book row and the embedding row the snapshot
 // projects, so the server's import finds the Pebble count it recorded.
 func seedCleanStopRows(t *testing.T, store *database.PebbleStore, path string) {
 	t.Helper()
+	seedCleanStopRowsDims(t, store, path, 4)
+}
+
+// seedCleanStopRowsDims is seedCleanStopRows with dims-wide vectors.
+func seedCleanStopRowsDims(t *testing.T, store *database.PebbleStore, path string, dims int) {
+	t.Helper()
 	_, err := store.CreateBook(&database.Book{ID: "joker", Title: "Hush", FilePath: filepath.Join(filepath.Dir(path), "library", "Hush.m4b")})
 	require.NoError(t, err)
+	vec := make([]float32, dims)
+	vec[0] = 1
 	require.NoError(t, database.NewEmbeddingStore(store.DB()).Upsert(database.Embedding{
-		EntityType: "book", EntityID: "joker", Vector: []float32{1, 0, 0, 0}}))
+		EntityType: "book", EntityID: "joker", Vector: vec}))
 }
 
 // cleanStopGone fails the test unless dir's marker has left the disk.
@@ -71,20 +91,23 @@ func cleanStopGone(t *testing.T, dir, when string) {
 // run to settle; and a marker the holder writes as it lets go, after this
 // boot's Options ran, is the one Register takes, so it cannot stay on disk
 // vouching through a run that then writes the rows.
+//
+// The store is the frozen one R2 leaves (testdata/r2store, copyR2Store): a
+// store a build with books' upgrade floor opens at all.
 func TestCleanStopClaimWaitsForTheStoreLock(t *testing.T) {
 	// hold opens the store at path with the rows the snapshot projects and
 	// keeps it open: the opener this boot runs beside.
 	hold := func(t *testing.T, path string) *database.PebbleStore {
 		t.Helper()
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-		store, err := database.NewPebbleStore(path)
+		store, err := database.OpenStandalone(path, StandaloneOptions(database.StandaloneOptions{}))
 		require.NoError(t, err)
-		seedCleanStopRows(t, store, path)
+		seedCleanStopRowsDims(t, store, path, r2StoreEmbeddingDims)
 		return store
 	}
 
 	t.Run("a boot refused beside a holder leaves the marker", func(t *testing.T) {
-		path := filepath.Join(tempDir(t), "gotham.pebble")
+		work := copyR2Store(t)
+		path := r2StoreDB(work)
 		holder := hold(t, path)
 		t.Cleanup(func() { _ = holder.Close() })
 		dir := database.HNSWSnapshotDir(path)
@@ -93,9 +116,9 @@ func TestCleanStopClaimWaitsForTheStoreLock(t *testing.T) {
 		before, err := os.ReadFile(filepath.Join(dir, "hnsw.clean-stop"))
 		require.NoError(t, err)
 
-		edit, disk := onDisk(path)
-		mod, opts, _ := composedOptions(t, false, "", edit, nil)
-		disk(&opts)
+		edit, boot := r2StoreBootConfig(t, work)
+		mod, opts, _ := composedOptions(t, false, r2StoreState(work), edit, nil)
+		boot(&opts)
 		a, err := app.New(t.Context(), opts, mod)
 		t.Cleanup(func() { Release(mod) })
 		if a != nil {
@@ -108,20 +131,18 @@ func TestCleanStopClaimWaitsForTheStoreLock(t *testing.T) {
 	})
 
 	t.Run("the marker the holder writes as it lets go is taken", func(t *testing.T) {
-		path := filepath.Join(tempDir(t), "gotham.pebble")
+		work := copyR2Store(t)
+		path := r2StoreDB(work)
 		holder := hold(t, path)
 		dir := database.HNSWSnapshotDir(path)
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 
-		edit, disk := onDisk(path)
-		c := bootComposedWith(t, false, "", func(cfg *config.Config) {
-			edit(cfg)
-			cfg.Embedding.Dimensions = 4
-		}, nil, func(o *app.Options) {
-			disk(o)
+		edit, boot := r2StoreBootConfig(t, work)
+		c := bootComposedWith(t, false, r2StoreState(work), edit, nil, func(o *app.Options) {
+			boot(o)
 			// After Options, before app.New opens the store: the holder's
 			// clean stop writes its marker, then lets the store go.
-			plantCleanStop(t, dir)
+			plantCleanStopAs(t, dir, r2StoreEmbeddingDims, r2StoreEmbeddingModel)
 			require.NoError(t, holder.Close())
 		})
 		cleanStopGone(t, dir, "after the boot")
@@ -190,24 +211,40 @@ func TestServedBootHandsTheCleanStopMarkerToTheImport(t *testing.T) {
 		"a HEAD store the boot migrates": {head: true, reconcile: true},
 	} {
 		t.Run(name, func(t *testing.T) {
+			// The case a boot does not migrate runs on the frozen R2 store
+			// (copyR2Store); the HEAD case is a pre-R2 store, which books'
+			// upgrade floor refuses, so it stays red until R3-02e deletes
+			// the migrations it exists for.
 			path := filepath.Join(tempDir(t), "gotham.pebble")
+			var work string
 			if tc.head {
 				headStoreAt(t, path, func(store *database.PebbleStore) { seedCleanStopRows(t, store, path) })
 			} else {
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-				store, err := database.NewPebbleStore(path)
+				work = copyR2Store(t)
+				path = r2StoreDB(work)
+				store, err := database.OpenStandalone(path, StandaloneOptions(database.StandaloneOptions{}))
 				require.NoError(t, err)
-				seedCleanStopRows(t, store, path)
+				seedCleanStopRowsDims(t, store, path, r2StoreEmbeddingDims)
 				require.NoError(t, store.Close())
 			}
 			dir := database.HNSWSnapshotDir(path)
 			require.NoError(t, os.MkdirAll(dir, 0o700))
-			plantCleanStop(t, dir)
-
 			edit, disk := onDisk(path)
-			c := bootComposedWith(t, false, "", func(cfg *config.Config) {
+			stateDir, dims, model := "", 4, ""
+			if tc.head {
+				plantCleanStop(t, dir)
+			} else {
+				// The R2 store's own settings give the embedding width and
+				// model; the marker must record them to be the current one.
+				edit, disk = r2StoreBootConfig(t, work)
+				stateDir, dims, model = r2StoreState(work), r2StoreEmbeddingDims, r2StoreEmbeddingModel
+				plantCleanStopAs(t, dir, dims, model)
+			}
+			c := bootComposedWith(t, false, stateDir, func(cfg *config.Config) {
 				edit(cfg)
-				cfg.Embedding.Dimensions = 4
+				if tc.head {
+					cfg.Embedding.Dimensions = 4
+				}
 			}, nil, disk)
 			cleanStopGone(t, dir, "after the boot")
 			require.Equal(t, tc.head, c.mod.migrated.Load(), "whether a books step ran in New: the case proves nothing")
@@ -296,17 +333,14 @@ func TestServedBootRefusesAMigrationOverAMarkerThatMayStillVouch(t *testing.T) {
 // TestServedBootHandsTheCleanStopMarkerToTheImport is the control: the same
 // store with a marker that can be taken boots.
 func TestServedBootRefusesAClaimOfAMarkerThatMayStillVouch(t *testing.T) {
-	path := filepath.Join(tempDir(t), "gotham.pebble")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	store, err := database.NewPebbleStore(path)
-	require.NoError(t, err)
-	require.NoError(t, store.Close())
+	work := copyR2Store(t)
+	path := r2StoreDB(work)
 	marker := filepath.Join(database.HNSWSnapshotDir(path), "hnsw.clean-stop")
 	require.NoError(t, os.MkdirAll(filepath.Join(marker, "riddle"), 0o700))
 
-	edit, disk := onDisk(path)
-	mod, opts, _ := composedOptions(t, false, "", edit, nil)
-	disk(&opts)
+	edit, boot := r2StoreBootConfig(t, work)
+	mod, opts, _ := composedOptions(t, false, r2StoreState(work), edit, nil)
+	boot(&opts)
 	a, err := app.New(t.Context(), opts, mod)
 	t.Cleanup(func() { Release(mod) })
 	if a != nil {

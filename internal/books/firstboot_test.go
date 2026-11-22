@@ -333,25 +333,22 @@ func TestStampWrittenAfterTheCheckpoint(t *testing.T) {
 	assert.Equal(t, 2, v.Version)
 }
 
-// TestFirstBootRefusesForeignKeys on ABO's boot (05-storage §5S.10): a HEAD
-// store that already holds keys under c/ or m/ but no install marker (a
-// store some other build wrote into) halts books' first R1 boot with
-// ErrForeignKeys before the server exists, and the boot writes nothing: not
-// a row, not a checkpoint.
+// TestFirstBootRefusesForeignKeys on ABO's boot (05-storage §5S.10): a store
+// that already holds keys under c/ or m/ but no install marker (a store some
+// other build wrote into) halts books' boot with ErrForeignKeys before the
+// server exists, and the boot writes nothing: not a row, not a checkpoint.
+// The store is the frozen one R2 leaves (testdata/r2store) with its marker
+// deleted, so the refusal is the one a store past the upgrade floor reaches.
 func TestFirstBootRefusesForeignKeys(t *testing.T) {
-	path := filepath.Join(tempDir(t), "arkham.pebble")
-	headStoreAt(t, path, nil)
-	db, err := pebble.Open(path, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
-	require.NoError(t, err)
-	require.NoError(t, db.Set([]byte("c/rogue"), []byte("x"), pebble.Sync))
-	require.NoError(t, db.Set([]byte("m/scarecrow/toxin"), []byte("y"), pebble.Sync))
-	require.NoError(t, db.Close())
+	work := copyR2Store(t)
+	path := r2StoreDB(work)
+	r2StoreWithForeignKeys(t, path, map[string]string{"c/rogue": "x", "m/scarecrow/toxin": "y"})
 	before := rawKVs(t, path)
 
-	edit, disk := onDisk(path)
-	mod, opts, _ := composedOptions(t, false, "", edit, nil)
-	disk(&opts)
-	err = bootFails(t, mod, opts)
+	edit, boot := r2StoreBootConfig(t, work)
+	mod, opts, _ := composedOptions(t, false, r2StoreState(work), edit, nil)
+	boot(&opts)
+	err := bootFails(t, mod, opts)
 	assert.ErrorIs(t, err, storage.ErrForeignKeys)
 	assert.Equal(t, before, rawKVs(t, path), "a refused first boot wrote")
 	_, err = os.Stat(database.StorageMigrationCheckpointPath(path))
@@ -359,16 +356,17 @@ func TestFirstBootRefusesForeignKeys(t *testing.T) {
 }
 
 // TestR1BootRepairsOpsAndEmails (05-storage §5S.10, §5S.9.3; COR5-7,
-// XFILE-10): on books' first R1 boot of a HEAD store holding an opv3 record
-// an older binary left stale and a user row it wrote without an email
-// source, books' repairs start hook repairs both before books serves: app.New
-// (books' constructor) leaves them as they were, and when Run opens the
-// listener the record matches its opv2 row and the row is stamped.
+// XFILE-10): on books' boot of a store holding an opv3 record an older binary
+// left stale and a user row it wrote without an email source, books' repairs
+// start hook repairs both before books serves: app.New (books' constructor)
+// leaves them as they were, and when Run opens the listener the record matches
+// its opv2 row and the row is stamped. The store is the frozen one R2 leaves
+// (testdata/r2store), which the rows are written into.
 func TestR1BootRepairsOpsAndEmails(t *testing.T) {
-	path := filepath.Join(tempDir(t), "blackgate.pebble")
+	work := copyR2Store(t)
 	const runID = "01JBATCAVE0000000000000001"
 	var userID string
-	headStoreAt(t, path, func(s *database.PebbleStore) {
+	r2StoreSeed(t, work, func(s *database.PebbleStore) {
 		now := time.Now().UTC().Truncate(time.Second)
 		require.NoError(t, s.InsertOperationV2(database.OperationV2Row{ID: runID, DefID: "test.rollback", Plugin: "test", Status: "queued", QueuedAt: now, Params: `{}`}))
 		// An older binary ran it to completed with no opv3 write.
@@ -405,8 +403,8 @@ func TestR1BootRepairsOpsAndEmails(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, u.EmailSource, "the email row was stamped before the start hooks")
 	}
-	edit, disk := onDisk(path)
-	r := runComposedWith(t, edit, nil, disk, stale)
+	edit, boot := r2StoreBootConfig(t, work)
+	r := runComposedIn(t, r2StoreState(work), edit, nil, boot, stale)
 
 	rec, err := r.store.GetRunV3(runID)
 	require.NoError(t, err)
