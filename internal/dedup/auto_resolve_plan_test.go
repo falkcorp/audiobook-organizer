@@ -216,9 +216,9 @@ func TestAutoResolveDryRun_WritesNothing(t *testing.T) {
 // this pins that the plan does not leak into an apply result).
 func TestAutoResolveApply_RecordsNoPlan(t *testing.T) {
 	engine, store, es := setupRealStoreEngine(t)
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = true
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 	for _, id := range []string{"PA", "PB", "PC", "PD"} {
 		_, err := store.CreateBook(arPlausibleBook(id, "Batman Year One "+id))
 		require.NoError(t, err)

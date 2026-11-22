@@ -179,9 +179,9 @@ func (o *runAllOps) GetOperationV2(id string) (*database.OperationV2Row, error) 
 
 func newRunAllPlugin(t *testing.T, embeddings bool) (*Plugin, *runAllRegistry, *runAllOps, *int) {
 	t.Helper()
-	prev := config.AppConfig.Dedup.EmbeddingsEnabled
-	config.AppConfig.Dedup.EmbeddingsEnabled = embeddings
-	t.Cleanup(func() { config.AppConfig.Dedup.EmbeddingsEnabled = prev })
+	prev := config.Get().Dedup.EmbeddingsEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.EmbeddingsEnabled = embeddings })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.EmbeddingsEnabled = prev }) })
 
 	ops := newRunAllOps()
 	reg := &runAllRegistry{children: ops}

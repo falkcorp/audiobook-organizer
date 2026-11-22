@@ -139,12 +139,14 @@ func TestT018_BothOpIDsRegistered(t *testing.T) {
 //     param-parsing path.
 func TestT018_EmbedAsyncDelegatesWithAsyncTrue(t *testing.T) {
 	// Set up config for OpenAI backend so the skip-guard doesn't trigger
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
-	config.AppConfig.OpenAIAPIKey = "sk-test-key"
-	config.AppConfig.Embedding.BaseURL = ""
+	config.SetForTest(func(c *config.Config) {
+		c.OpenAIAPIKey = "sk-test-key"
+		c.Embedding.BaseURL = ""
+	})
 
 	// Nil-engine plugin so both paths immediately return at the nil guard.
 	p := &Plugin{engine: nil}

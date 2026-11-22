@@ -18,10 +18,10 @@ import (
 // holder of the no-group sentinel (a regroup apply relying on its target
 // staying ungrouped).
 func TestAssignOrphanVGs_WaitsForNoGroupSentinel(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 	const libRoot = "/lib"
-	config.AppConfig.RootDir = libRoot
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	store := newFakeStore()
 	const id = "orphan"

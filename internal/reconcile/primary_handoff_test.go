@@ -68,9 +68,9 @@ func TestFindBrokenSegmentBooks_HandsPrimaryOn(t *testing.T) {
 
 func withRoot(t *testing.T, root string) {
 	t.Helper()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 }
 
 // #3764 follow-up item 5: a duplicate a user has listening state on is no

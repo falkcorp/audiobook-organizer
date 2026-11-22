@@ -145,9 +145,9 @@ func TestAutoResolveOp_DryRunFailsWhenThePlanCannotBeStored(t *testing.T) {
 func TestAutoResolveOp_ApplyStoresNoPlan(t *testing.T) {
 	es := newTestEmbeddingStorePurge(t)
 	seedCertainCandidate(t, es, "AA", "MISSING")
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = true
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 
 	p := buildPluginWithEngine(t, es, autoResolveMockStore())
 	params, err := json.Marshal(autoResolveParams{Apply: true})
@@ -162,9 +162,9 @@ func TestAutoResolveOp_ApplyRefusedWithoutKillSwitch(t *testing.T) {
 	ms := autoResolveMockStore()
 	seedCertainCandidate(t, es, "AA", "BB")
 
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = false
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = false })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 
 	p := buildPluginWithEngine(t, es, ms)
 	params, err := json.Marshal(autoResolveParams{Apply: true})
