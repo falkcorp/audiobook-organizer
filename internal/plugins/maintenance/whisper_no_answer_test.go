@@ -536,7 +536,7 @@ func TestFileIntroClear_ABookOpRunIdAlsoRollsBackTheBookVerdictItStamped(t *test
 		t.Fatalf("setup: the permanent verdict must name the run, got %q", r.IntroRunOpID)
 	}
 	if _, err := fx.s.ModifyBook(c, func(cur *database.Book) error {
-		cur.TranscribeError = sp("relabelled by a later run")
+		cur.TranscribeError = new("relabelled by a later run")
 		return nil
 	}); err != nil {
 		t.Fatal(err)

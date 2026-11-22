@@ -250,7 +250,7 @@ func (s *Server) folderAutoScanDef() opsregistry.OperationDef {
 					return fmt.Errorf("folder.autoscan: decode params: %w", err)
 				}
 			}
-			h := headFolderAutoScan{headT7Activity: headT7Activity{w: s.activityWriter}, s: s}
+			h := headFolderAutoScan{w: s.activityWriter, s: s}
 			return folderAutoScanCore(ctx, p, folderAutoScanEnv{t7Env: t7HeadEnv(reporter, true), Store: h, Writer: h})
 		},
 	}

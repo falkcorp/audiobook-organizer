@@ -224,7 +224,7 @@ func (failingWindowReads) GetFingerprintWindows(database.FingerprintWindowRef) (
 // sequentialItems runs fn for every index in order and stops at the first error,
 // without checking ctx itself, so a planner that does not check it shows.
 func sequentialItems(ctx context.Context, _ tasks.Parallelism, n int, _ kindItemsOptions, fn func(context.Context, int) error) error {
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if err := fn(ctx, i); err != nil {
 			return err
 		}

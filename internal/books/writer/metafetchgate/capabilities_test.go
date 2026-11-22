@@ -201,8 +201,8 @@ func TestWrapperOffersNoMethodBeyondTheClassifiedReads(t *testing.T) {
 		want = append(want, m)
 	}
 	ty := reflect.TypeFor[*metafetchgate.Store]()
-	for i := 0; i < ty.NumMethod(); i++ {
-		if m := ty.Method(i).Name; !base[m] {
+	for method := range ty.Methods() {
+		if m := method.Name; !base[m] {
 			got = append(got, m)
 		}
 	}
@@ -895,10 +895,8 @@ func TestNoMethodHandsBackTheInnerStore(t *testing.T) {
 	}
 	var bad []string
 	ty := reflect.TypeFor[*metafetchgate.Store]()
-	for i := range ty.NumMethod() {
-		m := ty.Method(i)
-		for j := range m.Type.NumOut() {
-			out := m.Type.Out(j)
+	for m := range ty.Methods() {
+		for out := range m.Type.Outs() {
 			if out.Kind() == reflect.Interface && out.NumMethod() == 0 {
 				bad = append(bad, fmt.Sprintf("%s returns %s (an empty interface can box the store)", m.Name, out))
 			}

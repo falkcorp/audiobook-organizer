@@ -294,28 +294,26 @@ func (p *Plugin) runIntroTranscribe(ctx context.Context, rawParams json.RawMessa
 // preview, so a preview run selects and counts and writes nothing.
 func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(introTranscribeKind, tasks.TaskSpec[introTranscribeNativeParams, introTranscribeResult]{
-		Common: tasks.Common{
-			Title: "Transcribe book intros",
-			Help:  introTranscribeNativeHelp,
-			// HEAD declares Writes: books. The body also writes a file's timeout
-			// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files) and the
-			// whisper result journal (OpenWhisperJournal: ops.ResAIJournal, see
-			// t6g4IntroTranscribeWrites). The run's stats aggregate (the
-			// stats:transcribe key) has no pkg/ops resource and is written outside the
-			// gated writer on purpose: see t6g4StatsSink.
-			Effects: tasks.Writes(t6g4Res(t6g4IntroTranscribeWrites...)...),
-			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
-			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
-			// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is
-			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
-			Resume:          tasks.ResumeFromZero,
-			Priority:        tasks.PriorityLow,
-			ConcurrencyKey:  tasks.Key("books." + introTranscribeOpID),
-			Timeout:         10 * time.Hour,
-			ProgressTimeout: 30 * time.Minute,
-			Schedule:        sched,
-			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "Transcribe book intros",
+		Help:  introTranscribeNativeHelp,
+		// HEAD declares Writes: books. The body also writes a file's timeout
+		// strikes (RecordIntroTimeout, ClearIntroTimeouts: book_files) and the
+		// whisper result journal (OpenWhisperJournal: ops.ResAIJournal, see
+		// t6g4IntroTranscribeWrites). The run's stats aggregate (the
+		// stats:transcribe key) has no pkg/ops resource and is written outside the
+		// gated writer on purpose: see t6g4StatsSink.
+		Effects: tasks.Writes(t6g4Res(t6g4IntroTranscribeWrites...)...),
+		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+		// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is
+		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+		Resume:          tasks.ResumeFromZero,
+		Priority:        tasks.PriorityLow,
+		ConcurrencyKey:  tasks.Key("books." + introTranscribeOpID),
+		Timeout:         10 * time.Hour,
+		ProgressTimeout: 30 * time.Minute,
+		Schedule:        sched,
+		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in introTranscribeNativeParams) (introTranscribeResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return introTranscribeResult{}, err

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -77,9 +78,7 @@ func (f *serverConfigFacade) Locks() map[string]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make(map[string]string, len(f.locks))
-	for k, v := range f.locks {
-		out[k] = v
-	}
+	maps.Copy(out, f.locks)
 	return out
 }
 
@@ -88,7 +87,7 @@ func (f *serverConfigFacade) Locks() map[string]string {
 func facadeField(cfg *config.Config, head string) (reflect.Value, reflect.StructField, bool) {
 	v := reflect.ValueOf(cfg).Elem()
 	var sf reflect.StructField
-	for _, seg := range strings.Split(head, ".") {
+	for seg := range strings.SplitSeq(head, ".") {
 		if v.Kind() != reflect.Struct {
 			return reflect.Value{}, sf, false
 		}

@@ -311,7 +311,7 @@ func benchTitleDirLibrary(b *testing.B, n int) *PebbleStore {
 	require.NoError(b, err)
 	b.Cleanup(func() { p.Close() })
 	p.WaitForWarmup()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, err := p.CreateBook(&Book{
 			Title:    fmt.Sprintf("Gotham Chronicle %d", i/4),
 			FilePath: fmt.Sprintf("/lib/Gotham/%d/copy%d.m4b", i/4, i%4),

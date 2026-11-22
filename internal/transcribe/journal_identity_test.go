@@ -634,7 +634,7 @@ func TestIdentity_APartialIdentityIsWarnedAgainByTheNextCall(t *testing.T) {
 	logs := logtest.Capture(t, slog.LevelWarn)
 	srv := identityServer(t, map[string]any{"status": "ok", "model": "Robin", "backend": "cpu", "decode_fingerprint": "fp-x"},
 		func(int) map[string]any { return idAnswer("Robin", "", "", "") })
-	for call := 0; call < 2; call++ {
+	for range 2 {
 		h, ok := probeRemoteHealth(context.Background(), srv.URL)
 		h.BatchPipeline = nil
 		if _, err := transcribeRemoteWithHealth(context.Background(), srv.URL, h, ok, 1, writeClips(t, 3), nil, newMapJournal()); err != nil {

@@ -46,11 +46,11 @@ func TestHashBackfill_TimeoutSizedRunFinishesUnderOneOperationID(t *testing.T) {
 	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	for b := 0; b < 9; b++ {
+	for b := range 9 {
 		_, err := store.CreateBook(&database.Book{ID: fmt.Sprintf("b%d", b), Title: fmt.Sprintf("Knightfall Part %d", b)})
 		require.NoError(t, err)
 	}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		path := filepath.Join(root, "Gotham", fmt.Sprintf("Arkham %04d.m4b", i)) // most are not on disk
 		if i%10 == 0 {
 			path = filepath.Join(root, "Gotham", fmt.Sprintf("Knightfall %04d.m4b", i))

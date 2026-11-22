@@ -181,7 +181,7 @@ func TestBatchLedger_RefusedRequestsOccupyNoSlot(t *testing.T) {
 	l := NewBatchLedger(time.Minute, 1024, 16)
 	now := time.Now()
 	l.now = func() time.Time { return now }
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		// n=2 against total=1, and a total over the cap, and an empty chunk.
 		require.Error(t, errAdm(l, "attacker", fmt.Sprint("x", i), 0, 2, 1, 5000))
 		require.Error(t, errAdm(l, "attacker", fmt.Sprint("y", i), 0, 1, 99999, 5000))
@@ -209,7 +209,7 @@ func TestBatchLedger_AFullLedgerEvictsInsteadOfRefusing(t *testing.T) {
 	l.now = func() time.Time { return now }
 	tick := func() { now = now.Add(time.Second) }
 	// One user opens many valid batches: their own oldest goes first.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		require.NoError(t, errAdm(l, "hog", fmt.Sprint("h", i), 0, 1, 10, 5000))
 		tick()
 	}
@@ -225,7 +225,7 @@ func TestBatchLedger_AFullLedgerEvictsInsteadOfRefusing(t *testing.T) {
 	require.NotContains(t, l.batches, batchKey("hog", "h0"), "the least recently touched one was evicted")
 	require.Contains(t, l.batches, batchKey("hog", "h9"))
 	// Many users fill the whole ledger; a newcomer is still admitted.
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		require.NoError(t, errAdm(l, fmt.Sprint("u", i), "b", 0, 1, 10, 5000))
 		tick()
 	}
@@ -308,12 +308,12 @@ func TestBatchLedger_ExceededOnTheFirstChunkDoesNotClaimEarlierChunks(t *testing
 func TestBatchLedger_ConcurrentUse(t *testing.T) {
 	l := NewBatchLedger(time.Minute, 64, 4)
 	var wg sync.WaitGroup
-	for g := 0; g < 32; g++ {
+	for g := range 32 {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
 			owner := fmt.Sprint("u", g%5)
-			for i := 0; i < 200; i++ {
+			for i := range 200 {
 				id := fmt.Sprint("b", i%7)
 				adm, err := l.Admit("op", owner, id, i%3, 2, 6, 5000, fmt.Sprint("d", i%3))
 				if err == nil && !adm.Resent {

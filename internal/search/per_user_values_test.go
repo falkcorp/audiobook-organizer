@@ -49,8 +49,7 @@ func TestCheckPerUserValues_RefusesValuesThePerUserPassCannotEvaluate(t *testing
 			t.Fatalf("fixture %q does not parse: %v", q, err)
 		}
 		err = CheckPerUserValues(ast, now)
-		var ve *PerUserValueError
-		if !errors.As(err, &ve) {
+		if _, ok := errors.AsType[*PerUserValueError](err); !ok {
 			t.Errorf("CheckPerUserValues(%q) = %v, want a *PerUserValueError", q, err)
 			continue
 		}

@@ -53,10 +53,10 @@ var t6g3MethodResources = t6WriterView(map[string]string{"SetRaw": "SetRaw/cover
 
 // Every writer method has an entry, and no entry names a method the writer lacks.
 func TestT6G3_MethodResourcesCoverTheWriterInterface(t *testing.T) {
-	typ := reflect.TypeOf((*t6g3Writer)(nil)).Elem()
+	typ := reflect.TypeFor[t6g3Writer]()
 	seen := map[string]bool{}
-	for i := 0; i < typ.NumMethod(); i++ {
-		name := typ.Method(i).Name
+	for method := range typ.Methods() {
+		name := method.Name
 		seen[name] = true
 		_, ok := t6g3MethodResources[name]
 		assert.True(t, ok, "t6g3Writer.%s has no entry in t6g3MethodResources", name)

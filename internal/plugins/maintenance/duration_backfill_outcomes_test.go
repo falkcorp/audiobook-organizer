@@ -161,7 +161,7 @@ func TestDurationReextract_ManyFailedSegmentsRecomputeNothing(t *testing.T) {
 	book, err := s.CreateBook(&database.Book{Title: "Batman: Hush", FilePath: dir})
 	require.NoError(t, err)
 	const n = 25
-	for i := 0; i < n; i++ {
+	for i := range n {
 		path := filepath.Join(dir, fmt.Sprintf("part%03d.mp3", i))
 		require.NoError(t, os.WriteFile(path, make([]byte, 480_000), 0o600))
 		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: path, FileSize: 480_000, TrackNumber: i + 1}))
@@ -191,12 +191,12 @@ func TestDurationReextract_MixedBookRecomputesOnce(t *testing.T) {
 	book, err := s.CreateBook(&database.Book{Title: "Batman: Year Two", FilePath: dir})
 	require.NoError(t, err)
 	const bad = 12
-	for i := 0; i < bad; i++ {
+	for i := range bad {
 		path := filepath.Join(dir, fmt.Sprintf("bad%02d.mp3", i))
 		require.NoError(t, os.WriteFile(path, make([]byte, 480_000), 0o600))
 		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: path, FileSize: 480_000, TrackNumber: i + 1}))
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.NoError(t, s.CreateBookFile(&database.BookFile{BookID: book.ID, FilePath: filepath.Join(dir, fmt.Sprintf("good%d.mp3", i)),
 			FileSize: 2_000_000, TrackNumber: bad + i + 1, AcoustIDFingerprintDurationSec: 100}))
 	}
@@ -292,7 +292,7 @@ func TestDurationReextract_UnreadableSegmentIsNotReprobed(t *testing.T) {
 	require.Equal(t, database.DeepScanMaxAttempts, runs())
 	require.Equal(t, database.DurationUnreadable, onlySegment(t, s, book.ID).DurationState())
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		require.NoError(t, p.runDurationBackfill(context.Background(), applyReextractParams(t), &fakeReporter{}))
 	}
 	require.Equal(t, database.DeepScanMaxAttempts, runs(), "an unreadable segment must not be probed again")

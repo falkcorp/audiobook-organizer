@@ -105,7 +105,7 @@ func (fx *introFx) yieldEnv(rep *fileIntroRep, ck *memCheckpoint, prog *yieldPro
 func (fx *introFx) yieldFiles(n int) []string {
 	fx.t.Helper()
 	paths := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		b := fx.book(fmt.Sprintf("Batman Year %d", i+1))
 		_, p := fx.file(b, "01.m4b", 1, fmt.Sprintf("yield-h%02d", i), false)
 		fx.whisp.texts[p] = goodIntro

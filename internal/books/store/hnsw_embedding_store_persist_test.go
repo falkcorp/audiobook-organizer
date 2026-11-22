@@ -371,12 +371,10 @@ func TestExportIfDirty_ConcurrentCallersExportOnce(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			results[i], errs[i] = s.ExportIfDirty(dir, truth)
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -405,14 +403,12 @@ func TestExportIfDirty_MutationsDuringExport(t *testing.T) {
 	dir := t.TempDir()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		rng := rand.New(rand.NewSource(11))
 		for _, id := range batmanIDs[6:] {
 			assert.NoError(t, s.Upsert(ctx, "book", id, exportTestVec(rng), nil))
 		}
-	}()
+	})
 	for range 5 {
 		_, err := s.ExportIfDirty(dir, nil)
 		require.NoError(t, err)

@@ -1225,8 +1225,7 @@ func TestCAS_BatchUpsert_BoundsRestagingUnderRotatingChurn(t *testing.T) {
 	if !errors.Is(err, ErrBookFileConflict) {
 		t.Fatalf("err = %v, want ErrBookFileConflict", err)
 	}
-	var refused *BookFileRowsRefusedError
-	if errors.As(err, &refused) {
+	if _, ok := errors.AsType[*BookFileRowsRefusedError](err); ok {
 		t.Errorf("an abandoned batch reported a partial commit: %v", err)
 	}
 	if *n != 2*maxBatchStageRounds {

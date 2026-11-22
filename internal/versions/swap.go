@@ -27,6 +27,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"slices"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
@@ -359,15 +360,15 @@ func filesForVersion(store bookFileLister, bookID, versionID string) ([]database
 // that names both. It tries every file and returns what failed.
 func undoMoves(oldPaths, newPaths []string, renamed []bool) error {
 	var errs []error
-	for i := len(oldPaths) - 1; i >= 0; i-- {
+	for i, oldPath := range slices.Backward(oldPaths) {
 		if i >= len(renamed) || !renamed[i] || i >= len(newPaths) {
 			continue
 		}
-		if err := renameNoReplace(newPaths[i], oldPaths[i]); err != nil {
+		if err := renameNoReplace(newPaths[i], oldPath); err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				err = fmt.Errorf("the original path is occupied: %w", err)
 			}
-			errs = append(errs, fmt.Errorf("move %s back to %s: %w", newPaths[i], oldPaths[i], err))
+			errs = append(errs, fmt.Errorf("move %s back to %s: %w", newPaths[i], oldPath, err))
 		}
 	}
 	return errors.Join(errs...)

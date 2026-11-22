@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -128,9 +129,7 @@ func (w *pathWorker) jobsSeen() map[string]map[string]any {
 	defer w.mu.Unlock()
 	all := map[string]map[string]any{}
 	for _, req := range w.requests {
-		for k, v := range req {
-			all[k] = v
-		}
+		maps.Copy(all, req)
 	}
 	return all
 }
@@ -142,9 +141,7 @@ func pathHealth(extra map[string]any) map[string]any {
 		"path_pipeline": true,
 		"path_roots":    []map[string]any{{"prefix": "/srv/library", "readable": true}},
 	}
-	for k, v := range extra {
-		h[k] = v
-	}
+	maps.Copy(h, extra)
 	return h
 }
 
@@ -310,8 +307,7 @@ func TestTranscribeByPathBatch_PerJobErrorsPassThroughAndIsolate(t *testing.T) {
 
 func requireTransport(t *testing.T, err error, wantInMsg ...string) {
 	t.Helper()
-	var te *TransportError
-	if !errors.As(err, &te) {
+	if _, ok := errors.AsType[*TransportError](err); !ok {
 		t.Fatalf("want *TransportError, got %T: %v", err, err)
 	}
 	for _, s := range wantInMsg {

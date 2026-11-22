@@ -135,7 +135,7 @@ func ReadInputs(root string) (Inputs, error) {
 // parseLines is a golden's lines without "#" comments and blanks.
 func parseLines(s string) []string {
 	var out []string
-	for _, l := range strings.Split(s, "\n") {
+	for l := range strings.SplitSeq(s, "\n") {
 		l = strings.TrimSpace(l)
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue

@@ -525,7 +525,7 @@ func init() {
 						t.Fatal(err)
 					}
 					var seqs []string
-					for _, ln := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+					for ln := range bytes.SplitSeq(bytes.TrimSpace(raw), []byte("\n")) {
 						if len(ln) == 0 {
 							continue
 						}

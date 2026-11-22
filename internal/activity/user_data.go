@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -383,10 +384,8 @@ func WithoutUserAttrs(raw string) string {
 // It reads only the fields a store filter reads (never Details), so it can be
 // the activity filter's ExcludeEntry predicate.
 func NamesOthersUserData(e database.ActivityEntry) bool {
-	for _, t := range e.Tags {
-		if t == TagUserData {
-			return true
-		}
+	if slices.Contains(e.Tags, TagUserData) {
+		return true
 	}
 	if typeNamesAccounts(e.Type) {
 		return true

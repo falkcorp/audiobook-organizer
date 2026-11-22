@@ -62,7 +62,7 @@ func variedRows(n int) []Row {
 	classes := []string{"", "moved", "copy"}
 	skips := []string{"", "", SkipITunes, "held"}
 	rows := make([]Row, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		r := Row{RowID: fmt.Sprintf("row-%03d", i), Title: fmt.Sprintf("Title %d", i), Reason: "r", Risk: RiskLow,
 			Fingerprint: fmt.Sprintf("fp-%d", i), Class: classes[i%len(classes)], Skipped: skips[i%len(skips)]}
 		if r.Skipped == "held" && i%2 == 0 {

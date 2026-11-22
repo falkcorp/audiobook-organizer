@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -180,10 +181,8 @@ func (s *SnapshotPins) addFloor(bookID string, floor int64) {
 	if bookID == "" {
 		return
 	}
-	for _, f := range s.floors[bookID] {
-		if f == floor {
-			return
-		}
+	if slices.Contains(s.floors[bookID], floor) {
+		return
 	}
 	s.floors[bookID] = append(s.floors[bookID], floor)
 }

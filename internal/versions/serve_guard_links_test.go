@@ -227,7 +227,7 @@ func TestLinkIndex_ManyRowsOneLink(t *testing.T) {
 	root := t.TempDir()
 	rows := 3*linkChunk + 5
 	linkAt := 2*linkChunk + 5
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		p := filepath.Join(root, fmt.Sprintf("dir%d", i%7), fmt.Sprintf("track%03d.m4b", i))
 		switch {
 		case i == linkAt:

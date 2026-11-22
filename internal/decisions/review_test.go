@@ -58,9 +58,7 @@ func requireLinearChain(t *testing.T, a, b *Store) {
 	var first *Record
 	var mu sync.Mutex
 	for i := range n {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			s := a
 			if i%2 == 1 {
 				s = b
@@ -70,7 +68,7 @@ func requireLinearChain(t *testing.T, a, b *Store) {
 			mu.Lock()
 			first = rec
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	require.NoError(t, errors.Join(errs...))

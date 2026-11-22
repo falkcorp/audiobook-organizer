@@ -247,8 +247,8 @@ func TestCutover_V1RowsSetAside(t *testing.T) {
 	}
 	v1Op{id: runID(2), typ: "dedup.book-scan", status: "exploded", logs: 1}.put(raw)
 	v1Op{id: runID(3), typ: "dedup.book-scan", status: "completed"}.put(raw) // no completion time
-	v1Op{id: runID(4), typ: "dedup.book-scan", status: "completed", done: tptr(epoch.Add(time.Hour)), logs: 2, badLog: true}.put(raw)
-	v1Op{id: runID(5), typ: "dedup.book-scan", status: "completed", done: tptr(epoch.Add(time.Hour)), journal: true}.put(raw)
+	v1Op{id: runID(4), typ: "dedup.book-scan", status: "completed", done: new(epoch.Add(time.Hour)), logs: 2, badLog: true}.put(raw)
+	v1Op{id: runID(5), typ: "dedup.book-scan", status: "completed", done: new(epoch.Add(time.Hour)), journal: true}.put(raw)
 	r := newRig(t, withRaw(raw))
 	r.runObserve(t, func(ctx context.Context, s *snap) {
 		want := map[string]bool{
@@ -291,7 +291,7 @@ func TestCutover_V1RowsSetAside(t *testing.T) {
 // a v2 operation row with no v3 record (the v2 row is an orphan; the v1 row
 // must not import over it and delete it unread) are all quarantined whole.
 func TestCutover_V1OperationRowsSetAside(t *testing.T) {
-	done := tptr(epoch.Add(time.Hour))
+	done := new(epoch.Add(time.Hour))
 	raw := map[string]string{}
 	v1Op{id: runID(1), typ: "dedup.book-scan", status: "completed", done: done}.put(raw)
 	raw["operation:"+runID(1)] = strings.Replace(raw["operation:"+runID(1)], `"id":"`+runID(1)+`"`, `"id":"`+runID(9)+`"`, 1)
@@ -325,7 +325,7 @@ func TestCutover_V1OperationRowsSetAside(t *testing.T) {
 // nothing is left in the source; the same operation without the stray row
 // imports.
 func TestCutover_V1StrayRowsQuarantineTheOperation(t *testing.T) {
-	done := tptr(epoch.Add(time.Hour))
+	done := new(epoch.Add(time.Hour))
 	raw := map[string]string{}
 	for i, stray := range []string{
 		"opv3:prog:" + runID(1),
@@ -381,7 +381,7 @@ func TestCutover_V1CheckpointOfAFinishedRunDeleted(t *testing.T) {
 	v1Op{id: runID(1), typ: "dedup.book-scan", status: "completed", state: true}.put(raw)
 	v1Op{id: runID(2), typ: "dedup.book-scan", status: "running", state: true}.put(raw)
 	specs := []runSpec{
-		{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour))},
+		{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(epoch.Add(time.Hour))},
 		{id: runID(2), def: "dedup.book-scan", st: "running"},
 	}
 	r := newRig(t, withRuns(nil, specs...), withRaw(raw))

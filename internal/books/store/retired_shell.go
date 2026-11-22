@@ -142,7 +142,7 @@ func retiredRowsHeld(r retiredShellReader, shellID string) (int, error) {
 	if p, ok := r.(*PebbleStore); ok {
 		return p.CountRetiredRowsHeldFor(shellID)
 	}
-	for attempt := 0; attempt < retiredHoldCountAttempts; attempt++ {
+	for range retiredHoldCountAttempts {
 		versions, err := r.GetRetiredVersionsFromBook(shellID)
 		if err != nil {
 			return 0, fmt.Errorf("read the retired versions of %s: %w", shellID, err)

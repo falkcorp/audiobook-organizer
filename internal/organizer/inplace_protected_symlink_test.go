@@ -163,8 +163,7 @@ func TestRefuseProtectedInPlaceSource_UnresolvableSymlinksFailClosed(t *testing.
 	if err == nil {
 		t.Fatal("a source with a link cycle was passed")
 	}
-	var conflict *DestinationConflictError
-	if errors.As(err, &conflict) {
+	if conflict, ok := errors.AsType[*DestinationConflictError](err); ok {
 		t.Fatalf("an unresolvable source is an error, not a %s refusal: %v", conflict.Category, err)
 	}
 }
