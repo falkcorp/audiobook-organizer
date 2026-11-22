@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
 	cpebble "github.com/cockroachdb/pebble/v2"
@@ -65,9 +64,6 @@ type Engine struct {
 	fs       vfs.FS
 	path     string
 	readOnly bool
-	// progress is the hook ObserveTables installed; nil = none. Pebble's
-	// event listener reads it from the flush and compaction goroutines.
-	progress atomic.Pointer[func()]
 }
 
 // Open opens (or creates) the store at path without a format version: a new
@@ -98,11 +94,6 @@ func Open(path string, o Options) (*Engine, error) {
 		cache = cpebble.NewCache(o.CacheBytes)
 		opts.Cache = cache
 	}
-	e := &Engine{fs: fs, path: path, readOnly: o.ReadOnly}
-	// A new output table is the only progress signal Pebble gives a
-	// compaction or a flush while it runs; ObserveTables turns it into a
-	// callback.
-	opts.EventListener = &cpebble.EventListener{TableCreated: e.tableCreated}
 	db, err := cpebble.Open(path, opts)
 	if cache != nil {
 		// The engine holds its own reference; this one is the constructor's.
@@ -111,31 +102,9 @@ func Open(path string, o Options) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pebble: open %s: %w", path, err)
 	}
-	e.db = db
+	e := &Engine{db: db, fs: fs, path: path, readOnly: o.ReadOnly}
 	e.gate = newGate(walSyncer{db: db}, !o.ReadOnly)
 	return e, nil
-}
-
-// tableCreated is the event listener's TableCreated: a flush or a compaction
-// has started writing another output table, which means the one before it
-// reached its target size.
-func (e *Engine) tableCreated(cpebble.TableCreateInfo) {
-	if f := e.progress.Load(); f != nil {
-		(*f)()
-	}
-}
-
-// ObserveTables calls f each time a flush or a compaction of this engine
-// starts a new output table, until the returned stop is called. That is a
-// real unit of work done (a table's worth of key-value data read, merged and
-// written), so a caller that must show a long, otherwise opaque engine call
-// is advancing (Compact has no progress of its own) can hang its signal on
-// it. f runs on Pebble's own goroutines, inside the event listener: it must
-// return at once and never call back into the engine. One observer at a
-// time; a second call replaces the first.
-func (e *Engine) ObserveTables(f func()) (stop func()) {
-	e.progress.Store(&f)
-	return func() { e.progress.CompareAndSwap(&f, nil) }
 }
 
 // Path is the store's directory.
