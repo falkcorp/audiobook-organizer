@@ -925,6 +925,17 @@ func t6g4WantNotWhile(head sdk.OperationDef) []tasks.Kind {
 	return out
 }
 
+// t6g4NativeScanGuard is the scan guard a native kind adds beyond HEAD's
+// DependsOn (F5-18e), from the guard table; none for a kind that has no guard.
+func t6g4NativeScanGuard(kind tasks.Kind) []tasks.Kind {
+	for _, c := range nativeScanGuardCases() {
+		if c.kind == kind {
+			return c.want
+		}
+	}
+	return nil
+}
+
 // t6g4NamesModeKey reports whether a Help text tells the operator to pass a mode
 // param the native shell refuses.
 func t6g4NamesModeKey(help string) bool {
@@ -993,8 +1004,17 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if c.Priority != wantPrio {
 				t.Errorf("Priority = %v, want %v", c.Priority, wantPrio)
 			}
-			if want := t6g4WantNotWhile(head); !slices.Equal(c.NotWhile, want) || (len(want) > 0) != w.hasDependsOn {
-				t.Errorf("NotWhile = %v, want %v derived from HEAD's DependsOn %v", c.NotWhile, want, head.DependsOn)
+			// HEAD's DependsOn maps by rule R5; a native kind may also carry the scan
+			// guard HEAD enforces by reading the v2 queue instead (F5-18e,
+			// native_scan_guard_test.go's table, which spells the kinds through the
+			// rename map and not through the helpers the definitions call).
+			fromHead := t6g4WantNotWhile(head)
+			if (len(fromHead) > 0) != w.hasDependsOn {
+				t.Errorf("HEAD's DependsOn %v, table hasDependsOn = %v", head.DependsOn, w.hasDependsOn)
+			}
+			wantNotWhile := slices.Concat(fromHead, t6g4NativeScanGuard(w.kind))
+			if !slices.Equal(sortedKinds(c.NotWhile), sortedKinds(wantNotWhile)) {
+				t.Errorf("NotWhile = %v, want %v: HEAD's DependsOn %v mapped by R5, plus the native scan guard", c.NotWhile, wantNotWhile, head.DependsOn)
 			}
 			if !slices.Equal(c.Ready, []tasks.ReadySignal{t6g4SignalMemDB}) {
 				t.Errorf("Ready = %v, want [%s]", c.Ready, t6g4SignalMemDB)
