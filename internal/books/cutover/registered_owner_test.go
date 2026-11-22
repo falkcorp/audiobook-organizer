@@ -13,11 +13,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -57,6 +59,26 @@ var ownerRouteKeys = []string{
 	"POST /api/v1/users/merges/{jid}/undo",
 	"POST /api/v1/users/{id}/merge-into/{target}/apply",
 	"POST /api/v1/users/{id}/merge-into/{target}/preview",
+}
+
+// ownerBarKey is an owner route's key in the F4-07 obligation rows' spelling: the
+// manifest's gin path, with ":name" for a parameter where the registered pattern has
+// "{name}".
+func ownerBarKey(key string) string { return ownerParam.ReplaceAllString(key, ":$1") }
+
+var ownerParam = regexp.MustCompile(`\{([^}/]+)\}`)
+
+// The discharge of F4-07-OWNER-SET: TestReachRegisteredPath_OwnerSet refuses a
+// non-owner admin session on every owner route (and every other principal with it).
+// The registration is read by the obligation check in package cutover.
+func init() {
+	cutover.RegisterReachDischarge("F4-07-OWNER-SET", "TestReachRegisteredPath_OwnerSet", func() []string {
+		var out []string
+		for _, k := range ownerRouteKeys {
+			out = append(out, ownerBarKey(k)+"|non-owner admin refused")
+		}
+		return out
+	})
 }
 
 // ownerRecordedTwin names, for each owner route, the row of verdicts.json's
