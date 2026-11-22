@@ -44,7 +44,7 @@ func healthBodyWith(t *testing.T, store system.SystemStore, getDegraded func() s
 	gin.SetMode(gin.TestMode)
 	h := system.New(
 		func() system.SystemStore { return store },
-		nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil,
 		getDegraded,
 	)
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
@@ -151,7 +151,7 @@ func TestHealthCheck_NilDegradedSource(t *testing.T) {
 func TestHealthCheck_TimestampFollowsInstalledClock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := system.New(func() system.SystemStore { return nil },
-		nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil,
 	).WithClock(func() time.Time { return time.Unix(1794193930, 0) })
 	w := run(http.MethodGet, "/health", "/health", nil, func(r *gin.Engine) {
 		r.GET("/health", h.HealthCheck)

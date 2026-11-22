@@ -236,7 +236,6 @@ packages:
       SystemStore:
       SystemService:
       PluginHealthChecker:
-      EventStreamer:
       OperationLogsProvider:
   github.com/falkcorp/audiobook-organizer/internal/server/handlers/dedup:
     config:
