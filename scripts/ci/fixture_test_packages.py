@@ -148,13 +148,16 @@ _DEFAULT_WEIGHT = 10
 _SPLIT_TARGET = 600
 
 # The number of fixture shards every workflow runs: ci.yml's fixture-tests
-# matrix (`shard: ['1/4', ...]`) and .woodpecker/race-nightly.yaml's
+# matrix (`shard: ['1/6', ...]`) and .woodpecker/race-nightly.yaml's
 # fixtures-N suites. scripts/test_fixture_test_packages.py checks the real
 # module's plan at this count and that both workflows list exactly these
 # shards. It went from 3 to 4 when the settings flip's tests (the ABOFlip
 # crash matrix among them) took internal/books past 2,000 s under -race on a
-# GitHub runner: four parts in four shards, so no two parts share one.
-SHARDS = 4
+# GitHub runner, and from 4 to 6 when three GitHub pipelines measured
+# internal/books at up to 3,251 s: that is six parts of _SPLIT_TARGET, and six
+# parts need six shards so no two parts share one. At four shards the heaviest
+# ran 32-34 min of its 35-min job cap.
+SHARDS = 6
 
 # Helpers that must be detected. vptest.New is the fixture the merge, undo and
 # redirect state-machine tests are built on; if the detector stops seeing it
