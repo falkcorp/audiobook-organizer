@@ -1,0 +1,3 @@
+### Added
+
+- A new test set compares what each route's permission row in the upgraded server's route table asks for with the permission checks the route runs today in its own handler chain (the permission atom, the admin gate, the credential and owner guards, the sign-in check), read from the real server rather than a hand-kept list. It fails when a row asks for less than the check it will one day replace, so that removing the old check cannot quietly loosen a route, and it also fails when a row asks for something no check enforces. On the current table it names four master-list rows whose row is missing the roles-view permission the old check asks for; they are awaiting a ruling.
