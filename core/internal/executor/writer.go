@@ -17,7 +17,8 @@ import (
 type writer struct{ a *attempt }
 
 // writable is the attempt's write permit (HEAD's opswriter Fence.Check):
-// ErrFenced once the attempt was abandoned (a.fenced) or its run context is
+// ErrFenced once the attempt was abandoned (a.fenced), a stand-down hold of
+// the run lapsed (a.holdLost) or its run context is
 // done, whatever stopped it: a cancel or the watchdog, a quiesce, Shutdown
 // or the attempt's Timeout. Every stop path ends a.ctx first, and a
 // context's Done channel is closed before its cancel returns, so a body
@@ -29,6 +30,12 @@ type writer struct{ a *attempt }
 func (a *attempt) writable() error {
 	if a.fenced.Load() {
 		return tasks.ErrFenced
+	}
+	// A lapsed stand-down hold revokes the permit before the context is
+	// canceled for it (holdLost is set under the lock that decided the lapse,
+	// the cancel follows), so no write passes in between.
+	if a.holdLost.Load() {
+		return fmt.Errorf("%w: %w", tasks.ErrFenced, tasks.ErrHoldLost)
 	}
 	select {
 	case <-a.ctx.Done():
@@ -58,7 +65,7 @@ func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Con
 	if err := a.e.renewHolds(ctx, a); err != nil {
 		return fmt.Errorf("%w: %v", tasks.ErrFenced, err)
 	}
-	a.Touch()
+	a.touch()
 	intent := func(changes []tasks.Change) error {
 		return a.ledger(ctx, func(ctx context.Context, b *storage.Batch) error {
 			return a.e.runs.AppendIntent(ctx, b, a.id, a.nextSeq(), wr, changes)

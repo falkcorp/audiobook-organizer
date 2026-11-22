@@ -63,9 +63,14 @@ type attempt struct {
 	cancel context.CancelCauseFunc
 	done   chan struct{}
 
-	fenced     atomic.Bool
+	fenced atomic.Bool
+	// holdLost is set, under e.mu, when a stand-down hold of this attempt lapsed
+	// (Renew or the reaper found it expired); the run's writer refuses from then on
+	// and its context is canceled with tasks.ErrHoldLost (writable).
+	holdLost   atomic.Bool
 	wmu        sync.Mutex // the per-run writer: every ledger write of this run
 	lastReport atomic.Int64
+	lastRenew  atomic.Int64 // UnixNano of the last progress-driven hold renewal (renewOnProgress)
 	reported   atomic.Bool
 	progressed atomic.Bool
 	ckptd      atomic.Bool
@@ -92,7 +97,6 @@ type attempt struct {
 	stopCause error
 	zombie    bool
 	exited    bool
-	holdLost  bool
 	live      bool // startAttempt published the fields above
 
 	holds []*standHold
@@ -243,7 +247,8 @@ func (a *attempt) ItemsProgress(done, total int64, current string) {
 }
 
 func (a *attempt) progress(done, total int, current string, setCurrent bool) {
-	a.Touch()
+	a.touch()
+	a.renewOnProgress()
 	if done > a.rec.Done {
 		a.progressed.Store(true) // past this attempt's starting point: ErrContinueInPlace's first proof
 	}
@@ -277,7 +282,7 @@ func (a *attempt) tickDueLocked(now time.Time) bool {
 // calls Note (or calls Set and then Note, as ABO's items env does) therefore
 // shows its latest note, not the previous one.
 func (a *attempt) Note(msg string) {
-	a.Touch()
+	a.touch()
 	a.pmu.Lock()
 	a.pCurrent, a.pDirty = msg, true
 	due := a.tickDueLocked(a.e.now())
@@ -298,10 +303,38 @@ func (a *attempt) Note(msg string) {
 	}
 }
 
-// Touch is liveness only (the watchdog's input).
+// Touch is rc.Progress().Tick: the run reports it is alive without a number. It
+// stamps the watchdog's input and, like a progress number, renews the run's
+// stand-down holds (HEAD renewed on every UpdateProgress): a run that ticks or
+// reports keeps its hold, a run that does neither loses it.
 func (a *attempt) Touch() {
+	a.touch()
+	a.renewOnProgress()
+}
+
+// touch is liveness only (the watchdog's input). The executor's own bookkeeping
+// (a write's gate, a note) stamps it without renewing a hold: the lease follows
+// the run's reports and writes, not the executor's own bookkeeping.
+func (a *attempt) touch() {
 	a.lastReport.Store(a.e.now().UnixNano())
 	a.reported.Store(true)
+}
+
+// renewOnProgress renews the run's stand-down holds from a progress report,
+// at most once per markerRestage (a loop reporting every item does not take the
+// executor lock or write the marker per item; the lease is minutes). A lapse is
+// found and acted on by renewHolds (the run is canceled and its writer refuses),
+// so the error has no other use here.
+func (a *attempt) renewOnProgress() {
+	now := a.e.now().UnixNano()
+	last := a.lastRenew.Load()
+	if now-last < int64(markerRestage) && last != 0 {
+		return
+	}
+	if !a.lastRenew.CompareAndSwap(last, now) {
+		return
+	}
+	_ = a.e.renewHolds(a.ctx, a)
 }
 
 // relayLiveness stamps the watchdog's input for await: a run blocked on a

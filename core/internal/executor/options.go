@@ -37,7 +37,7 @@ type Config struct {
 	MinCheckpointInterval time.Duration                 // core.tasks.min_checkpoint_interval (30s); hot
 	MaxYields             int                           // core.tasks.max_yields (1000); hot
 	ZombieCap             int                           // core.tasks.zombie_cap (4 per module); hot
-	StandDownLease        time.Duration                 // core.tasks.standdown_lease (2m); hot
+	StandDownLease        time.Duration                 // core.tasks.standdown_lease (5m, as HEAD's); hot
 	IdempotencyTTL        time.Duration                 // core.tasks.idempotency_ttl (7d); hot
 	ModuleMaxConcurrent   map[string]int                // modules.<id>.tasks.max_concurrent (0 = unlimited); hot
 
@@ -71,7 +71,7 @@ func (c Config) withDefaults() Config {
 	def(&c.MinCheckpointInterval, 30*time.Second)
 	defInt(&c.MaxYields, 1000)
 	defInt(&c.ZombieCap, 4)
-	def(&c.StandDownLease, 2*time.Minute)
+	def(&c.StandDownLease, 5*time.Minute)
 	def(&c.IdempotencyTTL, 7*24*time.Hour)
 	def(&c.DispatchTick, 100*time.Millisecond)
 	def(&c.WatchdogInterval, 30*time.Second)

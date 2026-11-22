@@ -54,8 +54,8 @@ func write(rc *tasks.RC, kind string) (called bool, err error) {
 }
 
 // A run that keeps calling Renew keeps its hold for far longer than one lease
-// (the default lease is 2 minutes; this run lives 9). Without Renew the reaper
-// would have dropped the hold at the second minute and the Renew after it fails.
+// (the default lease is 5 minutes; this run lives 9). Without Renew the reaper
+// would have dropped the hold at the fifth minute and the Renew after it fails.
 func TestHoldRenew_KeepsTheHoldForTheRunsWholeLife(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p := newHoldProbe()
@@ -114,7 +114,7 @@ func TestHoldRenew_ALapsedLeaseFailsClosed(t *testing.T) {
 				rc := <-p.rcs
 				defer close(p.free)
 
-				time.Sleep(3 * time.Minute) // past the 2 minute lease with no renewal
+				time.Sleep(6 * time.Minute) // past the 5 minute lease with no renewal
 				for i := range 2 {
 					if err := hold.Renew(); !errors.Is(err, tasks.ErrHoldLost) {
 						t.Fatalf("Renew %d after the lease lapsed: %v, want tasks.ErrHoldLost", i, err)
@@ -163,11 +163,11 @@ func TestHoldRenew_ALostHoldFailsEveryHoldOfTheRun(t *testing.T) {
 		rc := <-rcs
 		defer close(free)
 
-		time.Sleep(90 * time.Second)
+		time.Sleep(4 * time.Minute)
 		if err := pair[1].Renew(); err != nil {
 			t.Fatalf("renew of the second hold inside its lease: %v", err)
 		}
-		time.Sleep(60 * time.Second) // the first hold is 150 s old, its second hold 60 s
+		time.Sleep(2 * time.Minute) // the first hold is 6 min old (lease 5), the second 2 min
 		if err := pair[0].Renew(); !errors.Is(err, tasks.ErrHoldLost) {
 			t.Fatalf("Renew of the lapsed first hold: %v, want tasks.ErrHoldLost", err)
 		}

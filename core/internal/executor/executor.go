@@ -153,6 +153,8 @@ type executor struct {
 	paused    bool
 	unpaused  chan struct{} // closed while not paused
 	holds     map[tasks.Key]*standHold
+	markerGen map[tasks.Key]uint64 // newest marker decision per stand-down key (markerTicketLocked)
+	markerMu  sync.Mutex           // serializes marker writes (writeMarkers); taken before mu, never under it
 	bootQuiet map[tasks.RunID]bool // quiesced by a marker that survived a crash: not resumed this boot
 	waiting   map[string]bool      // Ready sets with a live waiter
 	deferred  map[tasks.RunID]string
@@ -184,7 +186,7 @@ func New(opts Options) (tasks.Executor, error) {
 		defs: map[tasks.Kind]*def{}, heldMods: map[string]bool{}, heldKind: map[tasks.Kind]string{},
 		starts: map[string][]tasks.Kind{}, lanes: map[tasks.LaneID]*lane{},
 		cpu: newCPUBudget(cfg.CPUSlots), refs: newRefTable(),
-		running: map[tasks.RunID]*attempt{}, zombies: map[string]int{}, holds: map[tasks.Key]*standHold{},
+		running: map[tasks.RunID]*attempt{}, zombies: map[string]int{}, holds: map[tasks.Key]*standHold{}, markerGen: map[tasks.Key]uint64{},
 		bootQuiet: map[tasks.RunID]bool{}, waiting: map[string]bool{}, deferred: map[tasks.RunID]string{}, left: map[tasks.RunID]uint64{},
 		heldCount: map[string]int64{},
 		termCh:    make(chan struct{}), unpaused: make(chan struct{}), wake: make(chan struct{}, 1),
