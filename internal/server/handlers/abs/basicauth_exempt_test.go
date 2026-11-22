@@ -45,17 +45,21 @@ var absUnauthenticatedRoutes = map[string]bool{
 // previous values afterwards, so no later test in this package inherits it.
 func enableBasicAuthForTest(t *testing.T) {
 	t.Helper()
-	prevEnabled := config.AppConfig.BasicAuthEnabled
-	prevUser := config.AppConfig.BasicAuthUsername
-	prevPass := config.AppConfig.BasicAuthPassword
+	prevEnabled := config.Get().BasicAuthEnabled
+	prevUser := config.Get().BasicAuthUsername
+	prevPass := config.Get().BasicAuthPassword
 	t.Cleanup(func() {
-		config.AppConfig.BasicAuthEnabled = prevEnabled
-		config.AppConfig.BasicAuthUsername = prevUser
-		config.AppConfig.BasicAuthPassword = prevPass
+		config.SetForTest(func(c *config.Config) {
+			c.BasicAuthEnabled = prevEnabled
+			c.BasicAuthUsername = prevUser
+			c.BasicAuthPassword = prevPass
+		})
 	})
-	config.AppConfig.BasicAuthEnabled = true
-	config.AppConfig.BasicAuthUsername = "admin"
-	config.AppConfig.BasicAuthPassword = "secret"
+	config.SetForTest(func(c *config.Config) {
+		c.BasicAuthEnabled = true
+		c.BasicAuthUsername = "admin"
+		c.BasicAuthPassword = "secret"
+	})
 }
 
 // newBasicAuthGatedABS returns the engine and the whole stack in front of it,

@@ -223,9 +223,9 @@ func TestShortDuration(t *testing.T) {
 // A completed deep count reports how long its walk took and how many pages it
 // read.
 func TestGetDBHealth_DeepReportsWalkMeasurements(t *testing.T) {
-	prev := config.AppConfig.MetadataFetchCacheTTLDays
-	config.AppConfig.MetadataFetchCacheTTLDays = 30
-	t.Cleanup(func() { config.AppConfig.MetadataFetchCacheTTLDays = prev })
+	prev := config.Get().MetadataFetchCacheTTLDays
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 30 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = prev }) })
 
 	spy := &walkSpyStore{delay: 20 * time.Millisecond}
 	store := deepSpyStore{spy: spy}
@@ -254,9 +254,9 @@ func TestExpiredCounter_CallerCancelDoesNotAbortSharedWalk(t *testing.T) {
 
 // A failed deep count reaches the client as expired_entries_error.
 func TestGetDBHealth_DeepFailureReturnsError(t *testing.T) {
-	prev := config.AppConfig.MetadataFetchCacheTTLDays
-	config.AppConfig.MetadataFetchCacheTTLDays = 30
-	t.Cleanup(func() { config.AppConfig.MetadataFetchCacheTTLDays = prev })
+	prev := config.Get().MetadataFetchCacheTTLDays
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 30 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = prev }) })
 
 	spy := &walkSpyStore{err: errors.New("disk on fire")}
 	store := deepSpyStore{spy: spy}

@@ -70,14 +70,14 @@ func TestOrganizeHandlers_ProtectedOriginalActsOnItsLibraryCopy(t *testing.T) {
 
 func organizeHandlersActOnTheLibraryCopy(t *testing.T, origID, copyID string) {
 	gin.SetMode(gin.TestMode)
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 	root := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             root,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)

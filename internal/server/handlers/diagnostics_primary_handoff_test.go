@@ -32,9 +32,9 @@ func (s diagOpStore) GetOperationV2(string) (*database.OperationV2Row, error) { 
 // flag on to the group's library copy.
 func TestDiagnosticsHandler_ApplySuggestions_DeleteOrphanHandsPrimaryOn(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	inc := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 	next := f.Book(t, vptest.Spec{ID: "next", Group: "g", Primary: "false"})
 
@@ -55,9 +55,9 @@ func TestDiagnosticsHandler_ApplySuggestions_DeleteOrphanHandsPrimaryOn(t *testi
 // it puts the sibling back in its group as that group's primary.
 func TestDiagnosticsHandler_ApplySuggestions_MergeVersionsSiblingMoveIsUndoable(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true"})
 	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "true"})
 	ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "false"})
@@ -88,9 +88,9 @@ func TestDiagnosticsHandler_ApplySuggestions_MergeVersionsSiblingMoveIsUndoable(
 // trashing's stamp; trashing it again must not leave that stamp on it.
 func TestDiagnosticsHandler_ApplySuggestions_DeleteOrphanStampsTheTrashTime(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	id := f.Book(t, vptest.Spec{ID: "orph", Group: "g", Primary: "true"})
 	f.Book(t, vptest.Spec{ID: "other", Group: "g", Primary: "false"})
 	stale := time.Now().Add(-200 * 24 * time.Hour)

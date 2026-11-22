@@ -201,41 +201,41 @@ type taskIntField struct {
 // (internal/scheduler/tasks.go).
 func acceptedBoolFields() []taskBoolField {
 	return []taskBoolField{
-		{"dedup_refresh", "enabled", func() bool { return config.AppConfig.Scheduled.DedupRefresh.Enabled }},
-		{"dedup_refresh", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.DedupRefresh }},
-		{"author_split_scan", "enabled", func() bool { return config.AppConfig.Scheduled.AuthorSplit.Enabled }},
-		{"author_split_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.AuthorSplit }},
-		{"db_optimize", "enabled", func() bool { return config.AppConfig.Scheduled.DbOptimize.Enabled }},
-		{"db_optimize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.DbOptimize }},
-		{"metadata_refresh", "enabled", func() bool { return config.AppConfig.Scheduled.MetadataRefresh.Enabled }},
-		{"metadata_refresh", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.MetadataRefresh }},
-		{"series_prune", "enabled", func() bool { return config.AppConfig.Scheduled.SeriesPrune.Enabled }},
-		{"series_prune", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.SeriesPrune }},
+		{"dedup_refresh", "enabled", func() bool { return config.Get().Scheduled.DedupRefresh.Enabled }},
+		{"dedup_refresh", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.DedupRefresh }},
+		{"author_split_scan", "enabled", func() bool { return config.Get().Scheduled.AuthorSplit.Enabled }},
+		{"author_split_scan", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.AuthorSplit }},
+		{"db_optimize", "enabled", func() bool { return config.Get().Scheduled.DbOptimize.Enabled }},
+		{"db_optimize", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.DbOptimize }},
+		{"metadata_refresh", "enabled", func() bool { return config.Get().Scheduled.MetadataRefresh.Enabled }},
+		{"metadata_refresh", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.MetadataRefresh }},
+		{"series_prune", "enabled", func() bool { return config.Get().Scheduled.SeriesPrune.Enabled }},
+		{"series_prune", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.SeriesPrune }},
 		// library_scan's first three bound only after 2026-08-16; before that the
 		// case wired the maintenance-window flag alone and dropped the rest.
-		{"library_scan", "enabled", func() bool { return config.AppConfig.Scheduled.LibraryScan.Enabled }},
-		{"library_scan", "run_on_startup", func() bool { return config.AppConfig.ScanOnStartup }},
-		{"library_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryScan }},
-		{"reconcile_scan", "enabled", func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled }},
-		{"reconcile_scan", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.Reconcile }},
-		{"purge_deleted", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeDeleted }},
-		{"purge_old_logs", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.PurgeOldLogs }},
-		{"tombstone_cleanup", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.TombstoneCleanup }},
-		{"library_organize", "run_in_maintenance_window", func() bool { return config.AppConfig.Maintenance.LibraryOrganize }},
+		{"library_scan", "enabled", func() bool { return config.Get().Scheduled.LibraryScan.Enabled }},
+		{"library_scan", "run_on_startup", func() bool { return config.Get().ScanOnStartup }},
+		{"library_scan", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.LibraryScan }},
+		{"reconcile_scan", "enabled", func() bool { return config.Get().Scheduled.Reconcile.Enabled }},
+		{"reconcile_scan", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.Reconcile }},
+		{"purge_deleted", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.PurgeDeleted }},
+		{"purge_old_logs", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.PurgeOldLogs }},
+		{"tombstone_cleanup", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.TombstoneCleanup }},
+		{"library_organize", "run_in_maintenance_window", func() bool { return config.Get().Maintenance.LibraryOrganize }},
 	}
 }
 
 func acceptedIntFields() []taskIntField {
 	return []taskIntField{
-		{"dedup_refresh", "interval_minutes", func() int { return config.AppConfig.Scheduled.DedupRefresh.Interval }},
-		{"author_split_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.AuthorSplit.Interval }},
-		{"db_optimize", "interval_minutes", func() int { return config.AppConfig.Scheduled.DbOptimize.Interval }},
-		{"metadata_refresh", "interval_minutes", func() int { return config.AppConfig.Scheduled.MetadataRefresh.Interval }},
-		{"series_prune", "interval_minutes", func() int { return config.AppConfig.Scheduled.SeriesPrune.Interval }},
-		{"library_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.LibraryScan.Interval }},
-		{"reconcile_scan", "interval_minutes", func() int { return config.AppConfig.Scheduled.Reconcile.Interval }},
-		{"metadata_upgrade", "interval_minutes", func() int { return config.AppConfig.Scheduled.MetadataUpgrade.Interval }},
-		{"asin_backfill", "interval_minutes", func() int { return config.AppConfig.Scheduled.ASINBackfill.Interval }},
+		{"dedup_refresh", "interval_minutes", func() int { return config.Get().Scheduled.DedupRefresh.Interval }},
+		{"author_split_scan", "interval_minutes", func() int { return config.Get().Scheduled.AuthorSplit.Interval }},
+		{"db_optimize", "interval_minutes", func() int { return config.Get().Scheduled.DbOptimize.Interval }},
+		{"metadata_refresh", "interval_minutes", func() int { return config.Get().Scheduled.MetadataRefresh.Interval }},
+		{"series_prune", "interval_minutes", func() int { return config.Get().Scheduled.SeriesPrune.Interval }},
+		{"library_scan", "interval_minutes", func() int { return config.Get().Scheduled.LibraryScan.Interval }},
+		{"reconcile_scan", "interval_minutes", func() int { return config.Get().Scheduled.Reconcile.Interval }},
+		{"metadata_upgrade", "interval_minutes", func() int { return config.Get().Scheduled.MetadataUpgrade.Interval }},
+		{"asin_backfill", "interval_minutes", func() int { return config.Get().Scheduled.ASINBackfill.Interval }},
 	}
 }
 
@@ -291,8 +291,8 @@ func putTaskConfig(t *testing.T, task, field string, value any) *httptest.Respon
 // not leak into its siblings.
 func restoreAppConfig(t *testing.T) {
 	t.Helper()
-	saved := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = saved })
+	saved := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(saved) })
 }
 
 func TestUpdateTaskConfig_AcceptedFieldsActuallyApply(t *testing.T) {
@@ -418,8 +418,10 @@ func TestUpdateTaskConfig_SchedulerReportsTheAppliedValue(t *testing.T) {
 // startup run is off.
 func TestUpdateTaskConfig_LibraryScanEnabledNamesScanOnStartup(t *testing.T) {
 	restoreAppConfig(t)
-	config.AppConfig.ScanOnStartup = true
-	config.AppConfig.Scheduled.LibraryScan.Enabled = true
+	config.SetForTest(func(c *config.Config) {
+		c.ScanOnStartup = true
+		c.Scheduled.LibraryScan.Enabled = true
+	})
 
 	before, ok := schedulerView(t, "library_scan")
 	require.True(t, ok)
@@ -444,8 +446,10 @@ func TestUpdateTaskConfig_LibraryScanEnabledNamesScanOnStartup(t *testing.T) {
 // disable the task, so IsEnabled has to survive it.
 func TestUpdateTaskConfig_LibraryScanRunOnStartupOffKeepsTaskEnabled(t *testing.T) {
 	restoreAppConfig(t)
-	config.AppConfig.ScanOnStartup = true
-	config.AppConfig.Scheduled.LibraryScan.Enabled = false
+	config.SetForTest(func(c *config.Config) {
+		c.ScanOnStartup = true
+		c.Scheduled.LibraryScan.Enabled = false
+	})
 
 	w := putTaskConfig(t, "library_scan", "run_on_startup", false)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -463,8 +467,10 @@ func TestUpdateTaskConfig_LibraryScanRunOnStartupOffKeepsTaskEnabled(t *testing.
 func TestUpdateTaskConfig_MetadataUpgradeIntervalAloneSchedulesIt(t *testing.T) {
 	restoreAppConfig(t)
 	// Production has both off; the task must be schedulable without either.
-	config.AppConfig.Maintenance.Enabled = false
-	config.AppConfig.Maintenance.MetadataRefresh = false
+	config.SetForTest(func(c *config.Config) {
+		c.Maintenance.Enabled = false
+		c.Maintenance.MetadataRefresh = false
+	})
 	view := func() scheduler.TaskInfo {
 		t.Helper()
 		ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{

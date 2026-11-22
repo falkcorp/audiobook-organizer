@@ -28,9 +28,9 @@ import (
 
 func withBulkApplyCap(t *testing.T, n int) {
 	t.Helper()
-	prev := config.AppConfig.BulkApplyMaxItems
-	config.AppConfig.BulkApplyMaxItems = n
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	prev := config.Get().BulkApplyMaxItems
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = n })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
 }
 
 func insertNCandidates(t *testing.T, d testDeps, n int) {
