@@ -22,8 +22,10 @@ import (
 )
 
 // The reach oracle (F4-07): what every principal of 05-rbac section 12 may
-// reach on R0, recorded from the R0 release binary (internal/books/rbacreach,
-// scripts/r2corpus/record_r0_reach.py), against what the same principals reach
+// reach on R0, recorded from main at the commit r0config/r0_reach_commit.txt
+// pins, built by scripts/r2corpus/build_r0_reach.py (internal/books/rbacreach,
+// scripts/r2corpus/record_r0_reach.py; F4-08 moved it off the v0.223.0 release
+// asset), against what the same principals reach
 // after M3 on the migrated corpus, under the manifest's route requirements
 // resolved through the atom table.
 //
@@ -91,7 +93,7 @@ type reachR0OwnerSet struct {
 }
 
 type reachR0Doc struct {
-	R0Tag           string            `json:"r0_tag"`
+	R0Commit        string            `json:"r0_commit"`      // the main commit R0 was built from
 	OverlaySHA256   string            `json:"overlay_sha256"` // digest of the overlay store the recording copied
 	Recorded        map[string]string `json:"recorded"`       // the run that wrote it (provenance, never compared)
 	RouteCount      int               `json:"route_count"`
@@ -124,6 +126,9 @@ func reachLoad(t testing.TB) (*reachPrincipalsDoc, *reachR0Doc) {
 	names := make([]string, len(pd.Principals))
 	for i, p := range pd.Principals {
 		names[i] = p.Name
+	}
+	if len(vd.R0Commit) != 40 {
+		t.Fatalf("verdicts.json: r0_commit %q is not a full commit SHA (record_r0_reach.py writes it)", vd.R0Commit)
 	}
 	if !slices.Equal(names, vd.Principals) {
 		t.Fatalf("principals.json and verdicts.json list different principals:\n%v\n%v", names, vd.Principals)

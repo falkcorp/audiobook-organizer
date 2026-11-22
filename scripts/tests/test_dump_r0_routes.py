@@ -4,11 +4,12 @@
 # last-edited: 2026-11-14
 """Tests for scripts/r2corpus/dump_r0_routes.py and its committed data (F4-07).
 
-The dump itself runs ``go test`` inside a checkout of the R0 tag, which these tests
-do not do: ``subprocess.run`` is replaced by a fake that writes the JSON the Go test
-would write. What they pin is the script's own logic (the tag file, the document it
-writes, the cleanup of the test file it copies into the checkout) and that the
-committed ``routes.json`` is a dump of the tag ``ci/r0_release.txt`` names.
+The dump itself runs ``go test`` inside a checkout of the R0 commit, which these
+tests do not do: ``subprocess.run`` is replaced by a fake that writes the JSON the Go
+test would write. What they pin is the script's own logic (the pinned commit, the
+document it writes, the cleanup of the test file it copies into the checkout) and that
+the committed ``routes.json`` is a dump of the commit ``r0config/r0_reach_commit.txt``
+names (F4-08; it was the ``ci/r0_release.txt`` tag until 2026-11-22).
 
 Run: python3 -m unittest scripts.tests.test_dump_r0_routes
 """
@@ -44,24 +45,33 @@ DUMP = {
 }
 
 
-class ReadTagTest(unittest.TestCase):
+class ReadCommitTest(unittest.TestCase):
     def read(self, text: str) -> str:
+        b = dump._build_module()
         with tempfile.TemporaryDirectory() as d:
-            f = pathlib.Path(d) / "r0_release.txt"
+            f = pathlib.Path(d) / "r0_reach_commit.txt"
             f.write_text(text, encoding="utf-8")
-            with mock.patch.object(dump, "TAG_FILE", f):
-                return dump.read_tag()
+            with mock.patch.object(dump, "_build_module", lambda: b), mock.patch.object(
+                b, "COMMIT_FILE", f
+            ):
+                return dump.read_commit()
 
-    def test_one_tag_line_among_comments_and_blanks(self):
-        self.assertEqual(self.read("# the R0 release\n\nv9.9.9\n# trailing\n"), "v9.9.9")
+    def test_one_commit_line_among_comments_and_blanks(self):
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        self.assertEqual(self.read(f"# the R0 commit\n\n{sha}\n# trailing\n"), sha)
 
-    def test_no_tag_line_is_refused(self):
+    def test_no_commit_line_is_refused(self):
         with self.assertRaises(SystemExit):
             self.read("# only a comment\n\n")
 
-    def test_two_tag_lines_are_refused(self):
+    def test_two_commit_lines_are_refused(self):
         with self.assertRaises(SystemExit):
-            self.read("v1.0.0\nv2.0.0\n")
+            self.read("0123456789abcdef0123456789abcdef01234567\n" * 2)
+
+    def test_a_short_or_symbolic_commit_is_refused(self):
+        for bad in ("f6698f9bf", "main", "v0.223.0"):
+            with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                self.read(bad + "\n")
 
 
 class RunDumpTest(unittest.TestCase):
@@ -108,16 +118,17 @@ class MainTest(unittest.TestCase):
         with ExitStack() as stack:
             src = stack.enter_context(tempfile.TemporaryDirectory())
             stack.enter_context(mock.patch.object(dump, "run_dump", fake_run_dump))
-            stack.enter_context(mock.patch.object(dump, "read_tag", lambda: "v9.9.9"))
+            stack.enter_context(mock.patch.object(dump, "read_commit", lambda: "9" * 40))
             stack.enter_context(redirect_stdout(buf))
             self.assertEqual(dump.main(["--src", src, "--out", str(out)]), 0)
         self.assertIn("wrote 3 routes", buf.getvalue())
         return json.loads(out.read_text(encoding="utf-8"))
 
-    def test_the_document_carries_the_tag_the_counts_and_every_route(self):
+    def test_the_document_carries_the_commit_the_counts_and_every_route(self):
         with tempfile.TemporaryDirectory() as d:
             doc = self.run_main(pathlib.Path(d) / "nested" / "routes.json")
-        self.assertEqual(doc["r0_tag"], "v9.9.9")
+        self.assertEqual(doc["r0_commit"], "9" * 40)
+        self.assertNotIn("r0_tag", doc)
         self.assertEqual(doc["route_count"], 3)
         self.assertEqual((doc["abs_off_count"], doc["abs_on_count"]), (2, 3))
         self.assertEqual(doc["routes"], DUMP["routes"])
@@ -127,12 +138,12 @@ class MainTest(unittest.TestCase):
     def test_a_checkout_named_by_src_is_not_removed(self):
         with ExitStack() as stack:
             d = stack.enter_context(tempfile.TemporaryDirectory())
-            src = pathlib.Path(d) / "tag"
+            src = pathlib.Path(d) / "commit"
             src.mkdir()
             stack.enter_context(
                 mock.patch.object(dump, "run_dump", lambda s, o: o.write_text(json.dumps(DUMP)))
             )
-            stack.enter_context(mock.patch.object(dump, "read_tag", lambda: "v9.9.9"))
+            stack.enter_context(mock.patch.object(dump, "read_commit", lambda: "9" * 40))
             run = stack.enter_context(mock.patch.object(dump.subprocess, "run"))
             stack.enter_context(redirect_stdout(io.StringIO()))
             dump.main(["--src", str(src), "--out", str(pathlib.Path(d) / "r.json")])
@@ -144,8 +155,8 @@ class CommittedDataTest(unittest.TestCase):
     def setUp(self):
         self.doc = json.loads(ROUTES.read_text(encoding="utf-8"))
 
-    def test_the_committed_dump_is_the_tag_the_release_file_names(self):
-        self.assertEqual(self.doc["r0_tag"], dump.read_tag())
+    def test_the_committed_dump_is_the_commit_the_pin_file_names(self):
+        self.assertEqual(self.doc["r0_commit"], dump.read_commit())
 
     def test_the_counts_are_the_routes_listed(self):
         routes = self.doc["routes"]

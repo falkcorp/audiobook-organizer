@@ -3,13 +3,13 @@
   "file": "internal/books/rbacreach/routes.json",
   "version": "1.0.0",
   "guid": "d41a8b7f-2c65-4e93-8f10-6b9e3a7c5d28",
-  "last-edited": "2026-11-13"
+  "last-edited": "2026-11-22"
  },
- "what": "the gin route table of the R0 tag's router (source dump, scripts/r2corpus/r0routes)",
- "r0_tag": "v0.223.0",
- "route_count": 572,
- "abs_off_count": 497,
- "abs_on_count": 572,
+ "what": "the gin route table of the R0 commit's router (source dump, scripts/r2corpus/r0routes)",
+ "r0_commit": "f6698f9bf0b6dd974c281876c3aa342d7d51c57c",
+ "route_count": 574,
+ "abs_off_count": 495,
+ "abs_on_count": 574,
  "routes": [
   {
    "method": "GET",
@@ -24,6 +24,16 @@
   {
    "method": "GET",
    "path": "/api/authors/:id",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/authors/:id/image",
+   "abs_only": true
+  },
+  {
+   "method": "HEAD",
+   "path": "/api/authors/:id/image",
    "abs_only": true
   },
   {
@@ -122,6 +132,11 @@
    "abs_only": true
   },
   {
+   "method": "POST",
+   "path": "/api/items/batch/get",
+   "abs_only": true
+  },
+  {
    "method": "GET",
    "path": "/api/libraries",
    "abs_only": true
@@ -179,6 +194,11 @@
   {
    "method": "GET",
    "path": "/api/libraries/:libraryId/series",
+   "abs_only": true
+  },
+  {
+   "method": "GET",
+   "path": "/api/libraries/:libraryId/stats",
    "abs_only": true
   },
   {
@@ -409,6 +429,11 @@
   {
    "method": "GET",
    "path": "/api/v1/admin/guest-service-tokens",
+   "abs_only": false
+  },
+  {
+   "method": "POST",
+   "path": "/api/v1/admin/guest-service-tokens/:userId/reissue",
    "abs_only": false
   },
   {
@@ -2202,11 +2227,6 @@
    "abs_only": false
   },
   {
-   "method": "GET",
-   "path": "/api/v1/operations/reconcile/preview",
-   "abs_only": false
-  },
-  {
    "method": "POST",
    "path": "/api/v1/operations/reconcile/scan",
    "abs_only": false
@@ -2552,18 +2572,8 @@
    "abs_only": false
   },
   {
-   "method": "POST",
-   "path": "/api/v1/system/factory-reset",
-   "abs_only": false
-  },
-  {
    "method": "GET",
    "path": "/api/v1/system/logs",
-   "abs_only": false
-  },
-  {
-   "method": "POST",
-   "path": "/api/v1/system/reset",
    "abs_only": false
   },
   {

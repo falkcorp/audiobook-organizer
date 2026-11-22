@@ -21,9 +21,11 @@ import (
 // where the answers differ is one of four things, and verdictRows names each:
 //
 //	classDrift   current HEAD (origin/main) answers as the flipped build does, not as
-//	             R0 did: a commit after R0 (v0.223.0) changed the route. Verified from
+//	             R0 did: a commit after R0's commit changed the route. Verified from
 //	             the route registration and its permission, see
-//	             TestRegisteredHarness_R0DriftIsInTheRouteTable.
+//	             TestRegisteredHarness_R0DriftIsInTheRouteTable. None since F4-08
+//	             re-recorded R0 at main f6698f9bf: the reconcile row (ed8d80f4b) and
+//	             the reset pair's rows (623da76d3) are R0's own answers now.
 //	classKnown   an accepted narrowing, with the ruling that accepted it.
 //	classB10y    refused by the flipped build where R0 and HEAD admit; not accepted. The
 //	             parity assertion for these is in the last commits of the stack (red
@@ -60,12 +62,6 @@ type verdictRow struct {
 }
 
 var verdictRows = []verdictRow{
-	{Method: "POST", Route: "/api/v1/operations/reconcile", Class: classDrift, Principals: []string{"key:admin:settings", "key:editor:empty", "key:editor:every", "session:editor"},
-		Why: "R0 drift: ed8d80f4b (2026-11-18) moved POST /operations/reconcile from scan.trigger to settings.manage (TestReconcileApplyRoute_NeedsSettingsManage)"},
-	{Method: "POST", Route: "/api/v1/system/factory-reset", Class: classDrift, Principals: []string{"anonymous", "authoff", "key:admin:empty", "key:admin:every", "key:admin:settings", "key:admin:users", "key:admin:view", "key:admin:worker", "key:custom-all:empty", "key:custom-all:every", "key:custom-subset:empty", "key:custom-subset:outside", "key:editor:empty", "key:editor:every", "key:editor:settings", "key:editor:users", "key:editor:view", "key:editor:worker", "key:fp-worker:empty", "key:fp-worker:every", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view", "key:fp-worker:worker", "key:viewer:empty", "key:viewer:every", "key:viewer:settings", "key:viewer:users", "key:viewer:view", "key:viewer:worker", "session:custom-all", "session:custom-subset", "session:custom-unknown", "session:editor", "session:fp-worker", "session:viewer"},
-		Why: "R0 drift: removed on main (wire_system_routes.go), the reset runs only offline; no route answers, so there is no authorization step to refuse"},
-	{Method: "POST", Route: "/api/v1/system/reset", Class: classDrift, Principals: []string{"anonymous", "authoff", "key:admin:empty", "key:admin:every", "key:admin:settings", "key:admin:users", "key:admin:view", "key:admin:worker", "key:custom-all:empty", "key:custom-all:every", "key:custom-subset:empty", "key:custom-subset:outside", "key:editor:empty", "key:editor:every", "key:editor:settings", "key:editor:users", "key:editor:view", "key:editor:worker", "key:fp-worker:empty", "key:fp-worker:every", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view", "key:fp-worker:worker", "key:viewer:empty", "key:viewer:every", "key:viewer:settings", "key:viewer:users", "key:viewer:view", "key:viewer:worker", "session:custom-all", "session:custom-subset", "session:custom-unknown", "session:editor", "session:fp-worker", "session:viewer"},
-		Why: "R0 drift: removed on main (wire_system_routes.go), the reset runs only offline; no route answers, so there is no authorization step to refuse"},
 	{Method: "DELETE", Route: "/api/v1/audiobooks/:id/status", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "DELETE", Route: "/api/v1/auth/api-keys/:id", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
@@ -323,7 +319,9 @@ func TestRegisteredHarness_EveryVerdictIsR0sOrNamed(t *testing.T) {
 
 // TestRegisteredHarness_R0DriftIsInTheRouteTable ties the classDrift rows to the
 // code: the two facts they rest on are read from the routes the flipped build
-// registers. R0's own recording is v0.223.0; the drift commits are after it.
+// registers. R0's recording was v0.223.0 when they were written; since F4-08 it
+// is main at f6698f9bf, which carries both commits, so no drift row is left and
+// the facts stay pinned here as what the re-recording absorbed.
 func TestRegisteredHarness_R0DriftIsInTheRouteTable(t *testing.T) {
 	h := bootRegistered(t, registeredConfig{})
 	ri := h.match(http.MethodPost, "/api/v1/operations/reconcile")

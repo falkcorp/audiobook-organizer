@@ -745,8 +745,9 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 	h := bootRegistered(t, registeredConfig{Seed: victims.seed})
 	ids := rhrDiscover(t, h, rec)
 	// The 23 routes of the in-handler sites are all in R0's recording; the owner
-	// routes (the last 9) are judged against owner_set, and two are newer than R0
-	// (the guest-service-token reissue) or are core's own (factory-reset).
+	// routes (the last 9) are judged against their recorded rows, except core's own
+	// factory-reset, which main does not serve and whose letters are ruled
+	// (factoryResetNoOwnerLetter).
 	for _, r := range rhrHiddenRoutes[:23] {
 		if _, ok := rec.routes[r]; !ok {
 			t.Fatalf("verdicts.json has no route %s", r)
@@ -920,15 +921,16 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 	// whoever signs in through Access), so HEAD's answer here is the route's ordinary
 	// guard, which is what R0's route recording holds: session:admin is admitted, the
 	// rest refused. With an owner set (R0's owner_set recording: 37 of 37 refused) is
-	// B10e1r's. Two routes have no recorded row of their own: the reissue is newer
-	// than R0 and takes the revoke's guard; core's factory-reset succeeds HEAD's
-	// POST /api/v1/system/factory-reset, whose recorded letters it takes.
+	// B10e1r's. Every books owner route has its own recorded row (R0 is main at
+	// f6698f9bf since F4-08). Core's factory reset has none: main serves no reset
+	// route (623da76d3), so its letters are a ruling, not parity (registered_owner_test.go
+	// ownerR2Only, 05-rbac §6.2, a deliberate addition versus main). With no owner set
+	// it is 05-authn §4.8's fallback, Guards.Interactive plus core:admin: the
+	// interactive admin session passes, every other principal is refused
+	// (factoryResetNoOwnerLetter).
 	t.Run("owner routes, no owner set", func(t *testing.T) {
 		owners := rhrHiddenRoutes[23:]
-		headRoute := map[string]string{
-			"POST /api/core/v1/system/factory-reset":                  "POST /api/v1/system/factory-reset",
-			"POST /api/v1/admin/guest-service-tokens/:userId/reissue": "POST /api/v1/admin/guest-service-tokens/:userId/revoke",
-		}
+		headRoute := map[string]string{}
 		paths := map[string]string{
 			"POST /api/core/v1/system/factory-reset":                  "/api/core/v1/system/factory-reset",
 			"POST /api/v1/admin/guest-service-tokens/:userId/revoke":  "/api/v1/admin/guest-service-tokens/" + ids.target + "/revoke",
@@ -950,7 +952,11 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 			if alias, ok := headRoute[route]; ok {
 				head = alias
 			}
-			cells = append(cells, rhrCell{route: head, method: method, path: paths[route], note: route})
+			c := rhrCell{route: head, method: method, path: paths[route], note: route}
+			if route == "POST /api/core/v1/system/factory-reset" {
+				c.head = factoryResetNoOwnerLetter
+			}
+			cells = append(cells, c)
 		}
 		problems, ran := rhrJudge(t, h, rec, cells, used)
 		t.Logf("%d cells over %d owner routes", ran, len(cells))
@@ -1129,4 +1135,17 @@ func TestReachRegisteredPath_CustomCoreAdmin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// factoryResetNoOwnerLetter is the expected letter of core's factory reset with no
+// owner set, by principal: 05-authn §4.8's fallback for an owner route (Interactive
+// plus core:admin) under 05-rbac §6.2's requirement, so the interactive admin
+// session is admitted and every other principal is refused. It is a ruling for an
+// R2-only route (registered_owner_test.go ownerR2Only), not a recorded letter: main
+// serves no reset route.
+func factoryResetNoOwnerLetter(principal string) byte {
+	if principal == "session:admin" {
+		return 'A'
+	}
+	return 'D'
 }
