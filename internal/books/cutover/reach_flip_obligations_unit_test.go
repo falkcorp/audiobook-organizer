@@ -53,6 +53,7 @@ var reachDischargedRows = map[string]bool{
 	"F4-07-RANDOM-ROLES":          true,
 	"F4-07-HANDLER-REFUSALS":      true, // TestReachRegisteredPath_HandlerRefusals (B10e2)
 	"F4-07-HIDDEN-HANDLER-CHECKS": true, // TestReachRegisteredPath_HiddenHandlerChecks (B10e2)
+	"F4-07-OWNER-SET":             true, // TestReachRegisteredPath_OwnerSet (B10e1r)
 }
 
 func TestReachObligations_TheTableIsStatedInTheSeamsAndEachRowIsOpenUntilItsDischargeLands(t *testing.T) {
