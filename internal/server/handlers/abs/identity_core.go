@@ -33,21 +33,6 @@ import (
 // the abs_sess record, the refresh rotation, the access token, the failure
 // throttle and the audit trail.
 
-// booksUserFromCore is the books-shaped copy of a core user that the session
-// minting and the response body read: ID, Username, Email, Status,
-// CredentialEpoch and CreatedAt. Nothing else of books' User is read on these
-// paths (no hash, no roles).
-func booksUserFromCore(u *coreauth.User) *database.User {
-	return &database.User{
-		ID:              string(u.ID),
-		Username:        u.Username,
-		Email:           u.Email,
-		Status:          string(u.Status),
-		CredentialEpoch: u.CredentialEpoch,
-		CreatedAt:       u.CreatedAt,
-	}
-}
-
 // loginThroughCore is Login's password check under core identity: from the
 // reading of the account on, in place of GetUserByUsername, VerifyPassword and
 // isActiveUser. Core's Compat.VerifyPassword applies the login ceilings, the
@@ -115,7 +100,7 @@ func (h *Handler) loginThroughCore(c *gin.Context, id *legacyauth.Identity, user
 	}
 
 	h.throttle.Clear(accountKey, throttleKey)
-	h.issueSession(c, booksUserFromCore(u), deviceInfo, servermiddleware.ABSModeJWT, "", now)
+	h.issueSession(c, legacyauth.BooksUserFromCore(u), deviceInfo, servermiddleware.ABSModeJWT, "", now)
 }
 
 // refreshUserThroughCore is refreshUser under core identity: the session's user,
@@ -139,7 +124,7 @@ func (h *Handler) refreshUserThroughCore(c *gin.Context, id *legacyauth.Identity
 	}
 	switch {
 	case err == nil && p != nil && p.User != nil:
-		return booksUserFromCore(p.User), true
+		return legacyauth.BooksUserFromCore(p.User), true
 	case err == nil:
 		h.errorRefresh(c, ip, "core-no-user", "could not load user")
 	case errors.Is(err, coreauth.ErrStaleEpoch):

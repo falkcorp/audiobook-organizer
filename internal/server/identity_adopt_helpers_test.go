@@ -108,6 +108,11 @@ func adoptIdentity(t testing.TB, atoms []string, owner legacyauth.OwnerRequired,
 		Client: func(*http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: "batarang"} },
 		// Refresh stands for core's Service.Refresh: the principal unchanged.
 		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },
+		// Access stands for core's account resolver under the Access policy: no
+		// person is admitted (the ABS Access sign-in is not what these tests drive).
+		Access: func(context.Context, legacyauth.AccessClaims) (*coreauth.User, error) {
+			return nil, errors.New("adoptIdentity: no Access sign-in in this fixture")
+		},
 	}
 }
 
