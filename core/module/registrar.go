@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/events"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/tasks"
@@ -25,9 +26,9 @@ import (
 // ProblemRegistrarClosed and take no effect. Methods record problems rather
 // than return errors (A4); Err reports them. Nothing recorded here takes
 // effect before P7 (A8). These are the R1 members, Tasks and Resources (F2),
-// and Topics and Subscribe (the identity flip's events surface, recorded
-// only until F4-08's boot wiring reads them); Lanes, ChangeSink, Health and
-// the rest arrive with their packages (06 §6.4.10).
+// Topics and Subscribe (the identity flip's events surface, recorded
+// only until F4-08's boot wiring reads them), and Lanes, ChangeSink and Health
+// (the tasks flip, F5-18); the rest arrive with their packages (06 §6.4.10).
 type Registrar struct {
 	id       ID
 	ctx      context.Context
@@ -89,6 +90,15 @@ type Registrations struct {
 	// refuses a bad entry (kernelEvents.declare, kernelEvents.subscribe).
 	Topics        []events.TopicSpec
 	Subscriptions []events.Subscription
+	// Lanes are the remote work lanes the module declared and ChangeSink its
+	// change journal, nil when it registered none (F5-18): recorded only,
+	// handed to the executor when the kernel builds it at P7.
+	Lanes      []tasks.Lane
+	ChangeSink tasks.ChangeSink
+	// Health are the components the module declared with Registrar.Health,
+	// in call order: the kernel registers them with the health registry at P7
+	// and binds Deps.Health's reporters to them.
+	Health []health.Check
 }
 
 // NewRegistrar returns the registrar of one module's Register call.
@@ -122,6 +132,8 @@ func (r *Registrar) Close() Registrations {
 	rec.Resources = slices.Clone(rec.Resources)
 	rec.Topics = slices.Clone(rec.Topics)
 	rec.Subscriptions = slices.Clone(rec.Subscriptions)
+	rec.Lanes = slices.Clone(rec.Lanes)
+	rec.Health = slices.Clone(rec.Health)
 	return rec
 }
 
@@ -315,6 +327,68 @@ func (r *Registrar) Resources(kinds ...string) {
 				r.problem(ProblemInvalidRegistration, "Resources: kind %q declared twice", k)
 			default:
 				r.rec.Resources = append(r.rec.Resources, k)
+			}
+		}
+	})
+}
+
+// Lanes declares the remote work lanes the module's tasks may name (05-tasks
+// 5T.3.9). It only records (06 §6.5.1 P6): the kernel hands them to the
+// executor at P7, which refuses a malformed or duplicate lane. A lane with an
+// empty ID is ProblemInvalidRegistration here, and an ID declared twice by this
+// module is too.
+func (r *Registrar) Lanes(l ...tasks.Lane) {
+	r.record("Lanes", func() {
+		for _, ln := range l {
+			switch {
+			case ln.ID == "":
+				r.problem(ProblemInvalidRegistration, "Lanes: a lane with no ID")
+			case slices.ContainsFunc(r.rec.Lanes, func(o tasks.Lane) bool { return o.ID == ln.ID }):
+				r.problem(ProblemInvalidRegistration, "Lanes: lane %q declared twice", ln.ID)
+			default:
+				r.rec.Lanes = append(r.rec.Lanes, ln)
+			}
+		}
+	})
+}
+
+// ChangeSink registers the module's change journal (books: the operation-change
+// journal and undo): tasks.Writer records every gated write's changes into it
+// (05-tasks 5T.3.5). At most one per module: a second registration, and a nil
+// sink, record ProblemChangeSinkDuplicate and ProblemInvalidRegistration. It
+// only records; the kernel wires it into the executor at P7.
+func (r *Registrar) ChangeSink(s tasks.ChangeSink) {
+	r.record("ChangeSink", func() {
+		switch {
+		case s == nil:
+			r.problem(ProblemInvalidRegistration, "ChangeSink(nil)")
+		case r.rec.ChangeSink != nil:
+			r.problem(ProblemChangeSinkDuplicate, "ChangeSink registered twice: at most one change journal per module")
+		default:
+			r.rec.ChangeSink = s
+		}
+	})
+}
+
+// Health declares the module's health components (05-health §5H.3.1): each
+// check's ID must be "<ID>.<name>" in this module's namespace and unique among
+// the module's own, else ProblemInvalidRegistration. It only records; the
+// kernel registers the checks with the App's registry at P7 (where the
+// registry refuses an ID another module or core already holds), and
+// Deps.Health then hands the module the push Reporter of each. A task
+// definition's Common.Ready names such a component (books: books.memdb), so a
+// run that needs it is not dispatched before it reports Up.
+func (r *Registrar) Health(c ...health.Check) {
+	r.record("Health", func() {
+		for _, ck := range c {
+			name, ok := strings.CutPrefix(string(ck.ID), string(r.id)+".")
+			switch {
+			case !ok || name == "":
+				r.problem(ProblemInvalidRegistration, "Health: component %q is not \"%s.<name>\"", ck.ID, r.id)
+			case slices.ContainsFunc(r.rec.Health, func(o health.Check) bool { return o.ID == ck.ID }):
+				r.problem(ProblemInvalidRegistration, "Health: component %q declared twice", ck.ID)
+			default:
+				r.rec.Health = append(r.rec.Health, ck)
 			}
 		}
 	})

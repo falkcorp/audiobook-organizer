@@ -85,6 +85,16 @@ type Manifest struct {
 	// runs as held instead of failing boot (5T.3.11, COR-13). A registered
 	// kind missing from it is a problem (ProblemTaskLedger).
 	TaskLedger []tasks.Kind
+	// TaskStarts lists the OTHER modules' task kinds this module's system
+	// actor may start (SEC2-15, COR3-10; "<other>.<name>" or core's). A module
+	// may always start its own kinds; a kind named here must be registered, or
+	// listed in some manifest's TaskLedger (ProblemTaskStartUnknown, checked at
+	// P7). The kind of a DISABLED module is a valid entry: the app boots, and the
+	// start is refused at runtime as held (tasks.ErrHeld) instead of failing
+	// boot. The start is bounded by the union of the Perms.Start of the module's
+	// own kinds and of these, less core:admin and every AuthRequired scope. A
+	// child a started kind enqueues must be listed too.
+	TaskStarts []tasks.Kind
 	// Storage is the module's storage declaration (05-storage §5S.3.4,
 	// §5S.3.5): its keyspace m/<ID>/, its legacy claims and its versioned
 	// migrations, Seed steps included (a Seed step and every later step of
