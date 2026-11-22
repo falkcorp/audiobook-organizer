@@ -86,7 +86,7 @@ func (s *Server) credRouteWhen(g *gin.RouterGroup, method, rel string, guarded f
 
 func (s *Server) credGuardMiddleware(guarded func(*gin.Context) bool) gin.HandlerFunc {
 	// Under core identity (WithIdentity, F4-08 B7) the principal's method
-	// decides (coreauth.Method.MayChangeCredentials), and books' EnableAuth is
+	// decides (coreauth.Principal.MayChangeCredentials), and books' EnableAuth is
 	// not read: the auth-disabled principal is refused, as core tightens HEAD's
 	// pass-through on purpose (SEC5-8). A conditional route still consults
 	// guarded only for a request whose method may not change credentials.
@@ -96,7 +96,7 @@ func (s *Server) credGuardMiddleware(guarded func(*gin.Context) bool) gin.Handle
 			return refuse
 		}
 		return func(c *gin.Context) {
-			if p, ok := coreauth.PrincipalFrom(c.Request.Context()); ok && p.Method.MayChangeCredentials() {
+			if p, ok := coreauth.PrincipalFrom(c.Request.Context()); ok && p.MayChangeCredentials() {
 				c.Next()
 				return
 			}

@@ -442,14 +442,21 @@ func (s *Service) settings() Settings {
 
 // interactive reports whether m is an interactive method: core's own
 // classification (Method.Interactive), or what its registration declared.
-func (s *Service) interactive(m Method) bool {
-	if m.Interactive() {
-		return true
-	}
+func (s *Service) interactive(m Method) bool { return s.classify(m).interactive }
+
+// classify is m's classification: core's own for core's methods, else what
+// m's registered MethodSpec declared. A method nobody registered is neither
+// interactive nor allowed to change credentials (fail closed).
+func (s *Service) classify(m Method) methodClass {
+	c := methodClass{method: m, interactive: m.Interactive(), mayChangeCredentials: m.MayChangeCredentials()}
 	s.methodsMu.RLock()
 	spec, ok := s.methods[m]
 	s.methodsMu.RUnlock()
-	return ok && spec.Interactive
+	if ok {
+		c.interactive = c.interactive || spec.Interactive
+		c.mayChangeCredentials = c.mayChangeCredentials || spec.MayChangeCredentials
+	}
+	return c
 }
 
 // knownMethod reports whether m is a method the service builds principals

@@ -56,7 +56,7 @@ func actorOf(p *auth.Principal) tasks.Actor {
 // authenticator extension whose MethodSpec.Interactive is true, and an API
 // key whose scopes name the requirement explicitly) are Deps.VerifiedMethod's.
 func DefaultVerifiedMethod(p *auth.Principal, _ rbac.Requirement) bool {
-	return p != nil && p.Method.Interactive()
+	return p != nil && p.Interactive()
 }
 
 // holdsNothing is the checker of a principal that carries none.
