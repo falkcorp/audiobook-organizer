@@ -90,11 +90,14 @@ type Deps struct {
 	// (F4-08, B3).
 	Auth auth.Identities
 
-	// AuthAdmin is the actor-checked identity participant for multi-owner
-	// commits (05-authn §3.1: StageUserMerge): every method re-checks the ctx
-	// principal (core:users.manage, interactive, dominance, the owner rule), so
-	// holding it grants nothing, and it joins the caller's batch and never
-	// commits. Nil until the kernel builds the auth service (F4-08, B3).
+	// AuthAdmin is the actor-checked identity participant (05-authn §3.1):
+	// StageUserMerge for multi-owner commits, which joins the caller's batch
+	// and never commits, and the account writes and reads of auth.AccountAdmin
+	// (invites, set-email, the admin user reads), which each commit on their
+	// own. Every method re-checks the ctx principal (core:users.manage,
+	// interactive, dominance, the owner rule, core:admin where the method
+	// vouches for an address), so holding it grants nothing. Nil until the
+	// kernel builds the auth service (F4-08, B3).
 	AuthAdmin auth.Admin
 
 	// AuthCompat is the method-bound handle of the module's own
