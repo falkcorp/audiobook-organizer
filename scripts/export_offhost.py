@@ -122,6 +122,8 @@ def parse(
         if not line.strip():
             continue
         if _ABSENT.fullmatch(line):
+            if "config" not in optional:
+                return "the helper reported a file as absent that this recipe requires"
             absent.add("config")
             continue
         m = _EXPORTED.fullmatch(line)
@@ -192,6 +194,7 @@ def main() -> int:
         return fail(f"{files}; nothing was copied. Look in {o.export_dir} on {o.host}.")
     remote = {k: f"{o.export_dir}/{name}" for k, (name, _, _) in files.items()}
     where = ", ".join(remote.values())
+    rm_cmd = "rm -f -- " + " ".join(shlex.quote(p) for p in remote.values())
     parts: dict[str, Path] = {}
     for k, (name, size, sha) in files.items():
         if os.path.lexists(dest / name) or os.path.lexists(dest / f"{name}.part"):
@@ -212,19 +215,19 @@ def main() -> int:
             return fail(
                 f"the copy of {name} is not the file the helper wrote (scp exit {p.returncode}, "
                 f"{got[0]} bytes, wanted {size}). The remote copies were KEPT: {where} on {o.host}. "
-                "Copy them by hand, or run this target again after removing them"
+                f"Copy them by hand, or remove them with `ssh {o.host} {shlex.quote(rm_cmd)}` and "
+                "run this target again"
             )
     for k, (name, _, _) in files.items():
         os.chmod(parts[k], 0o600)
         os.rename(parts[k], dest / name)
-    rm = "rm -f -- " + " ".join(shlex.quote(p) for p in remote.values())
-    d = guard.run_remote(o.host, rm, timeout=STEP_TIMEOUT)
+    d = guard.run_remote(o.host, rm_cmd, timeout=STEP_TIMEOUT)
     for name, size, sha in files.values():
         print(f"{dest / name}  {size} bytes  sha256 {sha}")
     if d.rc != 0:
         return fail(
             f"the copies are here and match, but deleting the remote ones failed (exit {d.rc}); "
-            f"delete them by hand: ssh {o.host} {shlex.quote(rm)}"
+            f"delete them by hand: ssh {o.host} {shlex.quote(rm_cmd)}"
         )
     print(
         "The remote copies are deleted. These files hold secrets: whoever has them can decrypt "

@@ -21,7 +21,7 @@ it touches comes from CONFIG, a root-owned file the owner writes once:
     service_user = audiobook
     archive_dir = /path/to/archives
     checkpoint_dir =                       (optional; core.storage.checkpoint_dir)
-    offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer
+    offline_env = HOME=/var/lib/audiobook-organizer ABO_CORE_PATHS_STATE_DIR=/var/lib/audiobook-organizer
     service_group = audiobook             (optional; defaults to service_user)
     stage_bin = /home/USER/audiobook-organizer                    (optional)
     stage_local_conf = /home/USER/audiobook-organizer-local.conf  (optional)
@@ -173,6 +173,7 @@ import hashlib
 import json
 import os
 import re
+import select
 import shutil
 import stat
 import subprocess
@@ -208,6 +209,12 @@ RECORD_LIMIT = 1 << 20
 # export never waits on a restore's, but it refuses while a restore runs.
 EXPORT_UNIT = "audiobook-organizer-rollback-export"
 EXPORT_LIMIT = 1 << 20
+# The export unit is killed by systemd after EXPORT_RUNTIME_SEC (RuntimeMaxSec),
+# and the helper stops reading and stops the unit itself EXPORT_DEADLINE_SEC after
+# it started: a hung unit would otherwise block every later export, and the deploy
+# user has no grant to stop it.
+EXPORT_RUNTIME_SEC = 60
+EXPORT_DEADLINE_SEC = EXPORT_RUNTIME_SEC + 30
 # The worker's exit status for "this file does not exist" (config.yaml only).
 EXPORT_ABSENT = 4
 EXPORT_MAGIC = "AORGEXPORT1"
@@ -337,6 +344,13 @@ def load_config() -> dict[str, str]:
             raise RefusedError(
                 f"{CONFIG}: offline_env token {tok!r} is not HOME=, ABK_*= or ABO_*="
             )
+    names = {tok.partition("=")[0] for tok in cfg.get("offline_env", "").split()}
+    if "ABK_STATE_DIR" in names and any(re.fullmatch(r"ABO_[A-Z0-9_]*STATE_DIR", n) for n in names):
+        raise RefusedError(
+            f"{CONFIG}: offline_env sets ABK_STATE_DIR and an ABO_ state directory together; the "
+            "flipped binary refuses ABK_STATE_DIR in every offline command, so drop it and keep "
+            "ABO_CORE_PATHS_STATE_DIR (docs/system/deploy-and-gpu-ops.md, Rollback helpers)"
+        )
     return cfg
 
 
@@ -1238,13 +1252,18 @@ def _check_template(text: str, cfg: dict[str, str], path: str) -> None:
         )
 
 
-def _read_all(fd: int, limit: int) -> bytes:
+def _read_all(fd: int, limit: int, deadline: float | None = None) -> bytes:
     """Read fd to its end or to limit bytes: one read(2) may return less
     than asked (a network-mounted home), and a short read must never install
-    a truncated file."""
+    a truncated file. deadline (time.monotonic) bounds the wait on a pipe:
+    TimeoutError when it passes with the writer still open."""
     chunks: list[bytes] = []
     total = 0
     while total < limit:
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                raise TimeoutError
         chunk = os.read(fd, limit - total)
         if not chunk:
             break
@@ -2422,6 +2441,7 @@ def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
         "--service-type=exec",
         f"--uid={cfg['service_user']}",
         "--property=PrivateTmp=yes",
+        f"--property=RuntimeMaxSec={EXPORT_RUNTIME_SEC}",
     ]
     argv += [f"--setenv={tok}" for tok in cfg.get("offline_env", "").split()]
     argv += ["--", TOOLS["python3"], "-I", os.path.abspath(__file__), "_export-worker", kind]
@@ -2430,31 +2450,83 @@ def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
     )
     assert proc.stdout is not None
     try:
-        raw = _read_all(proc.stdout.fileno(), EXPORT_LIMIT + 256)
+        return _export_result(proc, kind)
+    except BaseException:
+        # Whatever went wrong, no unit of ours is left running: killing
+        # systemd-run alone would leave the unit, and the deploy user has no
+        # grant to stop it.
+        _export_stop(proc)
+        raise
     finally:
         proc.stdout.close()
-    if len(raw) >= EXPORT_LIMIT + 256:
+
+
+def _export_stop(proc: subprocess.Popen[bytes]) -> None:
+    """Stop the export unit (as root, here; no sudoers line for it) and reap
+    systemd-run. Harmless when the unit already ended."""
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(  # noqa: S603
+            [TOOLS["systemctl"], "stop", EXPORT_UNIT], check=False, timeout=30
+        )
+    with contextlib.suppress(OSError):
         proc.kill()
-        proc.wait()
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        proc.wait(timeout=30)
+
+
+def _export_result(proc: subprocess.Popen[bytes], kind: str) -> bytes | None:
+    assert proc.stdout is not None
+    deadline = time.monotonic() + EXPORT_DEADLINE_SEC
+    too_slow = RefusedError(
+        f"the export unit for {kind} did not finish within {EXPORT_DEADLINE_SEC} seconds; it "
+        "was stopped and nothing was exported"
+    )
+    try:
+        raw = _read_all(proc.stdout.fileno(), EXPORT_LIMIT + 256, deadline)
+    except TimeoutError:
+        raise too_slow from None
+    if len(raw) >= EXPORT_LIMIT + 256:
         raise RefusedError(
             f"the export unit for {kind} wrote more than {EXPORT_LIMIT} bytes; nothing was exported"
         )
-    rc = proc.wait()
+    try:
+        rc = proc.wait(timeout=max(deadline - time.monotonic(), 0.01))
+    except subprocess.TimeoutExpired:
+        raise too_slow from None
     if rc == EXPORT_ABSENT and kind == "config" and not raw:
         return None
     if rc != 0:
         raise RefusedError(f"the export unit for {kind} exited {rc}; nothing was exported")
+    return _export_frame(kind, raw)
+
+
+def _export_frame(kind: str, raw: bytes) -> bytes:
+    """The file inside the one frame raw must be: a header at the very start,
+    a length in 1..EXPORT_LIMIT that is exactly what follows, and the sha256
+    of those bytes. Each check refuses with its own message."""
+    where = f"the export unit for {kind}"
     m = EXPORT_FRAME.match(raw)
-    body = raw[m.end() :] if m else b""
-    if (
-        m is None
-        or int(m.group(1)) == 0
-        or len(body) != int(m.group(1))
-        or hashlib.sha256(body).hexdigest() != m.group(2).decode()
-    ):
+    if m is None:
         raise RefusedError(
-            f"the export unit for {kind} did not write exactly one framed file to its output "
-            "(something else wrote there, or it was cut short); nothing was exported"
+            f"{where} did not start its output with a frame header (something else wrote "
+            "there); nothing was exported"
+        )
+    n = int(m.group(1))
+    body = raw[m.end() :]
+    if n == 0:
+        raise RefusedError(f"{where} framed an empty file; nothing was exported")
+    if n > EXPORT_LIMIT:
+        raise RefusedError(
+            f"{where} framed {n} bytes, over the {EXPORT_LIMIT} limit; nothing was exported"
+        )
+    if len(body) != n:
+        raise RefusedError(
+            f"{where} framed {n} bytes but {len(body)} followed (cut short, or more output after "
+            "the file); nothing was exported"
+        )
+    if hashlib.sha256(body).hexdigest() != m.group(2).decode():
+        raise RefusedError(
+            f"{where} framed bytes whose sha256 is not the one it stated; nothing was exported"
         )
     return body
 
