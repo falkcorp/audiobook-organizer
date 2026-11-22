@@ -683,7 +683,9 @@ class RecordPassTest(unittest.TestCase):
 
     def test_a_listed_5xx_without_its_listed_message_is_a_recorder_failure(self):
         self.rig.fake.handler_status["PUT /api/v1/audiobooks"] = 500
-        self.rig.fake.handler_message = "open /srv/batcave/archive/joker.mp3: permission denied (192.0.2.10)"
+        self.rig.fake.handler_message = (
+            "open /srv/batcave/archive/joker.mp3: permission denied (192.0.2.10)"
+        )
         with self.assertRaises(rec.RecorderError) as cm:
             self.rig.run()
         text = str(cm.exception)
@@ -698,7 +700,10 @@ class RecordPassTest(unittest.TestCase):
 
     def test_shape_of_names_the_kind_of_a_body_and_none_of_its_words(self):
         self.assertEqual(rec.shape_of("  "), "empty body")
-        self.assertEqual(rec.shape_of('{"error": "open /srv/batcave: denied"}'), "38 chars of a JSON object with 1 keys")
+        self.assertEqual(
+            rec.shape_of('{"error": "open /srv/batcave: denied"}'),
+            "38 chars of a JSON object with 1 keys",
+        )
         self.assertEqual(rec.shape_of("[1, 2]"), "6 chars of JSON that is not an object")
         out = rec.shape_of("open /srv/batcave/joker.mp3: permission denied")
         self.assertTrue(out.endswith("chars of text"))
@@ -1008,19 +1013,26 @@ class OwnerSetTest(unittest.TestCase):
 
     def test_the_owner_email_is_a_fixture_on_a_reserved_domain(self):
         self.assertEqual(rec.OWNER_EMAIL, "bruce@example.invalid")
-        self.assertEqual(rec.OWNER_ENV, {"OWNER_EMAIL": "bruce@example.invalid"})
+        # main's name for owner_email (F3-07): main refuses the retired OWNER_EMAIL at boot
+        self.assertEqual(rec.OWNER_ENV, {"ABO_BOOKS_IDENTITY_OWNER_EMAIL": "bruce@example.invalid"})
 
     def test_the_owner_routes_are_routes_of_the_committed_dump(self):
         dump = json.loads((REACH / "routes.json").read_text(encoding="utf-8"))
         got = rec.owner_routes(dump["routes"])
         self.assertEqual([(r["method"], r["path"]) for r in got], list(rec.OWNER_ROUTES))
-        self.assertEqual(len(rec.OWNER_ROUTES), 9)
-        self.assertEqual(len(set(rec.OWNER_ROUTES)), 9)
+        # main's ownerCredRoute calls: v0.223.0's nine less the two offline-only reset
+        # routes, plus the guest phone key's reissue route
+        self.assertEqual(len(rec.OWNER_ROUTES), 8)
+        self.assertEqual(len(set(rec.OWNER_ROUTES)), 8)
+        self.assertNotIn(("POST", "/api/v1/system/reset"), rec.OWNER_ROUTES)
+        self.assertIn(
+            ("POST", "/api/v1/admin/guest-service-tokens/:userId/reissue"), rec.OWNER_ROUTES
+        )
 
     def test_a_route_the_dump_lacks_is_a_recorder_failure(self):
         with self.assertRaises(rec.RecorderError) as cm:
             rec.owner_routes([{"method": "POST", "path": "/api/v1/backup/restore"}])
-        self.assertIn("/api/v1/system/reset", str(cm.exception))
+        self.assertIn("/api/v1/admin/guest-service-tokens/:userId/reissue", str(cm.exception))
 
     def test_an_owner_boot_sets_the_owner_in_the_environment_not_the_stored_config(self):
         seen: list[tuple[list[str], dict[str, str]]] = []
@@ -1043,7 +1055,7 @@ class OwnerSetTest(unittest.TestCase):
         ):
             staged = mock.patch.object(rec, "stage_copy")
             edited = mock.patch.object(rec, "edit_config", side_effect=record_edits)
-            proc = mock.patch.object(rec.w, "R0Process", side_effect=record_process)
+            proc = mock.patch.object(rec, "MainProcess", side_effect=record_process)
             with staged, edited, proc, self.assertRaises(StopError):
                 rec.boot_and_record(args, pathlib.Path("r0"), [], [], auth_off, owner_set=owner_set)
             self.assertEqual(seen[-1], (want_edits, want_env))
@@ -1103,13 +1115,17 @@ class OwnerSetTest(unittest.TestCase):
         self.assertGreater(n_on, 1)
         args = rec.build_parser().parse_args(["--check", "--binary", "r0"])
         manifest = {"r0_tag": "v0", "r0_binary_sha256": "x"}
+        commit = "c" * 40
         patches = [
             mock.patch.object(
                 rec.w, "MANIFEST_PATH", mock.Mock(read_text=lambda **k: json.dumps(manifest))
             ),
             mock.patch.object(rec.ra, "check_answers_still_valid"),
-            mock.patch.object(rec.w, "read_r0_tag", return_value="v0"),
-            mock.patch.object(rec, "load_routes", return_value={"r0_tag": "v0", "routes": routes}),
+            mock.patch.object(rec.b, "read_commit", return_value=commit),
+            mock.patch.object(
+                rec, "load_routes", return_value={"r0_commit": commit, "routes": routes}
+            ),
+            mock.patch.object(rec.b, "check_build_info"),
             mock.patch.object(rec.w, "check_native_binary"),
             mock.patch.object(rec.w, "sha256_file", return_value="x"),
             mock.patch.object(rec.w, "check_outside_maintenance_window"),
@@ -1271,16 +1287,16 @@ class FilesAndCheckTest(unittest.TestCase):
         self.addCleanup(rig.close)
         out = rig.run()
         extra = {k: out[k] for k in ("tasks", "approvals", "census")}
-        meta = {"r0_tag": "v9.9.9", "r0_binary_sha256": "0" * 64}
+        meta = {"r0_commit": "9" * 40, "r0_build": "recipe"}
         doc = rec.build_verdicts(meta, rig.routes, rig.principals, out["columns"], extra)
         if flip:
             v = doc["routes"][1]["verdict"]
             doc["routes"][1]["verdict"] = ("D" if v[0] == "A" else "A") + v[1:]
         return doc, rig
 
-    def test_the_output_names_the_r0_tag_and_the_route_count(self):
+    def test_the_output_names_the_r0_commit_and_the_route_count(self):
         doc, rig = self.doc()
-        self.assertEqual(doc["r0_tag"], "v9.9.9")
+        self.assertEqual(doc["r0_commit"], "9" * 40)
         self.assertEqual(doc["route_count"], len(rig.routes))
         self.assertEqual(doc["principals"], [p["name"] for p in rig.principals])
 
@@ -1411,8 +1427,8 @@ class ProvenanceTest(unittest.TestCase):
 
     def test_check_flags_a_changed_overlay_and_ignores_who_recorded_it(self):
         old = {
-            "r0_tag": "v1",
-            "r0_binary_sha256": "0" * 64,
+            "r0_commit": "1" * 40,
+            "r0_build": "recipe",
             "overlay_sha256": "1" * 64,
             "route_count": 0,
             "principals": [],
@@ -1421,6 +1437,13 @@ class ProvenanceTest(unittest.TestCase):
         }
         same_but_run = {**old, "recorded": {"run_id": "2"}}
         self.assertEqual(rec.diff_verdicts(old, same_but_run), [])
+        # the binary's digest is provenance: a rebuild of the same commit by the same
+        # recipe that is not bit-identical is no diff
+        rebuilt = {**old, "recorded": {"run_id": "1", "r0_binary_sha256": "f" * 64}}
+        self.assertEqual(rec.diff_verdicts(old, rebuilt), [])
+        for key, value in (("r0_commit", "2" * 40), ("r0_build", "another recipe")):
+            moved = {**old, key: value}
+            self.assertEqual(len(rec.diff_verdicts(old, moved)), 1, key)
         moved = {**old, "overlay_sha256": "2" * 64}
         diffs = rec.diff_verdicts(old, moved)
         self.assertEqual(len(diffs), 1)
@@ -1444,6 +1467,148 @@ class ProvenanceTest(unittest.TestCase):
         )
 
 
+class MainBuildTest(unittest.TestCase):
+    """R0 is main at the pinned commit (F4-08): the build is refused unless it is that
+    commit by the recipe, the boot speaks main's names, and each boot flag is shown
+    to have taken effect."""
+
+    COMMIT = "a" * 40
+
+    def info(self, **over):
+        good = {
+            "CGO_ENABLED": "0",
+            "GOOS": "linux",
+            "GOARCH": "amd64",
+            "-tags": "embed_frontend",
+            "-trimpath": "true",
+            "vcs": "git",
+            "vcs.modified": "false",
+            "vcs.revision": self.COMMIT,
+            "main.commit": self.COMMIT,
+        }
+        good.update(over)
+        return {k: v for k, v in good.items() if v is not None}
+
+    def check(self, **over):
+        with mock.patch.object(rec.b, "build_info", return_value=self.info(**over)):
+            return rec.b.check_build_info(pathlib.Path("bin"), self.COMMIT)
+
+    def test_the_pinned_commit_built_by_the_recipe_is_accepted(self):
+        self.check()
+
+    def test_any_other_build_is_refused_before_it_is_booted(self):
+        for over in (
+            {"vcs.revision": "b" * 40},
+            {"main.commit": "b" * 40},
+            {"vcs.modified": "true"},
+            {"-tags": ""},
+            {"-tags": None},
+            {"CGO_ENABLED": "1"},
+            {"GOARCH": "arm64"},
+            {"-trimpath": None},
+        ):
+            with self.subTest(over=over), self.assertRaises(rec.b.BuildError):
+                self.check(**over)
+
+    def test_the_ldflags_x_values_are_read_from_the_build_info(self):
+        out = "\n".join(
+            [
+                "bin: go1.27.3",
+                '\tbuild\t-ldflags="-s -w -X main.version=0.0.0-r0reach.x -X main.commit=abc"',
+                "\tbuild\tvcs.revision=abc",
+            ]
+        )
+        run = mock.Mock(return_value=mock.Mock(stdout=out))
+        with mock.patch.object(rec.b.subprocess, "run", run):
+            got = rec.b.build_info(pathlib.Path("bin"))
+        self.assertEqual(got["main.commit"], "abc")
+        self.assertEqual(got["vcs.revision"], "abc")
+
+    def test_the_committed_pin_is_one_full_sha(self):
+        self.assertRegex(rec.b.read_commit(), r"^[0-9a-f]{40}$")
+
+    def test_a_given_binary_must_be_the_pinned_build(self):
+        args = rec.build_parser().parse_args(["--check", "--binary", "bin"])
+        other = self.info(**{"vcs.revision": "b" * 40})
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(rec.b, "build_info", return_value=other))
+            stack.enter_context(self.assertRaises(rec.w.CorpusError))
+            rec.r0_binary(args, self.COMMIT)
+        built = mock.patch.object(rec.b, "build", return_value=pathlib.Path("built"))
+        with built as b:
+            args = rec.build_parser().parse_args(["--check"])
+            self.assertEqual(rec.r0_binary(args, self.COMMIT), pathlib.Path("built"))
+            b.assert_called_once()
+
+    def test_every_boot_env_name_has_a_main_name_or_a_stated_reason(self):
+        layout = rec.w.Layout(pathlib.Path("/nonexistent/wd"))
+        r0 = rec.w.boot_env(layout, 1)
+        self.assertEqual(set(r0), set(rec.MAIN_ENV_NAMES) | set(rec.MAIN_ENV_LEFT_OUT))
+        self.assertFalse(set(rec.MAIN_ENV_NAMES) & set(rec.MAIN_ENV_LEFT_OUT))
+        env = rec.main_boot_env(layout, 1)
+        for old, new in rec.MAIN_ENV_NAMES.items():
+            self.assertEqual(env[new], r0[old], old)
+        # main refuses HEAD's names at boot; none may reach it
+        for name in env:
+            self.assertTrue(name in ("HOME", "TZ") or name.startswith("ABO_"), name)
+        grown = {**r0, "GOTHAM_NEW": "x"}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(rec.w, "boot_env", return_value=grown))
+            stack.enter_context(self.assertRaises(rec.RecorderError))
+            rec.main_boot_env(layout, 1)
+
+    def test_the_operator_file_holds_no_head_flat_key(self):
+        self.assertEqual(rec.MAIN_OPERATOR_YAML.strip(), "{}")
+
+    def test_the_main_process_boots_main_env_and_extra_env_wins(self):
+        layout = rec.w.Layout(pathlib.Path("/nonexistent/wd"))
+        proc = rec.MainProcess(pathlib.Path("/bin/r0"), layout, 1, extra_env=rec.OWNER_ENV)
+        argv, env = proc._command()
+        self.assertEqual(argv[0], "/bin/r0")
+        self.assertEqual(env["ABO_BOOKS_IDENTITY_OWNER_EMAIL"], rec.OWNER_EMAIL)
+        self.assertNotIn("OWNER_EMAIL", env)
+        self.assertNotIn("ABS_API_ENABLED", env)
+        self.assertEqual(env["ABO_BOOKS_ABS_API_ENABLED"], "true")
+        with self.assertRaises(rec.w.CorpusError):
+            rec.MainProcess(pathlib.Path("/bin/r0"), layout, 1, docker=True)._command()
+
+    def _probe(self, answers):
+        """A Probe whose send answers from ``answers`` (path -> (status, body))."""
+        probe = rec.Probe(None, {"name": "session:admin", "kind": "session"}, None)
+
+        def send(method, path, body, sink=None):
+            status, text = answers[path]
+            if sink is not None and text:
+                sink.append(text)
+            return status
+
+        probe.send = send  # type: ignore[method-assign]
+        return probe
+
+    def test_a_boot_flag_that_did_not_take_effect_fails_the_run(self):
+        worker = rec.WORKER_FLAG_OFF_PROBE[1]
+        disc = rec.DISCOVERY_FLAG_OFF_PROBE[1]
+        on = {worker: (503, "not running"), disc: (502, "no such host")}
+        rec.check_boot_flags_took_effect(self._probe(on))
+        for path, answer in (
+            (worker, (404, "404 page not found")),
+            (disc, (403, '{"error":"deluge discovery is disabled (set it)"}')),
+        ):
+            with self.subTest(path=path), self.assertRaises(rec.RecorderError) as cm:
+                rec.check_boot_flags_took_effect(self._probe({**on, path: answer}))
+            self.assertIn(path, str(cm.exception))
+        # a 403 for another reason (a role) is not the flag's answer
+        rec.check_boot_flags_took_effect(self._probe({**on, disc: (403, "permission denied")}))
+
+    def test_each_boot_checks_its_flags_before_recording(self):
+        src = pathlib.Path(rec.__file__).read_text(encoding="utf-8")
+        body = src[src.index("def boot_and_record(") : src.index("def stop_throwaway(")]
+        self.assertEqual(body.count("check_boot_flags_took_effect("), 2)
+        self.assertLess(
+            body.index("check_boot_flags_took_effect(admin)"), body.index("record_pass(")
+        )
+
+
 class CommittedDataTest(unittest.TestCase):
     """The recorded data, once it is committed, is whole (skipped before the first run)."""
 
@@ -1464,10 +1629,17 @@ class CommittedDataTest(unittest.TestCase):
         for r in self.v["routes"]:
             self.assertEqual(len(r["verdict"]), len(names), r["path"])
 
-    def test_the_r0_tag_is_the_manifest_tag(self):
+    def test_the_r0_commit_is_the_pinned_commit_and_the_store_the_manifests(self):
+        # R0 is main at the pinned commit (F4-08); the store is still the corpus the
+        # release wrote, whose tag and binary stay the manifest's
         m = json.loads((REPO_ROOT / "internal/books/testdata/r2corpus/manifest.json").read_text())
-        self.assertEqual(self.v["r0_tag"], m["r0_tag"])
-        self.assertEqual(self.v["r0_binary_sha256"], m["r0_binary_sha256"])
+        self.assertEqual(self.v["r0_commit"], rec.b.read_commit())
+        self.assertEqual(self.v["r0_commit"], self.routes["r0_commit"])
+        self.assertEqual(self.v["r0_build"], rec.b.RECIPE)
+        self.assertEqual(self.v["store_written_by"], m["r0_tag"])
+        self.assertNotIn("r0_tag", self.v)
+        self.assertNotIn("r0_binary_sha256", self.v)
+        self.assertRegex(self.v["recorded"]["r0_binary_sha256"], r"^[0-9a-f]{64}$")
 
     def test_the_recording_names_its_store_and_its_run(self):
         store = REPO_ROOT / "internal/books/testdata/r2corpus/overlay"

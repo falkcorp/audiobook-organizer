@@ -6,11 +6,16 @@
 """Record the R0 binary's reach over the R2 overlay corpus (F4-07).
 
 05-rbac §6.3 / 09 §9.2.6: the reach oracle compares, for every (route, principal)
-cell, what the R0 release binary allowed with what R2 allows after M3 migrated
-the same corpus. This script records the R0 half: it boots the R0 binary on a
-copy of the overlay store (``write_r0_corpus.py``'s boot spec, F2-13's rows),
-requests every route of R0's router dump (``routes.json``, written by
-``dump_r0_routes.py`` from the tag's source) as every principal of
+cell, what the R0 binary allowed with what R2 allows after M3 migrated the same
+corpus. R0 is main at the commit ``r0config/r0_reach_commit.txt`` pins, built by
+``build_r0_reach.py`` with the release asset's recipe (F4-08, 2026-11-22: it was
+the v0.223.0 release asset until then, and a baseline that old hid what main had
+changed since). The corpus is still the release's: ``manifest.json``, the store and
+``ci/r0_release.txt`` are the corpus writer's and do not move. This script records
+the R0 half: it boots that binary on a copy of the overlay store (``main_boot_env``:
+``write_r0_corpus.py``'s boot spec under main's configuration names, F2-13's rows),
+requests every route of the commit's router dump (``routes.json``, written by
+``dump_r0_routes.py`` from the commit's source) as every principal of
 ``principal_table()`` and writes, under ``internal/books/rbacreach/``:
 
 - ``principals.json``: the table itself (the Go test seeds the same rows),
@@ -51,27 +56,34 @@ which must be the gate's own (``OWNER_REFUSAL_TEXT``: a 403 for another reason i
 evidence about the gate). The owner's ALLOW side is not recorded: R0 admits the owner
 only for a verified Cloudflare Access JWT, and the boot has no verifier and no issuer.
 
-``--check`` re-derives the data and exits 1 on any differing verdict cell, a
-changed R0 binary, a changed route count or principal list, or a changed overlay
-store (``overlay_sha256``, the digest of every file of the store the recording
-copied; the Go oracle also checks it against the committed store, offline).
+``--check`` builds the pinned commit again (or takes ``--binary``), re-derives the
+data and exits 1 on any differing verdict cell, a changed R0 commit or build recipe
+(``r0_commit``, ``r0_build``), a changed route count or principal list, or a changed
+overlay store (``overlay_sha256``, the digest of every file of the store the
+recording copied; the Go oracle also checks it against the committed store, offline).
+The binary's identity is its commit: its own build info must name the pinned
+commit, a clean tree and the recipe (``build_r0_reach.check_build_info``) or it is
+not booted. Its digest is provenance, since a rebuild is not promised to be
+bit-identical across runner images.
 
 Provenance. ``verdicts.json`` names the run that wrote it in ``recorded`` (the
-recorder's commit, the CI workflow and run, the runner image, python): taken from
-the GitHub Actions environment when the recorder runs there, else from the local
-checkout. It is never compared by ``--check``, since every run has its own.
+recorder's commit, the CI workflow and run, the runner image, python, and the R0
+binary's digest): taken from the GitHub Actions environment when the recorder runs
+there, else from the local checkout. It is never compared by ``--check``, since
+every run has its own.
 
 Re-running it (R0's per-address rate limit needs a loopback that owns all of
 127/8, so ``--spread-source-ips`` is on by default only on Linux):
 
-1. on a Linux host with the pinned R0 asset's runtime libraries (libtag), run
-   ``python3 scripts/r2corpus/record_r0_reach.py --check``. On macOS the loopback
-   owns only 127.0.0.1, ``--spread-source-ips`` is off, and R0's limiter answers
-   429, which fails the run; ``--docker`` (R0 in a container) was not tried for
-   this data;
+1. on a Linux host with go, node and npm (the build) and git history holding the
+   pinned commit, run ``python3 scripts/r2corpus/record_r0_reach.py --check``. The
+   binary is static (``CGO_ENABLED=0``), so it needs no runtime libraries. On macOS
+   the loopback owns only 127.0.0.1, ``--spread-source-ips`` is off, and R0's
+   limiter answers 429, which fails the run; ``--docker`` is not offered for the
+   main build;
 2. or on a GitHub runner: ``r0config/r0reach-record.workflow.yml.txt`` is the
-   workflow that recorded the committed data (run 43412869288), as a template
-   to copy onto a throwaway branch; its header says how.
+   workflow that recorded the committed data (its run is ``recorded.run_id``), as a
+   template to copy onto a throwaway branch; its header says how.
 """
 
 from __future__ import annotations
@@ -116,6 +128,7 @@ def _load(name: str, filename: str):
 
 w = _load("write_r0_corpus", "write_r0_corpus.py")
 ra = _load("record_r0_answers", "record_r0_answers.py")
+b = _load("build_r0_reach", "build_r0_reach.py")
 
 REACH_REL = "internal/books/rbacreach"
 REACH_DIR = w.REPO_ROOT / REACH_REL
@@ -1100,7 +1113,7 @@ def principals_doc(principals: list[dict[str, Any]]) -> dict[str, Any]:
 def diff_verdicts(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     """One line per differing verdict cell (statuses are not compared)."""
     out: list[str] = []
-    for k in ("r0_tag", "r0_binary_sha256", "overlay_sha256", "route_count", "principals"):
+    for k in ("r0_commit", "r0_build", "overlay_sha256", "route_count", "principals"):
         if old.get(k) != new.get(k):
             out.append(f"{k}: {old.get(k)!r} -> {new.get(k)!r}")
     if old.get("canary") != new.get("canary"):
@@ -1245,25 +1258,34 @@ WORKER_FLAG = "fingerprint_remote_workers_enabled=*>true"
 DISCOVERY_FLAG = "deluge_discovery_enabled=*>true"
 BOOT_FLAGS = [WORKER_FLAG, DISCOVERY_FLAG]
 AUTH_OFF_EDIT = "enable_auth=true>false"
+# What each flag's handler answers while the flag is off. Main reads the stored
+# config through F3-07's cutover, not the blob R0 read, so an edit that main no
+# longer honoured would leave the flag off silently: the fingerprint routes would
+# answer 404 to every principal (an A for each, the anonymous one included) and
+# discovery 403 to every principal (a D for each). check_boot_flags_took_effect
+# refuses either answer on the boot's most privileged principal.
+WORKER_FLAG_OFF_PROBE = ("GET", "/api/v1/fingerprint/worker/hello", 404, None)
+DISCOVERY_FLAG_OFF_PROBE = ("GET", "/api/v1/deluge/discover", 403, "deluge discovery is disabled")
 
 # The owner-set recording. Production sets ``owner_email``; the main recording does
-# not, so R0's owner gate (``ownerGateWhenOwnerSet``, owner_routes.go @v0.223.0, which
-# is on only while ``owner_email`` is set) was never on in it. These are the routes
-# R0 puts behind that gate (wire_library_routes.go, wire_system_routes.go
-# @v0.223.0), recorded again in boots whose environment holds OWNER_EMAIL. R0's
+# not, so R0's owner gate (``ownerGateWhenOwnerSet``, owner_routes.go at the pinned
+# commit, which is on only while ``owner_email`` is set) was never on in it. These
+# are the routes R0 puts behind that gate (the ``ownerCredRoute`` calls of
+# wire_library_routes.go and wire_system_routes.go at the pinned commit: v0.223.0's
+# two reset routes are offline-only on main, and the guest phone key's reissue route
+# is new), recorded again in boots whose environment holds the owner email. R0's
 # gate needs ``auth.OwnerProofWhyNot``: a verified Cloudflare Access JWT for the
 # owner's email, which no principal of the table can hold (the boot has no Access
 # verifier), so the table's whole answer is the gate's refusal, and the recording
 # shows that R0 refuses a non-owner admin session on every one of them.
 # The address is a fixture on a reserved domain.
 OWNER_EMAIL = "bruce@example.invalid"
-OWNER_ENV = {"OWNER_EMAIL": OWNER_EMAIL}
+OWNER_ENV = {"ABO_BOOKS_IDENTITY_OWNER_EMAIL": OWNER_EMAIL}
 OWNER_ROUTES: tuple[tuple[str, str], ...] = (
     ("GET", "/api/v1/admin/guest-service-tokens/plan"),
+    ("POST", "/api/v1/admin/guest-service-tokens/:userId/reissue"),
     ("POST", "/api/v1/admin/guest-service-tokens/:userId/revoke"),
     ("POST", "/api/v1/backup/restore"),
-    ("POST", "/api/v1/system/factory-reset"),
-    ("POST", "/api/v1/system/reset"),
     ("POST", "/api/v1/users/:id/merge-into/:target/apply"),
     ("POST", "/api/v1/users/:id/merge-into/:target/preview"),
     ("POST", "/api/v1/users/merges/:jid/resume"),
@@ -1306,6 +1328,23 @@ def edit_config(layout: Any, edits: list[str]) -> None:
     print(r.stdout.strip(), file=sys.stderr, flush=True)
 
 
+def check_boot_flags_took_effect(probe: Probe) -> None:
+    """Each boot flag's off-answer must not come back to the boot's most privileged
+    principal (WORKER_FLAG_OFF_PROBE, DISCOVERY_FLAG_OFF_PROBE): a flag the edit did
+    not reach would record a whole route family wrongly, with no failure."""
+    problems = []
+    for method, path, status, text in (WORKER_FLAG_OFF_PROBE, DISCOVERY_FLAG_OFF_PROBE):
+        sink: list[str] = []
+        got = probe.send(method, path, probe_body(method, path), sink)
+        if got == status and (text is None or any(text in body for body in sink)):
+            problems.append(f"{method} {path} answered {got} to {probe.principal['name']}")
+    if problems:
+        raise RecorderError(
+            "a boot flag did not take effect (the stored-config edit did not reach the "
+            "running binary): " + "; ".join(problems)
+        )
+
+
 def check_auth_is_off(client: Any) -> None:
     """R0 booted from the flipped store must answer a credential-less request to a
     route that needs one: a 401 here means the recording would not be auth-off."""
@@ -1317,6 +1356,60 @@ def check_auth_is_off(client: Any) -> None:
         )
 
 
+# write_r0_corpus.py's boot spec under main's names (F3-07 renamed every setting;
+# main refuses a retired env name or a --config file holding a HEAD flat key at
+# boot). Each of boot_env's names is translated (MAIN_ENV_NAMES) or left out
+# because the stored config the cutover imports holds the value R0 ran with
+# (MAIN_ENV_LEFT_OUT); test_record_r0_reach pins that the two cover boot_env.
+MAIN_ENV_NAMES: dict[str, str] = {
+    "HOME": "HOME",
+    "TZ": "TZ",
+    "ABK_STATE_DIR": "ABO_CORE_PATHS_STATE_DIR",
+    "ACOUSTID_API_KEY": "ABO_BOOKS_ACOUSTID_API_KEY",
+    "DELUGE_WEB_URL": "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_URL",
+    "DELUGE_WEB_PASSWORD": "ABO_INTEGRATIONS_DOWNLOAD_DELUGE_PASSWORD",
+    "ABS_API_ENABLED": "ABO_BOOKS_ABS_API_ENABLED",
+    "ABS_AUTH_MODES": "ABO_BOOKS_ABS_AUTH_MODES",
+    "ABS_JWT_SECRET": "ABO_BOOKS_ABS_JWT_SECRET",
+    "ABS_REFRESH_TOKEN_TTL": "ABO_BOOKS_ABS_REFRESH_TOKEN_TTL",
+}
+MAIN_ENV_LEFT_OUT: dict[str, str] = {
+    # The overlay's config_blob holds scheduled.library_scan.on_startup=false; main
+    # retired the env name and dropped the key.
+    "SCHEDULED_LIBRARY_SCAN_ON_STARTUP": "the stored config holds false; main dropped the key",
+    "SCHEDULED_DEDUP_REFRESH_INTERVAL": "the stored config holds dedup_refresh.interval=720",
+    "MAINTENANCE_WINDOW_START": "the stored config holds maintenance.window_start=2",
+}
+# The operator file (--config). R0's VIPER_YAML keys are HEAD flat keys, which main
+# refuses in that file; the stored config holds the same values (log_level info,
+# scan_on_startup false, write_startup_readonly_key false, auto_update.enabled
+# false), and concurrent_scans touches no authorization decision. So it is empty.
+MAIN_OPERATOR_YAML = "{}\n"
+
+
+def main_boot_env(layout: Any, port: int) -> dict[str, str]:
+    """boot_env under main's names. A name boot_env gains that neither table
+    covers is a recorder failure, never silently dropped."""
+    out: dict[str, str] = {}
+    for name, value in w.boot_env(layout, port).items():
+        if name in MAIN_ENV_NAMES:
+            out[MAIN_ENV_NAMES[name]] = value
+        elif name not in MAIN_ENV_LEFT_OUT:
+            raise RecorderError(f"boot_env name {name} has no main name (MAIN_ENV_NAMES)")
+    return out
+
+
+class MainProcess(w.R0Process):
+    """R0Process with main_boot_env in place of boot_env (extra_env still wins)."""
+
+    def _command(self) -> tuple[list[str], dict[str, str]]:
+        if self.docker:
+            raise w.CorpusError("--docker is not offered for the main build: run on linux/amd64")
+        env = {**main_boot_env(self.layout, self.port), **self.extra_env}
+        argv = w.boot_argv(str(self.binary), self.layout, self.port)
+        return argv, {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **env}
+
+
 def stage_copy(args: argparse.Namespace, layout: Any) -> None:
     corpus = pathlib.Path(args.corpus).resolve()
     if layout.workdir.exists():
@@ -1324,7 +1417,7 @@ def stage_copy(args: argparse.Namespace, layout: Any) -> None:
     shutil.copytree(corpus, layout.store)
     ra.touch_like_a_checkout(layout.store)
     layout.home.mkdir(parents=True, exist_ok=True)
-    layout.viper_yaml.write_text(w._yaml_dump(w.VIPER_YAML), encoding="utf-8")
+    layout.viper_yaml.write_text(MAIN_OPERATOR_YAML, encoding="utf-8")
 
 
 def boot_and_record(
@@ -1354,7 +1447,7 @@ def boot_and_record(
     if owner_set:
         env.update(OWNER_ENV)
     edit_config(layout, edits)
-    proc = w.R0Process(binary, layout, args.port, docker=args.docker, extra_env=env)
+    proc = MainProcess(binary, layout, args.port, docker=args.docker, extra_env=env)
     client = w.Client(proc.base, user_agent=RECORDER_UA)
     proc.start()
     try:
@@ -1364,12 +1457,14 @@ def boot_and_record(
             mine = [p for p in principals if p["kind"] == "authoff"]
             probes = {p["name"]: Probe(client, p, None) for p in mine}
             admin = probes["authoff"]
+            check_boot_flags_took_effect(admin)
             return record_pass(lambda p: probes[p["name"]], mine, routes, admin, 1, False)
         ra.mint_answer_key(_Ctx(client, proc, layout))
         ra.wait_for_boot_runs(client, f"key:{ra.ANSWER_KEY}", timeout=args.settle_timeout)
         mine = [p for p in principals if p["kind"] != "authoff"]
         probes = prepare_credentials(client, mine)
         admin = probes["session:admin"]
+        check_boot_flags_took_effect(admin)
         out = record_pass(
             lambda p: probes[p["name"]], mine, routes, admin, args.workers, not owner_set
         )
@@ -1414,24 +1509,35 @@ def load_routes(path: pathlib.Path) -> dict[str, Any]:
     return doc
 
 
+def r0_binary(args: argparse.Namespace, commit: str) -> pathlib.Path:
+    """``--binary``, or the pinned commit built now; refused unless its own build
+    info names the commit and the recipe (build_r0_reach.check_build_info)."""
+    try:
+        if args.binary:
+            binary = pathlib.Path(args.binary).resolve()
+            b.check_build_info(binary, commit)
+            return binary
+        return b.build(commit, pathlib.Path(args.cache).expanduser() / f"r0reach-{commit[:12]}")
+    except b.BuildError as e:
+        raise w.CorpusError(str(e)) from e
+
+
 def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = json.loads(w.MANIFEST_PATH.read_text(encoding="utf-8"))
     ra.check_answers_still_valid(manifest)
-    tag = w.read_r0_tag()
-    if manifest["r0_tag"] != tag:
-        raise w.CorpusError(f"manifest r0_tag {manifest['r0_tag']} != {tag}")
+    try:
+        commit = b.read_commit()
+    except b.BuildError as e:
+        raise w.CorpusError(str(e)) from e
     routes_doc = load_routes(pathlib.Path(args.routes))
-    if routes_doc.get("r0_tag") != tag:
-        raise w.CorpusError(f"routes.json is for {routes_doc.get('r0_tag')}, not {tag}")
-    binary = (
-        pathlib.Path(args.binary).resolve()
-        if args.binary
-        else w.fetch_binary(tag, pathlib.Path(args.cache).expanduser())
-    )
+    if routes_doc.get("r0_commit") != commit:
+        raise w.CorpusError(
+            f"routes.json is a dump of {routes_doc.get('r0_commit')}, not of the pinned "
+            f"commit {commit}: run dump_r0_routes.py"
+        )
+    binary = r0_binary(args, commit)
     if not args.docker:
         w.check_native_binary(binary, False)
-    if w.sha256_file(binary) != manifest["r0_binary_sha256"]:
-        raise w.CorpusError("this binary is not the one that wrote the corpus")
     w.check_outside_maintenance_window()
     principals = principal_table()
     routes = routes_doc["routes"]
@@ -1458,14 +1564,18 @@ def record(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any]]:
     owner_canary = {**owner_on["canary"], **owner_off["canary"]}
     main_canary = {**on["canary"], **off["canary"]}
     check_owner_canaries(main_canary, owner_canary)
+    recorded = recorded_by()
+    recorded["r0_binary_sha256"] = w.sha256_file(binary)
     meta = {
         "what": "R0's allow/deny per (route, principal); A = past the authorization decision, "
-        "D = 401/403 (record_r0_reach.py)",
-        "r0_tag": tag,
-        "r0_binary_sha256": manifest["r0_binary_sha256"],
+        "D = 401/403 (record_r0_reach.py). R0 is main at r0_commit built by r0_build "
+        "(build_r0_reach.py); the store is the corpus the store_written_by release wrote",
+        "r0_commit": commit,
+        "r0_build": b.RECIPE,
         "store": "internal/books/testdata/r2corpus/overlay",
+        "store_written_by": manifest["r0_tag"],
         "overlay_sha256": overlay_digest(pathlib.Path(args.corpus)),
-        "recorded": recorded_by(),
+        "recorded": recorded,
     }
     extra = {k: on[k] for k in ("tasks", "approvals", "census")}
     extra["canary"] = main_canary
@@ -1498,7 +1608,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--list", action="store_true", help="list the principals")
     ap.add_argument("--corpus", default=str(OVERLAY_STORE), help="the store directory to copy")
     ap.add_argument("--routes", default=str(REACH_DIR / "routes.json"))
-    ap.add_argument("--binary", help="use this R0 binary instead of the release asset")
+    ap.add_argument(
+        "--binary",
+        help="use this R0 binary instead of building the pinned commit (it must be that "
+        "commit's build: build_r0_reach.check_build_info)",
+    )
     ap.add_argument("--cache", default="~/.cache/r2corpus")
     ap.add_argument("--docker", action="store_true")
     ap.add_argument("--workdir", default=w.DEFAULT_WORKDIR)
