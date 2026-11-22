@@ -150,7 +150,10 @@ func identityServe(h http.Handler, req *http.Request, p *coreauth.Principal, c r
 func newTestServerWith(t testing.TB, store database.Store, opts ...ServerOption) *Server {
 	t.Helper()
 	installServerConfigFacade(t)
-	s := NewServer(store, opts...)
+	s, err := NewServer(store, opts...)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 	t.Cleanup(s.releaseUnstarted)
 	attachTestMetrics(t, s)
 	return s

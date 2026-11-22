@@ -858,10 +858,20 @@ func WithLogger(log *slog.Logger) ServerOption {
 	return func(o *serverOptions) { o.log = log }
 }
 
+// errNewServerNilStore is NewServer's refusal of a nil store: a programming
+// error, since every caller holds a concrete store.
+var errNewServerNilStore = errors.New("NewServer: nil store: callers must provide a concrete database.Store")
+
 // NewServer builds the server over store. It takes options rather than a
 // second constructor so that database.Store, the wide type, is named by one
 // signature (TestStoreReferenceCount) and cmd's newServer seam stays one type.
-func NewServer(store database.Store, opts ...ServerOption) *Server {
+//
+// It never exits the process. A refusal (an incomplete identity wiring, a nil
+// store, a service container that does not build, an ABS surface the store
+// cannot serve) comes back as an error naming the cause, and the server it had
+// begun to build is released first (ReleaseUnstarted), so the caller's own
+// teardown finds nothing half-built. The server is nil with an error.
+func NewServer(store database.Store, opts ...ServerOption) (*Server, error) {
 	var so serverOptions
 	for _, o := range opts {
 		o(&so)
@@ -923,8 +933,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// mode; without it nothing is bound and HEAD's chain decides.
 	if so.identity != nil {
 		if err := so.identity.Validate(); err != nil {
-			slog.Error("NewServer: identity wiring is incomplete", "err", err)
-			os.Exit(1)
+			return nil, fmt.Errorf("NewServer: identity wiring is incomplete: %w", err)
 		}
 		router.Use(so.identity.Bind())
 	}
@@ -941,8 +950,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// registry (05-metrics §6, R1-15).
 
 	if store == nil {
-		slog.Error("NewServer called with nil store — this is a programming error; callers must provide a concrete database.Store")
-		os.Exit(1)
+		return nil, errNewServerNilStore
 	}
 	// The store is handed to everything below as it is: the service registry
 	// (Override("store", ...)), the services constructed inline, the scanner,
@@ -985,6 +993,14 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		// wireServerFromContainer populates the fields.
 		diagnosticsService: diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath),
 		changelogService:   activity.NewChangelogService(store),
+	}
+	// fail is every refusal below this point: the half-built server is torn
+	// down the way a built-but-never-started one is (bgCtx cancelled and its
+	// goroutines waited for, the search observer and the authority provider
+	// detached), and the cause goes back to the caller.
+	fail := func(err error) (*Server, error) {
+		server.ReleaseUnstarted()
+		return nil, err
 	}
 	// Observe the store's writes BEFORE anything can write: the observer feeds
 	// the search result cache and, once Start opens the index and creates the
@@ -1031,8 +1047,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// gave the registry.
 	opRegistry, err := opsregistry.NewService(store, log, opHub)
 	if err != nil {
-		lifecycleLog.Error("ops registry: %v", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: ops registry: %w", err))
 	}
 	// The state directory is the one the kernel was given (books.Options
 	// checked core's against EnsureSecureStateDir's): the updater reads the
@@ -1052,12 +1067,10 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		regContainer.Override(serviceregistry.KeyActivityStore, activityStoreOverrideForTest)
 	}
 	if err := regContainer.Resolve(); err != nil {
-		slog.Error("serviceregistry resolve", "err", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: serviceregistry resolve: %w", err))
 	}
 	if err := regContainer.Build(regCtx); err != nil {
-		slog.Error("serviceregistry build", "err", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: serviceregistry build: %w", err))
 	}
 
 	// Load the HNSW snapshot BEFORE PostInit so dedup.Engine.PostInit can detect
@@ -1072,21 +1085,19 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	}
 
 	if err := regContainer.PostInit(regCtx); err != nil {
-		slog.Error("serviceregistry postinit", "err", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: serviceregistry postinit: %w", err))
 	}
 	wireServerFromContainer(server, regContainer)
 	// The operations registry resolves its ops v3 run state from the store it
 	// was built with, through any decorator's Unwrap chain. If that
 	// lookup misses on a Pebble-backed server, every v3 path (stopping runs,
 	// the boot sweep, requeue successors) silently degrades to "no record".
-	// Refuse to construct such a server instead. NewServer has no error
-	// return, and the operation-runner child (cmd/child_mode.go) builds its
-	// server here without ever calling Start, so a Start-time gate such as
-	// opRegistrationGate would miss it: exit, as for a nil store above.
+	// Refuse to construct such a server instead. The operation-runner child
+	// (cmd/child_mode.go) builds its server here without ever calling Start,
+	// so a Start-time gate such as opRegistrationGate would miss it: return
+	// the error, as for a nil store above.
 	if err := opRegistryRunStateGate(database.AsPebbleStore(store), server.opRegistry); err != nil {
-		lifecycleLog.Error("NewServer: %v", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: %w", err))
 	}
 	server.initSearchResultCache()
 	server.container = regContainer
@@ -1439,7 +1450,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// their own sub-routes under /api/v1/plugins/{id}/.
 	server.initPlugins(bgCtx)
 
-	return server
+	return server, nil
 }
 
 // drainEmbedQueue is the EmbedQueue DrainFn: ensures Ollama is running,

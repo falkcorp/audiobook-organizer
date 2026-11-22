@@ -56,7 +56,10 @@ func newTestServer(t testing.TB, store database.Store) *Server {
 	// GET/PUT /api/v1/config answer over the installed config.Facade (F3-07
 	// e3): every route test that builds a server has one.
 	installServerConfigFacade(t)
-	s := NewServer(store)
+	s, err := NewServer(store)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
 	t.Cleanup(s.releaseUnstarted)
 	attachTestMetrics(t, s)
 	return s
