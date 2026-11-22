@@ -27,11 +27,11 @@ import (
 
 func TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             rootDir,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	oldPath := filepath.Join(rootDir, "src")
 	if err := os.MkdirAll(oldPath, 0775); err != nil {
@@ -86,11 +86,11 @@ func TestReOrganizeInPlace_UpdateBookFileError_MarksNeedsRescan(t *testing.T) {
 
 func TestReOrganizeInPlace_UpdateBookFileSuccess_NoRescan(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             rootDir,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	oldPath := filepath.Join(rootDir, "src2")
 	if err := os.MkdirAll(oldPath, 0775); err != nil {
@@ -134,11 +134,11 @@ func TestReOrganizeInPlace_UpdateBookFileSuccess_NoRescan(t *testing.T) {
 // single-file book an apply had renamed.
 func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             rootDir,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	// A real single audio file living at a "wrong" path under the library root.
 	oldDir := filepath.Join(rootDir, "Old Folder")
@@ -199,11 +199,11 @@ func TestReOrganizeInPlace_SingleFile_UpdatesBookFileRow(t *testing.T) {
 // corrupted.
 func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             rootDir,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	oldPath := filepath.Join(rootDir, "Book 2") // the directory book that moves
 	if err := os.MkdirAll(oldPath, 0775); err != nil {
@@ -256,11 +256,11 @@ func TestReOrganizeInPlace_DirectoryPrefix_DoesNotRewriteSibling(t *testing.T) {
 // book must be flagged for rescan rather than returning a silent success.
 func TestReOrganizeInPlace_SingleFile_StaleRow_MarksNeedsRescan(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             rootDir,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	oldDir := filepath.Join(rootDir, "Old Folder")
 	if err := os.MkdirAll(oldDir, 0775); err != nil {

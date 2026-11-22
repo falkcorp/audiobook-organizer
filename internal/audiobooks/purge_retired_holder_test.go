@@ -95,7 +95,7 @@ func TestPurgeResult_CappedCutsTheHoldsRetiredVersionsIDs(t *testing.T) {
 func TestRunPurge_LiveRowWinsOverRetiredHolding(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	trashedHolder(t, store, "mixed")
-	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: "mixed", FilePath: filepath.Join(config.AppConfig.RootDir, "mixed", "01.mp3")}))
+	require.NoError(t, store.CreateBookFile(&database.BookFile{BookID: "mixed", FilePath: filepath.Join(config.Get().RootDir, "mixed", "01.mp3")}))
 
 	res, err := svc.RunPurge(context.Background(), PurgeOptions{Unattended: true})
 	require.NoError(t, err)

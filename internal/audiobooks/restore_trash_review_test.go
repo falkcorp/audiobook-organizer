@@ -42,7 +42,7 @@ func TestRestoreAudiobook_NeverTrashedPrimaryIsLeftAlone(t *testing.T) {
 	sib := f.Book(t, vptest.Spec{ID: "sib", Group: "g", Primary: "nil"})
 	// No library root: the hand-off after a restore holds the group rather
 	// than re-electing, so a yield the restore wrote is what stays.
-	config.AppConfig.RootDir = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
 
 	_, err := svc.RestoreAudiobook(context.Background(), prim)
 	require.NoError(t, err)

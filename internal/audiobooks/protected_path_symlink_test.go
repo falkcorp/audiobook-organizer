@@ -38,11 +38,11 @@ func resetImportPathCacheForHelper(t *testing.T) {
 // setITunesPaths sets the two configured iTunes library files for one test.
 func setITunesPaths(t *testing.T, read, itl string) {
 	t.Helper()
-	prevRead, prevITL := config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath
+	prevRead, prevITL := config.Get().ITunes.LibraryReadPath, config.Get().ITunes.LibraryITLPath
 	t.Cleanup(func() {
-		config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath = prevRead, prevITL
+		config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath, c.ITunes.LibraryITLPath = prevRead, prevITL })
 	})
-	config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath = read, itl
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath, c.ITunes.LibraryITLPath = read, itl })
 }
 
 type failingImportPathLister struct{}

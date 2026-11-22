@@ -30,17 +30,17 @@ import (
 // sampled file's; ten asks later that is still all that was ever started.
 func TestLibraryRootReady_HungMountIsNotAskedAgainWhileItsStatsAreOutstanding(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	started := hangRootStats(t)
 
-	err := svc.libraryRootReady(config.AppConfig.RootDir)
+	err := svc.libraryRootReady(config.Get().RootDir)
 	require.ErrorIs(t, err, ErrLibraryRootNotReady)
 	assert.Contains(t, err.Error(), "did not answer")
 	require.Eventually(t, func() bool { return started.Load() == 2 }, 5*time.Second, 5*time.Millisecond, "the root and the sampled file were stat-ed")
 	assert.Equal(t, int64(2), rootStatsHung.Load(), "both are outstanding")
 
 	for range 10 {
-		err := svc.libraryRootReady(config.AppConfig.RootDir)
+		err := svc.libraryRootReady(config.Get().RootDir)
 		require.ErrorIs(t, err, ErrLibraryRootNotReady)
 		assert.Contains(t, err.Error(), "still not answered")
 	}
@@ -51,7 +51,7 @@ func TestLibraryRootReady_HungMountIsNotAskedAgainWhileItsStatsAreOutstanding(t 
 // ready: the refusal lasts exactly as long as the hang.
 func TestLibraryRootReady_AnswersAgainOnceTheHungStatsReturn(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	prevStat, prevTimeout := rootStat, rootStatTimeout
 	release := make(chan struct{})
 	var started atomic.Int32
@@ -63,11 +63,11 @@ func TestLibraryRootReady_AnswersAgainOnceTheHungStatsReturn(t *testing.T) {
 	rootStatTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { rootStat, rootStatTimeout = prevStat, prevTimeout })
 
-	require.ErrorIs(t, svc.libraryRootReady(config.AppConfig.RootDir), ErrLibraryRootNotReady)
+	require.ErrorIs(t, svc.libraryRootReady(config.Get().RootDir), ErrLibraryRootNotReady)
 	require.Eventually(t, func() bool { return started.Load() == 2 }, 5*time.Second, 5*time.Millisecond)
 	close(release)
 	require.Eventually(t, func() bool { return rootStatsHung.Load() == 0 }, 5*time.Second, 5*time.Millisecond, "the late answers take themselves off the count")
-	require.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+	require.NoError(t, svc.libraryRootReady(config.Get().RootDir))
 }
 
 // failSampleAfterStore samples normally for its first `ok` questions and fails
@@ -119,7 +119,7 @@ func TestRunPurge_RootLostMidPassStopsThePassWithOneReason(t *testing.T) {
 func TestDeleteAudiobook_PurgeNowChecksTheRootBeforeTheMergeLock(t *testing.T) {
 	_, store, base := setupPurgeBoundary(t)
 	withDeleteFiles(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	x := filepath.Join(base, "lib", "Gotham", "hush.m4b")
 	writeFile(t, x)
 	softDeleted(t, store, "T", x)
@@ -172,7 +172,7 @@ func TestDeleteAudiobook_PurgeNowWithFilesKeptDoesNotCheckTheRoot(t *testing.T) 
 func TestBeginTrashPurges_ChecksOnceOutsideTheLockAndPurgesUnderIt(t *testing.T) {
 	_, store, base := setupPurgeBoundary(t)
 	withDeleteFiles(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	files := map[string]string{"T": "hush.m4b", "U": "knightfall.m4b", "V": "dark-victory.m4b"}
 	counting := &countingSampleStore{PebbleStore: store}
 	svc := NewAudiobookService(counting)
@@ -212,7 +212,7 @@ func TestBeginTrashPurges_AFailedCheckIsReturnedAndNothingIsSampledWithFilesKept
 	checkRoot, _ := svc.BeginTrashPurges()
 	require.ErrorIs(t, checkRoot(), ErrLibraryRootNotReady)
 
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = false
+	config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedDeleteFiles = false })
 	counting.calls.Store(0)
 	checkRoot, _ = svc.BeginTrashPurges()
 	require.NoError(t, checkRoot(), "files are kept: the root does not matter")

@@ -49,12 +49,14 @@ func (d *storeDecorator) Unwrap() database.Store { return d.inner }
 // restores the previous globals afterwards.
 func withBackupEnv(t *testing.T, dbPath string) string {
 	t.Helper()
-	prevPath, prevType := config.AppConfig.DatabasePath, config.AppConfig.DatabaseType
+	prevPath, prevType := config.Get().DatabasePath, config.Get().DatabaseType
 	t.Cleanup(func() {
-		config.AppConfig.DatabasePath, config.AppConfig.DatabaseType = prevPath, prevType
+		config.SetForTest(func(c *config.Config) { c.DatabasePath, c.DatabaseType = prevPath, prevType })
 	})
-	config.AppConfig.DatabasePath = dbPath
-	config.AppConfig.DatabaseType = "pebble"
+	config.SetForTest(func(c *config.Config) {
+		c.DatabasePath = dbPath
+		c.DatabaseType = "pebble"
+	})
 	return filepath.Join(filepath.Dir(dbPath), "backups")
 }
 
@@ -169,8 +171,8 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 		t.Fatalf("mkdir backups: %v", mkErr)
 	}
 
-	prevBudget := config.AppConfig.BackupMaxTotalBytes
-	t.Cleanup(func() { config.AppConfig.BackupMaxTotalBytes = prevBudget })
+	prevBudget := config.Get().BackupMaxTotalBytes
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BackupMaxTotalBytes = prevBudget }) })
 	// The budget holds one seeded archive plus the new one, and not two seeds:
 	// retention (enforceRetention, before the write with the incoming size)
 	// prunes the two oldest seeds and keeps the third. The default budget
@@ -185,7 +187,7 @@ func TestAutoBackup_HonoursTheConfiguredByteBudget(t *testing.T) {
 	// archive's size is asserted below the slack (seedBytes/2), so a store
 	// that grows past it fails here by name instead.
 	const seedBytes = 1 << 20
-	config.AppConfig.BackupMaxTotalBytes = seedBytes + seedBytes/2
+	config.SetForTest(func(c *config.Config) { c.BackupMaxTotalBytes = seedBytes + seedBytes/2 })
 
 	// Three stale archives: stale so the freshness window does not short-circuit
 	// autoBackup before retention ever runs.

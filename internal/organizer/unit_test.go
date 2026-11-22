@@ -1208,12 +1208,12 @@ func TestBuildPath_TrackFormatSpecWithTrackTitle(t *testing.T) {
 
 func TestPreviewOrganize_Success(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              tmpDir,
 		FolderNamingPattern:  "{author}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
@@ -1269,12 +1269,12 @@ func TestPreviewOrganize_Success(t *testing.T) {
 func TestPreviewOrganize_AlreadyAtTarget(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Set up config
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              tmpDir,
 		FolderNamingPattern:  "{author}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 
 	// Create the file at its target location
 	targetDir := filepath.Join(tmpDir, "Asimov")
@@ -1312,12 +1312,12 @@ func TestPreviewOrganize_AlreadyAtTarget(t *testing.T) {
 
 func TestPreviewOrganize_InRootNeedsRename(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              tmpDir,
 		FolderNamingPattern:  "{author}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 
 	// File is in root but with wrong name
 	wrongPath := filepath.Join(tmpDir, "WrongName.m4b")
@@ -1362,11 +1362,11 @@ func TestPreviewOrganize_InRootNeedsRename(t *testing.T) {
 
 func TestPreviewOrganize_WithCoverURL(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             tmpDir,
 		FolderNamingPattern: "{author}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	targetDir := filepath.Join(tmpDir, "Auth")
 	os.MkdirAll(targetDir, 0755)
@@ -1413,11 +1413,11 @@ func TestPreviewOrganize_WithCoverURL(t *testing.T) {
 
 func TestPreviewOrganize_ProtectedPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             tmpDir,
 		FolderNamingPattern: "{author}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
@@ -1461,11 +1461,11 @@ func TestPreviewOrganize_ProtectedPath(t *testing.T) {
 
 func TestPreviewOrganize_MultiFileProtected(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             tmpDir,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
@@ -1642,11 +1642,11 @@ func (l *noopLogger) With(string) logger.Logger         { return l }
 
 func TestBookNeedsReOrganize_FileAtCorrectPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             tmpDir,
 		FolderNamingPattern: "{author}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
@@ -1672,11 +1672,11 @@ func TestBookNeedsReOrganize_FileAtCorrectPath(t *testing.T) {
 
 func TestBookNeedsReOrganize_FileAtWrongPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             tmpDir,
 		FolderNamingPattern: "{author}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()
@@ -1700,10 +1700,10 @@ func TestBookNeedsReOrganize_FileAtWrongPath(t *testing.T) {
 
 func TestBookNeedsReOrganize_DirectoryBook(t *testing.T) {
 	tmpDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             tmpDir,
 		FolderNamingPattern: "{author}/{title}",
-	}
+	})
 
 	mockStore := newMockStore(t)
 	mockStore.On("GetBookAuthors", mock.Anything).Return(nil, nil).Maybe()

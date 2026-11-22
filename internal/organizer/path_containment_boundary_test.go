@@ -138,7 +138,7 @@ func TestOrganizeBook_HashTwinInSiblingIsNotADuplicateInLibrary(t *testing.T) {
 		t.Fatalf("fixture: hash lookup should find the twin, got %+v", twin)
 	}
 
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 	org.SetStore(store)
 	if _, _, err := org.OrganizeBook(book); err != nil && strings.Contains(err.Error(), "duplicate file already organized") {
 		t.Errorf("hash twin at %s (outside %s) was reported as already organized: %v", twinPath, root, err)

@@ -24,10 +24,10 @@ import (
 func TestLibraryRootReady_PebbleWithMemdbOffIsNotReady(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	liveBookWithFile(t, store, "mounted-witness", filepath.Join(base, "lib", "Gotham", "hush.m4b"))
-	require.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir), "with memdb serving the library is ready")
+	require.NoError(t, svc.libraryRootReady(config.Get().RootDir), "with memdb serving the library is ready")
 
 	store.UseMemDB = false
-	err := svc.libraryRootReady(config.AppConfig.RootDir)
+	err := svc.libraryRootReady(config.Get().RootDir)
 	require.ErrorIs(t, err, ErrLibraryRootNotReady)
 	assert.Contains(t, err.Error(), "cannot sample")
 	assert.Contains(t, err.Error(), "memdb is not serving")
