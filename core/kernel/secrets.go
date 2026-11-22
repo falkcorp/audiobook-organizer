@@ -207,7 +207,7 @@ const (
 // decision every boot, so a window shorter than an operator's retention
 // still never retires a key a retained archive needs.
 func rotateDeriveWindow(ctx context.Context, appID string) (w time.Duration, err error) {
-	st, err := newConfigStore(config.Options{AppID: appID, Logger: slog.New(slog.DiscardHandler)})
+	st, err := config.NewStore(config.Options{AppID: appID, Logger: slog.New(slog.DiscardHandler)})
 	if err != nil {
 		return 0, fmt.Errorf("kernel: secrets rotate-derive: config store: %w", err)
 	}

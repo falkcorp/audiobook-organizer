@@ -68,7 +68,7 @@ func TestLazyCoreConfig_BuiltOnlyWhenTasksNeedIt(t *testing.T) {
 // builds is the one coreConfig keeps, and the build itself, which a boot with
 // no kind no longer runs, still succeeds over the core sections.
 func TestLazyCoreConfig_StillBuildsAndKeepsOneStore(t *testing.T) {
-	c, err := newCoreConfig("batcave", CoreDefaults{}, nil)
+	c, err := newCoreConfig("batcave", CoreDefaults{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
