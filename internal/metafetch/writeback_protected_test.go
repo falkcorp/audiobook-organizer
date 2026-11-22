@@ -131,11 +131,12 @@ func TestProtectedListLoaded_ReflectsCache(t *testing.T) {
 // A path spelled through a symlink into the iTunes library folder is protected,
 // and an unrelated path next to a link is not.
 func TestIsProtectedPath_SymlinkIntoITunesFolder(t *testing.T) {
-	prev := config.AppConfig.ITunes.LibraryReadPath
-	t.Cleanup(func() { config.AppConfig.ITunes.LibraryReadPath = prev })
+	prev := config.Get().ITunes.LibraryReadPath
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = prev }) })
 	base := t.TempDir()
 	itunes := filepath.Join(base, "lib", "Gotham Music")
-	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "Library.xml")
+	cowV1 := filepath.Join(itunes, "Library.xml")
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = cowV1 })
 	if err := os.MkdirAll(filepath.Join(itunes, "Hush"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -201,9 +202,9 @@ func TestIsProtectedPath_UnreadableImportPathListFailsClosed(t *testing.T) {
 // store reads.
 func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 	libRoot := t.TempDir()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.RootDir = libRoot
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	book := &database.Book{ID: "b1", Title: "Hush", FilePath: filepath.Join(t.TempDir(), "Hush")}
 	failing := true
@@ -248,9 +249,9 @@ func TestResolveLibraryCopy_RefusesWhileImportPathListUnreadable(t *testing.T) {
 // never protected would get a copy.
 func TestResolveLibraryCopy_ReadsImportPathsOnce(t *testing.T) {
 	libRoot := t.TempDir()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.RootDir = libRoot
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	book := &database.Book{ID: "b1", Title: "Hush", FilePath: filepath.Join(t.TempDir(), "Hush")}
 	var reads int

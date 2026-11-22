@@ -20,7 +20,7 @@ import (
 
 func renameOnlyFixture(t *testing.T, files func(dir string) []database.BookFile) (*Service, []string) {
 	t.Helper()
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	dir := filepath.Join(root, "Someone", "Old")
 	rows := files(dir)
 	var paths []string
@@ -40,11 +40,14 @@ func renameOnlyFixture(t *testing.T, files func(dir string) []database.BookFile)
 // auto_rename_on_apply OFF: the write-back renames on an explicit
 // rename:true regardless, and RenamePreflight's preview stands down there.
 func TestRenameOnlyPreflight_RefusesUnplannableRenameWithAutoRenameOff(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.RootDir = t.TempDir()
-	config.AppConfig.AutoRenameOnApply = false
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoRenameOnApply = false
+		c.FolderNamingPattern = "{author}/{title}"
+	})
 
 	svc, paths := renameOnlyFixture(t, func(dir string) []database.BookFile {
 		return []database.BookFile{
@@ -53,10 +56,10 @@ func TestRenameOnlyPreflight_RefusesUnplannableRenameWithAutoRenameOff(t *testin
 		}
 	})
 
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) { c.FileNamingPattern = "{title} - {track:02d}" })
 	require.NoError(t, svc.RenameOnlyPreflight("b1"), "a plannable rename must not be refused")
 
-	config.AppConfig.FileNamingPattern = "{title} - {track:x}"
+	config.SetForTest(func(c *config.Config) { c.FileNamingPattern = "{title} - {track:x}" })
 	err := svc.RenameOnlyPreflight("b1")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrApplyFileWorkWouldFail)
@@ -72,11 +75,14 @@ func TestRenameOnlyPreflight_RefusesUnplannableRenameWithAutoRenameOff(t *testin
 // as a refusal before anything moves -- the failure that left three books
 // half renamed on 2026-09-13.
 func TestRenameOnlyPreflight_RefusesDuplicateTarget(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.RootDir = t.TempDir()
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	cowV2 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV2 })
+	config.SetForTest(func(c *config.Config) {
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+	})
 
 	svc, paths := renameOnlyFixture(t, func(dir string) []database.BookFile {
 		return []database.BookFile{
@@ -87,8 +93,8 @@ func TestRenameOnlyPreflight_RefusesDuplicateTarget(t *testing.T) {
 
 	// The planner's own verdict, so the test fails loudly if the fixture
 	// stops reaching the duplicate-target branch.
-	_, planErr := organizer.ComputeTargetPaths(config.AppConfig.RootDir, config.AppConfig.FolderNamingPattern,
-		config.AppConfig.FileNamingPattern, []database.BookFile{
+	_, planErr := organizer.ComputeTargetPaths(config.Get().RootDir, config.Get().FolderNamingPattern,
+		config.Get().FileNamingPattern, []database.BookFile{
 			{ID: "f1", FilePath: paths[0], TrackNumber: 1},
 			{ID: "f2", FilePath: paths[1], TrackNumber: 1},
 		}, organizer.PathVars{Author: "Someone", Title: "Old"}, organizer.BuildOpts{})

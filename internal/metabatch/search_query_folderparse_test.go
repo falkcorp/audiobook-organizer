@@ -20,9 +20,9 @@ import (
 // (the zero Config has it off, as the variant's rollback does).
 func withFolderParse(t *testing.T, on bool) {
 	t.Helper()
-	prev := config.AppConfig.MetadataFetch
-	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
-	config.AppConfig.MetadataFetch.FolderParsePersonTitle = on
+	prev := config.Get().MetadataFetch
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetch = prev }) })
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch.FolderParsePersonTitle = on })
 }
 
 // The folder-parse variant (spec 02 section 3.3 Q; census bucket "author

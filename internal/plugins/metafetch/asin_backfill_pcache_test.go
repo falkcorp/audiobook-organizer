@@ -18,12 +18,13 @@ import (
 
 func withSharedProviderCache(t *testing.T) {
 	t.Helper()
-	prevMF, prevTTL := config.AppConfig.MetadataFetch, config.AppConfig.MetadataFetchCacheTTLDays
+	prevMF, prevTTL := config.Get().MetadataFetch, config.Get().MetadataFetchCacheTTLDays
 	t.Cleanup(func() {
-		config.AppConfig.MetadataFetch, config.AppConfig.MetadataFetchCacheTTLDays = prevMF, prevTTL
+		config.SetForTest(func(c *config.Config) { c.MetadataFetch, c.MetadataFetchCacheTTLDays = prevMF, prevTTL })
 	})
-	config.AppConfig.MetadataFetch = config.DefaultMetadataFetchConfig()
-	config.AppConfig.MetadataFetchCacheTTLDays = 180
+	cowV1 := config.DefaultMetadataFetchConfig()
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 180 })
 }
 
 func pcacheKeys(t *testing.T, s *database.PebbleStore, prefix string) []string {

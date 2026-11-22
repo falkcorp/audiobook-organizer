@@ -34,7 +34,7 @@ func TestNewAudibleClientUsesConfiguredBaseURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	original := config.AppConfig.MetadataSources
+	original := config.Get().MetadataSources
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.MetadataSources = original })
 	})

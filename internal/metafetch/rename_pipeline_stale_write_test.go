@@ -36,14 +36,16 @@ type renameFixture struct {
 
 func newRenameFixture(t *testing.T) (*renameFixture, *Service) {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.AutoWriteTagsOnApply = false
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = true
+		c.AutoWriteTagsOnApply = false
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+	})
 
 	oldDir := filepath.Join(root, "incoming", "Some Book")
 	p1, p2 := filepath.Join(oldDir, "01.mp3"), filepath.Join(oldDir, "02.mp3")

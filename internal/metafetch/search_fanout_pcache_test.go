@@ -86,13 +86,16 @@ func newPCacheService(t *testing.T) (*Service, *pcacheKV) {
 // 180-day positive TTL) for one test; on is false for the rollback flag.
 func withSharedCache(t *testing.T, on bool) {
 	t.Helper()
-	prevMF, prevTTL := config.AppConfig.MetadataFetch, config.AppConfig.MetadataFetchCacheTTLDays
+	prevMF, prevTTL := config.Get().MetadataFetch, config.Get().MetadataFetchCacheTTLDays
 	t.Cleanup(func() {
-		config.AppConfig.MetadataFetch, config.AppConfig.MetadataFetchCacheTTLDays = prevMF, prevTTL
+		config.SetForTest(func(c *config.Config) { c.MetadataFetch, c.MetadataFetchCacheTTLDays = prevMF, prevTTL })
 	})
-	config.AppConfig.MetadataFetch = config.DefaultMetadataFetchConfig()
-	config.AppConfig.MetadataFetch.SharedCache = on
-	config.AppConfig.MetadataFetchCacheTTLDays = 180
+	cowV1 := config.DefaultMetadataFetchConfig()
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch = cowV1 })
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataFetch.SharedCache = on
+		c.MetadataFetchCacheTTLDays = 180
+	})
 }
 
 // withClock pins the cache clock for one test.

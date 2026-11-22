@@ -31,10 +31,10 @@ func newMatch4Fixture(t *testing.T) *match4Fixture {
 	store, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	f := &match4Fixture{store: store, root: t.TempDir(), newbooks: t.TempDir(), hash: "match4-hash"}
-	config.AppConfig.RootDir = f.root
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.root })
 	return f
 }
 
