@@ -42,8 +42,9 @@ type InviteAccept struct {
 	// none. The account holds it verified only when EmailBinding is
 	// InviteEmailBound.
 	Email string `json:"email,omitempty"`
-	// AcceptedAt is when the accept happened: core's own time for it (the created
-	// account's CreatedAt, taken from the one clock the accept's batch uses), and
+	// AcceptedAt is when the accept happened: core's own time for it (the
+	// InviteAccepted event's AcceptedAt, the one clock reading the accept's batch uses
+	// for the account's CreatedAt), and
 	// for a carried row HEAD's UsedAt. The list's window and its order key on it.
 	AcceptedAt time.Time `json:"accepted_at"`
 	// EmailBinding and SSOGrant are HEAD's Invite.EmailBinding and Invite.SSOGrant
