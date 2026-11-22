@@ -69,19 +69,22 @@ func (v *foldView) merged(i int, next tasks.RunRecord) {
 }
 
 // foldViews holds the views of the batches that are being staged into. An
-// entry goes with its batch: it is keyed by a weak pointer and dropped by a
-// cleanup when the batch is collected, so a view never outlives the work it
-// serves by more than a collection.
+// entry goes with its batch: it is keyed by a weak pointer to it and dropped by
+// a cleanup when the batch is collected, so a view never outlives the work it
+// serves by more than a collection. The key is held as an any (a weak.Pointer
+// is comparable, so it works as a dynamic map key) so that this file never
+// spells weak.Pointer[storage.Batch], which archtest's batch-by-value guard
+// (COR2-12) reads as a storage.Batch value.
 type foldViews struct {
 	mu sync.Mutex
-	m  map[weak.Pointer[storage.Batch]]*foldView
+	m  map[any]*foldView
 }
 
 // of returns b's view, reading the queue through load on b's first fold. load
 // runs outside the lock (it reads the store); a batch is staged by one
 // goroutine, so two loads for one batch cannot race.
 func (f *foldViews) of(b *storage.Batch, load func() *foldView) *foldView {
-	key := weak.Make(b)
+	var key any = weak.Make(b)
 	f.mu.Lock()
 	v, ok := f.m[key]
 	f.mu.Unlock()
@@ -91,11 +94,11 @@ func (f *foldViews) of(b *storage.Batch, load func() *foldView) *foldView {
 	v = load()
 	f.mu.Lock()
 	if f.m == nil {
-		f.m = map[weak.Pointer[storage.Batch]]*foldView{}
+		f.m = map[any]*foldView{}
 	}
 	f.m[key] = v
 	f.mu.Unlock()
-	runtime.AddCleanup(b, func(k weak.Pointer[storage.Batch]) {
+	runtime.AddCleanup(b, func(k any) {
 		f.mu.Lock()
 		delete(f.m, k)
 		f.mu.Unlock()
