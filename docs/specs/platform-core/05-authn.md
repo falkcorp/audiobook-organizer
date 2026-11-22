@@ -399,6 +399,12 @@ type Options struct {
 	// CoreGroup(). GET /api/core/v1/auth/oidc/{provider}/start is served in
 	// every case.
 	OIDCCallbackBase string
+	// InviteSessionTTL is how long the session an accepted invite opens lives
+	// (§4.13). Zero (hello, new apps) gives it core.auth.session.remember_ttl.
+	// An app that already gave invited users a longer first session sets it
+	// (ABO 720h, HEAD parity: handlers/user.go:380). Compile-time, with no
+	// operator key; negative is refused by New.
+	InviteSessionTTL time.Duration
 }
 
 // Users. Every method that acts on another user takes the actor and enforces
@@ -799,7 +805,7 @@ unnecessary and keeps verification O(1).
 
 | Credential | Format | Lifetime | Stored as |
 |---|---|---|---|
-| Session | `mcs_<43>_<6>` | 24 h; remember-me 7 d; sliding `LastSeen` (idle timeout optional) | `SHA-256` key + public ULID |
+| Session | `mcs_<43>_<6>` | 24 h; remember-me 7 d; invite-accept `Options.InviteSessionTTL` when the app sets one (ABO 720 h), else remember-me (§4.13); sliding `LastSeen` (idle timeout optional) | `SHA-256` key + public ULID |
 | API key | `mck_<43>_<6>` | default 30 d, max 1096 d (today's values, `handlers/apikeys.go` `MaxAPIKeyTTLDays`) | `SHA-256` |
 | Bootstrap | `mcb_<43>_<6>` | 10 min, single use | `SHA-256` as a one-time token in the store + 0600 file |
 | Invite | `mci_<43>_<6>` | default 72 h (today, `handlers/user.go:177-181`), single use | `SHA-256` |
@@ -1308,6 +1314,13 @@ re-runs `rbac.CanAssign` for the creator over that role and refuses (`invite_inv
 an invite whose creator was demoted after issuing it never yields an account in a role the creator can
 no longer assign.
 
+**Invite-accept session lifetime.** The session an accepted invite opens (`OriginInvite`) lives
+`Options.InviteSessionTTL` when the app sets one (ABO: 720 h, HEAD parity: its accept-invite opens a
+30-day session, `handlers/user.go:380`, longer than its 7-day remember-me login), else
+`core.auth.session.remember_ttl`. There is no operator key for it, and an operator's
+`remember_ttl` does not shorten an app-set invite lifetime. A password sign-in, remember-me or
+plain, keeps `core.auth.session.remember_ttl` or `core.auth.session.ttl` whatever the option says.
+
 **Invite delivery (SIMP2-4, R-F).** Invite e-mail uses a `mail.Sender` built from the `notify/email`
 integration instance (05-notify, 05-metadata); until R2's integrations flip (F7) is on `main`, it is
 built from books' SMTP settings, so auth never depends on `notify` before notify exists.
@@ -1519,7 +1532,7 @@ interactive method). Every key that decides who may sign in, with which role, or
 | `core.auth.mode` | enum `required`/`disabled`, declared `config.FailClosed("core.auth.mode", "\"required\"", "\"disabled\"")` (most restrictive first; 05-config §1.3.1): an operator value and a stored value that disagree resolve to the more restrictive one (§4.11) | `required` | no | owner (SEC3-6, §4.8); never changed by the auth-disabled principal (SEC4-8) |
 | `core.auth.disabled_allow_remote` | bool | false (ABO: true, §4.11) | no | admin |
 | `core.auth.session.ttl` | duration | 24h | yes (new sessions) | none |
-| `core.auth.session.remember_ttl` | duration | 168h | yes | none |
+| `core.auth.session.remember_ttl` | duration | 168h (remember-me sign-ins; also the invite-accept session unless `Options.InviteSessionTTL` is set, §4.13) | yes | none |
 | `core.auth.session.idle_timeout` | duration | 0 (off) | yes | none |
 | `core.auth.session.cookie_name` | string | `<AppID>_session` | no | admin |
 | `core.auth.session.cookie_host_prefix` | bool | true | no | admin |
