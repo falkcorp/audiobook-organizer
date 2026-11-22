@@ -66,12 +66,19 @@ below):
 | `JSON_BODY_LIMIT_MB` | `json_body_limit_mb` | `1` |
 | `UPLOAD_BODY_LIMIT_MB` | `upload_body_limit_mb` | `10` |
 | `MASTER_LIST_RETENTION` | `master_list_retention` | `10` |
-| `ENABLE_AUTH` | `enable_auth` | `true` |
+| `ABO_CORE_AUTH_MODE` | `core.auth.mode` | `required` |
 | `DELUGE_WEB_URL` | `deluge_web_url` | `http://deluge.example.invalid:8112` |
 | `DELUGE_WEB_PASSWORD` | `deluge_web_password` | (the Deluge Web UI password) |
 | `DELUGE_DISCOVERY_LABEL` | `deluge_discovery_label` | `audiobooks` |
 | `DELUGE_DISCOVERY_ENABLED` | `deluge_discovery_enabled` | `true` |
 | `DELUGE_MOVE_ENABLED` | `deluge_move_enabled` | `true` |
+
+`ABO_CORE_AUTH_MODE` takes `required` or `disabled`. It is how an operator turns
+sign-in on: with authentication off, Settings cannot turn it on, so set
+`ABO_CORE_AUTH_MODE=required` and restart. When it and the stored setting disagree,
+the stricter one wins (`required` over `disabled`). The retired `ENABLE_AUTH` name
+is not read: a server that finds it set refuses to start and names
+`ABO_CORE_AUTH_MODE`.
 
 ### Deluge settings precedence
 
