@@ -348,7 +348,7 @@ func optimizeCore(ctx context.Context, env optimizeEnv) error {
 	// EnqueueOp("acoustid.backfill") via the ops API stays ungated — that is the
 	// deliberate opt-in path. Filtering here rather than skipping mid-loop keeps `total`
 	// accurate, so progress does not report a child it never intended to run.
-	if !config.AppConfig.Maintenance.AcoustIDBackfill {
+	if !config.Snapshot().Maintenance.AcoustIDBackfill {
 		kept := make([]childOp, 0, len(children))
 		for _, ch := range children {
 			if ch.defID == optimizeChildAcoustIDBackfill {

@@ -26,11 +26,16 @@ const IgnoreWindowKey MaintenanceCtxKey = "ignore_window"
 // IsInMaintenanceWindowAt checks if a given hour falls within the configured window.
 // Supports midnight-spanning windows (e.g., start=23, end=2).
 func IsInMaintenanceWindowAt(hour int) bool {
-	if !config.AppConfig.Maintenance.Enabled {
+	// One snapshot: Enabled, WindowStart and WindowEnd must come from the same
+	// config generation, or a save that moves the window could be read half
+	// old and half new. This runs from the scheduler goroutine while a
+	// settings save replaces the whole config under the lock.
+	m := config.Snapshot().Maintenance
+	if !m.Enabled {
 		return false
 	}
-	start := config.AppConfig.Maintenance.WindowStart
-	end := config.AppConfig.Maintenance.WindowEnd
+	start := m.WindowStart
+	end := m.WindowEnd
 
 	if start < end {
 		return hour >= start && hour < end

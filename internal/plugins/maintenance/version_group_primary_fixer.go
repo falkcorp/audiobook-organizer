@@ -109,7 +109,7 @@ func (f *vgPrimaryFixer) Plan(ctx context.Context, raw json.RawMessage, rep regi
 	prober := f.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })
 	report, err := f.p.versionGroupPrimaryRepair(ctx, f.p.fixerStores(ctx), vgPrimaryRepairParams{
 		GroupIDs: fp.GroupIDs, Limit: fp.Limit, noDetailCap: true,
-	}, config.AppConfig.RootDir, prober, rep)
+	}, config.Snapshot().RootDir, prober, rep)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (f *vgPrimaryFixer) Replan(ctx context.Context, _ json.RawMessage, planned 
 		return repairs.Row{}, err
 	}
 	a := &vgApplier{store: store, reporter: rep, seriesNames: names, paths: repairs.NewPathResolver()}
-	loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: config.AppConfig.RootDir,
+	loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: config.Snapshot().RootDir,
 		Probe: f.prober(func(msg string) { _ = rep.Log(slog.LevelWarn, msg) })}
 	g := a.planGroup(ctx, loader, planned.RowID)
 	r := f.rowVia(st, &g)

@@ -2508,7 +2508,7 @@ func nthAudioFile(store bookFileLister, book database.Book, n int) (audioFileRef
 // Env WHISPER_CLIP_CACHE_DIR overrides. Default: {rootDir}/.wav-cache.
 // rootDir must not be empty; callers should pass p.deps.RootDir().
 func wavCacheDir(rootDir string) string {
-	if d := config.AppConfig.WhisperClipCacheDir; d != "" {
+	if d := config.Snapshot().WhisperClipCacheDir; d != "" {
 		return d
 	}
 	return filepath.Join(rootDir, ".wav-cache")

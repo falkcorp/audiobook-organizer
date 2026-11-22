@@ -343,7 +343,7 @@ func (p *Plugin) runVersionGroupPrimaryRepair(ctx context.Context, rawParams jso
 			"version-group-primary-repair: ffprobe unavailable (%v); chapter counts come from the chapter table", perr))
 		prober = nil
 	}
-	report, err := p.versionGroupPrimaryRepair(ctx, p.deps, params, config.AppConfig.RootDir, prober, reporter)
+	report, err := p.versionGroupPrimaryRepair(ctx, p.deps, params, config.Snapshot().RootDir, prober, reporter)
 	if report != nil {
 		if serr := registry.ReporterSetResult(reporter, report); serr != nil {
 			reporter.Logger().Warn("version-group-primary-repair: report not persisted", "err", serr)

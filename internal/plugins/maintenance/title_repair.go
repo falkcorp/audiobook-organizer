@@ -224,7 +224,7 @@ func (p *Plugin) runTitleRepair(ctx context.Context, raw json.RawMessage, report
 	env := titleRepairEnv{
 		t6g7Env: t6g7HeadEnv(reporter, params.Apply),
 		AgreedTitle: func(dir string) (string, bool) {
-			return metadata.AgreedChapterTitle(dir, config.AppConfig.SupportedExtensions)
+			return metadata.AgreedChapterTitle(dir, config.Snapshot().SupportedExtensions)
 		},
 	}
 	if store := p.deps.OpsStore(); store != nil {

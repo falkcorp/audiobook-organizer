@@ -74,7 +74,7 @@ func noRunOnStart() bool { return false }
 const fullSweepDueCheck = time.Hour
 
 func asinBackfillInterval() time.Duration {
-	mins := config.AppConfig.Scheduled.ASINBackfill.Interval
+	mins := config.Snapshot().Scheduled.ASINBackfill.Interval
 	if mins <= 0 {
 		return 0
 	}
@@ -101,7 +101,7 @@ type candidateFetchTaskParams struct {
 // candidateFetchParams is what the candidate_fetch tick sends: with the
 // identification driver on, the tick is its safety net and only marks.
 func candidateFetchParams() candidateFetchTaskParams {
-	return candidateFetchTaskParams{Unfetched: true, MarkDirtyOnly: config.AppConfig.IdentificationAdvanceEnabled}
+	return candidateFetchTaskParams{Unfetched: true, MarkDirtyOnly: config.Snapshot().IdentificationAdvanceEnabled}
 }
 
 // identification_advance task: enqueues identification.advance (spec 02 PR
@@ -167,7 +167,7 @@ func (ts *TaskScheduler) identDirtySetNonEmpty() (bool, error) {
 // default 360 = 6h; 0 disables the task). A tick that finds nothing to fetch
 // costs one library read and no provider request.
 func candidateFetchInterval() time.Duration {
-	mins := config.AppConfig.Scheduled.CandidateFetch.Interval
+	mins := config.Snapshot().Scheduled.CandidateFetch.Interval
 	if mins <= 0 {
 		return 0
 	}
@@ -195,7 +195,7 @@ type catalogHarvestTaskParams struct {
 // default 360 = 6h; 0 disables the task). The durable interval clock
 // (interval_clock.go) carries the cadence across restarts.
 func catalogHarvestInterval() time.Duration {
-	mins := config.AppConfig.Scheduled.CatalogHarvest.Interval
+	mins := config.Snapshot().Scheduled.CatalogHarvest.Interval
 	if mins <= 0 {
 		return 0
 	}
@@ -327,13 +327,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			// eligibility, so it must stay true for anyone who only ever set the
 			// legacy scan_on_startup flag — otherwise flipping to the new key
 			// would silently take away their startup scan.
-			return config.AppConfig.Scheduled.LibraryScan.Enabled || config.AppConfig.ScanOnStartup
+			cfg := config.Snapshot()
+			return cfg.Scheduled.LibraryScan.Enabled || cfg.ScanOnStartup
 		},
 		GetInterval: func() time.Duration {
-			if !config.AppConfig.Scheduled.LibraryScan.Enabled {
+			cfg := config.Snapshot()
+			if !cfg.Scheduled.LibraryScan.Enabled {
 				return 0
 			}
-			mins := config.AppConfig.Scheduled.LibraryScan.Interval
+			mins := cfg.Scheduled.LibraryScan.Interval
 			if mins <= 0 {
 				return 0
 			}
@@ -343,9 +345,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			// scan_on_startup is the one run-on-start setting core carries
 			// (modules.books.scan.on_startup). scheduled.library_scan.on_startup
 			// has no place in core's schedule value, so it is not read.
-			return config.AppConfig.ScanOnStartup
+			return config.Snapshot().ScanOnStartup
 		},
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryScan },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.LibraryScan },
 	})
 
 	// library_scan_full is the WEEKLY FULL SWEEP: a library.scan with both
@@ -382,7 +384,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			if store == nil {
 				return nil, fmt.Errorf("database not initialized")
 			}
-			period := time.Duration(config.AppConfig.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
+			// One snapshot per tick: the period and the two log lines below
+			// must agree, and a settings save between ticks is seen next tick.
+			cfg := config.Snapshot()
+			period := time.Duration(cfg.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
 			if period <= 0 {
 				// Declining is right -- a zero period would otherwise mean
 				// "always due", i.e. a full re-hash of the library every
@@ -392,7 +397,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 				// that never happens to fire.
 				slog.Warn("library_scan_full: period_hours is not positive, so the full sweep can NEVER run; "+
 					"set scheduled.library_scan_full.period_hours (168 = weekly)",
-					"periodHours", config.AppConfig.Scheduled.LibraryScanFull.PeriodHours, "source", source)
+					"periodHours", cfg.Scheduled.LibraryScanFull.PeriodHours, "source", source)
 				return nil, nil
 			}
 
@@ -427,7 +432,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 				// off an unannounced multi-hour re-hash of the whole library.
 				ts.seedFullSweepClock(ts.now())
 				slog.Info("library_scan_full: no prior sweep recorded; seeding the clock and waiting a full period",
-					"periodHours", config.AppConfig.Scheduled.LibraryScanFull.PeriodHours, "source", source)
+					"periodHours", cfg.Scheduled.LibraryScanFull.PeriodHours, "source", source)
 				return nil, nil
 			case !fullSweepDue(last, ts.now(), period) && !manual:
 				return nil, nil
@@ -479,7 +484,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return v2ScheduledOp(v2ID, "scan"), nil
 		},
 		IsEnabled: func() bool {
-			return config.AppConfig.Scheduled.LibraryScanFull.Enabled
+			return config.Snapshot().Scheduled.LibraryScanFull.Enabled
 		},
 		// Required, not optional: ListTasks calls RunOnStart() unconditionally,
 		// so leaving it nil panics the tasks page. Always false here -- a full
@@ -487,7 +492,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// happens several times a day.
 		RunOnStart: func() bool { return false },
 		GetInterval: func() time.Duration {
-			if !config.AppConfig.Scheduled.LibraryScanFull.Enabled {
+			if !config.Snapshot().Scheduled.LibraryScanFull.Enabled {
 				return 0
 			}
 			// Due-check cadence, NOT the sweep period. It is a scheduler detail
@@ -517,7 +522,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibraryOrganize },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.LibraryOrganize },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -538,7 +543,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.LibrarySizeRefresh },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.LibrarySizeRefresh },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -592,16 +597,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "author-dedup-scan"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.DedupRefresh.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.DedupRefresh.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.DedupRefresh.Interval
+			mins := config.Snapshot().Scheduled.DedupRefresh.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             noRunOnStart,
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DedupRefresh },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.DedupRefresh },
 	})
 
 	// label_refinement (INIT-1 T6): built-in-DISABLED scheduled task that, only
@@ -631,11 +636,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// needs the dedup engine AND the embedding store (dedup/register.go);
 		// without the gate the task could enqueue an unregistered def id.
 		IsEnabled: func() bool {
-			return config.AppConfig.Scheduled.LabelRefinement.Enabled &&
+			return config.Snapshot().Scheduled.LabelRefinement.Enabled &&
 				ts.deps.HasDedupPlugin != nil && ts.deps.HasDedupPlugin()
 		},
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.LabelRefinement.Interval
+			mins := config.Snapshot().Scheduled.LabelRefinement.Interval
 			if mins <= 0 {
 				return 0
 			}
@@ -687,16 +692,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "series-prune"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.SeriesPrune.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.SeriesPrune.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.SeriesPrune.Interval
+			mins := config.Snapshot().Scheduled.SeriesPrune.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             noRunOnStart,
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.SeriesPrune },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.SeriesPrune },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -919,7 +924,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// Enabled when identification_advance_enabled is set AND the op is
 		// registered in this binary.
 		IsEnabled: func() bool {
-			if ts.deps.OpRegistry == nil || !config.AppConfig.IdentificationAdvanceEnabled {
+			if ts.deps.OpRegistry == nil || !config.Snapshot().IdentificationAdvanceEnabled {
 				return false
 			}
 			_, ok := ts.deps.OpRegistry.Def(identificationAdvanceOpID)
@@ -1044,7 +1049,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// is on (the op refuses to run otherwise, so a tick would only fail),
 		// and the op is registered in this binary.
 		IsEnabled: func() bool {
-			if ts.deps.OpRegistry == nil || catalogHarvestInterval() <= 0 || !config.AppConfig.Catalog.Enabled {
+			if ts.deps.OpRegistry == nil || catalogHarvestInterval() <= 0 || !config.Snapshot().Catalog.Enabled {
 				return false
 			}
 			_, ok := ts.deps.OpRegistry.Def(catalogHarvestOpID)
@@ -1100,9 +1105,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			ts.setPreviousRunID("acoustid_backfill", v2ID)
 			return v2ScheduledOp(v2ID, "acoustid_backfill"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.AcoustIDBackfill.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.AcoustIDBackfill.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.AcoustIDBackfill.Interval
+			mins := config.Snapshot().Scheduled.AcoustIDBackfill.Interval
 			if mins <= 0 {
 				return 0
 			}
@@ -1230,10 +1235,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 		// is no separate enabled switch (see ScheduledTasksConfig.MetadataUpgrade).
 		// It is no longer in maintenanceOrder, so the window never runs it.
 		IsEnabled: func() bool {
-			return ts.deps.HasMetadataFetchSvc() && config.AppConfig.Scheduled.MetadataUpgrade.Interval > 0
+			return ts.deps.HasMetadataFetchSvc() && config.Snapshot().Scheduled.MetadataUpgrade.Interval > 0
 		},
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.MetadataUpgrade.Interval
+			mins := config.Snapshot().Scheduled.MetadataUpgrade.Interval
 			if mins <= 0 {
 				return 0
 			}
@@ -1261,16 +1266,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "author-split-scan"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.AuthorSplit.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.AuthorSplit.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.AuthorSplit.Interval
+			mins := config.Snapshot().Scheduled.AuthorSplit.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             noRunOnStart,
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.AuthorSplit },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.AuthorSplit },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -1288,16 +1293,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "db-optimize"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.DbOptimize.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.DbOptimize.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.DbOptimize.Interval
+			mins := config.Snapshot().Scheduled.DbOptimize.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             noRunOnStart,
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DbOptimize },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.DbOptimize },
 	})
 
 	// Nightly AcoustID online lookup. Off unless the user explicitly
@@ -1314,7 +1319,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 				return nil, fmt.Errorf("database not initialized")
 			}
 			params := map[string]any{
-				"limit": config.AppConfig.Maintenance.AcoustIDNightlyLimit,
+				"limit": config.Snapshot().Maintenance.AcoustIDNightlyLimit,
 				"force": false,
 			}
 			v2ID, enqErr := ts.deps.OpRegistry.EnqueueOp(context.Background(), "acoustid.lookup-online", params)
@@ -1323,10 +1328,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "acoustid-online-lookup"), nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.Maintenance.AcoustIDOnlineLookup },
+		IsEnabled:              func() bool { return config.Snapshot().Maintenance.AcoustIDOnlineLookup },
 		GetInterval:            func() time.Duration { return 0 }, // run only inside the maintenance window
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.AcoustIDOnlineLookup },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.AcoustIDOnlineLookup },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -1344,10 +1349,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "cleanup-old-backups"), nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.Maintenance.DbOptimize },
+		IsEnabled:              func() bool { return config.Snapshot().Maintenance.DbOptimize },
 		GetInterval:            func() time.Duration { return 0 },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.DbOptimize },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.DbOptimize },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -1365,15 +1370,15 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "purge-deleted"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.PurgeSoftDeletedAfterDays > 0 },
+		IsEnabled: func() bool { return config.Snapshot().PurgeSoftDeletedAfterDays > 0 },
 		GetInterval: func() time.Duration {
-			if config.AppConfig.PurgeSoftDeletedAfterDays > 0 {
+			if config.Snapshot().PurgeSoftDeletedAfterDays > 0 {
 				return 6 * time.Hour
 			}
 			return 0
 		},
-		RunOnStart:             func() bool { return config.AppConfig.PurgeSoftDeletedAfterDays > 0 },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.PurgeDeleted },
+		RunOnStart:             func() bool { return config.Snapshot().PurgeSoftDeletedAfterDays > 0 },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.PurgeDeleted },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -1394,7 +1399,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 		IsEnabled:              func() bool { return true },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.TombstoneCleanup },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.TombstoneCleanup },
 	})
 
 	ts.registerTask(TaskDefinition{
@@ -1461,9 +1466,9 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "resolve-production-authors"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.ResolveProductionAuthors.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.ResolveProductionAuthors.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.ResolveProductionAuthors.Interval
+			mins := config.Snapshot().Scheduled.ResolveProductionAuthors.Interval
 			if mins <= 0 {
 				return 0
 			}
@@ -1488,16 +1493,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "metadata-refresh"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.MetadataRefresh.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.MetadataRefresh.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.MetadataRefresh.Interval
+			mins := config.Snapshot().Scheduled.MetadataRefresh.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             noRunOnStart,
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.MetadataRefresh },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.MetadataRefresh },
 	})
 
 	// Reconcile — find broken file paths and match to untracked files on disk
@@ -1516,16 +1521,16 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "reconcile_scan"), nil
 		},
-		IsEnabled: func() bool { return config.AppConfig.Scheduled.Reconcile.Enabled },
+		IsEnabled: func() bool { return config.Snapshot().Scheduled.Reconcile.Enabled },
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.Reconcile.Interval
+			mins := config.Snapshot().Scheduled.Reconcile.Interval
 			if mins <= 0 {
 				return 0
 			}
 			return time.Duration(mins) * time.Minute
 		},
 		RunOnStart:             noRunOnStart,
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.Reconcile },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.Reconcile },
 	})
 
 	// AI Dedup Batch — uses OpenAI Batch API at 50% cost
@@ -1545,10 +1550,11 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return v2ScheduledOp(v2ID, "ai-dedup-batch"), nil
 		},
 		IsEnabled: func() bool {
-			return config.AppConfig.Scheduled.AIDedupBatch.Enabled && config.AppConfig.EnableAIParsing
+			cfg := config.Snapshot()
+			return cfg.Scheduled.AIDedupBatch.Enabled && cfg.EnableAIParsing
 		},
 		GetInterval: func() time.Duration {
-			mins := config.AppConfig.Scheduled.AIDedupBatch.Interval
+			mins := config.Snapshot().Scheduled.AIDedupBatch.Interval
 			if mins <= 0 {
 				return 24 * time.Hour
 			}
@@ -1586,7 +1592,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return nil, nil
 		},
 		IsEnabled: func() bool {
-			return config.AppConfig.OpenAIAPIKey != "" && ts.deps.HasBatchPoller()
+			return config.Snapshot().OpenAIAPIKey != "" && ts.deps.HasBatchPoller()
 		},
 		GetInterval: func() time.Duration {
 			return 5 * time.Minute
@@ -1614,10 +1620,10 @@ func (ts *TaskScheduler) registerAllTasks() {
 		},
 		// 0 means the default (90), not "off"; only a negative value (-1)
 		// disables the purge. See logging.ResolveLogRetentionDays.
-		IsEnabled:              func() bool { return logging.ResolveLogRetentionDays(config.AppConfig.LogRetentionDays) > 0 },
+		IsEnabled:              func() bool { return logging.ResolveLogRetentionDays(config.Snapshot().LogRetentionDays) > 0 },
 		GetInterval:            func() time.Duration { return 7 * 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
-		RunInMaintenanceWindow: func() bool { return config.AppConfig.Maintenance.PurgeOldLogs },
+		RunInMaintenanceWindow: func() bool { return config.Snapshot().Maintenance.PurgeOldLogs },
 	})
 
 	// Activity Log Cleanup — summarize old change entries and prune old debug entries
@@ -1664,7 +1670,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			return v2ScheduledOp(v2ID, "nightly_activity_compaction"), nil
 		},
 		IsEnabled: func() bool {
-			return ts.deps.HasActivitySvc() && config.AppConfig.ActivityLogNightlyCompactionEnabled
+			return ts.deps.HasActivitySvc() && config.Snapshot().ActivityLogNightlyCompactionEnabled
 		},
 		GetInterval:            func() time.Duration { return 0 }, // scheduled by DailyAt
 		RunOnStart:             func() bool { return false },
@@ -1690,7 +1696,7 @@ func (ts *TaskScheduler) registerAllTasks() {
 			}
 			return v2ScheduledOp(v2ID, "ai_journal_prune"), nil
 		},
-		IsEnabled:              func() bool { return config.AppConfig.AIJournalRetentionDays > 0 },
+		IsEnabled:              func() bool { return config.Snapshot().AIJournalRetentionDays > 0 },
 		GetInterval:            func() time.Duration { return 24 * time.Hour },
 		RunOnStart:             func() bool { return false },
 		RunInMaintenanceWindow: func() bool { return true },
