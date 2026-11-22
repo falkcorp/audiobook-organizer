@@ -7,22 +7,28 @@ package cutover_test
 
 // F4-08 B10rn: the two kinds of route internal/server's gin cross-check cannot call
 // weaker or stronger (legacy_manifest_gin_allowlist_test.go), run on the flipped
-// build. Neither test clears an allow-list entry. Both record what B10g, which
-// unmounts gin, has to decide:
+// build.
 //
-//	TestReachRegisteredPath_RoleNameRowsScopeAdmitsNameRefuses
-//	    the 19 ROLE-NAME-GATE rows. For each, a custom role holding exactly the
-//	    row's scopes passes stage 13, which is the manifest scope gate that B10g
-//	    leaves as the only gate. It is refused only by gin's role-name test
-//	    (RequireAdmin: "admin role required"). On the books:admin.view and
-//	    master-list rows an admin's key holding exactly the row's scopes is the
-//	    same: stage 13 admits it and gin refuses it because it lacks an atom (a
-//	    core:admin key gets one answer from both gates). The name gate and the scope gate therefore admit
-//	    different sets, and no rbac.Requirement can close the gap, because core lets
-//	    an admin create such a role (§4.7 role CRUD, custom.<slug>). The test fails
-//	    as soon as stage 13 refuses the custom role (the row was narrowed) or gin
-//	    admits it (gin relaxed): either way the B10rn table changed and must be
-//	    redone.
+//	TestReachRegisteredPath_RoleNameRowsScopeGateAdmits
+//	    the 19 ROLE-NAME-GATE rows, under the owner's ruling of 2026-11-22 (B10rn
+//	    STOP 1, option 1: permissions only; 05-rbac §6.2, 09 §9.2.6): from B10g,
+//	    which unmounts gin, a row's manifest scope is its whole gate, and a custom
+//	    role or key holding exactly that scope is admitted. This is an owner-approved
+//	    widening over HEAD's RequireAdmin, admin-granted only
+//	    (TestReachRegisteredPath_NonAdminCannotGrantAdminScopes). The test asserts
+//	    that post-B10g expectation through stage 13's own decision. A core:admin key
+//	    is refused at stage 13 on the four guest-service-token rows, which carry
+//	    Guards.Interactive. Gin's answer behind stage 13 is reported, not asserted:
+//	    until B10g the bridge still runs HEAD's role-name test (bridgedAdminGate)
+//	    and refuses the role with "admin role required", and from B10g it admits
+//	    it. B10g checklist: once gin is unmounted, this test still passes unchanged,
+//	    and the gin-refusal log lines disappear.
+//
+//	TestReachRegisteredPath_NonAdminCannotGrantAdminScopes
+//	    the other half of the ruling: a user who manages roles but holds none of
+//	    core:admin, books:admin.view or books:admin.debug can neither put one in a
+//	    role (create or update) nor mint a key holding one. Core refuses each with
+//	    its escalation refusal.
 //
 //	TestReachRegisteredPath_CoreRefusesAKeyOnAnotherUsersCredential
 //	    the CONDITIONAL-GUARD rows' question asked of core's own key routes, which
@@ -97,27 +103,36 @@ var rnRows = []rnRow{
 
 // rnKeyScopes are the admin's core keys, one per row class, each holding exactly
 // that class's scopes. books:admin.debug is Sensitive, which no key satisfies
-// (05-rbac §4.4), so the debug write rows have no key: there stage 13 and gin both
-// refuse every key.
+// (05-rbac §4.4), so the debug write rows have no key: stage 13 refuses every key
+// there.
 var rnKeyScopes = map[string][]string{
 	rnAdminView:  {"books:admin.view"},
 	rnMasterList: {"core:users.manage", "core:roles.view", "books:admin.view"},
 	rnCoreAdmin:  {"core:admin"},
 }
 
-// rnKeyAgrees: the classes on which the key gets the same answer from both gates.
-// A core:admin key satisfies every atom's route requirement (none of them is
-// Sensitive), so gin's every-atom test passes it too, and the guest-service-token
-// rows' Guards.Interactive refuses it at stage 13. On the other classes the key
-// splits the gates the way the custom role does.
-var rnKeyAgrees = map[string]bool{rnCoreAdmin: true}
-
-// The two refusals gin's RequireAdmin writes (internal/server/middleware/auth.go):
-// the role-name test, and the test that an admin's key holds every atom.
+// The two refusals gin's RequireAdmin writes behind stage 13 until B10g
+// (internal/server/middleware/auth.go): the role-name test, and the test that an
+// admin's key holds every atom.
 const (
 	rnNameRefusal = "admin role required"
 	rnKeyRefusal  = "admin role required: this API key's scopes do not include every permission"
 )
+
+// rnBehindStage13 checks what answered behind stage 13 for a principal stage 13
+// admitted: until B10g, gin's role-name refusal (want); from B10g, the handler
+// (anything but 401/403). Any other refusal fails. It returns which it saw.
+func rnBehindStage13(t *testing.T, p *Principal, res Result, want string) string {
+	t.Helper()
+	switch {
+	case res.Verdict() == 'A':
+		return "admitted by the handler (gin unmounted)"
+	case res.Status == http.StatusForbidden && rnMessage(res) == want:
+		return "refused by gin's role-name gate (until B10g)"
+	}
+	t.Errorf("%s: stage 13 admitted it and something other than gin's role-name gate refused it: %d %s", p.Name, res.Status, res.excerpt())
+	return ""
+}
 
 // rnCustomSession creates holder's role through core's role CRUD as the admin
 // session, invites holder's user into it, accepts the invite and signs the user in.
@@ -189,7 +204,7 @@ func rnMessage(res Result) string {
 	return b.Error
 }
 
-func TestReachRegisteredPath_RoleNameRowsScopeAdmitsNameRefuses(t *testing.T) {
+func TestReachRegisteredPath_RoleNameRowsScopeGateAdmits(t *testing.T) {
 	if got := len(rnRows); got != 19 {
 		t.Fatalf("the table has %d rows, the allow-list names 19 ROLE-NAME-GATE rows", got)
 	}
@@ -222,24 +237,23 @@ func TestReachRegisteredPath_RoleNameRowsScopeAdmitsNameRefuses(t *testing.T) {
 				t.Fatalf("control: stage 13 did not refuse a viewer (%d %s): the cell proves nothing", ctl.Status, ctl.excerpt())
 			}
 
-			// A custom role holding exactly the row's scopes: the scope gate admits it,
-			// the name gate refuses it.
+			// A custom role holding exactly the row's scopes: stage 13, the whole gate
+			// from B10g, admits it (the owner-approved widening).
 			p := holders[r.perm]
 			res, err := h.Do(p, r.method, r.path, nil)
 			if err != nil {
 				t.Fatalf("%s: %v", p.Name, err)
 			}
 			if res.Stage13 == Stage13Refused {
-				t.Errorf("stage 13 refuses %s (%s %s): the scope gate no longer admits a custom role holding %s, so the row is not the B10rn row; redo the table",
+				t.Errorf("stage 13 refuses %s (%s %s): a custom role holding exactly %s is not admitted, against the owner's ruling (05-rbac §6.2)",
 					p.Name, res.Code, res.excerpt(), r.perm)
-			}
-			if res.Status != http.StatusForbidden || rnMessage(res) != rnNameRefusal {
-				t.Errorf("gin no longer refuses %s by role name (%d %s): with gin relaxed the scope alone admits a role that is not the admin role, a WIDENING over HEAD that B10g must rule on",
-					p.Name, res.Status, res.excerpt())
+			} else {
+				t.Logf("%s: stage 13 admits; behind it: %s", p.Name, rnBehindStage13(t, p, res, rnNameRefusal))
 			}
 
-			// An admin's key holding exactly the row's scope: the same split, with
-			// the refusal of the key that lacks an atom.
+			// An admin's key holding exactly the row's scopes: admitted by stage 13,
+			// except where the row carries Guards.Interactive (the guest-service-token
+			// rows), which refuses every key.
 			k := keys[r.perm]
 			if k == nil {
 				return
@@ -248,20 +262,14 @@ func TestReachRegisteredPath_RoleNameRowsScopeAdmitsNameRefuses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", k.Name, err)
 			}
-			if rnKeyAgrees[r.perm] {
-				// Both gates refuse (stage 13 does), or both admit (gin then lets
-				// the request through to the handler).
-				if res.Stage13 != Stage13Refused && res.Verdict() == 'D' {
-					t.Errorf("stage 13 admits %s and gin refuses it (%d %s): the core:admin key now splits the gates too; redo the table", k.Name, res.Status, res.excerpt())
-				}
-				t.Logf("%s: %d stage13=%v", k.Name, res.Status, res.Stage13)
+			if ctl.Route.Guards.Interactive {
+				h.Refused(res, http.StatusForbidden, "interactive_required")
 				return
 			}
 			if res.Stage13 == Stage13Refused {
-				t.Errorf("stage 13 refuses %s (%s %s): an admin's key holding %s no longer passes the scope gate; redo the table", k.Name, res.Code, res.excerpt(), r.perm)
-			}
-			if res.Status != http.StatusForbidden || rnMessage(res) != rnKeyRefusal {
-				t.Errorf("gin no longer refuses %s for lacking an atom (%d %s): with gin relaxed the key's scope alone admits it", k.Name, res.Status, res.excerpt())
+				t.Errorf("stage 13 refuses %s (%s %s): an admin's key holding exactly %s is not admitted", k.Name, res.Code, res.excerpt(), r.perm)
+			} else {
+				t.Logf("%s: stage 13 admits; behind it: %s", k.Name, rnBehindStage13(t, k, res, rnKeyRefusal))
 			}
 		})
 	}
@@ -367,5 +375,99 @@ func TestReachRegisteredPath_CoreRefusesAKeyOnAnotherUsersCredential(t *testing.
 	}
 	if res := h.MustDo(t, adm, "DELETE", "/api/core/v1/api-keys/"+dicksKey, nil); res.Status/100 != 2 {
 		t.Errorf("control: the admin session could not revoke dick.grayson's key: %d %s", res.Status, res.excerpt())
+	}
+}
+
+// rnDetail is the detail of a problem document.
+func rnDetail(res Result) string {
+	var b struct {
+		Detail string `json:"detail"`
+	}
+	_ = json.Unmarshal(res.Body, &b)
+	return b.Detail
+}
+
+// The escalation refusals core writes (core/internal/rbachttp/errors.go,
+// core/internal/authhttp/errors.go): a role write naming a permission the actor
+// does not hold (rbac.ErrEscalation), and a key whose scopes the actor does not
+// hold (auth.ErrScopeEscalation).
+const (
+	rnRoleEscalation = "a role may be written only by an actor who holds every permission the change touches"
+	rnKeyEscalation  = "the key would hold a scope its creator does not"
+)
+
+func TestReachRegisteredPath_NonAdminCannotGrantAdminScopes(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{})
+	// A role manager and user manager with none of the admin scopes, and a user it
+	// dominates (a role holding core:roles.view only) to assign roles to.
+	keeper := rnCustomSession(t, h, rnHolder{"", "custom.rolekeepers", "Role keepers", "leslie.thompkins.rolekeeper",
+		[]string{"core:self", "core:roles.manage", "core:roles.view", "core:users.manage"}})
+	rnCustomSession(t, h, rnHolder{"", "custom.clerks", "Clerks", "jim.corrigan.clerk", []string{"core:roles.view"}})
+	clerk := rnUserID(t, h, "jim.corrigan.clerk")
+	// A role holding books:admin.view, made by the admin, for the assignment case.
+	if res := h.MustDo(t, h.Principal("session:admin"), "POST", "/api/core/v1/roles", map[string]any{
+		"name": "custom.archivists", "title": "Archivists", "permissions": []string{"books:admin.view"},
+	}); res.Status != http.StatusCreated {
+		t.Fatalf("create custom.archivists: %d %s", res.Status, res.excerpt())
+	}
+
+	// Controls: the keeper may create a role, mint a key and assign a role, each
+	// with a permission it holds, so every refusal below is about the scope.
+	if res := h.MustDo(t, keeper, "POST", "/api/core/v1/roles", map[string]any{
+		"name": "custom.readers", "title": "Readers", "permissions": []string{"core:roles.view"},
+	}); res.Status != http.StatusCreated {
+		t.Fatalf("control: the keeper could not create a role it holds every permission of: %d %s", res.Status, res.excerpt())
+	}
+	if res := h.MustDo(t, keeper, "POST", "/api/core/v1/me/api-keys", map[string]any{
+		"name": "control", "scopes": []string{"core:roles.view"}, "expires_in": "1h",
+	}); res.Status != http.StatusCreated {
+		t.Fatalf("control: the keeper could not mint a key it holds the scope of: %d %s", res.Status, res.excerpt())
+	}
+	if res := h.MustDo(t, keeper, "PUT", "/api/core/v1/users/"+clerk+"/roles", map[string]any{
+		"roles": []string{"custom.clerks", "custom.readers"},
+	}); res.Status/100 != 2 {
+		t.Fatalf("control: the keeper could not assign a role it holds: %d %s", res.Status, res.excerpt())
+	}
+
+	for i, scope := range []string{"core:admin", "books:admin.view", "books:admin.debug"} {
+		t.Run(scope, func(t *testing.T) {
+			res := h.MustDo(t, keeper, "POST", "/api/core/v1/roles", map[string]any{
+				"name": fmt.Sprintf("custom.usurpers%d", i), "title": "Usurpers", "permissions": []string{"core:roles.view", scope},
+			})
+			if h.Refused(res, http.StatusForbidden, "scope_escalation") && rnDetail(res) != rnRoleEscalation {
+				t.Errorf("create a role holding %s: detail %q, want %q", scope, rnDetail(res), rnRoleEscalation)
+			}
+			res = h.MustDo(t, keeper, "POST", "/api/core/v1/me/api-keys", map[string]any{
+				"name": "usurper", "scopes": []string{scope}, "expires_in": "1h",
+			})
+			if h.Refused(res, http.StatusForbidden, "scope_escalation") && rnDetail(res) != rnKeyEscalation {
+				t.Errorf("mint a key holding %s: detail %q, want %q", scope, rnDetail(res), rnKeyEscalation)
+			}
+		})
+	}
+	// Granting through assignment: the admin role (core:admin) and a role holding
+	// books:admin.view. Core refuses it in auth.Service.SetUserRoles with
+	// RBAC.CanAssign (core/auth/users.go), wrapped in auth.ErrScopeEscalation, and
+	// authhttp writes the one detail it has for that error (rnKeyEscalation, which
+	// names a key even here: core/internal/authhttp/errors.go).
+	for _, role := range []string{"admin", "custom.archivists"} {
+		t.Run("assign "+role, func(t *testing.T) {
+			res := h.MustDo(t, keeper, "PUT", "/api/core/v1/users/"+clerk+"/roles", map[string]any{"roles": []string{"custom.clerks", role}})
+			if h.Refused(res, http.StatusForbidden, "scope_escalation") && rnDetail(res) != rnKeyEscalation {
+				t.Errorf("assign %s: detail %q, want %q", role, rnDetail(res), rnKeyEscalation)
+			}
+		})
+	}
+	// Nothing changed: the clerk holds what the control gave it, and no usurper role exists.
+	var roles struct {
+		Items []struct {
+			Name string `json:"name"`
+		} `json:"items"`
+	}
+	h.coreJSON(h.Principal("session:admin"), http.MethodGet, "/api/core/v1/roles", nil, &roles)
+	for _, r := range roles.Items {
+		if strings.HasPrefix(r.Name, "custom.usurpers") {
+			t.Errorf("role %s was created", r.Name)
+		}
 	}
 }
