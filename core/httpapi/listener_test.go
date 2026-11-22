@@ -43,6 +43,33 @@ func TestListener_ServeAndShutdown(t *testing.T) {
 	}
 }
 
+// OnShutdown functions run when Shutdown begins, before the connections drain:
+// a long-lived stream (the realtime hub's SSE) is told to end there, or the
+// drain would wait for it until the budget ran out.
+func TestListen_OnShutdownRunsWhenShutdownBegins(t *testing.T) {
+	ran := make(chan struct{})
+	l, err := Listen(ListenOptions{Addr: "localhost:0", OnShutdown: []func(){func() { close(ran) }}}, http.NotFoundHandler(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = l.Serve() }()
+	select {
+	case <-ran:
+		t.Fatal("the shutdown hook ran before Shutdown")
+	default:
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if err := l.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown never ran the OnShutdown hook")
+	}
+}
+
 func TestListen_Refusals(t *testing.T) {
 	busy, err := Listen(ListenOptions{Addr: "localhost:0"}, http.NotFoundHandler(), nil)
 	if err != nil {

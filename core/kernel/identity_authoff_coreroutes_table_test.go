@@ -24,8 +24,10 @@ package kernel
 // (auth_disabled_remote), which the posture tests pin. Every row therefore has
 // one Want, held in all three postures.
 //
-// No backup, health, log, task, updater or event route is mounted by the
-// identity boot at this base, so 05-rbac 4.11 (b) and (c) have no cells; a
+// No backup, health, log, task or updater route is mounted by the identity boot
+// at this base (the F6-03 events flip mounts the event stream, the topic
+// catalog and the outbox operator routes, which have rows below), so 05-rbac
+// 4.11 (b) and (c) have no cells; a
 // route mounted later without a row here fails TestAuthOffCoreRoutes_
 // EveryCoreRouteHasARow, which is how those clauses get their rows.
 
@@ -104,6 +106,7 @@ const (
 	clInteractive   = "05-rbac 4.11 (a) and 05-authn 4.11 bullet 2 (SEC5-8): a Guards.Interactive route is refused because the auth-disabled principal is non-interactive (Method.MayChangeCredentials is false)"
 	clNeedUser      = "05-authn 4.11 bullet 3 (SEC-3) and 05-rbac 4.11 (d): credential metadata needs a user, the auth-disabled principal has none, so it is refused 403 interactive_required before the handler acts (05-authn and 05-rbac say 401 authentication_required; F4-08 ruling G5(a), 2026-11-22, makes it a 403 because a session-ending 401 would sign a no-auth install out of its own SPA)"
 	clAudit         = "05-rbac 4.11 (d) and 6.1: core:audit.view is AuthRequired, so the auth-disabled checker never holds it and the audit query and export answer 403 interactive_required (spec text: 401; F4-08 ruling G5(a))"
+	clSystemManage  = "05-rbac 4.11 bullet 1 and 6.1: core:system.manage is AuthRequired, so the auth-disabled checker never holds it and the outbox operator routes answer 403 interactive_required (spec text: 401; F4-08 ruling G5(a))"
 	clReset         = "05-rbac 6.2 (factory-reset row) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive and Guards.Owner; Interactive refuses first"
 	clReview        = "05-rbac 7.1 (acknowledge each restore_admins_review holder: an interactive core:admin session, audited core.role.review_admin) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive; Interactive refuses first"
 	clSettings      = "05-config 1.3.7 (cited by confighttp/routes.go): settings keep their auth-off reach, AnyAuthenticated with the per-section and per-key checks inside the handler"
@@ -199,6 +202,15 @@ var offCoreRows = []offRow{
 		Want: offDeny, Code: "protection_required", Clause: clProtect},
 	{Route: "PATCH /api/core/v1/settings", Name: "core.auth.disabled_allow_remote, protect admin", Body: `{"set":{"core.auth.disabled_allow_remote":false}}`,
 		Want: offDeny, Code: "protection_required", Clause: clProtect},
+
+	// ---- the event stream and the outbox (F6-03) -------------------------------
+	{Route: "GET /api/core/v1/events", Want: offAllow, Clause: clAnyAuth + "; the stream itself shows only the topics the principal's own checker may view (05-realtime 4.2)"},
+	{Route: "GET /api/core/v1/events/topics", Want: offAllow, Clause: clView},
+	{Route: "GET /api/core/v1/outbox/consumers", Want: offAllow, Clause: clView},
+	{Route: "GET /api/core/v1/outbox/dead", Want: offDeny, Code: "interactive_required", Clause: clSystemManage},
+	{Route: "POST /api/core/v1/outbox/dead/{consumer}/{seq}/retry", Want: offDeny, Code: "interactive_required", Clause: clSystemManage},
+	{Route: "DELETE /api/core/v1/outbox/dead/{consumer}/{seq}", Want: offDeny, Code: "interactive_required", Clause: clSystemManage},
+	{Route: "DELETE /api/core/v1/outbox/consumers/{consumer}/backlog", Want: offDeny, Code: "interactive_required", Clause: clInteractive + "; core:system.manage is AuthRequired as well"},
 
 	// ---- the store reset --------------------------------------------------------
 	{Route: "POST /api/core/v1/system/factory-reset", Want: offDeny, Code: "interactive_required", Clause: clReset, Head: "D", HeadRoute: "POST /api/v1/system/factory-reset"},
