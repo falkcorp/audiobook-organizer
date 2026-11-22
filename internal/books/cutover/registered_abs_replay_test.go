@@ -24,6 +24,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -297,6 +298,16 @@ func TestReachRegisteredPath_AbsReplay(t *testing.T) {
 	// The count is exact: no more and no fewer than the bar (reachBarABSReplay).
 	if len(cells) != absReplayCells {
 		t.Fatalf("replayed %d cells, want exactly %d (%d routes x %d principals)", len(cells), absReplayCells, absReplayRoutes, absReplayPrinc)
+	}
+	// What the test declares to the obligation check (absReplayCovers) is exactly
+	// what it replayed.
+	var replayed []string
+	for _, c := range cells {
+		replayed = append(replayed, c.route+"|"+c.principal)
+	}
+	sort.Strings(replayed)
+	if !slices.Equal(replayed, absReplayCovers()) {
+		t.Errorf("the replayed cells are not the coverage declared to F4-07-ABS-REPLAY (absReplayCovers): %d against %d", len(replayed), len(absReplayCovers()))
 	}
 	for _, p := range absProblems(cells, absKnownDifferences) {
 		t.Error(p)
@@ -648,4 +659,50 @@ func TestRegisteredAbs_RemoveFromContinueListeningServed(t *testing.T) {
 	if res := h.Raw(anon); res.Status != http.StatusUnauthorized {
 		t.Errorf("the anonymous caller: %d %s, want 401", res.Status, res.excerpt())
 	}
+}
+
+// absReplayCovers is the coverage TestReachRegisteredPath_AbsReplay declares to
+// F4-07-ABS-REPLAY, in the unit the row counts (route|principal): every R0 abs_only
+// route that the flip does not gate, against every principal of verdicts.json. It is
+// derived from R0's recording and the pinned absGated list, with no boot, and the
+// test compares it to the cells it really replayed. A load failure declares nothing,
+// which leaves the row open.
+func absReplayCovers() []string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return nil
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, reachRel, "verdicts.json")); err == nil {
+			break
+		}
+		next := filepath.Dir(dir)
+		if next == dir {
+			return nil
+		}
+		dir = next
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, reachRel, "verdicts.json"))
+	if err != nil {
+		return nil
+	}
+	var d absR0Doc
+	if json.Unmarshal(raw, &d) != nil {
+		return nil
+	}
+	var out []string
+	for _, r := range d.Routes {
+		if !r.ABSOnly || slices.Contains(absGated, r.key()) {
+			continue
+		}
+		for _, p := range d.Principals {
+			out = append(out, r.key()+"|"+p)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func init() {
+	cutover.RegisterReachDischarge("F4-07-ABS-REPLAY", "TestReachRegisteredPath_AbsReplay", absReplayCovers)
 }
