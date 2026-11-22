@@ -15,6 +15,7 @@ import { StaleBuildBanner } from './components/StaleBuildBanner';
 import { Dashboard } from './pages/Dashboard';
 import { Login } from './pages/Login';
 import { AcceptInvite } from './pages/AcceptInvite';
+import { TempLogin } from './pages/TempLogin';
 import { NotFound } from './pages/NotFound';
 import { ABS_REDIRECTS } from './utils/absRedirects';
 import { eventSourceManager } from './services/eventSourceManager';
@@ -204,11 +205,14 @@ function App() {
   // The invitation page is public and stands alone: an invitee has no session
   // yet, and a signed-in user opening someone's link should see the same page,
   // not the app shell. It must render before the auth/wizard gates below.
-  if (location.pathname.startsWith('/invite/')) {
+  // Both links carry their one-time token in the URL fragment (/invite#token=...,
+  // /login/temp#token=...), never the path or query (07 section 7.4.3): the old
+  // /invite/:token form is not routed.
+  if (location.pathname === '/invite' || location.pathname === '/login/temp') {
     return (
       <Routes>
-        <Route path="/invite/:token" element={<AcceptInvite />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/invite" element={<AcceptInvite />} />
+        <Route path="/login/temp" element={<TempLogin />} />
       </Routes>
     );
   }

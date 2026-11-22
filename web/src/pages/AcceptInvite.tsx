@@ -3,20 +3,13 @@
 // guid: 8e5c1a47-2d93-4b6f-a0e8-3f7b9d2c6a15
 // last-edited: 2026-11-07
 
-// Public page an invitee opens from their invitation link: /invite/:token.
-// It shows who the invitation is for and when it expires, lets them choose a
-// password, and says how to sign in from a browser. A guest gets through
-// Cloudflare by email login when accepting adds their address to the guest
-// Access policy (the lookup's email_login), so there is no shared header or
-// token to copy. When per-guest phone-app keys are on (the lookup's
-// phone_app_token), accepting also returns that guest's OWN Cloudflare
-// service token once (phone_app in the accept response); this page is the only
-// place the secret is ever shown, and it is kept in component state only. The
-// invitation comes from GET /api/v1/auth/invite/:token, which only answers for
-// a valid, unexpired, unused token.
+// Public page an invitee opens from their invitation link: /invite#token=... (core's link form,
+// F4-08 B8). The token is read from the URL fragment once and the fragment is removed at once
+// (useFragmentToken); it goes to core in a request body only (POST /auth/invites/lookup, then
+// /auth/invites/accept), never in a URL. The page shows who the invitation is for and when it
+// expires, lets the invitee choose a password, and accepting opens their session.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { useParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -27,35 +20,25 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { apiFetch } from '../utils/apiFetch';
-import { describeRequestError, responseErrorMessage, unwrapData } from '../utils/apiResponse';
+import {
+  acceptInvite,
+  lookupInvite,
+  type InvitePreview,
+  type PhoneAppKey,
+} from '../services/coreIdentity';
+import { ApiError } from '../services/apiError';
+import { useFragmentToken } from '../utils/fragmentToken';
+import { describeRequestError } from '../utils/apiResponse';
 
-interface PublicInvite {
-  username: string;
-  expires_at: string;
-  // email_login: accepting adds the invited address to the Cloudflare guest
-  // policy, so the guest signs in to Cloudflare with that address first.
-  email_login?: boolean;
-  // phone_app_token: accepting will mint this guest's own phone-app key.
-  phone_app_token?: boolean;
-}
-
-// The accept response's phone_app object. client_secret is shown once and
-// never stored by this page beyond component state.
-interface PhoneAppKey {
-  status: 'issued' | 'unavailable';
-  client_id?: string;
-  client_secret?: string;
-  id_header?: string;
-  secret_header?: string;
-  message?: string;
-}
+/** The server's own reason for a refusal; the generic text for a transport failure. */
+const reasonOf = (err: unknown, fallback: string) =>
+  err instanceof ApiError && err.message ? err.message : describeRequestError(err, fallback);
 
 type LoadState =
   | { kind: 'loading' }
   | { kind: 'invalid' }
   | { kind: 'error'; message: string }
-  | { kind: 'ready'; invite: PublicInvite };
+  | { kind: 'ready'; invite: InvitePreview };
 
 const MIN_PASSWORD = 8;
 
@@ -147,9 +130,17 @@ export function SignInSteps({
   );
 }
 
+/** core answers a missing, spent or expired invitation with one of these codes. */
+function isLinkInvalid(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  const code = (err.data as { code?: string } | undefined)?.code;
+  return code === 'invite_invalid' || code === 'link_invalid' || err.status === 404;
+}
+
 export function AcceptInvite() {
-  const { token = '' } = useParams<{ token: string }>();
-  const [state, setState] = useState<LoadState>({ kind: 'loading' });
+  // Declared before the effect below, so the fragment is removed before the lookup request.
+  const token = useFragmentToken();
+  const [state, setState] = useState<LoadState>(token ? { kind: 'loading' } : { kind: 'invalid' });
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -158,27 +149,22 @@ export function AcceptInvite() {
   const [phoneApp, setPhoneApp] = useState<PhoneAppKey | null>(null);
 
   useEffect(() => {
+    if (!token) return;
     let cancelled = false;
     (async () => {
       try {
-        const resp = await apiFetch(`/api/v1/auth/invite/${encodeURIComponent(token)}`);
-        if (cancelled) return;
-        if (resp.status === 404) {
-          setState({ kind: 'invalid' });
-          return;
-        }
-        if (!resp.ok) {
-          setState({ kind: 'error', message: await responseErrorMessage(resp) });
-          return;
-        }
-        const invite = unwrapData<PublicInvite>(await resp.json());
-        setState({ kind: 'ready', invite });
+        const invite = await lookupInvite(token);
+        if (!cancelled) setState({ kind: 'ready', invite });
       } catch (err) {
-        if (!cancelled)
-          setState({
-            kind: 'error',
-            message: describeRequestError(err, 'Could not load the invitation'),
-          });
+        if (cancelled) return;
+        setState(
+          isLinkInvalid(err)
+            ? { kind: 'invalid' }
+            : {
+                kind: 'error',
+                message: reasonOf(err, 'Could not load the invitation'),
+              }
+        );
       }
     })();
     return () => {
@@ -189,6 +175,7 @@ export function AcceptInvite() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setFormError('');
+    if (!token) return;
     if (password.length < MIN_PASSWORD) {
       setFormError(`Password must be at least ${MIN_PASSWORD} characters.`);
       return;
@@ -199,33 +186,21 @@ export function AcceptInvite() {
     }
     setSubmitting(true);
     try {
-      const resp = await apiFetch('/api/v1/auth/accept-invite', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, password }),
-      });
-      if (!resp.ok) {
-        setFormError(await responseErrorMessage(resp));
-        return;
-      }
-      // Read the one-time key before anything else can drop the response. A
-      // body that does not parse must not turn a created account into an error,
-      // and a response without phone_app (the feature is off) changes nothing
-      // about this page.
-      try {
-        const data = unwrapData<{ phone_app?: PhoneAppKey }>(await resp.json());
-        if (data?.phone_app) {
-          setPhoneApp(data.phone_app);
-          // The key is on screen now: drop the typed passwords from state.
-          setPassword('');
-          setConfirm('');
-        }
-      } catch {
-        /* no phone-app key in the response */
+      const done = await acceptInvite(token, password);
+      // The one-time phone-app key, when the server hands one over (B10s feeds it from a books
+      // claim endpoint after core's accept; core's own answer carries none).
+      if (done.phone_app) {
+        setPhoneApp(done.phone_app);
+        setPassword('');
+        setConfirm('');
       }
       setAccepted(true);
     } catch (err) {
-      setFormError(describeRequestError(err, 'Could not accept the invitation'));
+      setFormError(
+        isLinkInvalid(err)
+          ? 'This invitation is no longer valid. Ask the person who invited you for a new one.'
+          : reasonOf(err, 'Could not accept the invitation')
+      );
     } finally {
       setSubmitting(false);
     }
@@ -245,68 +220,63 @@ export function AcceptInvite() {
     body = <Alert severity="error">{state.message}</Alert>;
   } else {
     const { invite } = state;
-    body = (
+    body = accepted ? (
       <Stack spacing={2}>
-        {accepted ? (
-          <>
-            <Alert severity="success">
-              Your account <strong>{invite.username}</strong> is ready.
-            </Alert>
-            {phoneApp && <PhoneAppKeyPanel phoneApp={phoneApp} />}
-            <Button variant="contained" onClick={() => window.location.assign('/')}>
-              Continue to the library
-            </Button>
-          </>
-        ) : (
-          <>
-            <Typography>
-              This invitation is for <strong>{invite.username}</strong> and expires{' '}
-              {new Date(invite.expires_at).toLocaleString()}.
-            </Typography>
-            <Box component="form" onSubmit={handleSubmit} noValidate>
-              <TextField
-                fullWidth
-                type="password"
-                label="Choose a password"
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                margin="normal"
-                required
-                helperText={`At least ${MIN_PASSWORD} characters`}
-              />
-              <TextField
-                fullWidth
-                type="password"
-                label="Confirm password"
-                autoComplete="new-password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                margin="normal"
-                required
-              />
-              {formError && (
-                <Alert severity="error" sx={{ mt: 1 }}>
-                  {formError}
-                </Alert>
-              )}
-              <Button
-                type="submit"
-                variant="contained"
-                fullWidth
-                sx={{ mt: 2 }}
-                disabled={submitting}
-              >
-                {submitting ? 'Creating account…' : 'Create my account'}
-              </Button>
-            </Box>
-          </>
-        )}
+        <Alert severity="success">
+          Your account <strong>{invite.username}</strong> is ready and you are signed in.
+        </Alert>
+        {phoneApp && <PhoneAppKeyPanel phoneApp={phoneApp} />}
         <SignInSteps
           username={invite.username}
           emailLogin={!!invite.email_login}
           phoneAppToken={!!invite.phone_app_token}
-          showPhoneNote={!(accepted && phoneApp)}
+          showPhoneNote={!phoneApp}
+        />
+        <Button variant="contained" onClick={() => window.location.assign('/')}>
+          Continue to the library
+        </Button>
+      </Stack>
+    ) : (
+      <Stack spacing={2}>
+        <Typography>
+          This invitation is for <strong>{invite.username}</strong> and expires{' '}
+          {new Date(invite.expires_at).toLocaleString()}.
+        </Typography>
+        <Box component="form" onSubmit={handleSubmit} noValidate>
+          <TextField
+            fullWidth
+            type="password"
+            label="Choose a password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            margin="normal"
+            required
+            helperText={`At least ${MIN_PASSWORD} characters`}
+          />
+          <TextField
+            fullWidth
+            type="password"
+            label="Confirm password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            margin="normal"
+            required
+          />
+          {formError && (
+            <Alert severity="error" sx={{ mt: 1 }}>
+              {formError}
+            </Alert>
+          )}
+          <Button type="submit" variant="contained" fullWidth sx={{ mt: 2 }} disabled={submitting}>
+            {submitting ? 'Creating account…' : 'Create my account'}
+          </Button>
+        </Box>
+        <SignInSteps
+          username={invite.username}
+          emailLogin={!!invite.email_login}
+          phoneAppToken={!!invite.phone_app_token}
         />
       </Stack>
     );
