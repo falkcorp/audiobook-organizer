@@ -52,10 +52,15 @@ func f(p *P) bool { return p.Other.Interactive() }`, nil},
 //   - kernel/verified_method.go: the verified-method rule asks the Method and
 //     then its own map of the registered extensions' Interactive specs, the
 //     same answer the principal carries.
+//   - internal/taskhttp/principal.go: DefaultVerifiedMethod is core's
+//     narrower default, which verifies core's interactive session only and
+//     leaves the extension cell to the kernel's rule above
+//     (TestApprove_CoreDefaultRefusesWhatOnlyTheKernelWidens).
 func TestPrincipalClassFromRegistryOverCore(t *testing.T) {
 	PrincipalClassFromRegistry(t, coreRoot(t), []string{
 		"auth/method.go",
 		"realtime/handler.go",
 		"kernel/verified_method.go",
+		"internal/taskhttp/principal.go",
 	})
 }

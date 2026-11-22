@@ -72,7 +72,10 @@ func PrincipalClassFromRegistry(t testing.TB, dir string, allowed []string) {
 			t.Fatalf("PrincipalClassFromRegistry: %v", err)
 		}
 		for _, h := range hits {
-			rel, _ := filepath.Rel(root, f)
+			rel, err := filepath.Rel(root, f)
+			if err != nil {
+				rel = f
+			}
 			findings = append(findings, filepath.ToSlash(rel)+":"+h)
 		}
 	}
