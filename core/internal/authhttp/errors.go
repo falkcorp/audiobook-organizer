@@ -85,6 +85,8 @@ func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string
 		return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "you may not do this"}
 	case errors.Is(err, auth.ErrLastAdmin):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "last_admin", Detail: "this would leave no active administrator"}
+	case errors.Is(err, auth.ErrMergedAway):
+		return &httpapi.Error{Status: http.StatusConflict, Code: "merged_away", Detail: "this account was merged into another account; undo the merge instead of enabling it"}
 	case errors.Is(err, auth.ErrKeyRevoked):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "key_revoked", Detail: "a revoked key stays revoked"}
 	case errors.Is(err, auth.ErrEmailInUse):

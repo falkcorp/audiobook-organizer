@@ -69,6 +69,10 @@ var (
 	// ErrSetupClosed: setup once a user exists, or without the bootstrap
 	// token from a non-local caller (§4.6 items 3-4).
 	ErrSetupClosed = errors.New("auth: setup is not available")
+	// ErrMergedAway: enabling an account that an admin user merge folded into
+	// another account (User.MergedInto). It stays disabled; undoing the merge
+	// is the way back (409 merged_away).
+	ErrMergedAway = errors.New("auth: the account was merged into another account and stays disabled")
 	// ErrInviteInvalid: an invite that is unknown, spent, expired, or whose
 	// creator may no longer assign its role (SEC3-2).
 	ErrInviteInvalid = errors.New("auth: invite invalid")

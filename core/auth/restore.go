@@ -429,7 +429,10 @@ func (p *restorePlan) reapply(ctx context.Context, r journal.Revocation) error {
 // restore with no pre-swap store has nothing to prove the enable committed,
 // so neither may open access. A user that is deleted (by the store or an
 // earlier line), pending, _system or already active is left as it is: only a
-// disabled user is re-enabled, at the higher of its epoch and the line's.
+// disabled user is re-enabled, at the higher of its epoch and the line's. A
+// disabled user marked merged into another (User.MergedInto) is left disabled
+// and counted as nothing: a merged-away account stays disabled for good, and
+// SetStatus refuses to enable it, so a replayed line must not either.
 func (p *restorePlan) enable(r journal.Revocation) error {
 	if r.Subject.Module != auditModule || r.Subject.Kind != refKindUser || r.Subject.ID == "" || r.Epoch <= 0 {
 		return fmt.Errorf("%w: malformed %s line at seq %d (subject %q, epoch %d)",
@@ -440,7 +443,7 @@ func (p *restorePlan) enable(r journal.Revocation) error {
 	}
 	id := UserID(r.Subject.ID)
 	u := p.users[id]
-	if u == nil || p.deleted[id] || u.Status != StatusDisabled {
+	if u == nil || p.deleted[id] || u.Status != StatusDisabled || u.MergedInto != "" {
 		return nil
 	}
 	u.Status = StatusActive
