@@ -233,10 +233,13 @@ seams file before planning; each lists its own obligations "for F9-03".
   (prepared by `seams.d/F9-03-prep-nav.md`); map `booksNavItems` onto `NavContribution`; delete the old-path re-export
   files, `Sidebar.tsx` and `modules/books/layout/legacyAuth.ts`; give the bell `notifyLevel`; profile and password
   save in the user menu; the singleton check on the first real build; and the taskKinds def ids not yet carried.
-- **Legacy operation status literals** (`seams.d/F9-05-activity.md`). The Activity cut left about nine call sites
-  and four status methods on the legacy `ActiveOperation.status` values (`completed`, `failed`, `canceled`, ...). Once
-  the feed is the shell's, they must switch to core's run states (`succeeded`, `failed`, `canceled`, `timed_out`,
-  `interrupted_*`, `awaiting_decision`, ...), using the shell's run-state helpers rather than string compares. That
+- **Legacy operation status literals** (`seams.d/F9-05-activity.md`). The Activity cut (#5010) left twelve
+  comparison sites in `ActivityLogFrame.tsx` on the legacy `ActiveOperation.status` values (`queued`, `running`,
+  `completed`, `failed`, `canceled`, `interrupted_*`). The shell's store feeds rows carrying core's state names
+  (`TASK_RUN_STATES` in `providers/taskRuns.ts`), so each site needs a `status` binding method or a row adapter before
+  shell rows render correctly. The four new `ActivityStatusModel` methods are `isQueued`, `isSuccess`, `isFailure` and
+  `isCanceled` (`isRunning` and `awaitingDecision` are optional extras). The seams file has the site table with line
+  numbers and the legacy-to-core mapping; use the shell's `shellRunStatus` rather than string compares. That
   includes `useBooksRowActions.tsx`'s Review and Undo buttons, which test `op.status === 'completed'`
   (`seams.d/F9-02.md`). The Activity feed itself stays in `ActivityLogFrame` with ABO bindings, and
   `OperationTrackerProvider` moved whole into `web/src/modules/books/activity/`. This PR splits the generic
