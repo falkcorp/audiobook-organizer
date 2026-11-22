@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -502,15 +503,17 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 	return tasks.Task(fileIntroKind, tasks.TaskSpec[fileIntroNativeParams, fileIntroResult]{
 		Title: "Transcribe file intros",
 		Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced. A live run writes nothing itself: it starts one child run per 100 books, one at a time, and each child holds only its own books.",
-		// ReadOnly: the writes (a file's intro group: book_files; a book's transcript
-		// fill, ModifyBook: books, metadata_cache, indexes) are the children's, see
-		// fileIntroBatchKind. HEAD declared none, to keep a days-long run from
-		// queueing acoustid.backfill; the first native cut declared book_files and
-		// books for the whole run, which did the same. Now every child holds only its
-		// batch. The run's counters (the stats:transcribe-files key) have no pkg/ops
-		// constant and are written outside the gated writer, by the parent (see
-		// t6g4StatsSink).
-		Effects:  tasks.ReadOnly(),
+		// The Effects are the first native cut's, unchanged: the executor starts a
+		// kind with no declared writes in Live when the mode is omitted (core/
+		// internal/executor/start.go:149-152) where a writer kind starts in Preview.
+		// The parent narrows what it HOLDS to nothing with Subjects: the first native
+		// cut held book_files and books for the whole days-long run, and queued
+		// acoustid.backfill behind it. Every child now holds only its batch, see
+		// fileIntroBatchKind. The run's counters (the stats:transcribe-files key)
+		// have no pkg/ops constant and are written outside the gated writer, by the
+		// parent (see t6g4StatsSink).
+		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Subjects: batchParentHolds,
 		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,

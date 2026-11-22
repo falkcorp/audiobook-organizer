@@ -81,7 +81,7 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 	"books.maintenance.dedupe-book-file-rows":              {writes: "book_files books files fingerprint_index indexes metadata_cache operations", reads: "", deletes: ""},
 	"books.maintenance.duration-backfill":                  {writes: "book_files books indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.external-id-backfill":               {writes: "external_ids settings", reads: "", deletes: ""},
-	"books.maintenance.extract-wav-clips":                  {writes: "", reads: "", deletes: ""}, // F5-18h: a parent; its child holds the writes
+	"books.maintenance.extract-wav-clips":                  {writes: "book_files books files indexes metadata_cache", reads: "", deletes: ""}, // F5-18h: a parent; HEAD's declaration, it HOLDS nothing (Subjects), see batchParentHolds
 	"books.maintenance.extract-wav-clips.batch":            {writes: "book_files books files indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.file-integrity-check":               {writes: "", reads: "", deletes: ""},
 	"books.maintenance.file-provenance-capture":            {writes: "file_provenance", reads: "", deletes: ""},
@@ -90,7 +90,7 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 	"books.maintenance.folder-cover-backfill":              {writes: "books files indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.fs-regroup-xml":                     {writes: "book_files books external_ids indexes metadata_cache operations", reads: "", deletes: ""},
 	"books.maintenance.ident-index-rebuild":                {writes: "books indexes", reads: "", deletes: ""},
-	"books.maintenance.intro-migrate-single-file":          {writes: "", reads: "", deletes: ""}, // F5-18h: a parent; its child holds the writes
+	"books.maintenance.intro-migrate-single-file":          {writes: "book_files books indexes metadata_cache", reads: "", deletes: ""}, // F5-18h: a parent; HEAD's declaration, it HOLDS nothing (Subjects), see batchParentHolds
 	"books.maintenance.intro-migrate-single-file.batch":    {writes: "book_files books indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.library-optimize":                   {writes: "", reads: "", deletes: ""},
 	"books.maintenance.malformed-m4b-remux":                {writes: "book_files books files indexes metadata_cache settings", reads: "", deletes: ""},
@@ -128,7 +128,7 @@ var t6KindEffectsPinned = map[tasks.Kind]t6EffectsPin{
 	"books.maintenance.tombstone-cleanup":                  {writes: "authors", reads: "", deletes: ""},
 	"books.maintenance.transcode-temp-cleanup":             {writes: "files", reads: "", deletes: ""},
 	"books.maintenance.transcribe-book-intros":             {writes: "ai_journal book_files books files indexes metadata_cache", reads: "", deletes: ""},
-	"books.maintenance.transcribe-file-intros":             {writes: "", reads: "", deletes: ""}, // F5-18h: a parent; its child holds the writes
+	"books.maintenance.transcribe-file-intros":             {writes: "book_files books indexes metadata_cache", reads: "", deletes: ""}, // F5-18h: a parent; HEAD's declaration, it HOLDS nothing (Subjects), see batchParentHolds
 	"books.maintenance.transcribe-file-intros.batch":       {writes: "book_files books indexes metadata_cache", reads: "", deletes: ""},
 	"books.maintenance.trash-cleanup":                      {writes: "books files settings", reads: "", deletes: ""},
 	"books.maintenance.unknown-author-audit":               {writes: "", reads: "", deletes: ""},

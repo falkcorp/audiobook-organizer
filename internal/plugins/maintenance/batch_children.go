@@ -22,7 +22,7 @@ import (
 // The per-batch children of the three whole-library kinds and the parent runs
 // that enqueue them (F5-18h). The sweep itself is batch_sweep.go. The native
 // kinds extract-wav-clips, intro-migrate-single-file and transcribe-file-intros
-// are the PARENTS (ReadOnly, ResumeContinue): they plan the books, enqueue one
+// are the PARENTS (they hold no rows, ResumeContinue): they plan the books, enqueue one
 // child per batchSweepSize of them and fold the children's results. Each child
 // keeps the write set its kind always had (Effects) and narrows what the
 // dispatcher holds to its batch (Subjects). The cores are the ones the HEAD v2
