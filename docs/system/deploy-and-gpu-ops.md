@@ -881,7 +881,10 @@ The sudoers lines have no argument list and no wildcard.
 After upgrading the bundle, reinstall it (`make install-rollback-helpers
 APPLY=1`) with `--export-dir <export_dir>` in `ROLLBACK_INSTALL_ARGS`, so the
 new stubs, the sudoers lines and the `export_dir` setting exist; until then the
-make targets stop at "no export_dir" or at sudo's refusal.
+make targets stop at "no export_dir" or at sudo's refusal. `offline_env` now
+also accepts `ABO_*` names (for example `ABO_CORE_PATHS_STATE_DIR=<state_dir>`),
+which the flipped binary needs: it refuses `ABK_STATE_DIR` at boot, and so do
+its offline commands.
 
 ### The service environment is part of a rollback
 

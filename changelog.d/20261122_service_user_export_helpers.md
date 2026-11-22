@@ -5,4 +5,5 @@
 
 ### Changed
 
+- `offline_env` in `rollback.conf` now accepts `ABO_*` names beside `HOME` and `ABK_*`. The flipped binary refuses `ABK_STATE_DIR` at boot and in its offline commands, so a helper that runs one as the service user needs `ABO_CORE_PATHS_STATE_DIR`.
 - The R2 cutover runbook's Step 1 and Step 7 name the two make targets, add precondition P6 (the reinstalled bundle with `export_dir`), and narrow Known gap 2 to `storage cutover-blockers`.
