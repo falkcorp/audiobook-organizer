@@ -8,6 +8,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func identityABSServer(t *testing.T, opts ...ServerOption) *Server {
 		RootDir:       t.TempDir(),
 		EnableAuth:    true,
 		ABSAPIEnabled: true,
-		ABSJWTSecret:  "synthetic-throttle-test-secret-0123456789abcdef",
+		ABSJWTSecret:  strings.Repeat("batcave-", 6),
 	}
 	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/throttle-key.pebble")
 	require.NoError(t, err)
