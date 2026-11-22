@@ -318,6 +318,13 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	if err := db.labelled(labelCheckpointMkdir, func() error { return db.mkdirPrivate(tmp) }); err != nil {
 		return err
 	}
+	// The journal head the copy will hold at least: read before the copy, so the
+	// recorded boundary can only be below what the store had seen (a restore of
+	// the checkpoint then re-applies more, never less).
+	seq, err := db.journalSeq(ctx)
+	if err != nil {
+		return err
+	}
 	// A copy that fails checkpointInto's read-only check stays behind as
 	// <name>.tmp, which the next boot's sweep removes.
 	if err := db.labelled(labelCheckpointPebble, func() error { return db.checkpointInto(filepath.Join(tmp, "db")) }); err != nil {
@@ -344,7 +351,7 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	}
 	rec := checkpointRecord{
 		InstallID: st.installID, Epoch: st.epoch.Epoch, DirFSID: st.epoch.DirFSID, DirIno: st.epoch.DirIno,
-		FromVector: cur, FromRelease: st.opts.FromRelease, StateFiles: files, TakenAt: now, Status: "open",
+		FromVector: cur, FromRelease: st.opts.FromRelease, JournalSeq: seq, StateFiles: files, TakenAt: now, Status: "open",
 	}
 	if err := db.labelled(labelCheckpointRecord, func() error { return db.writeRecord(name, rec) }); err != nil {
 		return err
@@ -352,6 +359,25 @@ func (db *DB) takeCheckpoint(ctx context.Context) error {
 	st.cpName = name
 	db.log.Info("storage: pre-migration checkpoint taken", "name", name, "bytes", storeBytes)
 	return db.labelled(labelCheckpointPtr, func() error { return db.writePointer(checkpointPointer{Name: name, State: "open"}) })
+}
+
+// journalSeq is the committed revocation journal head seq of the live store,
+// through OpenOptions.JournalHead: 0 without the hook or without a "backup"
+// keyspace.
+func (db *DB) journalSeq(ctx context.Context) (uint64, error) {
+	hook := db.boot.opts.JournalHead
+	if hook == nil {
+		return 0, nil
+	}
+	ks, ok := db.Keyspace(backupOwner)
+	if !ok {
+		return 0, nil
+	}
+	seq, err := hook(ctx, ks)
+	if err != nil {
+		return 0, fmt.Errorf("storage: read the journal head for the checkpoint record: %w", err)
+	}
+	return seq, nil
 }
 
 // errCopyRefused marks a checkpoint copy checkpointInto made and refused: it

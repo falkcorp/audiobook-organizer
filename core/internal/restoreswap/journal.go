@@ -54,10 +54,15 @@ const (
 	StepRetired = "retired"
 )
 
-// stagedRecord is in's "staged" journal record: its kind in Note and, for
+// stagedRecord is in's "staged" journal record: its kind in Note, the outgoing
+// store's journal head in Seq (restore kinds; 0 for every other) and, for
 // KindRewrite, the step, the attempt and the store path M8 reads back.
 func stagedRecord(in restorejournal.Intent) restorejournal.Record {
 	r := restorejournal.Record{Step: StepStaged, Note: string(in.Kind), StepID: in.StepID}
+	switch in.Kind {
+	case restorejournal.KindArchive, restorejournal.KindRevert, restorejournal.KindCheckpoint:
+		r.Seq = in.OutgoingSeq
+	}
 	if in.Kind == restorejournal.KindRewrite {
 		r.Attempt, r.DBPath = in.Attempt, filepath.Clean(in.DBPath)
 	}
