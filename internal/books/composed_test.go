@@ -161,6 +161,7 @@ func bootComposedWith(t *testing.T, abs bool, stateDir string, edit func(*config
 	if opt != nil {
 		opt(&opts)
 	}
+	opts.Env = withLoopbackListen(opts.Env)
 	var registered module.Module = mod
 	for _, w := range wrap {
 		registered = w(registered)
@@ -332,7 +333,6 @@ func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre
 		if opt != nil {
 			opt(o)
 		}
-		o.Env = withLoopbackListen(o.Env)
 		listen := o.R1Listen
 		o.R1Listen = func(lo httpapi.ListenOptions, h http.Handler, l *slog.Logger) (app.R1Server, error) {
 			srv, err := listen(lo, h, l)
@@ -726,30 +726,29 @@ func TestOptions_FromReleaseReachesCore(t *testing.T) {
 // composedOptions put in the process environment for ResolveBootPaths.
 func storageEnv() string { return storagePathEnv + "=" + os.Getenv(storagePathEnv) }
 
-// listenEnv puts the listener on a free loopback port. A harness that
-// replaces app.Options.Env drops the process environment, and with it the
-// ABO_CORE_HTTP_LISTEN runComposedIn sets, so the listener would bind ABO's
-// compiled default 127.0.0.1:8484 and fail wherever that port is taken (a
-// host running the service, or two packages testing at once).
-const listenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
-
 // bootEnv is the environment a harness that replaces app.Options.Env gives a
-// booting service: the storage path, the free listen port, then extra.
+// booting service: the storage path, then extra. The listen port is not its
+// business: bootComposedWith passes the final Env through withLoopbackListen,
+// and the boots that never Run (bootOnce, bootAt) bind nothing.
 func bootEnv(extra ...string) []string {
-	return append([]string{storageEnv(), listenEnv}, extra...)
+	return append([]string{storageEnv()}, extra...)
 }
 
-// loopbackListenEnv is listenEnv under the name withLoopbackListen uses: the
-// operator value that puts a running test App's listener on a free loopback port.
-const loopbackListenEnv = listenEnv
+// loopbackListenEnv is the operator value that puts a test App's listener on a
+// free loopback port.
+const loopbackListenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
 
-// withLoopbackListen keeps a running test App off ABO's compiled listen default
-// (localhost:8484). composedOptions sets the same value on the process
+// withLoopbackListen keeps a test App off ABO's compiled listen default
+// (127.0.0.1:8484). composedOptions sets the same value on the process
 // environment, but a test that hands the boot its own Options.Env replaces that
 // environment whole, and its App then bound 8484: two such tests on one host
-// (parallel packages, two worktrees, two CI pipelines) collided with "address
-// already in use". A nil env falls back to the process environment, which
-// already carries the value; an env that names a listen address keeps it.
+// (the production service, parallel packages, two worktrees, two CI pipelines)
+// collided with "address already in use". It is the one mechanism for that:
+// bootComposedWith applies it to the Env its opt left, and every test App that
+// Runs is built there (runComposedIn, bootComposed), so no harness names the port
+// itself. bootOnce and bootAt never Run, so they bind nothing. A nil env falls
+// back to the process environment, which already carries the value; an env that
+// names a listen address keeps it.
 func withLoopbackListen(env []string) []string {
 	if env == nil || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "ABO_CORE_HTTP_LISTEN=") }) {
 		return env
