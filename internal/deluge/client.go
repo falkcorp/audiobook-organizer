@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"path/filepath"
@@ -123,6 +124,54 @@ func (e *rpcError) Error() string {
 	return fmt.Sprintf("deluge error %d: %s", e.Code, e.Message)
 }
 
+// statusError is a decode failure on a 5xx response, so IsTransient can tell a
+// failing server from a malformed answer.
+type statusError struct {
+	Status int
+	err    error
+}
+
+func (e *statusError) Error() string { return e.err.Error() }
+func (e *statusError) Unwrap() error { return e.err }
+
+// IsTransient reports whether err is the kind a retry of the same call can
+// outlive: a transport failure (connection refused or reset, a truncated
+// body, a timeout), a request that ran past its own
+// deadline, or a 5xx answer from a server or proxy in front of the Web UI.
+// Everything the Web UI answers deliberately is permanent: an RPC error (an
+// unknown torrent, a refused path, a method failure), a 2xx or 4xx body that
+// does not decode, ErrTorrentNotFound. A canceled context is not transient:
+// the caller stopped the call.
+func IsTransient(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var re *rpcError
+	if errors.As(err, &re) {
+		return false
+	}
+	var se *statusError
+	if errors.As(err, &se) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+	// *url.Error implements net.Error for every failure, a bad scheme or a
+	// certificate refusal included, so the net layer is read directly: a
+	// dial, read or write error, a timeout, or a DNS failure that says retry.
+	var op *net.OpError
+	if errors.As(err, &op) {
+		return true
+	}
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return dns.IsTemporary || dns.IsTimeout
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 // Deluge json_api error codes: 1 is NotAuthorizedError, raised before the
 // method runs; 4 is the generic method-failure code carrying the traceback text.
 const (
@@ -178,7 +227,13 @@ func (c *Client) callCtx(ctx context.Context, method string, params ...any) (jso
 
 	var rpcResp rpcResponse
 	if err := json.Unmarshal(raw, &rpcResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w (body: %s)", err, string(raw[:min(200, len(raw))]))
+		derr := fmt.Errorf("decode response: %w (body: %s)", err, string(raw[:min(200, len(raw))]))
+		if resp.StatusCode >= http.StatusInternalServerError {
+			// A proxy or gateway page in front of the Web UI: the server
+			// failed, not the call (IsTransient).
+			return nil, &statusError{Status: resp.StatusCode, err: derr}
+		}
+		return nil, derr
 	}
 	if rpcResp.Error != nil {
 		return nil, rpcResp.Error
