@@ -222,3 +222,34 @@ restore.
   Integrations, AI backends, Scheduled tasks, Performance, Temp Login, System Info) as shell; no cut row lists their
   files (F9-04 passes them into the frame from ABO). Unless a cut row takes them, this PR moves them into the shell,
   which 07 §7.19 step 4 allows ("one PR series") but makes this PR larger.
+
+## Carried in from the cut rows (lead, 2026-11-22)
+
+The cut rows were built in place, ahead of the R2 flips, and handed this PR work they could not do dark. Read each
+seams file before planning; each lists its own obligations "for F9-03".
+
+- **F9-02 is closed with no work of its own left** (coordinator, 2026-11-22). Its remaining items are this PR's:
+  `seams.d/F9-02.md` "Obligations for F9-03". They are: point `createShell` at the frames and delete the scaffold
+  (prepared by `seams.d/F9-03-prep-nav.md`); map `booksNavItems` onto `NavContribution`; delete the old-path re-export
+  files, `Sidebar.tsx` and `modules/books/layout/legacyAuth.ts`; give the bell `notifyLevel`; profile and password
+  save in the user menu; the singleton check on the first real build; and the taskKinds def ids not yet carried.
+- **Legacy operation status literals** (`seams.d/F9-05-activity.md`). The Activity cut left about nine call sites
+  and four status methods on the legacy `ActiveOperation.status` values (`completed`, `failed`, `canceled`, ...). Once
+  the feed is the shell's, they must switch to core's run states (`succeeded`, `failed`, `canceled`, `timed_out`,
+  `interrupted_*`, `awaiting_decision`, ...), using the shell's run-state helpers rather than string compares. That
+  includes `useBooksRowActions.tsx`'s Review and Undo buttons, which test `op.status === 'completed'`
+  (`seams.d/F9-02.md`). The Activity feed itself stays in `ActivityLogFrame` with ABO bindings, and
+  `OperationTrackerProvider` moved whole into `web/src/modules/books/activity/`. This PR splits the generic
+  follow-a-run part onto the shell's `TaskTrackerProvider`.
+- **Twins that are not equivalent** (`seams.d/F9-05-leaves.md`). `ToastProvider` and `useKeyboardShortcuts` were not
+  rebound to the shell and ui-kit twins, because the behaviour differs. The toast twin has no action button, queues
+  instead of stacking, never auto-hides errors, and throws outside a provider. The shortcuts twin uses a 1500 ms
+  chord window instead of 1000 ms, has no `Ctrl+K` or `/` search focus, and ignores `Ctrl+g`. This PR chooses each
+  behaviour and records the choice.
+- **Shell slot contracts** (`seams.d/F9-03-prep-nav.md`, `seams.d/F9-03-prep-pages.md`). `NavContribution`
+  `matchPath`/`matchSearch`, `ShellLayout`, and the Users/Setup/Settings slot shapes are in the shell. Their listed
+  gaps (connection feed, Settings `?tab=` strip versus panel routes, `SetupWizard` unmounted, the `isRequired` gate)
+  are this PR's.
+- **Return paths.** There is one client-side `sanitizeReturn`/`safeReturn`, in the shell's `auth/safeReturn.ts`; the
+  web copy is a re-export. Re-point its importers (`Login.tsx`, `BookDetail.tsx`) and keep the shared payload table
+  `core/auth/oidc/testdata/return_payloads.json` green.
