@@ -34,6 +34,11 @@ import (
 type moduleState struct {
 	roots []string // cleaned, absolute: the state directory, <db parent>
 	seams *bootseam.Seams
+	// owned says what core owns under the roots (stateowned.go); nil with no
+	// store open, where there are no roots either. real is its form over the
+	// real locations, for a path reached through a symbolic link; nil under a
+	// boot seam, whose filesystem has no links to resolve.
+	owned, real *coreOwned
 }
 
 var _ module.StateFS = (*moduleState)(nil)
@@ -41,8 +46,11 @@ var _ module.StateFS = (*moduleState)(nil)
 // newModuleState is the handle over roots (a relative or empty one is
 // dropped: a handle with no root refuses every path) under seams (nil in
 // production).
-func newModuleState(seams *bootseam.Seams, roots ...string) *moduleState {
-	s := &moduleState{seams: seams}
+func newModuleState(seams *bootseam.Seams, owned *coreOwned, roots ...string) *moduleState {
+	s := &moduleState{seams: seams, owned: owned}
+	if owned != nil && seams == nil {
+		s.real = owned.resolved()
+	}
 	for _, r := range roots {
 		if filepath.IsAbs(r) {
 			s.roots = append(s.roots, filepath.Clean(r))
@@ -57,13 +65,17 @@ func newModuleState(seams *bootseam.Seams, roots ...string) *moduleState {
 // does no I/O and its modules' Register must not either.
 func (k *Kernel) moduleState(ctx context.Context) module.StateFS {
 	if k.store == nil || k.store.db == nil {
-		return newModuleState(bootseam.From(ctx))
+		return newModuleState(bootseam.From(ctx), nil)
 	}
 	roots := []string{k.cfg.StateDir}
 	if k.cfg.StoragePath != "" {
 		roots = append(roots, filepath.Dir(k.cfg.StoragePath))
 	}
-	return newModuleState(bootseam.From(ctx), roots...)
+	keyFile := ""
+	if k.sec != nil {
+		keyFile = k.sec.store.KeyFile()
+	}
+	return newModuleState(bootseam.From(ctx), newCoreOwned(k.cfg.StateDir, k.cfg.StoragePath, keyFile, k.storageOwners()), roots...)
 }
 
 // resolve is path's root and its name under it. A path that is relative, that
@@ -89,6 +101,9 @@ func (s *moduleState) resolve(label, path string) (root, rel string, err error) 
 	}
 	if root == "" {
 		return "", "", fmt.Errorf("%w: %s", module.ErrStateConfined, path)
+	}
+	if s.owned != nil && (s.owned.owns(path) || s.real != nil && s.real.owns(viaParent(path))) {
+		return "", "", fmt.Errorf("%w: %s", module.ErrStateCoreOwned, path)
 	}
 	return root, rel, nil
 }

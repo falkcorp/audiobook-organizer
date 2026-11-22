@@ -46,6 +46,16 @@ var ErrCheckpointDirOverlap = errors.New("storage: the checkpoint directory over
 // core.storage.checkpoint_dir (§5S.3.12 "Where").
 const checkpointLeaf = ".mediacore-checkpoints"
 
+// CheckpointRoot is the directory that holds a store's checkpoints: checkpointDir
+// (core.storage.checkpoint_dir) or, when it is empty, the store's parent, plus
+// the checkpoint directory's name. Open computes it the same way.
+func CheckpointRoot(dbPath, checkpointDir string) string {
+	if checkpointDir == "" {
+		checkpointDir = filepath.Dir(dbPath)
+	}
+	return filepath.Join(checkpointDir, checkpointLeaf)
+}
+
 // checkpointStamp is the layout of a checkpoint name's UTC time.
 const checkpointStamp = "20060102T150405Z"
 

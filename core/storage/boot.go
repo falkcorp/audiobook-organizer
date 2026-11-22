@@ -195,11 +195,7 @@ func (o *OpenOptions) defaults() {
 	if o.Clock == nil {
 		o.Clock = time.Now
 	}
-	parent := o.CheckpointDir
-	if parent == "" {
-		parent = filepath.Dir(o.Path)
-	}
-	o.cpDir = filepath.Join(parent, checkpointLeaf)
+	o.cpDir = CheckpointRoot(o.Path, o.CheckpointDir)
 	fs := o.fs
 	if o.freeSpace == nil {
 		o.freeSpace = func(dir string) (uint64, error) {

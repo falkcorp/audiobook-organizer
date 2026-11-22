@@ -48,6 +48,12 @@ func newStateFixture(t *testing.T) stateFixture {
 	return f
 }
 
+// owned is core's rule for a store named gotham.pebble beside the fixture's
+// db parent, with the default keyring file.
+func (f stateFixture) owned() *coreOwned {
+	return newCoreOwned(f.state, filepath.Join(f.dbParent, "gotham.pebble"), "", nil)
+}
+
 func gone(t *testing.T, p string) bool {
 	t.Helper()
 	_, err := os.Lstat(p)
@@ -60,7 +66,7 @@ func gone(t *testing.T, p string) bool {
 // RemoveAll, fs.ErrNotExist for Remove.
 func TestModuleStateFS_RemovesInsideItsRoots(t *testing.T) {
 	f := newStateFixture(t)
-	s := newModuleState(nil, f.state, f.dbParent)
+	s := newModuleState(nil, f.owned(), f.state, f.dbParent)
 	ctx := context.Background()
 	if err := s.Remove(ctx, "bat.key", filepath.Join(f.state, ".batcave_key")); err != nil {
 		t.Fatal(err)
@@ -103,7 +109,7 @@ func TestModuleStateFS_Confinement(t *testing.T) {
 	if err := os.Symlink(filepath.Join(f.outside, "joker"), filepath.Join(f.state, "link")); err != nil {
 		t.Fatal(err)
 	}
-	s := newModuleState(nil, f.state, f.dbParent, "relative/dir", "")
+	s := newModuleState(nil, f.owned(), f.state, f.dbParent, "relative/dir", "")
 	ctx := context.Background()
 	for name, p := range map[string]string{
 		"relative":        ".batcave_key",
@@ -140,7 +146,7 @@ func TestModuleStateFS_Confinement(t *testing.T) {
 		t.Fatal("a symbolic link was followed")
 	}
 	// No roots: every path is refused.
-	if err := newModuleState(nil).RemoveAll(ctx, "bat.x", filepath.Join(f.state, ".batcave_key")); !errors.Is(err, module.ErrStateConfined) {
+	if err := newModuleState(nil, nil).RemoveAll(ctx, "bat.x", filepath.Join(f.state, ".batcave_key")); !errors.Is(err, module.ErrStateConfined) {
 		t.Fatalf("a handle with no root = %v, want ErrStateConfined", err)
 	}
 	if err := s.RemoveAll(ctx, "", filepath.Join(f.state, ".batcave_key")); !errors.Is(err, module.ErrStateUnlabelled) {
@@ -173,7 +179,7 @@ func TestModuleStateFS_NestedRootsUseTheInnermost(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s := newModuleState(nil, state, inner)
+	s := newModuleState(nil, newCoreOwned(state, filepath.Join(inner, "main.pebble"), "", nil), state, inner)
 	root, rel, err := s.resolve("l", filepath.Join(inner, "batcave.idx"))
 	if err != nil || root != inner || rel != "batcave.idx" {
 		t.Fatalf("resolve = %q, %q, %v; want the inner root", root, rel, err)
@@ -213,7 +219,7 @@ func TestModuleStateFS_LabelsEveryOperation(t *testing.T) {
 		}
 	}
 	rec := bootseamtest.New(mem, bootseamtest.Options{})
-	s := newModuleState(rec.Seams(), f.state, f.dbParent)
+	s := newModuleState(rec.Seams(), f.owned(), f.state, f.dbParent)
 	ctx := context.Background() // carries no seams: the handle holds the boot's
 	if err := s.RemoveAll(ctx, "cave.legacy.index", filepath.Join(f.dbParent, "batcave.idx")); err != nil {
 		t.Fatal(err)
@@ -396,7 +402,7 @@ func memHas(mem vfs.FS, p string) bool {
 func TestModuleStateFS_KillAndErrorLeaveAStateTheNextCallFinishes(t *testing.T) {
 	f := newStateFixture(t)
 	census := bootseamtest.New(memCave(t, f), bootseamtest.Options{Clones: true})
-	if err := cleanup(t.Context(), newModuleState(census.Seams(), f.state, f.dbParent), f); err != nil {
+	if err := cleanup(t.Context(), newModuleState(census.Seams(), f.owned(), f.state, f.dbParent), f); err != nil {
 		t.Fatal(err)
 	}
 	events, clones := census.Events(), census.Clones()
@@ -406,7 +412,7 @@ func TestModuleStateFS_KillAndErrorLeaveAStateTheNextCallFinishes(t *testing.T) 
 	finish := func(name string, mem vfs.FS) {
 		t.Helper()
 		rec := bootseamtest.New(mem.(*vfs.MemFS), bootseamtest.Options{})
-		if err := cleanup(t.Context(), newModuleState(rec.Seams(), f.state, f.dbParent), f); err != nil {
+		if err := cleanup(t.Context(), newModuleState(rec.Seams(), f.owned(), f.state, f.dbParent), f); err != nil {
 			t.Errorf("%s: the next boot's cleanup: %v", name, err)
 		}
 		for _, p := range []string{filepath.Join(f.dbParent, "batcave.idx"), filepath.Join(f.state, ".batcave_key")} {
@@ -427,7 +433,7 @@ func TestModuleStateFS_KillAndErrorLeaveAStateTheNextCallFinishes(t *testing.T) 
 				}
 				return nil
 			}})
-			if err := cleanup(t.Context(), newModuleState(rec.Seams(), f.state, f.dbParent), f); err == nil {
+			if err := cleanup(t.Context(), newModuleState(rec.Seams(), f.owned(), f.state, f.dbParent), f); err == nil {
 				t.Errorf("%v at %v %s: the cleanup reported success", errno, ev.Kind, ev.Path)
 			}
 			finish(errno.Error()+" at "+fmt.Sprint(ev.Kind)+" "+ev.Path, mem)
