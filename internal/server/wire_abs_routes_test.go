@@ -456,7 +456,7 @@ func TestPlaylistDetailReservedOnlyWhenABSEnabled(t *testing.T) {
 	t.Run("ABS disabled still redirects", func(t *testing.T) {
 		s, cleanup := setupTestServer(t)
 		defer cleanup()
-		config.AppConfig.ABSAPIEnabled = false
+		config.SetForTest(func(c *config.Config) { c.ABSAPIEnabled = false })
 
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -470,7 +470,7 @@ func TestPlaylistDetailReservedOnlyWhenABSEnabled(t *testing.T) {
 	t.Run("ABS enabled does not redirect", func(t *testing.T) {
 		s, cleanup := setupTestServer(t)
 		defer cleanup()
-		config.AppConfig.ABSAPIEnabled = true
+		config.SetForTest(func(c *config.Config) { c.ABSAPIEnabled = true })
 
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
@@ -484,7 +484,7 @@ func TestPlaylistDetailReservedOnlyWhenABSEnabled(t *testing.T) {
 	t.Run("the bare list keeps redirecting even with ABS enabled", func(t *testing.T) {
 		s, cleanup := setupTestServer(t)
 		defer cleanup()
-		config.AppConfig.ABSAPIEnabled = true
+		config.SetForTest(func(c *config.Config) { c.ABSAPIEnabled = true })
 
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/playlists", nil))
@@ -545,7 +545,7 @@ func TestPlaylistReservationDoesNotSwallowAppSubRoutes(t *testing.T) {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			s, cleanup := setupTestServer(t)
 			defer cleanup()
-			config.AppConfig.ABSAPIEnabled = true
+			config.SetForTest(func(c *config.Config) { c.ABSAPIEnabled = true })
 
 			w := httptest.NewRecorder()
 			s.router.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
@@ -566,7 +566,7 @@ func TestPlaylistReservationDoesNotSwallowAppSubRoutes(t *testing.T) {
 	t.Run("GET is still reserved for ABS", func(t *testing.T) {
 		s, cleanup := setupTestServer(t)
 		defer cleanup()
-		config.AppConfig.ABSAPIEnabled = true
+		config.SetForTest(func(c *config.Config) { c.ABSAPIEnabled = true })
 
 		w := httptest.NewRecorder()
 		s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/playlists/"+id, nil))
@@ -801,7 +801,7 @@ func TestPlaylistMutationsReservedExactlyWhenABSEnabled(t *testing.T) {
 func TestPlaylistMutationsReachABSNotTheRedirect(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
-	config.AppConfig.ABSAPIEnabled = true
+	config.SetForTest(func(c *config.Config) { c.ABSAPIEnabled = true })
 
 	for _, r := range []struct{ method, path string }{
 		{http.MethodPost, "/api/playlists"},

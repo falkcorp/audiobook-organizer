@@ -72,7 +72,7 @@ func TestRunMaintenanceJob_BackfillFileHashesReportsNotFoundAndWritesNothingForI
 
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Gotham"), 0o755))
-	prev := config.AppConfig.RootDir
+	prev := config.Get().RootDir
 	config.Mutate(func(c *config.Config) { c.RootDir = root })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.RootDir = prev }) })
 
@@ -121,7 +121,7 @@ func TestRunMaintenanceJob_BackfillFileHashesRecomputesABookOnce(t *testing.T) {
 
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Gotham"), 0o755))
-	prev := config.AppConfig.RootDir
+	prev := config.Get().RootDir
 	config.Mutate(func(c *config.Config) { c.RootDir = root })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.RootDir = prev }) })
 

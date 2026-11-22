@@ -31,14 +31,16 @@ func TestNotifyDelugeMoveStorage_EmptyHash(t *testing.T) {
 func TestNotifyDelugeMoveStorage_NoClient(t *testing.T) {
 	// Inject nil client and clear config so GetClient returns nil.
 	restore := deluge.SetGlobalClientForTest(nil)
-	origURL := config.AppConfig.DelugeWebURL
-	config.AppConfig.DelugeWebURL = ""
-	origHost := config.AppConfig.DownloadClient.Torrent.Deluge.Host
-	config.AppConfig.DownloadClient.Torrent.Deluge.Host = ""
+	origURL := config.Get().DelugeWebURL
+	config.SetForTest(func(c *config.Config) { c.DelugeWebURL = "" })
+	origHost := config.Get().DownloadClient.Torrent.Deluge.Host
+	config.SetForTest(func(c *config.Config) { c.DownloadClient.Torrent.Deluge.Host = "" })
 	defer func() {
 		restore()
-		config.AppConfig.DelugeWebURL = origURL
-		config.AppConfig.DownloadClient.Torrent.Deluge.Host = origHost
+		config.SetForTest(func(c *config.Config) {
+			c.DelugeWebURL = origURL
+			c.DownloadClient.Torrent.Deluge.Host = origHost
+		})
 	}()
 
 	// Should silently no-op when Deluge is not configured.
@@ -73,11 +75,11 @@ func TestNotifyDelugeMoveStorage_WithMockServer(t *testing.T) {
 	}
 
 	restore := deluge.SetGlobalClientForTest(client)
-	origMove := config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.DelugeMoveEnabled = true
+	origMove := config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = true })
 	defer func() {
 		restore()
-		config.AppConfig.DelugeMoveEnabled = origMove
+		config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = origMove })
 	}()
 
 	deluge.NotifyDelugeMoveStorage("abc123", "/new/path/to/book.m4b")
@@ -102,13 +104,17 @@ func TestHandleDelugeStatus_NotConfigured(t *testing.T) {
 		store.Close()
 	})
 
-	origURL := config.AppConfig.DelugeWebURL
-	origHost := config.AppConfig.DownloadClient.Torrent.Deluge.Host
-	config.AppConfig.DelugeWebURL = ""
-	config.AppConfig.DownloadClient.Torrent.Deluge.Host = ""
+	origURL := config.Get().DelugeWebURL
+	origHost := config.Get().DownloadClient.Torrent.Deluge.Host
+	config.SetForTest(func(c *config.Config) {
+		c.DelugeWebURL = ""
+		c.DownloadClient.Torrent.Deluge.Host = ""
+	})
 	defer func() {
-		config.AppConfig.DelugeWebURL = origURL
-		config.AppConfig.DownloadClient.Torrent.Deluge.Host = origHost
+		config.SetForTest(func(c *config.Config) {
+			c.DelugeWebURL = origURL
+			c.DownloadClient.Torrent.Deluge.Host = origHost
+		})
 	}()
 
 	srv := newTestServer(t, store)
@@ -146,10 +152,10 @@ func TestHandleDelugeStatus_Configured(t *testing.T) {
 		store.Close()
 	})
 
-	origURL := config.AppConfig.DelugeWebURL
-	config.AppConfig.DelugeWebURL = "http://localhost:8112"
+	origURL := config.Get().DelugeWebURL
+	config.SetForTest(func(c *config.Config) { c.DelugeWebURL = "http://localhost:8112" })
 	defer func() {
-		config.AppConfig.DelugeWebURL = origURL
+		config.SetForTest(func(c *config.Config) { c.DelugeWebURL = origURL })
 		// NewServer's deluge-plugin Build calls deluge.GetClient() while the
 		// URL above is set, which CACHES a live client in the package-level
 		// singleton. Restoring the URL string alone leaks that client into
@@ -200,14 +206,16 @@ func TestNotifyDelugeAfterVersionSwap(t *testing.T) {
 
 	// With no Deluge client configured, should not panic.
 	restore := deluge.SetGlobalClientForTest(nil)
-	origURL := config.AppConfig.DelugeWebURL
-	config.AppConfig.DelugeWebURL = ""
-	origHost := config.AppConfig.DownloadClient.Torrent.Deluge.Host
-	config.AppConfig.DownloadClient.Torrent.Deluge.Host = ""
+	origURL := config.Get().DelugeWebURL
+	config.SetForTest(func(c *config.Config) { c.DelugeWebURL = "" })
+	origHost := config.Get().DownloadClient.Torrent.Deluge.Host
+	config.SetForTest(func(c *config.Config) { c.DownloadClient.Torrent.Deluge.Host = "" })
 	defer func() {
 		restore()
-		config.AppConfig.DelugeWebURL = origURL
-		config.AppConfig.DownloadClient.Torrent.Deluge.Host = origHost
+		config.SetForTest(func(c *config.Config) {
+			c.DelugeWebURL = origURL
+			c.DownloadClient.Torrent.Deluge.Host = origHost
+		})
 	}()
 
 	fromVer := &database.BookVersion{ID: "v1", BookID: "b1", TorrentHash: "abc123"}
@@ -258,9 +266,9 @@ func TestResumeSwapDelugeFollow_LeavingVersionGetsItsSlotFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(deluge.SetGlobalClientForTest(client))
-	prev := config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.DelugeMoveEnabled = true
-	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = prev })
+	prev := config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = prev }) })
 
 	from := &database.BookVersion{ID: "v-robin", BookID: "b1", TorrentHash: "aaaa"}
 	to := &database.BookVersion{ID: "v-batgirl", BookID: "b1", TorrentHash: "bbbb"}

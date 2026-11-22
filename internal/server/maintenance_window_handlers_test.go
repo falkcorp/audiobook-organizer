@@ -75,12 +75,14 @@ func TestListTasksHasIsRunning(t *testing.T) {
 
 func TestGetMaintenanceWindowStatus(t *testing.T) {
 	// Set up known config values.
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
 
-	config.AppConfig.Maintenance.Enabled = true
-	config.AppConfig.Maintenance.WindowStart = 2
-	config.AppConfig.Maintenance.WindowEnd = 5
+	config.SetForTest(func(c *config.Config) {
+		c.Maintenance.Enabled = true
+		c.Maintenance.WindowStart = 2
+		c.Maintenance.WindowEnd = 5
+	})
 
 	srv := setupMaintenanceTestServer(t)
 
@@ -110,8 +112,8 @@ func TestGetMaintenanceWindowStatus(t *testing.T) {
 }
 
 func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
 
 	srv := setupMaintenanceTestServer(t)
 
@@ -130,9 +132,9 @@ func TestUpdateMaintenanceWindowConfig_Valid(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code, "expected 200 OK: %s", w.Body.String())
 
 	// Verify config was updated.
-	assert.True(t, config.AppConfig.Maintenance.Enabled)
-	assert.Equal(t, 3, config.AppConfig.Maintenance.WindowStart)
-	assert.Equal(t, 5, config.AppConfig.Maintenance.WindowEnd)
+	assert.True(t, config.Get().Maintenance.Enabled)
+	assert.Equal(t, 3, config.Get().Maintenance.WindowStart)
+	assert.Equal(t, 5, config.Get().Maintenance.WindowEnd)
 
 	// GET status and confirm round-trip.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/maintenance-window/status", nil)

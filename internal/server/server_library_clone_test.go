@@ -52,10 +52,12 @@ func cloneFixture(t *testing.T, nFiles int) (*Server, *database.PebbleStore, *da
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
 
-	old := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = old })
-	config.AppConfig.RootDir = root
-	config.AppConfig.OrganizationStrategy = "copy"
+	old := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(old) })
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.OrganizationStrategy = "copy"
+	})
 
 	store := rowWritersStore(t)
 	author, err := store.CreateAuthor("Clone Author")
@@ -101,7 +103,7 @@ func TestCloneBookIntoLibrary(t *testing.T) {
 			cloneID, err := srv.CloneBookIntoLibrary(book, files, "op-clone-test")
 			require.NoError(t, err)
 			require.NotEqual(t, book.ID, cloneID)
-			require.Equal(t, "copy", config.AppConfig.OrganizationStrategy, "the reflink override leaked into AppConfig")
+			require.Equal(t, "copy", config.Get().OrganizationStrategy, "the reflink override leaked into AppConfig")
 
 			// The clone landed exactly where the plan said, one row per file.
 			rows, err := store.GetBookFiles(cloneID)

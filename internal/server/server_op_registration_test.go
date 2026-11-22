@@ -30,9 +30,9 @@ import (
 func TestNewServer_RegistersOpsWithEmptyRootDir(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	origCfg := config.AppConfig
-	config.AppConfig.RootDir = ""
-	t.Cleanup(func() { config.AppConfig = origCfg })
+	origCfg := config.Snapshot()
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	t.Cleanup(func() { config.ReplaceForTest(origCfg) })
 
 	store := mocks.NewMockStore(t)
 	// Boot's own store calls, unrelated to what this test asserts.

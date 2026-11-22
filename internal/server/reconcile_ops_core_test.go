@@ -159,9 +159,9 @@ func TestReconcileApplyCore(t *testing.T) {
 }
 
 func TestReconcileApplyPrecheck(t *testing.T) {
-	old := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = old })
-	config.AppConfig.BulkApplyMaxItems = 2
+	old := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = old }) })
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = 2 })
 
 	require.NoError(t, reconcileApplyPrecheck(reconcileApplyOpParams{Matches: make([]reconcile.ReconcileApplyItem, 2)}))
 	err := reconcileApplyPrecheck(reconcileApplyOpParams{Matches: make([]reconcile.ReconcileApplyItem, 3)})
@@ -173,9 +173,9 @@ func TestReconcileApplyPrecheck(t *testing.T) {
 // The precheck refuses a match type the scan never produces before the first
 // write, for both shells.
 func TestReconcileApplyPrecheck_RefusesAnUnknownMatchType(t *testing.T) {
-	old := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = old })
-	config.AppConfig.BulkApplyMaxItems = 10
+	old := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = old }) })
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = 10 })
 
 	require.NoError(t, reconcileApplyPrecheck(reconcileApplyOpParams{Matches: []reconcile.ReconcileApplyItem{{BookID: "b1", MatchType: "filename"}}}))
 	err := reconcileApplyPrecheck(reconcileApplyOpParams{Matches: []reconcile.ReconcileApplyItem{{BookID: "b1", MatchType: "filname"}}})
@@ -186,9 +186,9 @@ func TestReconcileApplyPrecheck_RefusesAnUnknownMatchType(t *testing.T) {
 // The native apply refuses an over-cap match set before it builds a writer, as
 // HEAD's shell does before its first move.
 func TestReconcileApplyNative_RefusesOverCapBeforeAnyWriter(t *testing.T) {
-	old := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = old })
-	config.AppConfig.BulkApplyMaxItems = 1
+	old := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = old }) })
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = 1 })
 
 	built := false
 	deps := t7TestDeps(t)

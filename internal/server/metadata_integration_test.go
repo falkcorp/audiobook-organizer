@@ -27,11 +27,13 @@ import (
 // from viper defaults and discard this single-source override.
 func useOnlyOpenLibrary(t *testing.T, baseURL string) {
 	t.Helper()
-	orig := config.AppConfig.MetadataSources
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: baseURL},
-	}
-	t.Cleanup(func() { config.AppConfig.MetadataSources = orig })
+	orig := config.Get().MetadataSources
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: baseURL},
+		}
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = orig }) })
 }
 
 // useOnlyAudible sets config to only use a mock Audible as metadata source.
@@ -40,11 +42,13 @@ func useOnlyOpenLibrary(t *testing.T, baseURL string) {
 // the auto-fetch.
 func useOnlyAudible(t *testing.T, baseURL string) {
 	t.Helper()
-	orig := config.AppConfig.MetadataSources
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: baseURL},
-	}
-	t.Cleanup(func() { config.AppConfig.MetadataSources = orig })
+	orig := config.Get().MetadataSources
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: baseURL},
+		}
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = orig }) })
 }
 
 // audibleAnswersTitle is a MockAudibleServer answer: p for any of titles.

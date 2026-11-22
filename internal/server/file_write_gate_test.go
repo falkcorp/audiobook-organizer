@@ -44,9 +44,9 @@ func TestFileWriteGateBlocksUntilSlotReleased(t *testing.T) {
 }
 
 func TestWriteBackWorkersCapsConfiguredValue(t *testing.T) {
-	previous := config.AppConfig.MetadataScoring.WriteBackWorkers
-	t.Cleanup(func() { config.AppConfig.MetadataScoring.WriteBackWorkers = previous })
-	config.AppConfig.MetadataScoring.WriteBackWorkers = maxWriteBackWorkers + 1
+	previous := config.Get().MetadataScoring.WriteBackWorkers
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.WriteBackWorkers = previous }) })
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.WriteBackWorkers = maxWriteBackWorkers + 1 })
 
 	if got := writeBackWorkers(); got != maxWriteBackWorkers {
 		t.Fatalf("writeBackWorkers() = %d, want cap %d", got, maxWriteBackWorkers)

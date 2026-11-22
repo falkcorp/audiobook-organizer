@@ -41,12 +41,13 @@ func setupVersionLifecycleServer(t *testing.T) (*Server, database.Store) {
 
 	// A version purge deletes files only inside the library root (the book
 	// purge's rule), so the server under test has one.
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = filepath.Join(t.TempDir(), "lib")
-	if err := os.MkdirAll(config.AppConfig.RootDir, 0o755); err != nil {
+	prevRoot := config.Get().RootDir
+	cowV1 := filepath.Join(t.TempDir(), "lib")
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	if err := os.MkdirAll(config.Get().RootDir, 0o755); err != nil {
 		t.Fatalf("library root: %v", err)
 	}
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 
 	srv := newTestServer(t, store)
 	return srv, store
@@ -56,7 +57,7 @@ func setupVersionLifecycleServer(t *testing.T) (*Server, database.Store) {
 // in the stories the tests tell), where a purge is allowed to delete.
 func libraryDir(t *testing.T, name string) string {
 	t.Helper()
-	dir := filepath.Join(config.AppConfig.RootDir, "Gotham", name)
+	dir := filepath.Join(config.Get().RootDir, "Gotham", name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("library dir: %v", err)
 	}

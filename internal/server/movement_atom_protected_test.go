@@ -34,9 +34,9 @@ func TestStripMovementAtoms_ProtectedFileCountedAsSkippedNotFailed(t *testing.T)
 	t.Cleanup(func() { _ = store.Close() })
 
 	root := t.TempDir()
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	withAppDirConfig(t, root)
 
 	seeding := filepath.Join(root, "seeding")

@@ -44,16 +44,18 @@ type preflightFixture struct {
 func newPreflightFixture(t *testing.T, store *database.MockStore, fileNamingPattern string) *preflightFixture {
 	t.Helper()
 	withBulkApplyCapServer(t, 100)
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	root := t.TempDir()
 	// All config is set before the handler runs and not touched again: the
 	// handler's workers read it concurrently.
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.AutoWriteTagsOnApply = false
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = fileNamingPattern
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = true
+		c.AutoWriteTagsOnApply = false
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = fileNamingPattern
+	})
 
 	dir := filepath.Join(root, "Someone", "Old")
 	a, b := filepath.Join(dir, "1.mp3"), filepath.Join(dir, "2.mp3")

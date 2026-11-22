@@ -43,9 +43,9 @@ func (fastpathNoopProgress) IsCanceled() bool                        { return fa
 // "not_found" without exercising any HTTP client.
 func disableMetadataSourcesForTest(t *testing.T) {
 	t.Helper()
-	orig := config.AppConfig.MetadataSources
-	config.AppConfig.MetadataSources = nil
-	t.Cleanup(func() { config.AppConfig.MetadataSources = orig })
+	orig := config.Get().MetadataSources
+	config.SetForTest(func(c *config.Config) { c.MetadataSources = nil })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = orig }) })
 }
 
 // newFastpathMockStore builds a MockStore over the given books/authors and

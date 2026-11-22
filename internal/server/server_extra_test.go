@@ -77,7 +77,7 @@ func TestSoftDeleteEndpoints(t *testing.T) {
 	tempDir := t.TempDir()
 	// The purge deletes only inside the library root (purgePathInsideRoot,
 	// 2026-10-06), so the file lives under RootDir.
-	softFile := filepath.Join(config.AppConfig.RootDir, "soft.m4b")
+	softFile := filepath.Join(config.Get().RootDir, "soft.m4b")
 	require.NoError(t, os.WriteFile(softFile, []byte("audio"), 0o644))
 	marked := true
 	deletedAt := time.Now().Add(-24 * time.Hour)
@@ -321,12 +321,14 @@ func TestAIEndpoints(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.OpenAIAPIKey = ""
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = false
+		c.OpenAIAPIKey = ""
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ai/parse-filename", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -468,14 +470,15 @@ func TestBackupEndpointsErrors(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	tempDir := t.TempDir()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "missing.db")
-	config.AppConfig.DatabaseType = "sqlite"
+	cowV1 := filepath.Join(tempDir, "missing.db")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/backup/create", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")

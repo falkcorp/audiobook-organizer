@@ -39,18 +39,18 @@ func setupUserTagsAuthzTestServer(t *testing.T) (srv *Server, adminToken, viewer
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	origCfg := config.AppConfig
+	origCfg := config.Snapshot()
 	tempDir, err := os.MkdirTemp("", "audiobook-authz-test-*")
 	require.NoError(t, err)
 
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		DatabaseType: "pebble",
 		DatabasePath: filepath.Join(tempDir, "test.pebble"),
 		RootDir:      tempDir,
 		EnableAuth:   true,
-	}
+	})
 
-	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
+	store, err := database.NewPebbleStoreInMemory(config.Get().DatabasePath)
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
 
@@ -88,7 +88,7 @@ func setupUserTagsAuthzTestServer(t *testing.T) (srv *Server, adminToken, viewer
 		database.SetGlobalStore(nil)
 		store.Close()
 		_ = os.RemoveAll(tempDir)
-		config.AppConfig = origCfg
+		config.ReplaceForTest(origCfg)
 	}
 
 	return server, adminSession.ID, viewerSession.ID, book.ID, cleanup

@@ -28,9 +28,9 @@ import (
 // config pollution, so these tests must not trust ambient state.
 func pinEmptyRootDir(t *testing.T) {
 	t.Helper()
-	origCfg := config.AppConfig
-	config.AppConfig.RootDir = ""
-	t.Cleanup(func() { config.AppConfig = origCfg })
+	origCfg := config.Snapshot()
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	t.Cleanup(func() { config.ReplaceForTest(origCfg) })
 }
 
 // TestGetAudiobookTagsErrors tests error scenarios for getAudiobookTags (59.3% → target 70%+)

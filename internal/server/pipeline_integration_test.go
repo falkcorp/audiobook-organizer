@@ -66,10 +66,12 @@ func TestPipeline_ImportThenFetchMetadata(t *testing.T) {
 	audServer := testutil.MockAudibleServer(t, audibleAnswersTitle(testutil.AudibleHobbitProduct, "The Hobbit"))
 
 	// 4. Configure metadata sources — only Audible, pointed at the mock
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: audServer.URL},
-	}
-	config.AppConfig.WriteBackMetadata = false
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: audServer.URL},
+		}
+		c.WriteBackMetadata = false
+	})
 
 	// 6. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
@@ -154,12 +156,14 @@ func TestPipeline_FetchMetadata_MultiSourceFallback(t *testing.T) {
 	}, "Dune"))
 
 	// 4. Configure all three sources, pointed at their mocks
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
-		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
-		{ID: "audible", Name: "Audible", Enabled: true, Priority: 3, BaseURL: audServer.URL},
-	}
-	config.AppConfig.WriteBackMetadata = false
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+			{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 3, BaseURL: audServer.URL},
+		}
+		c.WriteBackMetadata = false
+	})
 
 	// 5. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
@@ -217,10 +221,12 @@ func TestPipeline_ChapterTitle_StillFindsBook(t *testing.T) {
 	})
 
 	// 3. Configure Audible, pointed at the mock
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: audServer.URL},
-	}
-	config.AppConfig.WriteBackMetadata = false
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 1, BaseURL: audServer.URL},
+		}
+		c.WriteBackMetadata = false
+	})
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)
@@ -264,11 +270,13 @@ func TestPipeline_FetchMetadata_NoResults_AllSources(t *testing.T) {
 	defer gbServer.Close()
 
 	// 3. Configure sources, pointed at their mocks
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
-		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
-	}
-	config.AppConfig.WriteBackMetadata = false
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: olServer.URL},
+			{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 2, BaseURL: gbServer.URL},
+		}
+		c.WriteBackMetadata = false
+	})
 
 	// 4. Call FetchMetadataForBook
 	svc := metafetch.NewService(env.Store)

@@ -60,11 +60,12 @@ func TestIsProtectedPath_FailedDir(t *testing.T) {
 // spelling would let it move a real iTunes file. An unrelated path, with a link
 // near it, is not.
 func TestIsProtectedPath_SymlinkIntoITunesFolder(t *testing.T) {
-	prev := config.AppConfig.ITunes.LibraryReadPath
-	t.Cleanup(func() { config.AppConfig.ITunes.LibraryReadPath = prev })
+	prev := config.Get().ITunes.LibraryReadPath
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = prev }) })
 	base := t.TempDir()
 	itunes := filepath.Join(base, "lib", "Gotham Music")
-	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "Library.xml")
+	cowV1 := filepath.Join(itunes, "Library.xml")
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = cowV1 })
 	require.NoError(t, os.MkdirAll(filepath.Join(itunes, "Hush"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(base, "lib", "Arkham", "Joker"), 0o755))
 	into := filepath.Join(base, "lib", "link")

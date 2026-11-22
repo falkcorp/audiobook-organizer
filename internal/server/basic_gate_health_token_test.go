@@ -31,13 +31,15 @@ const basicGateEnvName = "BASIC_AUTH_PASSWORD"
 // t.Setenv cannot.
 func setBasicGate(t *testing.T, enabled bool, user, stored string, env *string) {
 	t.Helper()
-	prevEnabled := config.AppConfig.BasicAuthEnabled
-	prevUser := config.AppConfig.BasicAuthUsername
-	prevPass := config.AppConfig.BasicAuthPassword
+	prevEnabled := config.Get().BasicAuthEnabled
+	prevUser := config.Get().BasicAuthUsername
+	prevPass := config.Get().BasicAuthPassword
 	t.Cleanup(func() {
-		config.AppConfig.BasicAuthEnabled = prevEnabled
-		config.AppConfig.BasicAuthUsername = prevUser
-		config.AppConfig.BasicAuthPassword = prevPass
+		config.SetForTest(func(c *config.Config) {
+			c.BasicAuthEnabled = prevEnabled
+			c.BasicAuthUsername = prevUser
+			c.BasicAuthPassword = prevPass
+		})
 	})
 	t.Setenv(basicGateEnvName, "")
 	if env == nil {
@@ -45,9 +47,11 @@ func setBasicGate(t *testing.T, enabled bool, user, stored string, env *string) 
 	} else {
 		require.NoError(t, os.Setenv(basicGateEnvName, *env))
 	}
-	config.AppConfig.BasicAuthEnabled = enabled
-	config.AppConfig.BasicAuthUsername = user
-	config.AppConfig.BasicAuthPassword = stored
+	config.SetForTest(func(c *config.Config) {
+		c.BasicAuthEnabled = enabled
+		c.BasicAuthUsername = user
+		c.BasicAuthPassword = stored
+	})
 }
 
 func sourceTokens(src interface{ Tokens() []string }) []string {
@@ -71,17 +75,17 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 		assert.Equal(t, []string{BasicGateNoPasswordToken}, src.Tokens())
 
 		// Saving a password clears it on the next call, no restart.
-		config.AppConfig.BasicAuthPassword = "secret"
+		config.SetForTest(func(c *config.Config) { c.BasicAuthPassword = "secret" })
 		assert.Nil(t, s.startupDegradedSource(), "no runner and no token: nil, as before the hotfix")
 
 		// The env recovery supplies a password, so no token.
-		config.AppConfig.BasicAuthPassword = ""
+		config.SetForTest(func(c *config.Config) { c.BasicAuthPassword = "" })
 		require.NoError(t, os.Setenv(basicGateEnvName, "recover"))
 		assert.Nil(t, s.startupDegradedSource())
 
 		// A gate that is off raises nothing.
 		require.NoError(t, os.Unsetenv(basicGateEnvName))
-		config.AppConfig.BasicAuthEnabled = false
+		config.SetForTest(func(c *config.Config) { c.BasicAuthEnabled = false })
 		assert.Nil(t, s.startupDegradedSource())
 	})
 
@@ -96,7 +100,7 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 			[]string{startup.TokenSearchIndex, BasicGateNoPasswordToken},
 			sourceTokens(s.startupDegradedSource()))
 
-		config.AppConfig.BasicAuthPassword = "secret"
+		config.SetForTest(func(c *config.Config) { c.BasicAuthPassword = "secret" })
 		assert.Equal(t, []string{startup.TokenSearchIndex}, sourceTokens(s.startupDegradedSource()))
 	})
 
@@ -138,17 +142,17 @@ func TestBasicGateNoPassword_TokenOnHealthSource(t *testing.T) {
 		assert.True(t, basicRefused("admin", ""), "the gate must refuse admin: with no password")
 
 		// Saving a password clears the token without a restart.
-		config.AppConfig.BasicAuthPassword = "secret"
+		config.SetForTest(func(c *config.Config) { c.BasicAuthPassword = "secret" })
 		assert.NotContains(t, health(), BasicGateNoPasswordToken)
 		assert.False(t, basicRefused("admin", "secret"))
 
 		// The env recovery opens the gate and raises no token.
-		config.AppConfig.BasicAuthPassword = ""
+		config.SetForTest(func(c *config.Config) { c.BasicAuthPassword = "" })
 		require.NoError(t, os.Setenv(basicGateEnvName, "recover"))
 		assert.NotContains(t, health(), BasicGateNoPasswordToken)
 		assert.False(t, basicRefused("admin", "recover"))
 		assert.True(t, basicRefused("admin", ""))
-		assert.Equal(t, "", config.AppConfig.BasicAuthPassword, "the env value must never be written")
+		assert.Equal(t, "", config.Get().BasicAuthPassword, "the env value must never be written")
 	})
 }
 

@@ -110,10 +110,12 @@ func TestImportPaths_ListNilAndRemoveInvalidID(t *testing.T) {
 // Capturing the row here is what proves the def id and the id contract end to
 // end; handlers.TestAddImportPath_* cover the same seam at unit grain.
 func TestAddImportPath_Returns201(t *testing.T) {
-	origCfg := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = origCfg })
-	config.AppConfig.AutoOrganize = false
-	config.AppConfig.RootDir = ""
+	origCfg := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(origCfg) })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoOrganize = false
+		c.RootDir = ""
+	})
 
 	importDir := t.TempDir()
 
@@ -160,10 +162,12 @@ func TestAddImportPath_Returns201(t *testing.T) {
 // mock store sets no CreateImportPath expectation, so the test fails if the
 // unvalidated path reaches the store.
 func TestAddImportPath_RejectsTraversal(t *testing.T) {
-	origCfg := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = origCfg })
-	config.AppConfig.AutoOrganize = false
-	config.AppConfig.RootDir = ""
+	origCfg := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(origCfg) })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoOrganize = false
+		c.RootDir = ""
+	})
 
 	store := dbmocks.NewMockStore(t)
 	store.EXPECT().SetRootDir(mock.Anything).Return()

@@ -84,14 +84,16 @@ func newRowWritersFixture(t *testing.T, store *database.PebbleStore) rowWritersF
 		}))
 	}
 
-	old := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = old })
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoOrganize = true
+	old := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(old) })
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoOrganize = true
+	})
 	// Explicit "copy": "auto" tries reflink then hardlink first and which one
 	// succeeds depends on the filesystem the temp dir lands on, which would
 	// make these tests machine-specific.
-	config.AppConfig.OrganizationStrategy = "copy"
+	config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = "copy" })
 
 	return rowWritersFixture{store: store, book: book, srcDir: srcDir, srcFiles: srcFiles, root: root}
 }
@@ -432,15 +434,18 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 	scanner.SetStore(store)
 	t.Cleanup(func() { scanner.SetStore(nil) })
 
-	old := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = old })
-	config.AppConfig.RootDir = t.TempDir()
-	config.AppConfig.AutoOrganize = true
-	config.AppConfig.OrganizationStrategy = "copy"
+	old := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(old) })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoOrganize = true
+		c.OrganizationStrategy = "copy"
+	})
 	// The scan matches on this list; unset (the zero AppConfig a test binary
 	// starts with) means every file is skipped and the op finds zero books,
 	// which would make the assertion below vacuous.
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
 	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
@@ -472,7 +477,7 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 	require.NoError(t, err)
 	var organizedID string
 	for i := range core {
-		if strings.HasPrefix(core[i].FilePath, config.AppConfig.RootDir) {
+		if strings.HasPrefix(core[i].FilePath, config.Get().RootDir) {
 			organizedID = core[i].ID
 		}
 	}
@@ -482,7 +487,7 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, rows, "the organized book must own at least one book_file row")
 	for _, r := range rows {
-		require.True(t, strings.HasPrefix(r.FilePath, config.AppConfig.RootDir),
+		require.True(t, strings.HasPrefix(r.FilePath, config.Get().RootDir),
 			"book_file %s still names a path outside the library: %s", r.ID, r.FilePath)
 	}
 
@@ -521,12 +526,15 @@ func TestPerformScanOrganizeRecordsChangesUnderRunContextOpID(t *testing.T) {
 	scanner.SetStore(store)
 	t.Cleanup(func() { scanner.SetStore(nil) })
 
-	old := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = old })
-	config.AppConfig.RootDir = t.TempDir()
-	config.AppConfig.AutoOrganize = true
-	config.AppConfig.OrganizationStrategy = "copy"
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	old := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(old) })
+	cowV2 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV2 })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoOrganize = true
+		c.OrganizationStrategy = "copy"
+		c.SupportedExtensions = []string{".m4b"}
+	})
 
 	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
 	svc := scanner.NewScanService(store)

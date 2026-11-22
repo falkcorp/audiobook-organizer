@@ -65,9 +65,11 @@ func TestAIEndpoints_WithStubbedOpenAI(t *testing.T) {
 
 	// Configure AI parsing to be enabled and point at stub server.
 	// (AppConfig is fully restored by defer cleanup() from setupTestServer.)
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "test-key"
-	config.AppConfig.OpenAIBaseURL = openAI.URL + "/v1"
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = "test-key"
+		c.OpenAIBaseURL = openAI.URL + "/v1"
+	})
 
 	// 1) POST /ai/parse-filename should succeed.
 	parseBody := bytes.NewBufferString(`{"filename":"The Hobbit - J.R.R. Tolkien"}`)

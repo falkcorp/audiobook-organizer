@@ -45,9 +45,10 @@ func TestDeprecatedBooksAliases_RemainingSixRoutesAnswer(t *testing.T) {
 
 	// A version purge needs a library root (it deletes nothing while the library
 	// does not look mounted).
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = t.TempDir()
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 
 	srv := newTestServer(t, store)
 

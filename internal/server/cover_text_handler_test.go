@@ -27,8 +27,9 @@ func setupCoverTextServer(t *testing.T) (*Server, database.Store) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	origCfg := config.AppConfig
-	config.AppConfig.RootDir = t.TempDir()
+	origCfg := config.Snapshot()
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 
 	store, err := database.NewPebbleStoreInMemory(filepath.Join(t.TempDir(), "pebble"))
 	if err != nil {
@@ -37,7 +38,7 @@ func setupCoverTextServer(t *testing.T) (*Server, database.Store) {
 	origStore := database.GetGlobalStore()
 	database.SetGlobalStore(store)
 	t.Cleanup(func() {
-		config.AppConfig = origCfg
+		config.ReplaceForTest(origCfg)
 		database.SetGlobalStore(origStore)
 		store.Close()
 	})

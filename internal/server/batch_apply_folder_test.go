@@ -27,8 +27,8 @@ import (
 // identity_stale on every path before the variant: it stays so, even for a row
 // pin. Synthetic names.
 func TestPlanCachedApply_FolderQueryRowAppliesOnlyFromAnOwnerRowPin(t *testing.T) {
-	prev := config.AppConfig.MetadataFetch
-	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
+	prev := config.Get().MetadataFetch
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetch = prev }) })
 
 	const folder = "The Paper Garden"
 	dur := 36000
@@ -70,7 +70,7 @@ func TestPlanCachedApply_FolderQueryRowAppliesOnlyFromAnOwnerRowPin(t *testing.T
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			config.AppConfig.MetadataFetch.FolderParsePersonTitle = c.switchOn
+			config.SetForTest(func(cfg *config.Config) { cfg.MetadataFetch.FolderParsePersonTitle = c.switchOn })
 			id := c.liveID
 			b := &database.Book{ID: "b1", Title: c.title, AuthorID: &id,
 				FilePath: "/library/Mara Quill/The Paper Garden/The Paper Garden.m4b", Duration: &dur}

@@ -207,17 +207,17 @@ func discoveryImportFixture(t *testing.T) (root string, full *database.BookFile)
 	srcPath := filepath.Join(srcDir, "book.m4b")
 	require.NoError(t, os.WriteFile(srcPath, []byte("audiodata"), 0o644))
 
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 	// Pin DelugeMoveEnabled off rather than inheriting it from whatever ran
 	// before: the success path reaches ImportToLibrary with a non-nil client
 	// and a non-empty DelugeHash, and this flag is the only thing standing
 	// between that and a real MoveStorage POST on a 5-minute timeout.
-	origMove := config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.DelugeMoveEnabled = false
-	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = origMove })
+	origMove := config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = false })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = origMove }) })
 
 	// handleDiscoveryImport bails with 503 when getDelugeClient() is nil. The
 	// client is never dialed on this path (DelugeMoveEnabled is off), so a

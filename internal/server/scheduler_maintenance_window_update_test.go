@@ -64,13 +64,15 @@ func (r *mwLogReporter) joined() string {
 func TestMaintenanceWindowStep1_CheckOnly(t *testing.T) {
 	srv := setupMaintenanceTestServer(t)
 
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.AutoUpdate.Enabled = true
-	config.AppConfig.AutoUpdate.Channel = "stable"
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoUpdate.Enabled = true
+		c.AutoUpdate.Channel = "stable"
+	})
 	// Window closed: the task loop after step 1 stops at its first task, so
 	// only step 1 runs.
-	config.AppConfig.Maintenance.Enabled = false
+	config.SetForTest(func(c *config.Config) { c.Maintenance.Enabled = false })
 
 	asset := fmt.Sprintf("audiobook-organizer-%s-%s", runtime.GOOS, runtime.GOARCH)
 	var latestHits, assetHits atomic.Int32

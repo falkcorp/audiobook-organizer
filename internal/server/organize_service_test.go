@@ -75,16 +75,16 @@ func TestOrganizeService_PerformOrganize_WithBooks(t *testing.T) {
 	// in this binary, so it must be snapshotted and restored — otherwise
 	// this test leaks its RootDir into every sibling test that runs after
 	// it.
-	origCfg := config.AppConfig
+	origCfg := config.Snapshot()
 	rootDir := t.TempDir()
 	srcDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
-	t.Cleanup(func() { config.AppConfig = origCfg })
+	})
+	t.Cleanup(func() { config.ReplaceForTest(origCfg) })
 
 	srcFile := filepath.Join(srcDir, "book1.mp3")
 	if err := os.WriteFile(srcFile, []byte("audio-data"), 0o644); err != nil {
