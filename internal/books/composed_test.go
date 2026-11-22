@@ -37,6 +37,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/mediacore/app"
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
@@ -597,9 +598,8 @@ func notifySocket(t *testing.T) *net.UnixConn {
 
 // TestComposedApp_SystemdSignals runs the composed App under a fake
 // NOTIFY_SOCKET. R1-16 moved READY=1, STATUS= and STOPPING=1 from the server
-// into the kernel, and books wires its search index's long open step to
-// Deps.ExtendStart: the start hook and the index open must ask for start time
-// (before READY=1), READY=1 must come after the listener is up, and the stop must
+// into the kernel: the pre-READY steps must ask for start time (before
+// READY=1), READY=1 must come after the listener is up, and the stop must
 // send STOPPING=1.
 func TestComposedApp_SystemdSignals(t *testing.T) {
 	sock := notifySocket(t)
@@ -632,10 +632,13 @@ func TestComposedApp_SystemdSignals(t *testing.T) {
 		require.Equal(t, "EXTEND_TIMEOUT_USEC=600000000", msg, "only start-timeout extensions may precede READY=1")
 		extends++
 	}
-	// Two: books' start hook asks for the step budget up front (HEAD's start
-	// ran under TimeoutStartSec=300, the kernel's window is 60 s), and the
-	// search index open asks again before its long step.
-	require.Equal(t, 2, extends, "books' start and its search index open ask for start time through Deps.ExtendStart: %q", got)
+	// Every step between STATUS=starting and READY=1 asks for start time
+	// (05-health §5H.3.4): the checkpoint mark, each hook, books' repairs and
+	// startup rows, each service of the container, the core services and the
+	// listener. TestComposedBoot_EveryStepAsksForStartTime names them; this
+	// test proves they reach the service manager over NOTIFY_SOCKET and none
+	// follows READY=1.
+	require.GreaterOrEqual(t, extends, 12, "the pre-READY steps ask for start time through the kernel and Deps.ExtendStart: %q", got)
 	require.Equal(t, "STATUS=Serving; readiness is reported by the health endpoint", next())
 
 	cancel()
@@ -746,4 +749,87 @@ func absEnv() []string {
 		}
 	}
 	return env
+}
+
+// extendLog records the start-timeout requests of a boot (Options.R1ExtendStart)
+// in the order they were made.
+type extendLog struct {
+	mu    sync.Mutex
+	steps []string
+}
+
+func (l *extendLog) record(step string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.steps = append(l.steps, step)
+}
+
+func (l *extendLog) list() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.steps)
+}
+
+func TestComposedBoot_EveryStepAsksForStartTime(t *testing.T) {
+	var log extendLog
+	r := runComposedWith(t, nil, nil, func(o *app.Options) { o.R1ExtendStart = log.record }, nil)
+	atReady := log.list() // Run has opened the listener: every pre-READY step has run
+	r.stop()
+	require.Equal(t, atReady, log.list(), "stopping must not ask for start time")
+
+	// Boot order: each named step asks, and asks after the one before it.
+	ordered := []string{
+		"kernel: boot P1", "kernel: boot P0", "kernel: boot P0a", "kernel: boot P3", "kernel: boot P2",
+		"storage.open", "kernel: boot P4a", "kernel: boot P4b", "kernel: boot P4c", "kernel: boot P4d",
+		"kernel: boot P5", "kernel: boot P6", "guardAgainstKeyRegeneration", "initEncryption", "config.Validate",
+		"service build searchindex", "hnsw snapshot import", "service postinit audiobook",
+		"kernel: boot P7", "kernel: boot P8", "kernel: run mark checkpoint served",
+		"kernel: hook start books.repairs", "gapFillStrip", "books boot repairs",
+		"kernel: hook start books.server", "books server start", "opRegistrationGate", "container.Start",
+		"service start searchindex", "opCatalogGate", "searchindex",
+		"kernel: run start core services", "kernel: run open listener",
+	}
+	last := -1
+	for _, step := range ordered {
+		i := slices.Index(atReady, step)
+		require.GreaterOrEqual(t, i, 0, "no request for %q: %q", step, atReady)
+		require.Greater(t, i, last, "%q asked out of order: %q", step, atReady)
+		last = i
+	}
+
+	// Every row of startup.Table is a request, read from the table so a row
+	// added to it is required here without editing this test. The two
+	// exemptions run outside books' composed boot: EnsureSecureStateDir in
+	// serve before the App exists, and http in serve's listener step, which
+	// the kernel's own "run open listener" request covers here.
+	for _, row := range startup.Table {
+		if row.Name == "EnsureSecureStateDir" || row.Name == "http" {
+			continue
+		}
+		require.Contains(t, atReady, row.Name, "startup row %q asked for no start time", row.Name)
+	}
+
+	// Every container service asks before each of its Build, PostInit and Start.
+	// The services are read from the log's own build requests: every service
+	// that was built is named in one, and the container's list is checked
+	// against the three steps by TestContainer_StepExtender_AsksBeforeEveryServiceStep.
+	var built []string
+	for _, s := range atReady {
+		if name, ok := strings.CutPrefix(s, "service build "); ok {
+			built = append(built, name)
+		}
+	}
+	require.GreaterOrEqual(t, len(built), 30, "the container built %d services: %q", len(built), built)
+	for _, name := range []string{"searchindex", "audiobook", "dedup", "activitywriter"} {
+		require.Contains(t, built, name)
+	}
+	for _, step := range []string{"service start opregistry", "service start updatescheduler", "service start activitywriter"} {
+		require.Contains(t, atReady, step)
+	}
+
+	// Nothing the boot hands to a background goroutine asks: the memdb
+	// warmup, cache warmers and the search reconciler run after READY=1 or
+	// beside it, and a request from them would extend a boot that has no step
+	// in flight (spec 05-health §5H.3.4).
+	require.Equal(t, "kernel: run open listener", atReady[len(atReady)-1], "a request followed the last pre-READY step")
 }

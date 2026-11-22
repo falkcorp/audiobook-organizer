@@ -372,6 +372,15 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if steps == nil {
 		steps = newSteps()
 	}
+	// The start-timeout extension (05-health §5H.3.4): Deps.ExtendStart
+	// reaches the service manager and, while a hook of this module's Start
+	// is running, that hook's own start window. Each startup step asks for
+	// time through it on the goroutine that runs the step, never from a
+	// timer: the startup runner before every row of startup.Table, the
+	// service container before every service's Build, PostInit and Start,
+	// NewServer before the HNSW import, the repairs hook before each repair.
+	extendStart := r.Deps().ExtendStart
+	steps.SetExtender(extendStart)
 	if err := bootSettings(store, steps, m.stateDir, m.dbPath); err != nil {
 		return err
 	}
@@ -390,15 +399,6 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// dispatched, started, finished) do not each become a system Activity row.
 	// The op's own rows come from the registry's activity mirror. Passing nil
 	// would capture slog.Default(), the process logger the Activity tap feeds.
-	// The start-timeout extension (05-health §5H.3.4): Deps.ExtendStart
-	// reaches the service manager and, while a hook of this module's Start
-	// is running, that hook's own start window. Each startup step asks for
-	// time through it on the goroutine that runs the step, never from a
-	// timer: the startup runner before every row of startup.Table, the
-	// service container before every service's Build, PostInit and Start,
-	// NewServer before the HNSW import, the repairs hook before each repair.
-	extendStart := r.Deps().ExtendStart
-	steps.SetExtender(extendStart)
 	srv := server.NewServer(store, server.WithLogger(r.Deps().Log), server.WithStartExtender(extendStart))
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
