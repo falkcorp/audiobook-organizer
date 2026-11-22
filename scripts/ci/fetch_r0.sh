@@ -9,7 +9,7 @@
 # actions/cache (the calling job's step), else fetched here with `gh release
 # download` (GITHUB_TOKEN, bounded retry), checked against the SHA-256 pinned
 # in internal/books/r0store_test.go (r0Tag, r0ArchiveSHA256["Linux_x86_64"]),
-# extracted, and exported to later steps as ABO_R0_BINARY (r0BinaryEnv).
+# extracted, and exported to later steps as AORG_TEST_R0_BINARY (r0BinaryEnv).
 #
 # Exit: 0 ok; 1 the archive does not match its pinned checksum; 3 the download
 # failed on every attempt (a caller may fall back to building from the tag).
@@ -63,4 +63,4 @@ member="audiobook-organizer_Linux_x86_64"
 tar -xzf "$archive" -C "$out" "$member"
 bin="${out}/${member}"
 chmod +x "$bin"
-echo "ABO_R0_BINARY=${bin}" >> "${GITHUB_ENV:?}"
+echo "AORG_TEST_R0_BINARY=${bin}" >> "${GITHUB_ENV:?}"

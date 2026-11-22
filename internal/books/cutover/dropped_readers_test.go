@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/archtest/typedload"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -82,7 +83,11 @@ func TestNoReaderOfADroppedField(t *testing.T) {
 		t.Skip("loads and type-checks the module")
 	}
 	root := repoRoot(t)
-	pkgs, err := packages.Load(&packages.Config{
+	// typedload, not packages.Load: it type-checks on one goroutine (see its doc).
+	// packages.Load checks independent packages concurrently, and go1.27's
+	// go/types races on the generic instances they share (golang/go#81122), which
+	// failed this test under -race on CI.
+	pkgs, err := typedload.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports,
 		Dir:  root,
 	}, "./internal/...", "./cmd/...")
