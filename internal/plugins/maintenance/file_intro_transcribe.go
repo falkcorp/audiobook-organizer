@@ -92,6 +92,19 @@ var fileIntroBusyOps = map[string]bool{
 	"metadata.batch-apply-cached": true,
 }
 
+// fileIntroNativeNotWhile is fileIntroBusyOps as the native kinds the rename map
+// gives them (books.<id>), plus the full sweep's kind, which shares the scan's
+// body and key (05-tasks 5T.8.2 rename map rule 4). Literals, not a map lookup:
+// this package may not import the cutover tree; TestFileIntroNotWhile_MatchesTheBusyOps
+// holds the two together, so an op added to fileIntroBusyOps fails it until the
+// kind is added here.
+func fileIntroNativeNotWhile() []tasks.Kind {
+	return []tasks.Kind{
+		"books.library.scan", "books.library.scan-full", "books.library.import",
+		"books.library.folder-auto-scan", "books.metadata.batch-apply-cached",
+	}
+}
+
 type fileIntroParams struct {
 	// OnlyMissing (default true) leaves files that already carry a result
 	// alone and never overwrites one. False re-transcribes every eligible
@@ -505,8 +518,11 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 		ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
 		Timeout:         tasks.MaxTimeout,
 		ProgressTimeout: 30 * time.Minute,
-		Schedule:        sched,
-		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		// Every attempt, a continued one included, waits at dispatch while a scan or
+		// bulk apply runs (fileIntroNativeNotWhile).
+		NotWhile: fileIntroNativeNotWhile(),
+		Schedule: sched,
+		Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fileIntroNativeParams) (fileIntroResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileIntroResult{}, err
@@ -597,23 +613,20 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	// A live run refuses to start while a scan or bulk apply is running (see
 	// fileIntroWaitWhileBusy for why); the preview above never reaches here.
 	//
-	// A RESUMED attempt waits for the scan instead (review N17). It is
-	// re-queued at once after a yield, and a yield is often caused by a scan:
-	// the scan-busy give-up leaves a batch undone because a scan was running at
-	// the margin, so the next attempt very likely starts while it still is.
-	// Refusing then would end the run failed and lose the yield (HEAD, which
-	// never resumes, keeps the refusal for a fresh start). The wait is bounded by
-	// ctx only: it cannot yield again, because a yield needs this attempt to have
-	// completed a batch (the executor's progress proof), so a scan that outlasts
-	// a whole attempt ends the run timed_out, as a batch 0 parked in a wait does.
-	if resumed {
-		if err := waitWhileScanBusy(ctx, fileIntroOpID, queue, func(def string) {
-			env.Progress(base, base+1, mark+"paused — "+def+" is running; resumes when it finishes")
-		}); err != nil {
+	// A RESUMED attempt does not refuse and does not wait here. It is re-queued at
+	// once after a yield, and a yield is often caused by a scan (the scan-busy
+	// give-up leaves a batch undone because a scan was running at the margin), so
+	// the next attempt very likely starts while it still is. Refusing then would
+	// end the run failed and lose the yield (review N17; HEAD never resumes and
+	// keeps the refusal for a fresh start). The native kind's NotWhile
+	// (fileIntroNativeNotWhile) holds that attempt at dispatch instead, in
+	// waiting_deps, with no worker, key or attempt clock, so a scan that outlasts
+	// a whole attempt can no longer end the run timed_out. A resume is native only
+	// (HEAD's env has no LoadCheckpoint), which is why this branch is dark at HEAD.
+	if !resumed {
+		if err := fileIntroRefuseIfBusy(queue); err != nil {
 			return res, err
 		}
-	} else if err := fileIntroRefuseIfBusy(queue); err != nil {
-		return res, err
 	}
 
 	runID := env.OpID

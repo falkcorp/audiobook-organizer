@@ -315,9 +315,14 @@ func TestFileIntroYieldWait_AnOutageSleepThatGivesUpWritesNothingForTheBatch(t *
 	}
 }
 
-// ---- N17: a resumed attempt waits for a scan ---------------------------------
+// ---- N17: a resumed attempt is not refused behind a scan ----------------------
 
-func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *testing.T) {
+// A fresh start behind a running scan refuses (HEAD). A resumed attempt is never
+// refused for one: the native kind's NotWhile holds it at dispatch
+// (TestFileIntroNotWhile_AContinuedAttemptBehindAScanDoesNotStartAndBurnsNoClock),
+// and the per-batch write gate still covers a scan that starts later. The core no
+// longer has a wait of its own at the start; what it does keep is this.
+func TestFileIntroResume_AResumedAttemptIsNotRefusedBehindAScanWhereAFreshStartIs(t *testing.T) {
 	t.Run("fresh start keeps HEAD's refusal", func(t *testing.T) {
 		fx := newIntroFx(t)
 		q := &scanQueue{busy: true}
@@ -329,7 +334,7 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 		}
 	})
 
-	t.Run("resumed attempt waits and continues", func(t *testing.T) {
+	t.Run("resumed attempt is not refused and continues once the scan clears", func(t *testing.T) {
 		fx := newIntroFx(t)
 		fileIntroSlots = func() int { return 1 }
 		q := &scanQueue{}
@@ -350,10 +355,10 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 		prog := &yieldProgress{}
 		res, err := fx.yieldRun(context.Background(), fx.yieldEnv(&fileIntroRep{id: "run-resume-scan-2"}, ck, prog, fileIntroYieldMargin), true)
 		if err != nil {
-			t.Fatalf("a resumed attempt must wait for the scan and continue, got %v", err)
+			t.Fatalf("a resumed attempt must not be refused behind a scan, got %v", err)
 		}
 		if n := q.polls(); n < 4 {
-			t.Fatalf("the scan was polled busy %d times, want at least 4: the attempt did not wait for it", n)
+			t.Fatalf("the scan was polled busy %d times, want at least 4: the batch gate did not hold the writes behind it", n)
 		}
 		if res.RunID != "run-resume-scan" || res.Stats == nil || !res.Stats.Done || res.Stats.Attempted != len(paths) {
 			t.Fatalf("the continued run did not finish: %+v stats=%+v", res, res.Stats)
@@ -368,7 +373,7 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 		}
 	})
 
-	t.Run("a cancelled run leaves a waiting resumed attempt", func(t *testing.T) {
+	t.Run("a cancelled run leaves a resumed attempt held at the batch gate", func(t *testing.T) {
 		fx := newIntroFx(t)
 		fileIntroSlots = func() int { return 1 }
 		q := &scanQueue{}
@@ -383,7 +388,7 @@ func TestFileIntroResume_AResumedAttemptWaitsForAScanWhereAFreshStartRefuses(t *
 		defer cancel()
 		_, err := fx.yieldRun(ctx, fx.yieldEnv(&fileIntroRep{id: "run-resume-cancel"}, ck, nil, fileIntroYieldMargin), true)
 		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("the wait is bounded by the run's context only, got %v", err)
+			t.Fatalf("the gate is bounded by the run's context only, got %v", err)
 		}
 	})
 }
