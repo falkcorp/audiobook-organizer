@@ -193,6 +193,51 @@ func TestVerifyExtendsPerProgressUnit(t *testing.T) {
 	}
 }
 
+// waitBounds is how long a stall test waits for its migration to reach the
+// stall, or for the boot to end after it: far longer than a loaded -race run
+// needs, short enough that a lost wake-up fails the test instead of hanging it.
+const waitBounds = 10 * time.Second
+
+// bootInBackground boots r under ctx and reports the boot's error on the
+// returned channel (buffered, so a test that gave up does not leak the goroutine).
+func (e *env) bootInBackground(ctx context.Context, r *storagemigrate.Runner) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		db, err := e.boot(ctx, r)
+		if db != nil {
+			err = errors.Join(err, db.Close())
+		}
+		done <- err
+	}()
+	return done
+}
+
+// awaitStall waits for stalled to close. If the boot ends first (its deadline
+// fired before the migration got there, as on a loaded machine) or nothing
+// happens within waitBounds, the test fails with that, not with a hang.
+func awaitStall(t *testing.T, stalled <-chan struct{}, done <-chan error) {
+	t.Helper()
+	select {
+	case <-stalled:
+	case err := <-done:
+		t.Fatalf("the boot ended before the migration stalled: %v", err)
+	case <-time.After(waitBounds):
+		t.Fatal("the migration never reached its stall")
+	}
+}
+
+// awaitBoot is the boot's error once it ends, bounded by waitBounds.
+func awaitBoot(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(waitBounds):
+		t.Fatal("the boot did not end after its deadline")
+		return nil
+	}
+}
+
 // TestVerifyThatStallsStopsExtending: a Verify that raises two units and then
 // blocks gets no further extension, however long it blocks: the boot is left to
 // its start budget (the test's short deadline), not kept alive by the runner.
@@ -209,24 +254,61 @@ func TestVerifyThatStallsStopsExtending(t *testing.T) {
 	}))
 	ctx, cancel := context.WithTimeout(t.Context(), 600*time.Millisecond)
 	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		db, err := e.boot(ctx, r)
-		if db != nil {
-			err = errors.Join(err, db.Close())
-		}
-		done <- err
-	}()
-	<-stalled
+	done := e.bootInBackground(ctx, r)
+	awaitStall(t, stalled, done)
 	atStall := x.total()
 	time.Sleep(200 * time.Millisecond)
 	if got := x.total(); got != atStall {
 		t.Fatalf("the stalled Verify was extended %d more times, want none", got-atStall)
 	}
-	if err := <-done; err == nil {
+	if err := awaitBoot(t, done); err == nil {
 		t.Fatal("the boot succeeded though Verify never returned")
 	}
 	if got := x.count(" verify"); got != 3 {
 		t.Fatalf("verify requests = %d, want 3 (before Verify and its two units): %q", got, x.steps)
+	}
+}
+
+// TestChunkLoopThatStallsStopsExtending: a Step that commits three chunks and
+// then blocks gets no further extension, however long it blocks. The boot has
+// asked once at its start and once per committed chunk (a chunk's items are
+// not a progress unit of their own: the chunk is), nothing during the stall,
+// and ends on its deadline.
+func TestChunkLoopThatStallsStopsExtending(t *testing.T) {
+	const chunkItems, committedChunks = 4, 3
+	e := newEnv(t, 64)
+	x := &extensions{t: t}
+	stalled := make(chan struct{})
+	var steps atomic.Int32
+	m := recount(sequential())
+	step := m.Step
+	m.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+		if steps.Add(1) > chunkItems*committedChunks {
+			close(stalled)
+			<-ctx.Done()
+			return context.Cause(ctx)
+		}
+		return step(ctx, kv, w)
+	}
+	r := e.runner(storagemigrate.Options{ChunkItems: chunkItems, ExtendStart: x.call}, m)
+	ctx, cancel := context.WithTimeout(t.Context(), 600*time.Millisecond)
+	defer cancel()
+	done := e.bootInBackground(ctx, r)
+	awaitStall(t, stalled, done)
+	chunks := x.count(" chunk 1") + x.count(" chunk 2") + x.count(" chunk 3")
+	atStall := x.total()
+	time.Sleep(200 * time.Millisecond)
+	if got := x.total(); got != atStall {
+		t.Fatalf("the stalled chunk loop was extended %d more times, want none: %q", got-atStall, x.steps)
+	}
+	if want := committedChunks + 1; atStall != want || chunks != committedChunks {
+		t.Fatalf("requests = %d (chunk requests %d), want %d (the start and one per committed chunk): %q", atStall, chunks, want, x.steps)
+	}
+	err := awaitBoot(t, done)
+	if err == nil {
+		t.Fatal("the boot succeeded though a Step never returned")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("boot error = %v, want the start budget's deadline", err)
 	}
 }
