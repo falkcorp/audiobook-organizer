@@ -21,6 +21,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -715,12 +716,18 @@ const ownerFactoryReset = "POST /api/core/v1/system/factory-reset"
 // reset, an R2-only owner route whose letters are a ruling (ownerR2Only: 05-rbac
 // §6.2, a deliberate addition versus main, not parity with R0). In the owner boot:
 //
+//   - the route is registered with core:admin, Guards.Interactive and
+//     Guards.Owner (the route table is what stage 13 judges);
 //   - the owner, signed in through Access (an interactive method) and holding
-//     core:admin, passes stage 13; a body without the "RESET" confirmation is then
+//     core:admin, is admitted; a body without the "RESET" confirmation is then
 //     refused by the handler (422 confirm_required), so nothing is staged;
 //   - the same owner through an API key of its own account (not an interactive
-//     sign-in) is refused by stage 13, interactive_required;
-//   - the owner without core:admin is refused by stage 13, permission_denied.
+//     sign-in) is refused 403 interactive_required;
+//   - the owner without core:admin is refused 403 permission_denied.
+//
+// The two refusals cannot say which layer wrote them: the handler's guard repeats
+// stage 13's judgement with the same codes, and Result.Stage13 is read from the
+// code. That is why the registration is pinned on its own.
 //
 // The non-owner side is TestReachRegisteredPath_OwnerSet's sweep.
 func TestReachRegisteredPath_OwnerFactoryReset(t *testing.T) {
@@ -733,6 +740,12 @@ func TestReachRegisteredPath_OwnerFactoryReset(t *testing.T) {
 	}
 	if reset.Pattern == "" {
 		t.Fatalf("%s is not an owner route of the registered build", ownerFactoryReset)
+	}
+	// The route table is what stage 13 judges. The handler repeats every check and
+	// writes the same problem codes, so over HTTP a route that dropped core:admin
+	// would look the same as one that kept it: the declaration is pinned here.
+	if want := rbac.Need(rbac.CoreAdmin).String(); reset.Perm.String() != want || !reset.Guards.Interactive || !reset.Guards.Owner {
+		t.Fatalf("%s is registered with Perm %s, Guards %+v; 05-rbac §6.2 wants %s with Interactive and Owner", ownerFactoryReset, reset.Perm, reset.Guards, want)
 	}
 	id, roles := ownerAccount(t, h)
 	if !slices.Contains(roles, "admin") {
@@ -748,7 +761,7 @@ func TestReachRegisteredPath_OwnerFactoryReset(t *testing.T) {
 			t.Fatalf("owner on %s: %v", ownerFactoryReset, err)
 		}
 		if res.Stage13 == Stage13Refused || res.Verdict() != 'A' {
-			t.Fatalf("WIDENING the wrong way: the verified owner with core:admin on %s: %d %q (%s) %s, want past stage 13", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
+			t.Fatalf("WIDENING the wrong way: the verified owner with core:admin on %s: %d %q (%s) %s, want it admitted", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
 		}
 		// res.Code holds stage 13's codes only; the handler's is the problem type's.
 		if code := problemCode(res); res.Status != http.StatusUnprocessableEntity || code != "confirm_required" {
@@ -771,7 +784,7 @@ func TestReachRegisteredPath_OwnerFactoryReset(t *testing.T) {
 			t.Fatalf("owner key on %s: %v", ownerFactoryReset, err)
 		}
 		if res.Stage13 != Stage13Refused || res.Status != http.StatusForbidden || res.Code != "interactive_required" {
-			t.Fatalf("WIDENING: the owner's own key on %s: %d %q (%s) %s, want stage 13's 403 interactive_required", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
+			t.Fatalf("WIDENING: the owner's own key on %s: %d %q (%s) %s, want 403 interactive_required", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
 		}
 	})
 
@@ -782,7 +795,7 @@ func TestReachRegisteredPath_OwnerFactoryReset(t *testing.T) {
 			t.Fatalf("owner on %s: %v", ownerFactoryReset, err)
 		}
 		if res.Stage13 != Stage13Refused || res.Status != http.StatusForbidden || res.Code != "permission_denied" {
-			t.Fatalf("WIDENING: the owner as a viewer on %s: %d %q (%s) %s, want stage 13's 403 permission_denied", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
+			t.Fatalf("WIDENING: the owner as a viewer on %s: %d %q (%s) %s, want 403 permission_denied", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
 		}
 	})
 }
