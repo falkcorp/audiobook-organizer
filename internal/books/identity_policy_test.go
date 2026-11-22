@@ -7,6 +7,7 @@ package books
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/auth/oidc"
+	coreconfig "github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -49,9 +52,79 @@ func TestIdentityPolicy_IsBuiltFromHEADsAllowListInputsOnly(t *testing.T) {
 			}
 		})
 	}
-	c := config.Config{OAuthAllowedEmails: "alfred@wayne.example.test", OAuthDefaultRole: "editor"}
-	if got := identityPolicyFrom(c); !reflect.DeepEqual(got, identityPolicy("alfred@wayne.example.test", "editor")) {
-		t.Errorf("identityPolicyFrom reads something else than OAuthAllowedEmails and OAuthDefaultRole: %+v", got)
+}
+
+// keyReads is a module.ConfigReads that answers one key with a fixed state.
+type keyReads struct {
+	module.ConfigReads
+	path coreconfig.Path
+	ks   coreconfig.KeyState
+	ok   bool
+}
+
+func (k keyReads) Lookup(p coreconfig.Path) (coreconfig.KeyState, bool) {
+	if p != k.path {
+		return coreconfig.KeyState{}, false
+	}
+	return k.ks, k.ok
+}
+
+func allowListKey(effective string) keyReads {
+	return keyReads{path: cfaccessAllowedEmailsKey, ok: true, ks: coreconfig.KeyState{Effective: json.RawMessage(effective)}}
+}
+
+// TestIdentityPolicyFrom_ReadsTheBooksKeyNotTheProviderProjection: the allow-list
+// is the books key's value and nothing else. The snapshot's OAuthAllowedEmails is
+// the OIDC provider fold's projection, set here to a different address so that a
+// policy built from it is told apart; the role still comes from the snapshot.
+func TestIdentityPolicyFrom_ReadsTheBooksKeyNotTheProviderProjection(t *testing.T) {
+	snap := config.Config{OAuthAllowedEmails: "selina@wayne.example.test", OAuthDefaultRole: "editor"}
+	got, err := identityPolicyFrom(allowListKey(`"alfred@wayne.example.test"`), snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := identityPolicy("alfred@wayne.example.test", "editor"); !reflect.DeepEqual(got, want) {
+		t.Errorf("policy = %+v, want %+v (the books key's list, the snapshot's role)", got, want)
+	}
+}
+
+// TestIdentityPolicyFrom_EmptyKeyAdmitsNobodyAndNoFallback: an empty (or unset)
+// books key is the empty list, HEAD's "refuse everyone", even while the provider
+// projection holds an address: there is no fallback to it.
+func TestIdentityPolicyFrom_EmptyKeyAdmitsNobodyAndNoFallback(t *testing.T) {
+	snap := config.Config{OAuthAllowedEmails: "selina@wayne.example.test"}
+	for name, acc := range map[string]keyReads{
+		"empty string":   allowListKey(`""`),
+		"no value bytes": allowListKey(``),
+		"blank entries":  allowListKey(`" , ,"`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := identityPolicyFrom(acc, snap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.AllowedEmails) != 0 || len(got.AllowedDomains) != 0 {
+				t.Errorf("policy admits %v / %v: an empty list admits nobody", got.AllowedEmails, got.AllowedDomains)
+			}
+		})
+	}
+}
+
+// TestIdentityPolicyFrom_UnreadableListRefusesTheBoot: no config reader, an
+// unregistered key and a value that is not a string each fail with
+// errAllowListUnreadable, never a guessed list.
+func TestIdentityPolicyFrom_UnreadableListRefusesTheBoot(t *testing.T) {
+	snap := config.Config{OAuthAllowedEmails: "selina@wayne.example.test"}
+	for name, acc := range map[string]module.ConfigReads{
+		"no config access": nil,
+		"key unregistered": keyReads{path: cfaccessAllowedEmailsKey},
+		"not a string":     allowListKey(`["alfred@wayne.example.test"]`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := identityPolicyFrom(acc, snap); !errors.Is(err, errAllowListUnreadable) {
+				t.Errorf("err = %v, want errAllowListUnreadable", err)
+			}
+		})
 	}
 }
 
