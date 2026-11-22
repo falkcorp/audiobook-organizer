@@ -132,12 +132,12 @@ var verdictRows = []verdictRow{
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "PUT", Route: "/api/v1/playlists/:id", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
-	{Method: "PATCH", Route: "/api/v1/admin/debug/book-files/:id", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
-		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
-	{Method: "PATCH", Route: "/api/v1/admin/debug/books/:id", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
-		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
-	{Method: "POST", Route: "/api/v1/admin/debug/edits/:edit_id/undo", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
-		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
+	{Method: "PATCH", Route: "/api/v1/admin/debug/book-files/:id", Class: classKnown, Principals: []string{"key:admin:empty", "key:admin:every"},
+		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
+	{Method: "PATCH", Route: "/api/v1/admin/debug/books/:id", Class: classKnown, Principals: []string{"key:admin:empty", "key:admin:every"},
+		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
+	{Method: "POST", Route: "/api/v1/admin/debug/edits/:edit_id/undo", Class: classKnown, Principals: []string{"key:admin:empty", "key:admin:every"},
+		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
