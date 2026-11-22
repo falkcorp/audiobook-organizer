@@ -8,6 +8,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -19,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
+	coreoidc "github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/rbac"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
@@ -181,6 +183,35 @@ type idHarness struct {
 	*absHarness
 	books *apiKeyStore
 	core  *coreFake
+	// access is core's account resolver as the Access sign-in reaches it
+	// (legacyauth.Identity.Access); identity is the Identity the router binds.
+	access   *accessFake
+	identity *legacyauth.Identity
+	// coreUsers is core's user table as the bridge's lookup reads it (books'
+	// store holds none of these).
+	coreUsers map[string]*database.User
+}
+
+// accessFake is legacyauth.Identity.Access: it answers what the test programs
+// and records every call, so a test can say what core was asked.
+type accessFake struct {
+	mu    sync.Mutex
+	fn    func(legacyauth.AccessClaims) (*coreauth.User, error)
+	calls []legacyauth.AccessClaims
+}
+
+func (a *accessFake) resolve(_ context.Context, c legacyauth.AccessClaims) (*coreauth.User, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calls = append(a.calls, c)
+	if a.fn == nil {
+		return nil, errors.New("accessFake: nothing programmed")
+	}
+	return a.fn(c)
+}
+
+func (a *accessFake) answers(u *coreauth.User, err error) {
+	a.fn = func(legacyauth.AccessClaims) (*coreauth.User, error) { return u, err }
 }
 
 const idUser = "u-bruce"
@@ -197,9 +228,14 @@ func newIdentityHarness(t *testing.T, allowed []string) *idHarness {
 	resolver := NewABSIdentityResolver(cfg, verifier, legacyoauth.New(legacyoauth.Config{AllowedEmails: allowed, DefaultRole: "viewer"}), books)
 	core := newCoreFake()
 
+	coreUsers := map[string]*database.User{}
 	lookup := func(_ context.Context, id coreauth.UserID) (*database.User, error) {
+		if u, ok := coreUsers[string(id)]; ok {
+			return u, nil
+		}
 		return books.GetUserByID(string(id))
 	}
+	access := &accessFake{}
 	bridge, err := legacyauth.New(absAtoms{
 		"library.view":                     rbac.AllOf("books:view", "core:tasks.view"),
 		string(auth.PermFingerprintWorker): rbac.Need("books:fpworker"),
@@ -211,6 +247,7 @@ func newIdentityHarness(t *testing.T, allowed []string) *idHarness {
 		Bridge: bridge, Compat: core,
 		Client:  func(r *http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: r.UserAgent()} },
 		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },
+		Access:  access.resolve,
 	}
 	r := gin.New()
 	r.Use(id.Bind())
@@ -226,7 +263,7 @@ func newIdentityHarness(t *testing.T, allowed []string) *idHarness {
 	r.GET("/api/me", ABSRequireAuth(resolver), handler)
 	return &idHarness{
 		absHarness: &absHarness{router: r, store: books.fakeABSStore, cfg: cfg, verifier: verifier, resolver: resolver},
-		books:      books, core: core,
+		books:      books, core: core, access: access, identity: id, coreUsers: coreUsers,
 	}
 }
 
@@ -379,47 +416,204 @@ func TestABSIdentity_ServiceTokenStillFallsThroughToTheBearer(t *testing.T) {
 	}
 }
 
-// TestABSIdentity_CFProvisioningIsRefused: a verified person is never resolved
-// through books' store under core identity. A stranger gets HEAD's 403, an
-// allowed person a distinct 403, and no user, identity or link is written.
-func TestABSIdentity_CFProvisioningIsRefused(t *testing.T) {
+// cfClaims is a verified Access assertion for a person.
+func cfClaims(sub, email string, verified bool) *legacyoauth.IdentityClaims {
+	return &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: sub, Email: email, EmailVerified: verified}
+}
+
+// reasonOf runs ResolveCFAssertion for the assertion under id (the harness's
+// Identity unless one is given) and returns the answer's status and audit
+// reason: the reason is what a 500 from a recovered panic would not carry.
+func (h *idHarness) reasonOf(t *testing.T, assertion string, id *legacyauth.Identity) (int, string, *ABSIdentity) {
+	t.Helper()
+	if id == nil {
+		id = h.identity
+	}
+	var (
+		status int
+		reason string
+		got    *ABSIdentity
+	)
+	r := gin.New()
+	r.Use(id.Bind())
+	r.GET("/x", func(c *gin.Context) {
+		var e *ABSAuthError
+		got, e = h.resolver.ResolveCFAssertion(c)
+		if e != nil {
+			status, reason = e.Status, e.Reason
+		}
+		c.Status(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set(cfaccess.CFAccessHeader, assertion)
+	r.ServeHTTP(httptest.NewRecorder(), req)
+	return status, reason, got
+}
+
+// TestABSIdentity_CFPersonResolvesThroughCoreNotBooksStore: a verified person is
+// resolved by core's account resolver, never through books' store. Books' store
+// holds a person with the same address under another ID and core resolves to a
+// different user, so a path that read books' store gives the other answer; the
+// response, the epoch core is asked at and the session user are core's, and
+// books' store gains no user, identity or link.
+func TestABSIdentity_CFPersonResolvesThroughCoreNotBooksStore(t *testing.T) {
 	h := newIdentityHarness(t, []string{"alfred@example.com", "bruce@example.com"})
 	h.store.addUser(&database.User{ID: idUser, Username: "bruce", Email: "bruce@example.com", Status: "active"})
-	h.core.accounts[idUser] = coreAccount{status: "active"}
-	h.verifier.byToken["stranger"] = &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: "cf|joker", Email: "joker@example.com", EmailVerified: true}
-	h.verifier.byToken["new-allowed"] = &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: "cf|alfred", Email: "alfred@example.com", EmailVerified: true}
-	h.verifier.byToken["linked-allowed"] = &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: "cf|bruce", Email: "bruce@example.com", EmailVerified: true}
-	h.verifier.byToken["unverified"] = &legacyoauth.IdentityClaims{Provider: legacyoauth.ProviderCFAccess, Subject: "cf|alfred2", Email: "alfred@example.com", EmailVerified: false}
+	const coreID, coreEpoch = "u-core-bruce", int64(7)
+	h.coreUsers[coreID] = &database.User{ID: coreID, Username: "bruce-core", Email: "bruce@example.com", Status: "active"}
+	h.core.accounts[coreID] = coreAccount{status: "active", epoch: coreEpoch}
+	h.access.answers(&coreauth.User{ID: coreID, Username: "bruce-core", Email: "bruce@example.com", Status: coreauth.StatusActive, CredentialEpoch: coreEpoch}, nil)
+	h.verifier.byToken["bruce"] = cfClaims("cf|bruce", "bruce@example.com", true)
 	usersBefore := len(h.store.users)
 
-	for name, tc := range map[string]struct {
-		assertion string
-		body      string
-	}{
-		"a stranger":                 {"stranger", "identity is not authorized for this server"},
-		"an unverified e-mail":       {"unverified", "identity is not authorized for this server"},
-		"an allowed new person":      {"new-allowed", "single sign-on is not available on this surface"},
-		"an allowed existing person": {"linked-allowed", "single sign-on is not available on this surface"},
-	} {
-		w := h.get(map[string]string{cfaccess.CFAccessHeader: tc.assertion})
-		if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), tc.body) {
-			t.Errorf("%s: status %d (%s), want 403 %q", name, w.Code, w.Body.String(), tc.body)
+	w := h.get(map[string]string{cfaccess.CFAccessHeader: "bruce"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d (%s), want 200", w.Code, w.Body.String())
+	}
+	for _, want := range []string{`"user":"` + coreID + `"`, `"mode":"cf"`, `"method":"abs"`} {
+		if !strings.Contains(w.Body.String(), want) {
+			t.Errorf("body %s lacks %s", w.Body.String(), want)
 		}
 	}
-	if len(h.store.users) != usersBefore {
-		t.Errorf("books' store has %d users after, %d before: a user was provisioned outside core", len(h.store.users), usersBefore)
+	// What core was asked: the subject and e-mail of the assertion, exactly,
+	// with the verifier's word on the address.
+	if len(h.access.calls) != 1 || h.access.calls[0] != (legacyauth.AccessClaims{Subject: "cf|bruce", Email: "bruce@example.com", EmailVerified: true}) {
+		t.Errorf("core's resolver was asked %+v", h.access.calls)
 	}
-	if len(h.store.identities) != 0 {
-		t.Errorf("books' store holds identities %v: a link was written outside core", h.store.identities)
+	// The principal is core's at the epoch of the record core resolved: a
+	// credential that stamped 0 would be stale against core's 7.
+	if !slices.Equal(h.core.epochs, []int64{coreEpoch}) {
+		t.Errorf("PrincipalFor was given epochs %v, want [%d]", h.core.epochs, coreEpoch)
 	}
-	// A refused assertion is terminal: a valid bearer riding along does not rescue it.
-	bearer := h.signedIn(t, 0, 0, "active")
-	w := h.get(map[string]string{cfaccess.CFAccessHeader: "new-allowed", "Authorization": bearer})
-	if w.Code != http.StatusForbidden {
-		t.Errorf("an allowed assertion beside a valid bearer: status %d, want 403", w.Code)
+	if len(h.store.users) != usersBefore || len(h.store.identities) != 0 {
+		t.Errorf("books' store changed: %d users (was %d), identities %v", len(h.store.users), usersBefore, h.store.identities)
 	}
-	if h.core.asked.users+h.core.asked.keys != 0 {
-		t.Error("core was asked after the assertion was refused")
+}
+
+// TestABSIdentity_CFAnswersMapToHEADs: each of core's answers keeps the status
+// HEAD gave the same situation (ResolveUser's ErrEmailNotAllowed, its not-verified
+// and conflict refusals, absCheckUserActive), and anything core did not name is
+// a 500, never a 401 or 403: the assertion is not known to be bad.
+func TestABSIdentity_CFAnswersMapToHEADs(t *testing.T) {
+	wrap := func(err error) error { return fmt.Errorf("resolve: %w", err) }
+	for name, tc := range map[string]struct {
+		user   *coreauth.User
+		err    error
+		status int
+		reason string
+		body   string
+	}{
+		"not on the allow-list":        {nil, wrap(coreoidc.ErrEmailNotAllowed), 403, "email-not-allowed", "identity is not authorized for this server"},
+		"e-mail not verified":          {nil, wrap(coreoidc.ErrEmailNotVerified), 403, "email-not-allowed", "identity is not authorized for this server"},
+		"e-mail not plain":             {nil, wrap(coreauth.ErrEmailNotPlain), 403, "email-not-allowed", "identity is not authorized for this server"},
+		"e-mail held by another":       {nil, wrap(coreauth.ErrEmailInUse), 403, "email-not-allowed", "identity is not authorized for this server"},
+		"account inactive":             {nil, wrap(coreauth.ErrInactiveUser), 403, "user-inactive", "account is not active"},
+		"account restricted or reset":  {nil, wrap(coreauth.ErrResetRequired), 403, "reset-required", "account is not active"},
+		"a store error":                {nil, errors.New("pebble: write stalled"), 500, "identity-resolve-error", "could not resolve identity"},
+		"the store unavailable":        {nil, wrap(coreauth.ErrStoreUnavailable), 500, "identity-resolve-error", "could not resolve identity"},
+		"a commit that kept losing":    {nil, wrap(coreauth.ErrContended), 500, "identity-resolve-error", "could not resolve identity"},
+		"an unbound core resolver":     {nil, wrap(coreoidc.ErrResolverUnbound), 500, "identity-resolve-error", "could not resolve identity"},
+		"no user and no error":         {nil, nil, 500, "identity-resolve-error", "could not resolve identity"},
+		"a user core records inactive": {&coreauth.User{ID: "u-x", Status: coreauth.StatusDisabled}, nil, 403, "user-inactive", "account is not active"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newIdentityHarness(t, []string{"alfred@example.com"})
+			h.access.answers(tc.user, tc.err)
+			h.verifier.byToken["a"] = cfClaims("cf|alfred", "alfred@example.com", true)
+			usersBefore := len(h.store.users)
+			w := h.get(map[string]string{cfaccess.CFAccessHeader: "a"})
+			if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.body) {
+				t.Errorf("status %d (%s), want %d %q", w.Code, w.Body.String(), tc.status, tc.body)
+			}
+			if st, reason, got := h.reasonOf(t, "a", nil); st != tc.status || reason != tc.reason || got != nil {
+				t.Errorf("answer %d %q (identity %v), want %d %q and none", st, reason, got, tc.status, tc.reason)
+			}
+			// Terminal: a valid bearer riding along does not rescue a refused
+			// assertion, and core's Compat was never asked to admit anyone.
+			bearer := h.signedIn(t, 0, 0, "active")
+			if w := h.get(map[string]string{cfaccess.CFAccessHeader: "a", "Authorization": bearer}); w.Code != tc.status {
+				t.Errorf("beside a valid bearer: status %d, want %d", w.Code, tc.status)
+			}
+			if h.core.asked.users+h.core.asked.keys != 0 {
+				t.Error("core's Compat was asked after the assertion was refused")
+			}
+			if len(h.store.users) != usersBefore+1 { // signedIn adds one books user
+				t.Errorf("books' store has %d users, want %d: a refusal provisioned one", len(h.store.users), usersBefore+1)
+			}
+		})
+	}
+}
+
+// TestABSIdentity_CFUnverifiedAddressIsHandedOnAsUnverified: the verifier's word
+// on the address reaches core as it is. A claim hard-coded to verified would
+// admit what HEAD refused.
+func TestABSIdentity_CFUnverifiedAddressIsHandedOnAsUnverified(t *testing.T) {
+	h := newIdentityHarness(t, []string{"alfred@example.com"})
+	h.access.fn = func(c legacyauth.AccessClaims) (*coreauth.User, error) {
+		if !c.EmailVerified {
+			return nil, coreoidc.ErrEmailNotVerified
+		}
+		return &coreauth.User{ID: "u-core-alfred", Status: coreauth.StatusActive}, nil
+	}
+	h.verifier.byToken["unverified"] = cfClaims("cf|alfred", "alfred@example.com", false)
+	if w := h.get(map[string]string{cfaccess.CFAccessHeader: "unverified"}); w.Code != http.StatusForbidden {
+		t.Fatalf("an unverified address: status %d (%s), want 403", w.Code, w.Body.String())
+	}
+	if len(h.access.calls) != 1 || h.access.calls[0].EmailVerified {
+		t.Errorf("core was handed %+v, want EmailVerified false", h.access.calls)
+	}
+}
+
+// TestABSIdentity_CFWithoutAResolverIsTerminal: an Identity with no Access
+// resolver answers a verified person 500 access-resolver-missing, on the audit
+// reason (a recovered panic is a 500 too, and carries none). It never reaches
+// books' store, so no person is provisioned there.
+func TestABSIdentity_CFWithoutAResolverIsTerminal(t *testing.T) {
+	h := newIdentityHarness(t, []string{"alfred@example.com"})
+	h.verifier.byToken["a"] = cfClaims("cf|alfred", "alfred@example.com", true)
+	bare := *h.identity
+	bare.Access = nil
+	usersBefore := len(h.store.users)
+	st, reason, got := h.reasonOf(t, "a", &bare)
+	if st != http.StatusInternalServerError || reason != "access-resolver-missing" || got != nil {
+		t.Errorf("answer %d %q (identity %v), want 500 access-resolver-missing and none", st, reason, got)
+	}
+	if len(h.store.users) != usersBefore || len(h.store.identities) != 0 {
+		t.Error("books' store was written without an Access resolver")
+	}
+}
+
+// TestABSIdentity_CFOffIdentityIsHEADsPath: with no Identity bound, a verified
+// person is resolved by HEAD's ResolveUser over books' store (provisioned there)
+// and core's resolver is never asked.
+func TestABSIdentity_CFOffIdentityIsHEADsPath(t *testing.T) {
+	h := newIdentityHarness(t, []string{"alfred@example.com"})
+	h.verifier.byToken["a"] = cfClaims("cf|alfred", "alfred@example.com", true)
+	h.verifier.byToken["stranger"] = cfClaims("cf|joker", "joker@example.com", true)
+	r := gin.New() // no id.Bind()
+	r.GET("/api/me", ABSRequireAuth(h.resolver), func(c *gin.Context) {
+		u, _ := CurrentUser(c)
+		c.JSON(http.StatusOK, gin.H{"email": u.Email})
+	})
+	get := func(token string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.Header.Set(cfaccess.CFAccessHeader, token)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w
+	}
+	usersBefore := len(h.store.users)
+	if w := get("a"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "alfred@example.com") {
+		t.Fatalf("an allowed person off identity: status %d (%s), want 200", w.Code, w.Body.String())
+	}
+	if len(h.store.users) != usersBefore+1 {
+		t.Errorf("books' store has %d users, want %d: HEAD provisions the person there", len(h.store.users), usersBefore+1)
+	}
+	if w := get("stranger"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "identity is not authorized for this server") {
+		t.Errorf("a stranger off identity: status %d (%s), want HEAD's 403", w.Code, w.Body.String())
+	}
+	if len(h.access.calls) != 0 {
+		t.Errorf("core's resolver was asked %d times off identity", len(h.access.calls))
 	}
 }
 

@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -433,7 +434,7 @@ func (s *Server) wireABSRoutes() {
 			}
 			slog.Warn("abs: Cloudflare Access mode is enabled but CF_ACCESS_TEAM_DOMAIN/CF_ACCESS_AUD are unset — " +
 				"assertions cannot be verified, so only the JWT resolver will authenticate")
-		} else if v, verr := cfaccess.NewCFAccessVerifier(context.Background(), snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {
+		} else if v, verr := s.absCFVerifier(snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {
 			verifier = v
 			if len(oauthCfg.AllowedEmails) == 0 {
 				// Fail-closed consequence worth shouting about: with an empty allowlist
@@ -928,4 +929,37 @@ type warmupWaiter interface {
 // wiring order ever changes and a decorated store starts arriving instead.
 func resolveWarmupWaiter(s any) (warmupWaiter, bool) {
 	return database.AsCapability[warmupWaiter](s)
+}
+
+// errAccessVerifierUnbound is absCFVerifier's answer under core identity when
+// books bound no Access verifier (its own build failed): the ABS surface then
+// has no verifier, exactly as when its own build failed at HEAD.
+var errAccessVerifierUnbound = errors.New("abs: the Cloudflare Access verifier books wired under core identity is not bound")
+
+// absCFVerifier is the Cloudflare Access verifier of the ABS surface's resolver
+// step 1, for a team domain and AUD both set.
+//
+// Off identity it is HEAD's own: a network JWKS verifier built here, independent
+// of the /api/v1 passthrough's. Under core identity (WithIdentity) it is the
+// handle books built for the Access extension and WithAccessVerifier hands this
+// server: the same NewCFAccessVerifier over the same team domain and AUD, bound
+// before NewServer runs (identityFor), so a request is verified against the same
+// Cloudflare key set with the same issuer and audience checks, only through one
+// verifier instead of two. The handle is late (cfaccess.LateVerifier): a test
+// that boots the whole module rebinds it to a fake of its own, and nothing else
+// can, so production changes nothing but which of two identical verifiers answers.
+//
+// A handle that is absent or unbound is a build failure, as at HEAD (the caller
+// takes its verifier-init-failed branch: JWT only, or a refusal to start when cf
+// is the only mode). It is never handed on: an unbound handle would count as an
+// enabled verifier and answer 401 to every assertion where HEAD fell through to
+// the bearer.
+func (s *Server) absCFVerifier(teamDomain, aud string) (cfaccess.CFAssertionVerifier, error) {
+	if s.identity == nil {
+		return cfaccess.NewCFAccessVerifier(context.Background(), teamDomain, aud)
+	}
+	if b, ok := s.accessVerifier.(interface{ Bound() bool }); !ok || !b.Bound() {
+		return nil, errAccessVerifierUnbound
+	}
+	return s.accessVerifier, nil
 }

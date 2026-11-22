@@ -6,6 +6,7 @@
 package legacyauth
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -13,7 +14,45 @@ import (
 
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
+
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
+
+// AccessClaims is a verified Cloudflare Access person as the ABS surface hands
+// it to core: the token's stable subject, its e-mail and whether the verifier
+// vouched for that address. The provider is not here: it is the admission
+// policy's (books binds "cfaccess"), so a caller cannot name another one.
+type AccessClaims struct {
+	Subject       string
+	Email         string
+	EmailVerified bool
+}
+
+// AccessResolver admits a verified Cloudflare Access person under core's
+// account resolver and books' Access admission policy (the one the Access
+// extension holds), and returns core's user: found by the linked subject,
+// linked by a verified address, or created. It reads and writes core's store
+// only, never books'. Its refusals are the oidc and auth sentinels core's
+// resolver returns (oidc.ErrEmailNotAllowed, auth.ErrEmailInUse,
+// auth.ErrInactiveUser, ...); the ABS surface maps each to HEAD's answer.
+type AccessResolver func(ctx context.Context, c AccessClaims) (*coreauth.User, error)
+
+// BooksUserFromCore is the books-shaped copy of a core user that the ABS
+// surface's session minting, authorization-code mint and response body read:
+// ID, Username, Email, Status, CredentialEpoch and CreatedAt. Nothing else of
+// books' User is read on those paths (no hash, no roles). It is the one
+// mapping of a core user the ABS surface makes: the password login, the
+// refresh, the A7 callback and a resolved Access person all use it.
+func BooksUserFromCore(u *coreauth.User) *database.User {
+	return &database.User{
+		ID:              string(u.ID),
+		Username:        u.Username,
+		Email:           u.Email,
+		Status:          string(u.Status),
+		CredentialEpoch: u.CredentialEpoch,
+		CreatedAt:       u.CreatedAt,
+	}
+}
 
 // ABSCredential is what the ABS surface's own verifier read from a request.
 // Exactly one of Key and User is set.
