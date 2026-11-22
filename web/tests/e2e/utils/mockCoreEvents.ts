@@ -32,7 +32,8 @@
 // the current document's requests, and any frame sent before is gone. A popup or another
 // Page is neither shimmed nor guarded: call mockCoreEvents on it too.
 //
-// No spec imports this until the F6 flip switches e2e off mockEventSource.
+// Installed for every mocked page by test-helpers.ts mockEventSource (F6-03 flip); a spec that drives
+// the stream asks for the same handle with mockCoreEvents(page).
 
 import type { Page } from '@playwright/test';
 

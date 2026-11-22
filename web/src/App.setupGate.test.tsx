@@ -17,15 +17,6 @@ import { appTheme } from './theme';
 import { AuthProvider } from './contexts/AuthContext';
 import { STORAGE_KEYS } from './lib/storageKeys';
 
-vi.mock('./services/eventSourceManager', () => ({
-  eventSourceManager: {
-    subscribe: () => () => {},
-    subscribeStatus: () => () => {},
-    close: vi.fn(),
-    getStatus: () => ({ state: 'closed' }),
-  },
-}));
-
 vi.mock('./components/tools/ToolsPanel', () => ({ ToolsPanel: () => null }));
 vi.mock('./components/common/ServerFileBrowser', () => ({ ServerFileBrowser: () => null }));
 
