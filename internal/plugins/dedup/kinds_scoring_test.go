@@ -424,8 +424,8 @@ func scoringWriteProbes(t *testing.T) []writeProbe {
 			func(s *scoringSpy) { s.purgeDeleted = 3 }),
 		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.autoResolveNative(d, nil) }, "",
 			func(*scoringSpy) {
-				config.AppConfig.Dedup.AutoResolveEnabled = true
-				t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = false })
+				config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = true })
+				t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = false }) })
 			}),
 		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.fullScanNative(d, nil) }, "", nil),
 		scoringProbe(t, func(p *Plugin, d ScoringKindDeps) tasks.Definition { return p.rescoreNative(d, nil) }, "", nil),
@@ -546,9 +546,9 @@ func TestDedupScoring_PurgeStaleHeadShellNeedsAnEngine(t *testing.T) {
 
 func enableAutoResolve(t *testing.T, on bool) {
 	t.Helper()
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = on
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = on })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 }
 
 func autoResolveBuild(p *Plugin, d ScoringKindDeps) tasks.Definition {

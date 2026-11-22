@@ -18,9 +18,9 @@ import (
 // soft-deleted into the keep.
 func TestMergeSplitBookCluster_RetiredPrimaryHandsOn(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	keep := f.Book(t, vptest.Spec{ID: "keep", Primary: "true"})
 	src := f.Book(t, vptest.Spec{ID: "src", Group: "g-src", Primary: "true"})

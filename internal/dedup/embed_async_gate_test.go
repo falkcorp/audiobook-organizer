@@ -21,16 +21,16 @@ func TestEmbedBooksAsync_HardGatedToOpenAI(t *testing.T) {
 	// A client must exist so the gate (not the nil-client guard) is what fires.
 	engine.embedClient = ai.NewEmbeddingClientWithOptions("ollama", "bge-m3", "http://192.168.0.20:11434/v1")
 
-	saved := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = saved })
+	saved := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(saved) })
 
 	for _, mode := range []string{
 		config.AIBackendModeLocal,
 		config.AIBackendModeDisabled,
 		config.AIBackendModeOpenAIFallbackLocal,
 	} {
-		config.AppConfig = config.Config{}
-		config.AppConfig.AIBackend.EmbeddingMode = mode
+		config.ReplaceForTest(config.Config{})
+		config.SetForTest(func(c *config.Config) { c.AIBackend.EmbeddingMode = mode })
 
 		_, _, err := engine.EmbedBooksAsync(context.Background())
 		if !errors.Is(err, ai.ErrBatchUnsupported) {

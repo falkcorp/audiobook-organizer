@@ -32,14 +32,16 @@ func TestEmbedAsyncDef_ScheduleIsNil(t *testing.T) {
 
 func TestRunEmbedAsync_SkipsWhenOllamaBaseURLConfigured(t *testing.T) {
 	// Save and restore config
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
 	// Configure non-empty BaseURL (Ollama) — signals non-OpenAI backend
-	config.AppConfig.Embedding.BaseURL = "http://localhost:11434"
-	config.AppConfig.OpenAIAPIKey = "sk-test-key"
+	config.SetForTest(func(c *config.Config) {
+		c.Embedding.BaseURL = "http://localhost:11434"
+		c.OpenAIAPIKey = "sk-test-key"
+	})
 
 	p := &Plugin{} // engine is nil; runEmbedAsync should not attempt to use it
 	err := p.runEmbedAsync(context.Background(), json.RawMessage(`{}`), &mockReporter{})
@@ -49,14 +51,16 @@ func TestRunEmbedAsync_SkipsWhenOllamaBaseURLConfigured(t *testing.T) {
 
 func TestRunEmbedAsync_SkipsWhenNoOpenAIAPIKey(t *testing.T) {
 	// Save and restore config
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
 	// Configure empty OpenAI key and empty BaseURL — signals non-OpenAI backend
-	config.AppConfig.Embedding.BaseURL = ""
-	config.AppConfig.OpenAIAPIKey = ""
+	config.SetForTest(func(c *config.Config) {
+		c.Embedding.BaseURL = ""
+		c.OpenAIAPIKey = ""
+	})
 
 	p := &Plugin{} // engine is nil; runEmbedAsync should not attempt to use it
 	err := p.runEmbedAsync(context.Background(), json.RawMessage(`{}`), &mockReporter{})
@@ -66,14 +70,16 @@ func TestRunEmbedAsync_SkipsWhenNoOpenAIAPIKey(t *testing.T) {
 
 func TestRunEmbedAsync_SkipsWhenBothConditionsMet(t *testing.T) {
 	// Save and restore config
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
 	// Configure both conditions that signal non-OpenAI backend
-	config.AppConfig.Embedding.BaseURL = "http://localhost:11434"
-	config.AppConfig.OpenAIAPIKey = ""
+	config.SetForTest(func(c *config.Config) {
+		c.Embedding.BaseURL = "http://localhost:11434"
+		c.OpenAIAPIKey = ""
+	})
 
 	p := &Plugin{} // engine is nil; runEmbedAsync should not attempt to use it
 	err := p.runEmbedAsync(context.Background(), json.RawMessage(`{}`), &mockReporter{})

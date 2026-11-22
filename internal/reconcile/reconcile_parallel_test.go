@@ -175,9 +175,9 @@ func (f *fakeReconcileStore) GetChaptersForBook(string) ([]database.Chapter, err
 // non-contiguous {1,3,4,6} so a concurrency-scrambled fold would be detected.
 // Run under -race to exercise the pool.
 func TestFindBrokenSegmentBooks_ParallelOrderAndCounts(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "" // disable the library-prefix skip; check all books
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" }) // disable the library-prefix skip; check all books
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 
 	base := t.TempDir()
 	const n = 8
@@ -274,13 +274,17 @@ func TestFindBrokenSegmentBooks_ParallelOrderAndCounts(t *testing.T) {
 // as UnmatchedBooks — enough to assert on the parallel fold. Broken indices
 // {0,2,5} are non-contiguous.
 func TestBuildReconcilePreview_ParallelBrokenOrder(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	prevITunes := config.AppConfig.ITunes.LibraryReadPath
-	config.AppConfig.RootDir = ""
-	config.AppConfig.ITunes.LibraryReadPath = ""
+	prevRoot := config.Get().RootDir
+	prevITunes := config.Get().ITunes.LibraryReadPath
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = ""
+		c.ITunes.LibraryReadPath = ""
+	})
 	defer func() {
-		config.AppConfig.RootDir = prevRoot
-		config.AppConfig.ITunes.LibraryReadPath = prevITunes
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir = prevRoot
+			c.ITunes.LibraryReadPath = prevITunes
+		})
 	}()
 
 	base := t.TempDir()
@@ -328,9 +332,9 @@ func TestFindBrokenSegmentBooks_RealStoreConcurrent(t *testing.T) {
 		t.Fatalf("new pebble store: %v", err)
 	}
 
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "" // disable the library-prefix skip; check all books
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" }) // disable the library-prefix skip; check all books
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 
 	base := t.TempDir()
 	const n = 40 // enough books to keep NumCPU workers genuinely contending

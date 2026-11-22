@@ -30,9 +30,9 @@ import (
 // TestMergeBooks_KeepBookStaysInItsOwnGroup.
 func TestMergeBooks_PrimaryLoserSiblingJoinsSurvivorGroup(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	a := f.Book(t, vptest.Spec{ID: "a", Group: "g-a", Primary: "true"})
 	b := f.Book(t, vptest.Spec{ID: "b", Group: "g-b", Primary: "true"})
@@ -59,9 +59,9 @@ func TestMergeBooks_PrimaryLoserSiblingJoinsSurvivorGroup(t *testing.T) {
 // sibling's old group and its exact old flag pointer for the undo.
 func TestMergeBooks_LoserSiblingsMoveLiveAndNonPrimary(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true"})
 	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "false"})
@@ -107,9 +107,9 @@ func TestMergeBooks_LoserSiblingsMoveLiveAndNonPrimary(t *testing.T) {
 // Each title ended up with two version groups.
 func TestMergeBooks_KeepBookStaysInItsOwnGroup(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	keep := f.Book(t, vptest.Spec{ID: "keep", Group: "g-keep", Primary: "true"})
 	sib := f.Book(t, vptest.Spec{ID: "sib", Group: "g-keep", Primary: "false", State: "organized_source"})
@@ -142,9 +142,9 @@ func TestMergeBooks_KeepBookStaysInItsOwnGroup(t *testing.T) {
 // election (a book with an audio route beats one without).
 func TestMergeBooks_ElectedWinnerKeepsItsOwnGroup(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	keep := f.Book(t, vptest.Spec{ID: "keep", Group: "g-keep", Primary: "true"})
 	sib := f.Book(t, vptest.Spec{ID: "sib", Group: "g-keep", Primary: "false", State: "organized_source"})
@@ -163,9 +163,9 @@ func TestMergeBooks_ElectedWinnerKeepsItsOwnGroup(t *testing.T) {
 // on; undoing the combine restores the shell as a non-primary member.
 func TestCombineBooks_AbsorbedPrimaryHandsOn(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	s := f.Book(t, vptest.Spec{ID: "s"})
 	a := f.Book(t, vptest.Spec{ID: "a", Group: "g-a", Primary: "true"})
@@ -188,9 +188,9 @@ func TestCombineBooks_AbsorbedPrimaryHandsOn(t *testing.T) {
 // which the old first-in-input-order rule would have picked.
 func TestMergeBooks_UngroupedSurvivorJoinsLargestGroup(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	keep := f.Book(t, vptest.Spec{ID: "keep"})
 	small := f.Book(t, vptest.Spec{ID: "small", Group: "g-small", Primary: "true"})
@@ -212,9 +212,9 @@ func TestMergeBooks_UngroupedSurvivorTieGoesToSmallestGroupID(t *testing.T) {
 	for _, order := range [][]string{{"g2", "g1", "keep"}, {"g1", "g2", "keep"}, {"keep", "g2", "g1"}} {
 		t.Run(fmt.Sprint(order), func(t *testing.T) {
 			f := vptest.New(t)
-			prev := config.AppConfig.RootDir
-			config.AppConfig.RootDir = f.Root
-			t.Cleanup(func() { config.AppConfig.RootDir = prev })
+			prev := config.Get().RootDir
+			config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 			keep := f.Book(t, vptest.Spec{ID: "keep"})
 			f.Book(t, vptest.Spec{ID: "g2", Group: "grp-2", Primary: "true"})
@@ -239,9 +239,9 @@ func TestMergeBooks_UngroupedSurvivorTieGoesToSmallestGroupID(t *testing.T) {
 // after each refusal.
 func TestMergeBooks_SoftDeletedLoserNotInSurvivorGroup_Refused(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	s := f.Book(t, vptest.Spec{ID: "s", Group: "H", Primary: "true"})
 	sSib := f.Book(t, vptest.Spec{ID: "ssib", Group: "H", Primary: "false"})

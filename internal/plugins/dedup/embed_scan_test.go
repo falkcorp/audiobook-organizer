@@ -48,9 +48,9 @@ func newEmbedScanFixture(t *testing.T, n int) (*Plugin, *database.MockStore, *da
 	t.Cleanup(func() { _ = db.Close() })
 	es := database.NewEmbeddingStore(database.NewGatedDB(db))
 
-	prevEnabled := config.AppConfig.Dedup.EmbeddingsEnabled
-	config.AppConfig.Dedup.EmbeddingsEnabled = true
-	t.Cleanup(func() { config.AppConfig.Dedup.EmbeddingsEnabled = prevEnabled })
+	prevEnabled := config.Get().Dedup.EmbeddingsEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.EmbeddingsEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.EmbeddingsEnabled = prevEnabled }) })
 
 	books := make([]database.Book, n)
 	byID := make(map[string]*database.Book, n)

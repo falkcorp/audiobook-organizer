@@ -385,13 +385,17 @@ func embeddingFakeDeps(t *testing.T) EmbeddingKindDeps {
 // backend (the only one dedup.embed-async runs under) until the test ends.
 func useOpenAIEmbeddingBackend(t *testing.T) {
 	t.Helper()
-	prevKey, prevURL, prevOn := config.AppConfig.OpenAIAPIKey, config.AppConfig.Embedding.BaseURL, config.AppConfig.Embedding.Enabled
+	prevKey, prevURL, prevOn := config.Get().OpenAIAPIKey, config.Get().Embedding.BaseURL, config.Get().Embedding.Enabled
 	t.Cleanup(func() {
-		config.AppConfig.OpenAIAPIKey, config.AppConfig.Embedding.BaseURL, config.AppConfig.Embedding.Enabled = prevKey, prevURL, prevOn
+		config.SetForTest(func(c *config.Config) {
+			c.OpenAIAPIKey, c.Embedding.BaseURL, c.Embedding.Enabled = prevKey, prevURL, prevOn
+		})
 	})
-	config.AppConfig.OpenAIAPIKey = "sk-test-key"
-	config.AppConfig.Embedding.BaseURL = ""
-	config.AppConfig.Embedding.Enabled = true
+	config.SetForTest(func(c *config.Config) {
+		c.OpenAIAPIKey = "sk-test-key"
+		c.Embedding.BaseURL = ""
+		c.Embedding.Enabled = true
+	})
 }
 
 func embeddingRows() []kindRow {
@@ -789,7 +793,7 @@ func TestDedupEmbedding_EmbedAsyncLiveSubmitsABatchUnderAnOpenAIBackend(t *testi
 // Under any backend but OpenAI the deprecated op does nothing, as HEAD's.
 func TestDedupEmbedding_EmbedAsyncSkipsWithoutAnOpenAIBackend(t *testing.T) {
 	useOpenAIEmbeddingBackend(t)
-	config.AppConfig.OpenAIAPIKey = ""
+	config.SetForTest(func(c *config.Config) { c.OpenAIAPIKey = "" })
 	spy, d := newEmbeddingSpy()
 	def := (&Plugin{}).embedAsyncNative(d, nil)
 	_, err := embeddingRun(t, def, tasks.ModeLive, "")

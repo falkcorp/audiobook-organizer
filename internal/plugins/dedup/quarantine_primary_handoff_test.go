@@ -20,9 +20,9 @@ import (
 // explicit primary and no other live member left nil.
 func TestQuarantineChapterArtifacts_GroupEndsWithOnePrimary(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	p := &Plugin{store: f.S}
 
 	var ids []string
