@@ -10,6 +10,14 @@ import "context"
 // progressKey is the context key of a startup step's progress hook.
 type progressKey struct{}
 
+// WithProgress returns ctx with f as the hook Progress calls: RunWithProgress
+// installs its extension signal this way, and a test that counts the units a
+// loop reports installs a counter. f is called from whichever goroutine
+// raises the unit and must be safe for that.
+func WithProgress(ctx context.Context, f func()) context.Context {
+	return context.WithValue(ctx, progressKey{}, f)
+}
+
 // Progress reports one unit of progress of the startup step running under
 // ctx: a page of rows read, a batch written, a chunk copied. Every unit of a
 // loop that scales with the library calls it, so the step asks the service
@@ -41,7 +49,7 @@ func RunWithProgress(ctx context.Context, step string, extend func(step string),
 	}
 	extend(step)
 	signal := make(chan struct{}, 1)
-	pctx := context.WithValue(ctx, progressKey{}, func() {
+	pctx := WithProgress(ctx, func() {
 		select {
 		case signal <- struct{}{}:
 		default: // one is already waiting for its extension
