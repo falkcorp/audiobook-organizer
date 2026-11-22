@@ -80,7 +80,7 @@ func (s *Service) UpdateProfile(ctx context.Context, actor *Principal, in Profil
 	}
 	now := s.now().UTC()
 	var out *User
-	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
+	err = s.commitInvalidating(ctx, func(b *storage.Batch, inv *invalidations) error {
 		cur, err := s.d.Store.GetUser(ctx, self)
 		if err != nil {
 			return err
@@ -115,6 +115,9 @@ func (s *Service) UpdateProfile(ctx context.Context, actor *Principal, in Profil
 			return err
 		}
 		out = &up
+		if !SameEmail(cur.Email, up.Email) {
+			s.queueEmailChanged(inv, EmailChanged{UserID: self, From: cur.Email, To: up.Email})
+		}
 		return nil
 	})
 	if err != nil {

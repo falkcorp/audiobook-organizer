@@ -173,6 +173,15 @@ type Manifest struct {
 	// Refresh itself refuses any principal core did not build or whose identity
 	// fields its holder edited.
 	AuthRefresh bool
+
+	// AuthLifecycle declares that the module observes account events (ABO:
+	// books keeps the Cloudflare Access guest policy in step with its
+	// guests), and so receives Deps.AuthLifecycle. false, the default, leaves
+	// it nil: the handle is a reviewed manifest line like AuthRefresh. It
+	// admits the module to auth.Service.RegisterLifecycle and nothing wider:
+	// the hook is called after the write committed with ids and minimal facts,
+	// cannot veto it, and holds no store or batch.
+	AuthLifecycle bool
 }
 
 // AppConfigSpec is a module's declaration of App-wide config access.
