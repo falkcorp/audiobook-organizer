@@ -403,7 +403,7 @@ path. `scripts/deploy_rollback.py restore` runs it, in order:
    resets it. A second restore refuses while the unit is in any state but
    `inactive` or `failed`: the recipe checks before it stops anything, and the
    helper again before it opens the log. The command refuses unless its
-   effective uid owns the state directory (`offline_env`'s `ABK_STATE_DIR`),
+   effective uid owns the state directory (`offline_env`'s `ABO_CORE_PATHS_STATE_DIR`),
    so `service_user` must be that owner. It takes the store's swap lock
    itself (an flock on `<state dir>/swap.lock` that never waits) and refuses
    while a service is running or starting. It also refuses the lock when the
@@ -803,6 +803,10 @@ writes it:
   group. Anything else on that output, a short or long body or a wrong hash
   is refused and nothing is delivered. A source file must be a regular file of
   the service user with one link and no symlink in its path, under 1 MiB.
+- The unit has a deadline: `RuntimeMaxSec=60`, and the helper stops waiting 30
+  seconds later. On a timeout, an oversized output or any other failure the helper
+  itself runs `systemctl stop` on the export unit (as root, inside the helper;
+  there is no sudoers line for it), so a hung export can never block the next one.
 - The helper opens `export_dir` itself with no symlink in any component and
   checks that the directory is owned by the user who ran `sudo` (`SUDO_UID`,
   which the caller cannot set) with mode 0700. Every later step is relative to that
@@ -822,22 +826,33 @@ writes it:
 
 **This does not widen what the deploy user can do.** The deploy user can
 already run any binary as the service user: `install-staged binary` installs the
-staged `stage_bin` as the service's binary, which the unit runs as
-`service_user`, and `install-staged unit` and `local-conf` accept its
-`ExecStart=` and `Environment=`. A caller who can do that can already read every
-file the service user can read, `.encryption_key` and the keyring included. The
-two new grants hand the deploy user nothing it could not already get; they only
-replace "ask an agent, or type `sudo`" with a fixed, tested path, and the files
-land as 0600 files owned by that user in a directory only that user can enter.
-The sudoers lines have no argument list and no wildcard.
+staged `stage_bin` as the service's binary with no signature check, and the
+granted `systemctl restart` makes the unit run it as `service_user`. (`unit`
+installs only the root-owned template, and `local-conf` refuses `ExecStart=`, so
+the capability holds through the binary alone.) A caller who can do that can
+already read every file the service user can read, `.encryption_key` and the
+keyring included. The two new grants hand the deploy user nothing it could not
+already get. The export is the quieter way to it: no service restart, no `.prev`
+rotation, no envgen record. It replaces "ask an agent, or type `sudo`" with a
+fixed, tested path, and the files land as 0600 files owned by that user in a
+directory only that user can enter. The sudoers lines have no argument list and
+no wildcard.
 
 After upgrading the bundle, reinstall it (`make install-rollback-helpers
 APPLY=1`) with `--export-dir <export_dir>` in `ROLLBACK_INSTALL_ARGS`, so the
 new stubs, the sudoers lines and the `export_dir` setting exist; until then the
-make targets stop at "no export_dir" or at sudo's refusal. `offline_env` now
-also accepts `ABO_*` names (for example `ABO_CORE_PATHS_STATE_DIR=<state_dir>`),
-which the flipped binary needs: it refuses `ABK_STATE_DIR` at boot, and so do
-its offline commands.
+make targets stop at "no export_dir" or at sudo's refusal. `offline_env` accepts
+`ABO_*` names, and the installer's default is now `HOME=<state_dir>
+ABO_CORE_PATHS_STATE_DIR=<state_dir>`: the flipped binary refuses `ABK_STATE_DIR`
+at boot and in every offline command (the restore, `fetch-release`,
+`export-keyring`), so a `rollback.conf` that still names it breaks all three until
+it is reinstalled (`REPLACE_CONF=1`, because the installer leaves a differing
+file alone). `rollback.conf` that sets `ABK_STATE_DIR` together with an `ABO_`
+state directory is refused by every helper. ABO-only also serves a pre-flip
+binary only when `state_dir` is the compiled default
+(`/var/lib/audiobook-organizer`); a generation-aware setting is not built yet.
+The exact reinstall command is precondition P6 in
+`docs/system/r2-cutover-runbook.md`.
 
 ### The service environment is part of a rollback
 
@@ -989,9 +1004,10 @@ Do them in this order. The first one is a command, not a file to put in place.
    `make install-rollback-helpers` (it shows the plan), then
    `make install-rollback-helpers APPLY=1` (see "Rollback helpers" above for
    the arguments). Write `host.conf` once as root (below). `rollback.conf`'s
-   `offline_env` must use the name the installed bundle's version reads
-   (`ABK_STATE_DIR`; `ABO_CORE_PATHS_STATE_DIR` once the config flip is
-   deployed), so a bundle reinstalled after the flip carries the new one.
+   `offline_env` must use the name the deployed binary reads
+   (`ABO_CORE_PATHS_STATE_DIR` since the config flip, the installer's default;
+   the flipped binary refuses `ABK_STATE_DIR`), so a bundle reinstalled after the
+   flip carries the new one.
 2. **Then sync `Makefile.local`.** Merge `Makefile.local.example`'s `deploy` and
    `deploy-debug` recipes (and its `pprof-dropin` and `pprof-off` ones) into it,
    in place of yours. Keep your own `DEPLOY_HOST`, `DEPLOY_BIN` and the

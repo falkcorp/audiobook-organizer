@@ -71,7 +71,51 @@ only read them there.
 | P3 | The stopgap is gone: the unit has a finite start timeout again. | `ssh <server> systemctl show -p TimeoutStartUSec audiobook-organizer.service` prints `TimeoutStartUSec=5min`, not `infinity`. If it still says `infinity`, the last deploy predates the fixes: tell the agents before going on. |
 | P4 | Enough free space for R2's first boot (it may take a checkpoint and rewrite ranges). | `ssh <server> df -B1 --output=avail <db parent dir>` must be larger than `ssh <server> du -sb <db dir>`. If not, free space first, or the boot halts before it writes anything. |
 | P5 | The rollback helpers answer. | `make rollback-check` prints the generations list (no `sudo` password prompt, no refusal). |
-| P6 | The helper bundle is the one with the export helpers, and `export_dir` is set. Reinstall it as the owner: `make install-rollback-helpers APPLY=1 ROLLBACK_INSTALL_ARGS="... --export-dir <dir>"`, after `mkdir -m 700 <dir>` as the deploy user on the host (see Rollback helpers in `deploy-and-gpu-ops.md`). | `make export-install-secrets` (Step 1) finishes instead of saying `no export_dir` or `sudo: a password is required`. |
+| P6 | The rollback helpers are reinstalled with the export helpers, an `export_dir`, and the `ABO_CORE_PATHS_STATE_DIR` offline environment. **Do it before the prod-copy rehearsal**, not only before Step 7. The exact command is [P6 below](#p6-reinstall-the-rollback-helpers-owner-before-the-prod-copy-rehearsal). | `ssh <server> cat /etc/audiobook-organizer/rollback.conf` shows an `export_dir =` line and `ABO_CORE_PATHS_STATE_DIR=` in the `offline_env =` line, and no `ABK_STATE_DIR`. |
+
+### P6: reinstall the rollback helpers (owner, before the prod-copy rehearsal)
+
+Why it comes before the rehearsal: the flipped binary refuses `ABK_STATE_DIR` in every offline command, and the
+rollback helpers' current `rollback.conf` sets exactly that name. Until this reinstall runs, `make rollback-restore`
+and `make rollback-restore RELEASE=<tag>` fail on the production host (the restore and the release fetch both run the
+flipped binary with that environment), and so would `make export-keyring`. A rollback you cannot run is no rollback,
+so this is done first, not discovered at Step 7.
+
+Run it as the owner, **on the deploy host**, in a checkout of the commit you are deploying. Every value comes from
+the host's current `/etc/audiobook-organizer/rollback.conf` (read it first: `ssh <server> cat
+/etc/audiobook-organizer/rollback.conf`): `<bin>`, `<db>`, `<unit>` (`DEPLOY_UNIT`, if not the default),
+`<service_user>`, `<state_dir>`, `<archive_dir>`, `<stage_bin>` and `<stage_local_conf>` are the lines of the same
+names; `<deploy user>` is the account you log in as; `<export_dir>` is new, a directory you create and own.
+
+```bash
+mkdir -m 700 <export_dir>
+make install-rollback-helpers APPLY=1 REPLACE_CONF=1 DEPLOY_BIN=<bin> DEPLOY_DB=<db> \
+  ROLLBACK_INSTALL_ARGS="--deploy-user <deploy user> --service-user <service_user> \
+    --state-dir <state_dir> --archive-dir <archive_dir> \
+    --stage-bin <stage_bin> --stage-local-conf <stage_local_conf> \
+    --offline-env 'HOME=<state_dir> ABO_CORE_PATHS_STATE_DIR=<state_dir>' \
+    --export-dir <export_dir>"
+```
+
+- `REPLACE_CONF=1` is required. Without it the installer leaves a `rollback.conf` that differs from the one it
+  renders alone (and says so), so `export_dir` and the new `offline_env` never land. The installer writes the whole
+  file from these arguments, so also pass `--checkpoint-dir` and `--service-group` if the current file has those
+  lines, or they are dropped. `DEPLOY_BIN` and `DEPLOY_DB` can be left out when `Makefile.local` sets them.
+- The single quotes around `--offline-env`'s value are part of the line: make passes them to the shell, which hands
+  the value over as one argument.
+- The state directory is named only as `ABO_CORE_PATHS_STATE_DIR`. That alone serves both binary generations only
+  because the production host's `state_dir` is the compiled default, `/var/lib/audiobook-organizer`: a pre-flip
+  binary ignores the name and falls back to that default. See Known gap 5.
+
+**Check:** `ssh <server> cat /etc/audiobook-organizer/rollback.conf` shows the `export_dir =` line and the `ABO_`
+token in `offline_env`, and `make rollback-check` still lists the generations. `make export-install-secrets`
+is not the check: it ignores the offline environment, so it passes while Step 7 would fail.
+
+**Undo:** in a checkout of the previous commit, run the same `make install-rollback-helpers APPLY=1 REPLACE_CONF=1`
+line without `--export-dir` (and with the `offline_env` the host had before, which the flipped binary refuses, so
+restore and the release fetch break again), then `rmdir <export_dir>`. `REPLACE_CONF=1` is required here too: the
+previous bundle's `rollback_helper.py` refuses `export_dir` as an unknown setting, which would break every helper,
+`install-staged` and the restore included, until the file is replaced.
 
 ## Which path are you on?
 
@@ -259,12 +303,9 @@ ships under `deploy/prometheus/` and `deploy/grafana/`. After F8-04a, `/metrics`
 **Do** (both paths; not recorded as done on Path A). After the R2 boot, write the keyring to the off-host place
 where you keep backups:
 
-```bash
-audiobook-organizer secrets export-keyring --out <file>
-```
-
-The file is written mode 0600. This reads the live install's secrets, so it runs as the service user. From your
-Mac, with the service running:
+The keyring export reads the live install's secrets, so it runs as the service user; do not type it yourself
+(`sudo -u` is what the helper replaces). The helper runs `audiobook-organizer secrets export-keyring --out <file>`
+for you, mode 0600. From your Mac, with the service running:
 
 ```bash
 make export-keyring
@@ -272,9 +313,11 @@ make export-keyring
 
 It runs the command through the rollback helper and brings the file to `~/aorg-offhost/<UTC stamp>/` (override
 with `OFFHOST_DIR=<dir>`), checks its size and sha256 and deletes the host's copy. It needs the helper bundle
-reinstalled with the export helpers and `export_dir` set (precondition P6).
+reinstalled with the export helpers, `export_dir` and the ABO offline environment (precondition P6).
 
-**Check:** health stops warning `secrets_keyring_not_exported`.
+**Check:** the target prints one line, `<local path>  <bytes> bytes  sha256 <hash>`, then `The remote copies are
+deleted.`, and health stops warning `secrets_keyring_not_exported`. The warning alone proves nothing: the binary
+records the export before the file is delivered, so it clears even when the copy fails.
 
 **Undo:** nothing on the service changes. Delete the file if you wrote it to the wrong place.
 
@@ -390,6 +433,11 @@ Still open:
    current host.
 4. **The measured R2 boot time.** R2-01c replaces the 4200 seconds in Step 4 with the measured number, and adds the
    Docker `start_period`.
+5. **The state-directory variable is static in `rollback.conf`.** `ABO_CORE_PATHS_STATE_DIR` alone serves both binary
+   generations only because the production host's `state_dir` is the compiled default,
+   `/var/lib/audiobook-organizer`. On a host with a different `state_dir`, a rollback to a pre-flip binary would open
+   the wrong directory. The general fix is a helper that picks the variable name by binary generation; it is
+   scheduled after R2.
 
 ## Record
 
@@ -397,7 +445,7 @@ One tracking-issue comment, with no hosts, paths, secrets or values:
 
 ```
 OWNER-05 recorded <date>
-path: A | B; preconditions P1-P5: held
+path: A | B; preconditions P1-P6: held
 step 0: merges <n> finished/undone, blocking rows <n> fixed/deleted (Path A: from the F4-08 deploy)
 dry run: done (<n> pending, <n> quarantined, <n> blocking); env check: clean
 deployed RC <RC tag>, version string matched: yes; NRestarts=0: yes

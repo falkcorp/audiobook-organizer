@@ -101,6 +101,24 @@ class Parse(unittest.TestCase):
                 (),
             ),
             ("a line of noise", "hello\n" + exported(key, KEY), ("encryption-key",), ()),
+            (
+                "a name that only starts like a keyring name (path traversal suffix)",
+                f"EXPORTED aorg-keyring-{STAMP}/../../../.ssh/authorized_keys 1 {SHA}",
+                ("keyring",),
+                (),
+            ),
+            (
+                "a keyring name with a suffix",
+                f"EXPORTED aorg-keyring-{STAMP}.extra 1 {SHA}",
+                ("keyring",),
+                (),
+            ),
+            (
+                "a stray ABSENT config for the keyring",
+                exported(f"aorg-keyring-{STAMP}", KEYRING) + "\nABSENT config",
+                ("keyring",),
+                (),
+            ),
         ):
             self.assertIsInstance(eo.parse(out, want, opt), str, label)
 
@@ -232,6 +250,7 @@ class Main(unittest.TestCase):
         self.assertEqual(list(self.dest.iterdir()), [])
         self.assertFalse(any(c.startswith("rm ") for c in self.remote))
         self.assertIn(f"/home/alfred/export/{name}", err)
+        self.assertIn(f"ssh wayne-manor.invalid 'rm -f -- /home/alfred/export/{name}'", err)
 
     def test_the_right_size_with_other_bytes_is_refused(self) -> None:
         self.setup_keyring(delivered=b"x" * len(KEYRING))
