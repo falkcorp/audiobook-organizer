@@ -40,6 +40,10 @@ const (
 // the books store. It checks what core checks that the service must hand it: a
 // principal in ctx, and its refusals by the codes core uses.
 type fakeCore struct {
+	// Admin is embedded so the fake keeps compiling when core adds methods to
+	// auth.Admin; a method this fake does not define would panic (nil), and the
+	// ones the tests use (PlanUserMerge, StageUserMerge) are defined below.
+	coreauth.Admin
 	t     *testing.T
 	store *database.PebbleStore
 
@@ -255,7 +259,7 @@ func (d decorated) ApplyUserMergeIdentity(ops []database.UserMergeOp, key string
 	return d.IdentityUserMerger.ApplyUserMergeIdentity(ops, key, journal, stage)
 }
 
-func TestIdentityPlan_ShowsCoreSummaryAndNoCredentialBytes(t *testing.T) {
+func TestMergeIdentityPlan_ShowsCoreSummaryAndNoCredentialBytes(t *testing.T) {
 	f := newIDFixture(t)
 	before := f.snapshot()
 	p := f.plan()
@@ -298,7 +302,7 @@ func TestIdentityPlan_ShowsCoreSummaryAndNoCredentialBytes(t *testing.T) {
 	}
 }
 
-func TestIdentityApply_OneBatchMovesBooksCoreAndJournal(t *testing.T) {
+func TestMergeIdentityApply_OneBatchMovesBooksCoreAndJournal(t *testing.T) {
 	f := newIDFixture(t)
 	before := f.snapshot()
 	p := f.plan()
@@ -341,7 +345,7 @@ func TestIdentityApply_OneBatchMovesBooksCoreAndJournal(t *testing.T) {
 	}
 }
 
-func TestIdentityApply_StagingFailureLeavesBooksAndCoreUntouched(t *testing.T) {
+func TestMergeIdentityApply_StagingFailureLeavesBooksAndCoreUntouched(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	before := f.snapshot()
@@ -357,7 +361,7 @@ func TestIdentityApply_StagingFailureLeavesBooksAndCoreUntouched(t *testing.T) {
 
 // The commit itself fails (the batch is closed under it after staging): none of
 // books' rows, the journal or core's marker lands, and AfterCommit never runs.
-func TestIdentityApply_CommitFailureLandsNothingAndRunsNoAfterCommit(t *testing.T) {
+func TestMergeIdentityApply_CommitFailureLandsNothingAndRunsNoAfterCommit(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	before := f.snapshot()
@@ -378,7 +382,7 @@ func TestIdentityApply_CommitFailureLandsNothingAndRunsNoAfterCommit(t *testing.
 	}
 }
 
-func TestIdentityApply_BooksRowChangedAfterThePlanIsAConflictAndWritesNothing(t *testing.T) {
+func TestMergeIdentityApply_BooksRowChangedAfterThePlanIsAConflictAndWritesNothing(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	// A writer changes a row the plan will write, after the plan was read under
@@ -406,7 +410,7 @@ func TestIdentityApply_BooksRowChangedAfterThePlanIsAConflictAndWritesNothing(t 
 	}
 }
 
-func TestIdentityApply_CoreSideChangeIsAConflictAndWritesNothing(t *testing.T) {
+func TestMergeIdentityApply_CoreSideChangeIsAConflictAndWritesNothing(t *testing.T) {
 	t.Run("core changed after the preview", func(t *testing.T) {
 		f := newIDFixture(t)
 		p := f.plan()
@@ -435,7 +439,21 @@ func TestIdentityApply_CoreSideChangeIsAConflictAndWritesNothing(t *testing.T) {
 	})
 }
 
-func TestIdentityPlan_SurvivorMustBeAnAdmin(t *testing.T) {
+// A plan asked for with no principal in the context (the operation's dry-run
+// preview, which has none) is denied by core and writes nothing: the preview
+// fails closed, as the maintenance op's comment says.
+func TestMergeIdentityPlan_WithoutAPrincipalCoreDeniesAndNothingIsWritten(t *testing.T) {
+	f := newIDFixture(t)
+	_, err := f.svc.BuildPlan(context.Background(), f.planReq())
+	if !errors.Is(err, coreauth.ErrDenied) {
+		t.Fatalf("BuildPlan without a principal = %v, want core's denial", err)
+	}
+	if len(f.journalRows()) != 0 || f.core.staged.Load() != 0 {
+		t.Error("a denied preview wrote something")
+	}
+}
+
+func TestMergeIdentityPlan_SurvivorMustBeAnAdmin(t *testing.T) {
 	f := newIDFixture(t)
 	f.core.users[f.a.ID].Roles = []rbac.RoleName{rbac.RoleEditor}
 	p := f.plan()
@@ -450,7 +468,7 @@ func TestIdentityPlan_SurvivorMustBeAnAdmin(t *testing.T) {
 	}
 }
 
-func TestIdentityPlan_EveryCoreRefusalIsAPlanRefusalWithItsCode(t *testing.T) {
+func TestMergeIdentityPlan_EveryCoreRefusalIsAPlanRefusalWithItsCode(t *testing.T) {
 	codes := map[string]error{
 		coreauth.RefusedAlreadyMerged: &coreauth.MergeRefusal{Code: coreauth.RefusedAlreadyMerged, Detail: "already merged"},
 		coreauth.RefusedNoSignIn:      &coreauth.MergeRefusal{Code: coreauth.RefusedNoSignIn, Detail: "no sign-in"},
@@ -487,7 +505,7 @@ func TestIdentityPlan_EveryCoreRefusalIsAPlanRefusalWithItsCode(t *testing.T) {
 	}
 }
 
-func TestIdentityMerge_TooLargeAnswersBeforeAnythingIsStagedOrWritten(t *testing.T) {
+func TestMergeIdentity_TooLargeAnswersBeforeAnythingIsStagedOrWritten(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	if MergeBatchCap != 64<<20 {
@@ -509,7 +527,7 @@ func TestIdentityMerge_TooLargeAnswersBeforeAnythingIsStagedOrWritten(t *testing
 
 // Two applies of the same source into two survivors: runMu serializes them and
 // exactly one lands; the other is refused. Run under -race.
-func TestIdentityApply_TwoSurvivorsRaceExactlyOneLands(t *testing.T) {
+func TestMergeIdentityApply_TwoSurvivorsRaceExactlyOneLands(t *testing.T) {
 	f := newIDFixture(t)
 	survivors := []string{f.a.ID, "u-alfred"}
 	reqs := make([]ApplyRequest, 2)
@@ -550,7 +568,7 @@ func TestIdentityApply_TwoSurvivorsRaceExactlyOneLands(t *testing.T) {
 	}
 }
 
-func TestIdentityApply_ActsAsTheRefreshedPrincipalOrNotAtAll(t *testing.T) {
+func TestMergeIdentityApply_ActsAsTheRefreshedPrincipalOrNotAtAll(t *testing.T) {
 	t.Run("ctx carries what Refresh returned, never the grant's copy", func(t *testing.T) {
 		f := newIDFixture(t)
 		p := f.plan()
@@ -643,6 +661,11 @@ func TestIdentityApply_ActsAsTheRefreshedPrincipalOrNotAtAll(t *testing.T) {
 		p := f.plan()
 		planned := f.core.planned.Load()
 		other := &coreauth.Principal{User: f.core.user(f.b.ID)}
+		refreshCalls := 0
+		f.svc.core.Refresh = func(_ context.Context, pr *coreauth.Principal) (*coreauth.Principal, error) {
+			refreshCalls++
+			return pr, nil
+		}
 		for name, pr := range map[string]*coreauth.Principal{"none": nil, "another user": other, "no user": {}} {
 			req := f.applyReq(p)
 			req.Principal = pr
@@ -650,8 +673,8 @@ func TestIdentityApply_ActsAsTheRefreshedPrincipalOrNotAtAll(t *testing.T) {
 				t.Errorf("%s: Apply = %v, want ErrNoPrincipal", name, err)
 			}
 		}
-		if f.core.planned.Load() != planned {
-			t.Errorf("core was asked with a principal that is not the actor's")
+		if f.core.planned.Load() != planned || refreshCalls != 0 {
+			t.Errorf("core was asked (%d plans) or Refresh called (%d) for a principal that is not the actor's", f.core.planned.Load()-planned, refreshCalls)
 		}
 		// Refresh answering with another user's principal is refused too.
 		f.svc.core.Refresh = func(context.Context, *coreauth.Principal) (*coreauth.Principal, error) { return other, nil }
@@ -661,7 +684,7 @@ func TestIdentityApply_ActsAsTheRefreshedPrincipalOrNotAtAll(t *testing.T) {
 	})
 }
 
-func TestIdentityApply_AfterCommitRunsOnce(t *testing.T) {
+func TestMergeIdentityApply_AfterCommitRunsOnce(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	if _, err := f.svc.Apply(context.Background(), f.applyReq(p), nil); err != nil {
@@ -674,7 +697,7 @@ func TestIdentityApply_AfterCommitRunsOnce(t *testing.T) {
 
 // The identity journal holds what a later unmerge needs of both halves and no
 // credential.
-func TestIdentityApply_JournalRecordsBothHalvesWithoutCredentials(t *testing.T) {
+func TestMergeIdentityApply_JournalRecordsBothHalvesWithoutCredentials(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	j, err := f.svc.Apply(context.Background(), f.applyReq(p), nil)
@@ -713,7 +736,7 @@ func TestIdentityApply_JournalRecordsBothHalvesWithoutCredentials(t *testing.T) 
 
 // A books row the absorbed account's in-flight request writes after the plan is
 // moved by the sweep, and the merge stays applied.
-func TestIdentityApply_SweepsBooksRowsWrittenAfterThePlan(t *testing.T) {
+func TestMergeIdentityApply_SweepsBooksRowsWrittenAfterThePlan(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	f.core.onStage = nil
@@ -740,7 +763,136 @@ func TestIdentityApply_SweepsBooksRowsWrittenAfterThePlan(t *testing.T) {
 	}
 }
 
-func TestIdentityResume_IsPermanentWithoutTouchingTheStore(t *testing.T) {
+// journalOnDisk is the journal the store holds for the one merge of f.
+func (f *idFixture) journalOnDisk() *Journal {
+	f.t.Helper()
+	rows := f.journalRows()
+	if len(rows) != 1 {
+		f.t.Fatalf("journal rows = %d, want 1", len(rows))
+	}
+	var j Journal
+	if err := json.Unmarshal(rows[0].Value, &j); err != nil {
+		f.t.Fatal(err)
+	}
+	return &j
+}
+
+// failingStore refuses to save a journal: the post-commit sweep's own re-saves.
+type failingStore struct {
+	Store
+	fail *atomic.Bool
+}
+
+func (s failingStore) SetRaw(key string, v []byte) error {
+	if s.fail.Load() && strings.HasPrefix(key, database.UserMergeJournalPrefix) {
+		return errors.New("disk full")
+	}
+	return s.Store.SetRaw(key, v)
+}
+
+// failingMerger refuses the sweep's write (rows and journal together).
+type failingMerger struct {
+	database.UserMerger
+	fail *atomic.Bool
+}
+
+func (m failingMerger) ApplyUserMergeOps(ops []database.UserMergeOp, key string, journal []byte) error {
+	if m.fail.Load() {
+		return errors.New("the books store went away")
+	}
+	return m.UserMerger.ApplyUserMergeOps(ops, key, journal)
+}
+
+// The journal in the committed batch says the sweep is still to run
+// (Core.SweepPending), so a crash between the commit and the sweep is visible
+// without anything having been written after it; a clean sweep clears it.
+func TestMergeIdentityApply_JournalSaysTheSweepIsPendingUntilItRanClean(t *testing.T) {
+	f := newIDFixture(t)
+	p := f.plan()
+	var committed Journal
+	real := f.svc.idMerger
+	f.svc.idMerger = decorated{IdentityUserMerger: real, apply: func(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error {
+		if err := json.Unmarshal(journal, &committed); err != nil {
+			return err
+		}
+		return real.ApplyUserMergeIdentity(ops, key, journal, stage)
+	}}
+	j, err := f.svc.Apply(context.Background(), f.applyReq(p), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if committed.Core == nil || !committed.Core.SweepPending {
+		t.Errorf("the journal in the batch does not say the sweep is pending: %+v", committed.Core)
+	}
+	if j.Core.SweepPending || f.journalOnDisk().Core.SweepPending {
+		t.Errorf("a clean sweep left the journal pending (memory %v, disk %v)", j.Core.SweepPending, f.journalOnDisk().Core.SweepPending)
+	}
+}
+
+// A failed save of the journal after a clean sweep is loud: the merge stands,
+// the run reports ErrSweepIncomplete with the merge id, and the journal on disk
+// still says sweep_pending.
+func TestMergeIdentityApply_FailedJournalResaveIsLoudAndLeavesTheMarker(t *testing.T) {
+	f := newIDFixture(t)
+	p := f.plan()
+	fail := &atomic.Bool{}
+	fail.Store(true)
+	f.svc.store = failingStore{Store: f.svc.store, fail: fail}
+	j, err := f.svc.Apply(context.Background(), f.applyReq(p), nil)
+	var se *SweepError
+	if !errors.As(err, &se) || !errors.Is(err, ErrSweepIncomplete) {
+		t.Fatalf("Apply error = %v, want a *SweepError", err)
+	}
+	if j == nil || se.JournalID != j.ID {
+		t.Errorf("the error names merge %q, the journal is %v", se.JournalID, j)
+	}
+	if got := f.journalOnDisk(); got.Core == nil || !got.Core.SweepPending || got.Status != StatusApplied {
+		t.Errorf("journal on disk = status %s, core %+v", got.Status, got.Core)
+	}
+	if f.core.user(f.b.ID).MergedInto != coreauth.UserID(f.a.ID) {
+		t.Error("the merge itself did not stand")
+	}
+	if f.core.after.Load() != 1 {
+		t.Errorf("AfterCommit ran %d times, want 1", f.core.after.Load())
+	}
+}
+
+// A straggler pass that cannot write is loud too, and the journal keeps to what
+// was written: the planned-but-unwritten straggler ops are not in it.
+func TestMergeIdentityApply_FailedSweepWriteIsLoudAndTheJournalKeepsToWhatHappened(t *testing.T) {
+	f := newIDFixture(t)
+	p := f.plan()
+	fail := &atomic.Bool{}
+	real := f.svc.idMerger
+	f.svc.idMerger = decorated{IdentityUserMerger: real, apply: func(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error {
+		if err := real.ApplyUserMergeIdentity(ops, key, journal, stage); err != nil {
+			return err
+		}
+		f.put("pref:"+f.b.ID+":late", "{\"key\":\"late\",\"value\":\"1\"}")
+		fail.Store(true)
+		return nil
+	}}
+	f.svc.merger = failingMerger{UserMerger: f.svc.merger, fail: fail}
+	j, err := f.svc.Apply(context.Background(), f.applyReq(p), nil)
+	if !errors.Is(err, ErrSweepIncomplete) {
+		t.Fatalf("Apply error = %v, want ErrSweepIncomplete", err)
+	}
+	got := f.journalOnDisk()
+	if got.Core == nil || !got.Core.SweepPending {
+		t.Errorf("journal core = %+v", got.Core)
+	}
+	if len(got.Ops) != got.Cursor || len(got.Ops) != len(p.ops) {
+		t.Errorf("journal ops = %d, cursor = %d, committed ops = %d", len(got.Ops), got.Cursor, len(p.ops))
+	}
+	if len(got.Warnings) == 0 || j == nil {
+		t.Errorf("warnings = %v, journal = %v", got.Warnings, j)
+	}
+	if f.get("pref:"+f.b.ID+":late") == "" {
+		t.Error("the straggler row moved although its write failed")
+	}
+}
+
+func TestMergeIdentityResume_IsPermanentWithoutTouchingTheStore(t *testing.T) {
 	f := newIDFixture(t)
 	store := &touchedStore{journalRows: journalRows{rows: journalRow("j1", StatusApplying)}}
 	svc := &Service{store: store, identityFlipped: f.svc.identityFlipped, core: f.svc.core, idMerger: f.svc.idMerger}
@@ -766,7 +918,7 @@ func TestIdentityResume_IsPermanentWithoutTouchingTheStore(t *testing.T) {
 
 // Off identity the service is HEAD's: it never asks core and never uses the
 // batch committer, though both are wired.
-func TestIdentityWiring_OffIdentityIsHeads(t *testing.T) {
+func TestMergeIdentityWiring_OffIdentityIsHeads(t *testing.T) {
 	f := newIDFixture(t)
 	f.svc.identityFlipped = nil
 	f.svc.idMerger = decorated{IdentityUserMerger: f.svc.idMerger, apply: func([]database.UserMergeOp, string, []byte, func(*storage.Batch) error) error {
@@ -785,7 +937,7 @@ func TestIdentityWiring_OffIdentityIsHeads(t *testing.T) {
 	}
 }
 
-func TestIdentityWiring_FailsClosedWithoutCoreHandlesOrCommitter(t *testing.T) {
+func TestMergeIdentityWiring_FailsClosedWithoutCoreHandlesOrCommitter(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
 	for name, mutate := range map[string]func(*Service){
@@ -811,7 +963,7 @@ func TestIdentityWiring_FailsClosedWithoutCoreHandlesOrCommitter(t *testing.T) {
 	}
 }
 
-func TestGrant_NeverFormatsOrLogsItsPrincipal(t *testing.T) {
+func TestMergeGrant_NeverFormatsOrLogsItsPrincipal(t *testing.T) {
 	pr := &coreauth.Principal{User: &coreauth.User{ID: "u-bruce"}, CredentialID: credCredential}
 	g := Grant{ActorID: "u-bruce", Action: ActionApply, SurvivorID: "a", AbsorbedID: "b", Digest: "d", Principal: pr}
 	for name, text := range map[string]string{
@@ -829,7 +981,7 @@ func TestGrant_NeverFormatsOrLogsItsPrincipal(t *testing.T) {
 	}
 }
 
-func TestGrants_PrincipalMustBeTheActorsOwn(t *testing.T) {
+func TestMergeGrants_PrincipalMustBeTheActorsOwn(t *testing.T) {
 	g := NewGrants()
 	own := &coreauth.Principal{User: &coreauth.User{ID: "u-bruce"}}
 	if _, err := g.Issue(Grant{ActorID: "u-dick", Action: ActionApply, SurvivorID: "a", AbsorbedID: "b", Digest: "d", Principal: own}); err == nil {

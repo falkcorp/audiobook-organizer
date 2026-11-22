@@ -443,6 +443,13 @@ type CoreJournal struct {
 	// summary does not carry the sign-ins' ids, and none is derived here.
 	IdentityProviders []string `json:"identity_providers"`
 	AllowListRows     int      `json:"allow_list_rows"`
+	// SweepPending is true from the committed batch until the post-commit
+	// straggler sweep has finished cleanly and the journal has been re-saved
+	// without it. It starts true IN THE BATCH, so a crash, a failed sweep or a
+	// failed final save all leave it true and none has to write anything to be
+	// seen: an unmerge (B10p) that finds it true must sweep the absorbed
+	// account's rows again before it trusts Ops to be the whole books half.
+	SweepPending bool `json:"sweep_pending,omitempty"`
 }
 
 const eraIdentity = "identity"
@@ -476,6 +483,7 @@ func coreJournalOf(p *Plan, src, tgt *coreauth.User) *CoreJournal {
 		APIKeyIDs:                 slices.Clone(c.APIKeyIDs),
 		IdentityProviders:         slices.Clone(c.IdentityProviders),
 		AllowListRows:             c.AllowListRows,
+		SweepPending:              true,
 	}
 }
 
@@ -544,14 +552,20 @@ func (s *Service) applyIdentity(ctx context.Context, req ApplyRequest, prog Prog
 	if after != nil {
 		after(ctx)
 	}
-	s.sweepAfterCommit(ctx, j)
-	prog.report(len(j.Ops), len(j.Ops), "merge applied")
+	sweepErr := s.sweepAfterCommit(ctx, j)
+	// The merge is committed whatever the sweep did, so the audit entry is
+	// written either way.
 	if s.audit != nil {
 		s.audit(fmt.Sprintf("merged user %s into %s", j.AbsorbedID, j.SurvivorID), map[string]any{
 			"journal_id": j.ID, "survivor_id": j.SurvivorID, "absorbed_id": j.AbsorbedID,
 			"actor_id": j.ActorID, "ops": len(j.Ops), "conflicts": j.ConflictTotal,
+			"sweep_pending": j.Core != nil && j.Core.SweepPending,
 		})
 	}
+	if sweepErr != nil {
+		return j, sweepErr
+	}
+	prog.report(len(j.Ops), len(j.Ops), "merge applied")
 	return j, nil
 }
 
@@ -621,32 +635,81 @@ func (s *Service) commitIdentity(ctx context.Context, req ApplyRequest, first *P
 	return j, after, nil
 }
 
+// ErrSweepIncomplete is a merge that COMMITTED but whose post-commit straggler
+// sweep did not finish cleanly. The merge stands (core's half and the books rows
+// are one committed batch, and the journal is in it); what is left is that rows
+// the absorbed account's in-flight requests wrote after the plan may still sit
+// under it. The journal says so (Core.SweepPending stays true), the error log
+// names the merge, and the operation fails with this error so the run is not
+// reported as a clean success.
+var ErrSweepIncomplete = errors.New("usermerge: the merge committed but its straggler sweep did not finish")
+
+// SweepError is ErrSweepIncomplete with the merge it concerns.
+type SweepError struct {
+	JournalID string
+	Cause     error
+}
+
+func (e *SweepError) Error() string {
+	return fmt.Sprintf("%v (merge %s; journal marked sweep_pending, run the sweep again before an unmerge): %v",
+		ErrSweepIncomplete, e.JournalID, e.Cause)
+}
+
+func (e *SweepError) Unwrap() []error { return []error{ErrSweepIncomplete, e.Cause} }
+
 // sweepAfterCommit moves books rows the absorbed account's in-flight requests
 // wrote after the plan read it. The merge is committed and the account is
-// already disabled (its sessions fail on core's next check), so this is
-// bounded, and a failure here is reported in the journal's warnings, never as a
-// failed merge. Each pass is its own locked, compare-and-set write, as HEAD's
-// sweep is.
-func (s *Service) sweepAfterCommit(ctx context.Context, j *Journal) {
-	warn := func(msg string) {
+// already disabled (its sessions fail on core's next check), so the window is
+// small, but it is not silent: the straggler rows and the journal that records
+// them cannot be in the one commit (the rows do not exist when it is staged),
+// so each pass is its own locked write of rows AND journal together
+// (applyRemaining), and the result is tracked by Core.SweepPending, which is true
+// from the commit until a clean sweep has been recorded. Every way the sweep can
+// fail returns a *SweepError and logs at error with the merge id; none can leave
+// the journal claiming a clean sweep.
+func (s *Service) sweepAfterCommit(ctx context.Context, j *Journal) error {
+	fail := func(msg string, cause error) error {
+		// Ops past the cursor were planned but never written: keep the journal
+		// to what happened.
+		j.Ops = j.Ops[:j.Cursor]
 		j.Warnings = append(j.Warnings, msg)
 		if err := s.save(j); err != nil {
-			s.log.Warn("save the merge journal after a straggler sweep: %v", err)
+			s.log.Error("merge %s: saving the journal after a failed straggler sweep failed too (sweep_pending stays set in the committed journal): %v", j.ID, err)
 		}
+		s.log.Error("merge %s (absorbed %s into %s) committed but its straggler sweep failed: %s: %v", j.ID, j.AbsorbedID, j.SurvivorID, msg, cause)
+		return &SweepError{JournalID: j.ID, Cause: cause}
 	}
+	clean := false
 	for range maxSweeps {
 		more, err := s.sweepIdentityOnce(ctx, j)
 		if err != nil {
-			warn("a sweep for rows written under the merged-away account stopped: " + failText(err))
-			return
+			return fail("a sweep for rows written under the merged-away account stopped: "+failText(err), err)
 		}
 		if !more {
-			return
+			clean = true
+			break
 		}
 	}
-	if more, err := s.hasStragglers(ctx, j); err == nil && more {
-		warn("rows were still appearing under the merged-away account after the final sweep")
+	if !clean {
+		more, err := s.hasStragglers(ctx, j)
+		switch {
+		case err != nil:
+			return fail("the final straggler check failed: "+failText(err), err)
+		case more:
+			return fail("rows were still appearing under the merged-away account after the final sweep", errors.New("stragglers remain"))
+		}
 	}
+	if j.Core != nil {
+		j.Core.SweepPending = false
+	}
+	if err := s.save(j); err != nil {
+		if j.Core != nil {
+			j.Core.SweepPending = true
+		}
+		s.log.Error("merge %s: recording the clean straggler sweep failed (sweep_pending stays set in the committed journal): %v", j.ID, err)
+		return &SweepError{JournalID: j.ID, Cause: err}
+	}
+	return nil
 }
 
 func (s *Service) sweepIdentityOnce(ctx context.Context, j *Journal) (bool, error) {
