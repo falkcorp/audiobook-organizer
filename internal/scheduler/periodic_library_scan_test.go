@@ -27,15 +27,15 @@ import (
 // This asserts the exact gate Start uses, against the shipped default config.
 func TestLibraryScanIsScheduledUnderDefaultConfig(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 
 	config.ResetToDefaultsForTest()
 
 	// Guard rail: the fix must not be sneaking through the legacy flags. Under
 	// defaults both of these are off, which is precisely why the old code was
 	// inert.
-	require.False(t, config.AppConfig.ScanOnStartup, "default config should still have scan_on_startup off")
-	require.False(t, config.AppConfig.AutoScanEnabled, "default config should still have auto_scan_enabled off")
+	require.False(t, config.Get().ScanOnStartup, "default config should still have scan_on_startup off")
+	require.False(t, config.Get().AutoScanEnabled, "default config should still have auto_scan_enabled off")
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("library_scan")
@@ -53,7 +53,7 @@ func TestLibraryScanIsScheduledUnderDefaultConfig(t *testing.T) {
 // ways an operator can turn the periodic scan back off.
 func TestLibraryScanIntervalIsConfigurable(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("library_scan")
@@ -73,10 +73,12 @@ func TestLibraryScanIntervalIsConfigurable(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			config.AppConfig.Scheduled.LibraryScan = config.ScheduledTaskConfig{
-				Enabled:  tc.enabled,
-				Interval: tc.interval,
-			}
+			config.SetForTest(func(c *config.Config) {
+				c.Scheduled.LibraryScan = config.ScheduledTaskConfig{
+					Enabled:  tc.enabled,
+					Interval: tc.interval,
+				}
+			})
 			assert.Equal(t, tc.want, task.GetInterval())
 		})
 	}
@@ -88,14 +90,16 @@ func TestLibraryScanIntervalIsConfigurable(t *testing.T) {
 // the new scheduled.library_scan key is off.
 func TestLibraryScanEnabledPreservesLegacyScanOnStartup(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("library_scan")
 	require.True(t, ok)
 
-	config.AppConfig.Scheduled.LibraryScan = config.ScheduledTaskConfig{Enabled: false, Interval: 0}
-	config.AppConfig.ScanOnStartup = true
+	config.SetForTest(func(c *config.Config) {
+		c.Scheduled.LibraryScan = config.ScheduledTaskConfig{Enabled: false, Interval: 0}
+		c.ScanOnStartup = true
+	})
 
 	assert.True(t, task.IsEnabled(), "legacy scan_on_startup must still enable the task")
 	assert.True(t, task.RunOnStart(), "legacy scan_on_startup must still trigger a startup scan")
@@ -124,9 +128,9 @@ func TestLibraryScanIsReachableFromMaintenanceWindow(t *testing.T) {
 // task is registered and the real tasks' startup runs stay out of the way.
 func TestStartCreatesTickerForNonZeroInterval(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	// Keep the maintenance-window goroutine out of this test.
-	config.AppConfig.Maintenance.Enabled = false
+	config.SetForTest(func(c *config.Config) { c.Maintenance.Enabled = false })
 
 	ts := &TaskScheduler{
 		deps:    testDeps(),
@@ -174,8 +178,8 @@ func TestStartCreatesTickerForNonZeroInterval(t *testing.T) {
 // tasks.go relies on, so the library_scan fix must not have loosened it.
 func TestStartCreatesNoTickerForZeroInterval(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
-	config.AppConfig.Maintenance.Enabled = false
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
+	config.SetForTest(func(c *config.Config) { c.Maintenance.Enabled = false })
 
 	ts := &TaskScheduler{
 		deps:    testDeps(),

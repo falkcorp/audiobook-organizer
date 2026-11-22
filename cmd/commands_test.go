@@ -92,15 +92,17 @@ func TestCommandsRunWithStubs(t *testing.T) {
 		_ = os.Chdir(origDir)
 	})
 
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.RootDir = tempDir
-	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV1 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.RootDir = tempDir })
+	cowV2 := filepath.Join(tempDir, "playlists")
+	config.SetForTest(func(c *config.Config) { c.PlaylistDir = cowV2 })
 
 	if err := scanCmd.RunE(scanCmd, nil); err != nil {
 		t.Fatalf("scanCmd failed: %v", err)
@@ -123,14 +125,15 @@ func TestScanCommandErrorPaths(t *testing.T) {
 	stubCommandDeps(t)
 
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.RootDir = tempDir
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV3 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV3 })
+	config.SetForTest(func(c *config.Config) { c.RootDir = tempDir })
 
 	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return nil, fmt.Errorf("scan failed")
@@ -154,13 +157,14 @@ func TestServeCommandErrorPaths(t *testing.T) {
 	stubCommandDeps(t)
 
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV4 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV4 })
 
 	// The encryption init's failure is books' now (internal/books
 	// TestSettingsBoot_StepFailuresAreFatal); serve returns the composition
@@ -177,14 +181,16 @@ func TestPlaylistCommandError(t *testing.T) {
 	stubCommandDeps(t)
 
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV5 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV5 })
+	cowV6 := filepath.Join(tempDir, "playlists")
+	config.SetForTest(func(c *config.Config) { c.PlaylistDir = cowV6 })
 
 	generatePlaylists = func() error {
 		return fmt.Errorf("playlist generation failed")
@@ -198,13 +204,14 @@ func TestTagCommandError(t *testing.T) {
 	stubCommandDeps(t)
 
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV7 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV7 })
 
 	updateSeriesTags = func() error {
 		return fmt.Errorf("tag update failed")
@@ -218,13 +225,14 @@ func TestOrganizeCommandError(t *testing.T) {
 	stubCommandDeps(t)
 
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV8 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV8 })
 
 	scanDirectory = func(_ context.Context, rootDir string, _ logger.Logger) ([]scanner.Book, error) {
 		return nil, fmt.Errorf("scan failed in organize")
@@ -238,13 +246,14 @@ func TestStoreInitializationError(t *testing.T) {
 	stubCommandDeps(t)
 
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	})
 
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV9 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV9 })
 
 	openCLIStore = func(context.Context, bool) (cliStore, func(), error) {
 		return nil, nil, fmt.Errorf("store init failed")
@@ -261,11 +270,12 @@ func TestStoreInitializationError(t *testing.T) {
 func serveWithStubs(t *testing.T) (started bool, in books.ServeInputs, err error) {
 	t.Helper()
 	tempDir := t.TempDir()
-	origConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = origConfig })
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.pebble")
-	config.AppConfig.RootDir = tempDir
+	origConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(origConfig) })
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "pebble" })
+	cowV10 := filepath.Join(tempDir, "db.pebble")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV10 })
+	config.SetForTest(func(c *config.Config) { c.RootDir = tempDir })
 	runApp = func(_ context.Context, got books.ServeInputs) error {
 		started, in = true, got
 		return nil
@@ -286,9 +296,9 @@ func TestServe_RunsNoStartupStepOfItsOwn(t *testing.T) {
 		t.Error("serve opened the store itself; the kernel opens it at P2")
 		return nil, nil, fmt.Errorf("serve must not open the store")
 	}
-	origConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = origConfig })
-	config.AppConfig.OTelExporterOTLPEndpoint = "http://192.0.2.9:4317"
+	origConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(origConfig) })
+	config.SetForTest(func(c *config.Config) { c.OTelExporterOTLPEndpoint = "http://192.0.2.9:4317" })
 
 	started, in, err := serveWithStubs(t)
 	if err != nil {

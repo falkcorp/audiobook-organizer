@@ -59,7 +59,7 @@ func TestFullSweepDue(t *testing.T) {
 // Start uses (IsEnabled && GetInterval > 0) against the shipped defaults.
 func TestLibraryScanFullIsScheduledUnderDefaultConfig(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
@@ -86,10 +86,10 @@ func TestLibraryScanFullIsScheduledUnderDefaultConfig(t *testing.T) {
 // return PeriodHours, this fails.
 func TestLibraryScanFullTickerIsNotTheSweepPeriod(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
-	period := time.Duration(config.AppConfig.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
+	period := time.Duration(config.Get().Scheduled.LibraryScanFull.PeriodHours) * time.Hour
 	require.Equal(t, testWeek, period, "default sweep period should be weekly (168h)")
 
 	ts := NewTaskScheduler(testDeps())
@@ -110,7 +110,7 @@ func TestLibraryScanFullTickerIsNotTheSweepPeriod(t *testing.T) {
 // sweep period), and that disabling the task stops the ticker.
 func TestLibraryScanFullDueCheckIsFixedAndIgnoresTheDroppedInterval(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
@@ -118,12 +118,12 @@ func TestLibraryScanFullDueCheckIsFixedAndIgnoresTheDroppedInterval(t *testing.T
 	require.True(t, ok)
 
 	for _, interval := range []int{0, 15, 60} {
-		config.AppConfig.Scheduled.LibraryScanFull.Interval = interval
+		config.SetForTest(func(c *config.Config) { c.Scheduled.LibraryScanFull.Interval = interval })
 		assert.Equal(t, fullSweepDueCheck, task.GetInterval(),
 			"interval=%d: the cadence must not depend on a field the flip zeroes", interval)
 	}
 
-	config.AppConfig.Scheduled.LibraryScanFull.Enabled = false
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LibraryScanFull.Enabled = false })
 	assert.False(t, task.IsEnabled())
 	assert.Equal(t, time.Duration(0), task.GetInterval(), "a disabled sweep must report no interval")
 }
@@ -178,7 +178,7 @@ func pastSweepSetting(age time.Duration) *database.Setting {
 // the organized library root.
 func TestFullSweepEnqueuesForceUpdateParams(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
@@ -208,7 +208,7 @@ func TestFullSweepEnqueuesForceUpdateParams(t *testing.T) {
 // registered, so mockery fails the test if the task re-seeds.
 func TestFullSweepStoreErrorDoesNotReseed(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
@@ -231,7 +231,7 @@ func TestFullSweepStoreErrorDoesNotReseed(t *testing.T) {
 // no way at all to force a full sweep.
 func TestFullSweepManualTriggerBypassesDueCheck(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
@@ -267,7 +267,7 @@ func TestFullSweepManualTriggerBypassesDueCheck(t *testing.T) {
 // so this asserts against the real error shape on purpose.
 func TestFullSweepSeedsOnErrSettingNotFound(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
@@ -304,7 +304,7 @@ func TestFullSweepSeedsOnErrSettingNotFound(t *testing.T) {
 // sweep is the cheaper failure, so the stamp happens first and aborts.
 func TestFullSweepRefusesToEnqueueWhenTheClockCannotBePersisted(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)

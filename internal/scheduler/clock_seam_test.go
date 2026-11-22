@@ -274,10 +274,12 @@ func TestClockSeam_DrivesTheDailyAtTimer(t *testing.T) {
 // IsInMaintenanceWindowAt (unchanged; seams.d/F5-14.md).
 func TestClockSeam_DrivesTheMaintenanceChecker(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
-	config.AppConfig.Maintenance.Enabled = true
-	config.AppConfig.Maintenance.WindowStart = 1
-	config.AppConfig.Maintenance.WindowEnd = 4
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
+	config.SetForTest(func(c *config.Config) {
+		c.Maintenance.Enabled = true
+		c.Maintenance.WindowStart = 1
+		c.Maintenance.WindowEnd = 4
+	})
 
 	east := time.FixedZone("gotham-east", 2*60*60)
 	clk := newFakeClock(time.Date(2030, 3, 7, 22, 30, 0, 0, time.UTC)) // 00:30 east
@@ -300,9 +302,9 @@ func TestClockSeam_DrivesTheMaintenanceChecker(t *testing.T) {
 // and stamp read SchedulerDeps.Now.
 func TestClockSeam_DrivesTheFullSweepClock(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
-	period := time.Duration(config.AppConfig.Scheduled.LibraryScanFull.PeriodHours) * time.Hour
+	period := time.Duration(config.Get().Scheduled.LibraryScanFull.PeriodHours) * time.Hour
 	require.Positive(t, period)
 
 	t0 := time.Date(2030, 3, 7, 12, 0, 0, 0, time.UTC)

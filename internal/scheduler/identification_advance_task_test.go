@@ -26,7 +26,7 @@ import (
 // selects and fetches as before and marks nothing.
 func TestCandidateFetchTick_UnchangedWhenDisabled(t *testing.T) {
 	ts, inserted := candidateFetchTaskFixture(t)
-	require.False(t, config.AppConfig.IdentificationAdvanceEnabled, "the driver must ship off")
+	require.False(t, config.Get().IdentificationAdvanceEnabled, "the driver must ship off")
 	task, _ := ts.GetTask(candidateFetchTaskName)
 	_, err := task.TriggerFn("test")
 	require.NoError(t, err)
@@ -41,7 +41,7 @@ func TestCandidateFetchTick_UnchangedWhenDisabled(t *testing.T) {
 // (mark_dirty_only) instead of fetching it.
 func TestCandidateFetchTick_MarksInsteadOfFetchingWhenEnabled(t *testing.T) {
 	ts, inserted := candidateFetchTaskFixture(t)
-	config.AppConfig.IdentificationAdvanceEnabled = true
+	config.SetForTest(func(c *config.Config) { c.IdentificationAdvanceEnabled = true })
 	task, _ := ts.GetTask(candidateFetchTaskName)
 	_, err := task.TriggerFn("test")
 	require.NoError(t, err)
@@ -65,7 +65,7 @@ func (d *dirtyStore) IdentDirtyPage(_ string, limit int) ([]database.IdentDirtyE
 func identAdvanceFixture(t *testing.T, marks int, active ...database.OperationV2Row) (*TaskScheduler, *[]database.OperationV2Row) {
 	t.Helper()
 	restoreCfg := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restoreCfg })
+	t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 	config.ResetToDefaultsForTest()
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row
@@ -99,7 +99,7 @@ func TestIdentificationAdvanceTask(t *testing.T) {
 	task, ok := ts.GetTask(identificationAdvanceTaskName)
 	require.True(t, ok)
 	assert.False(t, task.IsEnabled(), "off unless identification_advance_enabled")
-	config.AppConfig.IdentificationAdvanceEnabled = true
+	config.SetForTest(func(c *config.Config) { c.IdentificationAdvanceEnabled = true })
 	assert.True(t, task.IsEnabled())
 	assert.Equal(t, 5*time.Minute, task.GetInterval())
 	assert.False(t, task.RunOnStart())
@@ -112,7 +112,7 @@ func TestIdentificationAdvanceTask(t *testing.T) {
 	assert.Empty(t, *inserted)
 
 	ts, inserted = identAdvanceFixture(t, 1)
-	config.AppConfig.IdentificationAdvanceEnabled = true
+	config.SetForTest(func(c *config.Config) { c.IdentificationAdvanceEnabled = true })
 	task, _ = ts.GetTask(identificationAdvanceTaskName)
 	op, err = task.TriggerFn("test")
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestIdentificationAdvanceTask(t *testing.T) {
 	assert.JSONEq(t, `{"dry_run":false}`, (*inserted)[0].Params)
 
 	ts, inserted = identAdvanceFixture(t, 1, database.OperationV2Row{ID: "r", DefID: identificationAdvanceOpID, Status: "running"})
-	config.AppConfig.IdentificationAdvanceEnabled = true
+	config.SetForTest(func(c *config.Config) { c.IdentificationAdvanceEnabled = true })
 	task, _ = ts.GetTask(identificationAdvanceTaskName)
 	op, err = task.TriggerFn("test")
 	require.NoError(t, err)

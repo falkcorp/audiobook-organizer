@@ -44,9 +44,9 @@ func isolateCLIStore(t *testing.T) (stateDir, dbPath string) {
 	t.Helper()
 	stateDir = isolateStateDir(t)
 	dbPath = filepath.Join(t.TempDir(), "db", "books.pebble")
-	orig := config.AppConfig
-	config.AppConfig.DatabaseType, config.AppConfig.DatabasePath = "pebble", dbPath
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	config.SetForTest(func(c *config.Config) { c.DatabaseType, c.DatabasePath = "pebble", dbPath })
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	// The store path is a layer (core.storage.path), as the env a unit sets.
 	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 	return stateDir, dbPath
@@ -81,10 +81,11 @@ func fallbackStateDir(t *testing.T) string {
 		t.Skipf("%s is creatable here, so the state directory never falls back", config.DefaultSecureStateDir)
 	}
 	dbDir := t.TempDir()
-	orig := config.AppConfig
-	config.AppConfig.DatabaseType, config.AppConfig.DatabasePath = "pebble", filepath.Join(dbDir, "books.pebble")
-	t.Cleanup(func() { config.AppConfig = orig })
-	t.Setenv("ABO_CORE_STORAGE_PATH", config.AppConfig.DatabasePath)
+	orig := config.Snapshot()
+	cowV1, cowV2 := "pebble", filepath.Join(dbDir, "books.pebble")
+	config.SetForTest(func(c *config.Config) { c.DatabaseType, c.DatabasePath = cowV1, cowV2 })
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	t.Setenv("ABO_CORE_STORAGE_PATH", config.Get().DatabasePath)
 	return dbDir
 }
 
@@ -97,7 +98,7 @@ func fallbackStateDir(t *testing.T) string {
 // store the next start replaces.
 func TestRefuseBusySwapSlot_ReadsTheResolvedStateDirectory(t *testing.T) {
 	dbDir := fallbackStateDir(t)
-	stageSwap(t, dbDir, config.AppConfig.DatabasePath)
+	stageSwap(t, dbDir, config.Get().DatabasePath)
 
 	if _, err := refuseBusySwapSlot(); !errors.Is(err, restorejournal.ErrSwapPending) {
 		t.Fatalf("refuseBusySwapSlot = %v, want restorejournal.ErrSwapPending from the slot under the resolved directory %s", err, dbDir)
@@ -416,7 +417,8 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 		stageSwap(t, stateDir, dbPath)
 		before := treeSnapshot(t, dbPath)
 
-		config.AppConfig.RootDir = t.TempDir()
+		cowV3 := t.TempDir()
+		config.SetForTest(func(c *config.Config) { c.RootDir = cowV3 })
 		var ran []string
 		origScan, origProcess, origPlaylists, origTags := scanDirectory, processBooks, generatePlaylists, updateSeriesTags
 		t.Cleanup(func() {
@@ -476,7 +478,8 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 	t.Run("fresh install is refused and nothing is created", func(t *testing.T) {
 		useRealOpener(t)
 		_, dbPath := isolateCLIStore(t)
-		config.AppConfig.RootDir = t.TempDir()
+		cowV4 := t.TempDir()
+		config.SetForTest(func(c *config.Config) { c.RootDir = cowV4 })
 		scanned := false
 		origScan := scanDirectory
 		t.Cleanup(func() { scanDirectory = origScan })
@@ -602,7 +605,8 @@ func TestCLISubcommandsUseOfflineOpen(t *testing.T) {
 		useRealOpener(t)
 		_, dbPath := isolateCLIStore(t)
 		seedStarted(t, dbPath)
-		config.AppConfig.RootDir = t.TempDir()
+		cowV5 := t.TempDir()
+		config.SetForTest(func(c *config.Config) { c.RootDir = cowV5 })
 		origSeed := [3]int{seedCount, seedAuthors, seedSeries}
 		seedCount, seedAuthors, seedSeries = 2, 1, 1
 		t.Cleanup(func() { seedCount, seedAuthors, seedSeries = origSeed[0], origSeed[1], origSeed[2] })

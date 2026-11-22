@@ -19,14 +19,16 @@ import (
 // config.Scheduled and reports how many it set.
 func setEveryOnStartup(t *testing.T, v bool) int {
 	t.Helper()
-	sv := reflect.ValueOf(&config.AppConfig.Scheduled).Elem()
 	n := 0
-	for _, field := range sv.Fields() {
-		if f := field.FieldByName("OnStartup"); f.IsValid() && f.Kind() == reflect.Bool {
-			f.SetBool(v)
-			n++
+	config.SetForTest(func(c *config.Config) {
+		sv := reflect.ValueOf(&c.Scheduled).Elem()
+		for _, field := range sv.Fields() {
+			if f := field.FieldByName("OnStartup"); f.IsValid() && f.Kind() == reflect.Bool {
+				f.SetBool(v)
+				n++
+			}
 		}
-	}
+	})
 	return n
 }
 
@@ -35,7 +37,7 @@ func setEveryOnStartup(t *testing.T, v bool) int {
 // field. No task may read it, so setting them all changes nothing.
 func TestRunOnStartIgnoresTheDroppedOnStartupFields(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	runs := func() map[string]bool {
@@ -55,13 +57,13 @@ func TestRunOnStartIgnoresTheDroppedOnStartupFields(t *testing.T) {
 // setting core carries (modules.books.scan.on_startup).
 func TestLibraryScanRunsOnStartFromTheCarriedKeyOnly(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 	task, ok := NewTaskScheduler(testDeps()).GetTask("library_scan")
 	require.True(t, ok)
 
-	config.AppConfig.Scheduled.LibraryScan.OnStartup = true
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LibraryScan.OnStartup = true })
 	assert.False(t, task.RunOnStart())
-	config.AppConfig.ScanOnStartup = true
+	config.SetForTest(func(c *config.Config) { c.ScanOnStartup = true })
 	assert.True(t, task.RunOnStart())
 }

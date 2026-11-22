@@ -52,13 +52,13 @@ func TestCLIExposesCoreOfflineCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv(config.SecureStateDirEnv, stateDir)
-	origCfgFile, origDB, origConfig := cfgFile, databasePath, config.AppConfig
+	origCfgFile, origDB, origConfig := cfgFile, databasePath, config.Snapshot()
 	var out bytes.Buffer
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		rootCmd.SetOut(nil)
 		rootCmd.SetErr(nil)
-		cfgFile, databasePath, config.AppConfig = origCfgFile, origDB, origConfig
+		config.SetForTest(func(c *config.Config) { cfgFile, databasePath, *c = origCfgFile, origDB, origConfig })
 		for _, f := range []string{"config", "db"} {
 			if fl := rootCmd.PersistentFlags().Lookup(f); fl != nil {
 				fl.Changed = false

@@ -324,12 +324,12 @@ func TestScanCommandMissingRootDir(t *testing.T) {
 		_ = os.Chdir(origDir)
 	}()
 
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
-	config.AppConfig.RootDir = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
 
 	if err := scanCmd.RunE(scanCmd, nil); err == nil {
 		t.Fatal("expected error when root directory is missing")
@@ -353,11 +353,14 @@ func TestScanAndOrganizeLogToStdoutAtLogLevel(t *testing.T) {
 		slog.Info("penguin info line")
 		return nil
 	}
-	origConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = origConfig })
-	config.AppConfig.RootDir = t.TempDir()
-	config.AppConfig.PlaylistDir = t.TempDir()
-	config.AppConfig.DatabasePath = filepath.Join(t.TempDir(), "db")
+	origConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(origConfig) })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	cowV2 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.PlaylistDir = cowV2 })
+	cowV3 := filepath.Join(t.TempDir(), "db")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV3 })
 
 	for _, tc := range []struct {
 		name      string
@@ -372,7 +375,7 @@ func TestScanAndOrganizeLogToStdoutAtLogLevel(t *testing.T) {
 		{"organize at info", func() error { return organizeCmd.RunE(organizeCmd, nil) }, "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			config.AppConfig.LogLevel = tc.level
+			config.SetForTest(func(c *config.Config) { c.LogLevel = tc.level })
 			prev := slog.Default()
 
 			origStdout := os.Stdout
@@ -411,14 +414,16 @@ func TestScanAndOrganizeLogToStdoutAtLogLevel(t *testing.T) {
 // meet is the one serve itself installed.
 func TestServeStartupLinesGoToStdoutBeforeTheApp(t *testing.T) {
 	stubCommandDeps(t)
-	origConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = origConfig })
+	origConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(origConfig) })
 	tempDir := t.TempDir()
-	config.AppConfig.DatabaseType = "sqlite"
-	config.AppConfig.DatabasePath = filepath.Join(tempDir, "db.sqlite")
-	config.AppConfig.RootDir = tempDir
-	config.AppConfig.PlaylistDir = filepath.Join(tempDir, "playlists")
-	config.AppConfig.LogLevel = "debug"
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
+	cowV4 := filepath.Join(tempDir, "db.sqlite")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV4 })
+	config.SetForTest(func(c *config.Config) { c.RootDir = tempDir })
+	cowV5 := filepath.Join(tempDir, "playlists")
+	config.SetForTest(func(c *config.Config) { c.PlaylistDir = cowV5 })
+	config.SetForTest(func(c *config.Config) { c.LogLevel = "debug" })
 
 	runApp = func(context.Context, books.ServeInputs) error {
 		slog.Debug("two-face debug line")

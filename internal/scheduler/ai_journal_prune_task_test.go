@@ -17,10 +17,10 @@ import (
 
 func TestAIJournalPruneTask_RegisteredInWindowWithRetention(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
-	assert.Equal(t, 30, config.AppConfig.AIJournalRetentionDays, "default retention is 30 days")
+	assert.Equal(t, 30, config.Get().AIJournalRetentionDays, "default retention is 30 days")
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("ai_journal_prune")
@@ -33,6 +33,6 @@ func TestAIJournalPruneTask_RegisteredInWindowWithRetention(t *testing.T) {
 	assert.Equal(t, "maintenance.prune-ai-journal", taskV2DefIDs["ai_journal_prune"],
 		"isTaskRunning reads this map; a missing key answers 'not running' silently")
 
-	config.AppConfig.AIJournalRetentionDays = 0
+	config.SetForTest(func(c *config.Config) { c.AIJournalRetentionDays = 0 })
 	assert.False(t, task.IsEnabled(), "retention 0 keeps entries forever: the task must not run")
 }
