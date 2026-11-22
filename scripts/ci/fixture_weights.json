@@ -28,9 +28,13 @@
     "internal/versions": 3
   },
   "estimated": [
+    "internal/books",
+    "internal/books/cutover",
     "internal/plugins/maintenance"
   ],
   "weights": {
+    "internal/books": 2700,
+    "internal/books/cutover": 1300,
     "internal/server": 1174,
     "internal/plugins/maintenance": 1034,
     "internal/undo": 771,
