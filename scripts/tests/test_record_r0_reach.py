@@ -722,11 +722,25 @@ class RecordPassTest(unittest.TestCase):
             self.assertRegex(token, r"^[a-z][a-z0-9-]{3,40}$", route)
             self.assertTrue(message is None or len(message) >= 8, route)
 
-    def test_reason_token_reads_the_message_and_an_empty_panic_body(self):
+    def test_reason_token_reads_the_message_and_the_recovered_panic_document(self):
         panic = "POST /api/v1/audiobooks/:id/parse-with-ai"
-        self.assertEqual(rec.reason_token(panic, 500, ""), "recovered-panic")
-        with self.assertRaises(rec.RecorderError):
-            rec.reason_token(panic, 500, '{"error":"failed to parse"}')
+        # main: core's recovery stage answers a panic with its problem document
+        doc = json.dumps(
+            {
+                "type": "https://example.invalid/problems/internal",
+                "title": "Internal Server Error",
+                "status": 500,
+                "code": "internal",
+                "instance": "/api/v1/audiobooks/r2reach-missing/parse-with-ai",
+                "request_id": "01M7R2",
+            }
+        )
+        self.assertEqual(rec.reason_token(panic, 500, doc), "recovered-panic")
+        for other in ('{"error":"failed to parse"}', ""):
+            with self.assertRaises(rec.RecorderError):
+                rec.reason_token(panic, 500, other)
+        with mock.patch.dict(rec.OK_5XX_REASONS, {panic: ("recovered-panic", None)}):
+            self.assertEqual(rec.reason_token(panic, 500, ""), "recovered-panic")
         route = "POST /api/v1/update/apply"
         body = '{"error":"Failed To Apply Update","code":"INTERNAL_ERROR"}'
         self.assertEqual(rec.reason_token(route, 500, body), "failed-to-apply-update")

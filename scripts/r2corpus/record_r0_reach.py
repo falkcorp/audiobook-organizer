@@ -165,7 +165,10 @@ OK_5XX: dict[str, str] = {
     ),
     "POST /api/v1/audiobooks/:id/apply-metadata": "500 failed to apply metadata (audiobook not found)",
     "POST /api/v1/audiobooks/:id/mark-no-match": "500 failed to mark no match (audiobook not found)",
-    "POST /api/v1/audiobooks/:id/parse-with-ai": "500 a recovered nil-pointer panic: no AI parser is configured",
+    "POST /api/v1/audiobooks/:id/parse-with-ai": (
+        "500 a recovered nil-pointer panic: no AI parser is configured (main: core's"
+        " recovery stage answers its problem document, run 45045008058)"
+    ),
     "POST /api/v1/audiobooks/:id/quarantine": "500 quarantine failed (book not found)",
     "DELETE /api/v1/audiobooks/:id/quarantine": "500 unquarantine failed (book not found)",
     "POST /api/v1/audiobooks/:id/retired-versions/:vid/restore": (
@@ -195,8 +198,10 @@ OK_5XX_AUTHOFF: dict[str, str] = {}
 
 # The reason of every OK_5XX route as a token from a closed vocabulary, with the text
 # R0's handler puts in the error body (``httputil.InternalError`` and the Respond*
-# helpers answer a fixed message, never the underlying error; a recovered panic
-# answers 500 with no body at all, ``message`` None). A 5xx cell is recorded with its
+# helpers answer a fixed message, never the underlying error; ``message`` None is a
+# 500 with no body at all, which is how v0.223.0's gin recovery answered a panic. On
+# main core's recovery stage answers a panic with its problem document, whose title
+# is the status text, core/internal/httpmw/recover.go). A 5xx cell is recorded with its
 # token, never with the body: a body can carry a path or an address of the runner,
 # and the recording is public. A 5xx whose body does not hold the listed message is a
 # recorder failure, so a middleware that began answering 5xx before authorization
@@ -220,7 +225,7 @@ OK_5XX_REASONS: dict[str, tuple[str, str | None]] = {
         "failed-to-mark-no-match",
         "failed to mark no match",
     ),
-    "POST /api/v1/audiobooks/:id/parse-with-ai": ("recovered-panic", None),
+    "POST /api/v1/audiobooks/:id/parse-with-ai": ("recovered-panic", "Internal Server Error"),
     "POST /api/v1/audiobooks/:id/quarantine": ("quarantine-failed", "quarantine failed"),
     "DELETE /api/v1/audiobooks/:id/quarantine": ("unquarantine-failed", "unquarantine failed"),
     "POST /api/v1/audiobooks/:id/retired-versions/:vid/restore": (
