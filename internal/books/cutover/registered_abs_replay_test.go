@@ -7,6 +7,7 @@ package cutover_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,6 +23,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/falkcorp/mediacore/storage"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 )
@@ -262,7 +265,7 @@ func TestReachRegisteredPath_AbsReplay(t *testing.T) {
 	t.Run("sessions, keys and anonymous", func(t *testing.T) {
 		h := bootRegistered(t, registeredConfig{})
 		for _, p := range h.Principals {
-			if p.Kind == "key" && !strings.HasPrefix(p.bearer, "abk_") {
+			if p.Kind == "key" && !p.Core && !strings.HasPrefix(p.bearer, "abk_") {
 				t.Fatalf("%s holds a key that is not HEAD's abk_ format: the ABS surface would not even read it", p.Name)
 			}
 		}
@@ -455,10 +458,35 @@ func TestRegisteredAbs_CFModeRefusals(t *testing.T) {
 			t.Fatalf("the owner's assertion: %d %q, want 200", st, msg)
 		}
 	})
-	t.Run("a verified person who is not on the allow-list is refused", func(t *testing.T) {
+	t.Run("a verified person who is not on the allow-list is refused and gets no account", func(t *testing.T) {
+		users := func() []string {
+			res := h.MustDo(t, h.Principal("session:admin"), http.MethodGet, "/api/core/v1/users?limit=500", nil)
+			var page struct {
+				Items []struct {
+					ID       string `json:"id"`
+					Username string `json:"username"`
+				} `json:"items"`
+			}
+			if res.Status != http.StatusOK || json.Unmarshal(res.Body, &page) != nil {
+				t.Fatalf("core's user list as the admin: %d %s", res.Status, res.excerpt())
+			}
+			var ids []string
+			for _, u := range page.Items {
+				ids = append(ids, u.ID+" "+u.Username)
+			}
+			slices.Sort(ids)
+			return ids
+		}
+		before := users()
+		if len(before) == 0 || !slices.ContainsFunc(before, func(u string) bool { return strings.HasSuffix(u, " lucius.fox") }) {
+			t.Fatalf("core's user list is not the corpus's (%d users): the no-account check would prove nothing", len(before))
+		}
 		st, msg := absGET(h, assert("r2reach-sub-selina", "selina.kyle@example.invalid"))
 		if st != http.StatusForbidden || msg != "identity is not authorized for this server" {
 			t.Fatalf("an address off the allow-list: %d %q, want 403 \"identity is not authorized for this server\"", st, msg)
+		}
+		if after := users(); !slices.Equal(before, after) {
+			t.Errorf("a refused Access sign-in changed core's accounts: %d users before, %d after", len(before), len(after))
 		}
 	})
 	t.Run("a tampered assertion is refused and not rescued by a bearer", func(t *testing.T) {
@@ -475,4 +503,114 @@ func TestRegisteredAbs_CFModeRefusals(t *testing.T) {
 			t.Fatalf("a tampered assertion beside a live bearer: %d %q, want 401 \"invalid Cloudflare Access assertion\"", st, msg)
 		}
 	})
+}
+
+// absBearer sends one request with a raw ABS bearer key.
+func absBearer(h *Registered, raw, method, path string) Result {
+	req := httptest.NewRequest(method, path, nil)
+	req.Header.Set("Authorization", "Bearer "+raw)
+	req.RemoteAddr = h.nextPeer()
+	return h.Raw(req)
+}
+
+// TestRegisteredAbs_SeededKeys: the two key states the 37-principal table cannot show
+// the ABS handler, seeded as HEAD rows (SeedAPIKey) so M3 imports them as it does
+// prod's. The revoked key is refused 401 as at HEAD. The Confined one (scope
+// fingerprint.worker, the fp-worker key) is refused 403 with HEAD's own message,
+// because a worker-only credential never reaches the ABS surface (HEAD's
+// abortWorkerOnlyOutsideWorkerAPI): after the flip that refusal is
+// compat.CheckCredentialFor's (core's Confined rule), the one line of the ABS
+// handler no table cell reaches. The live key is the control.
+func TestRegisteredAbs_SeededKeys(t *testing.T) {
+	var live, revoked, worker string
+	h := bootRegistered(t, registeredConfig{Seed: func(ctx context.Context, lr storage.LegacyRange) (err error) {
+		if live, err = SeedAPIKey(ctx, lr, KeySeed{User: "lucius.fox", Scopes: []string{"library.view"}}); err != nil {
+			return err
+		}
+		if revoked, err = SeedAPIKey(ctx, lr, KeySeed{User: "lucius.fox", Status: "revoked", Scopes: []string{"library.view"}}); err != nil {
+			return err
+		}
+		worker, err = SeedAPIKey(ctx, lr, KeySeed{User: "fp.worker", Scopes: []string{"fingerprint.worker"}})
+		return err
+	}})
+	for name, raw := range map[string]string{"live": live, "revoked": revoked, "worker": worker} {
+		if !strings.HasPrefix(raw, "abk_") {
+			t.Fatalf("the %s seeded key is %q..., want HEAD's abk_ shape", name, raw[:min(4, len(raw))])
+		}
+	}
+	const route = "/api/libraries"
+	if res := absBearer(h, live, http.MethodGet, route); res.Status != http.StatusOK {
+		t.Fatalf("the live seeded key: %d %s, want 200 (the control)", res.Status, res.excerpt())
+	}
+	t.Run("a revoked key is refused", func(t *testing.T) {
+		if res := absBearer(h, revoked, http.MethodGet, route); res.Status != http.StatusUnauthorized {
+			t.Fatalf("revoked key: %d %s, want 401", res.Status, res.excerpt())
+		}
+	})
+	t.Run("a worker-confined key is refused outside the worker API", func(t *testing.T) {
+		res := absBearer(h, worker, http.MethodGet, route)
+		var e struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(res.Body, &e)
+		if res.Status != http.StatusForbidden || e.Error != "this credential is limited to the fingerprint worker API" {
+			t.Fatalf("worker-confined key: %d %s, want 403 with HEAD's message", res.Status, res.excerpt())
+		}
+		// A write route is refused the same way, not merely a read.
+		if res := absBearer(h, worker, http.MethodPost, "/api/collections"); res.Status != http.StatusForbidden {
+			t.Fatalf("worker-confined key on a write route: %d %s, want 403", res.Status, res.excerpt())
+		}
+	})
+}
+
+// TestRegisteredAbs_RemoveFromContinueListeningServed: HEAD registers
+// GET /api/me/item/:id/remove-from-continue-listening as a tolerated alias
+// (handlers/abs/handler.go, beside the POST and the /api/me/progress pair). The flip
+// folds the GET into an OwnAuth pattern of its own, so a route-table check cannot say
+// the handler still answers it. This sends the request with a real library item id
+// and expects the handler's answer, not a not-found; a path beside it that the fold
+// must not swallow stays a 404, and the anonymous caller is refused (401).
+func TestRegisteredAbs_RemoveFromContinueListeningServed(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{})
+	key := h.Principal("key:admin:every").bearer
+	var libs struct {
+		Libraries []struct {
+			ID string `json:"id"`
+		} `json:"libraries"`
+	}
+	if res := absBearer(h, key, http.MethodGet, "/api/libraries"); res.Status != http.StatusOK || json.Unmarshal(res.Body, &libs) != nil || len(libs.Libraries) == 0 {
+		t.Fatalf("libraries: %d %s", res.Status, res.excerpt())
+	}
+	var items struct {
+		Results []struct {
+			ID string `json:"id"`
+		} `json:"results"`
+	}
+	if res := absBearer(h, key, http.MethodGet, "/api/libraries/"+libs.Libraries[0].ID+"/items?limit=1"); res.Status != http.StatusOK || json.Unmarshal(res.Body, &items) != nil || len(items.Results) == 0 {
+		t.Fatalf("library items: %d %s", res.Status, res.excerpt())
+	}
+	id := items.Results[0].ID
+	if ri := h.match(http.MethodGet, "/api/me/item/"+id+"/remove-from-continue-listening"); ri == nil || !ri.OwnAuth {
+		t.Fatalf("GET /api/me/item/:id/remove-from-continue-listening is not an OwnAuth route of the flipped build: %+v", ri)
+	}
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/api/me/item/" + id + "/remove-from-continue-listening"},
+		{http.MethodPost, "/api/me/item/" + id + "/remove-from-continue-listening"},
+		{http.MethodGet, "/api/me/progress/" + id + "/remove-from-continue-listening"},
+		{http.MethodPost, "/api/me/progress/" + id + "/remove-from-continue-listening"},
+	} {
+		res := absBearer(h, key, c.method, c.path)
+		var obj map[string]any
+		if res.Status != http.StatusOK || json.Unmarshal(res.Body, &obj) != nil {
+			t.Errorf("%s %s: %d %s, want the handler's 200 and a JSON object", c.method, c.path, res.Status, res.excerpt())
+		}
+	}
+	if res := absBearer(h, key, http.MethodGet, "/api/me/item/"+id+"/nonsense"); res.Status != http.StatusNotFound {
+		t.Errorf("a path beside the folded route: %d %s, want 404", res.Status, res.excerpt())
+	}
+	anon := httptest.NewRequest(http.MethodGet, "/api/me/item/"+id+"/remove-from-continue-listening", nil)
+	anon.RemoteAddr = h.nextPeer()
+	if res := h.Raw(anon); res.Status != http.StatusUnauthorized {
+		t.Errorf("the anonymous caller: %d %s, want 401", res.Status, res.excerpt())
+	}
 }
