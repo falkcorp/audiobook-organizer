@@ -31,7 +31,7 @@ function auth(over: {
   authEnabled?: boolean | null;
   permissions?: string[];
 }) {
-  const { permissions = ['collections.manage'] } = over;
+  const { permissions = ['books:collections.manage'] } = over;
   mockAuth.mockReturnValue({
     initialized: over.initialized ?? true,
     authEnabled: over.authEnabled === undefined ? true : over.authEnabled,
@@ -59,7 +59,7 @@ describe('useCanManageCollections', () => {
   it('is true only with the permission when auth is on', () => {
     auth({});
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(true);
-    auth({ permissions: ['library.view'] });
+    auth({ permissions: ['books:view'] });
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
     auth({ permissions: [] });
     expect(renderHook(() => useCanManageCollections()).result.current).toBe(false);
@@ -114,7 +114,7 @@ describe('useCollections', () => {
   });
 
   it('exposes canManage false but still loads the reads', async () => {
-    auth({ permissions: ['library.view'] });
+    auth({ permissions: ['books:view'] });
     const { result } = renderHook(() => useCollections());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.canManage).toBe(false);

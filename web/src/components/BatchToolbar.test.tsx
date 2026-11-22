@@ -45,29 +45,29 @@ const props: BatchToolbarProps = {
 };
 
 describe('BatchToolbar trash permissions', () => {
-  it('disables Delete Selected without library.delete and shows why on hover', async () => {
-    signedInWith(['library.view', 'library.edit_metadata', 'library.organize']);
+  it('disables Delete Selected without books:delete and shows why on hover', async () => {
+    signedInWith(['books:view', 'books:edit', 'books:organize']);
     render(<BatchToolbar {...props} />);
     const del = screen.getByRole('button', { name: 'Delete Selected' });
     expect(del).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Restore Selected' })).toBeEnabled();
     // The disabled button gets no pointer events: the span around it does.
     await userEvent.hover(del.parentElement as HTMLElement);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('library.delete');
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('books:delete');
   });
 
-  it('disables Restore Selected without library.organize and shows why on hover', async () => {
-    signedInWith(['library.view', 'library.edit_metadata', 'library.delete']);
+  it('disables Restore Selected without books:organize and shows why on hover', async () => {
+    signedInWith(['books:view', 'books:edit', 'books:delete']);
     render(<BatchToolbar {...props} />);
     const restore = screen.getByRole('button', { name: 'Restore Selected' });
     expect(restore).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Delete Selected' })).toBeEnabled();
     await userEvent.hover(restore.parentElement as HTMLElement);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('library.organize');
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('books:organize');
   });
 
   it('shows no tooltip on a permitted button', async () => {
-    signedInWith(['library.delete', 'library.organize']);
+    signedInWith(['books:delete', 'books:organize']);
     render(<BatchToolbar {...props} />);
     await userEvent.hover(
       screen.getByRole('button', { name: 'Delete Selected' }).parentElement as HTMLElement
@@ -88,7 +88,7 @@ describe('BatchToolbar trash permissions', () => {
   });
 
   it('enables both for a user holding both, and with auth off', () => {
-    signedInWith(['library.delete', 'library.organize']);
+    signedInWith(['books:delete', 'books:organize']);
     const { unmount } = render(<BatchToolbar {...props} />);
     expect(screen.getByRole('button', { name: 'Delete Selected' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Restore Selected' })).toBeEnabled();
@@ -104,7 +104,7 @@ describe('BatchToolbar trash permissions', () => {
   });
 
   it('keeps the selection-based disabling when permitted', () => {
-    signedInWith(['library.delete', 'library.organize']);
+    signedInWith(['books:delete', 'books:organize']);
     render(<BatchToolbar {...props} selectedHasActive={false} selectedHasDeleted={false} />);
     expect(screen.getByRole('button', { name: 'Delete Selected' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Restore Selected' })).toBeDisabled();

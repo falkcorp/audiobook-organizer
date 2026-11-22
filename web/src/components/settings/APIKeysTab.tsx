@@ -51,22 +51,7 @@ import {
   expiryAfterDays,
   formatKeyExpiry,
 } from '../../utils/apiKeyExpiry';
-
-const ALL_SCOPES = [
-  'library.view',
-  'library.edit_metadata',
-  'library.delete',
-  'library.organize',
-  'scan.trigger',
-  'integrations.manage',
-  'users.manage',
-  'settings.manage',
-  'playlists.create',
-  'requests.create',
-  'requests.approve',
-  // Remote fingerprint worker API only; give a worker key this scope alone.
-  'fingerprint.worker',
-];
+import { API_KEY_SCOPES } from '../../generated/permissions';
 
 function relativeTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -475,7 +460,7 @@ export function APIKeysTab() {
                 Scopes
               </Typography>
               <FormGroup>
-                {ALL_SCOPES.map((s) => (
+                {API_KEY_SCOPES.map((s) => (
                   <FormControlLabel
                     key={s}
                     control={
