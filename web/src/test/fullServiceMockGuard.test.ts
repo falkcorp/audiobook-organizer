@@ -99,7 +99,7 @@ describe('findFullServiceMocks', () => {
   it('accepts an automock, other modules, and a real-module hold that is only a call away', () => {
     expect(find("vi.mock('../services/api');")).toEqual([]);
     expect(find("vi.mock('../components/toast/ToastProvider', () => ({}));")).toEqual([]);
-    expect(find("vi.mock('../services/eventSourceManager', () => ({}));")).toEqual([]);
+    expect(find("vi.mock('../services/coreEvents', () => ({}));")).toEqual([]);
     expect(find("vi.mock('../services/apiary', () => ({}));")).toEqual([]);
     expect(find("vi.mock('../services/api.helpers', () => ({}));")).toEqual([]);
   });

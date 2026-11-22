@@ -13,7 +13,7 @@ import { listSearchText, type ParsedSearch } from '../utils/searchParser';
 import { foldTag, tagTermValues } from '../utils/tagQuery';
 import type { ImportPath } from '../pages/libraryTypes';
 
-/** Payload of the server's `books.changed` SSE event (internal/realtime/book_changes.go). */
+/** One batch of book changes: the shape coreEvents' useBookChanges delivers (BookChangeBatch), folded from books.book.changed.v1 frames. */
 export interface BooksChangedEvent {
   kind: 'created' | 'updated' | 'deleted';
   ids: string[];

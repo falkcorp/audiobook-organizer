@@ -34,7 +34,6 @@ import {
   useLibraryQuery,
   buildLibraryListOptions,
   libraryTagsParam,
-  type BooksChangedEvent,
 } from '../hooks/useLibraryQuery';
 import { useScopedTagFacets } from '../hooks/useScopedTagFacets';
 import { appendTagTerm, removeTagTerm } from '../utils/tagQuery';
@@ -50,10 +49,11 @@ import { listFieldFilters, parseSearch, type ParsedSearch } from '../utils/searc
 import * as api from '../services/api';
 import type { SavedFilterPreset } from '../services/api';
 import {
-  eventSourceManager,
-  type EventSourceEvent,
-  type EventSourceStatus,
-} from '../services/eventSourceManager';
+  getEventStream,
+  useBookChanges,
+  useResync,
+  type StreamState,
+} from '../services/coreEvents';
 import { pollOperation } from '../utils/operationPolling';
 import { useOperationsStore } from '../stores/useOperationsStore';
 import { withOptimisticOperation } from '../utils/withOptimisticOperation';
@@ -426,7 +426,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   // auto-open the review dialog when it completes.
   const [pendingFetchOpId, setPendingFetchOpId] = useState<string | null>(null);
   const [mergeInProgress, setMergeInProgress] = useState(false);
-  const sseStatusRef = useRef<EventSourceStatus['state'] | null>(null);
+  const streamStateRef = useRef<StreamState | null>(null);
 
   const [importFileDialogOpen, setImportFileDialogOpen] = useState(false);
   const [importFilePath, setImportFilePath] = useState('');
@@ -485,7 +485,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     };
   }, []);
 
-  // SSE subscription for live operation progress & logs + historical hydration
+  // Historical hydration of the running operations' logs
   useEffect(() => {
     // Hydrate UI from v2 store on reload (UOS-13: no v1 getActiveOperations call).
     // The store is already populated via SSE + loadFromServer at app level.
@@ -525,79 +525,30 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         }
       }
     })();
+  }, []);
 
-    const unsubscribe = eventSourceManager.subscribe(
-      (evt: EventSourceEvent) => {
-        if (!evt || !evt.type) return;
-        if (evt.type === 'heartbeat') return; // Ignore heartbeat messages
-
-        if (evt.type === 'operation.log' && evt.data?.operation_id) {
-          const opId = String(evt.data.operation_id);
-          setOperationLogs((prev) => {
-            const capped = evictOldestOpLogKey(prev, opId, MAX_OPERATION_LOG_KEYS);
-            const existing = capped[opId] || [];
-            const next = [
-              ...existing,
-              {
-                level: String(evt.data?.level ?? 'info'),
-                message: String(evt.data?.message ?? ''),
-                details: evt.data?.details as string | undefined,
-                timestamp: Date.now(),
-              },
-            ];
-            return { ...capped, [opId]: next.slice(-200) };
-          });
-        } else if (evt.type === 'operation.progress' && evt.data?.operation_id) {
-          const opId = String(evt.data.operation_id);
-          const update = (op: api.Operation | null): api.Operation | null => {
-            if (!op || op.id !== opId) return op;
-            return {
-              ...op,
-              progress: Number(evt.data?.current ?? 0),
-              total: Number(evt.data?.total ?? 0),
-              message: String(evt.data?.message ?? ''),
-            };
-          };
-          setActiveScanOp((prev) => update(prev));
-          setActiveOrganizeOp((prev) => update(prev));
-        } else if (evt.type === 'operation.status' && evt.data?.operation_id) {
-          const opId = String(evt.data.operation_id);
-          const status = String(evt.data?.status ?? '');
-          const finalize = (op: api.Operation | null): api.Operation | null => {
-            if (!op || op.id !== opId) return op;
-            return { ...op, status };
-          };
-          setActiveScanOp((prev) => finalize(prev));
-          setActiveOrganizeOp((prev) => finalize(prev));
-        }
-      },
-      (status: EventSourceStatus) => {
-        const previousState = sseStatusRef.current;
-        sseStatusRef.current = status.state;
-
-        if (
-          (status.state === 'reconnecting' || status.state === 'error') &&
-          previousState !== status.state
-        ) {
+  // The connection toasts. Only the shared stream's own state counts: a keyed stream
+  // is another view's, and idle, hidden and connecting say nothing about the link.
+  useEffect(
+    () =>
+      getEventStream().onStatus((status) => {
+        if (status.streamKey !== '') return;
+        const previous = streamStateRef.current;
+        if (status.state !== 'open' && status.state !== 'reconnecting') return;
+        streamStateRef.current = status.state;
+        if (status.state === 'reconnecting' && previous !== 'reconnecting') {
           toast('Connection lost. Reconnecting...', 'warning');
-        } else if (status.state === 'open') {
-          if (previousState && previousState !== 'open') {
-            toast('Connection restored.', 'success');
+          if (status.delayMs) {
+            console.warn(
+              `Event stream connection lost (attempt ${status.attempt}), reconnecting in ${Math.round(status.delayMs / 1000)}s...`
+            );
           }
+        } else if (status.state === 'open' && previous === 'reconnecting') {
+          toast('Connection restored.', 'success');
         }
-
-        if (status.state === 'reconnecting' && status.delayMs) {
-          console.warn(
-            `EventSource connection lost (attempt ${status.attempt}), reconnecting in ${Math.round(status.delayMs / 1000)}s...`
-          );
-        }
-      }
-    );
-
-    return () => {
-      unsubscribe();
-    };
-  }, [toast]);
+      }),
+    [toast]
+  );
 
   // Reset loading states when operations complete (reload handled after loadAudiobooks definition)
   useEffect(() => {
@@ -1082,39 +1033,28 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
     buildFieldFilters,
   });
 
-  // Live row updates: the server broadcasts books.changed {kind, ids} for
-  // every committed book write (coalesced to 250 ms batches). Patch the rows
-  // on screen instead of reloading the page, so nothing moves under the user.
-  // Events sent while the stream was down (a server restart, a network blip)
-  // are lost, so on RE-connect do one same-query refresh — which keeps the
-  // rows mounted and the scroll where it is (see useLibraryQuery).
+  // Live row updates: core's books.book.changed.v1 carries one {kind, id} frame per
+  // committed book write, and useBookChanges folds them into the 250 ms batches
+  // applyBooksChanged takes, so the Library patches the affected rows in place instead
+  // of reloading the page. Changes sent while the stream was down (a server restart, a
+  // network blip) are lost, and the server may reset a subscriber that fell behind
+  // (core.stream.reset.v1): on a resync do one same-query refresh, which keeps the
+  // rows mounted and the scroll where it is (see useLibraryQuery). The refetch already
+  // contains whatever the batcher still holds, so it drops that first: delivered after
+  // the refetch, a created book would be counted twice in the "N new books" chip.
   const loadAudiobooksRef = useRef(loadAudiobooks);
   useEffect(() => {
     loadAudiobooksRef.current = loadAudiobooks;
   }, [loadAudiobooks]);
-  useEffect(() => {
-    let wasDown = false;
-    return eventSourceManager.subscribe(
-      (evt: EventSourceEvent) => {
-        if (evt?.type !== 'books.changed' || !evt.data) return;
-        const change = evt.data as unknown as BooksChangedEvent;
-        if (!Array.isArray(change.ids)) return;
-        void applyBooksChanged(change);
-        if (change.kind === 'deleted') dropSelectedIds(change.ids);
-      },
-      (status: EventSourceStatus) => {
-        if (status.state === 'open') {
-          if (wasDown) {
-            clearLibraryCache();
-            void loadAudiobooksRef.current();
-          }
-          wasDown = false;
-        } else {
-          wasDown = true;
-        }
-      }
-    );
-  }, [applyBooksChanged, dropSelectedIds, clearLibraryCache]);
+  const { clear: clearBookChanges } = useBookChanges((batch) => {
+    void applyBooksChanged(batch);
+    if (batch.kind === 'deleted') dropSelectedIds(batch.ids);
+  });
+  useResync(() => {
+    clearBookChanges();
+    clearLibraryCache();
+    void loadAudiobooksRef.current();
+  });
 
   // Return the user to where they were after a reload or a trip to a book.
   useLibraryScrollKeeper({
