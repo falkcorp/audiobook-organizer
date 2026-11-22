@@ -3969,6 +3969,32 @@ class Export(unittest.TestCase):
         self.assertNotIn("_export-worker", mod.STUBS, "the worker is never a sudoers stub")
 
 
+class OfflineEnv(unittest.TestCase):
+    def test_abo_names_are_accepted_alongside_abk_and_home(self):
+        h = Host(
+            self,
+            offline_env="HOME=/var/lib/x ABK_STATE_DIR=/var/lib/x ABO_CORE_PATHS_STATE_DIR=/var/lib/x",
+        )
+        code, _, err = h.run("probe")
+        self.assertEqual(code, 0, err)
+
+    def test_other_names_are_still_refused(self):
+        for bad in (
+            "ABO_X=/a;id",
+            "ABO_=/a x",
+            "abo_core=/a",
+            "ABOX=/a",
+            "LD_PRELOAD=/tmp/evil.so",
+            "PATH=/tmp",
+            "ABO_A=$(id)",
+        ):
+            h = Host(self, offline_env=f"HOME=/x {bad}")
+            code, _, err = h.run("probe")
+            self.assertEqual(code, 1, bad)
+            self.assertIn("offline_env", err)
+            self.assertEqual(h.tools(), [], bad)
+
+
 class Stubs(unittest.TestCase):
     """Each sudoers-granted stub runs one fixed subcommand of the helper."""
 
