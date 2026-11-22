@@ -27,9 +27,9 @@ import (
 func catalogHarvestTaskFixture(t *testing.T, active ...database.OperationV2Row) (*TaskScheduler, *[]database.OperationV2Row) {
 	t.Helper()
 	restoreCfg := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restoreCfg })
+	t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 	config.ResetToDefaultsForTest()
-	config.AppConfig.Catalog.Enabled = true
+	config.SetForTest(func(c *config.Config) { c.Catalog.Enabled = true })
 
 	store := dbmocks.NewMockStore(t)
 	var inserted []database.OperationV2Row
@@ -97,9 +97,11 @@ func TestCatalogHarvestTask_SkipsWhileAHarvestIsActive(t *testing.T) {
 func TestCatalogHarvestTask_DisabledWithoutCatalogOrInterval(t *testing.T) {
 	ts, _ := catalogHarvestTaskFixture(t)
 	task, _ := ts.GetTask(catalogHarvestTaskName)
-	config.AppConfig.Catalog.Enabled = false
+	config.SetForTest(func(c *config.Config) { c.Catalog.Enabled = false })
 	assert.False(t, task.IsEnabled())
-	config.AppConfig.Catalog.Enabled = true
-	config.AppConfig.Scheduled.CatalogHarvest.Interval = 0
+	config.SetForTest(func(c *config.Config) {
+		c.Catalog.Enabled = true
+		c.Scheduled.CatalogHarvest.Interval = 0
+	})
 	assert.False(t, task.IsEnabled())
 }

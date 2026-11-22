@@ -27,7 +27,7 @@ import (
 // not what a def that unmarshals them wants.
 func TestReconcileScanTask_EnqueuesSurvivorWithEmptyParams(t *testing.T) {
 	restoreCfg := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restoreCfg })
+	t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)

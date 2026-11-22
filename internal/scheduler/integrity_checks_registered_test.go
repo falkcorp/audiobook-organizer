@@ -76,7 +76,7 @@ func TestIntegrityChecks_AreWindowOnly(t *testing.T) {
 // that gains a mode flag later cannot be switched on by the scheduler.
 func TestIntegrityChecks_EnqueueEmptyParams(t *testing.T) {
 	restoreCfg := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restoreCfg })
+	t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)

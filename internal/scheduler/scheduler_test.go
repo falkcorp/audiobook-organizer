@@ -47,9 +47,11 @@ func TestIsInMaintenanceWindowAt(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config.AppConfig.Maintenance.Enabled = tt.enabled
-			config.AppConfig.Maintenance.WindowStart = tt.start
-			config.AppConfig.Maintenance.WindowEnd = tt.end
+			config.SetForTest(func(c *config.Config) {
+				c.Maintenance.Enabled = tt.enabled
+				c.Maintenance.WindowStart = tt.start
+				c.Maintenance.WindowEnd = tt.end
+			})
 			got := IsInMaintenanceWindowAt(tt.hour)
 			assert.Equal(t, tt.want, got)
 		})
@@ -124,9 +126,11 @@ func TestGetTask_UnknownTask(t *testing.T) {
 func TestIsInMaintenanceWindowAt_FullDayCoverage(t *testing.T) {
 	// A window of start=0, end=0: start < end is false, so falls into the
 	// midnight-span branch: hour >= 0 || hour < 0 — always true for valid hours.
-	config.AppConfig.Maintenance.Enabled = true
-	config.AppConfig.Maintenance.WindowStart = 0
-	config.AppConfig.Maintenance.WindowEnd = 0
+	config.SetForTest(func(c *config.Config) {
+		c.Maintenance.Enabled = true
+		c.Maintenance.WindowStart = 0
+		c.Maintenance.WindowEnd = 0
+	})
 	got := IsInMaintenanceWindowAt(12)
 	assert.True(t, got, "0==0 wraps to always-open")
 }

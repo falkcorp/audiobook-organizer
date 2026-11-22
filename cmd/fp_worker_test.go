@@ -27,9 +27,9 @@ func TestFPWorker_SkipsAppInitSideEffects(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	t.Setenv("HOME", t.TempDir())
-	origDB, origPl, origCfg, origApp := databasePath, playlistDir, cfgFile, config.AppConfig
+	origDB, origPl, origCfg, origApp := databasePath, playlistDir, cfgFile, config.Snapshot()
 	t.Cleanup(func() {
-		databasePath, playlistDir, cfgFile, config.AppConfig = origDB, origPl, origCfg, origApp
+		config.SetForTest(func(c *config.Config) { databasePath, playlistDir, cfgFile, *c = origDB, origPl, origCfg, origApp })
 		rootCmd.SetArgs(nil)
 	})
 	databasePath, playlistDir, cfgFile = "dbdir/audiobooks.pebble", "playlists", ""
