@@ -11,10 +11,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -82,7 +81,8 @@ import (
 //
 //	h := bootRegistered(t, registeredConfig{})   // one boot per top-level test (about 6s)
 //	p := h.Principal("session:admin")            // a name of verdicts.json (36 names; "authoff" needs AuthOff, Owner needs Owner)
-//	h.Principals                                 // every principal of this boot, in verdicts.json order, Owner last
+//	h.Principals                                 // every principal of this boot: the 36 of verdicts.json in its order, then the core keys (below), Owner last
+//	p.Recorded()                                 // the verdicts.json name whose R0 answers p is held to: p's own, or its imported twin's for a core key
 //	h.Routes                                     // app.Routes(): every registered route (httpapi.RouteInfo)
 //	h.Wired                                      // the httpapi.AtomResolver books.Options handed core
 //	h.Logs()                                     // what the App's log pipeline printed
@@ -110,6 +110,25 @@ import (
 //	              13 refuse an anonymous caller on it, so an admit (or any non-stage-13
 //	              answer) would be the handler's, not a verdict. A route stage 13 refuses
 //	              the anonymous caller on is believed for every principal (see above).
+//
+// Two key columns. The 28 key principals of verdicts.json ("key:...") hold prod's
+// shape: an abk_ value from GenerateAPIKeyToken, whose sha256 is the token_hash and
+// idx:apikey:hash: row written into the HEAD corpus before the boot, so M3 imports
+// them as it imports prod's keys (ABS accepts only this shape). Beside them, on an
+// auth-on boot, sit 18 core-native keys ("corekey:<same tail>", Core true, Twin the
+// imported name): mck_ values minted through core's own routes after the boot, with
+// the owner and the scopes M3 gave the imported twin, less the ambient scopes (core:self,
+// core:metrics.read, books:reading), which no creator holds to give. A core key has no
+// HEAD recording, so a cell holds it to its twin's verdict (p.Recorded()). The other
+// 10 keys (h.NoCoreTwin) have no twin: M3 gave each the ambient scopes only, and core
+// refuses a key without a role scope. Auth-off boots have neither column.
+//
+// registeredConfig{Seed: func(ctx, lr storage.LegacyRange) error} writes HEAD rows
+// (raw u:<id>, idx:user:..., oauth identities, keys through SeedAPIKey: a revoked
+// one with Status "revoked", a Confined one for the fp-worker user) into the corpus
+// before the boot, after the key rows, so M2 and M3 import them. registeredConfig{AccessAllowed: []string}
+// adds addresses to the owner boot's Access allow-list. Do accepts a path with a
+// query string.
 //
 // registeredConfig{AuthOff: true} boots with core.auth.mode disabled and the
 // "authoff" principal; ABSModes ("jwt" by default) names the ABS auth modes;
@@ -209,6 +228,13 @@ func repoRoot(t testing.TB) string {
 type Principal struct {
 	Name, Kind, User, Role string
 	Scopes                 []string
+	// Core marks a core-native key (an mck_ value minted through core's own route
+	// after the boot, named "corekey:..."); the abk_ keys of verdicts.json are the
+	// imported ones. Twin is the verdicts.json principal whose HEAD verdict a core
+	// key is compared against: a core key has no HEAD recording of its own, and its
+	// owner and scopes are its twin's.
+	Core bool
+	Twin string
 
 	cookie *http.Cookie
 	bearer string
@@ -224,6 +250,15 @@ const (
 	Owner     = "owner"
 )
 
+// Recorded is the verdicts.json principal whose R0 answers this one is held to: its
+// own name, or its twin's for a core key.
+func (p *Principal) Recorded() string {
+	if p.Twin != "" {
+		return p.Twin
+	}
+	return p.Name
+}
+
 // registeredConfig selects the boot.
 type registeredConfig struct {
 	// AuthOff boots with core.auth.mode disabled (enable_auth false at R0).
@@ -234,6 +269,13 @@ type registeredConfig struct {
 	Owner bool
 	// ABSModes is the ABS auth modes ("jwt" when empty).
 	ABSModes string
+	// Seed writes HEAD rows into the corpus before the boot, through the books
+	// legacy range, so M2 and M3 import them like any row a HEAD build wrote. It
+	// runs after the key rows are seeded; nil does nothing.
+	Seed func(ctx context.Context, lr storage.LegacyRange) error
+	// AccessAllowed is appended to the owner boot's Access allow-list
+	// (ABO_BOOKS_CFACCESS_ALLOWED_EMAILS); the owner's own address is always on it.
+	AccessAllowed []string
 }
 
 // Registered is one booted flipped build and the principals that call it.
@@ -248,6 +290,14 @@ type Registered struct {
 	// Wired is the resolver books.Options handed core: what stage 13 resolves a
 	// legacy atom requirement with.
 	Wired httpapi.AtomResolver
+
+	// NoCoreTwin names the key principals that have no core-native twin: their
+	// imported key holds the ambient scopes only (every atom of theirs lies outside
+	// the owner's roles), and core's mint refuses a key without a role scope.
+	NoCoreTwin []string
+	// KnownDifferences names the principals whose canary differed from R0 as
+	// knownDifferences says it may.
+	KnownDifferences []string
 
 	byName  map[string]*Principal
 	peers   atomic.Int64
@@ -312,7 +362,7 @@ func (h *Registered) Logs() string { return h.logs.String() }
 // core/coretest, which an arch test enforces) is the real one. A store that lived
 // in memory would boot, run M2 and M3, and fail M8 trying to create its journal on
 // the host. The overlay is 1.3 MB, so the copy costs nothing a MemFS would save.
-func diskCorpus(t testing.TB, rows []reachPrincipalRow, dir, stage string) map[string]string {
+func diskCorpus(t testing.TB, rows []reachPrincipalRow, dir, stage string, cfg registeredConfig) map[string]string {
 	t.Helper()
 	src := filepath.Join(repoRoot(t), corpusRel, "db")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -358,45 +408,55 @@ func diskCorpus(t testing.TB, rows []reachPrincipalRow, dir, stage string) map[s
 				return fmt.Errorf("point the settings blob at the stage: %w", err)
 			}
 		}
-		owners := map[string]string{}
-		expires := time.Now().AddDate(1, 0, 0).UTC().Format(time.RFC3339)
-		created := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+		if cfg.AuthOff {
+			// The stored blob says enable_auth true and M2 carries it to
+			// core.auth.mode, a layer above the environment and EnableAuth, so an
+			// auth-off boot edits the blob as record_r0_reach.py's edit_config did.
+			// The row is a database.Setting whose value is the blob's JSON.
+			var row map[string]json.RawMessage
+			if err := json.Unmarshal(blob, &row); err != nil {
+				return fmt.Errorf("decode the settings row: %w", err)
+			}
+			var val string
+			if err := json.Unmarshal(row["value"], &val); err != nil {
+				return fmt.Errorf("decode the settings blob's value: %w", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(val), &fields); err != nil {
+				return fmt.Errorf("decode the settings blob: %w", err)
+			}
+			if got := string(fields["enable_auth"]); got != "true" {
+				return fmt.Errorf("the corpus stores enable_auth %q, want true", got)
+			}
+			fields["enable_auth"] = json.RawMessage("false")
+			nv, err := json.Marshal(fields)
+			if err != nil {
+				return err
+			}
+			if row["value"], err = json.Marshal(string(nv)); err != nil {
+				return err
+			}
+			if blob, err = json.Marshal(row); err != nil {
+				return err
+			}
+			if err := lr.Set(ctx, []byte("setting:config_blob"), blob); err != nil {
+				return fmt.Errorf("turn auth off in the settings blob: %w", err)
+			}
+		}
 		for i, p := range rows {
 			if p.Kind != "key" {
 				continue
 			}
-			uid, ok := owners[p.User]
-			if !ok {
-				raw, err := lr.Get(ctx, []byte("idx:user:username:"+strings.ToLower(p.User)))
-				if err != nil || len(raw) == 0 {
-					return fmt.Errorf("the corpus has no user %q: %v", p.User, err)
-				}
-				uid = string(raw)
-				owners[p.User] = uid
-			}
-			tok, err := auth.MintCredential(auth.KindKey)
+			// Prod's shape: see SeedAPIKey.
+			tok, err := SeedAPIKey(ctx, lr, KeySeed{ID: fmt.Sprintf("01M7R2%020d", i), User: p.User, Scopes: p.Scopes})
 			if err != nil {
 				return err
 			}
-			raws[p.Name] = string(tok)
-			sum := sha256.Sum256([]byte(tok))
-			hash := hex.EncodeToString(sum[:])
-			id := fmt.Sprintf("01M7R2%020d", i)
-			row, err := json.Marshal(map[string]any{
-				"id": id, "user_id": uid, "name": "key-" + id[len(id)-4:], "token_hash": hash, "scopes": p.Scopes,
-				"status": "active", "created_at": created, "expires_at": expires, "use_count": 0,
-			})
-			if err != nil {
-				return err
-			}
-			for k, v := range map[string][]byte{
-				"apikey:" + id:                      row,
-				"idx:apikey:hash:" + hash:           []byte(id),
-				"idx:apikey:user:" + uid + ":" + id: []byte(id),
-			} {
-				if err := lr.Set(ctx, []byte(k), v); err != nil {
-					return fmt.Errorf("seed %s: %w", k, err)
-				}
+			raws[p.Name] = tok
+		}
+		if cfg.Seed != nil {
+			if err := cfg.Seed(ctx, lr); err != nil {
+				return fmt.Errorf("the config's Seed: %w", err)
 			}
 		}
 		return nil
@@ -493,16 +553,16 @@ func (a *accessApp) assertion(t testing.TB, sub, email string) string {
 
 // bootRegistered boots the flipped build over the corpus and signs the principals
 // in. It fails the test unless M2, M3 and M8 ran at that boot and every
-// principal signed in. The canary R0 recorded for each principal is asked by
-// TestRegisteredHarness_CanaryMatchesR0, not here: a pinned difference (the
-// fp-worker keys) is a fact about the flipped build, not a boot failure. Process-wide state it sets
+// principal signed in as the user R0 recorded: each principal's canary answers what
+// R0 recorded for it (requireCanary), except where knownDifferences names the cell,
+// and an auth-off boot reports auth_disabled (requireAuthMode). Process-wide state it sets
 // (the selector, the environment, the HTTP transport when Owner is set, the
 // process defaults) is restored by the test's cleanup, so a test boots one
 // registered build at a time and none runs in parallel.
 func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	rows, _ := loadPrincipalTable(t)
+	rows, canary := loadPrincipalTable(t)
 
 	// The one switch the flipped build has until B10g (an arch test forbids any
 	// non-test caller). It stays on for the app's whole life: it is read at
@@ -512,7 +572,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	work := t.TempDir()
 	stage := filepath.Join(work, "stage")
 	dbDir := filepath.Join(work, "db")
-	raws := diskCorpus(t, rows, dbDir, stage)
+	raws := diskCorpus(t, rows, dbDir, stage, cfg)
 	library := filepath.Join(stage, "library")
 	for _, d := range []string{dbDir, library, filepath.Join(stage, "state")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -554,7 +614,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	if cfg.Owner {
 		access = newAccessApp(t)
 		setenv("ABO_BOOKS_IDENTITY_OWNER_EMAIL", ownerEmail)
-		setenv("ABO_BOOKS_CFACCESS_ALLOWED_EMAILS", ownerEmail)
+		setenv("ABO_BOOKS_CFACCESS_ALLOWED_EMAILS", strings.Join(append([]string{ownerEmail}, cfg.AccessAllowed...), ","))
 		setenv("ABO_BOOKS_IDENTITY_CF_ACCESS_TEAM_DOMAIN", accessTeam)
 		setenv("ABO_BOOKS_IDENTITY_CF_ACCESS_AUD", accessAUD)
 		orig := http.DefaultTransport
@@ -653,6 +713,8 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	h.Routes = slices.Collect(a.Routes())
 	h.requireCutoverRan()
 	h.signIn(rows, raws, access)
+	h.requireAuthMode()
+	h.requireCanary(canary)
 	return h
 }
 
@@ -700,11 +762,112 @@ func (h *Registered) signIn(rows []reachPrincipalRow, raws map[string]string, ac
 		h.Principals = append(h.Principals, p)
 		h.byName[p.Name] = p
 	}
+	if !h.cfg.AuthOff {
+		h.mintCoreKeys(rows)
+	}
 	if h.cfg.Owner {
 		p := &Principal{Name: Owner, Kind: "owner", User: ownerEmail, peer: "192.0.2.200:41000"}
 		p.access = access.assertion(h.t, ownerSub, ownerEmail)
 		h.Principals = append(h.Principals, p)
 		h.byName[p.Name] = p
+	}
+}
+
+// ambientScopes are the scopes ABO's cutover hands every key that is not worker
+// confined (rbac.WithAmbient): core:self, core:metrics.read and books:reading.
+var ambientScopes = []string{"core:self", "core:metrics.read", "books:reading"}
+
+// coreKeyName is the name of the core key that mirrors a verdicts.json key.
+func coreKeyName(key string) string { return "corekey:" + strings.TrimPrefix(key, "key:") }
+
+// mintCoreKeys adds the second key column: for every key principal of the table a
+// core-native mck_ key with the same owner and the same scopes, minted through core's
+// own routes after the boot (as the admin session; its own route when the owner is
+// that admin). The scopes are the ones M3 gave the imported abk_ key, read back from
+// core, so the twin differs from the imported key in its credential kind and nothing
+// else. The keys come after the verdicts.json principals, before Owner.
+func (h *Registered) mintCoreKeys(rows []reachPrincipalRow) {
+	h.t.Helper()
+	admin := h.Principal("session:admin")
+	var page struct {
+		Items []struct {
+			ID       string `json:"id"`
+			Username string `json:"username"`
+		} `json:"items"`
+	}
+	h.coreJSON(admin, http.MethodGet, "/api/core/v1/users?limit=100", nil, &page)
+	uids := map[string]string{}
+	for _, u := range page.Items {
+		uids[strings.ToLower(u.Username)] = u.ID
+	}
+	adminID := uids[strings.ToLower(admin.User)]
+	for i, r := range rows {
+		if r.Kind != "key" {
+			continue
+		}
+		uid := uids[strings.ToLower(r.User)]
+		if uid == "" {
+			h.t.Fatalf("core lists no user %q (owner of %s)", r.User, r.Name)
+		}
+		var keys struct {
+			Items []struct {
+				Name     string   `json:"name"`
+				Scopes   []string `json:"scopes"`
+				Imported bool     `json:"imported"`
+			} `json:"items"`
+		}
+		h.coreJSON(admin, http.MethodGet, "/api/core/v1/users/"+uid+"/api-keys?limit=100", nil, &keys)
+		imported := fmt.Sprintf("key-%04d", i)
+		var scopes []string
+		for _, k := range keys.Items {
+			if k.Name == imported {
+				scopes = k.Scopes
+				break
+			}
+		}
+		if len(scopes) == 0 {
+			h.t.Fatalf("core lists no imported key %q for %s: %+v", imported, r.Name, keys.Items)
+		}
+		// The ambient scopes M3 added to the imported key are not role scopes: no
+		// creator holds them to give, and core's own mint leaves them off.
+		scopes = slices.DeleteFunc(scopes, func(s string) bool { return slices.Contains(ambientScopes, s) })
+		if len(scopes) == 0 {
+			// The imported key's atoms all lie outside its owner's roles, so M3 gave
+			// it the ambient scopes only. Core refuses a key with no role scope and
+			// no creator holds an ambient one to give: there is no core twin.
+			h.NoCoreTwin = append(h.NoCoreTwin, r.Name)
+			continue
+		}
+		route := "/api/core/v1/users/" + uid + "/api-keys"
+		if uid == adminID {
+			route = "/api/core/v1/me/api-keys"
+		}
+		var made struct {
+			Key string `json:"key"`
+		}
+		h.coreJSON(admin, http.MethodPost, route, map[string]any{"name": "corekey-" + strconv.Itoa(i), "scopes": scopes, "expires_in": "720h"}, &made)
+		if !strings.HasPrefix(made.Key, "mck_") {
+			h.t.Fatalf("core minted %q for %s, want an mck_ key", made.Key[:min(4, len(made.Key))], r.Name)
+		}
+		p := &Principal{Name: coreKeyName(r.Name), Kind: "key", User: r.User, Role: r.Role, Scopes: r.Scopes, Core: true, Twin: r.Name, bearer: made.Key}
+		p.peer = fmt.Sprintf("192.0.2.%d:41000", 100+i)
+		h.Principals = append(h.Principals, p)
+		h.byName[p.Name] = p
+	}
+}
+
+// coreJSON is one request to core as p that must answer 2xx, its body decoded into out.
+func (h *Registered) coreJSON(p *Principal, method, path string, body, out any) {
+	h.t.Helper()
+	res, err := h.Do(p, method, path, body)
+	if err != nil {
+		h.t.Fatalf("%s %s as %s: %v", method, path, p.Name, err)
+	}
+	if res.Status/100 != 2 {
+		h.t.Fatalf("%s %s as %s -> %d %s", method, path, p.Name, res.Status, res.excerpt())
+	}
+	if err := json.Unmarshal(res.Body, out); err != nil {
+		h.t.Fatalf("%s %s: %v: %s", method, path, err, res.excerpt())
 	}
 }
 
@@ -811,10 +974,11 @@ func (h *Registered) DoRoute(p *Principal, ri httpapi.RouteInfo, body any) (Resu
 }
 
 // Do sends method path as p. The route is the registered one whose pattern the
-// path matches.
+// path matches (a query string is sent and not matched on).
 func (h *Registered) Do(p *Principal, method, path string, body any) (Result, error) {
 	h.t.Helper()
-	return h.do(h.Handler, true, p, method, path, body, h.match(method, path))
+	route, _, _ := strings.Cut(path, "?")
+	return h.do(h.Handler, true, p, method, path, body, h.match(method, route))
 }
 
 // MustDo is Do that fails the test on an error.
@@ -1043,4 +1207,180 @@ func resultOf(rec *httptest.ResponseRecorder, ri *httpapi.RouteInfo) Result {
 		}
 	}
 	return res
+}
+
+// ---- the canary ----
+
+// knownDifference is one cell where the flipped build answers differently from R0
+// and the coordinator accepted it.
+type knownDifference struct {
+	Method, Route string
+	Principal     string
+	Head, Flip    int
+	// Code is the problem code the flipped build answers with.
+	Code string
+	// Why names the requirement that refuses and the layer that applies it.
+	Why string
+}
+
+// knownDifferences is the only place the registered path may differ from R0's
+// recorded answers on the canary route. Every other cell holds strict HEAD parity.
+//
+// Coordinator ruling 2026-11-22: a key of the fp-worker user answers 403 on
+// /api/v1/auth/me whatever scope it carries, where R0 answered 200 for a key whose
+// scope lay outside the worker API. It narrows access (a 200 became a 403), the
+// production worker never calls the route (it uses /api/v1/fingerprint/worker), and
+// the ruling is to accept it.
+//
+// The route's requirement is Authenticated (KindAuthenticated), not an atom: stage
+// 13 refuses it through the principal's checker, because every credential of the
+// fp-worker user is worker-confined (rbac.Confined: the role holds only Confining
+// scopes), a confined principal gets no ambient scope (core:self), and a confined
+// checker does not satisfy Authenticated. R0 judged the same key by its own scope.
+var knownDifferences = []knownDifference{
+	{"GET", "/api/v1/auth/me", "key:fp-worker:view", 200, 403, "permission_denied", "Authenticated, refused by the worker-confined checker (no core:self)"},
+	{"GET", "/api/v1/auth/me", "key:fp-worker:settings", 200, 403, "permission_denied", "Authenticated, refused by the worker-confined checker (no core:self)"},
+	{"GET", "/api/v1/auth/me", "key:fp-worker:users", 200, 403, "permission_denied", "Authenticated, refused by the worker-confined checker (no core:self)"},
+}
+
+// canaryRoute is the route whose answer R0 recorded for every principal as its
+// canary: the caller's own account, or the auth status for the auth-off one.
+func canaryRoute(p *Principal) string {
+	if p.Kind == "authoff" {
+		return "/api/v1/auth/status"
+	}
+	return "/api/v1/auth/me"
+}
+
+// requireAuthMode fails an auth-off boot that does not report auth_disabled: the
+// stored settings carry enable_auth true and M2 turns that into core.auth.mode, so a
+// boot that missed the edit answers 401 to the "authoff" principal on every route and
+// every cell of its column would be about a different build.
+func (h *Registered) requireAuthMode() {
+	h.t.Helper()
+	if !h.cfg.AuthOff {
+		return
+	}
+	var st struct {
+		Disabled bool `json:"auth_disabled"`
+	}
+	h.coreJSON(h.Principal(Authoff), http.MethodGet, "/api/core/v1/auth/status", nil, &st)
+	if !st.Disabled {
+		h.t.Fatal("the auth-off boot reports auth_disabled false: core.auth.mode is still required")
+	}
+}
+
+// requireCanary asks every principal its canary and fails the boot unless the answer
+// is what R0 recorded. A core key is held to its imported twin's. knownDifferences
+// names the cells that may differ, each exactly (R0's status, the flipped status and
+// problem code); a named difference that does not occur fails too, so a pin never
+// outlives the behaviour. The cells it applied are in h.KnownDifferences.
+func (h *Registered) requireCanary(canary map[string]int) {
+	h.t.Helper()
+	pinned := map[string]knownDifference{}
+	for _, d := range knownDifferences {
+		pinned[d.Principal] = d
+	}
+	for _, p := range h.Principals {
+		if p.Name == Owner {
+			continue // the owner has no R0 recording
+		}
+		want, ok := canary[p.Recorded()]
+		if !ok {
+			h.t.Fatalf("verdicts.json holds no canary for %s", p.Recorded())
+		}
+		route := canaryRoute(p)
+		res, err := h.Do(p, http.MethodGet, route, nil)
+		if err != nil {
+			h.t.Fatalf("canary %s as %s: %v", route, p.Name, err)
+		}
+		d, known := pinned[p.Name]
+		switch {
+		case known:
+			if want != d.Head || res.Status != d.Flip || res.Code != d.Code {
+				h.t.Fatalf("canary %s %s: R0 %d, flip %d %q; the known difference says R0 %d, flip %d %q", p.Name, route, want, res.Status, res.Code, d.Head, d.Flip, d.Code)
+			}
+			h.KnownDifferences = append(h.KnownDifferences, p.Name)
+		case res.Status == want:
+		case want >= 400 && res.Status < 400:
+			h.t.Fatalf("canary WIDENING: %s %s: R0 refused with %d, the flipped build answers %d", p.Name, route, want, res.Status)
+		default:
+			h.t.Fatalf("canary %s %s: R0 %d, flip %d (%s): not a known difference; the principal did not sign in as R0's", p.Name, route, want, res.Status, res.excerpt())
+		}
+	}
+	for _, d := range knownDifferences {
+		if _, here := h.byName[d.Principal]; here && !slices.Contains(h.KnownDifferences, d.Principal) {
+			h.t.Fatalf("known difference for %s never occurred", d.Principal)
+		}
+	}
+}
+
+// ---- seeding HEAD keys ----
+
+// KeySeed is one HEAD apikey row, for registeredConfig.Seed. User is a username of
+// the corpus; Scopes are HEAD's atom names ("library.view", "fingerprint.worker"; an
+// empty list is HEAD's "all the owner's role permissions"). Status is "active" (the
+// default) or "revoked" (RevokedAt is stamped); Name defaults to the ID's tail. ID
+// defaults to one derived from the key. The corpus's usernames and roles are in
+// internal/books/rbacreach/principals.json; for example a Confined (fp-worker-style)
+// key is User "fp.worker" with Scopes {"fingerprint.worker"}, and a revoked admin key
+// is User "lucius.fox", Status "revoked".
+type KeySeed struct {
+	ID, User, Name, Status string
+	Scopes                 []string
+}
+
+// SeedAPIKey writes a HEAD key row in prod's shape and returns the raw key. The raw
+// value is GenerateAPIKeyToken's abk_ token; the row holds its sha256 as token_hash
+// and the idx:apikey:hash: and idx:apikey:user: rows HEAD's CreateAPIKey writes, so M3
+// imports it like any key a HEAD build wrote. Use it inside registeredConfig.Seed:
+//
+//	var raw string
+//	cfg := registeredConfig{Seed: func(ctx context.Context, lr storage.LegacyRange) (err error) {
+//		raw, err = SeedAPIKey(ctx, lr, KeySeed{User: "lucius.fox", Status: "revoked", Scopes: []string{"library.view"}})
+//		return err
+//	}}
+//	h := bootRegistered(t, cfg)
+//	h.Raw(request with "Authorization: Bearer "+raw)
+func SeedAPIKey(ctx context.Context, lr storage.LegacyRange, ks KeySeed) (string, error) {
+	uidRaw, err := lr.Get(ctx, []byte("idx:user:username:"+strings.ToLower(ks.User)))
+	if err != nil || len(uidRaw) == 0 {
+		return "", fmt.Errorf("the corpus has no user %q: %v", ks.User, err)
+	}
+	uid := string(uidRaw)
+	tok, hash, err := store.GenerateAPIKeyToken()
+	if err != nil {
+		return "", err
+	}
+	id := ks.ID
+	if id == "" {
+		id = "01M7SD" + strings.ToUpper(hash[:20])
+	}
+	status := cmp.Or(ks.Status, "active")
+	now := time.Now().UTC()
+	fields := map[string]any{
+		"id": id, "user_id": uid, "name": cmp.Or(ks.Name, "key-"+id[len(id)-4:]), "token_hash": hash, "scopes": ks.Scopes,
+		"status": status, "created_at": now.Add(-time.Hour).Format(time.RFC3339),
+		"expires_at": now.AddDate(1, 0, 0).Format(time.RFC3339), "use_count": 0,
+	}
+	if fields["scopes"] == nil {
+		fields["scopes"] = []string{}
+	}
+	if status == "revoked" {
+		fields["revoked_at"] = now.Add(-time.Minute).Format(time.RFC3339)
+	}
+	row, err := json.Marshal(fields)
+	if err != nil {
+		return "", err
+	}
+	for k, v := range map[string][]byte{
+		"apikey:" + id:                      row,
+		"idx:apikey:hash:" + hash:           []byte(id),
+		"idx:apikey:user:" + uid + ":" + id: []byte(id),
+	} {
+		if err := lr.Set(ctx, []byte(k), v); err != nil {
+			return "", fmt.Errorf("seed %s: %w", k, err)
+		}
+	}
+	return tok, nil
 }
