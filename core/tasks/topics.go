@@ -8,6 +8,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/mediacore/events"
@@ -245,6 +246,56 @@ func FinishedTopicSpec() events.TopicSpec {
 // delivers nothing to them (fail closed).
 func visibleToAdmins(_ context.Context, who rbac.Checker, _ events.RawEnvelope) bool {
 	return who != nil && who.Has(rbac.CoreAdmin)
+}
+
+// tasksView is the default View scope of a definition that names none.
+const tasksView rbac.Permission = "core:tasks.view"
+
+// ViewRuleVisible is the Visible of the run-carrying task topics once the
+// definitions are known: an envelope is visible to a subscriber that holds
+// rbac.CoreAdmin or satisfies the View requirement of the definition of the
+// run's kind (05-tasks Perms.View, omitted: core:tasks.view), the rule
+// Client.Get and Client.Runs apply, so a books-only user who may view a books
+// kind sees that kind's runs on the stream and no other. view reports a kind's
+// View requirement and whether the kind is registered. A kind that is not
+// registered (a disabled module's, a retired kind) takes the default, as
+// executor.mayView does. A nil checker, or a payload with no decodable kind,
+// is not visible (fail closed): the default is never wider than REST's.
+func ViewRuleVisible(view func(Kind) (rbac.Requirement, bool)) events.VisibleFunc {
+	return func(_ context.Context, who rbac.Checker, e events.RawEnvelope) bool {
+		if who == nil {
+			return false
+		}
+		if who.Has(rbac.CoreAdmin) {
+			return true
+		}
+		var p struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil || p.Kind == "" {
+			return false
+		}
+		if req, ok := view(Kind(p.Kind)); ok && !req.IsZero() {
+			return who.Satisfies(req)
+		}
+		return who.Has(tasksView)
+	}
+}
+
+// WithViewRule returns specs with Visible replaced by ViewRuleVisible(view) on
+// the two topics whose payload is a run (core.task.run-changed.v1 and
+// core.task.finished.v1); every other entry is returned as it was. The
+// log-appended topic keeps visibleToAdmins: its payload is one line and names
+// no kind, so the definition rule cannot be applied to it without a run lookup
+// the declaration site does not have.
+func WithViewRule(specs []events.TopicSpec, view func(Kind) (rbac.Requirement, bool)) []events.TopicSpec {
+	out := slices.Clone(specs)
+	for i := range out {
+		if n := out[i].Name; n == RunChangedTopicName || n == FinishedTopicName {
+			out[i].Visible = ViewRuleVisible(view)
+		}
+	}
+	return out
 }
 
 // RedactLogAppended is RedactRunView's rule applied to one log line (05-tasks
