@@ -464,9 +464,10 @@ func TestResetToDefaultsPreservesPaths(t *testing.T) {
 
 func TestMinBookSizeBytesDefault(t *testing.T) {
 	c := &Config{MinBookSizeBytes: 0}
-	_ = c.Validate()
-	assert.Equal(t, int64(5*1024*1024), c.MinBookSizeBytes,
+	assert.Equal(t, int64(5*1024*1024), c.Normalized().MinBookSizeBytes,
 		"zero value should be coerced to 5 MB default")
+	_ = c.Validate()
+	assert.Equal(t, int64(0), c.MinBookSizeBytes, "Validate does not change its receiver")
 }
 
 func TestMinBookSizeBytesDisable(t *testing.T) {

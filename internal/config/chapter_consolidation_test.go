@@ -52,11 +52,14 @@ func TestResolveRepairChapterMaxMin(t *testing.T) {
 // reject it (refusing to start over a recovered setting would be an outage).
 func TestValidateNormalizesZeroChapterThreshold(t *testing.T) {
 	for _, stored := range []int{0, -1} {
+		// Validate judges the normalised form (a stored zero is valid) and no
+		// longer writes its receiver; Normalized is the normalised copy.
 		c := Config{DatabaseType: "pebble", ChapterConsolidationThresholdMin: stored}
 		require.NoError(t, c.Validate())
-		require.Equal(t, DefaultChapterConsolidationThresholdMin, c.ChapterConsolidationThresholdMin)
+		require.Equal(t, stored, c.ChapterConsolidationThresholdMin, "Validate does not change its receiver")
+		require.Equal(t, DefaultChapterConsolidationThresholdMin, c.Normalized().ChapterConsolidationThresholdMin)
 	}
 	c := Config{DatabaseType: "pebble", ChapterConsolidationThresholdMin: 7}
 	require.NoError(t, c.Validate())
-	require.Equal(t, 7, c.ChapterConsolidationThresholdMin, "a real value is left alone")
+	require.Equal(t, 7, c.Normalized().ChapterConsolidationThresholdMin, "a real value is left alone")
 }

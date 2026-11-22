@@ -51,10 +51,12 @@ func TestValidate_VectorBackendEmptyNormalizesToHNSW(t *testing.T) {
 	c := &Config{DatabaseType: "pebble"}
 	c.Embedding.VectorBackend = ""
 
-	_ = c.Validate() // other fields may fail; we only care about this one
-
-	assert.Equal(t, "hnsw", c.Embedding.VectorBackend,
+	assert.Equal(t, "hnsw", c.Normalized().Embedding.VectorBackend,
 		"an empty vector_backend must normalize to the default, not fall through to chromem")
+	if err := c.Validate(); err != nil {
+		assert.NotContains(t, err.Error(), "vector_backend", "an empty vector_backend is the default, not invalid")
+	}
+	assert.Equal(t, "", c.Embedding.VectorBackend, "Validate does not change its receiver")
 }
 
 // TestValidate_VectorBackendEnum locks the enum check. Before this change an

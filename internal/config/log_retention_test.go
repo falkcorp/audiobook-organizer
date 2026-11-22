@@ -33,9 +33,12 @@ func TestValidateNormalizesZeroLogRetention(t *testing.T) {
 	} {
 		c := cfg
 		c.LogRetentionDays = tc.in
+		if got := c.Normalized().LogRetentionDays; got != tc.want {
+			t.Errorf("Normalized left log_retention_days=%d as %d, want %d", tc.in, got, tc.want)
+		}
 		_ = c.Validate()
-		if c.LogRetentionDays != tc.want {
-			t.Errorf("Validate left log_retention_days=%d as %d, want %d", tc.in, c.LogRetentionDays, tc.want)
+		if c.LogRetentionDays != tc.in {
+			t.Errorf("Validate changed its receiver: log_retention_days %d -> %d", tc.in, c.LogRetentionDays)
 		}
 	}
 }

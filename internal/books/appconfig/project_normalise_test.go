@@ -32,8 +32,8 @@ func TestEngine_ANormalisedDefaultSurvivesASave(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	// What the boot does after the Facade is installed (books' boot step
-	// config.Validate, cmd/root.go): Validate the live config.
-	config.Mutate(func(c *config.Config) { _ = c.Validate() })
+	// config.Validate, cmd/root.go): normalise and validate the live config.
+	_ = config.NormalizeAndValidate()
 	booted := config.Snapshot()
 	if booted.MinBookSizeBytes != 5*1024*1024 || booted.MinRescanAgeHours != 144 || booted.Embedding.VectorBackend != "hnsw" ||
 		booted.ChapterConsolidationThresholdMin != config.DefaultChapterConsolidationThresholdMin ||
