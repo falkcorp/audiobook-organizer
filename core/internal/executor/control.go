@@ -24,12 +24,9 @@ const (
 	scopeTasksManage rbac.Permission = "core:tasks.manage"
 )
 
-// caller resolves Options.Principal for a Client call.
+// caller resolves the caller of a Client call (principal).
 func (e *executor) caller(ctx context.Context) (tasks.Actor, rbac.Checker) {
-	if e.opts.Principal == nil {
-		return tasks.Actor{}, nil
-	}
-	a, who, ok := e.opts.Principal(ctx)
+	a, who, ok := e.principal(ctx)
 	if !ok {
 		return tasks.Actor{}, nil
 	}
@@ -37,8 +34,15 @@ func (e *executor) caller(ctx context.Context) (tasks.Actor, rbac.Checker) {
 }
 
 // mayView applies a definition's View requirement (omitted: core:tasks.view).
+// A module's own client (ModuleClient) outside a request reads every run of
+// its own module's kinds: the module owns them, and its system actor holds
+// core:tasks.view for no kind. A kind of another module goes through the
+// checker like any caller's.
 func (e *executor) mayView(who rbac.Checker, kind tasks.Kind) bool {
 	if who == nil {
+		return true
+	}
+	if mc, ok := who.(moduleChecker); ok && kind.Module() == mc.module {
 		return true
 	}
 	if d := e.defs[kind]; d != nil && !d.c.Perms.View.IsZero() {

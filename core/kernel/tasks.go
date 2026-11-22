@@ -15,12 +15,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/scheduler"
 	"github.com/falkcorp/mediacore/internal/taskhttp"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -231,13 +233,94 @@ func (k *Kernel) upsertDefinitions(ctx context.Context, defs []tasks.Definition)
 
 // executorManifests is every manifest as the executor reads it: whether the
 // module is enabled (a disabled module's, and a module storage holds, runs are
-// held, 5T.3.11) and the kinds its ledger lists. TaskStarts is F5's.
+// held, 5T.3.11), the kinds its ledger lists and the kinds its system actor
+// may start besides its own (TaskStarts, SEC2-15).
 func (k *Kernel) executorManifests() []executor.Manifest {
 	out := make([]executor.Manifest, 0, len(k.entries))
 	for _, e := range k.entries {
-		out = append(out, executor.Manifest{Module: string(e.man.ID), Enabled: e.enabled, TaskLedger: slices.Clone(e.man.TaskLedger)})
+		out = append(out, executor.Manifest{Module: string(e.man.ID), Enabled: e.enabled,
+			TaskLedger: slices.Clone(e.man.TaskLedger), TaskStarts: slices.Clone(e.man.TaskStarts)})
 	}
 	return out
+}
+
+// executorCatalog is the scope catalog the executor builds a module system
+// actor's checker from (authz.ForSystem): core's scopes and every scope an enabled
+// module declares in Manifest.Permissions. It is not k.rbacCat, which holds core's
+// scopes alone: ForSystem drops a scope its catalog does not declare ("held by
+// no one"), so over k.rbacCat a module's system actor, which the scheduler starts
+// every scheduled kind as and Deps.Tasks acts as outside a request, would hold
+// none of the module's own scopes and every start of its own kind would be refused.
+// It is the catalog the identity boot's role importer checks against (earlyCatalog),
+// built for any app that runs the executor.
+func (k *Kernel) executorCatalog() (*rbac.Catalog, error) {
+	return earlyCatalog(k.identityModules())
+}
+
+// moduleLanes are the lanes every enabled module registered, and moduleSinks
+// the change journals, by module ID: the executor's Lanes and ChangeSinks.
+func (k *Kernel) moduleLanes() []tasks.Lane {
+	var out []tasks.Lane
+	for _, e := range k.entries {
+		if e.enabled {
+			out = append(out, e.rec.Lanes...)
+		}
+	}
+	return out
+}
+
+func (k *Kernel) moduleSinks() map[string]tasks.ChangeSink {
+	out := make(map[string]tasks.ChangeSink)
+	for _, e := range k.entries {
+		if e.enabled && e.rec.ChangeSink != nil {
+			out[string(e.man.ID)] = e.rec.ChangeSink
+		}
+	}
+	return out
+}
+
+// bindModuleTasks hands each enabled module its Deps.Tasks: the executor's
+// ModuleClient for that module, so a call outside a request acts as the
+// module's system actor and inside one as the request's principal.
+func (k *Kernel) bindModuleTasks(x tasks.Executor) error {
+	for _, e := range k.entries {
+		if !e.enabled || e.tasksDep == nil {
+			continue
+		}
+		c, err := executor.ModuleClient(x, string(e.man.ID))
+		if err != nil {
+			return fmt.Errorf("kernel: tasks: client of module %s: %w", e.man.ID, err)
+		}
+		e.tasksDep.bind(c)
+	}
+	return nil
+}
+
+// bindModuleHealth is P7's Registrar.Health step: each enabled module's
+// components are registered with the health registry and the module's
+// Deps.Health bound to their reporters. A module that declared a component in
+// an app with no registry (no store is open: the registry is built with it, P4c)
+// fails the boot, as a module that registers task kinds with no store does: a
+// component nothing can report would silently read as never-up.
+func (k *Kernel) bindModuleHealth() error {
+	for _, e := range k.entries {
+		if !e.enabled || e.healthDep == nil {
+			continue
+		}
+		if len(e.rec.Health) > 0 && k.healthReg == nil {
+			return fmt.Errorf("kernel: module %s registers health components and no store is open (core.storage.path is not set: kernel.Config.StoragePath)", e.man.ID)
+		}
+		reporters := make(map[health.ComponentID]health.Reporter, len(e.rec.Health))
+		for _, c := range e.rec.Health {
+			rep, err := k.healthReg.Register(c)
+			if err != nil {
+				return fmt.Errorf("kernel: module %s: register health component %s: %w", e.man.ID, c.ID, err)
+			}
+			reporters[c.ID] = rep
+		}
+		e.healthDep.bind(reporters)
+	}
+	return nil
 }
 
 // heldKinds reports a kind of a disabled module: the scheduler does not poll
@@ -273,6 +356,10 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		return fmt.Errorf("kernel: tasks: ops metrics scope: %w", err)
 	}
 	manifests := k.executorManifests()
+	cat, err := k.executorCatalog()
+	if err != nil {
+		return err
+	}
 	x, err := executor.New(executor.Options{
 		Config:      cfg.executorConfig(),
 		Stores:      kt.stores,
@@ -280,7 +367,9 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		Keyspace:    &kt.ks,
 		Definitions: defs,
 		Manifests:   manifests,
-		Catalog:     k.rbacCat,
+		Lanes:       k.moduleLanes(),
+		ChangeSinks: k.moduleSinks(),
+		Catalog:     cat,
 		Principal:   taskhttp.Principal,
 		WindowMembers: func(window string) []tasks.Kind {
 			if kt.sched == nil {
@@ -333,7 +422,7 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		return fmt.Errorf("kernel: tasks: routes: %w", err)
 	}
 	kt.defs, kt.exec, kt.sched, kt.server, kt.ops = defs, x, s, srv, ops
-	return nil
+	return k.bindModuleTasks(x)
 }
 
 // startTasks is Run steps (5) and (6) (06 §6.5.2): the executor's resume
