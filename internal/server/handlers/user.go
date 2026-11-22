@@ -80,6 +80,11 @@ type UserHandler struct {
 	// under core identity (invite_identity.go). nil when the store lacks the
 	// capability; the record is UI and resend data and is then not kept.
 	mailStore database.InviteMailStore
+	// outcomes is books' record of the Cloudflare guest-policy sync's outcome per
+	// accepted core invite, which the accepted list is read from under core
+	// identity (acceptedInvitesUnderIdentity). nil when the store lacks the
+	// capability.
+	outcomes database.GuestPolicyStore
 	// acceptChecker runs accept's own checks for the public lookup, so it
 	// answers 404 whenever accept would refuse. nil when the store lacks the
 	// capability; the lookup then checks only missing, used and expired.
@@ -110,6 +115,9 @@ func NewUserHandler(store UserStore) *UserHandler {
 	}
 	if ms, ok := database.AsCapability[database.InviteMailStore](store); ok {
 		h.mailStore = ms
+	}
+	if gp, ok := database.AsCapability[database.GuestPolicyStore](store); ok {
+		h.outcomes = gp
 	}
 	if ac, ok := database.AsCapability[database.InviteAcceptChecker](store); ok {
 		h.acceptChecker = ac
