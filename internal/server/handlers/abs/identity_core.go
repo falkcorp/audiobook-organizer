@@ -81,7 +81,12 @@ func (h *Handler) loginThroughCore(c *gin.Context, id *legacyauth.Identity, user
 		respondError(c, http.StatusInternalServerError, "could not verify credentials")
 		return
 	case errors.Is(err, coreauth.ErrInvalidCredentials):
-		h.throttle.Delay(h.throttle.RecordFailure(accountKey, throttleKey))
+		// Not charged to h.throttle: core charged this failure to its own
+		// per-client and per-account budgets inside VerifyPassword (and delayed
+		// it), so a second charge here would count one wrong password twice and
+		// lock a source out at half the budget HEAD gave it. The surface's own
+		// budget stays for the failures core never sees (an empty credential, a
+		// dead refresh token).
 		h.auditLoginFailure(c, ip, username, "", "invalid-credentials")
 		respondError(c, http.StatusUnauthorized, "invalid credentials")
 		return
