@@ -94,7 +94,13 @@ class InstallHostConf(unittest.TestCase):
         conf_dir = self.root / "etc" / "audiobook-organizer"
         conf_dir.mkdir()
         (conf_dir / "rollback.conf").write_text(IH.render_conf(CONF_VALUES))
-        for d in (self.root, self.root / "etc", self.root / "etc" / "systemd", self.systemd, conf_dir):
+        for d in (
+            self.root,
+            self.root / "etc",
+            self.root / "etc" / "systemd",
+            self.systemd,
+            conf_dir,
+        ):
             d.chmod(0o755)
         (conf_dir / "rollback.conf").chmod(0o644)
         self.systemctl = self.tmp / "systemctl"
@@ -151,6 +157,14 @@ class InstallHostConf(unittest.TestCase):
             st = p.lstat()
             out.append((str(p.relative_to(self.root)), stat.S_IMODE(st.st_mode), st.st_mtime_ns))
         return out
+
+    def reset(self) -> None:
+        """Back to the state setUp made, so each subTest stands alone (a refusal
+        that wrongly installed must not make the cases after it fail too)."""
+        for p in (self.log, self.dest):
+            p.unlink(missing_ok=True)
+        if self.unit_dir.is_dir():
+            self.unit_dir.rmdir()
 
     def calls(self) -> list[str]:
         return self.log.read_text().splitlines() if self.log.exists() else []
@@ -289,7 +303,9 @@ class InstallHostConf(unittest.TestCase):
         p = self.run_tool("--apply", env={"SYSTEMCTL_EXIT": "1"})
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("daemon-reload exited 1", p.stderr)
-        self.assertEqual(self.calls(), ["daemon-reload"], "never reports a drop-in it could not load")
+        self.assertEqual(
+            self.calls(), ["daemon-reload"], "never reports a drop-in it could not load"
+        )
 
     # -- refusals: the helper's own rules --------------------------------------
 
@@ -308,6 +324,7 @@ class InstallHostConf(unittest.TestCase):
         }
         for name, line in bad.items():
             with self.subTest(name):
+                self.reset()
                 self.src.write_text(GOOD + line + "\n")
                 before = self.tree()
                 p = self.run_tool("--apply")
@@ -339,6 +356,7 @@ class InstallHostConf(unittest.TestCase):
     def test_control_characters_nul_and_cr_are_refused(self) -> None:
         for text in (GOOD + "MemoryMax=1G\r\n", GOOD + "MemoryMax=1G\0\n", GOOD + "X\x0b=1\n"):
             with self.subTest(text=repr(text[-8:])):
+                self.reset()
                 self.src.write_bytes(text.encode())
                 before = self.tree()
                 self.assert_untouched(before, self.run_tool("--apply"))
@@ -453,7 +471,7 @@ class InstallHostConf(unittest.TestCase):
     def test_make_dry_run_uses_no_sudo(self) -> None:
         out = self.make_n()
         self.assertIn("install_helpers.py", out)
-        self.assertIn(f"--host-conf=\"{self.src}\"", out)
+        self.assertIn(f'--host-conf="{self.src}"', out)
         self.assertNotIn("--apply", out.split("else", 1)[1])
         self.assertNotIn("sudo", out.split("else", 1)[1])
 

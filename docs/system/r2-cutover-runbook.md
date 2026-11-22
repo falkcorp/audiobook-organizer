@@ -43,7 +43,7 @@ The production host has been migrated flip by flip. The F3-07 deploy on 2026-11-
 | Env names renamed in `deploy/local.conf` to the new `ABO_*` names (20 renames, 3 true/false values, 3 comma lists turned into JSON lists, the allowed-emails list moved, `OAUTH_DEFAULT_ROLE` deleted). A copy of the old file was kept, mode 0600. | converted once by an agent, reviewed, then deployed | `make deploy-env-check` prints `deploy/local.conf sets no retired env name.` |
 | `Makefile.local` switched to the helper recipes (`deploy` and `deploy-debug` install through `install-staged`). | merged from `Makefile.local.example` | `make deploy-env-check` prints `Makefile.local's deploy recipes go through the install-staged helper.` |
 | The rollback helper bundle and its sudoers file installed on `<server>`. | you ran the installer on 2026-11-21 | `make rollback-check` lists the kept environment generations without a sudo error. |
-| `host.conf` written beside the unit (the `ExecStart=` line with its flags, `WorkingDirectory=`, `MemoryMax=`, `TimeoutStopSec=`). | you ran a one-off script on 2026-11-21; a tracked make target for it is a [gap](#known-gaps) | `ssh <server> systemctl show -p DropInPaths audiobook-organizer.service` lists `.../audiobook-organizer.service.d/host.conf`. |
+| `host.conf` written beside the unit (the `ExecStart=` line with its flags, `WorkingDirectory=`, `MemoryMax=`, `TimeoutStopSec=`). | you ran a one-off script on 2026-11-21; the tracked target is now `make install-host-conf` (dry run, then `APPLY=1`; see [Known gaps](#known-gaps) item 3) | `ssh <server> systemctl show -p DropInPaths audiobook-organizer.service` lists `.../audiobook-organizer.service.d/host.conf`. |
 
 What it taught us about boot time:
 
@@ -367,9 +367,11 @@ Still open:
    (Step 7) and, on Path B only, `storage cutover-blockers` (Step 0) need to run as the service user. No helper
    does this yet. Proposed: helper operations in the rollback bundle, granted in sudoers like the others, each
    behind a make target. Until they exist, ask the agents rather than typing `sudo`.
-3. **A tracked make target for `host.conf`.** It was written on 2026-11-21 with a one-off script. A tracked,
-   tested target is coming as its own PR, so a rebuilt host can be set up the same way. Not needed for R2 on the
-   current host.
+3. **A tracked make target for `host.conf`: it exists.** It was written on 2026-11-21 with a one-off script. Now
+   write `deploy/host.conf` (copy `deploy/host.conf.example`), run `make install-host-conf` (a dry run that checks it
+   with the rollback helper's own rules and shows the diff), then `make install-host-conf APPLY=1` on the deploy
+   host. It installs `root:root` `0644`, runs `daemon-reload` and never restarts the service. A rebuilt host is set
+   up the same way. Not needed for R2 on the current host.
 4. **The measured R2 boot time.** R2-01c replaces the 4200 seconds in Step 4 with the measured number, and adds the
    Docker `start_period`.
 
