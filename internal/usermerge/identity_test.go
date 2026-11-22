@@ -65,6 +65,12 @@ type fakeCore struct {
 	unmergePlanErr, unmergeStageErr error
 	unplanned, unstaged, unafter    atomic.Int32
 	lastRec                         coreauth.UnmergeRecord
+
+	// footprint and footprintErr are what AdminAccountFootprint answers
+	// (footprint_identity_test.go); footprintSeen is the principal each call saw.
+	footprint     coreauth.AccountFootprint
+	footprintErr  error
+	footprintSeen []*coreauth.Principal
 }
 
 func markerKey(src string) string { return "pref:fakecore:merged:" + src }

@@ -32,13 +32,3 @@ func (s *Service) CheckAvailable() error {
 	}
 	return nil
 }
-
-// CheckFootprintAvailable refuses the footprint read under identity: it lists
-// sign-ins and API keys, which are core's records, and core exposes no masked
-// read of another user's for it. It is not part of the merge's port (B10l-op).
-func (s *Service) CheckFootprintAvailable() error {
-	if s.flipped() {
-		return ErrUnavailableUnderIdentity
-	}
-	return nil
-}
