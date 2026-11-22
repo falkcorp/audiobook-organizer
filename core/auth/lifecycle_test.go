@@ -33,6 +33,8 @@ type lcRec struct {
 	invites []auth.InviteAccepted
 	status  []auth.StatusChanged
 	emails  []auth.EmailChanged
+	deleted []auth.UserDeleted
+	merged  []auth.UserMergedAway
 }
 
 // lifecycle registers the recording Lifecycle. The fixture rebuilds the
@@ -61,6 +63,22 @@ func (f *fx) lifecycle() *lcRec {
 				f.t.Errorf("StatusChanged ran before the write committed: stored %+v, %v; event %+v", u, err, e)
 			}
 		},
+		UserDeleted: func(ctx context.Context, e auth.UserDeleted) {
+			r.mu.Lock()
+			r.deleted = append(r.deleted, e)
+			r.mu.Unlock()
+			if _, err := f.st.GetUser(ctx, e.UserID); !errors.Is(err, auth.ErrNotFound) {
+				f.t.Errorf("UserDeleted ran before the delete committed: user %s still reads (%v)", e.UserID, err)
+			}
+		},
+		UserMergedAway: func(ctx context.Context, e auth.UserMergedAway) {
+			r.mu.Lock()
+			r.merged = append(r.merged, e)
+			r.mu.Unlock()
+			if u, err := f.st.GetUser(ctx, e.UserID); err != nil || u.MergedInto != e.MergedInto {
+				f.t.Errorf("UserMergedAway ran before the merge committed: stored %+v, %v; event %+v", u, err, e)
+			}
+		},
 		EmailChanged: func(ctx context.Context, e auth.EmailChanged) {
 			r.mu.Lock()
 			r.emails = append(r.emails, e)
@@ -81,11 +99,19 @@ func (r *lcRec) counts() (invites, status, emails int) {
 	return len(r.invites), len(r.status), len(r.emails)
 }
 
+// removals counts the UserDeleted and UserMergedAway calls.
+func (r *lcRec) removals() (deleted, merged int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.deleted), len(r.merged)
+}
+
 // wantNone fails unless no callback ran.
 func (r *lcRec) wantNone(t *testing.T, what string) {
 	t.Helper()
-	if i, s, e := r.counts(); i+s+e != 0 {
-		t.Fatalf("%s: callbacks ran (invite=%d status=%d email=%d), want none", what, i, s, e)
+	d, m := r.removals()
+	if i, s, e := r.counts(); i+s+e+d+m != 0 {
+		t.Fatalf("%s: callbacks ran (invite=%d status=%d email=%d deleted=%d merged=%d), want none", what, i, s, e, d, m)
 	}
 }
 
@@ -569,5 +595,35 @@ func TestLifecycle_EmailChangedRunsWithTheEmailLockReleased(t *testing.T) {
 	case <-took:
 	default:
 		t.Fatal("the callback never took the e-mail lock")
+	}
+}
+
+// DeleteUser fires UserDeleted once, after the delete committed, with the
+// address the account held; a refused delete fires nothing.
+func TestLifecycle_UserDeletedFiresAfterTheDeleteWithTheAddress(t *testing.T) {
+	f := newFx(t)
+	bruce := f.user("bruce", rbac.RoleAdmin)
+	rec := f.lifecycle()
+	admin := f.session(bruce)
+	selina := f.userWithEmail("selina-kyle", "Selina.Kyle@example.test", true, "gotham.detective")
+	bare := f.user("harvey-bullock", "gotham.detective")
+
+	wantErr(t, "the last admin", f.svc.DeleteUser(context.Background(), admin, bruce.ID), auth.ErrLastAdmin)
+	rec.wantNone(t, "a refused delete")
+
+	if err := f.svc.DeleteUser(context.Background(), admin, selina.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.DeleteUser(context.Background(), admin, bare.ID); err != nil {
+		t.Fatal(err)
+	}
+	if d, m := rec.removals(); d != 2 || m != 0 {
+		t.Fatalf("callbacks: deleted=%d merged=%d, want 2 and 0", d, m)
+	}
+	if got := rec.deleted[0]; got.UserID != selina.ID || got.Email != "Selina.Kyle@example.test" {
+		t.Fatalf("UserDeleted = %+v, want the user and the address as stored", got)
+	}
+	if got := rec.deleted[1]; got.UserID != bare.ID || got.Email != "" {
+		t.Fatalf("UserDeleted of an account with no address = %+v", got)
 	}
 }
