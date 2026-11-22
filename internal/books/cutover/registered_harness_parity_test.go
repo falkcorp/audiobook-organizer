@@ -127,3 +127,61 @@ func TestRegisteredHarness_UnruledNarrowingsHoldR0(t *testing.T) {
 		t.Error(miss)
 	}
 }
+
+// TestRegisteredHarness_B10yRoutesHoldR0Parity holds the classB10y cells to R0: the
+// key:admin:{every,empty} and custom cells on admin/debug, cache, master-lists, user
+// merges and footprint, digest and wipe routes, the deluge discover and import cells,
+// and the auth-off invite routes. R0 and HEAD admit them, the flipped build refuses
+// them, and nobody accepted that; slice B10y is the fix. The test is red until it lands
+// and skips once the rows are deleted (the sweep requires deleting a row that no longer
+// differs).
+func TestRegisteredHarness_B10yRoutesHoldR0Parity(t *testing.T) {
+	var rows []verdictRow
+	for _, r := range verdictRows {
+		if r.Class == classB10y {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) == 0 {
+		t.Skip("slice B10y has landed: no row is left")
+	}
+	t.Run("auth on", func(t *testing.T) {
+		h := bootRegistered(t, registeredConfig{})
+		for _, miss := range parityMisses(t, h, rows, onAuthOn) {
+			t.Error(miss)
+		}
+	})
+	t.Run("auth off", func(t *testing.T) {
+		h := bootRegistered(t, registeredConfig{AuthOff: true})
+		for _, miss := range parityMisses(t, h, rows, onAuthOff) {
+			t.Error(miss)
+		}
+	})
+}
+
+// TestRegisteredHarness_B10zCoreKeyReachesMe is the ambient-scope parity ruling: a core
+// mck_ key made from a role that does not hold core:admin carries no core:self (an
+// ambient scope no creator holds to give), and /api/core/v1/me needs it, so the flipped
+// build refuses a key that HEAD's /auth/me answers. Parity is the ruling; B10z owns the
+// fix. Red until it lands. When it does, TestRegisteredHarness_CredentialKindOnCoreMe's
+// "core:self refused" case pins the old answer and must be changed to this one.
+func TestRegisteredHarness_B10zCoreKeyReachesMe(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{})
+	n := 0
+	for _, p := range h.Principals {
+		if !p.Core || p.Twin == "key:admin:every" || p.Twin == "key:admin:empty" {
+			continue
+		}
+		n++
+		res, err := h.Do(p, "GET", "/api/core/v1/me", nil)
+		if err != nil {
+			t.Fatalf("%s: %v", p.Name, err)
+		}
+		if res.Status != 200 {
+			t.Errorf("%s: GET /api/core/v1/me %d %s, want 200 with the key's own identity", p.Name, res.Status, res.excerpt())
+		}
+	}
+	if n == 0 {
+		t.Fatal("no core key without core:admin on this boot: the cell checks nothing")
+	}
+}
