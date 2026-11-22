@@ -129,11 +129,11 @@ func (s *Server) guestKeyDeploymentBlocked() string {
 // must be active and its email address trusted (an admin-set address counts; one
 // the user typed in does not). trustedEmailSource is unexported, so the
 // exported check is the store's verified-email lookup naming this same user.
-func guestKeyUserBlocked(store database.UserReader, u *database.User) string {
+func guestKeyUserBlocked(ctx context.Context, users guestKeyUsers, u *database.User) string {
 	if u == nil || u.Status != "active" {
 		return "the account is not active"
 	}
-	v, err := store.GetUserByVerifiedEmail(u.Email)
+	v, err := users.GetUserByVerifiedEmail(ctx, u.Email)
 	if err != nil {
 		return "the account's email address could not be checked"
 	}
@@ -163,23 +163,23 @@ func guestKeyFirstKeyBlocked(u *database.User) string {
 // checkGuestKeyIssue runs every check that does not change anything: the
 // deployment, the user and the record's state. It returns the fresh user and
 // the record (nil when the user has none: a first key).
-func (s *Server) checkGuestKeyIssue(userID string) (*database.User, *database.GuestServiceToken, *guestKeyFailure) {
+func (s *Server) checkGuestKeyIssue(ctx context.Context, userID string) (*database.User, *database.GuestServiceToken, *guestKeyFailure) {
 	if why := s.guestKeyDeploymentBlocked(); why != "" {
 		return nil, nil, guestKeyBlocked(why)
 	}
-	store := s.storeForWiring()
-	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](store)
+	users := s.guestUsers()
+	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring())
 	if !ok {
 		return nil, nil, guestKeyBlocked("the store cannot hold phone-app key records")
 	}
-	user, err := store.GetUserByID(userID)
+	user, err := users.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, nil, &guestKeyFailure{http.StatusInternalServerError, guestKeyFailedCode, "the account could not be read"}
 	}
 	if user == nil {
 		return nil, nil, &guestKeyFailure{http.StatusNotFound, "NOT_FOUND", "no such user"}
 	}
-	if why := guestKeyUserBlocked(store, user); why != "" {
+	if why := guestKeyUserBlocked(ctx, users, user); why != "" {
 		return nil, nil, guestKeyBlocked(why)
 	}
 	rec, err := tokens.GetGuestServiceToken(userID)
@@ -202,7 +202,7 @@ func (s *Server) checkGuestKeyIssue(userID string) (*database.User, *database.Gu
 // computed once per list. rec is nil for a user with no record. issuing is true
 // while a worker holds the user's per-user guard: it comes first, because the
 // stuck-record hint would send the admin to Revoke a key that is being mailed.
-func guestKeyRowBlocked(store database.UserReader, deployment string, u *database.User, rec *database.GuestServiceToken, issuing bool) string {
+func guestKeyRowBlocked(ctx context.Context, users guestKeyUsers, deployment string, u *database.User, rec *database.GuestServiceToken, issuing bool) string {
 	if issuing {
 		return guestKeyIssuingNow
 	}
@@ -212,7 +212,7 @@ func guestKeyRowBlocked(store database.UserReader, deployment string, u *databas
 	if deployment != "" {
 		return deployment
 	}
-	return guestKeyUserBlocked(store, u)
+	return guestKeyUserBlocked(ctx, users, u)
 }
 
 // guestKeyOutcome is what the background worker hands the handler.
@@ -240,7 +240,7 @@ func (s *Server) handleReissueGuestServiceToken(c *gin.Context) {
 		httputil.RespondWithBadRequest(c, "user id required")
 		return
 	}
-	if _, _, f := s.checkGuestKeyIssue(userID); f != nil {
+	if _, _, f := s.checkGuestKeyIssue(c.Request.Context(), userID); f != nil {
 		httputil.RespondWithError(c, f.Status, f.Msg, f.Code)
 		return
 	}
@@ -257,6 +257,11 @@ func (s *Server) handleReissueGuestServiceToken(c *gin.Context) {
 	if parent == nil {
 		parent = context.Background()
 	}
+	// The worker outlives the request, so it runs on the server's background
+	// context (shutdown stops it), but under core identity its reads of other
+	// accounts are judged against THIS admin: it carries the request's values
+	// (principal, checker), never its cancellation.
+	parent = withRequestValues(parent, c.Request.Context())
 	done := make(chan guestKeyOutcome, 1)
 	s.bgWG.Go("guest-service-token-reissue", func() {
 		defer s.guestTokens.reissueGuard.Delete(userID)
@@ -309,12 +314,12 @@ func (s *Server) handleReissueGuestServiceToken(c *gin.Context) {
 func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (*guestKeyResult, *guestKeyFailure) {
 	// Re-run the checks now that the guard is held: the handler's pass was only
 	// there to refuse early.
-	user, rec, f := s.checkGuestKeyIssue(userID)
+	user, rec, f := s.checkGuestKeyIssue(parent, userID)
 	if f != nil {
 		return nil, f
 	}
-	store := s.storeForWiring()
-	tokens, _ := database.AsCapability[database.GuestServiceTokenStore](store) // checked above
+	users := s.guestUsers()
+	tokens, _ := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring()) // checked above
 	res := &guestKeyResult{FirstKey: rec == nil}
 	if parent.Err() != nil {
 		return nil, guestKeyShutdown("The server is shutting down; nothing was changed. Try again once it is back")
@@ -338,7 +343,7 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 		}
 	}
 
-	issue, detail := s.mintGuestTokenCore(parent, store, tokens, user, actorID)
+	issue, detail := s.mintGuestTokenCore(parent, users, tokens, user, actorID)
 	if !issue.Issued {
 		if res.FirstKey {
 			return nil, guestKeyFailed("No phone-app key could be made: " + detail)
@@ -369,12 +374,12 @@ func (s *Server) issueGuestKey(parent context.Context, userID, actorID string) (
 		}
 		return nil, s.discardUnsentGuestKeyResult(parent, userID, actorID, res, reason)
 	}
-	fresh, freshErr := store.GetUserByID(userID)
+	fresh, freshErr := users.GetUserByID(parent, userID)
 	if freshErr != nil {
 		inviteAccessLog.Warn("guest key issue: re-reading account %s failed: %v", userID, logger.SanitizeLogValue(freshErr.Error()))
 		return nil, s.discardUnsentGuestKeyResult(parent, userID, actorID, res, "the account could not be re-read before the key was emailed")
 	}
-	if why := guestKeyUserBlocked(store, fresh); why != "" {
+	if why := guestKeyUserBlocked(parent, users, fresh); why != "" {
 		if err := s.discardUnsentGuestKey(parent, userID, actorID, res, "the account stopped being eligible before the key was emailed: "+why); err != nil {
 			return nil, guestKeyFailed(why + "; nothing was emailed, but the new key could not be revoked either, so it may still be active: use Revoke on its row")
 		}
