@@ -511,3 +511,76 @@ func TestConfigPlan_ANullBlobMemberIsUnsetAndReported(t *testing.T) {
 		t.Errorf("reported %v for a blob with no null of a known member", p.Reported)
 	}
 }
+
+// TestConfigPlan_OIDCRoleNarrowingIsReported: HEAD gave a new Cloudflare Access
+// user OAUTH_DEFAULT_ROLE whether or not OAuth sign-in was on, but under the
+// flip the role rides on a provider entry, and an Access-only install has none:
+// the role is quarantined and a new Access user is "viewer". When the stored role
+// is something else, M2 says so (the Reported channel, a log line at the step;
+// the cutover is not blocked, as nothing is widened). A role that is HEAD's
+// default, or none, changes nothing and is not reported; a provider entry that
+// carries the role leaves nothing to report.
+func TestConfigPlan_OIDCRoleNarrowingIsReported(t *testing.T) {
+	planFor := func(t *testing.T, enabled bool, withClientID bool, role string) *plan {
+		t.Helper()
+		key := make([]byte, 32)
+		for i := range key {
+			key[i] = byte(i + 1)
+		}
+		tree := map[string]any{"oauth_enabled": enabled, "oauth_default_role": role, "oauth_allowed_emails": "alfred@batcave.example"}
+		if withClientID {
+			tree["oauth_github_client_id"] = "robin-github-client"
+		}
+		raw, err := json.Marshal(tree)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := buildPlan(&m2Input{Rows: map[string]*rowState{}, Blob: settingRow(blobRowName, string(raw), "json", false), File: headFileValues{}, FileHas: map[string]bool{}, Key: key})
+		if err != nil {
+			t.Fatalf("buildPlan: %v", err)
+		}
+		return p
+	}
+	roleNotes := func(p *plan) []string {
+		var out []string
+		for _, n := range p.Reported {
+			if strings.HasPrefix(n, "oauth_default_role:") {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name     string
+		enabled  bool
+		clientID bool
+		role     string
+		reason   string // "" = no note
+	}{
+		{"viewer is the default: nothing to say", false, false, "viewer", ""},
+		{"no role: nothing to say", false, false, "", ""},
+		{"editor, sign-in enabled with no client id", true, false, "editor", reasonOAuthNoProvider},
+		{"editor, sign-in disabled (an Access-only install)", false, false, "editor", reasonOAuthDisabled},
+		{"editor, sign-in disabled with a client id", false, true, "editor", reasonOAuthDisabled},
+		{"editor on an enabled provider entry: the entry carries it", true, true, "editor", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := planFor(t, tc.enabled, tc.clientID, tc.role)
+			got := roleNotes(p)
+			if tc.reason == "" {
+				if len(got) != 0 {
+					t.Fatalf("reported %q, want nothing", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("reported %q, want one oauth_default_role note", got)
+			}
+			for _, want := range []string{"oauth_default_role", `"editor"`, "viewer role", "no Access-only default-role setting", tc.reason} {
+				if !strings.Contains(got[0], want) {
+					t.Errorf("note %q does not contain %q", got[0], want)
+				}
+			}
+		})
+	}
+}
