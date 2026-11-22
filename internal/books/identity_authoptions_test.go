@@ -42,6 +42,7 @@ func TestIdentityAuthOptions_AreHEADsAndOnlyUnderTheFlip(t *testing.T) {
 	require.Equal(t, "/api/v1/auth/oauth", got.OIDCCallbackBase, "HEAD's OAuth callback base (wire_auth_routes.go)")
 	require.True(t, got.DefaultDisabledAllowRemote, "HEAD only warns for auth off on a remote-reachable listener")
 	require.Equal(t, ".bootstrap-token", got.BootstrapTokenFile)
+	require.Equal(t, 720*time.Hour, got.InviteSessionTTL, "HEAD's accept-invite session is 30 days (handlers/user.go:380)")
 
 	t.Run("on", func(t *testing.T) {
 		t.Cleanup(SetIdentityFlipForTest(true))
@@ -55,6 +56,7 @@ func TestIdentityAuthOptions_AreHEADsAndOnlyUnderTheFlip(t *testing.T) {
 		require.Empty(t, o.Auth.ImportedKeyPrefixes)
 		require.Empty(t, o.Auth.OIDCCallbackBase)
 		require.False(t, o.Auth.DefaultDisabledAllowRemote)
+		require.Zero(t, o.Auth.InviteSessionTTL)
 	})
 }
 
