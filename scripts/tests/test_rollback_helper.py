@@ -3944,6 +3944,24 @@ class Export(unittest.TestCase):
             self.assertEqual(code, 1, (label, err))
             self.assertEqual(out, "", label)
 
+    def test_worker_refuses_a_file_the_service_user_does_not_own(self):
+        # The test cannot make a file of another user without root, so the
+        # worker's fstat is made to report one for the key file alone.
+        real = os.fstat
+
+        def spoof(fd):
+            st = real(fd)
+            if stat.S_ISREG(st.st_mode) and st.st_size == len(KEY):
+                fields = list(st)
+                fields[4] = st.st_uid + 1
+                return os.stat_result(fields)
+            return st
+
+        with unittest.mock.patch.object(os, "fstat", spoof):
+            code, out, err = self.h.run("_export-worker", "key")
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("belong to the service user", err)
+
     def test_worker_refuses_a_symlinked_config_yaml_and_nothing_is_delivered(self):
         h = self.h
         cfg = h.db.parent / "config.yaml"
