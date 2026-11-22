@@ -36,6 +36,8 @@ flowchart TD
 
 For debug builds (verbose logging): use `make deploy-debug` instead of `make deploy`.
 
+API keys minted before the flip keep working after it (M3 imports them); a NEW bootstrap after the flip uses `POST /api/core/v1/auth/bootstrap` (see `.claude/skills/server-bootstrap/SKILL.md`).
+
 ### Systemd service
 
 The service is managed as `audiobook-organizer.service`. Server-specific environment variables are in `deploy/local.conf` (gitignored); deploy renders its `Environment=` lines into the systemd drop-in `/etc/systemd/system/audiobook-organizer.service.d/local.conf`. The `ExecStart` override and other host settings are in `host.conf` beside it, which the owner installs as root and deploy never writes ([deploy-and-gpu-ops.md](deploy-and-gpu-ops.md)).
