@@ -362,6 +362,10 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// behind it, and reads the path as stored when it runs.
 	c.Dedupe = tasks.DedupePolicy{Key: func(raw json.RawMessage) (string, error) {
 		params, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
+		if params.TargetBookID != "" {
+			// A start for another copy is another move, not a repeat of this one.
+			return params.BookID + "->" + params.TargetBookID, err
+		}
 		return params.BookID, err
 	}}
 	c.Timeout = 1 * time.Minute
