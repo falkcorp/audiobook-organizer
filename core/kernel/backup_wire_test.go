@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/internal/taskstore"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/falkcorp/mediacore/tasks"
@@ -151,23 +152,48 @@ func TestBackupMarkers_UsesTheIdentityBootsJournal(t *testing.T) {
 	}
 }
 
-// TestBackupWireInput_RefusesBeforeItsHandlesExist: a kernel that has not
-// reached P4d (or has no swapper, secrets, store or audit) builds nothing and
-// says which handle is missing.
-func TestBackupWireInput_RefusesBeforeItsHandlesExist(t *testing.T) {
-	_, err := (&Kernel{}).newBackup(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "journal component") {
-		t.Fatalf("a bare kernel built a backup service: %v", err)
+// TestBackupWireInput_NamesTheMissingHandle: a kernel that has not reached P4d
+// (or has no swapper, secrets, store, audit or config store, or no core.backup
+// section) builds nothing and says which handle is missing; each handle is
+// dropped on its own from a kernel that has the rest.
+func TestBackupWireInput_NamesTheMissingHandle(t *testing.T) {
+	fx := newRxFx(t, nil)
+	full := func() *Kernel {
+		return &Kernel{
+			ident:   &identityBoot{journal: fx.comp, backupKS: fx.bks()},
+			swap:    &kernelSwap{s: &restoreswap.Swapper{}},
+			sec:     &kernelSecrets{store: &secrets.Store{}},
+			store:   &kernelStore{db: &storage.DB{}},
+			audit:   fx.aud,
+			cfgBoot: &configBoot{},
+		}
 	}
-}
-
-// TestBackupWireInput_RefusesAHalfBuiltIdentityBoot: an identity boot whose
-// P4d has not built the journal component is as unready as no boot at all, and
-// is refused before the service is built on a nil handle.
-func TestBackupWireInput_RefusesAHalfBuiltIdentityBoot(t *testing.T) {
-	_, err := (&Kernel{ident: &identityBoot{}}).newBackup(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "journal component") {
-		t.Fatalf("an identity boot with no journal built a backup service: %v", err)
+	for _, c := range []struct {
+		name string
+		drop func(*Kernel)
+		want string
+	}{
+		{"a bare kernel", func(k *Kernel) { *k = Kernel{} }, "journal component"},
+		{"no identity boot", func(k *Kernel) { k.ident = nil }, "journal component"},
+		{"an identity boot with no journal", func(k *Kernel) { k.ident = &identityBoot{} }, "journal component"},
+		{"no swapper state", func(k *Kernel) { k.swap = nil }, "no swapper"},
+		{"state with no swapper", func(k *Kernel) { k.swap = &kernelSwap{} }, "no swapper"},
+		{"no secrets", func(k *Kernel) { k.sec = nil }, "secret store"},
+		{"secrets with no store", func(k *Kernel) { k.sec = &kernelSecrets{} }, "secret store"},
+		{"no store", func(k *Kernel) { k.store = nil }, "store is not open"},
+		{"a store with no DB", func(k *Kernel) { k.store = &kernelStore{} }, "store is not open"},
+		{"no audit store", func(k *Kernel) { k.audit = nil }, "audit store"},
+		{"no config store", func(k *Kernel) { k.cfgBoot = nil }, "config store"},
+		{"no core.backup section", func(k *Kernel) {}, "core.backup section"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			k := full()
+			c.drop(k)
+			svc, err := k.newBackup(context.Background())
+			if err == nil || svc != nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("newBackup = (%v, %v), want a refusal naming %q", svc, err, c.want)
+			}
+		})
 	}
 }
 
@@ -475,28 +501,41 @@ func bwStageArchive(t *testing.T, tamper bool) bwSwapHost {
 	return h
 }
 
+// bwLockedProbe is a rename probe whose directories can no longer be written:
+// the swapper's own pre-check refuses what staging, with no probe, let through.
+type bwLockedProbe struct{}
+
+func (bwLockedProbe) ItemDev(string) (uint64, error) { return 1, nil }
+func (bwLockedProbe) DirDev(string) (uint64, error)  { return 1, nil }
+func (bwLockedProbe) Writable(string) error          { return errors.New("the bat-cave door is locked") }
+
 // TestBackupRecheck_ReachesStepB: through a real swapper's P0a, a staged
 // archive whose file changed size after staging is rejected at step b
 // (restore_rejected, the live store untouched) when the swapper carries the
 // composed check, and is not rejected by the plain swapper P0a builds today.
 // The untampered archive is not rejected by either, so the check rejects the
-// change and nothing else. The fixture's store is a directory, not a Pebble
+// change and nothing else; and the swapper's own rename pre-check is still in
+// the composed check (a locked directory, an untouched archive: rejected). The fixture's store is a directory, not a Pebble
 // store, so a swap that gets past step b fails later at the sidecar rewrite
 // (restore_failed, swapped back): "not rejected" is all this can show, and all
 // it needs to.
 func TestBackupRecheck_ReachesStepB(t *testing.T) {
 	ctx := context.Background()
 	for _, c := range []struct {
-		name                  string
-		tamper, aware, reject bool
+		name                          string
+		tamper, aware, refuse, reject bool
 	}{
 		{name: "aware swapper, untouched archive: passes step b", aware: true},
+		{name: "aware swapper, rename pre-check refuses, archive untouched: rejected", aware: true, refuse: true, reject: true},
 		{name: "aware swapper, tampered archive: rejected", tamper: true, aware: true, reject: true},
 		{name: "plain swapper, tampered archive: passes step b", tamper: true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := bwStageArchive(t, c.tamper)
 			o := restoreswap.Options{StateDir: h.state, BuildID: "batcomputer-1"}
+			if c.refuse {
+				o.Probe = bwLockedProbe{}
+			}
 			var sw *restoreswap.Swapper
 			var err error
 			if c.aware {
