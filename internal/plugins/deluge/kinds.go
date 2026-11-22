@@ -390,11 +390,17 @@ func (p *Plugin) linkBackfillNative(d KindDeps, sched func(tasks.Kind) *tasks.Sc
 	c := kindCommon(linkBackfillKind, sched)
 	c.Title = "Link Deluge torrents to library files"
 	c.Help = linkBackfillHelp
-	// HEAD declares Writes [ResBookFiles]: kept exactly (rule R7). The writer's
-	// ModifyBookFile is the shared table's wider fileRow (see the report: the
-	// admission gate compares declared sets, so this under-declares the
-	// aggregate the store recomputes).
-	c.Effects = tasks.Writes(res(ops.ResBookFiles)...)
+	// HEAD declares Writes [ResBookFiles]; that is a subset of what the body
+	// writes. The only write is linkWriter.ModifyBookFile (link_backfill.go:1776,
+	// linkRun.link), and the store's ModifyBookFile recomputes the book's
+	// aggregates after it commits the file row (store.PebbleStore.ModifyBookFile
+	// -> notifyBookFileChange -> RecomputeBookAggregates -> ModifyBook), so the
+	// shared table's row for it is book_files plus the books row, its
+	// metadata_cache stamp and its ident rows (indexes). The kind declares that
+	// row: the fence refuses a write whose row is not inside the declaration, so
+	// HEAD's narrower set would break the backfill once the executor fences it.
+	// HEAD has no fence and already performs these writes; this declares them.
+	c.Effects = tasks.Writes(res(ops.ResBookFiles, ops.ResBooks, ops.ResIndexes, ops.ResMetadataCache)...)
 	// R6: HEAD's Permissions [auth.PermIntegrationsManage] through the atom table.
 	c.Perms = tasks.Permissions{Start: rbac.AllOf(integrationsManageScopes...)}
 	// HEAD Restart: FromZero. The body keeps no checkpoint; a linked row is
