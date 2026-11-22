@@ -251,102 +251,223 @@ func seedFlushes(e *env, flushes, rowsEach int) {
 
 // TestRewriteCompactExtendsStartWhileTablesAreWritten: the flush and the
 // compaction, which Pebble gives no progress of, ask for start time at their
-// start and again as each starts a new output table; a store that holds more
-// disjoint data asks more often, and nothing is asked for after RewriteCompact
-// returned.
+// start and again before each chunk of the compaction (M8's compactRanges); a
+// store that holds more disjoint data is more chunks and so more requests,
+// the tables a real compaction writes (a few dozen rows each, at the engine's
+// small target size) are all there afterwards, and nothing is asked for after
+// RewriteCompact returned.
 func TestRewriteCompactExtendsStartWhileTablesAreWritten(t *testing.T) {
-	run := func(flushes int) (during, atBootEnd int) {
+	run := func(flushes int) (during, atBootEnd, chunks int) {
 		e := headStore(t, vfs.NewMem(), cpOwners()...)
 		seedFlushes(e, flushes, 100)
 		e.opts.engineTargetFile = 8 << 10 // every compaction output table is a few dozen rows
+		e.opts.rewriteCompactBytes = 1    // and every table starts a chunk (they compress to a kilobyte)
 		var log extendLog
 		e.opts.ExtendStart = log.record
+		var calls atomic.Int32
+		e.opts.compactRange = func(ctx context.Context, pdb *cpebble.DB, from, to []byte) error {
+			calls.Add(1)
+			return pdb.Compact(ctx, from, to, true) // the real manual compaction
+		}
 		e.opts.DataSteps = []DataStep{m8Step(func(ctx context.Context, db *DB) error {
+			pdb := db.engine().DB()
 			if err := db.RewriteCompact(ctx); err != nil {
 				return err
 			}
 			during = log.count(stepRewriteCompact)
+			for f := range flushes {
+				for _, i := range []int{0, 50, 99} {
+					k := fmt.Sprintf("batman:%02d:%05d", f, i)
+					if _, closer, err := pdb.Get([]byte(k)); err != nil {
+						return fmt.Errorf("%s after the compaction: %w", k, err)
+					} else {
+						_ = closer.Close()
+					}
+				}
+			}
 			return markDone(ctx, db, "wayne.rewrite")
 		})}
 		e.open()
 		time.Sleep(20 * time.Millisecond)
-		return during, log.count(stepRewriteCompact)
+		return during, log.count(stepRewriteCompact), int(calls.Load())
 	}
-	few, fewEnd := run(2)
-	many, manyEnd := run(8)
-	t.Logf("compaction requests: %d for 2 flushed ranges, %d for 8", few, many)
-	if few < 2 {
-		t.Errorf("a compaction of 2 flushed tables made %d requests, want its start and at least one new table", few)
+	few, fewEnd, fewChunks := run(2)
+	many, manyEnd, manyChunks := run(8)
+	t.Logf("compaction requests: %d (%d chunks) for 2 flushed ranges, %d (%d chunks) for 8", few, fewChunks, many, manyChunks)
+	if fewChunks < 2 {
+		t.Errorf("a compaction of 2 flushed tables ran %d chunks, want at least 2", fewChunks)
 	}
-	if many <= few {
-		t.Errorf("8 flushed tables made %d requests, 2 made %d: the count must grow with the work", many, few)
+	if manyChunks <= fewChunks {
+		t.Errorf("8 flushed tables ran %d chunks, 2 ran %d: the count must grow with the work", manyChunks, fewChunks)
+	}
+	// One request before the flush and one before each chunk, exactly.
+	if few != 1+fewChunks || many != 1+manyChunks {
+		t.Errorf("requests = %d and %d for %d and %d chunks, want one for the flush and one per chunk", few, many, fewChunks, manyChunks)
 	}
 	if fewEnd != few || manyEnd != many {
 		t.Errorf("requests after RewriteCompact returned: %d and %d", fewEnd-few, manyEnd-many)
 	}
 }
 
-// TestRunWithProgress: the helper that turns an opaque blocking call's
-// progress signals into ExtendStart requests. One request per signal, made on
-// the caller's goroutine; none while the work is stuck; a signal after the
-// work returned is dropped; the work's error comes back and its panic is
-// re-raised.
-func TestRunWithProgress(t *testing.T) {
-	t.Run("one request per signal", func(t *testing.T) {
-		progress := make(chan struct{})
-		release := make(chan struct{})
-		var n atomic.Int32
-		errc := make(chan error, 1)
-		go func() {
-			errc <- runWithProgress(func() error { <-release; return nil }, progress, func() { n.Add(1) })
-		}()
-		for i := 1; i <= 5; i++ {
-			progress <- struct{}{} // unbuffered: returns once the loop took it
-			deadline := time.Now().Add(5 * time.Second)
-			for n.Load() < int32(i) && time.Now().Before(deadline) {
-				time.Sleep(time.Millisecond)
-			}
-			if got := n.Load(); got != int32(i) {
-				t.Fatalf("after %d signals the work was extended %d times", i, got)
+// TestCompactRanges: the chunk plan covers [start, end] with consecutive
+// closed ranges, none empty or inverted, cut at table boundaries, and one
+// range when the store is smaller than a chunk or holds nothing.
+func TestCompactRanges(t *testing.T) {
+	db, err := cpebble.Open("plan", &cpebble.Options{FS: vfs.NewMem(), Logger: quiet{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	start, end := fullRange()
+	if got, err := compactRanges(db, start, end, 1); err != nil || len(got) != 1 || string(got[0][0]) != string(start) || string(got[0][1]) != string(end) {
+		t.Fatalf("an empty store: ranges = %q, err %v, want the whole range once", got, err)
+	}
+	for f := range 6 {
+		for i := range 100 {
+			k := fmt.Sprintf("batman:%02d:%05d", f, i)
+			if err := db.Set([]byte(k), []byte(strings.Repeat("robin", 40)), cpebble.NoSync); err != nil {
+				t.Fatal(err)
 			}
 		}
-		close(release)
-		if err := <-errc; err != nil {
+		if err := db.Flush(); err != nil {
 			t.Fatal(err)
 		}
-	})
-	t.Run("a stalled work is not extended", func(t *testing.T) {
-		progress := make(chan struct{}, 1)
-		release := make(chan struct{})
-		var n atomic.Int32
-		errc := make(chan error, 1)
+	}
+	if got, err := compactRanges(db, start, end, 1<<40); err != nil || len(got) != 1 {
+		t.Fatalf("a store under one chunk: %d ranges, err %v, want 1", len(got), err)
+	}
+	got, err := compactRanges(db, start, end, 1<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 6 {
+		t.Fatalf("6 tables of about 21 KB over 1 KB chunks: %d ranges, want one per table", len(got))
+	}
+	if string(got[0][0]) != string(start) || string(got[len(got)-1][1]) != string(end) {
+		t.Errorf("the plan runs from %q to %q, want %q to %q", got[0][0], got[len(got)-1][1], start, end)
+	}
+	for i, r := range got {
+		if string(r[0]) >= string(r[1]) {
+			t.Errorf("range %d is empty or inverted: %q to %q", i, r[0], r[1])
+		}
+		if i > 0 && string(r[0]) != string(got[i-1][1]) {
+			t.Errorf("range %d starts at %q, the one before ended at %q: the plan has a gap", i, r[0], got[i-1][1])
+		}
+	}
+}
+
+// TestRewriteCompactIgnoresBackgroundEngineWork: only M8's own compaction
+// counts as progress. While the manual compaction (here, the first chunk's
+// Compact) is stalled, other flushes and compactions of the same engine run
+// to completion and write tables, and none of them gets the step any more
+// start time: a wedged compaction is killed after its last request however
+// busy the engine is around it. The step also never returns while stalled,
+// and once it is released the remaining chunks ask again.
+func TestRewriteCompactIgnoresBackgroundEngineWork(t *testing.T) {
+	e := headStore(t, vfs.NewMem(), cpOwners()...)
+	seedFlushes(e, 4, 100)
+	e.opts.engineTargetFile = 8 << 10
+	e.opts.rewriteCompactBytes = 1
+	var log extendLog
+	e.opts.ExtendStart = log.record
+	stalled, release := make(chan struct{}), make(chan struct{})
+	var first sync.Once
+	bgDone := make(chan error, 1)
+	tablesBefore, tablesAfter := make(chan int, 1), make(chan int, 1)
+	e.opts.compactRange = func(ctx context.Context, pdb *cpebble.DB, from, to []byte) error {
+		first.Do(func() {
+			close(stalled)
+			<-release
+		})
+		return pdb.Compact(ctx, from, to, true)
+	}
+	e.opts.DataSteps = []DataStep{m8Step(func(ctx context.Context, db *DB) error {
+		pdb := db.engine().DB()
+		// Unrelated engine work while the chunk is held: writes, flushes and
+		// manual compactions of a key range M8 does not compact, each of which
+		// writes tables and so fires every table-created and flush event
+		// Pebble has.
 		go func() {
-			errc <- runWithProgress(func() error { <-release; return nil }, progress, func() { n.Add(1) })
-		}()
-		time.Sleep(300 * time.Millisecond)
-		if got := n.Load(); got != 0 {
-			t.Errorf("a work that made no progress was extended %d times", got)
-		}
-		close(release)
-		if err := <-errc; err != nil {
-			t.Fatal(err)
-		}
-		if got := n.Load(); got != 0 {
-			t.Errorf("finishing extended the work %d times", got)
-		}
-	})
-	t.Run("the error and the panic come back", func(t *testing.T) {
-		progress := make(chan struct{})
-		want := fmt.Errorf("joker laughed")
-		if got := runWithProgress(func() error { return want }, progress, func() {}); got != want {
-			t.Errorf("error = %v, want %v", got, want)
-		}
-		defer func() {
-			if r := recover(); r != "two-face flipped" {
-				t.Errorf("recovered %v, want the work's panic", r)
+			<-stalled
+			count := func() int {
+				lv, err := pdb.SSTables()
+				if err != nil {
+					return -1
+				}
+				n := 0
+				for _, l := range lv {
+					n += len(l)
+				}
+				return n
 			}
+			tablesBefore <- count()
+			for round := range 6 {
+				for i := range 100 {
+					k := fmt.Sprintf("zodiac:%02d:%05d", round, i)
+					if err := pdb.Set([]byte(k), []byte(strings.Repeat("riddler", 40)), cpebble.NoSync); err != nil {
+						bgDone <- err
+						return
+					}
+				}
+				if err := pdb.Flush(); err != nil {
+					bgDone <- err
+					return
+				}
+				if err := pdb.Compact(ctx, []byte("zodiac:"), []byte("zodiac:~"), true); err != nil {
+					bgDone <- err
+					return
+				}
+			}
+			tablesAfter <- count()
+			bgDone <- nil
 		}()
-		_ = runWithProgress(func() error { panic("two-face flipped") }, progress, func() {})
-		t.Error("the work's panic was swallowed")
-	})
+		if err := db.RewriteCompact(ctx); err != nil {
+			return err
+		}
+		return markDone(ctx, db, "wayne.rewrite")
+	})}
+	booted := make(chan error, 1)
+	go func() {
+		_, err := e.tryOpen()
+		booted <- err
+	}()
+	select {
+	case <-stalled:
+	case err := <-booted:
+		t.Fatalf("the compaction never reached its first chunk: %v", err)
+	case <-time.After(30 * time.Second):
+		t.Fatal("the compaction never reached its first chunk")
+	}
+	held := log.count(stepRewriteCompact)
+	if held != 2 {
+		t.Fatalf("before its first chunk the step made %d requests, want 2 (the flush and the chunk)", held)
+	}
+	select {
+	case err := <-bgDone:
+		if err != nil {
+			t.Fatalf("the background engine work failed: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the background engine work did not finish")
+	}
+	if before, after := <-tablesBefore, <-tablesAfter; after <= before {
+		t.Fatalf("the background work left %d tables, there were %d: it did no flush or compaction to ignore", after, before)
+	}
+	// A short budget: the stalled step must not return, and no request may
+	// arrive for the tables the background work wrote.
+	select {
+	case err := <-booted:
+		t.Fatalf("the boot returned (%v) while the manual compaction was held", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if got := log.count(stepRewriteCompact); got != held {
+		t.Errorf("background flushes and compactions made %d requests for a compaction that made no progress", got-held)
+	}
+	close(release)
+	if err := <-booted; err != nil {
+		t.Fatalf("boot after the compaction was released: %v", err)
+	}
+	if got := log.count(stepRewriteCompact); got <= held {
+		t.Errorf("no request after the compaction moved again (%d, was %d)", got, held)
+	}
 }
