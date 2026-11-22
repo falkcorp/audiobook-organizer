@@ -16,7 +16,7 @@ import (
 	"github.com/falkcorp/mediacore/storage"
 )
 
-// The audit actions of the invite writes of AccountAdmin.
+// The audit actions of the invite writes of InviteAdmin.
 const (
 	actionInviteMarkDelivered = "core.invite.mark_delivered"
 	actionInviteRotate        = "core.invite.rotate"
@@ -55,7 +55,7 @@ func (s *Service) inviteByID(ctx context.Context, id string) (*OneTimeToken, err
 	return nil, fmt.Errorf("%w: invite %q", ErrNotFound, id)
 }
 
-// Invite is AccountAdmin.Invite: the open invite with public ID id, never its
+// Invite is InviteAdmin.Invite: the open invite with public ID id, never its
 // token. An expired invite is not open (ErrNotFound), as the list leaves it
 // out.
 func (s *Service) Invite(ctx context.Context, id string) (InviteView, error) {
@@ -72,12 +72,12 @@ func (s *Service) Invite(ctx context.Context, id string) (InviteView, error) {
 	return inviteView(t), nil
 }
 
-// AdminInvites is AccountAdmin.AdminInvites: Invites behind the principal
-// check. The check runs when the sequence is ranged over, and a refusal is its
-// one element.
+// AdminInvites is InviteAdmin.AdminInvites: Invites behind the legacy
+// surface's check (mayAdministerInvites). The check runs when the sequence is
+// ranged over, and a refusal is its one element.
 func (s *Service) AdminInvites(ctx context.Context) iter.Seq2[InviteView, error] {
 	return func(yield func(InviteView, error) bool) {
-		if _, err := s.ctxManager(ctx, "list invites"); err != nil {
+		if _, err := ctxInviteAdministrator(ctx, "list invites"); err != nil {
 			yield(InviteView{}, err)
 			return
 		}
@@ -89,7 +89,62 @@ func (s *Service) AdminInvites(ctx context.Context) iter.Seq2[InviteView, error]
 	}
 }
 
-// MarkInviteEmailDelivered is AccountAdmin.MarkInviteEmailDelivered: it sets
+// AdminDeleteInvite is InviteAdmin.AdminDeleteInvite: the delete
+// Service.DeleteInvite makes, for the principal bound on ctx under the legacy
+// surface's check (mayAdministerInvites). CoreActions names no invite
+// deletion, so it is not audited (seams.d/F4-02.md), as DeleteInvite is not.
+func (s *Service) AdminDeleteInvite(ctx context.Context, id string) error {
+	if _, err := ctxInviteAdministrator(ctx, "delete an invite"); err != nil {
+		return err
+	}
+	return s.commitRetrying(ctx, func(b *storage.Batch) error {
+		return s.d.Store.DeleteOneTime(b, OneTimeInvite, id)
+	})
+}
+
+// ctxInviteAdministrator is the principal bound on ctx when
+// mayAdministerInvites admits it.
+func ctxInviteAdministrator(ctx context.Context, what string) (*Principal, error) {
+	p, ok := PrincipalFrom(ctx)
+	if !ok {
+		return nil, fmt.Errorf("%w: no principal is bound on the request", ErrDenied)
+	}
+	if err := mayAdministerInvites(p, what); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// mayAdministerInvites is the legacy surface's rule for listing and deleting
+// invites (F4-08 B10y, item 4 cause B): HEAD's GET and DELETE
+// /api/v1/users/invites were s.perm(users.manage) and nothing more, no
+// credential guard and no user, so an API key holding the atom and the
+// auth-off request both reached them. The rule is mayManageUsers without its
+// two legs that HEAD did not have, the interactive method and the user:
+// core:users.manage held through any method by a principal with a user, or by
+// the auth-disabled principal, whose checker holds core:users.manage (it is
+// neither AuthRequired nor Sensitive, 05-rbac §4.11). Neither call site checks
+// anything else (no dominance, no role bound: a delete names no user, and a
+// list reveals no credential). It is reachable only through AdminInvites and
+// AdminDeleteInvite, which no core-native route calls
+// (archtest.InviteRuleLegacyOnly); creating and resending keep mayManageUsers.
+func mayAdministerInvites(p *Principal, what string) error {
+	if p == nil || p.Perms == nil {
+		return fmt.Errorf("%w: no authenticated actor", ErrDenied)
+	}
+	switch {
+	case p.User != nil && p.User.ID != "":
+	case p.User == nil && p.Method == MethodAuthDisabled:
+	default:
+		return fmt.Errorf("%w: no authenticated actor", ErrDenied)
+	}
+	if !p.Perms.Has(permUsersManage) {
+		return fmt.Errorf("%w: %s is needed to %s", ErrDenied, permUsersManage, what)
+	}
+	return nil
+}
+
+// MarkInviteEmailDelivered is InviteAdmin.MarkInviteEmailDelivered: it sets
 // the invite's BindEmailOnAccept, HEAD's "the invitation was emailed to exactly
 // the invite's address" (inviteEmailDelivered). It is the only writer of the
 // flag. The caller calls it only after the mailer returned success: core
@@ -135,7 +190,7 @@ func (s *Service) MarkInviteEmailDelivered(ctx context.Context, inviteID string)
 	})
 }
 
-// RotateInvite is AccountAdmin.RotateInvite: a resend that kills the old link.
+// RotateInvite is InviteAdmin.RotateInvite: a resend that kills the old link.
 // In ONE batch it deletes the invite with public ID id and issues a new one
 // with the same username, e-mail and role and EXACTLY the old ExpiresAt (a
 // resend never extends the invite's life), under a new public ID. The caller

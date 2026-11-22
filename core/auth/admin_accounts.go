@@ -13,29 +13,47 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// AccountAdmin is the account half of the actor-checked identity participant a
-// module is handed (F4-08 B10t): the invite and admin set-email writes books
-// serves under core identity, and the two reads its admin routes share. It is
-// embedded in Admin. Every method re-checks the principal bound on ctx, the
-// way PlanUserMerge does, so holding the handle grants nothing, and none of
-// them returns a token, a hash or any other credential: an invite link comes
-// back once, from CreateInvite and RotateInvite, and nowhere else.
+// InviteAdmin and AccountAdmin are the account half of the actor-checked
+// identity participant a module is handed (F4-08 B10t): the invite and admin
+// set-email writes books serves under core identity, and the two reads its
+// admin routes share. Both are embedded in Admin; a caller takes the one it
+// uses. Every method re-checks the principal bound on ctx, the way
+// PlanUserMerge does, so holding the handle grants nothing, and none of them
+// returns a token, a hash or any other credential: an invite link comes back
+// once, from CreateInvite and RotateInvite, and nowhere else.
 //
 // Unlike StageUserMerge these methods COMMIT: each is one self-contained
 // write, in its own batch, with its audit record in it.
-type AccountAdmin interface {
-	// CreateInvite and DeleteInvite are the Service's explicit-actor methods:
-	// actor must be the principal bound on ctx (WithPrincipal), and the checks
-	// run on that principal's own permissions.
+//
+// They were one nine-method interface until F4-08 B10y; the invite methods
+// are their own interface, and AccountAdmin keeps the rest.
+
+// InviteAdmin is the invite half: create, read, list, delete, resend and the
+// delivery mark.
+//
+// AdminInvites and AdminDeleteInvite are the legacy surface's (books' HEAD
+// routes GET and DELETE /api/v1/users/invites) and answer HEAD's reach for
+// them (mayAdministerInvites): core:users.manage through any method, a key
+// included, or the auth-disabled principal. No core-native route calls them
+// (archtest.InviteRuleLegacyOnly); core's own list and delete routes keep
+// their guards and Service.DeleteInvite's rule.
+type InviteAdmin interface {
+	// CreateInvite is the Service's explicit-actor method: actor must be the
+	// principal bound on ctx (WithPrincipal), and the checks run on that
+	// principal's own permissions.
 	CreateInvite(ctx context.Context, actor *Principal, in InviteSpec) (string, InviteView, error)
-	DeleteInvite(ctx context.Context, actor *Principal, id string) error
+	// AdminDeleteInvite deletes the open invite with public ID id for the
+	// principal bound on ctx (mayAdministerInvites); ErrNotFound when there
+	// is none.
+	AdminDeleteInvite(ctx context.Context, id string) error
 	// Invite is one open invite by its public ID, for core:users.manage
 	// through an interactive method; ErrNotFound when there is none or it
 	// expired.
 	Invite(ctx context.Context, id string) (InviteView, error)
-	// AdminInvites lists the open invites under the same check. The check runs
-	// inside the returned sequence, which yields the refusal as its only
-	// element. It is not Service.Invites, which checks nothing.
+	// AdminInvites lists the open invites for the principal bound on ctx
+	// (mayAdministerInvites). The check runs inside the returned sequence,
+	// which yields the refusal as its only element. It is not
+	// Service.Invites, which checks nothing.
 	AdminInvites(ctx context.Context) iter.Seq2[InviteView, error]
 	// RotateInvite replaces an open invite by a new one with the same
 	// username, e-mail, role and exactly the same expiry, in one batch.
@@ -43,6 +61,11 @@ type AccountAdmin interface {
 	// MarkInviteEmailDelivered records that an admin mailed the invite to its
 	// address, so accepting it may bind the address verified.
 	MarkInviteEmailDelivered(ctx context.Context, inviteID string) error
+}
+
+// AccountAdmin is the account-record half: the admin set-email write and the
+// admin user reads.
+type AccountAdmin interface {
 	// SetUserEmail sets (or, with "", clears) another user's address, verified.
 	SetUserEmail(ctx context.Context, id UserID, email string) error
 	// AdminUser and AdminUsers read user records for core:users.manage through
@@ -51,7 +74,10 @@ type AccountAdmin interface {
 	AdminUsers(ctx context.Context, f UserFilter) iter.Seq2[*User, error]
 }
 
-var _ AccountAdmin = (*Service)(nil)
+var (
+	_ InviteAdmin  = (*Service)(nil)
+	_ AccountAdmin = (*Service)(nil)
+)
 
 // ctxActor is the principal an explicit-actor write (CreateInvite,
 // DeleteInvite) is made as: the one bound on ctx, never the one passed. actor

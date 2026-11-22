@@ -113,12 +113,14 @@ func (f *fakeAccounts) CreateInvite(ctx context.Context, actor *coreauth.Princip
 	return "/invite#token=" + tok, rec, nil
 }
 
-func (f *fakeAccounts) DeleteInvite(ctx context.Context, actor *coreauth.Principal, id string) error {
+// AdminDeleteInvite is core's ctx-bound delete: it decides on the principal of
+// ctx (none is ErrDenied), as core's does.
+func (f *fakeAccounts) AdminDeleteInvite(ctx context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.log("delete %s as %s", id, actorName(actor))
-	if p, _ := coreauth.PrincipalFrom(ctx); actorName(p) != actorName(actor) {
-		return fmt.Errorf("%w: the actor is not the principal of the request", coreauth.ErrDenied)
+	f.log("delete %s as %s", id, ctxActor(ctx))
+	if _, ok := coreauth.PrincipalFrom(ctx); !ok {
+		return fmt.Errorf("%w: no principal is bound on the request", coreauth.ErrDenied)
 	}
 	if _, ok := f.invites[id]; !ok {
 		return coreauth.ErrNotFound
