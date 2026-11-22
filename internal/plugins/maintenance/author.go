@@ -752,7 +752,7 @@ const (
 // token bucket in internal/metadata/providerhttp, so the buckets are the rate
 // limit and the pool only keeps them busy.
 func resolveProductionAuthorsWorkers() int {
-	w := config.AppConfig.MetadataScoring.BulkFetchWorkers
+	w := config.Snapshot().MetadataScoring.BulkFetchWorkers
 	if w <= 0 {
 		w = resolveProductionAuthorsDefaultWorkers
 	}

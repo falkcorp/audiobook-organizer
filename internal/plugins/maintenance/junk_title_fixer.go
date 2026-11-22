@@ -410,10 +410,11 @@ func (f *junkTitleFixer) buildJunkIndexSnapshotVia(st FixerStores) (*junkIndex, 
 			idx.authorNames[k] = append(idx.authorNames[k], allAuthors[i].ID)
 		}
 	}
-	if config.AppConfig.RootDir != "" {
-		root := filepath.Clean(config.AppConfig.RootDir)
+	cfg := config.Snapshot()
+	if cfg.RootDir != "" {
+		root := filepath.Clean(cfg.RootDir)
 		idx.roots = append(idx.roots, root)
-		pattern := strings.TrimSpace(config.AppConfig.FolderNamingPattern)
+		pattern := strings.TrimSpace(cfg.FolderNamingPattern)
 		if pattern == "" {
 			pattern = config.DefaultFolderNamingPattern
 		}

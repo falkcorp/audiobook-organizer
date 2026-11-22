@@ -216,7 +216,7 @@ func (p *Plugin) runITunesCloneIntoLibrary(ctx context.Context, raw json.RawMess
 			return fmt.Errorf("parse params: %w", err)
 		}
 	}
-	report, err := p.itunesCloneIntoLibrary(ctx, params, config.AppConfig.RootDir, reporter)
+	report, err := p.itunesCloneIntoLibrary(ctx, params, config.Snapshot().RootDir, reporter)
 	if report != nil {
 		if serr := registry.ReporterSetResult(reporter, report); serr != nil {
 			reporter.Logger().Warn("itunes-clone-into-library: report not persisted", "err", serr)

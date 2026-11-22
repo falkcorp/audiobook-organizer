@@ -300,7 +300,7 @@ func (f *mergeCleanupFixer) newRun(ctx context.Context, rep registry.Reporter) (
 	}
 	r := &mcRun{store: ops, alts: alts, trash: trash, ops: ops, vetoes: vetoes, syncIDs: database.AsSyncIdentityStore(ops),
 		applier: &vgApplier{store: ops, reporter: rep, seriesNames: names, paths: repairs.NewPathResolver()},
-		loader:  versionprimary.Loader{Files: ops, Chapters: vps, RootDir: config.AppConfig.RootDir, Probe: probe}}
+		loader:  versionprimary.Loader{Files: ops, Chapters: vps, RootDir: config.Snapshot().RootDir, Probe: probe}}
 	return r, nil
 }
 

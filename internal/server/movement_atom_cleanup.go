@@ -79,7 +79,7 @@ func (s *Server) stripMovementAtoms(ctx context.Context, opts ...walkresume.Opti
 		return movementAtomCleanupResult{Completed: true, AlreadyDone: true}
 	}
 
-	root := config.AppConfig.RootDir
+	root := config.Snapshot().RootDir
 	if root == "" {
 		slog.Warn("stripMovementAtoms RootDir not configured, skipping")
 		return movementAtomCleanupResult{}
