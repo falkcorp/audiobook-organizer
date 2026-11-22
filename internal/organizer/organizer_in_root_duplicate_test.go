@@ -38,7 +38,7 @@ func newInRootPair(t *testing.T, order idOrder, samePath bool, bAtTarget bool) *
 	aID, bID := mintBookIDs(t, order.originalOlder)
 	svc, store, root := setupInPlace(t)
 	// setupInPlace leaves the strategy empty; the organize that proceeds needs one.
-	config.AppConfig.OrganizationStrategy = "copy"
+	config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = "copy" })
 	author, err := store.CreateAuthor("Some Author")
 	if err != nil {
 		t.Fatal(err)

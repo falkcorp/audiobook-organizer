@@ -18,9 +18,9 @@ import (
 func handoffFixture(t *testing.T) (*vptest.Fixture, *AudiobookService) {
 	t.Helper()
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	return f, NewAudiobookService(f.S)
 }
 

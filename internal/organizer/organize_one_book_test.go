@@ -41,12 +41,12 @@ func directoryBookFixture(t *testing.T) *database.Book {
 
 	rootDir := t.TempDir()
 	srcParent := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 	if strings.HasPrefix(srcParent, rootDir) {
 		t.Fatalf("fixture invalid: source %s is under RootDir %s", srcParent, rootDir)
 	}
@@ -76,7 +76,7 @@ func directoryBookFixture(t *testing.T) *database.Book {
 // invalidating the test below.
 func TestOrganizeBook_RejectsDirectory(t *testing.T) {
 	book := directoryBookFixture(t)
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 
 	_, _, err := org.OrganizeBook(book)
 	if err == nil {
@@ -101,7 +101,7 @@ func TestOrganizeOneBook_DirectoryBook_TakesDirectoryPath(t *testing.T) {
 	mockStore.On("GetBookFiles", "book-dir-1").Return([]database.BookFile{}, nil)
 
 	svc := NewService(mockStore)
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 
 	_, err := svc.OrganizeOneBook(org, book, logger.New("test"))
 	if err == nil {
@@ -128,7 +128,7 @@ func TestOrganizeOneBook_DirectoryBook_OrganizesSegments(t *testing.T) {
 	}, nil)
 
 	svc := NewService(mockStore)
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 
 	landing, err := svc.OrganizeOneBook(org, book, logger.New("test"))
 	if err != nil {
@@ -138,8 +138,8 @@ func TestOrganizeOneBook_DirectoryBook_OrganizesSegments(t *testing.T) {
 		t.Fatalf("expected a directory landing (Files non-nil), got %+v", landing)
 	}
 	targetDir := landing.Path
-	if !strings.HasPrefix(targetDir, config.AppConfig.RootDir) {
-		t.Fatalf("expected target %s under RootDir %s", targetDir, config.AppConfig.RootDir)
+	if !strings.HasPrefix(targetDir, config.Get().RootDir) {
+		t.Fatalf("expected target %s under RootDir %s", targetDir, config.Get().RootDir)
 	}
 	entries, err := os.ReadDir(targetDir)
 	if err != nil {
@@ -156,12 +156,12 @@ func TestOrganizeOneBook_DirectoryBook_OrganizesSegments(t *testing.T) {
 func TestOrganizeOneBook_SingleFileBook_TakesSingleFilePath(t *testing.T) {
 	rootDir := t.TempDir()
 	srcParent := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 
 	srcFile := filepath.Join(srcParent, "solo.mp3")
 	if err := os.WriteFile(srcFile, []byte("audio"), 0o644); err != nil {
@@ -185,7 +185,7 @@ func TestOrganizeOneBook_SingleFileBook_TakesSingleFilePath(t *testing.T) {
 		{ID: "bf-1", BookID: "book-file-1", FilePath: srcFile},
 	}, nil).Once()
 	svc := NewService(mockStore)
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 
 	landing, err := svc.OrganizeOneBook(org, book, logger.New("test"))
 	if err != nil {

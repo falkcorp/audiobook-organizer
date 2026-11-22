@@ -47,11 +47,12 @@ func setupPurgeBoundaryUntrusted(t *testing.T) (*AudiobookService, *database.Peb
 	// warmup is async: purging straight away failed with "memdb is not
 	// serving" (FLAKE-PURGEWARMUP).
 	store.WaitForWarmup()
-	prev := config.AppConfig.RootDir
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	base := t.TempDir()
-	config.AppConfig.RootDir = filepath.Join(base, "lib")
-	if err := os.MkdirAll(config.AppConfig.RootDir, 0o755); err != nil {
+	cowV1 := filepath.Join(base, "lib")
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	if err := os.MkdirAll(config.Get().RootDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return NewAudiobookService(store), store, base
@@ -165,7 +166,7 @@ func TestPurge_DotDotEscapeIsKeptAndReported(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	escaped := config.AppConfig.RootDir + "/Author/../../secret.m4b"
+	escaped := config.Get().RootDir + "/Author/../../secret.m4b"
 	softDeleted(t, store, "escape", escaped)
 
 	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
@@ -187,7 +188,7 @@ func TestPurge_SymlinkEscapeIsKeptAndReported(t *testing.T) {
 	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(config.AppConfig.RootDir, "Linked")
+	link := filepath.Join(config.Get().RootDir, "Linked")
 	if err := os.Symlink(outside, link); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestPurge_SymlinkEscapeIsKeptAndReported(t *testing.T) {
 // it is empty.
 func TestPurge_RootItselfIsKeptAndReported(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	softDeleted(t, store, "rootbook", root)
 
 	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
@@ -223,7 +224,7 @@ func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config.AppConfig.RootDir = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
 	softDeleted(t, store, "noroot", file)
 
 	res, err := svc.PurgeSoftDeletedUnattended(context.Background(), true, nil)
@@ -245,7 +246,7 @@ func TestPurge_NoRootConfiguredDeletesNothing(t *testing.T) {
 // removed up to -- not including -- the root.
 func TestPurge_InsideRootRemovesFileAndParentsUpToRoot(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	parent := filepath.Join(root, "Author", "Series")
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		t.Fatal(err)

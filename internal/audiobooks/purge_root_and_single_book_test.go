@@ -50,7 +50,7 @@ func liveBookWithFile(t *testing.T, store *database.PebbleStore, id, path string
 // root_dir: a root holding them says nothing about whether the books are there.
 func libraryAppDirs(t *testing.T) {
 	t.Helper()
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	writeFile(t, filepath.Join(root, ".appdata", "audiobooks.pebble", "MANIFEST"))
 	writeFile(t, filepath.Join(root, ".covers", "year-one.jpg"))
 	writeFile(t, filepath.Join(root, ".backups", "backup-1.tar"))
@@ -66,14 +66,14 @@ func libraryAppDirs(t *testing.T) {
 // valid on the test's own goroutine).
 func unmountRoot(t *testing.T, store *database.PebbleStore) (remount func()) {
 	t.Helper()
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	return unmountLibrary(t)
 }
 
 // unmountLibrary is unmountRoot for a test that has added its live books itself.
 func unmountLibrary(t *testing.T) (remount func()) {
 	t.Helper()
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	away := root + ".away"
 	require.NoError(t, os.Rename(root, away))
 	require.NoError(t, os.Mkdir(root, 0o755))
@@ -91,9 +91,9 @@ func unmountLibrary(t *testing.T) (remount func()) {
 
 func withDeleteFiles(t *testing.T) {
 	t.Helper()
-	prev := config.AppConfig.PurgeSoftDeletedDeleteFiles
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
-	t.Cleanup(func() { config.AppConfig.PurgeSoftDeletedDeleteFiles = prev })
+	prev := config.Get().PurgeSoftDeletedDeleteFiles
+	config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedDeleteFiles = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedDeleteFiles = prev }) })
 }
 
 // S-2 / SH-1. A library root is "ready" when it is configured, exists, is a
@@ -112,7 +112,7 @@ func TestLibraryRootReady(t *testing.T) {
 
 	t.Run("no live books under the root is ready", func(t *testing.T) {
 		svc, _, _ := setupPurgeBoundary(t)
-		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir), "an empty library has nothing to protect")
+		assert.NoError(t, svc.libraryRootReady(config.Get().RootDir), "an empty library has nothing to protect")
 	})
 
 	t.Run("most sampled files present is ready", func(t *testing.T) {
@@ -124,7 +124,7 @@ func TestLibraryRootReady(t *testing.T) {
 		// One file lost on its own (deleted by hand) does not make a library
 		// look unmounted.
 		require.NoError(t, os.Remove(filepath.Join(base, "lib", "Gotham", "hush.m4b")))
-		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+		assert.NoError(t, svc.libraryRootReady(config.Get().RootDir))
 	})
 
 	t.Run("most sampled files missing is not ready even though the root holds the app's own folders", func(t *testing.T) {
@@ -134,7 +134,7 @@ func TestLibraryRootReady(t *testing.T) {
 		}
 		require.NoError(t, os.RemoveAll(filepath.Join(base, "lib", "Gotham")))
 		libraryAppDirs(t)
-		err := svc.libraryRootReady(config.AppConfig.RootDir)
+		err := svc.libraryRootReady(config.Get().RootDir)
 		require.ErrorIs(t, err, ErrLibraryRootNotReady)
 		assert.Contains(t, err.Error(), "only 0 of 3 sampled")
 	})
@@ -142,7 +142,7 @@ func TestLibraryRootReady(t *testing.T) {
 	t.Run("an empty-looking mount is not ready once a live book is known", func(t *testing.T) {
 		svc, store, _ := setupPurgeBoundary(t)
 		unmountRoot(t, store)
-		assert.ErrorIs(t, svc.libraryRootReady(config.AppConfig.RootDir), ErrLibraryRootNotReady)
+		assert.ErrorIs(t, svc.libraryRootReady(config.Get().RootDir), ErrLibraryRootNotReady)
 	})
 
 	t.Run("trashed and outside-root files are not evidence", func(t *testing.T) {
@@ -154,13 +154,13 @@ func TestLibraryRootReady(t *testing.T) {
 		_, err := store.CreateBook(&database.Book{ID: "elsewhere", Title: batmanTitle("elsewhere"), FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b")})
 		require.NoError(t, err)
 		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "elsewhere-f", BookID: "elsewhere", FilePath: filepath.Join(base, "lib2", "Gotham", "long-halloween.m4b"), Format: "m4b"}))
-		assert.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+		assert.NoError(t, svc.libraryRootReady(config.Get().RootDir))
 	})
 
 	t.Run("a store that cannot be read fails closed", func(t *testing.T) {
 		_, store, _ := setupPurgeBoundary(t)
 		svc := NewAudiobookService(&failingSampleStore{PebbleStore: store})
-		err := svc.libraryRootReady(config.AppConfig.RootDir)
+		err := svc.libraryRootReady(config.Get().RootDir)
 		require.ErrorIs(t, err, ErrLibraryRootNotReady)
 		assert.Contains(t, err.Error(), "cannot sample")
 	})
@@ -179,7 +179,7 @@ func (s *failingSampleStore) SampleLiveBookFilePathsUnder(string, int) ([]string
 func TestRootGuard_RechecksAfterTheTTLAndNeverCachesAFailure(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	now := time.Now()
-	g := newRootGuard(svc, config.AppConfig.RootDir, now)
+	g := newRootGuard(svc, config.Get().RootDir, now)
 	g.now = func() time.Time { return now }
 
 	remount := unmountRoot(t, store)

@@ -65,16 +65,16 @@ func buildFolderScopeFixture(t *testing.T, underRoot bool, labels ...string) *fo
 		store.UseMemDB = true
 	}
 
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 	tmp := t.TempDir()
 	rootDir := filepath.Join(tmp, "library")
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 
 	fx := &folderScopeFixture{
 		store:   store,

@@ -29,7 +29,7 @@ import (
 func TestCreateOrganizedVersion_ZeroDurationSourceRowsAreFilledFromTheNewPath(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 
 	srcDir := t.TempDir()
 	src1 := filepath.Join(srcDir, "ch01.mp3")
@@ -91,7 +91,7 @@ func TestCreateOrganizedVersion_ZeroDurationSourceRowsAreFilledFromTheNewPath(t 
 func TestCreateOrganizedVersion_SingleFileZeroDurationRowTakesBookDuration(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 
 	src := filepath.Join(t.TempDir(), "book.m4b")
 	require.NoError(t, os.WriteFile(src, []byte("book"), 0o644))

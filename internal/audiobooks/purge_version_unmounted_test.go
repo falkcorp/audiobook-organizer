@@ -33,7 +33,7 @@ import (
 // root looks populated (libraryRootReady samples live files).
 func libraryWitnesses(t *testing.T, f *versionGuardFixture) {
 	t.Helper()
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	liveBookWithFile(t, f.store, "long-halloween", filepath.Join(root, "Gotham", "long-halloween.m4b"))
 	liveBookWithFile(t, f.store, "dark-victory", filepath.Join(root, "Gotham", "dark-victory.m4b"))
 }
@@ -59,7 +59,7 @@ func unmountNested(t *testing.T, dir string) (remount func()) {
 func TestVersionPurgeRetry_EmptyMountPointStaysUnexplainedOnTheSecondRun(t *testing.T) {
 	f := newVersionGuardFixtureBookTrashed(t)
 	libraryWitnesses(t, f)
-	mnt := filepath.Join(config.AppConfig.RootDir, "Arkham")
+	mnt := filepath.Join(config.Get().RootDir, "Arkham")
 	own := filepath.Join(mnt, "arkham-asylum.m4b")
 	writeFile(t, own)
 	f.ownRow(t, own, 1)
@@ -88,7 +88,7 @@ func TestVersionPurgeRetry_EmptyMountPointStaysUnexplainedOnTheSecondRun(t *test
 func TestVersionPurgeRetry_UnmountedNestedFolderOfAnInterruptedPurgeIsNotGone(t *testing.T) {
 	f := newVersionGuardFixtureBookTrashed(t)
 	libraryWitnesses(t, f)
-	nested := filepath.Join(config.AppConfig.RootDir, "Arkham")
+	nested := filepath.Join(config.Get().RootDir, "Arkham")
 	own := filepath.Join(nested, "Asylum", "arkham.m4b")
 	writeFile(t, own)
 	f.ownRow(t, own, 1)
@@ -112,7 +112,7 @@ func TestVersionPurgeRetry_UnmountedNestedFolderOfAnInterruptedPurgeIsNotGone(t 
 func TestVersionPurgeRetry_RecordedPathReadsAsGoneEvenInAnEmptyFolder(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
-	folder := filepath.Join(config.AppConfig.RootDir, "Arkham", "Asylum")
+	folder := filepath.Join(config.Get().RootDir, "Arkham", "Asylum")
 	own := filepath.Join(folder, "arkham.m4b")
 	writeFile(t, own)
 	f.ownRow(t, own, 1)
@@ -138,7 +138,7 @@ func TestVersionPurgeRetry_RecordedPathReadsAsGoneEvenInAnEmptyFolder(t *testing
 func TestR4210b_RetryRecordedSiblingDoesNotVouchForAnUnrecordedOneInAnUnmountedFolder(t *testing.T) {
 	f := newVersionGuardFixtureBookTrashed(t)
 	libraryWitnesses(t, f)
-	mnt := filepath.Join(config.AppConfig.RootDir, "Arkham")
+	mnt := filepath.Join(config.Get().RootDir, "Arkham")
 	joker := filepath.Join(mnt, "joker.m4b")
 	harley := filepath.Join(mnt, "harley.m4b")
 	writeFile(t, joker)
@@ -194,7 +194,7 @@ func (s *flakyAtPath) BookFilesAtPath(p string) ([]database.BookFile, error) {
 func TestR4210b_RetrySeedExemptsSibling_RealSequence(t *testing.T) {
 	f := newVersionGuardFixtureBookTrashed(t)
 	libraryWitnesses(t, f)
-	mnt := filepath.Join(config.AppConfig.RootDir, "Arkham")
+	mnt := filepath.Join(config.Get().RootDir, "Arkham")
 	joker := filepath.Join(mnt, "joker.m4b")
 	harley := filepath.Join(mnt, "harley.m4b")
 	writeFile(t, joker)
@@ -287,7 +287,7 @@ func TestR4210b_UnrecordedUnlinkEscalatesToPurgeFailedSoItCanBeHardDeleted(t *te
 func TestR4210b_AlreadyMissingFolderLeavesRestorableTrashInTheTrash(t *testing.T) {
 	f := newVersionGuardFixtureBookTrashed(t)
 	libraryWitnesses(t, f)
-	own := filepath.Join(config.AppConfig.RootDir, "Gotham", "No Mans Land", "nml.m4b")
+	own := filepath.Join(config.Get().RootDir, "Gotham", "No Mans Land", "nml.m4b")
 	f.ownRow(t, own, 1) // never on disk / folder deleted by hand
 
 	require.Equal(t, database.BookVersionStatusTrash, f.reread(t).Status)
@@ -348,7 +348,7 @@ func TestVersionPurge_LibraryRootVanishingDuringTheMergeLockWaitIsNotAVerdict(t 
 	case <-time.After(10 * time.Second):
 		t.Fatal("the purge never asked whether the library is mounted")
 	}
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	away := root + ".away"
 	require.NoError(t, os.Rename(root, away)) // the mount goes away: no mount point left at root
 	merge.UnlockMergeRMW()
@@ -370,8 +370,8 @@ func TestVersionPurge_LibraryRootVanishingDuringTheMergeLockWaitIsNotAVerdict(t 
 func TestVersionPurgeGuard_UnresolvableRootIsTransientNotAPermanentKeep(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
-	own := filepath.Join(config.AppConfig.RootDir, "Gotham", "Year One", "year-one.m4b")
-	root := config.AppConfig.RootDir
+	own := filepath.Join(config.Get().RootDir, "Gotham", "Year One", "year-one.m4b")
+	root := config.Get().RootDir
 	away := root + ".away"
 	require.NoError(t, os.Rename(root, away))
 	defer func() { require.NoError(t, os.Rename(away, root)) }()
@@ -404,7 +404,7 @@ func resetImportPathCache() {
 func TestVersionPurgeGuard_UnreadableImportPathListLeavesTheFileAlone(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
-	own := filepath.Join(config.AppConfig.RootDir, "Gotham", "Year One", "hush.m4b")
+	own := filepath.Join(config.Get().RootDir, "Gotham", "Year One", "hush.m4b")
 	writeFile(t, own)
 	f.ownRow(t, own, 1)
 	svc := NewAudiobookService(failingImportPaths{f.store})
@@ -424,7 +424,7 @@ func TestVersionPurgeGuard_UnreadableImportPathListLeavesTheFileAlone(t *testing
 func TestPlanPurgePath_UnreadableImportPathListIsAFailedLookup(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
-	own := filepath.Join(config.AppConfig.RootDir, "Gotham", "Year One", "hush.m4b")
+	own := filepath.Join(config.Get().RootDir, "Gotham", "Year One", "hush.m4b")
 	writeFile(t, own)
 	svc := NewAudiobookService(failingImportPaths{f.store})
 	resetImportPathCache()
@@ -443,7 +443,7 @@ func TestPlanPurgePath_UnreadableImportPathListIsAFailedLookup(t *testing.T) {
 func TestPlanPurgePath_ProtectedByOtherRulesStillWinsWhenTheListIsUnreadable(t *testing.T) {
 	f := newVersionGuardFixture(t)
 	libraryWitnesses(t, f)
-	failed := filepath.Join(config.AppConfig.RootDir, "Gotham", ".failed", "knightfall.m4b")
+	failed := filepath.Join(config.Get().RootDir, "Gotham", ".failed", "knightfall.m4b")
 	writeFile(t, failed)
 	svc := NewAudiobookService(failingImportPaths{f.store})
 	resetImportPathCache()

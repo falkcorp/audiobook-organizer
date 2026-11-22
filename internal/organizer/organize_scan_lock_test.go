@@ -204,7 +204,7 @@ func TestOrganizeBooks_AutoOrganizeTakesNoScanLock(t *testing.T) {
 // Until this PR the organize took no L0 and this was the documented gap.
 func TestOrganizeBooks_CopyLandsUnderTheBooksScanLock(t *testing.T) {
 	svc, store, _ := setupInPlace(t)
-	config.AppConfig.OrganizationStrategy = "copy"
+	config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = "copy" })
 	src := filepath.Join(t.TempDir(), "import", "x.m4b")
 	x := addInPlaceBook(t, store, "x", "Copied", src, filled(170, 7), nil, 0)
 

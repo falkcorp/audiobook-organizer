@@ -523,9 +523,9 @@ func TestRevertCombine_EndToEndReversesALinkedRetireUnderTheMergeLock(t *testing
 // state is decided on its live rows, as every other restore path decides it.
 func TestRevertBookSoftDelete_RetiredVersionsDoNotDemoteAnOrganizedHolder(t *testing.T) {
 	root := t.TempDir()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
@@ -562,9 +562,9 @@ func TestRevertBookSoftDelete_RetiredVersionsDoNotDemoteAnOrganizedHolder(t *tes
 // rows at all it would be demoted for having none.
 func TestRevertBookSoftDelete_HolderWithOnlyRetiredVersionsIsJudgedOnThem(t *testing.T) {
 	root := t.TempDir()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	st, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)

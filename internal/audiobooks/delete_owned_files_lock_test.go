@@ -332,9 +332,9 @@ func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryIsCountedOnce(t *testing.T) 
 // purges nothing, but the sibling's progress moved, so cached lists are
 // dropped just as they are after "Purge now".
 func TestPurgeSoftDeletedBooks_LateRefusalAfterCarryInvalidatesTheListCache(t *testing.T) {
-	prev := config.AppConfig.CacheInvalidateOnBookUpdate
-	config.AppConfig.CacheInvalidateOnBookUpdate = true
-	t.Cleanup(func() { config.AppConfig.CacheInvalidateOnBookUpdate = prev })
+	prev := config.Get().CacheInvalidateOnBookUpdate
+	config.SetForTest(func(c *config.Config) { c.CacheInvalidateOnBookUpdate = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.CacheInvalidateOnBookUpdate = prev }) })
 
 	_, store, _ := setupPurgeBoundary(t)
 	groupBook(t, store, "keep", "g1", false, true)
@@ -504,9 +504,9 @@ func TestDiscardProgressAndPurge_ErasedMarkerRowIsAuditedWithItsRecordCount(t *t
 // cache refresh, but the sibling's progress did change, so the list cache is
 // invalidated on that path too.
 func TestPurgeNow_StateMovedRefusalInvalidatesTheListCache(t *testing.T) {
-	prev := config.AppConfig.CacheInvalidateOnBookUpdate
-	config.AppConfig.CacheInvalidateOnBookUpdate = true
-	t.Cleanup(func() { config.AppConfig.CacheInvalidateOnBookUpdate = prev })
+	prev := config.Get().CacheInvalidateOnBookUpdate
+	config.SetForTest(func(c *config.Config) { c.CacheInvalidateOnBookUpdate = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.CacheInvalidateOnBookUpdate = prev }) })
 
 	_, store, _ := setupPurgeBoundary(t)
 	groupBook(t, store, "keep", "g1", false, true)

@@ -22,9 +22,9 @@ import (
 // incumbent is demoted, so the group still has exactly one.
 func TestCreateOrganizedVersion_TakesPrimaryFromIneligibleIncumbent(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	svc := NewService(f.S)
 
 	incumbent := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true", State: "imported", NoFile: true})
@@ -45,9 +45,9 @@ func TestCreateOrganizedVersion_TakesPrimaryFromIneligibleIncumbent(t *testing.T
 // An eligible incumbent keeps the primary (the pre-existing rule).
 func TestCreateOrganizedVersion_EligibleIncumbentKeepsPrimary(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	svc := NewService(f.S)
 
 	incumbent := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
@@ -74,9 +74,9 @@ func (groupReadFailStore) GetBooksByVersionGroup(string) ([]database.Book, error
 // possibly second primary, and removes the file it landed.
 func TestCreateOrganizedVersion_GroupReadFailureRefuses(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	svc := NewService(groupReadFailStore{f.S})
 	source := f.Book(t, vptest.Spec{ID: "src", Group: "g", Primary: "true", State: "imported"})
 	src, err := f.S.GetBookByID(source)

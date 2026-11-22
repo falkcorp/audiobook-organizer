@@ -37,9 +37,9 @@ func newListenerFixture(t *testing.T) *listenerFixture {
 	t.Helper()
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	prev := config.AppConfig
-	config.AppConfig = config.Config{RootDir: rootDir}
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 
 	user, err := store.CreateUser("bruce_wayne", "bruce@example.com", "argon2id", "x", []string{"user"}, "active")
 	require.NoError(t, err)

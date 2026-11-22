@@ -172,7 +172,7 @@ func TestVersionPurgeGuard_AnUnmountedLibraryDoesNotCountEveryFileAsRemoved(t *t
 	slotFile := filepath.Join(versions.VersionSlotDir(f.bookDir, f.ver.ID), "part1.m4b")
 	writeFile(t, slotFile)
 	f.ownRow(t, slotFile, 1)
-	liveBookWithFile(t, f.store, "witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "witness.m4b"))
+	liveBookWithFile(t, f.store, "witness", filepath.Join(config.Get().RootDir, "Gotham", "witness.m4b"))
 	remount := unmountLibrary(t)
 
 	err := f.purge(t)
@@ -195,8 +195,8 @@ func TestVersionPurgeGuard_AMissingFileUnderAMissingFolderIsNotRemoved(t *testin
 	// Two library files that are there, so the root check (a majority of the
 	// sampled live files must be visible) passes and the question reaches the
 	// per-path decision.
-	liveBookWithFile(t, f.store, "witness-one", filepath.Join(config.AppConfig.RootDir, "Gotham", "witness-one.m4b"))
-	liveBookWithFile(t, f.store, "witness-two", filepath.Join(config.AppConfig.RootDir, "Gotham", "witness-two.m4b"))
+	liveBookWithFile(t, f.store, "witness-one", filepath.Join(config.Get().RootDir, "Gotham", "witness-one.m4b"))
+	liveBookWithFile(t, f.store, "witness-two", filepath.Join(config.Get().RootDir, "Gotham", "witness-two.m4b"))
 	ghost := filepath.Join(f.base, "lib", "Gotham", "No Such Folder", "ghost.m4b")
 	f.ownRow(t, ghost, 1)
 

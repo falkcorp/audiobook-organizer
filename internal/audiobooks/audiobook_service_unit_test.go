@@ -447,9 +447,9 @@ func TestAudiobookService_RestoreAudiobook_Success(t *testing.T) {
 		PreTrashLibraryState: new("organized"),
 	}
 	// "organized" comes back only with present files inside the library root.
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/lib"
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/lib" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	// Five reads, in order: merge.RestoreFromTrashLocked's read before the locks
 	// (to find a group a merge emptied, which it would lock too; this row
 	// has no group, so nothing more is read); versionprimary.LockBookGroups' first read (to
@@ -652,9 +652,9 @@ func TestAudiobookService_InvalidateListCache_ClearsCache(t *testing.T) {
 	// Default behavior (commit 95b0f70d) keeps the list cache warm on
 	// book mutation. Opt the test back into full invalidation so it
 	// exercises the cleared-list path.
-	prev := config.AppConfig.CacheInvalidateOnBookUpdate
-	config.AppConfig.CacheInvalidateOnBookUpdate = true
-	t.Cleanup(func() { config.AppConfig.CacheInvalidateOnBookUpdate = prev })
+	prev := config.Get().CacheInvalidateOnBookUpdate
+	config.SetForTest(func(c *config.Config) { c.CacheInvalidateOnBookUpdate = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.CacheInvalidateOnBookUpdate = prev }) })
 
 	mockStore := mocks.NewMockStore(t)
 	svc := NewAudiobookService(mockStore)

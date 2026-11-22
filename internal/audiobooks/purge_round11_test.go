@@ -65,7 +65,7 @@ func TestRemoveDeferredFiles_FilesInOneFolderWithNoSiblingAreAllDecidedBeforeThe
 	}
 	_, err := os.Stat(dir)
 	assert.True(t, errors.Is(err, os.ErrNotExist), "the emptied folder is removed once every path is decided: %v", err)
-	assert.True(t, fileExists(config.AppConfig.RootDir), "and never the root")
+	assert.True(t, fileExists(config.Get().RootDir), "and never the root")
 	pairs, err := svc.readPendingFilesForTest()
 	require.NoError(t, err)
 	assert.Empty(t, pairs, "nothing is left recorded")
@@ -163,11 +163,11 @@ func TestLibraryRootReady_UnmountedRootIsFoundOutBehindManyOtherBooks(t *testing
 		require.NoError(t, store.CreateBookFile(&database.BookFile{ID: id + "-f", BookID: id, FilePath: p, Format: "m4b"}))
 	}
 	remount := unmountRoot(t, store)
-	err := svc.libraryRootReady(config.AppConfig.RootDir)
+	err := svc.libraryRootReady(config.Get().RootDir)
 	require.ErrorIs(t, err, ErrLibraryRootNotReady)
 	assert.Contains(t, err.Error(), "only 0 of 1")
 	remount()
-	require.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+	require.NoError(t, svc.libraryRootReady(config.Get().RootDir))
 }
 
 // SH-3. A library with no live file under the root at all, anywhere, has nothing
@@ -178,7 +178,7 @@ func TestLibraryRootReady_NoLiveFileUnderTheRootAnywhereIsReady(t *testing.T) {
 	_, err := store.CreateBook(&database.Book{ID: "outside", Title: batmanTitle("outside"), FilePath: p})
 	require.NoError(t, err)
 	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "outside-f", BookID: "outside", FilePath: p, Format: "m4b"}))
-	require.NoError(t, svc.libraryRootReady(config.AppConfig.RootDir))
+	require.NoError(t, svc.libraryRootReady(config.Get().RootDir))
 }
 
 // n-4. The root check stats the way the purge's own decisions do: a symlink
@@ -186,7 +186,7 @@ func TestLibraryRootReady_NoLiveFileUnderTheRootAnywhereIsReady(t *testing.T) {
 // that is present.
 func TestLibraryRootReady_SymlinkToAMissingTargetIsNotPresent(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
-	dir := filepath.Join(config.AppConfig.RootDir, "Gotham")
+	dir := filepath.Join(config.Get().RootDir, "Gotham")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	link := filepath.Join(dir, "year-one.m4b")
 	require.NoError(t, os.Symlink(filepath.Join(base, "not-mounted", "year-one.m4b"), link))
@@ -194,7 +194,7 @@ func TestLibraryRootReady_SymlinkToAMissingTargetIsNotPresent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "linked-f", BookID: "linked", FilePath: link, Format: "m4b"}))
 
-	err = svc.libraryRootReady(config.AppConfig.RootDir)
+	err = svc.libraryRootReady(config.Get().RootDir)
 	require.ErrorIs(t, err, ErrLibraryRootNotReady)
 	assert.Contains(t, err.Error(), "only 0 of 1")
 }
@@ -203,12 +203,12 @@ func TestLibraryRootReady_SymlinkToAMissingTargetIsNotPresent(t *testing.T) {
 // ready within rootStatTimeout instead of hanging the caller.
 func TestLibraryRootReady_HungStatFailsClosedWithinTheTimeout(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 
 	started := hangRootStats(t)
 
 	began := time.Now()
-	err := svc.libraryRootReady(config.AppConfig.RootDir)
+	err := svc.libraryRootReady(config.Get().RootDir)
 	require.ErrorIs(t, err, ErrLibraryRootNotReady)
 	assert.Contains(t, err.Error(), "did not answer")
 	assert.Less(t, time.Since(began), 5*time.Second)
@@ -237,7 +237,7 @@ func (c *testClock) advance(d time.Duration) {
 // trusts it from its start, so a slow check does not buy extra trust.
 func TestRootGuard_TrustsACheckFromWhenItBeganNotWhenItEnded(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	clock := &testClock{t: time.Now()}
 	began := clock.now()
 
@@ -248,7 +248,7 @@ func TestRootGuard_TrustsACheckFromWhenItBeganNotWhenItEnded(t *testing.T) {
 	}
 	t.Cleanup(func() { rootStat = prevStat })
 
-	g := newRootGuard(svc, config.AppConfig.RootDir, time.Time{})
+	g := newRootGuard(svc, config.Get().RootDir, time.Time{})
 	g.now = clock.now
 	require.NoError(t, g.ready())
 	g.mu.Lock()
@@ -276,7 +276,7 @@ func (s *countingSampleStore) SampleLiveBookFilePathsUnder(root string, k int) (
 func TestDiscardProgressAndPurge_RootIsCheckedBeforeTheMergeLockAndOnlyOnce(t *testing.T) {
 	_, store, base := setupPurgeBoundary(t)
 	withDeleteFiles(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	x := filepath.Join(base, "lib", "Gotham", "hush.m4b")
 	writeFile(t, x)
 	softDeleted(t, store, "T", x)
@@ -311,7 +311,7 @@ func TestDiscardProgressAndPurge_RootIsCheckedBeforeTheMergeLockAndOnlyOnce(t *t
 // check (singleflight): the library is not sampled once per worker.
 func TestRootGuard_ConcurrentCallersShareOneCheck(t *testing.T) {
 	_, store, _ := setupPurgeBoundary(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	counting := &countingSampleStore{PebbleStore: store}
 	svc := NewAudiobookService(counting)
 
@@ -322,7 +322,7 @@ func TestRootGuard_ConcurrentCallersShareOneCheck(t *testing.T) {
 	}
 	t.Cleanup(func() { rootStat = prevStat })
 
-	g := newRootGuard(svc, config.AppConfig.RootDir, time.Time{})
+	g := newRootGuard(svc, config.Get().RootDir, time.Time{})
 	var wg sync.WaitGroup
 	errs := make([]error, 8)
 	start := make(chan struct{})
