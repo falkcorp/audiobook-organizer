@@ -105,7 +105,7 @@ func delugeRows() []kindRow {
 		},
 		{
 			HeadID: "deluge.path-update", Title: "Update Deluge torrent path",
-			HeadResume: sdk.ResumeDrop, Resume: tasks.ResumeDrop,
+			HeadResume: sdk.ResumeDrop, Resume: tasks.ResumeFromZero,
 			Priority: tasks.PriorityNormal, Timeout: time.Minute,
 			HeadKey: "deluge.path-update",
 			Writes:  []ops.Resource{ops.ResFiles},

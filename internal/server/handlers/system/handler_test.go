@@ -50,13 +50,10 @@ type deps struct {
 	store   *systemmocks.MockSystemStore
 	sysSvc  *systemmocks.MockSystemService
 	plugins *systemmocks.MockPluginHealthChecker
-	hub     *systemmocks.MockEventStreamer
 	opLogs  *systemmocks.MockOperationLogsProvider
 }
 
 // newTestHandler builds a Handler with all-mock deps and benign stub funcs.
-// The hub is wired non-nil here; tests that need the 503 nil-hub branch
-// construct a bespoke handler.
 func newTestHandler(t *testing.T) (*system.Handler, deps) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -64,14 +61,12 @@ func newTestHandler(t *testing.T) (*system.Handler, deps) {
 		store:   systemmocks.NewMockSystemStore(t),
 		sysSvc:  systemmocks.NewMockSystemService(t),
 		plugins: systemmocks.NewMockPluginHealthChecker(t),
-		hub:     systemmocks.NewMockEventStreamer(t),
 		opLogs:  systemmocks.NewMockOperationLogsProvider(t),
 	}
 	h := system.New(
 		func() system.SystemStore { return d.store },
 		d.sysSvc,
 		d.plugins,
-		func() system.EventStreamer { return d.hub },
 		d.opLogs,
 		func(path string) (uint64, uint64, error) { return 1000, 400, nil },
 		func() string { return "test-version" },
@@ -89,12 +84,10 @@ func newTestHandlerWithOpLogs(t *testing.T, opLogs system.OperationLogsProvider)
 		store:   systemmocks.NewMockSystemStore(t),
 		sysSvc:  systemmocks.NewMockSystemService(t),
 		plugins: systemmocks.NewMockPluginHealthChecker(t),
-		hub:     systemmocks.NewMockEventStreamer(t),
 	}
 	h := system.New(
 		func() system.SystemStore { return d.store },
 		d.sysSvc, d.plugins,
-		func() system.EventStreamer { return d.hub },
 		opLogs,
 		func(path string) (uint64, uint64, error) { return 1000, 400, nil },
 		func() string { return "test-version" },
@@ -347,35 +340,6 @@ func TestGetSystemActivityLog_OK(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, float64(1), resp["data"].(map[string]any)["count"])
-}
-
-// --- HandleEvents ---
-
-func TestHandleEvents_NilHub503(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store := systemmocks.NewMockSystemStore(t)
-	h := system.New(
-		func() system.SystemStore { return store },
-		nil, nil,
-		nil, // nil getHub provider -> resolveHub() returns nil -> 503
-		nil, nil, nil, nil, nil,
-	)
-	w := run(http.MethodGet, "/api/events", "/api/events", nil, func(r *gin.Engine) {
-		r.GET("/api/events", h.HandleEvents)
-	})
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-}
-
-func TestHandleEvents_DelegatesToHub(t *testing.T) {
-	h, d := newTestHandler(t)
-	d.hub.EXPECT().HandleSSE(mock.Anything).Run(func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	}).Return()
-
-	w := run(http.MethodGet, "/api/events", "/api/events", nil, func(r *gin.Engine) {
-		r.GET("/api/events", h.HandleEvents)
-	})
-	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // --- CreateBackup ---

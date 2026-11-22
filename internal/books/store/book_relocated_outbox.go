@@ -46,7 +46,7 @@ func BookRelocatedTopic() outbox.Topic[BookRelocatedV1] {
 
 // BookRelocatedTopicSpec is the topic's catalog entry, for books'
 // Registrar.Topics at the events flip (F6-03): durable, observable by anyone
-// who may view the library. Nothing declares it before that flip.
+// who may view the library.
 func BookRelocatedTopicSpec() events.TopicSpec {
 	return BookRelocatedTopic().Spec(events.TopicSpec{Permission: rbac.Need("books:view")}, bookRelocatedPartitions)
 }
@@ -61,8 +61,8 @@ var errRelocationNeedsCoreBatch = errors.New("books store: a relocation outbox i
 
 // SetRelocationOutbox makes every committed file_path change of this store
 // stage books.book.relocated.v1 through w, in the batch that writes the path.
-// Until it is called the store stages nothing: the events flip (F6-03) calls it
-// once, before the store takes writes, with the outbox's books Writer. The
+// Until it is called the store stages nothing: books' Register calls it once,
+// before the store takes writes, with the outbox's books Writer (F6-03). The
 // outbox must be built over the same core storage DB as the store's
 // LegacyRange, or every book move fails (Batch.Bind refuses a foreign handle).
 func (p *PebbleStore) SetRelocationOutbox(w outbox.Writer) {

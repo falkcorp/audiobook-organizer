@@ -78,10 +78,8 @@ func newEntitiesHandler(s *Server) *entities.Handler {
 // handlers/system sub-package; the whitebox handler tests in
 // handlers_unit_test.go still exercise the real store → JSON-envelope path
 // through this constructor. systemService/pluginRegistry/
-// and the func deps are wired from the real Server fields; the hub is
-// passed as a lazy provider closure (mirroring wireHandlers) so the
-// handleEvents nil-guard test, which nils s.hub after construction, still
-// resolves nil and 503s. filterReviewedAuthorGroups is the bound *Server method.
+// and the func deps are wired from the real Server fields.
+// filterReviewedAuthorGroups is the bound *Server method.
 func newSystemHandler(s *Server) *system.Handler {
 	var sysSvc system.SystemService
 	if s.systemService != nil {
@@ -99,15 +97,6 @@ func newSystemHandler(s *Server) *system.Handler {
 		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
 		plugins,
-		// Lazy hub provider mirrors wireHandlers; resolve s.hub at request time so
-		// TestHandleEventsUnavailable (which nils s.hub after construction) still
-		// hits the 503 guard.
-		func() system.EventStreamer {
-			if s.hub == nil {
-				return nil
-			}
-			return s.hub
-		},
 		opLogs,
 		getDiskStats,
 		func() string { return appVersion },

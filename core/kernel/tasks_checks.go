@@ -84,7 +84,7 @@ func manifestMigrations(man module.Manifest, imp module.Importers) []datamigrate
 // taskDefinitions are the definitions every enabled module registered, in
 // module ID order and registration order.
 func (k *Kernel) taskDefinitions() []tasks.Definition {
-	var defs []tasks.Definition
+	defs := k.eventsTaskDefinitions()
 	for _, e := range k.entries {
 		if e.enabled {
 			defs = append(defs, e.rec.Tasks...)

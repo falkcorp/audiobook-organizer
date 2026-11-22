@@ -348,8 +348,11 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// for a start that named no mode.
 	c.Effects = tasks.Writes(res(ops.ResFiles)...)
 	// HEAD Drop: the body keeps no checkpoint and the event that would fire it
-	// again is not carried.
-	c.Resume = tasks.ResumeDrop
+	// again is not carried. Under the flip the event is carried (the relocation
+	// consumer's outbox message), and a torrent move is idempotent, so a run a
+	// restart cut short starts again from zero instead of being dropped: a
+	// dropped run would leave the torrent where the book no longer is (F6-03 m1).
+	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.deluge.path-update")
 	// Fold a start only into a QUEUED run of the same book (F6-01 obligation

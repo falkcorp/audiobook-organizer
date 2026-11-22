@@ -360,14 +360,6 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		func() system.SystemStore { return s.storeForWiring() },
 		sysSvc,
 		sysPlugins,
-		// Lazy hub provider: resolve s.hub at request time with a typed-nil guard
-		// so a nil *realtime.EventHub is never boxed into a non-nil interface.
-		func() system.EventStreamer {
-			if s.hub == nil {
-				return nil
-			}
-			return s.hub
-		},
 		sysOpLogs,
 		getDiskStats,
 		func() string { return appVersion },

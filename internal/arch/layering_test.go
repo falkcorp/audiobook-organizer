@@ -77,7 +77,7 @@ type edge = archtest.Edge
 //
 // Classification rule for packages the table does not name: directory family
 // (internal/plugins/*, internal/maintenance/jobs = 4; internal/server/**,
-// internal/realtime, internal/syncapi = 5; cmd/*, tools/cmd/* = 6), else
+// internal/syncapi = 5; cmd/*, tools/cmd/* = 6), else
 // max(layer of the package's in-module imports) floored at 3, else 0 when it
 // imports no module package. matcher and fingerprint are the table's domain
 // packages that internal/books/store imports; each imports only layer-0
@@ -270,13 +270,12 @@ var layerOf = map[string]int{
 	"internal/plugins/metafetch":          4, // family: internal/plugins/* is jobs
 	"internal/plugins/webhook":            4, // family: internal/plugins/* is jobs
 	"internal/scheduler":                  4, // table: jobs
+	"internal/itunes/service":             4, // computed: max of imports=4, floored at 3
 	"internal/testutil":                   4, // computed: max of imports=4, floored at 3
 	"pkg/ops/opstest":                     4, // computed: max of imports=4 (registry); a test harness, imported by tests only
 	"pkg/plugin/sdk":                      4, // computed: max of imports=4, floored at 3
 
 	// Layer 5: transport
-	"internal/itunes/service":                   5, // computed: max of imports=5, floored at 3
-	"internal/realtime":                         5, // table: transport
 	"internal/server":                           5, // family: internal/server/** is transport
 	"internal/server/absauth":                   5, // family: internal/server/** is transport
 	"internal/server/handlers":                  5, // family: internal/server/** is transport
@@ -330,16 +329,14 @@ var layerOf = map[string]int{
 // allowed is the shrink-only list of known wrong-way edges (importer,
 // imported) with a one-line reason. See the package comment for the ratchet.
 var allowed = map[edge]string{
-	{"internal/config", "internal/aidispatch"}:                  "config reaches a package that floors at domain; 07-M1 makes config a leaf",
-	{"internal/config", "internal/backup"}:                      "config reaches a package that floors at domain; 07-M1",
-	{"internal/config", "internal/dedup/unified"}:               "config reaches a package that floors at domain; 07-M1",
-	{"internal/dedup", "internal/operations/registry"}:          "domain package registers operations itself; move registration into plugins/dedup",
-	{"internal/metadata", "internal/operations/registry"}:       "provider clients import the operations registry; 07-M4",
-	{"internal/plugins/itunes", "internal/itunes/service"}:      "itunes/service imports realtime (transport), so it computes to layer 5",
-	{"internal/plugins/maintenance", "internal/itunes/service"}: "itunes/service imports realtime (transport), so it computes to layer 5",
-	{"internal/reconcile", "internal/operations/registry"}:      "domain package registers operations itself",
-	{"internal/reconcile", "pkg/plugin/sdk"}:                    "pkg/plugin/sdk imports the operations registry, so it computes to layer 4",
-	{"internal/repairs", "internal/operations/registry"}:        "domain package imports the operations registry",
+	{"internal/config", "internal/aidispatch"}:             "config reaches a package that floors at domain; 07-M1 makes config a leaf",
+	{"internal/config", "internal/backup"}:                 "config reaches a package that floors at domain; 07-M1",
+	{"internal/config", "internal/dedup/unified"}:          "config reaches a package that floors at domain; 07-M1",
+	{"internal/dedup", "internal/operations/registry"}:     "domain package registers operations itself; move registration into plugins/dedup",
+	{"internal/metadata", "internal/operations/registry"}:  "provider clients import the operations registry; 07-M4",
+	{"internal/reconcile", "internal/operations/registry"}: "domain package registers operations itself",
+	{"internal/reconcile", "pkg/plugin/sdk"}:               "pkg/plugin/sdk imports the operations registry, so it computes to layer 4",
+	{"internal/repairs", "internal/operations/registry"}:   "domain package imports the operations registry",
 }
 
 // repoRoot walks up from the working directory to the directory holding go.mod.
@@ -523,7 +520,7 @@ var namedLayer = map[string]int{
 	// Layer 4 jobs.
 	"internal/operations/registry": 4, "internal/scheduler": 4, "internal/maintenance/jobs": 4,
 	// Layer 5 transport.
-	"internal/realtime": 5, "internal/syncapi": 5,
+	"internal/syncapi": 5,
 	// Layer 6 entry: the module-root main package.
 	".": 6,
 }

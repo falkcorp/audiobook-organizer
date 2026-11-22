@@ -72,7 +72,7 @@ func (k *Kernel) mountIdentity(ctx context.Context) error {
 	if err := mountIdentityRoutes(k.router, in); err != nil {
 		return err
 	}
-	return nil
+	return k.mountEventsRoutes()
 }
 
 // identityRoutesInput is everything mountIdentityRoutes takes, from the boot.
@@ -267,6 +267,9 @@ func (k *Kernel) describeIdentity() error {
 	}
 	if err := k.router.SetAuth(httpapi.AuthWiring{Service: inertAuthenticator{}, ResolveAtom: k.cfg.ResolveAtom}); err != nil {
 		return fmt.Errorf("kernel: describe: stages 12 and 13: %w", err)
+	}
+	if err := k.describeEventsRoutes(); err != nil {
+		return err
 	}
 	return mountIdentityRoutes(k.router, identityRoutes{
 		Auth: new(auth.Service), RBAC: new(rbac.Service), Review: review, Audit: new(audit.Store),
