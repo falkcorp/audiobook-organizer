@@ -52,6 +52,7 @@ type appConfigScan struct {
 	bare         int            // informational: address-of / value uses outside internal/config
 	writes       int            // informational: outside assignment or inc/dec targets rooted at AppConfig
 	insideConfig int            // informational: unqualified AppConfig uses inside internal/config
+	getUses      int            // informational: config.Get() uses outside internal/config (the copy-on-write reads AppConfig uses become)
 	perFile      map[string]int // outside uses per file
 }
 
@@ -198,6 +199,14 @@ func scanAppConfigReads(t *testing.T, root string) appConfigScan {
 			if alias == "" {
 				return nil
 			}
+			ast.Inspect(f, func(node ast.Node) bool {
+				if sel, ok := node.(*ast.SelectorExpr); ok && sel.Sel.Name == "Get" {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == alias {
+						res.getUses++
+					}
+				}
+				return true
+			})
 			u := classifyAppConfigUses(f, alias)
 			if u.total > 0 {
 				res.perFile[rel] = u.total
@@ -244,8 +253,12 @@ func TestAppConfigDirectReadRatchet(t *testing.T) {
 	if res.files < 500 {
 		t.Fatalf("scanned only %d Go files; the walker is broken, not the code", res.files)
 	}
-	if res.outside <= 100 {
-		t.Fatalf("counted only %d AppConfig uses; the alias resolver is broken, not the code", res.outside)
+	// The config-cow sweep (internal/config/cow.go) rewrites each AppConfig
+	// use to one config.Get() use, so the control counts both: a sweep that
+	// drives AppConfig uses toward zero must not trip it, and an alias
+	// resolver that matches nothing still does.
+	if res.outside+res.getUses <= 100 {
+		t.Fatalf("counted only %d AppConfig and %d config.Get uses; the alias resolver is broken, not the code", res.outside, res.getUses)
 	}
 
 	t.Logf("files scanned=%d; direct AppConfig uses outside internal/config=%d (in %d files), of which address-of / value uses (not config.AppConfig.Field)=%d; write targets=%d; unqualified uses inside internal/config (informational, not gated)=%d",

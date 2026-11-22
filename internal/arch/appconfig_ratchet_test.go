@@ -29,7 +29,13 @@ const appConfigImport = "github.com/falkcorp/audiobook-organizer/internal/config
 // MutateChecked is the same write with its refusal returned and is not counted: a
 // package that moves a Mutate to it is going the right way, and the ratchet must
 // not fail that change.
-var appConfigAccessors = map[string]bool{"AppConfig": true, "Snapshot": true, "Mutate": true}
+//
+// config.Get (the copy-on-write snapshot, internal/config/cow.go) is counted too:
+// the config-cow sweep rewrites each config.AppConfig use to one config.Get use,
+// so every ceiling holds through the sweep. Left uncounted, the rewrite would
+// drop each package's count without anything moving to an injected accessor,
+// and new code could add Get uses no ceiling sees.
+var appConfigAccessors = map[string]bool{"AppConfig": true, "Snapshot": true, "Mutate": true, "Get": true}
 
 // appConfigRatchet is, per package directory (relative to the module root, "." for
 // main), the number of uses of config.AppConfig, config.Snapshot and config.Mutate
