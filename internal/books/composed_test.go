@@ -250,8 +250,12 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 
 	mod := Module().(*booksModule)
 	mod.beforeSettings = func(store *database.PebbleStore) {
-		_, _, err := auth.SeedRoles(store)
-		require.NoError(t, err)
+		// Under the identity flip the role rows are a retired claim (core owns
+		// the roles): HEAD's seed would be refused, correctly.
+		if !identityOn() {
+			_, _, err := auth.SeedRoles(store)
+			require.NoError(t, err)
+		}
 		if pre != nil {
 			pre(store)
 		}

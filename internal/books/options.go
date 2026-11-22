@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
 	"github.com/falkcorp/mediacore/app"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -145,7 +146,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// agrees with it when the default could not be created and the state sits
 	// beside a store named by a flag.
 	o := bootOptions(in.Boot)
-	return app.Options{
+	ao := app.Options{
 		RetiredConfigNames:    o.RetiredConfigNames,
 		ConfigEnvBindings:     o.ConfigEnvBindings,
 		ConfigPassthrough:     o.ConfigPassthrough,
@@ -167,7 +168,34 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		StateDir:              m.stateDir,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
 		FromRelease:           in.FromRelease,
-	}, nil
+	}
+	if identityOn() {
+		if err := m.identityOptions(&ao); err != nil {
+			return app.Options{}, err
+		}
+	}
+	return ao, nil
+}
+
+// identityOptions adds the identity boot's inputs to ao (identityOn only): the
+// identity boot itself, stage 13's atom table, the Access extension and the
+// account resolver handle it holds, the bootstrap token's file name, and the
+// config pins (the session cookie's name). The declaration core would refuse a
+// piece of (a catalog that does not build, a seed role with nothing) fails here,
+// before anything opens, not at P2.
+func (m *booksModule) identityOptions(ao *app.Options) error {
+	w, err := newIdentityWiring(configOwnerEmail)
+	if err != nil {
+		return err
+	}
+	m.idw = w
+	ao.IdentityBoot = true
+	ao.ResolveAtom = atomsForStage13()
+	ao.AccountResolver = w.resolver
+	ao.Authenticators = []coreauth.Extension{w.ext}
+	ao.Auth = identityAuthOptions()
+	ao.ConfigFlags = identityConfigFlags(ao.ConfigFlags)
+	return nil
 }
 
 // OfflineOptions is ABO's app.Options for core's offline commands
@@ -425,6 +453,15 @@ func Attach(mod module.Module, a *app.App) error {
 	srv := m.srv.Load()
 	if srv == nil {
 		return nil
+	}
+	if identityOn() {
+		var admin migrationReader // an interface holding a nil *storage.Admin would read as non-nil
+		if sa := a.StorageAdmin(); sa != nil {
+			admin = sa
+		}
+		if err := identityStoreReady(context.Background(), srv.UnderCoreIdentity(), admin); err != nil {
+			return err
+		}
 	}
 	p := a.Metrics()
 	if err := srv.AttachMetrics(p.Registerer(), p.Gatherer(), p.Handler()); err != nil {
