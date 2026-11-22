@@ -383,8 +383,12 @@ var (
 // principal (the letters of reachR2.verdict, in the order of the principal table).
 // An R2-only route has no R0 recording, so no cell is compared and a change of its
 // requirement or of its Interactive guard would move reach and fail nothing; the
-// letters are the decision, taken from the spec, and a mutant that moves one fails
-// here. The reissue route is not listed: its Owner guard masks its requirement,
+// letters are the decision, and a mutant that moves one fails here. The claim's
+// letters are the credential routes' shape (the same as the ones before
+// PUT /auth/me/password in verdicts.json): the seven human sessions but the
+// fp-worker role admit (any signed-in user claims their own key), every API key,
+// the anonymous caller and the auth-off principal are refused (a credRoute needs
+// an interactive session that has a user). The reissue route is not listed: its Owner guard masks its requirement,
 // which reachMaskedRoutes and the owner-set twin pin instead.
 var reachWantR2OnlyVerdicts = map[string]string{
 	"POST /api/v1/auth/phone-key/claim": "AAADAAADDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
