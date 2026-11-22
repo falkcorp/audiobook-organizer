@@ -52,7 +52,7 @@ import {
   formatKeyExpiry,
 } from '../../utils/apiKeyExpiry';
 import { API_KEY_DESCRIPTION_MAX_CHARS } from '../../utils/apiKeyDescription';
-import { API_KEY_SCOPES } from '../../generated/permissions';
+import { API_KEY_ATOM_SCOPES } from '../../utils/apiKeyScopes';
 
 function relativeTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -463,7 +463,7 @@ export function APIKeysTab() {
                 Scopes
               </Typography>
               <FormGroup>
-                {API_KEY_SCOPES.map((s) => (
+                {API_KEY_ATOM_SCOPES.map((s) => (
                   <FormControlLabel
                     key={s}
                     control={
