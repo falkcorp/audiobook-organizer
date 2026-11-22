@@ -41,8 +41,9 @@ export interface UserMenuFrameProps {
   /** The shell's useAuth() value, or anything with its status, user, logout and refresh. */
   auth: Pick<AuthState, 'status' | 'user' | 'logout' | 'refresh'>;
   /** Saves the signed-in user's email; the frame refreshes `auth` after it resolves. */
-  onSaveProfile: (email: string) => Promise<unknown>;
-  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  onSaveProfile?: (email: string) => Promise<unknown>;
+  /** Each save is optional: without it the menu hides that entry (core's client has no route for either yet). */
+  onChangePassword?: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 export function UserMenuFrame({ auth, onSaveProfile, onChangePassword }: UserMenuFrameProps) {
@@ -104,7 +105,7 @@ export function UserMenuFrame({ auth, onSaveProfile, onChangePassword }: UserMen
     }
     setProfileSaving(true);
     try {
-      await onSaveProfile(email.trim());
+      await onSaveProfile?.(email.trim());
       // refresh() re-fetches the user from the server, so the displayed email
       // is the saved one, not a locally patched copy.
       await auth.refresh();
@@ -128,7 +129,7 @@ export function UserMenuFrame({ auth, onSaveProfile, onChangePassword }: UserMen
     }
     setPasswordSaving(true);
     try {
-      await onChangePassword(currentPassword, newPassword);
+      await onChangePassword?.(currentPassword, newPassword);
       closeDialog();
     } catch (e: unknown) {
       setPasswordError(String(e));
@@ -174,19 +175,23 @@ export function UserMenuFrame({ auth, onSaveProfile, onChangePassword }: UserMen
           </Typography>
         </Box>
         <Divider />
+        {onSaveProfile && (
         <MenuItem onClick={() => openDialog('profile')}>
           <ListItemIcon>
             <PersonIcon fontSize="small" />
           </ListItemIcon>
           Edit profile
         </MenuItem>
+        )}
+        {onChangePassword && (
         <MenuItem onClick={() => openDialog('password')}>
           <ListItemIcon>
             <LockIcon fontSize="small" />
           </ListItemIcon>
           Change password
         </MenuItem>
-        <Divider />
+        )}
+        {(onSaveProfile || onChangePassword) && <Divider />}
         <MenuItem
           onClick={() => {
             void handleLogout();

@@ -11,10 +11,11 @@ import { RealtimeProvider } from '../realtime';
 import type { RealtimeSource } from '../contracts';
 import type { ModuleManifest, ModuleUI, RouteContribution } from '../types';
 import { useMountedModules, useShellContext } from './context';
-import { LazySlot, MainLayout } from './MainLayout';
+import { LazySlot } from './LazySlot';
 import { ModulesGate } from './ModulesGate';
 import { StaleBuildBanner } from './StaleBuildBanner';
 import { NoAccessPage, NotFoundPage } from './Page';
+import { ShellLayout } from './ShellLayout';
 
 type ShellPages = typeof import('./shellPages');
 
@@ -116,7 +117,7 @@ export function shellRouteObjects(registry: readonly ModuleUI[], realtime: Realt
         {
           element: (
             <RequireAuth>
-              <MainLayout />
+              <ShellLayout />
             </RequireAuth>
           ),
           children: [
