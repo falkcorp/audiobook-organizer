@@ -39,6 +39,11 @@ type idCore struct {
 	planErr error
 	// unmergeErr is what PlanUserUnmerge answers (user_merge_unmerge_test.go).
 	unmergeErr error
+	// footprint and footprintErr are what AdminAccountFootprint answers
+	// (user_merge_identity_footprint_test.go); footprintCalls counts the reads.
+	footprint      coreauth.AccountFootprint
+	footprintErr   error
+	footprintCalls int
 }
 
 func (c *idCore) User(_ context.Context, id coreauth.UserID) (*coreauth.User, error) {
@@ -270,14 +275,5 @@ func TestUserMergeRoutes_TooLargeIs409MergeTooLargeOnPreviewAndApply(t *testing.
 	}
 	if len(r.enq.calls) != 0 {
 		t.Errorf("an oversized merge was enqueued")
-	}
-}
-
-func TestUserMergeRoutes_FootprintStaysUnavailableUnderIdentity(t *testing.T) {
-	r, _ := idMergeRig(t)
-	r.idEngine(t, true)
-	w, _ := r.do(t, http.MethodGet, "/users/"+r.absorbed.ID+"/footprint", nil)
-	if w.Code != http.StatusConflict || problemCode(t, w.Body.Bytes()) != usermerge.ProblemUnavailableUnderIdentity {
-		t.Errorf("footprint under identity: %d %s", w.Code, w.Body.String())
 	}
 }

@@ -6,8 +6,11 @@
 package usermerge
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -33,11 +36,25 @@ type Footprint struct {
 // FamPositions is the footprint-only family name of the upos: rows.
 const FamPositions = "positions"
 
-// Footprint reads userID's footprint. It writes nothing.
-func (s *Service) Footprint(userID string) (*Footprint, error) {
-	if err := s.CheckFootprintAvailable(); err != nil {
+// Footprint reads userID's footprint. It writes nothing. Before the identity flip
+// the account, its sign-ins, keys and sessions are read from the books store
+// (footprintFromBooks); once accounts live in core they are read through core's
+// masked AdminAccountFootprint, as the principal bound on ctx, and the families
+// books still owns from books' store (footprintFromCore). Both answer the same
+// shape. A flipped service without core's handles refuses
+// (ErrUnavailableUnderIdentity) before it reads anything.
+func (s *Service) Footprint(ctx context.Context, userID string) (*Footprint, error) {
+	if err := s.CheckAvailable(); err != nil {
 		return nil, err
 	}
+	if s.flipped() {
+		return s.footprintFromCore(ctx, userID)
+	}
+	return s.footprintFromBooks(userID)
+}
+
+// footprintFromBooks is HEAD's footprint: every family from the books store.
+func (s *Service) footprintFromBooks(userID string) (*Footprint, error) {
 	u, err := s.mustUser(userID, "user")
 	if err != nil {
 		return nil, err
@@ -46,7 +63,79 @@ func (s *Service) Footprint(userID string) (*Footprint, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &Footprint{User: summarize(u), Identities: []Identity{}, Counts: map[string]int{}, Unreadable: d.Unreadable}
+	f := newFootprint(summarize(u), userID, d)
+	owner := coreauth.NormalizeEmail(s.ownerEmail())
+	for _, r := range d.OAuthIdentities {
+		var id database.OAuthIdentity
+		if err := json.Unmarshal(r.Value, &id); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", r.Key, err)
+		}
+		f.Identities = append(f.Identities, Identity{ID: id.ID, Provider: id.Provider, Subject: maskSubject(id.Subject),
+			Email: id.Email, LinkedAt: id.CreatedAt, OwnerEmail: owner != "" && coreauth.NormalizeEmail(id.Email) == owner})
+	}
+	sessions, err := s.store.ListUserSessions(userID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	now := s.now()
+	for _, sess := range sessions {
+		if !sess.Revoked && sess.ExpiresAt.After(now) {
+			f.ActiveSessions++
+		}
+	}
+	return f, nil
+}
+
+// footprintFromCore is the footprint once accounts live in core (F4-08 B10fp).
+// The account and everything core owns about it (sign-ins, keys, invites, the
+// allow-list row, sessions) come from core's AdminAccountFootprint, which holds
+// counts and masked values and checks the principal on ctx itself, so holding the
+// handle grants nothing. The families books still owns (listening state,
+// bookmarks, preferences, playback, listen stats, playlists, collections) come
+// from books' store through ScanBooksUserData, which never reads the claims
+// books retired (oauthid:, apikey:, invite:, sess:).
+func (s *Service) footprintFromCore(ctx context.Context, userID string) (*Footprint, error) {
+	u, err := s.coreUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		return nil, fmt.Errorf("read user: %w: %s", database.ErrUserNotFound, userID)
+	}
+	cf, err := s.core.Admin.AdminAccountFootprint(ctx, coreauth.UserID(userID))
+	if errors.Is(err, coreauth.ErrNotFound) {
+		return nil, fmt.Errorf("read user: %w: %s", database.ErrUserNotFound, userID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the account's footprint: %w", err)
+	}
+	d, err := s.idMerger.ScanBooksUserData(userID)
+	if err != nil {
+		return nil, err
+	}
+	f := newFootprint(summarizeCore(u), userID, d)
+	f.Counts[FamOAuthIdentities] = len(cf.Identities)
+	f.Counts[FamAPIKeys] = cf.APIKeys
+	f.Counts[FamInvites] = cf.Invites
+	f.Counts[FamInviteGrants] = cf.InviteGrants
+	f.ActiveSessions = cf.ActiveSessions
+	f.Unreadable = append(f.Unreadable, cf.Unreadable...)
+	owner := coreauth.NormalizeEmail(s.ownerEmail())
+	for i, l := range cf.Identities {
+		// The id is an ordinal: core's sign-in has no id of its own, and the
+		// provider and subject (or a hash of the subject) would identify it.
+		f.Identities = append(f.Identities, Identity{ID: fmt.Sprintf("%s#%d", l.Provider, i+1), Provider: l.Provider,
+			Subject: l.SubjectMask, Email: l.Email, LinkedAt: l.LinkedAt,
+			OwnerEmail: owner != "" && coreauth.NormalizeEmail(l.Email) == owner})
+	}
+	return f, nil
+}
+
+// newFootprint is the footprint of user with every family counted from d (the
+// books families, and the core-owned ones when d came from a scan that read
+// them) and no sign-ins or sessions yet.
+func newFootprint(user AccountSummary, userID string, d *database.UserData) *Footprint {
+	f := &Footprint{User: user, Identities: []Identity{}, Counts: map[string]int{}, Unreadable: slices.Clone(d.Unreadable)}
 	if f.Unreadable == nil {
 		f.Unreadable = []string{}
 	}
@@ -68,24 +157,5 @@ func (s *Service) Footprint(userID string) (*Footprint, error) {
 	} {
 		f.Counts[fam] = len(rows)
 	}
-	owner := coreauth.NormalizeEmail(s.ownerEmail())
-	for _, r := range d.OAuthIdentities {
-		var id database.OAuthIdentity
-		if err := json.Unmarshal(r.Value, &id); err != nil {
-			return nil, fmt.Errorf("decode %s: %w", r.Key, err)
-		}
-		f.Identities = append(f.Identities, Identity{ID: id.ID, Provider: id.Provider, Subject: maskSubject(id.Subject),
-			Email: id.Email, LinkedAt: id.CreatedAt, OwnerEmail: owner != "" && coreauth.NormalizeEmail(id.Email) == owner})
-	}
-	sessions, err := s.store.ListUserSessions(userID)
-	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
-	}
-	now := s.now()
-	for _, sess := range sessions {
-		if !sess.Revoked && sess.ExpiresAt.After(now) {
-			f.ActiveSessions++
-		}
-	}
-	return f, nil
+	return f
 }
