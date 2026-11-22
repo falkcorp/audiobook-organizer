@@ -4,8 +4,8 @@
 // last-edited: 2026-10-21
 
 // The Users page on core's native identity routes (F4-08 B8): the list, disable and enable,
-// the merged-away marker, the one-time reset and invite links, invite revocation, and the one
-// call that stays on books (set email).
+// the merged-away marker and the one-time reset link; invitations (list, revoke, resend, create),
+// set email and the sign-ins drawer stay on books routes (F4-08 B10sq).
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
@@ -33,7 +33,9 @@ function serve(
 ) {
   return stubCoreFetch({
     'GET /users': () => page(users),
-    'GET /users/invites': () => page(invites),
+    // Books' list: the pending invites and the mail settings in one answer. A test that needs other
+    // settings overrides this key (booksInvites below keeps the pending list it was given).
+    'GET /api/v1/users/invites': () => coreJson({ data: { invites, count: invites.length } }),
     'GET /roles': page([{ name: 'admin' }, { name: 'editor' }, { name: 'viewer' }]),
     ...extra,
   });
@@ -53,6 +55,37 @@ describe('Users', () => {
     expect(await screen.findByText('bruce.wayne')).toBeInTheDocument();
   });
 
+  it('fills the Created column from the account created_at (G6)', async () => {
+    serve([activeUser]);
+    renderWithProviders(<Users />);
+    await screen.findByText('bruce.wayne');
+    expect(screen.getByText(new Date('2026-01-01T00:00:00Z').toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('renders every page of the account list, not just the first 1000 (rows 9 and 14)', async () => {
+    const people = Array.from({ length: 1001 }, (_, i) => ({
+      ...activeUser,
+      id: `u${i}`,
+      username: `user.${String(i).padStart(4, '0')}`,
+    }));
+    const { calls } = serve([], {
+      'GET /users': (call) => {
+        const q = new URL(call.path, 'http://x').searchParams;
+        const offset = Number(q.get('offset') ?? 0);
+        const limit = Number(q.get('limit') ?? 50);
+        const items = people.slice(offset, offset + limit);
+        return coreJson({ items, count: items.length, limit, offset, total: people.length });
+      },
+    });
+    renderWithProviders(<Users />);
+    expect(await screen.findByText('user.0000')).toBeInTheDocument();
+    expect(await screen.findByText('user.1000')).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'GET' && c.path.startsWith('/users?')).map((c) => c.path)).toEqual([
+      '/users?limit=1000&offset=0',
+      '/users?limit=1000&offset=1000',
+    ]);
+  });
+
   it('shows the problem core answered with, not an empty list, when the list fails', async () => {
     serve([], { 'GET /users': coreProblem(500, 'internal', 'the store is unavailable') });
     renderWithProviders(<Users />);
@@ -65,8 +98,11 @@ describe('Users', () => {
       vi.fn(async () => loginPageResponse())
     );
     renderWithProviders(<Users />);
-    // The extension panels bounce too and show their own alert; the page's own names core's list.
-    expect(await screen.findByText(/session expired\):.*\/api\/core\/v1\/users\?limit=1000/i)).toBeInTheDocument();
+    // The extension panels bounce too and show their own alerts; the page's own names whichever of its
+    // two list calls (core's accounts, books' invites) was refused first: both are bounced here.
+    expect(
+      (await screen.findAllByText(/session expired\):.*\/api\/(core\/v1\/users\?limit=1000|v1\/users\/invites)/i)).length
+    ).toBeGreaterThan(0);
   });
 
   it('shows an expired-session error when a disable is answered with a login page', async () => {
@@ -214,22 +250,42 @@ describe('Users', () => {
       id: 'inv-1',
       username: 'pending-guest',
       email: 'pending@example.test',
-      role: 'viewer',
-      created_by: 'u1',
+      role_id: 'viewer',
+      created_by_user_id: 'u1',
       created_at: '2026-11-20T12:00:00Z',
       expires_at: '2026-11-27T12:00:00Z',
     };
 
-    const booksInvites = (extra: object = {}) => ({
+    const booksInvites = (extra: object = {}, invites: unknown[] = []) => ({
       'GET /api/v1/users/invites': () =>
-        coreJson({ data: { invites: [], mail_configured: true, guest_policy_sync_configured: true, ...extra } }),
+        coreJson({
+          data: { invites, mail_configured: true, guest_policy_sync_configured: true, ...extra },
+        }),
     });
 
-    it('lists core pending invitations with no link column', async () => {
-      serve([activeUser], booksInvites(), [pending]);
+    it('lists the pending invitations from the books route with no link column, even when books sends a token', async () => {
+      const { calls } = serve([activeUser], booksInvites({}, [{ ...pending, token: 'gotham-link-one' }]));
       renderWithProviders(<Users />);
       expect(await screen.findByText('pending-guest')).toBeInTheDocument();
+      expect(screen.getByText('viewer')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /copy invitation link/i })).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toContain('gotham-link-one');
+      expect(calls.some((c) => c.method === 'GET' && c.path === '/api/v1/users/invites')).toBe(true);
+      expect(calls.some((c) => c.path.startsWith('/users/invites'))).toBe(false);
+    });
+
+    it('shows when the invitation email went out, and Not sent until it has', async () => {
+      serve(
+        [activeUser],
+        booksInvites({}, [
+          { ...pending, email_sent_at: '2026-11-20T12:30:00Z' },
+          { ...pending, id: 'inv-2', username: 'unsent-guest', email: '' },
+        ])
+      );
+      renderWithProviders(<Users />);
+      await screen.findByText('pending-guest');
+      expect(screen.getByText(`Sent ${new Date('2026-11-20T12:30:00Z').toLocaleString()}`)).toBeInTheDocument();
+      expect(screen.getAllByText('Not sent')).toHaveLength(1);
     });
 
     it('creates an invite on books (which sends the email) and shows the fragment link', async () => {
@@ -308,7 +364,7 @@ describe('Users', () => {
     });
 
     it('warns in the pending list and the create dialog when guest policy sync is off, and not when it is on', async () => {
-      serve([activeUser], booksInvites({ guest_policy_sync_configured: false }), [pending]);
+      serve([activeUser], booksInvites({ guest_policy_sync_configured: false }, [pending]));
       const user = userEvent.setup();
       renderWithProviders(<Users />);
       await screen.findByText('pending-guest');
@@ -323,7 +379,7 @@ describe('Users', () => {
     });
 
     it('shows no guest-access warning when guest policy sync is configured', async () => {
-      serve([activeUser], booksInvites({ guest_policy_sync_configured: true }), [pending]);
+      serve([activeUser], booksInvites({ guest_policy_sync_configured: true }, [pending]));
       const user = userEvent.setup();
       renderWithProviders(<Users />);
       await screen.findByText('pending-guest');
@@ -333,14 +389,10 @@ describe('Users', () => {
     });
 
     it('resends a pending invitation through books', async () => {
-      const { calls } = serve(
-        [activeUser],
-        {
-          ...booksInvites(),
-          'POST /api/v1/users/invites/inv-1/resend': () => coreJson({ data: {} }),
-        },
-        [pending]
-      );
+      const { calls } = serve([activeUser], {
+        ...booksInvites({}, [pending]),
+        'POST /api/v1/users/invites/inv-1/resend': () => coreJson({ data: {} }),
+      });
       const user = userEvent.setup();
       renderWithProviders(<Users />);
       await user.click(await screen.findByRole('button', { name: /resend invitation email to pending@example.test/i }));
@@ -367,15 +419,34 @@ describe('Users', () => {
       expect(screen.getByText(/added to cloudflare guest policy/i)).toBeInTheDocument();
     });
 
-    it('revokes a pending invitation and reloads', async () => {
+    it('revokes a pending invitation on the books route and reloads', async () => {
       const { calls } = serve([activeUser], {
-        'DELETE /users/invites/inv-1': () => new Response(null, { status: 204 }),
-      }, [pending]);
+        ...booksInvites({}, [pending]),
+        'DELETE /api/v1/users/invites/inv-1': () => coreJson({ data: { deleted: 'inv-1' } }),
+      });
       const user = userEvent.setup();
       renderWithProviders(<Users />);
       await user.click(await screen.findByRole('button', { name: /revoke invitation for pending-guest/i }));
       expect(await screen.findByText(/invitation for pending-guest revoked/i)).toBeInTheDocument();
-      expect(calls.some((c) => c.method === 'DELETE' && c.path === '/users/invites/inv-1')).toBe(true);
+      expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/users/invites/inv-1')).toBe(true);
+      expect(calls.some((c) => c.path.startsWith('/users/invites'))).toBe(false);
+      expect(calls.filter((c) => c.method === 'GET' && c.path === '/api/v1/users/invites')).toHaveLength(2);
+    });
+
+    it('shows books' + "'" + ' refusal of a revoke instead of a revoked notice', async () => {
+      serve([activeUser], {
+        ...booksInvites({}, [pending]),
+        'DELETE /api/v1/users/invites/inv-1': () =>
+          new Response(JSON.stringify({ error: 'invite not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+      await user.click(await screen.findByRole('button', { name: /revoke invitation for pending-guest/i }));
+      expect(await screen.findByText('invite not found')).toBeInTheDocument();
+      expect(screen.queryByText(/revoked/i)).not.toBeInTheDocument();
     });
   });
 });

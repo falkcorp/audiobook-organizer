@@ -3503,6 +3503,8 @@ export interface AdminUserSummary {
   email: string;
   status: string;
   roles: string[];
+  /** When the account was created (core's User.created_at). */
+  created_at?: string;
   /** Set when the account was merged into another; the server refuses to enable it (409 merged_away). */
   merged_into_user_id?: string;
 }

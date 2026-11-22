@@ -4,8 +4,10 @@
 // last-edited: 2026-11-22
 
 // SEC5-8: with authentication off core refuses invites, deactivate, reactivate and reset-password
-// for the auth-disabled principal. The page says "Turn on sign-in to do this" with a link, and
-// disables the actions up front; a refusal that arrives anyway maps to the same message.
+// for the auth-disabled principal. The page says "Turn on sign-in to do this" with a link, HIDES
+// deactivate, reactivate and reset-password, keeps invite create and resend visible but disabled,
+// and leaves the invite list and revoke live (F4-08 B10sq); a refusal that arrives anyway maps to
+// the same message.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -24,17 +26,16 @@ const invite = {
   id: 'i1',
   username: 'selina.kyle',
   email: 'selina@example.test',
-  role: 'viewer',
+  role_id: 'viewer',
   expires_at: '2026-12-01T00:00:00Z',
 };
 
 function serve(extra: Parameters<typeof stubCoreFetch>[0] = {}) {
   return stubCoreFetch({
     'GET /users': () => coreJson({ items: [bruce, harvey], total: 2 }),
-    'GET /users/invites': () => coreJson({ items: [invite], total: 1 }),
     'GET /roles': () => coreJson({ items: [{ name: 'admin' }], total: 1 }),
     'GET /api/v1/users/invites': () =>
-      envelope({ invites: [], count: 0, mail_configured: true }),
+      envelope({ invites: [invite], count: 1, mail_configured: true }),
     ...extra,
   });
 }
@@ -49,18 +50,34 @@ const renderPage = (authDisabled: boolean) =>
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Users page under auth-off (SEC5-8)', () => {
-  it('shows the message with a link and disables invite, deactivate, reactivate and reset-password', async () => {
+  it('shows the message with a link, disables invite create and resend, and hides deactivate, reactivate and reset-password', async () => {
     const { calls } = serve();
     renderPage(true);
     await screen.findByText('bruce.wayne');
     expect(screen.getByText(/Turn on sign-in to do this/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /turn on sign-in/i })).toHaveAttribute('href', SIGN_IN_HELP_URL);
     expect(screen.getByRole('button', { name: 'Create Invite' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Deactivate' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Reactivate' })).toBeDisabled();
-    for (const b of screen.getAllByRole('button', { name: 'Reset Password' })) expect(b).toBeDisabled();
     expect(screen.getByRole('button', { name: /Resend invitation email/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Deactivate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reactivate' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset Password' })).toBeNull();
+    // What is not refused stays: the account list, the footprint drawer and the invite list.
+    expect(screen.getByRole('button', { name: /Sign-ins and data for bruce.wayne/ })).toBeEnabled();
+    expect(screen.getByText('selina.kyle')).toBeInTheDocument();
     expect(calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
+  });
+
+  it('keeps the invite list and revoke live under auth-off: revoke goes to the books route', async () => {
+    const { calls } = serve({
+      'DELETE /api/v1/users/invites/i1': () => envelope({ deleted: 'i1' }),
+    });
+    const user = userEvent.setup();
+    renderPage(true);
+    await screen.findByText('selina.kyle');
+    await user.click(screen.getByRole('button', { name: /Revoke invitation for selina.kyle/ }));
+    expect(await screen.findByText(/Invitation for selina.kyle revoked/)).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual(['/api/v1/users/invites/i1']);
+    expect(calls.some((c) => c.path.startsWith('/users/invites'))).toBe(false);
   });
 
   it('leaves the actions on, with no notice, when auth is on', async () => {

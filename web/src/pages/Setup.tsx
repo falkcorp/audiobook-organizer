@@ -16,7 +16,7 @@ import {
   Alert,
 } from '@mui/material';
 import { setupAdmin } from '../services/coreIdentity';
-import { ApiError } from '../services/apiError';
+import { setupErrorMessage } from '../utils/setupErrorMessage';
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -46,13 +46,7 @@ export default function Setup() {
       await setupAdmin({ username, password, email, bootstrap_token: bootstrapToken });
       navigate('/');
     } catch (err: unknown) {
-      setError(
-        err instanceof ApiError && err.status === 401
-          ? 'The server requires a login before setup can run. Sign in and try again.'
-          : err instanceof Error && err.message
-            ? err.message
-            : 'Setup failed'
-      );
+      setError(setupErrorMessage(err, 'Setup failed'));
     } finally {
       setLoading(false);
     }

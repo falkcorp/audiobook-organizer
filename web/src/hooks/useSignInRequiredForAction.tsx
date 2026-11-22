@@ -9,6 +9,8 @@ import { SignInRequiredNotice } from '../components/common/SignInRequiredNotice'
 import { isAuthOff, isSignInRequiredRefusal } from '../utils/signInRequired';
 
 export interface SignInRequiredGate {
+  /** True only when the server said authentication is off (not merely refused once): the actions that cannot work are hidden. */
+  authOff: boolean;
   /** True when the action must not be offered: auth is off, or the server just refused it. */
   blocked: boolean;
   /** Call from a catch: true when `err` was the refusal (now shown as the notice), false for any other error. */
@@ -31,5 +33,5 @@ export function useSignInRequiredForAction(): SignInRequiredGate {
     [authOff]
   );
   const blocked = authOff || refused;
-  return { blocked, refuse, notice: blocked ? <SignInRequiredNotice /> : null };
+  return { authOff, blocked, refuse, notice: blocked ? <SignInRequiredNotice /> : null };
 }

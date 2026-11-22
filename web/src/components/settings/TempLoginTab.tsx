@@ -118,26 +118,31 @@ export function TempLoginTab() {
       )}
 
       <Stack spacing={2} sx={{ mt: 2 }}>
-        <TextField
-          select
-          label="User"
-          value={selectedUserID}
-          onChange={(e) => setSelectedUserID(e.target.value)}
-          disabled={users.length === 0 || loading}
-          fullWidth
-        >
-          {users.map((u) => (
-            <MenuItem key={u.id} value={u.id}>
-              {u.username} {u.email ? `— ${u.email}` : ''}
-            </MenuItem>
-          ))}
-        </TextField>
+        {/* Under auth-off core refuses the mint for the auth-disabled principal: the action is hidden, not offered. */}
+        {!gate.authOff && (
+          <>
+            <TextField
+              select
+              label="User"
+              value={selectedUserID}
+              onChange={(e) => setSelectedUserID(e.target.value)}
+              disabled={users.length === 0 || loading}
+              fullWidth
+            >
+              {users.map((u) => (
+                <MenuItem key={u.id} value={u.id}>
+                  {u.username} {u.email ? `— ${u.email}` : ''}
+                </MenuItem>
+              ))}
+            </TextField>
 
-        <Box>
-          <Button variant="contained" onClick={handleMint} disabled={!selectedUserID || loading || gate.blocked}>
-            {loading ? <CircularProgress size={20} /> : 'Generate Login URL'}
-          </Button>
-        </Box>
+            <Box>
+              <Button variant="contained" onClick={handleMint} disabled={!selectedUserID || loading || gate.blocked}>
+                {loading ? <CircularProgress size={20} /> : 'Generate Login URL'}
+              </Button>
+            </Box>
+          </>
+        )}
 
         {gate.notice}
         {error && <Alert severity="error">{error}</Alert>}

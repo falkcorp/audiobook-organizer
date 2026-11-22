@@ -43,9 +43,8 @@ function serve() {
   const people = [system, bruce, alfred, robin, locked];
   return stubCoreFetch({
     'GET /users': () => coreJson({ items: people, total: people.length }),
-    'GET /users/invites': () => coreJson({ items: [], total: 0 }),
     'GET /roles': () => coreJson({ items: [{ name: 'admin' }, { name: 'editor' }], total: 2 }),
-    // Books' own routes, which the extensions and the invite settings still read.
+    // Books' own routes: the pending-invite list and settings, and the extensions' reads.
     'GET /api/v1/users/invites': () => envelope({ invites: [], count: 0 }),
     'GET /api/v1/users/merges': () => envelope({ merges: [journal] }),
     'GET /api/v1/admin/guest-service-tokens': () => envelope({ flag_on: true, enabled: true, tokens: [] }),

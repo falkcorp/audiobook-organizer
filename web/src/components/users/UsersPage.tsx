@@ -10,15 +10,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { apiFetch } from '../../utils/apiFetch';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../../utils/apiResponse';
-import {
-  createPasswordResetLink,
-  deleteInvite,
-  disableUser,
-  enableUser,
-  listAdminUsers,
-  listInvites,
-  type PendingInvite,
-} from '../../services/coreIdentity';
+import { createPasswordResetLink, disableUser, enableUser, listAdminUsers } from '../../services/coreIdentity';
+import { deleteInvite, listInvites, type PendingInviteRow } from '../../services/booksInvites';
 import { emailBindingLabel, guestPolicyLabel, inviteLink, type AcceptedInvite } from './usersInvites';
 import { UserFootprintDrawer } from './UserFootprintDrawer';
 import type { UsersPageExtensions } from './usersExtensions';
@@ -69,13 +62,6 @@ interface InviteSettings {
   guestPolicySyncConfigured: boolean;
 }
 
-interface BooksInvitesBody {
-  accepted?: AcceptedInvite[];
-  mail_configured?: boolean;
-  mail_unavailable_reason?: string;
-  guest_policy_sync_configured?: boolean;
-}
-
 interface User {
   id: string;
   username: string;
@@ -90,9 +76,15 @@ interface User {
 
 /**
  * `authDisabled` is the host's reading of the server's auth setting (books: AuthContext.authEnabled
- * === false; the shell: /auth/status auth_disabled). Under it core refuses invites, deactivate,
- * reactivate and reset-password for the auth-disabled principal (SEC5-8), so the page says
- * "Turn on sign-in to do this" and disables them rather than showing a raw 403.
+ * === false; the shell: /auth/status auth_disabled). Under it core refuses invite create and resend,
+ * deactivate, reactivate and reset-password for the auth-disabled principal (SEC5-8). The page says
+ * "Turn on sign-in to do this" and:
+ *   - hides deactivate, reactivate and reset-password (nothing the page can do makes them work);
+ *   - keeps invite create and resend visible but disabled, so the message sits next to the controls
+ *     the admin came for;
+ *   - leaves the invite list and revoke live: they answer under auth-off (books routes, see
+ *     services/booksInvites.ts).
+ * A refusal that arrives anyway (the auth setting was unknown) only disables.
  */
 export function UsersPage({
   extensions,
@@ -105,11 +97,10 @@ export function UsersPage({
   const [signInRefused, setSignInRefused] = useState(false);
   const signInBlocked = authDisabled || signInRefused;
   const [users, setUsers] = useState<User[]>([]);
-  const [invites, setInvites] = useState<PendingInvite[]>([]);
+  const [invites, setInvites] = useState<PendingInviteRow[]>([]);
   const [accepted, setAccepted] = useState<AcceptedInvite[]>([]);
-  // Books still owns invitation e-mail (send, resend) and the guest-access flags: its list is read
-  // for those alone. The pending list itself is core's. Held until the books wrapper over core's
-  // invite create exists (lead hold-point, F4-08 B8).
+  // Books owns invitation e-mail (send, resend), the guest-access flags and the pending list itself
+  // (it answers under auth-off, where core's native list does not): one books call fills all three.
   const [settings, setSettings] = useState<InviteSettings>({
     mailConfigured: false,
     mailUnavailableReason: '',
@@ -146,25 +137,16 @@ export function UsersPage({
 
   const load = useCallback(async () => {
     try {
-      const [u, i] = await Promise.all([listAdminUsers(), listInvites()]);
+      const [u, list] = await Promise.all([listAdminUsers(), listInvites()]);
       setUsers(u);
-      setInvites(i);
+      setInvites(list.invites);
+      setAccepted(list.accepted);
+      setSettings({
+        mailConfigured: list.mailConfigured,
+        mailUnavailableReason: list.mailUnavailableReason,
+        guestPolicySyncConfigured: list.guestPolicySyncConfigured,
+      });
       setError('');
-      // Best effort: without books' answer the page shows no accepted list and no mail option.
-      try {
-        const resp = await apiFetch(`${API_BASE}/users/invites`);
-        if (resp.ok) {
-          const b = unwrapData<BooksInvitesBody>(await resp.json());
-          setAccepted(b.accepted || []);
-          setSettings({
-            mailConfigured: !!b.mail_configured,
-            mailUnavailableReason: b.mail_unavailable_reason || '',
-            guestPolicySyncConfigured: !!b.guest_policy_sync_configured,
-          });
-        }
-      } catch {
-        /* books' invite settings are optional */
-      }
     } catch (err) {
       setError(errorText(err, 'Failed to load users'));
     }
@@ -228,9 +210,9 @@ export function UsersPage({
   );
 
   const handleResend = useCallback(
-    async (inv: PendingInvite) => {
+    async (inv: PendingInviteRow) => {
       setNotice('');
-      // Books' route: core has no mailer. Kept until the books wrapper over core's invite create.
+      // Books' route: core has no mailer.
       if (
         await runUserAction(async () => {
           const resp = await apiFetch(`${API_BASE}/users/invites/${encodeURIComponent(inv.id)}/resend`, {
@@ -248,7 +230,7 @@ export function UsersPage({
   );
 
   const handleRevokeInvite = useCallback(
-    async (inv: PendingInvite) => {
+    async (inv: PendingInviteRow) => {
       setNotice('');
       if ((await runUserAction(() => deleteInvite(inv.id).then(() => true), 'Failed to revoke invitation')) !== null) {
         setNotice(`Invitation for ${inv.username} revoked.`);
@@ -329,14 +311,14 @@ export function UsersPage({
                   {u.created_at ? new Date(u.created_at).toLocaleDateString() : ''}
                 </TableCell>
                 <TableCell align="right">
-                  {u.status === 'active' && u.username !== '_system' && (
+                  {!authDisabled && u.status === 'active' && u.username !== '_system' && (
                     <Tooltip title="Deactivate">
                       <IconButton size="small" disabled={signInBlocked} onClick={() => handleDisable(u.id)}>
                         <BlockIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
-                  {u.status === 'disabled' && !u.merged_into_user_id && (
+                  {!authDisabled && u.status === 'disabled' && !u.merged_into_user_id && (
                     <Tooltip title="Reactivate">
                       <IconButton size="small" disabled={signInBlocked} onClick={() => handleEnable(u.id)}>
                         <ActiveIcon fontSize="small" color="success" />
@@ -377,7 +359,7 @@ export function UsersPage({
                       </IconButton>
                     </Tooltip>
                   )}
-                  {u.username !== '_system' && (
+                  {!authDisabled && u.username !== '_system' && (
                     <Tooltip title="Reset Password">
                       <IconButton size="small" disabled={signInBlocked} onClick={() => handleResetPassword(u)}>
                         <ResetIcon fontSize="small" />
@@ -418,11 +400,15 @@ export function UsersPage({
                   <TableRow key={inv.id}>
                     <TableCell>{inv.username}</TableCell>
                     <TableCell>{inv.email || '—'}</TableCell>
-                    <TableCell>{inv.role}</TableCell>
+                    <TableCell>{inv.role_id}</TableCell>
                     <TableCell>{new Date(inv.expires_at).toLocaleString()}</TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Typography variant="body2">Not sent</Typography>
+                        <Typography variant="body2">
+                          {inv.email_sent_at
+                            ? `Sent ${new Date(inv.email_sent_at).toLocaleString()}`
+                            : 'Not sent'}
+                        </Typography>
                         {inv.email && settings.mailConfigured && (
                           <Tooltip title="Resend email">
                             <IconButton

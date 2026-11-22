@@ -21,6 +21,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeReturn } from '../utils/safeReturn';
 import { listAuthProviders, oidcStartPath } from '../services/coreIdentity';
+import { setupErrorMessage } from '../utils/setupErrorMessage';
 
 type AuthMode = 'login' | 'setup';
 
@@ -57,6 +58,7 @@ export function Login() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [email, setEmail] = useState('');
+  const [bootstrapToken, setBootstrapToken] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -101,12 +103,12 @@ export function Login() {
     setLoading(true);
     try {
       if (mode === 'setup') {
-        await auth.setupAdmin({ username, password, email });
+        await auth.setupAdmin({ username, password, email, bootstrap_token: bootstrapToken });
       }
       await auth.login(username, password, rememberMe);
       navigate(redirectTo, { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      setError(setupErrorMessage(err, 'Authentication failed'));
     } finally {
       setLoading(false);
     }
@@ -185,6 +187,19 @@ export function Login() {
                   spellCheck: false,
                 },
               }}
+            />
+          )}
+
+          {mode === 'setup' && (
+            <TextField
+              label="Bootstrap token (only when setting up from another machine)"
+              value={bootstrapToken}
+              onChange={(e) => setBootstrapToken(e.target.value)}
+              name="bootstrap_token"
+              id="bootstrap_token"
+              type="password"
+              autoComplete="off"
+              fullWidth
             />
           )}
 
