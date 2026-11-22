@@ -105,3 +105,25 @@ func TestRegisteredHarness_ParityMissesSeesADifference(t *testing.T) {
 		t.Errorf("parityMisses reported a cell that answers as R0 did: %v", got)
 	}
 }
+
+// TestRegisteredHarness_UnruledNarrowingsHoldR0 holds the classRuling cells to R0: keys
+// on POST /auth/api-keys (refused with "API keys cannot change ... keys of other
+// users"), keys on the invite list and delete routes, and a custom-role session on
+// backup restore (core:admin is required). Nobody has ruled on these. They are red
+// until each is either fixed or accepted: accepting one moves its row to classKnown
+// with the ruling that accepted it, and the row is deleted from here by that move.
+func TestRegisteredHarness_UnruledNarrowingsHoldR0(t *testing.T) {
+	var rows []verdictRow
+	for _, r := range verdictRows {
+		if r.Class == classRuling {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) == 0 {
+		t.Skip("no unruled narrowing is left")
+	}
+	h := bootRegistered(t, registeredConfig{})
+	for _, miss := range parityMisses(t, h, rows, onAuthOn) {
+		t.Error(miss)
+	}
+}
