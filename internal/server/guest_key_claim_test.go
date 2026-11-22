@@ -47,7 +47,7 @@ import (
 
 const claimPath = "/api/v1/auth/phone-key/claim"
 
-// fakeAdminUsers is legacyauth.AdminUsers as core publishes it: every call
+// fakeAdminUsers is guestAdminReader as core publishes it: every call
 // re-checks the principal of ctx for core:users.manage, so a caller without the
 // right reads nothing.
 type fakeAdminUsers struct {
@@ -140,7 +140,6 @@ func newClaimFixtureWith(t *testing.T, lookup func(u *database.User) (*database.
 	f := &claimFixture{store: store, api: &fakeTokenAPI{}, policy: &fakeTokenPolicy{}, mail: &coretest.MailRecorder{},
 		admins: &fakeAdminUsers{}, guest: guest, other: other}
 	id := adoptIdentity(t, nil, nil, nil, guest, other)
-	id.Users = f.admins
 	if lookup != nil {
 		b, err := legacyauth.New(adoptTable(nil), func(_ context.Context, uid coreauth.UserID) (*database.User, error) {
 			for _, u := range []*database.User{guest, other} {
@@ -154,6 +153,7 @@ func newClaimFixtureWith(t *testing.T, lookup func(u *database.User) (*database.
 		id.Bridge = b
 	}
 	f.srv = newTestServerWith(t, store, WithIdentity(id))
+	f.srv.accountsForGuestKeys = f.admins
 	f.srv.guestTokens.apiOverride, f.srv.guestTokens.policyOverride = f.api, f.policy
 	f.srv.guestPolicyOverride = &fakeGuestPolicy{res: cfaccesspolicy.Added}
 	f.srv.mailSenderOverride = f.mail
@@ -370,7 +370,7 @@ func TestClaimGuestKey_NoPrincipalIsRefusedBeforeTheHandler(t *testing.T) {
 func TestClaimGuestKey_DeactivationDropsTheEntitlement(t *testing.T) {
 	f := newClaimFixture(t)
 	require.True(t, f.offer(f.guest))
-	f.srv.revokeGuestServiceTokenAsync(f.guest.ID, "deactivated")
+	f.srv.RevokeGuestKeyForAccount(f.guest.ID, "deactivated")
 	f.srv.bgWG.Wait()
 	refusal(t, f.claim(f.guest))
 	assert.Empty(t, f.api.created)
@@ -716,7 +716,7 @@ func TestReissueUnderIdentity_AdminWithoutUsersManageReadsNothingAndIssuesNothin
 func TestReissueUnderIdentity_NoReaderRefusesRatherThanReadBooksStore(t *testing.T) {
 	f := newClaimFixture(t)
 	f.seedCoreUsers()
-	f.srv.identity.Users = nil
+	f.srv.accountsForGuestKeys = nil
 	// Books' own store even holds the account, as before the cut-over: it must
 	// not be consulted.
 	_, err := f.store.CreateUser(f.guest.Username, f.guest.Email, "bcrypt", "h", []string{"viewer"}, "active")

@@ -670,9 +670,9 @@ func (s *Server) revokeGuestServiceTokenOpts(parent context.Context, userID, rea
 	return nil
 }
 
-// revokeGuestServiceTokenAsync is the deactivation hook (handlers.GuestTokenRevoker):
+// RevokeGuestKeyForAccount is the deactivation hook (handlers.GuestTokenRevoker):
 // best-effort, in the background, a no-op for a user with no token record.
-func (s *Server) revokeGuestServiceTokenAsync(userID, reason string) {
+func (s *Server) RevokeGuestKeyForAccount(userID, reason string) {
 	// A deactivated account's unclaimed phone-app key entitlement goes with it.
 	s.guestKeyClaims.forget(userID)
 	if tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring()); ok {
