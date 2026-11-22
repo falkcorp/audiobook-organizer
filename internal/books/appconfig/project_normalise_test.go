@@ -10,11 +10,13 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	logging "github.com/falkcorp/mediacore/log"
 )
 
 // TestEngine_ANormalisedDefaultSurvivesASave: HEAD's boot ran Validate on the
 // live config, which replaces each zero that means "the default" (min book
-// size, min rescan age, the vector backend) in place, and HEAD's PUT ran the
+// size, min rescan age, the vector backend, the chapter consolidation
+// threshold, the log retention window) in place, and HEAD's PUT ran the
 // same normalisation on its candidate, so the process config never showed
 // those zeros again. Flipped, the boot's Validate lands on the projection and
 // the next rebuild's Project replaced it with the raw rows: after any save the
@@ -33,9 +35,12 @@ func TestEngine_ANormalisedDefaultSurvivesASave(t *testing.T) {
 	// config.Validate, cmd/root.go): Validate the live config.
 	config.Mutate(func(c *config.Config) { _ = c.Validate() })
 	booted := config.Snapshot()
-	if booted.MinBookSizeBytes != 5*1024*1024 || booted.MinRescanAgeHours != 144 || booted.Embedding.VectorBackend != "hnsw" {
-		t.Fatalf("after the boot's Validate: min_book_size_bytes=%d min_rescan_age_hours=%d vector_backend=%q",
-			booted.MinBookSizeBytes, booted.MinRescanAgeHours, booted.Embedding.VectorBackend)
+	if booted.MinBookSizeBytes != 5*1024*1024 || booted.MinRescanAgeHours != 144 || booted.Embedding.VectorBackend != "hnsw" ||
+		booted.ChapterConsolidationThresholdMin != config.DefaultChapterConsolidationThresholdMin ||
+		booted.LogRetentionDays != logging.DefaultLogRetentionDays {
+		t.Fatalf("after the boot's Validate: min_book_size_bytes=%d min_rescan_age_hours=%d vector_backend=%q chapter_consolidation_threshold_min=%d log_retention_days=%d",
+			booted.MinBookSizeBytes, booted.MinRescanAgeHours, booted.Embedding.VectorBackend,
+			booted.ChapterConsolidationThresholdMin, booted.LogRetentionDays)
 	}
 
 	// A save of an unrelated key rebuilds and projects.
@@ -51,5 +56,11 @@ func TestEngine_ANormalisedDefaultSurvivesASave(t *testing.T) {
 		t.Fatalf("a save un-normalised the config: min_book_size_bytes %d -> %d, min_rescan_age_hours %d -> %d, vector_backend %q -> %q",
 			booted.MinBookSizeBytes, saved.MinBookSizeBytes, booted.MinRescanAgeHours, saved.MinRescanAgeHours,
 			booted.Embedding.VectorBackend, saved.Embedding.VectorBackend)
+	}
+	// Readers go through Resolve* for these two, but GET /config shows the
+	// field, and a 0 there is the value the rule says never shows.
+	if saved.ChapterConsolidationThresholdMin != booted.ChapterConsolidationThresholdMin || saved.LogRetentionDays != booted.LogRetentionDays {
+		t.Fatalf("a save un-normalised the config: chapter_consolidation_threshold_min %d -> %d, log_retention_days %d -> %d",
+			booted.ChapterConsolidationThresholdMin, saved.ChapterConsolidationThresholdMin, booted.LogRetentionDays, saved.LogRetentionDays)
 	}
 }
