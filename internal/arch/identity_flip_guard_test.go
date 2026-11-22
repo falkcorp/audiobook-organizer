@@ -125,6 +125,17 @@ func identityFlipFileProblems(f *ast.File) []string {
 // TestIdentityFlipSelectorHasNoProductionCaller pins the two rules over the real
 // tree.
 func TestIdentityFlipSelectorHasNoProductionCaller(t *testing.T) {
+	files := productionGoFiles(t)
+	if probs := identityFlipProblems(files); len(probs) > 0 {
+		t.Fatalf("the identity predicate's guard found %d problem(s):\n%s", len(probs), strings.Join(probs, "\n"))
+	}
+}
+
+// productionGoFiles is every non-test Go file of the module, path relative to the
+// repository root (slash-separated) to source: the input of the guards that read
+// the syntax of the whole tree.
+func productionGoFiles(t *testing.T) map[string][]byte {
+	t.Helper()
 	root := repoRoot(t)
 	skip := map[string]bool{
 		".git": true, "node_modules": true, "web": true, ".worktrees": true,
@@ -155,9 +166,7 @@ func TestIdentityFlipSelectorHasNoProductionCaller(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if probs := identityFlipProblems(files); len(probs) > 0 {
-		t.Fatalf("the identity predicate's guard found %d problem(s):\n%s", len(probs), strings.Join(probs, "\n"))
-	}
+	return files
 }
 
 // TestIdentityFlipGuard_CatchesEachBypass: the guard itself fails closed on
