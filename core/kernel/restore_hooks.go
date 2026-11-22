@@ -581,14 +581,9 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 			},
 			func(ctx context.Context, rc journal.RestoreContext) (map[string]int, error) {
 				defer bootseam.Region(ctx, labelHookAudit)()
-				// Audit keys its records on the run key and falls back to the restore
-				// line's seq without one, which a restored archive can repeat: so a
-				// run with no live-host key writes nothing.
-				key := hookRunKey(env)
-				if key == "" {
-					return nil, errors.New("kernel: the audit restore hook has no live-host run key (no restore ID and no run ID)")
-				}
-				return audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: key, Log: s.Log})(ctx, rc)
+				// Audit keys its records on the run key alone and refuses to run
+				// without one (a restore line's seq repeats in a restored archive).
+				return audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: hookRunKey(env), Log: s.Log})(ctx, rc)
 			},
 		}, nil
 	}
