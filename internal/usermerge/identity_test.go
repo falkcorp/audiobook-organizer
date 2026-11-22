@@ -58,6 +58,13 @@ type fakeCore struct {
 	planned, staged, after atomic.Int32
 	lastSrc, lastTgt       string
 	seen                   []*coreauth.Principal
+
+	// The unmerge side (undo_identity_test.go): the record the last
+	// PlanUserUnmerge was handed, the errors the two calls return, and how many
+	// times each ran.
+	unmergePlanErr, unmergeStageErr error
+	unplanned, unstaged, unafter    atomic.Int32
+	lastRec                         coreauth.UnmergeRecord
 }
 
 func markerKey(src string) string { return "pref:fakecore:merged:" + src }
@@ -878,6 +885,9 @@ func TestMergeIdentityApply_FailedSweepWriteIsLoudAndTheJournalKeepsToWhatHappen
 	}
 }
 
+// A resume under identity of a journal with no core half (written before the
+// flip) is permanent: the one read decides it and nothing is written. The
+// identity-era journals' own answers are in undo_identity_test.go.
 func TestMergeIdentityResume_IsPermanentWithoutTouchingTheStore(t *testing.T) {
 	f := newIDFixture(t)
 	store := &touchedStore{journalRows: journalRows{rows: journalRow("j1", StatusApplying)}}
@@ -885,20 +895,20 @@ func TestMergeIdentityResume_IsPermanentWithoutTouchingTheStore(t *testing.T) {
 	if _, err := svc.Resume(context.Background(), "j1", nil); !errors.Is(err, ErrMergePermanent) {
 		t.Fatalf("Resume = %v", err)
 	}
-	if n := store.calls.Load(); n != 0 {
-		t.Errorf("Resume touched the store %d times", n)
+	if n := store.calls.Load(); n != 1 {
+		t.Errorf("Resume touched the store %d times, want the one journal read", n)
 	}
-	// An identity-era journal is refused the same way (CheckAction is by flip
-	// level, never by journal content).
+	// A clean identity-era journal has nothing to resume; its undo is core's.
 	p := f.plan()
 	j, err := f.svc.Apply(context.Background(), f.applyReq(p), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, a := range []Action{ActionResume, ActionUndo} {
-		if err := f.svc.CheckAction(a, j.ID); !errors.Is(err, ErrMergePermanent) {
-			t.Errorf("CheckAction(%s) = %v", a, err)
-		}
+	if err := f.svc.CheckAction(ActionResume, j.ID); !errors.Is(err, ErrMergePermanent) {
+		t.Errorf("CheckAction(resume) = %v", err)
+	}
+	if err := f.svc.CheckAction(ActionUndo, j.ID); err != nil {
+		t.Errorf("CheckAction(undo) = %v, want nil (core decides an undo)", err)
 	}
 }
 
@@ -991,4 +1001,41 @@ func TestMergeGrants_PrincipalMustBeTheActorsOwn(t *testing.T) {
 	if err != nil || gr.Principal != own {
 		t.Fatalf("Redeem = %v %v", gr.Principal, err)
 	}
+}
+
+func (c *fakeCore) PlanUserUnmerge(ctx context.Context, rec coreauth.UnmergeRecord) (coreauth.UserUnmergePlan, coreauth.UnmergeSummary, error) {
+	c.unplanned.Add(1)
+	p, ok := coreauth.PrincipalFrom(ctx)
+	if !ok || p.User == nil {
+		return coreauth.UserUnmergePlan{}, coreauth.UnmergeSummary{}, fmt.Errorf("%w: no principal", coreauth.ErrDenied)
+	}
+	c.mu.Lock()
+	c.lastRec = rec
+	err := c.unmergePlanErr
+	c.mu.Unlock()
+	if err != nil {
+		return coreauth.UserUnmergePlan{}, coreauth.UnmergeSummary{}, err
+	}
+	return coreauth.UserUnmergePlan{}, coreauth.UnmergeSummary{Source: rec.Source, Target: rec.Target}, nil
+}
+
+// StageUserUnmerge undoes the fake's one write: the merged-into marker, in the
+// caller's batch, so whether the unmerge landed is whether the marker is gone.
+func (c *fakeCore) StageUserUnmerge(ctx context.Context, b *storage.Batch, _ coreauth.UserUnmergePlan) (coreauth.AfterCommit, error) {
+	c.unstaged.Add(1)
+	if p, ok := coreauth.PrincipalFrom(ctx); !ok || p.User == nil {
+		return nil, fmt.Errorf("%w: no principal", coreauth.ErrDenied)
+	}
+	c.mu.Lock()
+	rec, err := c.lastRec, c.unmergeStageErr
+	c.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if b != nil {
+		if err := b.Delete([]byte(markerKey(string(rec.Source)))); err != nil {
+			return nil, err
+		}
+	}
+	return func(context.Context) { c.unafter.Add(1) }, nil
 }

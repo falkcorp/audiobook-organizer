@@ -305,7 +305,7 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 	case usermerge.ActionResume:
 		j, err = env.Writer.ResumeUserMerge(ctx, params.JournalID, prog)
 	case usermerge.ActionUndo:
-		j, err = env.Writer.UndoUserMerge(ctx, usermerge.UndoRequest{JournalID: params.JournalID}, prog)
+		j, err = env.Writer.UndoUserMerge(ctx, usermerge.UndoRequest{JournalID: params.JournalID, ActorID: actor, Principal: gr.Principal}, prog)
 	}
 	if j != nil {
 		if rerr := env.SetResult(j.OpResult()); rerr != nil {

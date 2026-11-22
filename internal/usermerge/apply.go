@@ -196,10 +196,14 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest, prog Progress) (*
 // ever reached by an admin's click (a merge is never resumed automatically).
 func (s *Service) Resume(ctx context.Context, journalID string, prog Progress) (*Journal, error) {
 	if s.flipped() {
-		// An identity-era merge is one batch and leaves nothing half-applied; a
-		// pre-flip journal's remaining ops write keys the cutover retired. Neither
-		// has anything to resume (see CheckMergeAction).
-		return nil, ErrMergePermanent
+		// An identity-era merge is one batch and leaves nothing half-applied, and
+		// a pre-flip journal's remaining ops write keys the cutover retired: the
+		// only thing under identity left to resume is the straggler sweep of a
+		// merge that committed without it finishing (resumeIdentity); every other
+		// journal stays permanent (see CheckMergeAction).
+		runMu.Lock()
+		defer runMu.Unlock()
+		return s.resumeIdentity(ctx, journalID, prog)
 	}
 	runMu.Lock()
 	defer runMu.Unlock()

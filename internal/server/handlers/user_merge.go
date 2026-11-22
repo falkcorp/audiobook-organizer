@@ -34,6 +34,11 @@ type UserMergeService interface {
 	// merges permanent (usermerge.ErrMergePermanent); the journal routes ask it
 	// before they read a journal.
 	CheckAction(action usermerge.Action, journalID string) error
+	// CheckUndo asks core, as the request's principal in ctx, whether the undo
+	// of an identity-era merge would be refused, so a refusal is answered on the
+	// request with its code instead of as a failed background run. It writes
+	// nothing and is nil before the flip.
+	CheckUndo(ctx context.Context, journalID string) error
 	// CheckAvailable refuses (usermerge.ErrUnavailableUnderIdentity) only when
 	// the flip is wired and the service has no core handles to run the merge
 	// on (a wiring that left them out fails closed); preview and apply ask it
@@ -269,26 +274,33 @@ func (h *UserHandler) ListUserMerges(c *gin.Context) {
 // ResumeUserMerge handles POST /api/v1/users/merges/:jid/resume: finishes a
 // merge that stopped part way (a crash, a restart, a cancelled run).
 func (h *UserHandler) ResumeUserMerge(c *gin.Context) {
-	h.journalAction(c, usermerge.ActionResume, func(status string) bool { return status == usermerge.StatusApplying })
+	// An applying merge is resumed by finishing its ops; under identity the one
+	// thing to resume is the straggler sweep of an applied merge that has it
+	// pending (CheckAction already refuses every other identity-era resume).
+	h.journalAction(c, usermerge.ActionResume, func(j *usermerge.Journal) bool {
+		return j.Status == usermerge.StatusApplying ||
+			(j.Status == usermerge.StatusApplied && j.Core != nil && j.Core.SweepPending)
+	})
 }
 
 // UndoUserMerge handles POST /api/v1/users/merges/:jid/undo: puts back what the
 // merge changed, except anything written since (reported, never overwritten).
 func (h *UserHandler) UndoUserMerge(c *gin.Context) {
-	h.journalAction(c, usermerge.ActionUndo, func(status string) bool {
-		return status == usermerge.StatusApplying || status == usermerge.StatusApplied || status == usermerge.StatusUndoing
+	h.journalAction(c, usermerge.ActionUndo, func(j *usermerge.Journal) bool {
+		return j.Status == usermerge.StatusApplying || j.Status == usermerge.StatusApplied || j.Status == usermerge.StatusUndoing
 	})
 }
 
-func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, allowed func(status string) bool) {
+func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, allowed func(j *usermerge.Journal) bool) {
 	actorID, ok := h.mergeActor(c)
 	if !ok {
 		return
 	}
 	jid := c.Param("jid")
-	// First, before any journal is read: after the identity flip every journal
-	// is permanent (F4-08 A9), whatever its content, so an undecodable one is
-	// answered 409 like the rest rather than as a load failure.
+	// First, before any journal is read for its state: after the identity flip a
+	// journal with no core half (written before it) is permanent (F4-08 A9) and so
+	// is an undecodable one, answered 409 like the rest rather than as a load
+	// failure; an identity-era journal is undone by core (F4-08 B10p).
 	if err := h.merge.CheckAction(action, jid); err != nil {
 		h.mergeError(c, "check merge action", err)
 		return
@@ -298,7 +310,7 @@ func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, all
 		h.mergeError(c, "load merge journal", err)
 		return
 	}
-	if !allowed(j.Status) {
+	if !allowed(j) {
 		httputil.RespondWithConflict(c, "the merge is "+j.Status+"; it cannot be "+string(action)+"d")
 		return
 	}
@@ -306,8 +318,28 @@ func (h *UserHandler) journalAction(c *gin.Context, action usermerge.Action, all
 		httputil.RespondWithConflict(c, "an account cannot run a merge it was merged away by")
 		return
 	}
+	g := usermerge.Grant{Action: action, JournalID: j.ID}
+	// Under core identity an undo acts as this admin, as an apply does: the grant
+	// carries the request's own principal, which the operation re-validates
+	// through core. core's refusals (a key or sign-in changed since the merge,
+	// the last admin, an address another account holds now, a dominance the admin
+	// lacks) are answered here, on the request, before anything is enqueued.
+	if action == usermerge.ActionUndo {
+		if _, bridged := legacyauth.IdentityFrom(c.Request.Context()); bridged {
+			p, ok := coreauth.PrincipalFrom(c.Request.Context())
+			if !ok {
+				httputil.RespondWithForbidden(c, "undoing a merge needs a signed-in admin")
+				return
+			}
+			if err := h.merge.CheckUndo(c.Request.Context(), j.ID); err != nil {
+				h.mergeError(c, "check merge undo", err)
+				return
+			}
+			g.Principal = p
+		}
+	}
 	// The stored journal's own id, not the request's text, goes into the grant.
-	h.enqueueMerge(c, actorID, usermerge.Grant{Action: action, JournalID: j.ID})
+	h.enqueueMerge(c, actorID, g)
 }
 
 // enqueueMerge mints the single-use grant for g (bound to the actor) and
@@ -359,6 +391,15 @@ func (h *UserHandler) mergeError(c *gin.Context, what string, err error) {
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), usermerge.ProblemUnavailableUnderIdentity)
 	case errors.Is(err, usermerge.ErrMergeTooLarge):
 		httputil.RespondWithError(c, http.StatusConflict, err.Error(), usermerge.ProblemMergeTooLarge)
+	case errors.Is(err, usermerge.ErrUndoRefused):
+		var ur *usermerge.UndoRefusal
+		code := "conflict"
+		if errors.As(err, &ur) {
+			code = ur.Code
+		}
+		httputil.RespondWithError(c, http.StatusConflict, err.Error(), code)
+	case errors.Is(err, coreauth.ErrDominance):
+		httputil.RespondWithForbidden(c, "the account being merged is held by an admin who outranks you")
 	case errors.Is(err, coreauth.ErrDenied):
 		httputil.RespondWithForbidden(c, "merging accounts needs the admin role")
 	case errors.Is(err, usermerge.ErrJournalNotFound):
