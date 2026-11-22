@@ -214,9 +214,9 @@ func ownerRefusalCode(p *Principal) string {
 // requireOwnerRefusal sweeps every principal of the boot except the owner over every
 // owner route and fails on any that stage 13 does not refuse, with the code the
 // principal's kind must get. It also holds the answer to the route's expected
-// letter (expectedOwnerVerdict: R0's recording, or an R2-only route's decision): an
-// admit where that letter refuses is a widening and is named as one. It returns the
-// number of cells run.
+// letter (expectedOwnerVerdict: R0's recording, or an R2-only route's decision),
+// by equality: an admit where that letter refuses is named a widening, a refusal
+// where it admits a narrowing, and both fail. It returns the number of cells run.
 func requireOwnerRefusal(t *testing.T, h *Registered, rec *ownerRecording) int {
 	t.Helper()
 	routes := ownerRoutes(t, h)
@@ -233,8 +233,8 @@ func requireOwnerRefusal(t *testing.T, h *Registered, rec *ownerRecording) int {
 				t.Errorf("%s as %s: %v (a judged route the harness could not see stage 13 on)", key, p.Name, err)
 				continue
 			}
-			if want := rec.expectedOwnerVerdict(t, key, p.Recorded()); want == 'D' && res.Verdict() != 'D' {
-				t.Errorf("WIDENING: %s as %s: the expected letter is D (%s), the flipped build answered %d (%s)", key, p.Name, ownerLetterSource(key), res.Status, res.excerpt())
+			if want, got := rec.expectedOwnerVerdict(t, key, p.Recorded()), res.Verdict(); got != want {
+				t.Errorf("%s: %s as %s: the expected letter is %c (%s), the flipped build answered %c, %d (%s)", ownerDrift(want, got), key, p.Name, want, ownerLetterSource(key), got, res.Status, res.excerpt())
 				continue
 			}
 			if res.Stage13 != Stage13Refused || res.Code != ownerRefusalCode(p) {
@@ -261,6 +261,16 @@ func ownerPrincipalCounts(h *Registered) (imported, core int) {
 
 // ownerEmailEnv is the environment key of owner_email under the flip.
 const ownerEmailEnv = "ABO_BOOKS_IDENTITY_OWNER_EMAIL"
+
+// ownerDrift names a cell whose letter is not the expected one: an admit where the
+// expected letter refuses widens, a refusal where it admits narrows. Both fail: the
+// owner cells hold equality, so the expected table cannot drift either way unseen.
+func ownerDrift(want, got byte) string {
+	if want == 'D' && got != 'D' {
+		return "WIDENING"
+	}
+	return "NARROWING"
+}
 
 // ownerLetterSource says where an owner route's expected letter comes from, for a
 // failure message.
@@ -332,8 +342,8 @@ func TestReachRegisteredPath_OwnerSet(t *testing.T) {
 				t.Errorf("%s as authoff: %v", key, err)
 				continue
 			}
-			if want := rec.expectedOwnerVerdict(t, key, Authoff); want == 'D' && res.Verdict() != 'D' {
-				t.Errorf("WIDENING: %s as authoff: the expected letter is D (%s), the flipped build answered %d (%s)", key, ownerLetterSource(key), res.Status, res.excerpt())
+			if want, got := rec.expectedOwnerVerdict(t, key, Authoff), res.Verdict(); got != want {
+				t.Errorf("%s: %s as authoff: the expected letter is %c (%s), the flipped build answered %c, %d (%s)", ownerDrift(want, got), key, want, ownerLetterSource(key), got, res.Status, res.excerpt())
 				continue
 			}
 			// The auth-off boot binds core's auth-disabled principal, which is not an
