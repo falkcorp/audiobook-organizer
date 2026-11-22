@@ -389,6 +389,9 @@ type recordingHold struct{ released int }
 
 func (h *recordingHold) Release() { h.released++ }
 
+// Renew succeeds: this hold is never lost.
+func (h *recordingHold) Renew() error { return nil }
+
 // A whole native run: the writer the factory builds does the sweep, the scan
 // stand-down is taken on the configured key and given back, and the sweep's result
 // is the Task's result.

@@ -8,6 +8,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -38,9 +39,11 @@ func (h *standHold) liveLocked(now time.Time) bool {
 // holdHandle is the tasks.Hold one StandDown call returns.
 type holdHandle struct {
 	release func()
+	renew   func() error
 }
 
-func (h *holdHandle) Release() { h.release() }
+func (h *holdHandle) Release()     { h.release() }
+func (h *holdHandle) Renew() error { return h.renew() }
 
 // standDown takes a hold on key for the run a: running holders of key that
 // may yield (Common.Yields) are quiesced (stopping{quiesce}, context
@@ -91,7 +94,11 @@ func (e *executor) standDown(a *attempt, key tasks.Key) (tasks.Hold, error) {
 		v.cancel(tasks.ErrQuiesced)
 	}
 	var once sync.Once
-	return &holdHandle{release: func() { once.Do(func() { e.dropHolder(a, h) }) }}, nil
+	return &holdHandle{
+		release: func() { once.Do(func() { e.dropHolder(a, h) }) },
+		// The marker write must outlive a canceled run context, as Writer.Do's does.
+		renew: func() error { return e.renewHold(context.WithoutCancel(a.ctx), a, h) },
+	}, nil
 }
 
 // dropHolder removes a from h; the last holder clears the marker and
@@ -141,7 +148,7 @@ func (e *executor) releaseHolds(a *attempt) {
 }
 
 // renewHolds renews a's holds (every Writer.Do and item start calls it);
-// a hold whose lease already expired is lost (ErrHoldLost). The marker is
+// a hold whose lease already expired is lost (tasks.ErrHoldLost). The marker is
 // re-staged at most once a second.
 func (e *executor) renewHolds(ctx context.Context, a *attempt) error {
 	now := e.now()
@@ -149,31 +156,74 @@ func (e *executor) renewHolds(ctx context.Context, a *attempt) error {
 	e.mu.Lock()
 	if a.holdLost {
 		e.mu.Unlock()
-		return ErrHoldLost
-	}
-	if len(a.holds) == 0 {
-		e.mu.Unlock()
-		return nil
+		return tasks.ErrHoldLost
 	}
 	var restage []tasks.StandDown
 	for _, h := range a.holds {
-		if !now.Before(h.expires) {
-			a.holdLost = true
+		m, err := e.renewLocked(a, h, now, lease)
+		if err != nil {
 			e.mu.Unlock()
-			return ErrHoldLost
+			return err
 		}
-		h.expires = now.Add(lease)
-		if now.Sub(h.staged) >= markerRestage {
-			h.staged = now
-			restage = append(restage, tasks.StandDown{Key: h.key, Holder: a.id, Quiesced: slices.Clone(h.quiesced), Expires: h.expires})
+		if m != nil {
+			restage = append(restage, *m)
 		}
 	}
 	e.mu.Unlock()
-	if len(restage) == 0 {
+	return e.restage(ctx, restage)
+}
+
+// renewHold renews one hold of a (Hold.Renew). It fails with tasks.ErrHoldLost
+// once the lease had lapsed, once any other hold of the run was lost (the run's
+// writer is fenced from then on), and once h is no longer one of a's holds
+// (released, or reaped): a released hold is never revived and the lease of
+// another holder of its key is never touched.
+func (e *executor) renewHold(ctx context.Context, a *attempt, h *standHold) error {
+	now := e.now()
+	lease := e.config().StandDownLease
+	e.mu.Lock()
+	if a.holdLost {
+		e.mu.Unlock()
+		return tasks.ErrHoldLost
+	}
+	if !slices.Contains(a.holds, h) {
+		e.mu.Unlock()
+		return fmt.Errorf("%w: the hold on %s was released", tasks.ErrHoldLost, h.key)
+	}
+	m, err := e.renewLocked(a, h, now, lease)
+	e.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if m == nil {
+		return nil
+	}
+	return e.restage(ctx, []tasks.StandDown{*m})
+}
+
+// renewLocked extends h's lease from now, or marks a's hold lost when the lease
+// had already lapsed. It returns the marker to re-stage when the last staging
+// is at least markerRestage old. Caller holds e.mu.
+func (e *executor) renewLocked(a *attempt, h *standHold, now time.Time, lease time.Duration) (*tasks.StandDown, error) {
+	if !now.Before(h.expires) {
+		a.holdLost = true
+		return nil, fmt.Errorf("%w: the lease on %s lapsed", tasks.ErrHoldLost, h.key)
+	}
+	h.expires = now.Add(lease)
+	if now.Sub(h.staged) < markerRestage {
+		return nil, nil
+	}
+	h.staged = now
+	return &tasks.StandDown{Key: h.key, Holder: a.id, Quiesced: slices.Clone(h.quiesced), Expires: h.expires}, nil
+}
+
+// restage persists renewed markers.
+func (e *executor) restage(ctx context.Context, ms []tasks.StandDown) error {
+	if len(ms) == 0 {
 		return nil
 	}
 	return e.write(context.WithoutCancel(ctx), func(ctx context.Context, b *storage.Batch) error {
-		for _, m := range restage {
+		for _, m := range ms {
 			if err := e.opts.Stores.StandDown.Set(ctx, b, m.Key, &m); err != nil {
 				return err
 			}

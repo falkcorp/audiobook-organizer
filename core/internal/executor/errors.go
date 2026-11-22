@@ -60,9 +60,6 @@ var (
 	ErrAwaitSelfBlocked = errors.New("executor: awaited child cannot start while the awaiting run runs")
 	// ErrNotAwaitingDecision: Decide on a run that is not awaiting_decision.
 	ErrNotAwaitingDecision = errors.New("executor: run is not awaiting a decision")
-	// ErrHoldLost: a stand-down hold's lease expired without renewal; the
-	// holder's next write is refused (5T.3.7).
-	ErrHoldLost = errors.New("executor: stand-down hold lost: its lease expired")
 	// ErrLaneNotDeclared: Lane names a lane the definition does not declare
 	// in Common.Lanes, or one no Options.Lanes entry registers.
 	ErrLaneNotDeclared = errors.New("executor: lane not declared")
