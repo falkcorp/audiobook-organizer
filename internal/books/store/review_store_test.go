@@ -658,7 +658,7 @@ func TestListReviewItems_Search(t *testing.T) {
 				t.Fatalf("list %q: %v", key, err)
 			}
 			// No VALUE anywhere in the fixture contains any of these words, so the
-			// honest answer for every one of them is zero.
+			// correct answer for every one of them is zero.
 			if total != 0 || len(items) != 0 {
 				t.Fatalf("key name %q matched %d row(s) -- the matcher is reading JSON keys, not values", key, total)
 			}

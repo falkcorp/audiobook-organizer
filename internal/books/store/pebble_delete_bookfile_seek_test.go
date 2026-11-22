@@ -17,7 +17,7 @@ import (
 // so an ID-only caller cannot seek it — but the book_file_id index exists for
 // exactly that and was simply unused.
 //
-// Honest scope: measured at 8,000 rows the two paths are indistinguishable
+// Scope: measured at 8,000 rows the two paths are indistinguishable
 // (9.196ms vs 9.144ms per delete), so this is not a dramatic win — it removes an
 // O(N)-per-delete that only starts to matter at production row counts. These tests
 // exist to keep the resolution CORRECT, not to assert a speedup.
