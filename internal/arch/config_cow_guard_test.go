@@ -588,6 +588,10 @@ func TestConfigCOWOrderAndRatchetDecide(t *testing.T) {
 		map[string]int{"internal/gotham": 2, "internal/arkham": 2})
 	if len(got) != 2 || !strings.HasPrefix(got[0], "internal/blackgate:") || !strings.HasPrefix(got[1], "internal/gotham:") {
 		t.Errorf("ratchet: want a new package and a raised one refused, a held one passed; got %q", got)
+	} else if !strings.Contains(got[0], "had none") || !strings.Contains(got[1], "rose to 3 (ceiling 2)") {
+		// A new package also exceeds a zero ceiling, so only the message tells
+		// the two refusals apart; pin both so neither branch can go missing.
+		t.Errorf("ratchet: want the new package named as new and the raise named with its ceiling; got %q", got)
 	}
 }
 
