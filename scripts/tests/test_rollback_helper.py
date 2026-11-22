@@ -1861,13 +1861,9 @@ class InstallStaged(unittest.TestCase):
                 self.assert_local_conf_refused(h)
 
     def test_the_committed_example_host_conf_block_passes(self):
-        """deploy/local.conf.example shows host.conf in comments; with the
-        comment marks removed it must pass the helper's check."""
-        text = (REPO_ROOT / "deploy" / "local.conf.example").read_text()
-        block = text.split("# --- host.conf, NOT this file", 1)[1].split("# -----", 1)[0]
-        lines = block.splitlines()
-        start = next(i for i, ln in enumerate(lines) if ln == "# [Service]")
-        body = "".join(ln[2:] + "\n" if ln.startswith("# ") else "\n" for ln in lines[start:])
+        """deploy/host.conf.example is the one copy of the block (local.conf.example
+        points at it); installed as it stands it must pass the helper's check."""
+        body = (REPO_ROOT / "deploy" / "host.conf.example").read_text()
         h = self.host(service_user="audiobook")
         self.host_conf_path.write_text(body)
         self.stage_conf("[Service]\nEnvironment=A=1\n")

@@ -1,0 +1,44 @@
+# file: deploy/host.conf.example
+# version: 0.1.0
+# guid: 3c6f1a52-9d40-4e7b-8a15-b2e7c90d4f68
+# last-edited: 2026-11-22
+#
+# TEMPLATE for the unit's host.conf drop-in, the settings `make deploy` never
+# writes. Copy to deploy/host.conf (gitignored), fill in this host's values,
+# then on the deploy host:
+#
+#   make install-host-conf               # dry run: checks it, shows the diff
+#   make install-host-conf APPLY=1       # installs it, daemon-reload, no restart
+#
+# It becomes /etc/systemd/system/audiobook-organizer.service.d/host.conf,
+# root:root 0644. The rollback helpers' `install-staged unit` and `local-conf`
+# refuse to deploy without it, and refuse one that runs anything but the
+# service user's ExecStart: no other Exec*= line, no + or ! prefix on ExecStart=,
+# no `;` word, no Type=oneshot, no PermissionsStartOnly=, AmbientCapabilities=
+# or User=/Group= other than rollback.conf's. The install target runs the same
+# rule code first, so a refusal names the file and line here, not on deploy day.
+# No secrets in this file: it is world-readable. Environment= lines go in
+# deploy/local.conf (see local.conf.example), which deploy uploads.
+#
+# Every value below is a placeholder.
+
+[Service]
+# Clear the base unit's ExecStart, then set the full production command line.
+ExecStart=
+ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \
+      --db /path/to/audiobooks.pebble \
+      --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
+      --http3-port 8484
+
+WorkingDirectory=/var/lib/audiobook-organizer
+
+# A ceiling for the service's memory; size it for this host.
+MemoryMax=8G
+
+# Leave TimeoutStopSec= unset unless you need more than the base unit's 60 s,
+# which covers the kernel's shutdown budget (25 s by default), the store's close
+# after it (up to 10 s for a Pebble access still in flight) and a rollback's
+# previous release (see deploy/audiobook-organizer.service). Never set it lower.
+# Production raises it to 90 s for large in-flight operations (fingerprint
+# rescans, dedup purges):
+TimeoutStopSec=90
