@@ -51,6 +51,8 @@ const claimPath = "/api/v1/auth/phone-key/claim"
 // re-checks the principal of ctx for core:users.manage, so a caller without the
 // right reads nothing.
 type fakeAdminUsers struct {
+	// Admin is nil: the rest of core's handle is not what these tests call.
+	coreauth.Admin
 	mu    sync.Mutex
 	users []*coreauth.User
 	calls int
@@ -140,6 +142,7 @@ func newClaimFixtureWith(t *testing.T, lookup func(u *database.User) (*database.
 	f := &claimFixture{store: store, api: &fakeTokenAPI{}, policy: &fakeTokenPolicy{}, mail: &coretest.MailRecorder{},
 		admins: &fakeAdminUsers{}, guest: guest, other: other}
 	id := adoptIdentity(t, nil, nil, nil, guest, other)
+	id.Admin = f.admins
 	if lookup != nil {
 		b, err := legacyauth.New(adoptTable(nil), func(_ context.Context, uid coreauth.UserID) (*database.User, error) {
 			for _, u := range []*database.User{guest, other} {
@@ -153,7 +156,6 @@ func newClaimFixtureWith(t *testing.T, lookup func(u *database.User) (*database.
 		id.Bridge = b
 	}
 	f.srv = newTestServerWith(t, store, WithIdentity(id))
-	f.srv.accountsForGuestKeys = f.admins
 	f.srv.guestTokens.apiOverride, f.srv.guestTokens.policyOverride = f.api, f.policy
 	f.srv.guestPolicyOverride = &fakeGuestPolicy{res: cfaccesspolicy.Added}
 	f.srv.mailSenderOverride = f.mail
@@ -716,7 +718,7 @@ func TestReissueUnderIdentity_AdminWithoutUsersManageReadsNothingAndIssuesNothin
 func TestReissueUnderIdentity_NoReaderRefusesRatherThanReadBooksStore(t *testing.T) {
 	f := newClaimFixture(t)
 	f.seedCoreUsers()
-	f.srv.accountsForGuestKeys = nil
+	f.srv.identity.Admin = nil
 	// Books' own store even holds the account, as before the cut-over: it must
 	// not be consulted.
 	_, err := f.store.CreateUser(f.guest.Username, f.guest.Email, "bcrypt", "h", []string{"viewer"}, "active")
