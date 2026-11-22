@@ -479,11 +479,6 @@ type Server struct {
 	// guestKeyClaims holds the unclaimed phone-app key entitlements of accepted
 	// invitations (guest_key_claim.go).
 	guestKeyClaims guestKeyClaims
-	// accountsForGuestKeys is the actor-checked reader of core's accounts the
-	// guest key routes use (guestAccounts). It stands in for
-	// legacyauth.Identity.Accounts until B10t-books adds that member; nil
-	// refuses.
-	accountsForGuestKeys guestAdminReader
 	// mailSenderOverride replaces the SMTP sender (tests only).
 	mailSenderOverride imail.Sender
 	// opsV3Closing is closed when Shutdown begins (closeOpsV3Streams), before

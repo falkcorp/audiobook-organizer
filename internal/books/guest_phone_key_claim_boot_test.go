@@ -128,6 +128,12 @@ func bootGuestKeyApp(t *testing.T, wrap ...func(module.Module) module.Module) (*
 	t.Setenv("ABO_BOOKS_CFGUESTS_GUESTS_POLICY_ID", "eeeeeeee-1111-2222-3333-ffffffffffff")
 	t.Setenv("ABO_BOOKS_CFGUESTS_SERVICE_AUTH_POLICY_ID", claimPolicyID)
 	t.Setenv("ABO_BOOKS_CFGUESTS_GUEST_SERVICE_TOKENS", "true")
+	// A key is e-mailed on an admin reissue, so the deployment must be able to
+	// mail (the reissue's deployment check comes before its account check).
+	t.Setenv("ABO_CORE_HTTP_PUBLIC_BASE_URL", "https://batcave.example")
+	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_HOST", "mail.batcave.example")
+	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_PORT", "587")
+	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_FROM", "alfred@batcave.example")
 	r := runComposedWith(t, func(c *config.Config) {
 		c.EnableAuth = true
 		c.CFAccountID = claimAccountID
@@ -135,6 +141,8 @@ func bootGuestKeyApp(t *testing.T, wrap ...func(module.Module) module.Module) (*
 		c.CFGuestsPolicyID = "eeeeeeee-1111-2222-3333-ffffffffffff"
 		c.CFServiceAuthPolicyID = claimPolicyID
 		c.CFGuestServiceTokens = true
+		c.PublicBaseURL = "https://batcave.example"
+		c.SMTPHost, c.SMTPPort, c.SMTPFrom = "mail.batcave.example", 587, "alfred@batcave.example"
 	}, nil, nil, nil, wrap...)
 	// After the boot, not before: Register clones http.DefaultTransport as an
 	// *http.Transport and panics on any other RoundTripper.
