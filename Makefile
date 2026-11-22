@@ -1158,6 +1158,50 @@ rollback-check:
 	  --guard="$(ROLLBACK_GUARD)" --host="$(DEPLOY_HOST)" --bin="$(DEPLOY_BIN)" --db="$(DEPLOY_DB)" \
 	  --unit="$(DEPLOY_UNIT)"
 
+## export-keyring: Run `secrets export-keyring` as the service user on DEPLOY_HOST (through a root-owned rollback helper, no raw sudo) and copy the file into OFFHOST_DIR on this machine (R2 runbook Step 7; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
+#
+# The service may be running: `secrets export-keyring` opens no store and takes
+# no lock. The helper leaves the file in export_dir (rollback.conf), mode 0600,
+# owned by the deploy user; scripts/export_offhost.py copies it with scp into
+# $(OFFHOST_DIR) (default ~/aorg-offhost/<UTC stamp>, mode 0700), checks its size
+# and sha256, then deletes the remote copy. The file holds secrets: keep it with
+# the install's archive, off shared storage. Needs the helper bundle installed
+# with export_dir set (docs/system/deploy-and-gpu-ops.md, Rollback helpers).
+OFFHOST_DIR ?=
+export-keyring: export AORG_OH_WHAT = keyring
+export-keyring: export AORG_OH_HOST = $(DEPLOY_HOST)
+export-keyring: export AORG_OH_BIN = $(DEPLOY_BIN)
+export-keyring: export AORG_OH_DB = $(DEPLOY_DB)
+export-keyring: export AORG_OH_UNIT = $(DEPLOY_UNIT)
+export-keyring: export AORG_OH_GUARD = $(ROLLBACK_GUARD)
+export-keyring: export AORG_OH_DIR = $(OFFHOST_DIR)
+.PHONY: export-keyring
+export-keyring:
+	@[ -n "$$AORG_OH_HOST" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_BIN" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_DB" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@python3 scripts/export_offhost.py
+
+## export-install-secrets: Copy the install's .encryption_key and config.yaml off DEPLOY_HOST into OFFHOST_DIR (through a root-owned rollback helper, no raw sudo; R2 runbook Step 1; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
+#
+# Same shape and files-on-disk rules as export-keyring. Where the files are is
+# read from the helper's rollback.conf, not guessed here: .encryption_key in
+# state_dir (else beside the store), config.yaml beside the store. A config.yaml
+# that does not exist is reported as absent, not an error.
+export-install-secrets: export AORG_OH_WHAT = install-secrets
+export-install-secrets: export AORG_OH_HOST = $(DEPLOY_HOST)
+export-install-secrets: export AORG_OH_BIN = $(DEPLOY_BIN)
+export-install-secrets: export AORG_OH_DB = $(DEPLOY_DB)
+export-install-secrets: export AORG_OH_UNIT = $(DEPLOY_UNIT)
+export-install-secrets: export AORG_OH_GUARD = $(ROLLBACK_GUARD)
+export-install-secrets: export AORG_OH_DIR = $(OFFHOST_DIR)
+.PHONY: export-install-secrets
+export-install-secrets:
+	@[ -n "$$AORG_OH_HOST" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_BIN" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_DB" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@python3 scripts/export_offhost.py
+
 ## install-rollback-helpers: The owner's one-time install of the rollback helper bundle ON THE DEPLOY HOST: dry run by default, APPLY=1 installs (needs DEPLOY_BIN, DEPLOY_DB; see ROLLBACK_INSTALL_ARGS)
 #
 # Run it on the deploy host, in a checkout of the commit being deployed. It

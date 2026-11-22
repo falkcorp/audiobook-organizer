@@ -1,0 +1,14 @@
+#!/bin/sh
+# file: deploy/rollback-helpers/export-keyring
+# version: 0.1.0
+# guid: d5874e44-1883-4542-a9e4-90e0eceed973
+# last-edited: 2026-11-22
+#
+# export-keyring (no arguments), as root: the live install's `secrets export-keyring` output,
+# handed to the deploy user as files in export_dir; the service-user work runs
+# as the service user in a transient unit.
+# A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
+# which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
+# "Rollback helpers"). Install root-owned, mode 0755, in
+# /usr/local/libexec/audiobook-organizer/rollback/.
+exec /usr/bin/python3 -I /usr/local/libexec/audiobook-organizer/rollback/rollback_helper.py export-keyring "$@"

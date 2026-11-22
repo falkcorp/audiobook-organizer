@@ -104,6 +104,7 @@ CONF_KEYS = (
     "service_group",
     "stage_bin",
     "stage_local_conf",
+    "export_dir",
 )
 REQUIRED = ("bin", "db", "state_dir", "unit", "service_user", "archive_dir", "stage_bin")
 
@@ -168,6 +169,7 @@ def plan(a: argparse.Namespace, rh: ModuleType, guard: ModuleType) -> tuple[list
         "service_group": a.service_group,
         "stage_bin": a.stage_bin,
         "stage_local_conf": a.stage_local_conf,
+        "export_dir": a.export_dir,
     }
     missing = [k for k in REQUIRED if not values.get(k)]
     if missing:
@@ -184,6 +186,7 @@ def plan(a: argparse.Namespace, rh: ModuleType, guard: ModuleType) -> tuple[list
         unit=a.unit,
         user=a.service_user,
         stage_bin=a.stage_bin,
+        export_dir=a.export_dir,
     )
     bad = guard._validate(o) or (
         "" if guard._SAFE_USER.fullmatch(a.deploy_user) else f"--deploy-user {a.deploy_user!r}"
@@ -491,6 +494,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument(f"--{flag}", default="")
     for flag in ("stage-local-conf", "checkpoint-dir", "service-group", "offline-env"):
         p.add_argument(f"--{flag}", default="")
+    p.add_argument("--export-dir", default="")
     p.add_argument(
         "--deploy-user", default="", help="REQUIRED: the user the sudoers drop-in grants"
     )

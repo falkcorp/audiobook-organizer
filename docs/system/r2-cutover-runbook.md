@@ -71,6 +71,7 @@ only read them there.
 | P3 | The stopgap is gone: the unit has a finite start timeout again. | `ssh <server> systemctl show -p TimeoutStartUSec audiobook-organizer.service` prints `TimeoutStartUSec=5min`, not `infinity`. If it still says `infinity`, the last deploy predates the fixes: tell the agents before going on. |
 | P4 | Enough free space for R2's first boot (it may take a checkpoint and rewrite ranges). | `ssh <server> df -B1 --output=avail <db parent dir>` must be larger than `ssh <server> du -sb <db dir>`. If not, free space first, or the boot halts before it writes anything. |
 | P5 | The rollback helpers answer. | `make rollback-check` prints the generations list (no `sudo` password prompt, no refusal). |
+| P6 | The helper bundle is the one with the export helpers, and `export_dir` is set. Reinstall it as the owner: `make install-rollback-helpers APPLY=1 ROLLBACK_INSTALL_ARGS="... --export-dir <dir>"`, after `mkdir -m 700 <dir>` as the deploy user on the host (see Rollback helpers in `deploy-and-gpu-ops.md`). | `make export-install-secrets` (Step 1) finishes instead of saying `no export_dir` or `sudo: a password is required`. |
 
 ## Which path are you on?
 
@@ -141,8 +142,17 @@ the new file to appear in the list, then copy it off the host. R2-01c pins the e
 once F8-04a's backups page is live; until then this is [gap 1](#known-gaps).
 
 The archive alone cannot be restored without the install's key and config. Keep them with it:
-`.encryption_key` and `<db parent>/config.yaml`. They are readable only by the service user, and no helper copies
-them yet: [gap 2](#known-gaps).
+`.encryption_key` and `<db parent>/config.yaml`. They are readable only by the service user, so copy them with the
+helper, from your Mac:
+
+```bash
+make export-install-secrets
+```
+
+It leaves the files in `~/aorg-offhost/<UTC stamp>/` (mode 0700; override with `OFFHOST_DIR=<dir>`), checks their
+size and sha256, and deletes the copies it made on the host. A `config.yaml` that does not exist is reported as
+absent, which is normal. These files let whoever holds them decrypt the install's secrets: keep them with the
+archive, off shared storage.
 
 **Check:** the new archive is in the Library list with today's time, and your off-host copy has the same size.
 
@@ -253,8 +263,16 @@ where you keep backups:
 audiobook-organizer secrets export-keyring --out <file>
 ```
 
-The file is written mode 0600. This reads the live install's secrets, so it runs as the service user, and no
-helper runs it yet: [gap 2](#known-gaps).
+The file is written mode 0600. This reads the live install's secrets, so it runs as the service user. From your
+Mac, with the service running:
+
+```bash
+make export-keyring
+```
+
+It runs the command through the rollback helper and brings the file to `~/aorg-offhost/<UTC stamp>/` (override
+with `OFFHOST_DIR=<dir>`), checks its size and sha256 and deletes the host's copy. It needs the helper bundle
+reinstalled with the export helpers and `export_dir` set (precondition P6).
 
 **Check:** health stops warning `secrets_keyring_not_exported`.
 
@@ -363,10 +381,10 @@ Still open:
 
 1. **The off-host copy of the archive.** Before F8-04a the web app creates archives but has no download. R2-01c
    pins the download path once the core backups page is live.
-2. **Service-user commands.** Copying `.encryption_key` and `config.yaml` (Step 1), `secrets export-keyring`
-   (Step 7) and, on Path B only, `storage cutover-blockers` (Step 0) need to run as the service user. No helper
-   does this yet. Proposed: helper operations in the rollback bundle, granted in sudoers like the others, each
-   behind a make target. Until they exist, ask the agents rather than typing `sudo`.
+2. **`storage cutover-blockers`, on Path B only (Step 0).** It runs offline as the service user with the service
+   stopped. The key and config copy (Step 1: `make export-install-secrets`) and the keyring export (Step 7:
+   `make export-keyring`) have their own helpers now; this one has none yet. Until it does, ask the agents rather
+   than typing `sudo`. The production host is on Path A and does not need it.
 3. **A tracked make target for `host.conf`.** It was written on 2026-11-21 with a one-off script. A tracked,
    tested target is coming as its own PR, so a rebuilt host can be set up the same way. Not needed for R2 on the
    current host.
