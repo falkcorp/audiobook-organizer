@@ -107,3 +107,26 @@ func TestRegisteredHarness_ParityMissesSeesADifference(t *testing.T) {
 		t.Errorf("parityMisses reported a cell that answers as R0 did: %v", got)
 	}
 }
+
+// TestRegisteredHarness_UnruledNarrowingsHoldR0 holds the classRuling cells to R0: a
+// narrowing nobody has ruled on is red here until it is fixed (its row deleted) or
+// accepted (its row moved to classKnown with the ruling that accepted it). The rows it
+// was written for are all gone: the invite and restore cells were fixed in B10y, and
+// the 21 key cells on POST /auth/api-keys were the sweep's empty probe body (with R0's
+// {} they reach the handler, B10u2; the three fp-worker cells are the accepted
+// fp-worker narrowing). It skips while no row is left and goes red when one is added.
+func TestRegisteredHarness_UnruledNarrowingsHoldR0(t *testing.T) {
+	var rows []verdictRow
+	for _, r := range verdictRows {
+		if r.Class == classRuling {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) == 0 {
+		t.Skip("no unruled narrowing is left")
+	}
+	h := bootAsRecorded(t, false)
+	for _, miss := range parityMisses(t, h, rows, onAuthOn) {
+		t.Error(miss)
+	}
+}
