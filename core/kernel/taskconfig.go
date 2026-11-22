@@ -71,12 +71,14 @@ type cfgLeaf struct {
 
 // coreConfig is the core config, built on the first call and kept: the layered
 // store the config boot built, else (Describe) the defaults-only one. Boot
-// calls it at P7, which is single-threaded, from the two places
-// that read it: taskProblems when a definition exists (the schedule keys it
-// declares) and constructTasks when the start rule held (the executor's and
-// the scheduler's settings). A boot that registers no kind and finds no run
-// never calls it, so ABO's boot skips the build entirely; closeCore closes
-// the store only when it was built.
+// calls it from the three places that read it, all single-threaded:
+// registerCoreKinds at P6 when the tasks switch is on (the retention and journal
+// settings core's own kinds read, and core.tasks.windows), taskProblems at P7
+// when a definition exists (the schedule keys it declares) and constructTasks
+// when the start rule held (the executor's and the scheduler's settings). A
+// boot with the switch off that registers no kind and finds no run never calls
+// it, so ABO's boot skips the build entirely; closeCore closes the store only
+// when it was built.
 func (k *Kernel) coreConfig() (*coreConfig, error) {
 	if k.coreCfg == nil {
 		var c *coreConfig
