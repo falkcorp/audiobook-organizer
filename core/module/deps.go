@@ -15,9 +15,11 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/events"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // Deps are the handles a module may use (06 §6.4.4). Every handle is scoped
@@ -141,6 +143,23 @@ type Deps struct {
 	// Record, RecordIn, Emit); the action namespace "<ID>." is checked. Nil
 	// until the kernel builds the audit logger for modules (F4-08, B3).
 	Audit audit.Logger
+
+	// Tasks starts and observes runs by Kind (05-tasks 5T.3.10). It is the
+	// module's own client: a call made while serving a request acts as that
+	// request's principal, and a call made with no request in its ctx (a hook, a
+	// worker, a run body) acts as the module's system actor, which may start the
+	// module's own kinds and Manifest.TaskStarts (SEC2-15), cancel what that actor
+	// started, and nothing the core:tasks.manage scope guards. It is never nil,
+	// but the engine behind it is built at P7 and only when the app runs one: a
+	// call before then, or in an app with no task engine, returns
+	// ErrTasksNotBound.
+	Tasks tasks.Client
+
+	// Health hands out the push Reporter of each component the module declared
+	// with Registrar.Health (05-health §5H.3.1): Reporter returns
+	// health.ErrNotOwned for any other ID. It is never nil. The registrations are
+	// taken at P7, so a Reporter call before then returns ErrHealthNotBound.
+	Health health.Reporters
 }
 
 // RefreshFunc is Deps.AuthRefresh: auth.Service.Refresh. It has the underlying
@@ -220,3 +239,11 @@ type StorageHandles struct {
 
 // ErrStopped is returned by any handle used after the app stopped.
 var ErrStopped = errors.New("module: app stopped")
+
+// ErrTasksNotBound is what Deps.Tasks returns while the kernel has no task
+// engine for the module: before P7 builds it, or in an app that runs none.
+var ErrTasksNotBound = errors.New("module: Deps.Tasks is not bound: the task engine is built at P7 and only when the app runs one")
+
+// ErrHealthNotBound is what Deps.Health.Reporter returns before the kernel has
+// taken the module's Registrar.Health declarations at P7.
+var ErrHealthNotBound = errors.New("module: Deps.Health is not bound: the module's components are registered at P7")
