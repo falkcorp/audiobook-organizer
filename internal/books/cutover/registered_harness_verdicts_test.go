@@ -196,20 +196,18 @@ type authOffTightening struct {
 	Code string
 }
 
-// registeredAuthOffTightening is the auth-off tightening, one entry per route.
-var registeredAuthOffTightening = []authOffTightening{
-	{"POST", "/api/v1/auth/api-keys/:id/rotate", "FORBIDDEN"},
-	{"POST", "/api/v1/auth/temp-tokens", "interactive_required"},
-	{"POST", "/api/v1/backup/restore", "interactive_required"},
-	{"POST", "/api/v1/import-paths", "interactive_required"},
-	{"PUT", "/api/v1/plugins/:id/settings", "interactive_required"},
-	{"POST", "/api/v1/tools/:name/install", "interactive_required"},
-	{"POST", "/api/v1/update/apply", "interactive_required"},
-	{"POST", "/api/v1/users/:id/deactivate", "interactive_required"},
-	{"POST", "/api/v1/users/:id/reactivate", "interactive_required"},
-	{"POST", "/api/v1/users/:id/reset-password", "interactive_required"},
-	{"POST", "/api/v1/users/invite", "interactive_required"},
-	{"POST", "/api/v1/users/invites/:id/resend", "interactive_required"},
+// authOffTightenings flattens the oracle's registeredAuthOffTightening table
+// (registered_reach_eval_test.go: the one source of the 12 cells, each row with its
+// citation) into the route-and-code pairs the sweep and the exact-refusal test read.
+func authOffTightenings() []authOffTightening {
+	var out []authOffTightening
+	for _, row := range registeredAuthOffTightening.rows {
+		for _, r := range row.routes {
+			method, route, _ := strings.Cut(r, " ")
+			out = append(out, authOffTightening{Method: method, Route: route, Code: row.code})
+		}
+	}
+	return out
 }
 
 // recordedRoute is one row of verdicts.json.
@@ -291,7 +289,7 @@ func sweepMismatches(t *testing.T, h *Registered, only func(*Principal) bool) ma
 func expected(h *Registered, classes ...verdictClass) map[string]*verdictRow {
 	out := map[string]*verdictRow{}
 	if slices.Contains(classes, classTightening) {
-		for _, tt := range registeredAuthOffTightening {
+		for _, tt := range authOffTightenings() {
 			out[tt.Method+" "+tt.Route+"|"+Authoff] = &verdictRow{Method: tt.Method, Route: tt.Route, Class: classTightening, Principals: []string{Authoff}, Why: "auth-off tightening (SEC5-8)"}
 		}
 	}
@@ -370,7 +368,11 @@ func TestRegisteredHarness_R0DriftIsInTheRouteTable(t *testing.T) {
 // then reach these routes is TestRegisteredHarness_AuthOnByTheOperatorOverAStoredOff.
 func TestRegisteredHarness_AuthOffTighteningRefusesInteractiveRoutes(t *testing.T) {
 	off := bootRegistered(t, registeredConfig{AuthOff: true})
-	for _, tt := range registeredAuthOffTightening {
+	cells := authOffTightenings()
+	if len(cells) != registeredAuthOffTightening.want {
+		t.Fatalf("the tightening table flattens to %d cells, its rows claim %d", len(cells), registeredAuthOffTightening.want)
+	}
+	for _, tt := range cells {
 		ri := off.match(tt.Method, probePathFor(t, tt.Method, tt.Route))
 		if ri == nil {
 			t.Errorf("%s %s: not registered", tt.Method, tt.Route)
