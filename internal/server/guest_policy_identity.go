@@ -20,7 +20,8 @@ import (
 // sites for the guest-policy sync (the books accept handler, the books user
 // handlers' deactivate and e-mail routes) no longer see an account change. Core
 // reports each one after it commits through auth.Lifecycle, and books registers
-// the one hook below. What each event does is what HEAD did at the matching call
+// the one hook (AccountLifecycle, account_lifecycle.go), which runs this
+// concern and the guest phone-app key's beside each other. What each event does is what HEAD did at the matching call
 // site, over the same sync and revoke code:
 //
 //	InviteAccepted                  startGuestPolicySync (auth_accept_invite.go)
@@ -37,19 +38,6 @@ import (
 // The bookkeeping HEAD kept on the invite and on the inviteallow: grant is books'
 // own here (store.GuestPolicyStore): core has neither field, and inviteallow: is
 // the SSO grant the identity cutover consumed.
-
-// GuestPolicyLifecycle is the auth.Lifecycle books registers with core when it
-// runs under core identity. Every field is set: an event books does not act on
-// would be a hole a later core change walks through unnoticed.
-func (s *Server) GuestPolicyLifecycle() coreauth.Lifecycle {
-	return coreauth.Lifecycle{
-		InviteAccepted: s.guestOnInviteAccepted,
-		StatusChanged:  s.guestOnStatusChanged,
-		EmailChanged:   s.guestOnEmailChanged,
-		UserDeleted:    s.guestOnUserDeleted,
-		UserMergedAway: s.guestOnUserMergedAway,
-	}
-}
 
 // guestGrantStore is the bookkeeping the sync and the revoke run over: books' own
 // guestpolicy: rows under core identity, HEAD's inviteallow: grants otherwise.
