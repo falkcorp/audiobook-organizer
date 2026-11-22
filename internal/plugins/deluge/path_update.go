@@ -52,13 +52,6 @@ func (p *Plugin) pathUpdateDef() sdk.OperationDef {
 			sdk.CapFilesWrite,
 			sdk.CapNetworkGeneric,
 		},
-		// Event-triggered: fires on book.relocated events.
-		Triggers: []sdk.EventSubscription{
-			{
-				EventName: "book.relocated",
-				Handler:   p.handleBookRelocated,
-			},
-		},
 	}
 }
 
@@ -71,32 +64,6 @@ type pathUpdateParams struct {
 	// MoveStorage.
 	DryRun      *bool `json:"dry_run,omitempty"`
 	DryRunCamel *bool `json:"dryRun,omitempty"`
-}
-
-func (p *Plugin) handleBookRelocated(ctx context.Context, payload any) error {
-	// payload is expected to be a string (book ID) from the event bus.
-	bookID, ok := payload.(string)
-	if !ok {
-		return fmt.Errorf("book.relocated payload is not a string")
-	}
-
-	// Placeholder; nothing enqueues this today. The params below are built
-	// and discarded (see the end of this function), and nothing in the repo
-	// publishes book.relocated. DryRun is set live so that whoever wires this
-	// up does not inherit the op's preview default by accident: a relocation
-	// event wants the move made, and an omitted dry_run would queue a run that
-	// moves nothing.
-	params := pathUpdateParams{BookID: bookID, DryRun: opmode.Live()}
-	paramsBytes, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("marshal params: %w", err)
-	}
-
-	// The event handler doesn't have access to the registry for re-enqueueing,
-	// so this is a placeholder. In practice, the event bus will call RunOperation
-	// directly with these params.
-	_ = paramsBytes
-	return nil
 }
 
 // pathUpdateStore is the reads the core takes.
