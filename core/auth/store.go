@@ -1,7 +1,7 @@
 // file: core/auth/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c69ddd70-3f1b-4605-9604-d1be29ba81d9
-// last-edited: 2026-11-11
+// last-edited: 2026-11-21
 
 package auth
 
@@ -44,6 +44,7 @@ type Store interface {
 	APIKeyStore
 	OneTimeStore
 	IdentityStore
+	RestoreEpochStore
 	// StageMerge rewrites the owner of every record of plan (Admin.StageUserMerge).
 	StageMerge(b *storage.Batch, plan UserMergePlan) error
 }
@@ -130,6 +131,31 @@ type IdentityStore interface {
 	IdentityBySubject(ctx context.Context, provider, subject string) (*ExternalIdentity, error)
 	ScanIdentities(ctx context.Context, user UserID) iter.Seq2[*ExternalIdentity, error] // user "" = every identity
 	InviteAllowed(ctx context.Context, email string) (bool, error)
+}
+
+// RestoreEpochRun is the one record of RestoreEpochStore: what PostRestore's
+// step 3 did for one restore run, staged in the same batch as the sign-in
+// deletion and the credential-epoch bump it describes.
+type RestoreEpochRun struct {
+	// RunKey names the restore run (RestoreDeps.RunKey).
+	RunKey string
+	// Bumped and SignInsDeleted are the counts the run reported, so a re-run
+	// that finds its own key reports them again instead of 0.
+	Bumped, SignInsDeleted int
+}
+
+// RestoreEpochStore is the restore-run family of Store: the marker that makes
+// PostRestore's credential-epoch bump idempotent across a crash. A bump is a
+// read-modify-write (epoch+1), so a re-run cannot tell its own committed bump
+// from a stale one by looking at the users; the marker, committed with the
+// bump, can.
+type RestoreEpochStore interface {
+	// RestoreEpochRun is the marker of the last run that bumped the epochs;
+	// ok is false when no run has.
+	RestoreEpochRun(ctx context.Context) (run RestoreEpochRun, ok bool, err error)
+	// StageRestoreEpochRun stages r as the marker, replacing any earlier run's.
+	// A batch that stages it twice fails with an error.
+	StageRestoreEpochRun(b *storage.Batch, r RestoreEpochRun) error
 }
 
 // Importer is how an app's cutover step brings the identities it held before

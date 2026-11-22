@@ -1,5 +1,5 @@
 // file: core/auth/restore.go
-// version: 1.2.0
+// version: 1.3.1
 // guid: 2b7d94e1-6a30-4c58-b9f2-e41c8d05a763
 // last-edited: 2026-11-12
 
@@ -31,18 +31,23 @@ type RestoreDeps struct {
 	// restore (§4.14 step 3); nil when there is none.
 	Previous    Store
 	Revocations journal.RevocationJournal // the lines the hook appends (§4.12)
-	// RunKey names one restore run (the restore line's seq for a hook run, the
-	// restore's ID for a boot re-apply); empty for a run that has none. With
-	// Journaled it makes RestrictLastAdmins idempotent across a crash: every line
-	// it journals carries the key, and a line the journal already holds for this
-	// run is not appended a second time.
+	// RunKey names one restore run: "restore:<the restore intent's ID>..." (the
+	// kernel's hookRunKey and restrictKey); empty for a run that has none. A run
+	// that finds its own key SKIPS work: with Journaled, a line the journal already
+	// holds for this run is not appended a second time (RestrictLastAdmins), and a
+	// stored RestoreEpochRun with this key means PostRestore's epoch bump already
+	// committed, so it is not repeated. A skip is only as safe as the key is
+	// unforgeable, so the key must come from the live host (the intent's ID is
+	// minted from crypto/rand and kept outside the store) and never from anything
+	// a restored store can carry (a journal seq, an ID kept in the store). Empty
+	// means never skip: every line is journaled and every epoch bumped, each run.
 	RunKey string
 	// Journaled reports whether the journal already holds a line equal to r in
 	// kind, subject, object and detail (journal.Component.Journaled). Nil means
 	// the journal cannot be asked, and RestrictLastAdmins appends every line as
 	// it did before the key.
-	Journaled func(r journal.Revocation) (bool, error)
-	StateFiles  StateFiles                // bootstrap token and read-only key files (COR10-7); nil writes no file
+	Journaled  func(r journal.Revocation) (bool, error)
+	StateFiles StateFiles // bootstrap token and read-only key files (COR10-7); nil writes no file
 	// BootstrapTokenFile is Options.BootstrapTokenFile, the bootstrap token's
 	// file name under the state directory; "" is BootstrapTokenFile.
 	BootstrapTokenFile string
@@ -727,10 +732,31 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 	}
 	// Step 3 commits after the restrictions: a crash between the two leaves
 	// them applied and the sign-ins to be deleted on the re-run.
+	//
+	// The epoch bump is epoch+1, so a re-run cannot tell its own committed bump
+	// from an unbumped user. The batch therefore stages the run's marker with
+	// the bumps and the deletions it describes: they land together or not at
+	// all, and a re-run that finds its own key skips the bump (it still deletes
+	// whatever sign-ins exist) and reports the counts the first run committed.
+	// A run with no key has nothing to mark, so it bumps every time.
 	err = d.commit(ctx, func(b *storage.Batch) error {
+		var done RestoreEpochRun
+		resumed := false
+		if d.RunKey != "" {
+			prev, ok, err := d.Store.RestoreEpochRun(ctx)
+			if err != nil {
+				return err
+			}
+			resumed = ok && prev.RunKey == d.RunKey
+			done = prev
+		}
 		n, err := d.Store.RevokeSignInsBefore(b, time.Time{})
 		if err != nil {
 			return err
+		}
+		if resumed {
+			counts[CountSignInsDeleted], counts[CountEpochsBumped] = done.SignInsDeleted+n, done.Bumped
+			return nil
 		}
 		bumped := 0
 		for u, err := range d.Store.ScanUsers(ctx) {
@@ -749,6 +775,11 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 				return err
 			}
 			bumped++
+		}
+		if d.RunKey != "" {
+			if err := d.Store.StageRestoreEpochRun(b, RestoreEpochRun{RunKey: d.RunKey, Bumped: bumped, SignInsDeleted: n}); err != nil {
+				return err
+			}
 		}
 		counts[CountSignInsDeleted], counts[CountEpochsBumped] = n, bumped
 		return nil
