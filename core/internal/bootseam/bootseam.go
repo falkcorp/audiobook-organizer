@@ -147,18 +147,18 @@ func From(ctx context.Context) *Seams {
 
 type sectionCacheKey struct{}
 
-// WithSectionCache returns ctx carrying c, a config section cache (a
+// WithSectionCacheForTest returns ctx carrying c, a config section cache (a
 // *config.SectionCache, held as any as Seams.SectionCache is), for the boots
 // under ctx that carry no Seams.SectionCache. It lets a package's tests share
 // one cache across every kernel they boot without handing each boot a Seams:
 // a non-nil Seams changes what a boot reads (its filesystem, its journal
 // locks), and most test boots carry none. Nil in production.
-func WithSectionCache(ctx context.Context, c any) context.Context {
+func WithSectionCacheForTest(ctx context.Context, c any) context.Context {
 	return context.WithValue(ctx, sectionCacheKey{}, c)
 }
 
 // SectionCache is the section cache a boot under ctx builds its config
-// stores through: Seams.SectionCache, else WithSectionCache's; nil in
+// stores through: Seams.SectionCache, else WithSectionCacheForTest's; nil in
 // production.
 func SectionCache(ctx context.Context) any {
 	if s := From(ctx); s != nil && s.SectionCache != nil {
