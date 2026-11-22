@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -92,6 +93,49 @@ func TestTaskStarts_UnknownKindRefusedAtBoot(t *testing.T) {
 			return r.Err()
 		}).with(func(m *module.Manifest) { m.TaskLedger = []tasks.Kind{"robin.signal"} })
 		c, _ := taskConfig(t, g, robin)
+		mustNew(t, c)
+	})
+}
+
+// TestTaskStarts_CoreScopeKindRefusedAtBoot (SEC2-15): a module's system actor
+// holds the union of its listed kinds' Perms.Start, so a kind that starts under a
+// core:* scope may not be listed: it would hand the module core:tasks.manage,
+// core:tasks.view or core:admin. The same kind under the module's own scope is
+// valid.
+func TestTaskStarts_CoreScopeKindRefusedAtBoot(t *testing.T) {
+	robin := func(scope rbac.Permission) testModule {
+		return mod("robin", func(r *module.Registrar) error {
+			r.Tasks(tasks.Task("robin.signal", tasks.TaskSpec[struct{}, struct{}]{
+				Title: "Signal", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need(scope)},
+				Resume: tasks.ResumeFromZero, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
+			}))
+			return r.Err()
+		}).with(func(m *module.Manifest) {
+			m.TaskLedger = []tasks.Kind{"robin.signal"}
+			m.Permissions = []rbac.PermissionSpec{{Name: "robin:signal", Title: "Signal"}}
+		})
+	}
+	for _, scope := range []rbac.Permission{"core:tasks.manage", "core:tasks.view", "core:admin", "core:system.manage"} {
+		t.Run(string(scope), func(t *testing.T) {
+			g, _ := patroller([]tasks.Kind{"robin.signal"})
+			c, _ := taskConfig(t, g, robin(scope))
+			_, err := newK(t, c)
+			var ve *module.ValidationError
+			if !errors.As(err, &ve) {
+				t.Fatalf("New = %v, want a validation error", err)
+			}
+			found := false
+			for _, p := range ve.Problems {
+				found = found || (p.Kind == module.ProblemTaskStartUnknown && p.Module == "gotham" && strings.Contains(p.Detail, string(scope)))
+			}
+			if !found {
+				t.Fatalf("no TaskStarts problem naming %s: %v", scope, err)
+			}
+		})
+	}
+	t.Run("the module's own scope is valid", func(t *testing.T) {
+		g, _ := patroller([]tasks.Kind{"robin.signal"})
+		c, _ := taskConfig(t, g, robin("robin:signal"))
 		mustNew(t, c)
 	})
 }

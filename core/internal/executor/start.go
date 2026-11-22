@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/entity"
@@ -274,11 +275,10 @@ func (e *executor) moduleReach(module string, d *def) error {
 	return nil
 }
 
-// systemChecker builds module's system actor checker: the union of the
-// start requirements of its own kinds and its TaskStarts, minus core:admin
-// and every scope the catalog marks AuthRequired (authz.ForSystem refuses
-// the whole set if handed either).
-func (e *executor) systemChecker(module string) rbac.Checker {
+// systemPerms is the union of the start requirements of module's own kinds and
+// its TaskStarts, minus core:admin and every scope the catalog marks
+// AuthRequired (authz.ForSystem refuses the whole set if handed either).
+func (e *executor) systemPerms(module string) []rbac.Permission {
 	var perms []rbac.Permission
 	add := func(k tasks.Kind) {
 		if d, ok := e.defs[k]; ok {
@@ -302,6 +302,32 @@ func (e *executor) systemChecker(module string) rbac.Checker {
 			if spec, ok := e.opts.Catalog.Lookup(p); ok && spec.AuthRequired {
 				continue
 			}
+		}
+		keep = append(keep, p)
+	}
+	return keep
+}
+
+// systemChecker builds module's system actor checker for a START: what
+// systemPerms holds. It is what lets the module start the kinds it owns and the
+// kinds its manifest lists in TaskStarts, and nothing else reads it.
+func (e *executor) systemChecker(module string) rbac.Checker {
+	return authz.ForSystem(e.opts.Catalog, e.systemPerms(module))
+}
+
+// opsChecker builds module's checker for every operation that is not a start:
+// viewing, cancelling, discarding and deciding runs, pausing. It is systemPerms
+// narrowed to the module's own namespace and never any core:tasks.* scope, so a
+// module whose TaskStarts name a kind that starts under core:tasks.manage or
+// core:tasks.view (or any other core:* scope) can start that kind and still
+// cannot view or manage runs of other modules, or pause the executor. A scope of
+// another namespace is what the start needed, not a right over the runs.
+func (e *executor) opsChecker(module string) rbac.Checker {
+	var keep []rbac.Permission
+	for _, p := range e.systemPerms(module) {
+		ns, _, _ := strings.Cut(string(p), ":")
+		if ns != module || strings.HasPrefix(string(p), "core:tasks.") {
+			continue
 		}
 		keep = append(keep, p)
 	}
