@@ -128,6 +128,9 @@ type Steps struct {
 	mu       sync.Mutex
 	degraded map[string]struct{}
 	errorLog func(format string, args ...any)
+	// extend asks the service manager for start time (05-health §5H.3.4);
+	// nil = no request. Run calls it before every step's fn.
+	extend func(step string)
 }
 
 // New returns an empty Steps that logs degraded failures through the
@@ -154,6 +157,21 @@ func (st *Steps) SetErrorLog(f func(format string, args ...any)) *Steps {
 	return st
 }
 
+// SetExtender installs the function Run calls with a step's name right
+// before it runs the step: the start-timeout extension of 05-health §5H.3.4
+// (books passes module.Deps.ExtendStart), so every row of Table asks for
+// start time before it does its work, and a row added to Table cannot forget
+// to. Nil removes it, which books does once its start hook has returned: Run
+// is also called by steps that run after readiness, and there is no start
+// timeout left to extend. Run calls the function on its own goroutine, one
+// step at a time, as ExtendStart requires. Returns st so it chains off New.
+func (st *Steps) SetExtender(f func(step string)) *Steps {
+	st.mu.Lock()
+	st.extend = f
+	st.mu.Unlock()
+	return st
+}
+
 // Run runs the step called name and applies its class to fn's error.
 //
 //   - Fatal: fn's error is returned unchanged; no token is recorded.
@@ -166,6 +184,12 @@ func (st *Steps) Run(name string, fn func() error) error {
 	step, ok := Lookup(name)
 	if !ok {
 		return fmt.Errorf("startup: step %q is not in startup.Table", name)
+	}
+	st.mu.Lock()
+	extend := st.extend
+	st.mu.Unlock()
+	if extend != nil {
+		extend(name)
 	}
 	err := fn()
 	if err == nil {

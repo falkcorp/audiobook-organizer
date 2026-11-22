@@ -29,6 +29,8 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/falkcorp/audiobook-organizer/internal/startup"
 )
 
 // opsV3ReconcilePage is how many keys one detection page carries at most,
@@ -126,6 +128,7 @@ func (p *PebbleStore) ReconcileOpsV3WithV2(ctx context.Context) (rep OpsV3Reconc
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
+		startup.Progress(ctx)
 		more, err := p.migrateOpsV3Batch(stale[i:min(i+opsV3MigrationBatch, len(stale))], &mrep)
 		if err != nil {
 			return rep, err
@@ -142,6 +145,7 @@ func (p *PebbleStore) ReconcileOpsV3WithV2(ctx context.Context) (rep OpsV3Reconc
 		if err := ctx.Err(); err != nil {
 			return rep, err
 		}
+		startup.Progress(ctx)
 		n, err := p.deleteOrphanRunsV3Batch(orphans[i:min(i+opsV3MigrationBatch, len(orphans))], &rep.Undecodable)
 		if err != nil {
 			return rep, err
@@ -171,6 +175,7 @@ func (p *PebbleStore) findStaleRunsV3(ctx context.Context) (stale []string, chec
 		return p.db.NewIter(&pebble.IterOptions{LowerBound: []byte(opv2OpPrefix), UpperBound: prefixEnd([]byte(opv2OpPrefix))})
 	}
 	err = p.walkPagesParallel(ctx, open, true, func(keys, vals [][]byte) error {
+		startup.Progress(ctx) // a page of ops rows read, from a walk worker
 		var mine []string
 		for i, k := range keys {
 			id := strings.TrimPrefix(string(k), opv2OpPrefix)
@@ -205,6 +210,7 @@ func (p *PebbleStore) findOrphanRunsV3(ctx context.Context) (orphans []string, e
 		return p.db.NewIter(&pebble.IterOptions{LowerBound: []byte(opv3RunPrefix), UpperBound: prefixEnd([]byte(opv3RunPrefix))})
 	}
 	err = p.walkPagesParallel(ctx, open, false, func(keys, _ [][]byte) error {
+		startup.Progress(ctx) // a page of opv3 rows read, from a walk worker
 		var mine []string
 		for _, k := range keys {
 			id := strings.TrimPrefix(string(k), opv3RunPrefix)
