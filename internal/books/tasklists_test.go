@@ -7,7 +7,9 @@ package books
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
@@ -156,7 +159,26 @@ func listsFixture(t *testing.T) taskListInputs {
 			Upgrader:     listsUpgrader{},
 			StandDownKey: tasks.Key("books.library.scan"),
 		},
+		Repairs: repairs.BooksTaskInputs{
+			// The real fixers, so every one of their permission atoms must
+			// resolve through books' own atom table.
+			Fixers:       (&maintenance.Plugin{}).Repairs().List(),
+			Guard:        store,
+			Stores:       store,
+			PlanRows:     listsPlanRows{},
+			BindStores:   func(ctx context.Context) context.Context { return ctx },
+			StandDownKey: tasks.Key("books.library.scan"),
+		},
 	}
+}
+
+// listsPlanRows is the kernel's plan-row reader, which this fixture has no run
+// for: bookTaskLists only builds the definitions.
+type listsPlanRows struct{}
+
+func (listsPlanRows) PlanOf(context.Context, tasks.RunID) (string, error) { return "", nil }
+func (listsPlanRows) PlannedRow(context.Context, tasks.RunID, string) (json.RawMessage, bool, error) {
+	return nil, false, nil
 }
 
 // notYetBuilt are the scheduled kinds bookTaskLists does not carry yet, each with
@@ -287,9 +309,32 @@ func TestF5_EveryBuiltListIsCarried(t *testing.T) {
 		"itunes":            "books.itunes.position-sync",
 		"acoustid":          "books.acoustid.scan",
 		"scheduler":         "books.scheduler.metadata-upgrade",
+		"repairs":           "books.repairs.folder-books",
 	} {
 		require.True(t, have[sentinel], "the %s list is not in bookTaskLists (no %s)", list, sentinel)
 	}
+}
+
+// The Repairs list carries one kind per fixer the maintenance plugin offers, none
+// dropped and none invented.
+func TestF5_RepairsListCarriesEveryFixer(t *testing.T) {
+	in := listsFixture(t)
+	defs, err := bookTaskLists(in)
+	require.NoError(t, err)
+	have := map[tasks.Kind]bool{}
+	for _, d := range defs {
+		have[d.Kind()] = true
+	}
+	for _, f := range in.Repairs.Fixers {
+		require.True(t, have[tasks.Kind(repairs.KindPrefix+f.ID())], "fixer %s has no kind", f.ID())
+	}
+	n := 0
+	for k := range have {
+		if strings.HasPrefix(string(k), repairs.KindPrefix) {
+			n++
+		}
+	}
+	require.Equal(t, len(in.Repairs.Fixers), n)
 }
 
 func TestF5_BookTaskListsBuild(t *testing.T) {
