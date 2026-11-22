@@ -47,6 +47,12 @@ import (
 // bootLog logs books' boot (the settings boot and the store's lifecycle).
 var bootLog = logger.New("books")
 
+// newServer builds the server Register hands the kernel. A variable so a test
+// can make it refuse: with a real store no server refusal is reachable
+// through Register (ValidateABSConfig answers the ABS ones first), and the
+// unwind of a refused server needs a boot that gets there.
+var newServer = server.NewServer
+
 // ID is books' module ID.
 const ID module.ID = "books"
 
@@ -451,7 +457,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// A refusal comes back as an error, and NewServer has released whatever it
 	// had begun to build, so there is no server for Release to tear down: the
 	// error returns to the kernel's caller, and Release closes the store.
-	srv, err := server.NewServer(store, srvOpts...)
+	srv, err := newServer(store, srvOpts...)
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
 	}

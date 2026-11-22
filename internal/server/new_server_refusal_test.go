@@ -105,6 +105,21 @@ var refusalCases = []refusalCase{
 		require.EqualValues(t, 1, store.set.Load(), "setup: NewServer installs one change observer before the ABS wiring refuses")
 		require.EqualValues(t, 1, store.cleared.Load(), "a refused NewServer left its change observer installed on the store")
 	}},
+	{"activity store cannot build", func(t *testing.T) {
+		// A refusal inside the service registry's Build, long before the routes:
+		// with a database path set the activity store is built over the main
+		// store's PebbleStore, and a store that hides it (opaqueStore) has none.
+		// The change observer was installed before the registry ran, so the unwind
+		// is what detaches it.
+		refusalConfig(t, func(c *config.Config) { c.DatabasePath = filepath.Join(t.TempDir(), "gotham.pebble") })
+		store := &observerCountingStore{opaqueStore: opaqueStore{Store: refusalStore(t)}}
+		srv, err := NewServer(store)
+		require.Nil(t, srv)
+		require.ErrorContains(t, err, "serviceregistry build")
+		require.ErrorContains(t, err, "activitystore", "the error must name the service that refused")
+		require.EqualValues(t, 1, store.set.Load(), "setup: NewServer installs one change observer before the registry builds")
+		require.EqualValues(t, 1, store.cleared.Load(), "a refused NewServer left its change observer installed on the store")
+	}},
 	{"nil store", func(t *testing.T) {
 		refusalConfig(t, nil)
 		srv, err := NewServer(nil)
