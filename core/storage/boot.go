@@ -116,6 +116,13 @@ type OpenOptions struct {
 	rewriteTableBytes  int64
 	rewriteExtendKeys  int64
 	rewriteExtendBytes int64
+	// rewriteCompactBytes is the table data one M8 compaction chunk covers (0
+	// = rewriteCompactBytes), and compactRange runs one chunk's manual
+	// compaction (nil = Pebble's Compact, parallelized): a test shrinks the
+	// first to get several chunks out of kilobytes, and stalls or counts the
+	// second.
+	rewriteCompactBytes int64
+	compactRange        func(ctx context.Context, db *cpebble.DB, start, end []byte) error
 
 	// cpDir is the checkpoint directory itself:
 	// <CheckpointDir or the DB's parent>/.mediacore-checkpoints.
