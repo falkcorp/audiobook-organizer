@@ -222,6 +222,7 @@ func TestConfigPlan_NoPlaceToGoIsQuarantined(t *testing.T) {
 // TestProbeOIDCFoldDrops). The role HEAD's blob always carries ("viewer") is a
 // default and is not information to keep.
 func TestConfigPlan_OIDCFoldLeftovers(t *testing.T) {
+	const cfAccessAllowedEmailsPath = "modules.books.cfaccess.allowed_emails"
 	const (
 		role   = "role-Nightwing-0601"
 		emails = "robin-0602@batcave.example"
@@ -274,6 +275,14 @@ func TestConfigPlan_OIDCFoldLeftovers(t *testing.T) {
 				if strings.Trim(q.Value, `"`) != want {
 					t.Errorf("%s: the value is not recoverable from the quarantine", key)
 				}
+			}
+			// The fold has nowhere to put the list, but HEAD's Cloudflare Access
+			// path reads it too: the books key must be staged regardless of
+			// whether an OIDC provider entry exists (F4-08 B10o). An Access-only
+			// install has exactly this shape.
+			got, staged := stagedValue(snap, cfAccessAllowedEmailsPath)
+			if !staged || strings.Trim(got, `"`) != emails {
+				t.Errorf("%s staged %v with value %q; want the allow-list %q", cfAccessAllowedEmailsPath, staged, got, emails)
 			}
 			checkQuarantined(t, r, snap)
 		})
