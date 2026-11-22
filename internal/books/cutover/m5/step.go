@@ -156,28 +156,31 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 // to have, and a wiped log is acceptable while the database stays intact. So a
 // failure about ONE ROW is quarantined and the step goes on to the next row.
 // Two things are a failure about a row: it does not decode, has a level HEAD
-// never wrote or has no usable time (decode), or the journal's Import returned
-// an error for it while the boot was still running (quarantined as
-// reasonImport, raw bytes kept, source key deleted by Quarantine itself). The
-// journal importer's refusals of a record are not told apart from its other
-// errors here (its sentinels live in core/internal/logjournal, which an app
-// cannot import), and need not be: a store that is really broken fails at the
-// chunk's batch commit below, which is fatal.
+// never wrote or has no usable time (decode), or the journal's Import refused
+// the record, which is an error matching log.ErrImportRejected (quarantined as
+// reasonImport, raw bytes kept, source key deleted by Quarantine itself). That
+// is the importer's own verdict on what the record holds, and the only Import
+// error read as one: decode already rejects what the real importer refuses for a
+// row, so a rejection here is rare, and every other Import error comes from the
+// store (a read-only or misbound handle, a batch limit, a commit failure) or the
+// context. A deterministic store defect quarantining every row and marking the
+// step done for good would be the opposite of "the database stays intact".
 //
 // What stays fatal is whatever means the DATABASE is unhealthy, and none of
 // it is quarantined or dropped:
+//   - any Import error that is not a rejection of the record, including a
+//     cancelled ctx or a deadline;
 //   - the chunk's batch commit (the runner's, after Step returns);
-//   - storage.ErrBatchDone, from any call here or from Import;
-//   - an error from w.Quarantine or w.Delete. The runner poisons the chunk on
-//     a failed Quarantine (core/internal/storagemigrate/chunk.go, chunk.fail),
-//     so swallowing it here would not save the chunk, and every way
-//     Quarantine can fail for this step (the quarantine sequence's lease,
-//     the batch, a wiring or step defect) is the store's, never the row's:
-//     M5 declares no Sensitive prefixes, so the writer copies the raw bytes
-//     verbatim and nothing in a row's content can make it fail. So there is
-//     no "drop the row" leg: it could not take effect through the runner;
-//   - a cancelled ctx (a stopping boot fails nothing, the runner reports
-//     the cause), and a context deadline from the importer.
+//   - an error from w.Quarantine or w.Delete, among them storage.ErrBatchDone (a
+//     step ended the chunk's batch; the importer cannot cause it, because
+//     log.Importer never stages into the caller's batch). The runner poisons the
+//     chunk on a failed Quarantine (core/internal/storagemigrate/chunk.go,
+//     chunk.fail), so swallowing it here would not save the chunk, and every way
+//     Quarantine can fail for this step (the quarantine sequence's lease, the
+//     batch, a wiring or step defect) is the store's, never the row's: M5
+//     declares no Sensitive prefixes, so the writer copies the raw bytes verbatim
+//     and nothing in a row's content can make it fail. So there is no "drop the
+//     row" leg: it could not take effect through the runner.
 func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	m.read.Add(1)
 	key := string(kv.Key)
@@ -198,9 +201,9 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		return quarantine(reason)
 	}
 	if err := m.imp.Import(ctx, []log.ImportedRecord{{Record: rec, SourceID: key}}); err != nil {
-		// The database's errors, not the row's: the boot is stopping, or the
-		// importer ran into a batch a step ended or a deadline.
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrBatchDone) {
+		// Only the importer's refusal of this record is the row's failure; every
+		// other error is the store's or the boot's (see above).
+		if !errors.Is(err, log.ErrImportRejected) {
 			return fmt.Errorf("m5: import the system log row %q: %w", key, err)
 		}
 		m.logger.Warn("m5: a system log row is quarantined because the journal did not accept it", "key", key, "reason", reasonImport, "err", err)

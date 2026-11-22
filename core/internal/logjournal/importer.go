@@ -46,6 +46,9 @@ func importULID(ms uint64, sourceID string) string {
 // Import writes recs in one durable batch. Every record needs a usable Time
 // (the zero time and times outside 1970 to year 9999 are ErrInvalidTime) and a
 // SourceID; one bad record rejects the whole call before anything is written.
+// Each such refusal wraps log.ErrImportRejected beside its own error, so a
+// caller (books' M5) can tell a record the journal will never take from a
+// failure of the store, which comes back unwrapped.
 // A record already imported is overwritten with itself: an import is a plain
 // Set of a derived key, so repeating it is a no-op.
 func (im *Importer) Import(ctx context.Context, recs []log.ImportedRecord) (err error) {
@@ -59,22 +62,22 @@ func (im *Importer) Import(ctx context.Context, recs []log.ImportedRecord) (err 
 	defer discard(b, &err)
 	for i, r := range recs {
 		if r.SourceID == "" {
-			return fmt.Errorf("record %d: %w", i, ErrNoSourceID)
+			return fmt.Errorf("record %d: %w: %w", i, log.ErrImportRejected, ErrNoSourceID)
 		}
 		if r.Time.IsZero() {
-			return fmt.Errorf("record %d: %w", i, ErrInvalidTime)
+			return fmt.Errorf("record %d: %w: %w", i, log.ErrImportRejected, ErrInvalidTime)
 		}
 		ms, err := msOf(r.Time)
 		if err != nil {
-			return fmt.Errorf("record %d: %w", i, err)
+			return fmt.Errorf("record %d: %w: %w", i, log.ErrImportRejected, err)
 		}
 		rw, err := toRow(r.Record, r.Time)
 		if err != nil {
-			return fmt.Errorf("record %d: %w", i, err)
+			return fmt.Errorf("record %d: %w: %w", i, log.ErrImportRejected, err)
 		}
 		raw, err := rowCodec().Encode(rw)
 		if err != nil {
-			return fmt.Errorf("logjournal: encode: %w", err)
+			return fmt.Errorf("record %d: %w: logjournal: encode: %w", i, log.ErrImportRejected, err)
 		}
 		if err := b.Set(journalKey(importULID(ms, r.SourceID)), raw); err != nil {
 			return err

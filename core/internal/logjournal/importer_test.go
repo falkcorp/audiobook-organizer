@@ -66,6 +66,24 @@ func TestImporter_IdempotentKeyAndRejections(t *testing.T) {
 			t.Errorf("%s: %d rows after a rejected call, want 3", name, n)
 		}
 	}
+	// Every refusal of a record matches log.ErrImportRejected beside its own
+	// error; a failure that is not about a record does not (books' M5 quarantines
+	// the first and stops on the second).
+	for name, bad := range map[string]log.ImportedRecord{
+		"no source id": imp("", 0, "nameless"),
+		"zero time":    {Record: log.Record{Message: "timeless"}, SourceID: "syslog:z"},
+		"pre-epoch":    {Record: log.Record{Time: time.Date(1960, 1, 1, 0, 0, 0, 0, time.UTC), Message: "old"}, SourceID: "syslog:y"},
+		"year 10000":   {Record: log.Record{Time: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), Message: "far"}, SourceID: "syslog:f"},
+	} {
+		if err := im.Import(ctx, []log.ImportedRecord{bad}); !errors.Is(err, log.ErrImportRejected) {
+			t.Errorf("%s: err = %v, want it to match log.ErrImportRejected", name, err)
+		}
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := im.Import(cancelled, []log.ImportedRecord{imp("syslog:ok", 0, "fine")}); err == nil || errors.Is(err, log.ErrImportRejected) {
+		t.Errorf("a cancelled ctx: err = %v, want a non-nil error that is not a record refusal", err)
+	}
 	if err := im.Import(ctx, []log.ImportedRecord{imp("", 0, "x")}); !errors.Is(err, logjournal.ErrNoSourceID) {
 		t.Errorf("no source id: err = %v, want ErrNoSourceID", err)
 	}

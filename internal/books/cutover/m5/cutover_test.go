@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m5"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
@@ -304,7 +306,7 @@ func TestCutover_SyslogImported(t *testing.T) {
 		}
 		slices.Sort(keys)
 		poisoned := keys[3]
-		refuse := errors.New("the journal refused the record")
+		refuse := fmt.Errorf("record 0: %w: the journal refused the record", log.ErrImportRejected)
 		r := newRig(t, "", withRows(rows), func(r *rig) {
 			r.j.failFor = map[string]error{poisoned: refuse}
 			r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
@@ -355,6 +357,43 @@ func TestCutover_SyslogImported(t *testing.T) {
 		}
 		if got := r.j.callsFor(poisoned); got != 1 {
 			t.Errorf("the refused row was imported %d times across two boots, want 1: a done step is not re-entered", got)
+		}
+	})
+
+	// An Import error that is not the journal refusing the record is the store's:
+	// the boot stops, nothing is quarantined and every row stays, so a store defect
+	// that fails every Import cannot quarantine the whole log and finish the step.
+	t.Run("an_importer_store_error_stops_the_boot_and_keeps_the_rows", func(t *testing.T) {
+		rows := synth(t, 6, time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC))
+		keys := make([]string, 0, len(rows))
+		for k := range rows {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		poisoned := keys[3]
+		storeErr := fmt.Errorf("journal batch: %w", storage.ErrReadOnly)
+		r := newRig(t, "", withRows(rows), func(r *rig) {
+			r.j.failFor = map[string]error{poisoned: storeErr}
+			r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
+		})
+		mem := r.seed(t)
+		_, err := r.runOn(t, mem)
+		if !errors.Is(err, storage.ErrReadOnly) {
+			t.Fatalf("boot error = %v, want the store's: a store error is never a verdict on a row\n%s", err, r.logs)
+		}
+		if strings.Contains(err.Error(), "Year One") {
+			t.Errorf("the error quotes a row's message: %v", err)
+		}
+		// The store recovers; the next boot finishes the job with nothing quarantined.
+		r.j.mu.Lock()
+		r.j.failFor = nil
+		r.j.mu.Unlock()
+		s, err := r.runOn(t, mem)
+		if err != nil {
+			t.Fatalf("second boot: %v\n%s", err, r.logs)
+		}
+		if len(s.Left) != 0 || len(s.Journal) != len(rows) || len(s.Quarantine) != 0 || s.State != "done" {
+			t.Errorf("left %d journal %d quarantine %d state %q, want 0, %d, 0, done", len(s.Left), len(s.Journal), len(s.Quarantine), s.State, len(rows))
 		}
 	})
 
