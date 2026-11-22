@@ -80,6 +80,10 @@ func TestArchivePrefix_IsWhatHEADsWriterNames(t *testing.T) {
 	// core/backup's archiveExt, which is unexported.
 	require.Regexp(t, regexp.MustCompile(`^\d{8}_\d{6}(\.tar|\.tar\.gz|\.tar\.zst)$`), rest)
 
+	// An offline command resolves its store path before it builds options.
+	books := filepath.Join(tempDir(t), "books.pebble")
+	withConfig(t, config.Config{DatabaseType: "pebble", DatabasePath: books})
+	t.Setenv(storagePathEnv, books)
 	opts, err := OfflineOptions(BootInputs{})
 	require.NoError(t, err)
 	require.Equal(t, archivePrefix, opts.ArchivePrefix, "an offline command would name a different journal than serve")
