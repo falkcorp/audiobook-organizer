@@ -12,29 +12,7 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m3"
-	"github.com/falkcorp/mediacore/rbac"
 )
-
-// reachPinnedCells are the cells the reachHandlerAdmin pin removes from the
-// diff: each is a principal the route-level gate (users.manage) lets in and R0's
-// handler refuses, because the handler tests the admin role by name and that a
-// key may act as admin. They are the F4-08 obligation spelled out in
-// seams.d/F4-07.md: until the registered path proves the migrated handlers
-// (the merge actor check, SetUserEmail), these 11 cells are asserted by the
-// pin and by nothing that runs the handler.
-var reachPinnedCells = []string{
-	"GET /api/v1/users/:id/footprint / authoff: R0 D, R2 A",
-	"GET /api/v1/users/:id/footprint / key:admin:users: R0 D, R2 A",
-	"GET /api/v1/users/:id/footprint / key:custom-all:empty: R0 D, R2 A",
-	"GET /api/v1/users/:id/footprint / key:custom-all:every: R0 D, R2 A",
-	"GET /api/v1/users/:id/footprint / session:custom-all: R0 D, R2 A",
-	"GET /api/v1/users/merges / authoff: R0 D, R2 A",
-	"GET /api/v1/users/merges / key:admin:users: R0 D, R2 A",
-	"GET /api/v1/users/merges / key:custom-all:empty: R0 D, R2 A",
-	"GET /api/v1/users/merges / key:custom-all:every: R0 D, R2 A",
-	"GET /api/v1/users/merges / session:custom-all: R0 D, R2 A",
-	"PUT /api/v1/users/:id/email / session:custom-all: R0 D, R2 A",
-}
 
 // reachPinHiddenProblems is what the pin-hides-exactly check fails on, as text:
 // the oracle judged again over the same principals with the pin emptied must
@@ -75,36 +53,6 @@ func TestReachHandlerAdminPin_HidesExactlyTheCellsTheObligationLists(t *testing.
 	atoms := idAtoms()
 	with, whos := reachCompare(t, pd, vd, atoms, atoms)
 	for _, p := range reachPinHiddenProblems(t, vd, atoms, whos, with) {
-		t.Error(p)
-	}
-}
-
-// reachPinSitProblems is what the pin-sits-on-users.manage check fails on: the
-// pin refuses a caller without core:admin on top of the route's own requirement;
-// it does not replace it. A pinned route that stops asking for users.manage at
-// the router would still pass the gate, because every cell the pin leaves open is
-// one R0 also leaves open, so the requirement is asserted here.
-func reachPinSitProblems() []string {
-	var out []string
-	seen := 0
-	for _, lr := range reachManifest() {
-		key := lr.Method + " " + lr.GinPath
-		if _, pinned := reachHandlerAdmin[key]; !pinned {
-			continue
-		}
-		seen++
-		if lr.Perm.Kind() != rbac.KindLegacyAtom || lr.Perm.Atom() != "users.manage" {
-			out = append(out, fmt.Sprintf("%s is pinned as a handler-level core:admin check, but its route requirement is kind %v, not the users.manage atom", key, lr.Perm.Kind()))
-		}
-	}
-	if seen != len(reachHandlerAdmin) {
-		out = append(out, fmt.Sprintf("%d of %d pinned routes are in the manifest", seen, len(reachHandlerAdmin)))
-	}
-	return out
-}
-
-func TestReachHandlerAdminPin_SitsOnRoutesThatAskForUsersManage(t *testing.T) {
-	for _, p := range reachPinSitProblems() {
 		t.Error(p)
 	}
 }

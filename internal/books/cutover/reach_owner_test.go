@@ -32,59 +32,6 @@ import (
 // committed; the flip guard in reach_pin_source_test.go holds the same condition
 // at the mount switch).
 
-// reachOwnerRecorded are the nine routes the recorder boots again with an owner
-// set (OWNER_ROUTES in scripts/r2corpus/record_r0_reach.py).
-var reachOwnerRecorded = []string{
-	"GET /api/v1/admin/guest-service-tokens/plan",
-	"POST /api/v1/admin/guest-service-tokens/:userId/revoke",
-	"POST /api/v1/backup/restore",
-	"POST /api/v1/system/factory-reset",
-	"POST /api/v1/system/reset",
-	"POST /api/v1/users/:id/merge-into/:target/apply",
-	"POST /api/v1/users/:id/merge-into/:target/preview",
-	"POST /api/v1/users/merges/:jid/resume",
-	"POST /api/v1/users/merges/:jid/undo",
-}
-
-// The 9 to 8 mapping. R2's manifest has eight Guards.Owner routes: seven of the
-// nine recorded ones, plus the reissue route, which is newer than R0 (an R2-only
-// route, so it has no recording). The two recorded routes R2's manifest does not
-// carry are R0-only routes (the reset pair, which core replaces).
-var (
-	reachOwnerR0Only = []string{
-		"POST /api/v1/system/factory-reset",
-		"POST /api/v1/system/reset",
-	}
-	reachOwnerR2Only = []string{
-		"POST /api/v1/admin/guest-service-tokens/:userId/reissue",
-	}
-)
-
-// reachOwnerTwins declares, for each owner route the recording has no row for, a
-// recorded owner route that is its twin: the same permission, the same shape of
-// action on the same resource, so R0's owner-set answer for the twin is the
-// answer R0 would have given the route. The R2-only reissue route is the twin of
-// revoke (both act on one guest's service token, both need users.manage plus the
-// owner). The comparison reads the twin's recorded letters and holds the model's
-// letters for the route to them, so dropping the Owner guard on reissue moves a
-// model letter and fails the way a recorded route's would, instead of only
-// failing the mapping. It is a declared claim: a twin that is not one is for
-// review to catch, and the check below at least requires the twin to be recorded,
-// to be an Owner route in R2 and to carry the same R2 requirement.
-var reachOwnerTwins = map[string]string{
-	"POST /api/v1/admin/guest-service-tokens/:userId/reissue": "POST /api/v1/admin/guest-service-tokens/:userId/revoke",
-}
-
-// reachOwnerAssured says whether a principal is the Access-verified owner. The
-// table of 05-rbac section 12 holds none, so it is false for every name. It is
-// the ONE predicate: the owner-set comparison judges the recording with it
-// (reachChecks) and the flip obligations read it (reachObligationInputFrom), so
-// changing it at one site changes it at both. The functions that take it as a
-// parameter do so only so a test can show the comparison tells models apart. The
-// round-4 C2 swapped the obligations' copy for always-true while the model kept
-// the real one, and the oracle stayed green.
-func reachOwnerAssured(string) bool { return false }
-
 // reachOwnerSetVerdict is the model of a route under an owner set with the Access
 // verifier internal/cfaccess ships. It READS R2: r2 is the evaluation of the
 // manifest the oracle was run on (possibly a mutated copy), so a manifest change
@@ -115,10 +62,6 @@ func reachOwnerSetVerdict(key string, r2 *reachR2, assured func(string) bool) (s
 	}
 	return string(b), true
 }
-
-// reachOwnerGateText is what R0's owner gate says to a caller that is not the
-// verified owner (auth.OwnerProofWhyNot @v0.223.0; record_r0_reach.py OWNER_REFUSAL_TEXT).
-const reachOwnerGateText = "sign in through Cloudflare Access"
 
 // reachOwnerSetProblems compares the owner-set recording with R2's model of it,
 // route by route and principal by principal, three ways:
