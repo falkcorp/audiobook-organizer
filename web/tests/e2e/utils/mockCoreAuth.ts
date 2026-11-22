@@ -98,7 +98,15 @@ function bodyOf(request: Request): unknown {
   }
 }
 
+/**
+ * The pages this mock owns. setupMockApiRoutes (test-helpers.ts) also answers core's identity
+ * routes for the specs that sign in through its own state; on a page listed here it steps aside
+ * (route.fallback) so this mock, registered first but consulted last, answers /api/core/v1.
+ */
+export const coreAuthMockInstalled = new WeakSet<Page>();
+
 export async function installCoreAuthMock(page: Page, options: CoreAuthMockOptions = {}): Promise<CoreAuthMock> {
+  coreAuthMockInstalled.add(page);
   let current: string | null = options.signedInAs ?? null;
   const invites = new Map((options.invites ?? []).map((i) => [i.token, i]));
   const tempLogins = new Map((options.tempLogins ?? []).map((t) => [t.token, t]));

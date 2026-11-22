@@ -85,20 +85,21 @@ async function mockCollectionsApi(page: Page, permissions: string[]) {
   });
 
   // Registered after setupMockApi, so these win over its catch-all.
-  await page.route('**/api/v1/auth/me', (route) =>
+  await page.route('**/api/core/v1/me', (route) =>
     route.fulfill(
       json({
-        data: {
-          user: {
-            id: 'u1',
-            username: 'tester',
-            email: 'tester@example.test',
-            roles: ['viewer'],
-            status: 'active',
-            created_at: STAMP,
-            permissions,
-          },
+        user: {
+          id: 'u1',
+          username: 'tester',
+          email: 'tester@example.test',
+          roles: ['viewer'],
+          status: 'active',
+          created_at: STAMP,
+          updated_at: STAMP,
         },
+        permissions,
+        method: 'session',
+        owner_verified: false,
       })
     )
   );

@@ -54,15 +54,19 @@ test.describe('Invite link (fragment form)', () => {
     await page.goto(`/invite#token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
 
     // The invite page, with what the lookup returned.
-    await expect(page.getByText(INVITE.username)).toBeVisible();
+    await expect(page.getByText(/This invitation is for/)).toContainText(INVITE.username);
     await expectFragmentRemoved(page, mock);
 
     await page.getByLabel('Choose a password').fill('a-long-enough-password');
     await page.getByLabel('Confirm password').fill('a-long-enough-password');
     await page.getByRole('button', { name: /accept|create|join/i }).click();
 
-    await expect(page.getByRole('button', { name: INVITE.username })).toBeVisible();
+    // The page confirms the account, and keeps any one-time phone key on screen until the invitee
+    // chooses to leave; Continue then loads the app with the session the accept opened.
+    await expect(page.getByText(/is ready and you are signed in/i)).toBeVisible();
     expect(mock.signedInAs()).toBe(INVITE.username);
+    await page.getByRole('button', { name: /continue to the library/i }).click();
+    await expect(page.getByRole('button', { name: INVITE.username })).toBeVisible();
 
     const lookups = mock.requests.filter((r) => r.url.endsWith('/api/core/v1/auth/invites/lookup'));
     expect(lookups).toHaveLength(1);
@@ -78,7 +82,7 @@ test.describe('Invite link (fragment form)', () => {
 
     await page.goto(`/invite#token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
 
-    await expect(page.getByText(INVITE.username)).toBeVisible();
+    await expect(page.getByText(/This invitation is for/)).toContainText(INVITE.username);
     await expect(page.getByLabel('Choose a password')).toBeVisible();
     await expect(page.getByRole('heading', { name: /not found/i })).toHaveCount(0);
     await expectFragmentRemoved(page, mock);

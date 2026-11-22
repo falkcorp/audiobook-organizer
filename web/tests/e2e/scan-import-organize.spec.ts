@@ -77,15 +77,9 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       // auth check fails, and every page renders the LOGIN screen — which is
       // why these tests timed out looking for buttons that were never going to
       // be there. api.getAuthStatus() reads body.data, so the envelope matters.
-      if (pathname === '/api/v1/auth/status') {
+      if (pathname === '/api/core/v1/auth/status') {
         return Promise.resolve(
-          jsonResponse({
-            has_users: true,
-            auth_enabled: false,
-            requires_auth: false,
-            authenticated: true,
-            user: { id: 'test-user', username: 'test', role: 'admin' },
-          })
+          jsonResponse({ has_users: true, auth_disabled: true, setup_required: false })
         );
       }
 

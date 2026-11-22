@@ -160,15 +160,9 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
         // the auth check fails, and the app renders the LOGIN screen — so
         // every assertion here was looking for a tab on a page that was never
         // going to show it. api.getAuthStatus() reads body.data.
-        if (url.includes('/api/v1/auth/status')) {
+        if (url.includes('/api/core/v1/auth/status')) {
           return Promise.resolve(
-            jsonResponse({
-              has_users: true,
-              auth_enabled: false,
-              requires_auth: false,
-              authenticated: true,
-              user: { id: 'test-user', username: 'test', role: 'admin' },
-            })
+            jsonResponse({ has_users: true, auth_disabled: true, setup_required: false })
           );
         }
 

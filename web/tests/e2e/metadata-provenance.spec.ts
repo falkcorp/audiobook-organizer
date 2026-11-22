@@ -174,14 +174,8 @@ const setupMockRoutes = async (page: import('@playwright/test').Page) => {
         // not decorative. This spec mocks by patching window.fetch rather than
         // using page.route + setupMockApi, so it gets none of the shared
         // handlers and has to cover auth itself.
-        if (url.includes('/api/v1/auth/status')) {
-          const authStatus = {
-            has_users: true,
-            auth_enabled: false,
-            requires_auth: false,
-            authenticated: true,
-            user: { id: 'test-user', username: 'test', role: 'admin' },
-          };
+        if (url.includes('/api/core/v1/auth/status')) {
+          const authStatus = { has_users: true, auth_disabled: true, setup_required: false };
           return Promise.resolve(jsonResponse({ ...authStatus, data: authStatus }));
         }
 
