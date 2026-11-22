@@ -1114,6 +1114,10 @@ func t6g4KindsUnchecked(deps t6g4Deps, sched func(tasks.Kind) *tasks.Schedule) [
 		p.integrityCheckKind(deps, at(integrityCheckKind)),
 		p.introMigrateSingleFileKind(deps, at(introMigrateSingleFileKind)),
 		p.introTranscribeNativeKind(deps, at(introTranscribeKind)),
+		// The per-batch children of the three parents above (F5-18h).
+		p.extractWAVBatchKind(deps),
+		p.fileIntroBatchKind(deps),
+		p.introMigrateBatchKind(deps),
 	}
 }
 
