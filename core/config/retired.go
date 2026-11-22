@@ -210,12 +210,9 @@ func (s *Store) retiredJudge(r RetiredName, final bool) retiredVerdict {
 // *RetiredNameError naming every refused use. It runs before the boot record
 // or any store is opened.
 func (s *Store) checkRetired(final bool) error {
-	var fileKeys []string
-	if tk, ok := s.file.(topKeyer); ok {
-		var err error
-		if fileKeys, err = tk.topKeys(); err != nil {
-			return err
-		}
+	fileKeys, err := s.retiredFileKeys()
+	if err != nil {
+		return err
 	}
 	uses, refused := s.judgeRetired(fileKeys, final)
 	if !final && len(refused) > 0 {
@@ -257,6 +254,45 @@ func (s *Store) checkRetired(final bool) error {
 		return &RetiredNameError{Uses: refused}
 	}
 	return nil
+}
+
+// retiredFileKeys is the operator file's top-level keys, what a retired file
+// key is matched against; nil with no file.
+func (s *Store) retiredFileKeys() ([]string, error) {
+	tk, ok := s.file.(topKeyer)
+	if !ok {
+		return nil, nil
+	}
+	return tk.topKeys()
+}
+
+// AnyRetiredNameSet reports whether any name of Options.Retired is set in the
+// operator layers: an env name with a value that is not unset, or a top-level
+// key of the operator file (flags take canonical paths only, so no retired
+// name is ever a flag). It reads no section and needs none registered.
+//
+// It is the precondition of every retired-name judgement: judgeRetired skips
+// a name that is not set, so with none set no Boot, Load or CheckConfig can
+// return *RetiredNameError or list a use in RetiredSet. A caller that runs a
+// judgement only for that refusal (the kernel's step 0) skips it when this
+// is false. err is the operator file's parse error; the caller then cannot
+// know and judges in full, which reports the file in its own words.
+func (s *Store) AnyRetiredNameSet() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.o.Retired) == 0 {
+		return false, nil
+	}
+	fileKeys, err := s.retiredFileKeys()
+	if err != nil {
+		return false, err
+	}
+	for _, r := range s.o.Retired {
+		if s.retiredIsSet(r, fileKeys) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // judgeRetired judges every set retired name; see checkRetired.
