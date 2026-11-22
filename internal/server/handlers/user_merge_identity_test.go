@@ -31,6 +31,9 @@ import (
 const idCredential = "sess-batman-credential-id"
 
 type idCore struct {
+	// Admin is embedded so the fake keeps compiling when core adds methods to
+	// auth.Admin; the methods the tests use are defined on idCore below.
+	coreauth.Admin
 	users   map[string]*coreauth.User
 	summary coreauth.MergeSummary
 	planErr error
