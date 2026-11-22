@@ -37,6 +37,8 @@ type idCore struct {
 	users   map[string]*coreauth.User
 	summary coreauth.MergeSummary
 	planErr error
+	// unmergeErr is what PlanUserUnmerge answers (user_merge_unmerge_test.go).
+	unmergeErr error
 }
 
 func (c *idCore) User(_ context.Context, id coreauth.UserID) (*coreauth.User, error) {
@@ -114,6 +116,8 @@ func (r *mergeRig) idEngine(t *testing.T, principal bool) *coreauth.Principal {
 	})
 	e.POST("/users/:id/merge-into/:target/preview", r.h.PreviewUserMerge)
 	e.POST("/users/:id/merge-into/:target/apply", r.h.ApplyUserMerge)
+	e.POST("/users/merges/:jid/resume", r.h.ResumeUserMerge)
+	e.POST("/users/merges/:jid/undo", r.h.UndoUserMerge)
 	e.GET("/users/:id/footprint", r.h.UserFootprint)
 	r.router = e
 	return pr
