@@ -483,9 +483,9 @@ func TestITunesRegroupDryRun_ReportsRuleDelta(t *testing.T) {
 		t.Fatalf("write xml: %v", err)
 	}
 	raw, _ := json.Marshal(map[string]string{"xmlPath": xmlPath})
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = rgRoot
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rgRoot })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	p := New(fakeDeps{store: s})
 	rep := &fakeReporter{}
 	if err := p.runITunesRegroup(context.Background(), raw, rep); err != nil {
@@ -851,9 +851,9 @@ func TestITunesRegroupApply_RecheckSkipsChangedGroup(t *testing.T) {
 // Without a library root nothing can tell a library copy apart, so the op
 // refuses to run at all -- the dry run included.
 func TestITunesRegroup_RefusesWithoutRootDir(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = ""
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	raw, _ := json.Marshal(map[string]string{"xmlPath": "/nonexistent/lib.xml"})
 	p := New(fakeDeps{store: regroupStore(t)})
 	err := p.runITunesRegroup(context.Background(), raw, &fakeReporter{})

@@ -197,9 +197,9 @@ func TestITunesRegroup_RefusesWhenTheStoreCannotListRetiredRows(t *testing.T) {
 		t.Fatalf("write xml: %v", err)
 	}
 	raw, _ := json.Marshal(map[string]any{"xmlPath": xmlPath, "dry_run": false})
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = rgRoot
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rgRoot })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 
 	p := New(fakeDeps{store: storeHidingRetiredRows{s}})
 	err := p.runITunesRegroup(context.Background(), raw, &fakeReporter{})

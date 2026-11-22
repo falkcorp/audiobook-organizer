@@ -33,9 +33,9 @@ func TestCleanupEmptyFoldersJob_DryRunDoesNotDelete(t *testing.T) {
 	deep := filepath.Join(root, "a", "b", "c")
 	require.NoError(t, os.MkdirAll(deep, 0o755))
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-empty-folders")
 	require.NoError(t, err)
@@ -60,9 +60,9 @@ func TestCleanupEmptyFoldersJob_RemovesEmptyDirs(t *testing.T) {
 	require.NoError(t, err)
 	f.Close()
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-empty-folders")
 	require.NoError(t, err)
@@ -88,9 +88,9 @@ func TestCleanupEmptyFoldersJob_BottomUpOrder(t *testing.T) {
 	child := filepath.Join(parent, "child")
 	require.NoError(t, os.MkdirAll(child, 0o755))
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-empty-folders")
 	require.NoError(t, err)
@@ -107,9 +107,9 @@ func TestCleanupEmptyFoldersJob_CancelContext(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "a"), 0o755))
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-empty-folders")
 	require.NoError(t, err)

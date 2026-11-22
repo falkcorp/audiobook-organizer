@@ -234,9 +234,9 @@ const (
 // group skips that group: an error, in either mode. The other group is
 // planned (and applied) either way.
 func TestITunesRegroup_CheckFailedStatus(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = rgRoot
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rgRoot })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	xmlPath := filepath.Join(t.TempDir(), "lib.xml")
 	require.NoError(t, os.WriteFile(xmlPath, []byte(rgStatusXML()), 0o600))
 
@@ -330,9 +330,9 @@ func TestITunesRegroup_CheckFailedStatus(t *testing.T) {
 // error_message). The apply failure is injected at the aggregates recompute
 // of group G's target, after its files moved.
 func TestITunesRegroup_ApplyErrorWithSkippedGroup(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = rgRoot
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rgRoot })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	xmlPath := filepath.Join(t.TempDir(), "lib.xml")
 	require.NoError(t, os.WriteFile(xmlPath, []byte(rgStatusXML()), 0o600))
 

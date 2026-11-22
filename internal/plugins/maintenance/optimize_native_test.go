@@ -183,9 +183,9 @@ func t6g6RunOptimize(t *testing.T, h *t6g6OptimizeHost) error {
 
 func t6g6OptimizeFlags(t *testing.T, backfill, decode bool) {
 	t.Helper()
-	old := config.AppConfig.Maintenance.AcoustIDBackfill
-	t.Cleanup(func() { config.AppConfig.Maintenance.AcoustIDBackfill = old })
-	config.AppConfig.Maintenance.AcoustIDBackfill = backfill
+	old := config.Get().Maintenance.AcoustIDBackfill
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = old }) })
+	config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = backfill })
 	t.Setenv(serverdecode.EnvVar, strconv.FormatBool(decode))
 }
 

@@ -85,9 +85,9 @@ func hbSummary(t *testing.T, rep *noopReporter) (hbCounts, string) {
 // hbConfigRoot points config at root for the test.
 func hbConfigRoot(t *testing.T, root string) {
 	t.Helper()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 }
 
 // hbLibrary makes a populated library root, points config at it for the test,

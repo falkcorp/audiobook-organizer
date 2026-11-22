@@ -33,12 +33,12 @@ func (d *optimizeGateDeps) EnqueueOp(_ context.Context, defID string, _ any) (st
 // disabled" while the sweep kept firing it — so this asserts on what was ENQUEUED, not on
 // the flag's value.
 func TestOptimize_AcoustIDBackfillRespectsTheFlag(t *testing.T) {
-	prev := config.AppConfig.Maintenance.AcoustIDBackfill
-	t.Cleanup(func() { config.AppConfig.Maintenance.AcoustIDBackfill = prev })
+	prev := config.Get().Maintenance.AcoustIDBackfill
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = prev }) })
 
 	run := func(t *testing.T, enabled bool) (*optimizeGateDeps, *fakeReporter) {
 		t.Helper()
-		config.AppConfig.Maintenance.AcoustIDBackfill = enabled
+		config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = enabled })
 		t.Setenv(serverdecode.EnvVar, "1") // the fingerprint-rescan child only runs when decoding is allowed
 		deps := &optimizeGateDeps{}
 		rep := &fakeReporter{}
@@ -102,9 +102,9 @@ func TestAcoustIDBackfillDefaultsOff(t *testing.T) {
 // the sweep must drop it up front (and say so) rather than enqueue a child that is
 // certain to fail; with the variable set it still runs.
 func TestOptimize_FingerprintRescanChildFollowsServerDecodeSwitch(t *testing.T) {
-	prev := config.AppConfig.Maintenance.AcoustIDBackfill
-	t.Cleanup(func() { config.AppConfig.Maintenance.AcoustIDBackfill = prev })
-	config.AppConfig.Maintenance.AcoustIDBackfill = true
+	prev := config.Get().Maintenance.AcoustIDBackfill
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = prev }) })
+	config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = true })
 
 	run := func(t *testing.T) (*optimizeGateDeps, *fakeReporter) {
 		t.Helper()

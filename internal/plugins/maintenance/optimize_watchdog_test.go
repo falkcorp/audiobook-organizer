@@ -137,9 +137,9 @@ func (r *gapReporter) maxGap() time.Duration {
 func runOptimizeSim(t *testing.T, d *followDeps) *gapReporter {
 	t.Helper()
 	t.Setenv(serverdecode.EnvVar, "1") // the sweep only has 4 children when decoding is allowed
-	prev := config.AppConfig.Maintenance.AcoustIDBackfill
-	config.AppConfig.Maintenance.AcoustIDBackfill = true
-	t.Cleanup(func() { config.AppConfig.Maintenance.AcoustIDBackfill = prev })
+	prev := config.Get().Maintenance.AcoustIDBackfill
+	config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Maintenance.AcoustIDBackfill = prev }) })
 	rep := &gapReporter{clock: d.clock}
 	if err := New(d).runOptimize(context.Background(), nil, rep); err != nil {
 		t.Fatalf("runOptimize: %v", err)

@@ -30,9 +30,9 @@ func (r *recordingReporter) Log(level, msg string, _ *string) {
 // useITunesMapping maps local /lib to C:/Music for the length of one test.
 func useITunesMapping(t *testing.T) {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{{From: "C:/Music", To: "/lib"}}
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = []config.ITunesPathMap{{From: "C:/Music", To: "/lib"}} })
 }
 
 func TestRecomputeItunesPathsJob_Registered(t *testing.T) {

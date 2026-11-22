@@ -22,9 +22,9 @@ import (
 
 func withAutoMatchBulkApplyCap(t *testing.T, n int) {
 	t.Helper()
-	prev := config.AppConfig.BulkApplyMaxItems
-	config.AppConfig.BulkApplyMaxItems = n
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	prev := config.Get().BulkApplyMaxItems
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = n })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
 }
 
 // capEligibleBooks builds n books that pass every gate: never reviewed, with a

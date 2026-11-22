@@ -205,9 +205,9 @@ func TestNewYieldDue(t *testing.T) {
 func TestBootOps_RemuxResumesOnTheRealPoolWithoutReprocessingBeforeTheCursor(t *testing.T) {
 	tooltest.Require(t, "ffmpeg")
 	root := t.TempDir()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	const n = 60
 	var files []string
 	dirs := []string{"Batman", "Batman-Begins", "Robin", "Batman/Year One"}

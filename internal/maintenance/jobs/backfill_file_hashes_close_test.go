@@ -44,9 +44,9 @@ func (r *closeTestReporter) Log(_ string, msg string, _ *string) { r.logs = appe
 func TestBackfillFileHashes_CloseFailureAfterSuccessFailsTheWholeRun(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Gotham"), 0o755))
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	prevOpen := hbOpenFile
 	hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
 		f, err := prevOpen(name, mode, perm)
@@ -98,9 +98,9 @@ func (failingWriteFile) Write([]byte) (int, error) {
 func TestBackfillFileHashes_ReportWriteFailureStopsTheRun(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Gotham"), 0o755))
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	prevOpen := hbOpenFile
 	hbOpenFile = func(name string, mode library.ReportOpenMode, perm os.FileMode) (hbFile, error) {
 		f, err := prevOpen(name, mode, perm)

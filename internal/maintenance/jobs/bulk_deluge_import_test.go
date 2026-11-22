@@ -69,18 +69,18 @@ func bdiFixture(t *testing.T) (root string, full *database.BookFile) {
 	srcPath := filepath.Join(srcDir, "book.m4b")
 	require.NoError(t, os.WriteFile(srcPath, []byte("audiodata"), 0o644))
 
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 	// Pin DelugeMoveEnabled off rather than inheriting it from whatever ran
 	// before: bdi_buildDelugeClient reads the global DelugeWebURL, so a
 	// prior test leaving that set would give the success path a live client,
 	// and this flag is the only thing standing between that and a real
 	// MoveStorage POST on a 5-minute timeout.
-	origMove := config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.DelugeMoveEnabled = false
-	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = origMove })
+	origMove := config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = false })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = origMove }) })
 
 	full = &database.BookFile{
 		ID:         "f1",
@@ -304,9 +304,11 @@ func TestBulkDelugeImportJob_LinkedRowMarkedInPlace(t *testing.T) {
 	for _, dir := range []string{"Example Author", "..Extras"} {
 		t.Run(dir, func(t *testing.T) {
 			root := t.TempDir()
-			origRoot, origMove := config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled
-			config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled = root, false
-			t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled = origRoot, origMove })
+			origRoot, origMove := config.Get().RootDir, config.Get().DelugeMoveEnabled
+			config.SetForTest(func(c *config.Config) { c.RootDir, c.DelugeMoveEnabled = root, false })
+			t.Cleanup(func() {
+				config.SetForTest(func(c *config.Config) { c.RootDir, c.DelugeMoveEnabled = origRoot, origMove })
+			})
 
 			ps, err := database.NewPebbleStore(t.TempDir())
 			require.NoError(t, err)
@@ -412,15 +414,19 @@ func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "Example Author")
-			c := &config.AppConfig
-			origRoot, origMove, origProt, origURL := c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL
-			origHost := c.DownloadClient.Torrent.Deluge.Host
+			cur := config.Get()
+			origRoot, origMove, origProt, origURL := cur.RootDir, cur.DelugeMoveEnabled, cur.ProtectedPaths, cur.DelugeWebURL
+			origHost := cur.DownloadClient.Torrent.Deluge.Host
 			t.Cleanup(func() {
-				c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = origRoot, origMove, origProt, origURL
-				c.DownloadClient.Torrent.Deluge.Host = origHost
+				config.SetForTest(func(c *config.Config) {
+					c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = origRoot, origMove, origProt, origURL
+					c.DownloadClient.Torrent.Deluge.Host = origHost
+				})
 			})
-			c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
-			c.DownloadClient.Torrent.Deluge.Host = ""
+			config.SetForTest(func(c *config.Config) {
+				c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
+				c.DownloadClient.Torrent.Deluge.Host = ""
+			})
 			if tc.unloaded {
 				down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					http.Error(w, "down", http.StatusServiceUnavailable)
@@ -475,15 +481,19 @@ func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 func bdiPebbleWorld(t *testing.T) (root string, ps *database.PebbleStore, store *bdiPebbleStore) {
 	t.Helper()
 	root = t.TempDir()
-	c := &config.AppConfig
-	origRoot, origMove, origProt, origURL := c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL
-	origHost := c.DownloadClient.Torrent.Deluge.Host
+	cur := config.Get()
+	origRoot, origMove, origProt, origURL := cur.RootDir, cur.DelugeMoveEnabled, cur.ProtectedPaths, cur.DelugeWebURL
+	origHost := cur.DownloadClient.Torrent.Deluge.Host
 	t.Cleanup(func() {
-		c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = origRoot, origMove, origProt, origURL
-		c.DownloadClient.Torrent.Deluge.Host = origHost
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = origRoot, origMove, origProt, origURL
+			c.DownloadClient.Torrent.Deluge.Host = origHost
+		})
 	})
-	c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
-	c.DownloadClient.Torrent.Deluge.Host = ""
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir, c.DelugeMoveEnabled, c.ProtectedPaths, c.DelugeWebURL = root, false, nil, ""
+		c.DownloadClient.Torrent.Deluge.Host = ""
+	})
 
 	ps, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
@@ -562,7 +572,7 @@ func TestBulkDelugeImportJob_SameBasenameSameBytesSecondRefused(t *testing.T) {
 func TestBulkDelugeImportJob_StaticProtectedSourceNotCopied(t *testing.T) {
 	root, ps, store := bdiPebbleWorld(t)
 	srcDir := t.TempDir()
-	config.AppConfig.ProtectedPaths = []string{srcDir}
+	config.SetForTest(func(c *config.Config) { c.ProtectedPaths = []string{srcDir} })
 	src := filepath.Join(srcDir, "01.mp3")
 	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
 	book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: srcDir})
@@ -601,7 +611,7 @@ func TestBulkDelugeImportJob_UnloadedListProbedOnce(t *testing.T) {
 			http.Error(w, "down", http.StatusServiceUnavailable)
 		}))
 		t.Cleanup(down.Close)
-		config.AppConfig.DelugeWebURL = down.URL
+		config.SetForTest(func(c *config.Config) { c.DelugeWebURL = down.URL })
 		dir := filepath.Join(root, "Example Author")
 		book, err := ps.CreateBook(&database.Book{Title: "Example Book", FilePath: dir})
 		require.NoError(t, err)
