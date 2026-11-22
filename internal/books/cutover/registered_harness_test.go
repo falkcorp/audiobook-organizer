@@ -12,6 +12,8 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -76,18 +78,44 @@ import (
 // (stage13Fronts); a route that answers the anonymous probe any other way is one
 // stage 13 does not stand in front of, and a request to it is ErrNotJudged.
 //
-// What B10e and B10f call:
+// What B10e and B10f call (the registered-path API; frozen by B10d):
 //
-//	h := bootRegistered(t, registeredConfig{})           // one boot per top-level test
-//	p := h.Principal("session:admin")                    // any of the 36 names of verdicts.json but authoff
-//	res, err := h.Do(p, "GET", "/api/v1/auth/me", nil)   // an exact path
-//	res, err := h.DoRoute(p, ri, nil)                    // a manifest route, probed as the recorder did
-//	h.Routes                                             // app.Routes(), the registered routes
-//	h.MustDo(t, p, ...)                                  // Do that fails the test on an error
+//	h := bootRegistered(t, registeredConfig{})   // one boot per top-level test (about 6s)
+//	p := h.Principal("session:admin")            // a name of verdicts.json (36 names; "authoff" needs AuthOff, Owner needs Owner)
+//	h.Principals                                 // every principal of this boot, in verdicts.json order, Owner last
+//	h.Routes                                     // app.Routes(): every registered route (httpapi.RouteInfo)
+//	h.Wired                                      // the httpapi.AtomResolver books.Options handed core
+//	h.Logs()                                     // what the App's log pipeline printed
 //
-// registeredConfig{AuthOff: true} boots the auth-off principal ("authoff");
-// registeredConfig{Owner: true} configures the owner and Access and adds the
-// "owner" principal.
+//	res, err := h.Do(p, "GET", "/api/v1/auth/me", nil)   // an exact path; body is JSON-encoded when not nil
+//	res, err := h.DoRoute(p, ri, nil)                    // a manifest route, probed as the recorder did (probePath)
+//	res := h.MustDo(t, p, "GET", "/api/v1/auth/me", nil) // Do that fails the test on an error
+//	res := h.Raw(req)                                    // any request through the root handler, as no principal: the caller sets its own credential headers (ABS bearer, Access assertion)
+//
+//	res.Status, res.Header, res.Body                     // the answer
+//	res.Route                                            // the registered route Do matched (nil for Raw or no match)
+//	res.Stage13, res.Code                                // Stage13Refused and stage 13's problem code, or Stage13Unobserved
+//	res.Verdict()                                        // 'D' for 401/403, else 'A': record_r0_reach.py's letters
+//	res.Admitted()                                       // !(stage 13 refused)
+//
+// Do and DoRoute send every request from an address of its own (core rate limits
+// by address; the auth-off boot's are loopback, the only ones it serves), so a
+// table sweep is never throttled. They return an error, with the Result filled,
+// in two cases only:
+//
+//	ErrOwnAuth    the route is OwnAuth (the ABS surface): stages 12 and 13 skip it, so
+//	              its answer is the handler's own. Take the Result and judge it as an ABS
+//	              answer, or build the request yourself with Raw.
+//	ErrNotJudged  the route is one stage 13 must judge and the harness has not seen stage
+//	              13 refuse an anonymous caller on it, so an admit (or any non-stage-13
+//	              answer) would be the handler's, not a verdict. A route stage 13 refuses
+//	              the anonymous caller on is believed for every principal (see above).
+//
+// registeredConfig{AuthOff: true} boots with core.auth.mode disabled and the
+// "authoff" principal; ABSModes ("jwt" by default) names the ABS auth modes;
+// registeredConfig{Owner: true} configures the owner e-mail and Cloudflare Access
+// (the real verifier over a key set the harness serves) and adds the "owner"
+// principal, whose credential is a signed Access assertion.
 
 const (
 	corpusRel = "internal/books/testdata/r2corpus/overlay"
@@ -221,13 +249,13 @@ type Registered struct {
 	// legacy atom requirement with.
 	Wired httpapi.AtomResolver
 
-	byName   map[string]*Principal
-	peers    atomic.Int64
-	frontMu  sync.Mutex
-	fronted  map[string]bool // route -> an anonymous request to it was refused by stage 13
-	logs     *syncLog
-	cfg      registeredConfig
-	signer   jose.Signer
+	byName  map[string]*Principal
+	peers   atomic.Int64
+	frontMu sync.Mutex
+	fronted map[string]bool // route -> an anonymous request to it was refused by stage 13
+	logs    *syncLog
+	cfg     registeredConfig
+	access  *accessApp
 }
 
 type syncLog struct {
@@ -255,6 +283,18 @@ func (h *Registered) Principal(name string) *Principal {
 		h.t.Fatalf("this boot has no principal %q", name)
 	}
 	return p
+}
+
+// AccessRefused lists the hosts and paths the owner boot's network (the Access key
+// set server) was asked for and does not serve; empty when the boot stayed on the
+// team's key set. nil outside an Owner boot.
+func (h *Registered) AccessRefused() []string {
+	if h.access == nil {
+		return nil
+	}
+	h.access.mu.Lock()
+	defer h.access.mu.Unlock()
+	return slices.Clone(h.access.refused)
 }
 
 // Logs is what the App's log pipeline printed.
@@ -375,9 +415,17 @@ func diskCorpus(t testing.TB, rows []reachPrincipalRow, dir, stage string) map[s
 // accessApp is the Cloudflare Access application the owner boot trusts: an RSA key
 // whose public half is served as the team's key set, and the minting of assertions
 // it signs. The verifier under test is books' real one (cfaccess), unchanged; only
-// the network it fetches keys from is replaced.
+// the network it fetches keys from is replaced: a local TLS server, reached by a
+// clone of the default transport that dials it for every host. Core's own clients
+// clone http.DefaultTransport and need it to stay an *http.Transport, so the
+// replacement is one.
 type accessApp struct {
 	key *rsa.PrivateKey
+	srv *httptest.Server
+	// refused lists the hosts a request reached the server for that it does not
+	// serve: a boot that reached for the real network fails loudly.
+	mu      sync.Mutex
+	refused []string
 }
 
 func newAccessApp(t testing.TB) *accessApp {
@@ -386,25 +434,40 @@ func newAccessApp(t testing.TB) *accessApp {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &accessApp{key: k}
+	a := &accessApp{key: k}
+	a.srv = httptest.NewTLSServer(http.HandlerFunc(a.serve))
+	t.Cleanup(a.srv.Close)
+	return a
 }
 
-// RoundTrip serves the team's key set and refuses every other URL, so a boot that
-// reached for the real network fails loudly instead of leaving the harness.
-func (a *accessApp) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.URL.Host != accessTeam || r.URL.Path != "/cdn-cgi/access/certs" {
-		return nil, fmt.Errorf("the harness serves no %s", r.URL)
+func (a *accessApp) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Host != accessTeam || r.URL.Path != "/cdn-cgi/access/certs" {
+		a.mu.Lock()
+		a.refused = append(a.refused, r.Host+r.URL.Path)
+		a.mu.Unlock()
+		http.Error(w, "the harness serves no such host", http.StatusNotFound)
+		return
 	}
 	set := jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &a.key.PublicKey, KeyID: accessKeyID, Algorithm: "RS256", Use: "sig"}}}
-	body, err := json.Marshal(set)
-	if err != nil {
-		return nil, err
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(set)
+}
+
+// transport is the default transport's clone that sends every request to the
+// harness's server and trusts only its certificate.
+func (a *accessApp) transport() *http.Transport {
+	pool := x509.NewCertPool()
+	pool.AddCert(a.srv.Certificate())
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	addr := a.srv.Listener.Addr().String()
+	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
-	return &http.Response{
-		StatusCode: http.StatusOK, Status: "200 OK", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
-		Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(body)),
-		ContentLength: int64(len(body)), Request: r,
-	}, nil
+	// The test server's certificate names example.com, not the team's host.
+	tr.TLSClientConfig = &tls.Config{RootCAs: pool, ServerName: "example.com", MinVersion: tls.VersionTLS12}
+	tr.ForceAttemptHTTP2 = false
+	tr.Proxy = nil
+	return tr
 }
 
 // assertion is an Access JWT for email, issued a minute ago, valid for an hour.
@@ -493,7 +556,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 		setenv("ABO_BOOKS_IDENTITY_CF_ACCESS_TEAM_DOMAIN", accessTeam)
 		setenv("ABO_BOOKS_IDENTITY_CF_ACCESS_AUD", accessAUD)
 		orig := http.DefaultTransport
-		http.DefaultTransport = access
+		http.DefaultTransport = access.transport()
 		t.Cleanup(func() { http.DefaultTransport = orig })
 	}
 
@@ -517,7 +580,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 		scanner.SetStore(nil)
 	})
 
-	h := &Registered{t: t, cfg: cfg, logs: &syncLog{}, byName: map[string]*Principal{}}
+	h := &Registered{t: t, cfg: cfg, logs: &syncLog{}, byName: map[string]*Principal{}, access: access}
 
 	mod := books.Module()
 	opts, err := books.Options(mod, books.ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot(), LogOut: h.logs})
@@ -809,6 +872,33 @@ func judged(ri *httpapi.RouteInfo) bool {
 	return !(ri.Perm.Kind() == rbac.KindPublic && ri.Guards == (httpapi.Guards{}))
 }
 
+// Verdict is record_r0_reach.py's letter for the answer: 'D' for a 401 or 403,
+// 'A' for anything else (the request got past the authorization decision).
+func (r Result) Verdict() byte {
+	if r.Status == http.StatusUnauthorized || r.Status == http.StatusForbidden {
+		return 'D'
+	}
+	return 'A'
+}
+
+// Admitted reports that stage 13 did not refuse the request.
+func (r Result) Admitted() bool { return r.Stage13 != Stage13Refused }
+
+// Raw serves req through the root handler as no principal: no credential is added
+// and a request with no RemoteAddr gets a fresh one. It judges nothing, so a caller
+// that reads an authorization verdict from it must check Stage13 itself; it exists
+// for the routes Do refuses (ErrOwnAuth) and for credentials the table does not
+// hold.
+func (h *Registered) Raw(req *http.Request) Result {
+	h.t.Helper()
+	if req.RemoteAddr == "" || req.RemoteAddr == "192.0.2.1:1234" {
+		req.RemoteAddr = h.nextPeer()
+	}
+	rec := httptest.NewRecorder()
+	h.Handler.ServeHTTP(rec, req)
+	return resultOf(rec, nil)
+}
+
 // excerpt is the start of the response body, for a failure message.
 func (r Result) excerpt() string {
 	b := r.Body
@@ -816,6 +906,17 @@ func (r Result) excerpt() string {
 		b = b[:160]
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// peerFor is the address a request of p is sent from: a fresh one, so no request
+// is throttled by another's. The auth-off boot serves loopback callers only (core's
+// remote refusal), so its principal gets a fresh loopback address.
+func (h *Registered) peerFor(p *Principal) string {
+	if p.Kind == "authoff" {
+		n := h.peers.Add(1)
+		return fmt.Sprintf("127.0.%d.%d:41000", (n/250)%256, n%250+1)
+	}
+	return h.nextPeer()
 }
 
 // nextPeer is an address no principal has: core rate limits by source address, so
@@ -889,7 +990,7 @@ func (h *Registered) send(via http.Handler, p *Principal, method, path string, b
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.RemoteAddr = p.peer
+	req.RemoteAddr = h.peerFor(p)
 	switch {
 	case p.cookie != nil:
 		req.AddCookie(p.cookie)
@@ -900,6 +1001,11 @@ func (h *Registered) send(via http.Handler, p *Principal, method, path string, b
 	}
 	rec := httptest.NewRecorder()
 	via.ServeHTTP(rec, req)
+	return resultOf(rec, ri), nil
+}
+
+// resultOf reads a recorded answer, naming stage 13's refusal when it is one.
+func resultOf(rec *httptest.ResponseRecorder, ri *httpapi.RouteInfo) Result {
 	res := Result{Status: rec.Code, Header: rec.Header().Clone(), Body: rec.Body.Bytes(), Route: ri}
 	if strings.HasPrefix(res.Header.Get("Content-Type"), "application/problem+json") {
 		var pr struct {
@@ -910,5 +1016,5 @@ func (h *Registered) send(via http.Handler, p *Principal, method, path string, b
 			res.Code, res.Stage13 = pr.Code, Stage13Refused
 		}
 	}
-	return res, nil
+	return res
 }
