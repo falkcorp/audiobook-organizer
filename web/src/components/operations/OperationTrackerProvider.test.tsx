@@ -291,6 +291,51 @@ describe('OperationTrackerProvider', () => {
     expect(api.revertOperation).not.toHaveBeenCalled();
   });
 
+  it('a combine that stopped part-way offers Undo: running it reverts that operation, says so and tells a showing page', async () => {
+    const poll = deferPoll('op-2');
+    api.getOperationResult.mockResolvedValue({
+      result_data: { failed: true, incomplete: true, operation_id: 'op-undo-1', primary_id: 'b' },
+    });
+    api.revertOperation.mockResolvedValue({ message: 'Combine undone.' });
+    const onEnd = vi.fn();
+    const user = userEvent.setup();
+    render(<App onEnd={onEnd} />);
+    await user.click(screen.getByText('combine'));
+    await act(async () => poll.resolve('completed'));
+    await waitFor(() => expect(screen.getByTestId('locked')).toHaveTextContent(''));
+    expect(lastToast().severity).toBe('error');
+    expect(lastToast().action?.label).toBe('Undo');
+
+    await act(async () => lastToast().action?.onClick());
+    expect(api.revertOperation).toHaveBeenCalledWith('op-undo-1');
+    await waitFor(() => expect(lastToast().message).toBe('Combine undone.'));
+    expect(lastToast().severity).toBe('success');
+    expect(onEnd).toHaveBeenLastCalledWith(
+      expect.objectContaining({ kind: 'undo', descriptor: expect.objectContaining({ operationId: 'op-undo-1' }) })
+    );
+  });
+
+  it('an undo the server refuses says so, offers no second Undo for a 409 and does not tell the page it changed anything', async () => {
+    const poll = deferPoll('op-2');
+    api.getOperationResult.mockResolvedValue({
+      result_data: { failed: true, incomplete: true, operation_id: 'op-undo-2', primary_id: 'b' },
+    });
+    api.revertOperation.mockRejectedValue(new ApiError('nothing restorable', 409));
+    const onEnd = vi.fn();
+    const user = userEvent.setup();
+    render(<App onEnd={onEnd} />);
+    await user.click(screen.getByText('combine'));
+    await act(async () => poll.resolve('completed'));
+    await waitFor(() => expect(lastToast()?.action?.label).toBe('Undo'));
+    onEnd.mockClear();
+
+    await act(async () => lastToast().action?.onClick());
+    await waitFor(() => expect(lastToast().message).toContain('The combine was not undone.'));
+    expect(lastToast().severity).toBe('error');
+    expect(lastToast().action).toBeUndefined();
+    expect(onEnd).not.toHaveBeenCalled();
+  });
+
   it('stops following an operation the server no longer knows: says the outcome is unknown and releases the books', async () => {
     const poll = deferPoll();
     const user = userEvent.setup();
