@@ -64,9 +64,10 @@ func parityMisses(t *testing.T, h *Registered, rows []verdictRow, only func(*Pri
 	return out
 }
 
-// onAuthOn picks the principals of the auth-on boot. (Its auth-off twin arrives
-// with the held-red B10y parity test, its only caller.)
+// onAuthOn picks the principals of the auth-on boot, onAuthOff the auth-off boot's.
 func onAuthOn(p *Principal) bool { return p != nil && p.Kind != "authoff" }
+
+func onAuthOff(p *Principal) bool { return p != nil && p.Kind == "authoff" }
 
 // TestRegisteredHarness_ParityMissesSeesADifference is parityMisses's positive control:
 // a helper that returned nothing for every input would make the red tests below pass
@@ -129,4 +130,36 @@ func TestRegisteredHarness_UnruledNarrowingsHoldR0(t *testing.T) {
 	for _, miss := range parityMisses(t, h, rows, onAuthOn) {
 		t.Error(miss)
 	}
+}
+
+// TestRegisteredHarness_B10yRoutesHoldR0Parity holds the classB10y cells to R0, on
+// both boots: a cell R0 and HEAD admit, the flipped build refuses, and nobody accepted.
+// It was written red (B10d-h2) for the cells slice B10y was to fix. B10y fixed them,
+// except three groups that were never flip bugs (B10u2): the deluge discover pair was
+// the sweep's corpus with discovery off (R0 recorded it on), and the debug edit routes'
+// admin-key cells are the ruled Sensitive narrowing (classKnown). With no row left it
+// skips; a classB10y row added later turns it red until the fix deletes the row (the
+// sweep requires deleting a row that no longer differs).
+func TestRegisteredHarness_B10yRoutesHoldR0Parity(t *testing.T) {
+	var rows []verdictRow
+	for _, r := range verdictRows {
+		if r.Class == classB10y {
+			rows = append(rows, r)
+		}
+	}
+	if len(rows) == 0 {
+		t.Skip("slice B10y has landed: no row is left")
+	}
+	t.Run("auth on", func(t *testing.T) {
+		h := bootAsRecorded(t, false)
+		for _, miss := range parityMisses(t, h, rows, onAuthOn) {
+			t.Error(miss)
+		}
+	})
+	t.Run("auth off", func(t *testing.T) {
+		h := bootAsRecorded(t, true)
+		for _, miss := range parityMisses(t, h, rows, onAuthOff) {
+			t.Error(miss)
+		}
+	})
 }
