@@ -111,22 +111,23 @@ func WriteLocation(stateDir string, l Location, opts ...FSOption) error {
 	raw = append(raw, '\n')
 	final := filepath.Join(stateDir, LocationFile)
 	tmp := final + ".tmp"
-	if err := writeLocationTmp(fsys, tmp, raw); err != nil {
+	if err := writeStateTmp(fsys, LabelLocationTmp, LabelLocationCleanup, tmp, raw); err != nil {
 		return err
 	}
-	if err := renameLocation(fsys, tmp, final); err != nil {
+	if err := renameStateTmp(fsys, LabelLocationRename, LabelLocationCleanup, tmp, final); err != nil {
 		return err
 	}
 	return syncDir(fsys, LabelLocationDirSync, stateDir)
 }
 
-// writeLocationTmp creates tmp (0600, truncating a leftover), writes raw and
-// fsyncs, in LabelLocationTmp's region; a temporary file that failed is
-// removed in LabelLocationCleanup's.
-func writeLocationTmp(fsys FS, tmp string, raw []byte) error {
+// writeStateTmp creates tmp (0600, truncating a leftover), writes raw and
+// fsyncs, in label's region; a temporary file that failed is removed in
+// cleanup's. It is the first step of every state file this package writes
+// atomically (backup.location.json, restore_hook_run.json).
+func writeStateTmp(fsys FS, label, cleanup, tmp string, raw []byte) error {
 	created := false
 	err := func() error {
-		defer fsys.Region(LabelLocationTmp)()
+		defer fsys.Region(label)()
 		f, err := fsys.Open(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 		if err != nil {
 			return fmt.Errorf("journal: create %s: %w", tmp, err)
@@ -145,20 +146,20 @@ func writeLocationTmp(fsys FS, tmp string, raw []byte) error {
 		return nil
 	}()
 	if err != nil && created {
-		return errors.Join(err, removeLabelled(fsys, LabelLocationCleanup, tmp))
+		return errors.Join(err, removeLabelled(fsys, cleanup, tmp))
 	}
 	return err
 }
 
-// renameLocation renames tmp over final in LabelLocationRename's region; a
-// rename that failed removes tmp in LabelLocationCleanup's.
-func renameLocation(fsys FS, tmp, final string) error {
+// renameStateTmp renames tmp over final in label's region; a rename that failed
+// removes tmp in cleanup's.
+func renameStateTmp(fsys FS, label, cleanup, tmp, final string) error {
 	err := func() error {
-		defer fsys.Region(LabelLocationRename)()
+		defer fsys.Region(label)()
 		return fsys.Rename(tmp, final)
 	}()
 	if err != nil {
-		return errors.Join(fmt.Errorf("journal: rename %s: %w", tmp, err), removeLabelled(fsys, LabelLocationCleanup, tmp))
+		return errors.Join(fmt.Errorf("journal: rename %s: %w", tmp, err), removeLabelled(fsys, cleanup, tmp))
 	}
 	return nil
 }

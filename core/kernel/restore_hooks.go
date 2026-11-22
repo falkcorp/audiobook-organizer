@@ -54,19 +54,23 @@ type hookEnv struct {
 	// restore (§5B.3.6 (3), DATA8-7).
 	Journal journal.RevocationJournal
 	// RestoreSeq is the seq of the restore line the run belongs to (0 when the
-	// journal could not take the line): audit's idempotency key while it is not 0.
+	// journal could not take the line). It is reported, in audit's records and the
+	// log, and keys nothing: a journal's seqs start again after a reset or a host
+	// loss, so an archive can carry a record made under a seq a later restore also
+	// gets.
 	RestoreSeq uint64
-	// RunKey is the stored ID of this run of the hooks when there is no restore
-	// line to key on (RestoreSeq 0); empty otherwise. Seq 0 stands for "no line",
-	// not for one restore, so two such runs must not share a key: audit would
-	// take the second for a re-run of the first and write none of its records.
-	RunKey string
 	// RestoreID is the restore intent's ID when this run belongs to a restore the
 	// live host staged: minted by restoreswap.NewID (crypto/rand) and kept in the
 	// restore journal under the state directory, never in the store, so no archive
 	// can carry it. Empty for a replaced or external store and for any run that has
-	// no restore of its own. It is the only thing hookRunKey will key auth on.
+	// no restore of its own.
 	RestoreID string
+	// HostRun is the ID of this run when it has no restore intent (RestoreID
+	// empty): a replaced or external store. It is minted at P4d step 2 by
+	// journal.EnsureHookRun from crypto/rand and kept in the state directory
+	// (restore_hook_run.json), never in the store, so no archive can carry it, and
+	// removed once the run has finished. Empty for a run with a RestoreID.
+	HostRun string
 	// Previous is the pre-swap store; nil when there was none (host loss, an
 	// external replacement, a HooksOwed run).
 	Previous previousView
@@ -94,6 +98,9 @@ type restoreHooksInput struct {
 	KS       storage.Keyspace // c/backup/
 	Install  string
 	Identity storage.StoreIdentity
+	// StateDir is the state directory: where restore_hook_run.json, the ID of a
+	// run with no restore intent, lives. Required.
+	StateDir string
 	// Result is reapplyRevocations' result for this boot.
 	Result reapplyResult
 	// Restore is the restore boot; nil for a replaced store, whose hooks run
@@ -139,7 +146,7 @@ type restoreHooksResult struct {
 // without its c/backup/restore_hooked/<seq> record run the hooks, journal that
 // they completed, and write the markers.
 func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHooksResult, err error) {
-	if in.Journal == nil || in.Hooks == nil {
+	if in.Journal == nil || in.Hooks == nil || in.StateDir == "" {
 		return res, errors.New("kernel: the restore hooks are missing their inputs")
 	}
 	r := in.Result
@@ -149,7 +156,12 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		owed = nil
 	}
 	if !restoring && len(owed) == 0 && !(r.Class == classReplaced && r.Deferred) {
-		return res, nil
+		// No run is owed, so a run ID a crash or a build that does not know it left
+		// behind belongs to none: it goes before any later run could find it.
+		return res, in.clearHostRun(ctx)
+	}
+	if !restoring && r.HostRun == "" {
+		return res, errors.New("kernel: the restore hooks run with no restore of their own and no run ID (step 2 mints it)")
 	}
 
 	done := false
@@ -159,19 +171,7 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 		}
 	}
 	if !done {
-		// A run with no restore line has nothing to tell it from another such run
-		// (audit's idempotency key): it gets an ID that a crash and re-run of the
-		// same hooks find again, and that is gone once the run has finished.
-		runKey := ""
-		if r.RestoreLine == 0 {
-			exit := bootseam.Region(ctx, labelHooksRunEnsure)
-			runKey, err = journal.EnsureHookRun(ctx, in.KS, in.now())
-			exit()
-			if err != nil {
-				return res, fmt.Errorf("kernel: record the restore hooks' run ID: %w", err)
-			}
-		}
-		if res.Counts, err = in.run(ctx, &res.Report, runKey); err != nil {
+		if res.Counts, err = in.run(ctx, &res.Report); err != nil {
 			return res, err
 		}
 		res.Ran = true
@@ -222,18 +222,32 @@ func runRestoreHooks(ctx context.Context, in restoreHooksInput) (res restoreHook
 			return res, fmt.Errorf("kernel: journal applied: %w", err)
 		}
 	}
-	// The run is over, so its ID goes: the next run with no restore line is a
+	// The run is over, so its ID goes: the next run with no restore intent is a
 	// different restore. This is last on purpose; cleared before the markers, a
 	// crash would re-run the hooks under a new ID and write audit's records twice.
-	// Crashing between the markers and here leaves an ID behind that the next
-	// restore's store replaces (a restore swaps the whole store in).
-	if r.RestoreLine == 0 {
-		if err := bootseam.Labelled(bootseam.From(ctx), labelHooksRunClear, func() error { return journal.ClearHookRun(ctx, in.KS) }); err != nil {
-			return res, fmt.Errorf("kernel: clear the restore hooks' run ID: %w", err)
-		}
+	// A crash between the markers and here leaves the file behind, and nothing
+	// takes it for a key: the next boot is a plain one that clears it
+	// (clearHostRun, at the top), and a store swapped in before any boot finds the
+	// markers changed what the file was minted for (journal.EnsureHookRun's
+	// binding).
+	if err := in.clearHostRun(ctx); err != nil {
+		return res, err
 	}
 	in.Journal.SetFrozen(false)
 	return res, nil
+}
+
+// clearHostRun removes the run ID of a run with no restore intent, and the row of
+// the same name that a build before F4-08 B10m kept in the store: no run is
+// using either. A boot with neither writes nothing.
+func (in restoreHooksInput) clearHostRun(ctx context.Context) error {
+	if err := journal.ClearHookRun(in.StateDir, journal.WithFS(in.FS)); err != nil {
+		return fmt.Errorf("kernel: clear the restore hooks' run ID: %w", err)
+	}
+	if err := bootseam.Labelled(bootseam.From(ctx), labelHooksRunClear, func() error { return journal.ClearLegacyHookRun(ctx, in.KS) }); err != nil {
+		return fmt.Errorf("kernel: clear the restore hooks' legacy run row: %w", err)
+	}
+	return nil
 }
 
 // hookedLines are the restore lines whose restore_hooked record the run writes:
@@ -260,7 +274,7 @@ func (in restoreHooksInput) writeMarkers(ctx context.Context) error {
 }
 
 // run builds the RestoreContext and runs the hooks in order.
-func (in restoreHooksInput) run(ctx context.Context, report *hookReport, runKey string) (map[string]int, error) {
+func (in restoreHooksInput) run(ctx context.Context, report *hookReport) (map[string]int, error) {
 	var prev previousView
 	if rb := in.Restore; rb != nil && rb.PreSwapDir != "" {
 		if in.OpenPrevious == nil {
@@ -282,7 +296,7 @@ func (in restoreHooksInput) run(ctx context.Context, report *hookReport, runKey 
 	if err != nil {
 		return nil, err
 	}
-	hooks, err := in.Hooks(hookEnv{Journal: stampRestore{in.Journal, in.Result.RestoreLine}, RestoreSeq: in.Result.RestoreLine, RunKey: runKey, RestoreID: in.restoreID(), Previous: prev, Report: report})
+	hooks, err := in.Hooks(hookEnv{Journal: stampRestore{in.Journal, in.Result.RestoreLine}, RestoreSeq: in.Result.RestoreLine, RestoreID: in.restoreID(), HostRun: in.hostRun(), Previous: prev, Report: report})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: build the restore hooks: %w", err)
 	}
@@ -471,22 +485,37 @@ func (in restoreHooksInput) restoreID() string {
 	return in.Restore.ID
 }
 
-// hookRunKey is the key auth stamps on its restore run: the lines of the last-admin
-// restriction, and the marker that makes the credential-epoch bump idempotent. A
-// run that matches a stored key SKIPS work (the bump, a journal line), so the key
-// must be something a restored archive cannot forge. Neither the restore line's
-// seq (journal seqs start again after a journal reset or a host loss, so an
-// archive can carry a marker for a seq a later restore also gets) nor the hooks'
-// own run ID (stored in the restorable keyspace, so an archive taken mid-run hands
-// it back) is that. The restore intent's ID is: minted on this host from
-// crypto/rand, kept under the state directory outside the store. A run with no
-// such ID returns "", which auth takes as "never skip": it bumps and journals
-// every time, and a double bump only narrows what a session may do.
-func hookRunKey(env hookEnv) string {
-	if env.RestoreID == "" {
+// hostRun is the ID of this run when it has no restore intent: step 2's, minted
+// before anything of the run was written. Empty for a restore boot.
+func (in restoreHooksInput) hostRun() string {
+	if in.Restore != nil {
 		return ""
 	}
-	return fmt.Sprintf("restore:%s:seq:%d", env.RestoreID, env.RestoreSeq)
+	return in.Result.HostRun
+}
+
+// hookRunKey is the key every hook stamps on its restore run: auth's lines of the
+// last-admin restriction, auth's marker that makes the credential-epoch bump
+// idempotent, and audit's records. A run that matches a stored key SKIPS work (the
+// bump, a journal line, a record), so the key must be something a restored archive
+// cannot forge. Neither the restore line's seq (journal seqs start again after a
+// journal reset or a host loss, so an archive can carry a marker for a seq a later
+// restore also gets) nor an ID stored in the restorable keyspace (an archive taken
+// mid-run hands it back) is that. Two things are: the restore intent's ID, and the
+// run ID of a run with no intent. Each is minted on this host from crypto/rand and
+// kept under the state directory outside the store.
+//
+// "" is a run with neither. Auth takes it as "never skip" (it bumps and journals
+// every time, and a double bump only narrows what a session may do); audit has no
+// such fallback, so its adapter refuses to run on it.
+func hookRunKey(env hookEnv) string {
+	switch {
+	case env.RestoreID != "":
+		return fmt.Sprintf("restore:%s:seq:%d", env.RestoreID, env.RestoreSeq)
+	case env.HostRun != "":
+		return env.HostRun
+	}
+	return ""
 }
 
 // userIDs is ids as auth's user IDs.
@@ -552,7 +581,14 @@ func restoreHookList(s hookStores) func(env hookEnv) ([]journal.RestoreHook, err
 			},
 			func(ctx context.Context, rc journal.RestoreContext) (map[string]int, error) {
 				defer bootseam.Region(ctx, labelHookAudit)()
-				return audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: env.RunKey, Log: s.Log})(ctx, rc)
+				// Audit keys its records on the run key and falls back to the restore
+				// line's seq without one, which a restored archive can repeat: so a
+				// run with no live-host key writes nothing.
+				key := hookRunKey(env)
+				if key == "" {
+					return nil, errors.New("kernel: the audit restore hook has no live-host run key (no restore ID and no run ID)")
+				}
+				return audit.RestoreHook(audit.RestoreDeps{Store: s.Audit, RestoreSeq: env.RestoreSeq, RunKey: key, Log: s.Log})(ctx, rc)
 			},
 		}, nil
 	}

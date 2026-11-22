@@ -254,7 +254,7 @@ func (fx *rxFx) tryBoot(rb *restoreBoot, mut func(*reapplyInput), hooks func(env
 		hooks = restoreHookList(fx.stores())
 	}
 	hres, err := runRestoreHooks(ctx, restoreHooksInput{
-		Journal: fx.comp, KS: fx.bks(), Install: fx.install, Identity: in.Identity, Result: res, Restore: rb,
+		Journal: fx.comp, KS: fx.bks(), Install: fx.install, Identity: in.Identity, StateDir: fx.state, Result: res, Restore: rb,
 		SwappedBack: in.SwappedBack, OpenPrevious: fx.openPrevious, Hooks: hooks, Clock: fx.clock.now,
 		Log: slog.New(slog.DiscardHandler),
 	})
