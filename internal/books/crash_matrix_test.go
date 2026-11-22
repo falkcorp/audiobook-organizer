@@ -364,7 +364,7 @@ func aboUnreachedLabels() map[string]string {
 //     secret back through Deps.Config (the value for the three that are not
 //     config keys, Meta.Set for core.http.basic_gate.password, which is one).
 //
-// The generic matrix (TestBootCrashMatrix_ABOFlip) runs the flip without M8:
+// The generic matrix (TestBootCrashMatrix_ABOFlip_Part1-3) runs the flip without M8:
 // the kit's I2 holds a KindRewrite swap to the restore swap's rule that
 // previous/ keeps the original store, and M8 deletes it by design (phase 4,
 // 05-storage 5S.3.13), so the kit reports every fault-free M8 boot as a
@@ -782,12 +782,31 @@ func aboFlipFinalViolations(fsys vfs.FS, f crashmatrix.Fixture, st, base *aboFli
 	return out
 }
 
-// TestBootCrashMatrix_ABOFlip is the generic matrix over books' flip boot:
-// M2, both halves of M7, M8, the keyring and c/secrets/meta, each broken by a
-// kill and by an error return, the boots after it checked against the kit's
-// invariants. The probe runs in every boot that reaches Register, so every
-// recovery boot also reads the four secrets back and finds no legacy row.
-func TestBootCrashMatrix_ABOFlip(t *testing.T) {
+// TestBootCrashMatrix_ABOFlip_Part1, _Part2 and _Part3 are the generic matrix
+// over books' flip boot: M2, both halves of M7, M8, the keyring and
+// c/secrets/meta, each broken by a kill and by an error return, the boots
+// after it checked against the kit's invariants. The probe runs in every boot
+// that reaches Register, so every recovery boot also reads the four secrets
+// back and finds no legacy row.
+//
+// The matrix runs as three top-level tests, each the census plus a third of
+// its first-level jobs (crashmatrix Scenario.Part), because whole it was one
+// indivisible test of about 900 s under -race on a GitHub runner: the fixture
+// slicer deals tests out by name, so no split of the package could put it
+// under the 600 s a slice is sized for, against the 1,500 s per-process
+// timeout. The three names hash to three different slices of the package's
+// four (scripts/ci/fixture_test_packages.py part_of), none of them the
+// Tasklint/basic-gate slice; re-check that if the package's part count changes.
+func TestBootCrashMatrix_ABOFlip_Part1(t *testing.T) { aboFlipMatrixPart(t, 0) }
+
+func TestBootCrashMatrix_ABOFlip_Part2(t *testing.T) { aboFlipMatrixPart(t, 1) }
+
+func TestBootCrashMatrix_ABOFlip_Part3(t *testing.T) { aboFlipMatrixPart(t, 2) }
+
+// aboFlipMatrixParts is how many tests the generic flip matrix runs as.
+const aboFlipMatrixParts = 3
+
+func aboFlipMatrixPart(t *testing.T, part int) {
 	if testing.Short() {
 		t.Skip("the boot crash matrix: extraction-gates runs it")
 	}
@@ -796,6 +815,7 @@ func TestBootCrashMatrix_ABOFlip(t *testing.T) {
 	crashmatrix.Run(t, crashmatrix.Scenario{
 		Build:    aboFlipBuild(f, aboFlipModule{m: flipOnAt(f.StateDir, f.DBDir), probe: aboFlipProbe(&n)}),
 		Fixtures: []crashmatrix.Fixture{f},
+		Part:     part, Parts: aboFlipMatrixParts,
 	})
 	require.Positive(t, n.Load(), "the probe never ran: no boot of the matrix reached Register")
 }

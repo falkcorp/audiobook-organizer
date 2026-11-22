@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import re
 import time
 import unittest
 from pathlib import Path
@@ -56,11 +57,13 @@ class RealModuleDiscovery(unittest.TestCase):
         self.assertIn(f"{M}/internal/merge", self.result.selected)
 
     def test_shards_cover_every_unit_once(self):
-        got = sorted(u for i in (1, 2, 3) for u in ftp.shard(self.result.selected, i, 3))
+        n = ftp.SHARDS
+        got = sorted(u for i in range(1, n + 1) for u in ftp.shard(self.result.selected, i, n))
         self.assertEqual(got, sorted(ftp.units(self.result.selected)))
 
     def test_every_package_runs_in_some_shard(self):
-        ran = {u.pkg for i in (1, 2, 3) for u in ftp.shard(self.result.selected, i, 3)}
+        n = ftp.SHARDS
+        ran = {u.pkg for i in range(1, n + 1) for u in ftp.shard(self.result.selected, i, n)}
         self.assertEqual(sorted(ran), self.result.selected)
 
     def test_the_heavy_packages_are_split(self):
@@ -70,17 +73,32 @@ class RealModuleDiscovery(unittest.TestCase):
         self.assertGreater(ftp.split_count(f"{M}/internal/plugins/maintenance"), 1)
 
     def test_no_shard_carries_much_more_than_its_share(self):
-        loads = [ftp.shard_load(ftp.shard(self.result.selected, i, 3)) for i in (1, 2, 3)]
-        mean = sum(loads) / 3
+        n = ftp.SHARDS
+        loads = [ftp.shard_load(ftp.shard(self.result.selected, i, n)) for i in range(1, n + 1)]
+        mean = sum(loads) / n
         self.assertLessEqual(max(loads), mean * 1.15, loads)
 
     def test_no_two_parts_of_one_package_share_a_shard(self):
         # Splitting is there to spread a package over agents; two parts in one
-        # shard would be back on one agent, under one budget. Every split
-        # package has at most 3 parts, and there are 3 shards.
-        for i in (1, 2, 3):
-            pkgs = [u.pkg for u in ftp.shard(self.result.selected, i, 3)]
+        # shard would be back on one agent, under one budget. So no package
+        # may have more parts than there are shards.
+        n = ftp.SHARDS
+        for i in range(1, n + 1):
+            pkgs = [u.pkg for u in ftp.shard(self.result.selected, i, n)]
             self.assertEqual(sorted(pkgs), sorted(set(pkgs)), f"shard {i}")
+
+    def test_the_workflows_run_every_shard(self):
+        # ci.yml's fixture-tests matrix and race-nightly's fixtures-N suites
+        # must list exactly SHARDS shards: a planner at 4 with a workflow at 3
+        # would never run the units dealt to shard 4.
+        root = Path(__file__).resolve().parents[1]
+        want = [f"{i}/{ftp.SHARDS}" for i in range(1, ftp.SHARDS + 1)]
+        ci = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        m = re.search(r"fixture-tests:.*?shard: \[([^\]]*)\]", ci, re.S)
+        self.assertIsNotNone(m, "ci.yml has no fixture-tests shard matrix")
+        self.assertEqual(re.findall(r"'([^']+)'", m.group(1)), want, "ci.yml fixture-tests matrix")
+        nightly = (root / ".woodpecker" / "race-nightly.yaml").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"FIXTURE_SHARD=(\S+)", nightly), want, "race-nightly fixtures suites")
 
     def test_no_unit_is_heavier_than_the_split_target(self):
         for u in ftp.units(self.result.selected):

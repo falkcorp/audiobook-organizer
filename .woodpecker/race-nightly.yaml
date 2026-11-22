@@ -17,7 +17,7 @@
 #                    two ways instead of four; the plan check that every
 #                    package is assigned exactly once runs in each)
 #   short core/2     the nested core module's short tests (`go -C core test`)
-#   fixtures 1/3..3/3  `make test-fixtures`, every test that -short skips, no
+#   fixtures 1/4..4/4  `make test-fixtures`, every test that -short skips, no
 #                    -short, with -race (ci.yml's fixture-tests matrix)
 # The coverage-k.out files the short shards write are not used.
 #
@@ -76,11 +76,13 @@ matrix:
     - SUITE: short-core
       MAKE_ARGS: test-short-shard SHARD=core/2
     - SUITE: fixtures-1
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=1/3 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=1/4 FIXTURE_TIMEOUT=25m
     - SUITE: fixtures-2
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=2/3 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=2/4 FIXTURE_TIMEOUT=25m
     - SUITE: fixtures-3
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=3/3 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=3/4 FIXTURE_TIMEOUT=25m
+    - SUITE: fixtures-4
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=4/4 FIXTURE_TIMEOUT=25m
 
 clone:
   - name: clone
