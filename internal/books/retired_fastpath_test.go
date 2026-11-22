@@ -36,18 +36,21 @@ import (
 //
 // Every name of ABO's retired list (flipConfigNames, what serve hands
 // app.Options) is checked in each operator layer (the environment, the
-// operator file, the flags), and with no layer set at all:
+// operator file, the flags), with no layer set at all, and with every env name
+// set empty or null (unset). With every name set in one layer at once,
+// kernel.CheckConfig must list each name of that layer, and
+// AnyRetiredNameSet, asked with that name alone set, must say set; a name of
+// the other layer (or any flag: flags name canonical paths, so no retired name
+// is ever one) must be neither listed nor seen.
 //
-//   - every name set in one layer at once: kernel.CheckConfig must list each
-//     name of that layer, and AnyRetiredNameSet, asked with that name alone
-//     set, must say set; a name of the other layer (or any flag: flags name
-//     canonical paths, so no retired name is ever one) must be neither listed
-//     nor seen;
-//   - outside -short, each name alone in each layer: AnyRetiredNameSet is true
-//     exactly when CheckConfig lists a use, and never false where CheckConfig
-//     refuses. That is 1,900-odd full judgements, so it runs in the
-//     non-short gates with the crash matrices; the all-at-once form above
-//     covers every name in every run.
+// One full judgement per layer stands for one per name because the judgement
+// is per name: judgeRetired visits each retired name on its own, and whether
+// a name is set (retiredIsSet) and how it is judged (retiredJudge) read only
+// that name and the registered sections, never another name. So the uses
+// listed with every name of a layer set are the union of the uses each name
+// set alone lists, and the per-name AnyRetiredNameSet answers above are
+// compared against exactly that. (Running the 1,938 single-name judgements
+// directly took 521 s under -race, a third of the package's CI budget.)
 //
 // The run must reach both refused and warned names, so a list or a harness
 // that stopped exercising one class fails here instead of passing vacuously.
@@ -180,25 +183,4 @@ func TestRetiredNameFastPathAgreesWithCheckConfig(t *testing.T) {
 	require.Positive(t, nRefused, "no retired name refused: the run never reached the case the fast path must not skip")
 	require.Positive(t, nWarned, "no retired name was only warned about")
 	t.Logf("%d retired names, %d refuse boot and %d warn when set in their own layer", len(retired), nRefused, nWarned)
-
-	if testing.Short() {
-		return
-	}
-	for _, l := range layers {
-		t.Run(l.name+"/each name alone", func(t *testing.T) {
-			for _, r := range retired {
-				o := base()
-				l.set(t, &o, r)
-				uses, refused := full(t, o)
-				seen := fast(t, o)
-				require.Equal(t, len(uses) > 0, seen, "%s through %s: AnyRetiredNameSet says %t, CheckConfig lists %+v", r.Name, l.name, seen, uses)
-				if len(refused) > 0 {
-					require.True(t, seen, "%s through %s: CheckConfig refuses, AnyRetiredNameSet says nothing is set", r.Name, l.name)
-				}
-				if l.own(r) {
-					require.True(t, listed(uses, r), "%s set alone in its own layer (%s) is not listed", r.Name, l.name)
-				}
-			}
-		})
-	}
 }

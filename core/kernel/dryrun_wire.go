@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -206,10 +207,16 @@ func (k *Kernel) scratchConfig(ctx context.Context) (*configBoot, error) {
 			secs = append(secs, e.man.Settings...)
 		}
 	}
-	for _, s := range secs {
-		if _, err := s.Register(st.Registry()); err != nil {
-			return fail(fmt.Errorf("kernel: config: register the module section %s: %w", s.Path(), err))
+	reg := st.Registry()
+	if err := config.Batch(reg, func() error {
+		for _, s := range secs {
+			if _, err := s.Register(reg); err != nil {
+				return fmt.Errorf("kernel: config: register the module section %s: %w", s.Path(), err)
+			}
 		}
+		return nil
+	}); err != nil {
+		return fail(err)
 	}
 	if err := st.Load(ctx); err != nil {
 		return fail(fmt.Errorf("kernel: config load: %w", err))
