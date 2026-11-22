@@ -216,6 +216,13 @@ func (k *Kernel) runBootSteps(ctx context.Context, steps []bootStep) error {
 // <namespace>_kernel_boot_phase_seconds{phase, step=""}, the phase total
 // (06 §6.9). A phase before P5 is recorded once the gauge exists.
 func (k *Kernel) phase(name string, fn func() error) error {
+	// Every phase asks the service manager for start time before it runs
+	// (05-health §5H.3.4): a phase is a step, and the request follows the
+	// step, never a clock. A phase that holds a long loop extends again per
+	// unit inside it (storage's open, checkpoint and migrations; the
+	// registrations' own steps). Before Run no start window is open, so this
+	// is the service-manager request alone.
+	k.sendExtend(coreOwner, kernelStepPrefix+"boot "+name)
 	start := time.Now()
 	err := fn()
 	k.timings = append(k.timings, phaseTiming{phase: name, took: time.Since(start)})
@@ -468,6 +475,11 @@ func (k *Kernel) moduleLog(id module.ID) *slog.Logger {
 	return k.cfg.Logger.With(log.KeyModule, string(id))
 }
 
+// kernelStepPrefix starts the step name of every start-timeout extension the
+// kernel makes for its own phases and Run steps, so a recorder (a test, a
+// log) tells them from the steps modules name through Deps.ExtendStart.
+const kernelStepPrefix = "kernel: "
+
 // coreOwner is the owner id of ExtendStart calls the kernel makes for core's
 // own steps (storage's open and checkpoint): no module hook runs under it.
 const coreOwner module.ID = "core"
@@ -505,7 +517,11 @@ func (k *Kernel) sendExtend(id module.ID, step string) {
 		return
 	}
 	if err := sdnotify.ExtendTimeout(sdnotify.StartupStepBudget); err != nil {
-		k.log.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
+		l := k.log
+		if l == nil { // P1 runs before logging is built
+			l = slog.Default()
+		}
+		l.Warn("kernel: systemd start-timeout extension failed", "module", id, "step", step, "err", err)
 	}
 }
 

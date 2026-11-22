@@ -185,6 +185,13 @@ type Options struct {
 	// listener carries those (R1-17). nil = httpapi.Listen. Release R1 only.
 	R1Listen func(httpapi.ListenOptions, http.Handler, *slog.Logger) (R1Server, error)
 
+	// R1ExtendStart replaces the request the kernel, core's storage steps
+	// and every module's Deps.ExtendStart make to the service manager
+	// (EXTEND_TIMEOUT_USEC over NOTIFY_SOCKET): tests record them to prove
+	// every blocking step of a boot asked for time first (05-health
+	// §5H.3.4). nil = the systemd request.
+	R1ExtendStart func(step string)
+
 	// Telemetry is the part of the App's metrics.Options that the
 	// core.metrics and core.tracing config sections describe (05-metrics §7):
 	// the OTLP metric push, the OTLP span exporter and the resource's

@@ -260,6 +260,9 @@ type Server struct {
 	// through a lazy provider and Start writes it; nil before Start, which
 	// /health renders as "no startup step degraded".
 	startupSteps atomic.Pointer[startup.Steps]
+	// startExtend is WithStartExtender's function, kept for the start hook's
+	// own loops (the iTunes write-back purge); nil when none was given.
+	startExtend func(step string)
 	// postureTokens yields GET /system/status's authenticated posture
 	// tokens (the storage_checkpoint_* tokens from R1), installed by books'
 	// Attach once the App exists, after the handlers are wired: atomic for
@@ -785,7 +788,10 @@ var activityStoreOverrideForTest database.ActivityStorer
 // ServerOption configures NewServer.
 type ServerOption func(*serverOptions)
 
-type serverOptions struct{ log *slog.Logger }
+type serverOptions struct {
+	log    *slog.Logger
+	extend func(step string)
+}
 
 // WithLogger is the logger the operations registry (and through it every op
 // reporter's Logger()) and the flight recorder write to. nil, and the absence
@@ -800,6 +806,16 @@ type serverOptions struct{ log *slog.Logger }
 // structured rows come from the registry's activity mirror.
 func WithLogger(log *slog.Logger) ServerOption {
 	return func(o *serverOptions) { o.log = log }
+}
+
+// WithStartExtender is the start-timeout extension of 05-health §5H.3.4
+// (books passes module.Deps.ExtendStart): the service container calls it
+// before every service's Build, PostInit and Start, and NewServer calls it
+// before the HNSW snapshot import, so each of those startup steps asks the
+// service manager for time first, on the goroutine that runs it. nil, and the
+// absence of the option, asks for none.
+func WithStartExtender(f func(step string)) ServerOption {
+	return func(o *serverOptions) { o.extend = f }
 }
 
 // NewServer builds the server over store. It takes options rather than a
@@ -888,6 +904,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	flightRec := newFlightRecorder(log)
 	server := &Server{
+		startExtend:            so.extend,
 		store:                  store,
 		bgCtx:                  bgCtx,
 		bgCancel:               bgCancel,
@@ -978,7 +995,8 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		Override(serviceregistry.KeyOpHub, opHub).
 		Override("opregistry", opRegistry).
 		Override(serviceregistry.KeyUpdater, appUpdater).
-		Override("updatescheduler", updater.NewSchedulerService(appUpdater))
+		Override("updatescheduler", updater.NewSchedulerService(appUpdater)).
+		WithStepExtender(so.extend)
 	if activityStoreOverrideForTest != nil {
 		regContainer.Override(serviceregistry.KeyActivityStore, activityStoreOverrideForTest)
 	}
@@ -999,6 +1017,11 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	if config.AppConfig.DatabasePath != "" {
 		hnswDir := database.HNSWSnapshotDir(config.AppConfig.DatabasePath)
 		server.hnswPersistDir = hnswDir
+		if so.extend != nil {
+			// One opaque read of the snapshot, scaling with the embedding
+			// count: its own step between two services' PostInit.
+			so.extend("hnsw snapshot import")
+		}
 		importHNSWSnapshot(regContainer, hnswDir)
 	}
 

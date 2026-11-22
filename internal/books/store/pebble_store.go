@@ -125,6 +125,10 @@ type PebbleStore struct {
 	// the per-file intro writers (introNow). Set only by tests, before the store is
 	// shared; nil in production.
 	introClock func() time.Time
+	// bootExtend is the start-timeout extension (05-health §5H.3.4) the
+	// constructor's journal scan calls; set by newCoreStore for the length of
+	// its seedJournalClock call and nil after, so no later code can reach it.
+	bootExtend func(step string)
 	// retiredHash is the scan-lifetime cache of RetiredBookFilesWithHash
 	// (retired_hash_scope.go); its generation is bumped by every write that
 	// can change which retired rows hold which hash.

@@ -148,19 +148,6 @@ func (s *Server) startSearchIndexing() {
 	}
 }
 
-// SetStartExtender gives the search index service the function it calls
-// before the long step of opening the index, so the service manager extends
-// the start timeout (books passes module.Deps.ExtendStart). It does nothing
-// when the container built no searchindex. Call it before StartHook.
-func (s *Server) SetStartExtender(f func(step string)) {
-	if s.container == nil {
-		return
-	}
-	if idx, ok := serviceregistry.TryGet[*search.IndexService](s.container, "searchindex"); ok && idx != nil {
-		idx.SetStartExtender(f)
-	}
-}
-
 // adoptSearchIndex takes the Bleve index the searchindex service opened and,
 // when there is one, switches search indexing live (startSearchIndexing).
 //
@@ -737,7 +724,7 @@ func (s *Server) StartHook(ctx context.Context, cfg ServerConfig) (err error) {
 	// durable queue, held removes, status and outbox rows). Idempotent: once
 	// they are gone this is one empty scan per prefix.
 	if st := s.storeForWiring(); st != nil {
-		purgeLegacyITunesWriteBackKeys(st)
+		purgeLegacyITunesWriteBackKeys(st, s.startExtend)
 	}
 
 	// Start embed queue debounce timer (activated after container start so

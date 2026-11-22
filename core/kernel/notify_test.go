@@ -192,11 +192,18 @@ func TestSupervisor_DefaultNotifierSpeaksSystemd(t *testing.T) {
 		got = append(got, msg)
 		return msg
 	}
-	if msg := next(); msg != "STATUS=starting" {
-		t.Fatalf("first datagram = %q, want STATUS=starting (got %q)", msg, got)
+	// The boot's phases ask for start time before STATUS=starting, and Run's
+	// steps before READY=1 (05-health §5H.3.4); nothing else may come first.
+	msg := next()
+	for ; msg != "STATUS=starting"; msg = next() {
+		if msg != "EXTEND_TIMEOUT_USEC=600000000" {
+			t.Fatalf("datagram before STATUS=starting = %q, want only start-timeout extensions (got %q)", msg, got)
+		}
 	}
-	if msg := next(); msg != "READY=1" {
-		t.Fatalf("second datagram = %q, want READY=1 (got %q)", msg, got)
+	for msg = next(); msg != "READY=1"; msg = next() {
+		if msg != "EXTEND_TIMEOUT_USEC=600000000" {
+			t.Fatalf("datagram before READY=1 = %q, want only start-timeout extensions (got %q)", msg, got)
+		}
 	}
 	a, _ := addr.Load().(string)
 	if a == "" {

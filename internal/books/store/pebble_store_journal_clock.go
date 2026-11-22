@@ -299,6 +299,11 @@ func (p *PebbleStore) scanJournalTop() (top int64, rows int, err error) {
 		}
 		rows++
 		if rows%journalScanLogEvery == 0 {
+			// The scan is one step that scales with the journal: it asks
+			// for start time per unit of 50k rows, never from a timer.
+			if p.bootExtend != nil {
+				p.bootExtend("journal clock scan")
+			}
 			journalClockLog.Info("scanning the operation journal at open (one time): %d rows read, %s elapsed", rows, time.Since(started).Round(time.Millisecond))
 		}
 		top = max(top, c.CreatedSeq, c.RevertedSeq, c.CreatedAt.UnixNano())

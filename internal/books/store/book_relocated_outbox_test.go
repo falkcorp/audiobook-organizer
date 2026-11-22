@@ -75,7 +75,7 @@ func newRelocationRig(t *testing.T, undeclared bool) *relocationRig {
 	if !ok {
 		t.Fatal("no outbox keyspace")
 	}
-	s, err := newCoreStore(lr, nil, warmNever)
+	s, err := newCoreStore(lr, nil, warmNever, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

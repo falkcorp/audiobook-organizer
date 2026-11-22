@@ -43,8 +43,12 @@ func TestPurgeLegacyITunesWriteBackKeys(t *testing.T) {
 	require.NoError(t, store.SetRaw("itunes:keep", []byte("keep")))
 	require.NoError(t, store.SetUserPreferenceForUser("_system", "pipeline_checkpoint:b1:tags", "keep"))
 
-	got := purgeLegacyITunesWriteBackKeys(store)
+	var pages int
+	got := purgeLegacyITunesWriteBackKeys(store, func(string) { pages++ })
 	require.Equal(t, len(legacy)+1, got)
+	// One request per page it deleted (05-health §5H.3.4): the queue prefix
+	// held two pages, and each of the other prefixes one.
+	require.GreaterOrEqual(t, pages, 3, "an extension before every page deleted")
 
 	for _, prefix := range legacyITunesWriteBackPrefixes {
 		n, err := store.CountPrefix(prefix)
@@ -58,5 +62,7 @@ func TestPurgeLegacyITunesWriteBackKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, pref)
 
-	require.Zero(t, purgeLegacyITunesWriteBackKeys(store), "second run finds nothing")
+	pages = 0
+	require.Zero(t, purgeLegacyITunesWriteBackKeys(store, func(string) { pages++ }), "second run finds nothing")
+	require.Zero(t, pages, "an empty scan is not a unit of work and asks for nothing")
 }
