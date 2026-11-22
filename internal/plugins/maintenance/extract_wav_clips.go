@@ -218,7 +218,7 @@ func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVPa
 			if src == "" || cacheKey == "" {
 				continue
 			}
-			// A batch child holds only the rows its Subjects name. The file this
+			// A batch child holds only the book and file rows its Subjects name. The file this
 			// book's first audio file is now must be one of them, or the hash
 			// write-back below would land on a row nothing holds.
 			if owners != nil && ref.BookFileID != "" && !inScope(owners, bookID, ref.BookFileID) {

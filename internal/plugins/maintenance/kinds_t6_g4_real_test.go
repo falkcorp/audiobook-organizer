@@ -57,7 +57,7 @@ func t6g4RealHost(kind tasks.Kind, within time.Duration, w tasks.Writer) (*t6g4H
 	if within > 0 {
 		ctx, cancel = context.WithTimeout(ctx, within)
 	}
-	return &t6g4Host{FakeRun: taskstest.NewFakeRun(ctx, kind), mode: tasks.ModeLive, w: w}, cancel
+	return &t6g4Host{FakeRun: taskstest.NewFakeRun(ctx, kind), mode: tasks.ModeLive, w: w, trigger: t6g4TriggerOf(kind)}, cancel
 }
 
 // t6g4SameResources fails unless the resources the recorded calls wrote are
