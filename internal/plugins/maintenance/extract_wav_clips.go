@@ -22,7 +22,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
-	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -52,6 +51,10 @@ func (p *Plugin) extractWAVClipsDef() sdk.OperationDef {
 
 type extractWAVParams struct {
 	SkipExisting *bool `json:"skip_existing,omitempty"` // default true
+	// batch, set only by the per-batch child (F5-18h), confines the run to one
+	// batch's books and the book_file rows its Subjects hold. Never decoded:
+	// HEAD's shell and the whole-library parent leave it nil.
+	batch *batchScope
 }
 
 // extractWAVNativeParams is extractWAVParams for the native run: the mode keys
@@ -71,6 +74,10 @@ type extractWAVResult struct {
 	HashMismatched int `json:"hash_mismatched"`
 	ClipLinkFailed int `json:"clip_link_failed"`
 	Total          int `json:"total"`
+	// OutOfScope counts the books of a batch whose first audio file is not one
+	// the child holds (the file set changed after the parent planned the batch):
+	// they are left for the next run, never written. Always 0 outside a batch.
+	OutOfScope int `json:"out_of_scope,omitempty"`
 }
 
 // extractWAVClipsEnv is what the core needs from its engine (rules R2 and R10).
@@ -101,30 +108,30 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 	return err
 }
 
-// extractWAVClipsKind is the native shell (rule R2 item 3). HEAD has no preview
-// and the run writes book_files.file_hash, so it is a Live-only writer (rule R7).
+// extractWAVClipsKind is the native shell (rule R2 item 3), and since F5-18h the
+// PARENT of the per-batch children (batch_children.go). HEAD has no preview and
+// the run writes book_files.file_hash, so it is a Live-only writer (rule R7); the
+// parent itself writes nothing, so it is declared ReadOnly and its children hold
+// the writes, a batch at a time.
 func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(extractWAVClipsKind, tasks.TaskSpec[extractWAVNativeParams, extractWAVResult]{
 		Title: "Extract WAV clips for transcription cache",
-		Help:  "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes.",
-		// book_files: the file hash it persists. books: SetBookFileHash notifies the
-		// aggregate recompute when a hash makes or breaks a pairing of two rows
-		// (writeHashesOver -> RecomputeBookAggregates -> ModifyBook), which commits
-		// the book row's Duration (the shared SetBookFileHash row, kinds_resources.go;
-		// stack parity review P1). files: the clips it cuts and the content-stable
-		// hardlinks it makes under the library root (bytes on disk, written outside
-		// the writer).
-		// ModifyBook is reached through the recompute, so the row is the whole ModifyBook row:
-		// metadata_cache, indexes too (THE RULE, internal/maintenance/resources).
-		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
+		Help:  "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes. The run itself writes nothing: it starts one child run per 100 books, one at a time, and each child holds only its own books.",
+		// ReadOnly: the writes (the file hash it persists in book_files; books,
+		// metadata_cache and indexes through the aggregate recompute SetBookFileHash
+		// can reach; files, the clips and hardlinks it makes) are the children's, see
+		// extractWAVBatchKind. A ref lock cannot narrow an Effects hold, so the
+		// parent cannot hold them and still let a write to another book through.
+		Effects: tasks.ReadOnly(),
 		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
-		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
-		// internal/arch: skip_existing (the default) skips a clip already in the cache), so the 05-tasks mapping is
-		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
-		Resume:          tasks.ResumeFromZero,
+		// ResumeContinue (HEAD is ResumeRestart with no checkpoint): the parent's
+		// cursor, the child in flight and the rolled-up tallies are checkpointed
+		// (batch_sweep.go), so a restart resumes at the cursor, and the kernel
+		// only honours ErrContinueInPlace for a ResumeContinue kind.
+		Resume:          tasks.ResumeContinue,
 		Priority:        tasks.PriorityLow,
 		ConcurrencyKey:  tasks.Key("books.maintenance.extract-wav-clips"),
-		Timeout:         24 * time.Hour,
+		Timeout:         tasks.MaxTimeout,
 		ProgressTimeout: 10 * time.Minute,
 		Schedule:        sched,
 		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
@@ -138,11 +145,11 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 			if err := serverdecode.Check("maintenance.extract-wav-clips"); err != nil {
 				return extractWAVResult{}, err
 			}
-			base, err := t6g4NativeBase(rc, deps, true)
+			base, err := t6g4NativeBase(rc, deps, false)
 			if err != nil {
 				return extractWAVResult{}, err
 			}
-			return p.runExtractWAVClipsCore(rc.Context(), extractWAVParams{SkipExisting: in.SkipExisting}, extractWAVClipsEnv{t6g4Base: base})
+			return p.extractWAVBatchParent(rc, base, in)
 		},
 	})
 }
@@ -162,9 +169,15 @@ func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVPa
 		return extractWAVResult{}, fmt.Errorf("create wav cache dir %s: %w", cacheDir, err)
 	}
 
-	allIDs, err := store.ListBookIDs()
-	if err != nil {
-		return extractWAVResult{}, fmt.Errorf("list book ids: %w", err)
+	var allIDs []string
+	var owners map[string]string // nil outside a batch: every file is in scope
+	if params.batch != nil {
+		allIDs, owners = params.batch.bookIDs(), params.batch.fileOwners()
+	} else {
+		var err error
+		if allIDs, err = store.ListBookIDs(); err != nil {
+			return extractWAVResult{}, fmt.Errorf("list book ids: %w", err)
+		}
 	}
 	total := len(allIDs)
 
@@ -177,9 +190,9 @@ func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVPa
 	// extraction can succeed while the identity write fails, and a summary that
 	// folds those together reports "0 failed" for a run that wrote no hashes.
 	var extracted, skipped, failed int
-	var hashFailed, hashMismatched, clipLinkFailed int
+	var hashFailed, hashMismatched, clipLinkFailed, outOfScope int
 
-	err = env.Each(ctx, len(pages), t6g4EachOpts{
+	err := env.Each(ctx, len(pages), t6g4EachOpts{
 		Concurrency:   1,
 		Reason:        "pages run one at a time; each page already fans out introTranscribeFFWorkers ffmpeg workers, so the page loop adds none",
 		ProgressTotal: len(pages),
@@ -200,6 +213,13 @@ func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVPa
 			ref, _ := firstAudioFile(store, *b)
 			src, cacheKey := ref.Path, ref.CacheKey
 			if src == "" || cacheKey == "" {
+				continue
+			}
+			// A batch child holds only the rows its Subjects name. The file this
+			// book's first audio file is now must be one of them, or the hash
+			// write-back below would land on a row nothing holds.
+			if owners != nil && ref.BookFileID != "" && !inScope(owners, bookID, ref.BookFileID) {
+				outOfScope++
 				continue
 			}
 			dest := cachedClipPath(cacheDir, cacheKey)
@@ -298,7 +318,7 @@ func (p *Plugin) runExtractWAVClipsCore(ctx context.Context, params extractWAVPa
 	})
 	res := extractWAVResult{
 		Extracted: extracted, Skipped: skipped, Failed: failed, HashFailed: hashFailed,
-		HashMismatched: hashMismatched, ClipLinkFailed: clipLinkFailed, Total: total,
+		HashMismatched: hashMismatched, ClipLinkFailed: clipLinkFailed, Total: total, OutOfScope: outOfScope,
 	}
 	if err != nil {
 		return res, err
