@@ -87,6 +87,13 @@ type Options struct {
 	// runs it. "" = the build has no M8, and any KindRewrite intent or
 	// journal halts boot (ErrRewriteNotInThisBuild).
 	RewriteStep string
+	// ExtendStart is the boot's start-timeout extension (kernel
+	// ExtendStart; 05-health §5H.3.4): M8's phase 4 calls it once before it
+	// deletes the old store, a removal of tens of GB that is one call to the
+	// filesystem and shows no progress of its own, so it is given its own
+	// sdnotify.StartupStepBudget. nil = none (the offline swaps, which run
+	// under no start timeout).
+	ExtendStart func(step string)
 }
 
 // Swapper is the one journaled swap of 05-backup §5B.3.4 and 05-storage

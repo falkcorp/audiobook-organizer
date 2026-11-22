@@ -186,7 +186,8 @@ func (k *Kernel) runP0a(ctx context.Context) error {
 	}
 	clock := bootClock(ctx)
 	sw, err := restoreswap.New(restoreswap.Options{FS: fs, StateDir: k.cfg.StateDir, BuildID: build, Clock: clock,
-		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap"), RewriteStep: k.rewriteID()})
+		Owners: k.storageOwners(), Probe: bootProbe(ctx, fs), Logger: k.coreLog("restoreswap"), RewriteStep: k.rewriteID(),
+		ExtendStart: k.extendStart(coreOwner)})
 	if err != nil {
 		return fmt.Errorf("kernel: pre-boot swap (P0a): %w", err)
 	}

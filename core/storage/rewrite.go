@@ -120,6 +120,82 @@ func RewriteDir(dbPath string) string { return filepath.Clean(dbPath) + ".rewrit
 // rewriteSSTBytes is the size at which the copy starts a new SST.
 const rewriteSSTBytes = 64 << 20
 
+// How often M8 asks the service manager for more start time while it works.
+// The unit is real progress, never a clock (05-health §5H.3.4: a wedged step
+// must still be killed once its own sdnotify.StartupStepBudget, 10 min, runs
+// out), so each constant is a measure of work, and each is far finer than the
+// budget. Prod's store at the first flip held 74.2 GB in 173.5 M keys and
+// 1106 tables, and the prod-copy rehearsal's dry run copied it in 46 to 69
+// min, 18 to 27 MB/s. At that rate a table of rewriteSSTBytes takes 2.5 to
+// 3.7 s and rewriteExtendBytes under 1 s, and at a hundredth of the slowest
+// pass (0.18 MB/s) rewriteExtendBytes still takes 93 s, inside the budget.
+// rewriteExtendKeys covers a store of tiny values, where the byte count moves
+// slowly while every key still costs a read; it is 100,000 keys, 1.6 to 2.4 s
+// at the measured 42,000 to 63,000 keys/s. A call is one datagram write:
+// about 5,500 of them over that whole copy.
+const (
+	rewriteExtendBytes = 16 << 20
+	rewriteExtendKeys  = 100_000
+)
+
+// The ExtendStart step names of M8's storage half: fixed tokens, never a key,
+// a path or a value.
+const (
+	stepRewriteCompact = "storage.rewrite.compact"
+	stepRewriteCopy    = "storage.rewrite.copy"
+	stepRewriteSwap    = "storage.rewrite.swap"
+)
+
+// extendStart asks for start time before a step of M8 that makes progress. A
+// DB without a boot (the offline open's) has no start timeout to extend.
+// Callers are one goroutine at a time: ExtendStart is not safe to call
+// concurrently (the kernel's start window is not), so a worker that learns of
+// progress hands it to the goroutine running the step.
+func (db *DB) extendStart(step string) {
+	if db.boot != nil {
+		db.boot.opts.ExtendStart(step)
+	}
+}
+
+// runWithProgress runs work on its own goroutine and calls extend, on the
+// caller's, each time progress fires, until work returns. It is the whole of
+// how a call that gives no progress of its own (Pebble's Flush and Compact
+// block until done) shows the service manager it is advancing: extend is
+// called only for a progress signal, never on a clock, so a work that stalls
+// gets no further start time and is killed once its last extension runs out.
+// A signal that arrives after work returned is dropped. A panic in work is
+// re-raised here, as if work had run inline.
+func runWithProgress(work func() error, progress <-chan struct{}, extend func()) error {
+	type result struct {
+		err   error
+		panic any
+		died  bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		r := result{died: true}
+		defer func() {
+			if r.died {
+				r.panic = recover()
+			}
+			done <- r
+		}()
+		r.err = work()
+		r.died = false
+	}()
+	for {
+		select {
+		case r := <-done:
+			if r.died {
+				panic(r.panic)
+			}
+			return r.err
+		case <-progress:
+			extend()
+		}
+	}
+}
+
 // RewriteRecord is M8's record state ("" when it has none).
 func (db *DB) RewriteRecord(ctx context.Context, id string) (string, error) {
 	raw, err := db.storageKS().Get(ctx, DataMigrationKey(id))
@@ -146,7 +222,13 @@ func (db *DB) SetRewriteRecord(ctx context.Context, id, state string) error {
 }
 
 // RewriteCompact is M8's phase 1: flush, then compact the whole range,
-// parallelized.
+// parallelized. Pebble's Compact reports no progress and one call over a
+// store of tens of GB outlasts sdnotify.StartupStepBudget, so the flush and
+// the compaction run under runWithProgress: the engine's ObserveTables
+// signal (a flush or compaction starting another output table, about one
+// per 128 MiB at the bottom level) extends the start timeout, and nothing
+// else does. The compaction keeps Pebble's own parallelism over the whole
+// range.
 func (db *DB) RewriteCompact(ctx context.Context) error {
 	return db.labelled(LabelRewriteCompact, func() error {
 		release, err := db.lease()
@@ -154,11 +236,23 @@ func (db *DB) RewriteCompact(ctx context.Context) error {
 			return err
 		}
 		defer release()
-		if err := db.engine().DB().Flush(); err != nil {
+		eng := db.engine()
+		progress := make(chan struct{}, 1)
+		stop := eng.ObserveTables(func() {
+			select {
+			case progress <- struct{}{}:
+			default: // one is pending; it extends for this one too
+			}
+		})
+		defer stop()
+		extend := func() { db.extendStart(stepRewriteCompact) }
+		extend()
+		if err := runWithProgress(eng.DB().Flush, progress, extend); err != nil {
 			return fmt.Errorf("storage: rewrite flush: %w", err)
 		}
 		start, end := fullRange()
-		if err := db.engine().DB().Compact(ctx, start, end, true); err != nil {
+		err = runWithProgress(func() error { return eng.DB().Compact(ctx, start, end, true) }, progress, extend)
+		if err != nil {
 			return fmt.Errorf("storage: rewrite compact: %w", err)
 		}
 		return nil
@@ -197,6 +291,9 @@ func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteC
 	fs := st.opts.fs
 	tmp, ingest := final+".tmp", final+".ingest"
 	for _, p := range []string{tmp, final, ingest} {
+		// An earlier attempt's partial or finished copy can be tens of GB:
+		// each removal asks for its own budget.
+		db.extendStart(stepRewriteCopy)
 		if err := fs.RemoveAll(p); err != nil {
 			return stats, fmt.Errorf("storage: rewrite: remove %s: %w", p, err)
 		}
@@ -231,6 +328,7 @@ func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteC
 		return stats, err
 	}
 	if len(paths) > 0 {
+		db.extendStart(stepRewriteCopy)
 		if err := dst.DB().Ingest(ctx, paths); err != nil {
 			return stats, fmt.Errorf("storage: rewrite: ingest: %w", err)
 		}
@@ -253,6 +351,7 @@ func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteC
 	if err := dst.DB().Set(abs, m8, cpebble.Sync); err != nil {
 		return stats, fmt.Errorf("storage: rewrite: the copy's M8 record: %w", err)
 	}
+	db.extendStart(stepRewriteCopy)
 	if err := dst.DB().Flush(); err != nil {
 		return stats, fmt.Errorf("storage: rewrite: flush the copy: %w", err)
 	}
@@ -260,12 +359,15 @@ func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteC
 	if err := dst.Close(st.opts.CloseTimeout); err != nil {
 		return stats, fmt.Errorf("storage: rewrite: close the copy: %w", err)
 	}
+	db.extendStart(stepRewriteCopy)
 	if err := fs.RemoveAll(ingest); err != nil {
 		return stats, fmt.Errorf("storage: rewrite: remove %s: %w", ingest, err)
 	}
+	db.extendStart(stepRewriteCopy)
 	if err := db.privateTree(tmp); err != nil {
 		return stats, err
 	}
+	db.extendStart(stepRewriteCopy)
 	if err := ipebble.SyncDir(fs, tmp); err != nil {
 		return stats, err
 	}
@@ -276,7 +378,11 @@ func (db *DB) rewriteCopy(ctx context.Context, final, id string) (stats RewriteC
 }
 
 // writeTables writes every live key of the store into SSTs under dir, in
-// key order, each up to rewriteSSTBytes, at dst's table format.
+// key order, each up to the table size (rewriteSSTBytes), at dst's table
+// format. It asks for start time at every new table and again each time
+// rewriteExtendKeys keys or rewriteExtendBytes bytes have been copied since
+// the last request, so the deadline moves only while keys are being read and
+// written: an iterator or a write that stalls stops the requests.
 func (db *DB) writeTables(ctx context.Context, dst *ipebble.Engine, dir string, stats *RewriteCopyStats) (paths []string, err error) {
 	release, err := db.lease()
 	if err != nil {
@@ -292,6 +398,13 @@ func (db *DB) writeTables(ctx context.Context, dst *ipebble.Engine, dir string, 
 	defer func() { err = errors.Join(err, it.Close()) }()
 	fs := db.boot.opts.fs
 	format := dst.DB().TableFormat()
+	tableBytes, everyKeys, everyBytes := db.boot.opts.rewriteTableBytes, db.boot.opts.rewriteExtendKeys, db.boot.opts.rewriteExtendBytes
+	var sinceKeys, sinceBytes int64 // copied since the last extension
+	extend := func() {
+		db.extendStart(stepRewriteCopy)
+		sinceKeys, sinceBytes = 0, 0
+	}
+	extend()
 	var w *sstable.Writer
 	var size int64
 	finish := func() error {
@@ -306,10 +419,11 @@ func (db *DB) writeTables(ctx context.Context, dst *ipebble.Engine, dir string, 
 		if err := ctx.Err(); err != nil {
 			return nil, errors.Join(err, finish())
 		}
-		if w == nil || size >= rewriteSSTBytes {
+		if w == nil || size >= tableBytes {
 			if err := finish(); err != nil {
 				return nil, err
 			}
+			extend()
 			p := filepath.Join(dir, "rewrite-"+strconv.Itoa(len(paths))+".sst")
 			f, err := fs.Create(p, "")
 			if err != nil {
@@ -330,6 +444,11 @@ func (db *DB) writeTables(ctx context.Context, dst *ipebble.Engine, dir string, 
 		size += n
 		stats.Keys++
 		stats.Bytes += n
+		sinceKeys++
+		sinceBytes += n
+		if sinceKeys >= everyKeys || sinceBytes >= everyBytes {
+			extend()
+		}
 	}
 	if err := it.Error(); err != nil {
 		return nil, errors.Join(err, finish())
@@ -360,14 +479,17 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 	if err != nil {
 		return fmt.Errorf("storage: rewrite: the copy's identity: %w", err)
 	}
+	db.extendStart(stepRewriteSwap)
 	if err := db.labelled(LabelRewriteCheckpoint, func() error { return db.attemptIdentity(fsid, ino, false) }); err != nil {
 		return err
 	}
 	db.closed.Store(true)
+	db.extendStart(stepRewriteSwap)
 	if err := db.labelled(LabelRewriteClose, func() error { return db.engine().Close(db.set.closeTimeout) }); err != nil {
 		db.closed.Store(false)
 		return fmt.Errorf("storage: rewrite: close the store: %w", err)
 	}
+	db.extendStart(stepRewriteSwap)
 	swapErr := swap(ctx)
 	eng, err := db.reopenEngine()
 	if err != nil && swapErr == nil {
@@ -405,11 +527,13 @@ func (db *DB) RewriteSwap(ctx context.Context, swap func(ctx context.Context) er
 // after the swap.
 func (db *DB) reopenEngine() (*ipebble.Engine, error) {
 	st := db.boot
+	db.extendStart(stepRewriteSwap)
 	var eng *ipebble.Engine
 	err := db.labelled(LabelRewriteReopen, func() error {
 		var err error
 		eng, err = ipebble.Open(st.opts.Path, ipebble.Options{
 			FS: st.opts.fs, CacheBytes: st.opts.CacheBytes, MemtableBytes: st.opts.MemtableBytes, Logger: st.opts.Logger,
+			TargetFileBytes:  st.opts.engineTargetFile,
 			ErrorIfNotExists: true,
 		})
 		return err

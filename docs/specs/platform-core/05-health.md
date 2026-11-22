@@ -350,7 +350,7 @@ and launchd have no equivalent):
    step calls
    `Supervisor.ExtendStart(step)`, which extends the start deadline to at least
    `StartupStepBudget` (10 min, HEAD's value) from that moment. It is called per step, **never from a
-   timer**, so a step that hangs is still killed when its own budget runs out. Lower layers do not import
+   timer**, so a step that hangs is still killed when its own budget runs out. A step that can run longer than the budget by itself (M8's compaction and copy, 05-storage §5S.3.13) calls it again at each measurable unit of progress inside the step (an output table, a count of keys or bytes copied), never on a clock: the deadline then moves only while work advances. Lower layers do not import
    `health`: the kernel hands storage and the search-index opener `ExtendStart` as a plain
    `func(step string)`, and hands the same func to modules as `module.Deps.ExtendStart` (06 §6.4.4,
    from R1). Below layer 6 an ABO package never imports `module` or `app` (03 §3.5.1, MOD4-18), so

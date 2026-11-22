@@ -106,6 +106,17 @@ type OpenOptions struct {
 	hooks       testHooks
 	seams       *bootseam.Seams // the crash-matrix kit's, from Open's ctx (swap.go)
 
+	// The engine's compaction output table size (ipebble.Options
+	// .TargetFileBytes), and M8's copy sizes (rewrite.go): the SST size at
+	// which the copy starts a new table, and the keys or bytes copied
+	// between two ExtendStart calls. 0 = the engine's default or the
+	// package's constant. Tests shrink them to get several tables and many
+	// progress points out of a few kilobytes.
+	engineTargetFile   int64
+	rewriteTableBytes  int64
+	rewriteExtendKeys  int64
+	rewriteExtendBytes int64
+
 	// cpDir is the checkpoint directory itself:
 	// <CheckpointDir or the DB's parent>/.mediacore-checkpoints.
 	cpDir string
@@ -191,6 +202,15 @@ func (o *OpenOptions) defaults() {
 	}
 	if o.dirIdentity == nil {
 		o.dirIdentity = osDirIdentity(fs)
+	}
+	if o.rewriteTableBytes <= 0 {
+		o.rewriteTableBytes = rewriteSSTBytes
+	}
+	if o.rewriteExtendKeys <= 0 {
+		o.rewriteExtendKeys = rewriteExtendKeys
+	}
+	if o.rewriteExtendBytes <= 0 {
+		o.rewriteExtendBytes = rewriteExtendBytes
 	}
 	if o.sameDevice == nil {
 		o.sameDevice = osSameDevice(fs)
@@ -330,7 +350,8 @@ func Open(ctx context.Context, opts OpenOptions) (*Opened, error) {
 	opts.ExtendStart("storage.open")
 	eng, err := ipebble.Open(opts.Path, ipebble.Options{
 		FS: opts.fs, CacheBytes: opts.CacheBytes, MemtableBytes: opts.MemtableBytes, Logger: opts.Logger,
-		ReadOnly: opts.ReadOnly, ErrorIfNotExists: opts.MustExist || opts.ReadOnly,
+		TargetFileBytes: opts.engineTargetFile,
+		ReadOnly:        opts.ReadOnly, ErrorIfNotExists: opts.MustExist || opts.ReadOnly,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("storage: %w", err)
