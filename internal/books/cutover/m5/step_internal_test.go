@@ -7,6 +7,7 @@ package m5
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"log/slog"
 	"strings"
@@ -101,16 +102,17 @@ func (emptyReader) NewIterator(context.Context, storage.ScanOptions) (*storage.I
 	return nil, nil
 }
 
-// TestVerify_AccountingMustBalance: Verify fails a boot whose own count of rows
-// read is not the rows it imported plus the rows it quarantined, even over a
-// store that has no syslog: row left. A Step that returned an error after
-// counting a row, or a code path that read a row and neither moved nor
-// quarantined it, would show here.
+// TestVerify_AccountingMustBalance: Verify never fails the step (owner ruling,
+// 2026-11-22: M5 never blocks the boot), even when this boot's own count of rows
+// read is not the rows it imported plus the rows it quarantined. It logs a WARN
+// that names the counts instead, and reports the migration's own counts. A Step
+// that returned an error after counting a row, or a code path that read a row
+// and neither moved nor quarantined it, would show as that WARN.
 func TestVerify_AccountingMustBalance(t *testing.T) {
 	cases := []struct {
 		name                        string
 		read, imported, quarantined int64
-		wantFailure                 bool
+		wantWarn                    bool
 	}{
 		{"nothing_read", 0, 0, 0, false},
 		{"all_imported", 5, 5, 0, false},
@@ -120,7 +122,8 @@ func TestVerify_AccountingMustBalance(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m := &Migration{}
+			var logs strings.Builder
+			m := &Migration{logger: slog.New(slog.NewTextHandler(&logs, nil))}
 			m.read.Store(c.read)
 			m.imported.Store(c.imported)
 			m.quarantined.Store(c.quarantined)
@@ -128,16 +131,42 @@ func TestVerify_AccountingMustBalance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := len(rep.Failures) > 0; got != c.wantFailure {
-				t.Errorf("failures = %v, want a failure: %v", rep.Failures, c.wantFailure)
+			if len(rep.Failures) != 0 {
+				t.Errorf("failures = %v, want none: M5 never fails the step", rep.Failures)
 			}
-			if c.wantFailure && !strings.Contains(strings.Join(rep.Failures, "\n"), "imported") {
-				t.Errorf("the failure does not name the counts: %v", rep.Failures)
+			warned := strings.Contains(logs.String(), "m5: this boot's row counts do not balance")
+			if warned != c.wantWarn {
+				t.Errorf("warned = %v, want %v; log: %s", warned, c.wantWarn, logs.String())
+			}
+			if c.wantWarn && !strings.Contains(logs.String(), "level=WARN") {
+				t.Errorf("the count mismatch is not a WARN: %s", logs.String())
 			}
 			if rep.Read != c.read || rep.Written != c.imported || rep.Quarantined != c.quarantined {
 				t.Errorf("report = %+v, want the migration's own counts", rep)
 			}
 		})
+	}
+}
+
+// failingReader is a legacy range whose iterator cannot be opened: the store's
+// own I/O error.
+type failingReader struct {
+	emptyReader
+	err error
+}
+
+func (f failingReader) NewIterator(context.Context, storage.ScanOptions) (*storage.Iterator, error) {
+	return nil, f.err
+}
+
+// TestVerify_StoreReadErrorStillFails: Verify's only error is the store's. A
+// range it cannot read is not a warning, it is a broken store, and the step's
+// state is failed.
+func TestVerify_StoreReadErrorStillFails(t *testing.T) {
+	boom := errors.New("the store could not be read")
+	m := &Migration{logger: slog.New(slog.DiscardHandler)}
+	if _, err := m.Verify(context.Background(), failingReader{err: boom}); !errors.Is(err, boom) {
+		t.Fatalf("Verify error = %v, want the store's", err)
 	}
 }
 

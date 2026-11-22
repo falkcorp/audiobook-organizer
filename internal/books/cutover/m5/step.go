@@ -54,6 +54,10 @@ const (
 	reasonUndecodable = "the syslog row does not decode"
 	reasonLevel       = "the syslog row's level is not one HEAD wrote (info, warn or error)"
 	reasonTime        = "the syslog row has no usable time"
+	// reasonImport is a row the journal's Import refused while the store was
+	// otherwise healthy. The importer's own text is never the reason: it is
+	// logged beside the key, not stored in the quarantine record.
+	reasonImport = "the journal did not accept the syslog row"
 )
 
 // systemActivityLog is HEAD's row (store.SystemActivityLog), frozen here: this
@@ -80,8 +84,8 @@ func SourceRanges() []storage.Range {
 type Config struct {
 	// Importer is the native journal's importer (module.Importers' log member).
 	Importer log.Importer
-	// Logger receives one line per quarantined row (its key, a class, never its
-	// message). nil discards.
+	// Logger receives one line per quarantined row (its key and a class, never
+	// its message) and Verify's warnings. nil discards.
 	Logger *slog.Logger
 }
 
@@ -149,25 +153,46 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 // the same key (the importer's key is a function of the record's time and the
 // row's key), which writes nothing new. The step buffers nothing across calls.
 //
-// A row that does not decode, whose level HEAD never wrote, or that has no
-// usable time is quarantined with its raw bytes (Quarantine deletes the source
-// key itself). Anything the importer returns fails the chunk: a refusal of a
-// well-formed record is the importer's defect or a full disk, and the boot
-// stops with the checkpoint open rather than losing rows.
+// M5 never blocks the boot (owner ruling, 2026-11-22): the system log is nice
+// to have, and a wiped log is acceptable while the database stays intact. So a
+// failure about ONE ROW is quarantined and the step goes on to the next row.
+// Two things are a failure about a row: it does not decode, has a level HEAD
+// never wrote or has no usable time (decode), or the journal's Import returned
+// an error for it while the boot was still running (quarantined as
+// reasonImport, raw bytes kept, source key deleted by Quarantine itself). The
+// journal importer's refusals of a record are not told apart from its other
+// errors here (its sentinels live in core/internal/logjournal, which an app
+// cannot import), and need not be: a store that is really broken fails at the
+// chunk's batch commit below, which is fatal.
+//
+// What stays fatal is whatever means the DATABASE is unhealthy, and none of
+// it is quarantined or dropped:
+//   - the chunk's batch commit (the runner's, after Step returns);
+//   - storage.ErrBatchDone, from any call here or from Import;
+//   - an error from w.Quarantine or w.Delete. The runner poisons the chunk on
+//     a failed Quarantine (core/internal/storagemigrate/chunk.go, chunk.fail),
+//     so swallowing it here would not save the chunk, and every way
+//     Quarantine can fail for this step (the quarantine sequence's lease,
+//     the batch, a wiring or step defect) is the store's, never the row's:
+//     M5 declares no Sensitive prefixes, so the writer copies the raw bytes
+//     verbatim and nothing in a row's content can make it fail. So there is
+//     no "drop the row" leg: it could not take effect through the runner;
+//   - a cancelled ctx (a stopping boot fails nothing, the runner reports
+//     the cause), and a context deadline from the importer.
 func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	m.read.Add(1)
 	key := string(kv.Key)
 	rec, reason := decode(key, kv.Value)
 	if reason != "" {
 		m.logger.Warn("m5: a system log row is quarantined", "key", key, "reason", reason)
-		if err := w.Quarantine(kv.Key, kv.Value, reason); err != nil {
-			return err
-		}
-		m.quarantined.Add(1)
-		return nil
+		return m.quarantine(kv, w, reason)
 	}
 	if err := m.imp.Import(ctx, []log.ImportedRecord{{Record: rec, SourceID: key}}); err != nil {
-		return fmt.Errorf("m5: import the system log row %q: %w", key, err)
+		if storeUnhealthy(ctx, err) {
+			return fmt.Errorf("m5: import the system log row %q: %w", key, err)
+		}
+		m.logger.Warn("m5: a system log row is quarantined because the journal did not accept it", "key", key, "reason", reasonImport, "err", err)
+		return m.quarantine(kv, w, reasonImport)
 	}
 	if err := w.Delete(kv.Key); err != nil {
 		return err
@@ -175,6 +200,26 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 	m.imported.Add(1)
 	w.Count(OutcomeImported)
 	return nil
+}
+
+// quarantine moves one row's raw bytes to the quarantine (which deletes the
+// source key) and counts it. Its error is the store's and is returned: see Step.
+func (m *Migration) quarantine(kv storage.KV, w *datamigrate.StepWriter, reason string) error {
+	if err := w.Quarantine(kv.Key, kv.Value, reason); err != nil {
+		return err
+	}
+	m.quarantined.Add(1)
+	return nil
+}
+
+// storeUnhealthy reports an Importer error that is the database's, not the
+// row's: the boot is stopping, or the importer ran into a batch a step ended
+// (storage.ErrBatchDone) or a deadline. Everything else the importer returns
+// for a row is quarantined with the row.
+func storeUnhealthy(ctx context.Context, err error) bool {
+	return ctx.Err() != nil ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, storage.ErrBatchDone)
 }
 
 // decode is the journal record of a row, or the quarantine reason.
@@ -269,10 +314,18 @@ func parseKey(key string) (t time.Time, source string, ok bool) {
 	return t, rest[end+1:], true
 }
 
-// Verify is the step's invariant gate: no syslog: row is left, and this boot's
-// own accounting balances (every row Step read was imported or quarantined,
-// never neither). The counts in the report are this boot's: a boot that resumed
-// after a crash reports only what it stepped.
+// Verify reports this boot's accounting and never fails the step (owner
+// ruling, 2026-11-22: M5 never blocks the boot). A syslog: row still present,
+// or a count that does not balance (every row Step read was imported or
+// quarantined, never neither), is logged as a WARN and left as it is: the log
+// journal is then incomplete, the database is not. The leftover row stays under
+// its retired claim, which only the census and health report on
+// (core/storage/claims.go ClaimRetired) and which no later boot checks: a
+// done step is never re-entered (core/internal/storagemigrate/run.go, the
+// StateDone case of its migration switch) and M5 has no Preflight. Only an
+// error reading the store is returned, because that is the store's.
+// The counts in the report are this boot's: a boot that resumed after a crash
+// reports only what it stepped.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	rep := datamigrate.VerifyReport{Read: m.read.Load(), Written: m.imported.Load(), Quarantined: m.quarantined.Load()}
 	// One probe is enough: any key in the range is a row the step missed. It
@@ -284,13 +337,13 @@ func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.V
 		return rep, err
 	}
 	if it.First() {
-		rep.Failures = append(rep.Failures, fmt.Sprintf("a syslog: row is still present (%s)", it.Key()))
+		m.logger.Warn("m5: a syslog: row is still present after the step; the log journal is incomplete, the database is not", "key", string(it.Key()))
 	}
 	if err := errors.Join(it.Err(), it.Close()); err != nil {
 		return rep, err
 	}
 	if rep.Read != rep.Written+rep.Quarantined {
-		rep.Failures = append(rep.Failures, fmt.Sprintf("read %d rows but imported %d and quarantined %d", rep.Read, rep.Written, rep.Quarantined))
+		m.logger.Warn("m5: this boot's row counts do not balance", "read", rep.Read, "imported", rep.Written, "quarantined", rep.Quarantined)
 	}
 	return rep, nil
 }
