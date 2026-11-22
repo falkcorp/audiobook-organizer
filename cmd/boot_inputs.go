@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	coreconfig "github.com/falkcorp/mediacore/config"
 )
 
@@ -24,7 +23,7 @@ import (
 // (M6 moves it into core.library.roots at F7) and the playlist directory is a
 // stored setting, not scalar core keys, so they feed the commands that read
 // them, not the layered store. --config is
-// core.config.file and --db-type is checked and dropped (bootInputs).
+// core.config.file (bootInputs).
 var flagConfigPaths = map[string]coreconfig.Path{
 	"db":        "core.storage.path",
 	"log-level": "core.log.level",
@@ -37,8 +36,7 @@ var flagConfigPaths = map[string]coreconfig.Path{
 // "audiobooks.pebble" that HEAD resolved against the working directory.
 //
 // --db is made absolute here, against the working directory, as HEAD's open
-// did, because core refuses a relative store path. --db-type other than
-// pebble is refused as HEAD refused it: no other backend exists.
+// did, because core refuses a relative store path.
 func bootInputs(fs *pflag.FlagSet) (books.BootInputs, error) {
 	in := books.BootInputs{}
 	for name, path := range flagConfigPaths {
@@ -61,11 +59,6 @@ func bootInputs(fs *pflag.FlagSet) (books.BootInputs, error) {
 	}
 	if f := fs.Lookup("config"); f != nil && f.Changed {
 		in.ConfigFile = f.Value.String()
-	}
-	if f := fs.Lookup("db-type"); f != nil && f.Changed {
-		if err := database.ValidateDatabaseType(f.Value.String()); err != nil {
-			return books.BootInputs{}, err
-		}
 	}
 	return in, nil
 }

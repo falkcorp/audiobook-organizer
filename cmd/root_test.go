@@ -23,59 +23,40 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 )
 
-// TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning pins the #3268
-// follow-up: a command line that still carries the removed
-// --enable-sqlite3-i-know-the-risks flag must parse through the real Execute
-// path (before this, cobra failed startup with "unknown flag"), print the
-// deprecation warning, and stay out of --help.
-func TestRemovedSQLiteFlag_AcceptedWithDeprecationWarning(t *testing.T) {
-	flag := rootCmd.PersistentFlags().Lookup(removedSQLiteFlag)
-	if flag == nil {
-		t.Fatalf("--%s is not registered; a command line that passes it fails with unknown flag", removedSQLiteFlag)
-	}
-	if !flag.Hidden {
-		t.Errorf("--%s is not hidden", removedSQLiteFlag)
-	}
-	if flag.Deprecated != removedSQLiteFlagMessage {
-		t.Errorf("--%s Deprecated = %q, want %q", removedSQLiteFlag, flag.Deprecated, removedSQLiteFlagMessage)
-	}
+// TestRemovedFlagsUnknown pins R3-01c: --db-type and
+// --enable-sqlite3-i-know-the-risks were no-ops kept registered (the second
+// hidden and deprecated) so an off-repo unit or script that passed them kept
+// starting. R3 removes them with no compatibility shim (D10): neither is
+// registered, and a command line that carries one fails in cobra's flag parse
+// with "unknown flag", before any command body or initConfig runs.
+func TestRemovedFlagsUnknown(t *testing.T) {
+	for _, name := range []string{"db-type", "enable-sqlite3-i-know-the-risks"} {
+		t.Run(name, func(t *testing.T) {
+			if f := rootCmd.PersistentFlags().Lookup(name); f != nil {
+				t.Fatalf("--%s is still registered on the root command", name)
+			}
+			if f := serveCmd.Flags().Lookup(name); f != nil {
+				t.Fatalf("--%s is registered on serve", name)
+			}
 
-	var out bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&out)
-	// --help stops cobra before initConfig and the command body, so this
-	// exercises flag parsing and help rendering without starting a server.
-	rootCmd.SetArgs([]string{"serve", "--" + removedSQLiteFlag, "--help"})
-	t.Cleanup(func() {
-		rootCmd.SetArgs(nil)
-		rootCmd.SetOut(nil)
-		rootCmd.SetErr(nil)
-		_ = flag.Value.Set("false")
-		flag.Changed = false
-		if help := serveCmd.Flags().Lookup("help"); help != nil {
-			_ = help.Value.Set("false")
-			help.Changed = false
-		}
-	})
+			var out bytes.Buffer
+			rootCmd.SetOut(&out)
+			rootCmd.SetErr(&out)
+			rootCmd.SetArgs([]string{"serve", "--" + name})
+			t.Cleanup(func() {
+				rootCmd.SetArgs(nil)
+				rootCmd.SetOut(nil)
+				rootCmd.SetErr(nil)
+			})
 
-	if err := rootCmd.Execute(); err != nil {
-		t.Fatalf("Execute with --%s returned %v; the removed flag must never break startup", removedSQLiteFlag, err)
-	}
-
-	got := out.String()
-	wantWarning := "Flag --" + removedSQLiteFlag + " has been deprecated, " + removedSQLiteFlagMessage
-	if !strings.Contains(got, wantWarning) {
-		t.Errorf("output does not contain the deprecation warning %q:\n%s", wantWarning, got)
-	}
-	if !strings.Contains(got, "--db-type") {
-		t.Fatalf("serve --help output did not list the global flags; the hidden-flag check below would be vacuous:\n%s", got)
-	}
-	// The warning line is the only mention: the help listing omits the flag.
-	if n := strings.Count(got, removedSQLiteFlag); n != 1 {
-		t.Errorf("--%s appears %d times in the output, want 1 (the warning only, not the help listing):\n%s", removedSQLiteFlag, n, got)
-	}
-	if strings.Contains(rootCmd.UsageString(), removedSQLiteFlag) {
-		t.Errorf("root usage lists --%s", removedSQLiteFlag)
+			err := rootCmd.Execute()
+			if err == nil {
+				t.Fatalf("Execute with --%s succeeded; the removed flag must be rejected", name)
+			}
+			if want := "unknown flag: --" + name; !strings.Contains(err.Error(), want) {
+				t.Errorf("Execute with --%s returned %q, want it to contain %q", name, err.Error(), want)
+			}
+		})
 	}
 }
 

@@ -49,7 +49,7 @@ var configCheckOptions = func() (app.Options, error) {
 // entry's space-separated Name is its path; a parent ("storage") is made
 // once and holds no Run of its own. Cobra parses none of the command's
 // flags, so Run parses its own and its help is core's; the root's
-// persistent flags (--db, --config, --db-type and the rest) are taken out
+// persistent flags (--db, --config, --log-level and the rest) are taken out
 // of the arguments and parsed first, then the config is loaded with them
 // (the root's PersistentPreRun skips these commands, which would load it
 // before the flags were set), so an offline command names the same store

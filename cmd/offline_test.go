@@ -89,11 +89,11 @@ func TestCLIExposesCoreOfflineCommands(t *testing.T) {
 // and everything after "--", stay the command's.
 func TestSplitFlags(t *testing.T) {
 	fs := rootCmd.PersistentFlags()
-	own, inherited := splitFlags(fs, []string{"--include-open", "--db", "/batcave/db", "--confirm", "--db-type=pebble", "--", "--db", "x"})
+	own, inherited := splitFlags(fs, []string{"--include-open", "--db", "/batcave/db", "--confirm", "--log-level=debug", "--", "--db", "x"})
 	if want := []string{"--include-open", "--confirm", "--", "--db", "x"}; !slices.Equal(own, want) {
 		t.Errorf("own = %v, want %v", own, want)
 	}
-	if want := []string{"--db", "/batcave/db", "--db-type=pebble"}; !slices.Equal(inherited, want) {
+	if want := []string{"--db", "/batcave/db", "--log-level=debug"}; !slices.Equal(inherited, want) {
 		t.Errorf("inherited = %v, want %v", inherited, want)
 	}
 }
