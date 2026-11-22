@@ -22,9 +22,11 @@ main.date=..."``. Two changes, both so a rebuild can be compared: ``-trimpath``
 not the clock's. Neither reaches a handler.
 
 The commit is the identity, not the digest. The binary's own build info must name
-the pinned commit (``vcs.revision``), a clean tree (``vcs.modified=false``) and
-the recipe's settings (``check_build_info``), so a binary built from anything
-else, or by another recipe, is refused before it is booted. The digest is
+the pinned commit (``vcs.revision``, which the go command stamps from the checkout
+itself), a clean tree (``vcs.modified=false``) and the recipe's settings
+(``check_build_info``), so a binary built from anything else, or by another
+recipe, is refused before it is booted. The ``-X`` values are not in the build
+info: the go command leaves ``-ldflags`` out of it under ``-trimpath``. The digest is
 recorded as provenance (``recorded.r0_binary_sha256``): a vite bundle and a Go
 link are not promised to be bit-identical across runner images, so a digest
 compared by ``--check`` would fail a correct rebuild.
@@ -123,8 +125,6 @@ def check_build_info(binary: pathlib.Path, commit: str) -> dict[str, str]:
     ]
     if info.get("vcs.revision") != commit:
         problems.append(f"vcs.revision={info.get('vcs.revision')!r}, want {commit}")
-    if info.get("main.commit") != commit:
-        problems.append(f"-X main.commit={info.get('main.commit')!r}, want {commit}")
     if problems:
         raise BuildError(f"{binary.name} is not the pinned R0 build: " + "; ".join(problems))
     return info

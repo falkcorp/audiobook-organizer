@@ -1484,7 +1484,6 @@ class MainBuildTest(unittest.TestCase):
             "vcs": "git",
             "vcs.modified": "false",
             "vcs.revision": self.COMMIT,
-            "main.commit": self.COMMIT,
         }
         good.update(over)
         return {k: v for k, v in good.items() if v is not None}
@@ -1499,7 +1498,7 @@ class MainBuildTest(unittest.TestCase):
     def test_any_other_build_is_refused_before_it_is_booted(self):
         for over in (
             {"vcs.revision": "b" * 40},
-            {"main.commit": "b" * 40},
+            {"vcs.revision": None},
             {"vcs.modified": "true"},
             {"-tags": ""},
             {"-tags": None},
