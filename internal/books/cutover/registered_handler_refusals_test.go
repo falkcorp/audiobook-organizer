@@ -558,9 +558,9 @@ var rhrKnownNarrowing = []rhrNarrow{
 	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:view", head: 200, flip: 403,
 		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
 	{route: "PUT /api/v1/config", who: "key:admin:empty", head: 0, flip: 403,
-		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
+		why: "recorded (coordinator, 11-22, option 1): core refuses an API key on a protected key even when the write leaves it unchanged; HEAD refused a non-interactive caller only for a protected field that changed (internal/config/update_service.go:784 at origin/main), and the probe writes the stored value, so HEAD admitted it (derived, not recorded, hence head 0). A changing write is refused by both"},
 	{route: "PUT /api/v1/config", who: "key:admin:every", head: 0, flip: 403,
-		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
+		why: "recorded (coordinator, 11-22, option 1): core refuses an API key on a protected key even when the write leaves it unchanged; HEAD refused a non-interactive caller only for a protected field that changed (internal/config/update_service.go:784 at origin/main), and the probe writes the stored value, so HEAD admitted it (derived, not recorded, hence head 0). A changing write is refused by both"},
 }
 
 func (r rhrNarrow) key() string { return r.route + "|" + r.who }
@@ -1093,6 +1093,9 @@ func rhrAdminGated(ids rhrIDs) []rhrCell {
 		{route: "GET /api/v1/admin/debug/edits", method: "GET", path: "/api/v1/admin/debug/edits"},
 		{route: "GET /api/v1/admin/guest-service-tokens", method: "GET", path: "/api/v1/admin/guest-service-tokens"},
 		{route: "GET /api/v1/cache/stats/keys", method: "GET", path: "/api/v1/cache/stats/keys"},
+		{route: "PUT /api/v1/config", method: "PUT", path: "/api/v1/config",
+			body: map[string]any{"set": map[string]any{"activity_backend": "pebble"}},
+			note: "an admin: true key: HEAD's configCan(core:admin) is the admin role by name (B10y item 5)"},
 		{route: "POST /api/v1/repairs/:fixer/owner-apply", method: "POST", path: "/api/v1/repairs/" + ids.fixer + "/owner-apply",
 			body: map[string]any{"plan_op_id": "r2reach-missing", "row_id": "r2reach-missing"}},
 	}
