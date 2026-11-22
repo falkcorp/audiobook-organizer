@@ -181,17 +181,30 @@ func New(cfg Config, id string, raisesLevel int, after []storage.StepRef) (datam
 func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	m.read.Add(1)
 	key := string(kv.Key)
+	// quarantine moves the row's raw bytes to the quarantine (which deletes the
+	// source key) and counts it. Its error is the store's, returned as is (see
+	// above). Inline, not a method, so the step adds no identifier beyond Step to
+	// deadcode's unreachable set until F5-18 registers it.
+	quarantine := func(reason string) error {
+		if err := w.Quarantine(kv.Key, kv.Value, reason); err != nil {
+			return err
+		}
+		m.quarantined.Add(1)
+		return nil
+	}
 	rec, reason := decode(key, kv.Value)
 	if reason != "" {
 		m.logger.Warn("m5: a system log row is quarantined", "key", key, "reason", reason)
-		return m.quarantine(kv, w, reason)
+		return quarantine(reason)
 	}
 	if err := m.imp.Import(ctx, []log.ImportedRecord{{Record: rec, SourceID: key}}); err != nil {
-		if storeUnhealthy(ctx, err) {
+		// The database's errors, not the row's: the boot is stopping, or the
+		// importer ran into a batch a step ended or a deadline.
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, storage.ErrBatchDone) {
 			return fmt.Errorf("m5: import the system log row %q: %w", key, err)
 		}
 		m.logger.Warn("m5: a system log row is quarantined because the journal did not accept it", "key", key, "reason", reasonImport, "err", err)
-		return m.quarantine(kv, w, reasonImport)
+		return quarantine(reasonImport)
 	}
 	if err := w.Delete(kv.Key); err != nil {
 		return err
@@ -199,26 +212,6 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 	m.imported.Add(1)
 	w.Count(OutcomeImported)
 	return nil
-}
-
-// quarantine moves one row's raw bytes to the quarantine (which deletes the
-// source key) and counts it. Its error is the store's and is returned: see Step.
-func (m *Migration) quarantine(kv storage.KV, w *datamigrate.StepWriter, reason string) error {
-	if err := w.Quarantine(kv.Key, kv.Value, reason); err != nil {
-		return err
-	}
-	m.quarantined.Add(1)
-	return nil
-}
-
-// storeUnhealthy reports an Importer error that is the database's, not the
-// row's: the boot is stopping, or the importer ran into a batch a step ended
-// (storage.ErrBatchDone) or a deadline. Everything else the importer returns
-// for a row is quarantined with the row.
-func storeUnhealthy(ctx context.Context, err error) bool {
-	return ctx.Err() != nil ||
-		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, storage.ErrBatchDone)
 }
 
 // decode is the journal record of a row, or the quarantine reason.
