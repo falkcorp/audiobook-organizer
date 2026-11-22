@@ -65,7 +65,7 @@ func TestBoot_BindsTasksAndLogImportersOverTheirKeyspaces(t *testing.T) {
 	imp := k.importers().values()
 
 	at := time.Date(2026, 11, 22, 3, 0, 0, 0, time.UTC)
-	rec := log.ImportedRecord{Record: log.Record{Time: at, Level: slog.LevelInfo, Module: "books", Message: "The Long Halloween"}, SourceID: "syslog:2026-11-22T03:00:00Z:batcave"}
+	rec := log.ImportedRecord{Time: at, Level: slog.LevelInfo, Module: "books", Message: "The Long Halloween", SourceID: "syslog:2026-11-22T03:00:00Z:batcave"}
 	for range 2 { // idempotent: the second import rewrites the same key
 		if err := imp.Log.Import(ctx, []log.ImportedRecord{rec}); err != nil {
 			t.Fatalf("Import: %v", err)
