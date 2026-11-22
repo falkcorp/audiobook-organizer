@@ -101,6 +101,7 @@ func coreActionTable() []actionRow {
 		{"core.user.enable", UserScoped},
 		{"core.user.reset_password", UserScoped},
 		{"core.user.set_roles", UserScoped},
+		{"core.user.unmerge", UserScoped},
 	}
 }
 

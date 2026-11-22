@@ -228,6 +228,9 @@ type UserMergePlan struct {
 	srcVersion     int64
 	tgtVersion     int64
 	rows           []MergeRow
+	// receipt is what an unmerge needs of the rows (MergeReceipt); it holds
+	// sign-in subjects, so it is read through Receipt and never printed.
+	receipt MergeReceipt
 }
 
 // Source is the user the merge folds away.

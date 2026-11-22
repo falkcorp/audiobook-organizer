@@ -31,15 +31,15 @@ func coreActionGrammar() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
 }
 
-// TestAuditAction_Grammar (05-rbac §7.1): the action table has the 65 core
+// TestAuditAction_Grammar (05-rbac §7.1): the action table has the 66 core
 // actions, sorted and unique, every one of them and every action named in an
 // audit.Event literal under core/ matches <ns>.<noun>.<verb>, and ValidAction
 // agrees with the spec's regexp.
 func TestAuditAction_Grammar(t *testing.T) {
 	re := coreActionGrammar()
 	table := audit.CoreActions()
-	if len(table) != 65 {
-		t.Errorf("CoreActions has %d actions, want the 65 of §7.1", len(table))
+	if len(table) != 66 {
+		t.Errorf("CoreActions has %d actions, want the 66 of §7.1", len(table))
 	}
 	if !slices.IsSorted(table) {
 		t.Error("CoreActions is not sorted")
@@ -225,7 +225,7 @@ func TestCoreActions_CredentialAndIdentityActionsAreUserScoped(t *testing.T) {
 		"core.secret.rotate",
 		"core.session.revoke",
 		"core.templogin.consume", "core.templogin.mint",
-		"core.user.create", "core.user.delete", "core.user.disable", "core.user.enable", "core.user.reset_password", "core.user.set_roles",
+		"core.user.create", "core.user.delete", "core.user.disable", "core.user.enable", "core.user.reset_password", "core.user.set_roles", "core.user.unmerge",
 	}
 	for _, a := range scoped {
 		if got := audit.VisibilityOf(a); got != audit.UserScoped {
