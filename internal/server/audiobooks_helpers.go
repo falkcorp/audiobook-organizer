@@ -296,7 +296,10 @@ func (s *Server) warmFacetsCache() {
 // there is no screen whose counts it could be held to (RunPurge's preview
 // binding). It purges only books past the retention window, as before.
 func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) error {
-	if config.AppConfig.PurgeSoftDeletedAfterDays <= 0 {
+	// One Snapshot: this runs on a registry worker beside settings saves, and
+	// the window and the delete-files switch must come from the same save.
+	cfg := config.Snapshot()
+	if cfg.PurgeSoftDeletedAfterDays <= 0 {
 		return nil
 	}
 	if s.Ops() == nil || s.audiobookService == nil {
@@ -304,8 +307,8 @@ func (s *Server) runAutoPurgeSoftDeleted(ctx context.Context, opID string) error
 		return nil
 	}
 
-	days := config.AppConfig.PurgeSoftDeletedAfterDays
-	result, err := s.audiobookService.PurgeSoftDeletedUnattended(ctx, config.AppConfig.PurgeSoftDeletedDeleteFiles, &days)
+	days := cfg.PurgeSoftDeletedAfterDays
+	result, err := s.audiobookService.PurgeSoftDeletedUnattended(ctx, cfg.PurgeSoftDeletedDeleteFiles, &days)
 	if err != nil {
 		// A refused pass still returns its result (StoppedEarly, StopReason).
 		if result != nil {
