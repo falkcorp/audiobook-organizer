@@ -1,0 +1,3 @@
+### Fixed
+
+- `TestCalculateLibrarySizes_ExcludesAppDirs/empty_AppDirs` no longer fails on hosts whose filesystem is ZFS (u0 reported 2,048 bytes on disk for the test's 500 kB file, so "greater than 500,000" failed there and passed on macOS). `calculateLibrarySizes` deliberately reports physical size (`st_blocks * 512`), and two ZFS behaviours broke the fixture: zero-filled content is compressed to almost nothing, and block allocation is lazy, so even incompressible data reads about 1 kB until the transaction group commits (an `fsync` does not change that; `sync(2)` does). The fixture now writes fixed-seed `math/rand` bytes and the subtest calls `sync(2)` before measuring (`settleDisk`, a no-op on Windows). Test-only; production code is unchanged.
