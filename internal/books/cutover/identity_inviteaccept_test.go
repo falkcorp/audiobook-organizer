@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -46,9 +47,7 @@ func iaInvite(name string, usedAgo time.Duration, extra map[string]any) seedRow 
 	if usedAgo >= 0 {
 		v["used_at"] = idNow.Add(-usedAgo).Format(time.RFC3339Nano)
 	}
-	for k, x := range extra {
-		v[k] = x
-	}
+	maps.Copy(v, extra)
 	return seedRow{"invite:" + iaToken(name), v}
 }
 

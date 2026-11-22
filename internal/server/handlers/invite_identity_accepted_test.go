@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"iter"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,47 +21,34 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// F4-08 B10x: the accepted half of GET /users/invites under core identity is
-// books' guest-policy outcome family, over the same 30 days and order as HEAD's.
+// F4-08 B10x2: the accepted half of GET /users/invites under core identity is
+// books' accept rows (database.InviteAccept) joined, by invite id, to the guest-policy
+// outcome, over the same 30 days and order as HEAD's.
 
 // acceptedWindow is HEAD's window for the accepted list (acceptedInviteWindow).
 const acceptedWindow = 30 * 24 * time.Hour
 
-// usersView is core's identity view over a map: only User is read here.
-type usersView struct {
-	coreauth.Identities
-	users map[coreauth.UserID]*coreauth.User
-	err   error
-}
-
-func (u usersView) User(_ context.Context, id coreauth.UserID) (*coreauth.User, error) {
-	if u.err != nil {
-		return nil, u.err
-	}
-	if v, ok := u.users[id]; ok {
-		return v, nil
-	}
-	return nil, coreauth.ErrNotFound
-}
-
-// acceptedFixture is the identity fixture with a view of core's accounts.
-func acceptedFixture(t *testing.T, view coreauth.Identities, scopes ...rbac.Permission) *identityInviteFixture {
+// acceptedFixture is the identity fixture for the accepted list.
+func acceptedFixture(t *testing.T, scopes ...rbac.Permission) *identityInviteFixture {
 	t.Helper()
 	f := newIdentityInviteFixture(t, scopes...)
 	id := bridgeIdentity(t)
 	id.Admin = f.acc
-	id.Users = view
 	f.useIdentity(id, "bruce", scopes...)
 	return f
 }
 
 type acceptedOut struct {
 	Username          string     `json:"username"`
+	Email             string     `json:"email"`
 	AcceptedAt        *time.Time `json:"accepted_at"`
 	AcceptedUserID    string     `json:"accepted_user_id"`
+	EmailBinding      string     `json:"email_binding"`
+	SSOGrant          string     `json:"sso_grant"`
 	GuestPolicyStatus string     `json:"guest_policy_status"`
 	GuestPolicyDetail string     `json:"guest_policy_detail"`
 	GuestPolicyAt     *time.Time `json:"guest_policy_at"`
+	DisplacedUserIDs  []string   `json:"displaced_user_ids"`
 }
 
 func listAccepted(t *testing.T, f *inviteFixture) ([]acceptedOut, string) {
@@ -96,107 +84,205 @@ func gpOutcomes(t *testing.T, f *inviteFixture) store.GuestPolicyStore {
 	return gp
 }
 
-// The list is the family's last 30 days, newest first, each row naming the
-// account from core's view; a row older than the window is not shown (HEAD's
-// window), and an account core no longer holds is listed with no name.
-func TestIdentityAcceptedInvites_ListsTheWindowNewestFirst(t *testing.T) {
-	view := usersView{users: map[coreauth.UserID]*coreauth.User{
-		"u-barbara": {ID: "u-barbara", Username: "barbara.gordon"},
-		"u-dick":    {ID: "u-dick", Username: "dick.grayson"},
-	}}
-	f := acceptedFixture(t, view, rbac.CoreAdmin)
-	f.asUser(t, "bruce", "admin")
-	gp := gpOutcomes(t, f.inviteFixture)
-	now := f.clk.now()
-	rec := func(inv, user, status, detail string, at time.Time) {
-		t.Helper()
-		if err := gp.RecordGuestPolicyOutcome(inv, user, status, detail, at); err != nil {
-			t.Fatal(err)
-		}
+func acceptRows(t *testing.T, f *inviteFixture) store.InviteAcceptStore {
+	t.Helper()
+	ia, ok := store.AsCapability[store.InviteAcceptStore](f.store)
+	if !ok {
+		t.Fatal("the store has no accept-row capability")
 	}
-	rec("inv-old", "u-old", store.InviteGuestPolicyAdded, "", now.Add(-acceptedWindow-time.Hour))
-	rec("inv-b", "u-barbara", store.InviteGuestPolicyAdded, "", now.Add(-48*time.Hour))
-	rec("inv-d", "u-dick", store.InviteGuestPolicySkipped, "not emailed", now.Add(-time.Hour))
-	rec("inv-gone", "u-deleted", store.InviteGuestPolicyFailed, "HTTP 403", now.Add(-72*time.Hour))
-	rec("inv-edge", "u-barbara", store.InviteGuestPolicyAdded, "", now.Add(-acceptedWindow+time.Minute))
+	return ia
+}
+
+func recordAccept(t *testing.T, f *inviteFixture, a store.InviteAccept) {
+	t.Helper()
+	if err := acceptRows(t, f).RecordInviteAccept(a); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The list is the accept family's last 30 days on the ACCEPT time, newest first, each
+// row naming its account from its own row (no read of core's accounts, so a deleted
+// account is still listed under the name it accepted with); a row older than the
+// window is not shown (HEAD's window).
+func TestIdentityAcceptedInvites_ListsTheWindowNewestFirst(t *testing.T) {
+	f := acceptedFixture(t, rbac.CoreAdmin)
+	f.asUser(t, "bruce", "admin")
+	now := f.clk.now()
+	rec := func(inv, user, name string, at time.Time) {
+		t.Helper()
+		recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: inv, UserID: user, Username: name, AcceptedAt: at})
+	}
+	rec("inv-old", "u-old", "oswald.cobblepot", now.Add(-acceptedWindow-time.Hour))
+	rec("inv-b", "u-barbara", "barbara.gordon", now.Add(-48*time.Hour))
+	rec("inv-d", "u-dick", "dick.grayson", now.Add(-time.Hour))
+	rec("inv-gone", "u-deleted", "harvey.dent", now.Add(-72*time.Hour))
+	rec("inv-edge", "u-barbara", "barbara.gordon", now.Add(-acceptedWindow+time.Minute))
 
 	rows, body := listAccepted(t, f.inviteFixture)
 	var got []string
 	for _, r := range rows {
-		got = append(got, r.Username+"/"+r.GuestPolicyStatus)
+		got = append(got, r.Username)
 	}
-	want := []string{"dick.grayson/skipped", "barbara.gordon/added", "/failed", "barbara.gordon/added"}
+	want := []string{"dick.grayson", "barbara.gordon", "harvey.dent", "barbara.gordon"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("accepted = %v, want %v (newest first, 30 days, a deleted account unnamed): %s", got, want, body)
+		t.Fatalf("accepted = %v, want %v (newest first, 30 days on the accept time): %s", got, want, body)
 	}
 	d := rows[0]
-	if d.AcceptedUserID != "u-dick" || d.GuestPolicyDetail != "not emailed" || d.AcceptedAt == nil || !d.AcceptedAt.Equal(now.Add(-time.Hour)) || d.GuestPolicyAt == nil {
+	if d.AcceptedUserID != "u-dick" || d.AcceptedAt == nil || !d.AcceptedAt.Equal(now.Add(-time.Hour)) {
 		t.Fatalf("row = %+v", d)
 	}
-	for _, banned := range []string{`"token"`, `"email"`, "email_binding", "sso_grant", "displaced_user_ids"} {
-		if strings.Contains(body, banned) {
-			t.Fatalf("a member the family does not record (%s) is in the body: %s", banned, body)
-		}
+	if strings.Contains(body, `"token"`) {
+		t.Fatalf("a token is in the body: %s", body)
 	}
 }
 
-// An empty family, a server with no view of core's accounts and a read of the
-// view that fails all list rows or [] and never fail the pending half.
-func TestIdentityAcceptedInvites_EmptyAndUnreadableViewsAnswerCleanly(t *testing.T) {
-	f := acceptedFixture(t, usersView{}, rbac.CoreAdmin)
+// accepted_at is the accept row's time and guest_policy_at the outcome's, and the
+// window is judged on the accept time: an accept 29 days old whose sync reported
+// yesterday is listed under its accept time, and one whose accept is outside the
+// window is not listed though its sync reported inside it.
+func TestIdentityAcceptedInvites_AcceptedAtIsTheAcceptNotTheSync(t *testing.T) {
+	f := acceptedFixture(t, rbac.CoreAdmin)
+	f.asUser(t, "bruce", "admin")
+	now := f.clk.now()
+	accepted, synced := now.Add(-29*24*time.Hour), now.Add(-24*time.Hour)
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-a", UserID: "u-a", Username: "alfred.pennyworth", AcceptedAt: accepted})
+	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-a", "u-a", store.InviteGuestPolicyAdded, "", synced); err != nil {
+		t.Fatal(err)
+	}
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-o", UserID: "u-o", Username: "oswald.cobblepot", AcceptedAt: now.Add(-acceptedWindow - time.Hour)})
+	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-o", "u-o", store.InviteGuestPolicyAdded, "", now); err != nil {
+		t.Fatal(err)
+	}
+	rows, body := listAccepted(t, f.inviteFixture)
+	if len(rows) != 1 || rows[0].Username != "alfred.pennyworth" {
+		t.Fatalf("accepted = %s", body)
+	}
+	r := rows[0]
+	if r.AcceptedAt == nil || !r.AcceptedAt.Equal(accepted) || r.GuestPolicyAt == nil || !r.GuestPolicyAt.Equal(synced) || r.GuestPolicyStatus != "added" {
+		t.Fatalf("row = %+v: accepted_at must be %v and guest_policy_at %v", r, accepted, synced)
+	}
+}
+
+// Every member HEAD's view carries is served when it is known, and the member set of
+// a row is exact: a row that holds everything has all ten, one that holds only an
+// identity has three (HEAD's omitempty).
+func TestIdentityAcceptedInvites_EveryKnownMemberIsServedAndNoOther(t *testing.T) {
+	f := acceptedFixture(t, rbac.CoreAdmin)
+	f.asUser(t, "bruce", "admin")
+	now := f.clk.now()
+	gpAt := now.Add(-time.Hour)
+	recordAccept(t, f.inviteFixture, store.InviteAccept{
+		InviteID: "inv-full", UserID: "u-barbara", Username: "barbara.gordon", Email: "barbara.gordon@example.test",
+		AcceptedAt: now.Add(-2 * time.Hour), EmailBinding: store.InviteEmailBound, SSOGrant: store.InviteSSOGranted,
+		DisplacedUserIDs:  []string{"u-selina"},
+		GuestPolicyStatus: store.InviteGuestPolicyFailed, GuestPolicyDetail: "HTTP 403", GuestPolicyAt: &gpAt,
+	})
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-min", UserID: "u-dick", Username: "dick.grayson", AcceptedAt: now.Add(-3 * time.Hour)})
+
+	w, _ := f.do(t, http.MethodGet, "/users/invites", nil)
+	var body struct {
+		Data struct {
+			Accepted []map[string]any `json:"accepted"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	keys := func(m map[string]any) []string {
+		var ks []string
+		for k := range m {
+			ks = append(ks, k)
+		}
+		slices.Sort(ks)
+		return ks
+	}
+	if len(body.Data.Accepted) != 2 {
+		t.Fatalf("accepted = %v", body.Data.Accepted)
+	}
+	wantFull := []string{"accepted_at", "accepted_user_id", "displaced_user_ids", "email", "email_binding", "guest_policy_at", "guest_policy_detail",
+		"guest_policy_status", "sso_grant", "username"}
+	if got := keys(body.Data.Accepted[0]); !slices.Equal(got, wantFull) {
+		t.Fatalf("full row members = %v, want %v", got, wantFull)
+	}
+	if got, want := keys(body.Data.Accepted[1]), []string{"accepted_at", "accepted_user_id", "username"}; !slices.Equal(got, want) {
+		t.Fatalf("minimal row members = %v, want %v", got, want)
+	}
+	if f := body.Data.Accepted[0]; f["email"] != "barbara.gordon@example.test" || f["email_binding"] != "bound" || f["sso_grant"] != "granted" ||
+		f["guest_policy_status"] != "failed" || f["guest_policy_detail"] != "HTTP 403" || fmt.Sprint(f["displaced_user_ids"]) != "[u-selina]" {
+		t.Fatalf("full row = %v", f)
+	}
+}
+
+// The outcome row, when there is one, is the sync's last word and wins over the guest
+// policy members a carried row holds; with no outcome the row's own (HEAD's, for an
+// accept M3 carried) are served.
+func TestIdentityAcceptedInvites_OutcomeBeatsTheRowsOwnSyncMembers(t *testing.T) {
+	f := acceptedFixture(t, rbac.CoreAdmin)
+	f.asUser(t, "bruce", "admin")
+	now := f.clk.now()
+	carriedAt := now.Add(-5 * time.Hour)
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-1", UserID: "u-1", Username: "barbara.gordon", AcceptedAt: now.Add(-6 * time.Hour),
+		GuestPolicyStatus: store.InviteGuestPolicyFailed, GuestPolicyDetail: "the carried failure", GuestPolicyAt: &carriedAt})
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-2", UserID: "u-2", Username: "dick.grayson", AcceptedAt: now.Add(-7 * time.Hour),
+		GuestPolicyStatus: store.InviteGuestPolicyFailed, GuestPolicyDetail: "the carried failure", GuestPolicyAt: &carriedAt})
+	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-1", "u-1", store.InviteGuestPolicyAdded, "retried", now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	rows, body := listAccepted(t, f.inviteFixture)
+	if len(rows) != 2 {
+		t.Fatalf("accepted = %s", body)
+	}
+	if r := rows[0]; r.Username != "barbara.gordon" || r.GuestPolicyStatus != "added" || r.GuestPolicyDetail != "retried" || r.GuestPolicyAt == nil || !r.GuestPolicyAt.Equal(now.Add(-time.Hour)) {
+		t.Fatalf("a row with an outcome = %+v", r)
+	}
+	if r := rows[1]; r.Username != "dick.grayson" || r.GuestPolicyStatus != "failed" || r.GuestPolicyDetail != "the carried failure" || r.GuestPolicyAt == nil || !r.GuestPolicyAt.Equal(carriedAt) {
+		t.Fatalf("a carried row with no outcome = %+v", r)
+	}
+}
+
+// An empty family answers [] and never fails the pending half of the body.
+func TestIdentityAcceptedInvites_EmptyFamilyAnswersAnEmptyList(t *testing.T) {
+	f := acceptedFixture(t, rbac.CoreAdmin)
 	f.asUser(t, "bruce", "admin")
 	if rows, body := listAccepted(t, f.inviteFixture); len(rows) != 0 || !strings.Contains(body, `"accepted":[]`) {
 		t.Fatalf("empty family: %s", body)
 	}
-	now := f.clk.now()
-	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-1", "u-alfred", store.InviteGuestPolicyAdded, "", now); err != nil {
-		t.Fatal(err)
-	}
-	for name, view := range map[string]coreauth.Identities{
-		"no view of accounts":  nil,
-		"a view that errors":   usersView{err: fmt.Errorf("core is unreachable")},
-		"an account not found": usersView{},
-	} {
-		g := acceptedFixture(t, view, rbac.CoreAdmin)
-		g.asUser(t, "bruce", "admin")
-		if err := gpOutcomes(t, g.inviteFixture).RecordGuestPolicyOutcome("inv-1", "u-alfred", store.InviteGuestPolicyAdded, "", now); err != nil {
-			t.Fatal(err)
-		}
-		rows, body := listAccepted(t, g.inviteFixture)
-		if len(rows) != 1 || rows[0].Username != "" || rows[0].AcceptedUserID != "u-alfred" || rows[0].GuestPolicyStatus != "added" {
-			t.Fatalf("%s: %s", name, body)
-		}
-	}
 }
 
-// The list reads and never writes: the family is byte-for-byte what it was.
+// The list reads and never writes: the families are byte-for-byte what they were.
 func TestIdentityAcceptedInvites_ListNeverWrites(t *testing.T) {
-	f := acceptedFixture(t, usersView{}, rbac.CoreAdmin)
+	f := acceptedFixture(t, rbac.CoreAdmin)
 	f.asUser(t, "bruce", "admin")
-	gp := gpOutcomes(t, f.inviteFixture)
 	at := f.clk.now().Add(-time.Hour)
-	if err := gp.RecordGuestPolicyOutcome("inv-1", "u-alfred", store.InviteGuestPolicyPending, "", at); err != nil {
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-1", UserID: "u-alfred", Username: "alfred.pennyworth", AcceptedAt: at})
+	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-1", "u-alfred", store.InviteGuestPolicyPending, "", at); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := gp.ListGuestPolicyOutcomesSince(time.Time{})
+	snap := func() string {
+		a, _ := acceptRows(t, f.inviteFixture).ListInviteAcceptsSince(time.Time{})
+		o, _ := gpOutcomes(t, f.inviteFixture).GetGuestPolicyOutcome("inv-1")
+		return fmt.Sprintf("%v|%v", a, o)
+	}
+	before := snap()
 	for range 3 {
 		listAccepted(t, f.inviteFixture)
 	}
-	after, _ := gp.ListGuestPolicyOutcomesSince(time.Time{})
-	if fmt.Sprint(before) != fmt.Sprint(after) || len(after) != 1 {
-		t.Fatalf("the list changed the family: %v -> %v", before, after)
+	if after := snap(); before != after || !strings.Contains(after, "alfred.pennyworth") {
+		t.Fatalf("the list changed the families: %s -> %s", before, after)
 	}
 }
 
 // Before the flip nothing changes: HEAD's own accepted rows (from its invite
-// records) are listed, with HEAD's members, and the outcome family is not read.
-func TestAcceptedInvites_PreFlipListIsHEADsAndIgnoresTheOutcomeFamily(t *testing.T) {
+// records) are listed, with HEAD's members, and the accept and outcome families are
+// not read.
+func TestAcceptedInvites_PreFlipListIsHEADsAndIgnoresTheAcceptFamily(t *testing.T) {
 	f := newInviteFixture(t)
 	_, data := f.do(t, http.MethodPost, "/users/invite", map[string]any{"username": "acc", "role_id": "viewer", "email": "acc@example.com"})
 	if _, err := f.store.ConsumeInvite(fmt.Sprint(data["token"]), "bcrypt", "h"); err != nil {
 		t.Fatal(err)
 	}
-	// A row in the new family, which a pre-flip server never writes.
+	// Rows in the new families, which a pre-flip server never writes.
+	recordAccept(t, f, store.InviteAccept{InviteID: "inv-core", UserID: "u-selina", Username: "selina.kyle", AcceptedAt: time.Now()})
 	if err := gpOutcomes(t, f).RecordGuestPolicyOutcome("inv-core", "u-selina", store.InviteGuestPolicyAdded, "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -212,8 +298,8 @@ func TestAcceptedInvites_PreFlipListIsHEADsAndIgnoresTheOutcomeFamily(t *testing
 	if row["username"] != "acc" || row["email"] != "acc@example.com" || row["email_binding"] != "not_emailed" {
 		t.Fatalf("row = %v", row)
 	}
-	if strings.Contains(w.Body.String(), "u-selina") || strings.Contains(w.Body.String(), "inv-core") {
-		t.Fatalf("the outcome family leaked into the pre-flip list: %s", w.Body.String())
+	if strings.Contains(w.Body.String(), "u-selina") || strings.Contains(w.Body.String(), "selina.kyle") || strings.Contains(w.Body.String(), "inv-core") {
+		t.Fatalf("the accept family leaked into the pre-flip list: %s", w.Body.String())
 	}
 }
 
@@ -231,13 +317,12 @@ func (refusingAdmin) AdminInvites(context.Context) iter.Seq2[coreauth.InviteView
 // refuses is answered 403 and the body carries no guest, though the family holds
 // one. The route's own users.manage check is the first layer; this is the second.
 func TestIdentityAcceptedInvites_ACallerCoreRefusesSeesNoGuest(t *testing.T) {
-	view := usersView{users: map[coreauth.UserID]*coreauth.User{"u-barbara": {ID: "u-barbara", Username: "barbara.gordon"}}}
 	f := newIdentityInviteFixture(t, rbac.CoreAdmin)
 	id := bridgeIdentity(t)
 	id.Admin = refusingAdmin{f.acc}
-	id.Users = view
 	f.useIdentity(id, "bruce", rbac.CoreAdmin)
 	f.asUser(t, "bruce", "admin")
+	recordAccept(t, f.inviteFixture, store.InviteAccept{InviteID: "inv-b", UserID: "u-barbara", Username: "barbara.gordon", AcceptedAt: f.clk.now()})
 	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-b", "u-barbara", store.InviteGuestPolicyAdded, "", f.clk.now()); err != nil {
 		t.Fatal(err)
 	}

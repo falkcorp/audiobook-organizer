@@ -54,8 +54,10 @@ func (s *Server) guestGrantStore() (database.InviteEmailGrantStore, bool) {
 
 // guestOutcomeRecorder is the record func of syncGuestPolicy for a core invite:
 // HEAD wrote the outcome onto the invite, which is core's now, so it goes to a
-// row of books' own keyed by the invite's id. The Users page's accepted list reads
-// it (handlers.UserHandler.acceptedInvitesUnderIdentity, F4-08 B10x).
+// row of books' own keyed by the invite's id. The Users page's accepted list joins
+// it to the accept's own row by that id for the guest_policy_* members
+// (handlers.UserHandler.acceptedInvitesUnderIdentity, F4-08 B10x2); the accept row
+// (invite_accept_identity.go) is written first and does not depend on this one.
 func (s *Server) guestOutcomeRecorder(inviteID, userID string) func(status, detail string) {
 	return func(status, detail string) {
 		gp, ok := database.AsCapability[database.GuestPolicyStore](s.storeForWiring())

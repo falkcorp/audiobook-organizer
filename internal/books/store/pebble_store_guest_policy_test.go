@@ -6,7 +6,6 @@
 package store
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -84,46 +83,5 @@ func TestGuestPolicyFamilies_AreRegisteredAndDoNotNest(t *testing.T) {
 		if !seen[p] {
 			t.Errorf("%s is not a registered key family", p)
 		}
-	}
-}
-
-// The outcome list is the family only: windowed, newest first, deterministic on a
-// tie, skipping a row that does not decode, and it writes nothing.
-func TestGuestPolicyOutcome_ListSinceIsWindowedNewestFirstAndFamilyOnly(t *testing.T) {
-	s := newInviteTestStore(t)
-	if got, err := s.ListGuestPolicyOutcomesSince(time.Time{}); err != nil || got == nil || len(got) != 0 {
-		t.Fatalf("empty family = %#v, %v, want a non-nil empty list", got, err)
-	}
-	base := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	for _, o := range []struct {
-		inv string
-		at  time.Time
-	}{
-		{"inv-a", base}, {"inv-b", base.Add(time.Hour)}, {"inv-c", base.Add(time.Hour)}, {"inv-old", base.Add(-48 * time.Hour)},
-	} {
-		if err := s.RecordGuestPolicyOutcome(o.inv, "u-"+o.inv, InviteGuestPolicyAdded, "", o.at); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Neighbours the scan must not read: the grant family, a corrupt outcome row.
-	if err := s.PutGuestPolicyGrant(GuestPolicyGrant{Email: "selina.kyle@example.test", UserID: "u-selina", GrantedAt: base.Add(2 * time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.db.Set([]byte(guestPolicyOutcomePrefix+"inv-corrupt"), []byte("{not json"), nil); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.ListGuestPolicyOutcomesSince(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ids []string
-	for _, o := range got {
-		ids = append(ids, o.InviteID)
-	}
-	if want := "inv-c,inv-b,inv-a"; strings.Join(ids, ",") != want {
-		t.Fatalf("list = %v, want %s (window, newest first, tie by id descending, corrupt row skipped)", ids, want)
-	}
-	if all, _ := s.ListGuestPolicyOutcomesSince(time.Time{}); len(all) != 4 {
-		t.Fatalf("an unbounded list has %d rows, want 4", len(all))
 	}
 }

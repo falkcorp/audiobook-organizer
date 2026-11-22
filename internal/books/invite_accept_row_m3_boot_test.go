@@ -18,7 +18,8 @@ import (
 )
 
 // acHeadAccept is one invite HEAD's own code created, mailed and accepted before the
-// flip, and what HEAD's own Users page said of it.
+// flip, and what HEAD's own Users page said of it. The slice they are collected in is
+// in HEAD's list order, newest first.
 type acHeadAccept struct {
 	token string
 	view  database.Invite // HEAD's row after the accept and the sync
@@ -55,17 +56,14 @@ func acSeedHeadAccepts(t *testing.T, out *[]acHeadAccept) func(*database.PebbleS
 		plain := mk("alfred.pennyworth", "", false)
 		unmailed := mk("selina.kyle", acLuke, false)
 
+		// HEAD's own list, in HEAD's order (newest first): the order the page showed.
 		list, err := s.ListAcceptedInvitesSince(time.Time{})
 		require.NoError(t, err)
 		require.Len(t, list, 3, "HEAD's own list should show the three accepts")
-		for _, tok := range []string{bound, plain, unmailed} {
-			for _, i := range list {
-				if i.Token == tok {
-					*out = append(*out, acHeadAccept{token: tok, view: i})
-				}
-			}
+		for _, i := range list {
+			require.Contains(t, []string{bound, plain, unmailed}, i.Token)
+			*out = append(*out, acHeadAccept{token: i.Token, view: i})
 		}
-		require.Len(t, *out, 3)
 	}
 }
 
@@ -106,13 +104,22 @@ func TestInviteAcceptRow_PreFlipAcceptsSurviveM3(t *testing.T) {
 		assert.Nil(t, raw, "%s: HEAD's invite row (and its token) survived the cutover", v.Username)
 	}
 
-	// The bound accept really did what the fixture says, so the fields above were
-	// not all empty on both sides.
-	b := head[0].view
+	// The accepts really did what the fixture says, so the fields above were not all
+	// empty on both sides.
+	by := func(name string) database.Invite {
+		for _, h := range head {
+			if h.view.Username == name {
+				return h.view
+			}
+		}
+		t.Fatalf("no HEAD accept for %s", name)
+		return database.Invite{}
+	}
+	b := by("lucius.fox")
 	require.Equal(t, database.InviteEmailBound, b.EmailBinding)
 	require.Equal(t, database.InviteSSOGranted, b.SSOGrant)
 	require.NotEmpty(t, b.DisplacedUserIDs)
 	require.Equal(t, database.InviteGuestPolicyFailed, b.GuestPolicyStatus)
-	require.Equal(t, database.InviteEmailNotEmailed, head[2].view.EmailBinding)
-	require.Empty(t, head[1].view.EmailBinding)
+	require.Equal(t, database.InviteEmailNotEmailed, by("selina.kyle").EmailBinding)
+	require.Empty(t, by("alfred.pennyworth").EmailBinding)
 }
