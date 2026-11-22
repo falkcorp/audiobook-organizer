@@ -124,15 +124,17 @@ func TestNormalizeQuestion_KeyShape(t *testing.T) {
 // A provider pointed at another store keys apart from the default store; the
 // default store adds nothing to the endpoint.
 func TestNormalizeQuestion_MarketplaceIsAPrefix(t *testing.T) {
-	prev := config.AppConfig.MetadataSources
-	t.Cleanup(func() { config.AppConfig.MetadataSources = prev })
+	prev := config.Get().MetadataSources
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = prev }) })
 
 	q := Question{Title: "Title 000123"}
-	config.AppConfig.MetadataSources = nil
+	config.SetForTest(func(c *config.Config) { c.MetadataSources = nil })
 	def := questionKey(metadata.SourceIDAudible, EndpointSearchTitle, q)
 	require.True(t, strings.HasPrefix(def, "pcache:q:audible:search_title:"), def)
 
-	config.AppConfig.MetadataSources = []config.MetadataSource{{ID: metadata.SourceIDAudible, BaseURL: "https://api.example.invalid/1.0"}}
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{{ID: metadata.SourceIDAudible, BaseURL: "https://api.example.invalid/1.0"}}
+	})
 	other := questionKey(metadata.SourceIDAudible, EndpointSearchTitle, q)
 	assert.True(t, strings.HasPrefix(other, "pcache:q:audible:search_title@api.example.invalid:"), other)
 	assert.Equal(t, def[strings.LastIndex(def, ":"):], other[strings.LastIndex(other, ":"):],

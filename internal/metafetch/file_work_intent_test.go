@@ -45,14 +45,16 @@ type intentFixture struct {
 
 func newIntentFixture(t *testing.T, retire func(*database.Book)) *intentFixture {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	f := &intentFixture{root: t.TempDir(), locks: &testPathLocks{}}
-	config.AppConfig.RootDir = f.root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.AutoWriteTagsOnApply = true
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = f.root
+		c.AutoRenameOnApply = true
+		c.AutoWriteTagsOnApply = true
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+	})
 
 	f.oldDir = filepath.Join(f.root, "incoming", "Year One")
 	a, b := filepath.Join(f.oldDir, "01.mp3"), filepath.Join(f.oldDir, "02.mp3")
@@ -297,7 +299,7 @@ func TestFinishApplyFileWork_LiveBookIgnoresIntent(t *testing.T) {
 func TestFetchMetadataForBook_FileWorkJobCarriesTheFetchsIntent(t *testing.T) {
 	newFetch := func(t *testing.T, retire func(*database.Book)) (*Service, *[]string, *[]FetchIntent, *database.Book) {
 		svc, calls, book := fileWorkHarness(t, "/lib", false, false, nil)
-		config.AppConfig.WriteBackMetadata = true
+		config.SetForTest(func(c *config.Config) { c.WriteBackMetadata = true })
 		if retire != nil {
 			retire(book)
 		}

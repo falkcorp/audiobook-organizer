@@ -25,14 +25,16 @@ import (
 // test built on unwrapped fakes stayed green. Building clients makes no
 // network call.
 func TestActiveSourceNamesByID_ConfiguredChain(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "audible", Name: "Audible", Enabled: true, Priority: 1},
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 2},
-		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 3,
-			Credentials: map[string]string{"apiKey": "test-placeholder"}},
-	}
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 1},
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 2},
+			{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 3,
+				Credentials: map[string]string{"apiKey": "test-placeholder"}},
+		}
+	})
 	mfs := NewService(nil)
 	byID := mfs.ActiveSourceNamesByID()
 	names := mfs.ActiveSourceNames()

@@ -31,15 +31,17 @@ import (
 // callers must NOT t.Parallel().
 func withMetadataSourceConfig(t *testing.T, sources []config.MetadataSource) {
 	t.Helper()
-	savedSources := config.AppConfig.MetadataSources
-	savedHC := config.AppConfig.HardcoverAPIToken
-	savedG := config.AppConfig.GoogleBooksAPIKey
+	savedSources := config.Get().MetadataSources
+	savedHC := config.Get().HardcoverAPIToken
+	savedG := config.Get().GoogleBooksAPIKey
 	t.Cleanup(func() {
-		config.AppConfig.MetadataSources = savedSources
-		config.AppConfig.HardcoverAPIToken = savedHC
-		config.AppConfig.GoogleBooksAPIKey = savedG
+		config.SetForTest(func(c *config.Config) {
+			c.MetadataSources = savedSources
+			c.HardcoverAPIToken = savedHC
+			c.GoogleBooksAPIKey = savedG
+		})
 	})
-	config.AppConfig.MetadataSources = sources
+	config.SetForTest(func(c *config.Config) { c.MetadataSources = sources })
 }
 
 // TestBuildSourceChain_MemoizedAndBreakerPersists proves Bug 3's fix: repeated
@@ -93,9 +95,11 @@ func TestBuildSourceChain_MemoizedAndBreakerPersists(t *testing.T) {
 
 	// A config change (settings edit) must rebuild the chain with fresh instances
 	// so runtime config changes are honored.
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Enabled: true, Priority: 1},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Enabled: true, Priority: 1},
+		}
+	})
 	c4 := mfs.BuildSourceChain()
 	if len(c4) != 1 {
 		t.Fatalf("expected 1 source after config change, got %d", len(c4))

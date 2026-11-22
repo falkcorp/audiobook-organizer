@@ -163,10 +163,12 @@ func TestSortForDisplay(t *testing.T) {
 // asked and nothing is rescaled: stored order and Scores are HEAD's, and B
 // (0.86) stays under the 0.90 apply floor.
 func TestRerank_RankScoreDoesNotMoveTheWindowOrTheScores(t *testing.T) {
-	orig := config.AppConfig.MetadataScoring
-	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.05
-	config.AppConfig.MetadataScoring.LLMRerankTopK = 5
-	t.Cleanup(func() { config.AppConfig.MetadataScoring = orig })
+	orig := config.Get().MetadataScoring
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataScoring.LLMRerankEpsilon = 0.05
+		c.MetadataScoring.LLMRerankTopK = 5
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring = orig }) })
 
 	a := MetadataCandidate{Title: "A", Source: "Audible", Score: 0.905 * 0.75 * 0.85, RankScore: 0.905}
 	b := MetadataCandidate{Title: "B", Source: "Audible", Author: "Author 07", Narrator: "Narrator 03", Score: 0.86, RankScore: 0.86}
@@ -187,10 +189,12 @@ func TestRerank_RankScoreDoesNotMoveTheWindowOrTheScores(t *testing.T) {
 // are inside epsilon. The LLM prefers Q, so Q is rescaled to 0.90 and P to 0.88:
 // Score order [Q, P] while RankScore order is [P (1.173), Q (0.90)].
 func TestRerank_FinalSortFollowsScoreNotRankScore(t *testing.T) {
-	orig := config.AppConfig.MetadataScoring
-	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.05
-	config.AppConfig.MetadataScoring.LLMRerankTopK = 5
-	t.Cleanup(func() { config.AppConfig.MetadataScoring = orig })
+	orig := config.Get().MetadataScoring
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataScoring.LLMRerankEpsilon = 0.05
+		c.MetadataScoring.LLMRerankTopK = 5
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring = orig }) })
 
 	p := MetadataCandidate{Title: "P", Source: "Audible", Score: 0.90, RankScore: 1.20}
 	q := MetadataCandidate{Title: "Q", Source: "Audible", Score: 0.88, RankScore: 0.88}

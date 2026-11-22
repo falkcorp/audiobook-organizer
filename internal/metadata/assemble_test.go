@@ -95,9 +95,9 @@ func newPerFileExtractorStub(t *testing.T, byBase map[string]Metadata) *mockMeta
 // points config at .mp3 so the CONS-17b agree-check can enumerate them.
 func withChapterFiles(t *testing.T, names ...string) (bookDir, firstChapter string) {
 	t.Helper()
-	prevExts := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prevExts })
+	prevExts := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prevExts }) })
 
 	bookDir = filepath.Join(t.TempDir(), "Douglas Adams", "The Hitchhikers Guide")
 	if err := os.MkdirAll(bookDir, 0o755); err != nil {

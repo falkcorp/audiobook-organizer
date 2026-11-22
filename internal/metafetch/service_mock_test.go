@@ -1218,13 +1218,17 @@ func TestRerankTopK(t *testing.T) {
 	t.Run("boost_stacked_tail_rescale", func(t *testing.T) {
 		rerankSvc := NewService(mock)
 
-		origEpsilon := config.AppConfig.MetadataScoring.LLMRerankEpsilon
-		origTopK := config.AppConfig.MetadataScoring.LLMRerankTopK
-		config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.2
-		config.AppConfig.MetadataScoring.LLMRerankTopK = 5
+		origEpsilon := config.Get().MetadataScoring.LLMRerankEpsilon
+		origTopK := config.Get().MetadataScoring.LLMRerankTopK
+		config.SetForTest(func(c *config.Config) {
+			c.MetadataScoring.LLMRerankEpsilon = 0.2
+			c.MetadataScoring.LLMRerankTopK = 5
+		})
 		t.Cleanup(func() {
-			config.AppConfig.MetadataScoring.LLMRerankEpsilon = origEpsilon
-			config.AppConfig.MetadataScoring.LLMRerankTopK = origTopK
+			config.SetForTest(func(c *config.Config) {
+				c.MetadataScoring.LLMRerankEpsilon = origEpsilon
+				c.MetadataScoring.LLMRerankTopK = origTopK
+			})
 		})
 
 		llmMock := mocks.NewMockMetadataCandidateScorer(t)
@@ -1750,9 +1754,9 @@ func TestApplyMetadataFileIO(t *testing.T) {
 	// let the batch-apply API report Applied:true for books whose files had
 	// never moved.
 	t.Run("pipeline_failure_propagates", func(t *testing.T) {
-		origRename := config.AppConfig.AutoRenameOnApply
-		config.AppConfig.AutoRenameOnApply = true
-		t.Cleanup(func() { config.AppConfig.AutoRenameOnApply = origRename })
+		origRename := config.Get().AutoRenameOnApply
+		config.SetForTest(func(c *config.Config) { c.AutoRenameOnApply = true })
+		t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.AutoRenameOnApply = origRename }) })
 
 		mock := &database.MockStore{
 			GetBookByIDFunc: func(id string) (*database.Book, error) {
@@ -1770,13 +1774,17 @@ func TestApplyMetadataFileIO(t *testing.T) {
 	})
 
 	t.Run("clean_run_returns_nil", func(t *testing.T) {
-		origRename := config.AppConfig.AutoRenameOnApply
-		origTags := config.AppConfig.AutoWriteTagsOnApply
-		config.AppConfig.AutoRenameOnApply = false
-		config.AppConfig.AutoWriteTagsOnApply = false
+		origRename := config.Get().AutoRenameOnApply
+		origTags := config.Get().AutoWriteTagsOnApply
+		config.SetForTest(func(c *config.Config) {
+			c.AutoRenameOnApply = false
+			c.AutoWriteTagsOnApply = false
+		})
 		t.Cleanup(func() {
-			config.AppConfig.AutoRenameOnApply = origRename
-			config.AppConfig.AutoWriteTagsOnApply = origTags
+			config.SetForTest(func(c *config.Config) {
+				c.AutoRenameOnApply = origRename
+				c.AutoWriteTagsOnApply = origTags
+			})
 		})
 
 		mock := &database.MockStore{

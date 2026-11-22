@@ -61,7 +61,7 @@ func applyDedupProbe(t *testing.T, svc *Service) (<-chan string, *recordingEnque
 
 func TestRenameOnly_DedupViaScheduler_EnqueuesOpAndStartsNoGoroutine(t *testing.T) {
 	fx, svc := newRenameFixture(t)
-	config.AppConfig.Dedup.OnImportViaScheduler = true
+	config.SetForTest(func(c *config.Config) { c.Dedup.OnImportViaScheduler = true })
 	checked, enq := applyDedupProbe(t, svc)
 
 	stale := fx.stored
@@ -77,7 +77,7 @@ func TestRenameOnly_DedupViaScheduler_EnqueuesOpAndStartsNoGoroutine(t *testing.
 
 func TestRenameOnly_DedupFlagOff_RunsGoroutineAndEnqueuesNothing(t *testing.T) {
 	fx, svc := newRenameFixture(t)
-	config.AppConfig.Dedup.OnImportViaScheduler = false
+	config.SetForTest(func(c *config.Config) { c.Dedup.OnImportViaScheduler = false })
 	checked, enq := applyDedupProbe(t, svc)
 
 	stale := fx.stored

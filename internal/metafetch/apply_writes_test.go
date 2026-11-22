@@ -311,11 +311,13 @@ func TestApplyMetadataCandidate_ProvenanceForEveryWrittenField(t *testing.T) {
 // fileWorkHarness is a store with one book and one file for the file-side core.
 func fileWorkHarness(t *testing.T, rootDir string, autoRename, autoTags bool, filesErr error) (*Service, *[]string, *database.Book) {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.RootDir = rootDir
-	config.AppConfig.AutoRenameOnApply = autoRename
-	config.AppConfig.AutoWriteTagsOnApply = autoTags
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = rootDir
+		c.AutoRenameOnApply = autoRename
+		c.AutoWriteTagsOnApply = autoTags
+	})
 
 	book := &database.Book{ID: "b1", Title: "A Book", FilePath: "/lib/a/a.m4b"}
 	var mu sync.Mutex
@@ -463,7 +465,7 @@ func TestFetchMetadataForBook_WritesTagsThroughSharedPath(t *testing.T) {
 		// Under root_dir: auto-fetch touches files only for a book that already
 		// has a library copy there.
 		svc, calls, _ := fileWorkHarness(t, "/lib", false, tt.autoTags, nil)
-		config.AppConfig.WriteBackMetadata = tt.writeBackMetadata
+		config.SetForTest(func(c *config.Config) { c.WriteBackMetadata = tt.writeBackMetadata })
 		var scheduled []string
 		svc.fileWorkScheduler = func(bookID string, _ FetchIntent, work func()) {
 			scheduled = append(scheduled, bookID)
@@ -518,15 +520,16 @@ func TestPathUnderRoot(t *testing.T) {
 // flags, both real directories under one temp dir.
 func protectedSetup(t *testing.T) (root, itunes string) {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	base := t.TempDir()
 	root, itunes = filepath.Join(base, "library"), filepath.Join(base, "itunes")
 	require.NoError(t, os.MkdirAll(root, 0o755))
 	require.NoError(t, os.MkdirAll(itunes, 0o755))
-	config.AppConfig.RootDir = root
-	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "iTunes Library.xml")
-	config.AppConfig.ITunes.LibraryITLPath = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	cowV1 := filepath.Join(itunes, "iTunes Library.xml")
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = "" })
 	return root, itunes
 }
 
@@ -570,8 +573,10 @@ func TestExistingLibraryCopy_RejectsSiblingWithProtectedFileRow(t *testing.T) {
 // file is renamed (so the pipeline did run); the iTunes file is never moved.
 func TestRunApplyPipeline_NeverMovesAProtectedFileRow(t *testing.T) {
 	root, itunes := protectedSetup(t)
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.AutoWriteTagsOnApply = false
+	config.SetForTest(func(c *config.Config) {
+		c.AutoRenameOnApply = true
+		c.AutoWriteTagsOnApply = false
+	})
 	bookDir := filepath.Join(root, "Old Place")
 	libFile := filepath.Join(bookDir, "01.m4b")
 	itFile := filepath.Join(itunes, "Music", "02.m4b")
@@ -606,8 +611,10 @@ func TestRunApplyPipeline_NeverMovesAProtectedFileRow(t *testing.T) {
 // file work; the same book with a clean library sibling gets it, once.
 func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	root, itunes := protectedSetup(t)
-	config.AppConfig.AutoRenameOnApply = false
-	config.AppConfig.AutoWriteTagsOnApply = true
+	config.SetForTest(func(c *config.Config) {
+		c.AutoRenameOnApply = false
+		c.AutoWriteTagsOnApply = true
+	})
 	vg := "vg1"
 	book := &database.Book{ID: "b1", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg}
 	var siblings []database.Book
@@ -653,7 +660,7 @@ func TestFinishAutoFetchFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 // With no pool wired (organize's per-call service) auto-fetch touches no file.
 func TestFetchMetadataForBook_NoPoolTouchesNoFiles(t *testing.T) {
 	svc, calls, _ := fileWorkHarness(t, "/lib", true, true, nil)
-	config.AppConfig.WriteBackMetadata = true
+	config.SetForTest(func(c *config.Config) { c.WriteBackMetadata = true })
 	svc.overrideSources = []metadata.MetadataSource{fakeSource{
 		name:    "Audible",
 		results: []metadata.BookMetadata{{Title: "A Book", Author: "Some Author"}},
@@ -747,8 +754,10 @@ func TestFileWork_AutoFetchAndManualApplySerializeOnLibraryCopyPath(t *testing.T
 	for _, autoTags := range []bool{false, true} {
 		t.Run(fmt.Sprintf("auto_write_tags=%v", autoTags), func(t *testing.T) {
 			root, itunes := protectedSetup(t)
-			config.AppConfig.AutoRenameOnApply = false
-			config.AppConfig.AutoWriteTagsOnApply = autoTags
+			config.SetForTest(func(c *config.Config) {
+				c.AutoRenameOnApply = false
+				c.AutoWriteTagsOnApply = autoTags
+			})
 			vg := "vg1"
 			a := database.Book{ID: "a", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg}
 			b := database.Book{ID: "b", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
@@ -843,8 +852,10 @@ type copyHarness struct {
 func newCopyHarness(t *testing.T) (*Service, *copyHarness) {
 	t.Helper()
 	root, itunes := protectedSetup(t)
-	config.AppConfig.AutoRenameOnApply = false
-	config.AppConfig.AutoWriteTagsOnApply = false
+	config.SetForTest(func(c *config.Config) {
+		c.AutoRenameOnApply = false
+		c.AutoWriteTagsOnApply = false
+	})
 	vg := "vg1"
 	h := &copyHarness{books: map[string]database.Book{
 		"a": {ID: "a", Title: "A Book", FilePath: filepath.Join(itunes, "a.m4b"), VersionGroupID: &vg},
@@ -1075,8 +1086,10 @@ func TestFinishApplyFileWork_ReadErrorAtTheCopyLockStopsTheJob(t *testing.T) {
 // policy, so a stub would hide a tag step that creates a copy.
 func TestFinishFileWork_NeverCreatesALibraryCopy(t *testing.T) {
 	svc, h := newCopyHarness(t)
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.AutoWriteTagsOnApply = true
+	config.SetForTest(func(c *config.Config) {
+		c.AutoRenameOnApply = true
+		c.AutoWriteTagsOnApply = true
+	})
 
 	_ = svc.finishFileWork(context.Background(), "a", "", true, true, Unattended, nil, nil)
 	h.mu.Lock()
@@ -1110,8 +1123,10 @@ func TestFinishAutoFetchFileWork_NeverRenamesAndTagsOnlyUnderWriteBack(t *testin
 	for _, writeBack := range []bool{false, true} {
 		t.Run(fmt.Sprintf("write_back_metadata=%v", writeBack), func(t *testing.T) {
 			root, _ := protectedSetup(t)
-			config.AppConfig.AutoRenameOnApply = true
-			config.AppConfig.AutoWriteTagsOnApply = true
+			config.SetForTest(func(c *config.Config) {
+				c.AutoRenameOnApply = true
+				c.AutoWriteTagsOnApply = true
+			})
 			bookDir := filepath.Join(root, "Old Place")
 			libFile := filepath.Join(bookDir, "01.m4b")
 			writeFile(t, libFile, "library audio")
@@ -1276,7 +1291,7 @@ func TestFinishApplyFileWork_TwoVersionsMakeOneLibraryCopy(t *testing.T) {
 // whichever copy the fresh lookup found, one the job held no lock on.
 func TestFinishApplyFileWork_WritesTheLockedCopyWhenTheLookupFlips(t *testing.T) {
 	svc, h := newCopyHarness(t)
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	vg := "vg1"
 	sPath := filepath.Join(root, "A Book")
 	h.mu.Lock()
@@ -1314,7 +1329,7 @@ func TestFinishApplyFileWork_WritesTheLockedCopyWhenTheLookupFlips(t *testing.T)
 // errFileTargetChanged. The steps re-read the locked copy by id and check it.
 func TestFinishApplyFileWork_LockedCopyThatIsNoLongerACopyIsAnError(t *testing.T) {
 	svc, h := newCopyHarness(t)
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	vg := "vg1"
 	h.mu.Lock()
 	h.books["s"] = database.Book{ID: "s", Title: "A Book", FilePath: filepath.Join(root, "A Book"), VersionGroupID: &vg}
@@ -1403,7 +1418,7 @@ func TestFinishApplyFileWork_NeverWritesAHalfMadeLibraryCopy(t *testing.T) {
 // organize take P, re-read the book and move the files it was tagging at Q.
 func TestWithBookFilesLocked_WaitsForAnApplyAndLocksTheCurrentPath(t *testing.T) {
 	svc, h := newCopyHarness(t)
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	vg := "vg1"
 	p := filepath.Join(root, "A Book")
 	q := filepath.Join(root, "A Book (renamed)")
