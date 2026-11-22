@@ -35,7 +35,7 @@ func (s *fileIntroStatsStore) GetFileIntroStats() (*database.FileIntroStats, err
 func serveFileIntroStats(t *testing.T, store system.SystemStore) (map[string]json.RawMessage, int) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := system.New(func() system.SystemStore { return store }, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := system.New(func() system.SystemStore { return store }, nil, nil, nil, nil, nil, nil, nil)
 	w := run(http.MethodGet, "/stats", "/stats", nil, func(r *gin.Engine) {
 		r.GET("/stats", h.GetFileIntroStats)
 	})

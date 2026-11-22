@@ -248,7 +248,7 @@ func statusHandler(t *testing.T, raised tokenRaise) *Handler {
 	svc.EXPECT().CollectSystemStatus(mock.Anything).Return(&sysinfo.SystemStatus{Status: "ok"}, nil).Maybe()
 	return New(
 		func() SystemStore { return raised.store },
-		svc, nil, nil, nil, nil, nil, nil,
+		svc, nil, nil, nil, nil, nil,
 		raised.getDegraded,
 	).WithPostureTokens(raised.posture)
 }
