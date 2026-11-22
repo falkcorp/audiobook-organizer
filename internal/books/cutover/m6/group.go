@@ -288,10 +288,12 @@ func (g *groupRun) instances(ctx context.Context) error {
 	// The row standing for HEAD's legacy OpenAI path, synthesised when an OpenAI
 	// key is stored and no row has the ID openai. HEAD's own synthesis ran only
 	// while ai_endpoints was absent (internal/config/ai_endpoints.go
-	// migrateAIEndpointsBlob), but with ai_endpoints_routing off, its default,
-	// every call site outside the routed ones read the key from the scalars
-	// whatever the list held (internal/server/ai_ops.go,
-	// internal/plugins/maintenance/dedup_ops.go), so a stored key was in use.
+	// migrateAIEndpointsBlob), but whatever ai_endpoints_routing said, the sites
+	// the pool never routed (legacyKeyCapabilities) read the key from the scalars
+	// and ran only while enable_ai_parsing was on. So the row is ticked for those
+	// capabilities and is enabled exactly when enable_ai_parsing is: written
+	// tickless and enabled it health-probed with the key and served nothing even
+	// when AI was off (r2 m-a).
 	if !haveOpenAI && g.set[secretOpenAI] {
 		var base string
 		if raw, ok := g.top["openai_base_url"]; ok {
@@ -301,7 +303,11 @@ func (g *groupRun) instances(ctx context.Context) error {
 				}
 			}
 		}
-		p, proven := m.openAIInstance(base, g.set)
+		aiParsing, err := m.cfg.EnableAIParsing(ctx)
+		if err != nil {
+			return fmt.Errorf("m6: read enable_ai_parsing: %w", err)
+		}
+		p, proven := m.openAIInstance(base, g.set, aiParsing)
 		switch {
 		case !proven:
 			if err := g.quarantineMember("openai_base_url", []byte(base), reasonUnprovenURL); err != nil {

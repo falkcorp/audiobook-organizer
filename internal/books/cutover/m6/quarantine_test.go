@@ -20,24 +20,25 @@ import (
 // The quarantine reasons are fixed classes an operator reads in the report, so
 // the tests pin the words.
 const (
-	rJobUndecodable   = "the aijob row does not decode"
-	rJobState         = "the aijob row's status is not one HEAD wrote"
-	rJobKey           = "the aijob row's id is not its key"
-	rJobConflict      = "core already holds a different job under this ID"
-	rJobConflictOwned = "the aijob row this row belongs to was not imported: core already holds a different job under its ID"
-	rListRefused      = "core refused the config list this row feeds"
-	rOrphanPayload    = "the aijob_payload row has no aijob row"
-	rOrphanBatch      = "the aijob_batch index row names no aijob row that holds it"
-	rBlobUndecodable  = "the settings blob does not decode"
-	rRootUndecodable  = "the import_path row does not decode"
-	rRootConflict     = "core already holds a different root"
-	rUnprovenURL      = "a credential cannot be ruled out of the URL"
-	rInstanceConflict = "core already holds a different instance under this ID"
-	rAliasNoRoot      = "the path alias's root is no library root and no ancestor of one: its display rendering is not carried"
-	rAliasSubRoot     = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
-	rAliasShadowed    = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
-	rRootPath         = "the root path is not an absolute host path"
-	rUnreadMember     = "a settings blob member that no part of M6 reads"
+	rJobUndecodable         = "the aijob row does not decode"
+	rJobState               = "the aijob row's status is not one HEAD wrote"
+	rJobKey                 = "the aijob row's id is not its key"
+	rJobConflict            = "core already holds a different job under this ID"
+	rJobConflictOwned       = "the aijob row this row belongs to was not imported: core already holds a different job under its ID"
+	rListRefused            = "core refused the config list this row feeds"
+	rOrphanPayload          = "the aijob_payload row has no aijob row"
+	rOrphanBatch            = "the aijob_batch index row names no aijob row that holds it"
+	rBlobUndecodable        = "the settings blob does not decode"
+	rRootUndecodable        = "the import_path row does not decode"
+	rRootConflict           = "core already holds a different root"
+	rUnprovenURL            = "a credential cannot be ruled out of the URL"
+	rInstanceConflict       = "core already holds a different instance under this ID"
+	rAliasNoRoot            = "the path alias's root is no library root and no ancestor of one: its display rendering is not carried"
+	rAliasSubRoot           = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
+	rAliasShadowedByEarlier = "the path alias's root is inside a library root, but an alias listed before it has a root that contains its root: HEAD rendered none of its paths with it, and its display rendering is not carried"
+	rAliasShadowed          = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
+	rRootPath               = "the root path is not an absolute host path"
+	rUnreadMember           = "a settings blob member that no part of M6 reads"
 )
 
 const memberPrefix = m6.KeyBlob + "#"
@@ -187,12 +188,25 @@ func TestQuarantine_Cases(t *testing.T) {
 		},
 		{
 			// HEAD seeds such an alias from an iTunes mapping whose To is below a
-			// root (config.SeedPathAliases); core's aliases are per root.
-			name: "path alias inside a root",
+			// root (config.SeedPathAliases); core's aliases are per root. Listed
+			// before the alias of the root that contains it, HEAD's first match
+			// rendered its paths with it, and core's model cannot hold that.
+			name: "path alias inside a root, listed before the root's own",
+			opts: []func(*rig){withBlob(func(tree map[string]any) {
+				tree["path_aliases"] = append([]any{map[string]any{"root": rootDir + "/itunes", "windows": "I:"}}, tree["path_aliases"].([]any)...)
+			})},
+			want: map[string]string{memberPrefix + "path_aliases.0": rAliasSubRoot},
+			raw:  map[string]string{memberPrefix + "path_aliases.0": `{"root":"` + rootDir + `/itunes","windows":"I:"}`},
+		},
+		{
+			// The same alias listed after the alias of the root that contains it:
+			// HEAD's first match took every path under it, so it rendered nothing
+			// and the report must not say a rendering is lost (r2 n2).
+			name: "path alias inside a root, listed after the root's own",
 			opts: []func(*rig){withBlob(func(tree map[string]any) {
 				tree["path_aliases"] = append(tree["path_aliases"].([]any), map[string]any{"root": rootDir + "/itunes", "windows": "I:"})
 			})},
-			want: map[string]string{memberPrefix + "path_aliases.1": rAliasSubRoot},
+			want: map[string]string{memberPrefix + "path_aliases.1": rAliasShadowedByEarlier},
 			raw:  map[string]string{memberPrefix + "path_aliases.1": `{"root":"` + rootDir + `/itunes","windows":"I:"}`},
 		},
 		{

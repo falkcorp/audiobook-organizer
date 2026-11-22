@@ -423,6 +423,10 @@ type rig struct {
 	effective map[string]map[string]string
 	// effectiveErr makes Effective fail.
 	effectiveErr error
+	// aiParsingOff makes EnableAIParsing answer false (HEAD's enable_ai_parsing
+	// off), and aiParsingErr makes it fail.
+	aiParsingOff bool
+	aiParsingErr error
 	// corpus is "stage1" or "overlay" (copied from the R2 corpus), or "" for an
 	// empty store the test fills.
 	corpus string
@@ -533,10 +537,16 @@ func (r *rig) config() m6.Config {
 	return m6.Config{
 		Integrations: lazyInteg{r}, AI: lazyAI{r}, Notify: lazyNotify{r}, Config: r.cfg, Secrets: r.secrets,
 		SecretNames: r.secrets.names, SecretValue: r.secrets.value,
-		Legacy: r.legacy, Effective: r.overlay,
+		Legacy: r.legacy, Effective: r.overlay, EnableAIParsing: r.aiParsing,
 		Report: r.report,
 		Logger: r.logger(),
 	}
+}
+
+// aiParsing is Config.EnableAIParsing: on, as on the install the fixture models,
+// unless a test turns it off or makes the read fail.
+func (r *rig) aiParsing(context.Context) (bool, error) {
+	return !r.aiParsingOff, r.aiParsingErr
 }
 
 // overlay is Config.Effective: the operator's URLs the test set for ref.

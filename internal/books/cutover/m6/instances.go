@@ -265,7 +265,8 @@ type pending struct {
 	// capability_models entry's model), quarantined once the instance is written
 	// so the value can be recovered; a refused instance is quarantined whole.
 	droppedValues []droppedValue
-	// notes is the report lines said once the instance is reported.
+	// notes is the report lines about what the instance holds, said once the
+	// importer has accepted it (a refused instance holds nothing).
 	notes []string
 	// usesOpenAIKey: the instance refers to, or copies, the stored OpenAI key.
 	usesOpenAIKey bool
@@ -355,9 +356,6 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 	for _, d := range p.dropped {
 		m.report(Entry{Kind: "note", ID: ref.String(), Detail: "dropped: " + d})
 	}
-	for _, n := range p.notes {
-		m.report(Entry{Kind: "note", ID: ref.String(), Detail: n})
-	}
 	if p.inst.Config.Local {
 		m.report(Entry{Kind: "trust", ID: ref.String(), Detail: "Local, origin " + p.inst.LocalOrigin})
 	}
@@ -424,6 +422,11 @@ func (m *Migration) writeInstance(ctx context.Context, c *chunk, p *pending, qua
 		return false, m.quarantineMember(c, p.member, p.raw, reasonRefused, quarantined)
 	case err != nil:
 		return false, fmt.Errorf("m6: import %s: %w", ref, err)
+	}
+	// Said only once the importer accepted the instance: a note that a binding
+	// was made would be false for an instance that is quarantined instead.
+	for _, n := range p.notes {
+		m.report(Entry{Kind: "note", ID: ref.String(), Detail: n})
 	}
 	if p.copyKey != "" {
 		if err := m.cfg.Secrets.ImportSecret(ctx, b, secrets.Write{Name: p.copyKey, Value: secrets.NewValue(copyVal), By: m.by}); err != nil && !errors.Is(err, storage.ErrImportConflict) {
@@ -641,22 +644,41 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 		return nil, member, reasonBlobUndecodable
 	}
 	ref := integrations.Ref{Kind: integrations.KindAI, Instance: id}
-	// A renamed row that lands on openai pairs with the operator's OpenAI key
-	// only when HEAD sent it that key (auth_ref, below).
-	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == instanceOpenAI && (!renamed || ep.AuthRef == "openai_api_key")}
+	// A row on the openai ID, exact or renamed, pairs with the operator's OpenAI
+	// key only when HEAD sent it that key: poolSecret resolves auth_ref
+	// "openai_api_key" and no other name, and a row with no auth_ref got the dummy
+	// local key (internal/ai/pool_routing.go apiKeyFor).
+	sendsOpenAIKey := ep.AuthRef == "openai_api_key"
+	p = &pending{member: member, raw: raw, urls: map[string]string{}, operatorPair: id == instanceOpenAI && sendsOpenAIKey}
 	if renamed {
 		p.renamedFrom = ep.ID
 	}
 	settings := p.secretRefs(set, ref, ep.ID, renamed)
 	if _, ok := settings["api_key"]; ok && id == instanceOpenAI {
-		p.usesOpenAIKey = true // the exact openai row keeps the key M2 moved to its name
+		if sendsOpenAIKey {
+			p.usesOpenAIKey = true // the exact openai row keeps the key M2 moved to its name
+		} else {
+			// HEAD never sent this row the key: with no auth_ref it sent the dummy
+			// local key, and an auth_ref no secret answers to made the row uncallable.
+			// Binding it would serve a credential HEAD withheld. The key stays in the
+			// store, and the group pass says that nothing refers to it.
+			delete(settings, "api_key")
+		}
 	}
-	// A whisper process endpoint's URL names no network address
-	// (config.LocalUVEndpointURL "local:uv-openai-whisper"): it is carried as is
-	// and grants no trust.
+	// A whisper process endpoint's URL names no network address: HEAD's launcher
+	// never dials it (config.LocalUVEndpointURL "local:uv-openai-whisper" is only
+	// a marker, and HEAD's validator accepts any string for the protocol).
+	// books.whisper_local declares no url setting, and core refuses a
+	// destination-named setting that is no URL with a host, so a row carrying one
+	// is refused at Put and serves misconfigured. None is written. The marker
+	// loses nothing; any other value is reported and quarantined so it can be
+	// recovered (and never printed: it is the operator's text, and unproven).
 	if ep.URL != "" {
-		if adapter == "books.whisper_local" {
-			settings["url"] = ep.URL
+		if adapter == whisperLocalAdapter {
+			if ep.URL != localUVEndpointURL {
+				p.dropped = append(p.dropped, "url is not a setting of a local process endpoint (HEAD never dialled it; its value is quarantined)")
+				p.droppedValues = append(p.droppedValues, droppedValue{path: "url", value: ep.URL})
+			}
 		} else {
 			clean, ok := p.cleanURL("url", ep.URL)
 			if !ok {
@@ -714,12 +736,15 @@ func (m *Migration) aiInstance(raw json.RawMessage, i int, set secretSet) (p *pe
 	// poolSecret). The exact openai row keeps the secret M2 moved to its name
 	// (secretRefs). A row renamed to openai (OpenAI, OPENAI) takes no refs under
 	// its new name (secretRefs), but that name is the very key HEAD sent it, so
-	// it is bound here and reported. Any other row gets its own copy.
+	// it is bound here and reported. Any other row gets its own copy. Nothing
+	// stands in the way of the bound case: a secret held under the row's HEAD ID
+	// (carry, uncarried) needs a name core's grammar allows, and every spelling
+	// that renames to openai has an upper-case letter, so none is stored
+	// (TestOpenAIRename_NoSecretCanSitUnderARenamedSpelling).
 	switch {
 	case ep.AuthRef == "openai_api_key" && id == instanceOpenAI && renamed && set[secretOpenAI]:
 		settings["api_key"] = secrets.RefTo(secretOpenAI)
 		p.usesOpenAIKey = true
-		p.uncarried = slices.DeleteFunc(p.uncarried, func(cs carriedSecret) bool { return cs.field == "api_key" })
 		p.notes = append(p.notes, "HEAD's OpenAI key "+string(secretOpenAI)+" is bound to the renamed row, as HEAD sent it that key (auth_ref openai_api_key)")
 	case ep.AuthRef == "openai_api_key" && id != instanceOpenAI:
 		p.copyKey = secretName(ref, "api_key")
@@ -806,11 +831,15 @@ func (m *Migration) delugeInstance(webURL, stored string, set secretSet) (*pendi
 // openAIInstance is the ai/openai row HEAD synthesises from openai_base_url and
 // the stored key (05-metadata M1.10 migration table): HEAD's own defaults for the
 // URL, priority and concurrency, the batch and vision features, and the key by
-// reference. Its capability ticks are not recoverable from a row that was never
-// stored, so none are set, which is default-deny until an admin ticks them.
+// reference. The row stands for HEAD's legacy OpenAI path, which the sites that
+// read the scalar key served whenever enable_ai_parsing was on and refused to run
+// when it was off (legacyKeyCapabilities), so it is ticked with exactly those
+// capabilities and is enabled exactly when aiParsing is. A disabled row keeps its
+// ticks: it serves nothing and is never probed, and enabling it restores HEAD's
+// behaviour without the admin having to know which capabilities HEAD served.
 // proven is false when a credential cannot be ruled out of the URL: the caller
 // quarantines the member.
-func (m *Migration) openAIInstance(base string, set secretSet) (*pending, bool) {
+func (m *Migration) openAIInstance(base string, set secretSet, aiParsing bool) (*pending, bool) {
 	ref := integrations.Ref{Kind: integrations.KindAI, Instance: instanceOpenAI}
 	if strings.TrimSpace(base) == "" {
 		base = defaultOpenAIBaseURL
@@ -825,11 +854,18 @@ func (m *Migration) openAIInstance(base string, set secretSet) (*pending, bool) 
 	settings["url"] = clean
 	settings["concurrency"] = 4
 	settings["features"] = []string{"batch_api", "vision"}
+	caps, _ := mapCaps(legacyKeyCapabilities)
+	settings["capabilities"] = caps
 	// HEAD's openai row carries auth_ref openai_api_key, and HEAD's locality
 	// heuristic calls any endpoint with an auth_ref cloud (aidispatch/locality.go).
 	settings["locality"] = string(ai.LocalityCloud)
+	if aiParsing {
+		p.notes = append(p.notes, "the synthesised row is ticked for "+strings.Join(caps, ", ")+", the capabilities HEAD's legacy OpenAI path served with enable_ai_parsing on")
+	} else {
+		p.notes = append(p.notes, "the synthesised row is written disabled: enable_ai_parsing is off, and each site HEAD's legacy OpenAI path served refused to run without it; its ticks ("+strings.Join(caps, ", ")+") are kept for when it is enabled")
+	}
 	p.inst = integrations.StoredInstance{Config: integrations.InstanceConfig{
-		Ref: ref, Adapter: "core.openai_compat", Name: "OpenAI (migrated from openai_api_key)", Enabled: true, Priority: 20, Settings: settings,
+		Ref: ref, Adapter: "core.openai_compat", Name: "OpenAI (migrated from openai_api_key)", Enabled: aiParsing, Priority: 20, Settings: settings,
 	}}
 	return p, true
 }

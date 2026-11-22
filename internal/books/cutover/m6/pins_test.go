@@ -18,6 +18,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/books/adapters/metadata"
+	"github.com/falkcorp/audiobook-organizer/internal/books/adapters/whisper"
 	"github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata/providerhttp"
@@ -25,6 +26,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/library"
+	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -439,6 +441,9 @@ func TestAIInstances_PassCoresEndpointValidator(t *testing.T) {
 			if err := r.ValidateEndpoint(p.inst.Config.Settings, nil); err != nil {
 				t.Fatalf("core refuses what M6 writes: %v", err)
 			}
+			if _, has := p.inst.Config.Settings["url"]; has != (c.protocol != "local_process") {
+				t.Errorf("url present = %v for %s: a local process row has none (books.whisper_local declares no url)", has, c.protocol)
+			}
 			for _, want := range []string{`tick "mystery.cape"`, `tick "llm.*"`, `tick "*"`, `feature "telepathy"`, `feature "shared_fs:"`, `capability_models entry "mystery.cape"`} {
 				if !slices.ContainsFunc(p.dropped, func(d string) bool { return strings.Contains(d, want) }) {
 					t.Errorf("the dropped %s is not reported: %v", want, p.dropped)
@@ -577,5 +582,83 @@ func TestMetadataAdapters_FoldTableIsTheAdaptersDeclaredSecrets(t *testing.T) {
 	}
 	if !maps.Equal(got, declared) {
 		t.Errorf("the fold table is %v, the adapters declare %v", got, declared)
+	}
+}
+
+// TestWhisperLocal_AdapterAndMarkerArePinned pins the two values M6 freezes for a
+// local_process row to their sources: books' adapter ID and HEAD's marker URL.
+func TestWhisperLocal_AdapterAndMarkerArePinned(t *testing.T) {
+	if whisperLocalAdapter != whisper.LocalAdapterID {
+		t.Errorf("whisperLocalAdapter %q, books registers %q", whisperLocalAdapter, whisper.LocalAdapterID)
+	}
+	if got, ok := protocolAdapter(string(aidispatch.ProtocolLocalProcess)); !ok || got != whisper.LocalAdapterID {
+		t.Errorf("protocolAdapter(local_process) = %q, %v", got, ok)
+	}
+	if localUVEndpointURL != config.LocalUVEndpointURL {
+		t.Errorf("localUVEndpointURL %q, HEAD's marker is %q", localUVEndpointURL, config.LocalUVEndpointURL)
+	}
+}
+
+// TestWhisperLocal_ForeignURLIsReportedAndQuarantinedNeverPrinted: HEAD's
+// validator accepts any string for a local_process row's url and never dials it.
+// A value other than the marker is not written (the adapter has no such setting),
+// is reported without its text, and is quarantined so the operator can recover it.
+func TestWhisperLocal_ForeignURLIsReportedAndQuarantinedNeverPrinted(t *testing.T) {
+	const foreign = "local:riddler-cave-runner"
+	raw, err := json.Marshal(map[string]any{"id": "oracle-node", "label": "Oracle", "protocol": "local_process", "url": foreign, "enabled": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, why := (&Migration{}).aiInstance(raw, 0, secretSet{})
+	if p == nil {
+		t.Fatalf("refused: %s", why)
+	}
+	if _, has := p.inst.Config.Settings["url"]; has {
+		t.Error("a foreign url is written to the local row")
+	}
+	if len(p.dropped) != 1 || strings.Contains(p.dropped[0], foreign) {
+		t.Errorf("dropped %v: want one line that does not print the value", p.dropped)
+	}
+	if len(p.droppedValues) != 1 || p.droppedValues[0].path != "url" || p.droppedValues[0].value != foreign {
+		t.Errorf("droppedValues %v: want the url quarantined", p.droppedValues)
+	}
+}
+
+// TestOpenAIRename_NoSecretCanSitUnderARenamedSpelling: aiInstance binds a row
+// renamed to openai without carrying any secret held under the row's HEAD ID,
+// because none can be held. The IDs that rename to openai are exactly the
+// spellings of the word with another case of letter (the rename lower-cases and
+// maps _ to -, neither of which makes a letter of the word), and a secret name's
+// segments are lower-case only, so "integrations.ai.<spelling>.api_key" is a name
+// the store refuses. This is the whole set, not a sample.
+func TestOpenAIRename_NoSecretCanSitUnderARenamedSpelling(t *testing.T) {
+	const word = "openai"
+	renamed := 0
+	for mask := 0; mask < 1<<len(word); mask++ {
+		b := []byte(word)
+		for i := range b {
+			if mask&(1<<i) != 0 {
+				b[i] = b[i] - 'a' + 'A'
+			}
+		}
+		spelling := string(b)
+		id, wasRenamed, ok := instanceID(spelling)
+		if !ok || string(id) != word {
+			t.Fatalf("%q is %q (ok %v), want openai", spelling, id, ok)
+		}
+		if wasRenamed != (spelling != word) {
+			t.Errorf("%q renamed = %v", spelling, wasRenamed)
+		}
+		if !wasRenamed {
+			continue
+		}
+		renamed++
+		name := secrets.Name("integrations.ai." + spelling + ".api_key")
+		if err := name.Validate(); err == nil {
+			t.Errorf("the secrets store accepts %q: a renamed openai row could have a credential to carry", name)
+		}
+	}
+	if renamed != 1<<len(word)-1 {
+		t.Errorf("%d renamed spellings, want %d", renamed, 1<<len(word)-1)
 	}
 }
