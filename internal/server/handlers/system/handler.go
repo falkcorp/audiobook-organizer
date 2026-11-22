@@ -224,8 +224,15 @@ func HealthPostureTokens(r *health.Registry) []PostureToken {
 	if r == nil {
 		return nil
 	}
+	return SnapshotPostureTokens(r.Snapshot())
+}
+
+// SnapshotPostureTokens is HealthPostureTokens over a snapshot already taken:
+// for a caller that holds the registry's state (core's App.HealthSnapshot) and
+// not the registry.
+func SnapshotPostureTokens(s health.Snapshot) []PostureToken {
 	var out []PostureToken
-	for _, c := range r.Snapshot().Components {
+	for _, c := range s.Components {
 		if c.Result.Reason != "" {
 			out = append(out, PostureToken{Token: c.Result.Reason, Subject: string(c.ID)})
 		}
