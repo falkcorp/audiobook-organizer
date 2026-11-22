@@ -48,10 +48,13 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 )
 
 // ---- HEAD's recorded answers ----
@@ -399,6 +402,25 @@ type rhrCell struct {
 	// head overrides the whole of HEAD's answer (a recorded letter of its own).
 	head func(who string) byte
 	note string
+}
+
+// The obligations these tests discharge (reach_flip_obligations_test.go): each
+// declares the cases it covers from the tables the test itself runs, so a table
+// edited without the bar, or the bar edited without the table, shows up there.
+func init() {
+	cutover.RegisterReachDischarge("F4-07-HANDLER-REFUSALS", "TestReachRegisteredPath_HandlerRefusals", func() []string {
+		out := make([]string, 0, len(rhrHandlerRefusals))
+		for _, r := range rhrHandlerRefusals {
+			out = append(out, r.route+"|"+Authoff)
+		}
+		sort.Strings(out)
+		return out
+	})
+	cutover.RegisterReachDischarge("F4-07-HIDDEN-HANDLER-CHECKS", "TestReachRegisteredPath_HiddenHandlerChecks", func() []string {
+		out := slices.Clone(rhrHiddenRoutes)
+		sort.Strings(out)
+		return out
+	})
 }
 
 // rhrAbsentUnderFlip are the routes whose handler judges a record of books' own
