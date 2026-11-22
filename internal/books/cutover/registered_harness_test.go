@@ -95,13 +95,20 @@ import (
 //	res.Status, res.Header, res.Body                     // the answer
 //	res.Route                                            // the registered route Do matched (nil for Raw or no match)
 //	res.Stage13, res.Code                                // Stage13Refused and stage 13's problem code, or Stage13Unobserved
-//	res.Verdict()                                        // 'D' for 401/403, else 'A': record_r0_reach.py's letters
+//	res.Verdict()                                        // 'D' for 401/403, else 'A': record_r0_reach.py's letters, for comparing with R0 only
+//	h.Refused(res, status, code)                         // the refusal assertion for a hand-written cell: exact status AND exact code
 //	res.Admitted()                                       // !(stage 13 refused)
 //
-// Do and DoRoute send every request from an address of its own (core rate limits
-// by address; the auth-off boot's are loopback, the only ones it serves), so a
-// table sweep is never throttled. They return an error, with the Result filled,
-// in two cases only:
+// Every principal has an address of its own, stable for the whole run (a distinct one
+// of 192.0.2.0/24; the auth-off boot's is loopback, the only address it serves), and
+// every request of the principal comes from it. Core's limiter is on and keys on that
+// address and the route's class, so two principals never share a bucket; the budget
+// (registeredConfig.RateLimitPerMinute) is large enough for a table sweep of one
+// principal. A 429 anywhere (Do, DoRoute, MustDo, Raw) fails the test at once with
+// "rate-limited, cell proves nothing": a refusal cell that took any non-2xx, or a
+// verdict letter, would otherwise pass on a throttled request and prove nothing. A test
+// that is about the limiter says so with ExpectRateLimit. They return an error, with
+// the Result filled, in two cases only:
 //
 //	ErrOwnAuth    the route is OwnAuth (the ABS surface): stages 12 and 13 skip it, so
 //	              its answer is the handler's own. Take the Result and judge it as an ABS
@@ -276,7 +283,16 @@ type registeredConfig struct {
 	// AccessAllowed is appended to the owner boot's Access allow-list
 	// (ABO_BOOKS_CFACCESS_ALLOWED_EMAILS); the owner's own address is always on it.
 	AccessAllowed []string
+	// RateLimitPerMinute is core.http.rate_limit.per_minute (the burst is a fifth of
+	// it, at least 10). The limiter is always on, keyed by the caller's address, and
+	// each principal has its own address; zero is harnessRatePerMinute, a budget a
+	// table sweep of one principal does not exhaust. A test about the limiter itself
+	// sets a small number.
+	RateLimitPerMinute int
 }
+
+// harnessRatePerMinute is the limiter's default budget in a harness boot.
+const harnessRatePerMinute = 60000
 
 // Registered is one booted flipped build and the principals that call it.
 type Registered struct {
@@ -299,13 +315,16 @@ type Registered struct {
 	// knownDifferences says it may.
 	KnownDifferences []string
 
-	byName  map[string]*Principal
-	peers   atomic.Int64
-	frontMu sync.Mutex
-	fronted map[string]bool // route -> an anonymous request to it was refused by stage 13
-	logs    *syncLog
-	cfg     registeredConfig
-	access  *accessApp
+	byName map[string]*Principal
+	peers  atomic.Int64
+	// rateExpected counts the ExpectRateLimit calls in progress; a 429 fails the test
+	// while it is zero.
+	rateExpected atomic.Int32
+	frontMu      sync.Mutex
+	fronted      map[string]bool // route -> an anonymous request to it was refused by stage 13
+	logs         *syncLog
+	cfg          registeredConfig
+	access       *accessApp
 }
 
 type syncLog struct {
@@ -606,6 +625,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	setenv("ABO_CORE_STORAGE_PATH", c.DatabasePath)
 	setenv("ABO_CORE_HTTP_LISTEN", "127.0.0.1:0")
 	setenv("ABO_CORE_HTTP_BASIC_GATE_ENABLED", "false")
+	setenv("ABO_CORE_HTTP_RATE_LIMIT_PER_MINUTE", strconv.Itoa(cmp.Or(cfg.RateLimitPerMinute, harnessRatePerMinute)))
 	if cfg.AuthOff {
 		setenv("ABO_CORE_AUTH_MODE", "disabled")
 	}
@@ -1040,11 +1060,67 @@ func judged(ri *httpapi.RouteInfo) bool {
 
 // Verdict is record_r0_reach.py's letter for the answer: 'D' for a 401 or 403,
 // 'A' for anything else (the request got past the authorization decision).
+//
+// Use it to compare with R0's recorded letters, never as the whole refusal check of
+// a hand-written cell: 'A' is every answer that is not a 401 or 403, an error among
+// them, and 'D' does not say which refusal. A cell that expects a refusal asserts
+// Refused (status and code, exactly).
 func (r Result) Verdict() byte {
 	if r.Status == http.StatusUnauthorized || r.Status == http.StatusForbidden {
 		return 'D'
 	}
 	return 'A'
+}
+
+// problemCode is the code the answer names: the code of a problem document, else the
+// last segment of its type, else the message of a plain {"error": ...} answer (the ABS
+// surface's and the legacy handlers'), else "".
+func problemCode(res Result) string {
+	var b struct {
+		Code  string `json:"code"`
+		Type  string `json:"type"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(res.Body, &b) != nil {
+		return ""
+	}
+	switch {
+	case b.Code != "":
+		return b.Code
+	case b.Type != "":
+		return b.Type[strings.LastIndex(b.Type, "/")+1:]
+	}
+	return b.Error
+}
+
+// Refused asserts res is a refusal with exactly this status and this code (see
+// problemCode) and reports whether it is. It is the refusal check of a hand-written
+// cell: matching the status alone, a band of statuses or Verdict() would let another
+// refusal, or a throttled request, stand in for the one the cell is about.
+func (h *Registered) Refused(res Result, status int, code string) bool {
+	h.t.Helper()
+	if got := problemCode(res); res.Status != status || got != code {
+		h.t.Errorf("want the refusal %d %q, got %d %q: %s", status, code, res.Status, got, res.excerpt())
+		return false
+	}
+	return true
+}
+
+// ExpectRateLimit runs fn with 429 answers allowed: the opt-in of a test that is
+// about the limiter. Anywhere else a 429 fails the test.
+func (h *Registered) ExpectRateLimit(fn func()) {
+	h.rateExpected.Add(1)
+	defer h.rateExpected.Add(-1)
+	fn()
+}
+
+// notRateLimited fails the test on a throttled answer: the cell it belongs to
+// measured the limiter, not what it asked.
+func (h *Registered) notRateLimited(res Result, method, path, who string) {
+	h.t.Helper()
+	if res.Status == http.StatusTooManyRequests && h.rateExpected.Load() == 0 {
+		h.t.Fatalf("rate-limited, cell proves nothing: %s %s as %s", method, path, who)
+	}
 }
 
 // Admitted reports that stage 13 did not refuse the request.
@@ -1060,7 +1136,9 @@ func (h *Registered) Raw(req *http.Request) Result {
 	if req.RemoteAddr == "" || req.RemoteAddr == "192.0.2.1:1234" {
 		req.RemoteAddr = h.nextPeer()
 	}
-	return resultOf(h.serve(h.Handler, req), nil)
+	res := resultOf(h.serve(h.Handler, req), nil)
+	h.notRateLimited(res, req.Method, req.URL.RequestURI(), "no principal (Raw)")
+	return res
 }
 
 // excerpt is the start of the response body, for a failure message.
@@ -1072,13 +1150,13 @@ func (r Result) excerpt() string {
 	return strings.TrimSpace(string(b))
 }
 
-// peerFor is the address a request of p is sent from: a fresh one, so no request
-// is throttled by another's. The auth-off boot serves loopback callers only (core's
-// remote refusal), so its principal gets a fresh loopback address.
+// peerFor is the address a request of p is sent from: p's own, the same for the whole
+// run and no other principal's (the sign-in route and the limiter both key on it). A
+// caller that is not in the table (a probe) gets a fresh one. The auth-off boot serves
+// loopback callers only (core's remote refusal), so its principal's is loopback.
 func (h *Registered) peerFor(p *Principal) string {
-	if p.Kind == "authoff" {
-		n := h.peers.Add(1)
-		return fmt.Sprintf("127.0.%d.%d:41000", (n/250)%256, n%250+1)
+	if p.peer != "" {
+		return p.peer
 	}
 	return h.nextPeer()
 }
@@ -1164,7 +1242,9 @@ func (h *Registered) send(via http.Handler, p *Principal, method, path string, b
 		req.Header.Set("Cf-Access-Jwt-Assertion", p.access)
 	}
 	rec := h.serve(via, req)
-	return resultOf(rec, ri), nil
+	res := resultOf(rec, ri)
+	h.notRateLimited(res, method, path, p.Name)
+	return res, nil
 }
 
 // streamTimeout bounds one request. A route that streams (the SSE one) never ends
