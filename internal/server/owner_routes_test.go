@@ -140,7 +140,7 @@ func TestOwnerTrustRoot_ConfigThroughTheRouter(t *testing.T) {
 
 			// No owner: nobody sets the trust root through the API, the
 			// would-be owner's own Access sign-in included (host only).
-			config.AppConfig.OwnerEmail = ""
+			config.SetForTest(func(c *config.Config) { c.OwnerEmail = "" })
 			noOwner := map[string]map[string]string{
 				"that person's Access sign-in":    {cfaccess.CFAccessHeader: "jwt-owner"},
 				"another person's Access sign-in": {cfaccess.CFAccessHeader: "jwt-other"},
@@ -198,7 +198,7 @@ func TestOwnerTrustRoot_RestoreNeedsTheOwnerWhileOneIsSet(t *testing.T) {
 
 	// No owner yet: the ordinary guards only (a signed-in session reaches
 	// the handler, which then fails on the missing backup).
-	config.AppConfig.OwnerEmail = ""
+	config.SetForTest(func(c *config.Config) { c.OwnerEmail = "" })
 	w = f.requestBody(http.MethodPost, "/api/v1/backup/restore", body, map[string]string{"Authorization": "Bearer " + f.sessionToken})
 	assert.False(t, ownerRefused(w), "refused with no owner set: %s", w.Body.String())
 }

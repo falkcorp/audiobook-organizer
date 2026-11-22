@@ -264,11 +264,13 @@ func TestCreateOrganizedVersion_RecomputesITunesPath(t *testing.T) {
 	rootDir := t.TempDir()
 
 	// Set up path mappings so computeITunesPath works
-	oldMappings := config.AppConfig.ITunes.PathMappings
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: rootDir},
-	}
-	defer func() { config.AppConfig.ITunes.PathMappings = oldMappings }()
+	oldMappings := config.Get().ITunes.PathMappings
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: rootDir},
+		}
+	})
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = oldMappings }) }()
 
 	var createdFiles []database.BookFile
 	var mu sync.Mutex
@@ -498,7 +500,7 @@ func TestFilterBooksNeedingOrganization_SkipsAllMissingBookFiles(t *testing.T) {
 
 func TestCreateOrganizedVersion_CopiesAllBookFiles(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig.ITunes.PathMappings = nil // no mappings needed for this test
+	config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = nil }) // no mappings needed for this test
 
 	var createdFiles []database.BookFile
 	var mu sync.Mutex
@@ -571,7 +573,7 @@ func TestCreateOrganizedVersion_CopiesAllBookFiles(t *testing.T) {
 
 func TestCreateOrganizedVersion_SetsCorrectStates(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig.ITunes.PathMappings = nil
+	config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = nil })
 
 	isPrimary := false
 	var updatedOriginal *database.Book

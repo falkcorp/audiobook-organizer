@@ -114,17 +114,21 @@ func newLinkImportEnv(t *testing.T) *linkImportEnv {
 	content := filepath.Join(dir, "Example Book.m4b")
 	require.NoError(t, os.WriteFile(content, []byte("audiodata"), 0o644))
 
-	prevExt, prevDisc, prevMove, prevLabel := config.AppConfig.SupportedExtensions,
-		config.AppConfig.DelugeDiscoveryEnabled, config.AppConfig.DelugeMoveEnabled, config.AppConfig.DelugeDiscoveryLabel
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a"}
-	config.AppConfig.DelugeDiscoveryEnabled = true
-	config.AppConfig.DelugeMoveEnabled = false
-	config.AppConfig.DelugeDiscoveryLabel = "audiobooks"
+	prevExt, prevDisc, prevMove, prevLabel := config.Get().SupportedExtensions,
+		config.Get().DelugeDiscoveryEnabled, config.Get().DelugeMoveEnabled, config.Get().DelugeDiscoveryLabel
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a"}
+		c.DelugeDiscoveryEnabled = true
+		c.DelugeMoveEnabled = false
+		c.DelugeDiscoveryLabel = "audiobooks"
+	})
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = prevExt
-		config.AppConfig.DelugeDiscoveryEnabled = prevDisc
-		config.AppConfig.DelugeMoveEnabled = prevMove
-		config.AppConfig.DelugeDiscoveryLabel = prevLabel
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = prevExt
+			c.DelugeDiscoveryEnabled = prevDisc
+			c.DelugeMoveEnabled = prevMove
+			c.DelugeDiscoveryLabel = prevLabel
+		})
 	})
 
 	return &linkImportEnv{
@@ -269,12 +273,16 @@ func TestDiscoverImport_DelugeUnreachable_ImportsUnlinked(t *testing.T) {
 func TestDiscoverImport_NoClient_ImportsUnlinked(t *testing.T) {
 	env := newLinkImportEnv(t)
 	t.Cleanup(deluge.SetGlobalClientForTest(nil))
-	prevURL, prevHost := config.AppConfig.DelugeWebURL, config.AppConfig.DownloadClient.Torrent.Deluge.Host
-	config.AppConfig.DelugeWebURL = ""
-	config.AppConfig.DownloadClient.Torrent.Deluge.Host = ""
+	prevURL, prevHost := config.Get().DelugeWebURL, config.Get().DownloadClient.Torrent.Deluge.Host
+	config.SetForTest(func(c *config.Config) {
+		c.DelugeWebURL = ""
+		c.DownloadClient.Torrent.Deluge.Host = ""
+	})
 	t.Cleanup(func() {
-		config.AppConfig.DelugeWebURL = prevURL
-		config.AppConfig.DownloadClient.Torrent.Deluge.Host = prevHost
+		config.SetForTest(func(c *config.Config) {
+			c.DelugeWebURL = prevURL
+			c.DownloadClient.Torrent.Deluge.Host = prevHost
+		})
 	})
 
 	w := env.post(t, map[string]string{"content_path": env.content, "torrent_hash": linkTestHash})

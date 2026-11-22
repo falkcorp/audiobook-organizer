@@ -17,12 +17,14 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_AudiobookOrganizerPath(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+		}
+	})
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/audiobook-organizer/Author/Title/file.m4b")
 	assert.Equal(t,
@@ -31,12 +33,14 @@ func TestComputeITunesPath_AudiobookOrganizerPath(t *testing.T) {
 }
 
 func TestComputeITunesPath_ITunesMediaPath(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/itunes/iTunes Media", To: "/mnt/bigdata/books/itunes/iTunes Media"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/itunes/iTunes Media", To: "/mnt/bigdata/books/itunes/iTunes Media"},
+		}
+	})
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/itunes/iTunes Media/Audiobooks/Author/book.m4b")
 	assert.Equal(t,
@@ -45,12 +49,14 @@ func TestComputeITunesPath_ITunesMediaPath(t *testing.T) {
 }
 
 func TestComputeITunesPath_NoMatchingMapping(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+		}
+	})
 
 	result := metafetch.ComputeITunesPath("/some/random/path/file.m4b")
 	assert.Equal(t, "", result, "unmatched path should return empty string")
@@ -62,10 +68,10 @@ func TestComputeITunesPath_EmptyPath(t *testing.T) {
 }
 
 func TestComputeITunesPath_NoMappingsConfigured(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = nil
+	config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = nil })
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/audiobook-organizer/Author/file.m4b")
 	assert.Equal(t, "", result, "no mappings should return empty string")
@@ -76,12 +82,14 @@ func TestComputeITunesPath_NoMappingsConfigured(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_SpacesEncoded(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+		}
+	})
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/audiobook-organizer/Brandon Sanderson/The Way of Kings/file.m4b")
 	assert.Contains(t, result, "Brandon%20Sanderson")
@@ -93,12 +101,14 @@ func TestComputeITunesPath_SpacesEncoded(t *testing.T) {
 }
 
 func TestComputeITunesPath_SpecialCharsInTitle(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+		}
+	})
 
 	tests := []struct {
 		name     string
@@ -137,13 +147,15 @@ func TestComputeITunesPath_SpecialCharsInTitle(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_OrganizedVsITunes_Distinction(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-		{From: "W:/itunes/iTunes Media", To: "/mnt/bigdata/books/itunes/iTunes Media"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+			{From: "W:/itunes/iTunes Media", To: "/mnt/bigdata/books/itunes/iTunes Media"},
+		}
+	})
 
 	organizedPath := "/mnt/bigdata/books/audiobook-organizer/Author/Title/file.m4b"
 	itunesPath := "/mnt/bigdata/books/itunes/iTunes Media/Audiobooks/Author/file.m4b"
@@ -164,15 +176,17 @@ func TestComputeITunesPath_OrganizedVsITunes_Distinction(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_FirstMappingWins(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
 	// Both mappings could match a path starting with /mnt/bigdata/books/
 	// but the more specific one should be listed first
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-		{From: "W:/books", To: "/mnt/bigdata/books"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+			{From: "W:/books", To: "/mnt/bigdata/books"},
+		}
+	})
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/audiobook-organizer/Author/file.m4b")
 	assert.Contains(t, result, "W:/audiobook-organizer",
@@ -184,13 +198,15 @@ func TestComputeITunesPath_FirstMappingWins(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestComputeITunesPath_TrailingSlashConsistency(t *testing.T) {
-	old := config.AppConfig.ITunes.PathMappings
-	defer func() { config.AppConfig.ITunes.PathMappings = old }()
+	old := config.Get().ITunes.PathMappings
+	defer func() { config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = old }) }()
 
 	// No trailing slash in mapping
-	config.AppConfig.ITunes.PathMappings = []config.ITunesPathMap{
-		{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.ITunes.PathMappings = []config.ITunesPathMap{
+			{From: "W:/audiobook-organizer", To: "/mnt/bigdata/books/audiobook-organizer"},
+		}
+	})
 
 	result := metafetch.ComputeITunesPath("/mnt/bigdata/books/audiobook-organizer/Author/file.m4b")
 	assert.NotEmpty(t, result)

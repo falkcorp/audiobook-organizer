@@ -98,7 +98,7 @@ func TestDiagnosticsTracesRoutes_Permissions(t *testing.T) {
 	srv, adminToken, viewerToken, _, cleanup := setupUserTagsAuthzTestServer(t)
 	defer cleanup()
 
-	dir := filepath.Join(filepath.Dir(config.AppConfig.DatabasePath), "traces")
+	dir := filepath.Join(filepath.Dir(config.Get().DatabasePath), "traces")
 	require.NoError(t, os.MkdirAll(dir, 0o750))
 	const name = "20261014T010203Z-watchdog-stuck.trace"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("go 1.27 trace"), 0o600))

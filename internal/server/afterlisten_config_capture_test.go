@@ -26,26 +26,30 @@ import (
 // they were, whatever the process-global config becomes afterwards.
 func TestCaptureStartConfig_IsASnapshot(t *testing.T) {
 	prev := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = prev })
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 
-	config.AppConfig.AutoScanEnabled = true
-	config.AppConfig.AutoScanDebounceSeconds = 0
-	config.AppConfig.WriteStartupReadOnlyKey = true
-	config.AppConfig.Maintenance.AcoustIDBackfill = true
-	config.AppConfig.Maintenance.Enabled = true
-	config.AppConfig.Maintenance.WindowStart = 23
-	config.AppConfig.Maintenance.WindowEnd = 2
-	config.AppConfig.DatabasePath = "/srv/batcave/audiobooks.pebble"
+	config.SetForTest(func(c *config.Config) {
+		c.AutoScanEnabled = true
+		c.AutoScanDebounceSeconds = 0
+		c.WriteStartupReadOnlyKey = true
+		c.Maintenance.AcoustIDBackfill = true
+		c.Maintenance.Enabled = true
+		c.Maintenance.WindowStart = 23
+		c.Maintenance.WindowEnd = 2
+		c.DatabasePath = "/srv/batcave/audiobooks.pebble"
+	})
 	got := captureStartConfig()
 
-	config.AppConfig.AutoScanEnabled = false
-	config.AppConfig.AutoScanDebounceSeconds = 90
-	config.AppConfig.WriteStartupReadOnlyKey = false
-	config.AppConfig.Maintenance.AcoustIDBackfill = false
-	config.AppConfig.Maintenance.Enabled = false
-	config.AppConfig.Maintenance.WindowStart = 1
-	config.AppConfig.Maintenance.WindowEnd = 2
-	config.AppConfig.DatabasePath = "/srv/gotham/other.pebble"
+	config.SetForTest(func(c *config.Config) {
+		c.AutoScanEnabled = false
+		c.AutoScanDebounceSeconds = 90
+		c.WriteStartupReadOnlyKey = false
+		c.Maintenance.AcoustIDBackfill = false
+		c.Maintenance.Enabled = false
+		c.Maintenance.WindowStart = 1
+		c.Maintenance.WindowEnd = 2
+		c.DatabasePath = "/srv/gotham/other.pebble"
+	})
 
 	require.Equal(t, "/srv/batcave/audiobooks.pebble", got.databasePath,
 		"the path EnsureSecureStateDir's fallback derives from")
@@ -57,7 +61,7 @@ func TestCaptureStartConfig_IsASnapshot(t *testing.T) {
 	require.Equal(t, 23, got.maintenance.WindowStart)
 	require.Equal(t, 2, got.maintenance.WindowEnd)
 
-	config.AppConfig.AutoScanDebounceSeconds = 90
+	config.SetForTest(func(c *config.Config) { c.AutoScanDebounceSeconds = 90 })
 	require.Equal(t, 90*time.Second, captureStartConfig().autoScanDebounce)
 }
 
@@ -67,10 +71,12 @@ func TestCaptureStartConfig_IsASnapshot(t *testing.T) {
 // schedulerDeps reads the maintenance settings from config.AppConfig.
 func TestSchedulerDeps_ReadsTheCapturedMaintenanceNotTheLiveConfig(t *testing.T) {
 	prev := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = prev })
-	config.AppConfig.Maintenance.Enabled = true
-	config.AppConfig.Maintenance.WindowStart = 2
-	config.AppConfig.Maintenance.WindowEnd = 5
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
+	config.SetForTest(func(c *config.Config) {
+		c.Maintenance.Enabled = true
+		c.Maintenance.WindowStart = 2
+		c.Maintenance.WindowEnd = 5
+	})
 
 	s := &Server{}
 	s.life.startConfig = captureStartConfig()
@@ -91,9 +97,11 @@ func TestSchedulerDeps_ReadsTheCapturedMaintenanceNotTheLiveConfig(t *testing.T)
 	}()
 	close(start)
 	for i := range 50 { // the caller's config edit
-		config.AppConfig.Maintenance.Enabled = i%2 == 0
-		config.AppConfig.Maintenance.WindowStart = i
-		config.AppConfig.Maintenance.WindowEnd = i + 1
+		config.SetForTest(func(c *config.Config) {
+			c.Maintenance.Enabled = i%2 == 0
+			c.Maintenance.WindowStart = i
+			c.Maintenance.WindowEnd = i + 1
+		})
 	}
 	wg.Wait()
 }

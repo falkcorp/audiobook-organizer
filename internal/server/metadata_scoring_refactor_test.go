@@ -105,9 +105,9 @@ func TestScoreBaseCandidates_EmbeddingTierUsed(t *testing.T) {
 		name:   "embedding",
 		scores: []float64{0.9, 0.7, 0.3},
 	}, nil)
-	prev := config.AppConfig.MetadataScoring.EmbeddingEnabled
-	config.AppConfig.MetadataScoring.EmbeddingEnabled = true
-	defer func() { config.AppConfig.MetadataScoring.EmbeddingEnabled = prev }()
+	prev := config.Get().MetadataScoring.EmbeddingEnabled
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = true })
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = prev }) }()
 
 	results := []metadata.BookMetadata{
 		{Title: "A"}, {Title: "B"}, {Title: "C"},
@@ -125,9 +125,9 @@ func TestScoreBaseCandidates_ConfigDisabledFallsBackToF1(t *testing.T) {
 		name:   "embedding",
 		scores: []float64{1.0, 1.0, 1.0},
 	}, nil)
-	prev := config.AppConfig.MetadataScoring.EmbeddingEnabled
-	config.AppConfig.MetadataScoring.EmbeddingEnabled = false
-	defer func() { config.AppConfig.MetadataScoring.EmbeddingEnabled = prev }()
+	prev := config.Get().MetadataScoring.EmbeddingEnabled
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = false })
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = prev }) }()
 
 	results := []metadata.BookMetadata{
 		{Title: "The Way of Kings"},
@@ -146,9 +146,9 @@ func TestScoreBaseCandidates_ConfigDisabledFallsBackToF1(t *testing.T) {
 func TestScoreBaseCandidates_ScorerErrorFallsBackToF1(t *testing.T) {
 	stub := &scorerStub{name: "embedding", err: errors.New("api boom")}
 	mfs := newScoringTestService(stub, nil)
-	prev := config.AppConfig.MetadataScoring.EmbeddingEnabled
-	config.AppConfig.MetadataScoring.EmbeddingEnabled = true
-	defer func() { config.AppConfig.MetadataScoring.EmbeddingEnabled = prev }()
+	prev := config.Get().MetadataScoring.EmbeddingEnabled
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = true })
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = prev }) }()
 
 	results := []metadata.BookMetadata{{Title: "The Way of Kings"}}
 	searchWords := metafetch.SignificantWords("The Way of Kings")
@@ -162,9 +162,9 @@ func TestScoreBaseCandidates_ScorerErrorFallsBackToF1(t *testing.T) {
 
 func TestScoreBaseCandidates_NilScorerFallsBackSilently(t *testing.T) {
 	mfs := newScoringTestService(nil, nil)
-	prev := config.AppConfig.MetadataScoring.EmbeddingEnabled
-	config.AppConfig.MetadataScoring.EmbeddingEnabled = true
-	defer func() { config.AppConfig.MetadataScoring.EmbeddingEnabled = prev }()
+	prev := config.Get().MetadataScoring.EmbeddingEnabled
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = true })
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = prev }) }()
 
 	results := []metadata.BookMetadata{{Title: "The Way of Kings"}}
 	searchWords := metafetch.SignificantWords("The Way of Kings")
@@ -187,13 +187,17 @@ func TestMetadataScorer_WiredEndToEnd(t *testing.T) {
 	}
 
 	mfs := newScoringTestService(stub, nil)
-	prev := config.AppConfig.MetadataScoring.EmbeddingEnabled
-	prevMin := config.AppConfig.MetadataScoring.EmbeddingMinScore
-	config.AppConfig.MetadataScoring.EmbeddingEnabled = true
-	config.AppConfig.MetadataScoring.EmbeddingMinScore = 0.50
+	prev := config.Get().MetadataScoring.EmbeddingEnabled
+	prevMin := config.Get().MetadataScoring.EmbeddingMinScore
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataScoring.EmbeddingEnabled = true
+		c.MetadataScoring.EmbeddingMinScore = 0.50
+	})
 	defer func() {
-		config.AppConfig.MetadataScoring.EmbeddingEnabled = prev
-		config.AppConfig.MetadataScoring.EmbeddingMinScore = prevMin
+		config.SetForTest(func(c *config.Config) {
+			c.MetadataScoring.EmbeddingEnabled = prev
+			c.MetadataScoring.EmbeddingMinScore = prevMin
+		})
 	}()
 
 	book := &database.Book{ID: "BOOK_X", Title: "Query Title"}
@@ -213,7 +217,7 @@ func TestMetadataScorer_WiredEndToEnd(t *testing.T) {
 	var kept []int
 	for i, s := range scores {
 		adjusted := metafetch.ApplyNonBaseAdjustments(s, results[i], 0, "")
-		if adjusted > config.AppConfig.MetadataScoring.EmbeddingMinScore {
+		if adjusted > config.Get().MetadataScoring.EmbeddingMinScore {
 			kept = append(kept, i)
 		}
 	}
@@ -232,13 +236,17 @@ func TestRerankTopK_FiresOnAmbiguousTop(t *testing.T) {
 	}
 	mfs := newScoringTestService(nil, llm)
 
-	prevEps := config.AppConfig.MetadataScoring.LLMRerankEpsilon
-	prevK := config.AppConfig.MetadataScoring.LLMRerankTopK
-	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.05
-	config.AppConfig.MetadataScoring.LLMRerankTopK = 5
+	prevEps := config.Get().MetadataScoring.LLMRerankEpsilon
+	prevK := config.Get().MetadataScoring.LLMRerankTopK
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataScoring.LLMRerankEpsilon = 0.05
+		c.MetadataScoring.LLMRerankTopK = 5
+	})
 	defer func() {
-		config.AppConfig.MetadataScoring.LLMRerankEpsilon = prevEps
-		config.AppConfig.MetadataScoring.LLMRerankTopK = prevK
+		config.SetForTest(func(c *config.Config) {
+			c.MetadataScoring.LLMRerankEpsilon = prevEps
+			c.MetadataScoring.LLMRerankTopK = prevK
+		})
 	}()
 
 	book := &database.Book{ID: "BOOK", Title: "Query"}
@@ -277,13 +285,15 @@ func TestRerankTopK_HonorsTopKCap(t *testing.T) {
 	}
 	mfs := newScoringTestService(nil, llm)
 
-	prevEps := config.AppConfig.MetadataScoring.LLMRerankEpsilon
-	prevK := config.AppConfig.MetadataScoring.LLMRerankTopK
-	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.50 // huge — everything is "ambiguous"
-	config.AppConfig.MetadataScoring.LLMRerankTopK = 3
+	prevEps := config.Get().MetadataScoring.LLMRerankEpsilon
+	prevK := config.Get().MetadataScoring.LLMRerankTopK
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.LLMRerankEpsilon = 0.50 }) // huge — everything is "ambiguous"
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.LLMRerankTopK = 3 })
 	defer func() {
-		config.AppConfig.MetadataScoring.LLMRerankEpsilon = prevEps
-		config.AppConfig.MetadataScoring.LLMRerankTopK = prevK
+		config.SetForTest(func(c *config.Config) {
+			c.MetadataScoring.LLMRerankEpsilon = prevEps
+			c.MetadataScoring.LLMRerankTopK = prevK
+		})
 	}()
 
 	book := &database.Book{ID: "BOOK", Title: "Query"}
@@ -308,9 +318,9 @@ func TestRerankTopK_NoAmbiguityReturnsUnchanged(t *testing.T) {
 	llm := &scorerStub{name: "llm", scores: []float64{0.9}}
 	mfs := newScoringTestService(nil, llm)
 
-	prevEps := config.AppConfig.MetadataScoring.LLMRerankEpsilon
-	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.01
-	defer func() { config.AppConfig.MetadataScoring.LLMRerankEpsilon = prevEps }()
+	prevEps := config.Get().MetadataScoring.LLMRerankEpsilon
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.LLMRerankEpsilon = 0.01 })
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.LLMRerankEpsilon = prevEps }) }()
 
 	candidates := []metafetch.MetadataCandidate{
 		{Title: "A", Score: 0.95},
@@ -341,9 +351,9 @@ func TestRerankTopK_LLMErrorKeepsBaseScores(t *testing.T) {
 	llm := &scorerStub{name: "llm", err: errors.New("openai boom")}
 	mfs := newScoringTestService(nil, llm)
 
-	prevEps := config.AppConfig.MetadataScoring.LLMRerankEpsilon
-	config.AppConfig.MetadataScoring.LLMRerankEpsilon = 0.10
-	defer func() { config.AppConfig.MetadataScoring.LLMRerankEpsilon = prevEps }()
+	prevEps := config.Get().MetadataScoring.LLMRerankEpsilon
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.LLMRerankEpsilon = 0.10 })
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataScoring.LLMRerankEpsilon = prevEps }) }()
 
 	candidates := []metafetch.MetadataCandidate{
 		{Title: "A", Score: 0.95},

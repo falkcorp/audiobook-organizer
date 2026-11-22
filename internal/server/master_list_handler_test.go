@@ -147,7 +147,7 @@ func TestMasterListUpload_RefusesBadUploadsAndStoresNothing(t *testing.T) {
 
 func TestMasterListUpload_OversizedBodyIsRefusedBeforeParsing(t *testing.T) {
 	f := setupCredGuardServer(t)
-	config.AppConfig.UploadBodyLimitMB = 1
+	config.SetForTest(func(c *config.Config) { c.UploadBodyLimitMB = 1 })
 	big := "title,asin\n" + strings.Repeat("Synthetic Tale,B000000001\n", 60000) // ~1.5 MB
 	w := f.postMasterList(t, f.sessionToken, bytes.NewBufferString(big), "text/csv", "")
 	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code, w.Body.String())
@@ -163,7 +163,7 @@ func TestMasterListUpload_OversizedBodyIsRefusedBeforeParsing(t *testing.T) {
 
 func TestMasterListUpload_RowCapIsAFileError(t *testing.T) {
 	f := setupCredGuardServer(t)
-	config.AppConfig.UploadBodyLimitMB = 10
+	config.SetForTest(func(c *config.Config) { c.UploadBodyLimitMB = 10 })
 	var sb strings.Builder
 	sb.WriteString("asin\n")
 	for i := 0; i <= masterlist.MaxRows; i++ {
@@ -297,9 +297,9 @@ func masterListIDs(t *testing.T, f *credGuardFixture) []string {
 // never another uploader's lists and never read-elsewhere records.
 func TestMasterListUpload_RetentionPrunesTheUploadersOldestLists(t *testing.T) {
 	f := setupCredGuardServer(t)
-	prev := config.AppConfig.MasterListRetention
-	config.AppConfig.MasterListRetention = 2
-	t.Cleanup(func() { config.AppConfig.MasterListRetention = prev })
+	prev := config.Get().MasterListRetention
+	config.SetForTest(func(c *config.Config) { c.MasterListRetention = 2 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MasterListRetention = prev }) })
 
 	st := database.NewMasterListStore(f.store.DB())
 	other, err := st.PutList(database.MasterListMeta{Filename: "other.csv", Format: masterlist.FormatCSV, UploadedBy: "someone-else"},
@@ -332,9 +332,9 @@ func TestMasterListUpload_RetentionPrunesTheUploadersOldestLists(t *testing.T) {
 func TestMasterListUpload_RetentionDefaultsWhenUnsetOrInvalid(t *testing.T) {
 	for _, n := range []int{0, -5} {
 		f := setupCredGuardServer(t)
-		prev := config.AppConfig.MasterListRetention
-		config.AppConfig.MasterListRetention = n
-		t.Cleanup(func() { config.AppConfig.MasterListRetention = prev })
+		prev := config.Get().MasterListRetention
+		config.SetForTest(func(c *config.Config) { c.MasterListRetention = n })
+		t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MasterListRetention = prev }) })
 
 		require.Equal(t, database.DefaultMasterListRetention, masterListRetention(), "retention %d", n)
 
@@ -349,7 +349,7 @@ func TestMasterListUpload_RetentionDefaultsWhenUnsetOrInvalid(t *testing.T) {
 		assert.NotContains(t, remaining, ids[0], "retention %d: the oldest went", n)
 		assert.NotContains(t, remaining, ids[1], "retention %d: the second oldest went", n)
 		assert.Contains(t, remaining, ids[len(ids)-1], "retention %d: the list just stored stays", n)
-		config.AppConfig.MasterListRetention = prev
+		config.SetForTest(func(c *config.Config) { c.MasterListRetention = prev })
 	}
 }
 

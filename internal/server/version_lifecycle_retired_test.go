@@ -543,7 +543,8 @@ func TestHandlePurgeVersion_LibraryRootNotReadyIsA503(t *testing.T) {
 		t.Fatal(err)
 	}
 	ver := trashedVersionWithRow(t, store, audio)
-	config.AppConfig.RootDir = filepath.Join(t.TempDir(), "not-mounted")
+	cowV1 := filepath.Join(t.TempDir(), "not-mounted")
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 
 	w := postPurgeNow(t, srv, ver)
 	if w.Code != http.StatusServiceUnavailable {

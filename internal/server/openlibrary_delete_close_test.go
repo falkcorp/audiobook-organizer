@@ -30,9 +30,9 @@ import (
 func TestDeleteOLData_NeverRemovesDataUnderAnOpenEngine(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dumpDir := filepath.Join(t.TempDir(), "ol-dumps")
-	prev := config.AppConfig.OpenLibraryDumpDir
-	config.AppConfig.OpenLibraryDumpDir = dumpDir
-	t.Cleanup(func() { config.AppConfig.OpenLibraryDumpDir = prev })
+	prev := config.Get().OpenLibraryDumpDir
+	config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = dumpDir })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = prev }) })
 
 	db, err := pebble.Open(filepath.Join(dumpDir, "oldb"), &pebble.Options{FormatMajorVersion: pebble.FormatNewest})
 	if err != nil {

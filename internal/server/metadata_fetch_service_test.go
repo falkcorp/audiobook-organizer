@@ -96,14 +96,16 @@ func TestMetadataFetchService_ApplyMetadataToBook(t *testing.T) {
 
 func TestMetadataFetchService_BuildSourceChain(t *testing.T) {
 	// Save and restore config
-	origSources := config.AppConfig.MetadataSources
-	defer func() { config.AppConfig.MetadataSources = origSources }()
+	origSources := config.Get().MetadataSources
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = origSources }) }()
 
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 3},
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
-		{ID: "audnexus", Name: "Audnexus", Enabled: false, Priority: 2},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "google-books", Name: "Google Books", Enabled: true, Priority: 3},
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1},
+			{ID: "audnexus", Name: "Audnexus", Enabled: false, Priority: 2},
+		}
+	})
 
 	mockDB := &database.MockStore{}
 	mfs := metafetch.NewService(mockDB)
@@ -121,12 +123,14 @@ func TestMetadataFetchService_BuildSourceChain(t *testing.T) {
 }
 
 func TestMetadataFetchService_NoSourcesEnabled(t *testing.T) {
-	origSources := config.AppConfig.MetadataSources
-	defer func() { config.AppConfig.MetadataSources = origSources }()
+	origSources := config.Get().MetadataSources
+	defer func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = origSources }) }()
 
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Enabled: false, Priority: 1},
-	}
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Enabled: false, Priority: 1},
+		}
+	})
 
 	authorID := 1
 	mockDB := &database.MockStore{

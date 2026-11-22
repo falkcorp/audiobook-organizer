@@ -55,7 +55,7 @@ func TestSetupTestServerCleanup_DrainsRunningOpBeforeReturning(t *testing.T) {
 			}
 			// Touch the same global the real autoBackup reads, then block while
 			// ignoring ctx — exactly the pattern that used to leak past Shutdown.
-			_ = config.AppConfig.DatabasePath
+			_ = config.Get().DatabasePath
 			<-release
 			exited.Store(true)
 			return nil

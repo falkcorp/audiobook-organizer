@@ -36,16 +36,16 @@ const missingFilesPlanPath = "/api/v1/repairs/reconcile.missing-files/plan"
 func repairsPermServer(t *testing.T, enableAuth, withUsers bool) (srv *Server, editorToken, adminToken string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	origCfg := config.AppConfig
+	origCfg := config.Snapshot()
 	tempDir, err := os.MkdirTemp("", "repairs-perm-test-*")
 	require.NoError(t, err)
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		DatabaseType: "pebble",
 		DatabasePath: filepath.Join(tempDir, "test.pebble"),
 		RootDir:      tempDir,
 		EnableAuth:   enableAuth,
-	}
-	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
+	})
+	store, err := database.NewPebbleStoreInMemory(config.Get().DatabasePath)
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
 	// Routes under test read through memdb (the purge and forget paths sample
@@ -77,7 +77,7 @@ func repairsPermServer(t *testing.T, enableAuth, withUsers bool) (srv *Server, e
 		database.SetGlobalStore(nil)
 		store.Close()
 		_ = os.RemoveAll(tempDir)
-		config.AppConfig = origCfg
+		config.ReplaceForTest(origCfg)
 	})
 	return srv, editorToken, adminToken
 }

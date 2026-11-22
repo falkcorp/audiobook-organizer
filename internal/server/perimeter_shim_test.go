@@ -232,11 +232,13 @@ func TestPerimeter_ParityWithHEAD(t *testing.T) {
 	})
 
 	t.Run("basic gate", func(t *testing.T) {
-		orig := config.AppConfig
-		t.Cleanup(func() { config.AppConfig = orig })
-		config.AppConfig.BasicAuthEnabled = true
-		config.AppConfig.BasicAuthUsername = "alfred"
-		config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
+		orig := config.Snapshot()
+		t.Cleanup(func() { config.ReplaceForTest(orig) })
+		config.SetForTest(func(c *config.Config) {
+			c.BasicAuthEnabled = true
+			c.BasicAuthUsername = "alfred"
+			c.BasicAuthPassword = "synthetic-wayne-manor-gate"
+		})
 		for _, c := range perimeterCases() {
 			c.name = "gated: " + c.name
 			if strings.Contains(c.name, "unmatched method") {
@@ -307,9 +309,9 @@ func TestPerimeter_ParityWithHEAD(t *testing.T) {
 	})
 
 	t.Run("peer gate", func(t *testing.T) {
-		orig := config.AppConfig
-		t.Cleanup(func() { config.AppConfig = orig })
-		config.AppConfig.AllowedPeerCIDRs = "192.0.2.0/28"
+		orig := config.Snapshot()
+		t.Cleanup(func() { config.ReplaceForTest(orig) })
+		config.SetForTest(func(c *config.Config) { c.AllowedPeerCIDRs = "192.0.2.0/28" })
 		// What the kernel does at start step 7 with books' R1Values.
 		require.NoError(t, router.SetPerimeter(httpapi.Options{
 			PeerAllowlist: []httpapi.TrustedPeer{{Prefix: netip.MustParsePrefix("192.0.2.0/28")}},
@@ -362,11 +364,13 @@ func TestPerimeterShim_AltSvcOnUnroutedAnswers(t *testing.T) {
 func TestPerimeterShim_HandlerOwn401KeepsNoVary(t *testing.T) {
 	f := legacyEngine(t, false, false)
 	_, _, r1 := perimeterStacks(t, f, "")
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.BasicAuthEnabled = true
-	config.AppConfig.BasicAuthUsername = "alfred"
-	config.AppConfig.BasicAuthPassword = "synthetic-wayne-manor-gate"
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.BasicAuthEnabled = true
+		c.BasicAuthUsername = "alfred"
+		c.BasicAuthPassword = "synthetic-wayne-manor-gate"
+	})
 	origin := map[string]string{"Accept-Encoding": "gzip", "Origin": "https://gotham.example"}
 	for _, c := range withHeader([]perimeterCase{
 		{name: "API route", method: http.MethodGet, path: "/api/v1/audiobooks", header: origin},

@@ -26,7 +26,7 @@ func TestSoftDeleteAndPurge_WithFileDeletion(t *testing.T) {
 
 	// The purge deletes only inside the library root (purgePathInsideRoot,
 	// 2026-10-06), so the file lives under RootDir.
-	filePath := filepath.Join(config.AppConfig.RootDir, "purge.m4b")
+	filePath := filepath.Join(config.Get().RootDir, "purge.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Purge Me", FilePath: filePath, Format: "m4b"})
 	require.NoError(t, err)
@@ -50,12 +50,14 @@ func TestRunAutoPurgeSoftDeleted_DeletesOldEntries(t *testing.T) {
 	defer cleanup()
 
 	// AppConfig is fully restored by defer cleanup() from setupTestServer.
-	config.AppConfig.PurgeSoftDeletedAfterDays = 1
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	config.SetForTest(func(c *config.Config) {
+		c.PurgeSoftDeletedAfterDays = 1
+		c.PurgeSoftDeletedDeleteFiles = true
+	})
 
 	// The purge deletes only inside the library root (purgePathInsideRoot,
 	// 2026-10-06), so the file lives under RootDir.
-	filePath := filepath.Join(config.AppConfig.RootDir, "auto-purge.m4b")
+	filePath := filepath.Join(config.Get().RootDir, "auto-purge.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: "Auto Purge", FilePath: filePath, Format: "m4b"})
 	require.NoError(t, err)
@@ -113,7 +115,7 @@ func TestDiscardProgressAndPurge_RouteRefusesLiveBook(t *testing.T) {
 // two days ago, with no book_file rows (so the purge may take it).
 func seedOldSoftDeletedBook(t *testing.T, name string) *database.Book {
 	t.Helper()
-	filePath := filepath.Join(config.AppConfig.RootDir, name+".m4b")
+	filePath := filepath.Join(config.Get().RootDir, name+".m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{Title: name, FilePath: filePath, Format: "m4b"})
 	require.NoError(t, err)
@@ -134,8 +136,10 @@ func TestRunAutoPurgeSoftDeleted_ContextCancelPropagates(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 1
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	config.SetForTest(func(c *config.Config) {
+		c.PurgeSoftDeletedAfterDays = 1
+		c.PurgeSoftDeletedDeleteFiles = true
+	})
 	books := []*database.Book{
 		seedOldSoftDeletedBook(t, "cancel-a"),
 		seedOldSoftDeletedBook(t, "cancel-b"),
@@ -167,8 +171,10 @@ func TestRunAutoPurgeSoftDeleted_RefusedPassFailsTheOp(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 1
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	config.SetForTest(func(c *config.Config) {
+		c.PurgeSoftDeletedAfterDays = 1
+		c.PurgeSoftDeletedDeleteFiles = true
+	})
 	book := seedOldSoftDeletedBook(t, "refused-pass")
 	require.NoError(t, database.GetGlobalStore().SetRaw("merge:combine-journal:01CORRUPTROW", []byte("{not json")))
 
@@ -190,8 +196,10 @@ func TestRunAutoPurgeSoftDeleted_DisabledPurgesNothing(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 0
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	config.SetForTest(func(c *config.Config) {
+		c.PurgeSoftDeletedAfterDays = 0
+		c.PurgeSoftDeletedDeleteFiles = true
+	})
 	book := seedOldSoftDeletedBook(t, "disabled-purge")
 
 	server.runAutoPurgeSoftDeleted(t.Context(), "")

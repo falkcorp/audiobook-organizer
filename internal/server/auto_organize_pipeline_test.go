@@ -55,10 +55,12 @@ func TestAutoOrganizeResolvesScannedBooksToIDs(t *testing.T) {
 
 	// RootDir empty => the hook must bail before touching the organize service,
 	// which is also what keeps this test from needing one.
-	oldRoot, oldAuto := config.AppConfig.RootDir, config.AppConfig.AutoOrganize
-	t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.AutoOrganize = oldRoot, oldAuto })
-	config.AppConfig.AutoOrganize = true
-	config.AppConfig.RootDir = ""
+	oldRoot, oldAuto := config.Get().RootDir, config.Get().AutoOrganize
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir, c.AutoOrganize = oldRoot, oldAuto }) })
+	config.SetForTest(func(c *config.Config) {
+		c.AutoOrganize = true
+		c.RootDir = ""
+	})
 
 	srv := &Server{store: store}
 	// organizeService is deliberately nil: with RootDir unset the hook must
@@ -77,10 +79,11 @@ func TestAutoOrganizeResolvesScannedBooksToIDs(t *testing.T) {
 func TestAutoOrganizeSkipsWhenDisabled(t *testing.T) {
 	store := autoOrganizeTestStore(t)
 
-	oldRoot, oldAuto := config.AppConfig.RootDir, config.AppConfig.AutoOrganize
-	t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.AutoOrganize = oldRoot, oldAuto })
-	config.AppConfig.AutoOrganize = false
-	config.AppConfig.RootDir = t.TempDir()
+	oldRoot, oldAuto := config.Get().RootDir, config.Get().AutoOrganize
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir, c.AutoOrganize = oldRoot, oldAuto }) })
+	config.SetForTest(func(c *config.Config) { c.AutoOrganize = false })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 
 	srv := &Server{store: store}
 	// Again nil organizeService: disabled must mean "return", not "call".
@@ -115,18 +118,22 @@ func TestAutoOrganizeHandsWorkToTheRealPipeline(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	oldRoot, oldAuto := config.AppConfig.RootDir, config.AppConfig.AutoOrganize
-	oldStrategy := config.AppConfig.OrganizationStrategy
+	oldRoot, oldAuto := config.Get().RootDir, config.Get().AutoOrganize
+	oldStrategy := config.Get().OrganizationStrategy
 	t.Cleanup(func() {
-		config.AppConfig.RootDir, config.AppConfig.AutoOrganize = oldRoot, oldAuto
-		config.AppConfig.OrganizationStrategy = oldStrategy
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir, c.AutoOrganize = oldRoot, oldAuto
+			c.OrganizationStrategy = oldStrategy
+		})
 	})
-	config.AppConfig.AutoOrganize = true
-	config.AppConfig.RootDir = root
+	config.SetForTest(func(c *config.Config) {
+		c.AutoOrganize = true
+		c.RootDir = root
+	})
 	// Explicit "copy" rather than the "auto" default: auto tries reflink then
 	// hardlink first, and which one succeeds depends on the filesystem the
 	// temp dir lands on, which would make this test's behaviour machine-specific.
-	config.AppConfig.OrganizationStrategy = "copy"
+	config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = "copy" })
 
 	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
 	srv.autoOrganizeScannedBooks(context.Background(),

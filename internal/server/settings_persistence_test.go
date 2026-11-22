@@ -43,8 +43,8 @@ func TestAPIKeyPersistenceRoundtrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	assert.NotContains(t, w.Body.String(), plaintext, "PUT must not echo a secret")
 
-	assert.Equal(t, plaintext, config.AppConfig.OpenAIAPIKey, "API key should be in effect after PUT")
-	assert.True(t, config.AppConfig.EnableAIParsing)
+	assert.Equal(t, plaintext, config.Get().OpenAIAPIKey, "API key should be in effect after PUT")
+	assert.True(t, config.Get().EnableAIParsing)
 
 	// GET: the key is a secret entry with metadata and no value, anywhere in the body.
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
@@ -77,7 +77,7 @@ func TestAPIKeyPersistenceRoundtrip(t *testing.T) {
 	w = httptest.NewRecorder()
 	server.router.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Empty(t, config.AppConfig.OpenAIAPIKey)
+	assert.Empty(t, config.Get().OpenAIAPIKey)
 }
 
 // TestOLDumpUpload tests that the OpenLibrary dump upload endpoint works.
@@ -86,7 +86,8 @@ func TestOLDumpUpload(t *testing.T) {
 	defer cleanup()
 
 	// Set up a dump dir
-	config.AppConfig.OpenLibraryDumpDir = t.TempDir()
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = cowV1 })
 
 	// Create a multipart form with a small .gz file
 	var buf bytes.Buffer
@@ -166,7 +167,8 @@ func TestOLDumpUploadBadExtension(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.OpenLibraryDumpDir = t.TempDir()
+	cowV2 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = cowV2 })
 
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -190,8 +192,10 @@ func TestOLDumpDirAutoDerive(t *testing.T) {
 	_ = server
 
 	// Clear the dump dir, set root dir
-	config.AppConfig.OpenLibraryDumpDir = ""
-	config.AppConfig.RootDir = "/tmp/test-audiobooks"
+	config.SetForTest(func(c *config.Config) {
+		c.OpenLibraryDumpDir = ""
+		c.RootDir = "/tmp/test-audiobooks"
+	})
 
 	dir := metafetch.GetOLDumpDir()
 	assert.Equal(t, "/tmp/test-audiobooks/openlibrary-dumps", dir)

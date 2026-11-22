@@ -101,7 +101,7 @@ func TestDeleteBackup_Success(t *testing.T) {
 
 	// Backup dir is resolved relative to DatabasePath directory
 	backupDir := backup.DefaultBackupConfig().BackupDir
-	if dbPath := config.AppConfig.DatabasePath; dbPath != "" && !filepath.IsAbs(backupDir) {
+	if dbPath := config.Get().DatabasePath; dbPath != "" && !filepath.IsAbs(backupDir) {
 		backupDir = filepath.Join(filepath.Dir(dbPath), backupDir)
 	}
 	backupPath := filepath.Join(backupDir, info.Filename)

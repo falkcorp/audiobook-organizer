@@ -35,7 +35,7 @@ func TestWireHandlers_TombstoneSweepGuardIsInstalled(t *testing.T) {
 	require.True(t, ok, "the test server runs on a PebbleStore")
 	store.WaitForWarmup()
 
-	lib := config.AppConfig.RootDir
+	lib := config.Get().RootDir
 	write := func(rel string) string {
 		p := filepath.Join(lib, rel)
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))

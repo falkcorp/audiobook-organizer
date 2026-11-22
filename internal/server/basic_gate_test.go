@@ -26,13 +26,15 @@ import (
 // leaks into an "unset" row).
 func saveBasicGateConfig(t *testing.T) {
 	t.Helper()
-	prevEnabled := config.AppConfig.BasicAuthEnabled
-	prevUser := config.AppConfig.BasicAuthUsername
-	prevPass := config.AppConfig.BasicAuthPassword
+	prevEnabled := config.Get().BasicAuthEnabled
+	prevUser := config.Get().BasicAuthUsername
+	prevPass := config.Get().BasicAuthPassword
 	t.Cleanup(func() {
-		config.AppConfig.BasicAuthEnabled = prevEnabled
-		config.AppConfig.BasicAuthUsername = prevUser
-		config.AppConfig.BasicAuthPassword = prevPass
+		config.SetForTest(func(c *config.Config) {
+			c.BasicAuthEnabled = prevEnabled
+			c.BasicAuthUsername = prevUser
+			c.BasicAuthPassword = prevPass
+		})
 	})
 	t.Setenv(basicAuthPasswordEnv, "")
 }

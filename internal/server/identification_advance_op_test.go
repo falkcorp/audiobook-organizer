@@ -199,9 +199,9 @@ func TestAdvance_ReMarkDuringItemSurvives(t *testing.T) {
 // internal/plugins TestRunItemsCallsDeclareConcurrency, which traces the
 // direct RunItems call to identAdvanceRunOptions.
 func TestAdvance_RunItemsConcurrencySetExplicitly(t *testing.T) {
-	prevCfg := config.AppConfig.MetadataCandidateFetchWorkers
-	config.AppConfig.MetadataCandidateFetchWorkers = 0
-	t.Cleanup(func() { config.AppConfig.MetadataCandidateFetchWorkers = prevCfg })
+	prevCfg := config.Get().MetadataCandidateFetchWorkers
+	config.SetForTest(func(c *config.Config) { c.MetadataCandidateFetchWorkers = 0 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataCandidateFetchWorkers = prevCfg }) })
 	budget := metafetch.SourcesBudget{RPS: 8, Burst: 8}
 
 	ps := identTestStore(t)
@@ -315,7 +315,7 @@ func TestHarvestMarksAuthorBooksDirty(t *testing.T) {
 	cat := database.NewCatalogStoreFromStore(ps)
 	lister := &catalogFakeLister{}
 	rep := &catalogTestReporter{}
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	live, err := ps.GetBookByFilePath("/lib/Live Book")
@@ -330,7 +330,7 @@ func TestHarvestMarksAuthorBooksDirty(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Same listing again (manual trigger): no new entry, nothing staled.
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"Ann Author"}}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"Ann Author"}}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := cat.GetAuthorState(catalog.HarvestKey("Ann Author")); st == nil || st.Created != 0 {

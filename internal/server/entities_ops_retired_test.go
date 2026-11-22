@@ -168,11 +168,11 @@ func runResolve(t *testing.T, src metadata.MetadataSource, withCover bool, wrap 
 	}
 
 	fake := &fakeCoverAI{}
-	prevAI, prevKey, prevEnable := newAIParser, config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing
+	prevAI, prevKey, prevEnable := newAIParser, config.Get().OpenAIAPIKey, config.Get().EnableAIParsing
 	newAIParser = func(string, bool) aiParser { return fake }
-	config.AppConfig.EnableAIParsing = true
+	config.SetForTest(func(c *config.Config) { c.EnableAIParsing = true })
 	t.Cleanup(func() {
-		newAIParser, config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing = prevAI, prevKey, prevEnable
+		config.SetForTest(func(c *config.Config) { newAIParser, c.OpenAIAPIKey, c.EnableAIParsing = prevAI, prevKey, prevEnable })
 	})
 
 	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)

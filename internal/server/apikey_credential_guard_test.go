@@ -69,18 +69,18 @@ func setupCredGuardServerIdleRegistry(t *testing.T) *credGuardFixture {
 func setupCredGuardServerOpts(t *testing.T, cfg func(*config.Config), startRegistry bool) *credGuardFixture {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	origCfg := config.AppConfig
+	origCfg := config.Snapshot()
 	tempDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		DatabaseType: "pebble",
 		DatabasePath: filepath.Join(tempDir, "test.pebble"),
 		RootDir:      tempDir,
 		EnableAuth:   true,
-	}
+	})
 	if cfg != nil {
-		cfg(&config.AppConfig)
+		config.SetForTest(cfg)
 	}
-	store, err := database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
+	store, err := database.NewPebbleStoreInMemory(config.Get().DatabasePath)
 	require.NoError(t, err)
 	database.SetGlobalStore(store)
 	// Routes under test read through memdb (the purge and forget paths sample
@@ -132,7 +132,7 @@ func setupCredGuardServerOpts(t *testing.T, cfg func(*config.Config), startRegis
 		database.SetGlobalStore(nil)
 		store.Close()
 		_ = os.RemoveAll(tempDir)
-		config.AppConfig = origCfg
+		config.ReplaceForTest(origCfg)
 	})
 	return &credGuardFixture{
 		srv: srv, store: store, adminID: admin.ID, sessionToken: sess.ID, apiKey: raw,

@@ -29,8 +29,10 @@ func TestBulkWriteBack_RefusedRenameCountsFailedAndWritesNoTags(t *testing.T) {
 	// An unplannable file-name verb: RenameOnlyPreflight refuses before any
 	// file moves (the same fixture shape as metafetch's
 	// TestRenameOnlyPreflight_RefusesUnplannableRenameWithAutoRenameOff).
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:x}"
+	config.SetForTest(func(c *config.Config) {
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:x}"
+	})
 
 	before := make(map[string][]byte, len(f.srcFiles))
 	for _, p := range f.srcFiles {

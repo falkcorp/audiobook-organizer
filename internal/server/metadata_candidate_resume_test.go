@@ -46,9 +46,9 @@ func TestMetadataCandidateFetch_ResumeSkipsCheckpointedBooks(t *testing.T) {
 	// point. At 32 workers that bound is 30+31 = 61, which no longer proves
 	// the interrupt lands short of the whole batch. At 8 it is 30..37 of 60.
 	const workers = 8
-	prevWorkers := config.AppConfig.MetadataCandidateFetchWorkers
-	config.AppConfig.MetadataCandidateFetchWorkers = workers
-	t.Cleanup(func() { config.AppConfig.MetadataCandidateFetchWorkers = prevWorkers })
+	prevWorkers := config.Get().MetadataCandidateFetchWorkers
+	config.SetForTest(func(c *config.Config) { c.MetadataCandidateFetchWorkers = workers })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataCandidateFetchWorkers = prevWorkers }) })
 
 	// ---- first attempt: interrupted partway ----
 	ctx, cancel := context.WithCancel(context.Background())
