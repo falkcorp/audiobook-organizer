@@ -421,13 +421,18 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
 - **Admin-gated routes: owner-approved widening, admin-granted only (2026-11-22).** HEAD's 19 role-name admin
   routes (the debug reads and edits, cache key listing and invalidate, the guest service tokens, the retired
   recompact and wipe stubs, and the master lists) are gated by their 05-rbac §6.2 permission alone once the gin
-  gate is unmounted (F4-08 B10g). A custom role or key that holds exactly that permission is admitted where HEAD's
-  `RequireAdmin` refused anything but the `admin` role. The owner chose this on 2026-11-22 (F4-08 B10rn, STOP 1,
+  gate is unmounted (F4-08 B10g). A custom role that holds exactly that permission is admitted where HEAD's
+  `RequireAdmin` refused anything but the `admin` role. So is a key holding it, except on the four guest-service-token
+  routes (`Guards.Interactive` refuses every key) and the three `books:admin.debug` routes (a Sensitive permission, which
+  no key satisfies). The owner chose this on 2026-11-22 (F4-08 B10rn, STOP 1,
   option 1: permissions only) over keeping a role-name test. Only an actor who already holds the permission can
-  grant it (05-rbac §4.7 rule 1), and M3 grants none of them to any seeded or migrated principal but `admin`.
+  grant it (05-rbac §4.7 rule 1), so every chain of grants starts at an admin, though a holder who also manages roles
+  or users can pass it on. M3 grants none of them to any seeded or migrated principal but `admin`.
   - Proved on the flipped build by three cells: `TestReachRegisteredPath_RoleNameRowsScopeGateAdmits` (stage 13
-    admits such a role and such a key on all 19 routes); `TestReachRegisteredPath_NonAdminCannotGrantAdminScopes`
-    (a role manager without the permission cannot grant it to a role or a key); and
+    admits such a role on all 19 routes and such a key on the 12 that are neither guest-service-token nor debug-write
+    routes, and refuses the key on the four guest-service-token routes; no key is tried on the debug-write routes);
+    `TestReachRegisteredPath_NonAdminCannotGrantAdminScopes` (a role and user manager without the permission cannot
+    put it in a role, a key or a user's roles); and
     `TestRegisteredHarness_EveryVerdictIsR0sOrNamed` (no seeded or migrated principal changes reach).
   - Until B10g the bridge still applies the role-name test after the permission (`bridgedAdminGate`), and the
     allow-list in `internal/server/legacy_manifest_gin_allowlist_test.go` names each route until B10g deletes it.

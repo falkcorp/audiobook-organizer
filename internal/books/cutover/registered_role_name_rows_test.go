@@ -14,21 +14,31 @@ package cutover_test
 //	    STOP 1, option 1: permissions only; 05-rbac §6.2, 09 §9.2.6): from B10g,
 //	    which unmounts gin, a row's manifest scope is its whole gate, and a custom
 //	    role or key holding exactly that scope is admitted. This is an owner-approved
-//	    widening over HEAD's RequireAdmin, admin-granted only
+//	    widening over HEAD's RequireAdmin, granted only by a holder of the scope
 //	    (TestReachRegisteredPath_NonAdminCannotGrantAdminScopes). The test asserts
-//	    that post-B10g expectation through stage 13's own decision. A core:admin key
-//	    is refused at stage 13 on the four guest-service-token rows, which carry
-//	    Guards.Interactive. Gin's answer behind stage 13 is reported, not asserted:
-//	    until B10g the bridge still runs HEAD's role-name test (bridgedAdminGate)
-//	    and refuses the role with "admin role required", and from B10g it admits
-//	    it. B10g checklist: once gin is unmounted, this test still passes unchanged,
-//	    and the gin-refusal log lines disappear.
+//	    that post-B10g expectation through stage 13's own decision: a custom role on
+//	    all 19 rows. An admin's key holding exactly the scope is admitted on 12 of
+//	    them (the five admin-view rows, the four master-list rows and the three
+//	    core:admin stubs), refused with interactive_required on the four
+//	    guest-service-token rows (Guards.Interactive), and not tried on the three
+//	    books:admin.debug rows (a Sensitive scope, which 05-rbac §4.4 says no key
+//	    satisfies; this test does not prove it). Gin's answer behind stage 13 is
+//	    reported, not asserted: until B10g the bridge still runs HEAD's role-name
+//	    test (bridgedAdminGate) and refuses the role with "admin role required",
+//	    and from B10g it admits it. One principal passes gin already: the admin's
+//	    core:admin key, which HEAD's own key test admits as an admin key whose
+//	    scopes cover every atom (legacyauth.KeyMayActAsAdmin), so it is not part of
+//	    the widening. B10g checklist: once gin is unmounted, this test still passes
+//	    unchanged, and the gin-refusal log lines disappear.
 //
 //	TestReachRegisteredPath_NonAdminCannotGrantAdminScopes
 //	    the other half of the ruling: a user who manages roles but holds none of
-//	    core:admin, books:admin.view or books:admin.debug can neither put one in a
-//	    role (create or update) nor mint a key holding one. Core refuses each with
-//	    its escalation refusal.
+//	    core:admin, books:admin.view or books:admin.debug can neither create a role
+//	    holding one, nor mint a key holding one, nor assign a user a role holding
+//	    one (the admin role, or a custom role holding books:admin.view). Core
+//	    refuses each with 403 scope_escalation. A holder of the scope who also
+//	    manages roles or users can pass it on (05-rbac §4.7 rule 1), so every chain
+//	    of grants starts at an admin.
 //
 //	TestReachRegisteredPath_CoreRefusesAKeyOnAnotherUsersCredential
 //	    the CONDITIONAL-GUARD rows' question asked of core's own key routes, which
@@ -126,7 +136,7 @@ func rnBehindStage13(t *testing.T, p *Principal, res Result, want string) string
 	t.Helper()
 	switch {
 	case res.Verdict() == 'A':
-		return "admitted by the handler (gin unmounted)"
+		return "admitted by gin and the handler"
 	case res.Status == http.StatusForbidden && rnMessage(res) == want:
 		return "refused by gin's role-name gate (until B10g)"
 	}
