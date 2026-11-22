@@ -70,9 +70,9 @@ func withRunS(h *WorkerHub, r workerapi.ResultsRequest) workerapi.ResultsRequest
 
 func withRootDir(t *testing.T, dir string) {
 	t.Helper()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = dir
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = dir })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 }
 
 func newHubEnv(t *testing.T, nFiles int) *hubEnv {
@@ -201,9 +201,9 @@ func TestWorkerHub_ToolsMustBeAllowlisted(t *testing.T) {
 	_, err = h.hub.Lease(context.Background(), withRunL(h.hub, req))
 	require.ErrorIs(t, err, ErrToolsNotAllowed)
 
-	prev := config.AppConfig.FingerprintWorkerToolVersions
-	t.Cleanup(func() { config.AppConfig.FingerprintWorkerToolVersions = prev })
-	config.AppConfig.FingerprintWorkerToolVersions = []string{"1.6.1/" + h.tools.Versions.FFmpeg}
+	prev := config.Get().FingerprintWorkerToolVersions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = prev }) })
+	config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = []string{"1.6.1/" + h.tools.Versions.FFmpeg} })
 	h.hub.detach()
 	h2 := attachHub(t, h.wbEnv)
 	resp, err := h2.hub.Lease(context.Background(), withRunL(h2.hub, req))
@@ -646,16 +646,16 @@ func TestWindowBackfill_AllowlistedWorkerVersionsAreCurrent(t *testing.T) {
 	require.NoError(t, err)
 	workerPair := e.tools.Versions.Fpcalc + "/" + e.tools.Versions.FFmpeg
 
-	prev := config.AppConfig.FingerprintWorkerToolVersions
-	t.Cleanup(func() { config.AppConfig.FingerprintWorkerToolVersions = prev })
-	config.AppConfig.FingerprintWorkerToolVersions = []string{workerPair}
+	prev := config.Get().FingerprintWorkerToolVersions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = prev }) })
+	config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = []string{workerPair} })
 	e.tools.Versions = fingerprint.ToolVersionInfo{Fpcalc: "1.6.0-server", FFmpeg: "8.0.1-server"}
 	res, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true})
 	require.NoError(t, err)
 	require.Zero(t, res.written, "allowlisted windows must count as current")
 	require.Equal(t, 1, res.plan.current[windowTierPresent])
 
-	config.AppConfig.FingerprintWorkerToolVersions = nil
+	config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = nil })
 	res, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, res.written, "without the allowlist the old pair is stale")

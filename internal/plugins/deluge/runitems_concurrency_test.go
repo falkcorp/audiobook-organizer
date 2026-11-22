@@ -118,9 +118,9 @@ func newCentralizeFixture(t *testing.T, books, perBook int) *centralizeFixture {
 		probe:    newOverlapProbe(2),
 	}
 	srcDir := t.TempDir()
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = fx.root
-	t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = fx.root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 
 	for b := range books {
 		for f := range perBook {

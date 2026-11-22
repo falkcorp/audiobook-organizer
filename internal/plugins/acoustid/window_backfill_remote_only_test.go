@@ -38,17 +38,21 @@ var refPair = fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-ref", FFmpeg: "9.0.2-re
 // withRemoteOnly turns on the worker API and configures refPair.
 func withRemoteOnly(t *testing.T) {
 	t.Helper()
-	prevOn, prevRef := config.AppConfig.FingerprintRemoteWorkersEnabled, config.AppConfig.FingerprintWindowReferenceTools
-	prevAllow := config.AppConfig.FingerprintWorkerToolVersions
+	prevOn, prevRef := config.Get().FingerprintRemoteWorkersEnabled, config.Get().FingerprintWindowReferenceTools
+	prevAllow := config.Get().FingerprintWorkerToolVersions
 	prevClass := fingerprint.EquivalentToolPairs()
 	t.Cleanup(func() {
-		config.AppConfig.FingerprintRemoteWorkersEnabled = prevOn
-		config.AppConfig.FingerprintWindowReferenceTools = prevRef
-		config.AppConfig.FingerprintWorkerToolVersions = prevAllow
+		config.SetForTest(func(c *config.Config) {
+			c.FingerprintRemoteWorkersEnabled = prevOn
+			c.FingerprintWindowReferenceTools = prevRef
+			c.FingerprintWorkerToolVersions = prevAllow
+		})
 		fingerprint.SetToolEquivalence(fingerprint.ToolVersionInfo{}, prevClass)
 	})
-	config.AppConfig.FingerprintRemoteWorkersEnabled = true
-	config.AppConfig.FingerprintWindowReferenceTools = refPair.Fpcalc + "/" + refPair.FFmpeg
+	config.SetForTest(func(c *config.Config) {
+		c.FingerprintRemoteWorkersEnabled = true
+		c.FingerprintWindowReferenceTools = refPair.Fpcalc + "/" + refPair.FFmpeg
+	})
 }
 
 // noLocalTools makes any resolution of local tools fail the run and counts
@@ -297,16 +301,16 @@ func TestWindowBackfill_RemoteOnly_RefusesWithoutWorkerAPIOrReference(t *testing
 	calls := noLocalTools(e)
 	e.addFile("", "lib/a.m4b", true, 3600)
 
-	config.AppConfig.FingerprintRemoteWorkersEnabled = false
+	config.SetForTest(func(c *config.Config) { c.FingerprintRemoteWorkersEnabled = false })
 	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, RemoteOnly: true})
 	require.ErrorContains(t, err, "fingerprint_remote_workers_enabled")
 	res, err := e.run(context.Background(), nil, WindowBackfillParams{RemoteOnly: true})
 	require.NoError(t, err, "a dry run does not need the worker API")
 	require.Len(t, res.plan.tiers[windowTierPresent], 1)
 
-	config.AppConfig.FingerprintRemoteWorkersEnabled = true
+	config.SetForTest(func(c *config.Config) { c.FingerprintRemoteWorkersEnabled = true })
 	for _, ref := range []string{"", "1.6.1", "1.6.1/9.0.2/x", "/9.0.2"} {
-		config.AppConfig.FingerprintWindowReferenceTools = ref
+		config.SetForTest(func(c *config.Config) { c.FingerprintWindowReferenceTools = ref })
 		_, err = e.run(context.Background(), nil, WindowBackfillParams{Live: true, RemoteOnly: true})
 		require.ErrorContains(t, err, "fingerprint_window_reference_tools", "reference %q", ref)
 	}
@@ -323,7 +327,7 @@ func TestWindowBackfill_RemoteOnly_ReferencePairIsTheClassNotTheServerPair(t *te
 	withRootDir(t, e.lib)
 	withRemoteOnly(t)
 	allow := fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-allow", FFmpeg: "9.0.1-allow"}
-	config.AppConfig.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg}
+	config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg} })
 	e.addFile("", "lib/a.m4b", true, 3600)
 	// A normal run cuts the file with the server's own tools (deliberately:
 	// a reference pair is configured).
@@ -372,7 +376,7 @@ func TestWorkerHub_RemoteOnly_HelloBootstrapsThenOffersReferenceWindows(t *testi
 	withRootDir(t, e.lib)
 	withRemoteOnly(t)
 	allow := fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-allow", FFmpeg: "9.0.1-allow"}
-	config.AppConfig.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg}
+	config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg} })
 	e.addFileWith("", "lib/srv.m4b", fakeAudio(3600, 70<<10), 3600)
 	_, err := e.run(context.Background(), nil, WindowBackfillParams{Live: true, AllowServerDecode: true}) // server-pair windows
 	require.NoError(t, err)
@@ -582,7 +586,7 @@ func TestWorkerHub_RemoteOnly_ExistingReferenceWindowsNeverBootstrapAgain(t *tes
 	withRootDir(t, e.lib)
 	withRemoteOnly(t)
 	allow := fingerprint.ToolVersionInfo{Fpcalc: "1.6.1-allow", FFmpeg: "9.0.1-allow"}
-	config.AppConfig.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg}
+	config.SetForTest(func(c *config.Config) { c.FingerprintWorkerToolVersions = []string{allow.Fpcalc + "/" + allow.FFmpeg} })
 	var allowIDs []string
 	for i := range 5 {
 		_, id := e.addFileWith("", fmt.Sprintf("lib/allow%d.m4b", i), fakeAudio(3600, 70<<10), 3600)

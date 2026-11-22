@@ -252,7 +252,7 @@ func (h *offlineABO) boot() {
 // offline builds the offline commands over the stopped store.
 func (h *offlineABO) offline() {
 	h.t.Helper()
-	withConfig(h.t, func() config.Config { c := config.AppConfig; h.edit(&c); return c }())
+	withConfig(h.t, func() config.Config { c := config.Snapshot(); h.edit(&c); return c }())
 	opts, err := OfflineOptions(BootInputs{})
 	require.NoError(h.t, err)
 	h.disk(&opts)
@@ -386,7 +386,7 @@ func TestFactoryResetPreflightCountsWhatRunRemoves(t *testing.T) {
 func TestFactoryResetOffline_R1(t *testing.T) {
 	h := newOfflineABO(t)
 	elsewhere := filepath.Join(t.TempDir(), "arkham")
-	withConfig(t, func() config.Config { c := config.AppConfig; c.RootDir = elsewhere; return c }())
+	withConfig(t, func() config.Config { c := config.Snapshot(); c.RootDir = elsewhere; return c }())
 
 	out, err := h.run("storage reset", "--kind", "factory", "--confirm", "RESET", "--delete-library-files")
 	lce, ok := errors.AsType[*storage.LibraryConfirmError](err)

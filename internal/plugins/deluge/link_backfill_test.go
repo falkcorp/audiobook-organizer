@@ -142,12 +142,16 @@ func newLinkFixture(t *testing.T) *linkFixture {
 			t.Fatal(err)
 		}
 	}
-	origRoot, origLabel := config.AppConfig.RootDir, config.AppConfig.DelugeDiscoveryLabel
-	config.AppConfig.RootDir = f.root
-	config.AppConfig.DelugeDiscoveryLabel = linkTestLabel
+	origRoot, origLabel := config.Get().RootDir, config.Get().DelugeDiscoveryLabel
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = f.root
+		c.DelugeDiscoveryLabel = linkTestLabel
+	})
 	t.Cleanup(func() {
-		config.AppConfig.RootDir = origRoot
-		config.AppConfig.DelugeDiscoveryLabel = origLabel
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir = origRoot
+			c.DelugeDiscoveryLabel = origLabel
+		})
 	})
 	return f
 }

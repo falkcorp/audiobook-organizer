@@ -37,7 +37,7 @@ func TestNewEmbeddingClientWithOptions_Model(t *testing.T) {
 // We can't observe the SDK's base URL directly, but we can confirm
 // construction succeeds with the field set and the model is unchanged.
 func TestNewEmbeddingClient_BackwardCompat(t *testing.T) {
-	original := config.AppConfig.OpenAIBaseURL
+	original := config.Get().OpenAIBaseURL
 	t.Cleanup(func() {
 		config.Mutate(func(c *config.Config) { c.OpenAIBaseURL = original })
 	})

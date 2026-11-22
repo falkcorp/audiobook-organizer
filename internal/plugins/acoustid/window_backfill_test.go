@@ -237,14 +237,14 @@ func (e *wbEnv) windows(fileID string) []database.FingerprintWindow {
 // ---- tests ----
 
 func TestWindowWorkers_ExplicitAndClamped(t *testing.T) {
-	prev := config.AppConfig.FPParallelWorkers
-	t.Cleanup(func() { config.AppConfig.FPParallelWorkers = prev })
+	prev := config.Get().FPParallelWorkers
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.FPParallelWorkers = prev }) })
 
-	config.AppConfig.FPParallelWorkers = 0
+	config.SetForTest(func(c *config.Config) { c.FPParallelWorkers = 0 })
 	require.Equal(t, max(1, min(runtime.NumCPU()/2, 16)), windowWorkers(0))
 	require.Equal(t, 4, windowWorkers(4))
 	require.Equal(t, windowBackfillMaxWorkers, windowWorkers(500))
-	config.AppConfig.FPParallelWorkers = 12
+	config.SetForTest(func(c *config.Config) { c.FPParallelWorkers = 12 })
 	require.Equal(t, 12, windowWorkers(0))
 	require.Equal(t, 3, windowWorkers(3), "an explicit param beats the config knob")
 

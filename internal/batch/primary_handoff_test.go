@@ -29,9 +29,9 @@ func TestBatchUpdate_SetPrimaryDemotesIncumbent(t *testing.T) {
 // Soft-deleting a group's primary through a batch operation hands it on.
 func TestBatchDelete_PrimaryHandsOn(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	inc := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 	next := f.Book(t, vptest.Spec{ID: "next", Group: "g", Primary: "false"})
 	resp := NewBatchService(f.S).ExecuteOperations(&BatchOperationsRequest{Operations: []BatchOperationItem{{ID: inc, Action: "delete"}}, Caller: &TrashGrants{Trash: true}})
@@ -43,9 +43,9 @@ func TestBatchDelete_PrimaryHandsOn(t *testing.T) {
 // not re-elected, since that could crown the same book against the user.
 func TestBatchUpdate_ExplicitDemotionIsNotUndone(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	inc := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 	resp := NewBatchService(f.S).UpdateAudiobooks(&BatchUpdateRequest{IDs: []string{inc}, Updates: map[string]any{"is_primary_version": false}})
 	require.Equal(t, 1, resp.Success)

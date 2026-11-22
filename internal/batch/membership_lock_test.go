@@ -26,9 +26,9 @@ func TestBatchUpdate_GroupChangeWaitsForGroupLocks(t *testing.T) {
 	for _, held := range []string{"g", "h"} {
 		t.Run("holding "+held, func(t *testing.T) {
 			f := vptest.New(t)
-			prev := config.AppConfig.RootDir
-			config.AppConfig.RootDir = f.Root
-			t.Cleanup(func() { config.AppConfig.RootDir = prev })
+			prev := config.Get().RootDir
+			config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 			f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 			mover := f.Book(t, vptest.Spec{ID: "mover", Group: "g", Primary: "false"})
 
@@ -103,9 +103,9 @@ func TestBatchUpdate_GroupChangeRetriesOnMembershipChange(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			f := vptest.New(t)
-			prev := config.AppConfig.RootDir
-			config.AppConfig.RootDir = f.Root
-			t.Cleanup(func() { config.AppConfig.RootDir = prev })
+			prev := config.Get().RootDir
+			config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 			f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 			mover := f.Book(t, vptest.Spec{ID: "mover", Group: "g", Primary: "false"})
 

@@ -34,9 +34,9 @@ func newTransferRouter(ts *TransferService) *gin.Engine {
 // of a test and restores it on cleanup.
 func setITLPath(t *testing.T, path string) {
 	t.Helper()
-	orig := config.AppConfig.ITunes.LibraryITLPath
-	config.AppConfig.ITunes.LibraryITLPath = path
-	t.Cleanup(func() { config.AppConfig.ITunes.LibraryITLPath = orig })
+	orig := config.Get().ITunes.LibraryITLPath
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = path })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = orig }) })
 }
 
 // ---------------------------------------------------------------------------

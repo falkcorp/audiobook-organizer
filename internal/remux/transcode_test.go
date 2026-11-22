@@ -67,9 +67,9 @@ func TestTranscodeMalformedFilesAlreadyCompleted(t *testing.T) {
 // setup failure (no RootDir configured) now returns an error instead of
 // being swallowed as a Warn log, so the op can actually fail.
 func TestTranscodeMalformedFilesRootDirNotConfigured(t *testing.T) {
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = ""
-	defer func() { config.AppConfig.RootDir = origRoot }()
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) }()
 
 	store := &MockStore{}
 	transcoder := NewTranscoder(store)
@@ -87,10 +87,10 @@ func TestTranscodeMalformedFilesRootDirNotConfigured(t *testing.T) {
 func TestTranscodeMalformedFilesProgressCallback(t *testing.T) {
 	tooltest.Require(t, "ffmpeg")
 
-	origRoot := config.AppConfig.RootDir
+	origRoot := config.Get().RootDir
 	tmpDir := t.TempDir()
-	config.AppConfig.RootDir = tmpDir
-	defer func() { config.AppConfig.RootDir = origRoot }()
+	config.SetForTest(func(c *config.Config) { c.RootDir = tmpDir })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) }()
 
 	for i := range 3 {
 		p := filepath.Join(tmpDir, fmt.Sprintf("test%d.m4b", i))
