@@ -477,6 +477,7 @@ func TestDepsScoping(t *testing.T) {
 		t.Fatalf("single-module prefix = %q, want gotham", got[0].Metrics.Prefix())
 	}
 	t.Run("storage", depsScopingStorage)
+	t.Run("events", depsScopingEvents)
 }
 
 func TestRegistrarClosedAfterRegister(t *testing.T) {
