@@ -4,6 +4,7 @@
 // last-edited: 2026-11-19
 
 import { expect, Page } from '@playwright/test';
+import { mockCoreEvents } from './mockCoreEvents';
 
 // Re-export setup mode helpers for convenience
 export {
@@ -309,9 +310,19 @@ export interface TestBook {
 }
 
 /**
- * Mock EventSource to prevent SSE connections during tests
+ * Mock the page's event streams so no test opens a real one.
+ *
+ * Two kinds exist and each has its own mock. The operations SSE
+ * (`/api/v1/operations/events`, api.ts openOperationsSSE) is a native
+ * `EventSource`, replaced here by a MockEventSource. The app's main stream,
+ * `GET /api/core/v1/events`, is a fetch plus a ReadableStream, which
+ * a window.EventSource mock never sees: `mockCoreEvents` answers it. Calling
+ * this installs both, so every spec that mocks the page's streams through this
+ * helper (setupMockApi, setup-modes) gets the second one too; it is safe to
+ * call more than once per page.
  */
 export async function mockEventSource(page: Page) {
+  await mockCoreEvents(page);
   await page.addInitScript(() => {
     class MockEventSource {
       static instances: MockEventSource[] = [];

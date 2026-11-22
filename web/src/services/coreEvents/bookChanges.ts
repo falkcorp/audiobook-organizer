@@ -18,7 +18,7 @@
 // consumer drops it with clear() as it issues that request; the adapter does not guess
 // the moment from a resync, which reaches the consumer up to 5 s later (#4813 r1 m3).
 //
-// UNWIRED: nothing in the running app imports this until the F6 flip.
+// Wired by the F6-03 flip: App.tsx, TopBar and the Library use it.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
