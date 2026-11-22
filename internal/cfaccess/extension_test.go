@@ -306,8 +306,13 @@ func (g *rig) do(raw string, mod func(*http.Request)) (*coreauth.Assertion, erro
 
 func TestExtension_Registration(t *testing.T) {
 	g := newRig(t)
-	if g.ext.Spec.Method != "ext:cfaccess" || !g.ext.Spec.Interactive || !g.ext.Spec.OwnerVerifier || g.ext.Spec.MayChangeCredentials || g.ext.Spec.AppHandoff != nil {
-		t.Fatalf("Spec = %+v", g.ext.Spec)
+	// HEAD's cf_access is interactive AND may change credentials
+	// (origin/main internal/auth/context.go Interactive, MayChangeCredentials):
+	// a verified Access sign-in is a person's own login, admitted by HEAD's
+	// credGuard on every credential route and by the owner fallback (F4-08
+	// B10y). A service token never resolves a person (ErrNonIdentityAssertion).
+	if g.ext.Spec.Method != "ext:cfaccess" || !g.ext.Spec.Interactive || !g.ext.Spec.OwnerVerifier || !g.ext.Spec.MayChangeCredentials || g.ext.Spec.AppHandoff != nil {
+		t.Fatalf("Spec = %+v, want Interactive, MayChangeCredentials and OwnerVerifier (HEAD's cf_access), no app hand-off", g.ext.Spec)
 	}
 	if g.ext.Order <= coreauth.OrderAPIKey || g.ext.Order == coreauth.OrderSession || g.ext.Order >= coreauth.OrderSession {
 		t.Fatalf("Order = %d: must run after the API key and before the session authenticator", g.ext.Order)
