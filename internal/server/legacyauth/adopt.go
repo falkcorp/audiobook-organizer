@@ -56,6 +56,12 @@ type Identity struct {
 	// the account record is core's: resolving a person through books' store
 	// would create, link or mark rows core no longer owns.
 	Access AccessResolver
+	// Accounts is the invite and admin set-email calls (AccountAdmin, F4-08
+	// B10t). Unlike the members above it is NOT required by Validate yet: with
+	// it nil, the routes that use it (invite create, list, delete and resend,
+	// and set e-mail) answer 503 under core identity and never fall back to
+	// HEAD's store path, which under identity is no longer the account record.
+	Accounts AccountAdmin
 }
 
 // Validate reports a missing member. A server built over a partial Identity
