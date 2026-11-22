@@ -112,6 +112,13 @@ type headUser struct {
 	Version          int       `json:"version"`
 	CredentialEpoch  int64     `json:"credential_epoch,omitempty"`
 	EmailSource      string    `json:"email_source,omitempty"`
+	// MergedIntoUserID and MergedAt are the admin user merge's marker
+	// (store.User): the account this one was folded into, and when. The merge
+	// locks the account first and stamps these last; HEAD's ReactivateUser
+	// refuses an account that has one, so the import carries them
+	// (auth.User.MergedInto, MergedAt) and core's enable path refuses too.
+	MergedIntoUserID string     `json:"merged_into_user_id,omitempty"`
+	MergedAt         *time.Time `json:"merged_at,omitempty"`
 }
 
 // headRole is store.Role.
