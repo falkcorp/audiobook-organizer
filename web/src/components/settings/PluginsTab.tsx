@@ -33,6 +33,8 @@ import {
 } from '@mui/icons-material';
 import { apiFetch } from '../../utils/apiFetch';
 import { describeRequestError } from '../../utils/apiResponse';
+import { apiErrorFromResponse } from '../../utils/signInRequired';
+import { useSignInRequiredForAction } from '../../hooks/useSignInRequiredForAction';
 
 interface PluginInfo {
   id: string;
@@ -67,7 +69,8 @@ async function saveSettings(id: string, settings: PluginSettings): Promise<void>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings),
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  // An ApiError, not a bare Error: the 403 an auth-off principal gets must keep its status and code.
+  if (!resp.ok) throw await apiErrorFromResponse(resp, `HTTP ${resp.status}`);
 }
 
 function HealthBadge({ health }: { health: string }) {
@@ -100,6 +103,7 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
   const [saving, setSaving] = useState(false);
   const [settings, setSettings] = useState<PluginSettings>({});
   const [error, setError] = useState('');
+  const gate = useSignInRequiredForAction();
 
   const handleToggle = async () => {
     setSaving(true);
@@ -121,7 +125,9 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
       await saveSettings(p.id, settings);
       onRefresh();
     } catch (e: unknown) {
-      setError(describeRequestError(e, `Failed to save settings: ${(e as Error).message}`));
+      if (!gate.refuse(e)) {
+        setError(describeRequestError(e, `Failed to save settings: ${(e as Error).message}`));
+      }
     } finally {
       setSaving(false);
     }
@@ -211,6 +217,7 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
                 Plugin Settings
               </Typography>
               <Divider sx={{ mb: 2 }} />
+              {gate.notice && <Box sx={{ mb: 2 }}>{gate.notice}</Box>}
               {error && (
                 <Alert severity="error" sx={{ mb: 2 }}>
                   {error}
@@ -237,7 +244,7 @@ function PluginRow({ plugin: p, onRefresh }: { plugin: PluginInfo; onRefresh: ()
                   <Button
                     size="small"
                     variant="contained"
-                    disabled={saving}
+                    disabled={saving || gate.blocked}
                     onClick={handleSaveSettings}
                   >
                     Save

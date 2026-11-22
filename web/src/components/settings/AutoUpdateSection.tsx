@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import {
+  Box,
   Paper,
   Typography,
   Grid,
@@ -22,6 +23,7 @@ import {
   DialogActions,
 } from '@mui/material';
 import * as api from '../../services/api';
+import { useSignInRequiredForAction } from '../../hooks/useSignInRequiredForAction';
 import type { SettingsState } from '../../modules/books/pages/settingsState';
 
 interface AutoUpdateSectionProps {
@@ -44,6 +46,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
   const [updateInfo, setUpdateInfo] = useState<api.UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
+  const gate = useSignInRequiredForAction();
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   // A local build is never compared with releases, so the operator names the
@@ -85,7 +88,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
     try {
       await api.applyUpdate(localBuild ? namedVersion : undefined);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Update failed');
+      if (!gate.refuse(e)) setError(e instanceof Error ? e.message : 'Update failed');
     } finally {
       setApplying(false);
     }
@@ -133,6 +136,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
               )}
             </Alert>
           )}
+          {gate.notice && <Box sx={{ mb: 2 }}>{gate.notice}</Box>}
           {error && (
             <Alert severity="error" sx={{ mb: 2 }}>
               {error}
@@ -246,7 +250,7 @@ export function AutoUpdateSection({ settings, setSettings }: AutoUpdateSectionPr
                 variant="contained"
                 color="warning"
                 onClick={() => setConfirmOpen(true)}
-                disabled={applying}
+                disabled={applying || gate.blocked}
               >
                 {applying ? <CircularProgress size={20} sx={{ mr: 1 }} /> : null}
                 Update Now
