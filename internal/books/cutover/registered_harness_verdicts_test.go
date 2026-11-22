@@ -29,6 +29,10 @@ import (
 //	             parity assertion for these is in the last commits of the stack (red
 //	             until slice B10y lands).
 //	classRuling  a narrowing nobody has ruled on yet; the same, in its own commit.
+//	classTightening  the auth-off tightening (registeredAuthOffTightening): R0 admitted
+//	             the auth-off principal on an Interactive route, the flipped build does
+//	             not, deliberately (SEC5-8). Not a verdictRows entry: its own table, held
+//	             to the exact refusal code.
 //
 // TestRegisteredHarness_EveryVerdictIsR0sOrNamed fails on a mismatch no row names and
 // on a row that no longer mismatches, so the tables cannot go stale in either
@@ -44,6 +48,7 @@ const (
 	classKnown
 	classB10y
 	classRuling
+	classTightening
 )
 
 type verdictRow struct {
@@ -161,36 +166,49 @@ var verdictRows = []verdictRow{
 		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
 	{Method: "POST", Route: "/api/v1/master-lists", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
-	{Method: "DELETE", Route: "/api/v1/users/invites/:id", Class: classRuling, Principals: []string{"authoff", "key:admin:empty", "key:admin:every", "key:admin:users", "key:custom-all:empty", "key:custom-all:every"},
+	{Method: "DELETE", Route: "/api/v1/users/invites/:id", Class: classB10y, Principals: []string{"authoff"},
+		Why: "auth-off: refused where R0 admitted and it is not the SEC5-8 tightening (the route is not Interactive-guarded); a fix, slice B10y"},
+	{Method: "GET", Route: "/api/v1/users/invites", Class: classB10y, Principals: []string{"authoff"},
+		Why: "auth-off: refused where R0 admitted and it is not the SEC5-8 tightening (the route is not Interactive-guarded); a fix, slice B10y"},
+	{Method: "DELETE", Route: "/api/v1/users/invites/:id", Class: classRuling, Principals: []string{"key:admin:empty", "key:admin:every", "key:admin:users", "key:custom-all:empty", "key:custom-all:every"},
 		Why: "narrowing not yet ruled on"},
-	{Method: "GET", Route: "/api/v1/users/invites", Class: classRuling, Principals: []string{"authoff", "key:admin:empty", "key:admin:every", "key:admin:users", "key:custom-all:empty", "key:custom-all:every"},
+	{Method: "GET", Route: "/api/v1/users/invites", Class: classRuling, Principals: []string{"key:admin:empty", "key:admin:every", "key:admin:users", "key:custom-all:empty", "key:custom-all:every"},
 		Why: "narrowing not yet ruled on"},
 	{Method: "POST", Route: "/api/v1/auth/api-keys", Class: classRuling, Principals: []string{"key:admin:empty", "key:admin:every", "key:admin:settings", "key:admin:users", "key:admin:view", "key:custom-all:empty", "key:custom-all:every", "key:custom-subset:empty", "key:custom-subset:outside", "key:editor:empty", "key:editor:every", "key:editor:settings", "key:editor:users", "key:editor:view", "key:editor:worker", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view", "key:viewer:empty", "key:viewer:every", "key:viewer:settings", "key:viewer:users", "key:viewer:view", "key:viewer:worker"},
 		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/auth/api-keys/:id/rotate", Class: classRuling, Principals: []string{"authoff"},
+	{Method: "POST", Route: "/api/v1/backup/restore", Class: classRuling, Principals: []string{"session:custom-all"},
 		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/auth/temp-tokens", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/backup/restore", Class: classRuling, Principals: []string{"authoff", "session:custom-all"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/import-paths", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/tools/:name/install", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/update/apply", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/users/:id/deactivate", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/users/:id/reactivate", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/users/:id/reset-password", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/users/invite", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/users/invites/:id/resend", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"},
-	{Method: "PUT", Route: "/api/v1/plugins/:id/settings", Class: classRuling, Principals: []string{"authoff"},
-		Why: "narrowing not yet ruled on"}}
+}
+
+// authOffTightening is a route that R0 recorded as open to the auth-off principal and
+// the flipped build refuses it: the deliberate auth-off tightening of SEC5-8 (05-rbac
+// §4.11(a), 05-authn §4.11, R2's release note 09-abo-on-core.md §9.2.6). HEAD's
+// credential guard is a pass-through with auth off, and the auth-disabled principal is
+// non-interactive, so a route whose guard is Interactive refuses it. These are expected
+// differences, not defects; each cell is held to its exact answer by
+// TestRegisteredHarness_AuthOffTighteningRefusesInteractiveRoutes.
+type authOffTightening struct {
+	Method, Route string
+	// Code is the refusal's code: interactive_required from stage 13, or FORBIDDEN where
+	// the handler itself refuses.
+	Code string
+}
+
+// registeredAuthOffTightening is the auth-off tightening, one entry per route.
+var registeredAuthOffTightening = []authOffTightening{
+	{"POST", "/api/v1/auth/api-keys/:id/rotate", "FORBIDDEN"},
+	{"POST", "/api/v1/auth/temp-tokens", "interactive_required"},
+	{"POST", "/api/v1/backup/restore", "interactive_required"},
+	{"POST", "/api/v1/import-paths", "interactive_required"},
+	{"PUT", "/api/v1/plugins/:id/settings", "interactive_required"},
+	{"POST", "/api/v1/tools/:name/install", "interactive_required"},
+	{"POST", "/api/v1/update/apply", "interactive_required"},
+	{"POST", "/api/v1/users/:id/deactivate", "interactive_required"},
+	{"POST", "/api/v1/users/:id/reactivate", "interactive_required"},
+	{"POST", "/api/v1/users/:id/reset-password", "interactive_required"},
+	{"POST", "/api/v1/users/invite", "interactive_required"},
+	{"POST", "/api/v1/users/invites/:id/resend", "interactive_required"},
+}
 
 // recordedRoute is one row of verdicts.json.
 type recordedRoute struct {
@@ -266,9 +284,15 @@ func sweepMismatches(t *testing.T, h *Registered, only func(*Principal) bool) ma
 }
 
 // expected expands verdictRows into the cells they name, keyed like
-// sweepMismatches: each abk_ principal with its core twin where it has one.
+// sweepMismatches: each abk_ principal with its core twin where it has one. The
+// auth-off tightening's cells are included when classTightening is asked for.
 func expected(h *Registered, classes ...verdictClass) map[string]*verdictRow {
 	out := map[string]*verdictRow{}
+	if slices.Contains(classes, classTightening) {
+		for _, tt := range registeredAuthOffTightening {
+			out[tt.Method+" "+tt.Route+"|"+Authoff] = &verdictRow{Method: tt.Method, Route: tt.Route, Class: classTightening, Principals: []string{Authoff}, Why: "auth-off tightening (SEC5-8)"}
+		}
+	}
 	for i := range verdictRows {
 		row := &verdictRows[i]
 		if !slices.Contains(classes, row.Class) {
@@ -289,7 +313,7 @@ func expected(h *Registered, classes ...verdictClass) map[string]*verdictRow {
 // verdictRows names does mismatch. The route table is the registered one, so a route
 // added or re-permissioned after R0 shows here as an unexplained cell.
 func TestRegisteredHarness_EveryVerdictIsR0sOrNamed(t *testing.T) {
-	all := []verdictClass{classDrift, classKnown, classB10y, classRuling}
+	all := []verdictClass{classDrift, classKnown, classB10y, classRuling, classTightening}
 	check := func(t *testing.T, h *Registered, only func(*Principal) bool) {
 		want := expected(h, all...)
 		got := sweepMismatches(t, h, only)
@@ -336,4 +360,40 @@ func TestRegisteredHarness_R0DriftIsInTheRouteTable(t *testing.T) {
 			t.Errorf("%s %s: a drift row must say what changed", row.Method, row.Route)
 		}
 	}
+}
+
+// TestRegisteredHarness_AuthOffTighteningRefusesInteractiveRoutes holds each cell of
+// registeredAuthOffTightening to its exact refusal on the auth-off boot (the sweep
+// shows only that the verdict differs from R0's). That an operator can turn auth on and
+// then reach these routes is TestRegisteredHarness_AuthOnByTheOperatorOverAStoredOff.
+func TestRegisteredHarness_AuthOffTighteningRefusesInteractiveRoutes(t *testing.T) {
+	off := bootRegistered(t, registeredConfig{AuthOff: true})
+	for _, tt := range registeredAuthOffTightening {
+		ri := off.match(tt.Method, probePathFor(t, tt.Method, tt.Route))
+		if ri == nil {
+			t.Errorf("%s %s: not registered", tt.Method, tt.Route)
+			continue
+		}
+		res, err := off.Do(off.Principal(Authoff), tt.Method, probePathFor(t, tt.Method, tt.Route), nil)
+		if err != nil {
+			t.Errorf("%s %s: %v", tt.Method, tt.Route, err)
+			continue
+		}
+		if !off.Refused(res, http.StatusForbidden, tt.Code) {
+			t.Errorf("%s %s as auth-off: %d %s, want 403 %s", tt.Method, tt.Route, res.Status, res.excerpt(), tt.Code)
+		}
+	}
+}
+
+// probePathFor is the recorded probe path of a route (its :params filled).
+func probePathFor(t testing.TB, method, route string) string {
+	t.Helper()
+	_, routes := recordedVerdicts(t)
+	for _, r := range routes {
+		if r.Method == method && r.Path == route {
+			return r.ProbePath
+		}
+	}
+	t.Fatalf("%s %s is not a recorded route", method, route)
+	return ""
 }
