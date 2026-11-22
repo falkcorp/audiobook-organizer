@@ -106,9 +106,9 @@ func importStore(dir string, rows *[]*database.BookFile) *database.MockStore {
 
 func withSupportedExt(t *testing.T) {
 	t.Helper()
-	prev := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a"}
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = prev })
+	prev := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a"} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = prev }) })
 }
 
 // ---------------------------------------------------------------------------

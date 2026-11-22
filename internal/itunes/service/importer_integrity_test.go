@@ -160,9 +160,9 @@ func TestOrganizeMultiFileBook_PartialRepointRestoresTheRowsItAlreadyWrote(t *te
 // the copies and logged a "reconcile" hint instead.
 func TestOrganizeImportedBooks_MultiFileUpdateBookFailure_RollsBackRowsAndCopies(t *testing.T) {
 	root := t.TempDir()
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 
 	imported := "imported"
 	src := "/mnt/itunes/Library.xml"

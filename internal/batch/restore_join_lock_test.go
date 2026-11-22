@@ -22,9 +22,9 @@ func TestBatchRestore_GroupChangeWaitsForGroupLocks(t *testing.T) {
 	for _, held := range []string{"g", "h"} {
 		t.Run("holding "+held, func(t *testing.T) {
 			f := vptest.New(t)
-			prev := config.AppConfig.RootDir
-			config.AppConfig.RootDir = f.Root
-			t.Cleanup(func() { config.AppConfig.RootDir = prev })
+			prev := config.Get().RootDir
+			config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 			f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 			r := f.Book(t, vptest.Spec{ID: "r", Group: "g", Primary: "false"})
 			f.SoftDelete(t, r)

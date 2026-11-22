@@ -320,8 +320,9 @@ func TestFlipConfigNames_BootsWithTheOpenAIBindings(t *testing.T) {
 func TestOptions_CarriesTheConfigLists(t *testing.T) {
 	restoreConfigForTest(t)
 	sandboxStateDir(t)
-	config.AppConfig.DatabasePath = filepath.Join(tempDir(t), "gotham.pebble")
-	t.Setenv(storagePathEnv, config.AppConfig.DatabasePath)
+	cowV1 := filepath.Join(tempDir(t), "gotham.pebble")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
+	t.Setenv(storagePathEnv, config.Get().DatabasePath)
 	opts, err := Options(Module().(*booksModule), ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot()})
 	if err != nil {
 		t.Fatal(err)

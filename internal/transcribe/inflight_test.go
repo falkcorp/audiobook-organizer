@@ -25,9 +25,9 @@ func resetInFlight(t *testing.T, maxTotal int) {
 	// The registry now lives in internal/aidispatch; this clears it there.
 	resetInFlightState()
 
-	prev := config.AppConfig.WhisperMaxInFlight
-	config.AppConfig.WhisperMaxInFlight = maxTotal
-	t.Cleanup(func() { config.AppConfig.WhisperMaxInFlight = prev })
+	prev := config.Get().WhisperMaxInFlight
+	config.SetForTest(func(c *config.Config) { c.WhisperMaxInFlight = maxTotal })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.WhisperMaxInFlight = prev }) })
 }
 
 // hammer runs n concurrent acquire/hold/release cycles against url and reports
@@ -170,14 +170,14 @@ func TestAcquireInFlightCancelDoesNotStrandPoolSlot(t *testing.T) {
 }
 
 func TestWhisperBatchSizeIsConfigurable(t *testing.T) {
-	prev := config.AppConfig.WhisperBatchSize
-	t.Cleanup(func() { config.AppConfig.WhisperBatchSize = prev })
+	prev := config.Get().WhisperBatchSize
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.WhisperBatchSize = prev }) })
 
-	config.AppConfig.WhisperBatchSize = 0
+	config.SetForTest(func(c *config.Config) { c.WhisperBatchSize = 0 })
 	if got := whisperBatchSize(); got != defaultWhisperBatchSize {
 		t.Fatalf("0 must mean default, got %d", got)
 	}
-	config.AppConfig.WhisperBatchSize = 5
+	config.SetForTest(func(c *config.Config) { c.WhisperBatchSize = 5 })
 	if got := whisperBatchSize(); got != 5 {
 		t.Fatalf("configured size not honoured: got %d", got)
 	}

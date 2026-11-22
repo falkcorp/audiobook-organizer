@@ -194,9 +194,9 @@ func inFlightFake(t *testing.T) *atomic.Int64 {
 
 func setWorkers(t *testing.T, n int) {
 	t.Helper()
-	orig := config.AppConfig.FPParallelWorkers
-	config.AppConfig.FPParallelWorkers = n
-	t.Cleanup(func() { config.AppConfig.FPParallelWorkers = orig })
+	orig := config.Get().FPParallelWorkers
+	config.SetForTest(func(c *config.Config) { c.FPParallelWorkers = n })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.FPParallelWorkers = orig }) })
 }
 
 // TestBackfillPages_LoadsInPages is fix (b). The op used to call
@@ -474,7 +474,7 @@ func TestBackfillWorkers_ReadsTheSharedKnob(t *testing.T) {
 		t.Errorf("backfillWorkers() = %d, want 12", got)
 	}
 	for _, bad := range []int{0, -1, 33} {
-		config.AppConfig.FPParallelWorkers = bad
+		config.SetForTest(func(c *config.Config) { c.FPParallelWorkers = bad })
 		if got := backfillWorkers(); got != 4 {
 			t.Errorf("backfillWorkers() with FPParallelWorkers=%d = %d, want the default 4", bad, got)
 		}
@@ -484,15 +484,15 @@ func TestBackfillWorkers_ReadsTheSharedKnob(t *testing.T) {
 // fix (e): an unconfigured deployment must keep fpcalc's 120 s window, the
 // one every stored fingerprint was made with.
 func TestFingerprintLengthSec_DefaultReproducesStoredPrints(t *testing.T) {
-	orig := config.AppConfig.FingerprintLengthSec
-	t.Cleanup(func() { config.AppConfig.FingerprintLengthSec = orig })
+	orig := config.Get().FingerprintLengthSec
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.FingerprintLengthSec = orig }) })
 
 	// A negative value must NOT reach whole-file mode (-length 0): that is
 	// ~80x the work and an owner decision, not a config typo.
 	// Above the cap is clamped to it, so a typo cannot reach near-whole-file
 	// decode work either.
 	for cfg, want := range map[int]int{0: 120, 120: 120, 300: 300, 600: 600, 601: 600, 12000: 600, -1: fingerprint.DefaultAnalysisLengthSec} {
-		config.AppConfig.FingerprintLengthSec = cfg
+		config.SetForTest(func(c *config.Config) { c.FingerprintLengthSec = cfg })
 		if got := fingerprintLengthSec(); got != want {
 			t.Errorf("fingerprint_length_sec=%d → -length %d, want %d", cfg, got, want)
 		}

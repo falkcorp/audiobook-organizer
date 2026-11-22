@@ -362,9 +362,10 @@ func otherSweepEntries(ctx context.Context) []retentionEntry {
 				res0, err := kv.EnsureOpChangeByBookIndex(ctx, nil)
 				require.NoError(t, err)
 				require.True(t, res0.Trusted, "ledger index not trusted: %+v", res0)
-				prev := config.AppConfig.RootDir
-				t.Cleanup(func() { config.AppConfig.RootDir = prev })
-				config.AppConfig.RootDir = t.TempDir()
+				prev := config.Get().RootDir
+				t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
+				cowV1 := t.TempDir()
+				config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 				res, err := audiobooks.NewAudiobookService(kv).PurgeSoftDeletedUnattended(ctx, false, nil)
 				if err != nil {
 					return 0, err

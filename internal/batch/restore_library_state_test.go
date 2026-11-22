@@ -23,9 +23,9 @@ import (
 func trashedLikeDeleteAudiobook(t *testing.T) (*vptest.Fixture, string) {
 	t.Helper()
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	survivor := f.Book(t, vptest.Spec{ID: "survivor", Primary: "nil"})
 	id := f.Book(t, vptest.Spec{ID: "b", Primary: "nil"})
 	_, err := f.S.ModifyBook(id, func(b *database.Book) error {
@@ -77,11 +77,11 @@ func TestBatchUpdate_UnmarkDeletionUsesTheSharedRestoreRule(t *testing.T) {
 func liveGroupWithNilSibling(t *testing.T) (*vptest.Fixture, string, string) {
 	t.Helper()
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	prim := f.Book(t, vptest.Spec{ID: "prim", Group: "g", Primary: "true"})
 	sib := f.Book(t, vptest.Spec{ID: "sib", Group: "g", Primary: "nil"})
-	config.AppConfig.RootDir = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
 	return f, prim, sib
 }
 
@@ -125,9 +125,9 @@ func TestBatchUpdate_UnmarkDeletionOnLivePrimaryKeepsItsFlag(t *testing.T) {
 // later restore fell back to the file-location guess.
 func TestBatchUpdate_DeletedLabelRecordsThePreTrashState(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	// "imported" inside the root: the fallback would wrongly say organized.
 	id := f.Book(t, vptest.Spec{ID: "b", Primary: "nil", State: "imported"})
 

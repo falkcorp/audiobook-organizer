@@ -910,9 +910,9 @@ func TestPurgeAncestorWalkStops(t *testing.T) {
 	t.Run("library root", func(t *testing.T) {
 		f := newServedFixture(t)
 		root := t.TempDir()
-		prev := config.AppConfig.RootDir
-		config.AppConfig.RootDir = root
-		t.Cleanup(func() { config.AppConfig.RootDir = prev })
+		prev := config.Get().RootDir
+		config.SetForTest(func(c *config.Config) { c.RootDir = root })
+		t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 		shared := filepath.Join(root, "Gotham", "shared.m4b")
 		writeServed(t, shared)
 		if _, err := f.store.CreateBook(&database.Book{ID: "rootbook", Title: "Batman: Year One", FilePath: root}); err != nil {

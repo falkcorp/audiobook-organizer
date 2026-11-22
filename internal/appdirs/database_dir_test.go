@@ -105,10 +105,10 @@ func TestFromConfig_RelativeDatabasePathExcludesNothing(t *testing.T) {
 // guard controls have stopped guarding.
 func TestFromConfig_ClearedConfigIsZero(t *testing.T) {
 	const root = "/mnt/bigdata/books/audiobook-organizer"
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 
-	config.AppConfig = config.Config{RootDir: root}
+	config.ReplaceForTest(config.Config{RootDir: root})
 	if got := Current(); got != (pathutil.AppDirs{}) {
 		t.Fatalf("a fully cleared config must give the zero AppDirs; got %+v", got)
 	}
@@ -121,8 +121,8 @@ func TestFromConfig_ClearedConfigIsZero(t *testing.T) {
 		"DatabasePath":       func(c *config.Config) { c.DatabasePath = root + "/.appdata/db.pebble" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			config.AppConfig = config.Config{RootDir: root}
-			mutate(&config.AppConfig)
+			config.ReplaceForTest(config.Config{RootDir: root})
+			config.SetForTest(mutate)
 			if got := Current(); got == (pathutil.AppDirs{}) {
 				t.Errorf("%s was left set and Current() still returned the zero AppDirs — "+
 					"the empty-AppDirs negative controls are no longer guarding anything", name)

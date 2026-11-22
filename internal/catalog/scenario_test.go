@@ -205,10 +205,11 @@ func TestScenario_LocalCatalogStage_5000Books_800Blocks(t *testing.T) {
 			return nil
 		},
 	}
-	prev := config.AppConfig.MetadataFetch
-	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
-	config.AppConfig.MetadataFetch = config.DefaultMetadataFetchConfig()
-	config.AppConfig.MetadataFetch.SharedCache = false
+	prev := config.Get().MetadataFetch
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetch = prev }) })
+	cowV1 := config.DefaultMetadataFetchConfig()
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch.SharedCache = false })
 
 	type outcome struct {
 		providerCalls int64
@@ -222,7 +223,7 @@ func TestScenario_LocalCatalogStage_5000Books_800Blocks(t *testing.T) {
 		if matcher != nil {
 			svc.SetCatalogMatcher(matcher)
 		}
-		config.AppConfig.MetadataFetch.CatalogStage = stageOn
+		config.SetForTest(func(c *config.Config) { c.MetadataFetch.CatalogStage = stageOn })
 		stats := &metafetch.CatalogStageStats{}
 		ctx := metafetch.WithCatalogStageStats(context.Background(), stats)
 		out := outcome{results: make([]string, len(books)), stats: stats}

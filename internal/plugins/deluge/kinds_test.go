@@ -483,16 +483,20 @@ func (c *fakeCache) refreshCount() int {
 // calls poisonGlobals and hands the run its own config.
 func setGlobals(t *testing.T, root, label string, moveEnabled bool, protected []string) {
 	t.Helper()
-	orig := config.AppConfig
-	config.AppConfig.RootDir = root
-	config.AppConfig.DelugeDiscoveryLabel = label
-	config.AppConfig.DelugeMoveEnabled = moveEnabled
-	config.AppConfig.ProtectedPaths = protected
+	orig := config.Snapshot()
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.DelugeDiscoveryLabel = label
+		c.DelugeMoveEnabled = moveEnabled
+		c.ProtectedPaths = protected
+	})
 	t.Cleanup(func() {
-		config.AppConfig.RootDir = orig.RootDir
-		config.AppConfig.DelugeDiscoveryLabel = orig.DelugeDiscoveryLabel
-		config.AppConfig.DelugeMoveEnabled = orig.DelugeMoveEnabled
-		config.AppConfig.ProtectedPaths = orig.ProtectedPaths
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir = orig.RootDir
+			c.DelugeDiscoveryLabel = orig.DelugeDiscoveryLabel
+			c.DelugeMoveEnabled = orig.DelugeMoveEnabled
+			c.ProtectedPaths = orig.ProtectedPaths
+		})
 	})
 }
 

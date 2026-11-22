@@ -76,9 +76,9 @@ func (r *progressRecorder) lastMessage() string {
 // core.move_storage calls that reach Deluge: none for a preview, at least one
 // for a live run.
 func TestPreviewBehaviour_PathUpdate(t *testing.T) {
-	orig := config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.DelugeMoveEnabled = true
-	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = orig })
+	orig := config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = orig }) })
 
 	store := &database.MockStore{
 		GetBookByIDFunc: func(id string) (*database.Book, error) {

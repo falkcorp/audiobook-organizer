@@ -57,9 +57,9 @@ func newGuardClient(t *testing.T) (*Client, *atomic.Int32) {
 
 func setMoveEnabled(t *testing.T, on bool) {
 	t.Helper()
-	prev := config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.DelugeMoveEnabled = on
-	t.Cleanup(func() { config.AppConfig.DelugeMoveEnabled = prev })
+	prev := config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = on })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DelugeMoveEnabled = prev }) })
 }
 
 func TestMoveStorageGuard_DisabledSendsNothing(t *testing.T) {
