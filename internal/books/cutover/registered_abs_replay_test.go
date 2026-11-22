@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -366,9 +367,7 @@ func absLogin(t *testing.T, h *Registered, user, password string) (token, sub, s
 // the ABS handler wrote.
 func absGET(h *Registered, header http.Header) (int, string) {
 	req := httptest.NewRequest(http.MethodGet, "/api/libraries", nil)
-	for k, v := range header {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, header)
 	res := h.Raw(req)
 	var e struct {
 		Error string `json:"error"`
