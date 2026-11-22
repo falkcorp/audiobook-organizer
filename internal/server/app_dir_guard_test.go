@@ -7,6 +7,7 @@ package server
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,10 +49,21 @@ func withAppDirConfig(t *testing.T, root string) {
 // is why the fixture uses non-dot names — a dot-named fixture would have been
 // skipped by the pre-existing rule and proved nothing.
 func TestCalculateLibrarySizes_ExcludesAppDirs(t *testing.T) {
+	// calculateLibrarySizes reports PHYSICAL size (filePhysicalSize: st_blocks*512),
+	// not apparent size, so the fixture has to look the same to every filesystem:
+	//   - bytes are incompressible (fixed-seed math/rand): zero-filled content is
+	//     compressed to ~nothing on ZFS (u0 reported 2,048 bytes for 500 kB);
+	//   - callers that assert a physical size call settleDisk after writing,
+	//     because ZFS allocates blocks lazily and st_blocks of a just-written
+	//     file reads ~1 kB even for incompressible data (see settleDisk).
+	rng := rand.New(rand.NewSource(1939))
 	writeN := func(t *testing.T, path string, n int) {
 		t.Helper()
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, make([]byte, n), 0o644))
+		buf := make([]byte, n)
+		_, err := rng.Read(buf)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, buf, 0o644))
 	}
 
 	t.Run("app dirs configured are excluded from the total", func(t *testing.T) {
@@ -95,6 +107,7 @@ func TestCalculateLibrarySizes_ExcludesAppDirs(t *testing.T) {
 		})
 		writeN(t, filepath.Join(root, "Author", "Book", "book.m4b"), 1000)
 		writeN(t, filepath.Join(root, "backups", "archive.tar.zst"), 500_000)
+		settleDisk(t)
 
 		librarySize, _ := calculateLibrarySizes(root, nil)
 		require.Greater(t, librarySize, int64(500_000),
