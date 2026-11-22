@@ -48,7 +48,10 @@ import (
 //   - fInteractive: registered through credRoute (s.credRoutes "always"). A
 //     credRouteWhen route ("conditional") is guarded only for some requests,
 //     which Guards cannot say; gin keeps that guard, so it carries none here.
-//   - fOwner: the chain runs ownerGateWhenOwnerSet (RequireOwner).
+//   - fOwner: the chain runs ownerGateWhenOwnerSet (RequireOwner): Guards.Owner
+//     with LegacyRoute.OwnerWhenSet, so stage 13 demands the owner only while
+//     one is required and otherwise leaves the row's Interactive and Perm to
+//     decide, as HEAD's gate passed through with owner_email unset.
 //   - fBasicExempt: HEAD's Basic-gate health exemption, read by core's stage 8
 //     (httpapi.LegacyRoute.BasicExempt; the gate's other exemptions are
 //     pABS's OwnAuth and LegacyBasicExemptAssets).
@@ -104,14 +107,17 @@ type legacyRow struct {
 
 func (r legacyRow) route() httpapi.LegacyRoute {
 	lr := httpapi.LegacyRoute{
-		Method:      r.method,
-		GinPath:     r.path,
-		Perm:        r.perm.req(),
-		Guards:      httpapi.Guards{Interactive: r.flags&fInteractive != 0, Owner: r.flags&fOwner != 0},
-		OwnAuth:     r.perm.ownAuth,
-		BasicExempt: r.flags&fBasicExempt != 0,
-		RateClass:   httpapi.RateExempt,
-		NoCompress:  r.flags&fNoCompress != 0,
+		Method:  r.method,
+		GinPath: r.path,
+		Perm:    r.perm.req(),
+		Guards:  httpapi.Guards{Interactive: r.flags&fInteractive != 0, Owner: r.flags&fOwner != 0},
+		// HEAD's ownerGateWhenOwnerSet (F4-08 B10y): the owner leg only while
+		// core.auth.owner.required, which books derives from owner_email.
+		OwnerWhenSet: r.flags&fOwner != 0,
+		OwnAuth:      r.perm.ownAuth,
+		BasicExempt:  r.flags&fBasicExempt != 0,
+		RateClass:    httpapi.RateExempt,
+		NoCompress:   r.flags&fNoCompress != 0,
 	}
 	lr.Public = lr.Perm.Kind() == rbac.KindPublic
 	if lr.OwnAuth {

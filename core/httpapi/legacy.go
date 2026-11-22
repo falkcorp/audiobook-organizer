@@ -506,7 +506,7 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 			// The members share Perm, Guards and OwnAuth (sameRequirements),
 			// so the first speaks for all. An OwnAuth route authenticates
 			// itself and never meets stages 12 and 13.
-			mh = r.authWrap(first.Perm, first.Guards, first.Method+" "+reg.pat.path(), mh)
+			mh = r.authWrap(first.Perm, first.Guards, first.OwnerWhenSet, first.Method+" "+reg.pat.path(), mh)
 		}
 		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, mh, spec), facts: legacyGateFacts(reg, m)}
 		if err := register(mux, reg.pat.String(), h); err != nil {
@@ -639,6 +639,9 @@ func (r *Router) checkLegacyPerm(owner, what string, lr LegacyRoute) []error {
 	var errs []error
 	if lr.Public != (req.Kind() == rbac.KindPublic) {
 		errs = append(errs, fmt.Errorf("%w: %s: Public is %t but the requirement is %s", ErrLegacyManifest, what, lr.Public, req))
+	}
+	if lr.OwnerWhenSet && !lr.Guards.Owner {
+		errs = append(errs, fmt.Errorf("%w: %s: OwnerWhenSet on a route without Guards.Owner", ErrLegacyManifest, what))
 	}
 	switch {
 	case lr.OwnAuth && lr.AuthMethod == "":
@@ -905,7 +908,7 @@ func sameRequirements(a, b LegacyRoute) string {
 	switch {
 	case a.Perm.String() != b.Perm.String():
 		return "Perm"
-	case a.Guards != b.Guards:
+	case a.Guards != b.Guards || a.OwnerWhenSet != b.OwnerWhenSet:
 		return "Guards"
 	case a.Public != b.Public:
 		return "Public"

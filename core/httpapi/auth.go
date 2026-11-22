@@ -103,10 +103,13 @@ func (r *Router) SetAuth(w AuthWiring) error {
 // authWrap puts stage 12 and then stage 13 around h for the route named by
 // route ("METHOD /pattern"); r.mu is held and r.auth is set. The stages run
 // inside stages 10 and 11 (chain.Route wraps the result) and outside the
-// handler, so a refused request never reaches it.
-func (r *Router) authWrap(perm rbac.Requirement, guards Guards, route string, h http.Handler) http.Handler {
+// handler, so a refused request never reaches it. ownerWhenSet is a legacy
+// route's LegacyRoute.OwnerWhenSet; every native, raw and Infra route passes
+// false.
+func (r *Router) authWrap(perm rbac.Requirement, guards Guards, ownerWhenSet bool, route string, h http.Handler) http.Handler {
 	o := r.auth.opts
 	o.Route = route
+	o.ownerWhenSet = ownerWhenSet
 	s13, err := Stage13(perm, guards, o)
 	if err != nil {
 		// Unreachable: SetAuth always sets ClearCookie. Refuse everything

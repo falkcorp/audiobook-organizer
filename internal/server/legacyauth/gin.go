@@ -141,17 +141,18 @@ func RequireCredentialChange() gin.HandlerFunc {
 	}
 }
 
-// RequireOwner is the adapter of HEAD's RequireOwner (Guards.Owner at stage
-// 13, 05-authn §4.8): the principal must carry AssuranceOwner, which only an
-// OwnerVerifier extension sets. Only when core.auth.owner.required is false
-// (the injected OwnerRequired; nil reads as true) does it fall back to an
-// interactive principal holding core:admin, judged through rbac.Require so
-// the denial is audited. The auth-disabled principal has neither and is
-// refused.
+// RequireOwner is the adapter of HEAD's ownerGateWhenOwnerSet (Guards.Owner
+// with httpapi.LegacyRoute.OwnerWhenSet at stage 13): while
+// core.auth.owner.required holds (the injected OwnerRequired; nil reads as
+// true) the principal must carry AssuranceOwner, which only an OwnerVerifier
+// extension sets; while it does not, the gate passes every principal through
+// and the route's own credential guard and permission decide, as HEAD's gate
+// did with owner_email unset (F4-08 B10y). It has no core:admin fallback of
+// its own: that was 05-authn §4.8's native branch, which only core's own
+// owner routes keep. A request with no principal is still 401.
 func (b *Bridge) RequireOwner() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := c.Request.Context()
-		p, ok := coreauth.PrincipalFrom(ctx)
+		p, ok := coreauth.PrincipalFrom(c.Request.Context())
 		if !ok {
 			unauthenticated(c)
 			return
@@ -160,11 +161,7 @@ func (b *Bridge) RequireOwner() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if b.ownerRequired == nil || b.ownerRequired() || !p.Interactive() {
-			forbidden(c, msgOwnerRequired)
-			return
-		}
-		if rbac.Require(ctx, rbac.CoreAdmin) != nil {
+		if b.ownerRequired == nil || b.ownerRequired() {
 			forbidden(c, msgOwnerRequired)
 			return
 		}
