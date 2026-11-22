@@ -185,6 +185,36 @@ func (s scopedFileWriter) UpdateBookFile(id string, f *database.BookFile) error 
 	return s.w.UpdateBookFile(id, f)
 }
 
+// errBatchNotFromParent is a batch child's refusal of a start that did not come
+// from its parent's sweep.
+var errBatchNotFromParent = fmt.Errorf("%w: a batch child is started only by its parent run", errBatchScope)
+
+// batchRequireParent refuses a child run that a person or a schedule started: the
+// scope in its params (parent_run_id, batch) names a run and a batch only the
+// parent's sweep may name (the children stamp their results with that run id, and
+// a clear_run_id rollback finds what they wrote by it).
+func batchRequireParent(rc *tasks.RC) error {
+	if rc.Trigger() != tasks.TriggerParent {
+		return fmt.Errorf("%w (trigger %q)", errBatchNotFromParent, rc.Trigger())
+	}
+	return nil
+}
+
+// batchCacheRefs are the kind-wide refs every batch child also holds. A child's
+// ModifyBook / UpdateBookFile / SetBookFileHash write books, metadata_cache and
+// indexes (internal/maintenance/resources/resources.go:136, bookW; :139 fileRow
+// adds book_files); the first is held per batch, but metadata_cache and indexes
+// are keyed by things a batch's book list does not name (the cache's lookup rows,
+// the identity index's ident: rows), so a child holds them whole-kind, as it
+// holds files. A writer of either (metadata_cache_reap, metafetch's cache sweep)
+// then waits for the short child, where it waited for the whole run at HEAD.
+func batchCacheRefs() []entity.Ref {
+	return []entity.Ref{
+		tasks.Res("books", string(ops.ResMetadataCache)),
+		tasks.Res("books", string(ops.ResIndexes)),
+	}
+}
+
 // batchParentHolds is every batch parent's Common.Subjects: the parent writes no
 // row itself, so a run of it holds none and an unrelated write is never queued
 // behind it. The parent still DECLARES HEAD's Effects.Writes (a kind with no

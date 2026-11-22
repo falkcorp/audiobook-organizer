@@ -494,6 +494,8 @@ type t6g4Host struct {
 	*taskstest.FakeRun
 	mode tasks.Mode
 	w    tasks.Writer
+	// trigger is what Trigger() reports; zero keeps FakeRun's (manual).
+	trigger tasks.Trigger
 
 	mu       sync.Mutex
 	progress [][2]int64
@@ -655,9 +657,32 @@ func TestT6G4RunEach_ProgressTotalAndBaseReachTheProgress(t *testing.T) {
 	}
 }
 
+// newT6G4RC is a run host of kind in mode over writer w, and its RC.
+//
+// A batch child kind's run reports TriggerParent, as the sweep that starts it
+// would make it (a child refuses any other trigger, batchRequireParent); a test
+// of that refusal builds its host by hand with another trigger.
 func newT6G4RC(kind tasks.Kind, mode tasks.Mode, w tasks.Writer) (*t6g4Host, *tasks.RC) {
-	h := &t6g4Host{FakeRun: taskstest.NewFakeRun(context.Background(), kind), mode: mode, w: w}
+	h := &t6g4Host{FakeRun: taskstest.NewFakeRun(context.Background(), kind), mode: mode, w: w, trigger: t6g4TriggerOf(kind)}
 	return h, tasks.NewRC(h)
+}
+
+// t6g4TriggerOf is what starts a run of kind in a test: the parent's sweep for a
+// batch child, nothing (FakeRun's manual) for every other kind.
+func t6g4TriggerOf(kind tasks.Kind) tasks.Trigger {
+	switch kind {
+	case extractWAVBatchChildKind, introMigrateBatchChildKind, fileIntroBatchChildKind:
+		return tasks.TriggerParent
+	}
+	return ""
+}
+
+// Trigger reports the host's trigger, FakeRun's when none was set.
+func (h *t6g4Host) Trigger() tasks.Trigger {
+	if h.trigger != "" {
+		return h.trigger
+	}
+	return h.FakeRun.Trigger()
 }
 
 // runT6G4Kind runs d's own Run, the function the executor would call, with the
