@@ -182,6 +182,10 @@ func reachFixtureInput(t *testing.T, row reachObligation, covers []string, sourc
 		}
 		return reachParseTest("fixture_test.go", []byte(src), name)
 	}
+	// The fixture judges its own discharge alone: the real registrations
+	// (RegisterReachDischarge, from the B10 cell files' init) name tests the
+	// fake finder above cannot see, and would read as missing.
+	in.discharges = nil
 	if row.dir == "." {
 		in.discharges = []reachDischarge{{Obligation: row.name, Test: row.test, Covers: func() []string { return covers }}}
 	}
