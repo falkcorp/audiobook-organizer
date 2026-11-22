@@ -108,16 +108,30 @@ func (e *executor) Timeline(ctx context.Context, q tasks.TimelineQuery) ([]tasks
 	return out, nil
 }
 
-// Log implements tasks.Client.Log.
+// Log implements tasks.Client.Log (5T.3.10): the run's View rule, and each line
+// redacted by RedactRunView's rule (tasks.RedactLogAppended) for the caller's
+// checker, so no caller of the client, not only GET /runs/{id}/log, can read a
+// line's user-identifying text without core:users.view.
+//
+// A caller with no resolved identity (who == nil: a kernel-internal call, or an
+// executor built without a Principal) sees the lines as stored, the same way
+// mayView treats it. That is the one place this differs from RedactLogAppended,
+// which blanks for a nil checker because a stream subscriber with no checker is
+// an unwired entry; here nil means in-process, which is trusted.
 func (e *executor) Log(ctx context.Context, id tasks.RunID, q tasks.PageQuery) iter.Seq2[tasks.LogLine, error] {
 	return func(yield func(tasks.LogLine, error) bool) {
 		if _, err := e.Get(ctx, id); err != nil {
 			yield(tasks.LogLine{}, err)
 			return
 		}
+		_, who := e.caller(ctx)
 		q.Page = tasks.PageLog
 		for p, err := range e.runs.Pages(ctx, id, q) {
-			if !yield(p.Log, err) || err != nil {
+			line := p.Log
+			if err == nil && who != nil {
+				line = tasks.LogLine(tasks.RedactLogAppended(who, tasks.NewLogAppended(line)))
+			}
+			if !yield(line, err) || err != nil {
 				return
 			}
 		}
