@@ -41,6 +41,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,8 @@ for o in opts:
         env[k] = v
     if o.startswith("--property=StandardOutput=append:"):
         out = o.split("append:", 1)[1]
+if "--pipe" in opts:
+    sys.exit(subprocess.run(cmd, env=env).returncode)
 with open(out, "ab") as f:
     sys.exit(subprocess.run(cmd, env=env, stdout=f, stderr=f).returncode)
 """
@@ -233,6 +236,9 @@ class FakeHost:
         """The real helpers, with their fixed paths pointed into the sandbox."""
         self.libexec = self.root / "libexec"
         self.libexec.mkdir()
+        self.export = self.root / "export"
+        self.export.mkdir(mode=0o700)
+        self.export.chmod(0o700)
         etc = self.root / "etc"
         etc.mkdir(mode=0o755)
         self.config = etc / "rollback.conf"
@@ -287,6 +293,8 @@ class FakeHost:
             "restore-offline",
             "unit-type",
             "install-staged",
+            "export-keyring",
+            "export-install-secrets",
         ):
             text = (HELPERS / stub).read_text()
             assert lib_line in text, stub
@@ -304,6 +312,7 @@ class FakeHost:
             "archive_dir": str(self.archives),
             "checkpoint_dir": "",
             "offline_env": f"HOME={self.state} ABK_STATE_DIR={self.state}",
+            "export_dir": str(self.export),
         }
         values.update(config)
         self.config.write_text("".join(f"{k} = {v}\n" for k, v in values.items() if v is not None))
@@ -2049,6 +2058,237 @@ class SudoersDrift(unittest.TestCase):
             host="h", db="/path/to/audiobooks.pebble", bin="/usr/local/bin/audiobook-organizer"
         )
         self.assertEqual(body, guard.sudoers(o, "deploy"))
+
+
+class ExportTargets(unittest.TestCase):
+    """`make export-keyring` and `make export-install-secrets`: the real
+    recipe, scripts/export_offhost.py, the real helpers and a fake ssh/scp,
+    in a sandbox. Nothing here touches a real host."""
+
+    KEY = b"alfred-encryption-key-0123456789abcdef"
+    CONFIG_YAML = b"core:\n  paths:\n    state_dir: /var/lib/batcave\n"
+
+    def host(self, **kw) -> FakeHost:
+        host = FakeHost(self, **kw)
+        (host.state / ".encryption_key").write_bytes(self.KEY)
+        (host.db.parent / "config.yaml").write_bytes(self.CONFIG_YAML)
+        host.dest = host.root / "offhost" / "run1"
+        host.h["env"]["HOME"] = str(host.root / "home")
+        return host
+
+    def sudos(self, host: FakeHost) -> list[str]:
+        return [c for c in host.ssh() if c.startswith("sudo")]
+
+    def remote_files(self, host: FakeHost) -> list[str]:
+        return sorted(p.name for p in host.export.iterdir())
+
+    def test_export_keyring_brings_the_file_here_and_deletes_the_remote_copy(self) -> None:
+        host = self.host(current={"keyring": "batcave keyring export v1"})
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+        self.assertEqual(p.returncode, 0, out(p))
+        files = sorted(host.dest.iterdir())
+        self.assertEqual(len(files), 1, files)
+        got = files[0]
+        self.assertRegex(got.name, r"^aorg-keyring-[0-9]{8}T[0-9]{6}Z$")
+        self.assertEqual(got.read_bytes(), b"batcave keyring export v1")
+        self.assertEqual(stat.S_IMODE(got.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(host.dest.stat().st_mode), 0o700)
+        self.assertEqual(self.remote_files(host), [], "the remote copy is deleted")
+        self.assertIn(hashlib.sha256(b"batcave keyring export v1").hexdigest(), p.stdout)
+        ssh = host.ssh()
+        self.assertEqual(
+            [c for c in ssh if "export-" in c],
+            [f"sudo -n {guard.HELPER_DIR}/export-keyring"],
+            "one sudo, the fixed line, no arguments",
+        )
+        self.assertEqual(
+            ssh[-1], f"rm -f -- {host.export}/{got.name}", "the exact name, as the deploy user"
+        )
+        self.assertEqual(len(self.sudos(host)), 1)
+        downloads = [e for e in host.scps() if e.get("direction") == "down"]
+        self.assertEqual(len(downloads), 1)
+        self.assertEqual(downloads[0]["src"], f"{host.export}/{got.name}")
+        self.assertEqual(downloads[0]["dest"], f"{host.dest}/{got.name}.part")
+        self.assertEqual([p.name for p in host.dest.glob("*.part")], [])
+        self.assertEqual(
+            [e["args"][:2] for e in host.calls() if e["kind"] == "app"],
+            [["secrets", "export-keyring"]],
+        )
+
+    def test_export_install_secrets_brings_the_key_and_the_config(self) -> None:
+        host = self.host()
+        p = host.make("export-install-secrets", OFFHOST_DIR=str(host.dest))
+        self.assertEqual(p.returncode, 0, out(p))
+        got = {f.name.rsplit("-", 1)[0]: f for f in host.dest.iterdir()}
+        self.assertEqual(sorted(got), ["aorg-config", "aorg-encryption-key"])
+        self.assertEqual(got["aorg-encryption-key"].read_bytes(), self.KEY)
+        self.assertEqual(got["aorg-config"].read_bytes(), self.CONFIG_YAML)
+        self.assertTrue(got["aorg-config"].name.endswith(".yaml"))
+        for f in got.values():
+            self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f.name)
+        self.assertEqual(self.remote_files(host), [])
+        self.assertEqual(
+            [c for c in host.ssh() if "export-" in c],
+            [f"sudo -n {guard.HELPER_DIR}/export-install-secrets"],
+        )
+        rm = [c for c in host.ssh() if c.startswith("rm ")]
+        self.assertEqual(len(rm), 1)
+        self.assertEqual(
+            rm[0], "rm -f -- " + " ".join(f"{host.export}/{f.name}" for f in got.values())
+        )
+
+    def test_a_config_yaml_that_does_not_exist_is_absent_not_an_error(self) -> None:
+        host = self.host()
+        (host.db.parent / "config.yaml").unlink()
+        p = host.make("export-install-secrets", OFFHOST_DIR=str(host.dest))
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(
+            [f.name.rsplit("-", 1)[0] for f in host.dest.iterdir()], ["aorg-encryption-key"]
+        )
+
+    def test_the_default_local_directory_is_made_0700(self) -> None:
+        host = self.host()
+        p = host.make("export-keyring")
+        self.assertEqual(p.returncode, 0, out(p))
+        made = list((host.root / "home" / "aorg-offhost").iterdir())
+        self.assertEqual(len(made), 1)
+        self.assertRegex(made[0].name, r"^[0-9]{8}T[0-9]{6}Z$")
+        self.assertEqual(stat.S_IMODE(made[0].stat().st_mode), 0o700)
+        self.assertEqual(len(list(made[0].iterdir())), 1)
+
+    def test_both_targets_into_one_directory(self) -> None:
+        host = self.host()
+        for target in ("export-keyring", "export-install-secrets"):
+            p = host.make(target, OFFHOST_DIR=str(host.dest))
+            self.assertEqual(p.returncode, 0, out(p))
+        self.assertEqual(len(list(host.dest.iterdir())), 3)
+
+    def test_the_sudo_lines_it_runs_are_exactly_the_two_granted_ones(self) -> None:
+        o = guard.Opts(
+            host="h",
+            db="/path/to/audiobooks.pebble",
+            bin="/usr/local/bin/audiobook-organizer",
+            user=USER,
+        )
+        text = guard.sudoers(o, "deploy")
+        entries = parse_sudoers(text)
+        self.assertNotIn("*", text)
+        seen = set()
+        for target in ("export-keyring", "export-install-secrets"):
+            host = self.host()
+            p = host.make(target, OFFHOST_DIR=str(host.dest))
+            self.assertEqual(p.returncode, 0, out(p))
+            for c in self.sudos(host):
+                seen.add(c)
+                self.assertTrue(granted(entries, c), f"not granted: {c}\n{text}")
+        self.assertEqual(
+            seen,
+            {
+                f"sudo -n {guard.HELPER_DIR}/export-keyring",
+                f"sudo -n {guard.HELPER_DIR}/export-install-secrets",
+            },
+        )
+        self.assertEqual(
+            [ln for ln in text.splitlines() if "export-" in ln],
+            [
+                f'    {guard.HELPER_DIR}/export-keyring "", \\',
+                f'    {guard.HELPER_DIR}/export-install-secrets ""',
+            ],
+        )
+
+    # -- refusals ---------------------------------------------------------------
+
+    def assert_nothing_copied(self, host: FakeHost, p: subprocess.CompletedProcess) -> None:
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(list(host.dest.glob("*")) if host.dest.exists() else [], [])
+        self.assertEqual([e for e in host.scps() if e.get("direction") == "down"], [])
+        self.assertEqual([c for c in host.ssh() if c.startswith("rm ")], [])
+
+    def test_no_export_dir_in_the_host_config_refuses_before_any_sudo(self) -> None:
+        host = self.host(config={"export_dir": None})
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+        self.assert_nothing_copied(host, p)
+        self.assertIn("no export_dir", out(p))
+        self.assertEqual(self.sudos(host), [])
+
+    def test_a_host_config_for_another_store_refuses_before_any_sudo(self) -> None:
+        host = self.host()
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest), DEPLOY_DB="/data/other.pebble")
+        self.assert_nothing_copied(host, p)
+        self.assertEqual(self.sudos(host), [])
+
+    def test_a_running_restore_unit_stops_the_helper_and_copies_nothing(self) -> None:
+        host = self.host()
+        host.transient_state.write_text("active\n")
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+        self.assert_nothing_copied(host, p)
+        self.assertIn("may still be running", out(p))
+        self.assertEqual(self.remote_files(host), [])
+
+    def test_a_binary_that_refuses_copies_nothing(self) -> None:
+        host = self.host(current={"keyring_exit": 2})
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+        self.assert_nothing_copied(host, p)
+        self.assertEqual(self.remote_files(host), [])
+
+    def test_a_missing_key_copies_nothing_and_leaves_no_half_pair(self) -> None:
+        host = self.host()
+        (host.state / ".encryption_key").unlink()
+        p = host.make("export-install-secrets", OFFHOST_DIR=str(host.dest))
+        self.assert_nothing_copied(host, p)
+        self.assertEqual(self.remote_files(host), [])
+
+    def test_a_local_directory_others_can_enter_is_refused(self) -> None:
+        host = self.host()
+        host.dest.mkdir(parents=True, mode=0o755)
+        host.dest.chmod(0o755)
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(list(host.dest.iterdir()), [])
+        self.assertEqual(self.sudos(host), [], "refused before the host is touched")
+
+    def test_a_symlink_as_the_local_directory_is_refused(self) -> None:
+        host = self.host()
+        real = host.root / "elsewhere"
+        real.mkdir(mode=0o700)
+        host.dest.parent.mkdir(parents=True)
+        os.symlink(real, host.dest)
+        p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(list(real.iterdir()), [])
+        self.assertEqual(self.sudos(host), [])
+
+    def test_a_bad_copy_keeps_the_remote_file_and_says_so(self) -> None:
+        for label, rule in (
+            ("scp fails", {"exit": 1, "stderr": "scp: connection lost\n"}),
+            ("scp writes nothing", {"exit": 0}),
+        ):
+            host = self.host(rules=[{"match": r"^scp .*aorg-keyring-", "responses": [rule]}])
+            p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+            self.assertNotEqual(p.returncode, 0, label)
+            self.assertEqual(list(host.dest.iterdir()), [], f"{label}: no part or file is left")
+            self.assertEqual([c for c in host.ssh() if c.startswith("rm ")], [], label)
+            self.assertEqual(len(self.remote_files(host)), 1, label)
+            self.assertIn("KEPT", out(p), label)
+
+    def test_names_the_host_prints_are_held_to_a_grammar(self) -> None:
+        sha = "a" * 64
+        stamp = "20261122T010203Z"
+        for label, stdout in (
+            ("traversal", f"EXPORTED ../../etc/passwd 5 {sha}\n"),
+            ("shell metacharacters", f"EXPORTED aorg-keyring-{stamp};id 5 {sha}\n"),
+            ("wrong kind for this target", f"EXPORTED aorg-config-{stamp}.yaml 5 {sha}\n"),
+            ("nothing", ""),
+            ("two lines", f"EXPORTED aorg-keyring-{stamp} 5 {sha}\n" * 2),
+            ("a bad hash", f"EXPORTED aorg-keyring-{stamp} 5 {'g' * 64}\n"),
+            ("extra text", f"hello\nEXPORTED aorg-keyring-{stamp} 5 {sha}\n"),
+        ):
+            host = self.host(
+                rules=[{"match": r"export-keyring$", "responses": [{"stdout": stdout}]}]
+            )
+            p = host.make("export-keyring", OFFHOST_DIR=str(host.dest))
+            self.assert_nothing_copied(host, p)
+            self.assertIn("nothing was copied", out(p), label)
 
 
 def mutant(tc: unittest.TestCase, before: str, after: str) -> Path:

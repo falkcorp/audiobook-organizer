@@ -172,6 +172,10 @@ class Opts:
     # HOST_CONFIG's optional stage_local_conf: the file `make deploy` and
     # `make deploy-release` upload deploy/local.conf to for install-staged.
     stage_local_conf: str = ""
+    # HOST_CONFIG's optional export_dir: the deploy user's 0700 directory the
+    # export helpers (`make export-keyring`, `make export-install-secrets`)
+    # leave their files in, for the recipe to copy off the host.
+    export_dir: str = ""
     # prev_path names the binary whose levels, format and capabilities the
     # recipes read: "" = DEPLOY_BIN.prev, the fetched file once a RELEASE was
     # fetched and has not been installed.
@@ -277,6 +281,11 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         "install_local_conf": f"sudo -n {h}/install-staged local-conf",
         "pprof_on": f"sudo -n {h}/pprof on",
         "pprof_off": f"sudo -n {h}/pprof off",
+        # `make export-keyring` and `make export-install-secrets`
+        # (scripts/export_offhost.py): each takes no arguments, so each is
+        # granted with "" (none admitted).
+        "export_keyring": f"sudo -n {h}/export-keyring",
+        "export_install_secrets": f"sudo -n {h}/export-install-secrets",
     }
 
 
@@ -303,6 +312,8 @@ def sudoers(o: Opts, deploy_user: str) -> str:
         "unit_type_simple",
         "install_unit",
         "pprof_on",
+        "export_keyring",
+        "export_install_secrets",
         "record",
     ):
         argv = shlex.split(c[key])
@@ -376,6 +387,7 @@ def load_host_config(o: Opts, get: Getter) -> list[str]:
     o.checkpoint_dir, o.archive_dir = cfg.get("checkpoint_dir", ""), cfg["archive_dir"]
     o.stage_bin = cfg.get("stage_bin", "")
     o.stage_local_conf = cfg.get("stage_local_conf", "")
+    o.export_dir = cfg.get("export_dir", "")
     bad = _validate(o)
     if bad:
         return [f"REFUSING: {HOST_CONFIG}: {bad}. Nothing was changed."]
@@ -877,6 +889,7 @@ def _validate(o: Opts) -> str:
         ("archive_dir", o.archive_dir),
         ("stage_bin", o.stage_bin),
         ("stage_local_conf", o.stage_local_conf),
+        ("export_dir", o.export_dir),
     ):
         if p and (not _SAFE_PATH.fullmatch(p) or ".." in p.split("/")):
             return f"{label} {p!r} must be an absolute path of letters, digits and ._/@+-"

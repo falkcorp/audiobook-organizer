@@ -184,6 +184,34 @@ class InstallHelpers(unittest.TestCase):
         self.assertEqual(cfg["service_user"], "audiobook")
         self.assertEqual(cfg["stage_local_conf"], "/home/alfred/audiobook-organizer-local.conf")
 
+    def test_export_dir_is_written_when_given_and_the_helper_accepts_it(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        self.assertIn(
+            "export_dir =\n", self.conf.read_text(), "unset, like the other optional keys"
+        )
+        p = self.run_tool("--apply", "--export-dir=/home/alfred/aorg-export", "--replace-conf")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("export_dir = /home/alfred/aorg-export\n", self.conf.read_text())
+        old = RH.CONFIG
+        RH.CONFIG = str(self.conf)
+        self.addCleanup(setattr, RH, "CONFIG", old)
+        self.assertEqual(RH.load_config()["export_dir"], "/home/alfred/aorg-export")
+
+    def test_a_bad_export_dir_installs_nothing(self) -> None:
+        for bad in ("relative", "/home/../x", "/home/al fred/x", "/x;id"):
+            p = self.run_tool("--apply", f"--export-dir={bad}")
+            self.assertNotEqual(p.returncode, 0, bad)
+            self.assertEqual([x for x in self.root.rglob("*") if x.is_file()], [], bad)
+
+    def test_the_two_export_stubs_and_their_sudoers_lines_are_installed(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        for stub in ("export-keyring", "export-install-secrets"):
+            self.assertIn(stub, RH.STUBS)
+            f = self.libdir / stub
+            self.assertEqual(f.read_bytes(), (HELPERS / stub).read_bytes())
+            self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o755)
+            self.assertIn(f'{RH.LIBDIR}/{stub} ""', self.dropin.read_text())
+
     def test_the_sudoers_is_the_guards_own_rendering(self) -> None:
         self.assertEqual(self.run_tool("--apply").returncode, 0)
         o = guard.Opts(

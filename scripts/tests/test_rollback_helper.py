@@ -21,6 +21,7 @@ Run with:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -3479,6 +3480,493 @@ class RollbackEnv(unittest.TestCase):
             set(),
             "only systemctl is run, never the binary",
         )
+
+
+KEYRING = b"batcave keyring export v1\n" + bytes(range(32))
+KEY = b"alfred-encryption-key-0123456789abcdef"
+CONFIG_YAML = b"core:\n  paths:\n    state_dir: /var/lib/batcave\n"
+STAMP = "20261122T010203Z"
+
+# A fake binary: `secrets export-keyring --db D --out F` writes KEYRING to F,
+# mode 0600 (BIN_MODE), after logging its argv and environment.
+_FAKE_BIN = """#!{python}
+import json, os, sys
+args = sys.argv[1:]
+with open({log!r}, "a") as f:
+    f.write(json.dumps({{"argv": args, "env": {{k: os.environ.get(k, "") for k in
+        ("HOME", "ABK_STATE_DIR", "ABO_CORE_PATHS_STATE_DIR")}}}}) + "\\n")
+if {exit_code!r}:
+    sys.exit({exit_code!r})
+out = args[args.index("--out") + 1]
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, {mode!r})
+os.write(fd, {data!r})
+os.close(fd)
+os.chmod(out, {mode!r})
+"""
+
+
+class Export(unittest.TestCase):
+    """export-keyring and export-install-secrets: the service user's files,
+    handed to the deploy user only as files in export_dir."""
+
+    def setUp(self):
+        self.h = h = Host(self)
+        self.export = h.root / "export"
+        self.export.mkdir(mode=0o700)
+        self.export.chmod(0o700)
+        with open(h.mod.CONFIG, "a") as f:
+            f.write(f"export_dir = {self.export}\n")
+        self.tmp = h.root / "tmp"
+        self.tmp.mkdir()
+        self.bin_log = h.root / "bin-calls.log"
+        self.mode_file = h.root / "fake-run-mode"
+        self.set_bin()
+        # The helper copy the fake systemd-run runs as _export-worker, with its
+        # config path pointed into the sandbox (a unit really runs the installed one).
+        src = HELPER.read_text()
+        before = 'CONFIG = "/etc/audiobook-organizer/rollback.conf"'
+        assert src.count(before) == 1
+        self.patched = h.root / "patched" / "rollback_helper.py"
+        self.patched.parent.mkdir()
+        self.patched.write_text(src.replace(before, f"CONFIG = {h.mod.CONFIG!r}"))
+        body = (
+            "import subprocess\n"
+            "args = sys.argv[1:]\n"
+            'cut = args.index("--")\n'
+            "opts, cmd = args[:cut], args[cut + 1:]\n"
+            "env = dict(os.environ)\n"
+            "for o in opts:\n"
+            '    if o.startswith("--setenv="):\n'
+            '        k, _, v = o[len("--setenv="):].partition("=")\n'
+            "        env[k] = v\n"
+            f'cmd = [{str(self.patched)!r} if c.endswith("rollback_helper.py") else c for c in cmd]\n'
+            f"mode = open({str(self.mode_file)!r}).read().strip() if os.path.exists({str(self.mode_file)!r}) else 'normal'\n"
+            'if mode == "fail":\n'
+            "    sys.exit(7)\n"
+            "p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE)\n"
+            "data = p.stdout\n"
+            'if mode == "prefix": data = b"warning: hello\\n" + data\n'
+            'if mode == "truncate": data = data[:-3]\n'
+            'if mode == "flip": data = data[:-1] + bytes([data[-1] ^ 1])\n'
+            'if mode == "extra": data = data + b"x"\n'
+            'if mode == "big": data = b"A" * (2 << 20)\n'
+            'if mode == "twice": data = data + data\n'
+            "sys.stdout.buffer.write(data)\n"
+            "sys.stdout.buffer.flush()\n"
+            "sys.exit(p.returncode)\n"
+        )
+        h.mod.TOOLS["systemd-run"] = h.tool("systemd-run", body)
+        h.mod._export_stamp = lambda: STAMP
+        patch = unittest.mock.patch.dict(os.environ, {"TMPDIR": str(self.tmp)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        patch = unittest.mock.patch.object(tempfile, "tempdir", str(self.tmp))
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.put(h.state / ".encryption_key", KEY)
+        self.put(h.db.parent / "config.yaml", CONFIG_YAML)
+
+    def put(self, path: Path, data: bytes, mode: int = 0o600) -> Path:
+        path.write_bytes(data)
+        path.chmod(mode)
+        return path
+
+    def set_bin(self, data: bytes = KEYRING, mode: int = 0o600, exit_code: int = 0):
+        h = self.h
+        h.bin.write_text(
+            _FAKE_BIN.format(
+                python=sys.executable,
+                log=str(self.bin_log),
+                data=data,
+                mode=mode,
+                exit_code=exit_code,
+            )
+        )
+        h.bin.chmod(0o755)
+
+    def systemd_runs(self) -> list[list[str]]:
+        return [t["argv"] for t in self.h.tools() if t["tool"] == "systemd-run"]
+
+    def exported(self) -> list[str]:
+        return sorted(p.name for p in self.export.iterdir())
+
+    def lines(self, out: str) -> list[list[str]]:
+        return [ln.split(" ") for ln in out.splitlines()]
+
+    def refused(self, *argv: str, code: int = 1, contains: str = "") -> str:
+        before = self.exported()
+        got, out, err = self.h.run(*argv)
+        self.assertEqual(got, code, err)
+        self.assertEqual(out, "", "a refusal prints no EXPORTED line")
+        self.assertIn(contains, err)
+        self.assertEqual(self.exported(), before, "a refusal leaves export_dir as it was")
+        return err
+
+    # -- what it does ---------------------------------------------------------
+
+    def test_export_keyring_delivers_one_file_and_names_it(self):
+        h = self.h
+        code, out, err = h.run("export-keyring")
+        self.assertEqual(code, 0, err)
+        name = f"aorg-keyring-{STAMP}"
+        self.assertEqual(self.exported(), [name])
+        path = self.export / name
+        self.assertEqual(path.read_bytes(), KEYRING)
+        self.assertEqual(
+            self.lines(out),
+            [["EXPORTED", name, str(len(KEYRING)), hashlib.sha256(KEYRING).hexdigest()]],
+        )
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        self.assertEqual(path.stat().st_uid, os.getuid())
+
+    def test_export_keyring_runs_the_binary_as_the_service_user_not_into_export_dir(self):
+        h = self.h
+        self.assertEqual(h.run("export-keyring")[0], 0)
+        runs = self.systemd_runs()
+        self.assertEqual(len(runs), 1)
+        argv = runs[0]
+        cut = argv.index("--")
+        self.assertEqual(
+            argv[:cut],
+            [
+                "--pipe",
+                "--wait",
+                "--quiet",
+                "--collect",
+                "--unit=audiobook-organizer-rollback-export",
+                "--service-type=exec",
+                "--uid=alfred",
+                "--property=PrivateTmp=yes",
+                f"--setenv=HOME={h.state}",
+                f"--setenv=ABK_STATE_DIR={h.state}",
+            ],
+        )
+        self.assertEqual(
+            argv[cut + 1 :], [sys.executable, "-I", str(HELPER), "_export-worker", "keyring"]
+        )
+        self.assertFalse(
+            any("StandardOutput" in a or "restore.log" in a for a in argv),
+            "the secret never goes through the group-readable restore log",
+        )
+        calls = [json.loads(ln) for ln in self.bin_log.read_text().splitlines()]
+        self.assertEqual(len(calls), 1)
+        a = calls[0]["argv"]
+        self.assertEqual(a[:4], ["secrets", "export-keyring", "--db", str(h.db)])
+        self.assertEqual(a[4], "--out")
+        out = a[5]
+        self.assertTrue(out.startswith(str(self.tmp) + "/aorg-keyring-"), out)
+        self.assertFalse(out.startswith(str(self.export)))
+        self.assertEqual(calls[0]["env"]["ABK_STATE_DIR"], str(h.state))
+        self.assertEqual(list(self.tmp.iterdir()), [], "the scratch copy is removed")
+        self.assertFalse(h.restore_log().exists(), "no restore log is written")
+
+    def test_export_keyring_takes_no_stopped_unit(self):
+        # It works while the service runs: only the restore/export units matter,
+        # never the service's own.
+        h = self.h
+        self.assertEqual(h.run("export-keyring")[0], 0)
+        self.assertFalse(
+            any(t["argv"][:1] == ["stop"] for t in h.tools() if t["tool"] == "systemctl")
+        )
+        self.assertEqual(
+            [t["argv"] for t in h.tools() if t["tool"] == "systemctl"],
+            [
+                [
+                    "show",
+                    "-p",
+                    "ActiveState",
+                    "--value",
+                    "audiobook-organizer-rollback-restore.service",
+                ],
+                [
+                    "show",
+                    "-p",
+                    "ActiveState",
+                    "--value",
+                    "audiobook-organizer-rollback-export.service",
+                ],
+                [
+                    "show",
+                    "-p",
+                    "ActiveState",
+                    "--value",
+                    "audiobook-organizer-rollback-export.service",
+                ],
+            ],
+        )
+
+    def test_install_secrets_delivers_the_key_and_the_config(self):
+        h = self.h
+        code, out, err = h.run("export-install-secrets")
+        self.assertEqual(code, 0, err)
+        key, cfg = f"aorg-encryption-key-{STAMP}", f"aorg-config-{STAMP}.yaml"
+        self.assertEqual(self.exported(), sorted([key, cfg]))
+        self.assertEqual((self.export / key).read_bytes(), KEY)
+        self.assertEqual((self.export / cfg).read_bytes(), CONFIG_YAML)
+        self.assertEqual(
+            self.lines(out),
+            [
+                ["EXPORTED", key, str(len(KEY)), hashlib.sha256(KEY).hexdigest()],
+                ["EXPORTED", cfg, str(len(CONFIG_YAML)), hashlib.sha256(CONFIG_YAML).hexdigest()],
+            ],
+        )
+        for n in (key, cfg):
+            self.assertEqual(stat.S_IMODE((self.export / n).stat().st_mode), 0o600, n)
+        kinds = [r[-1] for r in self.systemd_runs()]
+        self.assertEqual(kinds, ["key", "config"])
+
+    def test_key_beside_the_store_when_the_state_dir_has_none(self):
+        h = self.h
+        (h.state / ".encryption_key").unlink()
+        self.put(h.db.parent / ".encryption_key", b"legacy-key-bytes")
+        self.assertEqual(h.run("export-install-secrets")[0], 0)
+        self.assertEqual(
+            (self.export / f"aorg-encryption-key-{STAMP}").read_bytes(), b"legacy-key-bytes"
+        )
+
+    def test_a_missing_config_yaml_is_reported_absent_not_an_error(self):
+        h = self.h
+        (h.db.parent / "config.yaml").unlink()
+        code, out, err = h.run("export-install-secrets")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.exported(), [f"aorg-encryption-key-{STAMP}"])
+        self.assertEqual(out.splitlines()[-1], "ABSENT config")
+
+    def test_a_missing_key_refuses_and_delivers_nothing(self):
+        h = self.h
+        (h.state / ".encryption_key").unlink()
+        self.refused("export-install-secrets", contains="exited")
+
+    def test_the_file_is_the_deploy_users_by_fchown_with_sudo_ids(self):
+        calls = []
+        env = {"SUDO_UID": str(os.getuid()), "SUDO_GID": "4343"}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(unittest.mock.patch.dict(os.environ, env))
+            stack.enter_context(
+                unittest.mock.patch.object(os, "fchown", lambda fd, u, g: calls.append((u, g)))
+            )
+            self.assertEqual(self.h.run("export-keyring")[0], 0)
+        self.assertEqual(calls, [(os.getuid(), 4343)])
+
+    def test_the_file_is_0600_whatever_the_umask(self):
+        old = os.umask(0)
+        self.addCleanup(os.umask, old)
+        self.assertEqual(self.h.run("export-keyring")[0], 0)
+        self.assertEqual(
+            stat.S_IMODE((self.export / f"aorg-keyring-{STAMP}").stat().st_mode), 0o600
+        )
+
+    # -- refusals -------------------------------------------------------------
+
+    def test_unset_export_dir_refuses_before_anything_runs(self):
+        h = self.h
+        text = Path(h.mod.CONFIG).read_text().replace(f"export_dir = {self.export}\n", "")
+        Path(h.mod.CONFIG).write_text(text)
+        err = self.refused("export-keyring", contains="export_dir is not set")
+        self.assertEqual(self.systemd_runs(), [])
+        self.assertNotIn(str(self.export), err)
+
+    def test_bad_export_dir_values_refuse_in_the_config(self):
+        for bad in ("relative/dir", "/home/alfred/ex port", "/home/../etc", "/home/alfred/x;id"):
+            h = Host(self)
+            with open(h.mod.CONFIG, "a") as f:
+                f.write(f"export_dir = {bad}\n")
+            code, _, err = h.run("export-keyring")
+            self.assertEqual(code, 1, bad)
+            self.assertIn("export_dir", err)
+            self.assertEqual(h.tools(), [], bad)
+
+    def test_symlinked_export_dir_refuses(self):
+        h = self.h
+        real = h.root / "real-export"
+        os.rename(self.export, real)
+        os.symlink(real, self.export)
+        before = sorted(p.name for p in real.iterdir())
+        code, out, err = h.run("export-keyring")
+        self.assertEqual(code, 1, err)
+        self.assertIn("cannot open the export directory", err)
+        self.assertEqual(sorted(p.name for p in real.iterdir()), before)
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_symlink_in_a_parent_of_export_dir_refuses(self):
+        h = self.h
+        real = h.root / "real-parent"
+        real.mkdir()
+        (real / "export").mkdir(mode=0o700)
+        os.symlink(real, h.root / "linked-parent")
+        text = (
+            Path(h.mod.CONFIG)
+            .read_text()
+            .replace(f"export_dir = {self.export}", f"export_dir = {h.root}/linked-parent/export")
+        )
+        Path(h.mod.CONFIG).write_text(text)
+        code, _, err = h.run("export-keyring")
+        self.assertEqual(code, 1, err)
+        self.assertIn("cannot open the export directory", err)
+        self.assertEqual(list((real / "export").iterdir()), [])
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_export_dir_that_is_a_file_refuses(self):
+        h = self.h
+        self.export.rmdir()
+        self.put(self.export, b"not a directory")
+        code, _, err = h.run("export-keyring")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(self.export.read_bytes(), b"not a directory")
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_export_dir_not_owned_by_the_deploy_user_refuses(self):
+        # SUDO_UID is the user who ran sudo; the directory belongs to someone else.
+        with unittest.mock.patch.dict(os.environ, {"SUDO_UID": str(os.getuid() + 1)}):
+            err = self.refused("export-keyring", contains="not by the deploy user")
+        self.assertIn(str(os.getuid() + 1), err)
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_export_dir_with_other_modes_refuses(self):
+        for mode in (0o755, 0o750, 0o770, 0o777, 0o500):
+            self.export.chmod(mode)
+            self.addCleanup(self.export.chmod, 0o700)
+            err = self.refused("export-keyring", contains="not 0700")
+            self.assertIn(f"{mode:04o}", err)
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_a_planted_symlink_at_the_output_name_is_refused_and_not_followed(self):
+        h = self.h
+        victim = self.put(h.root / "victim", b"the deploy user's own precious file")
+        os.symlink(victim, self.export / f"aorg-keyring-{STAMP}")
+        code, out, err = h.run("export-keyring")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(out, "")
+        self.assertIn("never overwritten or followed", err)
+        self.assertEqual(victim.read_bytes(), b"the deploy user's own precious file")
+        self.assertTrue((self.export / f"aorg-keyring-{STAMP}").is_symlink())
+        self.assertEqual(stat.S_IMODE(victim.stat().st_mode), 0o600)
+
+    def test_a_dangling_symlink_at_the_output_name_is_refused_too(self):
+        h = self.h
+        target = h.root / "not-there"
+        os.symlink(target, self.export / f"aorg-keyring-{STAMP}")
+        self.assertEqual(h.run("export-keyring")[0], 1)
+        self.assertFalse(
+            target.exists(), "O_EXCL refuses a dangling link instead of creating its target"
+        )
+
+    def test_an_existing_file_at_the_output_name_is_never_overwritten(self):
+        planted = self.put(self.export / f"aorg-keyring-{STAMP}", b"planted")
+        self.assertEqual(self.h.run("export-keyring")[0], 1)
+        self.assertEqual(planted.read_bytes(), b"planted")
+
+    def test_a_second_file_that_cannot_be_made_removes_the_first(self):
+        planted = self.put(self.export / f"aorg-config-{STAMP}.yaml", b"planted")
+        code, out, err = self.h.run("export-install-secrets")
+        self.assertEqual(code, 1, err)
+        self.assertEqual(out, "")
+        self.assertEqual(self.exported(), [planted.name], "the key written first is deleted again")
+        self.assertEqual(planted.read_bytes(), b"planted")
+
+    def test_arguments_are_refused(self):
+        for op in ("export-keyring", "export-install-secrets"):
+            for bad in [*INJECTIONS, "--out", "keyring"]:
+                self.refused(op, bad, code=2, contains="usage")
+            self.refused(op, "a", "b", code=2, contains="usage")
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_worker_kinds_are_refused(self):
+        for argv in ([], ["bin"], ["keyring", "x"], ["../x"], ["config\n"]):
+            code, out, _ = self.h.run("_export-worker", *argv)
+            self.assertEqual((code, out), (2, ""), argv)
+
+    def test_a_running_restore_or_export_unit_refuses_without_starting_anything(self):
+        for state in ("active", "activating", "deactivating", "reloading", ""):
+            self.h.transient_state(state)
+            self.refused("export-keyring", contains="may still be running")
+            self.refused("export-install-secrets", contains="may still be running")
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_a_failed_unit_is_reset_and_runs(self):
+        self.h.transient_state("failed")
+        self.assertEqual(self.h.run("export-keyring")[0], 0)
+        self.assertIn(
+            ["reset-failed", "audiobook-organizer-rollback-export"],
+            [t["argv"] for t in self.h.tools() if t["tool"] == "systemctl"],
+        )
+
+    def test_the_binary_failing_delivers_nothing(self):
+        self.set_bin(exit_code=3)
+        self.refused("export-keyring", contains="exited 1")
+
+    def test_a_keyring_readable_by_others_is_refused(self):
+        self.set_bin(mode=0o644)
+        self.refused("export-keyring", contains="exited 1")
+        self.assertEqual(list(self.tmp.iterdir()), [], "the scratch copy is removed on failure too")
+
+    def test_a_failing_unit_delivers_nothing(self):
+        self.mode_file.write_text("fail")
+        self.refused("export-keyring", contains="exited 7")
+
+    def test_output_that_is_not_exactly_one_frame_delivers_nothing(self):
+        for mode in ("prefix", "truncate", "flip", "extra", "big", "twice"):
+            self.mode_file.write_text(mode)
+            self.refused("export-keyring", contains="", code=1)
+            self.refused("export-install-secrets", contains="", code=1)
+
+    def test_worker_refuses_unsafe_source_files(self):
+        h = self.h
+        key = h.state / ".encryption_key"
+        second = h.root / "second-name"
+
+        def clear():
+            if key.is_symlink() or key.is_file():
+                key.unlink()
+            elif key.is_dir():
+                key.rmdir()
+            second.unlink(missing_ok=True)
+
+        def hard_link():
+            self.put(key, KEY)
+            os.link(key, second)
+
+        cases = {
+            "symlink": lambda: os.symlink(h.root / "elsewhere", key),
+            "empty": lambda: self.put(key, b""),
+            "directory": lambda: key.mkdir(),
+            "hard link": hard_link,
+            "too big": lambda: self.put(key, b"k" * ((1 << 20) + 1)),
+        }
+        for label, setup in cases.items():
+            clear()
+            setup()
+            code, out, err = h.run("_export-worker", "key")
+            self.assertEqual(code, 1, (label, err))
+            self.assertEqual(out, "", label)
+
+    def test_worker_refuses_a_symlinked_config_yaml_and_nothing_is_delivered(self):
+        h = self.h
+        cfg = h.db.parent / "config.yaml"
+        cfg.unlink()
+        os.symlink(h.root / "elsewhere", cfg)
+        self.refused("export-install-secrets", contains="exited 1")
+
+    def test_worker_writes_one_frame_on_stdout_and_nothing_else(self):
+        for kind, data in (("key", KEY), ("config", CONFIG_YAML), ("keyring", KEYRING)):
+            buf = io.BytesIO()
+            out = unittest.mock.Mock(buffer=buf)
+            with unittest.mock.patch.object(sys, "stdout", out):
+                code = self.h.mod.main(["_export-worker", kind])
+            self.assertEqual(code, 0, kind)
+            self.assertEqual(
+                buf.getvalue(),
+                f"AORGEXPORT1 {len(data)} {hashlib.sha256(data).hexdigest()}\n".encode() + data,
+                kind,
+            )
+
+    def test_the_new_operations_are_registered_with_stubs(self):
+        mod = self.h.mod
+        for op in ("export-keyring", "export-install-secrets"):
+            self.assertEqual(mod.STUBS[op], op)
+            self.assertIn(op, mod.OPS)
+        self.assertIn("_export-worker", mod.OPS)
+        self.assertNotIn("_export-worker", mod.STUBS, "the worker is never a sudoers stub")
 
 
 class Stubs(unittest.TestCase):

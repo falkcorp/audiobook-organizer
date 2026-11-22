@@ -479,6 +479,21 @@ class HostConfig(unittest.TestCase):
         lines = guard.load_host_config(o, table(host_config=R("bin = /usr/local/bin/aorg\n")))
         self.assertIn("does not parse", "\n".join(lines))
 
+    def test_export_dir_is_optional_and_checked(self):
+        o = guard.Opts(host="h", db="/data/db", bin="/usr/local/bin/aorg")
+        self.assertEqual(guard.load_host_config(o, table(host_config=R(self.CONF))), [])
+        self.assertEqual(o.export_dir, "")
+        o = guard.Opts(host="h", db="/data/db", bin="/usr/local/bin/aorg")
+        conf = self.CONF + "export_dir = /home/alfred/aorg-export\n"
+        self.assertEqual(guard.load_host_config(o, table(host_config=R(conf))), [])
+        self.assertEqual(o.export_dir, "/home/alfred/aorg-export")
+        for bad in ("relative", "/home/../x", "/home/al fred/x", "/x;id"):
+            o = guard.Opts(host="h", db="/data/db", bin="/usr/local/bin/aorg")
+            lines = guard.load_host_config(
+                o, table(host_config=R(self.CONF + f"export_dir = {bad}\n"))
+            )
+            self.assertIn("export_dir", "\n".join(lines), bad)
+
 
 SECRET = "hunter2"
 
@@ -566,6 +581,20 @@ class Sudoers(unittest.TestCase):
         self.assertTrue(text.rstrip().endswith(f"{h}/checkpoint-record"), text)
         self.assertNotIn("tee", text)
         self.assertNotIn("find", text)
+
+    def test_the_export_helpers_are_granted_with_no_arguments_and_nothing_else(self):
+        text = guard.sudoers(opts(), "deploy")
+        h = guard.HELPER_DIR
+        for stub in ("export-keyring", "export-install-secrets"):
+            self.assertIn(f'{h}/{stub} ""', text)
+            self.assertEqual(text.count(f"{h}/{stub}"), 1)
+            self.assertNotIn(f"{h}/{stub},", text.replace(f'{h}/{stub} ""', ""))
+        c = guard.commands(opts())
+        self.assertEqual(c["export_keyring"], f"sudo -n {h}/export-keyring")
+        self.assertEqual(c["export_install_secrets"], f"sudo -n {h}/export-install-secrets")
+        self.assertEqual(
+            sum(1 for ln in text.splitlines() if "export-" in ln), 2, "exactly the two new lines"
+        )
 
     def test_parse_vector_and_sidecar(self):
         self.assertEqual(guard.parse_vector('{"core":0,"books":2}'), {"core": 0, "books": 2})
