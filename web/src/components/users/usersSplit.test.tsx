@@ -14,6 +14,7 @@ import { MemoryRouter } from 'react-router';
 import Users from '../../pages/Users';
 import { UsersPage } from './UsersPage';
 import type { UserPanelProps, UserRowActionProps } from './usersExtensions';
+import { coreJson, stubCoreFetch } from '../../test/coreFetch';
 import pageSource from './UsersPage.tsx?raw';
 
 const envelope = (data: unknown) =>
@@ -22,7 +23,7 @@ const envelope = (data: unknown) =>
 const bruce = { id: 'u1', username: 'bruce.wayne', roles: ['admin'], status: 'active', created_at: '2026-01-01T00:00:00Z' };
 const alfred = { id: 'u2', username: 'alfred.pennyworth', roles: ['admin'], status: 'active', created_at: '2026-01-02T00:00:00Z' };
 const robin = { id: 'u3', username: 'dick.grayson', roles: ['editor'], status: 'active', created_at: '2026-01-03T00:00:00Z' };
-const locked = { id: 'u4', username: 'harvey.dent', roles: ['editor'], status: 'locked', created_at: '2026-01-04T00:00:00Z' };
+const locked = { id: 'u4', username: 'harvey.dent', roles: ['editor'], status: 'disabled', created_at: '2026-01-04T00:00:00Z' };
 const system = { id: 'u0', username: '_system', roles: ['admin'], status: 'active', created_at: '2026-01-01T00:00:00Z' };
 
 const journal = {
@@ -39,14 +40,16 @@ const journal = {
 };
 
 function serve() {
-  const fetchMock = vi.fn(async (url: string) => {
-    if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-    if (url.endsWith('/users/merges')) return envelope({ merges: [journal] });
-    if (url.includes('guest-service-tokens')) return envelope({ flag_on: true, enabled: true, tokens: [] });
-    return envelope({ users: [system, bruce, alfred, robin, locked], count: 5 });
+  const people = [system, bruce, alfred, robin, locked];
+  return stubCoreFetch({
+    'GET /users': () => coreJson({ items: people, total: people.length }),
+    'GET /users/invites': () => coreJson({ items: [], total: 0 }),
+    'GET /roles': () => coreJson({ items: [{ name: 'admin' }, { name: 'editor' }], total: 2 }),
+    // Books' own routes, which the extensions and the invite settings still read.
+    'GET /api/v1/users/invites': () => envelope({ invites: [], count: 0 }),
+    'GET /api/v1/users/merges': () => envelope({ merges: [journal] }),
+    'GET /api/v1/admin/guest-service-tokens': () => envelope({ flag_on: true, enabled: true, tokens: [] }),
   });
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
 }
 
 const follows = (a: HTMLElement, b: HTMLElement) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -122,7 +125,7 @@ describe('Users composition (F9-04 slice 4)', () => {
   });
 
   it('gives a row action its row and the list, and a done call reloads, shows the notice and bumps panels', async () => {
-    const fetchMock = serve();
+    const { calls } = serve();
     const user = userEvent.setup();
     const seenRefresh: number[] = [];
     const Action = ({ user: u, users, onDone }: UserRowActionProps) =>
@@ -140,7 +143,7 @@ describe('Users composition (F9-04 slice 4)', () => {
     );
     await user.click(await screen.findByRole('button', { name: 'act bruce.wayne of 5' }));
     expect(await screen.findByText('Batarang merge started')).toBeInTheDocument();
-    const usersLoads = () => fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/users')).length;
+    const usersLoads = () => calls.filter((c) => c.method === 'GET' && c.path.startsWith('/users?')).length;
     await waitFor(() => expect(usersLoads()).toBe(2));
     expect(Math.max(...seenRefresh)).toBe(1);
     await user.click(screen.getByRole('button', { name: 'panel' }));

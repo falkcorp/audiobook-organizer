@@ -13,37 +13,36 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router';
 import Users from './Users';
-
-const envelope = (data: unknown) =>
-  new Response(JSON.stringify({ data }), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
+import { coreJson, stubCoreFetch } from '../test/coreFetch';
 
 const batman = {
   id: 'u1',
   username: 'bruce.wayne',
-  role_id: 'editor',
+  roles: ['editor'],
   status: 'active',
   created_at: '2026-01-01T00:00:00Z',
 };
 
 function serve() {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string) => {
-      if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-      if (url.includes('/footprint'))
-        return envelope({
-          user: { id: 'u1', username: 'bruce.wayne', status: 'active', has_password: true },
-          identities: [],
-          counts: {},
-          active_sessions: 0,
-          unreadable: [],
-        });
-      return envelope({ users: [batman], count: 1 });
-    })
-  );
+  stubCoreFetch({
+    'GET /users': coreJson({ items: [batman], total: 1 }),
+    'GET /users/invites': coreJson({ items: [], total: 0 }),
+    'GET /roles': coreJson({ items: [{ name: 'editor' }], total: 1 }),
+    // The sign-ins drawer is books' route, not core's.
+    'GET /api/v1/users/u1/footprint': () =>
+      new Response(
+        JSON.stringify({
+          data: {
+            user: { id: 'u1', username: 'bruce.wayne', status: 'active', has_password: true },
+            identities: [],
+            counts: {},
+            active_sessions: 0,
+            unreadable: [],
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      ),
+  });
 }
 
 function Probe() {
