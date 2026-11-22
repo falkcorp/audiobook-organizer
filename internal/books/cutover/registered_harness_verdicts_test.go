@@ -62,6 +62,8 @@ type verdictRow struct {
 }
 
 var verdictRows = []verdictRow{
+	{Method: "GET", Route: "/api/events", Class: classKnown, Principals: []string{"anonymous", "key:admin:worker", "key:fp-worker:empty", "key:fp-worker:every", "key:fp-worker:worker", "session:fp-worker"},
+		Why: "F6-03: hub A and GET /api/events are deleted. R0 refused these principals at the route (401/403); the registered build answers every principal 301 to /api/v1/events (404), because the legacy /api redirect runs before any authorization step. The other principals already answered as R0 did. The stream is core's GET /api/core/v1/events (TestAPIEventsGone)"},
 	{Method: "DELETE", Route: "/api/v1/audiobooks/:id/status", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "DELETE", Route: "/api/v1/auth/api-keys/:id", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
@@ -73,8 +75,6 @@ var verdictRows = []verdictRow{
 	{Method: "DELETE", Route: "/api/v1/playlists/:id", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "DELETE", Route: "/api/v1/playlists/:id/books/:bookID", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
-		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
-	{Method: "GET", Route: "/api/events", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "GET", Route: "/api/v1/audiobooks/:id/position", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
