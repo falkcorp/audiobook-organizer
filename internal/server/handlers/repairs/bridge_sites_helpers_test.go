@@ -12,7 +12,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -80,18 +79,4 @@ func bridgeIdentity(t testing.TB, atoms ...string) *legacyauth.Identity {
 		Client:  func(*http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{} },
 		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },
 	}
-}
-
-// bindCore gives c a core principal of method m holding scopes, as stage 12
-// binds it, and the Identity when id is non-nil. A nil id leaves the request as
-// a LegacyAuthGin server serves it: a principal in the context changes nothing.
-func bindCore(c *gin.Context, id *legacyauth.Identity, m coreauth.Method, scopes ...rbac.Permission) {
-	chk := bridgeChecker(scopes)
-	p := &coreauth.Principal{Method: m, Perms: chk}
-	ctx := coreauth.WithPrincipal(c.Request.Context(), p)
-	ctx = rbac.WithChecker(ctx, chk)
-	if id != nil {
-		ctx = legacyauth.WithIdentity(ctx, id)
-	}
-	c.Request = c.Request.WithContext(ctx)
 }
