@@ -81,6 +81,34 @@ export interface SettingsPanelContribution<M extends ModuleManifest> {
   order?: number;
 }
 
+/** What a module's settings panels share while the Settings page is open. */
+export interface SettingsSession {
+  /** The shared form differs from what is saved. */
+  dirty: boolean;
+  saving?: boolean;
+  /** One save of the whole shared form; rejects with the reason it failed. */
+  save: () => Promise<void>;
+  /** Back to what is saved. */
+  discard: () => void;
+}
+
+/**
+ * A module's shared settings form (F9-03 prep; not in the 07 §7.4.2 text, see
+ * seams.d/F9-03-prep-pages.md). `Provider` wraps the whole Settings page, so the
+ * panels (which read its context), `Banners`, `Footer` and `Dialogs` share one
+ * state that outlives a tab switch. `useSession` is a hook called inside it.
+ */
+export interface SettingsSessionContribution {
+  Provider: ComponentType<{ children: ReactNode }>;
+  useSession: () => SettingsSession;
+  /** Notices, shown above the tabs on every tab. */
+  Banners?: ComponentType;
+  /** A bar under the panels while one of this module's panels is shown. Without one the shell draws Save and Discard while the form is dirty. */
+  Footer?: ComponentType;
+  /** Dialogs a panel opens (folder browsers, confirmations): rendered at page level so they outlive the tab. */
+  Dialogs?: ComponentType;
+}
+
 export interface PermissionsHints<M extends ModuleManifest> {
   view: readonly Perm<M>[];                 // any-of: needed to show the module at all
   actions?: Readonly<Record<string, Perm<M>>>; // named UI actions -> permission, for useAction()
@@ -108,13 +136,55 @@ export interface TopBarContribution<M extends ModuleManifest> {
   order?: number;
 }
 
+/**
+ * A row of the Users page as a module's slots see it: what ABO's account merge
+ * needs (the username and status to refuse the system account, the roles, and
+ * `merged_into_user_id` to hide a merged-away row). F9-03 prep: 07 §7.4.2 types
+ * a row action's props as `{ userId, onDone }`, which cannot carry any of it;
+ * see seams.d/F9-03-prep-pages.md.
+ */
+export interface UserPageUser {
+  id: string;
+  username: string;
+  status: string;
+  roles?: string[];
+  merged_into_user_id?: string;
+  email?: string;
+  display_name?: string;
+}
+
+export interface UserRowActionProps {
+  /** The row the action belongs to. */
+  user: UserPageUser;
+  /** The whole loaded list, for an action that picks a second account. */
+  users: UserPageUser[];
+  /** The action changed something: the page reloads its list and bumps every panel's refreshKey; a message is shown as the page notice. */
+  onDone: (message?: string) => void;
+}
+
+export interface UserPanelProps {
+  users: UserPageUser[];
+  /** Bumped whenever a row action reports done or a panel calls onNotice, so a panel that lists its own records reloads. */
+  refreshKey: number;
+  /** Show a message as the page notice, reload the list and bump refreshKey. */
+  onNotice: (message: string) => void;
+}
+
 export interface UserPageExtensions<M extends ModuleManifest> {
   tabs?: readonly { id: M['userPage'][number]; label: string; lazy: Lazy; permission?: Perm<M> }[];
   rowActions?: readonly {
     id: M['userPage'][number];
     label: string;
-    lazy: () => Promise<{ default: ComponentType<{ userId: string; onDone: () => void }> }>;
+    lazy: () => Promise<{ default: ComponentType<UserRowActionProps> }>;
     permission?: Perm<M>;
+  }[];
+  // Rendered below the account table, in module ID then `order`, each under its label.
+  panels?: readonly {
+    id: M['userPage'][number];
+    label: string;
+    lazy: () => Promise<{ default: ComponentType<UserPanelProps> }>;
+    permission?: Perm<M>;
+    order?: number;
   }[];
 }
 
@@ -126,11 +196,31 @@ export interface ActivityPaneContribution<M extends ModuleManifest> {
   order?: number;
 }
 
+export interface SetupStepProps {
+  /** Moves to the following step (a step can offer Skip); a no-op on the last. */
+  onNext: () => void;
+}
+
 export interface SetupContribution<M extends ModuleManifest> {
   // Asked after login (and on /setup) whether this module still needs first-run
   // setup; books: !config.root_dir && !config.setup_complete (App.tsx:87-89).
   isRequired: () => Promise<boolean>;
-  steps: readonly { id: M['setupSteps'][number]; title: string; lazy: Lazy }[];
+  steps: readonly {
+    id: M['setupSteps'][number];
+    title: string;
+    lazy: () => Promise<{ default: ComponentType<SetupStepProps> }>;
+    // A hook (named use*, stable identity), called inside `provider`: whether the way
+    // forward from this step is open. Absent means always open.
+    useCanProceed?: () => boolean;
+  }[];
+  // Module-wide: wraps every step of this module and its finish hook, so the steps
+  // share one draft (books keeps the whole wizard state there). Renders any
+  // dialogs the steps open. F9-03 prep; not in the 07 §7.4.2 text.
+  provider?: ComponentType<{ children: ReactNode }>;
+  // A hook, called inside `provider`, returning the module's apply. Complete runs
+  // every module's apply one after another in module ID order, stops at the first
+  // that throws and shows its message.
+  useFinish?: () => () => Promise<void>;
 }
 
 export interface TaskKindPresentation {
@@ -151,6 +241,7 @@ export interface ModuleUIInput<M extends ModuleManifest> {
   userPageExtensions?: UserPageExtensions<M>;
   activityPanes?: readonly ActivityPaneContribution<M>[];
   setup?: SetupContribution<M>;
+  settingsSession?: SettingsSessionContribution;
   themeExtend?: ThemeOptions;                                         // merged by the shell, per module (§7.7)
   taskKinds?: Readonly<Record<`${M['id']}.${string}`, TaskKindPresentation>>;
   // No redirects field: the shell redirects no former page path (D13, D10);

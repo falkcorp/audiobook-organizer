@@ -29,3 +29,18 @@ export function LazySlot({ load, label }: { load: Lazy; label: string }) {
     </ShellErrorBoundary>
   );
 }
+
+/**
+ * A contribution that takes props (a row action, a panel, a setup step), loaded
+ * on demand inside its own boundary. One React.lazy per `load`, as lazyOf.
+ */
+export function LazyWithProps<P extends object>({ load, label, props }: { load: () => Promise<{ default: ComponentType<P> }>; label: string; props: P }) {
+  const C = lazyOf(load as unknown as Lazy) as unknown as ComponentType<P>;
+  return (
+    <ShellErrorBoundary label={label}>
+      <Suspense fallback={null}>
+        <C {...props} />
+      </Suspense>
+    </ShellErrorBoundary>
+  );
+}
