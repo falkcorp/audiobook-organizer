@@ -379,12 +379,12 @@ and launchd have no equivalent):
    | Service container Build, PostInit, Start | `internal/serviceregistry/container.go` `extendFor` | each service for each of the three |
    | HNSW snapshot import | `internal/server/server.go` `NewServer` | once before the import |
    | Journal clock scan at store open | `internal/books/store/pebble_store_journal_clock.go` | every 50,000 journal rows |
-   | Books boot repairs (open repairs, ops reconcile) | `internal/books/module.go` `startRepairs` through `startup.RunWithProgress` | each repair, each page of ops rows read, each batch written |
+   | Books boot repairs (open repairs, ops reconcile) | `internal/books/module.go` `startRepairs` through `startprogress.Run` | each repair, each page of ops rows read, each batch written |
    | iTunes write-back key purge | `internal/server/itunes_writeback_cleanup.go` | each page deleted |
 
    A loop that scales with the library and runs on worker goroutines (the ops reconcile's parallel page
-   walks) cannot call `ExtendStart`, which is not safe for concurrent use. It raises `startup.Progress(ctx)`
-   per unit instead, and `startup.RunWithProgress` extends on the caller's goroutine, once per coalesced
+   walks) cannot call `ExtendStart`, which is not safe for concurrent use. It raises `startprogress.Report(ctx)`
+   per unit instead, and `startprogress.Run` extends on the caller's goroutine, once per coalesced
    signal and never on a clock. The work that deliberately never asks, because it is not a boot step and a
    request from it would extend a boot with nothing in flight, is everything handed to a goroutine: the
    in-memory warm-up, the cache warmers, dedup hydration, the search reconciler and the post-listener

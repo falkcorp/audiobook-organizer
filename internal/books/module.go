@@ -41,6 +41,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -507,8 +508,8 @@ func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, st
 	}
 	// The repairs scan the ops tables page by page on parallel workers: they
 	// raise a progress unit per page and batch, and the request for start
-	// time is made here, on the hook's goroutine (startup.RunWithProgress).
-	if err := startup.RunWithProgress(ctx, "books boot repairs", extend, store.RunBootRepairs); err != nil {
+	// time is made here, on the hook's goroutine (startprogress.Run).
+	if err := startprogress.Run(ctx, "books boot repairs", extend, store.RunBootRepairs); err != nil {
 		return errors.Join(fmt.Errorf("books: boot repairs: %w", err), m.closeStore())
 	}
 	return nil

@@ -23,8 +23,8 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
-	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/mediacore/buildid"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	ulid "github.com/oklog/ulid/v2"
@@ -590,16 +590,16 @@ func (p *PebbleStore) runOpenRepairs() error {
 // from, and the next boot retries. It then starts the memdb warmup of a
 // store NewBooksStore built (a no-op on any other store, or after Close).
 //
-// Under startup.RunWithProgress each repair raises a progress unit before it
+// Under startprogress.Run each repair raises a progress unit before it
 // starts, and the reconcile one per page of ops rows it reads and per batch it
 // writes, so the boot asks for start time per unit of this work (05-health
 // §5H.3.4); outside a boot (the standalone opener) the signals go nowhere.
 func (p *PebbleStore) RunBootRepairs(ctx context.Context) error {
-	startup.Progress(ctx)
+	startprogress.Report(ctx)
 	if err := p.runOpenRepairs(); err != nil {
 		return err
 	}
-	startup.Progress(ctx)
+	startprogress.Report(ctx)
 	if _, err := p.ReconcileOpsV3WithV2(ctx); err != nil {
 		opsV3Log.Error("opv3 reconcile failed; opv3 records may be stale until each run's next write, and the next boot retries: %v", err)
 	}

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/falkcorp/audiobook-organizer/internal/startup"
+	"github.com/falkcorp/mediacore/startprogress"
 )
 
 // seedStaleRuns writes n ops runs whose opv2 row an older binary changed, so
@@ -48,7 +48,7 @@ func TestReconcileOpsV3ReportsProgressPerPageAndBatch(t *testing.T) {
 		p := newTimelineStore(t)
 		seedStaleRuns(t, p, rows)
 		var n atomic.Int64
-		ctx := startup.WithProgress(context.Background(), func() { n.Add(1) })
+		ctx := startprogress.With(context.Background(), func() { n.Add(1) })
 		rep, err := p.ReconcileOpsV3WithV2(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -72,13 +72,13 @@ func TestReconcileOpsV3ReportsProgressPerPageAndBatch(t *testing.T) {
 }
 
 // TestRunBootRepairsReportsEachRepairAsAUnit: the boot repairs raise a unit
-// before each of their steps, so under startup.RunWithProgress each repair is
+// before each of their steps, so under startprogress.Run each repair is
 // preceded by a request for start time, and a store with no ops history still
 // reports the two steps.
 func TestRunBootRepairsReportsEachRepairAsAUnit(t *testing.T) {
 	p := newTimelineStore(t)
 	var n atomic.Int64
-	ctx := startup.WithProgress(context.Background(), func() { n.Add(1) })
+	ctx := startprogress.With(context.Background(), func() { n.Add(1) })
 	if err := p.RunBootRepairs(ctx); err != nil {
 		t.Fatal(err)
 	}
