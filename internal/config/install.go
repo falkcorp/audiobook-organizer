@@ -54,6 +54,9 @@ type UpdateHookRegistrar interface {
 // Generation. It is the Facade's rebuild step, called on every core generation
 // change; no other caller should assign the whole Config.
 func Project(cfg Config) {
+	// Publish the normalised config, as HEAD's boot Validate and PUT did: the
+	// rebuild hands over the raw rows, whose zeros mean "the default".
+	cfg.Normalize()
 	mutateLocal(func(c *Config) { *c = cfg })
 }
 
