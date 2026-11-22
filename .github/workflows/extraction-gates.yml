@@ -379,7 +379,7 @@ jobs:
       # The archive and its checksum are the ones r0store_test.go pins
       # (r0Tag, r0ArchiveSHA256["Linux_x86_64"]). scripts/ci/fetch_r0.sh
       # fetches it with `gh release download` (retrying), checks the pin and
-      # hands the extracted binary to the test through ABO_R0_BINARY, so the
+      # hands the extracted binary to the test through AORG_TEST_R0_BINARY, so the
       # test makes no download of its own. If every download attempt fails,
       # the R0 binary is built from the R0 tag instead (the brief allows
       # either).
@@ -398,7 +398,7 @@ jobs:
           git worktree add --detach "${RUNNER_TEMP}/r0src" "${R0_TAG}"
           mkdir -p "${RUNNER_TEMP}/r0"
           (cd "${RUNNER_TEMP}/r0src" && go build -o "${RUNNER_TEMP}/r0/audiobook-organizer" .)
-          echo "ABO_R0_BINARY=${RUNNER_TEMP}/r0/audiobook-organizer" >> "$GITHUB_ENV"
+          echo "AORG_TEST_R0_BINARY=${RUNNER_TEMP}/r0/audiobook-organizer" >> "$GITHUB_ENV"
 
       - name: Boot crash matrix and R0 rollback (must not skip)
         run: |
