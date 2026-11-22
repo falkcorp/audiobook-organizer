@@ -280,6 +280,10 @@ func (m *booksModule) cleanStopVoid() string {
 // errABSFlagDrift is Register's refusal when the stored settings turn the ABS
 // surface the other way from the environment Module read: the manifest's
 // legacy prefixes were fixed from the environment before the store opened.
+// errABSMisconfigured is the boot refusal for an enabled ABS surface whose settings
+// cannot build it (see server.ValidateABSConfig).
+var errABSMisconfigured = errors.New("books: modules.books.abs.api_enabled is on but the Audiobookshelf API is misconfigured")
+
 var errABSFlagDrift = errors.New("books: the stored settings set abs_api_enabled differently from the environment; " +
 	"set " + absEnabledEnv + " in the environment (it is environment-authoritative), so the legacy prefixes fixed before the store opened match the server")
 
@@ -406,6 +410,12 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	}
 	if config.AppConfig.ABSAPIEnabled != m.abs {
 		return errABSFlagDrift
+	}
+	// The ABS surface's own settings, checked here because NewServer, which
+	// checks them again, can only exit the process: a returned error reaches
+	// app.New's caller with its reason, and Release still tears the store down.
+	if err := server.ValidateABSConfig(config.Snapshot()); err != nil {
+		return fmt.Errorf("%w: %w", errABSMisconfigured, err)
 	}
 	// The shared Google Books daily budget persists its count in this store
 	// for the life of the process: attached BEFORE the server is built, so
