@@ -8,6 +8,7 @@ package authhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -234,6 +236,15 @@ func TestUsers_EnableRefusesMergedAwayAccountAndReadShowsMarker(t *testing.T) {
 
 	_, err := call(specEnable(), ena, bruce, userReq{ID: string(f.selina.ID)})
 	wantErr(t, err, http.StatusConflict, "merged_away")
+	// The answer says the account stays disabled and offers no way back: a
+	// merge is permanent once core holds the accounts (F4-08 B10l).
+	var he *httpapi.Error
+	if !errors.As(err, &he) || he.Detail != "this account was merged into another and stays disabled" {
+		t.Fatalf("merged_away detail = %+v, want the stays-disabled text with no advice to undo", err)
+	}
+	if strings.Contains(strings.ToLower(he.Detail), "undo") {
+		t.Fatalf("merged_away detail advises undo: %q", he.Detail)
+	}
 	if got := e.reload(f.selina.ID); got.Status != auth.StatusDisabled || got.Version != merged.Version {
 		t.Fatalf("a refused enable wrote: %+v", got)
 	}
