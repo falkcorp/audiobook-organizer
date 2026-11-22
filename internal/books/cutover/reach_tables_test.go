@@ -231,7 +231,8 @@ var reachHandlerRefusalCells = append(slices.Clone(reachIdentityRoutes), "POST /
 // the reason. A route that appears or disappears fails, never silently.
 var (
 	reachWantR0Only = []string{
-		"GET /", // the SPA handler, outside the manifest (served by the embedded frontend)
+		"GET /",           // the SPA handler, outside the manifest (served by the embedded frontend)
+		"GET /api/events", // F6-03: hub A's SSE stream, deleted; core's GET /api/core/v1/events succeeds it and /api/events answers 404 (TestAPIEventsGone)
 		"GET /api/v1/operations/reconcile/preview", // P14C-PREVIEW-ROUTE: dropped 2026-11-18 (an unqueued full-library sweep on library.view, no caller; POST /operations/reconcile/scan and scan/latest cover it)
 		"POST /api/v1/system/factory-reset",        // HEAD's reset routes: deleted at F4, the native core route succeeds them (05-rbac 6.2)
 		"POST /api/v1/system/reset",

@@ -743,12 +743,12 @@ var (
 )
 
 // registeredFPWorkerNarrowing: a key whose owner holds only the fp-worker role
-// reaches no authenticated-only route. 32 routes x 3 keys. It is the F4-07 golden's
+// reaches no authenticated-only route. 31 routes x 3 keys. It is the F4-07 golden's
 // 96-cell row (05-rbac 6.3), now measured through stage 13. Ruled 2026-11-22: the
 // fingerprint worker never calls these routes; the PR body names the difference.
 var registeredFPWorkerNarrowing = diffTable{
 	name: "fp-worker keys reach no authenticated-only route",
-	want: 96, // the fp-worker keys have no core-native twin (h.NoCoreTwin)
+	want: 93, // the fp-worker keys have no core-native twin (h.NoCoreTwin)
 	rows: []diffRow{
 		{
 			routes: []string{
@@ -780,9 +780,9 @@ var registeredFPWorkerNarrowing = diffTable{
 			why: "playlist routes: Authenticated-only at HEAD",
 		},
 		{
-			routes: []string{"GET /api/events", "GET /metrics"},
+			routes: []string{"GET /metrics"},
 			who:    fpWorkerKeys, r0: 'A', flip: 'D', status: 403, code: "permission_denied",
-			why: "the event stream and the metrics scrape: Authenticated-only at HEAD",
+			why: "the metrics scrape: Authenticated-only at HEAD",
 		},
 	},
 }
@@ -906,6 +906,7 @@ var registeredUnregistered = []struct {
 	status int
 	why    string
 }{
+	{"GET /api/events", http.StatusMovedPermanently, "F6-03 deleted hub A and its route: the legacy /api redirect sends it to /api/v1/events, which answers 404 (TestAPIEventsGone); core's GET /api/core/v1/events is the successor"},
 	{"GET /", http.StatusOK, "the SPA index: served by the static handler, public, so no route carries a requirement"},
 	{"POST /api/v1/system/reset", http.StatusNotFound, "623da76d3 deleted the gin reset routes: the reset runs only offline (wire_system_routes.go)"},
 	{"POST /api/v1/system/factory-reset", http.StatusNotFound, "623da76d3, as above; core's POST /api/core/v1/system/factory-reset is the successor"},
@@ -923,13 +924,13 @@ var registeredCanaryNarrowing = map[string][2]int{
 
 const (
 	registeredR0Routes     = 572
-	registeredProbed       = 505
+	registeredProbed       = 504
 	registeredDelegated    = 64
 	registeredPrincipals   = 36 // the recorded abk_ keys, sessions and the anonymous caller
 	registeredCoreKeys     = 18 // core-native mck_ twins, held to their imported twin's recording
 	registeredNoCoreTwin   = 10
 	registeredAuthOnCells  = registeredProbed * registeredPrincipals
-	registeredAuthOffCells = 505 // one principal over the probed routes
+	registeredAuthOffCells = 504 // one principal over the probed routes
 )
 
 // The recorded task starts and approvals, as pseudo-routes.
