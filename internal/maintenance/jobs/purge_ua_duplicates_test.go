@@ -29,9 +29,9 @@ import (
 func uaFixture(t *testing.T) (*database.MockStore, *map[string]bool) {
 	t.Helper()
 	root := t.TempDir()
-	old := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = old })
+	old := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = old }) })
 
 	const size = 1 << 20 // 1 MiB: probes land at 256/512/768 KiB
 	base := bytes.Repeat([]byte{0xAB}, size)

@@ -32,9 +32,9 @@ func TestCleanupOrganizeMessJob_DryRunDoesNotDelete(t *testing.T) {
 	garbageDir := filepath.Join(root, "01_ bad fragment dir")
 	require.NoError(t, os.MkdirAll(garbageDir, 0o755))
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-organize-mess")
 	require.NoError(t, err)
@@ -60,9 +60,9 @@ func TestCleanupOrganizeMessJob_RemovesEmptyGarbageDirs(t *testing.T) {
 	require.NoError(t, createErr)
 	f.Close()
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-organize-mess")
 	require.NoError(t, err)
@@ -79,9 +79,9 @@ func TestCleanupOrganizeMessJob_CancelContext(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "01_fragment"), 0o755))
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-organize-mess")
 	require.NoError(t, err)
@@ -100,9 +100,9 @@ func TestCleanupOrganizeMessJob_LogsGarbageDirs(t *testing.T) {
 	doubleDir := filepath.Join(root, "Title - 01 - Chapter")
 	require.NoError(t, os.MkdirAll(doubleDir, 0o755))
 
-	orig := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = orig }()
+	orig := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = orig }) }()
 
 	job, err := maintenance.Get("cleanup-organize-mess")
 	require.NoError(t, err)

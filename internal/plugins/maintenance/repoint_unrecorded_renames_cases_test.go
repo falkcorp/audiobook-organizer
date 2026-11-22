@@ -18,9 +18,9 @@ import (
 
 func clearITunes(t *testing.T) {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.ITunes = config.ITunesConfig{}
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.ITunes = config.ITunesConfig{} })
 }
 
 func TestRepointUnrecordedRenames_Outcomes(t *testing.T) {

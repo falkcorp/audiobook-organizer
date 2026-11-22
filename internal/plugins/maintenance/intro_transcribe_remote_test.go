@@ -173,7 +173,7 @@ func noClipWrites(t *testing.T) (rootDir string, check func()) {
 	t.Helper()
 	cacheDir := t.TempDir()
 	rootDir = t.TempDir()
-	orig := config.AppConfig.WhisperClipCacheDir
+	orig := config.Get().WhisperClipCacheDir
 	config.Mutate(func(c *config.Config) { c.WhisperClipCacheDir = cacheDir })
 	t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.WhisperClipCacheDir = orig }) })
 	// ffmpeg is unreachable: any exec of it fails, so a stray local decode

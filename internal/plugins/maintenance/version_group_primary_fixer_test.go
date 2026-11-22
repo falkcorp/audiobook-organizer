@@ -219,9 +219,9 @@ func (f *vgRepairFixture) plugin(deps ServerDeps) *Plugin {
 // fixer, which reads it the way the op's Run does.
 func withRoot(t *testing.T, root string) {
 	t.Helper()
-	old := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = old })
+	old := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = old }) })
 }
 
 // stubFixerProbe makes the fixer's ffprobe the fixture's stub.

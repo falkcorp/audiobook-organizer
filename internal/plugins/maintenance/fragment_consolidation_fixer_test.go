@@ -2231,17 +2231,19 @@ func TestFragmentFixer_NumberedSet(t *testing.T) {
 	// the import scanner's chapter_consolidation_threshold_min (owner
 	// 2026-10-03: "one for import, one for jobs").
 	t.Run("hour-long chapters merge under the repairs' own limit", func(t *testing.T) {
-		prevImport, prevRepair := config.AppConfig.ChapterConsolidationThresholdMin, config.AppConfig.RepairChapterMaxMin
+		prevImport, prevRepair := config.Get().ChapterConsolidationThresholdMin, config.Get().RepairChapterMaxMin
 		t.Cleanup(func() {
-			config.AppConfig.ChapterConsolidationThresholdMin, config.AppConfig.RepairChapterMaxMin = prevImport, prevRepair
+			config.SetForTest(func(c *config.Config) {
+				c.ChapterConsolidationThresholdMin, c.RepairChapterMaxMin = prevImport, prevRepair
+			})
 		})
-		config.AppConfig.ChapterConsolidationThresholdMin, config.AppConfig.RepairChapterMaxMin = 10, 120
+		config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin, c.RepairChapterMaxMin = 10, 120 })
 		f := newFragFixture(t)
 		f.numberedSeed(t, "lib/Serial", serialStems, 60*60, nil)
 		r := findRow(t, f.plan(t, "op-plan"), noParentRowID(f.path("lib/Serial"), fragNumberedKey))
 		require.True(t, r.Applicable(), "%s: %s", r.Skipped, r.SkipReason)
 
-		config.AppConfig.RepairChapterMaxMin = 30
+		config.SetForTest(func(c *config.Config) { c.RepairChapterMaxMin = 30 })
 		held(t, f, "lib/Serial", "30 min or longer")
 	})
 	// Leading pairs (2026-10-03): "1-03 Title" is book/disc 1, chapter 3.

@@ -390,9 +390,9 @@ func TestJunkTitleFixer_CatalogTaglineIsNotProposed(t *testing.T) {
 // for both when the owners can be the same person, and left alone when they
 // are two different people.
 func TestJunkTitleFixer_DuplicateGuardAcrossRealAndJunkOwners(t *testing.T) {
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/lib"
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/lib" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	two := func(dir string) []string { return []string{dir + "/01.mp3", dir + "/02.mp3"} }
 	build := func(t *testing.T, junkBook evBook) map[string]string {

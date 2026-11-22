@@ -23,9 +23,9 @@ import (
 // first store access for the row: a read-then-write op reads the old row and
 // then clobbers the new one; an atomic compare-and-write sees the new row.
 func TestRepointUnrecordedRenames_ConcurrentChangeIsNotOverwritten(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.ITunes = config.ITunesConfig{}
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.ITunes = config.ITunesConfig{} })
 
 	dir := t.TempDir()
 	oldP, newP := filepath.Join(dir, "old", "01.mp3"), filepath.Join(dir, "new", "01.mp3")
