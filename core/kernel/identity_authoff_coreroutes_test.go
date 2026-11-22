@@ -541,6 +541,40 @@ func TestAuthOffCoreRoutes_GuardedAndAuthRequiredRoutesAreRefused(t *testing.T) 
 	t.Logf("%d routes forced to deny by their guards or AuthRequired scopes", derived)
 }
 
+// offSessionEndingCodes is a copy of the problem codes whose 401 makes the SPA
+// shell treat the session as ended and drop the install to the sign-in screen:
+// core/web/packages/api-client/src/client.ts:26 SESSION_ENDING_CODES.
+var offSessionEndingCodes = map[string]bool{
+	"authentication_required": true,
+	"expired":                 true,
+	"revoked":                 true,
+	"inactive_user":           true,
+	"invalid_credential":      true,
+}
+
+// TestAuthOffCoreRoutes_NeverEndTheSession is F4-08 ruling G5(a) over every
+// core route and every posture: with authentication off, no route answers the
+// auth-disabled principal a 401 whose code ends the SPA's session. A no-auth
+// install has no sign-in to fall back to, so a refused action must be a 403
+// (the guard refusals already are; the AuthRequired-scope, credential-metadata
+// and audit refusals were 401 authentication_required until this ruling). The
+// action is still refused: TestAuthOffCoreRoutes_GuardedAndAuthRequiredRoutesAreRefused
+// keeps that.
+func TestAuthOffCoreRoutes_NeverEndTheSession(t *testing.T) {
+	seen := 0
+	for _, sw := range sweeps(t) {
+		for _, p := range sw.probes {
+			seen++
+			if p.cell.status == http.StatusUnauthorized && offSessionEndingCodes[p.cell.code] {
+				t.Errorf("[%s] %s %s answered %v: a session-ending 401 signs a no-auth install out of its own SPA", sw.posture.name, p.row.key(), p.path, p.cell)
+			}
+		}
+	}
+	if seen < 100 {
+		t.Errorf("only %d probes inspected: the sweep lost its inputs", seen)
+	}
+}
+
 // ---- remote against loopback ------------------------------------------------
 
 // TestAuthOffCoreRoutes_RemoteReachableMatchesLoopback: no route's verdict

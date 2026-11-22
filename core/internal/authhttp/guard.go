@@ -25,7 +25,9 @@ type spec struct {
 	rate                             httpapi.RateClass
 	success                          int
 	// needUser: the route reads or changes credential metadata, so the
-	// auth-disabled principal (no user) is refused 401 (05-authn §4.11).
+	// auth-disabled principal (no user) is refused (05-authn §4.11): 403
+	// interactive_required, not a 401 that would end a no-auth install's
+	// session (F4-08 ruling G5(a)).
 	needUser bool
 }
 
@@ -48,7 +50,7 @@ func (s spec) admit(p *auth.Principal) error {
 		return nil
 	}
 	if p == nil || (s.needUser && p.User == nil) {
-		return errUnauthenticated()
+		return httpapi.UserRequired(p)
 	}
 	if s.guards.Interactive && !p.MayChangeCredentials() {
 		return errInteractive()
