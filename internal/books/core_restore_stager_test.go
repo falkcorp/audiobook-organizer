@@ -288,6 +288,39 @@ func TestCoreRestoreStager_NeedsAServiceThatRunsTheHook(t *testing.T) {
 	assert.True(t, exists(h.marker))
 }
 
+// stagedWithoutHook is a Service that reports a staged restore without ever
+// running the before-stage hook, which core's Service never does while it wraps
+// a CheckedStager: it stands in for one that did, to show the stager does not
+// report that restore as staged.
+type stagedWithoutHook struct{ archive corebackup.Archive }
+
+func (f stagedWithoutHook) List(context.Context) ([]corebackup.Archive, error) {
+	return []corebackup.Archive{f.archive}, nil
+}
+
+func (f stagedWithoutHook) StageRestore(context.Context, corebackup.ArchiveID, corebackup.RestoreOptions) (corebackup.PendingRestore, error) {
+	return corebackup.PendingRestore{}, nil
+}
+
+// TestCoreRestoreStager_NeverReportsARestoreStagedWithoutTheHook: if the Service
+// stages without having run the hook, the restart that would apply the restore
+// would boot on a clean-stop marker nobody discarded, so the stager refuses to
+// hand it to the handler.
+func TestCoreRestoreStager_NeverReportsARestoreStagedWithoutTheHook(t *testing.T) {
+	dir := tempDir(t)
+	st := coreRestoreStager{
+		svc:    stagedWithoutHook{corebackup.Archive{ID: "legacy-gotham", Name: "gotham.tar.gz", Provenance: corebackup.Own}},
+		dir:    dir,
+		dbPath: filepath.Join(dir, "batcave.pebble"),
+	}
+	diverged := 0
+	got, err := st.StageRestore(ownerProof(context.Background()), dir, "gotham.tar.gz", true, "user:alfred", func() { diverged++ })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before-stage")
+	assert.Equal(t, backup.StagedRestore{}, got)
+	assert.Zero(t, diverged)
+}
+
 // TestCoreRestoreStager_ReadsOnlyItsOwnDirectoryAndCatalogue: the stager
 // stages a file the Service's catalogue lists, from the directory the Service
 // serves; another directory, a path that climbs, and a file the catalogue does

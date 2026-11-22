@@ -21,6 +21,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -92,6 +93,18 @@ func TestBackupMarkers_ReadsTheThreeBoundaries(t *testing.T) {
 	}
 	if b.ServedBoot != nil || b.JournalSeq != 0 {
 		t.Fatalf("a store with no journal and no marker read %+v", b)
+	}
+
+	// A committed journal line moves the head the markers read.
+	fx.boot(nil, nil) // binds the journal to its file
+	fx.key("key-redrobin", fx.user("tim-drake"), auth.KeyActive)
+	before := fx.head().Seq
+	seq := fx.revokeKey("key-redrobin")
+	if seq == 0 || seq <= before {
+		t.Fatalf("the fixture's revocation left the journal head at %d (was %d)", seq, before)
+	}
+	if b, err = m.Read(ctx); err != nil || b.JournalSeq != seq {
+		t.Fatalf("JournalSeq = %d, %v; want the committed head %d", b.JournalSeq, err, seq)
 	}
 
 	pair, err := m.Advance(ctx)
