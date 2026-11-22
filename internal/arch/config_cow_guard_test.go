@@ -524,30 +524,88 @@ func TestConfigCOWTestWritersRatchet(t *testing.T) {
 			t.Logf("\t%q: %d,", d, writes[d])
 		}
 	}
+	for _, v := range cowRatchetViolations(writes, cowTestWriteCeiling) {
+		t.Error(v)
+	}
+}
+
+// cowRatchetViolations compares the counted writes with the ceilings.
+func cowRatchetViolations(writes, ceilings map[string]int) []string {
+	var out []string
 	for dir, n := range writes {
-		ceiling, ok := cowTestWriteCeiling[dir]
+		ceiling, ok := ceilings[dir]
 		switch {
 		case !ok:
-			t.Errorf("%s: %d direct config.AppConfig writes in tests, and the package had none on 2026-11-22. "+
-				"Use config.SetForTest / config.ReplaceForTest (internal/config/cow.go)", dir, n)
+			out = append(out, fmt.Sprintf("%s: %d direct config.AppConfig writes in tests, and the package had none on 2026-11-22. "+
+				"Use config.SetForTest / config.ReplaceForTest (internal/config/cow.go)", dir, n))
 		case n > ceiling:
-			t.Errorf("%s: direct config.AppConfig writes in tests rose to %d (ceiling %d). "+
-				"Use config.SetForTest / config.ReplaceForTest (internal/config/cow.go)", dir, n, ceiling)
+			out = append(out, fmt.Sprintf("%s: direct config.AppConfig writes in tests rose to %d (ceiling %d). "+
+				"Use config.SetForTest / config.ReplaceForTest (internal/config/cow.go)", dir, n, ceiling))
 		}
 	}
+	sort.Strings(out)
+	return out
 }
 
 func TestConfigCOWReadersWaitForTestWriters(t *testing.T) {
 	writes, gets, _ := cowScan(t)
+	if msg := cowOrderViolation(writes, gets); msg != "" {
+		t.Fatal(msg)
+	}
+}
+
+// cowOrderViolation is the refusal TestConfigCOWReadersWaitForTestWriters
+// reports, or "" when production config.Get() may exist.
+func cowOrderViolation(writes map[string]int, gets []string) string {
 	left := 0
 	for _, n := range writes {
 		left += n
 	}
-	if left > 0 && len(gets) > 0 {
-		sort.Strings(gets)
-		t.Fatalf("%d production config.Get() uses (first: %s) while %d direct config.AppConfig writes remain in tests. "+
-			"A test's direct write reaches Get() only at the next publish, so a converted reader can see a stale config: "+
-			"convert the test writers first (.claude/notes/pc-tools/config-cow-slices.md, wave 1)", len(gets), gets[0], left)
+	if left == 0 || len(gets) == 0 {
+		return ""
+	}
+	sorted := append([]string(nil), gets...)
+	sort.Strings(sorted)
+	return fmt.Sprintf("%d production config.Get() uses (first: %s) while %d direct config.AppConfig writes remain in tests. "+
+		"A test's direct write reaches Get() only at the next publish, so a converted reader can see a stale config: "+
+		"convert the test writers first (.claude/notes/pc-tools/config-cow-slices.md, wave 1)", len(sorted), sorted[0], left)
+}
+
+// TestConfigCOWOrderAndRatchetDecide is the positive control for the two
+// checks above, which pass vacuously on a tree with no production Get().
+func TestConfigCOWOrderAndRatchetDecide(t *testing.T) {
+	if cowOrderViolation(map[string]int{"internal/gotham": 1}, []string{"internal/arkham/a.go:3"}) == "" {
+		t.Error("a production Get() with a direct test write left was not refused")
+	}
+	if cowOrderViolation(map[string]int{}, []string{"internal/arkham/a.go:3"}) != "" {
+		t.Error("a production Get() with no direct test write left was refused")
+	}
+	if cowOrderViolation(map[string]int{"internal/gotham": 4}, nil) != "" {
+		t.Error("direct test writes with no production Get() were refused")
+	}
+	got := cowRatchetViolations(
+		map[string]int{"internal/gotham": 3, "internal/arkham": 2, "internal/blackgate": 1},
+		map[string]int{"internal/gotham": 2, "internal/arkham": 2})
+	if len(got) != 2 || !strings.HasPrefix(got[0], "internal/blackgate:") || !strings.HasPrefix(got[1], "internal/gotham:") {
+		t.Errorf("ratchet: want a new package and a raised one refused, a held one passed; got %q", got)
+	}
+}
+
+// TestAppConfigRatchetCountsGet: the AppConfig ratchet must count config.Get,
+// or the sweep's rewrite would silently empty it.
+func TestAppConfigRatchetCountsGet(t *testing.T) {
+	src := `package gotham
+
+import "github.com/falkcorp/audiobook-organizer/internal/config"
+
+func read() string { return config.Get().RootDir + config.AppConfig.RootDir + config.Snapshot().RootDir }
+`
+	f, err := parser.ParseFile(token.NewFileSet(), "gotham.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countAccessorUses(f); got != 3 {
+		t.Fatalf("countAccessorUses = %d, want 3 (Get, AppConfig, Snapshot)", got)
 	}
 }
 
