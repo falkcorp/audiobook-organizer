@@ -1,0 +1,3 @@
+### Fixed
+
+- Under the identity flip the Cloudflare Access sign-in reads its allow-list straight from `modules.books.cfaccess.allowed_emails` (env `ABO_BOOKS_CFACCESS_ALLOWED_EMAILS`, the retired `OAUTH_ALLOWED_EMAILS`) instead of from the OIDC provider projection of the settings, so an install that signs in only through Cloudflare Access and has no OIDC provider entry keeps its allow-list. An empty list still admits nobody, owner included, and there is no fallback to a provider's list. A boot that cannot read the key refuses to start. The new-user role still comes from the settings snapshot: with no provider entry it is the default `viewer`.
