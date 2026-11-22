@@ -16,16 +16,19 @@ import (
 // TestRegisteredHarness_RelocationIsStagedByTheBootedModule (F6-03): on the
 // registered build books' Register installs the relocation outbox before the
 // store takes writes (store.SetRelocationOutbox, internal/books/module.go), so
-// a committed path change of a stored book leaves a message for books'
-// relocation consumer, which the operator route sees as backlog on that
-// consumer (intake_backlog: staged, not yet sequenced). The store's own tests prove the staging with an outbox they
+// an organized copy (CreateBookWithRelocation, the single-book organize
+// request's write) leaves a message for books' relocation consumer, which the
+// operator route sees as backlog on that consumer (intake_backlog: staged, not
+// yet sequenced). The store's own tests prove the staging with an outbox they
 // install themselves; only a booted module can show that Register did.
 //
-// A create stages nothing (a first path is not a relocation). The harness
-// boots no executor, so the relay never runs and the message stays in the intake
-// whatever F5-18 registers: the cell reads staging, not delivery. Delivery and
-// the crash-restart half are TestRelocationFollowUpDurable's, once F5-18
-// registers books' task kinds.
+// Nothing else stages: a create, and a path change of a stored book (the
+// organize-in-place, repair, scanner and version-swap writers), leave nothing,
+// even with the outbox installed, as those writers moved no torrent at base. The
+// harness boots no executor, so the relay never runs and the message stays in
+// the intake whatever F5-18 registers: the cell reads staging, not delivery.
+// Delivery and the crash-restart half are TestRelocationFollowUpDurable's, once
+// F5-18 registers books' task kinds.
 func TestRegisteredHarness_RelocationIsStagedByTheBootedModule(t *testing.T) {
 	h := bootRegistered(t, registeredConfig{})
 	admin := h.Principal("key:admin:every")
@@ -69,10 +72,20 @@ func TestRegisteredHarness_RelocationIsStagedByTheBootedModule(t *testing.T) {
 	if _, err := s.UpdateBook(b.ID, &store.Book{Title: b.Title, Format: "m4b", FilePath: "/library/batman/year-one/year-one.m4b"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ModifyBook(b.ID, func(bk *store.Book) error { bk.FilePath = "/library/batman/year-one-2/year-one.m4b"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if n := backlog(); n != 0 {
+		t.Fatalf("path changes of a stored book left %d relocation message(s), want 0: only a copy-organize stages", n)
+	}
+	if _, err := s.CreateBookWithRelocation(&store.Book{Title: b.Title, Format: "m4b", FilePath: "/library/batman/year-one-copy/year-one.m4b"}, b.ID); err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(20 * time.Second)
 	for backlog() == 0 {
 		if time.Now().After(deadline) {
-			t.Fatal("a committed path change left no relocation message: Register did not install the relocation outbox")
+			t.Fatal("an organized copy left no relocation message: Register did not install the relocation outbox")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
