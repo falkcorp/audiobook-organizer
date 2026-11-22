@@ -14,6 +14,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -130,5 +131,49 @@ func TestRegistrar_AuthMethodSetsAuthCompatOnDeps(t *testing.T) {
 	bare.AuthMethod(auth.MethodSpec{Method: "batcave.signal"})
 	if bare.Deps().AuthCompat != nil {
 		t.Error("AuthCompat is set with no Compat hook")
+	}
+}
+
+// TestRegistrar_RecordsOutboxHandlers: OutboxHandler records in call order
+// across calls without checking anything (the outbox does at P7), Close hands
+// back a copy, and a late call is a ProblemRegistrarClosed that takes no effect.
+func TestRegistrar_RecordsOutboxHandlers(t *testing.T) {
+	r := newTestRegistrar(t, false)
+	h := func(name string) outbox.Handler {
+		return outbox.ConsumeRaw("batcave.signal.lit.v1", name, func(context.Context, outbox.RawMessage) error { return nil })
+	}
+	r.OutboxHandler(h("batcave.watch"))
+	r.OutboxHandler(h("batcave.alarm"), h("batcave.log"))
+	if err := r.Err(); err != nil {
+		t.Fatalf("Err = %v: recording must not refuse anything", err)
+	}
+	rec := r.Close()
+	if len(rec.OutboxHandlers) != 3 {
+		t.Fatalf("recorded %d outbox handlers, want 3", len(rec.OutboxHandlers))
+	}
+	rec.OutboxHandlers[0] = outbox.Handler{}
+	if again := r.Close(); again.OutboxHandlers[0] == (outbox.Handler{}) {
+		t.Fatal("Close returned the registrar's own slice: an edit by the caller changed the next Close")
+	}
+
+	var late []Problem
+	c := NewRegistrar(RegistrarConfig{Context: t.Context(), Deps: Deps{Module: "batcave"},
+		AfterClose: func(p Problem) { late = append(late, p) }})
+	c.Close()
+	c.OutboxHandler(h("batcave.watch"))
+	if !errors.Is(c.Err(), ErrRegistrarClosed) || len(late) != 1 || !strings.Contains(late[0].Detail, "OutboxHandler") {
+		t.Fatalf("late OutboxHandler: Err = %v, late = %v, want ErrRegistrarClosed naming OutboxHandler", c.Err(), late)
+	}
+	if rec := c.Close(); len(rec.OutboxHandlers) != 0 {
+		t.Fatalf("a late call took effect: %+v", rec)
+	}
+}
+
+// TestDeps_ZeroOutboxWriterStagesNothing backs Deps.Outbox's doc: before the
+// kernel builds the outbox a module's Stage fails, never a panic.
+func TestDeps_ZeroOutboxWriterStagesNothing(t *testing.T) {
+	var d Deps
+	if err := outbox.Stage(d.Outbox, nil, outbox.NewTopic[signalLit]("batcave.signal.lit.v1"), "k", signalLit{Reason: "bat signal"}); err == nil {
+		t.Fatal("Stage through the zero Writer succeeded")
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -93,6 +94,12 @@ type Registrations struct {
 	// refuses a bad entry (kernelEvents.declare, kernelEvents.subscribe).
 	Topics        []events.TopicSpec
 	Subscriptions []events.Subscription
+	// OutboxHandlers are the module's outbox consumers, in call order
+	// (Registrar.OutboxHandler). Recorded as declared: the kernel declares
+	// every manifest's OutboxConsumers first and then registers these with the
+	// outbox at P7, which refuses a name the manifest did not list, a topic that
+	// is not Durable and a second handler of one name.
+	OutboxHandlers []outbox.Handler
 }
 
 // NewRegistrar returns the registrar of one module's Register call.
@@ -126,6 +133,7 @@ func (r *Registrar) Close() Registrations {
 	rec.Resources = slices.Clone(rec.Resources)
 	rec.Topics = slices.Clone(rec.Topics)
 	rec.Subscriptions = slices.Clone(rec.Subscriptions)
+	rec.OutboxHandlers = slices.Clone(rec.OutboxHandlers)
 	return rec
 }
 
@@ -348,6 +356,17 @@ func (r *Registrar) Topics(t ...events.TopicSpec) {
 // after every topic is declared.
 func (r *Registrar) Subscribe(s ...events.Subscription) {
 	r.record("Subscribe", func() { r.rec.Subscriptions = append(r.rec.Subscriptions, s...) })
+}
+
+// OutboxHandler registers outbox consumers built with outbox.Consume,
+// ConsumeTx, ConsumeIntoTask or the raw forms (06 §6.4.3). A module's handlers
+// are ConsumeIntoTask only (core/archtest.OutboxModuleConsumersAreTasks);
+// each consumer name must be listed in Manifest.OutboxConsumers and each
+// topic must be a Durable catalog entry. It only records (06 §6.5.1 P6): the
+// kernel registers the handlers at P7, after every consumer name and topic is
+// declared, and delivery begins when the relay starts (06 §6.5.2).
+func (r *Registrar) OutboxHandler(h ...outbox.Handler) {
+	r.record("OutboxHandler", func() { r.rec.OutboxHandlers = append(r.rec.OutboxHandlers, h...) })
 }
 
 // Err returns the problems recorded so far, as a *ValidationError; nil if

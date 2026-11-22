@@ -85,6 +85,7 @@ func (k *Kernel) storageOwners() []storage.OwnerSpec {
 	// The identity flip's three (F4-08 B3), only for an app that declared it.
 	if k.identityBootDeclared() {
 		owners = append(owners, identityOwners()...)
+		owners = append(owners, k.eventsOwners()...)
 	}
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {

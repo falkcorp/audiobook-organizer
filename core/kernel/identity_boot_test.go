@@ -55,7 +55,7 @@ func identityHost(t *testing.T) (*swapHost, Config) {
 func TestIdentityBoot_SwitchOnClaimsTheIdentityOwners(t *testing.T) {
 	h, c := identityHost(t)
 	k := h.mustBoot(c)
-	want := []storage.Owner{"core/audit", "core/tasks", configOwnerSpec().Owner, secretsOwnerID, authstore.Owner, rbacstore.Owner, journal.Owner, "alfred"}
+	want := []storage.Owner{"core/audit", "core/tasks", configOwnerSpec().Owner, secretsOwnerID, authstore.Owner, rbacstore.Owner, journal.Owner, outboxOwnerSpec().Owner, "alfred"}
 	if got := ownerIDs(k); !slices.Equal(got, want) {
 		t.Fatalf("storageOwners = %v, want %v", got, want)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -83,6 +84,15 @@ type Deps struct {
 	// usable: a Scope with no bus drops every publish silently, which is what
 	// a module gets until the kernel builds the bus (F4-08, B3).
 	Events events.Scope
+
+	// Outbox stages durable messages into the module's own batches
+	// (05-events §5E.4, 06 §6.4.4): Stage adds one intake row to the batch the
+	// caller already writes, and only for a topic this module declared Durable
+	// with Registrar.Topics. The zero Writer stages nothing and every Stage
+	// through it fails, which is what a module gets on a boot that built no
+	// outbox (app.Describe, an app that did not declare the identity flip);
+	// a module that stages must check for it.
+	Outbox outbox.Writer
 
 	// Auth is the read-only identity view (05-authn §3.1): lookups by ID and
 	// username, a user listing and the request principal, no credential,
