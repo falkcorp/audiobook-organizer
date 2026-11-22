@@ -187,7 +187,9 @@ type Server struct {
 	identity *legacyauth.Identity
 	// accessVerifier is WithAccessVerifier's value (identityThrottleKey).
 	accessVerifier cfaccess.CFAssertionVerifier
-	store          database.Store
+	// accessAllowList is WithAccessAllowList's value (keepGuestPolicyEmail).
+	accessAllowList func() (string, error)
+	store           database.Store
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind
@@ -799,6 +801,20 @@ type serverOptions struct {
 	// accessVerifier checks the Cloudflare Access assertion a request carries,
 	// for the failure throttle's visitor bucket under core identity.
 	accessVerifier cfaccess.CFAssertionVerifier
+	// accessAllowList reads the Cloudflare Access allow-list under core identity.
+	accessAllowList func() (string, error)
+}
+
+// WithAccessAllowList is the read of the Cloudflare Access allow-list
+// (modules.books.cfaccess.allowed_emails) of a server under core identity
+// (WithIdentity). Under identity that key, not the OIDC provider projection
+// config.Snapshot().OAuthAllowedEmails, is what admits a person, so the guest
+// policy's keep rule (keepGuestPolicyEmail) reads it here. An error means the
+// list is unreadable and the rule keeps the entry. It has no effect without
+// WithIdentity, and a server under identity built without it keeps every entry
+// it cannot rule out.
+func WithAccessAllowList(read func() (string, error)) ServerOption {
+	return func(o *serverOptions) { o.accessAllowList = read }
 }
 
 // WithAccessVerifier is the verifier of the Cloudflare Access assertion the
@@ -947,6 +963,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		router:                 router,
 		identity:               so.identity,
 		accessVerifier:         so.accessVerifier,
+		accessAllowList:        so.accessAllowList,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
 		importService:          importer.NewImportService(store),
