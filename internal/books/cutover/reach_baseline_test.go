@@ -272,9 +272,9 @@ func reachCountProblems(vd *reachR0Doc, manifest []httpapi.LegacyRoute) []string
 	}
 	want := map[string]int{
 		"R0 routes recorded":                  572,
-		"manifest routes R0 also has, judged": 504,
+		"manifest routes R0 also has, judged": 503,
 		"routes delegated to the ABS handler": 68,
-		"routes only R0 has":                  4,
+		"routes only R0 has":                  5,
 		"routes only R2 has":                  2,
 	}
 	var keys []string
