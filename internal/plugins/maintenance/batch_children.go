@@ -107,18 +107,16 @@ func (p *Plugin) extractWAVBatchParent(rc *tasks.RC, base t6g4Base, in extractWA
 func (p *Plugin) extractWAVBatchKind(deps t6g4Deps) tasks.Definition {
 	return tasks.Task(extractWAVBatchChildKind, tasks.TaskSpec[extractWAVBatchParams, extractWAVResult]{
 		Title: "Extract WAV clips for one batch of books",
-		Help:  "One batch of extract-wav-clips, started by that run for up to 100 books: extracts the first 90 seconds of each book's first audio file and persists the file hash where the row has none. It holds only its batch's books and files, so a write to any other book is not held behind it. Not started by hand.",
+		Help:  "One batch of extract-wav-clips, started by that run for up to 100 books: extracts the first 90 seconds of each book's first audio file and persists the file hash where the row has none. It holds its batch's books and files, and the metadata cache and identity index it writes through each book update, so a write to any other book's row is not held behind it. Started only by its parent run; a start by hand is refused.",
 		// The kind's own write set (see extractWAVClipsKind): the hash write-back,
 		// the aggregate recompute it can reach, the clips and links on disk.
 		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
 		// The dispatcher holds the batch's book and book_file rows and, whole-kind,
-		// files: ffmpeg reads the source paths and writes under the library root,
+		// files (ffmpeg reads the source paths and writes under the library root,
 		// so a mover of those paths must still wait, as it waited behind the whole
-		// run before. metadata_cache and indexes are in Effects (the recompute's
-		// ModifyBook writes them) but not held per batch: they carry no row of this
-		// batch's that another writer could reach, the same trade internal/repairs
-		// makes for its per-book fixes.
-		Subjects:        batchSubjects(func(p extractWAVBatchParams) batchScope { return p.batchScope }, tasks.Res("books", string(ops.ResFiles))),
+		// run before) and metadata_cache and indexes (the aggregate recompute's
+		// ModifyBook writes them, see batchCacheRefs).
+		Subjects:        batchSubjects(func(p extractWAVBatchParams) batchScope { return p.batchScope }, append(batchCacheRefs(), tasks.Res("books", string(ops.ResFiles)))...),
 		Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
 		Resume:          tasks.ResumeFromZero,
 		Priority:        tasks.PriorityLow,
@@ -127,6 +125,9 @@ func (p *Plugin) extractWAVBatchKind(deps t6g4Deps) tasks.Definition {
 		ProgressTimeout: 10 * time.Minute,
 		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in extractWAVBatchParams) (extractWAVResult, error) {
+			if err := batchRequireParent(rc); err != nil {
+				return extractWAVResult{}, err
+			}
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return extractWAVResult{}, err
 			}
@@ -200,10 +201,11 @@ func (p *Plugin) introMigrateBatchParent(rc *tasks.RC, base t6g4Base, in introMi
 func (p *Plugin) introMigrateBatchKind(deps t6g4Deps) tasks.Definition {
 	return tasks.Task(introMigrateBatchChildKind, tasks.TaskSpec[introMigrateBatchParams, introMigrateResult]{
 		Title: "Migrate intro transcripts for one batch of books",
-		Help:  "One batch of intro-migrate-single-file, started by that run for up to 100 books: copies each single-file book's intro transcript onto its one file row. It holds only its batch's books and files, so a write to any other book is not held behind it. Not started by hand.",
+		Help:  "One batch of intro-migrate-single-file, started by that run for up to 100 books: copies each single-file book's intro transcript onto its one file row. It holds its batch's books and files, and the metadata cache and identity index it writes through each book update, so a write to any other book's row is not held behind it. Started only by its parent run; a start by hand is refused.",
 		// The kind's own write set (see introMigrateSingleFileKind).
-		Effects:         tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
-		Subjects:        batchSubjects(func(p introMigrateBatchParams) batchScope { return p.batchScope }),
+		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		// The batch's rows, and metadata_cache and indexes whole-kind (batchCacheRefs).
+		Subjects:        batchSubjects(func(p introMigrateBatchParams) batchScope { return p.batchScope }, batchCacheRefs()...),
 		Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
 		Resume:          tasks.ResumeFromZero,
 		Priority:        tasks.PriorityLow,
@@ -212,6 +214,9 @@ func (p *Plugin) introMigrateBatchKind(deps t6g4Deps) tasks.Definition {
 		ProgressTimeout: 5 * time.Minute,
 		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in introMigrateBatchParams) (introMigrateResult, error) {
+			if err := batchRequireParent(rc); err != nil {
+				return introMigrateResult{}, err
+			}
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return introMigrateResult{}, err
 			}
@@ -378,7 +383,13 @@ func (p *Plugin) fileIntroBatchParent(rc *tasks.RC, base t6g4Base, in fileIntroN
 			log.Warn("transcribe-file-intros: stats write failed", "err", err)
 		}
 	}
-	flush(seed, false)
+	// Seed the key only on the first attempt: a resumed one restores the rollup
+	// (the counters of the whole run, StartedAt included) from the checkpoint, and
+	// writing this attempt's fresh seed first would reset them (HEAD restores
+	// prior.Stats on a resume, file_intro_transcribe.go:676-681).
+	if !rc.Resumed() {
+		flush(seed, false)
+	}
 	return runBatchSweep(host, batchPlan[fileIntroResult]{
 		IDs: batchWorkIDs(work), Size: batchSweepSize,
 		Books:  func(ids []string) []batchBook { return booksOfWork(work, ids) },
@@ -412,13 +423,14 @@ func booksOfWork(work map[string][]string, ids []string) []batchBook {
 func (p *Plugin) fileIntroBatchKind(deps t6g4Deps) tasks.Definition {
 	return tasks.Task(fileIntroBatchChildKind, tasks.TaskSpec[fileIntroBatchParams, fileIntroResult]{
 		Title: "Transcribe file intros for one batch of books",
-		Help:  "One batch of transcribe-file-intros, started by that run for up to 100 books: transcribes the batch's selected files and stores each result on the file's own record, and fills a book's transcript only when it is empty. With clear_run_id it removes what that run wrote in the batch instead. It holds only its batch's books and files, so a write to any other book is not held behind it. Not started by hand.",
+		Help:  "One batch of transcribe-file-intros, started by that run for up to 100 books: transcribes the batch's selected files and stores each result on the file's own record, and fills a book's transcript only when it is empty. With clear_run_id it removes what that run wrote in the batch instead. It holds its batch's books and files, and the metadata cache and identity index it writes through each book update, so a write to any other book's row is not held behind it. Started only by its parent run; a start by hand is refused.",
 		// The kind's own write set (see fileIntroTranscribeKind): a file's intro
 		// group (book_files), a book's transcript fill (ModifyBook: books,
 		// metadata_cache, indexes). The counters (stats:transcribe-files) are the
 		// parent's; the child persists none.
-		Effects:         tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
-		Subjects:        batchSubjects(func(p fileIntroBatchParams) batchScope { return p.batchScope }),
+		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		// The batch's rows, and metadata_cache and indexes whole-kind (batchCacheRefs).
+		Subjects:        batchSubjects(func(p fileIntroBatchParams) batchScope { return p.batchScope }, batchCacheRefs()...),
 		Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
 		Resume:          tasks.ResumeFromZero,
 		Priority:        tasks.PriorityLow,
@@ -427,6 +439,9 @@ func (p *Plugin) fileIntroBatchKind(deps t6g4Deps) tasks.Definition {
 		ProgressTimeout: 30 * time.Minute,
 		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fileIntroBatchParams) (fileIntroResult, error) {
+			if err := batchRequireParent(rc); err != nil {
+				return fileIntroResult{}, err
+			}
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileIntroResult{}, err
 			}
