@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -60,6 +61,17 @@ func refusalStore(t *testing.T) database.Store {
 	return store
 }
 
+// observerCountingStore is a store that hides the PebbleStore beneath it
+// (opaqueStore) and reports its change-observer installs and releases.
+type observerCountingStore struct {
+	opaqueStore
+	set, cleared atomic.Int32
+}
+
+func (s *observerCountingStore) SetChangeObserver(database.ChangeObserver) { s.set.Add(1) }
+
+func (s *observerCountingStore) ClearChangeObserver(database.ChangeObserver) { s.cleared.Add(1) }
+
 var refusalCases = []refusalCase{
 	{"abs jwt secret empty", func(t *testing.T) {
 		// wire_abs_routes.go's first exit: the ABS API on with no ABS_JWT_SECRET.
@@ -84,9 +96,14 @@ var refusalCases = []refusalCase{
 			c.ABSAPIEnabled = true
 			c.ABSJWTSecret = strings.Repeat("batcave-", 6)
 		})
-		srv, err := NewServer(opaqueStore{Store: refusalStore(t)})
+		store := &observerCountingStore{opaqueStore: opaqueStore{Store: refusalStore(t)}}
+		srv, err := NewServer(store)
 		require.Nil(t, srv)
 		require.ErrorIs(t, err, errABSNoSessionKeyspace)
+		// The refusal came after NewServer had installed its change observer on
+		// the store; the half-built server was released, so it is detached.
+		require.EqualValues(t, 1, store.set.Load(), "setup: NewServer installs one change observer before the ABS wiring refuses")
+		require.EqualValues(t, 1, store.cleared.Load(), "a refused NewServer left its change observer installed on the store")
 	}},
 	{"nil store", func(t *testing.T) {
 		refusalConfig(t, nil)
