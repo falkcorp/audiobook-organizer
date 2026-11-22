@@ -299,7 +299,11 @@ func (m *booksModule) identityFor(d module.Deps) (*legacyauth.Identity, error) {
 		return nil, err
 	}
 	snap := config.Snapshot()
-	m.idw.bindAccess(context.Background(), snap.CFAccessTeamDomain, snap.CFAccessAUD, identityPolicyFrom(snap), d.Log)
+	pol, err := identityPolicyFrom(d.Config, snap)
+	if err != nil {
+		return nil, err
+	}
+	m.idw.bindAccess(context.Background(), snap.CFAccessTeamDomain, snap.CFAccessAUD, pol, d.Log)
 	return id, nil
 }
 
