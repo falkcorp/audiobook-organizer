@@ -505,6 +505,7 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodGet, "/api/v1/auth/oauth-providers", pPublic, fRated},
 		{http.MethodGet, "/api/v1/auth/oauth/:provider/callback", pPublic, fRated},
 		{http.MethodGet, "/api/v1/auth/oauth/:provider/start", pPublic, fRated},
+		{http.MethodPost, "/api/v1/auth/phone-key/claim", pAuth, fRated | fInteractive},
 		{http.MethodGet, "/api/v1/auth/sessions", pAuth, fRated},
 		{http.MethodDelete, "/api/v1/auth/sessions/:id", pAuth, fRated},
 		{http.MethodPost, "/api/v1/auth/setup", pPublic, fRated},

@@ -343,7 +343,7 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 		inviteAccessLog.Warn("guest service token: writing the pending record failed, none minted: %v", logger.SanitizeLogValue(err.Error()))
 		return &guestTokenIssue{Message: guestTokenUnavailableMsg}
 	}
-	issue, _ := s.mintGuestTokenCore(parent, store, tokens, user, "")
+	issue, _ := s.mintGuestTokenCore(parent, s.guestUsers(), tokens, user, "")
 	if issue.Issued {
 		s.emailGuestToken(user, issue)
 	}
@@ -361,7 +361,7 @@ func (s *Server) mintGuestServiceToken(parent context.Context, inviteToken strin
 // detail (guestTokenUnavailableMsg is written for the guest and says nothing
 // useful to an admin). The detail is the same text the record carries for the
 // Users page. On success the issue holds the secret, which lives only there.
-func (s *Server) mintGuestTokenCore(parent context.Context, store database.UserReader, tokens database.GuestServiceTokenStore, user *database.User, actorID string) (issue *guestTokenIssue, adminDetail string) {
+func (s *Server) mintGuestTokenCore(parent context.Context, users guestKeyUsers, tokens database.GuestServiceTokenStore, user *database.User, actorID string) (issue *guestTokenIssue, adminDetail string) {
 	snap := config.Snapshot()
 	name := cfservicetoken.Name(user.ID)
 	unavailable := func(detail string) (*guestTokenIssue, string) {
@@ -383,7 +383,7 @@ func (s *Server) mintGuestTokenCore(parent context.Context, store database.UserR
 	// A deactivation locks the user BEFORE it looks for a record, so after the
 	// pending record exists either the lock is visible here or the revoke sees
 	// the record.
-	if u, uerr := store.GetUserByID(user.ID); uerr != nil || u == nil || u.Status != "active" {
+	if u, uerr := users.GetUserByID(parent, user.ID); uerr != nil || u == nil || u.Status != "active" {
 		return fail("the account was deactivated before the token was made; nothing was minted")
 	}
 
@@ -673,6 +673,8 @@ func (s *Server) revokeGuestServiceTokenOpts(parent context.Context, userID, rea
 // revokeGuestServiceTokenAsync is the deactivation hook (handlers.GuestTokenRevoker):
 // best-effort, in the background, a no-op for a user with no token record.
 func (s *Server) revokeGuestServiceTokenAsync(userID, reason string) {
+	// A deactivated account's unclaimed phone-app key entitlement goes with it.
+	s.guestKeyClaims.forget(userID)
 	if tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring()); ok {
 		if g, err := tokens.GetGuestServiceToken(userID); err == nil && g == nil {
 			// No record yet: a mint in flight is caught by its own user re-read.
@@ -787,8 +789,8 @@ type guestTokenView struct {
 }
 
 func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, lastSeenNote string, err error) {
-	store := s.storeForWiring()
-	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](store)
+	users := s.guestUsers()
+	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring())
 	if !ok {
 		return []guestTokenView{}, "", nil
 	}
@@ -827,7 +829,7 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 			UserID: r.UserID, TokenID: r.TokenID, Status: r.Status, Detail: r.Detail,
 			CreatedAt: &created, RevokedAt: r.RevokedAt, RevokeReason: r.RevokeReason, ReissuedAt: r.ReissuedAt,
 		}
-		u, uerr := store.GetUserByID(r.UserID)
+		u, uerr := users.GetUserByID(ctx, r.UserID)
 		if uerr == nil && u != nil {
 			v.Username = u.Username
 		}
@@ -835,10 +837,10 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 			v.LastSeenAt = seen[r.TokenID]
 		}
 		_, issuing := s.guestTokens.reissueGuard.Load(r.UserID)
-		v.ReissueBlocked = guestKeyRowBlocked(store, deployment, u, r, issuing)
+		v.ReissueBlocked = guestKeyRowBlocked(ctx, users, deployment, u, r, issuing)
 		views = append(views, v)
 	}
-	views = append(views, s.guestTokenNoKeyViews(store, deployment, hasRecord)...)
+	views = append(views, s.guestTokenNoKeyViews(ctx, users, deployment, hasRecord)...)
 	if views == nil {
 		views = []guestTokenView{}
 	}
@@ -852,19 +854,19 @@ func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, l
 // issue a key to for deployment reasons is still listed, with that reason on the
 // row. Sorted by username. The verified check scans the users once per
 // candidate (user counts are small), under the store's lock.
-func (s *Server) guestTokenNoKeyViews(store database.UserReader, deployment string, hasRecord map[string]bool) []guestTokenView {
+func (s *Server) guestTokenNoKeyViews(ctx context.Context, users guestKeyUsers, deployment string, hasRecord map[string]bool) []guestTokenView {
 	if !config.Snapshot().CFGuestServiceTokens {
 		return nil
 	}
-	users, err := store.ListUsers()
+	all, err := users.ListUsers(ctx)
 	if err != nil {
 		inviteAccessLog.Warn("guest service token list: listing users for first keys failed: %v", logger.SanitizeLogValue(err.Error()))
 		return nil
 	}
 	var out []guestTokenView
-	for i := range users {
-		u := &users[i]
-		if hasRecord[u.ID] || guestKeyUserBlocked(store, u) != "" || guestKeyFirstKeyBlocked(u) != "" {
+	for i := range all {
+		u := &all[i]
+		if hasRecord[u.ID] || guestKeyUserBlocked(ctx, users, u) != "" || guestKeyFirstKeyBlocked(u) != "" {
 			continue
 		}
 		blocked := deployment
