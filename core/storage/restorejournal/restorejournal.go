@@ -47,6 +47,12 @@ type Intent struct {
 	Staging        string `json:"staging,omitempty"`
 	InstallID      string `json:"install_id,omitempty"`
 	ManifestSHA256 string `json:"manifest_sha256,omitempty"`
+	// OutgoingSeq is the live store's committed c/backup/journal_head seq at
+	// staging: the `staged` journal record's Seq (05-backup §5B.3.4 step 8, the
+	// recorded boundary of a later revert, DATA2-25). The stager reads it before
+	// it creates the intent; 0 when the store had no head. Carried here so a
+	// `staged` record P0a writes (ensureStaged) says the same as one Stage wrote.
+	OutgoingSeq uint64 `json:"outgoing_seq,omitempty"`
 	// KindRewrite (§5S.3.13 "M8"): the step ID of the M8 that staged it, so
 	// each M8 reads only its own journals, and the name of the upgrade
 	// attempt's checkpoint it ran under (storage.DB.AttemptCheckpoint), so

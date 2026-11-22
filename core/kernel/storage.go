@@ -14,6 +14,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -138,6 +139,7 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
 		FromRelease:  k.cfg.FromRelease,
 		ClaimsShadow: k.cfg.StorageClaimsShadow,
+		JournalHead:  journalHeadSeq,
 	}, nil
 }
 
@@ -437,4 +439,12 @@ func (k *Kernel) closeStorage() error {
 		return errors.Join(serr, fmt.Errorf("kernel: storage close: %w", err))
 	}
 	return serr
+}
+
+// journalHeadSeq is storage.OpenOptions.JournalHead: the committed head seq of
+// the revocation journal the pre-migration checkpoint records as its
+// journal_seq (F4-08 B10k).
+func journalHeadSeq(ctx context.Context, ks storage.Keyspace) (uint64, error) {
+	h, err := journal.ReadHead(ctx, ks)
+	return h.Seq, err
 }
