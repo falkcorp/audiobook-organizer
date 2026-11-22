@@ -100,7 +100,7 @@ def sha256_file(path: pathlib.Path) -> str:
 
 
 def build_info(binary: pathlib.Path) -> dict[str, str]:
-    """``go version -m``'s build settings and the main module's ``-X`` values."""
+    """``go version -m``'s build settings (``build`` lines), keyed by setting name."""
     out = subprocess.run(
         ["go", "version", "-m", str(binary)], check=True, capture_output=True, text=True
     ).stdout
@@ -110,8 +110,6 @@ def build_info(binary: pathlib.Path) -> dict[str, str]:
         if len(parts) >= 2 and parts[0] == "build":
             key, _, value = parts[1].partition("=")
             info[key] = value.strip('"')
-    for name, value in re.findall(r"-X main\.(\w+)=(\S+)", info.get("-ldflags", "")):
-        info[f"main.{name}"] = value
     return info
 
 

@@ -108,14 +108,11 @@ var reachABSOnlyButGated = []string{
 }
 
 // reachDelegatedNewerThanR0 are routes R2 delegates to the ABS handler's own token
-// check that R0's router at the pinned tag does not have, so there is no recorded
-// answer to compare with.
-var reachDelegatedNewerThanR0 = []string{
-	"GET /api/authors/:id/image",
-	"GET /api/libraries/:libraryId/stats",
-	"HEAD /api/authors/:id/image",
-	"POST /api/items/batch/get",
-}
+// check that R0's router at the pinned commit does not have, so there is no
+// recorded answer to compare with. None since F4-08 moved R0 to main at
+// f6698f9bf: the four Lissen routes it held (author image GET and HEAD, library
+// stats, items batch get; de84ff2c8) are R0 abs_only routes now.
+var reachDelegatedNewerThanR0 = []string{}
 
 // reachDelegatedProblems is what the delegated-set pin fails on, as text.
 func reachDelegatedProblems(vd *reachR0Doc, res reachDiffResult) []string {
@@ -237,13 +234,13 @@ func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 		"cells that differ":                      len(res.cells),
 	}
 	want := map[string]int{
-		"R0 routes recorded":                     572,
-		"manifest routes compared":               504,
+		"R0 routes recorded":                     574,
+		"manifest routes compared":               505,
 		"routes delegated to the ABS handler":    68,
-		"routes only R0 has":                     4,
-		"routes only R2 has":                     1,
-		"cells compared (task pseudo-routes in)": 27108,
-		"cells that differ":                      221,
+		"routes only R0 has":                     1,
+		"routes only R2 has":                     0,
+		"cells compared (task pseudo-routes in)": 27217,
+		"cells that differ":                      217,
 	}
 	var keys []string
 	for k := range want {

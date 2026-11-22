@@ -1523,19 +1523,20 @@ class MainBuildTest(unittest.TestCase):
             with self.subTest(over=over), self.assertRaises(rec.b.BuildError):
                 self.check(**over)
 
-    def test_the_ldflags_x_values_are_read_from_the_build_info(self):
+    def test_the_build_settings_are_read_from_go_version_m(self):
         out = "\n".join(
             [
                 "bin: go1.27.3",
-                '\tbuild\t-ldflags="-s -w -X main.version=0.0.0-r0reach.x -X main.commit=abc"',
+                "\tpath\tgithub.com/example/abo",
+                "\tbuild\t-tags=embed_frontend",
                 "\tbuild\tvcs.revision=abc",
+                "\tdep\tgolang.org/x/text\tv0.1.0",
             ]
         )
         run = mock.Mock(return_value=mock.Mock(stdout=out))
         with mock.patch.object(rec.b.subprocess, "run", run):
             got = rec.b.build_info(pathlib.Path("bin"))
-        self.assertEqual(got["main.commit"], "abc")
-        self.assertEqual(got["vcs.revision"], "abc")
+        self.assertEqual(got, {"-tags": "embed_frontend", "vcs.revision": "abc"})
 
     def test_the_committed_pin_is_one_full_sha(self):
         self.assertRegex(rec.b.read_commit(), r"^[0-9a-f]{40}$")

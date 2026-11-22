@@ -198,26 +198,16 @@ func reachExpected() []reachExpect {
 	}
 }
 
-// reachPostR0Decisions are changes of policy made on HEAD after the R0 tag was
+// reachPostR0Decisions are changes of policy made on HEAD after R0's commit was
 // recorded, so R0's letter is the old policy and R2's is the manifest's. Each is
 // a decision about reach (a TODO.md item or an owner ruling), named by it, and
-// asserted on both letters like every row. They stay until R0's reach is
-// re-recorded over a newer tag.
+// asserted on both letters like every row; it stays until R0's reach is
+// re-recorded over a newer commit. None today: F4-08 re-recorded R0 at main
+// f6698f9bf, which already enforces RECONCILE-APPLY-PERMISSION (ed8d80f4b), so
+// its two rows (3 editor cells narrowed, key:admin:settings widened) are R0's
+// own letters now and match R2.
 func reachPostR0Decisions() []reachExpect {
-	return []reachExpect{
-		{
-			name:  "RECONCILE-APPLY-PERMISSION: POST /operations/reconcile enforces the settings.manage reconcile.apply declares (narrowing)",
-			why:   "the route was mounted on scan.trigger, which the seeded editor holds, while the op's definition and POST /operations/v2 require settings.manage; an editor could repoint books through the route",
-			route: routeIs("POST /api/v1/operations/reconcile"), who: whoIs("session:editor", "key:editor:every", "key:editor:empty"),
-			r0: 'A', r2: 'D', want: 3,
-		},
-		{
-			name:  "RECONCILE-APPLY-PERMISSION: POST /operations/reconcile enforces the settings.manage reconcile.apply declares (widening)",
-			why:   "a key scoped to settings.manage alone could not start the op through the route (scan.trigger was required); it holds the permission the op declares",
-			route: routeIs("POST /api/v1/operations/reconcile"), who: whoIs("key:admin:settings"),
-			r0: 'D', r2: 'A', want: 1,
-		},
-	}
+	return nil
 }
 
 // reachRecorderLimits are differences that are not a change of policy: the
@@ -368,13 +358,11 @@ func TestIdentityCutover_ReachOracle(t *testing.T) {
 var (
 	reachWantR0Only = []string{
 		"GET /", // the SPA handler, outside the manifest (served by the embedded frontend)
-		"GET /api/v1/operations/reconcile/preview", // P14C-PREVIEW-ROUTE: dropped 2026-11-18 (an unqueued full-library sweep on library.view, no caller; POST /operations/reconcile/scan and scan/latest cover it)
-		"POST /api/v1/system/factory-reset",        // HEAD's reset routes: deleted at F4, the native core route succeeds them (05-rbac 6.2)
-		"POST /api/v1/system/reset",
 	}
-	reachWantR2Only = []string{
-		"POST /api/v1/admin/guest-service-tokens/:userId/reissue", // newer than the R0 tag: no baseline to compare with
-	}
+	// None since F4-08 moved R0 to main at f6698f9bf, which already serves the
+	// reissue route (1619250eb), has dropped reconcile/preview (64fdc707e) and has
+	// deleted the reset pair (623da76d3).
+	reachWantR2Only = []string{}
 )
 
 // reachOneSideProblems is what the pinned one-sided routes fail on, as text.
