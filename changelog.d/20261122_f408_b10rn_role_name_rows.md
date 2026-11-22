@@ -1,6 +1,6 @@
 ### Changed
 
-- After the switch to the new sign-in system, the 19 admin pages and actions that the old release opened only to the role named "admin" will be opened by permission instead. Any role or API key that an administrator gives the matching permission will reach them. The owner approved this on 2026-11-22. Only someone who already holds a permission can hand it out, and nothing that existed before the switch gains access. The specs record this, and new tests check both halves: the permission opens the route, and a non-admin cannot grant it.
+- After the switch to the new sign-in system, the 19 admin pages and actions that the old release opened only to the role named "admin" will be opened by permission instead. Any role given the matching permission will reach them, and so will an API key holding it, except on the guest access token pages and the three debug edit actions, which no API key can use. The owner approved this on 2026-11-22. Only someone who already holds a permission can hand it out, so every grant starts with an administrator, and nothing that existed before the switch gains access. The specs record this, and new tests check both halves: the permission opens the route, and a non-admin cannot grant it.
 
 ### Security
 

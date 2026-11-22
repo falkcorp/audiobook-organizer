@@ -104,8 +104,10 @@ func scopeGateAdmits(route string) cellRef {
 // ownerWidening is the ruling every role-name entry carries (F4-08 B10rn STOP 1,
 // option 1: permissions only; 05-rbac §6.2, 09-abo-on-core §9.2.6).
 const ownerWidening = "owner-approved widening, 2026-11-22 (F4-08 B10rn STOP 1, option 1): from B10g the row's scope is the whole gate, " +
-	"so a custom role or key holding it is admitted where HEAD's name gate refused it; admin-granted only " +
-	"(TestReachRegisteredPath_NonAdminCannotGrantAdminScopes). B10g deletes this entry when it unmounts gin"
+	"so a custom role holding it is admitted where HEAD's name gate refused it, as is a key holding it on every row " +
+	"but the guest-service-token rows (Guards.Interactive) and the books:admin.debug rows (Sensitive); only a holder " +
+	"of the scope can grant it (TestReachRegisteredPath_NonAdminCannotGrantAdminScopes), so every grant starts at an admin. " +
+	"B10g deletes this entry when it unmounts gin"
 
 func roleName(method, path, kind, row string, cells ...cellRef) allowEntry {
 	e := allowEntry{
