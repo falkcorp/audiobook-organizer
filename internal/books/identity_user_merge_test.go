@@ -101,6 +101,9 @@ type idMergeEnv struct {
 	um             *usermerge.Service
 	surv, absorbed string
 	principal      func() *coreauth.Principal
+	// adminName and adminPass sign the survivor in again: a merge that moves a
+	// sign-in onto it ends its sessions (core bumps its credential epoch).
+	adminName, adminPass string
 }
 
 func newIDMergeEnv(t *testing.T) *idMergeEnv {
@@ -129,7 +132,7 @@ func newIDMergeEnv(t *testing.T) *idMergeEnv {
 	acc := post(t, h, "/api/core/v1/auth/invites/accept", map[string]string{"token": token, "password": "alfred-pennyworth-1939!"}, false)
 	require.Equal(t, http.StatusOK, acc.Code, acc.Body.String())
 
-	e := &idMergeEnv{c: c, h: h, ck: ck, surv: idUserID(t, h, ck, adminName), absorbed: idUserID(t, h, ck, "robin")}
+	e := &idMergeEnv{c: c, h: h, ck: ck, adminName: adminName, adminPass: adminPass, surv: idUserID(t, h, ck, adminName), absorbed: idUserID(t, h, ck, "robin")}
 	require.NotEqual(t, e.surv, e.absorbed)
 
 	// A books row of Robin's (the books half of the merge).

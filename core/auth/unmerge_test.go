@@ -693,3 +693,38 @@ func TestUserUnmerge_PlanPrintsNoRows(t *testing.T) {
 		}
 	}
 }
+
+// TestUserUnmerge_AGuestComesBackActiveAndNothingIsReissued: a guest is an
+// account that signs in only through an external identity and holds a key (no
+// password, the viewer role). The merge disabled it; the unmerge brings it back
+// active. Core fires StatusChanged once for that real change (disabled to
+// active) and no other lifecycle callback: not UserMergedAway (nothing was
+// merged), not InviteAccepted, not UserDeleted. A subscriber that adds a guest
+// to an external allow-list or mints a phone key on StatusChanged would have
+// exactly one event to act on, so a guest's Cloudflare access and phone key are
+// NOT re-added by the unmerge itself; they must be reissued by an admin.
+func TestUserUnmerge_AGuestComesBackActiveAndNothingIsReissued(t *testing.T) {
+	s := newUmScene(t, umOpts{srcRoles: []rbac.RoleName{rbac.RoleViewer}})
+	f := s.f
+	rec := f.lifecycle()
+	if got := f.reload(s.jason.ID); got.Status != auth.StatusDisabled {
+		t.Fatalf("the merge left the guest %s, want disabled", got.Status)
+	}
+	if got := f.reload(s.jason.ID); got.HasPassword {
+		t.Fatalf("the guest holds a password; this scene is not a guest")
+	}
+	if err := s.unmerge(f.signedIn(s.bruce), s.rec); err != nil {
+		t.Fatalf("unmerge: %v", err)
+	}
+	if got := f.reload(s.jason.ID); got.Status != auth.StatusActive {
+		t.Fatalf("the guest came back %s, want active", got.Status)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.status) != 1 || rec.status[0].UserID != s.jason.ID || rec.status[0].From != auth.StatusDisabled || rec.status[0].To != auth.StatusActive {
+		t.Fatalf("StatusChanged calls = %+v, want exactly one: the guest, disabled to active", rec.status)
+	}
+	if n := len(rec.merged) + len(rec.invites) + len(rec.deleted) + len(rec.emails); n != 0 {
+		t.Fatalf("other lifecycle callbacks ran: merged=%d invites=%d deleted=%d emails=%d, want none", len(rec.merged), len(rec.invites), len(rec.deleted), len(rec.emails))
+	}
+}
