@@ -17,7 +17,7 @@ import { useGrants } from '../auth';
 import { SettingsSection } from '../settings';
 import type { Lazy } from '../types';
 import { useMountedModules, useShellContext } from './context';
-import { LazySlot } from './MainLayout';
+import { LazySlot } from './LazySlot';
 import { Page } from './Page';
 
 // The shell's own pages, loaded lazily by the route table (07 §7.10, FE-18):

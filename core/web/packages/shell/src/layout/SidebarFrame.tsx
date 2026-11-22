@@ -49,6 +49,8 @@ export interface SidebarItem {
   path: string;
   matchPath?: string;
   matchSearch?: string;
+  /** Also selected on a sub-route of the path (`/settings` on `/settings/x`). */
+  matchPrefix?: boolean;
   useBadge?: () => number | undefined;
   children?: readonly SidebarItem[];
 }
@@ -81,6 +83,15 @@ function BadgedIcon({ useBadge, icon }: { useBadge: () => number | undefined; ic
   );
 }
 
+/**
+ * A leaf or group header is selected by strict path equality, as it always was,
+ * unless it declares a match field, which hands it to the Library rule.
+ */
+function isEntrySelected(item: SidebarItem, pathname: string, search: string): boolean {
+  if (item.matchPath === undefined && item.matchSearch === undefined && !item.matchPrefix) return pathname === item.path;
+  return isSubItemSelected(item, pathname, search);
+}
+
 function pathOf(item: { path: string; matchPath?: string }): string {
   return (item.matchPath ?? item.path).split('?')[0];
 }
@@ -97,7 +108,7 @@ function LeafEntry({ item, isCollapsed, go }: EntryProps) {
     <ListItem disablePadding>
       <Tooltip title={isCollapsed ? item.text : ''} placement="right">
         <ListItemButton
-          selected={location.pathname === item.path}
+          selected={isEntrySelected(item, location.pathname, location.search)}
           onClick={() => go(item.path)}
           sx={[
             isCollapsed
@@ -203,7 +214,7 @@ function GroupEntry({ item, isCollapsed, go }: EntryProps) {
         }
       >
         <ListItemButton
-          selected={location.pathname === item.path}
+          selected={isEntrySelected(item, location.pathname, location.search)}
           onClick={() => go(item.path)}
           sx={{ pr: 5 }}
         >

@@ -22,12 +22,13 @@
  * Library.tsx settles the URL into `?search=read_status%3Ain_progress&page=1`.
  */
 export function isSubItemSelected(
-  item: { path: string; matchPath?: string; matchSearch?: string },
+  item: { path: string; matchPath?: string; matchSearch?: string; matchPrefix?: boolean },
   pathname: string,
   search: string,
 ): boolean {
   const itemPath = (item.matchPath ?? item.path).split('?')[0];
-  if (pathname !== itemPath) return false;
+  const onPath = pathname === itemPath || (item.matchPrefix === true && itemPath !== '/' && pathname.startsWith(`${itemPath}/`));
+  if (!onPath) return false;
   if (item.matchSearch === undefined) return true;
   return (new URLSearchParams(search).get('search') ?? '') === item.matchSearch;
 }
