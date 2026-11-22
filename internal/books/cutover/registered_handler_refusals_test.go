@@ -423,40 +423,40 @@ type rhrNarrow struct {
 }
 
 var rhrKnownNarrowing = []rhrNarrow{
-	// core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD"s route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled
-	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:settings", head: 200, flip: 403},
-	// core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD"s route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled
-	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:users", head: 200, flip: 403},
-	// core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD"s route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled
-	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:view", head: 200, flip: 403},
-	// the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage
-	{route: "GET /api/v1/users/invites", who: "key:admin:empty", head: 200, flip: 403},
-	// the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage
-	{route: "GET /api/v1/users/invites", who: "key:admin:every", head: 200, flip: 403},
-	// the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage
-	{route: "GET /api/v1/users/invites", who: "key:admin:users", head: 200, flip: 403},
-	// the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage
-	{route: "GET /api/v1/users/invites", who: "key:custom-all:empty", head: 200, flip: 403},
-	// the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage
-	{route: "GET /api/v1/users/invites", who: "key:custom-all:every", head: 200, flip: 403},
-	// a repairs.plan run: the flip answers "this run belongs to a Repairs fixer you may not use" before the body is read; HEAD got past the run check (400 for the probe"s bad decision)
-	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:admin:empty", head: 400, flip: 403},
-	// a repairs.plan run: the flip answers "this run belongs to a Repairs fixer you may not use" before the body is read; HEAD got past the run check (400 for the probe"s bad decision)
-	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:admin:every", head: 400, flip: 403},
-	// a repairs.plan run: the flip answers "this run belongs to a Repairs fixer you may not use" before the body is read; HEAD got past the run check (400 for the probe"s bad decision)
-	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:custom-all:empty", head: 400, flip: 403},
-	// a repairs.plan run: the flip answers "this run belongs to a Repairs fixer you may not use" before the body is read; HEAD got past the run check (400 for the probe"s bad decision)
-	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:custom-all:every", head: 400, flip: 403},
-	// a repairs.plan run: the flip answers "this run belongs to a Repairs fixer you may not use" before the body is read; HEAD got past the run check (400 for the probe"s bad decision)
-	{route: "POST /api/v3/ops/runs/:id/approve", who: "session:admin", head: 400, flip: 403},
-	// a repairs.plan run: the flip answers "this run belongs to a Repairs fixer you may not use" before the body is read; HEAD got past the run check (400 for the probe"s bad decision)
-	{route: "POST /api/v3/ops/runs/:id/approve", who: "session:custom-all", head: 400, flip: 403},
-	// core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)
-	{route: "PUT /api/v1/config", who: "key:admin:empty", head: 0, flip: 403},
-	// core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)
-	{route: "PUT /api/v1/config", who: "key:admin:every", head: 0, flip: 403},
-	// the restore's route guard under the flip: a custom role holding every atom but not core:admin is refused (403); HEAD's s.perm(settings.manage) admitted it
-	{route: "POST /api/v1/backup/restore", who: "session:custom-all", head: 400, flip: 403},
+	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:settings", head: 200, flip: 403,
+		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
+	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:users", head: 200, flip: 403,
+		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
+	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:view", head: 200, flip: 403,
+		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
+	{route: "GET /api/v1/users/invites", who: "key:admin:empty", head: 200, flip: 403,
+		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+	{route: "GET /api/v1/users/invites", who: "key:admin:every", head: 200, flip: 403,
+		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+	{route: "GET /api/v1/users/invites", who: "key:admin:users", head: 200, flip: 403,
+		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+	{route: "GET /api/v1/users/invites", who: "key:custom-all:empty", head: 200, flip: 403,
+		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+	{route: "GET /api/v1/users/invites", who: "key:custom-all:every", head: 200, flip: 403,
+		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:admin:empty", head: 400, flip: 403,
+		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:admin:every", head: 400, flip: 403,
+		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:custom-all:empty", head: 400, flip: 403,
+		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:custom-all:every", head: 400, flip: 403,
+		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+	{route: "POST /api/v3/ops/runs/:id/approve", who: "session:admin", head: 400, flip: 403,
+		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+	{route: "POST /api/v3/ops/runs/:id/approve", who: "session:custom-all", head: 400, flip: 403,
+		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+	{route: "PUT /api/v1/config", who: "key:admin:empty", head: 0, flip: 403,
+		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
+	{route: "PUT /api/v1/config", who: "key:admin:every", head: 0, flip: 403,
+		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
+	{route: "POST /api/v1/backup/restore", who: "session:custom-all", head: 400, flip: 403,
+		why: "the restore's route guard under the flip: a custom role holding every atom but not core:admin is refused (403); HEAD's s.perm(settings.manage) admitted it"},
 }
 
 func (r rhrNarrow) key() string { return r.route + "|" + r.who }
@@ -836,7 +836,9 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 	for _, k := range rhrKnownNarrowing {
 		if !used[k.key()] {
 			t.Errorf("known narrowing %s as %s no longer occurs (a stale row, or the flip admits again)", k.route, k.who)
+			continue
 		}
+		t.Logf("known narrowing: %s as %s, HEAD %d, flip %d: %s", k.route, k.who, k.head, k.flip, k.why)
 	}
 }
 
