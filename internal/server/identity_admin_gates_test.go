@@ -120,8 +120,10 @@ func TestAdminGates_BridgeRefusals(t *testing.T) {
 
 // TestAdminGates_AuthDisabledPrincipal: HEAD's adminRole passes a read-only
 // route with auth off and its RequireAdmin answers 401 on any other; the
-// bridge keeps both and does not let the auth-disabled checker open an
-// always-authenticated route.
+// bridge keeps the pass-through and the refusal, does not let the
+// auth-disabled checker open an always-authenticated route, and answers the
+// refusal 403 rather than HEAD's 401, which would end a no-auth install's SPA
+// session (F4-08 ruling G5(a)).
 func TestAdminGates_AuthDisabledPrincipal(t *testing.T) {
 	w := newAdminGateWorld(t, true)
 	for _, rt := range adminGateRoutes {
@@ -131,13 +133,13 @@ func TestAdminGates_AuthDisabledPrincipal(t *testing.T) {
 			p, c := adoptPrincipal(coreauth.MethodAuthDisabled, nil, rt.scopesFor()...)
 			code := identityServe(w.core.router, rt.request(), p, c).Code
 			if rt.always {
-				require.Equal(t, http.StatusUnauthorized, code, "HEAD answered 401 with auth off; the checker holding the scope must not widen it")
+				require.Equal(t, http.StatusForbidden, code, "HEAD answered 401 with auth off, now 403 (G5(a)); the checker holding the scope must not widen it")
 				return
 			}
 			require.True(t, opened(code), "a read-only route opens for the auth-disabled principal, as HEAD's adminRole did")
 			np, nc := adoptPrincipal(coreauth.MethodAuthDisabled, nil)
-			require.Equal(t, http.StatusUnauthorized, identityServe(w.core.router, rt.request(), np, nc).Code,
-				"and is refused (no user) where its own checker does not hold")
+			require.Equal(t, http.StatusForbidden, identityServe(w.core.router, rt.request(), np, nc).Code,
+				"and is refused (no user, 403 not the session-ending 401: G5(a)) where its own checker does not hold")
 		})
 	}
 }

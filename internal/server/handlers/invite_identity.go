@@ -58,7 +58,7 @@ func identityAccounts(c *gin.Context, id *legacyauth.Identity) (coreauth.Admin, 
 func requestPrincipal(c *gin.Context) (*coreauth.Principal, bool) {
 	p, ok := coreauth.PrincipalFrom(c.Request.Context())
 	if !ok || p == nil || p.User == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 		return nil, false
 	}
 	return p, true

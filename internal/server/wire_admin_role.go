@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -145,8 +146,9 @@ func adminManifestRequirement(method, fullPath string) (rbac.Requirement, bool) 
 // refuse more than HEAD, never less: whether a custom role that holds the
 // requirement's scopes but is not named "admin" should pass is the successor's
 // decision, not this adapter's. The auth-disabled principal is judged by its own
-// checker for a read-only route (HEAD's adminRole passed it) and refused with 401
-// for an always-authenticated one (HEAD's RequireAdmin answered 401 with auth off;
+// checker for a read-only route (HEAD's adminRole passed it) and refused with 403
+// for an always-authenticated one (HEAD's RequireAdmin answered 401 with auth off,
+// which would end a no-auth install's SPA session: F4-08 ruling G5(a);
 // core's auth-disabled checker would otherwise hold a requirement that is not
 // AuthRequired and open it).
 func (s *Server) bridgedAdminGate(kind adminRouteKind) gin.HandlerFunc {
@@ -161,8 +163,9 @@ func (s *Server) bridgedAdminGate(kind adminRouteKind) gin.HandlerFunc {
 		}
 		if b.AuthOff(c.Request.Context()) {
 			if kind == adminRouteAlwaysAuthenticated {
-				httputil.RespondWithUnauthorized(c, "authentication required")
-				c.Abort()
+				// A 403, not HEAD's 401: a 401 would end a no-auth install's
+				// SPA session (F4-08 ruling G5(a)). The route stays refused.
+				legacyauth.RespondNoUser(c, "authentication required")
 				return
 			}
 			if b.CheckAdmin(c, req) {
