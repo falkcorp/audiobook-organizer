@@ -132,10 +132,16 @@ func Extension(c ExtensionConfig) (coreauth.Extension, error) {
 	}
 	return coreauth.Extension{
 		Authenticator: &extension{c: c},
+		// HEAD's cf_access (internal/auth/context.go): a verified Access
+		// sign-in resolved to an allow-listed person is interactive and may
+		// change credentials, so HEAD's credGuard admitted it on every
+		// credential route and the owner routes (F4-08 B10y). A service token
+		// names no person and never reaches a principal (authenticate).
 		Spec: coreauth.MethodSpec{
-			Method:        coreauth.Method("ext:" + ExtensionName),
-			Interactive:   true,
-			OwnerVerifier: true,
+			Method:               coreauth.Method("ext:" + ExtensionName),
+			Interactive:          true,
+			MayChangeCredentials: true,
+			OwnerVerifier:        true,
 		},
 		Order:    OrderCFAccess,
 		OwnerSet: func() bool { return strings.TrimSpace(c.OwnerEmail()) != "" },

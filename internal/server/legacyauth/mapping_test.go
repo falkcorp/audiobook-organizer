@@ -64,14 +64,13 @@ func TestLegacyMethod_BooksABS(t *testing.T) {
 // owner: the proof needs the verified Access e-mail, which the bridge never
 // fills from the account record).
 //
-// This is HEAD PARITY, deliberately LOOSER than core's own classification:
-// core treats ext:cfaccess as non-interactive (MayChangeCredentials false),
-// while the legacy readers behind the bridge see an interactive method that
-// may change credentials, as HEAD did. Ruled by the coordinator 2026-11-21: the
-// owner signs in through Access, an unmapped method would refuse every legacy
-// read on the owner's session at the flip, and a flip is behaviour-equal.
-// Whether ext:cfaccess may change credentials after the flip is an owner
-// decision (followups-queue.md, F4-08 unowned), not this test's.
+// This is HEAD PARITY, and core's own classification now agrees: the Access
+// extension registers Interactive and MayChangeCredentials (internal/cfaccess
+// extension.go), which core's guards read through the principal (F4-08 B10y;
+// coordinator ruling 2026-11-22, HEAD parity accepted). The 2026-11-21 ruling
+// stands: the owner signs in through Access, an unmapped method would refuse
+// every legacy read on the owner's session at the flip, and a flip is
+// behaviour-equal.
 func TestLegacyMethod_ExtCFAccess(t *testing.T) {
 	p := principal(MethodExtCFAccess, laxChecker{})
 	p.User.Email = "owner@example.com" // the ACCOUNT's e-mail: never the proof
