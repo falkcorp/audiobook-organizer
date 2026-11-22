@@ -271,7 +271,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	default:
 		k.followPerimeter(cc.http)
 		k.sendExtend(coreOwner, kernelStepPrefix+"run open listener")
-		if srv, err = k.listen(httpapi.ListenOptions{Addr: hs.Listen, TLSCertFile: hs.TLS.CertFile, TLSKeyFile: hs.TLS.KeyFile},
+		if srv, err = k.listen(httpapi.ListenOptions{Addr: hs.Listen, TLSCertFile: hs.TLS.CertFile, TLSKeyFile: hs.TLS.KeyFile, OnShutdown: k.shutdownHooks()},
 			k.handler, k.coreLog("http")); err != nil {
 			err = fmt.Errorf("kernel: listener: %w", err)
 		}
