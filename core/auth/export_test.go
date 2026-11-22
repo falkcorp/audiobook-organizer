@@ -50,3 +50,10 @@ func NewMergePlanForTest(source, target UserID, srcVersion, tgtVersion int64, ro
 func (s *Service) DisplaceUnverifiedHolders(ctx context.Context, b *storage.Batch, email string, newUser UserID) ([]UserID, error) {
 	return s.displaceUnverifiedHolders(ctx, b, email, newUser)
 }
+
+// NewUnmergePlanForTest is a UserUnmergePlan a test assembles by hand over the
+// users' versions, for the refusals a real PlanUserUnmerge would stop before it
+// could return a plan.
+func NewUnmergePlanForTest(rec UnmergeRecord, srcVersion, tgtVersion int64, rows ...MergeRow) UserUnmergePlan {
+	return UserUnmergePlan{rec: rec, srcVersion: srcVersion, tgtVersion: tgtVersion, rows: rows}
+}
