@@ -5,6 +5,11 @@
 
 package cutover
 
+import (
+	"maps"
+	"slices"
+)
+
 // The registered-path harness and its cells live in package cutover_test (the
 // external test package, because books imports cutover). The F4-07 obligation
 // registry lives here. This file is the one bridge between them: an exported
@@ -19,3 +24,15 @@ package cutover
 func RegisterReachDischarge(obligation, test string, covers func() []string) {
 	reachDischarges = append(reachDischarges, reachDischarge{Obligation: obligation, Test: test, Covers: covers})
 }
+
+// ReachPinnedCells are the 11 cells the removed evaluator's handler-admin pin hid:
+// route / principal, with HEAD's letter and the router's.
+func ReachPinnedCells() []string { return slices.Clone(reachPinnedCells) }
+
+// ReachHandlerRefusalCells are the routes of the eight auth-off cells the router
+// admits and R0's handler refused.
+func ReachHandlerRefusalCells() []string { return slices.Clone(reachHandlerRefusalCells) }
+
+// ReachWantR2OnlyVerdicts pins what each route R0 never recorded admits at stage
+// 13, in the order of verdicts.json's principals.
+func ReachWantR2OnlyVerdicts() map[string]string { return maps.Clone(reachWantR2OnlyVerdicts) }
