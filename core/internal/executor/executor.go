@@ -145,7 +145,6 @@ type executor struct {
 	pub      *publisher // nil: Options.Events and the test sink are both unset
 
 	startMu sync.Mutex // serialises dedupe-folding starts (taken before WriteRuns)
-	folds   foldViews  // StartIn's per-batch reads of the queue (fold_view.go)
 
 	mu        sync.Mutex
 	running   map[tasks.RunID]*attempt
