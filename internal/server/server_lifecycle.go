@@ -2792,7 +2792,11 @@ func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
 	}
 }
 
-func (s *Server) setupRoutes() {
+// setupRoutes registers every route on s.router. It returns the error of the
+// one registration that can refuse the boot, the Audiobookshelf surface
+// (wireABSRoutes), and stops at it: NewServer then fails with it and releases
+// the server, so a router left half-registered is never served.
+func (s *Server) setupRoutes() error {
 	// The legacy mount's post-match check (05-http-api §4.8, SEC2-22) runs
 	// before every route-level middleware and handler: gin binds a route's
 	// chain when the route is registered, so it is installed before any route
@@ -2920,7 +2924,9 @@ func (s *Server) setupRoutes() {
 	// fail-open Cloudflare-Access behaviour applied to /api/v1 below, where an
 	// unverifiable assertion falls through to RequireAuth. Feature-flagged off by
 	// default; registers nothing unless ABS_API_ENABLED is set. See wire_abs_routes.go.
-	s.wireABSRoutes()
+	if err := s.wireABSRoutes(); err != nil {
+		return err
+	}
 
 	// API routes (auth + request-size limits; the rate limit is core's). The Cloudflare Access
 	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is
@@ -3204,6 +3210,7 @@ func (s *Server) setupRoutes() {
 	// cfRecoveryMW (nil without Cloudflare Access) runs on the SPA page fallback:
 	// the one place browser page navigations are served. See cf_recovery.go.
 	s.setupStaticFiles(cfRecoveryMW)
+	return nil
 }
 
 func isStaleOperationStatus(status string) bool {

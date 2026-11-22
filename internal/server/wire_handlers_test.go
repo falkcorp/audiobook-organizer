@@ -122,7 +122,9 @@ func TestWireHandlers_CancelOperationV2ReachesAIScanPipeline(t *testing.T) {
 		aiScanStore:     scanStore,
 		// opRegistry nil: see the doc comment.
 	}
-	srv.setupRoutes()
+	if err := srv.setupRoutes(); err != nil {
+		t.Fatalf("setupRoutes: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/operations/v2/"+opID, nil)
 	w := httptest.NewRecorder()

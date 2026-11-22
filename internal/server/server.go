@@ -1444,7 +1444,9 @@ func NewServer(store database.Store, opts ...ServerOption) (*Server, error) {
 	// metadata_fetch.catalog_stage is on, which ships off.
 	wireCatalogStage(server.metadataFetchService, store)
 
-	server.setupRoutes()
+	if err := server.setupRoutes(); err != nil {
+		return fail(fmt.Errorf("NewServer: routes: %w", err))
+	}
 
 	// Initialize plugins after routes are set up so plugins can register
 	// their own sub-routes under /api/v1/plugins/{id}/.

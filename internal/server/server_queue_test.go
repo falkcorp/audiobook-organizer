@@ -33,7 +33,9 @@ func TestCancelOperationV2_NilRegistry(t *testing.T) {
 	mockStore := dbmocks.NewMockStore(t)
 
 	srv := &Server{router: gin.New(), store: mockStore} // opRegistry left nil
-	srv.setupRoutes()
+	if err := srv.setupRoutes(); err != nil {
+		t.Fatalf("setupRoutes: %v", err)
+	}
 
 	req := httptest.NewRequest("DELETE", "/api/v1/operations/v2/test-op-789", nil)
 	w := httptest.NewRecorder()
@@ -47,7 +49,9 @@ func TestGetOperationsActive(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	srv := &Server{router: gin.New()}
-	srv.setupRoutes()
+	if err := srv.setupRoutes(); err != nil {
+		t.Fatalf("setupRoutes: %v", err)
+	}
 
 	req := httptest.NewRequest("GET", "/api/v1/operations/active", nil)
 	w := httptest.NewRecorder()
