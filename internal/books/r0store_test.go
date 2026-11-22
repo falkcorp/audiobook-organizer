@@ -55,9 +55,9 @@ var r0ArchiveSHA256 = map[string]string{
 
 // r0BinaryEnv names a prebuilt R0 binary to use instead of the download:
 // for a machine with no network, or to try a candidate R0 build.
-const r0BinaryEnv = "ABO_R0_BINARY"
+const r0BinaryEnv = "AORG_TEST_R0_BINARY"
 
-// r0Binary returns the path of the R0 binary for this platform: $ABO_R0_BINARY
+// r0Binary returns the path of the R0 binary for this platform: $AORG_TEST_R0_BINARY
 // when set, else the release archive downloaded from the R0 release (cached
 // under the user cache directory, its checksum checked on every use) and the
 // binary extracted from it into a temp dir. It fails, never skips, when the
@@ -266,7 +266,7 @@ func r0RawRows(t *testing.T, out string) map[string]int {
 // rollback promise, which holds until R3 deletes it.
 //
 // It needs the R0 binary: downloaded from the R0 release (network), or
-// $ABO_R0_BINARY. Not run under -short.
+// $AORG_TEST_R0_BINARY. Not run under -short.
 func TestR0OpensR1Store(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the R0 release binary; not under -short")
