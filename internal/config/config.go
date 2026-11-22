@@ -1808,6 +1808,10 @@ var mu sync.RWMutex
 
 // AppConfig is the global application configuration.
 //
+// TRANSITIONAL MIRROR (copy-on-write config, cow.go): the published config is
+// Get(). AppConfig is a deep copy of it that every publish refreshes under mu,
+// kept until the last unconverted reader is gone; read Get() in new code.
+//
 // Convention:
 //   - All WRITES must go through Mutate — never assign AppConfig directly
 //     outside this package.
@@ -1817,7 +1821,10 @@ var mu sync.RWMutex
 //     AppConfig directly; they carry residual risk documented above.
 var AppConfig Config
 
-// Snapshot returns a value copy of AppConfig under a read lock.
+// Snapshot returns a value copy of AppConfig under a read lock. While AppConfig
+// is the transitional mirror (cow.go) it keeps reading it, so a test that still
+// assigns AppConfig directly sees its own write here; it becomes *Get() when
+// the mirror is deleted.
 // Use this when you need a consistent multi-field view of the config
 // (e.g. inside background goroutines or HTTP handlers that read many fields).
 func Snapshot() Config {
@@ -1914,11 +1921,12 @@ func mutateLocal(fn func(*Config)) {
 	mu.Lock()
 	defer mu.Unlock()
 	// Deferred after the Unlock defer so it runs first, still under the lock:
-	// a reader that sees the new generation and then calls Snapshot is
-	// guaranteed to see the write. It also fires when fn panics, because fn may
-	// have changed the config before it did.
+	// a reader that sees the new generation and then calls Get or Snapshot is
+	// guaranteed to see the write. It also fires when fn panics (nothing is
+	// published then; consumers treat a move as "re-derive", so a spurious one
+	// is harmless).
 	defer generation.Add(1)
-	fn(&AppConfig)
+	mutateCOW(fn) // cow.go: fn edits a deep copy, which is then published
 }
 
 // generation counts completed Mutate calls; see Generation.
@@ -2074,7 +2082,8 @@ func validateParentDirWritable(path string, field string) error {
 	return nil
 }
 
-// Validate performs structural checks on runtime configuration values.
+// Validate performs structural checks on runtime configuration values, judged
+// on the normalised form of c. It does not change c (see Problems).
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
@@ -2085,14 +2094,17 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Normalize makes the in-place normalisations Validate and Problems make,
-// without the checks: each zero that means "the default" becomes the default,
-// and the iTunes legacy path shims are derived. It is idempotent.
+// Normalize makes, in place, the normalisations Validate and Problems judge
+// by: each zero that means "the default" becomes the default, and the iTunes
+// legacy path shims are derived. It is idempotent. It WRITES its receiver, so
+// it is only ever called on a private copy (Project's own argument,
+// Normalized's clone), never on a published snapshot from Get().
 //
-// Project calls it on every projection it publishes. HEAD normalised the
-// process config at boot (Validate) and on every PUT (Problems on the
-// candidate), so readers never saw these zeros; with the flip, a rebuild
-// publishes the raw rows, and without this a save would put them back.
+// Project calls it on every projection it publishes, and NormalizeAndValidate
+// at boot. HEAD normalised the process config at boot (Validate) and on every
+// PUT (Problems on the candidate), so readers never saw these zeros; with the
+// flip, a rebuild publishes the raw rows, and without this a save would put
+// them back.
 func (c *Config) Normalize() {
 	// iTunes 4-state model: derive the legacy path shims (inert unless
 	// itunes.libraries is populated). See itunes_libraries.go / spec §2.
@@ -2129,16 +2141,33 @@ func (c *Config) Normalize() {
 	normalizeLogRetentionDays(c, "the loaded configuration")
 }
 
+// Normalized returns a deep copy of c with Normalize applied. c itself is
+// never changed, so it is safe on a published snapshot from Get().
+func (c *Config) Normalized() *Config {
+	if c == nil {
+		return nil
+	}
+	n := c.Clone()
+	n.Normalize()
+	return n
+}
+
 // Problems is every structural problem Validate would report, one message
-// each, and the same normalisations Validate makes (a zero that means "the
-// default" is replaced). The settings write path asks for the list so it can
-// name each setting; Validate is the boot and one-error form of the same checks.
+// each, judged on the normalised form of c (a zero that means "the default"
+// is valid). It does NOT change c: normalise explicitly (Normalize on a
+// private copy, Normalized for a copy) when the normalised form is to be kept.
+// The settings write path asks for the list so it can name each setting;
+// Validate is the boot and one-error form of the same checks.
 func (c *Config) Problems() []string {
+	return c.Normalized().problemsNormalized()
+}
+
+// problemsNormalized is Problems' checks on a config Normalize has already
+// run on. It reads c and never writes it.
+func (c *Config) problemsNormalized() []string {
 	var errs []string
 
-	c.Normalize()
-
-	// iTunes 4-state model: Normalize derived the legacy path shims; run the
+	// iTunes 4-state model: Normalized derived the legacy path shims; run the
 	// fail-closed library assertions (inert unless itunes.libraries is
 	// populated). See itunes_libraries.go / spec §2.
 	errs = append(errs, c.ITunes.ValidateLibraries(c.ProtectedPaths)...)

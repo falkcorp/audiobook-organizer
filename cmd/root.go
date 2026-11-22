@@ -478,7 +478,10 @@ func initConfig() error {
 		}
 	}
 
-	if err := config.AppConfig.Validate(); err != nil {
+	// Normalising is a write: publish the normalised config through the writer
+	// path (copy-on-write config) rather than letting Validate rewrite the live
+	// config field by field.
+	if err := config.NormalizeAndValidate(); err != nil {
 		fmt.Printf("Warning: configuration validation failed: %v\n", err)
 	}
 
