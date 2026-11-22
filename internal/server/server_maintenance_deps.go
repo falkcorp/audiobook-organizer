@@ -502,45 +502,46 @@ func (s *Server) HasMetadataFetchService() bool {
 }
 
 func (s *Server) HasAIParsing() bool {
-	return config.AppConfig.EnableAIParsing && config.AppConfig.OpenAIAPIKey != ""
+	cfg := config.Snapshot()
+	return cfg.EnableAIParsing && cfg.OpenAIAPIKey != ""
 }
 
 func (s *Server) RootDir() string {
-	return config.AppConfig.RootDir
+	return config.Snapshot().RootDir
 }
 
 // LogRetentionDays returns the effective purge window: the configured days,
 // the default (90) for 0, and 0 ("do not purge") for -1.
 func (s *Server) LogRetentionDays() int {
-	return logging.ResolveLogRetentionDays(config.AppConfig.LogRetentionDays)
+	return logging.ResolveLogRetentionDays(config.Snapshot().LogRetentionDays)
 }
 
 func (s *Server) AIJournalRetentionDays() int {
-	return config.AppConfig.AIJournalRetentionDays
+	return config.Snapshot().AIJournalRetentionDays
 }
 
 func (s *Server) PurgeSoftDeletedAfterDays() int {
-	return config.AppConfig.PurgeSoftDeletedAfterDays
+	return config.Snapshot().PurgeSoftDeletedAfterDays
 }
 
 func (s *Server) ActivityLogCompactionDays() int {
-	return config.AppConfig.ActivityLogCompactionDays
+	return config.Snapshot().ActivityLogCompactionDays
 }
 
 func (s *Server) ActivityLogNightlyCompactionEnabled() bool {
-	return config.AppConfig.ActivityLogNightlyCompactionEnabled
+	return config.Snapshot().ActivityLogNightlyCompactionEnabled
 }
 
 func (s *Server) ActivityLogFullDetailDays() int {
-	return config.AppConfig.ActivityLogFullDetailDays
+	return config.Snapshot().ActivityLogFullDetailDays
 }
 
 func (s *Server) ActivityLogRetentionChangeDays() int {
-	return config.AppConfig.ActivityLogRetentionChangeDays
+	return config.Snapshot().ActivityLogRetentionChangeDays
 }
 
 func (s *Server) ActivityLogRetentionDebugDays() int {
-	return config.AppConfig.ActivityLogRetentionDebugDays
+	return config.Snapshot().ActivityLogRetentionDebugDays
 }
 
 func (s *Server) BackupRetentionDays() int {
