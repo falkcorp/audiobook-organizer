@@ -77,10 +77,7 @@ func removeDotSegments(in string) string {
 	var out strings.Builder
 	trimLast := func() {
 		s := out.String()
-		i := strings.LastIndexByte(s, '/')
-		if i < 0 {
-			i = 0
-		}
+		i := max(strings.LastIndexByte(s, '/'), 0)
 		out.Reset()
 		out.WriteString(s[:i])
 	}
