@@ -30,9 +30,9 @@ func TestPreviewBehaviour_FingerprintDurationRepair(t *testing.T) {
 	fileFingerprintLengthFn = func(string, int) (*fingerprint.WholeFile, error) {
 		return &fingerprint.WholeFile{Raw: []byte{1, 2, 3, 4}, DurationSec: 42}, nil
 	}
-	origTools := config.AppConfig.FingerprintWindowReferenceTools
-	t.Cleanup(func() { config.AppConfig.FingerprintWindowReferenceTools = origTools })
-	config.AppConfig.FingerprintWindowReferenceTools = ""
+	origTools := config.Get().FingerprintWindowReferenceTools
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.FingerprintWindowReferenceTools = origTools }) })
+	config.SetForTest(func(c *config.Config) { c.FingerprintWindowReferenceTools = "" })
 
 	path := filepath.Join(t.TempDir(), "a.m4b")
 	if err := os.WriteFile(path, []byte("synthetic"), 0o644); err != nil {

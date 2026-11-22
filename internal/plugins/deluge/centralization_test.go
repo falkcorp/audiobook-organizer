@@ -68,9 +68,9 @@ func TestRunCentralization_HydratesBeforeWriteback(t *testing.T) {
 		t.Fatalf("write src file: %v", err)
 	}
 
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = origRoot }()
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) }()
 
 	diagJSON := `{"reason":"low_confidence"}`
 
@@ -131,9 +131,9 @@ func TestRunCentralization_ExistingDestinationNeverOverwritten(t *testing.T) {
 	if err := os.WriteFile(dest, []byte("another book's bytes"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	defer func() { config.AppConfig.RootDir = origRoot }()
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) }()
 
 	row := database.BookFile{ID: "f1", BookID: "b1", FilePath: srcPath}
 	store := &database.MockStore{
@@ -181,12 +181,13 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "Example Author", "Example Book")
-			origRoot, origProt := config.AppConfig.RootDir, config.AppConfig.ProtectedPaths
-			config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = root, nil
+			origRoot, origProt := config.Get().RootDir, config.Get().ProtectedPaths
+			config.SetForTest(func(c *config.Config) { c.RootDir, c.ProtectedPaths = root, nil })
 			if tc.protected != nil {
-				config.AppConfig.ProtectedPaths = tc.protected(dir)
+				cowV1 := tc.protected(dir)
+				config.SetForTest(func(c *config.Config) { c.ProtectedPaths = cowV1 })
 			}
-			t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = origRoot, origProt })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir, c.ProtectedPaths = origRoot, origProt }) })
 
 			row := database.BookFile{ID: "bf-1", BookID: "book-1", FilePath: filepath.Join(dir, "01.mp3"), DelugeHash: linkTorrentID(1)}
 			modifies := 0
@@ -213,7 +214,7 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 				tor := delugeclient.TorrentDetail{Hash: linkTorrentID(1), SavePath: dir}
 				_, client := newFakeDelugeClient(t, tor)
 				p.client = client
-				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)
+				p.cache = delugeclient.NewProtectedPathCache(client, config.Get().ProtectedPaths)
 			}
 			if tc.unloaded {
 				down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -225,7 +226,7 @@ func TestRunCentralization_InPlaceProtectedLeftPending(t *testing.T) {
 					t.Fatal(err)
 				}
 				p.client = client
-				p.cache = delugeclient.NewProtectedPathCache(client, config.AppConfig.ProtectedPaths)
+				p.cache = delugeclient.NewProtectedPathCache(client, config.Get().ProtectedPaths)
 			}
 
 			rep := &progressCapturingReporter{}
@@ -271,9 +272,9 @@ func TestRunCentralization_FailureLeavesNoOrphanCopy(t *testing.T) {
 		if err := os.WriteFile(src, []byte("test data"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		origRoot := config.AppConfig.RootDir
-		config.AppConfig.RootDir = root
-		t.Cleanup(func() { config.AppConfig.RootDir = origRoot })
+		origRoot := config.Get().RootDir
+		config.SetForTest(func(c *config.Config) { c.RootDir = root })
+		t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) })
 		return filepath.Join(root, "book.mp3"), &database.BookFile{ID: "f1", BookID: "b1", FilePath: src}
 	}
 	assertNoDest := func(t *testing.T, dest string) {
@@ -344,9 +345,9 @@ func TestRunCentralization_StaticProtectedSourceNotCopied(t *testing.T) {
 	if err := os.WriteFile(src, []byte("test data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	origRoot, origProt := config.AppConfig.RootDir, config.AppConfig.ProtectedPaths
-	config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = root, []string{srcDir}
-	t.Cleanup(func() { config.AppConfig.RootDir, config.AppConfig.ProtectedPaths = origRoot, origProt })
+	origRoot, origProt := config.Get().RootDir, config.Get().ProtectedPaths
+	config.SetForTest(func(c *config.Config) { c.RootDir, c.ProtectedPaths = root, []string{srcDir} })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir, c.ProtectedPaths = origRoot, origProt }) })
 
 	row := database.BookFile{ID: "f1", BookID: "b1", FilePath: src}
 	store := &database.MockStore{

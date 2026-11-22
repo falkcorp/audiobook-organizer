@@ -156,9 +156,9 @@ func (m *MockBackfillStore) SetSetting(key, value, dataType string, internal boo
 // duration of the test and restores the previous value afterwards.
 func setITunesXMLPath(t *testing.T, path string) {
 	t.Helper()
-	prev := config.AppConfig.ITunes.LibraryReadPath
-	config.AppConfig.ITunes.LibraryReadPath = path
-	t.Cleanup(func() { config.AppConfig.ITunes.LibraryReadPath = prev })
+	prev := config.Get().ITunes.LibraryReadPath
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = path })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = prev }) })
 }
 
 func TestBackfillExternalIDsWithNilStore(t *testing.T) {

@@ -23,9 +23,9 @@ import (
 // elects it rather than holding.
 func TestExecuteOperations_HardDeleteOfPrimaryHandsFlagOn(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	// The primary owns no file row (a hard delete refuses a book that does).
 	primary := f.Book(t, vptest.Spec{ID: "primary", Group: "g", Primary: "true", NoFile: true})
@@ -45,9 +45,9 @@ func TestExecuteOperations_HardDeleteOfPrimaryHandsFlagOn(t *testing.T) {
 // incumbent: the hand-off keeps a healthy incumbent.
 func TestExecuteOperations_HardDeleteOfNonPrimaryKeepsTheIncumbent(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	inc := f.Book(t, vptest.Spec{ID: "inc", Group: "g", Primary: "true"})
 	extra := f.Book(t, vptest.Spec{ID: "extra", Group: "g", Primary: "false", NoFile: true})
@@ -65,9 +65,9 @@ func TestExecuteOperations_HardDeleteOfNonPrimaryKeepsTheIncumbent(t *testing.T)
 // action alike. The handler re-checks the lengths, but this is the contract.
 func TestExecuteOperations_OneResultPerOperationInOrder(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	gone := f.Book(t, vptest.Spec{ID: "bane", Group: "g", Primary: "true", NoFile: true})
 	kept := f.Book(t, vptest.Spec{ID: "two-face", Group: "g", Primary: "false"})

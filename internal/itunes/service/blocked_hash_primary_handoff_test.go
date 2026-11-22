@@ -20,9 +20,9 @@ import (
 // group's library copy instead of leaving the group with none.
 func TestSoftDeleteBlockedBook_HandsPrimaryOn(t *testing.T) {
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	blocked := f.Book(t, vptest.Spec{ID: "blocked", Group: "g", Primary: "true"})
 	lib := f.Book(t, vptest.Spec{ID: "lib", Group: "g", Primary: "false"})
 	b, err := f.S.GetBookByID(blocked)

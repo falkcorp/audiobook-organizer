@@ -93,9 +93,9 @@ func TestRemuxMalformedFilesAlreadyCompleted(t *testing.T) {
 // setup failure (no RootDir configured) now returns an error instead of
 // being swallowed as a Warn log, so the op can actually fail.
 func TestRemuxMalformedFilesRootDirNotConfigured(t *testing.T) {
-	origRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = ""
-	defer func() { config.AppConfig.RootDir = origRoot }()
+	origRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) }()
 
 	store := &MockStore{}
 	remuxer := New(store)
@@ -114,10 +114,10 @@ func TestRemuxMalformedFilesRootDirNotConfigured(t *testing.T) {
 func TestRemuxMalformedFilesProgressCallback(t *testing.T) {
 	tooltest.Require(t, "ffmpeg")
 
-	origRoot := config.AppConfig.RootDir
+	origRoot := config.Get().RootDir
 	tmpDir := t.TempDir()
-	config.AppConfig.RootDir = tmpDir
-	defer func() { config.AppConfig.RootDir = origRoot }()
+	config.SetForTest(func(c *config.Config) { c.RootDir = tmpDir })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = origRoot }) }()
 
 	// Files that taglib can't parse are "malformed" candidates; plain text
 	// content is enough to exercise the walk + progress path (ffmpeg will
