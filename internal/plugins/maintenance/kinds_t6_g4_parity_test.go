@@ -119,12 +119,31 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			}
 			rec := &t6g4Calls{}
 			var handed []tasks.Writer
-			def := t6g4KindByName(t, t6g4KindsUnchecked(t6g4RealDeps(nat.p, rec, &handed), nil), c.kind)
+			allDefs := t6g4KindsUnchecked(t6g4RealDeps(nat.p, rec, &handed), nil)
+			def := t6g4KindByName(t, allDefs, c.kind)
 			run := &t6g4RunWriter{name: "native"}
 			h, cancel := t6g4RealHost(c.kind, 0, run)
 			defer cancel()
 			wh := &t6g4WidthHost{t6g4Host: h, seen: map[int]bool{}}
-			if _, err := runT6G4Kind(t, def, tasks.NewRC(wh), nat.paramsFor(false, c)); err != nil {
+			// A batch parent writes nothing itself: it starts a child per batch, and
+			// every child runs under a host of its own that records its loops' widths
+			// into the same set. The writes, the writer handoff and the declaration
+			// below are the CHILD's.
+			var host tasks.RunHost = wh
+			var children *batchRunHost
+			declDef := def
+			if t6g4IsBatchParent(c.kind) {
+				bh, _ := newBatchRunHost(t, wh, tasks.ModeLive, batchDefsOf(allDefs))
+				bh.child = func(kind tasks.Kind) (*tasks.RC, tasks.Writer) {
+					w := &t6g4RunWriter{name: "native child"}
+					ch, cancelChild := t6g4RealHost(kind, 0, w)
+					t.Cleanup(cancelChild)
+					return tasks.NewRC(&t6g4ChildWidthHost{t6g4Host: ch, parent: wh}), w
+				}
+				children, host = bh, bh
+				declDef = t6g4KindByName(t, allDefs, c.kind+".batch")
+			}
+			if _, err := runT6G4Kind(t, def, tasks.NewRC(host), nat.paramsFor(false, c)); err != nil {
 				t.Fatalf("native run: %v", err)
 			}
 			if c.widths != nil {
@@ -139,15 +158,27 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			if got := nat.observe(); got != afterHead {
 				t.Errorf("native run left the store as\n%s\nHEAD's def.Run left it as\n%s", got, afterHead)
 			}
-			if len(handed) != 1 || handed[0] != tasks.Writer(run) {
-				t.Errorf("NewWriter was handed %v, want this run's rc.Writer() once", handed)
+			if children == nil {
+				if len(handed) != 1 || handed[0] != tasks.Writer(run) {
+					t.Errorf("NewWriter was handed %v, want this run's rc.Writer() once", handed)
+				}
+			} else {
+				// One writer per child, each its own run's, never the parent's.
+				if len(children.runs) == 0 || len(handed) != len(children.runs) {
+					t.Fatalf("the parent started %d children and NewWriter was called %d times", len(children.runs), len(handed))
+				}
+				for i, w := range handed {
+					if w != children.writers[i] || w == tasks.Writer(run) {
+						t.Errorf("NewWriter call %d was handed %v, want child %d's rc.Writer()", i, w, i)
+					}
+				}
 			}
 			t6g4SameResources(t, rec, c.want...)
 
 			// The declaration is exactly what the run touches: what the writer
 			// recorded plus what the case names as written outside it.
 			declared := map[string]bool{}
-			for _, r := range tasks.CommonOf(def).Effects.WriteSet() {
+			for _, r := range tasks.CommonOf(declDef).Effects.WriteSet() {
 				declared[r.Kind] = true
 			}
 			expect := map[string]bool{}
@@ -159,6 +190,16 @@ func TestT6G4Kinds_LiveRunsMatchHEADAndRecordTheirWrites(t *testing.T) {
 			}
 		})
 	}
+}
+
+// t6g4IsBatchParent reports whether kind's native shell is a batch parent.
+func t6g4IsBatchParent(kind tasks.Kind) bool {
+	for _, w := range t6g4Expected {
+		if w.kind == kind {
+			return w.batchParent
+		}
+	}
+	return false
 }
 
 // t6g4FFmpegShim puts a stand-in ffmpeg first on PATH: it writes a few bytes to
@@ -188,6 +229,16 @@ func (h *t6g4WidthHost) CapWorkers(declared int) int {
 	h.mu.Unlock()
 	return h.t6g4Host.CapWorkers(declared)
 }
+
+// t6g4ChildWidthHost is a child run's host that reports the worker counts its
+// loops declare into its parent's record (t6g4WidthHost), so a table case's
+// widths cover the whole sweep.
+type t6g4ChildWidthHost struct {
+	*t6g4Host
+	parent *t6g4WidthHost
+}
+
+func (h *t6g4ChildWidthHost) CapWorkers(declared int) int { return h.parent.CapWorkers(declared) }
 
 func (h *t6g4WidthHost) widths() []int {
 	h.mu.Lock()

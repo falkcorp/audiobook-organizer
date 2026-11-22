@@ -7,7 +7,6 @@ package maintenance
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"sync/atomic"
@@ -196,66 +195,13 @@ func TestFileIntroCallBound_BatchZeroIsNeverCut(t *testing.T) {
 	}
 }
 
-// The native SHELL hands the core both margins (N32). The tests above set
-// env.CallMargin by hand, so a shell that stopped passing it would restore the
-// whole N16 defect with every one of them green. This one goes through the
-// kind's own Run with the margin variables narrowed to a seconds-long deadline:
-// batch 1's whisper call never answers, and only the margin the shell passes can
-// end it before the deadline. Deleting `CallMargin: fileIntroCallMargin()` from
-// the shell leaves the call blocked until the deadline, so the run neither
-// yields nor returns early.
-func TestFileIntroNativeShell_PassesTheCallMarginSoABlockedWhisperCallYields(t *testing.T) {
-	fx := newIntroFx(t)
-	fileIntroSlots = func() int { return 1 }
-	fx.yieldFiles(2*fileIntroBatchGroups + 1)
-	origY, origC := fileIntroYieldMargin, fileIntroCallMargin
-	t.Cleanup(func() { fileIntroYieldMargin, fileIntroCallMargin = origY, origC })
-	// Batches start until 1.5 s before the deadline, a call is cut 1.2 s before
-	// it: the call margin is strictly inside the yield margin, as in production.
-	fileIntroYieldMargin = 1500 * time.Millisecond
-	fileIntroCallMargin = func() time.Duration { return 1200 * time.Millisecond }
-
-	var calls atomic.Int32
-	inner := fileIntroWhisperFn
-	fileIntroWhisperFn = func(ctx context.Context, jobs map[string]fileIntroJob, prog func(int, int)) (map[string]fileIntroWhisperResult, error) {
-		if calls.Add(1) == 1 {
-			return inner(ctx, jobs, prog) // batch 0 answers
-		}
-		<-ctx.Done() // batch 1 never does
-		return nil, ctx.Err()
-	}
-
-	const deadline = 5 * time.Second
-	rec := &t6g4Calls{}
-	var handed []tasks.Writer
-	def := fx.p.fileIntroTranscribeKind(t6g4RealDeps(fx.p, rec, &handed), nil)
-	h, cancel := t6g4RealHost(fileIntroKind, deadline, &t6g4RunWriter{name: "attempt 1"})
-	defer cancel()
-
-	start := time.Now()
-	_, err := runT6G4Kind(t, def, tasks.NewRC(h), "")
-	elapsed := time.Since(start)
-	if !errors.Is(err, tasks.ErrContinueInPlace) {
-		t.Fatalf("the native shell must hand the call margin to the run so a blocked call is cut and the run yields; err = %v after %s", err, elapsed)
-	}
-	if elapsed >= deadline-500*time.Millisecond {
-		t.Fatalf("the run yielded after %s, too close to its %s deadline: the call was cut by the deadline, not by the margin", elapsed, deadline)
-	}
-	raw, ok := h.CheckpointJSON("")
-	if !ok {
-		t.Fatal("the yield saved no cursor")
-	}
-	var cur fileIntroCursor
-	if err := json.Unmarshal(raw, &cur); err != nil {
-		t.Fatal(err)
-	}
-	if cur.DoneBatches != 1 || cur.Last == nil {
-		t.Fatalf("cursor %+v, want batch 0 done", cur)
-	}
-	if n := calls.Load(); n != 2 {
-		t.Fatalf("whisper was called %d times, want 2 (batch 0 and the cut batch 1)", n)
-	}
-}
+// (F5-18h) The test that stood here drove the native shell and required it to
+// hand the core both margins (N32). The native shells no longer run the core
+// themselves for a live run: the parent starts a child per batch of 100 books,
+// the child sets neither margin nor a cursor (a batch is minutes against a long
+// attempt, see fileIntroBatchKind), and the parent's own yield is the batch
+// cursor (batch_sweep_test.go). The margins are still handed to the core by the
+// tests above, which set env.CallMargin by hand; no shipped caller sets them.
 
 // ---- N19: an outage sleep that gives up leaves the files undone -------------
 

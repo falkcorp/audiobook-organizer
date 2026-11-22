@@ -116,7 +116,7 @@ func TestBooksT6G4Deps_NilStatsStaysNilSoRegistrationStillRefuses(t *testing.T) 
 	d = newT6G4Deps(s, g4HostSpy{}, nil)
 	defs, err = t6g4Kinds(d, nil)
 	require.NoError(t, err)
-	require.Len(t, defs, len(t6g4Expected))
+	require.Len(t, defs, t6g4DefCount())
 }
 
 // TestBooksT6G4Writer_EveryKindsCallsAreAdmittedByItsOwnEffects: every writer
@@ -131,6 +131,11 @@ func TestBooksT6G4Writer_EveryKindsCallsAreAdmittedByItsOwnEffects(t *testing.T)
 			continue
 		}
 		def := g4ByKind(t, deps, want.kind)
+		if want.batchParent {
+			// The parent writes nothing; its calls are the child's, and the child's own
+			// Effects are what must admit them.
+			def = g4ByKind(t, deps, want.kind+".batch")
+		}
 		for _, mode := range []tasks.Mode{tasks.ModeLive, tasks.ModePreview} {
 			t.Run(string(want.kind)+"/"+mode.String(), func(t *testing.T) {
 				enforcing := writertest.New(def, mode)

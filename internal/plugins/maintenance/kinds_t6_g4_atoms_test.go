@@ -31,8 +31,11 @@ func TestT6G4StartRequirement_MatchesSettingsManageAtom(t *testing.T) {
 		t.Fatal("AtomTable has no settings.manage row")
 	}
 	starts := maintenance.T6G4KindStarts(t)
-	if len(starts) != 14 {
-		t.Fatalf("group 4 has %d native kinds, want 14", len(starts))
+	// 14 kinds that mirror a HEAD operation, plus the three per-batch children of
+	// the batch parents (F5-18h): a child is started by its parent as the parent's
+	// actor and states the same Start requirement.
+	if len(starts) != 17 {
+		t.Fatalf("group 4 has %d native kinds, want 17", len(starts))
 	}
 	// Every kind, not just the shared constructor's value: each one's declared
 	// Start requirement must be the settings.manage atom.

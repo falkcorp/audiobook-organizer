@@ -8,7 +8,6 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"reflect"
 	"slices"
 	"strings"
@@ -77,62 +76,59 @@ func t6g4SameResources(t *testing.T, rec *t6g4Calls, want ...ops.Resource) {
 }
 
 func init() {
-	// transcribe-file-intros through the native shell, which sets the yield
-	// margin: attempt 1 runs under a deadline inside it and yields after its first
-	// batch with a cursor; attempt 2 restores that cursor and finishes the run.
+	// transcribe-file-intros through the native shells: the parent starts one child
+	// run per batch of books and holds nothing itself; each child writes through the
+	// writer built from ITS OWN rc.Writer(), under the run id of the parent (so a
+	// rollback by clear_run_id finds what every batch wrote), and the parent
+	// persists the counters. (The yield and cursor of the pre-F5-18h shell moved to
+	// the parent's batch cursor: batch_sweep_test.go.)
 	t6g4WriteScenarios[fileIntroKind] = func(t *testing.T) {
 		fx := newIntroFx(t)
-		fileIntroSlots = func() int { return 1 } // sequential: the prefix is exactly the first batch
+		fileIntroSlots = func() int { return 1 }
 		paths := fx.yieldFiles(2*fileIntroBatchGroups + 1)
 		rec := &t6g4Calls{}
 		var handed []tasks.Writer
-		def := fx.p.fileIntroTranscribeKind(t6g4RealDeps(fx.p, rec, &handed), nil)
-		decl := tasks.CommonOf(def).Effects
+		defs := batchDefsOf(t6g4KindsUnchecked(t6g4RealDeps(fx.p, rec, &handed), nil))
+		decl := tasks.CommonOf(defs[fileIntroBatchChildKind]).Effects
 
-		run1 := &t6g4RunWriter{name: "attempt 1"}
-		h1, cancel := t6g4RealHost(fileIntroKind, time.Minute, run1)
+		parentRun := &t6g4RunWriter{name: "parent"}
+		ph, cancel := t6g4RealHost(fileIntroKind, 0, parentRun)
 		defer cancel()
-		_, err := runT6G4Kind(t, def, tasks.NewRC(h1), "")
-		if !errors.Is(err, tasks.ErrContinueInPlace) {
-			t.Fatalf("attempt 1 inside the margin: err = %v, want tasks.ErrContinueInPlace (the native shell must set the yield margin and the checkpoint hook)", err)
+		bh, rc := newBatchRunHost(t, ph, tasks.ModeLive, defs)
+		bh.child = func(kind tasks.Kind) (*tasks.RC, tasks.Writer) {
+			w := &t6g4RunWriter{name: "child of " + string(kind)}
+			ch, cancelChild := t6g4RealHost(kind, 0, w)
+			t.Cleanup(cancelChild)
+			return tasks.NewRC(ch), w
 		}
-		raw, ok := h1.CheckpointJSON("")
-		if !ok {
-			t.Fatal("attempt 1 yielded without saving a cursor")
-		}
-		var cur fileIntroCursor
-		if err := json.Unmarshal(raw, &cur); err != nil {
-			t.Fatal(err)
-		}
-		if cur.DoneBatches != 1 || cur.Last == nil || cur.Stats.Done {
-			t.Fatalf("cursor after the yield = %+v, want one batch done, a last key, counters not done", cur)
-		}
-		if got := len(fx.whisp.sentPaths()); got != fileIntroBatchGroups {
-			t.Fatalf("attempt 1 sent %d files, want exactly the first batch (%d)", got, fileIntroBatchGroups)
+		if _, err := runT6G4Kind(t, defs[fileIntroKind], rc, ""); err != nil {
+			t.Fatalf("parent run: %v", err)
 		}
 
-		fx.whisp.mu.Lock()
-		fx.whisp.calls = nil
-		fx.whisp.mu.Unlock()
-		run2 := &t6g4RunWriter{name: "attempt 2"}
-		h2, cancel2 := t6g4RealHost(fileIntroKind, 0, run2)
-		defer cancel2()
-		if err := h2.SetCheckpoint("", raw); err != nil {
-			t.Fatal(err)
+		books := mustAllBooks(t, fx)
+		if want := (len(books) + batchSweepSize - 1) / batchSweepSize; len(bh.runs) != want || want == 0 {
+			t.Fatalf("%d children for %d books, want %d (one per %d books)", len(bh.runs), len(books), want, batchSweepSize)
 		}
-		if _, err := runT6G4Kind(t, def, tasks.NewRC(h2), ""); err != nil {
-			t.Fatalf("attempt 2 (restored): %v", err)
+		if got := len(fx.whisp.sentPaths()); got != len(paths) {
+			t.Fatalf("whisper was sent %d files, want %d", got, len(paths))
 		}
-		if got := len(fx.whisp.sentPaths()); got != len(paths)-fileIntroBatchGroups {
-			t.Fatalf("attempt 2 sent %d files, want the remaining %d", got, len(paths)-fileIntroBatchGroups)
+		// NewWriter was handed each child's own rc.Writer(), in start order, and
+		// never the parent's: the parent holds no writer.
+		if len(handed) != len(bh.runs) || len(bh.writers) != len(bh.runs) {
+			t.Fatalf("NewWriter called %d times for %d children", len(handed), len(bh.runs))
 		}
-		if len(handed) != 2 || handed[0] != tasks.Writer(run1) || handed[1] != tasks.Writer(run2) {
-			t.Errorf("NewWriter was handed %v, want each attempt's own rc.Writer()", handed)
+		for i, w := range handed {
+			if w != bh.writers[i] || w == tasks.Writer(parentRun) {
+				t.Errorf("NewWriter call %d was handed %v, want child %d's rc.Writer()", i, w, i)
+			}
 		}
-		for _, b := range mustAllBooks(t, fx) {
+		for _, b := range books {
 			for _, f := range mustFiles(t, fx.s, b) {
 				if f.IntroSourceHash != f.FileHash {
-					t.Fatalf("file %s is not done after the second attempt: %+v", f.ID, f)
+					t.Fatalf("file %s is not done after the sweep: %+v", f.ID, f)
+				}
+				if f.IntroRunOpID != string(rc.RunID()) {
+					t.Errorf("file %s carries run id %q, want the parent's %q (clear_run_id would miss it)", f.ID, f.IntroRunOpID, rc.RunID())
 				}
 			}
 		}
@@ -141,10 +137,14 @@ func init() {
 		// those two calls write are the table's rows, not a retyped list.
 		t6g4SameResources(t, rec, t6RowsOf("SetBookFileIntro", "ModifyBook")...)
 		t6g4NoStatsThroughTheWriter(t, rec)
-		if st, err := fx.s.GetFileIntroStats(); err != nil || st == nil {
-			t.Errorf("the run's counters (stats:transcribe-files) were not persisted: %+v err=%v", st, err)
+		st, err := fx.s.GetFileIntroStats()
+		if err != nil || st == nil {
+			t.Fatalf("the run's counters (stats:transcribe-files) were not persisted: %+v err=%v", st, err)
 		}
-		// What the kind declares is the union of the rows of every writer method
+		if st.RunOpID != string(rc.RunID()) || st.OK != len(paths) {
+			t.Errorf("stats %+v, want the parent's run id %q and %d files transcribed (the children's counters rolled up)", st, rc.RunID(), len(paths))
+		}
+		// What the child declares is the union of the rows of every writer method
 		// its core can call (a file the fixture does not reach clears the intro or
 		// records a timeout), nothing the core never calls.
 		canCall := []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}
@@ -256,8 +256,8 @@ func TestT6G4Kinds_RegistrationRefusesNilStats(t *testing.T) {
 	}
 	deps.Stats = headT6G4Stats{}
 	defs, err = t6g4Kinds(deps, nil)
-	if err != nil || len(defs) != len(t6g4Expected) {
-		t.Fatalf("with a sink the registration must succeed with all %d kinds, got %d err=%v", len(t6g4Expected), len(defs), err)
+	if err != nil || len(defs) != t6g4DefCount() {
+		t.Fatalf("with a sink the registration must succeed with all %d kinds, got %d err=%v", t6g4DefCount(), len(defs), err)
 	}
 }
 
