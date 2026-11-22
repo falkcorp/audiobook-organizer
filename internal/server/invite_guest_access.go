@@ -397,11 +397,32 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 	if coreauth.SameEmail(snap.OwnerEmail, email) {
 		return "it is the owner's email"
 	}
-	for _, allowed := range legacyoauth.ParseAllowedEmails(snap.OAuthAllowedEmails) {
-		if coreauth.SameEmail(allowed, email) {
-			return "it is on OAUTH_ALLOWED_EMAILS"
+	if s.identity != nil {
+		// Under core identity the Cloudflare Access allow-list is the books key
+		// read through WithAccessAllowList; snap.OAuthAllowedEmails is the OIDC
+		// provider projection, which no longer says who Access admits. An
+		// unreadable list keeps the entry, like a failed holder lookup below.
+		if s.accessAllowList == nil {
+			return "the Cloudflare Access allow-list cannot be read, so it cannot be ruled out that this address is on it"
+		}
+		list, err := s.accessAllowList()
+		if err != nil {
+			return "the Cloudflare Access allow-list could not be read, so it cannot be ruled out that this address is on it"
+		}
+		for _, allowed := range legacyoauth.ParseAllowedEmails(list) {
+			if coreauth.SameEmail(allowed, email) {
+				return "it is on the Cloudflare Access allow-list"
+			}
+		}
+	} else {
+		for _, allowed := range legacyoauth.ParseAllowedEmails(snap.OAuthAllowedEmails) {
+			if coreauth.SameEmail(allowed, email) {
+				return "it is on OAUTH_ALLOWED_EMAILS"
+			}
 		}
 	}
+	// Still the books store: moving the verified-holder lookup to core is B10r
+	// phase 2's work, not this function's.
 	holder, err := s.storeForWiring().GetUserByVerifiedEmail(email)
 	if err != nil {
 		return "the verified-email lookup failed, so another verified holder cannot be ruled out"

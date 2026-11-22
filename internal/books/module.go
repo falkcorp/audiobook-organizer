@@ -426,7 +426,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		return err
 	}
 	if identity != nil {
-		srvOpts = append(srvOpts, server.WithIdentity(identity), server.WithAccessVerifier(m.idw.verifier))
+		srvOpts = append(srvOpts, server.WithIdentity(identity), server.WithAccessVerifier(m.idw.verifier),
+			// The guest policy's keep rule reads the same key the admission policy
+			// does, with the same semantics (identityPolicyFrom).
+			server.WithAccessAllowList(func() (string, error) { return cfaccessAllowedEmails(deps.Config) }))
 	}
 	srv := server.NewServer(store, srvOpts...)
 	// Stored before any check can fail, so Release tears it down when New
