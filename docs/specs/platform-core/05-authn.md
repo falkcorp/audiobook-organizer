@@ -1454,7 +1454,9 @@ applied once by the identity cutover (§11).
 | Stored identity record cannot be decoded by the store (unknown status, malformed JSON; `ErrUndecodableRecord`) | the record is treated as restricted (user inactive, key refused) and counted; boot continues | closed | fail closed on damaged data |
 | A HEAD user, API-key or OAuth-identity row the cutover cannot decode, or that `Importer` rejects (`ErrImportRejected`; a key or identity whose user does not exist included) | the upgrade stops before any write: the cutover preflight refuses the boot (`storage.ErrCutoverBlocked`, exit 78) before the checkpoint and M7 (on a store whose cutover has not started; a resumed cutover relies on M3's own check, §11), with a report naming each row by key and reason, never its value; `<app> storage cutover-blockers` fixes or deletes it (§11); nothing is quarantined | closed | D13: an identity is never imported partly or dropped |
 | A HEAD user-merge journal that is `applying` or `undoing` | the upgrade stops before any write, naming the journal; the owner finishes or undoes the merge on the pre-freeze release first (§11) | closed | D13; the merge's HEAD writes cannot be completed on the native store (DATA-4) |
-| Undo of a merge finished before R2 | refused (409 `merge_permanent`) | closed | D13: finished merges are permanent after R2 |
+| Undo of a merge finished before R2 (a journal with no core half) | refused (409 `merge_permanent`) | closed | D13: a merge the pre-freeze release made is permanent after R2 |
+| Undo of a merge made after R2 (`Admin.PlanUserUnmerge` / `StageUserUnmerge`) | whole or refused: 409 with the first mismatch's code (`not_merged`, `source_changed`, `source_deleted`, `target_deleted`, `target_inactive`, `target_merged`, `email_claimed`, `key_moved`, `signin_moved`), 409 `last_admin`, 403 on denial or dominance; books adds 409 `sweep_pending` and `receipt_missing`; nothing is written for a refusal | closed | the undo restores only what the merge left exactly as it left it |
+| Resume of a merge journal after R2 | only an applied merge whose straggler sweep is pending (`sweep_pending`) re-runs the idempotent sweep and clears the marker; every other resume is 409 `merge_permanent` | closed | an R2 merge is one batch, so nothing else is half-applied |
 | User with `SignInRestricted` | every authenticator refuses: 401 `password_reset_required` | closed | restricted last admin (SEC4-12) |
 | Invite whose creator no longer may assign its role | `invite_invalid`, audited | closed | SEC3-2 |
 | Replaced store, as 05-backup §5B.3.6 (2) classifies it (content marker, out-of-store journal head), verified tail or not; a relocated store is not replaced and runs no hook | tail re-applied, then the hook with `rc.Revocations == nil`: every session and invite deleted, every active or disabled key `needs_confirmation`, every epoch bumped; a chain break adds health `revocation_journal_broken` | closed | SEC3-10, SEC4-6, SEC5-6, DATA6-4, DATA6-5 |
@@ -1749,7 +1751,20 @@ the boot while any journal is `applying` or `undoing`, naming it: the owner rein
 release, finishes or undoes the merge there, and deploys R2 again. A finished merge (`done` or `undone`)
 becomes **permanent**: its journal is kept read-only for display, books' undo action answers 409
 `merge_permanent` for it, and the R2 release note says "Account merges finished before this release can
-no longer be undone." `auth.Admin` has no inverse of `StageUserMerge`, so no merge is undone after R2.
+no longer be undone." A merge made after R2 is different: `auth.Admin` has the inverse of `StageUserMerge`,
+`PlanUserUnmerge` and `StageUserUnmerge`, and books' undo commits its own inverse rows, the undone journal and
+core's half in ONE batch (the caller's-batch convention: `StageUserUnmerge` never commits). The reversal is
+whole or refused. It restores the merged-away account to the status the merge found, with a fresh credential
+epoch so no session or token from before the merge returns, gives back its address, keys and sign-ins, takes
+off the target the roles the merge gave it, ends the target's sessions only when a sign-in moves back, and
+refuses with a code when the first record has changed since the merge: `not_merged`, `source_changed`,
+`source_deleted`, `target_deleted`, `target_inactive`, `target_merged`, `email_claimed`, `key_moved` or
+`signin_moved`; a removal that would leave no active admin is `ErrLastAdmin`. The actor needs the same
+authority as the merge: users.manage, dominance over both accounts, and the right to assign the roles it
+removes. The merge journal records the moved sign-ins' subject ids and the committed key versions (journal
+only, never in a preview or a response). An undo does not re-add a guest's Cloudflare access or phone key;
+an admin reissues them. A merge whose straggler sweep did not finish (`sweep_pending`) is refused for undo
+until a resume has finished the sweep.
 M3 rewrites each kept journal once, in its own chunk, replacing every `invite:<token>` key in its images
 by the token's SHA-256, since the invites themselves are deleted (the table above), so no raw invite token stays in
 the live store. Test: 05-storage's `TestCutoverRefusedWhileMergeInProgress` (§10).
