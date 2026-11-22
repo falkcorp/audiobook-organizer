@@ -151,7 +151,8 @@ func TestNewKernelUpdater_NilHTTPAndNotify(t *testing.T) {
 }
 
 // The topic spec is core.update.found.v1, observable by core:system.manage,
-// and declares on a bus next to core's own topics without a clash.
+// and coreTopics (which carries it since the flip) declares on a bus once, with
+// no clash against core's own topics.
 func TestUpdaterTopicSpecs(t *testing.T) {
 	specs := updaterTopicSpecs()
 	if len(specs) != 1 || specs[0].Name != "core.update.found.v1" || specs[0].Notify == nil {
@@ -161,7 +162,7 @@ func TestUpdaterTopicSpecs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Declare("core", append(coreTopics(), specs...)...); err != nil {
+	if err := bus.Declare("core", coreTopics()...); err != nil {
 		t.Fatalf("declaring core's topics with the updater's: %v", err)
 	}
 	if _, ok := bus.Catalog().Lookup("core.update.found.v1"); !ok {
@@ -366,42 +367,5 @@ func TestMountUpdater_MountsTheFourRoutes(t *testing.T) {
 	}
 	if err := mountUpdater(httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{}).CoreGroup(), nil, nil, nil); err == nil {
 		t.Error("a nil updater was accepted")
-	}
-}
-
-// TestUpdaterAdapter_DarkUntilWired is the dark proof (F8-04b 8b-3). A kernel
-// booted over a real store registers nothing of the updater: core's topic
-// catalog has no core.update.found.v1, the storage owners and the claim ledger
-// have no core/updater, the store has no c/updater/ keyspace, the health
-// registry has no core.updater, the router has no /updater route and the tasks
-// have no core.updater.* kind. Only the constructors above, called by a flip,
-// add them.
-func TestUpdaterAdapter_DarkUntilWired(t *testing.T) {
-	h := newSwapHost(t)
-	k := h.mustBoot(h.envConfig(nil))
-
-	for _, s := range coreTopics() {
-		if s.Name == updater.FoundTopicName {
-			t.Errorf("coreTopics declares %s", s.Name)
-		}
-	}
-	for _, o := range k.storageOwners() {
-		if o.Owner == updaterOwnerID || strings.HasPrefix(string(o.Owner), "core/updater") {
-			t.Errorf("storageOwners has %s", o.Owner)
-		}
-	}
-	if _, ok := k.store.db.Keyspace(updaterOwnerID); ok {
-		t.Error("the booted store has a c/updater/ keyspace")
-	}
-	if c, ok := states(k.healthReg)[componentUpdater]; ok {
-		t.Errorf("the health registry has core.updater: %+v", c)
-	}
-	if routes := updaterRoutes(k.router); len(routes) != 0 {
-		t.Errorf("the router mounts updater routes: %v", routes)
-	}
-	for ri := range k.router.Routes() {
-		if strings.HasPrefix(ri.Pattern, "/api/core/v1/updater") {
-			t.Errorf("route %s %s is mounted", ri.Method, ri.Pattern)
-		}
 	}
 }

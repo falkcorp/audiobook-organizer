@@ -24,22 +24,36 @@ import (
 	"github.com/falkcorp/mediacore/updater"
 )
 
-// The kernel's updater adapter (F8-04b slice 8b-3; 05-updater §5U.3, §5U.10,
-// §5U.12; seams.d/F8-02.md, "Left for F8-04"). It is dark: it holds
-// constructors only. Nothing here is called from boot.go or kernel.go, and
-// nothing is registered: no topic in coreTopics, no owner in storageOwners, no
-// component in the health registry, no route, no task. The F8-04b flip turns
-// each constructor into one call site:
+// The kernel's updater (F8-04b: slice 8b-3's constructors, wired by the flip).
+// An app that declared the identity flip (Config.IdentityBoot) and ships an
+// updater (Config.Updater, app.Options.Updater) gets, and no other app gets:
 //
-//   - coreTopics: append updaterTopicSpecs()...
-//   - storageOwners: append updaterOwnerSpec()
-//   - registerCoreComponents: coreComponentSources.Updater = updaterHealthSource(u)
-//   - the served App's updater: newKernelUpdater(updaterOptions(in), svc, ...)
-//   - the router's core group: mountUpdater(r.CoreGroup(), u, newUpdaterStarter(client), log)
+//   - the topic: coreTopics carries updaterTopicSpecs() (events.go);
+//   - the owner: storageOwners appends updaterOwnerSpec() (swap.go), a one-time
+//     claim-ledger write at P4b;
+//   - the component: wireUpdater registers core.updater on the health registry
+//     with updaterHealthSource(u). It does not go through registerCoreComponents,
+//     which has no boot caller yet and whose core.config and core.backup rows
+//     are already registered by their own wiring (config_boot.go,
+//     identity_p4d.go), so calling it would fail as a duplicate;
+//   - the routes: mountUpdater(r.CoreGroup(), u, newUpdaterStarter(executor), log)
+//     at P7, once the executor exists and before P8 builds the router.
+//
+// updaterDeclared is the one predicate. With either half off nothing is
+// registered, so the running app, today's ABO among them, behaves as before:
+// Config.Updater alone is set on every offline command (updater fetch-release
+// reads it) and wires nothing.
+//
+// Not wired here, and so not startable through the routes: the three
+// core.updater.* task kinds. Core registers none of its own kinds at this base
+// (the kernel's P6 loop is over modules' Registrars, and
+// core_kinds_schedule_test's census lists the kinds "the day F5-18 registers
+// them"), so a POST to /updater/check, /apply or /rollback finds no kind to
+// start. That registration is the next slice (REMAINING in the F8-04b hand-back).
 //
 // The app, not this file, names ABO: AppID, BinaryName, the release Source and
 // the asset namer all arrive as parameters (ABO's come from
-// internal/books/options.go through app.Options.Updater), so core holds no
+// internal/books.FetchOptions through app.Options.Updater), so core holds no
 // second literal of them.
 
 // updaterOwnerID is core/updater's owner in the storage claim ledger: the
@@ -210,4 +224,127 @@ func mountUpdater(g *httpapi.Group, u *updater.Updater, st updaterhttp.Starter, 
 	}
 	updaterhttp.Register(g, updaterhttp.Deps{Updater: u, Starter: st, Log: log})
 	return nil
+}
+
+// updaterDeclared reports whether this boot wires the updater: the app
+// declared the identity flip (the routes need its auth service and the router
+// it mounts through) and ships an updater (Config.Updater). It is the one
+// predicate behind the owner, the topic's publisher, the health component and
+// the routes, so none of them can exist without the others, and an app with
+// either half off boots as it did before F8-04b. The topic spec is declared
+// with every identity boot (coreTopics), which is a catalog entry only; it has
+// no publisher unless this is true.
+func (k *Kernel) updaterDeclared() bool {
+	return k.identityBootDeclared() && k.cfg.Updater != nil
+}
+
+// updaterRestarter is updater.Restarter over the supervisor: the graceful
+// restart that takes the swapped binary. It refuses until the app is ready,
+// like backupRestart: Lifecycle.RequestRestart would log and drop the request,
+// and an apply that reported success for a restart that never happened would
+// leave the new binary unstarted.
+type updaterRestarter struct{ l *Lifecycle }
+
+func (r updaterRestarter) Restart(_ context.Context, reason string) error {
+	if r.l == nil || !r.l.ready.Load() {
+		return errUpdaterNotReady
+	}
+	r.l.RequestRestart(reason)
+	return nil
+}
+
+var errUpdaterNotReady = errors.New("kernel: the app is not ready to restart; restart it to run the swapped binary")
+
+// updaterSettingsOver is updater.WithSettings over the live core.updater
+// section: mode, channel and max_download, re-read on every operation. A mode
+// or channel the section holds that the updater does not know reads as its
+// default (off, stable): the section's Validate refuses them at write time, so
+// this is a guard, not a path.
+func updaterSettingsOver(get func() *updaterSettings, def updater.Mode) func() updater.Settings {
+	return func() updater.Settings {
+		out := updater.DefaultSettings(def)
+		s := get()
+		if s == nil {
+			return out
+		}
+		out.Mode, _ = updater.ParseMode(s.Mode)
+		if c := updater.Channel(s.Channel); c == updater.ChannelStable || c == updater.ChannelPrerelease {
+			out.Channel = c
+		}
+		out.MaxDownload = s.MaxDownload
+		return out
+	}
+}
+
+// buildUpdater is the updater of this boot: Config.Updater's source over the
+// kernel's services. It leaves Deps.HTTP and Deps.Notify nil (the I10
+// fallback, F7-09 not merged): the release source uses its own https-only
+// client and no found notification is staged, which is HEAD's behaviour.
+func (k *Kernel) buildUpdater() (*updater.Updater, error) {
+	o := k.cfg.Updater
+	if o == nil {
+		return nil, errors.New("kernel: updater: no updater options")
+	}
+	if k.store == nil || k.store.db == nil || k.events == nil || k.cfgBoot == nil || k.healthReg == nil {
+		return nil, errors.New("kernel: updater: the wiring needs the store, the events bus, the config store and the health registry P4 and P5 built")
+	}
+	ks, ok := k.store.db.Keyspace(updaterOwnerID)
+	if !ok {
+		return nil, fmt.Errorf("kernel: updater: owner %s has no keyspace: append updaterOwnerSpec() to storageOwners", updaterOwnerID)
+	}
+	h, ok := handleOf[updaterSettings](k.cfgBoot.handles)
+	if !ok {
+		return nil, errors.New("kernel: updater: the core.updater section is not registered")
+	}
+	in := updaterInputs{AppID: o.AppID, BinaryName: o.BinaryName, Source: o.Source, AssetName: o.AssetName, DefaultMode: o.DefaultMode}
+	return newKernelUpdater(in, updaterServices{
+		Restarter: updaterRestarter{l: k.lifecycle}, Health: k.healthReg, Events: k.events.bus, Store: ks,
+		ReaderCheck: updater.NewReaderCheck(updater.ReaderCheckOptions{StateDir: k.cfg.StateDir}),
+		Log:         k.coreLog("updater"),
+	},
+		updater.WithVersion(k.cfg.Version),
+		updater.WithSettings(updaterSettingsOver(h.Get, o.DefaultMode)),
+		updater.WithStateDir(k.cfg.StateDir),
+		updater.WithDBPath(k.cfg.StoragePath),
+	)
+}
+
+// lateExecutor is exportStarter over whatever executor the boot built, read
+// when a request arrives. The routes mount at P5, before P7 decides whether
+// the tasks start rule builds an executor at all (tasksNeeded), so the starter
+// cannot hold one; a request, which only arrives after the router is built at
+// P8, finds it or fails with errUpdaterNoExecutor. It never panics.
+type lateExecutor struct{ k *Kernel }
+
+var _ exportStarter = lateExecutor{}
+
+var errUpdaterNoExecutor = errors.New("kernel: the task executor is not running; the updater cannot start a task")
+
+func (l lateExecutor) Start(ctx context.Context, kind tasks.Kind, req tasks.StartRequest) (tasks.RunRef, error) {
+	kt := l.k.tasks
+	if kt == nil || kt.exec == nil {
+		return tasks.RunRef{}, errUpdaterNoExecutor
+	}
+	return kt.exec.Start(ctx, kind, req)
+}
+
+// wireUpdater is the updater's P5 step, after mountIdentity: build the
+// updater, register the core.updater health component on the registry (its own
+// Register, as registerBackupHealth does, since registerCoreComponents would
+// also register core.config and core.backup, which their own wiring owns), and
+// mount the four routes on the core group with a starter over the late-bound
+// executor. It does nothing unless updaterDeclared. It starts and writes
+// nothing.
+func (k *Kernel) wireUpdater() error {
+	if !k.updaterDeclared() {
+		return nil
+	}
+	u, err := k.buildUpdater()
+	if err != nil {
+		return err
+	}
+	if _, err := k.healthReg.Register(health.Check{ID: componentUpdater, Title: titleUpdater, Probe: updaterHealthSource(u)}); err != nil {
+		return fmt.Errorf("kernel: updater: health: %w", err)
+	}
+	return mountUpdater(k.router.CoreGroup(), u, newUpdaterStarter(lateExecutor{k: k}), k.coreLog("updaterhttp"))
 }

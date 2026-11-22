@@ -87,6 +87,12 @@ func (k *Kernel) storageOwners() []storage.OwnerSpec {
 	if k.identityBootDeclared() {
 		owners = append(owners, identityOwners()...)
 	}
+	// core/updater's c/updater/ (F8-04b), only for an app that declared the
+	// identity flip and ships an updater: a one-time claim-ledger write at P4b
+	// that an app which has not flipped must not take (updaterDeclared).
+	if k.updaterDeclared() {
+		owners = append(owners, updaterOwnerSpec())
+	}
 	for _, e := range k.entries {
 		if DeclaresStorage(e.man) {
 			owners = append(owners, storage.OwnerSpec{Owner: storage.Owner(e.man.ID), Spec: e.man.Storage, Enabled: e.enabled})
