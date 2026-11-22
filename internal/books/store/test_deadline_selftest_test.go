@@ -102,7 +102,7 @@ func TestAwaitOrFatalDeadline_Child(t *testing.T) {
 	s := newReviewTestStore(t)
 	// The parent removes this directory itself: the "stuck" child exits the
 	// binary before any t.Cleanup runs, so t.TempDir's own removal never
-	// happens. The parent points TMPDIR at a directory it owns and checks
+	// happens. The parent points TMPDIR and GOTMPDIR at a directory it owns and checks
 	// that this path was inside it and is gone afterwards.
 	fmt.Fprintf(os.Stderr, "%s%s\n", deadlineChildTempDirPrefix, filepath.Dir(t.TempDir()))
 	it, err := s.UpsertReviewItem(mkReviewItem("regroup.multidisc", "dk-deadline-child", "/f", "s", `{}`))
@@ -160,9 +160,11 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 			// The child's t.TempDir (which holds its on-disk Pebble store) goes
 			// under a directory this test owns. A child that exits the binary
 			// skips its own cleanup, so without this every "stuck" run leaked
-			// its whole temp dir, store included.
+			// its whole temp dir, store included. Go 1.27's t.TempDir creates
+			// under $GOTMPDIR when it is set (CI and rgo-host.sh set it), and
+			// only falls back to $TMPDIR, so the child needs both.
 			childTmp := t.TempDir()
-			cmd.Env = append(os.Environ(), deadlineChildEnv+"="+mode, "TMPDIR="+childTmp)
+			cmd.Env = append(os.Environ(), deadlineChildEnv+"="+mode, "TMPDIR="+childTmp, "GOTMPDIR="+childTmp)
 			raw, err := cmd.CombinedOutput()
 			out := string(raw)
 			assertChildTempDirRemoved(t, out, childTmp)
@@ -232,8 +234,8 @@ func TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers(t *testin
 }
 
 // assertChildTempDirRemoved finds the temp dir the deadline child reported,
-// checks it was created under childTmp (the TMPDIR the parent gave it, not the
-// system temp dir), removes childTmp's contents, and asserts the child's dir is
+// checks it was created under childTmp (the TMPDIR and GOTMPDIR the parent gave
+// it, not the system temp dir), removes childTmp's contents, and asserts the child's dir is
 // gone, so a killed child cannot leave its store behind.
 func assertChildTempDirRemoved(t *testing.T, out, childTmp string) {
 	t.Helper()
