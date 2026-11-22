@@ -6,6 +6,7 @@
 package cutover_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // ---- the wired resolver is the atom table ----
@@ -79,8 +81,32 @@ func TestRegisteredHarness_WiredResolverIsTheAtomTable(t *testing.T) {
 // change to one fails here before it breaks a table.
 func TestRegisteredHarness_APISurface(t *testing.T) {
 	h := bootRegistered(t, registeredConfig{})
-	if len(h.Principals) != 36 || len(h.Routes) < 500 {
-		t.Fatalf("%d principals and %d routes, want 36 and at least 500", len(h.Principals), len(h.Routes))
+	// The 36 principals of verdicts.json, then a core-native twin of 18 of the 28
+	// keys among them (corekey:..., Twin naming the imported one).
+	var recorded, core int
+	for _, p := range h.Principals {
+		if p.Core {
+			core++
+			if p.Twin == "" || h.Principal(p.Twin).Core || p.Name != coreKeyName(p.Twin) || !strings.HasPrefix(p.bearer, "mck_") {
+				t.Fatalf("core key %s: twin %q, bearer shape %q", p.Name, p.Twin, p.bearer[:min(4, len(p.bearer))])
+			}
+			continue
+		}
+		recorded++
+		if p.Kind == "key" && !strings.HasPrefix(p.bearer, "abk_") {
+			t.Fatalf("%s holds a %q key, want abk_ (the shape prod's rows hold)", p.Name, p.bearer[:min(4, len(p.bearer))])
+		}
+	}
+	// Ten of the 28 keys have no core twin: M3 gave each the ambient scopes only (its
+	// atoms lie outside its owner's roles), and core's mint refuses a key without a
+	// role scope. The three fp-worker keys are among them.
+	wantNoTwin := []string{"key:editor:settings", "key:editor:users", "key:editor:worker", "key:viewer:settings", "key:viewer:users", "key:viewer:worker",
+		"key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users", "key:custom-subset:outside"}
+	if !slices.Equal(h.NoCoreTwin, wantNoTwin) {
+		t.Fatalf("keys without a core twin: %v, want %v", h.NoCoreTwin, wantNoTwin)
+	}
+	if recorded != 36 || core != 18 || len(h.Routes) < 500 {
+		t.Fatalf("%d recorded and %d core-key principals and %d routes, want 36, 18 and at least 500", recorded, core, len(h.Routes))
 	}
 	admin := h.Principal("session:admin")
 	res := h.MustDo(t, admin, http.MethodGet, "/api/v1/auth/me", nil)
@@ -100,7 +126,7 @@ func TestRegisteredHarness_APISurface(t *testing.T) {
 	if _, err := h.Do(admin, http.MethodGet, "/api/me", nil); !errors.Is(err, ErrOwnAuth) {
 		t.Fatalf("an ABS route answered without ErrOwnAuth: %v", err)
 	}
-	// Raw serves a request as no principal: the ABS login route is reachable.
+	// Raw serves a request as no principal, here a path no route claims.
 	raw := h.Raw(httptest.NewRequest(http.MethodGet, "/ping", nil))
 	if raw.Route != nil || raw.Status == 0 {
 		t.Fatalf("Raw: %+v", raw)
@@ -322,5 +348,36 @@ func TestRegisteredHarness_ChangedAtomRowFailsTheResolverCheck(t *testing.T) {
 				t.Errorf("changing the %s row's read side went unreported", row.Name)
 			}
 		}
+	}
+}
+
+// TestRegisteredHarness_SeedHEADKeys: the Seed hook and SeedAPIKey, the pattern
+// B10e3 uses for a revoked abk_ key and a Confined (fp-worker-style) one. The seeded
+// rows are imported by M3 like HEAD's own: the revoked key is refused wherever it is
+// shown, the confined key reaches the worker API and nothing else.
+func TestRegisteredHarness_SeedHEADKeys(t *testing.T) {
+	var revoked, worker string
+	h := bootRegistered(t, registeredConfig{Seed: func(ctx context.Context, lr storage.LegacyRange) (err error) {
+		if revoked, err = SeedAPIKey(ctx, lr, KeySeed{User: "lucius.fox", Status: "revoked", Scopes: []string{"library.view"}}); err != nil {
+			return err
+		}
+		worker, err = SeedAPIKey(ctx, lr, KeySeed{User: "fp.worker", Scopes: []string{"fingerprint.worker"}})
+		return err
+	}})
+	as := func(raw, method, path string) Result {
+		t.Helper()
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer "+raw)
+		req.RemoteAddr = h.nextPeer()
+		return h.Raw(req)
+	}
+	if res := as(revoked, http.MethodGet, "/api/v1/auth/me"); res.Status != http.StatusUnauthorized {
+		t.Errorf("a revoked abk_ key: %d %s", res.Status, res.excerpt())
+	}
+	if res := as(worker, http.MethodPost, "/api/v1/fingerprint/worker/lease"); res.Verdict() != 'A' {
+		t.Errorf("the confined worker key on the worker API: %d %s", res.Status, res.excerpt())
+	}
+	if res := as(worker, http.MethodGet, "/api/v1/audiobooks"); res.Status != http.StatusForbidden {
+		t.Errorf("the confined worker key on the library: %d %s", res.Status, res.excerpt())
 	}
 }
