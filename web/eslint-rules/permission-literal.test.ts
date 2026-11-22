@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import tseslint from 'typescript-eslint';
 import { describe, expect, it } from 'vitest';
-import { PERMISSION_LITERAL_PENDING_FILES, permissionLiteralRestrictions } from './permission-literal.mjs';
+import { permissionLiteralRestrictions } from './permission-literal.mjs';
 
 const RULE = 'no-restricted-syntax';
 
@@ -77,14 +77,14 @@ describe('permission-literal rule: what it lets through', () => {
 describe('permission-literal rule over web/src', () => {
   const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-  it('finds exactly the files PERMISSION_LITERAL_PENDING_FILES names', async () => {
+  async function findings(ignores: string[]): Promise<string[]> {
     const eslint = new ESLint({
       cwd: webRoot,
       overrideConfigFile: true,
       overrideConfig: [
         {
           files: ['src/**/*.{ts,tsx}'],
-          ignores: ['src/**/*.test.{ts,tsx}'],
+          ignores,
           languageOptions: { parser: tseslint.parser, parserOptions: { ecmaFeatures: { jsx: true } } },
           linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: 'off' },
           rules: { [RULE]: ['error', ...permissionLiteralRestrictions] },
@@ -92,10 +92,17 @@ describe('permission-literal rule over web/src', () => {
       ] as never,
     });
     const results = await eslint.lintFiles(['src']);
-    const violating = results
+    return results
       .filter((r) => r.messages.some((m) => m.ruleId === RULE))
       .map((r) => path.relative(webRoot, r.filePath))
       .sort();
-    expect(violating).toEqual([...PERMISSION_LITERAL_PENDING_FILES].sort());
+  }
+
+  it('finds nothing in any hand-written file: no pending list is left (F4-08 B8)', async () => {
+    expect(await findings(['src/**/*.test.{ts,tsx}', 'src/generated/**'])).toEqual([]);
+  }, 120_000);
+
+  it('would find the generated permissions file, so its exemption is the only one and is load-bearing', async () => {
+    expect(await findings(['src/**/*.test.{ts,tsx}'])).toEqual(['src/generated/permissions.ts']);
   }, 120_000);
 });

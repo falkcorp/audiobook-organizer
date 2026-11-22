@@ -56,21 +56,3 @@ export const permissionLiteralRestrictions = PERMISSION_LITERAL_SELECTORS.map((s
   selector,
   message: MESSAGE,
 }));
-
-/**
- * The files that still hold a permission literal at the commit that wires the
- * rule (F4-08 B8 groundwork): ABO's five legacy permission constants and the
- * API-key scope list of APIKeysTab (07 section 7.4.3's Permission atoms bullet
- * names them). They go through the generated client in the SPA's switch (B8
- * proper), and that change deletes this list; until then it is the only reason
- * the rule can run over web/src. permission-literal.test.ts compares it with
- * what the rule really finds, so an entry cannot go stale and a new violation
- * cannot hide behind it.
- */
-export const PERMISSION_LITERAL_PENDING_FILES = [
-  'src/components/settings/APIKeysTab.tsx',
-  'src/components/system/ThrottlePanel.tsx',
-  'src/hooks/useCanOrganizeLibrary.ts',
-  'src/hooks/useCollections.ts',
-  'src/hooks/useLibraryPermission.ts',
-];

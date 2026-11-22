@@ -8,7 +8,7 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
-import { PERMISSION_LITERAL_PENDING_FILES, permissionLiteralRestrictions } from './eslint-rules/permission-literal.mjs';
+import { permissionLiteralRestrictions } from './eslint-rules/permission-literal.mjs';
 
 export default tseslint.config(
   {
@@ -103,14 +103,13 @@ export default tseslint.config(
     // comes from manifest.permissions or the generated client. The selectors
     // and their fixtures live in eslint-rules/permission-literal.mjs.
     //
-    // PERMISSION_LITERAL_PENDING_FILES are the five files whose literals
-    // (ABO's legacy permission constants and APIKeysTab's scope list) go
-    // through the generated client in the SPA's switch; that change deletes
-    // the list. The rule is not weakened for them beyond that exact list:
-    // eslint-rules/permission-literal.test.ts fails if the list names a file
-    // that is clean or misses one that is not.
+    // Every file under src/ is held to the rule. The one place a permission string
+    // may be spelled is src/generated/permissions.ts, which cmd/permsgen writes from
+    // internal/books/atoms.go (make generate-permissions; make ci fails when it is
+    // stale), so it is the generated client's side of the line, not a hand-written
+    // literal.
     files: ['src/**/*.{ts,tsx}'],
-    ignores: ['src/**/*.test.{ts,tsx}', ...PERMISSION_LITERAL_PENDING_FILES],
+    ignores: ['src/**/*.test.{ts,tsx}', 'src/generated/**'],
     rules: {
       'no-restricted-syntax': ['error', ...permissionLiteralRestrictions],
     },

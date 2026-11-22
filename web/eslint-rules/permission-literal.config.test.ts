@@ -11,7 +11,6 @@ import { ESLint } from 'eslint';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { PERMISSION_LITERAL_PENDING_FILES } from './permission-literal.mjs';
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const eslint = new ESLint({ cwd: webRoot });
@@ -39,9 +38,21 @@ describe('eslint.config.mjs permission-literal rule', () => {
     expect(await messages(fixture, 'src/components/Fixture.test.tsx')).toEqual([]);
   });
 
-  it('exempts only the pending files, so any other new file is held to the rule', async () => {
-    const pending = PERMISSION_LITERAL_PENDING_FILES[0];
-    expect(await messages(fixture, pending)).toEqual([]);
-    expect(await messages(fixture, 'src/hooks/someNewHook.ts')).toHaveLength(1);
+  it('holds every file under src to the rule, the five files that once had literals included', async () => {
+    for (const file of [
+      'src/components/settings/APIKeysTab.tsx',
+      'src/components/system/ThrottlePanel.tsx',
+      'src/hooks/useCanOrganizeLibrary.ts',
+      'src/hooks/useCollections.ts',
+      'src/hooks/useLibraryPermission.ts',
+      'src/hooks/someNewHook.ts',
+    ]) {
+      expect(await messages(fixture, file), file).toHaveLength(1);
+    }
+  });
+
+  it('exempts only the generated permissions file', async () => {
+    expect(await messages(fixture, 'src/generated/permissions.ts')).toEqual([]);
+    expect(await messages(fixture, 'src/generator/permissions.ts')).toHaveLength(1);
   });
 });

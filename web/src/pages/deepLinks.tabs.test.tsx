@@ -25,7 +25,7 @@ vi.mock('../contexts/AuthContext', () => ({
   useAuth: () => ({
     initialized: true,
     authEnabled: true,
-    user: { id: 'u1', permissions: ['library.view', 'collections.manage'] },
+    user: { id: 'u1', permissions: ['books:view', 'books:collections.manage'] },
   }),
 }));
 vi.mock('../components/AIJobsPanel', () => ({ AIJobsPanel: () => null }));
