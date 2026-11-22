@@ -930,7 +930,6 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 	// (factoryResetNoOwnerLetter).
 	t.Run("owner routes, no owner set", func(t *testing.T) {
 		owners := rhrHiddenRoutes[23:]
-		headRoute := map[string]string{}
 		paths := map[string]string{
 			"POST /api/core/v1/system/factory-reset":                  "/api/core/v1/system/factory-reset",
 			"POST /api/v1/admin/guest-service-tokens/:userId/revoke":  "/api/v1/admin/guest-service-tokens/" + ids.target + "/revoke",
@@ -948,11 +947,7 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 		var cells []rhrCell
 		for _, route := range owners {
 			method, _, _ := strings.Cut(route, " ")
-			head := route
-			if alias, ok := headRoute[route]; ok {
-				head = alias
-			}
-			c := rhrCell{route: head, method: method, path: paths[route], note: route}
+			c := rhrCell{route: route, method: method, path: paths[route], note: route}
 			if route == "POST /api/core/v1/system/factory-reset" {
 				c.head = factoryResetNoOwnerLetter
 			}
