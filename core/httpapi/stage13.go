@@ -93,9 +93,11 @@ func (d AuthzDecision) Admitted() bool { return d.Refusal == nil }
 //     opts.ResolveAtom first: 403 permission_denied naming the missing scope,
 //     403 interactive_required when that scope is Sensitive and the method is
 //     not interactive (05-rbac §8). The auth-disabled principal is answered
-//     401 authentication_required instead (05-rbac §4.11, 05-authn §4.11),
-//     and is refused every LegacyCheck requirement (HEAD's in-handler
-//     auth.Can denies it, 05-rbac §4.11).
+//     403 interactive_required (AuthOffRefusal) instead, not the 401
+//     05-rbac §4.11 and 05-authn §4.11 name: a 401 authentication_required
+//     ends the SPA's session, and a no-auth install has none to end (F4-08
+//     ruling G5(a), 2026-11-22). It is refused every LegacyCheck requirement
+//     (HEAD's in-handler auth.Can denies it, 05-rbac §4.11).
 //
 // Every input it cannot prove admits is refused: a nil checker, a zero,
 // Delegated or unresolvable requirement, an unknown atom, a resolver that
@@ -163,7 +165,7 @@ func permRefusal(p *auth.Principal, perm rbac.Requirement, opts AuthzOptions) *E
 		return nil
 	}
 	if authOff {
-		return errAuthRequired()
+		return AuthOffRefusal()
 	}
 	if !ok {
 		return &Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "the route's permission cannot be resolved"}

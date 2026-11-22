@@ -295,10 +295,11 @@ func holds(p *auth.Principal, perm rbac.Permission) bool {
 // as at HEAD, whose credential guard, permission and owner gate also answer
 // 403. The one rule of its own comes after Authorize admits: a route other
 // than a view route needs a user to name as the actor, so a principal with
-// none (the auth-disabled one) is answered 401 there. The router admits that
-// principal on an unguarded route, so on those routes this 401 is what a
-// caller sees; on a guarded route Authorize has already refused it 403
-// interactive_required, as the router does. It passes no
+// none (the auth-disabled one) is answered 403 interactive_required there
+// (httpapi.UserRequired; a 401 would end a no-auth install's SPA session,
+// F4-08 ruling G5(a)). The router admits that principal on an unguarded route,
+// so on those routes this 403 is what a caller sees; on a guarded route
+// Authorize has already refused it the same way. It passes no
 // rbac catalog, so a non-interactive principal missing a Sensitive scope is
 // told permission_denied where the router says interactive_required; the
 // router judges first, so a caller never sees the difference. Only the
@@ -316,7 +317,7 @@ func (a *api) authorise(p *auth.Principal, g gate) (string, error) {
 		return "", d.Refusal
 	}
 	if !g.anon && subject == "" {
-		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
+		return "", httpapi.UserRequired(p)
 	}
 	return subject, nil
 }

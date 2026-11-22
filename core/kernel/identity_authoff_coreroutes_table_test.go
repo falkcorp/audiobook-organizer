@@ -102,8 +102,8 @@ const (
 	clOpenAPI       = "05-http-api 7 (the document is AnyAuthenticated unless core.http.openapi.public) with 05-rbac 4.11: the auth-disabled principal holds core:self"
 	clView          = "05-rbac 4.11 bullet 1 and 05-authn 4.13 (no guard on the row): the auth-disabled checker holds every scope that is neither AuthRequired nor Sensitive, and core:users.view and core:roles.view are ClassView only"
 	clInteractive   = "05-rbac 4.11 (a) and 05-authn 4.11 bullet 2 (SEC5-8): a Guards.Interactive route is refused because the auth-disabled principal is non-interactive (Method.MayChangeCredentials is false)"
-	clNeedUser      = "05-authn 4.11 bullet 3 (SEC-3) and 05-rbac 4.11 (d): credential metadata needs a user, the auth-disabled principal has none, so 401 authentication_required before the handler acts"
-	clAudit         = "05-rbac 4.11 (d) and 6.1: core:audit.view is AuthRequired, so the auth-disabled checker never holds it and the audit query and export answer 401"
+	clNeedUser      = "05-authn 4.11 bullet 3 (SEC-3) and 05-rbac 4.11 (d): credential metadata needs a user, the auth-disabled principal has none, so it is refused 403 interactive_required before the handler acts (05-authn and 05-rbac say 401 authentication_required; F4-08 ruling G5(a), 2026-11-22, makes it a 403 because a session-ending 401 would sign a no-auth install out of its own SPA)"
+	clAudit         = "05-rbac 4.11 (d) and 6.1: core:audit.view is AuthRequired, so the auth-disabled checker never holds it and the audit query and export answer 403 interactive_required (spec text: 401; F4-08 ruling G5(a))"
 	clReset         = "05-rbac 6.2 (factory-reset row) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive and Guards.Owner; Interactive refuses first"
 	clReview        = "05-rbac 7.1 (acknowledge each restore_admins_review holder: an interactive core:admin session, audited core.role.review_admin) and 4.11 bullet 1: core:admin is AuthRequired and the route carries Guards.Interactive; Interactive refuses first"
 	clSettings      = "05-config 1.3.7 (cited by confighttp/routes.go): settings keep their auth-off reach, AnyAuthenticated with the per-section and per-key checks inside the handler"
@@ -141,28 +141,28 @@ var offCoreRows = []offRow{
 	{Route: "GET /api/v1/auth/oauth/{provider}/callback", Want: offAllow, Clause: clPublic, Head: "A", HeadRoute: "GET /api/v1/auth/oauth/:provider/callback"},
 
 	// ---- the caller's own account: a user is required -------------------------
-	{Route: "GET /api/core/v1/me", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/me"},
+	{Route: "GET /api/core/v1/me", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/me"},
 	{Route: "PATCH /api/core/v1/me", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "D", HeadRoute: "PATCH /api/v1/auth/me"},
 	{Route: "PUT /api/core/v1/me/password", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "D", HeadRoute: "PUT /api/v1/auth/me/password"},
-	{Route: "GET /api/core/v1/me/sessions", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/sessions"},
+	{Route: "GET /api/core/v1/me/sessions", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/sessions"},
 	{Route: "DELETE /api/core/v1/me/sessions/{publicID}", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "D", HeadRoute: "DELETE /api/v1/auth/sessions/:id"},
-	{Route: "GET /api/core/v1/me/api-keys", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/api-keys"},
-	{Route: "POST /api/core/v1/me/api-keys", Body: offKeyCreateBody, Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "POST /api/v1/auth/api-keys"},
-	{Route: "PATCH /api/core/v1/me/api-keys/{id}", Body: offKeyStatusBody, Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "PATCH /api/v1/auth/api-keys/:id"},
-	{Route: "DELETE /api/core/v1/me/api-keys/{id}", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "DELETE /api/v1/auth/api-keys/:id"},
+	{Route: "GET /api/core/v1/me/api-keys", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/api-keys"},
+	{Route: "POST /api/core/v1/me/api-keys", Body: offKeyCreateBody, Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "POST /api/v1/auth/api-keys"},
+	{Route: "PATCH /api/core/v1/me/api-keys/{id}", Body: offKeyStatusBody, Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "PATCH /api/v1/auth/api-keys/:id"},
+	{Route: "DELETE /api/core/v1/me/api-keys/{id}", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "DELETE /api/v1/auth/api-keys/:id"},
 
 	// ---- API keys of other users, by ID ----------------------------------------
-	{Route: "GET /api/core/v1/api-keys", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/api-keys"},
-	{Route: "GET /api/core/v1/api-keys/{id}", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/api-keys/:id"},
-	{Route: "PATCH /api/core/v1/api-keys/{id}", Body: offKeyStatusBody, Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "PATCH /api/v1/auth/api-keys/:id"},
-	{Route: "DELETE /api/core/v1/api-keys/{id}", Want: offDeny, Code: "authentication_required", Clause: clNeedUser, Head: "D", HeadRoute: "DELETE /api/v1/auth/api-keys/:id"},
-	{Route: "GET /api/core/v1/users/{id}/api-keys", Want: offDeny, Code: "authentication_required", Clause: clNeedUser},
+	{Route: "GET /api/core/v1/api-keys", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/api-keys"},
+	{Route: "GET /api/core/v1/api-keys/{id}", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "GET /api/v1/auth/api-keys/:id"},
+	{Route: "PATCH /api/core/v1/api-keys/{id}", Body: offKeyStatusBody, Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "PATCH /api/v1/auth/api-keys/:id"},
+	{Route: "DELETE /api/core/v1/api-keys/{id}", Want: offDeny, Code: "interactive_required", Clause: clNeedUser, Head: "D", HeadRoute: "DELETE /api/v1/auth/api-keys/:id"},
+	{Route: "GET /api/core/v1/users/{id}/api-keys", Want: offDeny, Code: "interactive_required", Clause: clNeedUser},
 	{Route: "POST /api/core/v1/users/{id}/api-keys", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
 
 	// ---- users ------------------------------------------------------------------
 	{Route: "GET /api/core/v1/users", Want: offAllow, Clause: clView, Head: "A", HeadRoute: "GET /api/v1/users"},
 	{Route: "GET /api/core/v1/users/{id}", Want: offAllow, Clause: clView},
-	{Route: "GET /api/core/v1/users/invites", Want: offDeny, Code: "authentication_required", Clause: clBeyond, Head: "A", HeadRoute: "GET /api/v1/users/invites", Tightens: clBeyond, Beyond: true},
+	{Route: "GET /api/core/v1/users/invites", Want: offDeny, Code: "interactive_required", Clause: clBeyond, Head: "A", HeadRoute: "GET /api/v1/users/invites", Tightens: clBeyond, Beyond: true},
 	{Route: "POST /api/core/v1/users/invites", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "A", HeadRoute: "POST /api/v1/users/invite", Tightens: clInteractive},
 	{Route: "DELETE /api/core/v1/users/invites/{id}", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "A", HeadRoute: "DELETE /api/v1/users/invites/:id", Tightens: clInteractive},
 	{Route: "POST /api/core/v1/users/{id}/disable", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "A", HeadRoute: "POST /api/v1/users/:id/deactivate", Tightens: clInteractive},
@@ -171,7 +171,7 @@ var offCoreRows = []offRow{
 	{Route: "POST /api/core/v1/users/{id}/reset-password", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "A", HeadRoute: "POST /api/v1/users/:id/reset-password", Tightens: clInteractive},
 	{Route: "PUT /api/core/v1/users/{id}/roles", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
 	{Route: "POST /api/core/v1/users/{id}/temp-login", Want: offDeny, Code: "interactive_required", Clause: clInteractive, Head: "A", HeadRoute: "POST /api/v1/auth/temp-tokens", Tightens: clInteractive},
-	{Route: "GET /api/core/v1/users/{id}/sessions", Want: offDeny, Code: "authentication_required", Clause: clNeedUser},
+	{Route: "GET /api/core/v1/users/{id}/sessions", Want: offDeny, Code: "interactive_required", Clause: clNeedUser},
 	{Route: "DELETE /api/core/v1/users/{id}/sessions/{publicID}", Want: offDeny, Code: "interactive_required", Clause: clInteractive},
 
 	// ---- roles ------------------------------------------------------------------
@@ -184,8 +184,8 @@ var offCoreRows = []offRow{
 	{Route: "POST /api/core/v1/users/{id}/review-admin", Want: offDeny, Code: "interactive_required", Clause: clReview},
 
 	// ---- audit ------------------------------------------------------------------
-	{Route: "GET /api/core/v1/audit", Want: offDeny, Code: "authentication_required", Clause: clAudit},
-	{Route: "GET /api/core/v1/audit/export", Want: offDeny, Code: "authentication_required", Clause: clAudit},
+	{Route: "GET /api/core/v1/audit", Want: offDeny, Code: "interactive_required", Clause: clAudit},
+	{Route: "GET /api/core/v1/audit/export", Want: offDeny, Code: "interactive_required", Clause: clAudit},
 
 	// ---- settings ---------------------------------------------------------------
 	{Route: "GET /api/core/v1/settings/schema", Want: offAllow, Clause: clSettings},
@@ -218,9 +218,9 @@ var offControlRows = []offRow{
 		Clause: "05-authn 4.11 bullet 2 and httpapi.Guards.Session: only the user's own interactive sign-in (Method.Interactive) passes; the auth-disabled principal is neither interactive nor a user"},
 	{Route: "POST /api/alfred/v1/relay-owner", Want: offDeny, Code: "interactive_required",
 		Clause: "05-authn 4.8 and 4.11: Guards.Owner without an OwnerVerifier falls back to Interactive plus core:admin, which the auth-disabled principal is not"},
-	{Route: "GET /api/alfred/v1/vault", Want: offDeny, Code: "authentication_required",
-		Clause: "05-rbac 4.11 bullet 1: a route whose only scope is AuthRequired is answered 401 with auth disabled"},
-	{Route: "GET /api/alfred/v1/vault-any", Want: offDeny, Code: "authentication_required",
+	{Route: "GET /api/alfred/v1/vault", Want: offDeny, Code: "interactive_required",
+		Clause: "05-rbac 4.11 bullet 1: a route whose only scope is AuthRequired is refused with auth disabled: 403 interactive_required, the spec text says 401 (F4-08 ruling G5(a))"},
+	{Route: "GET /api/alfred/v1/vault-any", Want: offDeny, Code: "interactive_required",
 		Clause: "05-rbac 4.11 bullet 1 and 6.1: the auth-disabled checker never holds an AuthRequired scope, also when the requirement is an AnyOf, which the AllOf drop rule does not reach"},
 }
 

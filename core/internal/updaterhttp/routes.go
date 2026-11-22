@@ -172,7 +172,8 @@ func (a *api) wrap(g gate, h func(http.ResponseWriter, *http.Request, caller)) h
 // in the same order: a principal (401), the interactive guard (403
 // interactive_required), then the permission (403 permission_denied). The one
 // rule of its own comes after Authorize admits: every route names an actor, so
-// a principal with no user (the auth-disabled one) is answered 401. It passes
+// a principal with no user (the auth-disabled one) is answered 403
+// interactive_required (httpapi.UserRequired, F4-08 ruling G5(a)). It passes
 // no rbac catalog, so a non-interactive principal missing a Sensitive scope is
 // told permission_denied where the router says interactive_required; the
 // router judges first, so a caller never sees the difference.
@@ -188,7 +189,7 @@ func authorise(p *auth.Principal, g gate) (string, error) {
 		return "", d.Refusal
 	}
 	if subject == "" {
-		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
+		return "", httpapi.UserRequired(p)
 	}
 	return subject, nil
 }

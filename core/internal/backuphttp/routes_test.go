@@ -506,14 +506,13 @@ func TestBackupRoutesRefusalOrder(t *testing.T) {
 				// route asks for: a guarded route refuses it as the router
 				// does (403 interactive_required); an unguarded one, which
 				// the router admits, meets authorise's own rule that a
-				// non-view route needs a user to name as the actor (401).
+				// non-view route needs a user to name as the actor, and is
+				// answered the same 403 (F4-08 ruling G5(a): never the
+				// session-ending 401 for the auth-disabled principal).
 				t.Run("auth-disabled principal holding the permission", func(t *testing.T) {
 					r := newBHRig(t)
 					rep := r.run(bhAs(auth.MethodAuthDisabled, c.perm, rbac.CoreAdmin), c)
-					status, code := 401, "authentication_required"
-					if c.interactive || c.owner {
-						status, code = 403, "interactive_required"
-					}
+					status, code := 403, "interactive_required"
 					if rep.status != status || bhProblem(t, rep).Code != code {
 						t.Errorf("= %d %s, want %d %s", rep.status, rep.body, status, code)
 					}
