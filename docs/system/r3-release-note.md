@@ -63,4 +63,8 @@ The interface has new page addresses, and no old address is redirected. A bookma
 | `/maintenance` | `/system` |
 | every other page (Library, Book detail, Authors, Series, Works, Collections, Playlists, Trashed versions, the review workspace, and so on) | the same page under `/books/...` |
 
-Seven interface preferences (the theme excepted) reset once with this release: the new interface stores them under new names. They are the activity source and pinned-operations settings, the table column settings, the dismissed announcements, the welcome wizard's completed flag, the operations indicator's collapsed state, and the advanced-settings toggle.
+<!-- The operations indicator's collapsed state is not listed: #4928 (merged 2026-11-21, before R2 was cut) already
+     moved it to storageKey('operations', 'indicatorCollapse'), so that reset reaches users with R2, not R3. R3-04b
+     re-checks this list against main before the note is final. -->
+
+Six interface preferences (the theme excepted) reset once with this release: the new interface stores them under new names. They are the activity source and pinned-operations settings, the table column settings, the dismissed announcements, the welcome wizard's completed flag, and the advanced-settings toggle.
