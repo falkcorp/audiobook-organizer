@@ -48,6 +48,18 @@ func TestIdentityOptions_ShapeUnderTheFlip(t *testing.T) {
 		require.Equal(t, "ext:cfaccess", string(o.Authenticators[0].Spec.Method))
 		require.Equal(t, ".bootstrap-token", o.Auth.BootstrapTokenFile)
 		require.Equal(t, "session_id", o.ConfigFlags["core.auth.session.cookie_name"])
+
+		// Core derives core.auth.owner.required from this extension's OwnerSet,
+		// so the extension Options hands core must read the configured owner,
+		// the same value the bridge reads (a fake wired in only here would leave
+		// the real wiring unpinned).
+		ext := o.Authenticators[0]
+		prev := config.Snapshot().OwnerEmail
+		t.Cleanup(func() { config.Mutate(func(c *config.Config) { c.OwnerEmail = prev }) })
+		config.Mutate(func(c *config.Config) { c.OwnerEmail = waynE })
+		require.True(t, ext.OwnerSet(), "an owner is configured but core's owner gate would be off")
+		config.Mutate(func(c *config.Config) { c.OwnerEmail = "" })
+		require.False(t, ext.OwnerSet())
 	})
 	t.Run("off", func(t *testing.T) {
 		t.Cleanup(SetIdentityFlipForTest(false))
