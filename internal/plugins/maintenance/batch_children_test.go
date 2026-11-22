@@ -17,11 +17,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	metafetchpkg "github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
@@ -86,8 +88,10 @@ func overlapsAny(a, b []entity.Ref) bool {
 	return false
 }
 
-// A child's Subjects name only its batch's book and book_file rows (the wav child
-// also holds files whole-kind, for the clips and links it writes on disk).
+// A child's Subjects name its batch's book and book_file rows, and only whole-kind
+// the resources a batch's book list cannot name: metadata_cache and indexes (the
+// ModifyBook writes, batchCacheRefs) and, for the wav child, files (the clips and
+// links it writes on disk). Nothing else is held kind-wide.
 func TestBatchChildren_SubjectsAreOnlyTheBatch(t *testing.T) {
 	defs := batchDefs(t)
 	raw := scopeJSON(t, "bk-alfred", "bk-barbara")
@@ -98,6 +102,8 @@ func TestBatchChildren_SubjectsAreOnlyTheBatch(t *testing.T) {
 				bookRef("bk-alfred"), bookFileRef("f-bk-alfred"),
 				bookRef("bk-barbara"), bookFileRef("f-bk-barbara"),
 			}
+			want = append(want,
+				tasks.Res("books", string(ops.ResMetadataCache)), tasks.Res("books", string(ops.ResIndexes)))
 			if k.child == extractWAVBatchChildKind {
 				want = append(want, tasks.Res("books", string(ops.ResFiles)))
 			}
@@ -105,8 +111,48 @@ func TestBatchChildren_SubjectsAreOnlyTheBatch(t *testing.T) {
 				t.Fatalf("Subjects = %v, want %v", got, want)
 			}
 			for _, r := range got {
-				if r.ID == "" && r.Kind != string(ops.ResFiles) {
-					t.Errorf("%s is a whole-kind hold: it would block every other writer of the kind, the thing a batch exists to avoid", r)
+				switch r.Kind {
+				case string(ops.ResMetadataCache), string(ops.ResIndexes), string(ops.ResFiles):
+				default:
+					if r.ID == "" {
+						t.Errorf("%s is a whole-kind hold: it would block every other writer of the kind, the thing a batch exists to avoid", r)
+					}
+				}
+			}
+		})
+	}
+}
+
+// Every resource a child's Effects declare is held, per row or kind-wide: a
+// resource a child writes but does not hold is one another kind can write while a
+// child runs (the admission gate compares held sets), the gap review found for
+// metadata_cache and indexes. And what the child's ModifyBook, the one store
+// method of the three that writes beyond the file row, writes is inside Effects:
+// internal/maintenance/resources/resources.go:136 (bookW = books, metadata_cache,
+// indexes), :139 (fileRow = book_files + bookW) for UpdateBookFile/SetBookFileHash.
+func TestBatchChildren_EveryDeclaredWriteIsHeld(t *testing.T) {
+	defs := batchDefs(t)
+	raw := scopeJSON(t, "bk-alfred")
+	for _, k := range batchChildKinds {
+		t.Run(string(k.child), func(t *testing.T) {
+			c := tasks.CommonOf(defs[k.child])
+			held := holds(t, defs[k.child], raw)
+			declared := map[string]bool{}
+			for _, r := range c.Effects.WriteSet() {
+				declared[r.Kind] = true
+				heldKind := false
+				for _, h := range held {
+					if h.Kind == r.Kind {
+						heldKind = true
+					}
+				}
+				if !heldKind {
+					t.Errorf("the child declares a write of %s but holds none of it (held %v)", r.Kind, held)
+				}
+			}
+			for _, res := range t6RowsOf("ModifyBook") {
+				if !declared[string(res)] {
+					t.Errorf("ModifyBook writes %s, which the child does not declare", res)
 				}
 			}
 		})
@@ -264,9 +310,7 @@ func TestBatchAdmission_OnlyTheBatchIsHeld(t *testing.T) {
 
 	// The writes of a ModifyBook on one book, as a per-book metadata kind
 	// (internal/repairs-style Subjects) declares them.
-	modify := func(book string) []entity.Ref {
-		return []entity.Ref{bookRef(book), tasks.ResID("books", string(ops.ResMetadataCache), book)}
-	}
+	modify := func(book string) []entity.Ref { return []entity.Ref{bookRef(book)} }
 	wholeKind := tasks.CommonOf(defs[durationBackfillKind]).Effects.WriteSet() // acoustid.backfill's shape
 	if len(wholeKind) == 0 {
 		t.Fatal("fixture: the whole-kind writer declares no writes")
@@ -276,7 +320,7 @@ func TestBatchAdmission_OnlyTheBatchIsHeld(t *testing.T) {
 		t.Run(string(k.child), func(t *testing.T) {
 			held := holds(t, defs[k.child], batchN)
 			if overlapsAny(held, modify("bk-gordon")) {
-				t.Errorf("a metadata write to a book outside batch N is held behind the child (%v)", held)
+				t.Errorf("a book-row write to a book outside batch N is held behind the child (%v)", held)
 			}
 			// Two batches of one sweep share no row. (The wav child also holds files
 			// whole-kind, for the clips and links it writes by path, so two wav
@@ -299,6 +343,45 @@ func TestBatchAdmission_OnlyTheBatchIsHeld(t *testing.T) {
 				t.Errorf("the parent holds %v: it must hold nothing", parent)
 			}
 		})
+	}
+}
+
+// A child and a writer of metadata_cache or indexes do not run together: the
+// child's ModifyBook writes both, so it holds both kind-wide, and the reaper
+// (metadata_cache_reap.go) and metafetch's cache sweep, which declare them, wait
+// for the short child where they waited for the whole run at HEAD. The kinds are
+// the real definitions.
+func TestBatchAdmission_ChildAndCacheWritersDoNotRunTogether(t *testing.T) {
+	defs := batchDefs(t)
+	batchN := scopeJSON(t, "bk-alfred", "bk-barbara")
+
+	writers := map[string]tasks.Definition{}
+	for _, d := range (&Plugin{}).t6g5Kinds(t6g5Deps{}, nil) {
+		if d.Kind() == metadataCacheReapKind {
+			writers["metadata_cache_reap"] = d
+		}
+	}
+	for _, d := range (&metafetchpkg.Plugin{}).Kinds(metafetchpkg.KindDeps{}, nil) {
+		if d.Kind() == "books.metafetch.pcache-sweep" {
+			writers["metafetch.pcache-sweep"] = d
+		}
+	}
+	if len(writers) != 2 {
+		t.Fatalf("fixture: found %d of the two cache writers", len(writers))
+	}
+	for name, w := range writers {
+		// What the dispatcher holds for the writer, with no params.
+		wheld := holds(t, w, nil)
+		if len(wheld) == 0 {
+			t.Fatalf("fixture: %s holds nothing", name)
+		}
+		for _, k := range batchChildKinds {
+			t.Run(name+"/"+string(k.child), func(t *testing.T) {
+				if !overlapsAny(holds(t, defs[k.child], batchN), wheld) {
+					t.Errorf("%s (holds %v) is admitted alongside a %s child, which writes metadata_cache and indexes through ModifyBook", name, wheld, k.child)
+				}
+			})
+		}
 	}
 }
 
@@ -743,9 +826,10 @@ func TestBatchParent_MigrateSweepsTheLibraryInBatchesOfOneHundred(t *testing.T) 
 			}
 			seen[b.ID] = true
 		}
-		// Subjects named this batch's rows and no others.
-		if want := len(p.Books) * 2; len(c.subject) != want {
-			t.Errorf("child %d holds %d refs, want %d (a book and a file row each)", i, len(c.subject), want)
+		// Subjects named this batch's rows and no others, plus the two kind-wide
+		// cache refs (metadata_cache, indexes).
+		if want := len(p.Books)*2 + 2; len(c.subject) != want {
+			t.Errorf("child %d holds %d refs, want %d (a book and a file row each, and metadata_cache and indexes)", i, len(c.subject), want)
 		}
 	}
 	if !slices.Equal(sizes, []int{100, 100, 50}) || len(seen) != 250 {
@@ -988,5 +1072,118 @@ func TestBatchChildren_RefuseModeKeys(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// ---- a resumed parent keeps its counters; a child starts only from its parent ----
+
+// recFileIntroStats is a stats sink that records every snapshot the parent
+// persists, then writes it through to the store.
+type recFileIntroStats struct {
+	headT6G4Stats
+	sink *orderSink
+}
+
+func (r recFileIntroStats) PutFileIntroStats(st *database.FileIntroStats) error {
+	_ = r.sink.PutFileIntroStats(st)
+	return r.headT6G4Stats.PutFileIntroStats(st)
+}
+
+// A transcribe-file-intros parent restarted mid-run (the kernel's resume, or a
+// continue-in-place) restores the rollup from its checkpoint, counters and
+// StartedAt included, and never writes this attempt's fresh seed over the stats
+// key first: a monitor reading the key between the attempt's start and the first
+// folded batch would see the whole run's counters reset to zero. HEAD restores
+// prior.Stats on a resume (file_intro_transcribe.go:676-681).
+func TestBatchParent_ResumedFileIntroParentKeepsItsCountersAndStartedAt(t *testing.T) {
+	fx := newIntroFx(t)
+	fileIntroSlots = func() int { return 1 }
+	paths := fx.yieldFiles(3)
+	rec := &t6g4Calls{}
+	var handed []tasks.Writer
+	deps := t6g4RealDeps(fx.p, rec, &handed)
+	sink := newOrderSink(false, 0)
+	deps.Stats = recFileIntroStats{headT6G4Stats: deps.Stats.(headT6G4Stats), sink: sink}
+	defs := batchDefsOf(t6g4KindsUnchecked(deps, nil))
+
+	ph, cancel := t6g4RealHost(fileIntroKind, 0, &t6g4RunWriter{name: "parent"})
+	defer cancel()
+	bh, rc := newBatchRunHost(t, ph, tasks.ModeLive, defs)
+	bh.child = func(kind tasks.Kind) (*tasks.RC, tasks.Writer) {
+		w := &t6g4RunWriter{name: "child"}
+		ch, cancelChild := t6g4RealHost(kind, 0, w)
+		t.Cleanup(cancelChild)
+		return tasks.NewRC(ch), w
+	}
+
+	// An earlier attempt's checkpoint: one batch folded (Batches 1) with 7 files
+	// already transcribed, started long before this attempt.
+	startedAt := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	if err := rc.Checkpoint(batchState[fileIntroResult]{
+		Batches: 1, Steps: 2,
+		Rollup: fileIntroResult{RunID: string(rc.RunID()), Stats: &database.FileIntroStats{
+			RunOpID: string(rc.RunID()), StartedAt: startedAt, UpdatedAt: startedAt,
+			Attempted: 7, OK: 7,
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	bh.resumed = true
+	if _, err := runT6G4Kind(t, defs[fileIntroKind], rc, ""); err != nil {
+		t.Fatalf("resumed parent run: %v", err)
+	}
+
+	puts := sink.snapshot()
+	if len(puts) == 0 {
+		t.Fatal("the resumed parent persisted no counters at all")
+	}
+	for i, p := range puts {
+		if p.OK < 7 || p.Attempted < 7 {
+			t.Errorf("snapshot %d has OK=%d Attempted=%d: the prior attempt's 7 files were reset (a resume must not seed the key afresh)", i, p.OK, p.Attempted)
+		}
+		if !p.StartedAt.Equal(startedAt) {
+			t.Errorf("snapshot %d has StartedAt %v, want the first attempt's %v", i, p.StartedAt, startedAt)
+		}
+	}
+	last := puts[len(puts)-1]
+	if !last.Done || last.OK != 7+len(paths) {
+		t.Errorf("final snapshot %+v, want Done with OK = 7 carried + %d transcribed", last, len(paths))
+	}
+}
+
+// A batch child started by hand, by a schedule or by anything but its parent's
+// sweep is refused with a typed error before it decodes a scope, builds a writer
+// or touches a row: its params name a parent run id and a batch that only the
+// sweep may name, and a clear_run_id rollback finds what children wrote by that
+// id.
+func TestBatchChildren_RefuseAStartNotFromTheirParent(t *testing.T) {
+	for _, k := range batchChildKinds {
+		for _, trig := range []tasks.Trigger{tasks.TriggerManual, tasks.TriggerSchedule, tasks.TriggerWindow, tasks.TriggerOnStart, tasks.TriggerOutbox, tasks.TriggerResume} {
+			t.Run(string(k.child)+"/"+string(trig), func(t *testing.T) {
+				deps, pr := fakeT6G4Deps(t)
+				def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), k.child)
+				h, rc := newT6G4RC(k.child, tasks.ModeLive, &t6g4RunWriter{})
+				h.trigger = trig
+				err := t6g4RunSafely(t, def, rc, string(scopeJSON(t, "bk-alfred")))
+				if !errors.Is(err, errBatchNotFromParent) {
+					t.Fatalf("err = %v, want errBatchNotFromParent", err)
+				}
+				if pr.newWriterCalls != 0 {
+					t.Errorf("a refused start built a writer")
+				}
+			})
+		}
+		t.Run(string(k.child)+"/parent", func(t *testing.T) {
+			t.Setenv(serverdecode.EnvVar, "true")
+			deps, _ := fakeT6G4Deps(t)
+			def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), k.child)
+			h, rc := newT6G4RC(k.child, tasks.ModeLive, &t6g4RunWriter{})
+			if h.Trigger() != tasks.TriggerParent {
+				t.Fatalf("fixture: the child's host reports trigger %q", h.Trigger())
+			}
+			if err := t6g4RunSafely(t, def, rc, string(scopeJSON(t, "bk-alfred"))); errors.Is(err, errBatchNotFromParent) {
+				t.Fatalf("a start from the parent was refused: %v", err)
+			}
+		})
 	}
 }
