@@ -58,9 +58,15 @@ func TestBridgeSites_APIKeyList_ShowAllIsJudgedByTheWorld(t *testing.T) {
 		t.Run(w.name, func(t *testing.T) {
 			caller := &database.User{ID: "u-bruce", Username: "bruce"}
 			store := handlersmocks.NewMockAPIKeyHandlerStore(t)
-			if w.allowed {
+			// Under identity the keys are core's (F4-08 B10z): the verdict
+			// reaches core's AdminAPIKeys as its all flag, and books' store
+			// is not read.
+			keys := &fakeKeyAdmin{}
+			switch {
+			case w.bound:
+			case w.allowed:
 				store.EXPECT().ListAllAPIKeys().Return(nil, nil)
-			} else {
+			default:
 				store.EXPECT().ListAPIKeysForUser("u-bruce").Return(nil, nil)
 			}
 			c, rec := newAuthCtx("GET", "/auth/api-keys?all=true", nil)
@@ -68,15 +74,19 @@ func TestBridgeSites_APIKeyList_ShowAllIsJudgedByTheWorld(t *testing.T) {
 			if len(w.headPerms) > 0 {
 				c.Request = c.Request.WithContext(auth.WithPermissions(c.Request.Context(), w.headPerms))
 			}
-			var id = bridgeIdentity(t, string(auth.PermUsersManage))
+			var id = withKeys(bridgeIdentity(t, string(auth.PermUsersManage)), keys, fakeKeyScoper{})
 			if !w.bound {
 				id = nil
 			}
 			if w.bound || len(w.scopes) > 0 {
-				bindCore(c, id, coreauth.MethodSession, w.scopes...)
+				bindCoreUser(c, id, coreauth.MethodSession, w.scopes...)
 			}
 			handlers.NewAPIKeyHandler(store).List(c)
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			if w.bound {
+				require.NotNil(t, keys.all, "core's key listing was not asked")
+				require.Equal(t, w.allowed, *keys.all, "?all=true reached core as the wrong verdict")
+			}
 		})
 	}
 }

@@ -157,6 +157,16 @@ func (s *Server) apiKeyOwnedByAnotherUser(c *gin.Context) bool {
 	if !ok || caller == nil {
 		return true
 	}
+	if s.identity != nil {
+		// Under core identity the keys are core's (M3 drained books' rows):
+		// read the key as the caller, and refuse whatever cannot be read.
+		p, ok := coreauth.PrincipalFrom(c.Request.Context())
+		if !ok || s.identity.Admin == nil {
+			return true
+		}
+		k, err := s.identity.Admin.AdminAPIKey(c.Request.Context(), p, c.Param("id"))
+		return err != nil || k == nil || string(k.Owner) != caller.ID
+	}
 	key, err := s.storeForWiring().GetAPIKey(c.Param("id"))
 	if err != nil || key == nil {
 		return true

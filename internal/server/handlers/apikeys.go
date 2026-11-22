@@ -270,6 +270,11 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 			return
 		}
 	}
+	// Under core identity the key is core's (apikeys_identity.go).
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.createUnderIdentity(c, id, req, targetUserID, asked)
+		return
+	}
 	rawToken, hash, err := database.GenerateAPIKeyToken()
 	if err != nil {
 		httputil.InternalError(c, "failed to generate token", err)
@@ -329,6 +334,10 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "authentication required")
 		return
 	}
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.listUnderIdentity(c, id, caller.ID)
+		return
+	}
 	showAll := c.Query("all") == "true" && isAdminUser(c)
 	var keys []database.APIKey
 	var err error
@@ -377,6 +386,10 @@ func (h *APIKeyHandler) Get(c *gin.Context) {
 		httputil.RespondWithUnauthorized(c, "authentication required")
 		return
 	}
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.getUnderIdentity(c, id)
+		return
+	}
 	id := c.Param("id")
 	key, err := h.store.GetAPIKey(id)
 	if err != nil {
@@ -405,6 +418,10 @@ func (h *APIKeyHandler) UpdateStatus(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
 		httputil.RespondWithUnauthorized(c, "authentication required")
+		return
+	}
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.updateStatusUnderIdentity(c, id, caller.ID)
 		return
 	}
 	id := c.Param("id")
@@ -466,6 +483,10 @@ func (h *APIKeyHandler) Revoke(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
 		httputil.RespondWithUnauthorized(c, "authentication required")
+		return
+	}
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.revokeUnderIdentity(c, id, caller.ID)
 		return
 	}
 	id := c.Param("id")

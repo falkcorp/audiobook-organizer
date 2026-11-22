@@ -41,6 +41,14 @@ func ambientScopes() []rbac.Permission {
 	return []rbac.Permission{"core:self", "core:metrics.read", scopeReading}
 }
 
+// keyScoper is M3's key-scope rule over this declaration: the value
+// m3.New builds from Config.Atoms, Catalog and Ambient, which identityM3
+// fills from the same three fields, so books' key route under identity and
+// the import share one function and one input (F4-08 B10z).
+func (d *identityDecl) keyScoper() (*m3.KeyScoper, error) {
+	return m3.NewKeyScoper(d.atoms, d.catalog, d.ambient)
+}
+
 // buildIdentityDecl assembles the declaration. The seed sets are not typed in a
 // second time: core's seed for editor and viewer is the DefaultGrants of the
 // catalog (rbac.buildSeeds), so the sets M3 intersects a key against are read
