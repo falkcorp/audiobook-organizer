@@ -25,10 +25,25 @@ written, so running it again after a `git pull` replaces exactly what changed
 differs from the rendered one is never overwritten without --replace-conf,
 since the owner may have edited it; the difference is shown.
 
-It does not write host.conf (the unit drop-in the owner writes once; see
-docs/system/deploy-and-gpu-ops.md, "host.conf"), and it never touches
-Makefile.local: install the bundle FIRST, then sync Makefile.local, because
-the synced recipes call the helper at their first step.
+It does not write host.conf in this mode (`--host-conf` below does), and it
+never touches Makefile.local: install the bundle FIRST, then sync
+Makefile.local, because the synced recipes call the helper at their first step.
+
+`--host-conf SOURCE` (`make install-host-conf`) is the other mode. It installs
+SOURCE, a file the owner keeps locally (deploy/host.conf, gitignored), as the
+unit's host.conf drop-in, /etc/systemd/system/<unit>.d/host.conf, which the
+helpers' install-staged refuses to work without. It takes the user, group and
+unit from the rollback.conf this installer wrote (rollback_helper.load_config),
+runs SOURCE through the helper's own byte checks and rule check
+(rollback_helper._read_root_conf, _check_rules: nothing is re-implemented
+here), shows create / replace / fix / unchanged and the diff against what is
+installed, and with --apply installs it root:root 0644 atomically,
+`systemctl daemon-reload`s, checks the installed file with the helper's own
+_check_host_conf and prints the unit's DropInPaths. It never restarts the
+service and adds no sudoers line: it runs under the owner's own sudo. SOURCE is
+opened once by rollback_helper._read_staged (no symlink in any component, one
+regular file with one link, owned by whoever ran sudo) and the bytes checked
+are the bytes written. A refusal names the file and the line, never the text.
 
 What it trusts, because it runs as root and writes files root later executes:
 
@@ -80,6 +95,7 @@ import difflib
 import shlex
 import stat
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -485,6 +501,170 @@ def check_whole_config(visudo: str) -> str:
     return "" if r.returncode == 0 else (r.stdout + r.stderr).strip() or f"exit {r.returncode}"
 
 
+HOST_CONF_MODE = 0o644
+UNIT_DIR_MODE = 0o755
+
+
+def checked_host_conf(rh: ModuleType, cfg: dict[str, str], data: bytes, source: str) -> str:
+    """The text of data (the bytes read from source), after the helper's own
+    checks: _read_root_conf's (size, UTF-8, no CR or NUL; it wants a file root
+    or this user owns, so it reads a private copy) and _check_rules. A refusal
+    names source and the line, never the text. The bytes returned are the
+    bytes checked: the copy is read back and compared."""
+    with tempfile.TemporaryDirectory(prefix="aorg-host-conf.") as d:
+        copy = os.path.join(d, "host.conf")
+        fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        try:
+            text = rh._read_root_conf(copy)
+        except rh.RefusedError as e:
+            raise rh.RefusedError(str(e).replace(copy, source)) from None
+    if text.encode("utf-8") != data:
+        raise rh.RefusedError(f"{source} changed while it was being checked; nothing installed")
+    rh._check_rules(text, cfg, source)
+    return text
+
+
+def host_conf_main(a: argparse.Namespace) -> int:
+    """`--host-conf SOURCE`: see the module docstring."""
+    rh = load("rollback_helper", HERE / "rollback_helper.py")
+    try:
+        return install_host_conf(a, rh)
+    except rh.RefusedError as e:
+        print(f"install_helpers: {e}", file=sys.stderr)
+        return 1
+
+
+def install_host_conf(a: argparse.Namespace, rh: ModuleType) -> int:
+    root = a.root.rstrip("/")
+    rh.CONFIG = f"{root}{rh.CONFIG}"
+    rh.SYSTEMD_DIR = f"{root}{rh.SYSTEMD_DIR}"
+    if a.systemctl:
+        rh.TOOLS["systemctl"] = a.systemctl
+    bad = check_sources()
+    if bad and (a.apply or os.geteuid() == 0):
+        raise rh.RefusedError(
+            "REFUSING to run as root from a checkout that is not root's (owner, group/other "
+            f"write bit, ACL or symlink on a path it reads or sits under): {', '.join(bad[:6])}"
+            + (f" and {len(bad) - 6} more" if len(bad) > 6 else "")
+            + ". It loads rollback_helper.py as root, so whoever can edit it gets root. Run "
+            "`make install-host-conf APPLY=1`, which exports HEAD to a root-owned directory first"
+        )
+    try:
+        cfg = rh.load_config()
+    except rh.RefusedError as e:
+        raise rh.RefusedError(
+            f"{e} (`make install-rollback-helpers` writes it; host.conf is checked against "
+            "its service_user, service_group and unit)"
+        ) from None
+    if a.unit and a.unit != cfg["unit"]:
+        raise rh.RefusedError(
+            f"--unit {a.unit} is not the unit {rh.CONFIG} names ({cfg['unit']}): the helpers "
+            "check and install host.conf for that one; nothing installed"
+        )
+    # Opened once, no symlink in any component, one regular file with one
+    # link, owned by whoever ran sudo; the bytes checked are the bytes written.
+    fd, _ = rh._read_staged(a.host_conf, rh.UNIT_LIMIT)
+    try:
+        data = rh._read_all(fd, rh.UNIT_LIMIT + 1)
+    finally:
+        os.close(fd)
+    if len(data) > rh.UNIT_LIMIT:
+        raise rh.RefusedError(f"{a.host_conf} is over {rh.UNIT_LIMIT} bytes; nothing installed")
+    text = checked_host_conf(rh, cfg, data, a.host_conf)
+    unit_dir = f"{rh.SYSTEMD_DIR}/{cfg['unit']}.d"
+    dest = f"{unit_dir}/{rh.HOST_CONF}"
+    dir_step = Step(unit_dir, b"", UNIT_DIR_MODE, "dir")
+    file_step = Step(dest, data, HOST_CONF_MODE, "file", "host.conf")
+    try:
+        check_parents(root, unit_dir, include_target=True)
+        dir_state, file_state = state(dir_step), state(file_step)
+    except SystemExit as e:
+        msg = str(e.code)
+        raise rh.RefusedError(msg.split("install_helpers: ", 1)[-1]) from None
+    directives = rh._logical_lines(text, a.host_conf)
+    print(f"host.conf, from {a.host_conf}: {len(directives)} directive line(s), accepted by the")
+    print("rollback helper's own rules (no other Exec*= line, no + or ! prefix, no User=/Group=")
+    print("other than rollback.conf's, ...).")
+    if bad:
+        print(
+            f"  NOTICE: {len(bad)} path(s) of this checkout are not root's or are open to others "
+            f"(first: {bad[0]}). `make install-host-conf APPLY=1` exports HEAD to a root-owned "
+            "directory first."
+        )
+    if not any(
+        k.strip(" \t") == "ExecStart" and v.strip(" \t")
+        for k, _, v in (line.partition("=") for _, line in directives)
+    ):
+        print(
+            "  NOTICE: it sets no ExecStart=, so the service would restart on the base unit's "
+            "command line (see deploy/host.conf.example)."
+        )
+    print(f"  {dir_state:<9} {unit_dir}")
+    print(f"  {file_state:<9} {dest}")
+    if file_state == "replace" and not os.path.islink(dest):
+        try:
+            old = rh._read_root_conf(dest)
+        except (rh.RefusedError, OSError):
+            print(f"{dest} is not a file the helper accepts; it is replaced (not shown).")
+        else:
+            print(f"Change to {dest}:")
+            print(
+                "\n".join(
+                    difflib.unified_diff(
+                        old.splitlines(), text.splitlines(), "installed", "given", lineterm=""
+                    )
+                )
+            )
+    elif file_state == "fix":
+        print(f"{dest} has the right text; its owner or mode is fixed.")
+    elif file_state == "unreadable":
+        print(f"{dest} cannot be read by this run; APPLY=1 compares it as root.")
+    if not a.apply:
+        print(
+            "\nThis was a dry run: nothing was changed. Run it again with APPLY=1 "
+            "(make install-host-conf APPLY=1) to install it, then daemon-reload. "
+            "The service is not restarted."
+        )
+        return 0
+    if os.geteuid() != 0 and not root:
+        print("\nApplying needs root: re-running under sudo.", flush=True)
+        os.execvp("sudo", sudo_argv())  # noqa: S606 (argv)
+    chown = os.geteuid() == 0
+    if dir_state != "unchanged":
+        ensure_dir(unit_dir, UNIT_DIR_MODE)
+        fix_dir(unit_dir, UNIT_DIR_MODE, chown)
+        print(f"  {'made' if dir_state == 'create' else 'fixed'} {unit_dir}")
+    if file_state != "unchanged":
+        write_atomic(dest, data, HOST_CONF_MODE, chown)
+        _sync_dir(unit_dir)
+        print(f"  wrote {dest}")
+    # The exact check install-staged runs before it copies anything.
+    rh._check_host_conf(cfg)
+    print("  the helper accepts it (the same check `install-staged unit` runs)")
+    rh._daemon_reload()
+    print("  systemctl daemon-reload done; the service was NOT restarted")
+    shown = subprocess.run(  # noqa: S603 (argv, no shell)
+        [rh.TOOLS["systemctl"], "show", "-p", "DropInPaths", cfg["unit"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    line = shown.stdout.strip() or f"(systemctl show exited {shown.returncode}, no output)"
+    print(f"  {line}")
+    if dest not in line.split("=", 1)[-1].split():
+        print(
+            f"  NOTICE: {dest} is not in that list. Before `make deploy` has installed the unit "
+            "itself, systemd may not list a drop-in; run `make rollback-check` after a deploy."
+        )
+    print(
+        "\nDone. The running service keeps its old settings until its next restart "
+        "(`make deploy`, or restart it yourself when you choose)."
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     for flag in ("bin", "db", "unit", "state-dir", "service-user", "archive-dir", "stage-bin"):
@@ -500,11 +680,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--root", default="", help="put every destination under this prefix")
     p.add_argument("--visudo", default="visudo", help="the visudo command (tests give a fake)")
+    p.add_argument(
+        "--host-conf",
+        default="",
+        metavar="SOURCE",
+        help="install SOURCE (an absolute path) as the unit's host.conf drop-in instead of the bundle",
+    )
+    p.add_argument(
+        "--systemctl", default="", help="the systemctl to run, with --host-conf (tests give a fake)"
+    )
     a = p.parse_args(argv)
     sys.dont_write_bytecode = True  # root writes no .pyc beside sources others may own
     a.unit = a.unit or "audiobook-organizer.service"
     global STAGING
     STAGING = bool(a.root)
+    if a.host_conf:
+        return host_conf_main(a)
     if not a.deploy_user:
         raise SystemExit(
             "install_helpers: --deploy-user is required: the sudoers drop-in lets that user run the "
@@ -643,9 +834,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"  wrote {sudoers_path}")
     print(
-        "\nInstalled. Still yours: host.conf (the unit drop-in, written once; see "
-        "docs/system/deploy-and-gpu-ops.md), then sync Makefile.local from Makefile.local.example. "
-        "`make rollback-check` shows what the host keeps."
+        "\nInstalled. Next: host.conf (the unit drop-in: write deploy/host.conf, then "
+        "`make install-host-conf`; see docs/system/deploy-and-gpu-ops.md), then sync "
+        "Makefile.local from Makefile.local.example. `make rollback-check` shows what the "
+        "host keeps."
     )
     return 1 if refuse_conf else 0
 

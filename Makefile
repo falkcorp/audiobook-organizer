@@ -1198,6 +1198,41 @@ install-rollback-helpers:
 	    --unit="$(DEPLOY_UNIT)" $(ROLLBACK_INSTALL_ARGS) $(if $(REPLACE_CONF),--replace-conf,); \
 	fi
 
+## install-host-conf: The owner's install of the unit's host.conf drop-in ON THE DEPLOY HOST from HOST_CONF (default deploy/host.conf, gitignored): dry run by default, APPLY=1 installs and daemon-reloads, never restarts
+#
+# Run it on the deploy host, in a checkout of the commit being deployed, AFTER
+# `make install-rollback-helpers` (it takes the service user, group and unit
+# from the rollback.conf that wrote). host.conf is the file the helpers'
+# install-staged refuses to work without; deploy/host.conf.example is the
+# template. The dry run runs the file through the helper's own rule check, shows
+# create / replace / fix / unchanged and the diff against what is installed, and
+# changes nothing. APPLY=1 exports HEAD to a fresh root-made `mktemp -d` under
+# $(ROLLBACK_EXPORT_DIR), exactly as install-rollback-helpers does, runs the
+# installer from it with sudo, installs root:root 0644 atomically, runs
+# `systemctl daemon-reload` and prints the unit's DropInPaths. It does NOT
+# restart the service and grants the deploy user nothing (no sudoers line): it
+# runs under your own sudo. HOST_CONF is read once, by the root installer, which
+# refuses a symlink in any component, a non-regular file, a file with a second
+# link or one that is not owned by the user who ran sudo.
+HOST_CONF ?= deploy/host.conf
+.PHONY: install-host-conf
+install-host-conf:
+	@[ -e "$(HOST_CONF)" ] || [ -L "$(HOST_CONF)" ] || (echo "ERROR: $(HOST_CONF) does not exist. Copy deploy/host.conf.example to it, fill in this host's values, and run again (or give HOST_CONF=<absolute path>)."; exit 1)
+	@if [ -n "$(APPLY)" ]; then \
+	  set -e; \
+	  echo "→ Exporting HEAD to a fresh root-owned directory under $(ROLLBACK_EXPORT_DIR) (the installer runs as root and will not run from a checkout that is not root's)..."; \
+	  git archive HEAD deploy/rollback-helpers > /dev/null; \
+	  exp=$$(sudo mktemp -d "$(ROLLBACK_EXPORT_DIR)/aorg-install.XXXXXX"); \
+	  case "$$exp" in "$(ROLLBACK_EXPORT_DIR)"/aorg-install.??????) ;; *) echo "ERROR: unexpected export directory '$$exp'"; exit 1;; esac; \
+	  trap 'sudo rm -rf -- "$$exp"' EXIT; \
+	  git -c tar.umask=0022 archive HEAD deploy/rollback-helpers | sudo tar -x -f - --no-same-owner -C "$$exp"; \
+	  sudo python3 -I -B "$$exp/deploy/rollback-helpers/install_helpers.py" \
+	    --host-conf="$(abspath $(HOST_CONF))" --unit="$(DEPLOY_UNIT)" --apply; \
+	else \
+	  python3 -I -B deploy/rollback-helpers/install_helpers.py \
+	    --host-conf="$(abspath $(HOST_CONF))" --unit="$(DEPLOY_UNIT)"; \
+	fi
+
 # Quick aliases
 .PHONY: t c b v
 t: test

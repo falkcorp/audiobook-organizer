@@ -26,27 +26,17 @@
 # docs/system/runbooks.md and docs/status/2026-07-02-local-cutover-and-matching.md.
 
 # --- host.conf, NOT this file -------------------------------------------
-# /etc/systemd/system/audiobook-organizer.service.d/host.conf, written once
-# by the owner as root (sudo tee / sudoedit), then
-# `sudo systemctl daemon-reload`. `install-staged unit` and `local-conf`
-# refuse to deploy without it, and refuse a host.conf that runs anything but the
-# service user's ExecStart (no other Exec*= line, no + or ! prefix, no
-# PermissionsStartOnly=, AmbientCapabilities= or other User=/Group=):
-#
-# [Service]
-# # Clear the base unit's ExecStart, then set the full production command line.
-# ExecStart=
-# ExecStart=/usr/local/bin/audiobook-organizer serve --host 0.0.0.0 --port 8484 \
-#       --db /path/to/audiobooks.pebble \
-#       --tls-cert /path/to/server.crt --tls-key /path/to/server.key \
-#       --http3-port 8484
-# # Leave TimeoutStopSec= unset unless you need more than the base unit's
-# # 60 s, which covers the kernel's shutdown budget (25 s by default), the
-# # store's close after it (up to 10 s for a Pebble access still in flight)
-# # and a rollback's previous release (see deploy/audiobook-organizer.service).
-# # Never set it lower. Production raises it to 90 s for large in-flight
-# # operations (fingerprint rescans, dedup purges):
-# TimeoutStopSec=90
+# The ExecStart= override, WorkingDirectory=, MemoryMax= and TimeoutStopSec=
+# live in /etc/systemd/system/audiobook-organizer.service.d/host.conf, which
+# the owner installs as root, not in this file. Write deploy/host.conf (copy
+# deploy/host.conf.example, gitignored, and fill in this host's values), then
+# on the deploy host run `make install-host-conf` (a dry run that checks it and
+# shows the diff) and `make install-host-conf APPLY=1` (installs it and
+# daemon-reloads, never restarts). `install-staged unit` and
+# `local-conf` refuse to deploy without it, and refuse a host.conf that runs
+# anything but the service user's ExecStart (no other Exec*= line, no + or !
+# prefix, no PermissionsStartOnly=, AmbientCapabilities= or other User=/Group=);
+# the install target runs the same check first.
 # --------------------------------------------------------------------------
 
 [Service]
