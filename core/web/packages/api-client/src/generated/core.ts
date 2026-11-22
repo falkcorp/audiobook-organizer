@@ -898,6 +898,7 @@ export type components = {
         "core.APIKey": {
             /** Format: date-time */
             created_at: string;
+            description?: string;
             /** Format: date-time */
             expires_at?: null | string;
             id: string;
@@ -1017,6 +1018,7 @@ export type components = {
             username: string;
         };
         "core.KeyCreate": {
+            description?: string;
             /** Format: date-time */
             expires_at?: null | string;
             expires_in?: null | string;
@@ -1027,6 +1029,7 @@ export type components = {
             api_key: {
                 /** Format: date-time */
                 created_at: string;
+                description?: string;
                 /** Format: date-time */
                 expires_at?: null | string;
                 id: string;
@@ -1114,6 +1117,7 @@ export type components = {
             items: null | {
                 /** Format: date-time */
                 created_at: string;
+                description?: string;
                 /** Format: date-time */
                 expires_at?: null | string;
                 id: string;

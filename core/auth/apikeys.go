@@ -41,6 +41,9 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 	if len(spec.Scopes) == 0 {
 		return "", nil, fmt.Errorf("%w: an API key needs at least one scope", ErrBadInput)
 	}
+	if err := CheckKeyDescription(spec.Description); err != nil {
+		return "", nil, fmt.Errorf("%w: %w", ErrBadInput, err)
+	}
 	scopes := slices.Clone(spec.Scopes)
 	slices.Sort(scopes)
 	scopes = slices.Compact(scopes)
@@ -114,7 +117,7 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor *Principal, spec KeySp
 		}
 	}
 
-	key := &APIKey{Owner: owner, Name: spec.Name, Scopes: scopes, Status: KeyActive, CreatedAt: now, ExpiresAt: expires}
+	key := &APIKey{Owner: owner, Name: spec.Name, Description: spec.Description, Scopes: scopes, Status: KeyActive, CreatedAt: now, ExpiresAt: expires}
 	var raw string
 	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
 		k := *key
