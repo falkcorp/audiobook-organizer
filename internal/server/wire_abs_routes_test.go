@@ -193,7 +193,9 @@ func TestABSRedirectExclusion_LeavesABSPathsAlone(t *testing.T) {
 func TestWireABSRoutes_DisabledByDefaultRegistersNothing(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	s := &Server{router: gin.New()}
-	s.wireABSRoutes() // config.AppConfig.ABSAPIEnabled is false by default
+	if err := s.wireABSRoutes(); err != nil {
+		t.Fatalf("wireABSRoutes: %v", err)
+	}
 
 	for _, ri := range s.router.Routes() {
 		for _, abs := range absRouteList() {
@@ -710,7 +712,9 @@ func TestWireABSRoutes_LogsStateEvenWhenDisabled(t *testing.T) {
 	config.Mutate(func(c *config.Config) { c.ABSAPIEnabled = false })
 	defer config.Mutate(func(c *config.Config) { c.ABSAPIEnabled = prev })
 
-	s.wireABSRoutes()
+	if err := s.wireABSRoutes(); err != nil {
+		t.Fatalf("wireABSRoutes: %v", err)
+	}
 
 	var found bool
 	for _, record := range handler.Records() {
