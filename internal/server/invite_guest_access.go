@@ -306,7 +306,7 @@ func (s *Server) syncGuestPolicy(parent context.Context, client guestPolicyEnsur
 	// The grant was revoked while Cloudflare was answering. The revoke saw
 	// CFAdded=false and left the entry; this goroutine added it, so it
 	// removes it, under the same keep rules as a revoke.
-	if why := s.keepGuestPolicyEmail(userID, email); why != "" {
+	if why := s.keepGuestPolicyEmail(parent, userID, email); why != "" {
 		inviteAccessLog.Info("invite accept: access was revoked during the Cloudflare update; entry kept: %s", why)
 		record(database.InviteGuestPolicyAdded, "the access was revoked during the update; the entry was kept because "+why)
 		return
@@ -332,11 +332,22 @@ func (s *Server) syncGuestPolicy(parent context.Context, client guestPolicyEnsur
 // or when it is on the operator's OAUTH_ALLOWED_EMAILS: in each case someone
 // still intends that address to have access.
 func (s *Server) revokeGuestAccess(userID, email, reason string) {
+	ctx := s.bgCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.revokeGuestAccessCtx(ctx, userID, email, reason)
+}
+
+// revokeGuestAccessCtx is revokeGuestAccess with the context the keep rule's
+// read of core's accounts runs under (the handlers' revoke has none of its own;
+// the account-event callbacks pass theirs).
+func (s *Server) revokeGuestAccessCtx(ctx context.Context, userID, email, reason string) {
 	email = coreauth.NormalizeEmail(email)
 	if email == "" || userID == "" {
 		return
 	}
-	gs, ok := database.AsCapability[database.InviteEmailGrantStore](s.storeForWiring())
+	gs, ok := s.guestGrantStore()
 	if !ok {
 		return
 	}
@@ -352,7 +363,7 @@ func (s *Server) revokeGuestAccess(userID, email, reason string) {
 	if !grant.CFAdded {
 		return
 	}
-	if why := s.keepGuestPolicyEmail(userID, email); why != "" {
+	if why := s.keepGuestPolicyEmail(ctx, userID, email); why != "" {
 		inviteAccessLog.Info("guest access revoke (%s): Cloudflare guest-policy entry kept: %s", reason, why)
 		return
 	}
@@ -392,7 +403,7 @@ func (s *Server) revokeGuestAccess(userID, email, reason string) {
 // accepted emailed invite, or an identity provider). If the lookup fails the
 // entry is kept: a failed removal is fixed by hand, a wrong one cuts someone
 // off.
-func (s *Server) keepGuestPolicyEmail(userID, email string) string {
+func (s *Server) keepGuestPolicyEmail(ctx context.Context, userID, email string) string {
 	snap := config.Snapshot()
 	if coreauth.SameEmail(snap.OwnerEmail, email) {
 		return "it is the owner's email"
@@ -421,8 +432,10 @@ func (s *Server) keepGuestPolicyEmail(userID, email string) string {
 			}
 		}
 	}
-	// Still the books store: moving the verified-holder lookup to core is B10r
-	// phase 2's work, not this function's.
+	if s.identity != nil {
+		// Under core identity the accounts are core's, not books' store's.
+		return s.keepForCoreHolder(ctx, userID, email)
+	}
 	holder, err := s.storeForWiring().GetUserByVerifiedEmail(email)
 	if err != nil {
 		return "the verified-email lookup failed, so another verified holder cannot be ruled out"
