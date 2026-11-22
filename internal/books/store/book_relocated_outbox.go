@@ -29,13 +29,17 @@ const bookRelocatedPartitions = 16
 // BookID, so one book's relocations are sequenced in commit order (the store's
 // per-book write stripe serializes them, 05-events §5E.5.2 "Partitioning").
 //
-// FromPath and ToPath are the paths of this one commit. A consumer acts on the
-// book's path as stored when it runs, never on ToPath: a later relocation of the
-// same book may already have committed, and its own message follows this one.
+// It names the book only. The paths of the commit are left out on purpose: a
+// consumer acts on the book's path as stored when it runs, never on the path
+// this commit wrote (a later relocation of the same book may already have
+// committed, and its own message follows this one), and the one consumer
+// (deluge's RelocationConsumer) reads neither. A path in the payload would be a
+// value that is stale by design and invites a consumer to trust it. No spec
+// names them (05-events §5E.13 specifies the topic by its trigger, not its
+// fields), and nothing has staged the topic yet, so there is no stored row to
+// stay compatible with.
 type BookRelocatedV1 struct {
-	BookID   string `json:"book_id"`
-	FromPath string `json:"from_path"`
-	ToPath   string `json:"to_path"`
+	BookID string `json:"book_id"`
 }
 
 // BookRelocatedTopic is the typed topic. A function, not a package variable
@@ -90,5 +94,5 @@ func (p *PebbleStore) stageBookRelocated(batch *GatedBatch, id, oldPath, newPath
 	if batch.lb == nil {
 		return errRelocationNeedsCoreBatch
 	}
-	return (*fn)(batch.lb, BookRelocatedV1{BookID: id, FromPath: oldPath, ToPath: newPath})
+	return (*fn)(batch.lb, BookRelocatedV1{BookID: id})
 }
