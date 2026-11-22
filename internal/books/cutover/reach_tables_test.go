@@ -7,7 +7,10 @@ package cutover
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/falkcorp/mediacore/httpapi"
@@ -210,5 +213,225 @@ func reachMaskedProblemsOf(routes []httpapi.LegacyRoute) []string {
 func TestReachOracle_RoutesAGuardDominatesKeepTheirRequirement(t *testing.T) {
 	for _, p := range reachMaskedProblems() {
 		t.Error(p)
+	}
+}
+
+// reachHandlerRefusalCells are the eight auth-off cells the router admits and R0's
+// handler refused, on routes that are not Public: the seven credential routes
+// (reachIdentityRoutes, 401: the handler needs a user and auth off has none) and
+// the approval of a run (403: ApproveRun needs a user to record). They were read
+// from the removed evaluator's own diff, its auth-off cells that went R0 D to R2 A
+// on a route that is not Public, and the registered path proves each again
+// (registered_reach_eval_test.go's auth-off boot, B10e2's HandlerRefusals cells).
+// Each is an F4-08 obligation (seams.d/F4-07.md, round-2 MINOR-3), the bar of
+// F4-07-HANDLER-REFUSALS.
+var reachHandlerRefusalCells = append(slices.Clone(reachIdentityRoutes), "POST /api/v3/ops/runs/:id/approve")
+
+// reachWantR0Only and reachWantR2Only are the routes only one side has, each with
+// the reason. A route that appears or disappears fails, never silently.
+var (
+	reachWantR0Only = []string{
+		"GET /", // the SPA handler, outside the manifest (served by the embedded frontend)
+		"GET /api/v1/operations/reconcile/preview", // P14C-PREVIEW-ROUTE: dropped 2026-11-18 (an unqueued full-library sweep on library.view, no caller; POST /operations/reconcile/scan and scan/latest cover it)
+		"POST /api/v1/system/factory-reset",        // HEAD's reset routes: deleted at F4, the native core route succeeds them (05-rbac 6.2)
+		"POST /api/v1/system/reset",
+	}
+	reachWantR2Only = []string{
+		"POST /api/v1/admin/guest-service-tokens/:userId/reissue", // newer than the R0 tag: no baseline to compare with
+		"POST /api/v1/auth/phone-key/claim",                       // F4-08 B10s: the guest's one-time phone-app key under core identity; newer than the R0 tag
+	}
+)
+
+// reachWantR2OnlyVerdicts pins what each R2-only route admits at stage 13, principal
+// by principal (the letters in the order of the principal table: verdicts.json's
+// 36 principals before the auth-disabled one). An R2-only route has no R0 recording,
+// so no cell is compared and a change of its requirement or of its Interactive guard
+// would move reach and fail nothing; the letters are the decision, and a mutant that
+// moves one fails on the registered path (registered_reach_eval_test.go). The
+// claim's letters are the credential routes' shape (the same as the ones before
+// PUT /auth/me/password in verdicts.json): the seven human sessions but the
+// fp-worker role admit (any signed-in user claims their own key), every API key,
+// the anonymous caller and the auth-off principal are refused (a credRoute needs
+// an interactive session that has a user). The reissue route is not listed: its
+// Owner guard masks its requirement, which reachMaskedRoutes and the owner-set twin
+// pin instead.
+var reachWantR2OnlyVerdicts = map[string]string{
+	"POST /api/v1/auth/phone-key/claim": "AAADAAADDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+}
+
+// reachOwnerTableProblems holds the owner-set tables to the manifest and to R0's
+// owner_set recording, with no evaluator: what remains of the removed owner-set
+// model once the registered path (B10e1r's cells) judges the owner routes itself.
+//
+//   - the recording boots R0 with owner_email set and no Access verifier, so its
+//     owner_set names an owner and covers exactly reachOwnerRecorded;
+//   - the manifest's Guards.Owner routes, the delegated ones left out, are the
+//     recorded ones less the R0-only plus the R2-only (the 9 to 8 mapping);
+//   - every owner route the recording has no row for has a declared twin that is
+//     recorded, Owner-guarded in the manifest and asks the same requirement;
+//   - no principal passes an owner route in the recording (the table holds no
+//     owner: reachOwnerAssured is false for every name), the admin session's
+//     refusal is the owner gate's, some principal the main recording allowed is
+//     refused there (the gate was on), and an R0-only route is not in the manifest;
+//   - the owner boots' canary is the main recording's.
+func reachOwnerTableProblems(vd *reachR0Doc, manifest []httpapi.LegacyRoute, twins map[string]string) []string {
+	var p []string
+	if vd.OwnerSet == nil {
+		return []string{"verdicts.json has no owner_set recording: the owner-gated routes were recorded without an owner (record_r0_reach.py)"}
+	}
+	if vd.OwnerSet.OwnerEmail == "" {
+		p = append(p, "owner_set names no owner_email: R0's owner gate was not on in it")
+	}
+	var got []string
+	recorded := map[string]reachR0Route{}
+	for _, r := range vd.OwnerSet.Routes {
+		got = append(got, r.key())
+		recorded[r.key()] = r
+	}
+	if !slices.Equal(got, reachOwnerRecorded) {
+		p = append(p, "owner_set routes are "+strings.Join(got, ", ")+", want "+strings.Join(reachOwnerRecorded, ", "))
+	}
+
+	perm := map[string]string{}
+	var have []string
+	inManifest := map[string]bool{}
+	ownerGuarded := map[string]bool{}
+	for _, lr := range manifest {
+		k := lr.Method + " " + lr.GinPath
+		inManifest[k] = true
+		perm[k] = lr.Perm.String()
+		if lr.Guards.Owner && !reachDelegated(lr) {
+			have = append(have, k)
+			ownerGuarded[k] = true
+		}
+	}
+	want := slices.DeleteFunc(slices.Clone(reachOwnerRecorded), func(k string) bool { return slices.Contains(reachOwnerR0Only, k) })
+	want = append(want, reachOwnerR2Only...)
+	slices.Sort(want)
+	slices.Sort(have)
+	if !slices.Equal(have, want) {
+		p = append(p, "the manifest's Guards.Owner routes are "+strings.Join(have, ", ")+", the recording (less the R0-only, plus the R2-only) gives "+strings.Join(want, ", "))
+	}
+	if len(have) != 8 {
+		p = append(p, fmt.Sprintf("the manifest has %d Guards.Owner routes, the mapping names eight", len(have)))
+	}
+
+	for _, k := range have {
+		if _, ok := recorded[k]; ok {
+			continue
+		}
+		if _, ok := twins[k]; !ok {
+			p = append(p, k+": an owner route with no owner_set recording and no declared twin (reachOwnerTwins), so nothing recorded stands for it")
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(twins)) {
+		twin := twins[k]
+		switch {
+		case recorded[twin].Method == "":
+			p = append(p, k+": its declared twin "+twin+" is not in the owner_set recording")
+		case !ownerGuarded[twin]:
+			p = append(p, k+": its declared twin "+twin+" has no Guards.Owner in the manifest, so it is no stand-in for an owner route")
+		case perm[k] == "" || perm[k] != perm[twin]:
+			p = append(p, k+": requirement "+perm[k]+" differs from its twin "+twin+" ("+perm[twin]+"): not the same requirement")
+		}
+	}
+
+	main := map[string]string{}
+	for _, r := range vd.Routes {
+		main[r.key()] = r.Verdict
+	}
+	for _, r := range vd.OwnerSet.Routes {
+		k := r.key()
+		if !strings.Contains(r.AdminRefusal, reachOwnerGateText) {
+			p = append(p, k+": the admin session's recorded refusal is "+fmt.Sprintf("%q", r.AdminRefusal)+", not the owner gate's ("+reachOwnerGateText+")")
+		}
+		if len(r.Verdict) != len(vd.Principals) {
+			p = append(p, fmt.Sprintf("%s: verdict has %d letters for %d principals", k, len(r.Verdict), len(vd.Principals)))
+			continue
+		}
+		moved := false
+		for i, name := range vd.Principals {
+			if !reachOwnerAssured(name) && r.Verdict[i] != 'D' {
+				p = append(p, k+" "+name+": the owner set admits a principal that is not the verified owner")
+			}
+			if m := main[k]; len(m) == len(r.Verdict) && m[i] == 'A' && r.Verdict[i] == 'D' {
+				moved = true
+			}
+		}
+		if !moved {
+			p = append(p, k+": no principal is allowed in the main recording and refused in the owner set: the owner gate shows no effect")
+		}
+		if slices.Contains(reachOwnerR0Only, k) && inManifest[k] {
+			p = append(p, k+": is R0-only (the reset pair core replaces) and the manifest has it")
+		}
+	}
+	if o := vd.OwnerSet.Canary; o == nil || !maps.Equal(o, vd.Canary) {
+		p = append(p, "owner_set canary is not the main recording's canary: the owner boots' principals did not behave as the main boots' did")
+	}
+	return p
+}
+
+func TestReachOwnerTables_MatchTheManifestAndTheOwnerSetRecording(t *testing.T) {
+	_, vd := reachLoad(t)
+	if p := reachOwnerTableProblems(vd, reachManifest(), reachOwnerTwins); len(p) > 0 {
+		t.Fatalf("the owner tables, the manifest and the owner_set recording disagree:\n%s", strings.Join(p, "\n"))
+	}
+}
+
+// Each doctoring of the manifest, the twins or the recording is reported, never
+// absorbed.
+func TestReachOwnerTables_FailOnADoctoredManifestTwinOrRecording(t *testing.T) {
+	_, vd := reachLoad(t)
+	reissue := reachOwnerR2Only[0]
+	mutateManifest := func(f func(*httpapi.LegacyRoute)) []httpapi.LegacyRoute {
+		m := slices.Clone(reachManifest())
+		for i := range m {
+			f(&m[i])
+		}
+		return m
+	}
+	cases := []struct {
+		name     string
+		vd       *reachR0Doc
+		manifest []httpapi.LegacyRoute
+		twins    map[string]string
+		want     string
+	}{
+		{"the Owner guard dropped on the R2-only route", vd, mutateManifest(func(lr *httpapi.LegacyRoute) {
+			if lr.Method+" "+lr.GinPath == reissue {
+				lr.Guards.Owner = false
+			}
+		}), reachOwnerTwins, "Guards.Owner routes"},
+		{"the R2-only route's twin is not declared", vd, reachManifest(), map[string]string{}, "no declared twin"},
+		{"the twin is a route the recording lacks", vd, reachManifest(), map[string]string{reissue: "POST /api/v1/batcave/gadgets"}, "is not in the owner_set recording"},
+		{"the twin lost its Owner guard", vd, mutateManifest(func(lr *httpapi.LegacyRoute) {
+			if lr.Method+" "+lr.GinPath == reachOwnerTwins[reissue] {
+				lr.Guards.Owner = false
+			}
+		}), reachOwnerTwins, "no stand-in"},
+		{"the twin asks a different requirement", vd, mutateManifest(func(lr *httpapi.LegacyRoute) {
+			if lr.Method+" "+lr.GinPath == reissue {
+				lr.Perm = reachManifest()[0].Perm
+			}
+		}), reachOwnerTwins, "not the same requirement"},
+		{"no owner_set recording", &reachR0Doc{}, reachManifest(), reachOwnerTwins, "no owner_set recording"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := strings.Join(reachOwnerTableProblems(c.vd, c.manifest, c.twins), "\n"); !strings.Contains(got, c.want) {
+				t.Errorf("want a problem containing %q, got:\n%s", c.want, got)
+			}
+		})
+	}
+	// An owner set that admits a principal fails.
+	doctored := *vd
+	o := *vd.OwnerSet
+	o.Routes = slices.Clone(o.Routes)
+	v := []byte(o.Routes[0].Verdict)
+	v[0] = 'A'
+	o.Routes[0].Verdict = string(v)
+	doctored.OwnerSet = &o
+	if got := strings.Join(reachOwnerTableProblems(&doctored, reachManifest(), reachOwnerTwins), "\n"); !strings.Contains(got, "not the verified owner") {
+		t.Errorf("an owner-set verdict admitting a principal was not reported:\n%s", got)
 	}
 }
