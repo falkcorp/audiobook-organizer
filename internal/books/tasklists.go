@@ -8,13 +8,16 @@ package books
 import (
 	"fmt"
 
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
@@ -30,6 +33,7 @@ type taskListInputs struct {
 	ITunes      itunes.BooksTaskInputs
 	Acoustid    acoustid.BooksTaskInputs
 	Scheduler   scheduler.BooksTaskInputs
+	Repairs     repairs.BooksTaskInputs
 }
 
 // bookTaskLists is every task definition the books module registers through
@@ -44,8 +48,6 @@ type taskListInputs struct {
 //     (t6g1Deps with PlanRuns left for the flip until #5003 merges, t6g5Deps,
 //     t6g7Deps) and their entries in maintenance.BooksTaskLists.
 //   - TODO-F5-18-A6-DEDUP: the dedup plugin's KindDeps builder (five groups).
-//   - TODO-F5-18-A6-REPAIRS: repairs.KindDeps (the fixers, FixerStores binding,
-//     the six-capability repairs.Writer and the kernel's PlannedRows).
 //   - TODO-F5-18-A6-SERVER-T7: internal/server's t7Deps builder, in a new file.
 //
 // Left out on purpose: the 14 group-6 maintenance kinds. They hold a
@@ -104,5 +106,25 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	}
 	out = append(out, l...)
 
+	ri := in.Repairs
+	ri.Scopes = atomScopes
+	l, err = repairs.BooksTaskLists(ri)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
+
 	return out, nil
+}
+
+// atomScopes resolves a HEAD permission atom to the native scopes books' atom
+// table (AtomTable) writes for it, which is what a Repairs kind's Start
+// requirement is made of. An atom the table does not hold resolves to false.
+func atomScopes(atom auth.Permission) ([]rbac.Permission, bool) {
+	for _, a := range AtomTable() {
+		if a.Name == string(atom) {
+			return a.Scopes, len(a.Scopes) > 0
+		}
+	}
+	return nil, false
 }

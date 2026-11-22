@@ -27,8 +27,9 @@ import (
 // bulk-apply gate, not through a tasks.Writer. The gate therefore stamps the
 // whole sweep as ONE write over the kind's declared resources (a write-ahead
 // intent for the pass, and a refusal for a Preview or a stopped run before the
-// sweep starts), the way the group-4 and group-5 writers stamp their batched
-// passes. It does not fence the sweep's individual rows.
+// sweep starts). It does not fence the sweep's individual rows, and the row is
+// a copy of the resources the kind declares (extra_ops.go), so a test, not the
+// type system, keeps the two in step. Both are carries for the flip.
 
 // MetadataUpgrader is the upgrade sweep: metabatch.MetadataUpgradeService.
 type MetadataUpgrader interface {
@@ -51,11 +52,14 @@ type BooksTaskInputs struct {
 // module's own dependency values.
 func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	var missing []string
-	for name, set := range map[string]bool{
-		"Upgrader": in.Upgrader != nil, "StandDownKey": in.StandDownKey != "", "Schedules": in.Schedules != nil,
+	for _, c := range []struct {
+		name string
+		set  bool
+	}{
+		{"Upgrader", in.Upgrader != nil}, {"StandDownKey", in.StandDownKey != ""}, {"Schedules", in.Schedules != nil},
 	} {
-		if !set {
-			missing = append(missing, name)
+		if !c.set {
+			missing = append(missing, c.name)
 		}
 	}
 	if len(missing) > 0 {
