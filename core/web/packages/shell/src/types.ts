@@ -50,6 +50,15 @@ export interface NavContribution<M extends ModuleManifest> {
   to: PageId<M> | { page: PageId<M>; search?: string };
   permission?: Perm<M>;    // hidden when the user lacks it
   order?: number;
+  // Selection rules (F9-03 prep; not in the 07 §7.4.2 text, see
+  // seams.d/F9-03-prep-nav.md). matchPath is relative to /<module id>/ like a
+  // route path, and an entry is selected when the location's pathname equals it
+  // (default: the page's own path, query removed). matchSearch is the decoded
+  // value of the `search` query parameter the entry additionally requires, so a
+  // Library group can tell "All Books" ('') from "In Progress"
+  // ('read_status:in_progress'); the rule is layout/sidebarSelection.ts.
+  matchPath?: string;
+  matchSearch?: string;
   // A React hook (FE-22): must be named use*, have stable identity, and obey
   // the rules of hooks. The shell calls it inside a dedicated <NavBadge>
   // component per entry, so the React Compiler and rules-of-hooks accept it.

@@ -13,6 +13,9 @@ export interface NavItem {
   moduleId: string;
   label: string;
   href: string;
+  /** The entry's matchPath resolved under /<module id>/, when it set one. */
+  matchPath?: string;
+  matchSearch?: string;
   entry: NavContribution<ModuleManifest>;
   children: NavItem[];
 }
@@ -24,6 +27,11 @@ export function pageHref(mod: ModuleUI, to: NavContribution<ModuleManifest>['to'
   if (!route) throw new Error(`nav: module ${mod.id} links to page ${page}, which it has no route for`);
   const search = typeof to === 'string' || !to.search ? '' : to.search.startsWith('?') ? to.search : `?${to.search}`;
   return `/${mod.id}/${route.path}${search}`;
+}
+
+/** An entry's matchPath under /<module id>/ ('' is the module's root). */
+function matchHref(mod: ModuleUI, matchPath: string): string {
+  return matchPath === '' ? `/${mod.id}` : `/${mod.id}/${matchPath}`;
 }
 
 /**
@@ -45,6 +53,8 @@ export function buildNav(modules: readonly ModuleUI[], grants: Grants): NavItem[
           moduleId: mod.id,
           label: e.label,
           href: pageHref(mod, e.to),
+          ...(e.matchPath !== undefined ? { matchPath: matchHref(mod, e.matchPath) } : {}),
+          ...(e.matchSearch !== undefined ? { matchSearch: e.matchSearch } : {}),
           entry: e,
           children: walk(e.children ?? []),
         }));
