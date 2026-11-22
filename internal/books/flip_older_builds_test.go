@@ -8,6 +8,7 @@ package books
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -223,6 +224,25 @@ func TestCutoverRefusedByOlderBuilds(t *testing.T) {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
+// changeOf says what a write did to a file whose content went from before to
+// after: the bytes it appended (a log line names the boot that wrote it), or,
+// for a rewrite, both sizes and the new tail. A bare "changed" left a CI-only
+// failure of TestCutoverRefusedByOlderBuilds with nothing to say which boot
+// wrote state/logs/abo.log.
+func changeOf(before, after string) string {
+	const max = 4096
+	clip := func(s string) string {
+		if len(s) > max {
+			return "..." + s[len(s)-max:]
+		}
+		return s
+	}
+	if strings.HasPrefix(after, before) {
+		return fmt.Sprintf("appended %q", clip(after[len(before):]))
+	}
+	return fmt.Sprintf("rewritten, %d bytes before and %d after, ending %q", len(before), len(after), clip(after))
+}
+
 func atoi(t *testing.T, s string) int {
 	t.Helper()
 	n, err := strconv.Atoi(s)
@@ -238,7 +258,7 @@ func imageDiff(before, after map[string]string) []string {
 		if w, ok := after[k]; !ok {
 			out = append(out, "removed "+k)
 		} else if w != v {
-			out = append(out, "changed "+k)
+			out = append(out, "changed "+k+": "+changeOf(v, w))
 		}
 	}
 	for k := range after {
