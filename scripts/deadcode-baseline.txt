@@ -1543,7 +1543,11 @@ internal/plugins/maintenance.Plugin.creditsBackfillKind
 internal/plugins/maintenance.Plugin.dedupExactTriageKind
 internal/plugins/maintenance.Plugin.dedupeBookFileRowsKind
 internal/plugins/maintenance.Plugin.durationBackfillKind
+internal/plugins/maintenance.Plugin.extractWAVBatchKind
+internal/plugins/maintenance.Plugin.extractWAVBatchParent
 internal/plugins/maintenance.Plugin.extractWAVClipsKind
+internal/plugins/maintenance.Plugin.fileIntroBatchKind
+internal/plugins/maintenance.Plugin.fileIntroBatchParent
 internal/plugins/maintenance.Plugin.fileIntroTranscribeKind
 internal/plugins/maintenance.Plugin.filePathCollisionReportKind
 internal/plugins/maintenance.Plugin.fileProvenanceCaptureKind
@@ -1552,6 +1556,8 @@ internal/plugins/maintenance.Plugin.folderCoverBackfillKind
 internal/plugins/maintenance.Plugin.fsRegroupXMLKind
 internal/plugins/maintenance.Plugin.identIndexKind
 internal/plugins/maintenance.Plugin.integrityCheckKind
+internal/plugins/maintenance.Plugin.introMigrateBatchKind
+internal/plugins/maintenance.Plugin.introMigrateBatchParent
 internal/plugins/maintenance.Plugin.introMigrateSingleFileKind
 internal/plugins/maintenance.Plugin.introTranscribeNativeKind
 internal/plugins/maintenance.Plugin.itunesCloneIntoLibraryKind
@@ -1631,6 +1637,12 @@ internal/plugins/maintenance.auxRunReporter.SetCurrentItem
 internal/plugins/maintenance.auxStoreCompactDef
 internal/plugins/maintenance.auxStoreCompactDefEvery
 internal/plugins/maintenance.auxStoreCompactKindList
+internal/plugins/maintenance.batchBooksOf
+internal/plugins/maintenance.batchScope.subjects
+internal/plugins/maintenance.batchScope.validate
+internal/plugins/maintenance.batchSubjects
+internal/plugins/maintenance.batchWorkIDs
+internal/plugins/maintenance.bookFileRef
 internal/plugins/maintenance.bookRef
 internal/plugins/maintenance.booksGate.do
 internal/plugins/maintenance.booksJobsStore.AddBookTagWithSource
@@ -1731,6 +1743,7 @@ internal/plugins/maintenance.booksJobsStore.UpdateBookFile
 internal/plugins/maintenance.booksJobsStore.UpdateBookFileHashes
 internal/plugins/maintenance.booksJobsStore.UpdateBookmarkTitle
 internal/plugins/maintenance.booksJobsStore.UpdateSeriesName
+internal/plugins/maintenance.booksOfWork
 internal/plugins/maintenance.booksT6G2Store.BookAtPathIndexBuilt
 internal/plugins/maintenance.booksT6G2Store.BookFilesAtPath
 internal/plugins/maintenance.booksT6G2Store.CheckAuthorBooksLegacyRetire
@@ -1963,11 +1976,15 @@ internal/plugins/maintenance.junkTitleFixer.buildJunkIndex
 internal/plugins/maintenance.junkTitleFixer.candidateTitle
 internal/plugins/maintenance.kindRef
 internal/plugins/maintenance.loadNativeAuthorityPlan
+internal/plugins/maintenance.mergeExtractWAV
+internal/plugins/maintenance.mergeFileIntro
+internal/plugins/maintenance.mergeIntroMigrate
 internal/plugins/maintenance.nativeAuthorityPlans
 internal/plugins/maintenance.nativeCBFingerprint
 internal/plugins/maintenance.nativeCBLedger.judgedSources
 internal/plugins/maintenance.nativeCBLedger.markJudged
 internal/plugins/maintenance.nativeCBLedger.others
+internal/plugins/maintenance.newBatchHost
 internal/plugins/maintenance.newBooksGate
 internal/plugins/maintenance.newJobsDeps
 internal/plugins/maintenance.newT6G2Deps
@@ -1991,6 +2008,7 @@ internal/plugins/maintenance.reportPathOver
 internal/plugins/maintenance.resolveJobsCaps
 internal/plugins/maintenance.resolveProductionAuthorsParallelism
 internal/plugins/maintenance.resolveProductionNativeParams.UnmarshalJSON
+internal/plugins/maintenance.runBatchSweep
 internal/plugins/maintenance.runClassLists.ClearClassLists
 internal/plugins/maintenance.runClassLists.SaveClassLists
 internal/plugins/maintenance.runRowStore.GetOpRows
