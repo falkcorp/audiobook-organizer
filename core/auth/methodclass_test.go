@@ -33,7 +33,7 @@ func TestClassify_RegistryAnswersEachPropertyOnItsOwn(t *testing.T) {
 		{"ext:creds", false, true},
 		{"ext:neither", false, false},
 		{"books.abs", false, false},
-		{"ext:nobody", false, false},  // unregistered extension: fail closed
+		{"ext:nobody", false, false},   // unregistered extension: fail closed
 		{"books.nobody", false, false}, // unregistered compat method: fail closed
 	}
 	for _, tc := range cases {
