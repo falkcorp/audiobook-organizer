@@ -282,22 +282,6 @@ type reachGate struct {
 	handler     bool // the handler itself checks core:admin (reachHandlerAdmin)
 }
 
-// reachHandlerAdmin are the routes whose handler, not the router, refuses a
-// caller that does not hold core:admin. At HEAD each tests the admin role by
-// name and that a key may act as admin; 05-rbac 4.6 moves each to
-// rbac.Can(ctx, core:admin) with key scoping, "never adminRole", and says so
-// for these: the merge handlers' mergeActor, including the two reads that are not
-// credential routes (GET /users/:id/footprint, GET /users/merges), and the
-// role-name checks of handlers/user.go (SetUserEmail, whose route's users.manage
-// "is not enough"). The oracle's route-level gate cannot see a handler, so the
-// check is pinned here from the spec; it is a claim about code that F4-08 or
-// the handler migration (04) writes, and unproven until then (seams.d/F4-07.md).
-var reachHandlerAdmin = map[string]string{
-	"GET /api/v1/users/:id/footprint": "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:68-70, called at :101) @v0.223.0",
-	"GET /api/v1/users/merges":        "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:68-70, called at :194) @v0.223.0",
-	"PUT /api/v1/users/:id/email":     "05-rbac 4.6: SetUserEmail checks core:admin in place of the admin role name (handlers/user.go:456-458) @v0.223.0",
-}
-
 // reachUnenforced are the atoms no route enforces: books' table gives them a
 // zero route requirement, and a route naming one is an error (resolveRoutes).
 var reachUnenforced = map[string]bool{"playlists.create": true}
