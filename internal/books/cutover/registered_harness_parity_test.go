@@ -14,7 +14,7 @@ import (
 
 // The parity assertions for the narrowings the sweep names but does not accept.
 //
-// EveryVerdictIsR0sOrNamed keeps the tables honest: it fails on an unnamed difference
+// EveryVerdictIsR0sOrNamed keeps the tables in step with R0: it fails on an unnamed difference
 // and on a named one that no longer differs. It cannot say that a named difference is
 // wrong, because naming it is what makes the sweep pass. The tests here say it: each
 // holds the cells of one class of verdictRows to R0's verdict, so they are red while the
