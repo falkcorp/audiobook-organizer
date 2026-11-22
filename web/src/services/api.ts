@@ -3548,6 +3548,26 @@ export interface UserFootprint {
 export type UserMergeOwnerHolder =
   'none' | 'survivor' | 'absorbed' | 'both' | 'no_owner_configured' | '';
 
+/**
+ * Core's masked summary of the auth half of a merge. Present only when the
+ * server runs under core identity (core owns sign-ins and API keys); absent
+ * otherwise. It carries ids, provider names and counts, never a credential.
+ */
+export interface UserMergeCoreSummary {
+  /** Roles the surviving account gains. */
+  roles_transferred: string[];
+  /** True when the surviving account is an admin after the merge. */
+  target_holds_admin: boolean;
+  /** An outcome code for the e-mail address, not an address. */
+  email: string;
+  /** Ids of the API keys that move. The server can send null for none. */
+  api_key_ids: string[] | null;
+  /** Providers of the sign-ins that move, one entry per sign-in. The server can send null for none. */
+  identity_providers: string[] | null;
+  /** Access allow-list rows that move. */
+  allow_list_rows: number;
+}
+
 export interface UserMergePlan {
   survivor_id: string;
   absorbed_id: string;
@@ -3557,8 +3577,13 @@ export interface UserMergePlan {
   conflicts: Array<{ family: string; key: string; outcome: string }>;
   conflict_total: number;
   ops: number;
+  /** Empty under core identity: core owns sign-ins, so books has none to list. See `core`. */
   survivor_identities: UserMergeIdentity[];
+  /** Empty under core identity; see `survivor_identities`. */
   absorbed_identities: UserMergeIdentity[];
+  /** Core's summary of the auth half. Present only under core identity; the page reads sign-ins, keys and allow-list rows from it instead of the two identity lists. */
+  core?: UserMergeCoreSummary;
+  /** Under core identity the holder is never checked: the wire value is the empty string. */
   owner_identity_holder: UserMergeOwnerHolder;
   owner_identity_on_absorbed: boolean;
   /** True when apply needs the acknowledgement: the account being merged away holds the owner's sign-in, or the plan cannot tell. */
