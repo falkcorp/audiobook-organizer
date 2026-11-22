@@ -649,7 +649,7 @@ func TestCoreSections_Defaults(t *testing.T) {
 		{"core.notify", "core.notify.max_attempts", int64(10)},
 		{"core.rbac", "core.rbac.cache_size", int64(4096)},
 		{"core.audit", "core.audit.retention.max_records", int64(1000000)},
-		{"core.realtime", "core.realtime.ring_size", int64(4096)},
+		{"core.realtime", "core.realtime.ring_size", int64(1024)},
 		{"core.realtime", "core.realtime.max_coalesce_keys", int64(10000)},
 		{"core.storage", "core.storage.cache_bytes", int64(512 << 20)},
 		{"core.storage", "core.storage.claims.mode", "strict"},

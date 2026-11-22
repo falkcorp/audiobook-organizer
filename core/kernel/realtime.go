@@ -50,16 +50,36 @@ type kernelRealtime struct {
 	log *slog.Logger
 }
 
+// realtimeRingFloor is the smallest resume ring the kernel builds. The
+// journal's live tail (core.log.recorded.v1, F6-05) shares the one ring with
+// every other realtime topic and, at info level, takes most of its slots, so a
+// ring of core.realtime.ring_size's default (1024) would shrink every other
+// topic's Last-Event-ID window to almost nothing (seams.d/F6-05.md). It is a
+// stopgap: the section default lives in core_sections.go, which this slice
+// does not edit; once that default is raised to at least this value (todo.d,
+// after #4765) the floor never applies and is deleted. A configured value above
+// it is used as is.
+const realtimeRingFloor = 4096
+
+// realtimeRingDefault is core.realtime.ring_size's section default
+// (core_sections.go; pinned by TestCoreSections_Defaults). The floor raising
+// it is expected and logged at info; raising any other value is an override
+// of what the operator set, logged as a warning.
+const realtimeRingDefault = 1024
+
 // realtimeOptions maps core.realtime.* (05-realtime §8) onto the hub's
-// Options. ring_size is passed through as configured (its section default is 4096,
-// sized for the journal's live tail, which shares the ring with every other realtime
-// topic, seams.d/F6-05.md); a negative value reaches the hub, which refuses it. max_coalesce_keys has no hub
+// Options. ring_size below realtimeRingFloor is raised to it; a negative value
+// is passed through for the hub to refuse. max_coalesce_keys has no hub
 // option (the bus's coalescer has no key bound, seams.d/F6-02.md; todo.d), so
 // it is not read. AllowNoControlTopics stays false. The four live keys are
 // also read through Options.Live by newKernelRealtime.
 func realtimeOptions(s realtimeSettings) realtime.Options {
+	ring := s.RingSize
+	if ring >= 0 && ring < realtimeRingFloor {
+		ring = realtimeRingFloor
+	}
 	return realtime.Options{
-		RingSize:     s.RingSize,
+		RingSize:     ring,
 		ClientBuffer: s.ClientBuffer,
 		MaxClients:   s.MaxClients,
 		MaxPerBucket: s.MaxPerBucket,
@@ -120,6 +140,14 @@ func newKernelRealtime(cat events.Catalog, settings func() realtimeSettings, a r
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: realtime: %w", err)
+	}
+	if opt.RingSize != s.RingSize {
+		msg := "kernel: realtime: core.realtime.ring_size is below the floor the journal's live tail needs; the floor is used"
+		if s.RingSize == realtimeRingDefault || s.RingSize == 0 {
+			l.Info(msg, "configured", s.RingSize, "used", opt.RingSize)
+		} else {
+			l.Warn(msg, "configured", s.RingSize, "used", opt.RingSize)
+		}
 	}
 	return &kernelRealtime{hub: hub, log: l}, nil
 }
