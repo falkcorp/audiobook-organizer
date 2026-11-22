@@ -20,8 +20,12 @@ service_user = audiobook
 archive_dir = /path/to/archives
 # core.storage.checkpoint_dir, if set; empty means the store's parent directory.
 checkpoint_dir =
-# The environment storage restore-offline runs with (the unit's).
-offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer
+# The environment storage restore-offline, fetch-release and export-keyring run
+# with. The flipped binary refuses ABK_STATE_DIR in every offline command, so the
+# state directory is ABO_CORE_PATHS_STATE_DIR only (a pre-flip binary ignores it
+# and uses its compiled default, which is this path on a default install). The
+# helpers refuse a conf that sets both.
+offline_env = HOME=/var/lib/audiobook-organizer ABO_CORE_PATHS_STATE_DIR=/var/lib/audiobook-organizer
 # The unit's Group=, if not service_user. install-staged unit refuses a unit
 # whose User= or Group= differ from these.
 service_group =
