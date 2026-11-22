@@ -8,7 +8,6 @@ package kernel
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -124,41 +123,6 @@ func TestNewKernelRealtime_RefreshIsAuths(t *testing.T) {
 	waitLine(t, lines, `"reason":"credential_revoked"`)
 }
 
-// TestNewKernelRealtime_RingFloorLogging: the floor raising the section
-// default (or an unset value) is logged at info; raising a value the operator
-// set is a warning naming both; a value at or above the floor logs nothing.
-func TestNewKernelRealtime_RingFloorLogging(t *testing.T) {
-	for _, tc := range []struct {
-		ring  int
-		level string // "" = no line
-	}{
-		{0, "INFO"},
-		{realtimeRingDefault, "INFO"},
-		{2048, "WARN"},
-		{realtimeRingFloor, ""},
-		{realtimeRingFloor * 2, ""},
-	} {
-		var buf syncBuf
-		l := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		newRTFixtureWith(t, settingsOf(realtimeSettings{RingSize: tc.ring}).get, &fakeAuth{}, l, false)
-		out := buf.String()
-		line := ""
-		for l := range strings.SplitSeq(out, "\n") {
-			if strings.Contains(l, "ring_size") {
-				line = l
-			}
-		}
-		switch {
-		case tc.level == "" && line != "":
-			t.Errorf("ring_size %d logged %q, want nothing", tc.ring, line)
-		case tc.level != "" && !strings.Contains(line, "level="+tc.level):
-			t.Errorf("ring_size %d: line %q, want level=%s", tc.ring, line, tc.level)
-		case tc.level != "" && !strings.Contains(line, fmt.Sprintf("configured=%d used=%d", tc.ring, realtimeRingFloor)):
-			t.Errorf("ring_size %d: line %q does not name the configured and used sizes", tc.ring, line)
-		}
-	}
-}
-
 // syncBuf is a log sink safe for the hub's goroutines.
 type syncBuf struct {
 	mu sync.Mutex
@@ -168,8 +132,9 @@ type syncBuf struct {
 func (s *syncBuf) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
 func (s *syncBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
-// TestRealtimeOptions maps every core.realtime key onto the hub's options and
-// raises ring_size to the floor the live tail needs.
+// TestRealtimeOptions maps every core.realtime key onto the hub's options; ring_size
+// is passed through unchanged (the section default, 4096, is what sizes the ring for
+// the live tail, TestCoreSections_Defaults).
 func TestRealtimeOptions(t *testing.T) {
 	s := realtimeSettings{
 		RingSize: 8192, ClientBuffer: 64, MaxClients: 32, MaxPerBucket: 4,
@@ -184,20 +149,10 @@ func TestRealtimeOptions(t *testing.T) {
 	if o.AllowNoControlTopics || o.MaxPayload != 0 {
 		t.Errorf("AllowNoControlTopics %v, MaxPayload %d: want false and the hub default", o.AllowNoControlTopics, o.MaxPayload)
 	}
-	for _, tc := range []struct{ in, want int }{
-		{0, realtimeRingFloor},
-		{1024, realtimeRingFloor},
-		{realtimeRingFloor - 1, realtimeRingFloor},
-		{realtimeRingFloor, realtimeRingFloor},
-		{realtimeRingFloor + 1, realtimeRingFloor + 1},
-		{-1, -1}, // the hub refuses it; the floor must not hide it
-	} {
-		if got := realtimeOptions(realtimeSettings{RingSize: tc.in}).RingSize; got != tc.want {
-			t.Errorf("ring_size %d -> RingSize %d, want %d", tc.in, got, tc.want)
+	for _, in := range []int{0, 1, 1024, 4096, 4097, -1} {
+		if got := realtimeOptions(realtimeSettings{RingSize: in}).RingSize; got != in {
+			t.Errorf("ring_size %d -> RingSize %d, want it passed through (the hub refuses a negative one)", in, got)
 		}
-	}
-	if realtimeRingFloor < 4096 {
-		t.Errorf("realtimeRingFloor = %d, want at least 4096 (F6-03 pre-scope Q8)", realtimeRingFloor)
 	}
 }
 
