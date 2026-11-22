@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -184,7 +185,9 @@ type Server struct {
 	// (WithIdentity); every adopted auth site reads it, or the request's bound
 	// copy, and takes HEAD's path when it is nil.
 	identity *legacyauth.Identity
-	store    database.Store
+	// accessVerifier is WithAccessVerifier's value (identityThrottleKey).
+	accessVerifier cfaccess.CFAssertionVerifier
+	store          database.Store
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind
@@ -793,6 +796,21 @@ type ServerOption func(*serverOptions)
 type serverOptions struct {
 	log      *slog.Logger
 	identity *legacyauth.Identity
+	// accessVerifier checks the Cloudflare Access assertion a request carries,
+	// for the failure throttle's visitor bucket under core identity.
+	accessVerifier cfaccess.CFAssertionVerifier
+}
+
+// WithAccessVerifier is the verifier of the Cloudflare Access assertion the
+// visitor bucket of a server under core identity (WithIdentity) believes: a
+// request from this host that carries an assertion it accepts is keyed on the
+// CF-Connecting-IP it names, not on the connector's address. Books passes the
+// handle the Access extension also holds, so the throttle and the sign-in agree
+// on what is verified. Without it (nil) no assertion is believed and the bucket
+// is the peer's: a shared bucket for tunnel visitors, never a skipped one. It
+// has no effect without WithIdentity.
+func WithAccessVerifier(v cfaccess.CFAssertionVerifier) ServerOption {
+	return func(o *serverOptions) { o.accessVerifier = v }
 }
 
 // WithIdentity builds the server to run under core identity
@@ -928,6 +946,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		streamsClosing:         make(chan struct{}),
 		router:                 router,
 		identity:               so.identity,
+		accessVerifier:         so.accessVerifier,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
 		importService:          importer.NewImportService(store),

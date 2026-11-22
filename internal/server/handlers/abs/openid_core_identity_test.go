@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,12 @@ type coreLikeCompat struct {
 	verifies      []verifyCall
 	verifyFailure error // when set, VerifyPassword returns it instead of the check
 	verifyNil     bool  // when set, VerifyPassword answers (nil, nil)
+
+	// throttle is core's own failure throttle as Compat.VerifyPassword applies
+	// it: keyed on the client the identity names, checked before the password,
+	// charged once per wrong password inside the call and cleared by a success.
+	// It is what makes "the surface does not charge a second time" observable.
+	throttle *coreauth.Throttle
 
 	// core, when non-nil, is core's own record of each account (by user ID)
 	// and the compat answers from it alone, never from the harness's books
@@ -76,7 +83,30 @@ type verifyCall struct {
 // password (an unknown name is a wrong password), then status, then reset.
 // With core's records set it answers from them alone; without, from the
 // harness's books rows.
-func (c *coreLikeCompat) VerifyPassword(_ context.Context, username, password string, client coreauth.ClientInfo) (*coreauth.User, error) {
+func (c *coreLikeCompat) VerifyPassword(ctx context.Context, username, password string, client coreauth.ClientInfo) (*coreauth.User, error) {
+	if c.throttle == nil {
+		return c.verifyPassword(ctx, username, password, client)
+	}
+	source, account := client.Addr.String(), coreauth.AccountKey(username)
+	if c.throttle.SourceBlocked(source) {
+		return nil, coreauth.ErrThrottled
+	}
+	u, err := c.verifyPassword(ctx, username, password, client)
+	switch {
+	case errors.Is(err, coreauth.ErrInvalidCredentials):
+		c.throttle.RecordFailure(account, source)
+	case err == nil && u != nil:
+		c.throttle.Clear(account, source)
+	}
+	return u, err
+}
+
+// charges is the failures core's throttle counted against the account.
+func (c *coreLikeCompat) charges(username string) int {
+	return c.throttle.AccountFailures(coreauth.AccountKey(username))
+}
+
+func (c *coreLikeCompat) verifyPassword(_ context.Context, username, password string, client coreauth.ClientInfo) (*coreauth.User, error) {
 	c.mu.Lock()
 	c.verifies = append(c.verifies, verifyCall{username: username, password: password, client: client})
 	failure, nilUser := c.verifyFailure, c.verifyNil
@@ -223,10 +253,19 @@ func (c *coreLikeCompat) recorded() []coreCall {
 // server.WithIdentity does: every request is bound to the identity first.
 func (h *harness) underCoreIdentity(t *testing.T) *coreLikeCompat {
 	t.Helper()
-	compat := &coreLikeCompat{h: h}
+	compat := &coreLikeCompat{h: h, throttle: coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)}
 	id := &legacyauth.Identity{
 		Compat: compat,
-		Client: func(*http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: "batarang"} },
+		// The client is the visitor a test names with visitorHeader, else the
+		// TCP peer, as core's stage 0 resolves it.
+		Client: func(r *http.Request) coreauth.ClientInfo {
+			a, err := netip.ParseAddr(r.Header.Get(visitorHeader))
+			if err != nil {
+				ap, _ := netip.ParseAddrPort(r.RemoteAddr)
+				a = ap.Addr()
+			}
+			return coreauth.ClientInfo{UserAgent: "batarang", Addr: a}
+		},
 	}
 	r := gin.New()
 	if err := r.SetTrustedProxies(nil); err != nil {
