@@ -1,0 +1,3 @@
+### Added
+
+- A new test set proves that the upgraded server refuses everything the old release refused at the places where the route's own handler (not the shared permission layer) makes the decision: the eight credential and approval routes under both sign-in settings, the thirty-two checks hidden inside handlers (including every recorded maintenance-job start and the nine owner-only routes), the eleven pinned cases, and a role that holds the core admin permission without being the admin role. The same runs also record, in named tables, the few places where the upgraded server is stricter than the old release.
