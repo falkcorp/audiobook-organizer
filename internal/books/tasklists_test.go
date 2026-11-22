@@ -224,7 +224,7 @@ var notYetBuilt = map[tasks.Kind]string{
 	// the dedup plugin's KindDeps builder.
 	"books.dedup.label-refinement": "dedup plugin",
 	"books.dedup.llm-review":       "dedup plugin",
-	// maintenance groups 1, 5 and 7 builders; nightly-compact-activity-log is group 6
+	// maintenance groups 1 and 5 builders; nightly-compact-activity-log is group 6
 	// (held for TODO-F5-11-HOLD-RENEW).
 	"books.maintenance.author-split-scan":            "maintenance g1/g5",
 	"books.maintenance.metadata-refresh":             "maintenance g1/g5",
@@ -363,4 +363,36 @@ func TestF5_BookTaskListsBuild(t *testing.T) {
 	defs, err := bookTaskLists(listsFixture(t))
 	require.NoError(t, err)
 	t.Logf("%d definitions", len(defs))
+}
+
+// A dependency the maintenance lists need and the caller left nil refuses at
+// build time, by name: the kind would otherwise register and fail at its first
+// run with a refusal nobody reads at boot. The hook is copied into every
+// package's inputs, so a nil hook refuses there too.
+func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
+	for name, mutate := range map[string]func(*taskListInputs){
+		"Jobs":                     func(in *taskListInputs) { in.Maintenance.Jobs = nil },
+		"G2Source":                 func(in *taskListInputs) { in.Maintenance.G2Source = nil },
+		"G2Host":                   func(in *taskListInputs) { in.Maintenance.G2Host = nil },
+		"RootDir":                  func(in *taskListInputs) { in.Maintenance.RootDir = nil },
+		"G3Source":                 func(in *taskListInputs) { in.Maintenance.G3Source = nil },
+		"G3Host":                   func(in *taskListInputs) { in.Maintenance.G3Host = nil },
+		"Runs":                     func(in *taskListInputs) { in.Maintenance.Runs = nil },
+		"Ops":                      func(in *taskListInputs) { in.Maintenance.Ops = nil },
+		"G4Host":                   func(in *taskListInputs) { in.Maintenance.G4Host = nil },
+		"AuxStores":                func(in *taskListInputs) { in.Maintenance.AuxStores = nil },
+		"StandDownKey":             func(in *taskListInputs) { in.Maintenance.StandDownKey = "" },
+		"G7.Reads":                 func(in *taskListInputs) { in.Maintenance.G7.Reads = nil },
+		"G7.Writes":                func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
+		"G7.InvalidateSeriesCache": func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
+		"Schedules":                func(in *taskListInputs) { in.Schedules = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := listsFixture(t)
+			mutate(&in)
+			_, err := bookTaskLists(in)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), name)
+		})
+	}
 }
