@@ -4,7 +4,7 @@
 // last-edited: 2026-11-19
 
 // Public surface of the core event-stream client (F6-03 SPA pre-slice).
-// UNWIRED: no running code imports this until the F6 flip replaces eventSourceManager.
+// Wired by the F6-03 flip, which replaced eventSourceManager.
 
 export { reconnectDelay, parseRetryAfter, BASE_DELAY_MS, MAX_DELAY_MS } from './backoff';
 export { buildStreamUrl, EVENTS_PATH } from './connection';

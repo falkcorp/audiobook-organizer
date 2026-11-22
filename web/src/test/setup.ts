@@ -10,6 +10,8 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
+import { sseStream } from './eventStreamFake';
+
 // findBy*/waitFor default to a 1 s asyncUtilTimeout. On the Woodpecker host the
 // web-test step shares the machine with five Go test workflows, and that second
 // is not enough for a dialog re-render: the same MetadataEditDialog test failed
@@ -89,12 +91,14 @@ Object.defineProperty(global, 'localStorage', {
 //
 // It also OPENS, as a live connection does: onopen fires in a microtask after
 // construction (the caller assigns its handlers synchronously right after
-// `new EventSource`). Without it eventSourceManager stayed "connecting" until
+// `new EventSource`). Without it the old SSE client stayed "connecting" until
 // its 8 s connect timeout, then reported an error, and Library toasted
 // "Connection lost. Reconnecting..." in the middle of any test that ran past
 // 8 s on a loaded CI agent -- replacing the toast the test was asserting on
 // (Library.combineToast "closes the dialog on the 202", 11.4 s, 2026-11-06).
-// A microtask, not a timer, so tests on fake timers open too.
+// A microtask, not a timer, so tests on fake timers open too. The core event
+// stream (a fetch, not an EventSource) gets the same treatment in the fetch mock
+// below: an open stream that stays quiet until it is aborted.
 class MockEventSource {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -142,8 +146,16 @@ const okJson = (data: unknown) => {
   } as unknown as Response);
 };
 
-global.fetch = (input: Parameters<typeof fetch>[0]) => {
+global.fetch = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
   const url = typeof input === 'string' ? input : input.toString();
+
+  // The core event stream: open and quiet, ended only by an abort. Without this the
+  // default answer below is a JSON body, which the stream client reads as a refusal
+  // and reconnects on a timer, so a Library test running past a few seconds would
+  // toast "Connection lost" over whatever it was asserting.
+  if (url.includes('/api/core/v1/events')) {
+    return Promise.resolve(sseStream(init?.signal).response);
+  }
 
   if (url.includes('/api/v1/system/status')) {
     return okJson({

@@ -462,7 +462,7 @@ export function useAuth(): AuthState;
 export function usePermission(p: Permission): boolean;
 export function useAction(moduleId: string, action: string): boolean;
 export function useTopic<T>(topic: string, onEvent: (data: T) => void, opts?: { key?: string }): void;
-export function useResync(onResync: () => void): void;
+export function useResync(onResync: (info: { streamKey: string }) => void, opts?: { streamKey?: string; coalesceMs?: number; minIntervalMs?: number }): void;
 export function useToast(): ToastApi;
 export function useTask(runId: string | undefined): TaskRunView | undefined;
 export function useApi(): import('@mediacore/api-client').Client;
@@ -1259,7 +1259,13 @@ The shell side:
   same signature).
 * **Resync and shutdown.** On `core.stream.reset.v1` (any reason: `restart`, `gap`, `overflow`) and
   after a reconnect that could not resume, the shell calls every `useResync` handler and re-runs §7.5.2
-  (05-realtime §4.8 item 6; FE8-9). The native stream has no `resync` frame. A `core.stream.closed.v1` with `credential_revoked` or
+  (05-realtime §4.8 item 6; FE8-9). The native stream has no `resync` frame. A handler is paced, so a
+  refetch is not repeated for one loss: by default it takes only the shared stream's resets (`streamKey`
+  `''`; a key names that view's keyed stream, `'*'` takes every stream's, one call per stream that
+  reset), merges every reset within 250 ms (`coalesceMs`) into one trailing call, and runs at most once
+  every 5 s (`minIntervalMs`, resets in between merge into the next call). That is what turns a
+  reopen's two resets (the client's `reconnect` and the reset the subscribe owed) into one refetch,
+  and no reset is dropped before the merge, because a `gap` can be a real loss in mid-stream. A `core.stream.closed.v1` with `credential_revoked` or
   `permission_revoked` goes through the auth rule of §7.9.1. The
   shutdown backdrop and reconnect counter (`App.tsx:215-241`) move to the shell, driven by
   `core.stream.closed.v1` with `reason: "shutdown"`, which the hub sends to every subscriber

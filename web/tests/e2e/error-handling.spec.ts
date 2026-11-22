@@ -8,6 +8,7 @@ import {
   generateTestBooks,
   setupMockApi,
 } from './utils/test-helpers';
+import { mockCoreEvents } from './utils/mockCoreEvents';
 
 const openLibrary = async (
   page: Page,
@@ -118,49 +119,23 @@ test.describe('Error Handling', () => {
     await page.waitForURL('**/login');
   });
 
-  test('recovers from SSE connection loss', async ({ page }) => {
-    // Arrange
+  test('recovers from event stream connection loss', async ({ page }) => {
+    // Arrange: mockEventSource (through setupMockApi) already installed the core
+    // event stream mock on this page; asking again returns the same handle.
+    const events = await mockCoreEvents(page);
     await openLibrary(page);
+    await expect.poll(() => events.openCount()).toBeGreaterThan(0);
 
-    // The page opens TWO EventSources: the global status stream owned by
-    // eventSourceManager ('/api/events') and the operations stream
-    // ('/api/v1/operations/events') owned by useOperationsStore. Only the
-    // former drives the TopBar connection chip and the Library toasts, so
-    // target it by URL rather than by instance index.
-    // Act
-    await page.waitForFunction(() => {
-      const mock = (window as unknown as { __mockEventSource?: {
-        instances?: Array<{ url: string }>;
-      } }).__mockEventSource;
-      return Boolean(
-        mock?.instances?.some((instance) => instance.url === '/api/events')
-      );
-    });
-    await page.evaluate(() => {
-      const mock = (window as unknown as { __mockEventSource?: {
-        instances?: Array<{ url: string; emitError?: () => void }>;
-      } }).__mockEventSource;
-      const target = mock?.instances?.find((i) => i.url === '/api/events');
-      target?.emitError?.();
-    });
+    // Act: the connection drops. The client waits out its backoff (3 s base,
+    // jittered) and reopens; the shim answers the reopen with a fresh stream.
+    await events.endAll();
 
-    // Assert — TopBar renders a "Connection lost" chip
+    // Assert: TopBar renders a "Connection lost" chip
     await expect(page.getByText('Connection lost', { exact: true })).toBeVisible();
 
-    // Act — the manager auto-reconnects with a new EventSource; force the
-    // most recent status-stream instance open so the restored path fires.
-    await page.evaluate(() => {
-      const mock = (window as unknown as { __mockEventSource?: {
-        instances?: Array<{ url: string; onopen?: () => void }>;
-      } }).__mockEventSource;
-      const matches = (mock?.instances || []).filter(
-        (i) => i.url === '/api/events'
-      );
-      matches[matches.length - 1]?.onopen?.();
-    });
-
-    // Assert — Library surfaces a "Connection restored." toast
-    await expect(page.getByText('Connection restored.').first()).toBeVisible();
+    // Assert: Library surfaces a "Connection restored." toast once it reopens
+    await expect(page.getByText('Connection restored.').first()).toBeVisible({ timeout: 15_000 });
+    events.assertNoUnmockedRequests();
   });
 
   test('handles file upload errors', async ({ page }) => {

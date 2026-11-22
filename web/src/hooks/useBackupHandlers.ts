@@ -127,7 +127,8 @@ export function useBackupHandlers(
     try {
       // The server stages the restore and restarts to apply it (202). No
       // reload here: the page would race the restart. The server tells
-      // every connected page it is going down (system.shutdown), and the
+      // every connected page it is going down (core.stream.closed.v1 with
+      // reason "shutdown", sent when the listener begins to drain), and the
       // App's reconnect overlay reloads once it answers again, now over the
       // restored database.
       const staged = await api.restoreBackup(restoreTarget.filename, restoreVerify);
