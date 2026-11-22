@@ -11,6 +11,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"slices"
 	"sync"
 	"testing"
@@ -64,7 +65,7 @@ func flipHost(t *testing.T, mutate ...func(*Config)) (*swapHost, Config, *alfred
 		Effects: tasks.ReadOnly(),
 		// A core scope, as the Deluge kinds use: the executor's catalog is
 		// core-only, so a system actor holds nothing for a module-scope Start.
-		Perms:  tasks.Permissions{Start: rbac.Need("core:settings.manage")},
+		Perms:  tasks.Permissions{Start: rbac.Need("core:settings.manage"), View: rbac.Need("alfred:signal")},
 		Resume: tasks.ResumeFromZero,
 		Run: func(*tasks.RC, struct{}) (struct{}, error) {
 			p.ran <- struct{}{}
@@ -406,5 +407,61 @@ func depsScopingEvents(t *testing.T) {
 	}
 	if alfred.deps.Events == bane.Events {
 		t.Fatal("two modules share one Deps.Events scope")
+	}
+}
+
+// viewHolder is a Checker that holds perms and satisfies the requirements in
+// sat, compared by value.
+type viewHolder struct {
+	perms []rbac.Permission
+	sat   []rbac.Requirement
+}
+
+func (v viewHolder) Has(p rbac.Permission) bool { return slices.Contains(v.perms, p) }
+func (v viewHolder) Satisfies(r rbac.Requirement) bool {
+	return slices.ContainsFunc(v.sat, func(s rbac.Requirement) bool { return reflect.DeepEqual(s, r) })
+}
+func (viewHolder) Confined() bool                { return false }
+func (v viewHolder) Concrete() []rbac.Permission { return v.perms }
+
+// TestEventsFlip_TaskTopicsFollowTheDefinitionsViewRule: the run-carrying task
+// topics core declares at P7 carry the definition rule as their Visible
+// (tasks.WithViewRule over the registrations), not the fail-closed admin
+// default. alfred.patrol asks alfred:signal to view, so a holder of that scope
+// and no core:tasks.view sees a patrol run on the stream, a holder of
+// core:tasks.view alone does not, and a run of a kind nobody registered takes
+// core:tasks.view. The log-appended topic keeps the admin default: a line
+// names no kind.
+func TestEventsFlip_TaskTopicsFollowTheDefinitionsViewRule(t *testing.T) {
+	k, _ := flipBoot(t)
+	signal := viewHolder{perms: []rbac.Permission{"alfred:signal"}, sat: []rbac.Requirement{rbac.Need("alfred:signal")}}
+	auditor := viewHolder{perms: []rbac.Permission{"core:tasks.view"}}
+	run := func(kind string) events.RawEnvelope {
+		return events.RawEnvelope{Payload: mustJSON(t, map[string]string{"kind": kind})}
+	}
+	for _, topic := range []string{tasks.RunChangedTopicName, tasks.FinishedTopicName} {
+		spec, ok := k.events.bus.Catalog().Lookup(topic)
+		if !ok {
+			t.Fatalf("%s is not in the catalog", topic)
+		}
+		for _, c := range []struct {
+			name string
+			who  rbac.Checker
+			env  events.RawEnvelope
+			want bool
+		}{
+			{"alfred:signal holder, alfred.patrol", signal, run(string(alfredPatrol)), true},
+			{"core:tasks.view holder, alfred.patrol", auditor, run(string(alfredPatrol)), false},
+			{"core:tasks.view holder, unregistered kind", auditor, run("alfred.gone"), true},
+			{"alfred:signal holder, unregistered kind", signal, run("alfred.gone"), false},
+		} {
+			if got := spec.Visible(t.Context(), c.who, c.env); got != c.want {
+				t.Errorf("%s, %s: visible = %v, want %v", topic, c.name, got, c.want)
+			}
+		}
+	}
+	logs, _ := k.events.bus.Catalog().Lookup(tasks.LogAppendedTopicName)
+	if logs.Visible(t.Context(), signal, run(string(alfredPatrol))) {
+		t.Error("core.task.log-appended.v1 took the definition rule: a log line names no kind")
 	}
 }
