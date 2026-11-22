@@ -634,7 +634,7 @@ func TestWhisperLocal_ForeignURLIsReportedAndQuarantinedNeverPrinted(t *testing.
 func TestOpenAIRename_NoSecretCanSitUnderARenamedSpelling(t *testing.T) {
 	const word = "openai"
 	renamed := 0
-	for mask := 0; mask < 1<<len(word); mask++ {
+	for mask := range 1 << len(word) {
 		b := []byte(word)
 		for i := range b {
 			if mask&(1<<i) != 0 {
