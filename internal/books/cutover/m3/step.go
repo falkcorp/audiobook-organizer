@@ -407,6 +407,11 @@ func (m *Migration) reportKey(w *datamigrate.StepWriter, id string, n keyNotes) 
 		w.Count(OutcomeReported)
 		m.log.Warn("m3: a key names atoms outside the atom table; they grant nothing", "step", m.cfg.StepID, "key", id, "atoms", boundedAtoms(n.unknown))
 	}
+	if len(n.description) > 0 {
+		// The description is never in the line: it can hold anything.
+		w.Count(OutcomeReported)
+		m.log.Warn("m3: a key's description was normalized to fit core's rule", "step", m.cfg.StepID, "key", id, "changes", strings.Join(n.description, "; "))
+	}
 	if n.stamped {
 		m.log.Info("m3: a key with no expiry got the one-shot expiry stamp", "step", m.cfg.StepID, "key", id)
 	}

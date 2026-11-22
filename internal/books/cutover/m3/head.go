@@ -147,6 +147,11 @@ type headKey struct {
 	UseCount   int64      `json:"use_count"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+
+	// Description is store.APIKey.Description (json "description", no
+	// omitempty): the text the owner typed at creation, which HEAD never limited
+	// and never lets anyone edit. mapKey normalizes it for core.
+	Description string `json:"description"`
 }
 
 // headIdentity is store.OAuthIdentity.

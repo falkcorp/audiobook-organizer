@@ -313,6 +313,9 @@ type keyNotes struct {
 	oddStatus string // a status HEAD does not define, imported disabled
 	stamped   bool   // a live key with no expiry got the one-shot stamp
 	unknown   []string
+	// description lists, in fixed words, what normalizeDescription changed in
+	// the key's description; empty when it was left as it was.
+	description []string
 }
 
 // mapKey is the native key of a HEAD row with its scopes already decided, and
@@ -329,6 +332,7 @@ func (m *Migration) mapKey(h *headKey, scopes []rbac.Permission) (auth.APIKey, [
 		ID: h.ID, Owner: auth.UserID(h.UserID), Name: h.Name, Scopes: scopes, Status: status,
 		CreatedAt: h.CreatedAt, UseCount: h.UseCount, Imported: true, Version: 1,
 	}
+	k.Description, notes.description = normalizeDescription(h.Description)
 	if h.LastUsedAt != nil {
 		k.LastUsedAt = *h.LastUsedAt
 	}
