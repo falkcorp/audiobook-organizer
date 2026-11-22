@@ -203,7 +203,9 @@ func readableBody(h http.Header, b []byte) string {
 // stream holds its connection busy, so the listener's graceful drain would
 // wait on it until core.shutdown.http_drain (10s) ran out. The stop ends the
 // streams first (R1Listener.Shutdown's pre-drain step: endStreamsOnShutdown
-// for /api/events and the v2 operations stream, closeOpsV3Streams for v3).
+// for the v2 operations stream, closeOpsV3Streams for v3). Core's own stream,
+// /api/core/v1/events, is ended by the realtime hub's Close, which the
+// listener runs when its shutdown begins (httpapi.ListenOptions.OnShutdown).
 // With the App running as serve runs it, each open stream must reach EOF
 // well inside the drain once Run is cancelled.
 func TestStop_EventStreamsEndBeforeTheDrain(t *testing.T) {
@@ -217,7 +219,7 @@ func TestStop_EventStreamsEndBeforeTheDrain(t *testing.T) {
 		at   time.Time
 		err  error
 	}
-	paths := []string{"/api/events", "/api/v1/operations/events", "/api/v3/ops/events"}
+	paths := []string{"/api/v1/operations/events", "/api/v3/ops/events"}
 	done := make(chan ended, len(paths))
 	for _, p := range paths {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*drain)

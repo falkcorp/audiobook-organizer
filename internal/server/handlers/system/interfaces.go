@@ -113,12 +113,6 @@ type PluginHealthChecker interface {
 	HealthCheckAll() map[string]error
 }
 
-// EventStreamer is the narrow *realtime.EventHub subset used by handleEvents to
-// serve the Server-Sent Events stream.
-type EventStreamer interface {
-	HandleSSE(c *gin.Context)
-}
-
 // OperationLogsProvider lets getSystemLogs delegate the operation_id branch to
 // the already-migrated operations-domain handler without importing the
 // operations sub-package (avoiding coupling). The controller passes

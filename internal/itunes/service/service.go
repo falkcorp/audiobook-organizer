@@ -13,7 +13,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/plugin"
-	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 )
 
 // Deps is the explicit dependency set for Service. No globals, no Server,
@@ -25,7 +24,6 @@ import (
 type Deps struct {
 	Store      Store
 	ActivityFn func(database.ActivityEntry)
-	Realtime   *realtime.EventHub // may be nil; means no SSE push
 	Config     Config
 	Logger     logger.Logger
 	// EventBus is where the service publishes lifecycle events. The
