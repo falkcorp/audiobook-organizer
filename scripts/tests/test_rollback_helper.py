@@ -3530,7 +3530,7 @@ class Export(unittest.TestCase):
         self.patched.parent.mkdir()
         self.patched.write_text(src.replace(before, f"CONFIG = {h.mod.CONFIG!r}"))
         body = (
-            "import subprocess\n"
+            "import hashlib, subprocess\n"
             "args = sys.argv[1:]\n"
             'cut = args.index("--")\n'
             "opts, cmd = args[:cut], args[cut + 1:]\n"
@@ -3551,6 +3551,7 @@ class Export(unittest.TestCase):
             'if mode == "extra": data = data + b"x"\n'
             'if mode == "big": data = b"A" * (2 << 20)\n'
             'if mode == "twice": data = data + data\n'
+            'if mode == "zero": data = b"AORGEXPORT1 0 " + hashlib.sha256(b"").hexdigest().encode() + b"\\n"\n'
             "sys.stdout.buffer.write(data)\n"
             "sys.stdout.buffer.flush()\n"
             "sys.exit(p.returncode)\n"
@@ -3905,7 +3906,7 @@ class Export(unittest.TestCase):
         self.refused("export-keyring", contains="exited 7")
 
     def test_output_that_is_not_exactly_one_frame_delivers_nothing(self):
-        for mode in ("prefix", "truncate", "flip", "extra", "big", "twice"):
+        for mode in ("prefix", "truncate", "flip", "extra", "big", "twice", "zero"):
             self.mode_file.write_text(mode)
             self.refused("export-keyring", contains="", code=1)
             self.refused("export-install-secrets", contains="", code=1)
@@ -3927,7 +3928,10 @@ class Export(unittest.TestCase):
             os.link(key, second)
 
         cases = {
-            "symlink": lambda: os.symlink(h.root / "elsewhere", key),
+            "symlink": lambda: (
+                self.put(h.root / "elsewhere", KEY),
+                os.symlink(h.root / "elsewhere", key),
+            ),
             "empty": lambda: self.put(key, b""),
             "directory": lambda: key.mkdir(),
             "hard link": hard_link,
@@ -3962,6 +3966,7 @@ class Export(unittest.TestCase):
         h = self.h
         cfg = h.db.parent / "config.yaml"
         cfg.unlink()
+        self.put(h.root / "elsewhere", CONFIG_YAML)
         os.symlink(h.root / "elsewhere", cfg)
         self.refused("export-install-secrets", contains="exited 1")
 
