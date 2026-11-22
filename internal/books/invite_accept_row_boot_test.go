@@ -115,8 +115,8 @@ func TestInviteAcceptRow_FullBoot(t *testing.T) {
 		assert.Equal(t, "luke.fox4", a.Username)
 	})
 
-	// A refused accept (a spent invite) fires nothing, so writes no row.
-	t.Run("06_a_refused_accept_leaves_no_row", func(t *testing.T) {
+	// A refused second accept of a spent invite fires nothing, so it changes nothing.
+	t.Run("06_a_second_accept_of_a_spent_invite_changes_nothing", func(t *testing.T) {
 		id, tok := e.invite(t, e.admin, "luke.fox5", "")
 		e.accept(t, tok)
 		require.NotNil(t, acRow(t, e, id))
