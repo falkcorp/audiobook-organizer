@@ -371,13 +371,9 @@ func TestRegisteredHarness_SeedHEADKeys(t *testing.T) {
 		req.RemoteAddr = h.nextPeer()
 		return h.Raw(req)
 	}
-	if res := as(revoked, http.MethodGet, "/api/v1/auth/me"); res.Status != http.StatusUnauthorized {
-		t.Errorf("a revoked abk_ key: %d %s", res.Status, res.excerpt())
-	}
+	h.Refused(as(revoked, http.MethodGet, "/api/v1/auth/me"), http.StatusUnauthorized, "revoked")
 	if res := as(worker, http.MethodPost, "/api/v1/fingerprint/worker/lease"); res.Verdict() != 'A' {
 		t.Errorf("the confined worker key on the worker API: %d %s", res.Status, res.excerpt())
 	}
-	if res := as(worker, http.MethodGet, "/api/v1/audiobooks"); res.Status != http.StatusForbidden {
-		t.Errorf("the confined worker key on the library: %d %s", res.Status, res.excerpt())
-	}
+	h.Refused(as(worker, http.MethodGet, "/api/v1/audiobooks"), http.StatusForbidden, "permission_denied")
 }
