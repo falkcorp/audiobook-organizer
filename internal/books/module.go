@@ -210,7 +210,7 @@ func (m *booksModule) Manifest() module.Manifest {
 		// (05-storage §5S.3.4, §5S.9.3; internal/books/store booksspec.go).
 		// The first step discards the HNSW clean-stop marker and marks this
 		// boot migrated (beforeMigration).
-		Storage: m.storageSpec(),
+		Storage: withUpgradeFloor(m.storageSpec()),
 		// HEAD's factory-reset file effects (the Open Library dumps and,
 		// only on request, the library folder's contents), run at the boot
 		// that applies a ResetFactory swap (reset_hook.go).

@@ -1,0 +1,3 @@
+### Changed
+
+- A build now refuses to start on a data store that skipped the R2 release. Books declares an upgrade floor at its legacy schema version (66) with the five cutover migrations (config, identity, tasks, log, integrations) required, so a store that has not been through R2 exits with status 78 and the message `install <release> first`, before any file or row is written. A fresh install, a factory reset and every store that R2 left behind pass the check. A restore archive of a store below the floor is refused at staging, before anything is extracted. Until the R2 production tag is recorded the declaration carries a placeholder, and the release-tag test refuses to ship while it is there.
