@@ -182,9 +182,10 @@ func TestFilesIncludingRetired_SeesRowsGetBookFilesHides(t *testing.T) {
 // "imported", which takes it out of the ABS listing.
 func TestRevertBookSoftDelete_RetiredRowsCountForTheRestoredLibraryState(t *testing.T) {
 	fx := newGuardFx(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = filepath.Dir(filepath.Dir(fx.path))
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	cowV1 := filepath.Dir(filepath.Dir(fx.path))
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	organized, yes := "organized", true
 	_, err := fx.st.ModifyBook(fx.holder.ID, func(b *database.Book) error {
 		b.LibraryState = &organized

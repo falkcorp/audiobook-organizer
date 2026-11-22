@@ -27,11 +27,11 @@ func TestLibraryRootReady_ARowThatIsTheRootDoesNotMakeAnUnmountedRootReady(t *te
 	svc, store, _ := setupPurgeBoundary(t)
 	remount := unmountRoot(t, store)
 	defer remount()
-	require.ErrorIs(t, svc.libraryRootReady(config.AppConfig.RootDir), ErrLibraryRootNotReady, "control: unmounted is refused")
+	require.ErrorIs(t, svc.libraryRootReady(config.Get().RootDir), ErrLibraryRootNotReady, "control: unmounted is refused")
 
 	softDeleted(t, store, "Joker", "")
-	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "joker-f", BookID: "Joker", FilePath: config.AppConfig.RootDir + "/", Format: "m4b"}))
-	require.ErrorIs(t, svc.libraryRootReady(config.AppConfig.RootDir), ErrLibraryRootNotReady,
+	require.NoError(t, store.CreateBookFile(&database.BookFile{ID: "joker-f", BookID: "Joker", FilePath: config.Get().RootDir + "/", Format: "m4b"}))
+	require.ErrorIs(t, svc.libraryRootReady(config.Get().RootDir), ErrLibraryRootNotReady,
 		"a directory path stored as a file is not a reason to trust the mount")
 }
 

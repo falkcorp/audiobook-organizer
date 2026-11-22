@@ -144,7 +144,7 @@ func newLibraryCopyFixture(t *testing.T, copyGroup string, order idOrder) *libra
 }
 
 func (f *libraryCopyFixture) organizer(spy OrganizeHooks) *Organizer {
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 	org.SetStore(f.store)
 	org.SetHooks(spy)
 	return org
@@ -341,9 +341,9 @@ func TestOrganizeBooks_OnlyAMergedLibraryCopyMakesNoSecondCopy(t *testing.T) {
 			// A protected original is organized by copying it in; without a
 			// strategy the organize fails for a reason that has nothing to do
 			// with the merged copy.
-			prevStrategy := config.AppConfig.OrganizationStrategy
-			config.AppConfig.OrganizationStrategy = "copy"
-			t.Cleanup(func() { config.AppConfig.OrganizationStrategy = prevStrategy })
+			prevStrategy := config.Get().OrganizationStrategy
+			config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = "copy" })
+			t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = prevStrategy }) })
 			// The resolver production wires, in miniature: the book's only
 			// library copy of its own file is retired.
 			f.svc.ResolveLibraryCopy = func(b *database.Book) (*database.Book, bool, *database.Book) {

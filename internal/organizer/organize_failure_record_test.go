@@ -75,12 +75,14 @@ func TestOrganizeFailure_CreateVersionFailureIsRecorded(t *testing.T) {
 
 	// PerformOrganize reads RootDir and the naming patterns from the process
 	// config. Restore them so this test cannot leak into its neighbours.
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
-	config.AppConfig.RootDir = rootDir
-	config.AppConfig.FolderNamingPattern = "{author}"
-	config.AppConfig.FileNamingPattern = "{title}"
-	config.AppConfig.OrganizationStrategy = "copy"
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = rootDir
+		c.FolderNamingPattern = "{author}"
+		c.FileNamingPattern = "{title}"
+		c.OrganizationStrategy = "copy"
+	})
 
 	const bookID = "book-createfail"
 	const opID = "op-createfail"

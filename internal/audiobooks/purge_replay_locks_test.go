@@ -396,13 +396,13 @@ func TestReplay_MissingFileInAPresentFolderIsGone(t *testing.T) {
 // from ENOENT.
 func TestDecideFile_PassGuardChecksTheRootAgainAfterItsTTL(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
-	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.AppConfig.RootDir, "Gotham", "year-one.m4b"))
+	liveBookWithFile(t, store, "mounted-witness", filepath.Join(config.Get().RootDir, "Gotham", "year-one.m4b"))
 	softDeleted(t, store, "T", filepath.Join(base, "lib", "Gotham", "hush.m4b"))
 	book, err := store.GetBookByID("T")
 	require.NoError(t, err)
 
 	now := time.Now()
-	g := newRootGuard(svc, config.AppConfig.RootDir, now)
+	g := newRootGuard(svc, config.Get().RootDir, now)
 	g.now = func() time.Time { return now }
 	env := purgeEnv{root: g}
 

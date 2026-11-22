@@ -20,14 +20,14 @@ import (
 // warmup), a library root and the organizer service over it.
 func organizeUndoFixture(t *testing.T) (*database.PebbleStore, *organizer.Service, string) {
 	t.Helper()
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 	root := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:             root,
 		FolderNamingPattern: "{author}/{title}",
 		FileNamingPattern:   "{title}",
-	}
+	})
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -53,7 +53,7 @@ func writeAudio(t *testing.T, path, body string) {
 func organizeAndUndo(t *testing.T, store *database.PebbleStore, svc *organizer.Service, book *database.Book, afterOrganize func(*organizer.Landing)) *organizer.Landing {
 	t.Helper()
 	log := logger.New("test")
-	landing, err := svc.OrganizeOneBook(organizer.NewOrganizer(&config.AppConfig), book, log)
+	landing, err := svc.OrganizeOneBook(organizer.NewOrganizer(config.Get()), book, log)
 	if err != nil {
 		t.Fatalf("OrganizeOneBook: %v", err)
 	}

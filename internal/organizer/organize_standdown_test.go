@@ -21,9 +21,10 @@ import (
 // PerformOrganize ignored the canceled backup and walked into the
 // FetchMetadataFirst loop.
 func TestPerformOrganize_StopsAfterCanceledAutoBackup(t *testing.T) {
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
-	config.AppConfig.RootDir = t.TempDir()
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 
 	var reads atomic.Int32
 	mockDB := &database.MockStore{

@@ -179,9 +179,9 @@ func TestRemoveDeferredFiles_BookTrashedMidLoopStillKeepsItsFile(t *testing.T) {
 func TestDiscardProgressAndPurge_FileNamedByAnotherTrashedBookStays(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
 	svc.auditOverride = &fakeRecorder{}
-	prev := config.AppConfig.PurgeSoftDeletedDeleteFiles
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
-	t.Cleanup(func() { config.AppConfig.PurgeSoftDeletedDeleteFiles = prev })
+	prev := config.Get().PurgeSoftDeletedDeleteFiles
+	config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedDeleteFiles = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedDeleteFiles = prev }) })
 
 	shared := filepath.Join(base, "lib", "Author", "shared.m4b")
 	alone := filepath.Join(base, "lib", "Author", "alone.m4b")

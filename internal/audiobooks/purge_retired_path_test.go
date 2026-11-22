@@ -23,7 +23,7 @@ import (
 // retired out of. The control is the same path once the row is gone.
 func TestPurgePathStillReferenced_RetiredRowKeepsItsFile(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	path := filepath.Join(config.AppConfig.RootDir, "shell", "01.mp3")
+	path := filepath.Join(config.Get().RootDir, "shell", "01.mp3")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func TestPurgePathStillReferenced_RetiredRowKeepsItsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	holder, err := store.CreateBook(&database.Book{Title: "Year One", FilePath: filepath.Join(config.AppConfig.RootDir, "holder")})
+	holder, err := store.CreateBook(&database.Book{Title: "Year One", FilePath: filepath.Join(config.Get().RootDir, "holder")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestPurgePathStillReferenced_RetiredRowKeepsItsFile(t *testing.T) {
 	}
 
 	// Control: a path no row names is free.
-	if err := svc.purgePathStillReferenced(filepath.Join(config.AppConfig.RootDir, "shell", "unreferenced.mp3")); err != nil {
+	if err := svc.purgePathStillReferenced(filepath.Join(config.Get().RootDir, "shell", "unreferenced.mp3")); err != nil {
 		t.Errorf("control: an unreferenced path was refused: %v", err)
 	}
 }

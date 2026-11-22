@@ -239,13 +239,13 @@ func TestPurge_ITunesOnlySiblingIsNotACarryTarget(t *testing.T) {
 // purge would take the book now.
 func TestTrashProgress_ListedCopyAndEligibility(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	prev := config.AppConfig.PurgeSoftDeletedAfterDays
-	t.Cleanup(func() { config.AppConfig.PurgeSoftDeletedAfterDays = prev })
+	prev := config.Get().PurgeSoftDeletedAfterDays
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedAfterDays = prev }) })
 	groupBook(t, store, "keep", "g1", false, true)
 	groupBook(t, store, "dup", "g1", true, false) // trashed an hour ago
 	purgeSeedProgress(t, store, "dup")
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 30
+	config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedAfterDays = 30 })
 	info, err := svc.TrashProgress(context.Background(), []string{"dup"})
 	require.NoError(t, err)
 	require.Equal(t, "keep", info["dup"].ListedCopyID)
@@ -261,7 +261,7 @@ func TestTrashProgress_ListedCopyAndEligibility(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, info["dup"].PurgeEligible)
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 0
+	config.SetForTest(func(c *config.Config) { c.PurgeSoftDeletedAfterDays = 0 })
 	info, err = svc.TrashProgress(context.Background(), []string{"dup"})
 	require.NoError(t, err)
 	require.False(t, info["dup"].PurgeEligible, "the nightly purge is off")

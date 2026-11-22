@@ -83,16 +83,16 @@ func keptSweepOnPurged(t *testing.T, f *versionGuardFixture, paths ...string) ve
 // called.
 func TestSweepKeptFiles_RealGuardProtectsTheConfiguredITunesFolders(t *testing.T) {
 	for name, set := range map[string]func(path string){
-		"library read path": func(p string) { config.AppConfig.ITunes.LibraryReadPath = p },
-		"library itl path":  func(p string) { config.AppConfig.ITunes.LibraryITLPath = p },
+		"library read path": func(p string) { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = p }) },
+		"library itl path":  func(p string) { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = p }) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newVersionGuardFixtureBookTrashed(t)
-			prevRead, prevITL := config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath
+			prevRead, prevITL := config.Get().ITunes.LibraryReadPath, config.Get().ITunes.LibraryITLPath
 			t.Cleanup(func() {
-				config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath = prevRead, prevITL
+				config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath, c.ITunes.LibraryITLPath = prevRead, prevITL })
 			})
-			config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath = "", ""
+			config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath, c.ITunes.LibraryITLPath = "", "" })
 			dir := filepath.Join(f.base, "lib", "Gotham Music")
 			set(filepath.Join(dir, "Library.xml"))
 			inITunes := filepath.Join(dir, "Audiobooks", "Hush", "hush.m4b")
@@ -115,10 +115,11 @@ func TestSweepKeptFiles_RealGuardProtectsTheConfiguredITunesFolders(t *testing.T
 // symlink-resolved spelling since #4256, so the file under the iTunes folder stays.
 func TestSweepKeptFiles_RealGuardSymlinkIntoITunesFolder(t *testing.T) {
 	f := newVersionGuardFixtureBookTrashed(t)
-	prevRead := config.AppConfig.ITunes.LibraryReadPath
-	t.Cleanup(func() { config.AppConfig.ITunes.LibraryReadPath = prevRead })
+	prevRead := config.Get().ITunes.LibraryReadPath
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = prevRead }) })
 	itunesDir := filepath.Join(f.base, "lib", "Gotham Music")
-	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunesDir, "Library.xml")
+	cowV1 := filepath.Join(itunesDir, "Library.xml")
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = cowV1 })
 	real := filepath.Join(itunesDir, "Hush", "hush.m4b")
 	writeFile(t, real)
 	link := filepath.Join(f.base, "lib", "Gotham", "link")

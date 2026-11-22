@@ -46,7 +46,7 @@ func newLandingTestStore(t *testing.T) *database.PebbleStore {
 func TestCreateOrganizedVersion_UnlandedRowKeepsSource_EvenWhenTargetIsOccupied(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 
 	srcDir := t.TempDir()
 	src1 := filepath.Join(srcDir, "ch01.mp3")
@@ -102,7 +102,7 @@ func svcCreateOrganized(t *testing.T, store *database.PebbleStore, book *databas
 func TestCreateOrganizedVersion_SingleFileLandingForMultiRowBook_FailsClosedAndRollsBack(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 
 	src := t.TempDir()
 	book, err := store.CreateBook(&database.Book{Title: "Title", FilePath: filepath.Join(src, "a.mp3")})
@@ -140,7 +140,7 @@ func TestCreateOrganizedVersion_SingleFileLandingForMultiRowBook_FailsClosedAndR
 func TestCreateOrganizedVersion_InPlaceLandingIsRefused_NoRowNoRollback(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 
 	dst := filepath.Join(rootDir, "Author", "Title.mp3")
 	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o775))
@@ -183,7 +183,7 @@ func derefStr(p *string) string {
 // empty.
 func TestRollbackOrganizedVersion_RemovesOnlyCreated(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	svc := NewService(newMockStore(t))
 
 	targetDir := filepath.Join(rootDir, "Author", "Title")
@@ -214,7 +214,7 @@ func TestRollbackOrganizedVersion_RemovesOnlyCreated(t *testing.T) {
 // at. They must be kept: removing them left a live book with missing audio.
 func TestRollbackOrganizedVersion_DeleteRefusedKeepsCreatedFiles(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	store := newMockStore(t)
 	// No SetBookAuthors expectation: the mock fails the test if the rollback
 	// clears the author credits of a book it then cannot delete.
@@ -234,7 +234,7 @@ func TestRollbackOrganizedVersion_DeleteRefusedKeepsCreatedFiles(t *testing.T) {
 
 func TestRollbackOrganizedVersion_EmptyDirectoryIsRemoved(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	svc := NewService(newMockStore(t))
 
 	targetDir := filepath.Join(rootDir, "Author", "Title")
@@ -253,7 +253,7 @@ func TestRollbackOrganizedVersion_EmptyDirectoryIsRemoved(t *testing.T) {
 // target — it was there before this run.
 func TestRollbackOrganizedVersion_AdoptedSingleFileSurvives(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	svc := NewService(newMockStore(t))
 
 	dst := filepath.Join(rootDir, "Author", "Title.m4b")
@@ -269,7 +269,7 @@ func TestRollbackOrganizedVersion_AdoptedSingleFileSurvives(t *testing.T) {
 
 func TestRollbackOrganizedVersion_RefusesPathsOutsideRoot(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	svc := NewService(newMockStore(t))
 
 	outside := filepath.Join(t.TempDir(), "elsewhere.m4b")
@@ -485,11 +485,11 @@ func TestStrandedRenameTemps_TargetWithGlobMetacharacters(t *testing.T) {
 func TestReOrganizeInPlace_TwoBooksSameTarget_NeitherIsDestroyed(t *testing.T) {
 	for iter := range 20 {
 		rootDir := t.TempDir()
-		config.AppConfig = config.Config{
+		config.ReplaceForTest(config.Config{
 			RootDir:             rootDir,
 			FolderNamingPattern: "{author}/{title}",
 			FileNamingPattern:   "{title}",
-		}
+		})
 		store := newLandingTestStore(t)
 		svc := NewService(store)
 
@@ -567,12 +567,12 @@ func TestReOrganizeInPlace_TwoBooksSameTarget_NeitherIsDestroyed(t *testing.T) {
 func TestOrganizeOneBook_MultiRowBookWithFileFilePath_TakesDirectoryPath(t *testing.T) {
 	rootDir := t.TempDir()
 	srcDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 	ch1 := filepath.Join(srcDir, "ch01.mp3")
 	ch2 := filepath.Join(srcDir, "ch02.mp3")
 	require.NoError(t, os.WriteFile(ch1, []byte("one"), 0o644))
@@ -593,7 +593,7 @@ func TestOrganizeOneBook_MultiRowBookWithFileFilePath_TakesDirectoryPath(t *test
 	mockStore.On("GetBookFileByPath", mock.Anything).Return(nil, nil).Maybe()
 
 	svc := NewService(mockStore)
-	landing, err := svc.OrganizeOneBook(NewOrganizer(&config.AppConfig), book, &noopLogger{})
+	landing, err := svc.OrganizeOneBook(NewOrganizer(config.Get()), book, &noopLogger{})
 	require.NoError(t, err)
 	require.True(t, landing.IsDir(), "a 2-row book must land as a directory, got %+v", landing)
 	require.Len(t, landing.Files, 2)
@@ -615,12 +615,12 @@ func TestOrganizeOneBook_MultiRowBookWithFileFilePath_TakesDirectoryPath(t *test
 // in-place move had just produced.
 func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 	stale := filepath.Join(rootDir, "Old Author", "Old Title.m4b")
 	require.NoError(t, os.MkdirAll(filepath.Dir(stale), 0o775))
 	require.NoError(t, os.WriteFile(stale, []byte("audio"), 0o644))
@@ -643,7 +643,7 @@ func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 	mockStore.On("GetBookFileByPath", mock.Anything).Return(nil, nil).Maybe()
 
 	svc := NewService(mockStore)
-	landing, err := svc.OrganizeOneBook(NewOrganizer(&config.AppConfig), book, &noopLogger{})
+	landing, err := svc.OrganizeOneBook(NewOrganizer(config.Get()), book, &noopLogger{})
 	require.NoError(t, err)
 	require.True(t, landing.InPlace, "a book under the root is renamed in place, and the Landing must say so: %+v", landing)
 	require.Equal(t, filepath.Join(rootDir, "New Author", "New Title", "New Title.m4b"), landing.Path)
@@ -657,7 +657,7 @@ func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 	require.NoError(t, os.WriteFile(outside, []byte("audio2"), 0o644))
 	other := &database.Book{ID: "book-outside", Title: "Other", FilePath: outside, Format: "m4b", Author: &database.Author{Name: "Someone"}}
 	mockStore.EXPECT().GetBookFiles("book-outside").Return(nil, nil).Once()
-	landing, err = svc.OrganizeOneBook(NewOrganizer(&config.AppConfig), other, &noopLogger{})
+	landing, err = svc.OrganizeOneBook(NewOrganizer(config.Get()), other, &noopLogger{})
 	require.NoError(t, err)
 	require.False(t, landing.InPlace)
 	require.FileExists(t, outside, "a copy-in leaves the source where it was")
@@ -669,17 +669,17 @@ func TestOrganizeOneBook_BookUnderRoot_LandsInPlace(t *testing.T) {
 // it was there before this run.
 func TestOrganizeSingleFile_AdoptedTarget_IsNotCreatedAndSurvivesRollback(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 	src := filepath.Join(t.TempDir(), "solo.m4b")
 	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
 	book := &database.Book{ID: "b1", Title: "Title", FilePath: src, Format: "m4b", Author: &database.Author{Name: "Author"}}
 
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 	target, err := org.GenerateTargetPath(book)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o775))
@@ -701,17 +701,17 @@ func TestOrganizeSingleFile_AdoptedTarget_IsNotCreatedAndSurvivesRollback(t *tes
 // removes it.
 func TestOrganizeSingleFile_FreshCopy_IsCreatedAndRolledBack(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 	src := filepath.Join(t.TempDir(), "solo.m4b")
 	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
 	book := &database.Book{ID: "b1", Title: "Title", FilePath: src, Format: "m4b", Author: &database.Author{Name: "Author"}}
 
-	landing, err := NewOrganizer(&config.AppConfig).OrganizeSingleFile(book)
+	landing, err := NewOrganizer(config.Get()).OrganizeSingleFile(book)
 	require.NoError(t, err)
 	require.Equal(t, []string{landing.Path}, landing.Created)
 
@@ -787,7 +787,7 @@ func (s durabilityUnknownStore) BatchCreateBookFiles(files []*database.BookFile)
 func TestCreateOrganizedVersion_DurabilityUnknownIsNotRolledBack(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	srcDir := t.TempDir()
 	src := filepath.Join(srcDir, "ch01.mp3")
 	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))
@@ -821,7 +821,7 @@ func TestCreateOrganizedVersion_DurabilityUnknownIsNotRolledBack(t *testing.T) {
 func TestCreateOrganizedVersion_CopiesCreditPositions(t *testing.T) {
 	store := newLandingTestStore(t)
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{RootDir: rootDir}
+	config.ReplaceForTest(config.Config{RootDir: rootDir})
 	srcDir := t.TempDir()
 	src := filepath.Join(srcDir, "ch01.mp3")
 	require.NoError(t, os.WriteFile(src, []byte("audio"), 0o644))

@@ -106,18 +106,18 @@ func newCollisionMockStore(books map[string]*database.Book) *database.MockStore 
 // a downstream mitigation reshaped it into.
 func TestOrganizeBooks_LogsCollisionWhenTwoBooksShareATargetPath(t *testing.T) {
 	rootDir := t.TempDir()
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              rootDir,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
-	t.Cleanup(func() { config.AppConfig = config.Config{} })
+	})
+	t.Cleanup(func() { config.ReplaceForTest(config.Config{}) })
 
 	reg := metricstest.Registry(t)
 	before := collisionCounterValue(t, reg)
 
-	org := NewOrganizer(&config.AppConfig)
+	org := NewOrganizer(config.Get())
 
 	// Two books that share Title/Author -> generateTargetPath computes the
 	// same path for both.

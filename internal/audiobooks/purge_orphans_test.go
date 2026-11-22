@@ -214,7 +214,7 @@ func TestPurge_FilelessSoftDeletedBookStillPurged(t *testing.T) {
 func setupRoot(t *testing.T) string {
 	t.Helper()
 	// setupPurgeBoundary pointed config.AppConfig.RootDir at <base>/lib.
-	return config.AppConfig.RootDir
+	return config.Get().RootDir
 }
 
 func containsSubstr(ss []string, sub string) bool {

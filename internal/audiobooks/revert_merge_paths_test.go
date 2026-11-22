@@ -221,9 +221,9 @@ func TestRevert_SplitBookMerge(t *testing.T) {
 func siblingFixture(t *testing.T) (*vptest.Fixture, string, string, string) {
 	t.Helper()
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	k := f.Book(t, vptest.Spec{ID: "k", Group: "H", Primary: "true"})
 	l := f.Book(t, vptest.Spec{ID: "l", Group: "G", Primary: "true"})
 	ls := f.Book(t, vptest.Spec{ID: "ls", Group: "G", Primary: "false"})

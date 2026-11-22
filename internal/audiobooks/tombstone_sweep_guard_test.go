@@ -38,7 +38,7 @@ func statStamp(t *testing.T, path string) *database.TombstoneFileStamp {
 // decision only: it never unlinks, so each row also asserts the file is intact.
 func TestTombstoneSweepGuard_Check(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
-	lib := config.AppConfig.RootDir
+	lib := config.Get().RootDir
 	imports := filepath.Join(base, "downloads")
 	_, err := store.CreateImportPath(imports, "downloads")
 	require.NoError(t, err)
@@ -132,7 +132,7 @@ func TestTombstoneSweepGuard_Check(t *testing.T) {
 // is counted as a refusal.
 func TestSweepTombstones_WithTheRealGuard(t *testing.T) {
 	svc, store, base := setupPurgeBoundary(t)
-	lib := config.AppConfig.RootDir
+	lib := config.Get().RootDir
 	// libraryRootReady needs a live book on disk to believe the library is mounted.
 	liveBookWithFile(t, store, "witness", filepath.Join(lib, "Gotham", "witness.m4b"))
 
@@ -174,7 +174,7 @@ func TestSweepTombstones_WithTheRealGuard(t *testing.T) {
 // A file that was replaced after the purge decided on it is not removed.
 func TestSweepTombstones_ReplacedFileIsKept(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	lib := config.AppConfig.RootDir
+	lib := config.Get().RootDir
 	liveBookWithFile(t, store, "witness", filepath.Join(lib, "Gotham", "witness.m4b"))
 	p := filepath.Join(lib, "Gotham", "no-mans-land.m4b")
 	writeFile(t, p)
@@ -193,7 +193,7 @@ func TestSweepTombstones_ReplacedFileIsKept(t *testing.T) {
 // "gone". The sweep keeps every tombstone that names a file.
 func TestSweepTombstones_UnmountedLibraryKeepsEverything(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	lib := config.AppConfig.RootDir
+	lib := config.Get().RootDir
 	witness := filepath.Join(lib, "Gotham", "witness.m4b")
 	liveBookWithFile(t, store, "witness", witness)
 	p := filepath.Join(lib, "Gotham", "the-cult.m4b")
@@ -212,7 +212,7 @@ func TestSweepTombstones_UnmountedLibraryKeepsEverything(t *testing.T) {
 // writeTombstone stamps only when the purge committed to removing the file.
 func TestWriteTombstone_StampsOnlyACommittedRemoval(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
-	p := filepath.Join(config.AppConfig.RootDir, "Gotham", "gotham-central.m4b")
+	p := filepath.Join(config.Get().RootDir, "Gotham", "gotham-central.m4b")
 	writeFile(t, p)
 	info, err := os.Stat(p)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func (deleteFailingStore) DeleteBook(string) error {
 func TestPurgeDeleteRow_FailedDeleteWithdrawsTheTombstoneStamp(t *testing.T) {
 	_, store, _ := setupPurgeBoundary(t)
 	svc := NewAudiobookService(deleteFailingStore{store})
-	lib := config.AppConfig.RootDir
+	lib := config.Get().RootDir
 	p := filepath.Join(lib, "Gotham", "under-the-red-hood.m4b")
 	writeFile(t, p)
 	book, err := store.CreateBook(&database.Book{ID: "red-hood", Title: "Batman: Under the Red Hood", FilePath: p})
