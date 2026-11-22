@@ -166,6 +166,13 @@ type booksModule struct {
 	// before the settings boot: a stored settings blob, the seeded roles.
 	beforeSettings func(*database.PebbleStore)
 
+	// idw is the identity boot's late handles, built by Options when the
+	// identity predicate is on and finished by Register; nil otherwise.
+	idw *identityWiring
+	// cutoverErr is why the cutover func could not build M3 (Manifest.Cutover has
+	// no error return), recorded for Register to refuse the boot with.
+	cutoverErr atomic.Pointer[error]
+
 	// store is the store Register built over books' LegacyRange.
 	store atomic.Pointer[database.PebbleStore]
 	// repairsBegan is set when the repairs hook starts; from then the
@@ -333,6 +340,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if legacy == (storage.LegacyRange{}) {
 		return nil
 	}
+	// The compat method, before anything reads Deps: the kernel binds
+	// Deps.AuthCompat when the module registers its method (Registrar.AuthMethod),
+	// so the identity the server is built under (below) reads the handle from
+	// r.Deps() after this call, never from a copy taken before it.
+	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
+	if cerr := m.cutoverErr.Load(); cerr != nil {
+		// The cutover list could not be built (cutover.go): the store was opened
+		// under a manifest whose M3 is missing, so nothing may serve over it.
+		return fmt.Errorf("books: the identity cutover could not be built: %w", *cerr)
+	}
 	// The memdb sort indexes and the counts-cache interval are read once, as
 	// the store opens. cmd's initConfig set them from the operator layers;
 	// the booted store's effective values (a stored one included) win here.
@@ -402,7 +419,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// dispatched, started, finished) do not each become a system Activity row.
 	// The op's own rows come from the registry's activity mirror. Passing nil
 	// would capture slog.Default(), the process logger the Activity tap feeds.
-	srv := server.NewServer(store, server.WithLogger(r.Deps().Log))
+	deps := r.Deps()
+	srvOpts := []server.ServerOption{server.WithLogger(deps.Log)}
+	identity, err := m.identityFor(deps)
+	if err != nil {
+		return err
+	}
+	if identity != nil {
+		srvOpts = append(srvOpts, server.WithIdentity(identity), server.WithAccessVerifier(m.idw.verifier))
+	}
+	srv := server.NewServer(store, srvOpts...)
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
@@ -424,7 +450,6 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		return fmt.Errorf("books: legacy manifest: %w", err)
 	}
 
-	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
 	// The repairs hook is registered first, so it starts before the server
 	// hook and stops after it (the kernel stops hooks in reverse): the
 	// store closes once HEAD's stop has drained, and before the kernel
@@ -467,6 +492,9 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// in exactly this shape, and fails closed on any other write to .Auth.
 	if identityOn() {
 		mount.Auth = httpapi.LegacyAuthCore
+	}
+	if err := identityTies(identityOn(), identity != nil, mount.Auth); err != nil {
+		return err
 	}
 	r.MountLegacy(mount)
 	cfg := m.serveConfig()
