@@ -265,17 +265,36 @@ func TestIdentityBoot_DeletingTheGuestRevokesTheKey(t *testing.T) {
 	}
 }
 
-// markInviteMailed flags the invite as e-mailed to its address, the way books'
-// invite mailer will through core's AccountAdmin.MarkInviteEmailDelivered. No
-// production code can call that yet: the only writer of the flag is B10t-books'
-// mailer, and core hands a module no AccountAdmin until it lands, so this is the
-// one place a flagged accept cannot be driven end to end.
-func markInviteMailed(t *testing.T, _ *runningApp, _ *http.Cookie, _ string) {
+// The two things the SSO-granted cases need that production cannot supply yet.
+// They are variables, not constants, so each skip below is a runtime decision:
+// flipping one to true when its dependency lands runs the cases it gates.
+var (
+	// invitesCanBeMailed: books' invite mailer can flag an invite e-mailed
+	// (core's AccountAdmin.MarkInviteEmailDelivered). Its only writer is
+	// B10t-books' mailer, and core hands a module no AccountAdmin until it lands.
+	invitesCanBeMailed = false
+	// accountsReaderWired: legacyauth.Identity.Accounts (B10t-books) is supplied,
+	// so the admin reissue can read other accounts under core identity.
+	accountsReaderWired = false
+)
+
+func skipUntilInvitesCanBeMailed(t *testing.T) {
 	t.Helper()
-	t.Skip("B10t-books: nothing can flag an invite e-mailed (Admin.MarkInviteEmailDelivered has no caller) " +
-		"and Identity.Accounts (core's AdminUser/AdminUsers) is not supplied, so an SSO-granted accept and the guest's " +
-		"reissue eligibility cannot be driven end to end until B10t-books lands; B10r-p2 registers the " +
-		"books Lifecycle these tests then prove")
+	if !invitesCanBeMailed {
+		t.Skip("B10t-books: nothing can flag an invite e-mailed (Admin.MarkInviteEmailDelivered has no caller) " +
+			"and Identity.Accounts (core's AdminUser/AdminUsers) is not supplied, so an SSO-granted accept and the " +
+			"guest's reissue eligibility cannot be driven end to end until B10t-books lands; B10r-p2 registers the " +
+			"books Lifecycle these tests then prove")
+	}
+}
+
+func skipUntilAccountsReaderWired(t *testing.T) {
+	t.Helper()
+	if !accountsReaderWired {
+		t.Skip("B10t-books: Identity.Accounts (core's AdminUser/AdminUsers) is not supplied, so every admin reissue is " +
+			"refused today and the refusal would pass without exercising the verified-holder rule; " +
+			"B10r-p2 registers the books Lifecycle that makes the unbound case meaningful")
+	}
 }
 
 // TestIdentityBoot_SSOGrantedAcceptIsClaimableAndReissueEligible: an invite an
@@ -283,11 +302,12 @@ func markInviteMailed(t *testing.T, _ *runningApp, _ *http.Cookie, _ string) {
 // the one-time key (the guest claims it) and the guest is eligible for an
 // admin reissue.
 func TestIdentityBoot_SSOGrantedAcceptIsClaimableAndReissueEligible(t *testing.T) {
+	skipUntilInvitesCanBeMailed(t)
 	r, cf, seen := bootLifecycleApp(t)
 	admin := bootstrapAdmin(t, r)
-	// The guest accepts a MAILED invite: the helper flags the invite before the
-	// accept, and skips today (see markInviteMailed).
-	markInviteMailed(t, r, admin, "robin")
+	// The guest accepts a MAILED invite: flagging it before the accept is the
+	// step production cannot do yet (see invitesCanBeMailed). Then:
+	//   markInviteEmailDelivered(ctx as admin, inviteID)
 	guest, guestID, _ := inviteGuest(t, r, admin, "robin", "robin@wayne.example")
 
 	if ours, accepted, _, _ := seen.snapshot(); ours {
@@ -309,9 +329,7 @@ func TestIdentityBoot_SSOGrantedAcceptIsClaimableAndReissueEligible(t *testing.T
 // AdminUser/AdminUsers (Identity.Accounts, B10t-books), which is absent today, so every reissue is
 // refused and the refusal proves nothing about the verified-holder rule.
 func TestIdentityBoot_UnboundAcceptRefusesReissue(t *testing.T) {
-	t.Skip("B10t-books: Identity.Accounts (core's AdminUser/AdminUsers) is not supplied, so every admin reissue is " +
-		"refused today and the refusal would pass without exercising the verified-holder rule; " +
-		"B10r-p2 registers the books Lifecycle that makes the unbound case meaningful")
+	skipUntilAccountsReaderWired(t)
 	r, _, _ := bootLifecycleApp(t)
 	admin := bootstrapAdmin(t, r)
 	_, guestID, _ := inviteGuest(t, r, admin, "robin", "robin@wayne.example")
