@@ -1970,6 +1970,9 @@ internal/plugins/maintenance.nativeCBLedger.judgedSources
 internal/plugins/maintenance.nativeCBLedger.markJudged
 internal/plugins/maintenance.nativeCBLedger.others
 internal/plugins/maintenance.nativeScanNotWhile
+internal/plugins/maintenance.nativeScanStandDown.AcquireScanStandDown
+internal/plugins/maintenance.nativeScanStandDown.RenewScanStandDown
+internal/plugins/maintenance.nativeScanStandDown.ScanStandDownValid
 internal/plugins/maintenance.newBooksGate
 internal/plugins/maintenance.newJobsDeps
 internal/plugins/maintenance.newT6G2Deps
@@ -2086,6 +2089,7 @@ internal/plugins/maintenance.t6g3NativeCBHold.Items
 internal/plugins/maintenance.t6g3NativeCBHold.Lost
 internal/plugins/maintenance.t6g3NativeCBHold.Release
 internal/plugins/maintenance.t6g3NativeItems
+internal/plugins/maintenance.t6g3NativeStandDown
 internal/plugins/maintenance.t6g3NeedStore
 internal/plugins/maintenance.t6g3Priority
 internal/plugins/maintenance.t6g3RefuseModeKeys
