@@ -289,6 +289,19 @@ type registeredConfig struct {
 	// table sweep of one principal does not exhaust. A test about the limiter itself
 	// sets a small number.
 	RateLimitPerMinute int
+	// AuthMode is the operator value of core.auth.mode (ABO_CORE_AUTH_MODE): "required"
+	// is how an operator turns auth on. Empty sets none, except that AuthOff sets
+	// "disabled" (unless StoredAuthOff).
+	AuthMode string
+	// StoredAuthOff makes an AuthOff boot an install whose operator never set a value:
+	// core.auth.mode comes from the stored enable_auth false alone (M2 stores it as
+	// disabled), no ABO_CORE_AUTH_MODE is set.
+	StoredAuthOff bool
+	// Over boots over the store an earlier boot left: that boot must have been
+	// stopped (Stop), the migrations are already done, and the principals sign in with
+	// the credentials the earlier boot's corpus gave them. The corpus is not copied
+	// again and Seed does not run.
+	Over *Registered
 }
 
 // harnessRatePerMinute is the limiter's default budget in a harness boot.
@@ -316,7 +329,14 @@ type Registered struct {
 	KnownDifferences []string
 
 	byName map[string]*Principal
-	peers  atomic.Int64
+	// work is the boot's directory (the store is work/db), raws the key principals'
+	// credentials the corpus was given; a boot Over this one reuses both.
+	work     string
+	raws     map[string]string
+	teardown []func()
+	stopOnce sync.Once
+	stopped  atomic.Bool
+	peers    atomic.Int64
 	// rateExpected counts the ExpectRateLimit calls in progress; a 429 fails the test
 	// while it is zero.
 	rateExpected atomic.Int32
@@ -588,10 +608,22 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	// Options, at Register and by the handlers.
 	t.Cleanup(books.SetIdentityFlipForTest(true))
 
-	work := t.TempDir()
+	var work string
+	var raws map[string]string
+	if cfg.Over != nil {
+		if !cfg.Over.stopped.Load() {
+			t.Fatal("bootRegistered over a boot that is still running: Stop it first, the store is open")
+		}
+		work, raws = cfg.Over.work, cfg.Over.raws
+	}
+	if work == "" {
+		work = t.TempDir()
+	}
 	stage := filepath.Join(work, "stage")
 	dbDir := filepath.Join(work, "db")
-	raws := diskCorpus(t, rows, dbDir, stage, cfg)
+	if cfg.Over == nil {
+		raws = diskCorpus(t, rows, dbDir, stage, cfg)
+	}
 	library := filepath.Join(stage, "library")
 	for _, d := range []string{dbDir, library, filepath.Join(stage, "state")} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -626,7 +658,10 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	setenv("ABO_CORE_HTTP_LISTEN", "127.0.0.1:0")
 	setenv("ABO_CORE_HTTP_BASIC_GATE_ENABLED", "false")
 	setenv("ABO_CORE_HTTP_RATE_LIMIT_PER_MINUTE", strconv.Itoa(cmp.Or(cfg.RateLimitPerMinute, harnessRatePerMinute)))
-	if cfg.AuthOff {
+	switch {
+	case cfg.AuthMode != "":
+		setenv("ABO_CORE_AUTH_MODE", cfg.AuthMode)
+	case cfg.AuthOff && !cfg.StoredAuthOff:
 		setenv("ABO_CORE_AUTH_MODE", "disabled")
 	}
 
@@ -655,14 +690,15 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	if err := os.WriteFile(store.EncryptionKeyPath(stateDir), key, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The process-wide handles a books boot sets, put back as the composed
-	// harness does after every boot.
-	t.Cleanup(func() {
+	h := &Registered{t: t, cfg: cfg, logs: &syncLog{}, byName: map[string]*Principal{}, access: access, work: work, raws: raws}
+	// What a boot sets and a stop (or the test's end) undoes, last first. The
+	// process-wide handles a books boot sets are put back as the composed harness
+	// does after every boot.
+	t.Cleanup(h.Stop)
+	h.onStop(func() {
 		store.SetGlobalStore(nil)
 		scanner.SetStore(nil)
 	})
-
-	h := &Registered{t: t, cfg: cfg, logs: &syncLog{}, byName: map[string]*Principal{}, access: access}
 
 	mod := books.Module()
 	opts, err := books.Options(mod, books.ServeInputs{Server: server.GetDefaultServerConfig(), Telemetry: config.Snapshot(), LogOut: h.logs})
@@ -686,13 +722,13 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 
 	a, err := app.New(t.Context(), opts, mod)
 	if a != nil {
-		t.Cleanup(func() {
+		h.onStop(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			_ = a.Close(ctx)
 		})
 	}
-	t.Cleanup(func() { books.Release(mod) })
+	h.onStop(func() { books.Release(mod) })
 	if err != nil {
 		t.Fatalf("app.New over the corpus: %v", err)
 	}
@@ -701,7 +737,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 		t.Fatalf("InstallProcessDefaults: %v", err)
 	}
 	var once sync.Once
-	t.Cleanup(func() { once.Do(restore) })
+	h.onStop(func() { once.Do(restore) })
 	if err := books.Attach(mod, a); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -709,7 +745,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	ctx, cancel := context.WithCancel(context.Background())
 	ran := make(chan error, 1)
 	go func() { ran <- a.Run(ctx) }()
-	t.Cleanup(func() {
+	h.onStop(func() {
 		cancel()
 		select {
 		case err := <-ran:
@@ -736,6 +772,22 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	h.requireAuthMode()
 	h.requireCanary(canary)
 	return h
+}
+
+// onStop adds a step to what Stop undoes.
+func (h *Registered) onStop(fn func()) { h.teardown = append(h.teardown, fn) }
+
+// Stop shuts the boot down: the run ends, the process defaults and handles it set
+// are put back and the store is closed, the steps in the reverse of the boot's. It is
+// what the test's cleanup does, and may be called earlier to boot again over the
+// same store (registeredConfig.Over); a second call does nothing.
+func (h *Registered) Stop() {
+	h.stopOnce.Do(func() {
+		for i := len(h.teardown) - 1; i >= 0; i-- {
+			h.teardown[i]()
+		}
+		h.stopped.Store(true)
+	})
 }
 
 // requireCutoverRan fails unless M2, M3 and M8 committed at this boot: a boot that
