@@ -23,8 +23,10 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import * as api from '../../services/api';
 import { useToast } from '../toast/ToastProvider';
+import { useSignInRequiredForAction } from '../../hooks/useSignInRequiredForAction';
 
 export function TempLoginTab() {
+  const gate = useSignInRequiredForAction();
   const { toast } = useToast();
   const [users, setUsers] = useState<api.AdminUserSummary[]>([]);
   const [usersError, setUsersError] = useState('');
@@ -75,7 +77,7 @@ export function TempLoginTab() {
       const res = await api.createTempLoginToken(selectedUserID);
       setResult(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mint token');
+      if (!gate.refuse(err)) setError(err instanceof Error ? err.message : 'Failed to mint token');
     } finally {
       setLoading(false);
     }
@@ -132,11 +134,12 @@ export function TempLoginTab() {
         </TextField>
 
         <Box>
-          <Button variant="contained" onClick={handleMint} disabled={!selectedUserID || loading}>
+          <Button variant="contained" onClick={handleMint} disabled={!selectedUserID || loading || gate.blocked}>
             {loading ? <CircularProgress size={20} /> : 'Generate Login URL'}
           </Button>
         </Box>
 
+        {gate.notice}
         {error && <Alert severity="error">{error}</Alert>}
 
         {result && (

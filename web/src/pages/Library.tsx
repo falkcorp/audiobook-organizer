@@ -83,6 +83,7 @@ import {
   type TrackedOpEnd,
 } from '../components/operations/OperationTrackerProvider';
 import { usePurgeRun, type PurgeRunEnd } from '../hooks/usePurgeRun';
+import { useSignInRequiredForAction } from '../hooks/useSignInRequiredForAction';
 
 // Types ImportPath, BulkActionResult, BulkActionProgress, DuplicateAction,
 // DuplicateDialogState, OrganizeErrorState imported from './libraryTypes'
@@ -366,6 +367,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
   const [importPaths, setImportPaths] = useState<ImportPath[]>([]);
   const [importPathsExpanded, setImportPathsExpanded] = useState(false);
   const [addPathDialogOpen, setAddPathDialogOpen] = useState(false);
+  const addPathGate = useSignInRequiredForAction();
   const [newImportPath, setNewImportPath] = useState('');
   const [showServerBrowser, setShowServerBrowser] = useState(false);
   const [systemStatus, setSystemStatus] = useState<api.SystemStatus | null>(null);
@@ -2249,6 +2251,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
         pollTimerRef.current = setTimeout(poll, pollInterval);
       }
     } catch (error) {
+      if (addPathGate.refuse(error)) return;
       console.error('Failed to add import path:', error);
     }
   };
@@ -2795,6 +2798,7 @@ export const Library = ({ defaultPreset = 'standard' }: LibraryProps) => {
           newImportPath={newImportPath}
           setNewImportPath={setNewImportPath}
           handleAddImportPath={handleAddImportPath}
+          addPathGate={addPathGate}
           handleServerBrowserSelect={handleServerBrowserSelect}
           importPaths={importPaths}
           importPathsExpanded={importPathsExpanded}
