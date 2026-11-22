@@ -2153,8 +2153,16 @@ func (s *Server) seedRolesAndTokens() {
 		slog.Error("Failed to create the state directory; no bootstrap token will be written",
 			"dir", dataDir, "err", err)
 	} else {
-		if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
-			slog.Info("Failed to init bootstrap token", "err", err)
+		// Under core identity the token is core's: auth.BootWrites writes
+		// <state dir>/.bootstrap-token (Options.Auth.BootstrapTokenFile) and core
+		// verifies the redemption against its own record. HEAD's writer would
+		// replace that file on every start with a token only the retired
+		// /auth/bootstrap handler could redeem, so a second writer under the same
+		// name leaves the operator holding a token nothing accepts.
+		if s.identity == nil {
+			if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
+				slog.Info("Failed to init bootstrap token", "err", err)
+			}
 		}
 		if s.life.startConfig.writeStartupReadOnlyKey {
 			if err := InitStartupReadOnlyKey(s.storeForWiring(), dataDir); err != nil {

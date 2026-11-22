@@ -7,7 +7,6 @@ package books
 
 import (
 	"context"
-	"fmt"
 	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
@@ -108,14 +107,17 @@ func (m *booksModule) cutoverSteps() func(module.Importers) []datamigrate.DataMi
 	return func(imp module.Importers) []datamigrate.DataMigration {
 		f, err := m.flipSteps(imp)
 		if err != nil {
-			// Manifest.Cutover has no error return, and the only error NewFlip
-			// has is IdentityStep's, which needs FlipOptions.Identity: flipOptions
-			// sets none, so this is unreachable until the release that turns the
-			// identity cutover on (F4-08 B10), which must give this func an error
-			// path before it sets the option. Until then a refusal is a programming
-			// error and fails loudly, as ConfigStep does on its own misuse, rather
-			// than registering a list with M3 missing.
-			panic(fmt.Sprintf("books: building the cutover list: %v", err))
+			// Manifest.Cutover has no error return. The only error NewFlip has is
+			// IdentityStep's, and the identity config's own (m3Config: importers
+			// that cannot stage the step), which need FlipOptions.Identity: set only
+			// while identityOn. An error there is not a panic (a boot must refuse,
+			// not crash a Describe or an offline plan): it is recorded, the list is
+			// empty, and Register refuses the boot with it (cutoverErr). Options has
+			// already built and checked the declaration, so what reaches here is the
+			// importers the kernel handed, which are its own late forwarders and
+			// always carry the reads M3 needs; a failure is a wiring fault.
+			m.cutoverErr.Store(&err)
+			return nil
 		}
 		return f.Data
 	}
@@ -135,7 +137,29 @@ func (m *booksModule) rewriteStep() *storage.RewriteStep {
 // level steps, M8) come from the same value's pure shape, flipShapeOptions, so the
 // manifest can build them with zero importers.
 func (m *booksModule) flipSteps(imp module.Importers) (cutover.Flip, error) {
-	return cutover.NewFlip(imp.Config, imp.Secrets, m.flipOptions(imp))
+	fo := m.flipOptions(imp)
+	if fo.Identity != nil {
+		d, err := m.identityDecl()
+		if err != nil {
+			return cutover.Flip{}, err
+		}
+		cfg, err := d.m3Config(imp)
+		if err != nil {
+			return cutover.Flip{}, err
+		}
+		fo.Identity.Config = cfg
+	}
+	return cutover.NewFlip(imp.Config, imp.Secrets, fo)
+}
+
+// identityDecl is the identity declaration: the one Options built and checked, or
+// a fresh one for a module that never went through Options (Describe, the offline
+// plan).
+func (m *booksModule) identityDecl() (*identityDecl, error) {
+	if m.idw != nil {
+		return m.idw.decl, nil
+	}
+	return buildIdentityDecl()
 }
 
 // flipShapeOptions is the part of flipOptions the shape reads: the level step's
