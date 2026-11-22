@@ -182,10 +182,22 @@ func flipShapeOptions() cutover.FlipOptions {
 	fo := cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion}
 	if identityOn() {
 		fo.Identity = &cutover.IdentityFlipOptions{}
+	}
+	if tasksFlipOn() {
 		fo.Tasks = &cutover.TasksFlipOptions{}
 	}
 	return fo
 }
+
+// tasksFlipOn is the tasks flip's one predicate (F5-18): whether this build runs
+// ABO's operations on core's task engine. Everything the tasks flip changes in
+// this package reads it, so the switch moves them together: the cutover list's
+// books.level-3, M4 and M5 (flipShapeOptions), and the retirement of HEAD's ops
+// recorder (Register). Until the switch it rides the identity flip, because the
+// list is built over it (cutover.NewFlip refuses Tasks without Identity), so it
+// is off in production and a test turns it on through the identity selector.
+// The switch's re-cut changes this function's body and nothing else.
+func tasksFlipOn() bool { return identityOn() }
 
 // scanStandDownKey is the concurrency key the library scan kinds run under, and
 // so the key HEAD's scan stand-down marker holds once imported: books.library.scan

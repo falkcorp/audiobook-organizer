@@ -35,6 +35,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -355,6 +356,15 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// so the identity the server is built under (below) reads the handle from
 	// r.Deps() after this call, never from a copy taken before it.
 	r.AuthMethod(auth.MethodSpec{Method: absAuthMethod})
+	if tasksFlipOn() {
+		// Core's executor serves the audiobook_organizer_ops_* families under the
+		// <ns>.ops scope, so HEAD's recorder must not claim them: before the server
+		// below builds the registry that reads opsmetrics.Default. Late is a boot
+		// error, not a quiet half-owned set of families.
+		if err := opsmetrics.Retire(); err != nil {
+			return fmt.Errorf("books: retire HEAD's ops metrics for the tasks flip: %w", err)
+		}
+	}
 	if cerr := m.cutoverErr.Load(); cerr != nil {
 		// The cutover list could not be built (cutover.go): the store was opened
 		// under a manifest whose M3 is missing, so nothing may serve over it.

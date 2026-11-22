@@ -66,6 +66,7 @@ package opsmetrics
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -74,6 +75,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
@@ -291,14 +293,64 @@ func (r *Recorder) observeAbandoned(_ context.Context, o metric.Observer) error 
 }
 
 var (
-	defaultOnce sync.Once
-	defaultRec  *Recorder
+	// defaultMu guards the three below. Default creates the process's one
+	// recorder on first use; Retire decides, before that first use, whether it
+	// is a live one or an inert one.
+	defaultMu      sync.Mutex
+	defaultRec     *Recorder
+	defaultRetired bool
 )
 
-// Default is the recorder on the global meter provider, created on first use.
+// ErrRetireTooLate is Retire's refusal after Default has already created a live
+// recorder: its instruments are claimed on the global provider and cannot be
+// taken back.
+var ErrRetireTooLate = errors.New("opsmetrics: Retire after Default: the live recorder already claimed the ops families")
+
+// Default is the recorder on the global meter provider, created on first use;
+// after Retire it is built on a no-op provider, so it claims no family.
 func Default() *Recorder {
-	defaultOnce.Do(func() { defaultRec = New(otel.GetMeterProvider()) })
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	if defaultRec == nil {
+		if defaultRetired {
+			defaultRec = New(noop.NewMeterProvider())
+		} else {
+			defaultRec = New(otel.GetMeterProvider())
+		}
+	}
 	return defaultRec
+}
+
+// Retire makes Default's recorder inert for the life of the process: the tasks
+// flip (F5-18) moves every run into core's task store and core's executor
+// serves the same audiobook_organizer_ops_* families under the <ns>.ops scope,
+// and a Prometheus family has one owner, so HEAD's recorder must not claim them
+// (the boot would refuse with metrics_family_taken). It must run before the
+// first Default; after it Retire cannot undo a claim and returns
+// ErrRetireTooLate, which the caller turns into a boot error rather than serving
+// with the families half-owned. Calling it again once retired is a no-op.
+//
+// A bridge inside the F5-18 flip: commit 4 deletes it together with HEAD's
+// engine and this package.
+func Retire() error {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	if defaultRetired {
+		return nil
+	}
+	if defaultRec != nil {
+		return ErrRetireTooLate
+	}
+	defaultRetired = true
+	return nil
+}
+
+// resetDefaultForTest puts Default back to unset and un-retired, for tests of
+// the pair above.
+func resetDefaultForTest() {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	defaultRec, defaultRetired = nil, false
 }
 
 // Started counts a run attempt that began executing.
