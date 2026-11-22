@@ -132,8 +132,15 @@ func TestKernelBoot_CoreConfigUsesSeamCache(t *testing.T) {
 // step 0's CheckConfig store did exactly that once, because it spelled its
 // options out by hand and lost SectionCache, and the hello crash matrix ran
 // three times slower until it timed out in CI.
+//
+// Step 0 builds its judgement store only when a retired name is set
+// (refuseRetiredAtStep0), so the boots here set one, a warn-class env name;
+// the last boot sets none and must make exactly one store fewer: the skip
+// is the judgement store and nothing else.
 func TestKernelBoot_EveryConfigStoreUsesSeamCache(t *testing.T) {
 	cache := config.NewSectionCache()
+	retired := []config.RetiredName{{Name: "HELLO_ALFRED", Message: "the butler retired"}}
+	environ := []string{"HELLO_ALFRED=pennyworth"}
 	var stores, bypassed int
 	seen := func(sc any) {
 		stores++
@@ -144,10 +151,12 @@ func TestKernelBoot_EveryConfigStoreUsesSeamCache(t *testing.T) {
 
 	ctx := bootseam.With(t.Context(), &bootseam.Seams{SectionCache: cache, ConfigStore: seen})
 	state := t.TempDir()
-	boot := func() {
+	boot := func(environ []string) {
 		t.Helper()
 		c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
 		c.StateDirDefault = state
+		c.ConfigOptions.Retired = retired
+		c.ConfigOptions.Environ = append(slices.Clone(c.ConfigOptions.Environ), environ...)
 		k, err := newKCtx(t, ctx, c)
 		if err != nil {
 			t.Fatalf("New: %v", err)
@@ -165,16 +174,22 @@ func TestKernelBoot_EveryConfigStoreUsesSeamCache(t *testing.T) {
 			}
 		}
 	}
-	boot()
+	boot(environ)
 	if stores < 2 {
 		t.Fatalf("the boot made %d config stores, want step 0's store and its judgement store at least", stores)
 	}
 	if bypassed != 0 {
 		t.Errorf("%d of the boot's %d config stores were built without the section cache in its context", bypassed, stores)
 	}
-	first := cache.Len()
-	boot()
+	first, judged := cache.Len(), stores
+	stores = 0
+	boot(environ)
 	if got := cache.Len(); got != first {
 		t.Errorf("a second boot over the same cache holds %d templates, want %d", got, first)
+	}
+	stores = 0
+	boot(nil)
+	if stores != judged-1 {
+		t.Errorf("a boot with no retired name set made %d config stores, one with one set %d: want exactly the judgement store fewer", stores, judged)
 	}
 }
