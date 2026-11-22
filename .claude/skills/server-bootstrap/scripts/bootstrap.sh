@@ -35,7 +35,7 @@ ssh "$SERVER_IP" 'sudo systemctl restart audiobook-organizer.service' || {
 }
 
 # Step 2: Read the token from the state directory. Core writes it to
-# <state_dir>/bootstrap-token (no leading dot, mode 0600, owned by the service
+# <state_dir>/.bootstrap-token (leading dot, mode 0600, owned by the service
 # user) and logs only the file NAME, never the path or the value, so the path is
 # the state directory, not something to derive from the journal. The directory
 # is core.paths.state_dir (ABO_CORE_PATHS_STATE_DIR); this host's default is the
@@ -49,7 +49,7 @@ sleep 90
 BOOTSTRAP_TOKEN=""
 for i in {1..12}; do
     # -tt: production sudo needs a pseudo-terminal, which adds a CR to the output.
-    BOOTSTRAP_TOKEN=$(ssh -tt "$SERVER_IP" "sudo cat '$STATE_DIR/bootstrap-token'" 2>/dev/null | tr -d '\r\n' || true)
+    BOOTSTRAP_TOKEN=$(ssh -tt "$SERVER_IP" "sudo cat '$STATE_DIR/.bootstrap-token'" 2>/dev/null | tr -d '\r\n' || true)
     if [ -n "$BOOTSTRAP_TOKEN" ]; then
         break
     fi
@@ -58,7 +58,7 @@ for i in {1..12}; do
 done
 
 if [ -z "$BOOTSTRAP_TOKEN" ]; then
-    echo "❌ Could not read $STATE_DIR/bootstrap-token"
+    echo "❌ Could not read $STATE_DIR/.bootstrap-token"
     exit 1
 fi
 echo "✓ Got bootstrap token: ${BOOTSTRAP_TOKEN:0:8}..."

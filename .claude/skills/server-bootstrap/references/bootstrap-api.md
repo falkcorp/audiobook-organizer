@@ -18,7 +18,7 @@ Exchanges a one-time bootstrap token for a full-privilege API key. Public route
 }
 ```
 
-- **token** (required): Bootstrap token read from the `bootstrap-token` file in the state directory (format: `mcb_*`; never logged).
+- **token** (required): Bootstrap token read from the `.bootstrap-token` file in the state directory (format: `mcb_*`; never logged).
 
 Core refuses a body with any other field, so there is no key name to send.
 
@@ -102,11 +102,11 @@ ssh -tt <server> '
   sleep 90
   journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
     | grep "bootstrap token written" | tail -1
-  sudo cat /var/lib/audiobook-organizer/bootstrap-token
+  sudo cat /var/lib/audiobook-organizer/.bootstrap-token
 '
 ```
 
-The file is `<state_dir>/bootstrap-token`, mode 0600, owned by the service user.
+The file is `<state_dir>/.bootstrap-token` (leading dot, the path the sudoers rule names), mode 0600, owned by the service user.
 The state directory is `core.paths.state_dir` (`ABO_CORE_PATHS_STATE_DIR`),
 which defaults to `/var/lib/audiobook-organizer` on the prod host. The log line
 carries the file name and the token's expiry, never the directory or the
@@ -117,8 +117,8 @@ visible during initialization, so reading it immediately after the restart can
 return a stale token that the new process rejects. Production sudo also requires
 the SSH pseudo-terminal supplied by `-tt`.
 
-A file named `.bootstrap-token` (leading dot) is HEAD's and is never cleaned up;
-it answers `sudo cat` with a well-formed, long-expired value. Read the file
-without the dot.
+The previous token stays readable until the new process rewrites the file, and
+answers `sudo cat` with a well-formed, expired value; confirm the log line is
+from this restart.
 
 The token is valid for exactly 10 minutes from service startup.

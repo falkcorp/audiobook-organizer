@@ -382,7 +382,7 @@ class UnitLifecycleTest(unittest.TestCase):
         goes through a signed-in session: the bootstrap exchange also returns
         the admin's generated password. Returns (HTTP status, JSON body).
         """
-        token_file = STATE_DIR / "bootstrap-token"
+        token_file = STATE_DIR / ".bootstrap-token"
         deadline = time.monotonic() + 120
         while not (token_file.exists() and token_file.stat().st_size > 0):
             self.assertLess(time.monotonic(), deadline, "no bootstrap token was written")

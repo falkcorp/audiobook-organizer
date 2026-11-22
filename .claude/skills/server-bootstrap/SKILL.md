@@ -1,6 +1,6 @@
 ---
 name: server-bootstrap
-description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the bootstrap-token file in the state directory (never logged), exchange it for an API key via POST /api/core/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
+description: Initialize server authentication and retrieve API key. SSH to the audiobook-organizer server, restart the service, read the bootstrap token from the .bootstrap-token file in the state directory (never logged), exchange it for an API key via POST /api/core/v1/auth/bootstrap, and write the key to .claude/.api-token (shared across worktrees, auto-cleanup after 8 hours). Use when starting fresh or when the API key has expired.
 ---
 <!-- file: .claude/skills/server-bootstrap/SKILL.md -->
 <!-- version: 1.6.1 -->
@@ -22,12 +22,13 @@ Server IP: <user will prompt>
 The skill will:
 1. SSH to the server and restart `audiobook-organizer.service`.
 2. **Wait 90 seconds before reading the token file.** The previous file may remain visible while the service initializes; reading immediately after `systemctl restart` can return that stale token and cause a `401 invalid bootstrap token` response.
-3. Read the bootstrap token from the **`bootstrap-token` file** in core's state directory (the raw token is never logged to journalctl):
+3. Read the bootstrap token from the **`.bootstrap-token` file** in the state directory (the raw token is never logged to journalctl):
    ```bash
-   # The file is <state_dir>/bootstrap-token (no leading dot), mode 0600, owned
+   # The file is <state_dir>/.bootstrap-token (leading dot, the path the sudoers
+   # rule already names), mode 0600, owned
    # by the service user, so sudo is required, and production sudo requires a
    # pseudo-terminal. Core logs only the file NAME ("auth: bootstrap token
-   # written file=bootstrap-token expires_at=..."), not its directory: the
+   # written file=.bootstrap-token expires_at=..."), not its directory: the
    # directory is core.paths.state_dir (ABO_CORE_PATHS_STATE_DIR), which
    # defaults to /var/lib/audiobook-organizer on the prod host.
    # Keep the delay between restart and cat so this reads the newly written
@@ -37,17 +38,16 @@ The skill will:
      sleep 90
      journalctl -u audiobook-organizer.service --since "-3 min" --no-pager \
        | grep "bootstrap token written" | tail -1
-     sudo cat /var/lib/audiobook-organizer/bootstrap-token
+     sudo cat /var/lib/audiobook-organizer/.bootstrap-token
    '
    ```
 
-   > **A leftover file can still answer.** A restart overwrites the token file
-   > in the state directory in use, but a file from an earlier configuration
-   > (HEAD named it `.bootstrap-token`, with a leading dot) is never cleaned up
-   > and `sudo cat` on it succeeds with a well-formed but expired value. The
+   > **A stale file can still answer.** The wait above exists because the
+   > previous `.bootstrap-token` stays readable until the new process rewrites
+   > it, and `sudo cat` on it succeeds with a well-formed but expired value. The
    > exchange then answers `401 bootstrap_invalid` with nothing pointing at
-   > why. Read `bootstrap-token` (no dot), and confirm the `bootstrap token
-   > written` log line is from THIS restart before trusting what you read.
+   > why. Confirm the `bootstrap token written` log line is from THIS restart
+   > before trusting what you read.
 4. POST to `/api/core/v1/auth/bootstrap` to exchange token for API key
 5. Write key + expiry to `.claude/.api-token` (shared, .gitignored)
 6. Schedule cleanup after 8 hours (non-blocking background process). That
