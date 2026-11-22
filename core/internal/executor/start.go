@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"iter"
 	"slices"
 	"time"
 
@@ -78,7 +77,6 @@ func (e *executor) StartIn(ctx context.Context, b *storage.Batch, kind tasks.Kin
 	if err != nil {
 		return tasks.RunRef{}, err
 	}
-	prep.batchFold = true
 	ref, err := e.stageStart(ctx, b, prep)
 	if err == nil {
 		e.wakeDispatcher()
@@ -121,10 +119,6 @@ type prepared struct {
 	mode   tasks.Mode
 	params json.RawMessage
 	prio   tasks.Priority
-	// batchFold: stageFold reads the queue through the batch's foldView, once
-	// per batch, instead of afresh for this start (StartIn: a bulk start
-	// stages many starts into one batch, fold_view.go).
-	batchFold bool
 }
 
 // prepare validates a start before anything is staged: the kind, held,
@@ -504,11 +498,10 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		}
 		want = k
 	}
-	var view *foldView
-	if p.batchFold {
-		view = e.folds.of(b, func() *foldView { return e.loadFoldView(ctx) })
-	}
-	for i, cur := range e.queuedForFold(ctx, view) {
+	for cur, err := range e.runs.Queued(ctx) {
+		if err != nil {
+			continue // undecodable: hidden (5T.5)
+		}
 		if cur.Kind != p.d.kind || cur.Mode != p.mode || cur.PlanRef != "" {
 			continue // a plan's apply run takes no fold (stageStart)
 		}
@@ -517,13 +510,7 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		}
 		match := pol.AnyParams || pol.Merge != nil
 		if !match && pol.Key != nil {
-			var k string
-			var err error
-			if view != nil {
-				k, err = view.key(p.d.kind, i, pol.Key)
-			} else {
-				k, err = pol.Key(cur.Params)
-			}
+			k, err := pol.Key(cur.Params)
 			match = err == nil && k == want
 		}
 		if !match && pol.Key == nil {
@@ -551,9 +538,6 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 			if err := e.runs.AppendEvent(ctx, b, cur.ID, next.Seq.Event, ev); err != nil {
 				return tasks.RunRef{}, false, err
 			}
-			if view != nil {
-				view.merged(i, next)
-			}
 			e.emitRunChanged(ctx, next)
 		}
 		return tasks.RunRef{ID: cur.ID, Existing: true}, true, nil
@@ -579,42 +563,6 @@ func (e *executor) stageFold(ctx context.Context, b *storage.Batch, p prepared) 
 		}
 	}
 	return tasks.RunRef{}, false, nil
-}
-
-// queuedForFold yields the queued runs stageFold tries, in dispatch order,
-// with each one's index into view (-1 without one: nothing is memoised). An
-// undecodable run is hidden (5T.5).
-func (e *executor) queuedForFold(ctx context.Context, view *foldView) iter.Seq2[int, tasks.RunRecord] {
-	return func(yield func(int, tasks.RunRecord) bool) {
-		if view != nil {
-			for i, r := range view.runs {
-				if !yield(i, r) {
-					return
-				}
-			}
-			return
-		}
-		for r, err := range e.runs.Queued(ctx) {
-			if err != nil {
-				continue
-			}
-			if !yield(-1, r) {
-				return
-			}
-		}
-	}
-}
-
-// loadFoldView reads the queued runs once, for a batch's foldView.
-func (e *executor) loadFoldView(ctx context.Context) *foldView {
-	v := &foldView{keys: map[tasks.Kind][]foldKeyVal{}}
-	for r, err := range e.runs.Queued(ctx) {
-		if err != nil {
-			continue // undecodable: hidden (5T.5)
-		}
-		v.runs = append(v.runs, r)
-	}
-	return v
 }
 
 // runningFoldLimit caps stageFold's read of a kind's running runs (the
