@@ -146,7 +146,6 @@ func (c *fakeCore) StageUserMerge(ctx context.Context, b *storage.Batch, _ corea
 type idFixture struct {
 	*fixture
 	core *fakeCore
-	c    *coreauth.User // a second admin survivor, for the race
 	pr   *coreauth.Principal
 }
 
@@ -233,23 +232,10 @@ func coreOwned(key string) bool {
 	return false
 }
 
-// swapMerger replaces the service's batch committer with m.
-type mergerFunc func(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error
-
-func (m mergerFunc) ApplyUserMergeIdentity(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error {
-	return m(ops, key, journal, stage)
-}
-
-// ScanBooksUserData is never called through the decorator in these tests.
-func (m mergerFunc) ScanBooksUserData(string) (*database.UserData, error) {
-	return nil, errors.New("decorator: scan is not under test")
-}
-
 // decorated is the real committer with a hook around ApplyUserMergeIdentity.
 type decorated struct {
 	database.IdentityUserMerger
-	around func(real func() error) error
-	apply  func(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error
+	apply func(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error
 }
 
 func (d decorated) ApplyUserMergeIdentity(ops []database.UserMergeOp, key string, journal []byte, stage func(*storage.Batch) error) error {
@@ -967,6 +953,7 @@ func TestMergeGrant_NeverFormatsOrLogsItsPrincipal(t *testing.T) {
 	pr := &coreauth.Principal{User: &coreauth.User{ID: "u-bruce"}, CredentialID: credCredential}
 	g := Grant{ActorID: "u-bruce", Action: ActionApply, SurvivorID: "a", AbsorbedID: "b", Digest: "d", Principal: pr}
 	for name, text := range map[string]string{
+		//lint:ignore S1025 the test pins what each verb prints, %s included
 		"%v": fmt.Sprintf("%v", g), "%+v": fmt.Sprintf("%+v", g), "%#v": fmt.Sprintf("%#v", g), "%s": fmt.Sprintf("%s", g),
 		"pointer %+v": fmt.Sprintf("%+v", &g),
 	} {
