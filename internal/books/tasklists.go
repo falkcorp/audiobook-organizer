@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 )
 
 // taskListInputs is everything bookTaskLists builds the module's task lists
@@ -28,6 +29,7 @@ type taskListInputs struct {
 	Deluge      deluge.BooksTaskInputs
 	ITunes      itunes.BooksTaskInputs
 	Acoustid    acoustid.BooksTaskInputs
+	Scheduler   scheduler.BooksTaskInputs
 }
 
 // bookTaskLists is every task definition the books module registers through
@@ -78,6 +80,14 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	ac := in.Acoustid
 	ac.Schedules = in.Schedules
 	l, err = acoustid.BooksTaskLists(ac)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
+
+	sc := in.Scheduler
+	sc.Schedules = in.Schedules
+	l, err = scheduler.BooksTaskLists(sc)
 	if err != nil {
 		return nil, fmt.Errorf("books task lists: %w", err)
 	}

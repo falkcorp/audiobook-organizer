@@ -16,10 +16,13 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
+	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
+	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
@@ -96,6 +99,12 @@ func (listsAux) OLStoreCompactionStats() (database.CompactionStats, bool) {
 	return database.CompactionStats{}, false
 }
 
+type listsUpgrader struct{}
+
+func (listsUpgrader) RunUpgrade(context.Context, int, operations.ProgressReporter) (*metabatch.UpgradeResult, error) {
+	return &metabatch.UpgradeResult{}, nil
+}
+
 type listsCandidates struct{}
 
 func (listsCandidates) GetCachedCandidates(string) (*database.MetadataCandidateCache, bool, error) {
@@ -143,6 +152,10 @@ func listsFixture(t *testing.T) taskListInputs {
 			Plugin: &acoustid.Plugin{},
 			Source: store,
 		},
+		Scheduler: scheduler.BooksTaskInputs{
+			Upgrader:     listsUpgrader{},
+			StandDownKey: tasks.Key("books.library.scan"),
+		},
 	}
 }
 
@@ -164,8 +177,6 @@ var notYetBuilt = map[tasks.Kind]string{
 	"books.library.size-refresh":                 "server t7",
 	"books.metadata.candidate-fetch":             "server t7",
 	"books.reconcile.scan":                       "server t7",
-	// internal/scheduler t7Deps builder.
-	"books.scheduler.metadata-upgrade": "scheduler t7",
 	// the dedup plugin's KindDeps builder.
 	"books.dedup.label-refinement": "dedup plugin",
 	"books.dedup.llm-review":       "dedup plugin",
