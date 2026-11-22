@@ -627,6 +627,7 @@ core/kernel.newBackupSwapper
 core/kernel.newKernelEvents
 core/kernel.newKernelOutbox
 core/kernel.newKernelRealtime
+core/kernel.newStartupTable
 core/kernel.otherInstall
 core/kernel.outboxConfig
 core/kernel.outboxHealthCheck
