@@ -1,7 +1,7 @@
 // file: core/kernel/restore_hooks.go
-// version: 1.4.2
+// version: 1.5.0
 // guid: b84e1f27-6c93-4d05-8a7e-2f1d9c3b5e60
-// last-edited: 2026-11-12
+// last-edited: 2026-11-21
 
 package kernel
 
@@ -61,6 +61,12 @@ type hookEnv struct {
 	// not for one restore, so two such runs must not share a key: audit would
 	// take the second for a re-run of the first and write none of its records.
 	RunKey string
+	// RestoreID is the restore intent's ID when this run belongs to a restore the
+	// live host staged: minted by restoreswap.NewID (crypto/rand) and kept in the
+	// restore journal under the state directory, never in the store, so no archive
+	// can carry it. Empty for a replaced or external store and for any run that has
+	// no restore of its own. It is the only thing hookRunKey will key auth on.
+	RestoreID string
 	// Previous is the pre-swap store; nil when there was none (host loss, an
 	// external replacement, a HooksOwed run).
 	Previous previousView
@@ -276,7 +282,7 @@ func (in restoreHooksInput) run(ctx context.Context, report *hookReport, runKey 
 	if err != nil {
 		return nil, err
 	}
-	hooks, err := in.Hooks(hookEnv{Journal: stampRestore{in.Journal, in.Result.RestoreLine}, RestoreSeq: in.Result.RestoreLine, RunKey: runKey, Previous: prev, Report: report})
+	hooks, err := in.Hooks(hookEnv{Journal: stampRestore{in.Journal, in.Result.RestoreLine}, RestoreSeq: in.Result.RestoreLine, RunKey: runKey, RestoreID: in.restoreID(), Previous: prev, Report: report})
 	if err != nil {
 		return nil, fmt.Errorf("kernel: build the restore hooks: %w", err)
 	}
@@ -456,17 +462,31 @@ func journaledOf(j journal.RevocationJournal) func(journal.Revocation) (bool, er
 	return nil
 }
 
-// hookRunKey is the key auth's last-admin restriction stamps on its lines for
-// one run of the hooks: the restore line's seq while there is one, else the
-// run's stored ID (hookEnv.RunKey), the same two that key audit's records.
+// restoreID is the ID of the restore the live host staged for this run, "" when
+// there is none (a replaced or external store).
+func (in restoreHooksInput) restoreID() string {
+	if in.Restore == nil {
+		return ""
+	}
+	return in.Restore.ID
+}
+
+// hookRunKey is the key auth stamps on its restore run: the lines of the last-admin
+// restriction, and the marker that makes the credential-epoch bump idempotent. A
+// run that matches a stored key SKIPS work (the bump, a journal line), so the key
+// must be something a restored archive cannot forge. Neither the restore line's
+// seq (journal seqs start again after a journal reset or a host loss, so an
+// archive can carry a marker for a seq a later restore also gets) nor the hooks'
+// own run ID (stored in the restorable keyspace, so an archive taken mid-run hands
+// it back) is that. The restore intent's ID is: minted on this host from
+// crypto/rand, kept under the state directory outside the store. A run with no
+// such ID returns "", which auth takes as "never skip": it bumps and journals
+// every time, and a double bump only narrows what a session may do.
 func hookRunKey(env hookEnv) string {
-	if env.RestoreSeq != 0 {
-		return fmt.Sprintf("seq:%d", env.RestoreSeq)
+	if env.RestoreID == "" {
+		return ""
 	}
-	if env.RunKey != "" {
-		return "run:" + env.RunKey
-	}
-	return ""
+	return fmt.Sprintf("restore:%s:seq:%d", env.RestoreID, env.RestoreSeq)
 }
 
 // userIDs is ids as auth's user IDs.

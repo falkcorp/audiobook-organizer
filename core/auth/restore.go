@@ -1,5 +1,5 @@
 // file: core/auth/restore.go
-// version: 1.3.0
+// version: 1.3.1
 // guid: 2b7d94e1-6a30-4c58-b9f2-e41c8d05a763
 // last-edited: 2026-11-12
 
@@ -31,11 +31,16 @@ type RestoreDeps struct {
 	// restore (§4.14 step 3); nil when there is none.
 	Previous    Store
 	Revocations journal.RevocationJournal // the lines the hook appends (§4.12)
-	// RunKey names one restore run (the restore line's seq for a hook run, the
-	// restore's ID for a boot re-apply); empty for a run that has none. With
-	// Journaled it makes RestrictLastAdmins idempotent across a crash: every line
-	// it journals carries the key, and a line the journal already holds for this
-	// run is not appended a second time.
+	// RunKey names one restore run: "restore:<the restore intent's ID>..." (the
+	// kernel's hookRunKey and restrictKey); empty for a run that has none. A run
+	// that finds its own key SKIPS work: with Journaled, a line the journal already
+	// holds for this run is not appended a second time (RestrictLastAdmins), and a
+	// stored RestoreEpochRun with this key means PostRestore's epoch bump already
+	// committed, so it is not repeated. A skip is only as safe as the key is
+	// unforgeable, so the key must come from the live host (the intent's ID is
+	// minted from crypto/rand and kept outside the store) and never from anything
+	// a restored store can carry (a journal seq, an ID kept in the store). Empty
+	// means never skip: every line is journaled and every epoch bumped, each run.
 	RunKey string
 	// Journaled reports whether the journal already holds a line equal to r in
 	// kind, subject, object and detail (journal.Component.Journaled). Nil means
