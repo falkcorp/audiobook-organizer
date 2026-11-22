@@ -469,10 +469,7 @@ func Attach(mod module.Module, a *app.App) error {
 	}
 	tapActivity(a, srv.ActivityLogWriter())
 	srv.SetConfigAtoms(atomsWithScope)
-	srv.SetPostureTokens(func() []system.PostureToken {
-		h, err := a.CheckpointHealth()
-		return checkpointPosture(h, err, time.Now())
-	})
+	srv.SetPostureTokens(func() []system.PostureToken { return postureTokens(a, time.Now()) })
 	// POST /backup/restore stages through the swap (R1-25). The binary ID is
 	// the one the kernel computed from the same Options.Version, so the next
 	// boot's P0a accepts the intent as this binary's.
