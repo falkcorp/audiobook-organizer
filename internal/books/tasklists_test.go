@@ -309,6 +309,30 @@ func TestF5_ScheduledKindsRegistered(t *testing.T) {
 	}
 }
 
+// The hook reaches every list. A kind outside ScheduledKinds never shows a
+// dropped hook (maintenance group 2 has none), so build the lists with a hook
+// that schedules every kind and require every definition to carry it.
+func TestF5_EveryKindTakesTheHook(t *testing.T) {
+	probe := NewSchedules(ScheduleDeps{})("books.maintenance.trash-cleanup")
+	require.NotNil(t, probe)
+	in := listsFixture(t)
+	in.Schedules = func(tasks.Kind) *tasks.Schedule { return probe }
+	defs, err := bookTaskLists(in)
+	require.NoError(t, err)
+	var unscheduled []string
+	for _, d := range defs {
+		// The repairs kinds are operator-started fixers: repairs.KindDeps has no
+		// schedule hook, so they carry none whatever books ships.
+		if strings.HasPrefix(string(d.Kind()), "books.repairs.") {
+			continue
+		}
+		if tasks.CommonOf(d).Schedule == nil {
+			unscheduled = append(unscheduled, string(d.Kind()))
+		}
+	}
+	require.Empty(t, unscheduled, "kinds that did not take the schedule hook")
+}
+
 // Every list bookTaskLists is meant to carry is in it. The schedule check cannot
 // see a dropped list whose kinds are unscheduled (all of deluge and itunes), so
 // each list is pinned by one kind it owns.
