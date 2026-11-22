@@ -32,6 +32,7 @@ const reasonMerged = "merged"
 // in their own batch with their audit record in it (F4-08 B10t).
 type Admin interface {
 	AccountAdmin
+	KeyAdmin
 
 	// PlanUserMerge previews folding source into target: it re-checks the
 	// principal exactly as StageUserMerge does, reads the records the merge
