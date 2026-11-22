@@ -9,9 +9,9 @@ import "sync/atomic"
 
 // ABO's tasks flip (F5-18) is ONE decision, tasksFlipOn, and everything the flip
 // changes in this package reads it: the manifest (books.level-3, M4 and M5 in
-// the cutover list, the retired ops-family and syslog: claims), and from commit
-// 2 on the kernel's tasks switch (app.Options.TasksBoot) and books' task
-// registrations. They are tied to one predicate for the reason the identity
+// the cutover list, the retired ops-family and syslog: claims), the retirement
+// of HEAD's ops recorder (Register), and from commit 2 on the kernel's tasks
+// switch (app.Options.TasksBoot) and books' task registrations. They are tied to one predicate for the reason the identity
 // flip's are (identity_flip.go): core's executor without M4 runs over an empty
 // run table and HEAD's history is lost to it; M4 without core's executor
 // retires HEAD's run rows while HEAD's engine still writes them.
