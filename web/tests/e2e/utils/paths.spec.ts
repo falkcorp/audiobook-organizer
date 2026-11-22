@@ -3,11 +3,20 @@
 // guid: e2e97a2a-7fe7-4997-84cd-91b2144fbc3d
 // last-edited: 2026-11-22
 
-// Checks on ./paths that do not open a browser. Every helper returns the value
-// the specs spelled out before they were re-pointed to it; the literals below
-// are copied from those specs, so they stay literal on purpose.
+// Two checks on ./paths, neither of which opens a browser.
+//
+// 1. Every helper returns the value the specs spelled out before they were
+//    re-pointed to it (the literals below are copied from those specs, so they
+//    stay literal on purpose: this file is exempt from the guard).
+// 2. No spec spells out a page path in goto, toHaveURL, waitForURL or
+//    expectFinalUrl, so F9-03's move of the pages under /books/ is a change to
+//    paths.ts only. The guard's own samples show what it catches and allows.
 
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
+import { findRawPagePaths } from './pathLiteralGuard';
 import {
   bookPath,
   collectionPath,
@@ -23,6 +32,8 @@ import {
   urlGlob,
   urlReaches,
 } from './paths';
+
+const E2E_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 test.describe('paths: values the specs used before', () => {
   test('page paths', () => {
@@ -110,5 +121,65 @@ test.describe('paths: values the specs used before', () => {
     expect(urlEndsWith(paths.dashboard).test('http://x.test/dashboard?a=1')).toBe(false);
     expect(urlContainsAny([paths.operations, paths.activity]).test('http://x.test/activity')).toBe(true);
     expect(urlContainsAny([paths.operations, paths.activity]).test('http://x.test/library')).toBe(false);
+  });
+});
+
+test.describe('paths: no spec spells a page path out', () => {
+  const sources = [
+    ...readdirSync(E2E_DIR).filter((f) => f.endsWith('.spec.ts')),
+    ...readdirSync(join(E2E_DIR, 'utils')).map((f) => join('utils', f)),
+  ]
+    .filter((f) => f.endsWith('.ts'))
+    .filter((f) => !/(^|\/)(paths\.spec|paths|pathLiteralGuard)\.ts$/.test(f))
+    .sort();
+
+  test('the scan reads the specs', () => {
+    expect(sources.length).toBeGreaterThan(40);
+    expect(sources).toContain('library-browser.spec.ts');
+    expect(sources).toContain(join('utils', 'setup-modes.ts'));
+  });
+
+  test('every spec takes its page paths from utils/paths', () => {
+    const raw = sources.flatMap((file) =>
+      findRawPagePaths(readFileSync(join(E2E_DIR, file), 'utf8')).map((hit) => `${file}:${hit.line}  ${hit.text}`),
+    );
+    expect(raw, 'raw page-path literals; use utils/paths').toEqual([]);
+  });
+
+  test('the guard catches each shape', () => {
+    const bad = [
+      "await page.goto('/library');",
+      'await page.goto(`/library/${id}`);',
+      "await page.goto(opts.url ?? '/review?lane=authors');",
+      'await page.goto(\n  "/settings#paths",\n);',
+      'await expect(page).toHaveURL(/\\/dashboard$/);',
+      'await expect(page).toHaveURL(/.*\\/settings/);',
+      "await page.waitForURL('**/login');",
+      'await page.waitForURL(/.*\\/settings/, { timeout: 5000 });',
+      "await expectFinalUrl(page, '/review?lane=dupes');",
+      'page.locator(`a[href="/library/${id}"]`)',
+      "expect(pageUrl).toContain('/settings');",
+    ];
+    for (const source of bad) {
+      expect(findRawPagePaths(source), source).toHaveLength(1);
+    }
+  });
+
+  test('the guard allows what names no page', () => {
+    const fine = [
+      'await page.goto(paths.library);',
+      'await page.goto(libraryPath(`limit=${n}`));',
+      "await page.goto(baseURL || 'http://localhost:5173');",
+      'await page.goto(initialURL, { waitUntil: "domcontentloaded" });',
+      'await expect(page).toHaveURL(/band=CERTAIN/);',
+      'await expect(page).toHaveURL(/[?&]layer=acoustid(&|$)/);',
+      'await expect(page).toHaveURL(expectedUrl, { timeout: 3000 });',
+      "await page.route('**/api/v1/audiobooks**', handler);",
+      "expect(url).toContain('sort=author');",
+      "const key = url.pathname.split('/').pop();",
+    ];
+    for (const source of fine) {
+      expect(findRawPagePaths(source), source).toEqual([]);
+    }
   });
 });
