@@ -334,8 +334,11 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.fs-regroup-xml"),
 		Timeout:        120 * time.Minute,
-		Schedule:       sched,
-		Ready:          []tasks.ReadySignal{t6g4SignalMemDB},
+		// HEAD refuses an apply while a library scan is queued or running
+		// (refuseWhileLibraryScanActive); natively a scan that is running holds the run.
+		NotWhile: nativeScanNotWhile(),
+		Schedule: sched,
+		Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fsRegroupNativeParams) (fsRegroupResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fsRegroupResult{}, err

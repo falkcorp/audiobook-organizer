@@ -524,6 +524,9 @@ func (p *Plugin) repointMissingToFolderAudioNative(deps t6g7Deps, sched func(tas
 	c.Resume = tasks.ResumeDrop
 	c.Priority = tasks.PriorityLow
 	c.ConcurrencyKey = tasks.Key("books.maintenance.repoint-missing-to-folder-audio")
+	// HEAD refuses a live repoint while a library scan is queued or running; a
+	// running scan holds the native run.
+	c.NotWhile = nativeScanNotWhile()
 	return tasks.Task(rfKind, tasks.TaskSpec[json.RawMessage, rfReport]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (rfReport, error) {
