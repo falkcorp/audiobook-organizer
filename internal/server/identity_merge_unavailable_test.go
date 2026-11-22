@@ -15,9 +15,11 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )
 
-// F4-08 B10l guard: the merge service a server builds is unavailable exactly
-// when the server is wired with core identity (the signal B10b2 uses for
-// permanence), and answers as HEAD does without it.
+// F4-08 B10l-op: the merge service a server builds is unavailable under core
+// identity exactly when the server was not given core's admin handles (Admin,
+// Users and Refresh; the merge then fails closed rather than run on HEAD's
+// account rows), and answers as HEAD does without identity. With the handles it
+// is available: internal/books' composed tests run that case against real core.
 func TestUserMerge_AvailabilityFollowsTheIdentityWiring(t *testing.T) {
 	newStore := func(t *testing.T) database.Store {
 		store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/merge-unavailable.pebble")
