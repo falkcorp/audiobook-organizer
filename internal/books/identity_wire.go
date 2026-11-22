@@ -240,7 +240,8 @@ func newLegacyIdentity(d module.Deps, ownerRequired func() bool) (*legacyauth.Id
 	if err != nil {
 		return nil, fmt.Errorf("books: the legacy-auth bridge: %w", err)
 	}
-	id := &legacyauth.Identity{Bridge: b, Compat: d.AuthCompat, Client: httpapi.ClientInfoFrom, Refresh: d.AuthRefresh}
+	id := &legacyauth.Identity{Bridge: b, Compat: d.AuthCompat, Client: httpapi.ClientInfoFrom, Refresh: d.AuthRefresh,
+		Admin: d.AuthAdmin, Users: d.Auth}
 	if err := id.Validate(); err != nil {
 		return nil, fmt.Errorf("books: %w", err)
 	}

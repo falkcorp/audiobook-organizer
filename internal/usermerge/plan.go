@@ -130,12 +130,28 @@ type Plan struct {
 
 	Warnings []string `json:"warnings"`
 	Refusals []string `json:"refusals"`
+	// RefusalCodes are the codes of the refusals core decided (identity only):
+	// already_merged, no_sign_in, email_linkable, last_admin, email_in_use,
+	// inactive_user. Absent off identity, where every refusal is books' own.
+	RefusalCodes []string `json:"refusal_codes,omitempty"`
+	// Core is core's masked summary of the auth half of the merge (identity
+	// only): the roles, e-mail outcome, key ids and provider names, never a
+	// credential. Absent off identity.
+	Core *CoreSummary `json:"core,omitempty"`
 	// Digest names exactly what Apply will write. It is bound into the grant, so
 	// an apply carries the digest of the preview the admin looked at.
 	Digest string `json:"digest"`
 
 	ops    []database.UserMergeOp
 	retire database.UserRetirement
+	// corePlan is core's opaque plan of the auth half (identity only). It is
+	// unexported so no encoder reaches it: it stays in the process that built
+	// it, and Apply plans again under its locks rather than keeping it.
+	corePlan coreauth.UserMergePlan
+	// coreSurvivor and coreAbsorbed are the two accounts as core held them when
+	// the plan was built (identity only), for the journal's record of the core
+	// half and the check that they did not move meanwhile.
+	coreSurvivor, coreAbsorbed *coreauth.User
 	// rowRefusals are the refusals in Refusals that quote row keys and decode
 	// errors. Summary leaves them out (they are for the admin-only preview).
 	rowRefusals []string
@@ -304,9 +320,10 @@ func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error)
 	if err := s.CheckAvailable(); err != nil {
 		return nil, err
 	}
-	p := &Plan{SurvivorID: req.SurvivorID, AbsorbedID: req.AbsorbedID,
-		Counts: map[string]FamilyCount{}, Conflicts: []Conflict{}, Warnings: []string{}, Refusals: []string{},
-		SurvivorIdentities: []Identity{}, AbsorbedIdentities: []Identity{}, RolesGained: []string{}}
+	if s.flipped() {
+		return s.buildIdentityPlan(ctx, req)
+	}
+	p := newPlan(req)
 	if req.SurvivorID == "" || req.AbsorbedID == "" {
 		p.Refusals = append(p.Refusals, "both a surviving and an absorbed account are required")
 		return p, nil
@@ -403,11 +420,21 @@ func (s *Service) BuildPlan(ctx context.Context, req PlanRequest) (*Plan, error)
 	return p, nil
 }
 
+// newPlan is an empty plan for req, every list non-nil so it encodes as [].
+func newPlan(req PlanRequest) *Plan {
+	return &Plan{SurvivorID: req.SurvivorID, AbsorbedID: req.AbsorbedID,
+		Counts: map[string]FamilyCount{}, Conflicts: []Conflict{}, Warnings: []string{}, Refusals: []string{},
+		SurvivorIdentities: []Identity{}, AbsorbedIdentities: []Identity{}, RolesGained: []string{}}
+}
+
 // ActorIsAdmin reports whether id is an existing, active account with the admin
 // role: the only kind of account that may preview or run a merge.
 func (s *Service) ActorIsAdmin(id string) (bool, error) {
 	if id == "" {
 		return false, nil
+	}
+	if s.flipped() {
+		return s.coreActorIsAdmin(context.Background(), id)
 	}
 	u, err := s.store.GetUserByID(id)
 	if err != nil {
@@ -881,15 +908,22 @@ func (b *builder) planAPIKeys(_ context.Context, surv, abs *database.User, d *da
 // planOwnerFields rewrites the owner field of the families that have no
 // per-user key: playlists, collections, invites, and invite email grants.
 func (b *builder) planOwnerFields(_ context.Context, surv, abs *database.User, d *database.UserData) error {
-	for _, f := range []struct {
-		family, field string
-		rows          []database.UserDataRow
-	}{
+	return b.planOwnerFamilies(surv, abs, []ownerFamily{
 		{FamPlaylists, "created_by_user_id", d.Playlists},
 		{FamCollections, "created_by_user_id", d.Collections},
 		{FamInvites, "created_by_user_id", d.Invites},
 		{FamInviteGrants, "user_id", d.InviteGrants},
-	} {
+	})
+}
+
+// ownerFamily is one family whose rows carry the owning user in a field.
+type ownerFamily struct {
+	family, field string
+	rows          []database.UserDataRow
+}
+
+func (b *builder) planOwnerFamilies(surv, abs *database.User, families []ownerFamily) error {
+	for _, f := range families {
 		for i, r := range f.rows {
 			b.count(f.family).Rows++
 			// Refusals name the row by position, not key: an invite's key is its

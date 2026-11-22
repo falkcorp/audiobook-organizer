@@ -146,6 +146,11 @@ func (s *Server) UserMerge() *usermerge.Service {
 		// Merges are permanent once the account store is core's (A9): the
 		// wiring says so, here, where the service is built.
 		opts = append(opts, usermerge.WithIdentityFlipped(func() bool { return s.identity != nil }))
+		// The merge runs on core's handles when the server was given them; without
+		// them it stays unavailable under identity (usermerge.CheckAvailable).
+		if id := s.identity; id != nil && id.Admin != nil && id.Users != nil && id.Refresh != nil {
+			opts = append(opts, usermerge.WithCoreIdentity(usermerge.CoreIdentity{Admin: id.Admin, Users: id.Users, Refresh: id.Refresh}))
+		}
 		svc, err := usermerge.New(s.store, opts...)
 		if err != nil {
 			logger.New("usermerge").Warn("user merge unavailable: %v", err)

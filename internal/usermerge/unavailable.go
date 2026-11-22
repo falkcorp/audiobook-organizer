@@ -27,7 +27,17 @@ var ErrUnavailableUnderIdentity = errors.New("usermerge: " + ProblemUnavailableU
 // user rows on the strength of the handler alone (the operation runs later,
 // from a grant minted before a restart that may have flipped).
 func (s *Service) CheckAvailable() error {
-	if s.identityFlipped != nil && s.identityFlipped() {
+	if s.flipped() && !s.identityReady() {
+		return ErrUnavailableUnderIdentity
+	}
+	return nil
+}
+
+// CheckFootprintAvailable refuses the footprint read under identity: it lists
+// sign-ins and API keys, which are core's records, and core exposes no masked
+// read of another user's for it. It is not part of the merge's port (B10l-op).
+func (s *Service) CheckFootprintAvailable() error {
+	if s.flipped() {
 		return ErrUnavailableUnderIdentity
 	}
 	return nil

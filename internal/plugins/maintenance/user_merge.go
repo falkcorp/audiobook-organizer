@@ -287,7 +287,8 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 	if action != usermerge.ActionApply {
 		want.SurvivorID, want.AbsorbedID, want.Digest = "", "", ""
 	}
-	if _, err := env.Grants.Redeem(params.Grant, actor, want); err != nil {
+	gr, err := env.Grants.Redeem(params.Grant, actor, want)
+	if err != nil {
 		return fmt.Errorf("%s: %w", UserMergeOpID, err)
 	}
 	if !fresh {
@@ -299,7 +300,8 @@ func userMergeCore(ctx context.Context, dry bool, params userMergeParams, env us
 	switch action {
 	case usermerge.ActionApply:
 		j, err = env.Writer.ApplyUserMerge(ctx, usermerge.ApplyRequest{ActorID: actor, SurvivorID: params.SurvivorID,
-			AbsorbedID: params.AbsorbedID, Digest: params.Digest, AcknowledgeOwnerIdentity: params.AcknowledgeOwnerIdentity}, prog)
+			AbsorbedID: params.AbsorbedID, Digest: params.Digest, AcknowledgeOwnerIdentity: params.AcknowledgeOwnerIdentity,
+			Principal: gr.Principal}, prog)
 	case usermerge.ActionResume:
 		j, err = env.Writer.ResumeUserMerge(ctx, params.JournalID, prog)
 	case usermerge.ActionUndo:

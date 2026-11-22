@@ -50,6 +50,13 @@ type Identity struct {
 	// (permHoldsLive); under core identity that store is no longer the
 	// account's record, so the question goes to core.
 	Refresh func(context.Context, *coreauth.Principal) (*coreauth.Principal, error)
+	// Admin and Users are core's actor-checked merge handle (module.Deps.
+	// AuthAdmin) and read-only identity view (module.Deps.Auth), which the
+	// admin user merge runs on. Optional: Validate does not require them, and
+	// a server that left either nil refuses the merge instead of running it
+	// (usermerge.ErrUnavailableUnderIdentity).
+	Admin coreauth.Admin
+	Users coreauth.Identities
 }
 
 // Validate reports a missing member. A server built over a partial Identity
