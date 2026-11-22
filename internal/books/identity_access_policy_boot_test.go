@@ -76,10 +76,11 @@ func bootAccessOnly(t *testing.T, allowList string) *runningApp {
 	t.Helper()
 	t.Cleanup(SetIdentityFlipForTest(true))
 	t.Setenv(accessEnvKey, allowList)
-	r := runComposedWith(t, func(c *config.Config) {
-		c.EnableAuth = true
-		c.OwnerEmail = accessOwner
-	}, nil, nil, nil)
+	// The owner is a key of the flipped config (modules.books.identity.owner_email),
+	// not the fixture's loaded config: set it where an operator does.
+	t.Setenv("ABO_BOOKS_IDENTITY_OWNER_EMAIL", accessOwner)
+	r := runComposedWith(t, func(c *config.Config) { c.EnableAuth = true }, nil, nil, nil)
+	require.Equal(t, accessOwner, config.Snapshot().OwnerEmail, "the owner is not configured in this boot, so a test of the owner proves nothing")
 	require.NoError(t, r.mod.idw.verifier.Bind(newAccessAssertions()))
 	return r
 }
