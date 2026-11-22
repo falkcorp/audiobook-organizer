@@ -426,11 +426,13 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
 - **Recorded changes (release notes).** With auth off, every `Guards.Interactive` route (credential, key,
   temp-login, restore, user-management, import-path, plugin-settings, tool-install and update routes) refuses the
   auth-disabled principal, so do the API-key, session-list and audit routes
-  (SEC-3), and the backup routes answer 401. The credential-metadata routes (`/me*`, `/api-keys*`,
-  `/users/{id}/sessions*`, `/users/{id}/api-keys*`) and the audit routes answer 401 too, while the settings routes keep
+  (SEC-3), and the backup routes refuse it too. The credential-metadata routes (`/me*`, `/api-keys*`,
+  `/users/{id}/sessions*`, `/users/{id}/api-keys*`) and the audit routes refuse it as well, while the settings routes keep
   their auth-off reach (05-rbac §4.11): "With authentication off, credential, API-key, session, audit, backup,
   user-management, import-path, plugin-settings, tool-install and update routes now refuse requests; turn
-  authentication on to use them." Playlist writes stay open to every signed-in user,
+  authentication on to use them." Every such refusal of the auth-disabled principal is 403 (core:
+  `interactive_required`; books' gin routes: `FORBIDDEN`), never 401, so it does not end a no-auth install's SPA
+  session (F4-08 ruling G5(a)); a request with no credential while authentication is on still answers 401. Playlist writes stay open to every signed-in user,
   as at HEAD: `books:playlists.create` is not enforced on them (SEC-4). An API key of an `fp-worker` user whose
   scopes lie outside the worker scope reaches no route (HEAD let it reach the authenticated-only routes). An admin's
   API key, the bootstrap key included, no longer reaches `PATCH /api/v1/admin/debug/books/:id`,
@@ -718,7 +720,7 @@ steps (§9.4 R2).
 | 9 | Web sessions, invites, one-time tokens | HEAD's rows | deleted (M3): everyone signs in to the web app once | 05-authn §11 | re-send open invites (P5; deploy step 8) |
 | 10 | API keys | `abk_` tokens holding atoms | the same tokens, with native scopes (M3); new keys are `mck_` | 05-authn §4.4; 05-rbac §6 | — |
 | 11 | Roles and permissions | 13 stored atoms; seed roles rewritten at every boot | native scopes through the atom table; core seeds the seed roles | 05-rbac §6 | — |
-| 12 | Auth-off behaviour | HEAD's pass-through | credential, key, temp-login, restore, user-management (invite, resend, deactivate, reactivate, reset-password), import-path, plugin-settings, tool-install and update routes refuse the auth-disabled principal; the backup routes answer 401 | 05-rbac §4.10–§4.11 | turn authentication on to use them |
+| 12 | Auth-off behaviour | HEAD's pass-through | credential, key, temp-login, restore, user-management (invite, resend, deactivate, reactivate, reset-password), import-path, plugin-settings, tool-install and update routes refuse the auth-disabled principal, and so do the backup routes | 05-rbac §4.10–§4.11 | turn authentication on to use them |
 | 13 | Task kinds, runs and schedules | HEAD's definition IDs and ops rows | `books.<id>` and `core.<id>` by the kind-rename map; runs, clocks, markers and stamps in `c/tasks/` (M4) | 05-tasks §5T.8 | — |
 | 14 | System log | `syslog:` rows | `c/log/`, converted (M5) | 05-logging §5 | — |
 | 15 | Integrations, AI jobs, library roots, the webhook rule | blob fields, `aijob*`, `import_path:` | `c/integrations/instances/`, `c/ai/`, `core.library.roots` entries (IDs kept), native notify instances and their rule (M6) | 05-metadata M1.10; 05-ai §10; 05-library §5L.10; 05-notify §10 | — |
@@ -732,7 +734,7 @@ steps (§9.4 R2).
 | 23 | Pre-R2 backups | — | they still hold plaintext secrets and sign-in tokens; restoring one migrates it again and clears its sign-ins; after R3 it needs R2 installed first and its off-host `.encryption_key` | 05-authn §11; §9.2.2 | keep them as safe as the server, with their `.encryption_key`, or delete them |
 | 24 | Account merges | a finished merge could be undone from its journal | permanent: no merge finished before R2 is undone after it (an undo answers 409 `merge_permanent`), and a merge in progress refuses the upgrade until it is finished (D13) | 05-authn §11 | finish or undo every merge before the deploy (deploy step 0) |
 | 25 | Rollback and revocations | — | a `make rollback-restore` brings back every credential revoked, user disabled or password changed on R2 | 05-storage §5S.3.12 | repeat those revocations after a rollback (SEC-10) |
-| 26 | Auth-off reach of credential metadata | HEAD bound no user with auth off, so these routes answered 401 or did not exist | with auth off, `/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*` and the audit routes answer 401; the settings routes keep their auth-off reach (SEC-3) | 05-rbac §4.11; 05-authn §4.13 | turn authentication on to use them |
+| 26 | Auth-off reach of credential metadata | HEAD bound no user with auth off, so these routes answered 401 or did not exist | with auth off, `/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*` and the audit routes refuse the auth-disabled principal; the settings routes keep their auth-off reach (SEC-3) | 05-rbac §4.11; 05-authn §4.13 | turn authentication on to use them |
 | 27 | AI request routing | `ai_endpoints_routing` (default off): an install that never turned it on called the single configured backend directly | always routed: every AI call goes through the router over the `ai_endpoints` list, and the setting is dropped; an install that never enabled routing moves to the routed path (its endpoints are derived from the backend scalars it already has) | 05-ai §10; the rename table row `ai_endpoints_routing` | after the first boot check Settings > AI backends: the endpoints list is what serves each AI call |
 
 **The kept contract (D12 (c)).** The **only** frozen external contract is the ABS-compatible API that the phone apps
