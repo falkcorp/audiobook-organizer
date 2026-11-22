@@ -23,6 +23,6 @@ export function themeBootScript(storageKey: string, defaultMode: 'light' | 'dark
   if (defaultMode !== 'light' && defaultMode !== 'dark') throw new Error(`default mode must be light or dark`);
   return (
     `(function(){var m=${JSON.stringify(defaultMode)};try{var s=localStorage.getItem(${JSON.stringify(storageKey)});` +
-    `if(s==="light"||s==="dark")m=s}catch(e){}document.documentElement.setAttribute(${JSON.stringify(MODE_ATTRIBUTE)},m)})();`
+    `if(s==="light"||s==="dark")m=s;else if(s==="system"&&typeof matchMedia==="function")m=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}catch(e){}document.documentElement.setAttribute(${JSON.stringify(MODE_ATTRIBUTE)},m)})();`
   );
 }
