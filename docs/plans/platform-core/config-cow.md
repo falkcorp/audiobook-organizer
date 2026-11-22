@@ -75,7 +75,7 @@ func Snapshot() Config
 // Test-only. internal/arch refuses them outside _test.go and internal/testutil.
 func SetForTest(fn func(*Config))     // in-memory COW publish, no Facade, cannot be refused
 func ReplaceForTest(c Config)         // SetForTest(func(d){ *d = c })
-func CheckSealed() error              // see section 7
+func CheckSealed() error              // see section 5.1
 ```
 
 **Name.** `Get`. `Current()` was the first choice, but r10's `install.go`
@@ -148,9 +148,11 @@ delegates to the Facade when one is installed, else to `mutateLocal`.
 
 ### 4.2 `Project` (r10)
 
-`Project(cfg Config)` becomes `mutateLocal(func(c *Config) { *c = cfg })`
-unchanged. `mutateCOW`'s second `Clone` makes the published snapshot private,
-so the Engine's later shallow copies of `e.cur` can never reach what readers
+At `2be168931`, `Project(cfg Config)` is `cfg.Normalize()` followed by
+`mutateLocal(func(c *Config) { *c = cfg })`. It stays as it is: `cfg` is
+`Project`'s own argument, so normalising it in place writes nothing a reader
+holds. `mutateCOW`'s second `Clone` makes the published snapshot private, so
+the Engine's later shallow copies of `e.cur` can never reach what readers
 hold.
 
 ### 4.3 Validate and normalisation
@@ -278,9 +280,18 @@ On rebase:
 
 - `Normalize()` stays the single normalisation body. The prototype's
   `normalizeInPlace` is deleted, and `Normalized()` becomes
-  `n := c.Clone(); n.Normalize(); return n`. Main's two extra normalisers,
-  `chapter_consolidation_threshold_min` and `log_retention_days`, go wherever
-  r10 put them; they are not reintroduced.
+  `n := c.Clone(); n.Normalize(); return n`.
+- **r10 gap (for the F3-07 lead).** At `2be168931`, `Normalize` covers
+  `ITunes.Resolve`, `vector_backend`, `min_book_size_bytes` and
+  `min_rescan_age_hours`. `chapter_consolidation_threshold_min` and
+  `log_retention_days` are still normalised inside `Problems()`
+  (`normalizeChapterConsolidationThreshold` and `normalizeLogRetentionDays`,
+  at `config.go:2166` and `:2169`), and `Project` calls `Normalize`, not
+  `Problems`. So after a save, a stored 0 in either field is published as 0.
+  Readers go through the `Resolve*` helpers, so behaviour holds, but `GET
+  /config` shows the 0 that the comment at `:2160` says it must never show.
+  Moving both calls into `Normalize` closes the gap and leaves one body. This
+  design assumes that move.
 - `Normalize` keeps its in-place signature, because `Project` calls it on its
   own private argument before the swap. A guard rule is added: `Normalize` on
   a chain rooted at `config.Get()` is refused, the same way `Resolve` is.
@@ -291,19 +302,39 @@ On rebase:
   normalising `cand` before it is stored. It calls `cand.Normalize()`
   explicitly first: `cand` is the Engine's private candidate, so normalising
   in place is fine there.
-- The boot step stays `config.NormalizeAndValidate()`. With a Facade
-  installed, the published projection is already normalised, so the publish
-  is an idempotent swap. Without one, the publish does the work. Either way,
-  nothing writes into a snapshot that readers hold. Today's
-  `config.AppConfig.Validate()` on r10 still writes the live projection in
-  place, even when every value written is unchanged; under `-race` that is
-  still a write.
+- **The boot step must not write through the Facade.** On r10,
+  `books.Register` binds the Facade (`installAppConfig`, `module.go:361`)
+  *before* `bootSettings` (`:376`), so `internal/books/boot.go`'s step runs
+  with a Facade installed. There, `Mutate` routes to `Engine.Mutate`, which
+  persists the diff as the internal actor. A `NormalizeAndValidate` built on
+  `Mutate` would therefore make boot a stored write whenever the projection
+  is not normalised (today: the two fields in the gap above), or a logged
+  refusal. So on r10 it branches:
+
+  ```go
+  func NormalizeAndValidate() error {
+      if Current() != nil { // Project already published a normalised projection
+          return Get().Validate()
+      }
+      var err error
+      mutateLocal(func(c *Config) { *c = *c.Normalized(); err = c.validateNormalized() })
+      return err
+  }
+  ```
+
+  `cmd/root.go`'s call runs in `cobra.OnInitialize`, before any Facade
+  exists, and takes the local branch. The books boot step takes the Facade
+  branch and only reads. Neither writes into a snapshot that readers hold.
+  Today's `config.AppConfig.Validate()` on r10 still writes the live
+  projection in place, even when every value written is unchanged; under
+  `-race` that is still a write.
 
 ## 7. Pointer hand-offs
 
-Measured on r10: 26 non-test sites (23 `&config.AppConfig`, 2
-`&config.AppConfig.Tools`, plus the 2 boot `Validate()` calls covered in
-section 6). The rule: **per-request or per-run objects take
+Measured at r10 `2be168931`: 24 non-test sites. These are 20
+`&config.AppConfig`, 2 `&config.AppConfig.Tools`, and the 2 boot `Validate()`
+calls covered in section 6. Since `344e033e2`, r10 itself removed the
+`appdirs.go:73` and `plugins/maintenance/dedup_ops.go:155` hand-offs. The rule: **per-request or per-run objects take
 `config.Get()` once at the start and keep that snapshot. Long-lived objects
 take a `config.Source` and call it once per operation.**
 
@@ -314,14 +345,13 @@ take a `config.Source` and call it once per operation.**
 | `metafetch/file_pipeline.go:145` (`newPathOrganizer`) | per call (`ComputeTargetPaths`) | `NewOrganizer(config.Get())` |
 | `metafetch/service_apply.go:669` | per op | `NewOrganizer(config.Get())` at op start |
 | `server/batch_save_op.go:78`, `server/handlers/organize.go:314` | per op | `NewOrganizer(config.Get())` |
-| `server/server.go:128` (`newAIParser`), `server/diagnostics_ai_ops.go:68`, `server/handlers/ai.go:68,262,297`, `plugins/maintenance/dedup_ops.go:155` | parser per op / request (`ai_ops.go:60`, `entities_ops.go:750` build it per call) | `ai.NewOpenAIParser(config.Get(), ...)`; read the key and enabled flag off the same snapshot |
+| `server/server.go:128` (`newAIParser`), `server/diagnostics_ai_ops.go:68`, `server/handlers/ai.go:68,262,297` | parser per op / request (`ai_ops.go:60`, `entities_ops.go:750` build it per call) | `ai.NewOpenAIParser(config.Get(), ...)`; read the key and enabled flag off the same snapshot |
 | `server/handlers/aibackends/aibackends.go:103` | per request | `cfg := config.Get()` |
-| `appdirs/appdirs.go:73` (`Current()`) | per call | `FromConfig(config.Get())` |
 | `maintenance/jobs/bulk_deluge_import.go:134,163` | per file inside one run | `cfg := config.Get()` at run start, passed down |
 | `server/deluge_discovery.go:325` | per file inside one run | same |
 | `plugins/deluge/centralization.go:416`, `path_update.go:249` | env per run | `Cfg: config.Get()` |
-| `server/server.go:976` `Override("config", &config.AppConfig)` | **long-lived**: the service registry. Consumers: `quarantine.QuarantineService.cfg`, `search.IndexService.cfg`, `plugins/deluge`, `plugins/itunes` | register `config.Source(config.Get)`; `config.GetConfig(c)` returns a `Source`; each consumer keeps the Source and calls it per operation. 4 consumer packages |
-| `server/server.go:1116` `tools.NewToolRegistry(&config.AppConfig.Tools)`, `server/wire_handlers.go:680` `toolshandler.New(..., &config.AppConfig.Tools)` | **long-lived** | `internal/tools` cannot import `internal/config` (config imports tools), so both take `func() *tools.ToolsConfig`, wired as `func() *tools.ToolsConfig { return &config.Get().Tools }`. The registry and handler only read it; the guard refuses any write |
+| `server/server.go:976` `Override("config", &config.AppConfig)` | **long-lived**: the service registry. `config.GetConfig(c)` has 8 callers: `quarantine/register.go`, `activity/register.go`, `plugins/itunes/register.go`, `plugins/deluge/register.go`, and `server/registry_wire.go` ×4. Most read a few fields at Build time. `quarantine.QuarantineService`, `search`'s `cfg` field and the deluge importer adapter keep the pointer | register `config.Source(config.Get)`; `GetConfig(c)` returns a `Source`. A Build-time reader calls it once; a holder keeps the Source and calls it per operation |
+| `server/server.go:1116` `tools.NewToolRegistry(&config.AppConfig.Tools)`, `server/wire_handlers.go:680` `toolshandler.New(..., &config.AppConfig.Tools)` | **long-lived** | `internal/tools` cannot import `internal/config` (config imports tools), so both take `func() *tools.ToolsConfig`, wired as `func() *tools.ToolsConfig { t := config.Get().Tools; return &t }`. That returns a pointer to a copy of the struct. `&config.Get().Tools` would compile, but the guard refuses it, rightly: it is an address into the snapshot. The copy is shallow, and the registry and handler only read it |
 | `config/config.go` (`fn(&AppConfig)`) | n/a | gone: `mutateCOW` |
 
 19 test-file hand-offs (`organizer/*_test.go` ×10, `bulk_deluge_import_test.go`
@@ -356,7 +386,21 @@ scripts/config_cow_codemod.py [--write] [--test-writes] [--summary|--json] PATH.
   `A = B`, `N += 2` and `x, A = 1, 2` all become exact. Adjacent statements
   fold into one closure. A root inside a function literal in such a statement
   becomes `Get()`, the live read the literal made whenever it ran.
-  `config.AppConfig = v` becomes `ReplaceForTest(v)`.
+  `config.AppConfig = v` becomes `ReplaceForTest(v)`. The closure parameter
+  is `c` unless the statement already uses that name (then `cfg`, `cc`,
+  and so on).
+- **A right-hand side that calls something is hoisted.** The closure runs
+  under the config write lock. A callee that reaches `Mutate`, `SetForTest`
+  or a lock-taking getter (`Snapshot` and the RLock getters, on this branch)
+  would deadlock there, and neither vet nor the build can see that. So
+  `config.AppConfig.RootDir = t.TempDir()` becomes
+  `cowV1 := t.TempDir()` followed by
+  `config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })`. The call
+  still runs unlocked, as before. Temporaries are named to be unique in the
+  file. A call on the left-hand side, or a statement that cannot be split
+  (an `if`, `for` or `switch` header), is refused. On r10: 73 statements are
+  hoisted and none are refused; the callees are `filepath.Join` (41),
+  `t.TempDir` (22) and a handful of others.
 - **Refused, printed as the manual list**: any write outside a test;
   `&config.AppConfig`; `&` of a field; a method call not in
   `READONLY_METHODS`; `append`, `copy`, `clear` or `delete`; a `sort` or
@@ -370,22 +414,25 @@ scripts/config_cow_codemod.py [--write] [--test-writes] [--summary|--json] PATH.
 
 | | automatic | manual |
 |---|---|---|
-| non-test | 555 (551 reads, 4 value copies) | 27 (23 `&AppConfig`, 2 `&AppConfig.Tools`, 2 `Validate()`) |
+| non-test | 441 (437 reads, 4 value copies) | 24 (20 `&AppConfig`, 2 `&AppConfig.Tools`, 2 `Validate()`) |
 | test | 2,493 (683 reads, 138 value copies, 1,455 write closures, 217 restores) | 19 (18 `&AppConfig`, 1 field address) |
-| **total** | **3,048 sites in 548 files** | **46 sites in 33 files** |
+| **total** | **2,934 sites in 524 files** | **43 sites in 30 files** |
 
-Re-measure with `--summary` at the merge base. These counts are at r10's head
-on 2026-11-21.
+These counts are at r10 `2be168931` (2026-11-21). At `344e033e2` the totals
+were 3,048 automatic and 45 manual; r10's own work removed the difference.
+Re-measure with `--summary` at the merge base.
 
-**Whole-tree proof on r10 (2026-11-21, scratch checkout, not pushed).** The
-steps were:
+**Whole-tree proof on r10 (2026-11-21, scratch checkout, not pushed).** It
+was run at `344e033e2` and again at `2be168931`, with the hoisting codemod.
+The steps were:
 
 1. Copy `cow.go` in.
 2. Route `mutateLocal` through `mutateCOW`.
 3. Run `--write --test-writes` over `cmd/`, `internal/` and `main.go`.
 
-That rewrote 3,048 sites in 548 files, with `AppConfig` still present
-(transitional). `go build ./...` and `go vet ./...` are both green.
+At `344e033e2` that rewrote 3,048 sites in 548 files, with `AppConfig` still
+present (transitional), and `go build ./...` and `go vet ./...` are both
+green. The `2be168931` result is in section 14.
 `go vet ./...` type-checks every test file, so the rewrite compiles across the
 whole module.
 
@@ -397,8 +444,11 @@ and so on), and a test pins this. The same run found that an in-package
 package config a value copy is now `*Get()`, also pinned by a test.
 
 What remains after the codemod is therefore the manual list, deleting
-`AppConfig`, and the test suites. No compile repair across 548 files is
-needed.
+`AppConfig`, and the test suites. No compile repair across the rewritten
+files is needed. **Test triage is not measured.** Build and vet prove that
+the rewrite compiles. They do not prove that every suite passes: a test can
+depend on a timing the copy-on-write config changes. Only the four
+prototype packages' suites have been run (section 14).
 
 ## 9. The ratchet (`internal/arch/appconfig_ratchet_test.go`, r10)
 
@@ -461,25 +511,29 @@ with ceilings that may only fall. End state:
 
 ## 13. Full sweep: cost and slicing
 
-The codemod does 98.5% of the sites (3,048 of 3,094) in seconds. The work is
-the 46 manual sites, the signature changes behind the hand-offs, compile
-fixes, and running the suites.
+The codemod does 98.6% of the sites (2,934 of 2,977 at `2be168931`) in
+seconds. The work is the 43 manual sites, the signature changes behind the
+hand-offs, and running and triaging the suites.
+
+**Order.** `AppConfig` is deleted **last**, not first. Slice A lands the new
+API alongside the transitional mirror, so `AppConfig` keeps compiling while
+B–E run in parallel worktrees off A. Slice F deletes the mirror once nothing
+references it. Every slice's files are disjoint from every other slice's.
 
 | Slice | Files (disjoint) | Work | Worker-hours |
 |---|---|---|---|
-| A. core | `internal/config/*`, `internal/books/appconfig/write.go`, `internal/books/boot.go`, `cmd/root.go`, `internal/arch/*` (ratchet, guard) | delete `AppConfig`; port `cow.go`, `Normalized` and `Problems` onto r10; fix `Engine.Mutate`; `NormalizeAndValidate` at both boot sites; ratchet edit; in-package codemod | 3 |
-| B. mechanical | every remaining file the codemod touches **except** those in C–E | `--write --test-writes`, gofmt, build and vet (green on r10 with no hand edits, section 8), then the package suites under `-race`; triage any test that depended on a direct write being seen before the next publish | 2, plus suite time |
-| C. AI parser + scanner | `internal/ai/*`, `internal/server/{server.go,diagnostics_ai_ops.go,ai_ops.go,entities_ops.go}`, `internal/server/handlers/ai.go`, `handlers/aibackends/*`, `internal/plugins/maintenance/dedup_ops.go` | per-op `config.Get()`; registry `Source` (server.go:976) and tools Source (server.go:1116) stay in this slice because they are in `server.go`; quarantine, search, deluge and itunes register consumers | 3 |
-| D. organizer + metafetch | `internal/organizer/*`, `internal/metafetch/{file_pipeline,service_apply}.go`, `internal/server/{batch_save_op.go,handlers/organize.go}`, organizer tests | `NewOrganizer(config.Get())`; tests to `Fixed` | 2 |
-| E. deluge + tools | `internal/deluge/*`, `internal/plugins/deluge/*`, `internal/maintenance/jobs/bulk_deluge_import*.go`, `internal/server/{deluge_discovery.go,wire_handlers.go}`, `internal/tools/registry.go`, `internal/server/handlers/tools/*`, `internal/appdirs/*` | per-run pin; `func() *tools.ToolsConfig` | 2 |
-| F. acceptance | `internal/books` TestFlip fixture | delete the quiesce; `-race -count=20`; `CheckSealed` in cleanup | 1, plus suite time |
+| A. core and every shared signature | `internal/config/*` (incl. `register.go`), `internal/books/appconfig/write.go`, `internal/books/boot.go`, `cmd/root.go`, `internal/arch/*`; the registry: `internal/server/server.go` (all three of its hand-offs: `:128`, `:976`, `:1116`), `internal/server/registry_wire.go`, `internal/quarantine/*`, `internal/search/register.go`, `internal/activity/register.go`, `internal/plugins/itunes/register.go`, `internal/plugins/deluge/register.go`; the tools Source: `internal/tools/registry.go`, `internal/server/handlers/tools/*`, `internal/server/wire_handlers.go` | port `cow.go`, `Normalized`, pure `Problems`/`Validate`, the branching `NormalizeAndValidate` (section 6) onto r10, with the `AppConfig` mirror **kept**; fix `Engine.Mutate`; `GetConfig` returns a `Source` and its 8 callers adapt; `func() *tools.ToolsConfig`; guard and ratchet; in-package codemod | 4 |
+| B. mechanical | every remaining file the codemod touches, **except** those in A and C–E | `--write --test-writes` with `--exclude` on A and C–E files, gofmt, build and vet, then the package suites under `-race`; triage any test that depended on seeing a direct write before the next publish | 2, plus triage (unmeasured) |
+| C. AI parser | `internal/ai/*`, `internal/server/{diagnostics_ai_ops.go,ai_ops.go,entities_ops.go}`, `internal/server/handlers/ai.go`, `internal/server/handlers/aibackends/*`, `internal/scanner/ai_parse_{async,journal}.go` | per-op `config.Get()`; the parser reads the key and the enabled flag off one snapshot | 2 |
+| D. organizer + metafetch | `internal/organizer/*` (incl. its tests), `internal/metafetch/{file_pipeline,service_apply}.go`, `internal/server/{batch_save_op.go,handlers/organize.go}`, `internal/audiobooks/organize_inplace_undo_test.go`, `internal/server/{apikey_credential_guard,scan_integration}_test.go` | `NewOrganizer(config.Get())`; tests use `Fixed` | 2 |
+| E. deluge + rest | `internal/deluge/*`, `internal/plugins/deluge/*` (except `register.go`), `internal/maintenance/jobs/bulk_deluge_import*.go`, `internal/server/deluge_discovery.go`, `internal/appdirs/database_dir_test.go`, `internal/scheduler/on_startup_dropped_test.go` | per-run pin; the deluge importer adapter keeps a Source | 1.5 |
+| F. delete + acceptance | `internal/config/*` (mirror only), `internal/books` TestFlip fixture | delete `AppConfig` and the transitional lines in `cow.go`; then delete the quiesce and run `-race -count=20` with `CheckSealed` in cleanup | 1.5, plus suite time |
 
-About **13 worker-hours**. Run B–E in parallel worktrees off the same base,
-and A first, because the others compile against it. B runs the codemod with
-`--exclude` on C–E's files, so no file is in two slices. The coordinator
-stacks A, then B–E, then F, into **one PR** (section 12). Wall-clock is about
-5–6 hours with 4 workers, dominated by A and by the `-race` suite runs on the
-remote builders.
+About **13 worker-hours, plus B's test triage, which is not measured yet**
+(section 8; section 14 has the first data point). A lands first. B–E run in
+parallel off A, then F. The coordinator stacks them into **one PR**
+(section 12). Wall-clock is about 5–6 hours with 4 workers, dominated by A
+and by the `-race` suite runs on the remote builders.
 
 ## 14. Status of the prototype (this branch)
 
