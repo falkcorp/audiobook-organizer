@@ -51,6 +51,18 @@ func (s *Svc) actor(ctx context.Context) string {
 	return "unknown"
 }
 
+// outgoingSeq is the live store's committed journal head seq, which the intent
+// carries into the `staged` record's Seq (05-backup §5B.3.4 step 8, DATA2-25):
+// read through Markers, as Create reads its boundaries, before the intent exists,
+// so a failed read leaves nothing staged.
+func (s *Svc) outgoingSeq(ctx context.Context) (uint64, error) {
+	b, err := s.o.Markers.Read(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("backup: read the journal head for the staged record: %w", err)
+	}
+	return b.JournalSeq, nil
+}
+
 func (s *Svc) probe() restorejournal.Probe {
 	if s.o.Probe != nil {
 		return s.o.Probe
@@ -233,10 +245,15 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		install = s.o.Store.InstallID()
 	}
 	actor := s.actor(ctx)
+	outgoing, err := s.outgoingSeq(ctx)
+	if err != nil {
+		return PendingRestore{}, err
+	}
 	in := restorejournal.Intent{
 		ID: rid, Kind: restorejournal.KindArchive, DBPath: s.o.DBPath, Targets: targets,
 		StagedByBuild: s.o.BuildID, ExpiresAt: now.Add(ttl), RequestedBy: actor, RequestedAt: now,
 		ArchiveID: string(id), Staging: staging, InstallID: install, ManifestSHA256: manifestSHA,
+		OutgoingSeq: outgoing,
 	}
 	if s.o.Stager == nil {
 		return PendingRestore{}, errors.New("backup: restore needs a Stager")
@@ -741,10 +758,14 @@ func (s *Svc) RevertLastRestore(ctx context.Context, o RestoreOptions) (PendingR
 	if s.o.Store != nil {
 		install = s.o.Store.InstallID()
 	}
+	outgoing, err := s.outgoingSeq(ctx)
+	if err != nil {
+		return PendingRestore{}, err
+	}
 	in := restorejournal.Intent{
 		ID: rid, Kind: restorejournal.KindRevert, DBPath: s.o.DBPath, Targets: targets,
 		StagedByBuild: s.o.BuildID, ExpiresAt: now.Add(ttl), RequestedBy: s.actor(ctx), RequestedAt: now,
-		InstallID: install,
+		InstallID: install, OutgoingSeq: outgoing,
 	}
 	if s.o.Stager == nil {
 		return PendingRestore{}, errors.New("backup: restore needs a Stager")
