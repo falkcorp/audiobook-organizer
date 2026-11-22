@@ -7,11 +7,14 @@ package log_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,6 +92,23 @@ func TestJournalSDK_Shape(t *testing.T) {
 	}
 }
 
+// TestJournalSDK_ImportRejectedSentinel pins the exported sentinel an Importer
+// wraps around its refusal of a record (as opposed to a store failure): a
+// caller matches it with errors.Is, through any wrapping, and no other error
+// matches.
+func TestJournalSDK_ImportRejectedSentinel(t *testing.T) {
+	if log.ErrImportRejected == nil || !strings.Contains(log.ErrImportRejected.Error(), "importer refused") {
+		t.Fatalf("log.ErrImportRejected = %v", log.ErrImportRejected)
+	}
+	wrapped := fmt.Errorf("record 3: %w: %w", log.ErrImportRejected, errors.New("a time the journal cannot key"))
+	if !errors.Is(wrapped, log.ErrImportRejected) {
+		t.Errorf("a wrapped refusal does not match log.ErrImportRejected")
+	}
+	if errors.Is(errors.New("storage: commit: disk full"), log.ErrImportRejected) {
+		t.Errorf("an unrelated error matches log.ErrImportRejected")
+	}
+}
+
 // TestJournalSDK_NamesOnlyLog: log is L0 (R4), and the journal types name
 // nothing but the standard library and log's own types, so log never imports
 // storage for them. The check reads journal.go's own import block.
@@ -97,7 +117,7 @@ func TestJournalSDK_NamesOnlyLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := []string{"context", "log/slog", "time"}
+	allowed := []string{"context", "errors", "log/slog", "time"}
 	for _, imp := range f.Imports {
 		p, err := strconv.Unquote(imp.Path.Value)
 		if err != nil {

@@ -129,7 +129,7 @@ func TestStep_AnImportFailureQuarantinesTheRowAndTheStepGoesOn(t *testing.T) {
 	at := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 	bad, badRaw := goodRow(t, at, "scanner")
 	next, nextRaw := goodRow(t, at.Add(time.Second), "organizer")
-	refuse := errors.New("the journal refused the record 0xBADC0DE")
+	refuse := fmt.Errorf("record 0: %w: the journal refused the record 0xBADC0DE", log.ErrImportRejected)
 	imp := &fakeImporter{fail: map[string]error{bad: refuse}}
 	m, logs := newTestMigration(t, imp)
 	c := &fakeChunk{}
@@ -170,7 +170,10 @@ func TestStep_AnImportFailureQuarantinesTheRowAndTheStepGoesOn(t *testing.T) {
 
 // TestStep_TheStoreBeingUnhealthyStaysFatal: every error that is the database's
 // is returned and nothing is quarantined for it. A swallowed one would let a boot
-// finish over a store that is failing.
+// finish over a store that is failing. Only an Import error that matches
+// log.ErrImportRejected is a verdict on the row: every other Import error is the
+// store's or the context's, including the ones a store defect repeats for every
+// row (a read-only or misbound handle, a batch limit, a commit failure).
 func TestStep_TheStoreBeingUnhealthyStaysFatal(t *testing.T) {
 	at := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
 	key, raw := goodRow(t, at, "scanner")
@@ -190,12 +193,15 @@ func TestStep_TheStoreBeingUnhealthyStaysFatal(t *testing.T) {
 		wantQuar   int
 		wantImport bool
 	}{
-		{name: "the_quarantine_of_a_refused_row_fails", ctx: live, importErr: errors.New("refused"), quarErr: boom, wantErr: boom, wantImport: true},
+		{name: "the_quarantine_of_a_refused_row_fails", ctx: live, importErr: fmt.Errorf("record 0: %w", log.ErrImportRejected), quarErr: boom, wantErr: boom, wantImport: true},
 		{name: "the_quarantine_of_an_undecodable_row_fails", ctx: live, row: []byte("not json"), quarErr: boom, wantErr: boom},
 		{name: "the_delete_of_an_imported_row_fails", ctx: live, deleteErr: boom, wantErr: boom, wantImport: true},
 		{name: "the_batch_was_ended_under_the_delete", ctx: live, deleteErr: storage.ErrBatchDone, wantErr: storage.ErrBatchDone, wantImport: true},
-		{name: "the_importer_met_an_ended_batch", ctx: live, importErr: fmt.Errorf("commit: %w", storage.ErrBatchDone), wantErr: storage.ErrBatchDone, wantImport: true},
-		{name: "the_boot_is_cancelled", ctx: canceled, importErr: errors.New("refused"), wantImport: true}, // the cause is the runner's to report: any error will do
+		{name: "an_import_store_error_that_is_not_a_refusal", ctx: live, importErr: boom, wantErr: boom, wantImport: true},
+		{name: "the_import_handle_is_read_only", ctx: live, importErr: fmt.Errorf("journal batch: %w", storage.ErrReadOnly), wantErr: storage.ErrReadOnly, wantImport: true},
+		{name: "the_import_batch_is_too_large", ctx: live, importErr: fmt.Errorf("commit: %w", storage.ErrBatchTooLarge), wantErr: storage.ErrBatchTooLarge, wantImport: true},
+		{name: "the_import_met_an_ended_batch", ctx: live, importErr: fmt.Errorf("commit: %w", storage.ErrBatchDone), wantErr: storage.ErrBatchDone, wantImport: true},
+		{name: "the_boot_is_cancelled", ctx: canceled, importErr: errors.New("the importer stopped"), wantImport: true}, // the cause is the runner's to report: any error will do
 		{name: "the_importer_returns_a_cancel", ctx: live, importErr: context.Canceled, wantErr: context.Canceled, wantImport: true},
 		{name: "the_importer_returns_a_deadline", ctx: live, importErr: context.DeadlineExceeded, wantErr: context.DeadlineExceeded, wantImport: true},
 	}

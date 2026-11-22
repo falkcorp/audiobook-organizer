@@ -204,9 +204,18 @@ type JournalStore interface {
 // reason JournalStore commits its own batches. Instead
 // Import is idempotent: each record's key is derived from its Time and SourceID, so a step that resumes after
 // a crash between an import and its source deletes rewrites the same keys and imports nothing twice.
+//
+// Import tells a record it refuses from a failure of the store: a record refused for what it holds (a time the
+// journal cannot key, no SourceID, an attribute it cannot store) returns an error matching ErrImportRejected
+// (errors.Is) and the call writes nothing; every other error is the store's or the context's, and says nothing
+// about the records. books' M5 quarantines a row only for the first kind.
 type Importer interface {
 	Import(ctx context.Context, recs []ImportedRecord) error // one durable batch per call
 }
+
+// ErrImportRejected is what an Importer wraps (with %w) around its refusal of a record for what the record
+// holds, as opposed to a failure of the store (cf. auth.ErrImportRejected, storage.ErrImportRejected).
+var ErrImportRejected = errors.New("log: the importer refused the record")
 
 type ImportedRecord struct {
 	Record

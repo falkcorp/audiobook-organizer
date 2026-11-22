@@ -7,6 +7,7 @@ package log
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -39,9 +40,22 @@ type JournalStore interface {
 // record's key is derived from its Time and SourceID, so a step that resumes
 // after a crash between an import and its source deletes rewrites the same keys
 // and imports nothing twice.
+//
+// Import tells a record it refuses from a failure of the store. A record the
+// importer refuses for what the record itself holds (a time the journal cannot
+// key, no SourceID, an attribute it cannot store) comes back as an error that
+// matches ErrImportRejected (errors.Is), and the call writes nothing. Every
+// other error is the store's or the caller's context's (a read-only handle, a
+// commit failure, a cancelled ctx): it says nothing about the records, and a
+// caller must not treat it as a verdict on one row.
 type Importer interface {
 	Import(ctx context.Context, recs []ImportedRecord) error // one durable batch per call
 }
+
+// ErrImportRejected is what an Importer wraps (with %w) around its refusal of a
+// record for what the record holds, as opposed to a failure of the store.
+// Precedents: auth.ErrImportRejected and storage.ErrImportRejected.
+var ErrImportRejected = errors.New("log: the importer refused the record")
 
 // ImportedRecord is one pre-core row, as the app's cutover step decoded it.
 type ImportedRecord struct {
