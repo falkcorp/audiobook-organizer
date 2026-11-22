@@ -21,6 +21,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/executor"
+	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/internal/scheduler"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -51,6 +52,8 @@ type coreConfig struct {
 	// reads (the listener, the perimeter and the stop budget).
 	http     *config.Handle[httpSettings]
 	shutdown *config.Handle[shutdownSettings]
+	// journal is core.log.journal, which core.log.journal.prune reads each pass.
+	journal *config.Handle[logjournal.Settings]
 	// leaves is every key of the core sections (and, with the config boot on,
 	// of the enabled modules' sections) by dotted path, for the
 	// schedule-key declaration check (ValidateSchedules' declared function).
@@ -135,11 +138,13 @@ func coreConfigOver(st *config.Store, handles []any) (*coreConfig, error) {
 			c.http = th
 		case *config.Handle[shutdownSettings]:
 			c.shutdown = th
+		case *config.Handle[logjournal.Settings]:
+			c.journal = th
 		}
 		cfgWalkLeaves(c.leaves, h)
 	}
-	if c.tasks == nil || c.http == nil || c.shutdown == nil {
-		return nil, fmt.Errorf("kernel: core config: coreSections lacks core.tasks, core.http or core.shutdown")
+	if c.tasks == nil || c.http == nil || c.shutdown == nil || c.journal == nil {
+		return nil, fmt.Errorf("kernel: core config: coreSections lacks core.tasks, core.http, core.shutdown or core.log.journal")
 	}
 	return c, nil
 }

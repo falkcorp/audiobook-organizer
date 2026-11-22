@@ -108,8 +108,6 @@ type CensusResult struct {
 
 // CompactTask returns core.storage.compact over s. A nil s yields a definition
 // whose Run is nil, which tasks.Problems reports, so registration fails closed.
-//
-//tasklint:constructor the kernel passes the result to Registrar.Tasks when the tasks flip F5 registers core kinds (F5-18); this package registers nothing
 func CompactTask(s Surface, o Options) tasks.Definition {
 	var run func(rc *tasks.RC, _ CompactParams) (CompactResult, error)
 	if s != nil {
@@ -180,8 +178,6 @@ func (runReporter) SetCurrentItem(string) {}
 
 // CensusTask returns core.storage.census over s, recording into sink. A nil s
 // or sink yields a definition with no body, which registration refuses.
-//
-//tasklint:constructor the kernel passes the result to Registrar.Tasks when the tasks flip F5 registers core kinds (F5-18); this package registers nothing
 func CensusTask(s Surface, sink CensusSink, o Options) tasks.Definition {
 	var run func(rc *tasks.RC, _ CensusParams) (CensusResult, error)
 	if s != nil && sink != nil {

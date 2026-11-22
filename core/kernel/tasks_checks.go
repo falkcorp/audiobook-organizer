@@ -85,7 +85,7 @@ func manifestMigrations(man module.Manifest, imp module.Importers) []datamigrate
 // module ID order and registration order.
 func (k *Kernel) taskDefinitions() []tasks.Definition {
 	var defs []tasks.Definition
-	for _, e := range k.entries {
+	for _, e := range k.taskEntries() {
 		if e.enabled {
 			defs = append(defs, e.rec.Tasks...)
 		}
@@ -117,7 +117,7 @@ func (k *Kernel) taskDefinitions() []tasks.Definition {
 // the boot off no module section is registered, so every such key is refused).
 func (k *Kernel) taskProblems() []module.Problem {
 	var probs []module.Problem
-	for _, e := range k.entries {
+	for _, e := range k.taskEntries() {
 		if !e.enabled {
 			continue
 		}
@@ -171,7 +171,7 @@ func (k *Kernel) moduleTaskProblems(e *entry) []module.Problem {
 		}
 		seen[kind] = true
 		c := tasks.CommonOf(d)
-		if c.Priority == tasks.PrioritySystem {
+		if c.Priority == tasks.PrioritySystem && id != coreModuleID {
 			bad(module.ProblemInvalidRegistration, "task kind %q asks for PrioritySystem, which only core's own kinds may", kind)
 		}
 		for _, p := range c.Perms.Start.Permissions() {

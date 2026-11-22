@@ -1,0 +1,27 @@
+# file: core/kernel/testdata/ops_series.golden
+# version: 1.0.0
+# guid: 5c19e8a3-72d0-4b4f-9a61-e30d8f2b7c15
+# last-edited: 2026-11-22
+#
+# The series of the ops scope the kernel builds with the executor
+# (05-metrics §5 item 5, 05-tasks 5T.11): family<TAB>type<TAB>labels, checked
+# in TestOpsSeries_Golden. 17 of the executor's 19 instruments are sampled by
+# its scenario; yields and undecodable_records are the two it cannot reach (the
+# test's opsUncovered list names them, and fails if an instrument is in neither).
+mediacore_ops_cpu_slots_in_use	gauge	
+mediacore_ops_dispatch_deferred_total	counter	reason
+mediacore_ops_dispatch_wait_seconds	gauge	def_id,reason,trigger
+mediacore_ops_held_runs	gauge	module
+mediacore_ops_inflight	gauge	def_id,module
+mediacore_ops_items_total	counter	def_id,outcome
+mediacore_ops_lane_in_use	gauge	lane
+mediacore_ops_progress_age_seconds	gauge	def_id,module
+mediacore_ops_progress_timeout_seconds	gauge	def_id,module
+mediacore_ops_queue_depth	gauge	module,priority
+mediacore_ops_ref_lock_wait_seconds	histogram	def_id
+mediacore_ops_run_duration_seconds	histogram	def_id,outcome
+mediacore_ops_runs_total	counter	def_id,outcome
+mediacore_ops_schedule_errors_total	counter	def_id
+mediacore_ops_schedule_lag_seconds	histogram	def_id
+mediacore_ops_schedule_missed_total	counter	def_id
+mediacore_ops_zombies	gauge	

@@ -379,6 +379,8 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		UIOptions:             opts.UIOptions,
 		FromRelease:           opts.FromRelease,
 		IdentityBoot:          opts.IdentityBoot,
+		TasksBoot:             opts.TasksBoot,
+		Interim:               kernel.InterimBackends(opts.InterimBackends),
 		ResolveAtom:           opts.ResolveAtom,
 		DisplayName:           opts.DisplayName,
 		ArchivePrefix:         opts.ArchivePrefix,

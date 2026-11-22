@@ -24,27 +24,19 @@ func TestTasklint_Core(t *testing.T) {
 		// The allowlist of //tasklint:constructor functions: exported kind
 		// constructors that other modules call. A new entry is reviewed here.
 		Constructors: []string{
-			core + "/storage/datamigrate.DerivedBuildTask",       // modules pass it to Registrar.DerivedIndex (05-storage §5S.3.9)
-			core + "/internal/scheduler.WindowDefinition",        // the kernel registers one per core.tasks.windows entry (F2-04, F2-16)
-			core + "/integrations/providerhttp.ReleaseHoldsTask", // the kernel registers it at P6 when the app sets InterimBackends.Holds (F2-11, F5-18)
-			core + "/integrations/ai.BatchPollTask",              // the same, for InterimBackends.Poll (F2-11, F5-18)
-			core + "/integrations/ai.BatchApplyTask",             // a module passes it to Registrar.Tasks in its Register, one per batch capability; core registers none (F7-03)
-			core + "/health/diagnostics.ExportTask",              // the same, for InterimBackends.Export (F2-11, F5-18)
-			core + "/health/diagnostics.PruneTask",               // dark until the kernel registers core.diagnostics.prune at P6 when it wires core.diagnostics (F8-04); delete with the directive
-			core + "/internal/bleveindex.Engine.RebuildTask",     // dark until the kernel registers core.index.rebuild when it wires the index engine (F7-09); delete with the directive
-			core + "/library.TransferRecoverTask",                // the kernel registers it when core.library is wired (F2-16, F7; F7-06)
-			core + "/outbox.Outbox.RelayDefinition",              // dark until F6-03 hands it to the executor's definition list (F6-01)
-			core + "/backup.CreateTask",                          // the four core.backup.* kinds: dark until the kernel registers them at P6 when the app opts into core backup (F8-04); delete with the directives
-			core + "/backup.VerifyTask",                          // as CreateTask
-			core + "/backup.PruneTask",                           // as CreateTask
-			core + "/backup.StageRestoreTask",                    // as CreateTask
-			core + "/internal/storagetasks.CompactTask",          // dark until the kernel registers core.storage.compact when the tasks flip F5 wires core kinds (F5-18); delete with the directive
-			core + "/internal/storagetasks.CensusTask",           // as CompactTask, for core.storage.census
-			core + "/internal/executor.PruneDefinition",          // dark until the kernel hands core.tasks.prune to the executor's definition list at the tasks flip (F5-18); delete with the directive
-			core + "/internal/logjournal.PruneDefinition",        // dark until the kernel registers core.log.journal.prune at the tasks flip (F5-18); delete with the directive
-			core + "/updater.CheckTask",                          // the three core.updater.* kinds: dark until the kernel registers them at P6 when the app opts into the core updater (F8-04); delete with the directives
-			core + "/updater.ApplyTask",                          // as CheckTask
-			core + "/updater.RollbackTask",                       // as CheckTask
+			core + "/storage/datamigrate.DerivedBuildTask",   // modules pass it to Registrar.DerivedIndex (05-storage §5S.3.9)
+			core + "/integrations/ai.BatchApplyTask",         // a module passes it to Registrar.Tasks in its Register, one per batch capability; core registers none (F7-03)
+			core + "/health/diagnostics.PruneTask",           // dark until the kernel registers core.diagnostics.prune at P6 when it wires core.diagnostics (F8-04); delete with the directive
+			core + "/internal/bleveindex.Engine.RebuildTask", // dark until the kernel registers core.index.rebuild when it wires the index engine (F7-09); delete with the directive
+			core + "/library.TransferRecoverTask",            // the kernel registers it when core.library is wired (F2-16, F7; F7-06)
+			core + "/outbox.Outbox.RelayDefinition",          // dark until F6-03 hands it to the executor's definition list (F6-01)
+			core + "/backup.CreateTask",                      // the four core.backup.* kinds: dark until the kernel registers them at P6 when the app opts into core backup (F8-04); delete with the directives
+			core + "/backup.VerifyTask",                      // as CreateTask
+			core + "/backup.PruneTask",                       // as CreateTask
+			core + "/backup.StageRestoreTask",                // as CreateTask
+			core + "/updater.CheckTask",                      // the three core.updater.* kinds: dark until the kernel registers them at P6 when the app opts into the core updater (F8-04); delete with the directives
+			core + "/updater.ApplyTask",                      // as CheckTask
+			core + "/updater.RollbackTask",                   // as CheckTask
 		}})
 }
 

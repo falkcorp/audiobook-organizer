@@ -159,7 +159,15 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	// The checkpoint sweeper (05-storage §5S.4 step 15): registered on the
 	// open store once its gauge exists; Run starts it after readiness.
 	k.newSweeper()
-	if err := k.phase(phaseP6, func() error { return k.register(ctx) }); err != nil {
+	if err := k.phase(phaseP6, func() error {
+		if err := k.register(ctx); err != nil {
+			return err
+		}
+		if describe {
+			return nil
+		}
+		return k.registerCoreKinds(ctx)
+	}); err != nil {
 		return nil, err
 	}
 	// P7: the registrations are consumed and checked (problems of every kind

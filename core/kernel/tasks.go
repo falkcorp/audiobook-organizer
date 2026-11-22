@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/mediacore/health"
@@ -76,6 +77,11 @@ type kernelTasks struct {
 	sched  taskScheduler
 	server *taskhttp.Server
 	ops    *metrics.Scope
+	// runWindow is the body of every core.window.<name> kind: the scheduler's
+	// RunWindow, set once constructTasks built the scheduler (the scheduler's
+	// Starter is the executor that registered the window kinds, so it exists
+	// second). nil until then.
+	runWindow atomic.Pointer[func(*tasks.RC) error]
 
 	mu       sync.Mutex
 	started  bool
@@ -422,6 +428,8 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		return fmt.Errorf("kernel: tasks: routes: %w", err)
 	}
 	kt.defs, kt.exec, kt.sched, kt.server, kt.ops = defs, x, s, srv, ops
+	run := s.RunWindow
+	kt.runWindow.Store(&run)
 	return k.bindModuleTasks(x)
 }
 
