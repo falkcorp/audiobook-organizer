@@ -85,6 +85,15 @@ type Manifest struct {
 	// runs as held instead of failing boot (5T.3.11, COR-13). A registered
 	// kind missing from it is a problem (ProblemTaskLedger).
 	TaskLedger []tasks.Kind
+
+	// OutboxConsumers names every outbox consumer the module may register
+	// ("<ID>.<name>"). They are known while the module is disabled, so the
+	// relay keeps retaining messages for them (05-events, COR-12); an
+	// OutboxHandler whose consumer name is not listed here is a problem
+	// (ProblemOutboxConsumerUndeclared). The kernel declares them for every
+	// manifest, enabled or not, before any handler registers (F6-03).
+	OutboxConsumers []string
+
 	// Storage is the module's storage declaration (05-storage §5S.3.4,
 	// §5S.3.5): its keyspace m/<ID>/, its legacy claims and its versioned
 	// migrations, Seed steps included (a Seed step and every later step of
