@@ -170,9 +170,9 @@ func TestProcessBooksParallelWritesScanCacheForNormalizedMultiFileBook(t *testin
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	seg1 := filepath.Join(dir, "part01.mp3")

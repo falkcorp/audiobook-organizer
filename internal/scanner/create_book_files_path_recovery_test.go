@@ -130,9 +130,9 @@ func TestProcessBooksParallelDirectoryBookKeepsItsPath(t *testing.T) {
 	_, err := store.CreateBook(&database.Book{FilePath: dir, Title: "Directory Book"})
 	require.NoError(t, err)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	if got := createBookFilesForBook(dir, segs, logger.New("test"), normalizeToDirectory); got != "" {
 		t.Fatalf("a directory-rooted book reported a move to %q; the normalization guard "+
@@ -154,9 +154,9 @@ func TestProcessBooksParallelSecondScanKeepsTheBookServiceable(t *testing.T) {
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	segs := writeSegments(t, dir, "part01.mp3", "part02.mp3")
@@ -261,9 +261,9 @@ func TestProcessBooksParallelPersistsChaptersForNormalizedMultiFileBook(t *testi
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	var createdID string
 	oldSaver := saveBook
@@ -326,9 +326,9 @@ func TestProcessBooksParallelKeepsPathWhenNothingMoved(t *testing.T) {
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	segs := writeSegments(t, dir, "part01.mp3", "part02.mp3")

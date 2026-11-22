@@ -237,9 +237,9 @@ func TestProcessBooksParallelGivesASingleFileBookItsFileRow(t *testing.T) {
 	SetStore(store)
 	t.Cleanup(func() { database.SetGlobalStore(origStore); SetStore(nil) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3", ".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3", ".m4b"} })
 
 	soloDir := t.TempDir()
 	solo := filepath.Join(soloDir, "Solo Book.m4b")

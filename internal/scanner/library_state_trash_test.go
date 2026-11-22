@@ -22,7 +22,7 @@ const suspiciousFloor = 1024
 // "suspicious" for it, and returns the stored row afterwards.
 func rescanTinyFile(t *testing.T, f scanLockFixture, row *database.Book) *database.Book {
 	t.Helper()
-	config.AppConfig.MinBookSizeBytes = suspiciousFloor
+	config.SetForTest(func(c *config.Config) { c.MinBookSizeBytes = suspiciousFloor })
 	scanOne(t, Book{FilePath: row.FilePath, Title: row.Title, Format: ".m4b"})
 	got, err := f.store.GetBookByID(row.ID)
 	require.NoError(t, err)

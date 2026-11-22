@@ -442,9 +442,9 @@ func TestParseFilenameForAuthorNoSeparator(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProcessBooksParallelWithProgressCallback(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	tmp := t.TempDir()
 	books := []Book{
@@ -659,9 +659,9 @@ func TestQuickReadAlbumNonexistent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProcessBooksParallelWithScanCache(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	tmp := t.TempDir()
 	filePath := filepath.Join(tmp, "cached.m4b")
@@ -967,9 +967,9 @@ func TestProcessBooksParallelContextCancelled(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	tmp := t.TempDir()
 	books := make([]Book, 5)
@@ -995,9 +995,9 @@ func TestProcessBooksParallelWorkersMinimum(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "book.m4b")
@@ -1011,9 +1011,9 @@ func TestProcessBooksParallelWorkersMinimum(t *testing.T) {
 
 func TestProcessBooksParallelSaveError(t *testing.T) {
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
@@ -1039,19 +1039,23 @@ func TestProcessBooksParallelAIParsingEnabled(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	// Enable AI parsing but with no key (tests the warning path)
-	oldAI := config.AppConfig.EnableAIParsing
-	oldKey := config.AppConfig.OpenAIAPIKey
+	oldAI := config.Get().EnableAIParsing
+	oldKey := config.Get().OpenAIAPIKey
 	t.Cleanup(func() {
-		config.AppConfig.EnableAIParsing = oldAI
-		config.AppConfig.OpenAIAPIKey = oldKey
+		config.SetForTest(func(c *config.Config) {
+			c.EnableAIParsing = oldAI
+			c.OpenAIAPIKey = oldKey
+		})
 	})
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "" // No key = warning log
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = ""
+	}) // No key = warning log
 
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "ai.m4b")
@@ -1072,19 +1076,23 @@ func TestProcessBooksParallelAIParsingWithBadKey(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	// Enable AI parsing with a fake key (tests the parser init path)
-	oldAI := config.AppConfig.EnableAIParsing
-	oldKey := config.AppConfig.OpenAIAPIKey
+	oldAI := config.Get().EnableAIParsing
+	oldKey := config.Get().OpenAIAPIKey
 	t.Cleanup(func() {
-		config.AppConfig.EnableAIParsing = oldAI
-		config.AppConfig.OpenAIAPIKey = oldKey
+		config.SetForTest(func(c *config.Config) {
+			c.EnableAIParsing = oldAI
+			c.OpenAIAPIKey = oldKey
+		})
 	})
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "sk-fake-key-for-test"
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = "sk-fake-key-for-test"
+	})
 
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "ai_test.m4b")
@@ -1105,9 +1113,9 @@ func TestProcessBooksParallelGenericFilename(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	tmp := t.TempDir()
 	bookDir := filepath.Join(tmp, "Author Name", "Book Title")
@@ -1138,9 +1146,9 @@ func TestProcessBooksParallelSaveWithScanCacheUpdate(t *testing.T) {
 	t.Cleanup(func() { saveBook = oldSaver })
 	saveBook = func(ctx context.Context, book *Book) (*ownershipSkip, error) { return nil, nil }
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	tmp := t.TempDir()
 	p := filepath.Join(tmp, "Author - Title.m4b")
@@ -1407,9 +1415,9 @@ func TestCreateBookFilesForBookWithStore(t *testing.T) {
 			return stored, nil
 		})
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	// The normalization is the scanner's own write, so it is recorded.
 	var history []*database.MetadataChangeRecord
@@ -1641,9 +1649,9 @@ func TestProcessBooksParallelNormalFile(t *testing.T) {
 	database.SetGlobalStore(nil)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3"} })
 
 	saveCalled := 0
 	oldSaver := saveBook
@@ -1670,9 +1678,9 @@ func TestProcessBooksParallelDirectoryBook(t *testing.T) {
 	database.SetGlobalStore(nil)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3"} })
 
 	saveCalled := 0
 	oldSaver := saveBook
@@ -1701,9 +1709,9 @@ func TestProcessBooksParallelMultipleErrors(t *testing.T) {
 	database.SetGlobalStore(nil)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	oldSaver := saveBook
 	t.Cleanup(func() { saveBook = oldSaver })
@@ -1730,9 +1738,9 @@ func TestProcessBooksParallelWithSegmentFiles(t *testing.T) {
 	database.SetGlobalStore(nil)
 	t.Cleanup(func() { database.SetGlobalStore(origStore) })
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	saveCalled := 0
 	oldSaver := saveBook

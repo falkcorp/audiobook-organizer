@@ -82,12 +82,12 @@ func TestChapterGroupKey(t *testing.T) {
 func stubChapterDurations(t *testing.T, sec int, perPath map[string]int) {
 	t.Helper()
 	prevReader := chapterFileDurationSec
-	prevThreshold := config.AppConfig.ChapterConsolidationThresholdMin
+	prevThreshold := config.Get().ChapterConsolidationThresholdMin
 	t.Cleanup(func() {
 		chapterFileDurationSec = prevReader
-		config.AppConfig.ChapterConsolidationThresholdMin = prevThreshold
+		config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = prevThreshold })
 	})
-	config.AppConfig.ChapterConsolidationThresholdMin = 10
+	config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = 10 })
 	chapterFileDurationSec = func(p string) int {
 		if d, ok := perPath[p]; ok {
 			return d
@@ -194,7 +194,7 @@ func TestConsolidateOversized_NeverShattersASameTitleGroup(t *testing.T) {
 		// that in production for eleven days, so 0 now resolves to the
 		// default on BOTH paths.
 		stubChapterDurations(t, 300, nil)
-		config.AppConfig.ChapterConsolidationThresholdMin = 0
+		config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = 0 })
 		books := consolidateChapterGroupsMode(context.Background(), files, consolidateOversized)
 		require.Len(t, books, 1)
 		require.Len(t, books[0].SegmentFiles, len(files))
@@ -266,9 +266,9 @@ func TestProcessBooksParallel_ProvenSequenceOverCeilingGetsAllItsRows(t *testing
 	defer cleanup()
 	SetStore(store)
 	defer SetStore(nil)
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	files := writeDirFixture(t, dir, willNames(maxDirectoryBookFiles+20), "Will of the Empress", func(int) bool { return true })
@@ -294,9 +294,9 @@ func TestProcessBooksParallel_UntaggedProvenSequenceOverCeiling(t *testing.T) {
 	defer cleanup()
 	SetStore(store)
 	defer SetStore(nil)
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	n := maxDirectoryBookFiles + 20
@@ -381,9 +381,9 @@ func TestProcessBooksParallel_SubGroupsKeepDistinctPaths(t *testing.T) {
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	files := writeDirFixture(t, dir, bibleNames(), "The Bible", func(int) bool { return true })

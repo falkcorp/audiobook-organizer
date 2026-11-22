@@ -36,11 +36,13 @@ func newRetiredScanFixture(t *testing.T) *retiredScanFixture {
 	store.WaitForWarmup()
 	useScannerStore(t, store)
 
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.SupportedExtensions = []string{".mp3"}
+	})
 
 	holder, err := store.CreateBook(&database.Book{Title: "Year One", FilePath: filepath.Join(root, "holder")})
 	require.NoError(t, err)

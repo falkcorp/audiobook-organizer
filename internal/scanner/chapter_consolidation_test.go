@@ -23,9 +23,11 @@ import (
 // consolidation entirely for this group: every file stays its own Book with
 // zero Duration and no SegmentFiles.
 func TestConsolidateChapterGroups_AllUnreadable_SkipsConsolidation(t *testing.T) {
-	prevThreshold := config.AppConfig.ChapterConsolidationThresholdMin
-	config.AppConfig.ChapterConsolidationThresholdMin = 10
-	t.Cleanup(func() { config.AppConfig.ChapterConsolidationThresholdMin = prevThreshold })
+	prevThreshold := config.Get().ChapterConsolidationThresholdMin
+	config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = 10 })
+	t.Cleanup(func() {
+		config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = prevThreshold })
+	})
 
 	files := []string{
 		"/nonexistent/01 - My Book.mp3",
@@ -56,9 +58,11 @@ func TestConsolidateChapterGroups_AllUnreadable_SkipsConsolidation(t *testing.T)
 // grouped as a chapter candidate at all) must still pass through unchanged,
 // confirming the R-8 guard only fires for actual chapter-sequence groups.
 func TestConsolidateChapterGroups_StandaloneFile_Unaffected(t *testing.T) {
-	prevThreshold := config.AppConfig.ChapterConsolidationThresholdMin
-	config.AppConfig.ChapterConsolidationThresholdMin = 10
-	t.Cleanup(func() { config.AppConfig.ChapterConsolidationThresholdMin = prevThreshold })
+	prevThreshold := config.Get().ChapterConsolidationThresholdMin
+	config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = 10 })
+	t.Cleanup(func() {
+		config.SetForTest(func(c *config.Config) { c.ChapterConsolidationThresholdMin = prevThreshold })
+	})
 
 	files := []string{
 		"/nonexistent/solo-file.mp3", // no numeric prefix → standalone, never grouped
