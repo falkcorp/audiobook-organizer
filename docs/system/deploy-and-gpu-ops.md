@@ -568,10 +568,27 @@ the `rollback.conf` that wrote). The source defaults to `deploy/host.conf`;
   Before the first deploy installs the unit itself, systemd may not list the
   drop-in yet; it then says so.
 - **never restarts the service** and adds no sudoers line: it grants the deploy
-  user nothing. The running service keeps its old settings until its next
-  restart.
+  user nothing. `daemon-reload` is not inert for the running service, though: it
+  re-applies resource-control settings (`MemoryMax=` and the other `Memory*`,
+  `CPU*`, `Tasks*` and `IO*` keys) to it at once, so the output prints a NOTICE
+  naming each such key the change touches. Only `ExecStart=`,
+  `WorkingDirectory=` and `TimeoutStopSec=` keep their old values until the
+  service's next restart.
+- after `APPLY=1`, compares the exported `rollback_helper.py` with the installed
+  copy and says so when they differ or the copy is missing: the next deploy
+  judges `host.conf` with the installed bundle, so reinstall it with
+  `make install-rollback-helpers`.
+- passes `HOST_CONF`, `DEPLOY_UNIT` and `ROLLBACK_EXPORT_DIR` to the recipe as
+  environment variables, so a quote or space in one is one argument and not
+  more shell text under `sudo`; a `DEPLOY_UNIT` that is not a `.service` unit
+  name is refused.
 - is idempotent: the same file reports `unchanged` and is not rewritten (the
   reload still runs, so a reload that failed last time is not skipped).
+
+Review the output of the `APPLY=1` run, not only the dry run's: APPLY reads the
+file again as root and installs whatever passes the rules at that moment, so
+edit the file between the two runs and the second install is the one that
+counts.
 
 host.conf, and every other drop-in systemd applies to the unit, must run
 nothing but the service user's `ExecStart=`: no other `Exec*=` line

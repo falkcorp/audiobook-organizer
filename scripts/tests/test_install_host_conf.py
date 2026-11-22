@@ -22,6 +22,7 @@ import contextlib
 import importlib.util
 import io
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -36,6 +37,7 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 REPO = SCRIPTS.parent
 HELPERS = REPO / "deploy" / "rollback-helpers"
 UNIT = "audiobook-organizer.service"
+RH_LIBDIR = "/usr/local/libexec/audiobook-organizer/rollback"
 CANARY = "canary_Zq7x"
 
 
@@ -210,7 +212,7 @@ class InstallHostConf(unittest.TestCase):
         p = self.run_tool()
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("accepted", p.stdout)
-        self.assertNotIn("NOTICE", p.stdout, "the example sets an ExecStart=")
+        self.assertNotIn("sets no ExecStart=", p.stdout, "the example sets an ExecStart=")
 
     def test_a_file_without_an_execstart_is_accepted_with_a_notice(self) -> None:
         self.src.write_text("[Service]\nMemoryMax=30G\n")
@@ -317,12 +319,16 @@ class InstallHostConf(unittest.TestCase):
             "an extra Exec line": f"ExecStartPre=/bin/{CANARY}",
             "a + prefix": f"ExecStart=+/bin/{CANARY}",
             "a ! prefix": f"ExecStart=!/bin/{CANARY}",
-            "User=root": f"User=root\n# {CANARY}",
-            "Group=root": "Group=root",
+            # a comment line is skipped, so a canary there never reaches the logical
+            # line; each canary sits in the refused line's own text
+            "User=root": f"User=root_{CANARY}",
+            "Group=root": f"Group=root_{CANARY}",
             "a second command": f"ExecStart=/bin/true ; /bin/{CANARY}",
+            # the one rule with no free text in its line: its own test below
+            # pins the whole message
             "Type=oneshot": "Type=oneshot",
-            "PermissionsStartOnly": "PermissionsStartOnly=yes",
-            "AmbientCapabilities": "AmbientCapabilities=CAP_SYS_ADMIN",
+            "PermissionsStartOnly": f"PermissionsStartOnly={CANARY}",
+            "AmbientCapabilities": f"AmbientCapabilities={CANARY}",
             "a continuation hiding a prefix": f"ExecStart=\\\n+/bin/{CANARY}",
         }
         for name, line in bad.items():
@@ -337,6 +343,16 @@ class InstallHostConf(unittest.TestCase):
                 self.assertIn("line 8", out, "names the line (the first physical one)")
                 self.assertNotIn(CANARY, out, "never the text of a line")
                 self.assertIn("nothing installed", out)
+
+    def test_the_oneshot_refusal_says_exactly_the_rule_and_nothing_else(self) -> None:
+        self.src.write_text(GOOD + "Type=oneshot\n")
+        p = self.run_tool("--apply")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertRegex(
+            p.stderr,
+            r"^install_helpers: " + re.escape(str(self.src)) + r" line 8 sets Type=oneshot, which "
+            r"runs every command an ExecStart= line holds; [^;\n]*; nothing installed\n$",
+        )
 
     def test_a_refusal_in_the_dry_run_too(self) -> None:
         self.src.write_text(GOOD + "ExecStartPost=/bin/x\n")
@@ -493,25 +509,239 @@ class InstallHostConf(unittest.TestCase):
         self.assertEqual(rc, 0)
         loaded.assert_called_once()
 
+    # -- the test seams are not a root run's to take from its arguments ---------
+
+    def run_bare(self, *extra: str) -> subprocess.CompletedProcess:
+        """The tool without --root: how a real run is called."""
+        env = {k: v for k, v in os.environ.items() if k != "SUDO_UID"}
+        env.update(SYSTEMCTL_LOG=str(self.log), HOST_CONF_DEST=str(self.dest))
+        return subprocess.run(
+            [sys.executable, str(self.tool), f"--host-conf={self.src}", f"--unit={UNIT}", *extra],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def test_systemctl_without_root_is_refused(self) -> None:
+        for extra in ([], ["--apply"]):
+            with self.subTest(extra=extra):
+                p = self.run_bare(f"--systemctl={self.systemctl}", *extra)
+                self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+                self.assertIn("test seam", p.stderr)
+                self.assertIn("--root", p.stderr)
+                self.assertEqual(self.calls(), [], "the named systemctl was never run")
+
+    def test_a_unit_name_that_is_not_one_is_refused_before_anything_else(self) -> None:
+        for unit in ('x.service" --systemctl="/tmp/evil', "x.service; y", "a b.service", "x"):
+            with self.subTest(unit=unit):
+                before = self.tree()
+                p = self.run_tool("--apply", unit=unit)
+                self.assert_untouched(before, p)
+                self.assertIn("not a .service unit name", p.stderr)
+
+    # -- what the tool checked is what it wrote (the in-process seams) ----------
+
+    def run_main_inprocess(self, patch_rh) -> tuple[int, str, str]:
+        """IH.main with the helper module patched by patch_rh(rh), as a real
+        --apply run would call it (no --root-less sudo re-exec, no root)."""
+        rh = load("rollback_helper_inprocess", HELPERS / "rollback_helper.py")
+        patch_rh(rh)
+        argv = [
+            f"--host-conf={self.src}",
+            f"--unit={UNIT}",
+            f"--root={self.root}",
+            f"--systemctl={self.systemctl}",
+            "--apply",
+        ]
+        out, err = io.StringIO(), io.StringIO()
+        env = {"SYSTEMCTL_LOG": str(self.log), "HOST_CONF_DEST": str(self.dest)}
+        self.addCleanup(setattr, IH, "STAGING", IH.STAGING)
+        with contextlib.ExitStack() as stack:
+            patch = unittest.mock.patch.object
+            stack.enter_context(patch(IH, "check_sources", return_value=[]))
+            stack.enter_context(patch(IH, "load", return_value=rh))
+            stack.enter_context(unittest.mock.patch.dict(os.environ, env))
+            os.environ.pop("SUDO_UID", None)
+            stack.enter_context(contextlib.redirect_stdout(out))
+            stack.enter_context(contextlib.redirect_stderr(err))
+            rc = IH.main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_the_bytes_written_are_the_bytes_checked_not_a_second_read_of_the_path(self) -> None:
+        evil = f"[Service]\nExecStartPre=/bin/{CANARY}\nUser=root\n"
+
+        def swap_after_open(rh: Any) -> None:
+            real = rh._read_staged
+
+            def read_then_swap(path: str, limit: int | None):
+                got = real(path, limit)  # the fd the installer will read
+                other = path + ".evil"
+                Path(other).write_text(evil)
+                os.replace(other, path)  # the path now names a file nothing checked
+                return got
+
+            rh._read_staged = read_then_swap
+
+        rc, out, err = self.run_main_inprocess(swap_after_open)
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(self.dest.read_bytes(), GOOD.encode(), "what was checked, not the swap")
+        self.assertNotIn(CANARY, self.dest.read_text())
+
+    def test_the_helpers_own_check_runs_on_what_was_written(self) -> None:
+        def refuses(rh: Any) -> None:
+            def boom(cfg: dict) -> None:
+                raise rh.RefusedError("host.conf refused after the write (test)")
+
+            rh._check_host_conf = boom
+
+        rc, out, err = self.run_main_inprocess(refuses)
+        self.assertNotEqual(rc, 0, out + err)
+        self.assertIn("refused after the write", err)
+        self.assertEqual(self.calls(), [], "no reload for a file the helper would refuse")
+
+    def test_text_that_differs_from_the_bytes_read_is_refused(self) -> None:
+        def reads_other_text(rh: Any) -> None:
+            real = rh._read_root_conf
+
+            def other(path: str) -> str:
+                text = real(path)
+                return text + "# tampered\n" if "aorg-host-conf" in path else text
+
+            rh._read_root_conf = other
+
+        rc, out, err = self.run_main_inprocess(reads_other_text)
+        self.assertNotEqual(rc, 0, out + err)
+        self.assertIn("changed while it was being checked", err)
+        self.assertFalse(self.dest.exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_the_private_copy_is_made_where_scratch_dir_says(self) -> None:
+        mine = self.tmp / "scratch"
+        mine.mkdir(mode=0o700)
+        seen: list[Any] = []
+        real = tempfile.TemporaryDirectory
+
+        def spy(*args: Any, **kw: Any):
+            seen.append(kw.get("dir"))
+            return real(*args, **kw)
+
+        rh = load("rollback_helper_scratch", HELPERS / "rollback_helper.py")
+        cfg = {"service_user": "audiobook", "service_group": "audiobook"}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                unittest.mock.patch.object(IH, "scratch_dir", return_value=str(mine))
+            )
+            stack.enter_context(unittest.mock.patch.object(IH.tempfile, "TemporaryDirectory", spy))
+            IH.checked_host_conf(rh, cfg, GOOD.encode(), str(self.src))
+        self.assertEqual(seen, [str(mine)])
+
+    def test_as_root_the_private_copy_goes_in_the_root_made_export(self) -> None:
+        with unittest.mock.patch.object(IH.os, "geteuid", return_value=0):
+            self.assertEqual(IH.scratch_dir(), str(IH.REPO))
+        with unittest.mock.patch.object(IH.os, "geteuid", return_value=1000):
+            self.assertIsNone(IH.scratch_dir())
+
+    # -- the running service ----------------------------------------------------
+
+    def test_a_changed_resource_setting_is_called_out_before_it_is_applied(self) -> None:
+        self.unit_dir.mkdir()
+        self.unit_dir.chmod(0o755)
+        self.dest.write_text(GOOD.replace("MemoryMax=30G", "MemoryMax=12G"))
+        self.dest.chmod(0o644)
+        p = self.run_tool()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("applies resource-control settings to the RUNNING service", p.stdout)
+        self.assertIn("This changes: MemoryMax.", p.stdout)
+
+    def test_a_new_file_that_sets_one_is_called_out_too(self) -> None:
+        p = self.run_tool()
+        self.assertIn("This changes: MemoryMax.", p.stdout)
+
+    def test_a_removed_resource_setting_is_called_out(self) -> None:
+        self.unit_dir.mkdir()
+        self.unit_dir.chmod(0o755)
+        self.dest.write_text(GOOD + "TasksMax=100\n")
+        self.dest.chmod(0o644)
+        p = self.run_tool()
+        self.assertIn("This changes: TasksMax.", p.stdout)
+
+    def test_a_change_that_waits_for_a_restart_is_not_called_out(self) -> None:
+        self.unit_dir.mkdir()
+        self.unit_dir.chmod(0o755)
+        self.dest.write_text(GOOD.replace("TimeoutStopSec=90", "TimeoutStopSec=120"))
+        self.dest.chmod(0o644)
+        p = self.run_tool()
+        self.assertIn("replace", p.stdout)
+        self.assertNotIn("This changes", p.stdout)
+
+    def test_an_unchanged_file_is_not_called_out(self) -> None:
+        self.assertEqual(self.run_tool("--apply").returncode, 0)
+        p = self.run_tool("--apply")
+        self.assertNotIn("This changes", p.stdout)
+
+    def test_what_the_apply_says_about_the_running_service_is_true(self) -> None:
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("was not restarted", p.stdout)
+        self.assertIn("ExecStart=, WorkingDirectory= and TimeoutStopSec= take effect", p.stdout)
+        self.assertIn("resource-control settings", p.stdout)
+        self.assertNotIn("keeps its old settings", p.stdout)
+
+    # -- the installed bundle judges host.conf at the next deploy ---------------
+
+    def install_bundle_copy(self, data: bytes) -> None:
+        lib = self.root / RH_LIBDIR.lstrip("/")
+        lib.mkdir(parents=True)
+        (lib / "rollback_helper.py").write_bytes(data)
+
+    def test_a_missing_installed_bundle_is_noticed(self) -> None:
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("installed helper bundle is missing", p.stdout)
+        self.assertIn("make install-rollback-helpers", p.stdout)
+
+    def test_an_installed_bundle_that_differs_is_noticed(self) -> None:
+        self.install_bundle_copy(b"# an older helper\n")
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("installed helper bundle differs from this checkout", p.stdout)
+        self.assertIn("the next deploy judges host.conf with the installed one", p.stdout)
+
+    def test_an_installed_bundle_that_matches_is_not_noticed(self) -> None:
+        self.install_bundle_copy((HELPERS / "rollback_helper.py").read_bytes())
+        p = self.run_tool("--apply")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("installed helper bundle", p.stdout)
+
     # -- the make target --------------------------------------------------------
 
-    def make_n(self, *args: str) -> str:
+    def make(self, *args: str, dry: bool = True, source: Path | str | None = None):
         if shutil.which("make") is None:
             self.skipTest("make is not installed")
-        p = subprocess.run(
-            ["make", "-n", "install-host-conf", f"HOST_CONF={self.src}", *args],
+        return subprocess.run(
+            [
+                "make",
+                *(["-n"] if dry else []),
+                "install-host-conf",
+                f"HOST_CONF={self.src if source is None else source}",
+                *args,
+            ],
             cwd=REPO,
             capture_output=True,
             text=True,
             timeout=60,
         )
+
+    def make_n(self, *args: str) -> str:
+        p = self.make(*args)
         self.assertEqual(p.returncode, 0, p.stderr)
         return p.stdout
 
     def test_make_dry_run_uses_no_sudo(self) -> None:
         out = self.make_n()
         self.assertIn("install_helpers.py", out)
-        self.assertIn(f'--host-conf="{self.src}"', out)
+        self.assertIn('--host-conf="$hc"', out)
         self.assertNotIn("--apply", out.split("else", 1)[1])
         self.assertNotIn("sudo", out.split("else", 1)[1])
 
@@ -527,6 +757,30 @@ class InstallHostConf(unittest.TestCase):
             self.assertIn(needed, out)
         self.assertNotIn("restart", out)
         self.assertNotIn("sudoers", out)
+
+    def test_make_variables_are_never_spliced_into_the_shell_line(self) -> None:
+        hostile = 'x.service" --systemctl="/tmp/evil'
+        for args in (["APPLY=1"], []):
+            out = self.make_n(
+                *args,
+                f"DEPLOY_UNIT={hostile}",
+                "ROLLBACK_EXPORT_DIR=/opt; touch /tmp/pwned",
+            )
+            self.assertNotIn("--systemctl", out)
+            self.assertNotIn("/tmp/evil", out)
+            self.assertNotIn("touch", out)
+            self.assertIn('--unit="$AORG_HC_UNIT"', out)
+
+    def test_make_hands_a_hostile_unit_to_the_installer_as_one_refused_argument(self) -> None:
+        p = self.make('DEPLOY_UNIT=x.service" --systemctl="/tmp/evil', dry=False, source=self.src)
+        self.assertNotEqual(p.returncode, 0, p.stdout)
+        self.assertIn("not a .service unit name", p.stderr)
+        self.assertNotIn("test seam", p.stderr, "it was one argument, not two")
+
+    def test_make_takes_a_path_with_spaces(self) -> None:
+        p = self.make(dry=False, source=self.tmp / "no such dir" / "host conf")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(f"{self.tmp}/no such dir/host conf does not exist", p.stdout + p.stderr)
 
 
 if __name__ == "__main__":
