@@ -123,7 +123,7 @@ func newK(t testing.TB, c Config) (*Kernel, error) {
 // whose Seams name a cache keeps it.
 func newKCtx(t testing.TB, ctx context.Context, c Config) (*Kernel, error) {
 	t.Helper()
-	return New(bootseam.WithSectionCache(ctx, testSectionCache(t)), withState(t, c))
+	return New(bootseam.WithSectionCacheForTest(ctx, testSectionCache(t)), withState(t, c))
 }
 
 // testSectionCaches holds one section cache per test (testing.TB) that boots

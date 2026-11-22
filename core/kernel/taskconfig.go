@@ -305,7 +305,7 @@ func bootConfigStoreSeen(ctx context.Context) func(any) {
 }
 
 // bootSectionCache is the section cache a test handed the boot
-// (bootseam.SectionCache: Seams.SectionCache, else bootseam.WithSectionCache),
+// (bootseam.SectionCache: Seams.SectionCache, else bootseam.WithSectionCacheForTest),
 // nil when it handed none (every production boot).
 func bootSectionCache(ctx context.Context) (*config.SectionCache, error) {
 	sc := bootseam.SectionCache(ctx)
