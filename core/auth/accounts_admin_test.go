@@ -9,6 +9,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -441,4 +443,64 @@ func TestRotateInvite_RechecksTheAddressAndUsername(t *testing.T) {
 	if f.storedInvite(v.ID) == nil {
 		t.Fatal("a refused rotation removed the invite")
 	}
+}
+
+// The ctx principal the account writes decide on is the one the REAL middleware
+// binds: a request presenting a session reaches its handler with the principal
+// on r.Context(), and passing that same principal to CreateInvite and
+// DeleteInvite is accepted (middleware.go: bind -> WithPrincipal).
+func TestInvite_WritesWorkThroughTheRealMiddleware(t *testing.T) {
+	f := newFx(t)
+	bruce := f.user("bruce", rbac.RoleAdmin)
+	sess, err := f.svc.IssueSession(context.Background(), bruce, auth.OriginPassword, false, from("192.0.2.10"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created string
+	var gotErr error
+	h := f.svc.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := auth.PrincipalFrom(r.Context())
+		if !ok {
+			gotErr = errors.New("the middleware bound no principal")
+			return
+		}
+		_, v, err := f.svc.CreateInvite(r.Context(), p, auth.InviteSpec{Username: "irena-dubrovna", Role: "gotham.detective"})
+		if err != nil {
+			gotErr = err
+			return
+		}
+		created = v.ID
+		gotErr = f.svc.MarkInviteEmailDelivered(r.Context(), "01NOSUCHINVITE") // reaches the lookup: the admin check passed
+		if errors.Is(gotErr, auth.ErrNotFound) {
+			gotErr = f.svc.DeleteInvite(r.Context(), p, v.ID)
+		}
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), request("", sess.Token))
+	if gotErr != nil || created == "" {
+		t.Fatalf("a signed-in request: invite %q, err %v", created, gotErr)
+	}
+	if f.storedInvite(created) != nil {
+		t.Fatal("the delete through the same request did not remove the invite")
+	}
+}
+
+// Auth-off mode's principal has no user: every account method refuses it
+// (the writes need a creator or an actor row, and the reads need users.manage
+// through a user's own sign-in), and none panics on the nil user.
+func TestAccountAdmin_RefusesTheAuthOffPrincipal(t *testing.T) {
+	f := newFx(t)
+	bruce := f.user("bruce", rbac.RoleAdmin)
+	off := &auth.Principal{Method: auth.MethodAuthDisabled, Perms: scopedChecker{rbac.CoreAdmin: true, "core:users.manage": true}}
+	ctx := auth.WithPrincipal(context.Background(), off)
+	_, _, err := f.svc.CreateInvite(ctx, off, auth.InviteSpec{Username: "irena-dubrovna", Role: "gotham.detective"})
+	wantErr(t, "CreateInvite", err, auth.ErrDenied)
+	wantErr(t, "DeleteInvite", f.svc.DeleteInvite(ctx, off, "x"), auth.ErrDenied)
+	wantErr(t, "MarkInviteEmailDelivered", f.svc.MarkInviteEmailDelivered(ctx, "x"), auth.ErrDenied)
+	_, _, err = f.svc.RotateInvite(ctx, "x")
+	wantErr(t, "RotateInvite", err, auth.ErrDenied)
+	wantErr(t, "SetUserEmail", f.svc.SetUserEmail(ctx, bruce.ID, "bruce@example.test"), auth.ErrDenied)
+	_, err = f.svc.AdminUser(ctx, bruce.ID)
+	wantErr(t, "AdminUser", err, auth.ErrDenied)
+	_, err = f.svc.Invite(ctx, "x")
+	wantErr(t, "Invite", err, auth.ErrDenied)
 }

@@ -255,3 +255,50 @@ func TestCreateInvite_RefusesAVerifiedHolderOfTheAddress(t *testing.T) {
 		t.Fatalf("an address only typed in refused an invite: %v", err)
 	}
 }
+
+// InviteAccepted runs with the e-mail lock released, for an accept that binds
+// and for one that does not (both hold the lock across the commit because the
+// invite names an address): a callback that takes the lock, as a sign-up or an
+// OIDC resolve does, must not wait on the call that is calling it.
+func TestInviteBind_InviteAcceptedRunsWithTheEmailLockReleased(t *testing.T) {
+	for _, bound := range []bool{true, false} {
+		name := "unflagged"
+		if bound {
+			name = "flagged and bound"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFx(t)
+			bruce := f.user("bruce", rbac.RoleAdmin)
+			admin := f.session(bruce)
+			tok, v := f.emailInvite(admin, "irena-dubrovna", "irena@example.test")
+			if bound {
+				if err := f.svc.MarkInviteEmailDelivered(f.as(admin), v.ID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			took := make(chan struct{})
+			if err := f.svc.RegisterLifecycle(auth.Lifecycle{InviteAccepted: func(context.Context, auth.InviteAccepted) {
+				unlock := f.svc.LockEmails() // blocks forever while AcceptInvite still holds the lock
+				unlock()
+				close(took)
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { _, _, err := f.accept(tok, "catwoman-1234"); done <- err }()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("AcceptInvite never returned: the callback waited on the e-mail lock the call still held")
+			}
+			select {
+			case <-took:
+			default:
+				t.Fatal("the callback never took the e-mail lock")
+			}
+		})
+	}
+}
