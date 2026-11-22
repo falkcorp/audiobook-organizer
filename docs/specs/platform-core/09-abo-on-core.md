@@ -424,11 +424,13 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   early fixes, never HEAD itself (SEC-13); the auth-disabled principal is also checked against every core route, not
   only the HEAD router dump. It runs on F4's PR and stays as the table's regression test (05-rbac §12).
 - **Recorded changes (release notes).** With auth off, every `Guards.Interactive` route (credential, key,
-  temp-login and restore routes) refuses the auth-disabled principal, so do the API-key, session-list and audit routes
+  temp-login, restore, user-management, import-path, plugin-settings, tool-install and update routes) refuses the
+  auth-disabled principal, so do the API-key, session-list and audit routes
   (SEC-3), and the backup routes answer 401. The credential-metadata routes (`/me*`, `/api-keys*`,
   `/users/{id}/sessions*`, `/users/{id}/api-keys*`) and the audit routes answer 401 too, while the settings routes keep
-  their auth-off reach (05-rbac §4.11): "With authentication off, credential, API-key, session, audit and backup
-  routes now refuse requests; turn authentication on to use them." Playlist writes stay open to every signed-in user,
+  their auth-off reach (05-rbac §4.11): "With authentication off, credential, API-key, session, audit, backup,
+  user-management, import-path, plugin-settings, tool-install and update routes now refuse requests; turn
+  authentication on to use them." Playlist writes stay open to every signed-in user,
   as at HEAD: `books:playlists.create` is not enforced on them (SEC-4). An API key of an `fp-worker` user whose
   scopes lie outside the worker scope reaches no route (HEAD let it reach the authenticated-only routes). An admin's
   API key, the bootstrap key included, no longer reaches `PATCH /api/v1/admin/debug/books/:id`,
@@ -702,7 +704,7 @@ steps (§9.4 R2).
 | 9 | Web sessions, invites, one-time tokens | HEAD's rows | deleted (M3): everyone signs in to the web app once | 05-authn §11 | re-send open invites (P5; deploy step 8) |
 | 10 | API keys | `abk_` tokens holding atoms | the same tokens, with native scopes (M3); new keys are `mck_` | 05-authn §4.4; 05-rbac §6 | — |
 | 11 | Roles and permissions | 13 stored atoms; seed roles rewritten at every boot | native scopes through the atom table; core seeds the seed roles | 05-rbac §6 | — |
-| 12 | Auth-off behaviour | HEAD's pass-through | credential, key, temp-login and restore routes refuse the auth-disabled principal; the backup routes answer 401 | 05-rbac §4.10–§4.11 | turn authentication on to use them |
+| 12 | Auth-off behaviour | HEAD's pass-through | credential, key, temp-login, restore, user-management (invite, resend, deactivate, reactivate, reset-password), import-path, plugin-settings, tool-install and update routes refuse the auth-disabled principal; the backup routes answer 401 | 05-rbac §4.10–§4.11 | turn authentication on to use them |
 | 13 | Task kinds, runs and schedules | HEAD's definition IDs and ops rows | `books.<id>` and `core.<id>` by the kind-rename map; runs, clocks, markers and stamps in `c/tasks/` (M4) | 05-tasks §5T.8 | — |
 | 14 | System log | `syslog:` rows | `c/log/`, converted (M5) | 05-logging §5 | — |
 | 15 | Integrations, AI jobs, library roots, the webhook rule | blob fields, `aijob*`, `import_path:` | `c/integrations/instances/`, `c/ai/`, `core.library.roots` entries (IDs kept), native notify instances and their rule (M6) | 05-metadata M1.10; 05-ai §10; 05-library §5L.10; 05-notify §10 | — |
