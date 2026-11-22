@@ -26,8 +26,8 @@ import (
 // s13Atoms is the test's own copy of books' atom table (05-rbac §6.1): each
 // HEAD atom and the native scopes whose AllOf is its route requirement. The
 // atoms are string literals on purpose, and every atom a legacy manifest route
-// names is here. playlists.create gates no route (zero route requirement) and
-// is not in the table; the resolver answers it separately.
+// names is here, and so is playlists.create, which no route names but whose
+// route requirement is AllOf its scope like every other atom's (F4-08 B10y).
 //
 // core cannot import internal/books, so this is a copy, and a copy that nothing
 // checked would make "stage 13 matches the successor" a statement about a table
@@ -45,6 +45,7 @@ func s13Atoms() map[string][]rbac.Permission {
 		"users.manage":          {"core:users.manage", "core:roles.view"},
 		"settings.manage": {"core:settings.manage", "books:settings.manage", "core:tasks.manage", "core:system.view",
 			"core:system.manage", "core:library.manage", "core:library.browse", "core:integrations.manage"},
+		"playlists.create":   {"books:playlists.create"},
 		"collections.manage": {"books:collections.manage"},
 		"requests.create":    {"books:request"},
 		"requests.approve":   {"books:request.approve"},

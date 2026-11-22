@@ -160,8 +160,10 @@ func TestReachResolve(t *testing.T) {
 	if !slices.Equal(g.req.Permissions(), want.Permissions()) || g.req.Kind() != rbac.KindAllOf {
 		t.Errorf("settings.manage resolved to %s, want AllOf of its %d scopes", g.req, len(want.Permissions()))
 	}
-	if _, err := reachResolve(atoms, route("playlists.create")); err == nil {
-		t.Error("a route naming playlists.create must be an error: no route enforces it")
+	// No route names playlists.create, but its route requirement is AllOf its
+	// scope like every other atom's (books TestAtomTable_NoZeroRoute).
+	if g, err := reachResolve(atoms, route("playlists.create")); err != nil || !slices.Equal(g.req.Permissions(), []rbac.Permission{"books:playlists.create"}) {
+		t.Errorf("playlists.create resolved to %s, %v; want AllOf[books:playlists.create]", g.req, err)
 	}
 	if _, err := reachResolve(atoms, route("batcave.access")); err == nil {
 		t.Error("an atom the table lacks must be an error")

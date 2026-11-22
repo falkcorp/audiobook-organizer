@@ -298,13 +298,10 @@ var reachHandlerAdmin = map[string]string{
 	"PUT /api/v1/users/:id/email":     "05-rbac 4.6: SetUserEmail checks core:admin in place of the admin role name (handlers/user.go:456-458) @v0.223.0",
 }
 
-// reachUnenforced are the atoms no route enforces: books' table gives them a
-// zero route requirement, and a route naming one is an error (resolveRoutes).
-var reachUnenforced = map[string]bool{"playlists.create": true}
-
 // reachResolve is books' routeRequirement and resolveRoutes over atoms: a
 // LegacyAtom becomes AllOf every scope of the atom's row. A route whose atom
-// the table lacks, or no route may enforce, is an error, never a gate.
+// the table lacks is an error, never a gate. Every atom the table holds has a
+// route requirement, playlists.create included (books TestAtomTable_NoZeroRoute).
 func reachResolve(atoms []m3.AtomRow, lr httpapi.LegacyRoute) (reachGate, error) {
 	return reachResolveWith(atoms, lr, reachHandlerAdmin)
 }
@@ -328,9 +325,6 @@ func reachResolveWith(atoms []m3.AtomRow, lr httpapi.LegacyRoute, pin map[string
 	for _, a := range atoms {
 		if a.Name != lr.Perm.Atom() {
 			continue
-		}
-		if reachUnenforced[a.Name] {
-			break
 		}
 		g.req = rbac.AllOf(a.Scopes...)
 		if g.req.IsZero() {
