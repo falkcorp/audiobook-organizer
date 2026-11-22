@@ -125,6 +125,10 @@ func newIdentityWiring(ownerEmail func() string) (*identityWiring, error) {
 // configOwnerEmail is the owner e-mail as HEAD read it on every request.
 func configOwnerEmail() string { return config.Snapshot().OwnerEmail }
 
+// ownerRequiredNow is core.auth.owner.required as the bridge reads it, per call:
+// true exactly while an owner e-mail is configured.
+func ownerRequiredNow() bool { return ownerSet(configOwnerEmail) }
+
 // ownerSet is whether an owner e-mail is configured. core.auth.owner.required is
 // true exactly then (ruling b): the extension's OwnerSet and the bridge's
 // owner-required reader both come from this one rule, so core's stage 13 and
@@ -290,7 +294,7 @@ func (m *booksModule) identityFor(d module.Deps) (*legacyauth.Identity, error) {
 	if err := refuseOwnerRequiredOff(d.Config); err != nil {
 		return nil, err
 	}
-	id, err := newLegacyIdentity(d, func() bool { return ownerSet(configOwnerEmail) })
+	id, err := newLegacyIdentity(d, ownerRequiredNow)
 	if err != nil {
 		return nil, err
 	}
