@@ -1154,7 +1154,10 @@ the config cutover, 05-config §1.12.2).
   every concrete scope that is neither `AuthRequired` nor `Sensitive`, has **no admin flag** and no
   implication from `core:admin` (05-rbac §4.11, SEC-2). `core:admin` itself is `AuthRequired`, so
   the always-authenticated class — store wipes, debug edits, credential surfaces
-  (`wire_admin_role.go:28-38`) — answers 401 with auth disabled, as today; read-only admin
+  (`wire_admin_role.go:28-38`) — is refused with auth disabled, as today, but with 403
+  `interactive_required` ("turn authentication on to use this route") rather than HEAD's 401 (ruling
+  G5(a), F4-08 B10sr: a 401 `authentication_required` ends the SPA's session, and a no-auth install has
+  no sign-in; see 05-rbac §4.11); read-only admin
   introspection stays open, as today's `adminRole` pass-through (05-rbac §6.2).
 - `MethodAuthDisabled` is non-interactive and may not change credentials, so every
   `Guards.Interactive` route (password, keys, sessions of others, temp-login, backup restore) is
@@ -1165,11 +1168,12 @@ the config cutover, 05-config §1.12.2).
   Books' `s.perm` routes keep HEAD's auth-off reach (05-rbac §4.11's auth-off evaluation rule).
 - **Credential metadata needs a user (SEC-3).** The auth-disabled principal has `User == nil`, and HEAD
   answers 401 to these reads when no user is bound (`handlers/apikeys.go:259-264` @748fd787a; with auth
-  off HEAD's middleware binds none). So `internal/authhttp` refuses that principal with 401
-  `authentication_required` on every route of §4.13 that lists or reads keys, sessions or the caller's
+  off HEAD's middleware binds none). So `internal/authhttp` refuses that principal with 403
+  `interactive_required` (HEAD's 401 would end a no-auth install's SPA session, ruling G5(a); a nil
+  principal, auth on with no credential, keeps 401 `authentication_required`) on every route of §4.13 that lists or reads keys, sessions or the caller's
   own profile (`/me*`, `/api-keys*`, `/users/{id}/sessions*`, `/users/{id}/api-keys*`), before the
   handler runs, as credential routes already refuse it; and `core:audit.view` is `AuthRequired`
-  (05-rbac §6.1), so the audit query and export answer 401 too. Key names, scopes, last-use addresses,
+  (05-rbac §6.1), so the audit query and export answer 403 `interactive_required` too. Key names, scopes, last-use addresses,
   session addresses and the audit trail therefore stay behind a credential on a remote-reachable
   auth-off install.
 - `disabled` refuses to start when a listener is bound to a non-loopback address **or** any trusted
@@ -1482,7 +1486,7 @@ applied once by the identity cutover (§11).
 | Key create by a key whose effective set is empty (nil caller permission set) | 403 `scope_escalation`, nothing written | closed | the empty set grants nothing to delegate (SEC9-5) |
 | Action on a user the actor does not dominate | 403 `dominance_required` | closed | SEC-4 |
 | A compat surface's password, key or principal call for a `SignInRestricted` or `PasswordResetRequired` user, a `needs_confirmation` key, or a password or principal call from a throttled source | refused by `auth.Compat` (`ErrResetRequired`; `ErrThrottled` for the throttled source; for the key, the failure stage 12 records), surfaced in the surface's own error shape | closed | SEC-1: no second auth stack outside core's rules |
-| Credential-metadata or audit route with the auth-disabled principal | 401 `authentication_required` | closed | SEC-3; HEAD's `CurrentUser` 401 |
+| Credential-metadata or audit route with the auth-disabled principal | 403 `interactive_required` (ruling G5(a); HEAD's `CurrentUser` answered 401, which would end the SPA session) | closed | SEC-3 |
 | Facade key off its facade group, or general key on a facade group (deferred-build, §3.5) | 403 `permission_denied` | closed | SEC-5 |
 | OIDC subject whose email matches an unlinkable account | 409 `email_in_use` | closed | SEC-7 |
 | Remove last `core:admin` holder | 409 `last_admin` | closed | lockout protection |
@@ -1626,7 +1630,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestOAuthStart_HEADPathServedByCore` | (ABO, fake IdP, from F4; SAFETY-11) HEAD's start `GET /api/v1/auth/oauth/{provider}/start` reaches core's start handler through the whole core chain (`RouteInfo.Owner` `core`, Public, `RateAuth`), no gin handler serves it, and it answers as `GET /api/core/v1/auth/oidc/{provider}/start` does, one cell per `AppHandoff` rule of §4.7: no app fields → an ordinary web sign-in that completes at HEAD's callback; a listed `redirect_uri` (and, in its own cell, `callback`) of `audiobooth://oauth` with an S256 `code_challenge` → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of the two → ordinary web sign-in; an unlisted or prefix-extended `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` → 400 |
 | `TestOIDC_AppHandoffMintsABSCode` | (ABO, fake IdP, from F4; SEC-2) one cell per control of §4.7's hand-off: both `redirect_uri` (or `callback`) and `code_challenge` present → the callback calls `AppHandoff.Mint`, redirects to the app scheme with the code and the app's state, and no web session record exists; only one of them → ordinary web sign-in; an unlisted, prefix-extended or userinfo-bearing `redirect_uri` → inline 400 with no `Location` header; `code_challenge_method` `plain` or missing → 400; the code redeems once at the ABS route `/auth/openid/callback` and is refused after the user's epoch is bumped (port of HEAD's `internal/server/oauth_app_code_epoch_integration_test.go`); a `SignInRestricted` user gets no code |
 | `TestCompat_ABSLoginHonoursRestrictions` | (ABO, SEC-1) through `Deps.AuthCompat` only: the ABS password login, an ABS JWT, an `abk_` key and the Cloudflare Access login path, each against a `SignInRestricted` user, a `PasswordResetRequired` user (password, JWT and Cloudflare paths) and a `needs_confirmation` key (key path) → refused; a JWT or Cloudflare call from a source whose throttle is spent → refused; a refused `PrincipalFor` call records no failure (30 stale-epoch JWT calls from one source, then the same source's password login succeeds, and a wrong password still counts); a good password is throttled with web logins and rehashed from bcrypt; books' module holds no `*auth.Service` (archtest) |
-| `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 401 `authentication_required`, nothing listed |
+| `TestAuthOff_CredentialMetadataNeedsUser` | (SEC-3) auth disabled: `GET /me`, `/me/sessions`, `/me/api-keys`, `/api-keys`, `/api-keys/{id}`, `/users/{id}/sessions`, `/users/{id}/api-keys`, `/audit` and `/audit/export` → 403 `interactive_required` (G5(a)), nothing listed; with auth on and no credential, 401 `authentication_required` |
 | `TestFirstRun_OnlyPublicAndSetupReachable` | zero users: every non-Public route 401 |
 | `TestSetup_RequiresBootstrapToken` / `TestSetup_LoopbackExceptionRefusesForwarded` | loopback peer with a forwarding header, or a trusted-proxy peer, is not local (SEC-30) |
 | `TestBootstrapRedeemedOnce` | `testing/synctest`, 50 concurrent redeems, exactly 1 success |
