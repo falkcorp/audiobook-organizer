@@ -16,7 +16,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 )
@@ -109,6 +113,17 @@ func (listsRuns) Rows(context.Context, tasks.RunID) iter.Seq2[tasks.Row, error] 
 	return func(func(tasks.Row, error) bool) {}
 }
 
+type listsCandidates struct{}
+
+func (listsCandidates) GetCachedCandidates(string) (*database.MetadataCandidateCache, bool, error) {
+	return nil, false, nil
+}
+
+type listsProtectedCache struct{}
+
+func (listsProtectedCache) Refresh() error          { return nil }
+func (listsProtectedCache) IsProtected(string) bool { return false }
+
 // listsFixture is the inputs of bookTaskLists over a real Pebble store.
 func listsFixture(t *testing.T) taskListInputs {
 	t.Helper()
@@ -131,20 +146,135 @@ func listsFixture(t *testing.T) taskListInputs {
 			AuxStores:    listsAux{},
 			StandDownKey: tasks.Key("books.library.scan"),
 		},
+		Metafetch: metafetch.BooksTaskInputs{
+			Source:     store,
+			Candidates: listsCandidates{},
+			Scoring:    func() config.MetadataScoringConfig { return config.MetadataScoringConfig{} },
+			NewAudible: func() metafetch.AudibleSearcher { return nil },
+		},
+		Deluge: deluge.BooksTaskInputs{
+			Source: store,
+			Cache:  listsProtectedCache{},
+			Config: &config.Config{},
+		},
+		Acoustid: acoustid.BooksTaskInputs{
+			Plugin: &acoustid.Plugin{},
+			Source: store,
+		},
+	}
+}
+
+// notYetBuilt are the scheduled kinds bookTaskLists does not carry yet, each with
+// the piece that will. An entry fails the test the moment its kind appears in the
+// lists, so the table shrinks as the builders land and nothing is silently
+// dropped. The held group-6 kinds stay here until TODO-F5-11-HOLD-RENEW.
+var notYetBuilt = map[tasks.Kind]string{
+	// internal/server t7Deps builder (kinds_t7.go).
+	"books.catalog.harvest-authors":              "server t7",
+	"books.collections.refresh-relative-dynamic": "server t7",
+	"books.dedup.author-scan":                    "server t7",
+	"books.dedup.series-normalize":               "server t7",
+	"books.dedup.series-prune":                   "server t7",
+	"books.identification.advance":               "server t7",
+	"books.library.organize":                     "server t7",
+	"books.library.scan":                         "server t7",
+	"books.library.scan-full":                    "server t7",
+	"books.library.size-refresh":                 "server t7",
+	"books.metadata.candidate-fetch":             "server t7",
+	"books.reconcile.scan":                       "server t7",
+	// internal/scheduler t7Deps builder.
+	"books.scheduler.metadata-upgrade": "scheduler t7",
+	// the dedup plugin's KindDeps builder.
+	"books.dedup.label-refinement": "dedup plugin",
+	"books.dedup.llm-review":       "dedup plugin",
+	// maintenance groups 1, 5 and 7 builders; nightly-compact-activity-log is group 6
+	// (held for TODO-F5-11-HOLD-RENEW).
+	"books.maintenance.author-split-scan":            "maintenance g1/g5/g7",
+	"books.maintenance.metadata-refresh":             "maintenance g1/g5/g7",
+	"books.maintenance.orphan-book-files-cleanup":    "maintenance g1/g5/g7",
+	"books.maintenance.prune-ai-journal":             "maintenance g1/g5/g7",
+	"books.maintenance.reports-prune":                "maintenance g1/g5/g7",
+	"books.maintenance.resolve-production-authors":   "maintenance g1/g5/g7",
+	"books.maintenance.nightly-compact-activity-log": "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
+}
+
+// scheduleSig is what a schedule reports through its accessors. tasks.CommonOf
+// deep-copies the Schedule (a definition and its caller never share one), so
+// pointer identity with the hook's schedule is not observable; the config key is
+// unique per kind (TestF5_ScheduleKeysAreUniquePerKind), so it ties a definition
+// to the hook's schedule for that kind, and the rest guards the copy.
+type scheduleSig struct {
+	key                                              string
+	every                                            time.Duration
+	onStart, startGate, intervalGate, paramsFn, live bool
+	preview                                          bool
+	missed                                           tasks.MissedPolicy
+	params                                           string
+	open, startOpen, intervalOn, windowOpen          bool
+}
+
+func sigOf(s *tasks.Schedule) scheduleSig {
+	return scheduleSig{
+		key: s.ConfigKey(), every: s.Interval(), onStart: s.RunsOnStart(),
+		startGate: s.HasStartGate(), intervalGate: s.HasIntervalGate(), paramsFn: s.HasParamsFunc(),
+		live: s.IsLive(), preview: s.IsPreview(), missed: s.OnMissed(), params: string(s.RunParams()),
+		open: s.Open(), startOpen: s.StartOpen(), intervalOn: s.IntervalEnabled(), windowOpen: s.WindowOpen(),
+	}
+}
+
+func TestF5_ScheduleKeysAreUniquePerKind(t *testing.T) {
+	hook := NewSchedules(ScheduleDeps{})
+	seen := map[string]tasks.Kind{}
+	for _, k := range ScheduledKinds() {
+		s := hook(k)
+		require.NotNil(t, s, k)
+		key := s.ConfigKey()
+		if prev, dup := seen[key]; dup {
+			t.Fatalf("kinds %s and %s share schedule key %q: a schedule comparison cannot tell them apart", prev, k, key)
+		}
+		seen[key] = k
+	}
+}
+
+func TestF5_ScheduledKindsRegistered(t *testing.T) {
+	in := listsFixture(t)
+	defs, err := bookTaskLists(in)
+	require.NoError(t, err)
+
+	byKind := map[tasks.Kind]tasks.Definition{}
+	for _, d := range defs {
+		require.NotContains(t, byKind, d.Kind(), "kind %s is in the lists twice", d.Kind())
+		byKind[d.Kind()] = d
+		require.Empty(t, tasks.Problems(d), d.Kind())
+	}
+
+	scheduled := map[tasks.Kind]bool{}
+	for _, k := range ScheduledKinds() {
+		scheduled[k] = true
+		if _, ok := byKind[k]; !ok {
+			require.Contains(t, notYetBuilt, k, "scheduled kind %s is in no list and not in notYetBuilt", k)
+		}
+	}
+	for k, owner := range notYetBuilt {
+		require.NotContains(t, byKind, k, "%s is built now: drop it from notYetBuilt (was waiting on %s)", k, owner)
+		require.True(t, scheduled[k], "notYetBuilt names %s, which is not a scheduled kind", k)
+	}
+
+	// The hook the lists were built with is the one books ships.
+	hook := in.Schedules
+	for k, d := range byKind {
+		got := tasks.CommonOf(d).Schedule
+		if !scheduled[k] {
+			require.Nil(t, got, "%s is outside ScheduledKinds but carries a schedule", k)
+			continue
+		}
+		require.NotNil(t, got, "%s is scheduled but its definition has no schedule", k)
+		require.Equal(t, sigOf(hook(k)), sigOf(got), "%s carries another kind's schedule", k)
 	}
 }
 
 func TestF5_BookTaskListsBuild(t *testing.T) {
 	defs, err := bookTaskLists(listsFixture(t))
 	require.NoError(t, err)
-	have := map[tasks.Kind]bool{}
-	for _, d := range defs {
-		have[d.Kind()] = true
-	}
-	for _, k := range ScheduledKinds() {
-		if !have[k] {
-			t.Logf("scheduled kind not in the lists: %s", k)
-		}
-	}
 	t.Logf("%d definitions", len(defs))
 }
