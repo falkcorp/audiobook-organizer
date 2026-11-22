@@ -38,11 +38,11 @@ func setupBoundaryScanner(t *testing.T) boundaryEnv {
 		database.SetGlobalStore(prevStore)
 		SetStore(nil)
 	})
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 	base := t.TempDir()
 	root := filepath.Join(base, "lib")
-	config.AppConfig.RootDir = root
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
 	return boundaryEnv{store: store, base: base, root: root}
 }
 

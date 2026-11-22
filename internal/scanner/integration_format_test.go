@@ -17,8 +17,10 @@ import (
 
 // TestIntegrationRealWorldMixedFormats tests scanner with realistic mixed format audiobook directories
 func TestIntegrationRealWorldMixedFormats(t *testing.T) {
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"}
-	config.AppConfig.ConcurrentScans = 2
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"}
+		c.ConcurrentScans = 2
+	})
 
 	tmpDir, err := os.MkdirTemp("", "integration-test-*")
 	if err != nil {
@@ -116,9 +118,11 @@ func TestIntegrationRealWorldMixedFormats(t *testing.T) {
 
 // TestIntegrationProcessingMixedFormats tests end-to-end processing with multiple formats
 func TestIntegrationProcessingMixedFormats(t *testing.T) {
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a"}
-	config.AppConfig.ConcurrentScans = 2
-	config.AppConfig.EnableAIParsing = false // Disable AI for faster tests
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a"}
+		c.ConcurrentScans = 2
+		c.EnableAIParsing = false
+	}) // Disable AI for faster tests
 
 	tmpDir, err := os.MkdirTemp("", "processing-test-*")
 	if err != nil {
@@ -184,7 +188,7 @@ func TestIntegrationLargeScaleMixedFormats(t *testing.T) {
 		t.Skip("Skipping large-scale test in short mode")
 	}
 
-	config.AppConfig.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b", ".mp3", ".m4a", ".flac"} })
 
 	tmpDir, err := os.MkdirTemp("", "largescale-test-*")
 	if err != nil {

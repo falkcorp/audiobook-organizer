@@ -47,9 +47,9 @@ func TestProcessBooksParallelDirectoryBookAcquiresBookFileRows(t *testing.T) {
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	segs := writeSegments(t, dir, "part01.mp3", "part02.mp3", "part03.mp3")
@@ -110,9 +110,9 @@ func TestCreateBookFilesForBookEnumeratesADirectory(t *testing.T) {
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	segs := writeSegments(t, dir, "part01.mp3", "part02.mp3", "part03.mp3")

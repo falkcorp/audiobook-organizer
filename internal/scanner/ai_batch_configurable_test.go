@@ -68,13 +68,15 @@ func (p *ctxAwareParser) sizes() []int {
 // this change. Save the whole struct, not the fields you happen to be setting.
 func withAIParseBatchConfig(t *testing.T, size, timeoutSeconds int, workers ...int) {
 	t.Helper()
-	prev := config.AppConfig.AIBackend
-	t.Cleanup(func() { config.AppConfig.AIBackend = prev })
+	prev := config.Get().AIBackend
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.AIBackend = prev }) })
 
-	config.AppConfig.AIBackend.ParseBatchSize = size
-	config.AppConfig.AIBackend.ParseBatchTimeoutSeconds = timeoutSeconds
+	config.SetForTest(func(c *config.Config) {
+		c.AIBackend.ParseBatchSize = size
+		c.AIBackend.ParseBatchTimeoutSeconds = timeoutSeconds
+	})
 	if len(workers) > 0 {
-		config.AppConfig.AIBackend.ParseBatchWorkers = workers[0]
+		config.SetForTest(func(c *config.Config) { c.AIBackend.ParseBatchWorkers = workers[0] })
 	}
 }
 

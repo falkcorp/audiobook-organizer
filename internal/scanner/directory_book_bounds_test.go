@@ -199,9 +199,9 @@ func TestCreateBookFilesForBook_HardBoundAppliesToAnExplicitSegmentList(t *testi
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	names := unnumberedNames(maxDirectoryBookFiles + 1)
@@ -240,9 +240,9 @@ func TestCreateBookFilesForBook_HardBoundRefusesUnboundedExpansion(t *testing.T)
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	names := unnumberedNames(maxDirectoryBookFiles + 1)
@@ -370,9 +370,9 @@ func TestProcessBooksParallel_RescanOfAnOversizedFolderDoesNotGrowTheRowCount(t 
 	SetStore(store)
 	defer SetStore(nil)
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
 
 	dir := t.TempDir()
 	files := writeDirFixture(t, dir, unnumberedNames(maxDirectoryBookFiles+1), "Author Shelf", func(int) bool { return true })

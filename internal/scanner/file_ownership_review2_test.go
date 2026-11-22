@@ -33,11 +33,13 @@ func TestProcessBooksParallel_SkippedNominationIsWithdrawn(t *testing.T) {
 	t.Cleanup(func() { database.SetGlobalStore(origGlobal) })
 	useScannerStore(t, f.store)
 
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
-	config.AppConfig.AIBackend.LocalBaseURL = "http://192.0.2.1:1"
-	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
-	config.AppConfig.MinBookSizeBytes = 0
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.AIBackend.LLMMode = config.AIBackendModeLocal
+		c.AIBackend.LocalBaseURL = "http://192.0.2.1:1"
+		c.AIBackend.LocalLLMModel = "test-model"
+		c.MinBookSizeBytes = 0
+	})
 
 	owner, err := f.store.GetBookByID(f.parent.ID)
 	require.NoError(t, err)
@@ -71,8 +73,10 @@ func TestProcessBooksParallel_SkippedNominationIsWithdrawn(t *testing.T) {
 func TestProcessBooksParallel_DirectoryBookGainsNewFiles(t *testing.T) {
 	f := newOwnershipFixture(t)
 	useScannerStore(t, f.store)
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.MinBookSizeBytes = 0
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = false
+		c.MinBookSizeBytes = 0
+	})
 
 	books := []Book{{FilePath: f.dir, Format: ".mp3", Title: "Eldest", Author: "Christopher Paolini"}}
 	require.NoError(t, ProcessBooksParallel(t.Context(), books, 1, nil, logger.New("test")))
@@ -149,8 +153,10 @@ func TestHandleOwnershipSkip_FailedAppendIsCountedAndListed(t *testing.T) {
 func TestProcessBooksParallel_StagedArrivalKeepsProviderChapters(t *testing.T) {
 	f := newOwnershipFixture(t)
 	useScannerStore(t, f.store)
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.MinBookSizeBytes = 0
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = false
+		c.MinBookSizeBytes = 0
+	})
 
 	provider := []database.Chapter{
 		{ID: 1, StartSec: 0, EndSec: 900, Title: "Prologue"},

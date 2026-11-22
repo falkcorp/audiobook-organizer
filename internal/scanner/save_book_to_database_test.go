@@ -44,13 +44,13 @@ func TestSaveBookToDatabase_GlobalStoreCreateAndUpdate(t *testing.T) {
 		SetStore(nil)
 	})
 
-	prevConfig := config.AppConfig
+	prevConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = prevConfig
+		config.ReplaceForTest(prevConfig)
 	})
 
 	rootDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rootDir })
 
 	filePath := filepath.Join(rootDir, "book.m4b")
 	if err := os.WriteFile(filePath, []byte("test"), 0o644); err != nil {
@@ -109,13 +109,13 @@ func TestSaveBookToDatabase_BlocklistSkips(t *testing.T) {
 		SetStore(nil)
 	})
 
-	prevConfig := config.AppConfig
+	prevConfig := config.Snapshot()
 	t.Cleanup(func() {
-		config.AppConfig = prevConfig
+		config.ReplaceForTest(prevConfig)
 	})
 
 	rootDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rootDir })
 
 	filePath := filepath.Join(rootDir, "blocked.m4b")
 	if err := os.WriteFile(filePath, []byte("blocked"), 0o644); err != nil {
@@ -177,9 +177,10 @@ func TestSaveBookToDatabase_DedupOnImportHook(t *testing.T) {
 		SetStore(nil)
 	})
 
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
-	config.AppConfig.RootDir = t.TempDir()
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 
 	// Install scan hooks and make sure we uninstall on test exit so other
 	// tests in the same package aren't affected.
@@ -187,7 +188,7 @@ func TestSaveBookToDatabase_DedupOnImportHook(t *testing.T) {
 	SetScanHooks(th)
 	t.Cleanup(func() { SetScanHooks(nil) })
 
-	filePath := filepath.Join(config.AppConfig.RootDir, "dedup-hook.m4b")
+	filePath := filepath.Join(config.Get().RootDir, "dedup-hook.m4b")
 	if err := os.WriteFile(filePath, []byte("hook test"), 0o644); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
