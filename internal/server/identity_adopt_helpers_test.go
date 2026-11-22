@@ -86,6 +86,10 @@ func (a *adoptCompat) PrincipalFor(_ context.Context, u *coreauth.User, _ []rbac
 }
 func (*adoptCompat) CheckCredentialFor(*coreauth.Principal, rbac.Requirement) error { return nil }
 
+// adoptAdmin stands for core's auth.Admin where a test needs the handle present
+// and never calls it: every method is the embedded nil interface's.
+type adoptAdmin struct{ coreauth.Admin }
+
 // adoptIdentity builds an Identity over a bridge whose user lookup resolves
 // users, and compat.
 func adoptIdentity(t testing.TB, atoms []string, owner legacyauth.OwnerRequired, compat coreauth.Compat, users ...*database.User) *legacyauth.Identity {
@@ -105,6 +109,7 @@ func adoptIdentity(t testing.TB, atoms []string, owner legacyauth.OwnerRequired,
 	return &legacyauth.Identity{
 		Bridge: b,
 		Compat: compat,
+		Admin:  adoptAdmin{},
 		Client: func(*http.Request) coreauth.ClientInfo { return coreauth.ClientInfo{UserAgent: "batarang"} },
 		// Refresh stands for core's Service.Refresh: the principal unchanged.
 		Refresh: func(_ context.Context, p *coreauth.Principal) (*coreauth.Principal, error) { return p, nil },

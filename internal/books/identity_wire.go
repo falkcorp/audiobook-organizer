@@ -233,7 +233,7 @@ func atomsForStage13() httpapi.AtomResolver { return newAtomResolver().resolve }
 
 // errIdentityDeps is Register's refusal when the predicate is on and core did not
 // hand the handles the server runs under.
-var errIdentityDeps = errors.New("books: the identity flip is on but core handed no identity (Deps.Auth, AuthCompat and AuthRefresh are all required): " +
+var errIdentityDeps = errors.New("books: the identity flip is on but core handed no identity (Deps.Auth, AuthAdmin, AuthCompat and AuthRefresh are all required): " +
 	"the boot was not given Options.IdentityBoot, so serving would leave HEAD's tables, which M3 drained, judging every request")
 
 // errIdentityDepsWithoutFlip is the opposite refusal: core handed identity
@@ -267,7 +267,7 @@ func legacyUser(ids coreauth.Identities) legacyauth.UserLookup {
 // true exactly when an owner e-mail is configured (ownerSet). access is the ABS
 // surface's Cloudflare Access resolver (identityWiring.accessResolver).
 func newLegacyIdentity(d module.Deps, ownerRequired func() bool, access legacyauth.AccessResolver) (*legacyauth.Identity, error) {
-	if d.Auth == nil || d.AuthCompat == nil || d.AuthRefresh == nil {
+	if d.Auth == nil || d.AuthAdmin == nil || d.AuthCompat == nil || d.AuthRefresh == nil {
 		return nil, errIdentityDeps
 	}
 	b, err := legacyauth.New(newAtomResolver(), legacyUser(d.Auth), ownerRequired)

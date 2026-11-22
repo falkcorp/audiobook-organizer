@@ -81,11 +81,12 @@ func TestIdentity_ValidateRefusesAPartialWiring(t *testing.T) {
 	require.NoError(t, full.Validate())
 	for name, id := range map[string]*legacyauth.Identity{
 		"nil":        nil,
-		"no bridge":  {Compat: full.Compat, Client: full.Client, Refresh: full.Refresh, Access: full.Access},
-		"no compat":  {Bridge: full.Bridge, Client: full.Client, Refresh: full.Refresh, Access: full.Access},
-		"no client":  {Bridge: full.Bridge, Compat: full.Compat, Refresh: full.Refresh, Access: full.Access},
-		"no refresh": {Bridge: full.Bridge, Compat: full.Compat, Client: full.Client, Access: full.Access},
-		"no access":  {Bridge: full.Bridge, Compat: full.Compat, Client: full.Client, Refresh: full.Refresh},
+		"no bridge":  {Compat: full.Compat, Client: full.Client, Refresh: full.Refresh, Access: full.Access, Admin: full.Admin},
+		"no compat":  {Bridge: full.Bridge, Client: full.Client, Refresh: full.Refresh, Access: full.Access, Admin: full.Admin},
+		"no client":  {Bridge: full.Bridge, Compat: full.Compat, Refresh: full.Refresh, Access: full.Access, Admin: full.Admin},
+		"no refresh": {Bridge: full.Bridge, Compat: full.Compat, Client: full.Client, Access: full.Access, Admin: full.Admin},
+		"no access":  {Bridge: full.Bridge, Compat: full.Compat, Client: full.Client, Refresh: full.Refresh, Admin: full.Admin},
+		"no admin":   {Bridge: full.Bridge, Compat: full.Compat, Client: full.Client, Refresh: full.Refresh, Access: full.Access},
 	} {
 		require.Error(t, id.Validate(), name)
 	}
