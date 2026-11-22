@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"sync"
@@ -93,9 +92,7 @@ type Config struct {
 type Migration struct {
 	cfg    Config
 	log    *slog.Logger
-	atoms  map[string][]rbac.Permission
-	names  []string          // atom names in table order
-	every  []rbac.Permission // the union of every row's scopes, table order
+	scoper *KeyScoper // the key-scope rule, shared with books' key route (keyscope.go)
 	seeds  map[string]SeedRole
 	legacy func() storage.Reader
 
@@ -140,24 +137,13 @@ func New(cfg Config) (*Migration, error) {
 	case len(cfg.Ambient) == 0:
 		return nil, errors.New("m3: Config.Ambient is the ambient scope list")
 	}
-	m := &Migration{cfg: cfg, log: cfg.Logger, atoms: map[string][]rbac.Permission{}, seeds: map[string]SeedRole{}, legacy: cfg.Legacy}
+	scoper, err := NewKeyScoper(cfg.Atoms, cfg.Catalog, cfg.Ambient)
+	if err != nil {
+		return nil, err
+	}
+	m := &Migration{cfg: cfg, log: cfg.Logger, scoper: scoper, seeds: map[string]SeedRole{}, legacy: cfg.Legacy}
 	if m.log == nil {
 		m.log = slog.New(slog.DiscardHandler)
-	}
-	for _, a := range cfg.Atoms {
-		if a.Name == "" || len(a.Scopes) == 0 {
-			return nil, fmt.Errorf("m3: atom %q has no scopes", a.Name)
-		}
-		if _, dup := m.atoms[a.Name]; dup {
-			return nil, fmt.Errorf("m3: atom %q is listed twice", a.Name)
-		}
-		m.atoms[a.Name] = slices.Clone(a.Scopes)
-		m.names = append(m.names, a.Name)
-		for _, s := range a.Scopes {
-			if !slices.Contains(m.every, s) {
-				m.every = append(m.every, s)
-			}
-		}
 	}
 	for _, s := range cfg.SeedRoles {
 		if s.ID == "" {

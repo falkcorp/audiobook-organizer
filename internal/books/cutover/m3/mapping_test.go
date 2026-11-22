@@ -366,7 +366,7 @@ func TestKeyScopes(t *testing.T) {
 		{"every atom unknown: ambient only, never an empty list", []string{"batcave.access"}, viewer, with(), []string{"batcave.access"}},
 		{"a repeated atom counts once", []string{"library.view", "library.view"}, viewer, with("books:view", "core:tasks.view"), nil},
 	} {
-		got, unknown, err := m.keyScopes(c.atoms, c.owner)
+		got, unknown, err := m.scoper.Scopes(c.atoms, c.owner)
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue

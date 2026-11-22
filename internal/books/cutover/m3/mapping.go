@@ -86,27 +86,6 @@ func nativeRoleName(id string) rbac.RoleName {
 	return name
 }
 
-// scopesOf is the union of the native scopes of atoms, deduplicated in table
-// order (the implication closure is the catalog's, at check time), and the
-// atoms the table does not know, in the order given. A repeated atom counts once.
-func (m *Migration) scopesOf(atoms []string) (scopes []rbac.Permission, unknown []string) {
-	for _, name := range m.names {
-		if slices.Contains(atoms, name) {
-			for _, s := range m.atoms[name] {
-				if !slices.Contains(scopes, s) {
-					scopes = append(scopes, s)
-				}
-			}
-		}
-	}
-	for _, a := range atoms {
-		if _, ok := m.atoms[a]; !ok && !slices.Contains(unknown, a) {
-			unknown = append(unknown, a)
-		}
-	}
-	return scopes, unknown
-}
-
 // verdictOf decides a decoded role row. taken reports whether the native name
 // is already in use (an earlier role of this run, or a role a committed chunk
 // imported); a role whose name is taken is quarantined, never merged into the
@@ -122,7 +101,7 @@ func (m *Migration) verdictOf(h *headRole, taken func(rbac.RoleName) bool) roleV
 	if taken != nil && taken(name) {
 		return roleVerdict{kind: verdictQuarantine, name: name, reason: "the role's native name is already taken"}
 	}
-	scopes, unknown := m.scopesOf(h.Permissions)
+	scopes, unknown := m.scoper.scopesOf(h.Permissions)
 	if len(h.Permissions) > 0 && len(scopes) == 0 {
 		return roleVerdict{kind: verdictQuarantine, name: name, unknown: unknown, reason: "every atom of the role is unknown"}
 	}
@@ -224,71 +203,6 @@ func keyStatus(raw string, revokedAt *time.Time) (status auth.KeyStatus, odd str
 		return auth.KeyActive, ""
 	}
 	return auth.KeyDisabled, clip(norm, maxStatusLen)
-}
-
-// keyScopes is an imported key's native scopes (05-rbac §6.3): the effective
-// set at the cutover, i.e. the native scopes of its atoms (an empty list, HEAD's
-// "all the owner's role permissions", is the owner's set) intersected with the
-// owner's native role set as a role-only checker compiles it, plus the ambient
-// scopes unless that set is Confined. Only when the owner's roles hold
-// core:admin does a key holding every atom, or with an empty list, get
-// core:admin and every row's scopes. An atom outside the table grants nothing
-// and is returned.
-func (m *Migration) keyScopes(atoms []string, owner []rbac.Permission) (scopes []rbac.Permission, unknown []string, err error) {
-	known, unknown := m.scopesOf(atoms)
-	admin := rbac.GrantsAdmin(owner)
-	every := len(atoms) > 0
-	for _, n := range m.names {
-		if !slices.Contains(atoms, n) {
-			every = false
-			break
-		}
-	}
-	var base []rbac.Permission
-	switch {
-	case admin && (len(atoms) == 0 || every):
-		base = append([]rbac.Permission{rbac.CoreAdmin}, m.every...)
-	case len(atoms) == 0:
-		base = m.expand(owner)
-	default:
-		base = known
-	}
-	if !admin {
-		held := m.closure(m.expand(owner))
-		base = slices.DeleteFunc(slices.Clone(base), func(s rbac.Permission) bool { return !slices.Contains(held, s) })
-	}
-	out, err := rbac.WithAmbient(m.cfg.Catalog, base, m.cfg.Ambient...)
-	return out, unknown, err
-}
-
-// expand is the concrete scopes the catalog holds under perms (patterns allowed).
-func (m *Migration) expand(perms []rbac.Permission) []rbac.Permission {
-	var out []rbac.Permission
-	for _, p := range perms {
-		for _, c := range m.cfg.Catalog.Expand(p) {
-			if !slices.Contains(out, c) {
-				out = append(out, c)
-			}
-		}
-	}
-	return out
-}
-
-// closure is scopes plus every scope they imply, transitively.
-func (m *Migration) closure(scopes []rbac.Permission) []rbac.Permission {
-	out := slices.Clone(scopes)
-	for i := 0; i < len(out); i++ {
-		spec, ok := m.cfg.Catalog.Lookup(out[i])
-		if !ok {
-			continue
-		}
-		for _, imp := range spec.Implies {
-			if !slices.Contains(out, imp) {
-				out = append(out, imp)
-			}
-		}
-	}
-	return out
 }
 
 // errNoTokenHash is a key whose stored hash is not 64 hex digits.
