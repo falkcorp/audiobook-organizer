@@ -18,7 +18,6 @@ import (
 	"context"
 	"log/slog"
 	"path/filepath"
-	"sync/atomic"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
@@ -30,27 +29,6 @@ type IndexService struct {
 	cfg  *config.Config
 	idx  *BleveIndex
 	path string
-
-	// extendStart is the func the module's Deps.ExtendStart gave this service
-	// (SetStartExtender); nil means no extension is requested. Atomic: it is
-	// set from books' Register and read from the start hook's goroutine.
-	extendStart atomic.Pointer[func(step string)]
-}
-
-// SetStartExtender injects the function Start calls, right before it opens
-// the index, to ask the service manager for more start time: books passes the
-// kernel's module.Deps.ExtendStart (05-health §5H.3.4). The package imports no
-// module, so a layer-2 package takes a plain func (MOD4-18). A nil f removes
-// it. Call it before Start; it is safe to call while Start runs.
-func (b *IndexService) SetStartExtender(f func(step string)) {
-	if b == nil {
-		return
-	}
-	if f == nil {
-		b.extendStart.Store(nil)
-		return
-	}
-	b.extendStart.Store(&f)
 }
 
 // Start opens the on-disk Bleve index. Idempotent — if already open,
@@ -69,13 +47,11 @@ func (b *IndexService) Start(_ context.Context) error {
 		return nil
 	}
 	indexPath := filepath.Join(filepath.Dir(b.cfg.DatabasePath), "library.bleve")
-	// Opening (or rebuilding) the index is a long startup step: ask for start
-	// time before it, never on a timer, so a hung open is still killed once
-	// its budget runs out. The injected func is a no-op without NOTIFY_SOCKET
-	// and never fails startup.
-	if f := b.extendStart.Load(); f != nil {
-		(*f)("search index open")
-	}
+	// Opening (or rebuilding) the index is a long startup step. It asks for
+	// start time through the container, which calls the step extender right
+	// before every service's Start (serviceregistry.Container.WithStepExtender,
+	// 05-health §5H.3.4), never on a timer, so a hung open is still killed
+	// once its budget runs out.
 	idx, err := Open(indexPath)
 	if err != nil {
 		slog.Warn("Failed to open search index", "err", err)

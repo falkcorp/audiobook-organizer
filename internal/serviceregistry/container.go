@@ -33,6 +33,28 @@ type Container struct {
 	order         []string
 	phase         containerPhase
 	activeBuilder string // name of service whose Build is currently running
+	// extend asks the service manager for start time (05-health §5H.3.4)
+	// before each service's Build, PostInit and Start runs; nil = no request.
+	// The three run on the booting goroutine, one service at a time, as the
+	// request requires.
+	extend func(step string)
+}
+
+// WithStepExtender sets the function the container calls, with
+// "service <phase> <name>", right before each service's Build, PostInit and
+// Start: a service is a startup step, and the request follows the step, never
+// a clock. A service added to the container cannot forget to ask. Returns c so
+// it chains off NewContainerFrom.
+func (c *Container) WithStepExtender(f func(step string)) *Container {
+	c.extend = f
+	return c
+}
+
+// extendFor asks for start time for phase's work on service name.
+func (c *Container) extendFor(phase, name string) {
+	if c.extend != nil {
+		c.extend("service " + phase + " " + name)
+	}
 }
 
 // NewContainerFrom creates a Container whose factory list is exactly defs
@@ -104,6 +126,7 @@ func (c *Container) Build(ctx context.Context) error {
 			continue
 		}
 		def := c.defs[name]
+		c.extendFor("build", name)
 		c.activeBuilder = name
 		instance, err := def.Build(c)
 		c.activeBuilder = ""
@@ -128,6 +151,7 @@ func (c *Container) PostInit(ctx context.Context) error {
 	for _, name := range c.order {
 		instance := c.built[name]
 		if pi, ok := instance.(PostIniter); ok {
+			c.extendFor("postinit", name)
 			if err := pi.PostInit(ctx, c); err != nil {
 				return fmt.Errorf("serviceregistry: postinit %q: %w", name, err)
 			}
@@ -154,6 +178,7 @@ func (c *Container) Start(ctx context.Context) error {
 		if !ok {
 			continue
 		}
+		c.extendFor("start", name)
 		if err := s.Start(ctx); err != nil {
 			// Stop already-started services in reverse.
 			for _, s := range slices.Backward(started) {

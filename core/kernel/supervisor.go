@@ -190,6 +190,11 @@ func (k *Kernel) Run(ctx context.Context) error {
 		return errRunTwice
 	}
 	k.signal(ctx, "status", k.notifier.Status("starting"))
+	// Run's own pre-READY steps each ask the service manager for start time
+	// before they run (05-health §5H.3.4), on this goroutine: the checkpoint
+	// mark, the workers, the core services and the listener. The hooks'
+	// steps ask in startHooks, the reset hook per batch.
+	k.sendExtend(coreOwner, kernelStepPrefix+"run mark checkpoint served")
 	// Before step (1): every open checkpoint record of the live store is
 	// marked served (ready_at, 05-storage §5S.3.12) before any module code
 	// that can write runs, the first being step (2)'s hooks (Register writes
@@ -225,6 +230,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	// (5) The task executor and (6) the scheduler, only when the start rule
 	// held at P7 (tasks.go); then step (7)'s first member, the audit writer,
 	// before any listener can queue a record for it (F2-16).
+	k.sendExtend(coreOwner, kernelStepPrefix+"run start core services")
 	coreErr := k.startCoreServices(ctx)
 	// (7) Listeners: core.http read from the layered config, the perimeter
 	// values handed to the router (and kept in step with the config from
@@ -253,6 +259,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 		err = berr
 	default:
 		k.followPerimeter(cc.http)
+		k.sendExtend(coreOwner, kernelStepPrefix+"run open listener")
 		if srv, err = k.listen(httpapi.ListenOptions{Addr: hs.Listen, TLSCertFile: hs.TLS.CertFile, TLSKeyFile: hs.TLS.KeyFile},
 			k.handler, k.coreLog("http")); err != nil {
 			err = fmt.Errorf("kernel: listener: %w", err)
@@ -468,6 +475,13 @@ func (k *Kernel) startHooks(ctx context.Context) ([]moduleHook, *lateStart, erro
 	var started []moduleHook
 	for _, h := range k.hooks {
 		if h.hook.Start != nil {
+			// Every hook's Start asks the service manager for start time
+			// before it runs: the unit's own start budget (300 s) must not
+			// count the hooks before it. This is the service-manager request
+			// alone: the hook's kernel window stays core.lifecycle.start_timeout
+			// until the hook extends it through Deps.ExtendStart, so a hook
+			// that blocks without asking is still abandoned at its window.
+			k.sendExtend(h.module, kernelStepPrefix+"hook start "+h.hook.Name)
 			began := time.Now()
 			wctx, cancel := context.WithCancelCause(ctx)
 			end := k.startWin.begin(h.module, startTimeout, func() { cancel(context.DeadlineExceeded) })

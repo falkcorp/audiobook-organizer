@@ -410,7 +410,7 @@ func TestLayering(t *testing.T) {
 // mapping; core/internal/... is unreachable from ABO (Go's internal rule).
 var coreABOLayer = map[string]int{
 	// R4 L0-L5
-	"entity": -1, "lifecycle": -1, "version": -1, "buildid": -1, "log": -1, "metrics": -1,
+	"entity": -1, "lifecycle": -1, "version": -1, "buildid": -1, "startprogress": -1, "log": -1, "metrics": -1,
 	"storage": -1, "secrets": -1, "config": -1,
 	"events": -1, "outbox": -1, "tasks": -1, "library": -1, "auth": -1, "rbac": -1, "audit": -1,
 	"integrations": -1, "backup": -1, "updater": -1, "health": -1, "acquire": -1,

@@ -24,6 +24,7 @@ import (
 	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/mediacore/buildid"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	ulid "github.com/oklog/ulid/v2"
@@ -260,7 +261,7 @@ func OpenStandalone(path string, o StandaloneOptions) (_ *PebbleStore, err error
 	}
 	guarded := claimGuardedClose(db, o.ExpectClaimViolations)
 	closeDB := func() error { return errors.Join(guarded(), lock.release()) }
-	store, err := newCoreStore(lr, closeDB, warmNow)
+	store, err := newCoreStore(lr, closeDB, warmNow, nil)
 	if err != nil {
 		return nil, errors.Join(err, guarded())
 	}
@@ -390,8 +391,14 @@ func holdSwapLock(stateDir string) (*swapHold, error) {
 // It takes the LegacyRange rather than module.StorageHandles because
 // internal/books/store may not import mediacore/module (internal/arch:
 // moduleAppImporters); books passes the handles' Legacy member.
-func NewBooksStore(r storage.LegacyRange) (*PebbleStore, error) {
-	return newCoreStore(r, nil, warmDeferred)
+//
+// extend, when set, is the start-timeout extension (05-health §5H.3.4): the
+// construction's one loop that scales with the library, the journal scan an
+// absent clock key forces, calls it every journalScanLogEvery rows, on the
+// caller's goroutine. It is not kept: nothing outside the constructor calls
+// it. nil asks for none.
+func NewBooksStore(r storage.LegacyRange, extend func(step string)) (*PebbleStore, error) {
+	return newCoreStore(r, nil, warmDeferred, extend)
 }
 
 // AttachStorageAdmin hands the store core's admin surface (checkpoint,
@@ -409,7 +416,7 @@ func (p *PebbleStore) AttachStorageAdmin(a *storage.Admin) {
 // books' own store but without the memdb warmup (reads fall back to Pebble),
 // and never closed (it owns nothing).
 func newStepStore(r storage.LegacyRange) (*PebbleStore, error) {
-	return newCoreStore(r, nil, warmNever)
+	return newCoreStore(r, nil, warmNever, nil)
 }
 
 // warmMode is when a core store starts its memdb warmup.
@@ -432,7 +439,7 @@ const (
 // the identification index state loaded. warm says when the async memdb
 // warmup, which only reads, starts. closeStore closes the core DB the caller
 // opened (nil: the kernel owns it).
-func newCoreStore(r storage.LegacyRange, closeStore func() error, warm warmMode) (*PebbleStore, error) {
+func newCoreStore(r storage.LegacyRange, closeStore func() error, warm warmMode, extend func(step string)) (*PebbleStore, error) {
 	closingCtx, closingCancel := context.WithCancel(context.Background())
 	store := &PebbleStore{
 		db:            newLegacyGatedDB(r, closeStore),
@@ -445,7 +452,10 @@ func newCoreStore(r storage.LegacyRange, closeStore func() error, warm warmMode)
 		return nil, err
 	}
 	store.seedWorksGeneration()
-	if err := store.seedJournalClock(); err != nil {
+	store.bootExtend = extend
+	err := store.seedJournalClock()
+	store.bootExtend = nil
+	if err != nil {
 		return fail(err)
 	}
 	// Load the undecodable-marker set before any write can stage (or skip) a
@@ -579,10 +589,17 @@ func (p *PebbleStore) runOpenRepairs() error {
 // logged, not returned: opv2: is still the source of truth the registry runs
 // from, and the next boot retries. It then starts the memdb warmup of a
 // store NewBooksStore built (a no-op on any other store, or after Close).
+//
+// Under startprogress.Run each repair raises a progress unit before it
+// starts, and the reconcile one per page of ops rows it reads and per batch it
+// writes, so the boot asks for start time per unit of this work (05-health
+// §5H.3.4); outside a boot (the standalone opener) the signals go nowhere.
 func (p *PebbleStore) RunBootRepairs(ctx context.Context) error {
+	startprogress.Report(ctx)
 	if err := p.runOpenRepairs(); err != nil {
 		return err
 	}
+	startprogress.Report(ctx)
 	if _, err := p.ReconcileOpsV3WithV2(ctx); err != nil {
 		opsV3Log.Error("opv3 reconcile failed; opv3 records may be stale until each run's next write, and the next boot retries: %v", err)
 	}

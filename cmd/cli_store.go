@@ -93,7 +93,7 @@ func openOfflineStore(ctx context.Context, readOnly bool) (cliStore, func(), err
 	if err != nil {
 		return nil, nil, errors.Join(err, o.Close())
 	}
-	store, err := database.NewBooksStore(h.Legacy)
+	store, err := database.NewBooksStore(h.Legacy, nil)
 	if err != nil {
 		return nil, nil, errors.Join(fmt.Errorf("open the books store: %w", err), o.Close())
 	}

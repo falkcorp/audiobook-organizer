@@ -41,6 +41,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -331,7 +332,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 		ApplyStoreTunables(idx, interval)
 	}
-	store, err := database.NewBooksStore(legacy)
+	store, err := database.NewBooksStore(legacy, r.Deps().ExtendStart)
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
 	}
@@ -372,6 +373,15 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if steps == nil {
 		steps = newSteps()
 	}
+	// The start-timeout extension (05-health §5H.3.4): Deps.ExtendStart
+	// reaches the service manager and, while a hook of this module's Start
+	// is running, that hook's own start window. Each startup step asks for
+	// time through it on the goroutine that runs the step, never from a
+	// timer: the startup runner before every row of startup.Table, the
+	// service container before every service's Build, PostInit and Start,
+	// NewServer before the HNSW import, the repairs hook before each repair.
+	extendStart := r.Deps().ExtendStart
+	steps.SetExtender(extendStart)
 	if err := bootSettings(store, steps, m.stateDir, m.dbPath); err != nil {
 		return err
 	}
@@ -390,16 +400,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// dispatched, started, finished) do not each become a system Activity row.
 	// The op's own rows come from the registry's activity mirror. Passing nil
 	// would capture slog.Default(), the process logger the Activity tap feeds.
-	srv := server.NewServer(store, server.WithLogger(r.Deps().Log))
+	srv := server.NewServer(store, server.WithLogger(r.Deps().Log), server.WithStartExtender(extendStart))
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
-	// The search index opens in the start hook, a long step: it asks for
-	// start time through the kernel's Deps.ExtendStart, which extends the
-	// service manager's deadline and this hook's own start window (05-health
-	// §5H.3.4).
-	extendStart := r.Deps().ExtendStart
-	srv.SetStartExtender(extendStart)
 	// The drift check: the reviewed manifest must describe this engine
 	// exactly, and its routes must lie inside the prefixes Manifest declared
 	// (the router refuses a route outside them at P7).
@@ -426,7 +430,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		// Stop for a hook whose Start failed.
 		Start: func(ctx context.Context) error {
 			m.repairsBegan.Store(true)
-			return m.startRepairs(ctx, steps, store)
+			return m.startRepairs(ctx, steps, store, extendStart)
 		},
 		Stop: func(context.Context) error { return m.closeStore() },
 	})
@@ -461,6 +465,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 			// the op gates and the service container included, is not cut
 			// off sooner than HEAD's was. Later steps extend again.
 			extendStart("books server start")
+			// The runner's extender serves the pre-listener steps only:
+			// afterListen runs the later ones after this hook returned and
+			// the start window closed, where there is nothing to extend.
+			defer steps.SetExtender(nil)
 			return srv.StartHook(ctx, cfg)
 		},
 		// HEAD's stop after the listener drained, within the budget left.
@@ -492,13 +500,16 @@ func asBooks(mod module.Module) (*booksModule, error) {
 // begun: the config.yaml gap-fill strip, then the boot repairs, whose
 // failure closes the store (the kernel calls no Stop for a hook whose Start
 // failed).
-func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, store *database.PebbleStore) error {
+func (m *booksModule) startRepairs(ctx context.Context, steps *startup.Steps, store *database.PebbleStore, extend func(step string)) error {
 	// A failed or refused strip degrades /health, it does not stop the boot: the
 	// file is untouched or already stripped, and the next boot runs it again.
 	if err := steps.Run("gapFillStrip", func() error { return m.stripGapFill(ctx) }); err != nil {
 		return errors.Join(err, m.closeStore())
 	}
-	if err := store.RunBootRepairs(ctx); err != nil {
+	// The repairs scan the ops tables page by page on parallel workers: they
+	// raise a progress unit per page and batch, and the request for start
+	// time is made here, on the hook's goroutine (startprogress.Run).
+	if err := startprogress.Run(ctx, "books boot repairs", extend, store.RunBootRepairs); err != nil {
 		return errors.Join(fmt.Errorf("books: boot repairs: %w", err), m.closeStore())
 	}
 	return nil
