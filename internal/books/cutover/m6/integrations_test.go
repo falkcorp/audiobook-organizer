@@ -664,16 +664,24 @@ func TestIntegrationsMigration_TwoRenamedOnUnwrittenExactIDNamesTheRealHolder(t 
 	undecodable := map[string]any{"id": "batcave-db", "name": "Batcave DB (exact)", "priority": "high"}
 	first := map[string]any{"id": "batcave_db", "name": "Batcave DB (first)", "enabled": true, "priority": 4}
 	second := map[string]any{"id": "BATCAVE-DB", "name": "Batcave DB (second)", "enabled": true, "priority": 3}
+	var exactAt, firstAt int
 	r, s := runFixture(t, func(r *rig) {
 		tree := blobTree()
+		base := len(tree["metadata_sources"].([]any))
+		exactAt, firstAt = base, base+1
 		tree["metadata_sources"] = append(tree["metadata_sources"].([]any), undecodable, first, second)
 		withRows(map[string][]byte{m6.KeyBlob: blobRow(r.t, tree)})(r)
 	})
 	if row := instances(t, s)["metadata/batcave-db"]; row["name"] != "Batcave DB (first)" {
 		t.Fatalf("metadata/batcave-db is %v, want the first renamed entry", row["name"])
 	}
-	if !reportHas(r, "instance", "metadata/batcave-db", "id already taken by metadata_sources.") {
-		t.Error("the conflict does not name the entry that holds the ID")
+	// The holder is named by its position, not just its list: the exact entry sits
+	// in the same list and a mutant naming it instead would still match a prefix.
+	if !reportHas(r, "instance", "metadata/batcave-db", fmt.Sprintf("id already taken by metadata_sources.%d", firstAt)) {
+		t.Errorf("the conflict does not name metadata_sources.%d, the entry that holds the ID", firstAt)
+	}
+	if reportHas(r, "instance", "metadata/batcave-db", fmt.Sprintf("id already taken by metadata_sources.%d", exactAt)) {
+		t.Errorf("the conflict names metadata_sources.%d, the exact entry that holds nothing", exactAt)
 	}
 	if reportHas(r, "instance", "metadata/batcave-db", "whose HEAD id it is") {
 		t.Error("the conflict names the exact entry, which holds nothing, as the holder")
