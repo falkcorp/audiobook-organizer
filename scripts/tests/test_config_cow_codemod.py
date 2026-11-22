@@ -202,6 +202,29 @@ func TestRobin(t *testing.T) {
 }
 """
 
+HOIST_TEST = """\
+package gotham
+
+import (
+	"strconv"
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+)
+
+func mint(s string) string { return s + "/gotham" }
+
+func TestBatgirl(t *testing.T) {
+	cowV1 := "already spelled"
+	config.AppConfig.RootDir = t.TempDir()
+	config.AppConfig.PlaylistDir = mint(config.AppConfig.RootDir)
+	config.AppConfig.ITunes.PathMappings[len(cowV1)].To = "/tmp/arkham"
+	config.AppConfig.DatabaseType += strconv.Itoa(2)
+	if config.AppConfig.DatabasePath = mint("x"); true {
+	}
+}
+"""
+
 IN_PACKAGE = """\
 package config
 
@@ -340,6 +363,39 @@ class EndToEndTest(unittest.TestCase):
         out = (self.dir / "loop_test.go").read_text()
         self.assertIn(
             "config.SetForTest(func(cfg *config.Config) { cfg.EnableAIParsing = c.on })", out
+        )
+
+    def test_a_right_hand_side_that_calls_is_hoisted_out_of_the_lock(self):
+        (self.dir / "hoist_test.go").write_text(HOIST_TEST)
+        sites = [s for s in self.sites() if s.file.endswith("hoist_test.go")]
+        manual = sorted((s.line, s.detail) for s in sites if not s.auto)
+        self.assertEqual([line for line, _ in manual], [16, 18])
+        self.assertIn("call on the left-hand side", manual[0][1])
+        self.assertIn("cannot be split", manual[1][1])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(
+                cc.main(["--write", "--test-writes", str(self.dir / "hoist_test.go")]), 0
+            )
+        out = (self.dir / "hoist_test.go").read_text()
+        # Two hoists in one block get distinct temporaries, and cowV1 is
+        # skipped because the file already spells it.
+        self.assertIn(
+            "\tcowV2 := t.TempDir()\n\tconfig.SetForTest(func(c *config.Config) { c.RootDir = cowV2 })",
+            out,
+        )
+        self.assertIn(
+            "\tcowV3 := mint(config.Get().RootDir)\n\tconfig.SetForTest(func(c *config.Config) { c.PlaylistDir = cowV3 })",
+            out,
+        )
+        self.assertIn("cowV4 := strconv.Itoa(2)", out)
+        self.assertIn("config.SetForTest(func(c *config.Config) { c.DatabaseType += cowV4 })", out)
+        gofmt = subprocess.run(
+            ["gofmt", "-l", str(self.dir)], capture_output=True, text=True, check=False
+        )
+        self.assertEqual(gofmt.stdout.strip(), "")
+        self.assertEqual(
+            [s for s in self.sites() if s.auto and s.file.endswith("hoist_test.go")], []
         )
 
     def test_in_package_bare_identifier(self):

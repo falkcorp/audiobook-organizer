@@ -132,10 +132,10 @@ func TestFindUntrackedFiles_SkipsAppDirs(t *testing.T) {
 				c.SupportedExtensions = []string{".m4b"}
 			})
 			if tc.appDirs {
-				config.SetForTest(func(c *config.Config) {
-					c.BackupDir = filepath.Join(root, "backups")
-					c.OpenLibraryDumpDir = filepath.Join(root, "openlibrary-dumps")
-				})
+				cowV1 := filepath.Join(root, "backups")
+				config.SetForTest(func(c *config.Config) { c.BackupDir = cowV1 })
+				cowV2 := filepath.Join(root, "openlibrary-dumps")
+				config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = cowV2 })
 			} else {
 				// Zero EVERY field appdirs.FromConfig reads, not just these two.
 				// backup.ResolveDir SYNTHESIZES "backups" when BackupDir is unset and

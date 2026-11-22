@@ -222,6 +222,7 @@ func analyzeFile(path string, testWrites bool) ([]Site, error) {
 	}
 
 	off := func(p token.Pos) int { return fset.Position(p).Offset }
+	hoister := newTempNamer(f)
 	text := func(n ast.Node) string { return string(src[off(n.Pos()):off(n.End())]) }
 
 	var sites []Site
@@ -294,7 +295,7 @@ func analyzeFile(path string, testWrites bool) ([]Site, error) {
 			s.Kind = kindWrite
 			s.Text = text(p)
 			if isTest && testWrites {
-				if k, edits, why := testWriteEdits(p, depth, match, off, src, setCall, replCall, param, getCall, snapCall); edits != nil {
+				if k, edits, why := testWriteEdits(p, stmtParent(stack, i), hoister, depth, match, off, src, setCall, replCall, param, getCall, snapCall); edits != nil {
 					s.Kind, s.Auto, s.Edits = k, true, edits
 				} else {
 					s.Detail = why
@@ -307,7 +308,7 @@ func analyzeFile(path string, testWrites bool) ([]Site, error) {
 		case *ast.IncDecStmt:
 			s.Kind, s.Detail, s.Text = kindWrite, "increment/decrement", text(p)
 			if isTest && testWrites {
-				if k, edits, why := testWriteEdits(p, depth, match, off, src, setCall, replCall, param, getCall, snapCall); edits != nil {
+				if k, edits, why := testWriteEdits(p, stmtParent(stack, i), hoister, depth, match, off, src, setCall, replCall, param, getCall, snapCall); edits != nil {
 					s.Kind, s.Auto, s.Edits, s.Detail = k, true, edits, ""
 				} else {
 					s.Detail = why
@@ -410,35 +411,210 @@ func mutatingCall(c *ast.CallExpr, top ast.Node) (string, string) {
 
 // testWriteEdits proposes the rewrite for a write statement in a test: the
 // whole statement moves inside one SetForTest closure, with every AppConfig
-// root in it (targets and right-hand side alike) replaced by the closure's c.
-// That is exact: the closure runs synchronously under the write lock on a copy
-// of the config the old statement read and wrote, so
+// root in it (targets and right-hand side alike) replaced by the closure's
+// parameter c. That is exact: the closure runs synchronously, under the write
+// lock, on a copy of the config the old statement read and wrote, so
 //
 //	config.AppConfig.A = config.AppConfig.B   ->  c.A = c.B
 //	config.AppConfig.N += 2                   ->  c.N += 2
 //	x, config.AppConfig.A = 1, 2              ->  x, c.A = 1, 2  (x is captured)
 //
-// A function literal in the statement may run after the closure returns, so
-// a root inside one is not c: it becomes Get() (or Snapshot() for a whole
+// A function literal in the statement may run after the closure returns, so a
+// root inside one is not c: it becomes Get() (or Snapshot() for a whole
 // value), the live read the old code made whenever the literal ran.
-// A plain `config.AppConfig = v` becomes ReplaceForTest(v).
-func testWriteEdits(stmt ast.Stmt, depth int, match rootMatcher, off func(token.Pos) int, src []byte, setCall, replCall, param, getCall, snapCall string) (string, []Edit, string) {
+//
+// A right-hand side that CALLS something is hoisted out of the closure:
+//
+//	config.AppConfig.RootDir = t.TempDir()  ->  cowV1 := t.TempDir()
+//	                                            config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
+//
+// because the closure runs under the config write lock, and a callee that
+// reaches Mutate, SetForTest or any lock-taking config getter would deadlock
+// there. The old statement evaluated its right-hand side unlocked; hoisting
+// keeps that. Roots in a hoisted right-hand side become live Get() reads. A
+// call on the left (config.AppConfig.M[key()] = v), or a call in a statement
+// that cannot be split in two (an if/for/switch header), is refused.
+//
+// A plain `config.AppConfig = v` becomes ReplaceForTest(v): v is an argument,
+// evaluated before ReplaceForTest takes the lock.
+func testWriteEdits(stmt ast.Stmt, parent ast.Node, hoister *tempNamer, depth int, match rootMatcher, off func(token.Pos) int, src []byte, setCall, replCall, param, getCall, snapCall string) (string, []Edit, string) {
 	if a, ok := stmt.(*ast.AssignStmt); ok && a.Tok == token.ASSIGN && len(a.Lhs) == 1 && depth == 0 && isRootOnly(a.Lhs[0], match) && !mentions(a.Rhs[0], match) {
 		rhs := string(src[off(a.Rhs[0].Pos()):off(a.Rhs[0].End())])
 		return kindTestRepl, []Edit{{Start: off(a.Pos()), End: off(a.End()), New: replCall + "(" + rhs + ")"}}, ""
 	}
-	name := closureParam(stmt, match)
-	body := replaceRoots(stmt, match, off, src, getCall, snapCall, name)
+	a, isAssign := stmt.(*ast.AssignStmt)
+	if isAssign {
+		for _, l := range a.Lhs {
+			if hasCall(l) {
+				return "", nil, "a call on the left-hand side; it would run under the config write lock"
+			}
+		}
+	}
+	if !isAssign || !rhsHasCall(a) {
+		name := closureParam(stmt, match, nil)
+		body := replaceRoots(stmt, match, off, src, getCall, snapCall, name)
+		return kindTestSet, []Edit{{Start: off(stmt.Pos()), End: off(stmt.End()),
+			New: fmt.Sprintf("%s(func(%s %s) { %s })", setCall, name, param, body)}}, ""
+	}
+	switch parent.(type) {
+	case *ast.BlockStmt, *ast.CaseClause, *ast.CommClause:
+	default:
+		return "", nil, "the right-hand side calls something and the statement cannot be split to hoist it out of the lock"
+	}
+	// Hoist: one fresh temporary per value the right-hand side yields.
+	n := len(a.Lhs)
+	if len(a.Rhs) == len(a.Lhs) {
+		n = len(a.Rhs)
+	}
+	if a.Tok != token.ASSIGN {
+		n = 1 // op-assignment: one target, one operand
+	}
+	temps := hoister.names(stmt.Pos(), n)
+	var rhs []string
+	for _, r := range a.Rhs {
+		rhs = append(rhs, replaceRootsLive(r, match, off, src, getCall, snapCall))
+	}
+	hoist := fmt.Sprintf("%s := %s", strings.Join(temps, ", "), strings.Join(rhs, ", "))
+	name := closureParam(stmt, match, temps)
+	var lhs []string
+	for _, l := range a.Lhs {
+		lhs = append(lhs, replaceRoots(l, match, off, src, getCall, snapCall, name))
+	}
+	assign := fmt.Sprintf("%s %s %s", strings.Join(lhs, ", "), a.Tok, strings.Join(temps, ", "))
+	indent := lineIndent(src, off(stmt.Pos()))
 	return kindTestSet, []Edit{{Start: off(stmt.Pos()), End: off(stmt.End()),
-		New: fmt.Sprintf("%s(func(%s %s) { %s })", setCall, name, param, body)}}, ""
+		New: fmt.Sprintf("%s\n%s%s(func(%s %s) { %s })", hoist, indent, setCall, name, param, assign)}}, ""
+}
+
+// stmtParent is the node enclosing stack[i] (the statement), or nil.
+func stmtParent(stack []ast.Node, i int) ast.Node {
+	if i >= 1 {
+		return stack[i-1]
+	}
+	return nil
+}
+
+// hasCall reports whether e calls anything outside a function literal (a
+// literal's body does not run where it is written). A conversion such as
+// int64(x) is syntactically a call too; hoisting one is harmless.
+func hasCall(e ast.Node) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.CallExpr:
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+func rhsHasCall(a *ast.AssignStmt) bool {
+	for _, r := range a.Rhs {
+		if hasCall(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// tempNamer hands out hoisting temporaries for one file: names spelled
+// nowhere in the file and never handed out twice, so two hoisted statements in
+// one block cannot redeclare each other's temporary. A statement visited once
+// per root it contains gets the same names each time, so its sites propose
+// identical (de-duplicated) edits.
+type tempNamer struct {
+	used  map[string]bool
+	byPos map[token.Pos][]string
+	next  int
+}
+
+func newTempNamer(f *ast.File) *tempNamer {
+	t := &tempNamer{used: map[string]bool{}, byPos: map[token.Pos][]string{}}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			t.used[id.Name] = true
+		}
+		return true
+	})
+	return t
+}
+
+func (t *tempNamer) names(at token.Pos, n int) []string {
+	if got, ok := t.byPos[at]; ok {
+		return got
+	}
+	var out []string
+	for len(out) < n {
+		t.next++
+		if name := fmt.Sprintf("cowV%d", t.next); !t.used[name] {
+			t.used[name] = true
+			out = append(out, name)
+		}
+	}
+	t.byPos[at] = out
+	return out
+}
+
+// lineIndent is the leading whitespace of the line holding offset.
+func lineIndent(src []byte, offset int) string {
+	start := offset
+	for start > 0 && src[start-1] != '\n' {
+		start--
+	}
+	end := start
+	for end < len(src) && (src[end] == ' ' || src[end] == '\t') {
+		end++
+	}
+	return string(src[start:end])
+}
+
+// replaceRootsLive returns e's source with every root replaced by the live
+// read: getCall before a selector or index, snapCall for a whole value.
+func replaceRootsLive(e ast.Node, match rootMatcher, off func(token.Pos) int, src []byte, getCall, snapCall string) string {
+	base := off(e.Pos())
+	text := []byte(string(src[base:off(e.End())]))
+	type span struct{ start, end int }
+	var roots []span
+	var stack []ast.Node
+	ast.Inspect(e, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
+		}
+		if match(n, parent) {
+			roots = append(roots, span{off(n.Pos()) - base, off(n.End()) - base})
+			return false
+		}
+		stack = append(stack, n)
+		return true
+	})
+	for i := len(roots) - 1; i >= 0; i-- {
+		r := roots[i]
+		repl := snapCall
+		if r.end < len(text) && (text[r.end] == '.' || text[r.end] == '[') {
+			repl = getCall
+		}
+		text = append(text[:r.start], append([]byte(repl), text[r.end:]...)...)
+	}
+	return string(text)
 }
 
 // closureParam picks the closure's parameter name: c, unless the statement
 // already uses that identifier (a loop variable `c` in the right-hand side
 // would otherwise be shadowed by the closure parameter, which at best fails to
 // compile and at worst compiles and reads the config instead).
-func closureParam(stmt ast.Node, match rootMatcher) string {
+func closureParam(stmt ast.Node, match rootMatcher, reserved []string) string {
 	used := map[string]bool{}
+	for _, r := range reserved {
+		used[r] = true
+	}
 	ast.Inspect(stmt, func(n ast.Node) bool {
 		if n != nil && match(n, nil) {
 			return false

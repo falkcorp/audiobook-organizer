@@ -179,7 +179,8 @@ func TestSaveBookToDatabase_DedupOnImportHook(t *testing.T) {
 
 	prevConfig := config.Snapshot()
 	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
-	config.SetForTest(func(c *config.Config) { c.RootDir = t.TempDir() })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 
 	// Install scan hooks and make sure we uninstall on test exit so other
 	// tests in the same package aren't affected.

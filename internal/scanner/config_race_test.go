@@ -90,7 +90,8 @@ func TestConfigRace_SaveBookHonorsCancellation(t *testing.T) {
 	// Now simulate test-teardown: mutate the global config concurrently.
 	// If any worker goroutine is still alive reading config.AppConfig.RootDir,
 	// the race detector will fire here.
-	config.SetForTest(func(c *config.Config) { c.RootDir = t.TempDir() })
+	cowV1 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV1 })
 }
 
 // TestConfigRace_WorkersDontReadConfigAfterCancel verifies that after the
@@ -112,10 +113,9 @@ func TestConfigRace_WorkersDontReadConfigAfterCancel(t *testing.T) {
 			c.RootDir = oldRoot
 		})
 	})
-	config.SetForTest(func(c *config.Config) {
-		c.SupportedExtensions = []string{".m4b"}
-		c.RootDir = t.TempDir()
-	})
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
+	cowV2 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV2 })
 
 	tmp := t.TempDir()
 	books := make([]Book, 4)
@@ -141,5 +141,6 @@ func TestConfigRace_WorkersDontReadConfigAfterCancel(t *testing.T) {
 
 	// After ProcessBooksParallel returns all goroutines MUST be done.
 	// Mutate RootDir here — race detector fires if a worker is still alive.
-	config.SetForTest(func(c *config.Config) { c.RootDir = t.TempDir() })
+	cowV3 := t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = cowV3 })
 }
