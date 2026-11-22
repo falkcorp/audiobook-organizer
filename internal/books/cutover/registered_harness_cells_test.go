@@ -6,9 +6,11 @@
 package cutover_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
@@ -69,6 +71,81 @@ func TestRegisteredHarness_WiredResolverIsTheAtomTable(t *testing.T) {
 	if n := len(books.AtomTable()); n != 13 {
 		t.Fatalf("the atom table has %d rows, want 13 (05-rbac 6.1)", n)
 	}
+}
+
+// ---- the frozen API ----
+
+// TestRegisteredHarness_APISurface exercises each helper B10e and B10f call, so a
+// change to one fails here before it breaks a table.
+func TestRegisteredHarness_APISurface(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{})
+	if len(h.Principals) != 36 || len(h.Routes) < 500 {
+		t.Fatalf("%d principals and %d routes, want 36 and at least 500", len(h.Principals), len(h.Routes))
+	}
+	admin := h.Principal("session:admin")
+	res := h.MustDo(t, admin, http.MethodGet, "/api/v1/auth/me", nil)
+	if res.Status != http.StatusOK || res.Verdict() != 'A' || !res.Admitted() || res.Route == nil || res.Route.Pattern != "/api/v1/auth/me" {
+		t.Fatalf("admin GET /api/v1/auth/me: %d verdict %c route %v", res.Status, res.Verdict(), res.Route)
+	}
+	var ri httpapi.RouteInfo
+	for _, r := range h.Routes {
+		if r.Method == http.MethodGet && r.Pattern == "/api/v1/users" {
+			ri = r
+		}
+	}
+	res, err := h.DoRoute(h.Principal("session:viewer"), ri, nil)
+	if err != nil || res.Verdict() != 'D' || res.Admitted() || res.Code != "permission_denied" {
+		t.Fatalf("viewer DoRoute GET /api/v1/users: %d %q %v", res.Status, res.Code, err)
+	}
+	if _, err := h.Do(admin, http.MethodGet, "/api/me", nil); !errors.Is(err, ErrOwnAuth) {
+		t.Fatalf("an ABS route answered without ErrOwnAuth: %v", err)
+	}
+	// Raw serves a request as no principal: the ABS login route is reachable.
+	raw := h.Raw(httptest.NewRequest(http.MethodGet, "/ping", nil))
+	if raw.Route != nil || raw.Status == 0 {
+		t.Fatalf("Raw: %+v", raw)
+	}
+	if h.Wired == nil || h.Logs() == "" {
+		t.Fatal("Wired or Logs is empty")
+	}
+}
+
+// TestRegisteredHarness_OwnerAndAuthOffBoots: the two other boots of the API. The
+// owner is admitted through a signed Access assertion the real verifier checks
+// against the harness's key set; the auth-off principal is the one core binds when
+// core.auth.mode is disabled.
+func TestRegisteredHarness_OwnerAndAuthOffBoots(t *testing.T) {
+	t.Run("owner", func(t *testing.T) {
+		h := bootRegistered(t, registeredConfig{Owner: true, ABSModes: "cf,jwt"})
+		own := h.Principal(Owner)
+		if h.Principals[len(h.Principals)-1] != own {
+			t.Fatal("the owner is not the last principal")
+		}
+		res := h.MustDo(t, own, http.MethodGet, "/api/core/v1/me", nil)
+		var me struct {
+			Method        string `json:"method"`
+			OwnerVerified bool   `json:"owner_verified"`
+		}
+		if err := json.Unmarshal(res.Body, &me); err != nil || res.Status != http.StatusOK || me.Method != "ext:cfaccess" || !me.OwnerVerified {
+			t.Fatalf("owner GET /api/core/v1/me: %d %s", res.Status, res.excerpt())
+		}
+		if got := h.AccessRefused(); len(got) != 0 {
+			t.Fatalf("the boot reached for hosts the harness does not serve: %v", got)
+		}
+	})
+	t.Run("authoff", func(t *testing.T) {
+		h := bootRegistered(t, registeredConfig{AuthOff: true})
+		off := h.Principal(Authoff)
+		res := h.MustDo(t, off, http.MethodGet, "/api/v1/auth/status", nil)
+		if res.Status != http.StatusOK {
+			t.Fatalf("auth-off GET /api/v1/auth/status: %d %s", res.Status, res.excerpt())
+		}
+		for range 3 { // fresh loopback peers: never throttled
+			if r := h.MustDo(t, off, http.MethodGet, "/api/v1/auth/status", nil); r.Status != http.StatusOK {
+				t.Fatalf("auth-off repeat: %d", r.Status)
+			}
+		}
+	})
 }
 
 // ---- stage 13 ran ----
