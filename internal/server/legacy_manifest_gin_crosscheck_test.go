@@ -39,9 +39,12 @@ import (
 //   - gin's admin gate is the admin role by name; a row is a scope. A custom
 //     role holding the row's scope passes the row and is refused by gin. That is
 //     the difference wire_admin_role.go's bridgedAdminGate documents as the
-//     successor's decision; it is listed (ROLE-NAME-GATE) and not failed.
+//     successor's decision. It is not a mismatch crossCheck can name, so each
+//     such row is a ROLE-NAME-GATE entry in legacy_manifest_gin_allowlist_test.go
+//     with the harness cell that proves it, and the check fails on a row that has
+//     no entry and on an entry whose row is not of the class.
 //   - A credRouteWhen guard guards some requests only; the manifest has no way
-//     to say so and carries no guard. Listed (CONDITIONAL-GUARD), not failed.
+//     to say so and carries no guard. The same rule, class CONDITIONAL-GUARD.
 //   - The recorder runs on the non-identity engine. Every gate constructor
 //     reports itself before its s.identity branch, so the gates are the same
 //     under WithIdentity; the only chain that differs is the two public invite
@@ -144,9 +147,10 @@ type finding struct {
 	kind, key, text string
 }
 
-// advisoryKinds are the findings listed but not failed: differences the code
-// documents as the successor's decision, waiting for a ruling (see the
-// header).
+// advisoryKinds are the findings that are neither weaker nor stronger: the
+// differences the code documents as the successor's decision (see the header).
+// They are not per-row failures; each must be an allow-list entry
+// (allowListProblems) or the run fails.
 var advisoryKinds = map[string]bool{"ROLE-NAME-GATE": true, "CONDITIONAL-GUARD": true}
 
 func failing(fs []finding) []finding {
@@ -346,7 +350,10 @@ func TestLegacyManifest_NeverWeakerThanGinChain(t *testing.T) {
 				}
 				byKey[f.key] = append(byKey[f.key], f.text)
 			}
-			t.Logf("%d rows, %d advisory lines (role-name admin gates and conditional credential guards)", len(rows), advisory)
+			t.Logf("%d rows, %d allow-listed differences (role-name admin gates and conditional credential guards)", len(rows), advisory)
+			t.Run("allow-lists", func(t *testing.T) {
+				assert.Empty(t, allowListProblems(crossCheckName(abs), findings, allowEntries()))
+			})
 			for _, lr := range rows {
 				key := lr.Method + " " + lr.GinPath
 				t.Run(strings.ReplaceAll(key, " ", "_"), func(t *testing.T) {
