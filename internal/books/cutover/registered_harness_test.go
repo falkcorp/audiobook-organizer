@@ -7,6 +7,7 @@ package cutover_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -191,6 +192,8 @@ type registeredConfig struct {
 	// Cloudflare Access (team domain, AUD, the allow-list), and adds the Owner
 	// principal. The verifier is the real one, over a key set the harness serves.
 	Owner bool
+	// ABSModes is the ABS auth modes ("jwt" when empty).
+	ABSModes string
 }
 
 // Registered is one booted flipped build and the principals that call it.
@@ -208,6 +211,9 @@ type Registered struct {
 
 	byName   map[string]*Principal
 	resolved atomic.Int64
+	peers    atomic.Int64
+	frontMu  sync.Mutex
+	fronted  map[string]bool // route -> an anonymous request to it was refused by stage 13
 	logs     *syncLog
 	cfg      registeredConfig
 	signer   jose.Signer
@@ -333,8 +339,8 @@ func diskCorpus(t testing.TB, rows []reachPrincipalRow, dir, stage string) map[s
 				return err
 			}
 			for k, v := range map[string][]byte{
-				"apikey:" + id:                        row,
-				"idx:apikey:hash:" + hash:             []byte(id),
+				"apikey:" + id:                      row,
+				"idx:apikey:hash:" + hash:           []byte(id),
 				"idx:apikey:user:" + uid + ":" + id: []byte(id),
 			} {
 				if err := lr.Set(ctx, []byte(k), v); err != nil {
@@ -448,7 +454,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 		// The corpus was written by an R0 serving the ABS surface, its stored
 		// settings say so, and a boot that names it differently is refused.
 		ABSAPIEnabled: true,
-		ABSAuthModes:  "jwt",
+		ABSAuthModes:  cmp.Or(cfg.ABSModes, "jwt"),
 		ABSJWTSecret:  "synthetic-registered-harness-secret-0123456789abcdef",
 	}
 	origCfg := config.AppConfig
@@ -457,7 +463,7 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 
 	setenv := func(k, v string) { t.Setenv(k, v) }
 	setenv("ABO_BOOKS_ABS_API_ENABLED", "true")
-	setenv("ABO_BOOKS_ABS_AUTH_MODES", "jwt")
+	setenv("ABO_BOOKS_ABS_AUTH_MODES", c.ABSAuthModes)
 	setenv("ABO_BOOKS_ABS_JWT_SECRET", c.ABSJWTSecret)
 	setenv("ABO_BOOKS_PLAYLIST_DIR", c.PlaylistDir)
 	setenv("ABO_BOOKS_OPENLIBRARY_DUMP_DIR", c.OpenLibraryDumpDir)
@@ -732,14 +738,14 @@ func probePath(pattern string) string {
 // DoRoute sends the request the recorder sent for a registered route.
 func (h *Registered) DoRoute(p *Principal, ri httpapi.RouteInfo, body any) (Result, error) {
 	h.t.Helper()
-	return h.do(h.Handler, p, ri.Method, probePath(ri.Pattern), body, &ri)
+	return h.do(h.Handler, true, p, ri.Method, probePath(ri.Pattern), body, &ri)
 }
 
 // Do sends method path as p. The route is the registered one whose pattern the
 // path matches.
 func (h *Registered) Do(p *Principal, method, path string, body any) (Result, error) {
 	h.t.Helper()
-	return h.do(h.Handler, p, method, path, body, h.match(method, path))
+	return h.do(h.Handler, true, p, method, path, body, h.match(method, path))
 }
 
 // MustDo is Do that fails the test on an error.
@@ -803,7 +809,73 @@ func judged(ri *httpapi.RouteInfo) (must, resolvesAtom bool) {
 	return true, k == rbac.KindLegacyAtom || k == rbac.KindLegacyCheck
 }
 
-func (h *Registered) do(via http.Handler, p *Principal, method, path string, body any, ri *httpapi.RouteInfo) (Result, error) {
+// excerpt is the start of the response body, for a failure message.
+func (r Result) excerpt() string {
+	b := r.Body
+	if len(b) > 160 {
+		b = b[:160]
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// nextPeer is an address no principal has: core rate limits by source address, so
+// a probe sweep that must not be throttled sends each request from its own (the
+// 198.18.0.0/15 benchmarking range).
+func (h *Registered) nextPeer() string {
+	n := h.peers.Add(1)
+	return fmt.Sprintf("198.18.%d.%d:41000", (n/250)%256, n%250+1)
+}
+
+// stage13Fronts reports whether stage 13 stands in front of ri on via: an
+// anonymous request to it is refused with stage 13's own problem
+// (authentication_required). Nothing else tells an admit of stage 13 from an
+// answer of the handler behind it, which is why an admit is believed only for a
+// route this holds for. The answer for the real handler is kept per route.
+func (h *Registered) stage13Fronts(via http.Handler, real bool, ri *httpapi.RouteInfo) bool {
+	key := ri.Method + " " + ri.Pattern
+	if real {
+		h.frontMu.Lock()
+		ok, seen := h.fronted[key]
+		h.frontMu.Unlock()
+		if seen {
+			return ok
+		}
+	}
+	res, _ := h.send(via, &Principal{Name: Anonymous, peer: h.nextPeer()}, ri.Method, probePath(ri.Pattern), nil, ri)
+	ok := res.Stage13 == Stage13Refused && res.Code == "authentication_required"
+	if real {
+		h.frontMu.Lock()
+		if h.fronted == nil {
+			h.fronted = map[string]bool{}
+		}
+		h.fronted[key] = ok
+		h.frontMu.Unlock()
+	}
+	return ok
+}
+
+// do sends the request through via (real: via is the registered handler, so what
+// it learns about a route can be kept) and judges the answer.
+func (h *Registered) do(via http.Handler, real bool, p *Principal, method, path string, body any, ri *httpapi.RouteInfo) (Result, error) {
+	h.t.Helper()
+	res, err := h.send(via, p, method, path, body, ri)
+	if err != nil {
+		return res, err
+	}
+	if ri != nil && ri.OwnAuth {
+		return res, fmt.Errorf("%w: %s %s", ErrOwnAuth, method, path)
+	}
+	// An admit (or any answer that is not stage 13's refusal) is a verdict only
+	// for a route stage 13 is in front of. An auth-off boot has no anonymous
+	// refusal to find: stage 13 admits the auth-off principal on every route.
+	if must, _ := judged(ri); must && res.Stage13 == Stage13Unobserved && !h.cfg.AuthOff && !h.stage13Fronts(via, real, ri) {
+		return res, fmt.Errorf("%w: %s %s as %s answered %d", ErrNotJudged, method, ri.Pattern, p.Name, res.Status)
+	}
+	return res, nil
+}
+
+// send is one request as p, with what the answer shows of stage 13.
+func (h *Registered) send(via http.Handler, p *Principal, method, path string, body any, ri *httpapi.RouteInfo) (Result, error) {
 	h.t.Helper()
 	var rd io.Reader
 	if body != nil {
@@ -841,13 +913,6 @@ func (h *Registered) do(via http.Handler, p *Principal, method, path string, bod
 	}
 	if res.Stage13 == Stage13Unobserved && h.resolved.Load() > before {
 		res.Stage13 = Stage13Resolved
-	}
-	if ri != nil && ri.OwnAuth {
-		return res, fmt.Errorf("%w: %s %s", ErrOwnAuth, method, ri.Pattern)
-	}
-	must, atom := judged(ri)
-	if must && atom && res.Stage13 == Stage13Unobserved {
-		return res, fmt.Errorf("%w: %s %s as %s answered %d", ErrNotJudged, method, ri.Pattern, p.Name, res.Status)
 	}
 	return res, nil
 }

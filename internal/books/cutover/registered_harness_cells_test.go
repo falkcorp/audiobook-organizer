@@ -22,17 +22,23 @@ import (
 // ---- the wired resolver is the atom table ----
 
 // resolverDiffs lists where r answers differently from books.AtomTable(): for every
-// row, its Route on the route side and its ReadSide on the read side, and the
-// refusals (an atom the table does not know; an atom with no entry of the asked
-// side, playlists.create's zero Route among them). Empty means equal.
+// row, its Route on the route side and, on the read side, its ReadSide when it has
+// one and its Route otherwise (the in-handler read-side entry exists for
+// users.manage alone: the table's own contract), and the refusals (an atom the
+// table does not know; an atom with no entry of the asked side, playlists.create's
+// zero Route among them). Empty means equal.
 func resolverDiffs(r httpapi.AtomResolver) []string {
 	var out []string
 	for _, a := range books.AtomTable() {
+		readWant := a.Route
+		if !a.ReadSide.IsZero() {
+			readWant = a.ReadSide
+		}
 		for _, side := range []struct {
 			name     string
 			readSide bool
 			want     rbac.Requirement
-		}{{"route", false, a.Route}, {"read side", true, a.ReadSide}} {
+		}{{"route", false, a.Route}, {"read side", true, readWant}} {
 			got, ok := r(a.Name, side.readSide)
 			wantOK := !side.want.IsZero()
 			switch {
@@ -83,13 +89,18 @@ func (h *Registered) stage13Sweep(via http.Handler, anon *Principal, methods ...
 		if !must || !slices.Contains(methods, ri.Method) {
 			continue
 		}
-		res, err := h.do(via, anon, ri.Method, probePath(ri.Pattern), nil, &ri)
+		// Core rate limits an address; each probe comes from its own (the 198.18/15
+		// benchmarking range, never a principal's), so the sweep measures stage 13 and
+		// not the limiter.
+		fresh := *anon
+		fresh.peer = h.nextPeer()
+		res, err := h.do(via, via == h.Handler, &fresh, ri.Method, probePath(ri.Pattern), nil, &ri)
 		judgedRoutes++
 		switch {
 		case err != nil:
 			problems = append(problems, err.Error())
 		case res.Stage13 != Stage13Refused || res.Code != "authentication_required":
-			problems = append(problems, fmt.Sprintf("%s %s as anonymous answered %d (%s), not stage 13's 401 authentication_required", ri.Method, ri.Pattern, res.Status, res.Stage13))
+			problems = append(problems, fmt.Sprintf("%s %s as anonymous answered %d (%s) %s, not stage 13's 401 authentication_required", ri.Method, ri.Pattern, res.Status, res.Stage13, res.excerpt()))
 		}
 	}
 	return problems, judgedRoutes
@@ -156,7 +167,7 @@ func TestRegisteredHarness_BypassingStage13FailsTheHarness(t *testing.T) {
 		// The mutant: the request is served by something that mounts the route
 		// without stage 13 and admits it, as a router that dropped stage 13 would.
 		bypass := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		res, err := h.do(bypass, anon, atomRoute.Method, probePath(atomRoute.Pattern), nil, atomRoute)
+		res, err := h.do(bypass, false, anon, atomRoute.Method, probePath(atomRoute.Pattern), nil, atomRoute)
 		if !errors.Is(err, ErrNotJudged) {
 			t.Fatalf("a 200 from outside stage 13 on %s %s was answered (%d, %s, err %v): the harness would report the handler's answer as a verdict", atomRoute.Method, atomRoute.Pattern, res.Status, res.Stage13, err)
 		}
@@ -170,7 +181,7 @@ func TestRegisteredHarness_BypassingStage13FailsTheHarness(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"error":"authentication required"}`))
 		})
-		_, err := h.do(own, anon, atomRoute.Method, probePath(atomRoute.Pattern), nil, atomRoute)
+		_, err := h.do(own, false, anon, atomRoute.Method, probePath(atomRoute.Pattern), nil, atomRoute)
 		if !errors.Is(err, ErrNotJudged) {
 			t.Fatalf("a handler's own 401 passed as stage 13's refusal (err %v)", err)
 		}
@@ -198,7 +209,7 @@ func TestRegisteredHarness_ChangedAtomRowFailsTheResolverCheck(t *testing.T) {
 					continue
 				}
 				req := a.Route
-				if readSide {
+				if readSide && !a.ReadSide.IsZero() {
 					req = a.ReadSide
 				}
 				return req, !req.IsZero()
@@ -221,6 +232,13 @@ func TestRegisteredHarness_ChangedAtomRowFailsTheResolverCheck(t *testing.T) {
 		}
 		if len(resolverDiffs(resolver(mutated))) == 0 {
 			t.Errorf("changing the %s row's route went unreported", row.Name)
+		}
+		if !row.ReadSide.IsZero() {
+			mutated = books.AtomTable()
+			mutated[i].ReadSide = rbac.Need("core:users.manage")
+			if len(resolverDiffs(resolver(mutated))) == 0 {
+				t.Errorf("changing the %s row's read side went unreported", row.Name)
+			}
 		}
 	}
 }
