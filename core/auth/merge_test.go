@@ -15,20 +15,9 @@ import (
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
-	"github.com/falkcorp/mediacore/storage/keys"
 )
 
 // Admin.StageUserMerge (05-authn §3.1, §4.8; DATA4-9).
-
-// keyRow is the merge plan row for key id: the stored bytes a preview read.
-func (f *fx) keyRow(id string) auth.MergeRow {
-	f.t.Helper()
-	seen, err := f.st.Keyspace().Get(context.Background(), keys.Join(keys.Str("apikey"), keys.Str(id)))
-	if err != nil {
-		f.t.Fatalf("read apikey %s: %v", id, err)
-	}
-	return auth.MergeRow{Kind: auth.MergeAPIKey, ID: id, Seen: seen}
-}
 
 // planMerge is the plan Admin.PlanUserMerge gives actor for source into target.
 func (f *fx) planMerge(actor *auth.Principal, source, target auth.UserID) auth.UserMergePlan {
