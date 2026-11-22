@@ -136,7 +136,7 @@ func headSetCORSHeaders(h http.Header, r *http.Request) (origin string, allowed 
 // WithExcludedPaths, a prefix match on URL.Path, and
 // WithExcludedPathsRegexs).
 var (
-	headCompressionExcludedPaths = []string{"/api/events", "/metrics", "/api/v1/auth/accept-invite"}
+	headCompressionExcludedPaths = []string{"/metrics", "/api/v1/auth/accept-invite"}
 	headCompressionExcludedRE    = regexp.MustCompile(`^/api/v1/operations/v2/[^/]+/logs/download$`)
 )
 
@@ -151,7 +151,7 @@ func headCompressionExcluded(path string) bool {
 
 // TestCompressionExclusionsEqualHEAD: on the real engine, ABS off and on,
 // a manifest route is NoCompress exactly when HEAD's exclusion rule matched
-// its path, and through core's stages each of HEAD's four exclusions is sent
+// its path, and through core's stages each of HEAD's remaining exclusions is sent
 // uncompressed to a gzip client while an ordinary JSON route is compressed
 // once. Every text/event-stream response is never compressed, whatever its
 // route (core's TestHandler_NoDoubleGzip), and HandleRaw streams are
@@ -175,13 +175,11 @@ func TestCompressionExclusionsEqualHEAD(t *testing.T) {
 	engine := gin.New()
 	big := strings.Repeat("Oracle relays the Bat-Signal. ", 200)
 	h := func(c *gin.Context) { c.Data(http.StatusOK, "application/json", []byte(`{"x":"`+big+`"}`)) }
-	engine.GET("/api/events", h)
 	engine.GET("/metrics", h)
 	engine.POST("/api/v1/auth/accept-invite", h)
 	engine.GET("/api/v1/operations/v2/:id/logs/download", h)
 	engine.GET("/api/v1/audiobooks", h)
 	_, stack := stagesOver(t, engine, httpapi.Deps{},
-		httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/events", NoCompress: true},
 		httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/metrics", NoCompress: true},
 		httpapi.LegacyRoute{Method: http.MethodPost, GinPath: "/api/v1/auth/accept-invite", Perm: rbac.Public, Public: true, NoCompress: true},
 		httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/operations/v2/:id/logs/download", NoCompress: true},
@@ -191,7 +189,6 @@ func TestCompressionExclusionsEqualHEAD(t *testing.T) {
 		method, path string
 		gzip         bool
 	}{
-		{http.MethodGet, "/api/events", false},
 		{http.MethodGet, "/metrics", false},
 		{http.MethodPost, "/api/v1/auth/accept-invite", false},
 		{http.MethodGet, "/api/v1/operations/v2/01JBATCAVE/logs/download", false},

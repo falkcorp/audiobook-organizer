@@ -326,7 +326,6 @@ func legacyManifestRows() []legacyRow {
 		{http.MethodPost, "/api/collections/:id/book", pABS, fABSOnly},
 		{http.MethodDelete, "/api/collections/:id/book/:bookId", pABS, fABSOnly},
 		{http.MethodPost, "/api/emails/send-ebook-to-device", pABS, fABSOnly},
-		{http.MethodGet, "/api/events", pAuth, fNoCompress},
 		{http.MethodGet, "/api/health", pPublic, fBasicExempt},
 		{http.MethodGet, "/api/items/:id", pABS, fABSOnly},
 		{http.MethodGet, "/api/items/:id/cover", pPublic, fABSOnly},

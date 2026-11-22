@@ -77,7 +77,7 @@ type edge = archtest.Edge
 //
 // Classification rule for packages the table does not name: directory family
 // (internal/plugins/*, internal/maintenance/jobs = 4; internal/server/**,
-// internal/realtime, internal/syncapi = 5; cmd/*, tools/cmd/* = 6), else
+// internal/syncapi = 5; cmd/*, tools/cmd/* = 6), else
 // max(layer of the package's in-module imports) floored at 3, else 0 when it
 // imports no module package. matcher and fingerprint are the table's domain
 // packages that internal/books/store imports; each imports only layer-0
@@ -276,7 +276,6 @@ var layerOf = map[string]int{
 
 	// Layer 5: transport
 	"internal/itunes/service":                   5, // computed: max of imports=5, floored at 3
-	"internal/realtime":                         5, // table: transport
 	"internal/server":                           5, // family: internal/server/** is transport
 	"internal/server/absauth":                   5, // family: internal/server/** is transport
 	"internal/server/handlers":                  5, // family: internal/server/** is transport
@@ -523,7 +522,7 @@ var namedLayer = map[string]int{
 	// Layer 4 jobs.
 	"internal/operations/registry": 4, "internal/scheduler": 4, "internal/maintenance/jobs": 4,
 	// Layer 5 transport.
-	"internal/realtime": 5, "internal/syncapi": 5,
+	"internal/syncapi": 5,
 	// Layer 6 entry: the module-root main package.
 	".": 6,
 }
