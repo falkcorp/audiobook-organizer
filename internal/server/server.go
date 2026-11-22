@@ -785,7 +785,10 @@ var activityStoreOverrideForTest database.ActivityStorer
 // ServerOption configures NewServer.
 type ServerOption func(*serverOptions)
 
-type serverOptions struct{ log *slog.Logger }
+type serverOptions struct {
+	log   *slog.Logger
+	trace func(step string) // told each domain constructor's name as it returns; tests only
+}
 
 // WithLogger is the logger the operations registry (and through it every op
 // reporter's Logger()) and the flight recorder write to. nil, and the absence
@@ -971,7 +974,8 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	appUpdater := updater.NewService(appVersion, updater.WithStateDir(config.SecureStateDir()))
 	// The activity defs (`activity` + `activitystore`) are in the list only
 	// when DatabasePath is set: the activitystore Build errors on an empty one.
-	regContainer := serviceregistry.NewContainerFrom(serviceDefs(config.AppConfig.DatabasePath != "")...).
+	domain := newDomainServices(store, so.trace)
+	regContainer := serviceregistry.NewContainerFrom(serviceDefs(config.AppConfig.DatabasePath != "", domain.merge)...).
 		Override("store", store).
 		Override("config", &config.AppConfig).
 		Override("appversion", appVersion).
@@ -991,6 +995,8 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		os.Exit(1)
 	}
 
+	domain.completeFromRegistry(store, &config.AppConfig, regContainer)
+
 	// Load the HNSW snapshot BEFORE PostInit so dedup.Engine.PostInit can detect
 	// the populated store and skip HydrateChromem. Loading after PostInit caused a
 	// crash loop: HydrateChromem re-inserted all ~38K existing keys into the
@@ -1006,7 +1012,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		slog.Error("serviceregistry postinit", "err", err)
 		os.Exit(1)
 	}
-	wireServerFromContainer(server, regContainer)
+	wireServerFromContainer(server, regContainer, domain)
 	// The operations registry resolves its ops v3 run state from the store it
 	// was built with, through any decorator's Unwrap chain. If that
 	// lookup misses on a Pebble-backed server, every v3 path (stopping runs,

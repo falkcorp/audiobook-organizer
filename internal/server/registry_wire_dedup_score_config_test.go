@@ -27,6 +27,9 @@ import (
 // dedup plugin's Facade UpdateHook (internal/plugins/dedup/score_hook_test.go).
 type dedupWiring struct {
 	engine *dedup.Engine
+	// merge is the service handed to serviceDefs, which the dedup def must
+	// close over (R3-05a: it is constructed, no longer registry-built).
+	merge *merge.Service
 }
 
 // buildDedupEngineFromContainer runs the production "dedup" ServiceDef (the
@@ -63,11 +66,11 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 		serviceregistry.KeyEmbeddingStore: database.NewEmbeddingStore(pebble.DB()),
 		"embedclient":                     ai.NewEmbeddingClientWithOptions("test-key", "test-model", ""),
 		"llmparser":                       (*ai.OpenAIParser)(nil),
-		serviceregistry.KeyMerge:          merge.NewService(pebble),
 	}
+	mergeSvc := merge.NewService(pebble)
 	// The production list's defs reachable from the two roots, minus every
 	// name overridden: what the old include-by-name container built.
-	c := serviceregistry.NewContainerFrom(defsReachableFrom(serviceDefs(false), overrides, serviceregistry.KeyDedup, "dedupplugin")...)
+	c := serviceregistry.NewContainerFrom(defsReachableFrom(serviceDefs(false, mergeSvc), overrides, serviceregistry.KeyDedup, "dedupplugin")...)
 	for name, instance := range overrides {
 		c.Override(name, instance)
 	}
@@ -81,7 +84,7 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 	if !ok || eng == nil {
 		t.Fatalf("dedup engine not built (ok=%v) — the embedding-mode gate short-circuited the fixture", ok)
 	}
-	return dedupWiring{engine: eng}, nil
+	return dedupWiring{engine: eng, merge: mergeSvc}, nil
 }
 
 // headOrderWithDatabase is the order the production container resolved its 45
@@ -94,6 +97,12 @@ func buildDedupEngineFromContainer(t *testing.T, cfg *config.Config) (dedupWirin
 // ready queue, so it does not depend on the order of the list). An earlier
 // capture at b91bfec17 gave the same 45 names, so R1-15's review fixes and R1-20
 // changed neither services nor overrides.
+//
+// R3-05a removed eight names (audiobook, batch, importpath, merge, organize,
+// quarantine, scan, work: constructed by domainServices) and dedup no longer
+// Needs merge, so dedup, acoustidplugin and dedupplugin resolve ahead of
+// filesystem instead of behind it. filesystem declares no PostInit, Start or
+// Stop, so what they now cross has no lifecycle method to reorder.
 var headOrderWithDatabase = []string{
 	"appversion",
 	"config",
@@ -108,18 +117,14 @@ var headOrderWithDatabase = []string{
 	"store",
 	"aijobsstore",
 	"aiscanstore",
-	"audiobook",
-	"batch",
 	"dashboard",
 	"delugeplugin",
 	"embeddingstore",
 	"embedclient",
-	"filesystem",
-	"importpath",
-	"merge",
 	"dedup",
 	"acoustidplugin",
 	"dedupplugin",
+	"filesystem",
 	"metadatascorer",
 	"metadatastate",
 	"metafetch",
@@ -127,18 +132,14 @@ var headOrderWithDatabase = []string{
 	"itunesplugin",
 	"metafetchplugin",
 	"metricsstore",
-	"organize",
 	"pebble-activitystore",
 	"activitystore",
 	"activity",
 	"activitywriter",
 	"pipelinemanager",
-	"quarantine",
-	"scan",
 	"system",
 	"updater",
 	"updatescheduler",
-	"work",
 }
 
 // headOrderWithoutDatabase is the same capture with DatabasePath unset: the
@@ -158,18 +159,14 @@ var headOrderWithoutDatabase = []string{
 	"store",
 	"aijobsstore",
 	"aiscanstore",
-	"audiobook",
-	"batch",
 	"dashboard",
 	"delugeplugin",
 	"embeddingstore",
 	"embedclient",
-	"filesystem",
-	"importpath",
-	"merge",
 	"dedup",
 	"acoustidplugin",
 	"dedupplugin",
+	"filesystem",
 	"metadatascorer",
 	"metadatastate",
 	"metafetch",
@@ -177,18 +174,15 @@ var headOrderWithoutDatabase = []string{
 	"itunesplugin",
 	"metafetchplugin",
 	"metricsstore",
-	"organize",
 	"pipelinemanager",
-	"quarantine",
-	"scan",
 	"system",
 	"updater",
 	"updatescheduler",
-	"work",
 }
 
 // TestServiceDefs_BuildsHEADSet pins what the production container builds:
-// serviceDefs(true) resolves to HEAD's 45 names in HEAD's order and
+// serviceDefs(true) resolves to HEAD's 45 names in HEAD's order (less R3-05a's
+// eight constructed clusters, see headOrderWithDatabase) and
 // serviceDefs(false) to HEAD's 41, each less configupdate (44 and 40), with no def listed twice. The container is
 // made the way NewServer makes it, with the same seven overrides, so the names
 // include them.
@@ -202,7 +196,7 @@ func TestServiceDefs_BuildsHEADSet(t *testing.T) {
 		{"database path unset", false, headOrderWithoutDatabase},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			defs := serviceDefs(tc.databasePathSet)
+			defs := serviceDefs(tc.databasePathSet, (*merge.Service)(nil))
 			seen := map[string]bool{}
 			var dups []string
 			for _, d := range defs {

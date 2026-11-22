@@ -15,13 +15,10 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
-	"github.com/falkcorp/audiobook-organizer/internal/batch"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
-	"github.com/falkcorp/audiobook-organizer/internal/importer"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
@@ -34,13 +31,10 @@ import (
 	delugeplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	itunesplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	metafetchplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
-	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
-	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 	"github.com/falkcorp/audiobook-organizer/internal/sysinfo"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
-	"github.com/falkcorp/audiobook-organizer/internal/work"
 )
 
 // resolveVectorBackend maps a configured embedding.vector_backend value onto
@@ -101,22 +95,27 @@ func resolveVectorBackend(backend string) string {
 // The ops registry, its event hub, the updater and the update scheduler are
 // not here: NewServer constructs them and hands them to the container as
 // Overrides (R1-15).
-func serviceDefs(databasePathSet bool) []serviceregistry.ServiceDef {
+//
+// Eight of R3-05's nine clusters are not here either (R3-05a): work, audiobook,
+// organize, quarantine, scan, merge, importpath and batch are built by
+// domainServices (domain_services.go). mergeSvc is that constructed merge
+// service, for the dedup def that uses it.
+//
+// The ninth, itunes, is still a def (serverServiceDefs). It cannot be built
+// before the container: it needs the registry-built eventbus and metafetch
+// (F7-09's), and the registry-built itunesplugin (F5-18's) needs it, so it sits
+// between two layers of one atomic Build. It leaves with the first of those two
+// flips; TestServiceDefs_OmitTheConstructedClusters names it so that flip has to
+// update the test.
+func serviceDefs(databasePathSet bool, mergeSvc *merge.Service) []serviceregistry.ServiceDef {
 	defs := slices.Concat(
 		plugin.ServiceDefs(),
 		fileops.ServiceDefs(),
 		sysinfo.ServiceDefs(),
 		search.ServiceDefs(),
-		serverServiceDefs(),
+		serverServiceDefs(mergeSvc),
 		ai.ServiceDefs(),
 		metafetch.ServiceDefs(),
-		work.ServiceDefs(),
-		audiobookspkg.ServiceDefs(),
-		quarantine.ServiceDefs(),
-		scanner.ServiceDefs(),
-		merge.ServiceDefs(),
-		importer.ServiceDefs(),
-		batch.ServiceDefs(),
 		metafetchplugin.ServiceDefs(),
 		itunesplugin.ServiceDefs(),
 		delugeplugin.ServiceDefs(),
@@ -153,7 +152,7 @@ func serviceDefs(databasePathSet bool) []serviceregistry.ServiceDef {
 //   - `dedup` (the engine) — needs *config.Config to read thresholds;
 //     internal/dedup doesn't already import internal/config, so defining it
 //     here avoids forcing a new dependency on that pkg.
-func serverServiceDefs() []serviceregistry.ServiceDef {
+func serverServiceDefs(mergeSvc *merge.Service) []serviceregistry.ServiceDef {
 	return []serviceregistry.ServiceDef{
 		{
 			Name:   serviceregistry.KeySystem,
@@ -239,7 +238,7 @@ func serverServiceDefs() []serviceregistry.ServiceDef {
 		// in NewServer.
 		{
 			Name:   serviceregistry.KeyDedup,
-			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser", serviceregistry.KeyMerge},
+			Needs:  []string{serviceregistry.KeyStore, serviceregistry.KeyConfig, serviceregistry.KeyEmbeddingStore, "embedclient", "llmparser"},
 			Groups: []string{"ai"},
 			Build: func(c *serviceregistry.Container) (any, error) {
 				cfg := config.GetConfig(c)
@@ -263,7 +262,6 @@ func serverServiceDefs() []serviceregistry.ServiceDef {
 					slog.Info("dedup engine: LLM parser unavailable (LLM mode disabled) — Layer 3 LLM review off")
 				}
 				store := serviceregistry.Get[dedup.Store](c, serviceregistry.KeyStore)
-				mergeSvc := serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
 				// The unified scorer's bands + per-kind confidence bounds come from
 				// the persisted dedup.signals settings (config.yaml overlaid by the DB
 				// settings blob) and are handed to the engine HERE, at construction.
@@ -441,14 +439,20 @@ func serverServiceDefs() []serviceregistry.ServiceDef {
 // returns an error when DatabasePath is empty). All other W1+W2 services are unconditional and Get
 // could safely be used — TryGet is used consistently here to keep the
 // wire-up uniform and tolerant of further phased Include() decisions.
-func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
+func wireServerFromContainer(s *Server, c *serviceregistry.Container, d *domainServices) {
+	// R3-05a: work, audiobook, organize, quarantine, scan, merge, importpath
+	// and batch are constructed (domainServices), not registry-built.
+	s.audiobookService = d.audiobook
+	s.batchService = d.batch
+	s.workService = d.work
+	s.mergeService = d.merge
+	s.organizeService = d.organize
+	s.quarantineSvc = d.quarantine
+	s.importPathService = d.importPath
+	s.scanService = d.scan
+
 	// W1 services (unconditional)
-	s.audiobookService = serviceregistry.Get[*audiobookspkg.AudiobookService](c, serviceregistry.KeyAudiobook)
-	s.batchService = serviceregistry.Get[*batch.BatchService](c, serviceregistry.KeyBatch)
-	s.workService = serviceregistry.Get[*work.WorkService](c, serviceregistry.KeyWork)
 	s.filesystemService = serviceregistry.Get[*fileops.FilesystemService](c, serviceregistry.KeyFilesystem)
-	s.importPathService = serviceregistry.Get[*importer.ImportPathService](c, serviceregistry.KeyImportPath)
-	s.scanService = serviceregistry.Get[*scanner.ScanService](c, serviceregistry.KeyScan)
 	s.dashboardService = serviceregistry.Get[*sysinfo.DashboardService](c, serviceregistry.KeyDashboard)
 	s.systemService = serviceregistry.Get[*sysinfo.SystemService](c, serviceregistry.KeySystem)
 	s.metadataStateService = serviceregistry.Get[*metafetch.MetadataStateService](c, serviceregistry.KeyMetadataState)
@@ -458,9 +462,6 @@ func wireServerFromContainer(s *Server, c *serviceregistry.Container) {
 	if ol, ok := serviceregistry.TryGet[*metafetch.OpenLibraryService](c, "olservice"); ok && ol != nil {
 		s.olService = ol
 	}
-	s.mergeService = serviceregistry.Get[*merge.Service](c, serviceregistry.KeyMerge)
-	s.organizeService = serviceregistry.Get[*OrganizeService](c, serviceregistry.KeyOrganize)
-	s.quarantineSvc = serviceregistry.Get[*quarantine.QuarantineService](c, serviceregistry.KeyQuarantine)
 	s.eventBus = plugin.GetEventBus(c)
 	// activity is conditional on config.DatabasePath — pull via TryGet so
 	// tests that don't configure a DB path still build.
