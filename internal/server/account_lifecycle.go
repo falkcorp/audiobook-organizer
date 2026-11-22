@@ -15,9 +15,11 @@ import (
 
 // AccountLifecycle is the ONE auth.Lifecycle books registers with core under
 // core identity (F4-08 B10r + B10s). Core allows a single registration, so every
-// books reaction to an account event lives behind this value, and two concerns
-// run for each event that touches them:
+// books reaction to an account event lives behind this value, and up to three
+// concerns run for each event that touches them:
 //
+//	accept record     the accepted-invite row the Users page lists (invite_accept_identity.go);
+//	                  InviteAccepted only, and first
 //	guest policy      the Cloudflare Access guest policy (guest_policy_identity.go)
 //	guest phone key   the guest's one-time phone-app key and its Cloudflare
 //	                  service token (guest_key_claim.go, guest_service_tokens.go)
@@ -25,6 +27,7 @@ import (
 // Event by event, and what HEAD did at the matching call site:
 //
 //	InviteAccepted             policy: startGuestPolicySync    key: OfferGuestKeyClaim
+//	                           record: the accepted-invite row (new: HEAD's invite held it)
 //	StatusChanged to disabled  policy: "user deactivated"      key: RevokeGuestKeyForAccount
 //	                           (handlers/user.go DeactivateUser did both)
 //	EmailChanged               policy: "email changed"         key: none (HEAD's e-mail
@@ -37,7 +40,7 @@ import (
 // away: a deleted or merged-away guest keeps neither a Cloudflare guest-policy
 // entry nor a live phone-app key.
 //
-// The two concerns are independent. Each runs under its own recover (concern):
+// The concerns are independent. Each runs under its own recover (concern):
 // core recovers a panic in the callback as a whole, which would skip whatever
 // came after the panicking concern, so a panic in the guest-policy half must
 // never leave the key alive and the reverse. Both are best-effort, as at HEAD:
@@ -45,6 +48,10 @@ import (
 func (s *Server) AccountLifecycle() coreauth.Lifecycle {
 	return coreauth.Lifecycle{
 		InviteAccepted: func(ctx context.Context, e coreauth.InviteAccepted) {
+			// First, and on its own recover: the accepted-invite row is the accept's
+			// record, so neither the guest-policy sync (which returns early for an
+			// invite with no address) nor a panic in it may come before or cost it.
+			concern("accept record", "invite accepted", func() { s.recordInviteAccept(ctx, e) })
 			concern("guest policy", "invite accepted", func() { s.guestOnInviteAccepted(ctx, e) })
 			concern("guest key", "invite accepted", func() {
 				s.OfferGuestKeyClaim(GuestKeyOffer{
