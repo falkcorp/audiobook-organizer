@@ -84,6 +84,10 @@ func TestIsTransient(t *testing.T) {
 		require.True(t, IsTransient(context.DeadlineExceeded))
 		require.True(t, IsTransient(fmt.Errorf("read response: %w", io.ErrUnexpectedEOF)))
 		require.True(t, IsTransient(&net.OpError{Op: "read", Err: syscall.ECONNRESET}))
+		// A caller that stopped the call is not a failing server, even when the
+		// dial it stopped is a *net.OpError.
+		require.False(t, IsTransient(context.Canceled))
+		require.False(t, IsTransient(&net.OpError{Op: "dial", Err: context.Canceled}))
 		require.True(t, IsTransient(&net.DNSError{IsTemporary: true}))
 		require.False(t, IsTransient(&net.DNSError{IsNotFound: true}))
 	})
