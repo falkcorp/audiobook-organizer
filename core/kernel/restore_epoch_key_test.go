@@ -19,26 +19,37 @@ import (
 // archive can carry any marker the store ever held, so the key must be one the
 // archive cannot contain (F4-08 B10j, review finding on 9aa237608).
 
-// TestHookRunKey_IsTheLiveHostsRestoreIDAndNothingElse: the key is built from the
-// restore intent's ID (crypto/rand, kept in the restore journal under the state
-// directory) and the restore line's seq. A run with no such ID has no key, so it
-// can never skip: not on a journal seq, which restarts after a journal reset or
-// a host loss, and not on the hooks' run ID, which lives in the restorable store.
-func TestHookRunKey_IsTheLiveHostsRestoreIDAndNothingElse(t *testing.T) {
+// TestHookRunKey_IsTheLiveHostsRestoreIDOrRunIDAndNothingElse: the key is built from
+// the restore intent's ID (crypto/rand, kept in the restore journal under the state
+// directory) and the restore line's seq, or, for a run with no intent, from the run
+// ID of the state directory (crypto/rand, restore_hook_run.json). A run with neither
+// has no key, so it can never skip: not on a journal seq, which restarts after a
+// journal reset or a host loss.
+func TestHookRunKey_IsTheLiveHostsRestoreIDOrRunIDAndNothingElse(t *testing.T) {
 	if got := hookRunKey(hookEnv{RestoreID: "r-dent", RestoreSeq: 11}); got != "restore:r-dent:seq:11" {
 		t.Errorf("a staged restore keys %q, want restore:r-dent:seq:11", got)
 	}
 	if hookRunKey(hookEnv{RestoreID: "r-dent", RestoreSeq: 11}) == hookRunKey(hookEnv{RestoreID: "r-other", RestoreSeq: 11}) {
 		t.Error("two restores with the same restore line seq share a key: the key does not carry the restore's ID")
 	}
+	if got := hookRunKey(hookEnv{HostRun: "run:00ff"}); got != "run:00ff" {
+		t.Errorf("a replaced store with no line keys %q, want its run ID", got)
+	}
+	if got := hookRunKey(hookEnv{HostRun: "run:00ff", RestoreSeq: 11}); got != "run:00ff" {
+		t.Errorf("a replaced store with a restore line keys %q, want its run ID and not the seq", got)
+	}
+	if hookRunKey(hookEnv{HostRun: "run:00ff", RestoreSeq: 11}) == hookRunKey(hookEnv{HostRun: "run:00ee", RestoreSeq: 11}) {
+		t.Error("two runs with the same restore line seq share a key: the key does not carry the run's ID")
+	}
+	if got := hookRunKey(hookEnv{RestoreID: "r-dent", RestoreSeq: 11, HostRun: "run:00ff"}); got != "restore:r-dent:seq:11" {
+		t.Errorf("a run with both keys %q, want the restore intent's", got)
+	}
 	for name, env := range map[string]hookEnv{
-		"a replaced store with a restore line": {RestoreSeq: 11},
-		"a replaced store with no line":        {RunKey: "2026-11-21T00:00:00Z-ab12"},
-		"an external run with both":            {RestoreSeq: 11, RunKey: "ab12"},
-		"nothing":                              {},
+		"a run with a restore line and no ID": {RestoreSeq: 11},
+		"nothing":                             {},
 	} {
 		if got := hookRunKey(env); got != "" {
-			t.Errorf("%s keys %q, want none: a run with no live-host restore ID must never skip", name, got)
+			t.Errorf("%s keys %q, want none: a run with no live-host ID must never skip", name, got)
 		}
 	}
 }
@@ -86,9 +97,9 @@ func TestRestoreHook_AnArchivedMarkerNeverSkipsTheBump(t *testing.T) {
 
 	t.Run("a replaced or external store whose stored marker matches an old-style key", func(t *testing.T) {
 		for name, env := range map[string]hookEnv{
-			"seq":     {RestoreSeq: 11},
-			"run ID":  {RunKey: "2026-11-21T00:00:00Z-ab12"},
-			"neither": {},
+			"seq":                {RestoreSeq: 11},
+			"a state-dir run ID": {RestoreSeq: 11, HostRun: "run:00112233445566778899aabbccddeeff"},
+			"neither":            {},
 		} {
 			fx := newRxFx(t, newRxKeys())
 			dick := fx.user("dick-grayson")
@@ -100,6 +111,32 @@ func TestRestoreHook_AnArchivedMarkerNeverSkipsTheBump(t *testing.T) {
 			if got := fx.userRow(dick).CredentialEpoch; got != start+2 {
 				t.Errorf("%s: epoch %d after two runs over matching stored markers, want %d: a run with no restore ID skipped", name, got, start+2)
 			}
+		}
+	})
+
+	t.Run("a marker keyed on the ID a store row held does not skip the bump of a run with its own ID", func(t *testing.T) {
+		// A build before F4-08 B10m kept the run ID in c/backup/restore_run, so a
+		// marker an archive carries can be keyed on that row's ID. This build's run
+		// ID is the state directory's, minted by another run, so it never matches.
+		fx := newRxFx(t, newRxKeys())
+		dick := fx.user("dick-grayson")
+		start := fx.userRow(dick).CredentialEpoch
+		fx.stageMarker("run:0011223344556677")
+		fx.runAuthHook(hookEnv{HostRun: "run:8899aabbccddeeff"})
+		if got := fx.userRow(dick).CredentialEpoch; got != start+1 {
+			t.Errorf("epoch %d, want %d: a marker keyed on a store row's run ID skipped the bump", got, start+1)
+		}
+	})
+
+	t.Run("the same host run resumed after a kill past the commit", func(t *testing.T) {
+		fx := newRxFx(t, newRxKeys())
+		dick := fx.user("dick-grayson")
+		start := fx.userRow(dick).CredentialEpoch
+		env := hookEnv{HostRun: "run:8899aabbccddeeff", RestoreSeq: 11}
+		fx.runAuthHook(env)
+		fx.runAuthHook(env)
+		if got := fx.userRow(dick).CredentialEpoch; got != start+1 {
+			t.Errorf("a resumed run left epoch %d, want %d", got, start+1)
 		}
 	})
 

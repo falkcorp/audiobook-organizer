@@ -120,12 +120,13 @@ func TestReapplyRegions_EveryCommitSiteCarriesItsLabel(t *testing.T) {
 	})
 	t.Run("a replaced store whose restore line cannot be written runs the hooks under a run ID", func(t *testing.T) {
 		fx := replacedByCopy(t, "anchor")
+		fx.putLegacyRunRow("run:00000000deadbeef")
 		brokenKeyring(fx)
 		fx.labels.take()
 		if res, hres := fx.boot(nil, nil); res.RestoreLine != 0 || !hres.Ran {
 			t.Fatalf("restore line %d, hooks ran %v: the scenario needs a run with no line", res.RestoreLine, hres.Ran)
 		}
-		expect(t, fx.labels.take(), labelHooksRunEnsure, labelHooksRunClear, labelHooksHeldHead)
+		expect(t, fx.labels.take(), labelHooksRunClear, labelHooksHeldHead)
 	})
 	t.Run("a restore boot's restore line", func(t *testing.T) {
 		s := newRestoreScene(t, nil)
