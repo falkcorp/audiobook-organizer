@@ -85,6 +85,11 @@ type storageMover interface {
 // the mode switch (the mode is the env's Live).
 type pathUpdateCoreParams struct {
 	BookID string `json:"book_id"`
+	// TargetBookID, when set, is the book whose stored path the torrents of
+	// BookID move to: the organized copy of a copy-organize, where the original's
+	// own path does not change (F6-03). The path is read when the run runs,
+	// never taken from the message that started it. Empty: BookID's own path.
+	TargetBookID string `json:"target_book_id,omitempty"`
 }
 
 // pathUpdateEnv is what the core takes from its shell. Mover is nil when Deluge
@@ -184,6 +189,25 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 		return pathUpdateResult{}, fmt.Errorf("book not found")
 	}
 
+	// The path the torrents follow is the target's, when there is a target.
+	pathBook := book
+	if args.TargetBookID != "" {
+		target, err := env.Store.GetBookByID(args.TargetBookID)
+		if err != nil {
+			return pathUpdateResult{}, fmt.Errorf("load target book: %w", err)
+		}
+		if target == nil || target.FilePath == "" {
+			// The copy was rolled back, deleted or retired since the follow-up
+			// was staged: no path is left to follow, now or on any retry, so the
+			// run ends successfully having moved nothing.
+			env.Logger.Warn("deluge path-update: the target book is gone or has no path, nothing moved",
+				"book_id", bookID, "target_book_id", args.TargetBookID)
+			newProgress(env.kindEnv, 0).Done("target book gone: nothing moved")
+			return pathUpdateResult{BookID: bookID, DryRun: dryRun}, nil
+		}
+		pathBook = target
+	}
+
 	versions, err := env.Store.GetBookVersionsByBookID(bookID)
 	if err != nil {
 		return pathUpdateResult{}, fmt.Errorf("load versions: %w", err)
@@ -204,7 +228,7 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 			activeCount++
 		}
 	}
-	primaryDir := filepath.Dir(book.FilePath)
+	primaryDir := filepath.Dir(pathBook.FilePath)
 
 	var updated, planned atomic.Int64
 	var failMu sync.Mutex

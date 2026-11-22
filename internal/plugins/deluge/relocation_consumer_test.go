@@ -73,20 +73,23 @@ func TestRelocationConsumer_UndeclaredNameRefused(t *testing.T) {
 
 func TestRelocationRunParams(t *testing.T) {
 	p, err := relocationRunParams(outbox.Message[database.BookRelocatedV1]{
-		Key: "partition-key-not-the-payload", Payload: database.BookRelocatedV1{BookID: "joker-01", FromPath: "/gotham/a", ToPath: "/gotham/b"},
+		Key: "partition-key-not-the-payload", Payload: database.BookRelocatedV1{BookID: "joker-01", TargetBookID: "joker-02"},
 	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(p)
 	require.NoError(t, err)
-	// The run gets the book ID only: it moves the torrents to the book's path
-	// as stored when it runs, never to the message's ToPath.
-	require.JSONEq(t, `{"book_id":"joker-01"}`, string(raw))
+	// The run gets the two book ids: it moves the original's torrents to the
+	// target's path as stored when it runs (the message carries no path).
+	require.JSONEq(t, `{"book_id":"joker-01","target_book_id":"joker-02"}`, string(raw))
 	got, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
 	require.NoError(t, err, "the params decode as the kind's own")
 	require.Equal(t, "joker-01", got.BookID)
+	require.Equal(t, "joker-02", got.TargetBookID)
 
 	_, err = relocationRunParams(outbox.Message[database.BookRelocatedV1]{})
 	require.ErrorIs(t, err, outbox.ErrPermanent, "a message naming no book can never start a useful run")
+	_, err = relocationRunParams(outbox.Message[database.BookRelocatedV1]{Payload: database.BookRelocatedV1{BookID: "joker-01"}})
+	require.ErrorIs(t, err, outbox.ErrPermanent, "a message naming no target can never start a useful run: a retry cannot supply it")
 }
 
 // TestPathUpdate_DedupeKeyIsTheBook: a relocation start folds only into a
@@ -104,6 +107,12 @@ func TestPathUpdate_DedupeKeyIsTheBook(t *testing.T) {
 	k2, err := c.Dedupe.Key(json.RawMessage(`{"book_id":"nightwing-03"}`))
 	require.NoError(t, err)
 	require.NotEqual(t, k, k2)
+	// A start for another copy of the same original is another move.
+	kc1, err := c.Dedupe.Key(json.RawMessage(`{"book_id":"robin-02","target_book_id":"copy-a"}`))
+	require.NoError(t, err)
+	kc2, err := c.Dedupe.Key(json.RawMessage(`{"book_id":"robin-02","target_book_id":"copy-b"}`))
+	require.NoError(t, err)
+	require.NotEqual(t, kc1, kc2, "two copies of one original must not fold into one run")
 	_, err = c.Dedupe.Key(json.RawMessage(`{"book_id":`))
 	require.Error(t, err, "params the run would refuse are refused at the start")
 	_, err = c.Dedupe.Key(json.RawMessage(`{"book_id":"robin-02","dry_run":true}`))

@@ -25,17 +25,19 @@ const BookRelocatedTopicName = "books.book.relocated.v1"
 // the zero default: changing it later stops the topic.
 const bookRelocatedPartitions = 16
 
-// BookRelocatedV1 is the payload of books.book.relocated.v1. The message key is
-// BookID, so one book's relocations are sequenced in commit order (the store's
-// per-book write stripe serializes them, 05-events §5E.5.2 "Partitioning").
+// BookRelocatedV1 is the payload of books.book.relocated.v1: the original book
+// whose torrents follow, and the book (its organized copy) they follow to. The
+// message key is BookID, so one book's relocations are sequenced in commit
+// order (05-events 5E.5.2 "Partitioning").
 //
-// FromPath and ToPath are the paths of this one commit. A consumer acts on the
-// book's path as stored when it runs, never on ToPath: a later relocation of the
-// same book may already have committed, and its own message follows this one.
+// It names books, never paths. A consumer reads the target's path as stored
+// when it runs, so a replay after the copy moved again follows the copy and no
+// value that is stale by design is in the message. No spec names the fields
+// (05-events 5E.13 specifies the topic by its trigger), and nothing had staged
+// the topic before F6-03, so no stored row constrains them.
 type BookRelocatedV1 struct {
-	BookID   string `json:"book_id"`
-	FromPath string `json:"from_path"`
-	ToPath   string `json:"to_path"`
+	BookID       string `json:"book_id"`
+	TargetBookID string `json:"target_book_id"`
 }
 
 // BookRelocatedTopic is the typed topic. A function, not a package variable
@@ -59,12 +61,15 @@ type relocationStager func(b *storage.Batch, ev BookRelocatedV1) error
 // in a second batch would break the one-commit rule (F6-03 STOP 3).
 var errRelocationNeedsCoreBatch = errors.New("books store: a relocation outbox is installed but this store's batch is not a core storage batch")
 
-// SetRelocationOutbox makes every committed file_path change of this store
-// stage books.book.relocated.v1 through w, in the batch that writes the path.
-// Until it is called the store stages nothing: books' Register calls it once,
-// before the store takes writes, with the outbox's books Writer (F6-03). The
-// outbox must be built over the same core storage DB as the store's
-// LegacyRange, or every book move fails (Batch.Bind refuses a foreign handle).
+// SetRelocationOutbox makes CreateBookWithRelocation stage
+// books.book.relocated.v1 through w, in the batch that writes the new row. It
+// is the only writer that does: a book's file_path changing through
+// UpdateBook or ModifyBook stages nothing, as it moved no torrent before the
+// events flip (the Deluge hook ran only after a copy-organize). Until it is
+// called the store stages nothing: books' Register calls it once, before the
+// store takes writes, with the outbox's books Writer (F6-03). The outbox must
+// be built over the same core storage DB as the store's LegacyRange, or every
+// organized copy fails (Batch.Bind refuses a foreign handle).
 func (p *PebbleStore) SetRelocationOutbox(w outbox.Writer) {
 	t := BookRelocatedTopic()
 	fn := relocationStager(func(b *storage.Batch, ev BookRelocatedV1) error {
@@ -73,22 +78,18 @@ func (p *PebbleStore) SetRelocationOutbox(w outbox.Writer) {
 	p.relocation.Store(&fn)
 }
 
-// stageBookRelocated stages the relocation of book id from oldPath to newPath
-// into batch, the batch that writes the new path. It stages nothing when no
-// outbox is installed, when the path did not change, when the old path is
-// empty (a book getting its first path is a create, not a relocation: there is
-// nothing at an old path for a follow-up to move, and staging it would start a
-// path-update run for every newly imported book), or when the new path is
-// empty (a retire or detach: nothing is left at a path for a follow-up to point
-// at). An error must discard the batch: the move and its follow-up commit
-// together or not at all.
-func (p *PebbleStore) stageBookRelocated(batch *GatedBatch, id, oldPath, newPath string) error {
+// stageBookRelocated stages the relocation of book originalID's torrents to
+// book targetID's path into batch, the batch that creates targetID. It stages
+// nothing when no outbox is installed or originalID is empty (the write is not
+// a copy-organize). An error must discard the batch: the copy and its
+// follow-up commit together or not at all.
+func (p *PebbleStore) stageBookRelocated(batch *GatedBatch, originalID, targetID string) error {
 	fn := p.relocation.Load()
-	if fn == nil || oldPath == newPath || oldPath == "" || newPath == "" {
+	if fn == nil || originalID == "" {
 		return nil
 	}
 	if batch.lb == nil {
 		return errRelocationNeedsCoreBatch
 	}
-	return (*fn)(batch.lb, BookRelocatedV1{BookID: id, FromPath: oldPath, ToPath: newPath})
+	return (*fn)(batch.lb, BookRelocatedV1{BookID: originalID, TargetBookID: targetID})
 }
