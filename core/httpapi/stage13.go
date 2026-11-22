@@ -81,9 +81,11 @@ func (d AuthzDecision) Admitted() bool { return d.Refusal == nil }
 //     invalid Bearer or API key is 401 on Public routes too (05-authn §4.3).
 //  2. Public (with no Guards): admitted.
 //  3. No principal: 401 authentication_required.
-//  4. Guards: Interactive needs Method.MayChangeCredentials (403
-//     interactive_required). Session needs Method.Interactive, the user's own
-//     sign-in and not a delegated session (403 interactive_required). Owner
+//  4. Guards: Interactive needs Principal.MayChangeCredentials (403
+//     interactive_required). Session needs Principal.Interactive, the user's
+//     own sign-in and not a delegated session (403 interactive_required).
+//     Both are the principal's, which carry the registered MethodSpec of an
+//     identity extension (Cloudflare Access), never Method's core-only list. Owner
 //     needs AssuranceOwner (403 owner_required) while OwnerRequired, else
 //     Interactive plus core:admin (05-authn §4.8).
 //  5. Perm through the principal's checker (confinement and Sensitive are the
@@ -115,10 +117,10 @@ func Authorize(req AuthzRequest, opts AuthzOptions) AuthzDecision {
 	if p == nil {
 		return refuse(errAuthRequired())
 	}
-	if req.Guards.Interactive && !p.Method.MayChangeCredentials() {
+	if req.Guards.Interactive && !p.MayChangeCredentials() {
 		return refuse(errInteractiveRequired())
 	}
-	if req.Guards.Session && !p.Method.Interactive() {
+	if req.Guards.Session && !p.Interactive() {
 		return refuse(errSessionRequired())
 	}
 	if req.Guards.Owner {
@@ -140,7 +142,7 @@ func ownerRefusal(p *auth.Principal, required bool) *Error {
 		}
 		return nil
 	}
-	if !p.Method.MayChangeCredentials() {
+	if !p.MayChangeCredentials() {
 		return errInteractiveRequired()
 	}
 	if p.Perms == nil || !p.Perms.Has(rbac.CoreAdmin) || !p.Perms.Satisfies(rbac.Need(rbac.CoreAdmin)) {
@@ -170,7 +172,7 @@ func permRefusal(p *auth.Principal, perm rbac.Requirement, opts AuthzOptions) *E
 	if !named {
 		return &Error{Status: http.StatusForbidden, Code: "permission_denied"}
 	}
-	if opts.Catalog != nil && !p.Method.Interactive() {
+	if opts.Catalog != nil && !p.Interactive() {
 		if spec, found := opts.Catalog.Lookup(missing); found && spec.Sensitive {
 			return errInteractiveRequired()
 		}

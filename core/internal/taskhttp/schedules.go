@@ -182,7 +182,7 @@ func mergeSchedule(cur tasks.ScheduleConfig, raw []byte) (tasks.ScheduleConfig, 
 // the credential may change protected keys, owner proof, a scope check).
 func configActor(p *auth.Principal) config.Actor {
 	a := config.Actor{
-		Interactive: p.Method.MayChangeCredentials(),
+		Interactive: p.MayChangeCredentials(),
 		Owner:       p.Assurance&auth.AssuranceOwner != 0,
 		Can:         func(perm string) bool { return p.Perms != nil && p.Perms.Has(permission(perm)) },
 	}

@@ -44,13 +44,66 @@ func (m Method) isExtension() bool { return strings.HasPrefix(string(m), extensi
 // deliberate tightening: HEAD's credential guard is a pass-through with auth
 // off (credential_routes.go:79-82), stated in R2's release note (§4.11, SEC5-8).
 // Unknown methods are non-interactive and may not change credentials.
-// Extensions declare their own classification at registration (MethodSpec).
+//
+// These two are core's classification of core's own methods ONLY. An identity
+// extension declares its own at registration (MethodSpec), which a Method
+// alone cannot see: ext:cfaccess answers false here whatever its spec says.
+// Every authorization decision therefore asks the principal
+// (Principal.Interactive, Principal.MayChangeCredentials), which carries the
+// registered classification; asking the Method is the F4-08 B10y bug that
+// locked an Access-only owner out of the owner routes.
 func (m Method) Interactive() bool { return m == MethodSession }
 
 // MayChangeCredentials: see Interactive. An allowlist, so a method nobody
-// classified fails closed.
+// classified fails closed. Core methods only; authorization asks
+// Principal.MayChangeCredentials.
 func (m Method) MayChangeCredentials() bool {
 	return m == MethodSession || m == MethodSessionDelegated
+}
+
+// methodClass is the classification of one method as the service's registry
+// answered it when PrincipalFor built the principal: core's own
+// (Method.Interactive, Method.MayChangeCredentials) or what the method's
+// MethodSpec declared at registration. method names the method it was read
+// for, so a holder that edits Principal.Method does not carry another
+// method's classification over to it.
+type methodClass struct {
+	method               Method
+	interactive          bool
+	mayChangeCredentials bool
+}
+
+// Interactive reports whether p's credential is a person's own interactive
+// sign-in: core's MethodSession, or an identity extension registered with
+// MethodSpec.Interactive (Cloudflare Access). It is what Guards.Session, the
+// Sensitive rule's refusal code and the owner-fallback questions ask. A nil
+// principal, an unknown method, and a principal core did not build for a
+// method outside core's own list are not interactive (fail closed).
+func (p *Principal) Interactive() bool {
+	if p == nil {
+		return false
+	}
+	if p.Method.Interactive() {
+		return true
+	}
+	return p.class.method != MethodNone && p.class.method == p.Method && p.class.interactive
+}
+
+// MayChangeCredentials reports whether p's credential may change credentials
+// or identity (HEAD's credGuard, Guards.Interactive, config.Actor.Interactive):
+// core's MethodSession and MethodSessionDelegated, or an identity extension
+// registered with MethodSpec.MayChangeCredentials. It is a property of its own,
+// not Interactive: a delegated session may change credentials (the
+// reset-password flow) and is not interactive. Fails closed as Interactive
+// does.
+func (p *Principal) MayChangeCredentials() bool {
+	if p == nil {
+		return false
+	}
+	if p.Method.MayChangeCredentials() {
+		return true
+	}
+	return p.class.method != MethodNone && p.class.method == p.Method && p.class.mayChangeCredentials
 }
 
 type Assurance uint8
@@ -86,6 +139,9 @@ type Principal struct {
 	// seal does.
 	scopes []rbac.Permission
 	seal   principalSeal
+	// class is the registry's classification of Method, set only by
+	// PrincipalFor (see methodClass, Principal.Interactive).
+	class methodClass
 	// notAfter is when an identity extension's principal stops standing
 	// (Assertion.ExpiresAt, or core.auth.extension_max_age after AuthTime);
 	// zero for every other method, whose credential record carries its own
