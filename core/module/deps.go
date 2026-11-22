@@ -60,6 +60,24 @@ type Deps struct {
 	// config.
 	Secrets secrets.Scope
 
+	// State is the labelled state filesystem for a boot-time write outside
+	// Pebble (a legacy file's deletion in a start hook): every call takes the
+	// writer's crash-matrix label, so the kit sees it (state.go). Never nil
+	// from the kernel; a path with no state directory or store directory
+	// under it is refused (ErrStateConfined), which is every path in
+	// app.Describe, where no store is open.
+	State StateFS
+
+	// SecretsKeyringExported reports whether core.secrets is not raising
+	// secrets_keyring_not_exported: every key of the keyring is named by an
+	// export (05-config §2.4, §2.9). It reads the export record on every call
+	// and fails closed: false when the record cannot be read and when the
+	// keyring is not open (app.Describe, after shutdown). It is not the
+	// core.secrets health Result, which carries one Reason and so can name
+	// secrets_undecryptable while the keyring is also unexported. Never nil
+	// from the kernel.
+	SecretsKeyringExported func() bool
+
 	// Config is the App's layered config store (05-config): every key of
 	// core and of every module, read and written as the caller's Actor, plus
 	// the secrets Manifest.AppConfig names. It is nil unless the module

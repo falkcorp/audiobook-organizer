@@ -173,16 +173,29 @@ func secretsHealth(ctx context.Context, s *secrets.Store) health.Result {
 	if blocked := s.RetireBlocked(); len(blocked) > 0 {
 		raise(reasonDeriveRetireBlocked, fmt.Sprintf("derive key(s) %s are past retire_after and kept: a retained archive, undo point, checkpoint or revocation-journal line still names them, or the check failed", strings.Join(blocked, ", ")))
 	}
-	switch missing, err := s.UnexportedKeys(); {
-	case err != nil:
-		raise(reasonKeyringNotExported, "the export record cannot be read ("+err.Error()+"); run secrets export-keyring")
-	case len(missing) > 0:
-		raise(reasonKeyringNotExported, fmt.Sprintf("keyring key(s) %s are in no export; run secrets export-keyring and keep the copy off this host", strings.Join(missing, ", ")))
+	if detail := keyringNotExported(s); detail != "" {
+		raise(reasonKeyringNotExported, detail)
 	}
 	if reason == "" {
 		return health.Result{Status: health.StatusUp}
 	}
 	return health.Result{Status: health.StatusDegraded, Reason: reason, Detail: strings.Join(details, "; ")}
+}
+
+// keyringNotExported is the condition of secrets_keyring_not_exported: "" when
+// every key of the loaded keyring is named by an export record, else the
+// Detail core.secrets raises it with. An unreadable record, or a store that
+// cannot say (closed), is not exported: the check never reads "unknown" as
+// "exported". secretsHealth and Deps.SecretsKeyringExported (keyringExported)
+// share it, so the query is true exactly when the token is not raised.
+func keyringNotExported(s *secrets.Store) string {
+	switch missing, err := s.UnexportedKeys(); {
+	case err != nil:
+		return "the export record cannot be read (" + err.Error() + "); run secrets export-keyring"
+	case len(missing) > 0:
+		return fmt.Sprintf("keyring key(s) %s are in no export; run secrets export-keyring and keep the copy off this host", strings.Join(missing, ", "))
+	}
+	return ""
 }
 
 // reportSecretsHealth pushes secretsHealth to core.secrets' reporter.
