@@ -173,6 +173,8 @@ func (fx *flipFixture) runFlipped(t *testing.T, atReady func(*composed)) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if atReady != nil {
+		// Deleted by the config copy-on-write lane; see quiesceBackgroundForFlipPUT.
+		quiesceBackgroundForFlipPUT(t, r.composed)
 		atReady(r.composed)
 	}
 	require.NoError(t, r.stop())
