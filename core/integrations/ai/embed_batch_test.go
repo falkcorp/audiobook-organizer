@@ -46,9 +46,9 @@ func (e *embedBatchEnv) handle(_ *tasks.RC, _ ai.BatchJob, results iter.Seq2[ai.
 	return out, nil
 }
 
-func newEmbedBatchEnv(t *testing.T) (*embedBatchEnv, func(ai.BatchHandle)) {
+func newEmbedBatchEnv(t *testing.T, opts ...harnessOption) (*embedBatchEnv, func(ai.BatchHandle)) {
 	t.Helper()
-	h := newHarness(t)
+	h := newHarness(t, opts...)
 	c := h.capability("embed_batch", func(s *ai.CapabilitySpec) {
 		s.Kind, s.RequiredFeatures = ai.KindEmbed, []ai.Feature{ai.FeatureBatch}
 	})
@@ -76,7 +76,7 @@ func embedItems() []ai.BatchItem {
 // completes.
 func TestEmbedBatch_RoundTripSubmitPollApply(t *testing.T) {
 	t.Parallel()
-	e, complete := newEmbedBatchEnv(t)
+	e, complete := newEmbedBatchEnv(t, withMetrics())
 	ctx := context.Background()
 	id, err := e.r.SubmitBatch(ctx, e.c, embedItems(), []byte(`{"case":"vectors"}`), ai.WithPinnedModel("joker-embed"))
 	if err != nil {
@@ -105,6 +105,12 @@ func TestEmbedBatch_RoundTripSubmitPollApply(t *testing.T) {
 	job, err := e.r.BatchJob(ctx, id)
 	if err != nil || job.State != ai.JobCompleted {
 		t.Errorf("job after apply = %+v, %v, want completed", job, err)
+	}
+	// The embed answers' tokens reach the batch counters: FakeAI answers each
+	// embed item with 10 input tokens.
+	got := series(t, e.prov.Gatherer(), "mediacore_ai_tokens_total", map[string]string{"mode": "batch", "direction": "input"}, true)
+	if got != 20 {
+		t.Errorf("batch input tokens = %v, want 20 (2 embed rows x 10)", got)
 	}
 }
 
