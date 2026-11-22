@@ -51,7 +51,10 @@ type OrganizePreviewServicer interface {
 // them was wrong for multi-row books whose file_path names a file.
 type OrganizeServicer interface {
 	OrganizeOneBook(org *organizer.Organizer, book *database.Book, log logger.Logger) (*organizer.Landing, error)
-	CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error)
+	// CreateOrganizedVersionFollowTorrents makes the copy and stages, in the
+	// copy row'"'"'s own batch, the follow-up that moves the original'"'"'s torrents
+	// to it (the events flip, F6-03).
+	CreateOrganizedVersionFollowTorrents(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error)
 }
 
 // OrganizeStore is what OrganizeHandler actually needs, measured by emptying it
@@ -406,7 +409,7 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		return
 	}
 
-	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(book, landing, opID, log2)
+	createdBook, createErr := h.organizeSvc.CreateOrganizedVersionFollowTorrents(book, landing, opID, log2)
 	if createErr != nil {
 		r.internal("failed to create organized version", createErr)
 		return
@@ -421,9 +424,11 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		slog.Warn("organize failed to stamp organized book", "createdBook", createdBook.ID, "updateErr", updateErr)
 	}
 
-	// Deluge follows the move through the durable relocation follow-up: the
-	// store stages books.book.relocated.v1 in the batch that wrote the new path,
-	// and books' outbox consumer starts the path-update run (F6-03).
+	// Deluge follows the copy through the durable relocation follow-up:
+	// CreateOrganizedVersionFollowTorrents staged books.book.relocated.v1 in the
+	// copy row's own batch, and books' outbox consumer starts the path-update
+	// run for the original (F6-03). It replaces NotifyDelugeAfterOrganize.
+	// The in-place branch above made no Deluge call at base and makes none now.
 
 	if h.publisher != nil {
 		h.publisher.Publish(ctx, plugin.NewEvent(plugin.EventFileOrganized, createdBook.ID, map[string]any{
