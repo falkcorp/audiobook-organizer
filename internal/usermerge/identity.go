@@ -77,7 +77,8 @@ func (c *CoreIdentity) ready() bool {
 }
 
 // WithCoreIdentity gives the service core's handles. With the flip wired and
-// no handles the merge stays unavailable (ErrUnavailableUnderIdentity).
+// no handles the merge and the footprint stay unavailable
+// (ErrUnavailableUnderIdentity).
 func WithCoreIdentity(c CoreIdentity) Option {
 	return func(s *Service) { s.core = &c }
 }

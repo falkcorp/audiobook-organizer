@@ -56,6 +56,9 @@ func TestAccountFootprint_CheckIsUsersManageAndAdminThroughAnyMethod(t *testing.
 	adminSession := f.session(f.admin)
 	_, manageOnly := f.mint(adminSession, f.admin.ID, "core:users.manage")
 	_, both := f.mint(adminSession, f.admin.ID, "core:users.manage", rbac.CoreAdmin)
+	// core's compiled checker makes core:admin imply every permission, so the
+	// users.manage leg is only observable on a checker that holds exactly what it
+	// names (scopedChecker); it is kept so the rule reads as HEAD's two gates.
 	noUser := &auth.Principal{Method: auth.MethodAuthDisabled, Perms: scopedChecker{rbac.CoreAdmin: true, "core:users.manage": true}}
 
 	for name, ctx := range map[string]context.Context{
@@ -63,7 +66,9 @@ func TestAccountFootprint_CheckIsUsersManageAndAdminThroughAnyMethod(t *testing.
 		"a viewer":                     f.as(f.session(alfred)),
 		"users.manage without admin":   f.as(f.session(gordon)),
 		"a key scoped to users.manage": f.as(f.keyPrincipal(f.admin, manageOnly)),
-		"the auth-disabled principal":  f.as(noUser),
+		"core:admin on an exact checker without users.manage": f.as(&auth.Principal{User: f.admin, Method: auth.MethodSession,
+			Perms: scopedChecker{rbac.CoreAdmin: true}}),
+		"the auth-disabled principal": f.as(noUser),
 	} {
 		got, err := f.read(ctx)
 		if !errors.Is(err, auth.ErrDenied) {
