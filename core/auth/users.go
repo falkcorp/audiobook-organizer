@@ -503,6 +503,7 @@ func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) e
 		subject := ref(refKindUser, string(id))
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDeleted, Subject: subject})
 		inv.user(id, journal.UserDeleted)
+		s.queueUserDeleted(inv, UserDeleted{UserID: id, Email: u.Email})
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionUserDelete, Outcome: audit.Success, Target: subject,
 			Details: map[string]any{"username": u.Username},
