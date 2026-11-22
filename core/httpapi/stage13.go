@@ -292,6 +292,10 @@ type Stage13Options struct {
 	Audit audit.Logger
 	// Route is "METHOD /pattern", the route the denial names.
 	Route string
+	// ownerWhenSet is the route's LegacyRoute.OwnerWhenSet, set by authWrap
+	// only; unexported so no caller of Stage13 can drop a native route's
+	// owner leg.
+	ownerWhenSet bool
 }
 
 // ErrStage13Options is Stage13's refusal of options it cannot run with.
@@ -333,9 +337,15 @@ func stage13(perm rbac.Requirement, guards Guards, o Stage13Options, outcome fun
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			req := AuthzRequest{Perm: perm, Guards: guards}
-			req.Failure, req.Principal = outcome(r)
 			ownerRequired := o.OwnerRequired == nil || o.OwnerRequired()
+			g := guards
+			if o.ownerWhenSet && !ownerRequired {
+				// HEAD's ownerGateWhenOwnerSet: no owner leg while no owner
+				// is required (LegacyRoute.OwnerWhenSet).
+				g.Owner = false
+			}
+			req := AuthzRequest{Perm: perm, Guards: g}
+			req.Failure, req.Principal = outcome(r)
 			d := Authorize(req, AuthzOptions{OwnerRequired: ownerRequired, ResolveAtom: o.ResolveAtom, Catalog: o.Catalog})
 			if d.ClearCookie {
 				if ck := o.ClearCookie(r); ck != nil {
