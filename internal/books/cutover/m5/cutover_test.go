@@ -293,7 +293,10 @@ func TestCutover_SyslogImported(t *testing.T) {
 		}
 	})
 
-	t.Run("an_importer_error_stops_the_boot_and_keeps_the_rows", func(t *testing.T) {
+	// M5 never blocks the boot (owner ruling, 2026-11-22): the journal refusing
+	// one row quarantines that row, the boot reaches done, and the next row is
+	// imported. Before the ruling this boot failed with the importer's error.
+	t.Run("an_importer_error_quarantines_the_row_and_the_boot_completes", func(t *testing.T) {
 		rows := synth(t, 6, time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC))
 		keys := make([]string, 0, len(rows))
 		for k := range rows {
@@ -307,24 +310,51 @@ func TestCutover_SyslogImported(t *testing.T) {
 			r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
 		})
 		mem := r.seed(t)
-		_, err := r.runOn(t, mem)
-		if !errors.Is(err, refuse) {
-			t.Fatalf("boot error = %v, want the importer's", err)
+		s, err := r.runOn(t, mem)
+		if err != nil {
+			t.Fatalf("boot: %v, want the boot to reach done over a row the journal refused\n%s", err, r.logs)
 		}
-		if strings.Contains(err.Error(), "Year One") {
-			t.Errorf("the error quotes a row's message: %v", err)
+		if s.State != "done" || len(s.Left) != 0 {
+			t.Fatalf("state %q, %d syslog: rows left, want done and none", s.State, len(s.Left))
 		}
-		// The boot stopped with the poisoned row (and everything after it) still
-		// in the store; the importer recovers, and the next boot finishes the job.
+		if len(s.Quarantine) != 1 || s.Quarantine[0].Key != poisoned || s.Quarantine[0].Value != string(rows[poisoned]) {
+			t.Fatalf("quarantine = %+v, want the one refused row with its raw bytes", s.Quarantine)
+		}
+		if strings.Contains(s.Quarantine[0].Reason, refuse.Error()) {
+			t.Errorf("the quarantine reason carries the importer's text: %q", s.Quarantine[0].Reason)
+		}
+		if len(s.Journal) != len(rows)-1 {
+			t.Errorf("%d journal records, want %d", len(s.Journal), len(rows)-1)
+		}
+		imported := map[string]bool{}
+		for _, j := range s.Journal {
+			imported[j.SourceID] = true
+		}
+		for i, k := range keys {
+			if want := i != 3; imported[k] != want {
+				t.Errorf("row %d (%s) journaled = %v, want %v: the row after the refused one must still import", i, k, imported[k], want)
+			}
+		}
+		if v := s.Verify; v.Read != int64(len(rows)) || v.Written != int64(len(rows)-1) || v.Quarantined != 1 || len(v.Failures) != 0 {
+			t.Errorf("verify = %+v, want %d read, %d written, 1 quarantined, no failures", v, len(rows), len(rows)-1)
+		}
+		if !strings.Contains(r.logs.String(), "m5: a system log row is quarantined because the journal did not accept it") {
+			t.Errorf("no m5: WARN for the refused row:\n%s", r.logs)
+		}
+		// The next boot does not run M5 again, so the journal that recovered is not
+		// asked for the quarantined row, and the boot does not refuse.
 		r.j.mu.Lock()
 		r.j.failFor = nil
 		r.j.mu.Unlock()
-		s, err := r.runOn(t, mem)
+		s2, err := r.runOn(t, mem)
 		if err != nil {
 			t.Fatalf("second boot: %v\n%s", err, r.logs)
 		}
-		if len(s.Left) != 0 || len(s.Journal) != len(rows) || len(s.Quarantine) != 0 || s.State != "done" {
-			t.Errorf("left %d journal %d quarantine %d state %q, want 0, %d, 0, done", len(s.Left), len(s.Journal), len(s.Quarantine), s.State, len(rows))
+		if s2.State != "done" || len(s2.Left) != 0 || len(s2.Journal) != len(rows)-1 || len(s2.Quarantine) != 1 {
+			t.Errorf("second boot: state %q left %d journal %d quarantine %d, want done, 0, %d, 1", s2.State, len(s2.Left), len(s2.Journal), len(s2.Quarantine), len(rows)-1)
+		}
+		if got := r.j.callsFor(poisoned); got != 1 {
+			t.Errorf("the refused row was imported %d times across two boots, want 1: a done step is not re-entered", got)
 		}
 	})
 
@@ -382,12 +412,14 @@ func TestCutover_SyslogImported(t *testing.T) {
 		}
 	})
 
-	t.Run("verify_names_a_row_left_behind", func(t *testing.T) {
+	// Verify no longer fails the step for a leftover row: it logs a WARN naming it.
+	t.Run("verify_warns_about_a_row_left_behind_and_does_not_fail", func(t *testing.T) {
 		var report datamigrate.VerifyReport
 		var verr error
+		left := syslogKey(time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC), "scanner")
 		r := newRig(t, "", func(r *rig) {
 			r.mutate = func(ctx context.Context, t testing.TB, lr storage.LegacyRange) {
-				if err := lr.Set(ctx, []byte(syslogKey(time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC), "scanner")), []byte("{}")); err != nil {
+				if err := lr.Set(ctx, []byte(left), []byte("{}")); err != nil {
 					t.Fatal(err)
 				}
 				report, verr = r.migration().Verify(ctx, lr)
@@ -397,8 +429,61 @@ func TestCutover_SyslogImported(t *testing.T) {
 		if verr != nil {
 			t.Fatal(verr)
 		}
-		if len(report.Failures) == 0 || !strings.Contains(strings.Join(report.Failures, "\n"), "still present") {
-			t.Errorf("verify over a store that still holds a syslog: row reported %+v, want a failure naming it", report)
+		if len(report.Failures) != 0 {
+			t.Errorf("verify over a store that still holds a syslog: row reported failures %v, want none: M5 never blocks", report.Failures)
+		}
+		out := r.logs.String()
+		if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "m5: a syslog: row is still present") || !strings.Contains(out, left) {
+			t.Errorf("no m5: WARN naming the leftover row:\n%s", out)
+		}
+	})
+
+	// A leftover row under the retired claim neither fails this boot's step nor
+	// refuses the next boot, and M5 is not run again for it. The step skips one
+	// row, as a defect would, so Verify finds it left.
+	t.Run("a_leftover_row_blocks_neither_this_boot_nor_the_next", func(t *testing.T) {
+		rows := synth(t, 6, time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC))
+		keys := make([]string, 0, len(rows))
+		for k := range rows {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		skipped := keys[2]
+		r := newRig(t, "", withRows(rows), func(r *rig) {
+			r.parallelism = func(dm *datamigrate.DataMigration) { dm.Parallelism = fixedOne() }
+		})
+		mem := r.seed(t)
+		dm := r.migration()
+		inner := dm.Step
+		dm.Step = func(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
+			if string(kv.Key) == skipped {
+				return nil // neither imported nor quarantined: the row stays
+			}
+			return inner(ctx, kv, w)
+		}
+		s, err := r.runWith(t, mem, dm)
+		if err != nil {
+			t.Fatalf("boot with a row left behind: %v\n%s", err, r.logs)
+		}
+		if s.State != "done" || len(s.Left) != 1 || len(s.Journal) != len(rows)-1 {
+			t.Fatalf("state %q left %d journal %d, want done, 1, %d", s.State, len(s.Left), len(s.Journal), len(rows)-1)
+		}
+		if len(s.Verify.Failures) != 0 {
+			t.Errorf("verify failures = %v, want none", s.Verify.Failures)
+		}
+		if !strings.Contains(r.logs.String(), "m5: a syslog: row is still present") {
+			t.Errorf("no m5: WARN for the leftover row:\n%s", r.logs)
+		}
+		total := r.j.totalCalls()
+		s2, err := r.runOn(t, mem)
+		if err != nil {
+			t.Fatalf("second boot over the retired claim's leftover row: %v\n%s", err, r.logs)
+		}
+		if s2.State != "done" || len(s2.Left) != 1 {
+			t.Errorf("second boot: state %q left %d, want done and the row still there", s2.State, len(s2.Left))
+		}
+		if got := r.j.totalCalls(); got != total {
+			t.Errorf("the second boot made %d more Import calls: M5 ran again", got-total)
 		}
 	})
 
