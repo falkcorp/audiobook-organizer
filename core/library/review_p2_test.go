@@ -250,6 +250,18 @@ func TestSourceUnchangedChecksEachFact(t *testing.T) {
 			t.Skip("this filesystem reports no inode generation")
 		}
 		replaceKeepingTime(t, abs, stamp.mtime)
+		// A filesystem can answer FS_IOC_GETVERSION without the answer being a
+		// per-inode value (OpenZFS returns one number for every file in the
+		// dataset). Whether this one does is read off the replacement itself: if
+		// the other file has the same generation, the generation cannot tell the
+		// two apart here, and sourceUnchanged correctly leaves the decision to the
+		// other facts. That is not a scenario this filesystem can produce, so the
+		// subtest does not apply; it is not a defect in the check.
+		if after, err := root.rw.local().factsOf(src.Rel); err != nil {
+			t.Fatal(err)
+		} else if after.HasGen && after.Gen == stamp.gen {
+			t.Skipf("this filesystem's inode generation (%d) is the same for another file: not a per-inode value", stamp.gen)
+		}
 		only := srcStamp{size: stamp.size, gen: stamp.gen, hasGen: true}
 		if _, err := check(t, r, root, src, only, false); !errors.Is(err, ErrSourceChanged) {
 			t.Errorf("= %v, want ErrSourceChanged (generation)", err)
