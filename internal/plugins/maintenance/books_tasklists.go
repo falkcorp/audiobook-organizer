@@ -23,8 +23,8 @@ import (
 // The lists, and what the flip must still decide about each:
 //
 //   - jobs.Kinds over newJobsDeps (the maintenance jobs).
-//   - t6g2Kinds, t6g3Kinds, t6g4Kinds over newT6G2Deps, newT6G3Deps,
-//     newT6G4Deps.
+//   - t6g2Kinds, t6g3Kinds, t6g4Kinds, t6g7Kinds over newT6G2Deps,
+//     newT6G3Deps, newT6G4Deps, newT6G7Deps.
 //   - auxStoreCompactKindList, the books half of db_optimize.
 //
 // Group 6 is NOT in BooksTaskLists. Its 14 kinds hold a library-scan
@@ -80,6 +80,9 @@ type BooksTaskInputs struct {
 	Scan   ScanController
 	// AuxStores compacts books' separate AI-scan and OpenLibrary stores.
 	AuxStores StoreOptimizer
+	// G7 serves group 7 (the repair, report and user-merge kinds). Its RootDir
+	// and StandDownKey are the shared ones above, whatever it carries.
+	G7 G7Inputs
 	// StandDownKey is the concurrency key of the library scan kinds, which a
 	// live write parks (rc.StandDown). Empty makes a live write that needs the
 	// stand-down refuse, so it is required here.
@@ -120,6 +123,9 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	n.check("AuxStores", in.AuxStores != nil)
 	n.check("StandDownKey", in.StandDownKey != "")
 	n.check("Schedules", in.Schedules != nil)
+	n.check("G7.Reads", in.G7.Reads != nil)
+	n.check("G7.Writes", in.G7.Writes != nil)
+	n.check("G7.InvalidateSeriesCache", in.G7.InvalidateSeriesCache != nil)
 	if err := n.err("BooksTaskLists"); err != nil {
 		return nil, err
 	}
@@ -144,6 +150,10 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 		return nil, fmt.Errorf("maintenance group 4: %w", err)
 	}
 	out = append(out, g4...)
+
+	g7 := in.G7
+	g7.RootDir, g7.StandDownKey = in.RootDir, in.StandDownKey
+	out = append(out, p.t6g7Kinds(newT6G7Deps(g7), in.Schedules)...)
 
 	out = append(out, auxStoreCompactKindList(in.AuxStores, in.Schedules(auxStoreCompactKind))...)
 	return out, nil

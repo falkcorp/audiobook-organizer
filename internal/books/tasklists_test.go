@@ -129,15 +129,19 @@ func listsFixture(t *testing.T) taskListInputs {
 	return taskListInputs{
 		Schedules: NewSchedules(ScheduleDeps{}),
 		Maintenance: maintenance.BooksTaskInputs{
-			Jobs:         store,
-			G2Source:     store,
-			G2Host:       listsG2Host{},
-			RootDir:      func() string { return root },
-			G3Source:     store,
-			G3Host:       listsG3Host{root: root},
-			Ops:          store,
-			G4Host:       listsG4Host{root: root},
-			AuxStores:    listsAux{},
+			Jobs:      store,
+			G2Source:  store,
+			G2Host:    listsG2Host{},
+			RootDir:   func() string { return root },
+			G3Source:  store,
+			G3Host:    listsG3Host{root: root},
+			Ops:       store,
+			G4Host:    listsG4Host{root: root},
+			AuxStores: listsAux{},
+			G7: maintenance.G7Inputs{
+				Reads: store, Writes: store,
+				InvalidateSeriesCache: func() {},
+			},
 			StandDownKey: tasks.Key("books.library.scan"),
 		},
 		Metafetch: metafetch.BooksTaskInputs{
@@ -204,12 +208,11 @@ var notYetBuilt = map[tasks.Kind]string{
 	"books.dedup.llm-review":       "dedup plugin",
 	// maintenance groups 1, 5 and 7 builders; nightly-compact-activity-log is group 6
 	// (held for TODO-F5-11-HOLD-RENEW).
-	"books.maintenance.author-split-scan":            "maintenance g1/g5/g7",
-	"books.maintenance.metadata-refresh":             "maintenance g1/g5/g7",
-	"books.maintenance.orphan-book-files-cleanup":    "maintenance g1/g5/g7",
-	"books.maintenance.prune-ai-journal":             "maintenance g1/g5/g7",
-	"books.maintenance.reports-prune":                "maintenance g1/g5/g7",
-	"books.maintenance.resolve-production-authors":   "maintenance g1/g5/g7",
+	"books.maintenance.author-split-scan":            "maintenance g1/g5",
+	"books.maintenance.metadata-refresh":             "maintenance g1/g5",
+	"books.maintenance.orphan-book-files-cleanup":    "maintenance g1/g5",
+	"books.maintenance.prune-ai-journal":             "maintenance g1/g5",
+	"books.maintenance.resolve-production-authors":   "maintenance g1/g5",
 	"books.maintenance.nightly-compact-activity-log": "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
 }
 
@@ -310,6 +313,7 @@ func TestF5_EveryBuiltListIsCarried(t *testing.T) {
 		"acoustid":          "books.acoustid.scan",
 		"scheduler":         "books.scheduler.metadata-upgrade",
 		"repairs":           "books.repairs.folder-books",
+		"maintenance g7":    "books.maintenance.reports-prune",
 	} {
 		require.True(t, have[sentinel], "the %s list is not in bookTaskLists (no %s)", list, sentinel)
 	}
