@@ -7,7 +7,6 @@ package system
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -286,7 +285,7 @@ func (h *Handler) configCan(c *gin.Context) func(string) bool {
 		// own user count, which is not the account record once core owns
 		// identity.
 		if id, bridged := legacyauth.IdentityFrom(c.Request.Context()); bridged {
-			return h.configCanBridged(c.Request.Context(), id.Bridge, perm)
+			return h.configCanBridged(c, id.Bridge, perm)
 		}
 		if perm == config.FirstRunPerm {
 			return h.configFirstRun != nil && h.configFirstRun()
@@ -308,13 +307,23 @@ func (h *Handler) configCan(c *gin.Context) func(string) bool {
 	}
 }
 
-// configCanBridged is configCan under core identity.
-func (h *Handler) configCanBridged(ctx context.Context, b *legacyauth.Bridge, perm string) bool {
+// configCanBridged is configCan under core identity. core:admin keeps the
+// legacy branch's whole test, HEAD's admin-role test as every other admin
+// site writes it (handlers/user.go inviteMarkerMayBind): the active caller
+// holds the admin role by name and its credential may act as admin
+// (APIKeyMayActAsAdmin, through the bridge), and under core identity the
+// principal must also hold core:admin (AdminHeld). Holding core:admin alone,
+// as through a custom role granted it after the cutover, is not HEAD's admin
+// (F4-08 B10y, item 5).
+func (h *Handler) configCanBridged(c *gin.Context, b *legacyauth.Bridge, perm string) bool {
+	ctx := c.Request.Context()
 	switch {
 	case perm == config.FirstRunPerm:
 		return false
 	case perm == "core:admin":
-		return b.AdminHeld(ctx)
+		u, ok := servermiddleware.CurrentUser(c)
+		return ok && u != nil && u.Status == "active" && slices.Contains(u.Roles, "admin") &&
+			servermiddleware.APIKeyMayActAsAdmin(c) && b.AdminHeld(ctx)
 	case h.configAtoms == nil:
 		return false
 	}
