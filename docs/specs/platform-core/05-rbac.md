@@ -936,8 +936,15 @@ through `core:admin` and the `settings.manage` row; see §14 item 7),
 | `fp-worker` | books module seed role with ID `fp-worker` (admitted by books' `Manifest.ImportedRoleIDs`, §4.9), `books:fingerprint.worker` only — no `core:self` |
 
 The 20 `RequireAdmin` routes keep today's two kinds (`wire_admin_role.go:19-57`, decision table in
-`docs/decisions/2026-10-30-admin-routes-auth-off.md`), so both the role reach and the auth-off reach
-stay identical:
+`docs/decisions/2026-10-30-admin-routes-auth-off.md`), so the auth-off reach stays identical. The role reach does
+not: each route is gated by the permission below and nothing else (§4.6: no role-name test), and a custom role can
+hold that permission (§4.7: an actor who holds a scope may put it in a role, `core:admin` included), as can a key
+scoped to it. Such a role or key reaches the route, where HEAD's `RequireAdmin` admitted only the `admin` role. This
+widening was approved by the owner on 2026-11-22 (F4-08 B10rn). Only an actor who already holds the permission can grant
+it (§4.7 rule 1), so it reaches no one an admin did not choose. No seeded or migrated principal changes reach: M3
+writes none of these permissions to anything but `admin` (§6.1). During the identity flip, until the gin gate is
+unmounted, the bridge still runs HEAD's role-name test after the permission, so the widening takes effect when it is
+unmounted (09 §9.2.6):
 
 | Today's kind | Routes (all under `/api/v1` at HEAD) | Native permission | With auth off |
 |---|---|---|---|
@@ -945,7 +952,7 @@ stay identical:
 | read-only (`adminRole`) | the four `GET /admin/debug/*` | `books:admin.view` | open |
 | read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, core:roles.view, books:admin.view)` | open |
 | always-authenticated | `PATCH /admin/debug/books/:id`, `PATCH /admin/debug/book-files/:id`, `POST /admin/debug/edits/:edit_id/undo` | `books:admin.debug` | 401 |
-| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/reset` and `POST /system/factory-reset` | deleted in release R1, whose only reset is the offline `storage reset` (A-17); from F4 the one native route `POST /api/core/v1/system/factory-reset` replaces both, with `core:admin` + `Guards.Interactive` + `Guards.Owner` (§4.10); only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin` | 401 |
+| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/reset` and `POST /system/factory-reset` | deleted in release R1, whose only reset is the offline `storage reset` (A-17); from F4 the one native route `POST /api/core/v1/system/factory-reset` replaces both, with `core:admin` + `Guards.Interactive` + `Guards.Owner` (§4.10); `admin` and any custom role an admin gave `core:admin` reach it (the widening above) | 401 |
 | always-authenticated | retired 410 stubs `/maintenance/wipe`, `/cache/invalidate`, `/admin/recompact-digests` | `core:admin` (stub keeps auth-first ordering) | 401 |
 | always-authenticated | guest service tokens list, plan, revoke | `core:admin` | 401 |
 

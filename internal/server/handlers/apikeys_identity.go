@@ -36,6 +36,10 @@ import (
 // hashed, is ever logged.
 var apiKeyLog = logger.New("handlers.apikeys")
 
+// keyForAnotherUserMessage is the 403 of a key-authenticated caller asking to
+// create a key for another user.
+const keyForAnotherUserMessage = "API keys cannot create keys for other users; sign in to do that"
+
 // errKeysNotWired is the 503 of a server whose Identity carries no key rule.
 const errKeysNotWired = "api keys are not available on this server: the identity wiring has no key rule"
 
@@ -91,6 +95,14 @@ func (h *APIKeyHandler) createUnderIdentity(c *gin.Context, id *legacyauth.Ident
 	// a core key always has one). Every other method had no calling key to
 	// clamp to on HEAD and was refused: it still is.
 	method := auth.MethodFromContext(ctx)
+	// A key never mints for another user (F4-08 B10rn, STOP 2 ruling, option 2).
+	// The route's credRouteWhen refuses it first today; this refusal is the
+	// handler's own, so it holds when that guard is gone, and does not rest on
+	// core's refusal or on the clamp below.
+	if method == auth.MethodAPIKey && target != string(p.User.ID) {
+		httputil.RespondWithForbidden(c, keyForAnotherUserMessage)
+		return
+	}
 	if !servermiddleware.CredentialChangeAllowed(c) && method != auth.MethodAPIKey {
 		httputil.RespondWithForbidden(c, noClampMessage)
 		return

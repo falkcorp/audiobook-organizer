@@ -418,6 +418,19 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   13 rows, a key then intersected with its owner's role set, never `core:admin` (05-rbac §6.1; SEC-12). Core seeds the four
   seed roles, and their IDs (`admin`, `editor`, `viewer`, `fp-worker`) are kept, so `User.Roles` and invite role
   references need no rewrite. An atom outside the table maps to nothing, and its role converts and is reported (P2).
+- **Admin-gated routes: owner-approved widening, admin-granted only (2026-11-22).** HEAD's 19 role-name admin
+  routes (the debug reads and edits, cache key listing and invalidate, the guest service tokens, the retired
+  recompact and wipe stubs, and the master lists) are gated by their 05-rbac §6.2 permission alone once the gin
+  gate is unmounted (F4-08 B10g). A custom role or key that holds exactly that permission is admitted where HEAD's
+  `RequireAdmin` refused anything but the `admin` role. The owner chose this on 2026-11-22 (F4-08 B10rn, STOP 1,
+  option 1: permissions only) over keeping a role-name test. Only an actor who already holds the permission can
+  grant it (05-rbac §4.7 rule 1), and M3 grants none of them to any seeded or migrated principal but `admin`.
+  - Proved on the flipped build by three cells: `TestReachRegisteredPath_RoleNameRowsScopeGateAdmits` (stage 13
+    admits such a role and such a key on all 19 routes); `TestReachRegisteredPath_NonAdminCannotGrantAdminScopes`
+    (a role manager without the permission cannot grant it to a role or a key); and
+    `TestRegisteredHarness_EveryVerdictIsR0sOrNamed` (no seeded or migrated principal changes reach).
+  - Until B10g the bridge still applies the role-name test after the permission (`bridgedAdminGate`), and the
+    allow-list in `internal/server/legacy_manifest_gin_allowlist_test.go` names each route until B10g deletes it.
 - **The reach oracle.** Allow and deny for every gin route (the ABS routes included), every seed and custom role,
   scoped keys and auth-off, computed by the R0 binary on its fixture corpus (with its hand-built overlay, §9.3) and by R2
   on the migrated corpus, are equal except the recorded changes below. The baseline is R0, that is HEAD plus the six
