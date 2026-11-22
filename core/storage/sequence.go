@@ -88,13 +88,41 @@ func (s *Sequence) NextIn(ctx context.Context, b *Batch) (uint64, error) {
 // store are written back (05-rbac audit copy-forward; DATA2-16, SEC2-12). Like
 // a refill, a crash after it can only skip IDs.
 func (s *Sequence) AdvancePast(ctx context.Context, n uint64) error {
+	_, err := s.advancePast(ctx, n)
+	return err
+}
+
+// Cut ends the current lease and returns a boundary B such that every ID a Next
+// call hands out after Cut returns is greater than B, and every ID handed out
+// before it (the whole of the ended lease, issued or not) is at most B. It is
+// what a reader needs when it must tell "allocated before this point" from
+// "allocated after" over a sequence that is still being drawn from: the stored
+// high-water mark alone is not that boundary, because it is the end of the
+// live lease and Next keeps handing out IDs below it until the lease is spent
+// (05-backup §5B.3.5 step 4, the audit log's boundary).
+//
+// Like AdvancePast it is its own Sync commit under the sequence's mutex and
+// costs the unissued remainder of the ended lease, skipped and never reissued.
+// A sequence that never issued an ID has boundary 0.
+func (s *Sequence) Cut(ctx context.Context) (uint64, error) {
+	hw, err := s.advancePast(ctx, 0)
+	if err != nil {
+		return 0, err
+	}
+	return hw - 1, nil // hw is the first ID no lease has handed out; it is never 0
+}
+
+// advancePast commits hw = max(hw, n+1), drops the live lease and returns the
+// stored mark.
+func (s *Sequence) advancePast(ctx context.Context, n uint64) (uint64, error) {
 	if s.err != nil {
-		return s.err
+		return 0, s.err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, err := s.commitHW(ctx, func(hw uint64) uint64 { return max(hw, n+1) }); err != nil {
-		return err
+	hw, err := s.commitHW(ctx, func(hw uint64) uint64 { return max(hw, n+1) })
+	if err != nil {
+		return 0, err
 	}
 	// The dropped lease's unissued IDs are skipped, never reissued: the next
 	// refill starts at the stored mark, which is past both n and that lease.
@@ -102,7 +130,7 @@ func (s *Sequence) AdvancePast(ctx context.Context, n uint64) error {
 	// and takes its ID after finds it spent and refills (review NIT-2).
 	s.cur.Load().limit.Store(0)
 	s.cur.Store(&seqLease{})
-	return nil
+	return hw, nil
 }
 
 // refill takes a new durable lease when l is still the current one.
