@@ -67,8 +67,11 @@ func as(m auth.Method, perms ...rbac.Permission) *auth.Principal {
 }
 
 // owner is an interactive core:admin session with the owner assurance.
-func owner() *auth.Principal {
-	p := as(auth.MethodSession, rbac.CoreAdmin)
+func owner() *auth.Principal { return ownerHolding(rbac.CoreAdmin) }
+
+// ownerHolding is an interactive session with the owner assurance holding perms.
+func ownerHolding(perms ...rbac.Permission) *auth.Principal {
+	p := as(auth.MethodSession, perms...)
 	p.Assurance = auth.AssuranceOwner
 	return p
 }
@@ -397,6 +400,12 @@ func TestFactoryReset_GuardsRefuseBeforeAnythingIsRead(t *testing.T) {
 		// interactive guard, then the owner guard, then core:admin.
 		{"api key, not an admin", as(auth.MethodAPIKey, "core:settings.manage"), nil, 403, "interactive_required", ""},
 		{"session, not an admin, not the owner", as(auth.MethodSession, "core:settings.manage"), nil, 403, "owner_required", ""},
+		// The owner gate is not the permission: while the owner is required, the
+		// verified owner still needs core:admin (05-rbac §6.2). With the owner not
+		// required the Owner guard's fallback asks core:admin itself, so only this
+		// case shows that guard() checks the permission on its own.
+		{"the owner, required, not an admin", ownerHolding("core:settings.manage"), func() bool { return true }, 403, "permission_denied", string(rbac.CoreAdmin)},
+		{"the owner, required, no checker", &auth.Principal{Method: auth.MethodSession, User: &auth.User{ID: bruceID}, Assurance: auth.AssuranceOwner}, func() bool { return true }, 403, "permission_denied", string(rbac.CoreAdmin)},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
