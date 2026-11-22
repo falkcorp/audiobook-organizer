@@ -27,7 +27,8 @@ import (
 //   - taking a field's address:     &config.Get().X
 //   - mutating a slice or map in it: append/copy/clear/delete, sort.*, slices.Sort*
 //   - calling a pointer-receiver method that changes its receiver
-//     (ITunesConfig.Resolve; Config.Validate no longer does, see Normalized)
+//     (ITunesConfig.Resolve, and r10's in-place Config.Normalize; Config.Validate
+//     no longer does, see Normalized)
 //
 // plus the test-only setters (SetForTest, ReplaceForTest) in production code.
 // The check is syntactic and follows one level of aliasing (a local assigned
@@ -36,7 +37,7 @@ import (
 
 // cowMutatingMethods are pointer-receiver config methods that change their
 // receiver. Calling one on a snapshot writes into it.
-var cowMutatingMethods = map[string]bool{"Resolve": true}
+var cowMutatingMethods = map[string]bool{"Resolve": true, "Normalize": true}
 
 // cowTestOnly are the setters only tests (and internal/testutil) may call.
 var cowTestOnly = map[string]bool{"SetForTest": true, "ReplaceForTest": true}

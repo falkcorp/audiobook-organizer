@@ -269,23 +269,35 @@ global, outside `mu`.
 
 The new path is safe in every case, which is the point of the change.
 
-**r10 port.**
+**r10 port: one normalisation, not two.** r10 has since moved the four in-place
+fixups into `Config.Normalize()` (`2be168931`). `Normalize` is idempotent and
+in place. Both `Problems()` and `Project` call it, so every projection is
+published normalised; `TestEngine_ANormalisedDefaultSurvivesASave` pins that.
+This fixes the flaw where the next rebuild overwrote the boot normalisation.
+On rebase:
 
-- `Problems()` becomes pure in the same way: `Normalized()` first, then the
-  checks.
-- `appconfig.validateCandidate` (`write.go:650`, `cand.Problems()`) normalises
-  its candidate in place today. It switches to
-  `cand = *cand.Normalized(); found := cand.Problems()`, so the stored values
-  stay the normalised ones.
-- The boot call becomes `config.NormalizeAndValidate()`. **With the Facade
-  installed**, that publishes a projection-only change, which the next
-  `Project` overwrites. Today's in-place `Validate` has the same flaw: it
-  normalises the projection, and the next Facade rebuild silently drops it.
-  The correct r10 shape is for `Project` to publish `cfg.Normalized()`, so
-  every projection is normalised and the boot step reduces to
-  `config.Get().Validate()`. That is a behaviour decision for the F3-07 owner,
-  since GET /config reads the Engine's `e.cur`, not the projection. It is
-  raised in section 11 rather than decided here.
+- `Normalize()` stays the single normalisation body. The prototype's
+  `normalizeInPlace` is deleted, and `Normalized()` becomes
+  `n := c.Clone(); n.Normalize(); return n`. Main's two extra normalisers,
+  `chapter_consolidation_threshold_min` and `log_retention_days`, go wherever
+  r10 put them; they are not reintroduced.
+- `Normalize` keeps its in-place signature, because `Project` calls it on its
+  own private argument before the swap. A guard rule is added: `Normalize` on
+  a chain rooted at `config.Get()` is refused, the same way `Resolve` is.
+- `Problems()` and `Validate()` become pure. Today `Problems` starts with
+  `c.Normalize()` on its receiver. It changes to `n := c.Normalized()` and
+  checks `n`.
+- `appconfig.validateCandidate` (`write.go:650`) relied on `cand.Problems()`
+  normalising `cand` before it is stored. It calls `cand.Normalize()`
+  explicitly first: `cand` is the Engine's private candidate, so normalising
+  in place is fine there.
+- The boot step stays `config.NormalizeAndValidate()`. With a Facade
+  installed, the published projection is already normalised, so the publish
+  is an idempotent swap. Without one, the publish does the work. Either way,
+  nothing writes into a snapshot that readers hold. Today's
+  `config.AppConfig.Validate()` on r10 still writes the live projection in
+  place, even when every value written is unchanged; under `-race` that is
+  still a write.
 
 ## 7. Pointer hand-offs
 
@@ -402,9 +414,9 @@ with ceilings that may only fall. End state:
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Rebase churn: the F3-07 stack is still moving and rewrites `internal/config` (r10 deletes `update_service.go` and most of `persistence.go`) | certain | Core API in a new file (`cow.go`); the codemod is re-run, never hand-merged; the main-only `update_service.go` edits disappear with the file. On r10 the only hand edits are `mutateLocal`, `Problems`/`Validate`, `Engine.Mutate` and `validateCandidate` |
+| Rebase churn: the F3-07 stack is still moving and rewrites `internal/config` (r10 deletes `update_service.go` and most of `persistence.go`) | certain | Core API in a new file (`cow.go`); the codemod is re-run, never hand-merged; the main-only `update_service.go` edits disappear with the file. On r10 the only hand edits are `mutateLocal`, `Normalized` on top of `Normalize`, pure `Problems`/`Validate`, `Engine.Mutate` and `validateCandidate` |
 | A reader writes through `Get()` (compiles) | medium | arch guard (syntax) and seal (runtime, tests); the codemod refuses such sites |
-| `Project` and the boot normalisation interact (section 6) | known | owner decision: normalise in `Project` (recommended) or keep the boot step projection-only, as today |
+| Two normalisation bodies after the rebase (main's `normalizeInPlace` and r10's `Normalize`) | certain without care | section 6: `Normalized()` is defined on `Normalize()`; `normalizeInPlace` is deleted on rebase |
 | Per-run pinning changes behaviour for long runs | low, intended | listed per site in section 7; long-lived services use a Source |
 | Write cost: two reflective `Clone`s per write, three under `go test` | low | writes are saves, boot and test set-ups; measure `BenchmarkMutate` in the sweep PR. If a hot test loop shows it, the seal can skip unchanged generations |
 | `testing` imported by non-test `internal/config` | low | precedent: `internal/books/store/pebble_store_open.go`; `testing.Testing()` registers no flags |

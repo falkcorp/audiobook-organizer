@@ -38,7 +38,7 @@ func TestMutatePublishesANewSnapshotAndLeavesTheOldOneAlone(t *testing.T) {
 	SetForTest(func(c *Config) {
 		c.RootDir = "/tmp/gotham"
 		c.SupportedExtensions = []string{".mp3", ".m4b"}
-		c.Dedup.Signals.Confidence = map[string]float64{"isbn": 0.9}
+		c.Dedup.Signals.Confidence = map[string]DedupKindConfidence{"isbn": {MinConfidence: 0.9}}
 	})
 	before := Get()
 	beforeCopy := before.Clone()
@@ -46,8 +46,8 @@ func TestMutatePublishesANewSnapshotAndLeavesTheOldOneAlone(t *testing.T) {
 	Mutate(func(c *Config) {
 		c.RootDir = "/tmp/batcave"
 		c.SupportedExtensions[0] = ".flac" // in place on the copy
-		c.Dedup.Signals.Confidence["isbn"] = 0.1
-		c.Dedup.Signals.Confidence["asin"] = 0.5
+		c.Dedup.Signals.Confidence["isbn"] = DedupKindConfidence{MinConfidence: 0.1}
+		c.Dedup.Signals.Confidence["asin"] = DedupKindConfidence{MinConfidence: 0.5}
 	})
 
 	after := Get()
@@ -57,7 +57,7 @@ func TestMutatePublishesANewSnapshotAndLeavesTheOldOneAlone(t *testing.T) {
 	if !reflect.DeepEqual(before, beforeCopy) {
 		t.Fatalf("the previous snapshot changed under a reader: %+v", before)
 	}
-	if after.RootDir != "/tmp/batcave" || after.SupportedExtensions[0] != ".flac" || after.Dedup.Signals.Confidence["asin"] != 0.5 {
+	if after.RootDir != "/tmp/batcave" || after.SupportedExtensions[0] != ".flac" || after.Dedup.Signals.Confidence["asin"].MinConfidence != 0.5 {
 		t.Fatalf("the write did not reach the new snapshot: %+v", after)
 	}
 }
@@ -111,7 +111,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 	restoreConfig(t)
 	SetForTest(func(c *Config) {
 		c.SupportedExtensions = []string{".mp3"}
-		c.Dedup.Signals.Confidence = map[string]float64{"isbn": 0.9}
+		c.Dedup.Signals.Confidence = map[string]DedupKindConfidence{"isbn": {MinConfidence: 0.9}}
 	})
 	var stop atomic.Bool
 	var wg sync.WaitGroup
@@ -133,7 +133,7 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		Mutate(func(c *Config) {
 			c.SupportedExtensions = append(c.SupportedExtensions, ".m4b")
-			c.Dedup.Signals.Confidence["isbn"] = float64(i)
+			c.Dedup.Signals.Confidence["isbn"] = DedupKindConfidence{MinConfidence: float64(i)}
 			c.RootDir = filepath.Join("/tmp/gotham", "block")
 		})
 	}

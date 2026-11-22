@@ -214,6 +214,12 @@ func analyzeFile(path string, testWrites bool) ([]Site, error) {
 		q = localName(f) + "."
 	}
 	getCall, snapCall, setCall, replCall, param := q+"Get()", q+"Snapshot()", q+"SetForTest", q+"ReplaceForTest", "*"+q+"Config"
+	if inPkg {
+		// Inside package config, Snapshot itself is one of the readers being
+		// rewritten (`return AppConfig`); spelling a value copy as Snapshot()
+		// there would make it call itself.
+		snapCall = "*Get()"
+	}
 
 	off := func(p token.Pos) int { return fset.Position(p).Offset }
 	text := func(n ast.Node) string { return string(src[off(n.Pos()):off(n.End())]) }

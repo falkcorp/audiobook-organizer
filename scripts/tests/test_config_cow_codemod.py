@@ -195,6 +195,8 @@ var AppConfig Config
 
 func root() string { return AppConfig.RootDir }
 
+func Snapshot() Config { return AppConfig }
+
 func field(c Config) int { return c.AppConfig }
 
 func local() string {
@@ -318,8 +320,11 @@ class EndToEndTest(unittest.TestCase):
         (pkg / "x.go").write_text(IN_PACKAGE)
         sites, stderr, code = cc.run_analyzer([str(pkg / "x.go")], False)
         self.assertEqual(code, 0, stderr)
-        self.assertEqual([(s.line, s.kind) for s in sites], [(7, "read")])
+        self.assertEqual([(s.line, s.kind) for s in sites], [(7, "read"), (9, "value-copy")])
         self.assertEqual(sites[0].edits[0].new, "Get()")
+        # Not Snapshot(): inside package config that is the function being
+        # rewritten, and it would call itself.
+        self.assertEqual(sites[1].edits[0].new, "*Get()")
 
 
 if __name__ == "__main__":
