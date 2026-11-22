@@ -135,6 +135,16 @@ type User struct {
 	// clears it; set on a last admin a restore had to keep (05-rbac §7.1,
 	// §4.14, SEC4-12).
 	SignInRestricted bool
+	// MergedInto is the user an admin user merge folded this account into, ""
+	// otherwise; MergedAt is when. The merge's own batch writes it with the
+	// disable. SetStatus refuses to enable a marked account (ErrMergedAway,
+	// 409 `merged_away`) because enabling would put a second live account back
+	// on sign-ins and data that now belong to MergedInto; the REST user view
+	// carries both (`merged_into_user_id`, `merged_at`). Both are omitted from
+	// the stored record while unset. HEAD's `merged_into_user_id` and
+	// `merged_at` import into them (§11).
+	MergedInto UserID
+	MergedAt   time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	Version         int64
@@ -201,6 +211,16 @@ type Identities interface {
 // ctx principal (core:users.manage, Interactive, dominance over both users,
 // and the owner rule of §4.8), so holding the handle grants nothing.
 type Admin interface {
+	// PlanUserMerge previews folding source into target (R1). It re-checks the
+	// principal exactly as StageUserMerge does, runs every refusal StageUserMerge
+	// runs, reads the records the merge moves (API keys, linked sign-ins, the
+	// allow-list row of the source's address) and returns the opaque plan
+	// StageUserMerge takes plus a MergeSummary of ids, counts and outcome codes.
+	// The plan keeps the stored bytes of those records inside auth, so a
+	// credential hash never reaches the module that asked for the preview; it
+	// pins both users' versions and every row it read. It stages and writes
+	// nothing.
+	PlanUserMerge(ctx context.Context, source, target UserID) (UserMergePlan, MergeSummary, error)
 	// StageUserMerge binds the auth Store to the caller's batch b and has it
 	// rewrite the owner of every record in plan from Source to Target
 	// (Store.StageMerge, R4-1), disables Source and bumps its
@@ -216,6 +236,25 @@ type Admin interface {
 	// does not make. AfterCommit re-reads Source and publishes only when the
 	// store shows the merge's write, so running it after a failed commit
 	// publishes nothing (F4-08 A15). It is nil whenever the error is not.
+	//
+	// Beyond the re-owning, the merge stages in b: the source's roles the target
+	// lacks, added to the target under the principal's dominance (dominance over
+	// the source covers every one of them; the stored role set is claimed with a
+	// guard, so a role edited before the commit fails it); HEAD's e-mail rule
+	// (the source's address is always cleared; the target keeps its own, else
+	// takes the source's with its verification; a same-address merge whose only
+	// verified side was the source leaves the target verified; a verified
+	// address another account holds is refused, ErrEmailInUse); the source's
+	// MergedInto/MergedAt marker. Two refusals are MergeRefusal values (match
+	// ErrMergeRefused, read with errors.As): `already_merged` (the source was
+	// merged before) and `no_sign_in` (the target would have no password and no
+	// linked sign-in once the merge's own sign-ins move to it), plus
+	// `email_linkable`, which core adds to HEAD's rules: a target that is not an
+	// admin and has no password may not gain a verified address it did not hold
+	// verified, because the OIDC resolver links a sign-in by address to exactly
+	// such an account; HEAD's plan cannot reach it (its survivor must be an
+	// admin). The last-admin rule for disabling the source holds too; the app
+	// cannot reach it, since books refuses a survivor that is not an admin.
 	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (AfterCommit, error)
 }
 
@@ -263,8 +302,21 @@ type Compat interface {
 // UserMergePlan is the auth half of an admin user merge; books builds it from
 // its preview (internal/usermerge stays in ABO).
 type UserMergePlan struct {
-	Source, Target UserID
-	Rows           []MergeRow
+	// unexported: source, target, both users' versions, the rows. Zero value =
+	// no plan, refused with ErrBadInput. Source() and Target() read the ids;
+	// printing a plan (%v, %+v, %#v, slog) shows the ids and a record count only.
+}
+
+// MergeSummary is what a preview may show an admin: ids, counts and outcome
+// codes, never a credential hash, a key secret or a token.
+type MergeSummary struct {
+	Source, Target    UserID
+	RolesTransferred  []rbac.RoleName
+	TargetHoldsAdmin  bool              // HEAD's plan refuses a survivor that is not an admin
+	Email             MergeEmailOutcome // none | kept | moved | verified_transferred | released_verified
+	APIKeys           []string          // ids of the source's keys that move
+	IdentityProviders []string          // the provider of each sign-in that moves
+	AllowListRows     int
 }
 
 type MergeRow struct {
@@ -659,8 +711,12 @@ type Store interface {
 	IdentityBySubject(ctx context.Context, provider, subject string) (*ExternalIdentity, error)
 	InviteAllowed(ctx context.Context, email string) (bool, error)
 
-	// StageMerge rewrites the owner of every record of plan (Admin.StageUserMerge).
-	StageMerge(b *storage.Batch, plan UserMergePlan) error
+	// MergeRows reads every record a merge of source moves, each with the stored
+	// bytes (Admin.PlanUserMerge); StageMerge re-owns them from source to
+	// target with an Expect on those bytes (Admin.StageUserMerge). Both are the
+	// embedded MergeStore, so the interface stays within the interface-width cap.
+	MergeRows(ctx context.Context, source UserID) ([]MergeRow, error)
+	StageMerge(b *storage.Batch, source, target UserID, rows []MergeRow) error
 }
 
 var ErrUndecodableRecord = errors.New("auth: stored identity record cannot be decoded")
