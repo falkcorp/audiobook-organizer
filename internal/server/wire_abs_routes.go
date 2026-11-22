@@ -1,7 +1,7 @@
 // file: internal/server/wire_abs_routes.go
-// version: 1.37.3
+// version: 1.37.4
 // guid: 9c6b13f8-40a2-4e57-b18d-72e0a5c4d396
-// last-edited: 2026-11-11
+// last-edited: 2026-11-22
 
 package server
 
@@ -372,6 +372,48 @@ func absReservedPath(path string) bool {
 	return false
 }
 
+// errABSCFNeedsAccess is why a boot whose only ABS auth mode is cf is refused
+// without the Cloudflare Access team domain and AUD.
+var errABSCFNeedsAccess = errors.New("absauth: ABS_AUTH_MODES=cf requires CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD; " +
+	"without them no request could ever authenticate")
+
+// loadABSConfig validates the ABS settings of snap into the config the surface
+// is built from. It is pure (it reads snap and nothing else), so a caller that
+// can return an error checks it before building anything: books' Register does
+// (ValidateABSConfig), and wireABSRoutes, which cannot return one, stays the
+// belt for every other caller of NewServer. A snap that leaves the surface off
+// is valid.
+func loadABSConfig(snap config.Config) (*absauth.Config, error) {
+	cfg, err := absauth.Load(absauth.Settings{
+		Enabled:          snap.ABSAPIEnabled,
+		AuthModes:        snap.ABSAuthModes,
+		JWTSecret:        snap.ABSJWTSecret,
+		AccessTokenTTL:   snap.ABSAccessTokenTTL,
+		RefreshTokenTTL:  snap.ABSRefreshTokenTTL,
+		RefreshGrace:     snap.ABSRefreshGrace,
+		SessionMaxTTL:    snap.ABSSessionMaxTTL,
+		ServerVersion:    snap.ABSServerVersion,
+		DefaultLibraryID: snap.ABSDefaultLibraryID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Enabled && cfg.Modes.CF && !cfg.Modes.JWT && (snap.CFAccessTeamDomain == "" || snap.CFAccessAUD == "") {
+		return nil, errABSCFNeedsAccess
+	}
+	return cfg, nil
+}
+
+// ValidateABSConfig is the error a boot with snap's ABS settings would exit on
+// in wireABSRoutes: a missing or short ABS_JWT_SECRET, an unparseable duration,
+// an unknown auth mode, or cf as the only mode without its Access settings. nil
+// when the surface is off or valid. It exists so books' Register can refuse the
+// boot with a returned error before NewServer, whose constructor can only exit.
+func ValidateABSConfig(snap config.Config) error {
+	_, err := loadABSConfig(snap)
+	return err
+}
+
 // wireABSRoutes builds and registers the Audiobookshelf-compatible router group.
 //
 // It is a NEW TOP-LEVEL GROUP, not a child of /api/v1 (spec §3.6), with its own
@@ -393,17 +435,7 @@ func (s *Server) wireABSRoutes() {
 		return
 	}
 
-	cfg, err := absauth.Load(absauth.Settings{
-		Enabled:          true,
-		AuthModes:        snap.ABSAuthModes,
-		JWTSecret:        snap.ABSJWTSecret,
-		AccessTokenTTL:   snap.ABSAccessTokenTTL,
-		RefreshTokenTTL:  snap.ABSRefreshTokenTTL,
-		RefreshGrace:     snap.ABSRefreshGrace,
-		SessionMaxTTL:    snap.ABSSessionMaxTTL,
-		ServerVersion:    snap.ABSServerVersion,
-		DefaultLibraryID: snap.ABSDefaultLibraryID,
-	})
+	cfg, err := loadABSConfig(snap)
 	if err != nil {
 		slog.Error("abs: refusing to start — the Audiobookshelf API is enabled but misconfigured", "err", err)
 		os.Exit(1)
@@ -425,13 +457,9 @@ func (s *Server) wireABSRoutes() {
 	})
 	if cfg.Modes.CF {
 		if snap.CFAccessTeamDomain == "" || snap.CFAccessAUD == "" {
-			// Not fatal when the JWT resolver can still serve requests, but it IS fatal
-			// when cf is the only enabled mode: nothing could ever authenticate.
-			if !cfg.Modes.JWT {
-				slog.Error("abs: refusing to start — ABS_AUTH_MODES=cf requires CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD; " +
-					"without them no request could ever authenticate")
-				os.Exit(1)
-			}
+			// Not fatal when the JWT resolver can still serve requests; it IS fatal
+			// when cf is the only enabled mode (nothing could ever authenticate), and
+			// loadABSConfig has already refused that.
 			slog.Warn("abs: Cloudflare Access mode is enabled but CF_ACCESS_TEAM_DOMAIN/CF_ACCESS_AUD are unset — " +
 				"assertions cannot be verified, so only the JWT resolver will authenticate")
 		} else if v, verr := s.absCFVerifier(snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {

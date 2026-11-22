@@ -1,12 +1,14 @@
 // file: internal/books/boot_test.go
-// version: 1.1.1
+// version: 1.1.2
 // guid: 4e1b7c92-3a6d-4f08-8b25-9c0d7e5a1f36
-// last-edited: 2026-11-09
+// last-edited: 2026-11-22
 
 package books
 
 import (
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -72,6 +74,65 @@ func TestSettingsBoot_ABSFlagDriftRefuses(t *testing.T) {
 		err := bootFails(t, mod, opts)
 		assert.ErrorIs(t, err, errABSFlagDrift, "abs=%v", abs)
 	}
+}
+
+// absMisconfigCases are the ABS settings the preflight refuses: each is a boot
+// that used to reach wireABSRoutes inside NewServer, which logged and called
+// os.Exit(1).
+var absMisconfigCases = []struct {
+	name, want string
+	edit       func(*config.Config)
+	modes      string // the ABS auth modes layer (the environment), "" for the default
+}{
+	{"no secret", "ABS_JWT_SECRET is required", func(c *config.Config) { c.ABSJWTSecret = "" }, ""},
+	{"short secret", "at least", func(c *config.Config) { c.ABSJWTSecret = "short" }, ""},
+	{"unknown mode", "ABS_AUTH_MODES", nil, "jwt,ldap"},
+	{"cf only, no Access settings", "CF_ACCESS_TEAM_DOMAIN", nil, "cf"},
+}
+
+const absMisconfigChildEnv = "ABO_TEST_ABS_MISCONFIG_CASE"
+
+// An enabled ABS surface whose settings cannot build it refuses the boot with a
+// returned error naming the reason, instead of exiting the process from inside
+// NewServer. Each case boots in a child test process: with the preflight gone
+// the child is exited by NewServer, and only a parent that watches the child
+// can report that as a failure of this test rather than a dead test binary.
+func TestSettingsBoot_ABSMisconfiguredRefuses(t *testing.T) {
+	if os.Getenv(absMisconfigChildEnv) != "" {
+		t.Skip("the child half runs it (TestSettingsBoot_ABSMisconfiguredRefusesChild)")
+	}
+	for _, tc := range absMisconfigCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestSettingsBoot_ABSMisconfiguredRefusesChild$", "-test.v")
+			cmd.Env = append(os.Environ(), absMisconfigChildEnv+"="+tc.name)
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "the boot did not return an error: the child process was exited by the boot (os.Exit in NewServer) or failed:\n%s", out)
+			assert.Contains(t, string(out), "PASS: TestSettingsBoot_ABSMisconfiguredRefusesChild", "the child did not run its assertions:\n%s", out)
+		})
+	}
+}
+
+// TestSettingsBoot_ABSMisconfiguredRefusesChild is one case of the test above,
+// chosen by the environment. Alone it is skipped.
+func TestSettingsBoot_ABSMisconfiguredRefusesChild(t *testing.T) {
+	name := os.Getenv(absMisconfigChildEnv)
+	if name == "" {
+		t.Skip("run by TestSettingsBoot_ABSMisconfiguredRefuses")
+	}
+	for _, tc := range absMisconfigCases {
+		if tc.name != name {
+			continue
+		}
+		if tc.modes != "" {
+			t.Setenv("ABO_BOOKS_ABS_AUTH_MODES", tc.modes)
+		}
+		mod, opts, _ := composedOptions(t, true, "", tc.edit, nil)
+		err := bootFails(t, mod, opts)
+		assert.ErrorIs(t, err, errABSMisconfigured)
+		assert.Contains(t, err.Error(), tc.want)
+		return
+	}
+	t.Fatalf("no case %q", name)
 }
 
 // Options hands core HEAD's database path, made absolute, the state
