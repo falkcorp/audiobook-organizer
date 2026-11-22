@@ -135,36 +135,6 @@ func NotifyDelugeMoveStorageToDir(torrentHash, dir string) {
 	}
 }
 
-// organizeNotifyStore is the one method NotifyDelugeAfterOrganize calls. The
-// parameter previously embedded database.BookVersionStore, 9 methods.
-type organizeNotifyStore interface {
-	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
-}
-
-// NotifyDelugeAfterOrganize tells Deluge to follow a book that was
-// just moved into the library by the organize pipeline.
-//
-// Called after the file move succeeds and the Book record has been
-// updated to point at newPath. It looks up the active BookVersion(s)
-// for the book; for each with a non-empty TorrentHash it calls
-// NotifyDelugeMoveStorage so the torrent client keeps seeding from
-// the new location.
-//
-// Best-effort: errors are logged but do not bubble up — the organize
-// operation already succeeded.
-func NotifyDelugeAfterOrganize(store organizeNotifyStore, bookID, newPath string) {
-	versions, err := store.GetBookVersionsByBookID(bookID)
-	if err != nil {
-		slog.Warn("deluge-organize failed to load versions for book", "bookID", bookID, "err", err)
-		return
-	}
-	for _, v := range versions {
-		if v.TorrentHash != "" && v.Status == database.BookVersionStatusActive {
-			NotifyDelugeMoveStorage(v.TorrentHash, newPath)
-		}
-	}
-}
-
 // swapNotifyStore is the one method NotifyDelugeAfterVersionSwap calls; was 44.
 type swapNotifyStore interface {
 	GetBookByID(id string) (*database.Book, error)

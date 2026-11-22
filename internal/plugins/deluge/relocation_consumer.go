@@ -14,10 +14,9 @@ import (
 )
 
 // RelocationConsumerName is the outbox consumer that turns each
-// books.book.relocated.v1 message into a books.deluge.path-update run. The
-// events flip (F6-03) lists it in books' Manifest.OutboxConsumers and
-// registers RelocationConsumer through Registrar.OutboxHandler; until then
-// nothing registers it.
+// books.book.relocated.v1 message into a books.deluge.path-update run. Books
+// lists it in Manifest.OutboxConsumers and registers RelocationConsumer through
+// Registrar.OutboxHandler (the events flip, F6-03).
 const RelocationConsumerName = "books.deluge.book-relocated"
 
 // RelocationConsumer is the durable relocation follow-up (05-events §5E.13,
@@ -27,9 +26,8 @@ const RelocationConsumerName = "books.deluge.book-relocated"
 // that is already committed wants the torrent to follow it; the kind's
 // Preview default must never apply to an outbox start (COR2-5).
 //
-// It replaces only NotifyDelugeAfterOrganize, which the flip deletes in the
-// same PR that registers this consumer, so an organize move never triggers
-// Deluge twice. The version-swap and import moves are not replaced and stay
+// It replaced NotifyDelugeAfterOrganize, deleted in the PR that registered this
+// consumer, so an organize move never triggers Deluge twice. The version-swap and import moves are not replaced and stay
 // in-process until the flip designs their events: a swap moves the
 // from-version to .versions/<id>, which path-update skips (it acts on the
 // Active version only), and a same-path swap writes no book row so stages
