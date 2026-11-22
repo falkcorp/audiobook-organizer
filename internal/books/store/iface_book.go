@@ -305,6 +305,11 @@ type BookReader interface { //nolint:interfacebloat // transitional composition 
 // BookMutator creates, updates and deletes books.
 type BookMutator interface {
 	CreateBook(book *Book) (*Book, error)
+	// CreateBookWithRelocation is CreateBook for the organized copy of book
+	// originalID: in the same batch as the new row it stages the follow-up
+	// that moves the original's torrents to the copy's stored path. It is the
+	// only write that does (book_relocated_outbox.go).
+	CreateBookWithRelocation(book *Book, originalID string) (*Book, error)
 	UpdateBook(id string, book *Book) (*Book, error)
 	// ModifyBook reads the stored row and writes fn's changes to it under the
 	// book's write lock, so no concurrent write lands between the read and the
