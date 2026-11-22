@@ -35,12 +35,14 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -250,6 +252,10 @@ func (m *booksModule) Manifest() module.Manifest {
 		// and books' one seed role (identity_declarations.go): declared only
 		// when the flip is, so a boot without it declares nothing to rbac.
 		mf.Permissions, mf.Roles, mf.ImportedRoleIDs = booksPermissions(), booksRoles(), booksImportedRoleIDs()
+		// The outbox consumers books registers (Register's OutboxHandler), listed
+		// so the kernel declares them for a disabled books too and keeps the
+		// messages staged for them (TestDisabledModuleOutboxRetained).
+		mf.OutboxConsumers = []string{deluge.RelocationConsumerName}
 	}
 	return mf
 }
@@ -346,6 +352,13 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// changes no behaviour until then. It comes before the no-storage return:
 	// the declaration does not depend on a store.
 	r.Resources(taskResourceKinds()...)
+	if identityOn() {
+		// The events flip (F6-03): books' two catalog topics and the durable
+		// relocation follow-up. The consumer starts a task run, so it is the one
+		// kind of handler a module may register (ConsumeIntoTask).
+		r.Topics(database.BookChangedTopicSpec(), database.BookRelocatedTopicSpec())
+		r.OutboxHandler(deluge.RelocationConsumer())
+	}
 	legacy := r.Deps().Storage.Legacy
 	if legacy == (storage.LegacyRange{}) {
 		return nil
@@ -394,6 +407,14 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 	}
 	database.SetGlobalStore(store)
+	if out := r.Deps().Outbox; out != (outbox.Writer{}) {
+		// Before anything writes through the store: every committed path change
+		// stages books.book.relocated.v1 in the batch that writes the path.
+		store.SetRelocationOutbox(out)
+	}
+	// Every committed book write publishes books.book.changed.v1 (the zero
+	// Deps.Events of a boot without the identity flip publishes nothing).
+	database.PublishBookChanges(r.Deps().Events)
 	// With the core config boot on, the Facade is bound before the settings
 	// boot and the server read AppConfig (config_wire.go); without it Deps.Config
 	// is nil and HEAD's loaders below stay the source.
@@ -583,6 +604,7 @@ func (m *booksModule) closeStore() error {
 		return nil
 	}
 	database.SetGlobalStore(nil)
+	database.SetBookChangeObserver(nil)
 	m.releaseAppConfig()
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("books: close the store: %w", err)
