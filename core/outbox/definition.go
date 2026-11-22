@@ -33,10 +33,9 @@ const relayTimeoutSlack = 5 * time.Minute
 // that needed it could be started by a person alone, and the relay would
 // never come back after a cancel or a restart.
 //
-// The kernel registers it with the executor; until F6-03 wires it into the
-// App's boot, nothing does.
-//
-//tasklint:constructor the kernel passes the result to the executor's definition list when F6-03 wires core.outbox into boot (it also binds the executor); this package registers nothing
+// The kernel registers it as one of core's own kinds (kernel.registerCoreKinds)
+// when the events flip is built, and binds the executor to the outbox
+// (Outbox.BindRuns) once the executor exists.
 func (o *Outbox) RelayDefinition() tasks.Definition {
 	return tasks.Task(RelayKind, tasks.TaskSpec[struct{}, struct{}]{
 		Title:          "Outbox relay",

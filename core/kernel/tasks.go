@@ -382,6 +382,7 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		Manifests:   manifests,
 		Lanes:       k.moduleLanes(),
 		ChangeSinks: k.moduleSinks(),
+		Events:      k.eventsPublisher(),
 		Catalog:     cat,
 		Principal:   taskhttp.Principal,
 		WindowMembers: func(window string) []tasks.Kind {
@@ -437,6 +438,7 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 	kt.defs, kt.exec, kt.sched, kt.server, kt.ops = defs, x, s, srv, ops
 	run := s.RunWindow
 	kt.runWindow.Store(&run)
+	k.bindOutboxRuns(x)
 	return k.bindModuleTasks(x)
 }
 
@@ -459,6 +461,7 @@ func (k *Kernel) startTasks(ctx context.Context) error {
 		return fmt.Errorf("kernel: tasks: start the executor: %w", err)
 	}
 	kt.started = true
+	k.startOutboxNudger(ctx)
 	kt.schedEnd = make(chan struct{})
 	end := kt.schedEnd
 	go func() {
@@ -502,6 +505,7 @@ func (k *Kernel) stopTasks(ctx context.Context) error {
 	end := kt.schedEnd
 	kt.mu.Unlock()
 	var errs []error
+	errs = append(errs, k.stopOutboxNudger(ctx))
 	if err := kt.sched.Stop(ctx); err != nil {
 		errs = append(errs, fmt.Errorf("kernel: tasks: stop the scheduler: %w", err))
 	}
