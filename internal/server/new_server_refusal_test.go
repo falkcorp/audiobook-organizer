@@ -132,8 +132,7 @@ func TestNewServer_RefusalReturnsErrorAndProcessSurvives(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestNewServer_RefusalChild$", "-test.v", "-test.count=1")
 			cmd.Env = append(os.Environ(), refusalChildEnv+"="+tc.name)
 			out, err := cmd.CombinedOutput()
-			var ee *exec.ExitError
-			if errors.As(err, &ee) {
+			if ee, ok := errors.AsType[*exec.ExitError](err); ok {
 				t.Fatalf("the child process exited with status %d: NewServer ended the process (os.Exit) or the cell failed:\n%s", ee.ExitCode(), out)
 			}
 			require.NoError(t, err, "starting the child process: %s", out)
