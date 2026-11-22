@@ -22,12 +22,12 @@ import importlib.util
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
-import re
 import time
 import unittest
 from pathlib import Path
@@ -98,7 +98,9 @@ class RealModuleDiscovery(unittest.TestCase):
         self.assertIsNotNone(m, "ci.yml has no fixture-tests shard matrix")
         self.assertEqual(re.findall(r"'([^']+)'", m.group(1)), want, "ci.yml fixture-tests matrix")
         nightly = (root / ".woodpecker" / "race-nightly.yaml").read_text(encoding="utf-8")
-        self.assertEqual(re.findall(r"FIXTURE_SHARD=(\S+)", nightly), want, "race-nightly fixtures suites")
+        self.assertEqual(
+            re.findall(r"FIXTURE_SHARD=(\S+)", nightly), want, "race-nightly fixtures suites"
+        )
 
     def test_no_unit_is_heavier_than_the_split_target(self):
         for u in ftp.units(self.result.selected):
@@ -518,6 +520,7 @@ class StaticTestNames(unittest.TestCase):
             ftp.missing_here(native, discovery), {"m/x": ["FuzzLinux", "TestLinuxOnly"]}
         )
 
+
 class TimingEmission(unittest.TestCase):
     def _res(self, label, out, ok=True, is_slice=False, secs=9.0):
         return ftp.Result(label, 0 if ok else 1, secs, out, ok, is_slice)
@@ -545,7 +548,9 @@ class TimingEmission(unittest.TestCase):
 
     def test_a_slice_without_an_ok_line_falls_back_to_wall_time(self):
         res = self._res(f"{M}/internal/server#2/2", "", is_slice=True, secs=41.0)
-        self.assertEqual([(t.unit, t.seconds) for t in ftp.result_timings(res)], [("internal/server#2/2", 41.0)])
+        self.assertEqual(
+            [(t.unit, t.seconds) for t in ftp.result_timings(res)], [("internal/server#2/2", 41.0)]
+        )
 
     def test_a_failed_package_reports_no_timing_but_its_passing_mates_do(self):
         res = self._res(
