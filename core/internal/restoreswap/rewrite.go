@@ -317,6 +317,10 @@ func (s *Swapper) rewriteFinish(ctx context.Context, db *storage.DB, step storag
 // set-aside gone knows the deletion did it.
 const rewriteDeleteStarted = "rewrite.delete.started"
 
+// stepRewriteDelete is the ExtendStart step name of phase 4's deletion: a
+// fixed token, never a path.
+const stepRewriteDelete = "restoreswap.rewrite.delete"
+
 // finishRewriteSwap is phase 4's swap half for journal id of M8 stepID over
 // the store at dbPath. Until the journal is applied, the in-flight file's
 // intent is the one the move used: it must be stepID's KindRewrite intent
@@ -408,6 +412,9 @@ func (s *Swapper) deleteRewriteAside(ctx context.Context, in restorejournal.Inte
 			if err := writeFileAtomic(s.fs, mark, nil, privateFile); err != nil {
 				return err
 			}
+		}
+		if s.o.ExtendStart != nil {
+			s.o.ExtendStart(stepRewriteDelete)
 		}
 		if err := s.fs.RemoveAll(leaf); err != nil {
 			return fmt.Errorf("restoreswap: delete the rewrite's set-aside %s: %w", leaf, err)
