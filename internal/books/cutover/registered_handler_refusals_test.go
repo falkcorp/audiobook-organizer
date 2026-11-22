@@ -451,34 +451,45 @@ var rhrKnownNarrowing = []rhrNarrow{
 		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
 	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:view", head: 200, flip: 403,
 		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
+}
+
+// rhrHeldRed are the cells where the flip refuses and HEAD admitted that are NOT
+// accepted differences: B10y fixes each (the coordinator's rulings, causes A, B and
+// (ii), and item 5), and until that lands they fail, labelled HELD-RED. They are
+// deliberately not in rhrKnownNarrowing: that table is the list of what the flip
+// is allowed to differ on, and nothing here is. Each row is the HEAD status the
+// recording holds and the flip's status today; when B10y's fix lands the cell
+// answers HEAD's and the row is deleted (a stale row is not checked: the cell
+// passing is the evidence).
+var rhrHeldRed = []rhrNarrow{
 	{route: "GET /api/v1/users/invites", who: "key:admin:empty", head: 200, flip: 403,
-		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+		why: "cause B: the invite list drops the interactive leg, so a key holding users.manage lists invites again"},
 	{route: "GET /api/v1/users/invites", who: "key:admin:every", head: 200, flip: 403,
-		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+		why: "cause B: the invite list drops the interactive leg, so a key holding users.manage lists invites again"},
 	{route: "GET /api/v1/users/invites", who: "key:admin:users", head: 200, flip: 403,
-		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+		why: "cause B: the invite list drops the interactive leg, so a key holding users.manage lists invites again"},
 	{route: "GET /api/v1/users/invites", who: "key:custom-all:empty", head: 200, flip: 403,
-		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+		why: "cause B: the invite list drops the interactive leg, so a key holding users.manage lists invites again"},
 	{route: "GET /api/v1/users/invites", who: "key:custom-all:every", head: 200, flip: 403,
-		why: "the flip refuses a key on the invite list (the credential guard of the route); HEAD listed invites for a key holding users.manage"},
+		why: "cause B: the invite list drops the interactive leg, so a key holding users.manage lists invites again"},
 	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:admin:empty", head: 400, flip: 403,
-		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+		why: "cause A: playlists.create gets a real Route, so the all-atoms check holds again and the approve reaches its body check"},
 	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:admin:every", head: 400, flip: 403,
-		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+		why: "cause A: playlists.create gets a real Route, so the all-atoms check holds again and the approve reaches its body check"},
 	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:custom-all:empty", head: 400, flip: 403,
-		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+		why: "cause A: playlists.create gets a real Route, so the all-atoms check holds again and the approve reaches its body check"},
 	{route: "POST /api/v3/ops/runs/:id/approve", who: "key:custom-all:every", head: 400, flip: 403,
-		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+		why: "cause A: playlists.create gets a real Route, so the all-atoms check holds again and the approve reaches its body check"},
 	{route: "POST /api/v3/ops/runs/:id/approve", who: "session:admin", head: 400, flip: 403,
-		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+		why: "cause A: playlists.create gets a real Route, so the all-atoms check holds again and the approve reaches its body check"},
 	{route: "POST /api/v3/ops/runs/:id/approve", who: "session:custom-all", head: 400, flip: 403,
-		why: "a repairs.plan run: the flip answers \"this run belongs to a Repairs fixer you may not use\" before the body is read; HEAD got past the run check (400 for the probe's bad decision)"},
+		why: "cause A: playlists.create gets a real Route, so the all-atoms check holds again and the approve reaches its body check"},
 	{route: "PUT /api/v1/config", who: "key:admin:empty", head: 0, flip: 403,
-		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
+		why: "B10y item 5: an admin key (role name AND APIKeyMayActAsAdmin AND AdminHeld) is admitted again"},
 	{route: "PUT /api/v1/config", who: "key:admin:every", head: 0, flip: 403,
-		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
+		why: "B10y item 5: an admin key (role name AND APIKeyMayActAsAdmin AND AdminHeld) is admitted again"},
 	{route: "POST /api/v1/backup/restore", who: "session:custom-all", head: 400, flip: 403,
-		why: "the restore's route guard under the flip: a custom role holding every atom but not core:admin is refused (403); HEAD's s.perm(settings.manage) admitted it"},
+		why: "(ii): with owner_email unset the restore uses the ordinary guards"},
 }
 
 func (r rhrNarrow) key() string { return r.route + "|" + r.who }
@@ -501,6 +512,7 @@ func rhrJudge(t *testing.T, h *Registered, rec *rhrRecorded, cells []rhrCell, us
 		known[k.key()] = k
 	}
 	for _, c := range cells {
+	principals:
 		for _, p := range h.Principals {
 			// A core-native key has no HEAD recording: it is held to its imported twin's.
 			rn := p.Recorded()
@@ -537,6 +549,12 @@ func rhrJudge(t *testing.T, h *Registered, rec *rhrRecorded, cells []rhrCell, us
 					}
 					used[k.key()] = true
 					continue
+				}
+				for _, k := range rhrHeldRed {
+					if k.route == c.route && k.who == rn && k.flip == res.Status {
+						problems = append(problems, fmt.Sprintf("HELD-RED behind B10y, %s: %s: HEAD admits (%d), the flip answers %d %s", k.why, label, k.head, res.Status, res.excerpt()))
+						continue principals
+					}
 				}
 				problems = append(problems, fmt.Sprintf("NARROWING (unlisted) %s: HEAD admits, the flip answers %d %s", label, res.Status, res.excerpt()))
 			}
@@ -1007,7 +1025,11 @@ func TestReachRegisteredPath_CustomCoreAdmin(t *testing.T) {
 				t.Fatalf("%v (a finding, not a skip)", err)
 			}
 			if res.Verdict() != 'D' {
-				t.Errorf("WIDENING: HEAD's owner-role check refuses a role that is not the admin role; the flip answers %d %s", res.Status, res.excerpt())
+				prefix := "WIDENING"
+				if c.route == "PUT /api/v1/config" {
+					prefix = "HELD-RED behind B10y item 5 (configCanBridged: core:admin must also require the admin role name), a WIDENING"
+				}
+				t.Errorf("%s: HEAD's owner-role check refuses a role that is not the admin role; the flip answers %d %s", prefix, res.Status, res.excerpt())
 			}
 			if c.route == "POST /api/v1/repairs/:fixer/owner-apply" {
 				return // refused for want of an owner proof whoever asks: no admitting control exists
