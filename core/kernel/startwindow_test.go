@@ -8,12 +8,16 @@ package kernel
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/sdnotify"
 	"github.com/falkcorp/mediacore/module"
 )
@@ -31,7 +35,19 @@ func (r *stepRecorder) extend(step string) {
 	r.steps = append(r.steps, step)
 }
 
+// list is the steps modules asked for through Deps.ExtendStart: the kernel's
+// own extensions (kernelStepPrefix) are what all returns as well.
 func (r *stepRecorder) list() []string {
+	var out []string
+	for _, s := range r.all() {
+		if !strings.HasPrefix(s, kernelStepPrefix) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (r *stepRecorder) all() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.steps...)
@@ -383,6 +399,105 @@ func TestStartWindow(t *testing.T) {
 		time.Sleep(time.Hour)
 		if count() != 2 {
 			t.Fatalf("expired %d times after the window closed", count())
+		}
+	})
+}
+
+// timedSteps is a stepRecorder that stamps each extension with the bubble's
+// clock, and the notifier that stamps READY=1.
+type timedSteps struct {
+	mu    sync.Mutex
+	at    []time.Time
+	steps []string
+	ready time.Time
+}
+
+func (r *timedSteps) extend(step string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.at, r.steps = append(r.at, time.Now()), append(r.steps, step)
+}
+
+type timedNotifier struct {
+	notifier
+	r *timedSteps
+}
+
+func (n timedNotifier) Ready() error {
+	n.r.mu.Lock()
+	n.r.ready = time.Now()
+	n.r.mu.Unlock()
+	return n.notifier.Ready()
+}
+
+// gaps are the silences of a boot that began at begin: begin to the first
+// extension, each extension to the next, the last to READY=1.
+func (r *timedSteps) gaps(begin time.Time) []time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	marks := append(append([]time.Time{begin}, r.at...), r.ready)
+	out := make([]time.Duration, 0, len(marks)-1)
+	for i := 1; i < len(marks); i++ {
+		out = append(out, marks[i].Sub(marks[i-1]))
+	}
+	return out
+}
+
+// TestBoot_EveryKernelStepAsksForTimeBeforeItRuns drives a boot on the
+// bubble's clock in which a step of every kind the kernel itself runs before
+// READY=1 takes 4 minutes (a phase's module code, a hook's Start, the
+// listener's open), so the boot lasts four times what the unit's start
+// timeout is (05-health §5H.3.4: TimeoutStartSec=300). No timer extends: the
+// longest silence between two extensions, counted from the start and to
+// READY=1, must stay under 5 minutes, which holds only when each step is
+// preceded by its own request. The same test with an extension deleted from
+// the kernel's phase funnel or from Run's steps shows a gap of 8 minutes and
+// fails, which is how a new kernel step that forgets to ask is caught: a step
+// added to boot() through k.phase, or to Run through k.sendExtend, is covered
+// by this run the moment the test gives it a slow stand-in.
+func TestBoot_EveryKernelStepAsksForTimeBeforeItRuns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const slow = 4 * time.Minute
+		rec, steps, deps := &recorder{}, &timedSteps{}, &depsOf{}
+		alfred := mod("alfred", func(r *module.Registrar) error {
+			deps.put(r.Deps())
+			time.Sleep(slow) // P6: a module's Register, which no hook extends
+			r.Hook(module.Hook{Name: "alfred.cave", Start: func(ctx context.Context) error {
+				// The kernel asked for time as this hook began; the hook's
+				// own window is its to extend.
+				deps.get("alfred").ExtendStart("open the cave")
+				return napping(ctx, slow)
+			}})
+			return nil
+		})
+		c := supervised(t, rec, alfred)
+		c.Notifier = timedNotifier{notifier{rec}, steps}
+		c.ExtendStart = steps.extend
+		c.BeforeTelemetry = func(*slog.Logger) error { time.Sleep(slow); return nil } // P5
+		listen := c.Listen
+		c.Listen = func(o httpapi.ListenOptions, h http.Handler, l *slog.Logger) (Server, error) {
+			time.Sleep(slow) // start step (7)
+			return listen(o, h, l)
+		}
+		begin := time.Now()
+		if _, err := runStart(t, rec, c); err != nil {
+			t.Fatalf("Run = %v", err)
+		}
+		got := steps.gaps(begin)
+		var longest time.Duration
+		for _, g := range got {
+			longest = max(longest, g)
+		}
+		if longest >= 5*time.Minute {
+			t.Errorf("longest silence between extensions = %s, want under 5m (steps %q, gaps %v)", longest, steps.steps, got)
+		}
+		if total := steps.ready.Sub(begin); total < 4*slow {
+			t.Errorf("boot lasted %s, want at least %s: the slow steps did not run", total, 4*slow)
+		}
+		for _, want := range []string{"kernel: boot P5", "kernel: boot P6", "kernel: hook start alfred.cave", "open the cave", "kernel: run open listener"} {
+			if !slices.Contains(steps.steps, want) {
+				t.Errorf("no extension for %q: %q", want, steps.steps)
+			}
 		}
 	})
 }

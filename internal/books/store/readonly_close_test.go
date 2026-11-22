@@ -61,7 +61,7 @@ func TestReadOnlyBooksStoreClosesClean(t *testing.T) {
 	if !ok {
 		t.Fatal("no legacy range for books")
 	}
-	ro, err := NewBooksStore(lr)
+	ro, err := NewBooksStore(lr, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
