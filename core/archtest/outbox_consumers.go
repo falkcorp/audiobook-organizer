@@ -11,6 +11,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,9 +47,7 @@ func outboxModulePackage(importPath string) bool {
 // as well (ErrModuleHandler); this guard fails the build before that.
 //
 // It loads core, the module above the working directory, over the whole
-// tag-set union. Modules outside core (the application's own module) are not
-// loaded here; F6-03 extends the guard to the root module with the manifest
-// wiring.
+// tag-set union. The application's own module is OutboxApplicationConsumersAreTasks'.
 func OutboxModuleConsumersAreTasks(t testing.TB) {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -75,17 +74,70 @@ func OutboxModuleConsumersAreTasks(t testing.TB) {
 // the loaded packages, or when no non-test file of a module package was
 // scanned: each would make the guard pass without looking.
 func OutboxModuleConsumerFindings(dir string) ([]string, error) {
+	return outboxConsumerFindings(dir, outboxModulePackage, func(pkgs map[string]*Package) error {
+		if _, ok := pkgs[outboxPath]; !ok {
+			return fmt.Errorf("archtest: %s is not among the %d loaded packages; the guard would be vacuous", outboxPath, len(pkgs))
+		}
+		return nil
+	})
+}
+
+// OutboxApplicationConsumersAreTasks is OutboxModuleConsumersAreTasks for the
+// application's own module (the one above the working directory, the root
+// module beside core): every package of it is a module's, because core's
+// kernel and its own consumers live in the core module, so no package here may
+// reference outbox.Consume, outbox.ConsumeTx or outbox.ConsumeRaw (05-events
+// §5E.6; F6-03 extends the guard from core's examples to the manifest wiring).
+func OutboxApplicationConsumersAreTasks(t testing.TB) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("OutboxApplicationConsumersAreTasks: %v", err)
+	}
+	root, err := ModuleRoot(wd)
+	if err != nil {
+		t.Fatalf("OutboxApplicationConsumersAreTasks: %v", err)
+	}
+	findings, err := OutboxApplicationConsumerFindings(root)
+	if err != nil {
+		t.Fatalf("OutboxApplicationConsumersAreTasks: %v", err)
+	}
+	if len(findings) > 0 {
+		t.Errorf("%d reference(s) to a core-only outbox constructor in the application's module (05-events §5E.6: a module's consumer is ConsumeIntoTask):\n  %s",
+			len(findings), strings.Join(findings, "\n  "))
+	}
+}
+
+// OutboxApplicationConsumerFindings loads the module at dir over TagSets() and
+// returns one line per core-only outbox reference in any of its packages. It
+// returns an error when the load fails, when no loaded package imports outbox
+// (the guard would not be looking at the wiring) or when no file was scanned.
+func OutboxApplicationConsumerFindings(dir string) ([]string, error) {
+	return outboxConsumerFindings(dir, func(string) bool { return true }, func(pkgs map[string]*Package) error {
+		for _, p := range pkgs {
+			if slices.Contains(p.Imports, outboxPath) {
+				return nil
+			}
+		}
+		return fmt.Errorf("archtest: none of the %d loaded packages imports %s; the guard would be vacuous", len(pkgs), outboxPath)
+	})
+}
+
+// outboxConsumerFindings is the scan both entry points share: it loads dir,
+// refuses a load that cannot be trusted (vacuous), and reports the core-only
+// references in every package isModule accepts.
+func outboxConsumerFindings(dir string, isModule func(importPath string) bool, vacuous func(map[string]*Package) error) ([]string, error) {
 	pkgs, err := Load(LoadOptions{Dir: dir, TagSets: TagSets()})
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := pkgs[outboxPath]; !ok {
-		return nil, fmt.Errorf("archtest: %s is not among the %d loaded packages; the guard would be vacuous", outboxPath, len(pkgs))
+	if err := vacuous(pkgs); err != nil {
+		return nil, err
 	}
 	var out []string
 	scanned := 0
 	for _, p := range pkgs {
-		if !outboxModulePackage(p.ImportPath) {
+		if !isModule(p.ImportPath) {
 			continue
 		}
 		for _, f := range p.GoFiles {
