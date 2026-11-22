@@ -96,7 +96,7 @@ var refusalCases = []refusalCase{
 			c.ABSAPIEnabled = true
 			c.ABSJWTSecret = strings.Repeat("batcave-", 6)
 		})
-		store := &observerCountingStore{opaqueStore: opaqueStore{Store: refusalStore(t)}}
+		store := &observerCountingStore{Store: refusalStore(t)}
 		srv, err := NewServer(store)
 		require.Nil(t, srv)
 		require.ErrorIs(t, err, errABSNoSessionKeyspace)
@@ -112,7 +112,7 @@ var refusalCases = []refusalCase{
 		// The change observer was installed before the registry ran, so the unwind
 		// is what detaches it.
 		refusalConfig(t, func(c *config.Config) { c.DatabasePath = filepath.Join(t.TempDir(), "gotham.pebble") })
-		store := &observerCountingStore{opaqueStore: opaqueStore{Store: refusalStore(t)}}
+		store := &observerCountingStore{Store: refusalStore(t)}
 		srv, err := NewServer(store)
 		require.Nil(t, srv)
 		require.ErrorContains(t, err, "serviceregistry build")
