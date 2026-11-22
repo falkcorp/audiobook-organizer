@@ -281,7 +281,7 @@ func legacyUser(ids coreauth.Identities) legacyauth.UserLookup {
 // core gave books. ownerRequired is core.auth.owner.required as books reads it:
 // true exactly when an owner e-mail is configured (ownerSet). access is the ABS
 // surface's Cloudflare Access resolver (identityWiring.accessResolver).
-func newLegacyIdentity(d module.Deps, ownerRequired func() bool, access legacyauth.AccessResolver) (*legacyauth.Identity, error) {
+func newLegacyIdentity(d module.Deps, ownerRequired func() bool, access legacyauth.AccessResolver, keys legacyauth.KeyScoper) (*legacyauth.Identity, error) {
 	if d.Auth == nil || d.AuthAdmin == nil || d.AuthCompat == nil || d.AuthRefresh == nil || d.AuthLifecycle == nil {
 		return nil, errIdentityDeps
 	}
@@ -290,7 +290,7 @@ func newLegacyIdentity(d module.Deps, ownerRequired func() bool, access legacyau
 		return nil, fmt.Errorf("books: the legacy-auth bridge: %w", err)
 	}
 	id := &legacyauth.Identity{Bridge: b, Compat: d.AuthCompat, Client: httpapi.ClientInfoFrom, Refresh: d.AuthRefresh, Access: access,
-		Admin: d.AuthAdmin, Users: d.Auth}
+		Admin: d.AuthAdmin, Users: d.Auth, Keys: keys}
 	if err := id.Validate(); err != nil {
 		return nil, fmt.Errorf("books: %w", err)
 	}
@@ -344,7 +344,13 @@ func (m *booksModule) identityFor(d module.Deps) (*legacyauth.Identity, error) {
 	if err := refuseOwnerRequiredOff(d.Config); err != nil {
 		return nil, err
 	}
-	id, err := newLegacyIdentity(d, ownerRequiredNow, m.idw.accessResolver())
+	// The key-scope rule is M3's own (identityDecl.keyScoper), over the same
+	// atom table, catalog and ambient list M3's Config carries.
+	keys, err := m.idw.decl.keyScoper()
+	if err != nil {
+		return nil, err
+	}
+	id, err := newLegacyIdentity(d, ownerRequiredNow, m.idw.accessResolver(), keys)
 	if err != nil {
 		return nil, err
 	}

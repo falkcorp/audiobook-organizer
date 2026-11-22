@@ -54,6 +54,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/storage"
+
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 )
 
@@ -401,7 +403,85 @@ type rhrCell struct {
 	stream  bool
 	// head overrides the whole of HEAD's answer (a recorded letter of its own).
 	head func(who string) byte
-	note string
+	// victim, when set, gives each request of the cell its own path: a cell
+	// that changes the record it names (a key disabled or revoked) must not
+	// change one a later request, or a principal's own credential, depends on.
+	victim func(t testing.TB) string
+	note   string
+}
+
+// rhrVictims are the keys the cells that change a key act on, one per request:
+// HEAD key rows of lucius.fox with the scopes of the key rhrDiscover names
+// (library.view), seeded before the boot so M3 imports them as it imports
+// prod's keys, and held by no principal. The owner and the scopes are the old
+// target's, so a principal's verdict on a victim is its verdict on that key.
+type rhrVictims struct {
+	pools map[string][]string // tag -> key ids, in hand-out order
+	next  map[string]int
+}
+
+// rhrVictimScopes are the HEAD atoms of every victim: those of the corpus key of
+// lucius.fox that rhrDiscover names (keys[0], key:admin:view's row).
+var rhrVictimScopes = []string{"library.view"}
+
+// newRHRVictims reserves n victims for each tag. The ids sort after every
+// principal's key (01M7R2...), so rhrDiscover's keys[0] is unchanged.
+func newRHRVictims(n int, tags ...string) *rhrVictims {
+	v := &rhrVictims{pools: map[string][]string{}, next: map[string]int{}}
+	for ti, tag := range tags {
+		for i := range n {
+			v.pools[tag] = append(v.pools[tag], fmt.Sprintf("01M7VD%02d%018d", ti, i))
+		}
+	}
+	return v
+}
+
+// seed is the registeredConfig.Seed that writes every victim.
+func (v *rhrVictims) seed(ctx context.Context, lr storage.LegacyRange) error {
+	for tag, ids := range v.pools {
+		for i, id := range ids {
+			if _, err := SeedAPIKey(ctx, lr, KeySeed{ID: id, User: "lucius.fox", Name: fmt.Sprintf("victim-%s-%02d", tag, i), Scopes: rhrVictimScopes}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// path hands out the next victim of tag under prefix, failing when the pool is
+// spent: a reused victim would be a key an earlier request already changed.
+func (v *rhrVictims) path(tag, prefix string) func(t testing.TB) string {
+	return func(t testing.TB) string {
+		t.Helper()
+		i := v.next[tag]
+		if i >= len(v.pools[tag]) {
+			t.Fatalf("the %s victims are spent (%d): reserve more", tag, len(v.pools[tag]))
+		}
+		v.next[tag] = i + 1
+		return prefix + v.pools[tag][i]
+	}
+}
+
+// rhrAlive returns the principals whose credential no longer authenticates: a
+// cell that disabled or revoked a key a principal holds, or ended a session,
+// turns every later cell of that principal into a 401, which the table reads as
+// a refusal and so hides.
+func rhrAlive(t testing.TB, h *Registered) []string {
+	t.Helper()
+	var dead []string
+	for _, p := range h.Principals {
+		if p.Name == Anonymous {
+			continue
+		}
+		res, err := h.Do(p, http.MethodGet, "/api/core/v1/me", nil)
+		switch {
+		case err != nil:
+			dead = append(dead, fmt.Sprintf("%s: %v", p.Name, err))
+		case res.Status == http.StatusUnauthorized:
+			dead = append(dead, fmt.Sprintf("%s: 401 %s", p.Name, res.excerpt()))
+		}
+	}
+	return dead
 }
 
 // The obligations these tests discharge (reach_flip_obligations_test.go): each
@@ -424,16 +504,28 @@ func init() {
 }
 
 // rhrAbsentUnderFlip are the routes whose handler judges a record of books' own
-// store (a key, a user) that M3 moved into core and left no copy of: under the
-// flip the lookup finds nothing, so a principal HEAD refused on a real record gets
-// a 404 and nothing of the record. The status is pinned; an answer that carried the
-// record would be a widening and fails.
+// store (a user) that M3 moved into core and left no copy of: under the flip the
+// lookup finds nothing, so a principal HEAD refused on a real record gets a 404
+// and nothing of the record. The status is pinned; an answer that carried the
+// record would be a widening and fails. The api-key routes are not here: under
+// identity they read core's keys (internal/server/handlers/apikeys_identity.go),
+// so a principal HEAD refused is refused again, 403.
 var rhrAbsentUnderFlip = map[string]string{
-	"GET /api/v1/auth/api-keys/:id":    "books' key table is empty under the flip (the key is core's, GET /api/core/v1/users/:id/api-keys)",
-	"PATCH /api/v1/auth/api-keys/:id":  "same: the handler's GetAPIKey finds no row",
-	"DELETE /api/v1/auth/api-keys/:id": "same: the handler's GetAPIKey finds no row",
-	"PUT /api/v1/auth/me/password":     "books' user table is empty under the flip: the target user is not found after the users.manage check",
+	"PUT /api/v1/auth/me/password": "books' user table is empty under the flip: the target user is not found after the users.manage check",
 }
+
+// The two core rules HEAD's /api/v1/auth/api-keys/:id meets under identity
+// (ruled option 1, coordinator 11-22; 09-abo-on-core §9.2.6).
+const (
+	rhrWhyKeyMayCreate = "a key manages only keys it could create (core keyMayManage, 05-authn §4.4; core/auth/apikeys.go:234,281): " +
+		"every scope of the target must be held by the managing key, else 403 cannot grant scope you don't have. " +
+		"HEAD let any key of the owner revoke any of the owner's keys (internal/server/handlers/apikeys.go:475 at origin/main)"
+	rhrWhyDominance = "users.manage plus dominance over the owner's roles, and an interactive session for another user's key " +
+		"(core keyReader.may, core/auth/admin_keys.go:116-129; mayManage, core/auth/service.go:546-564; SEC-4): custom-all holds " +
+		"every atom but not core:admin, so it does not outrank lucius.fox's admin role, and core answers 403 access denied. " +
+		"HEAD checked users.manage only (isAdminUser, internal/server/handlers/apikeys.go:220-222, used at :384, :414 and :475 at origin/main)"
+	rhrWhyKeyInteractive = "; a key is also refused another user's key for want of an interactive sign-in (core/auth/service.go:558)"
+)
 
 // rhrKnownNarrowing are the (route, principal) cells where the flip refuses and HEAD
 // admitted, each pinned with HEAD's and the flip's status. Every row is reported in
@@ -445,6 +537,20 @@ type rhrNarrow struct {
 }
 
 var rhrKnownNarrowing = []rhrNarrow{
+	// Ruled option 1 (coordinator, 11-22): HEAD's /api/v1/auth/api-keys/:id under core's key rules.
+	// HEAD's status is derived (head 0): R0 recorded these routes with a missing id, 404 for everyone.
+	// A core twin is judged under its imported twin's name, so a key:... row also covers corekey:...
+	{route: "DELETE /api/v1/auth/api-keys/:id", who: "key:admin:settings", head: 0, flip: 403, why: rhrWhyKeyMayCreate},
+	{route: "DELETE /api/v1/auth/api-keys/:id", who: "key:admin:users", head: 0, flip: 403, why: rhrWhyKeyMayCreate},
+	{route: "DELETE /api/v1/auth/api-keys/:id", who: "key:admin:view", head: 0, flip: 403,
+		why: rhrWhyKeyMayCreate + ". Only the core twin (corekey:admin:view) is refused: the victim, an imported-shape library.view key, carries the ambient scopes (core:self, core:metrics.read, books:reading) that a core-minted key never holds; key:admin:view itself revokes it"},
+	{route: "GET /api/v1/auth/api-keys/:id", who: "key:custom-all:empty", head: 0, flip: 403, why: rhrWhyDominance},
+	{route: "GET /api/v1/auth/api-keys/:id", who: "key:custom-all:every", head: 0, flip: 403, why: rhrWhyDominance},
+	{route: "GET /api/v1/auth/api-keys/:id", who: "session:custom-all", head: 0, flip: 403, why: rhrWhyDominance},
+	{route: "PATCH /api/v1/auth/api-keys/:id", who: "session:custom-all", head: 0, flip: 403, why: rhrWhyDominance},
+	{route: "DELETE /api/v1/auth/api-keys/:id", who: "key:custom-all:empty", head: 0, flip: 403, why: rhrWhyDominance + rhrWhyKeyInteractive},
+	{route: "DELETE /api/v1/auth/api-keys/:id", who: "key:custom-all:every", head: 0, flip: 403, why: rhrWhyDominance + rhrWhyKeyInteractive},
+	{route: "DELETE /api/v1/auth/api-keys/:id", who: "session:custom-all", head: 0, flip: 403, why: rhrWhyDominance},
 	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:settings", head: 200, flip: 403,
 		why: "core refuses the fingerprint-worker scope on the key listing (permission_denied); HEAD's route is AnyAuthenticated. The same cell as GET /api/v1/auth/me, already ruled"},
 	{route: "GET /api/v1/auth/api-keys", who: "key:fp-worker:users", head: 200, flip: 403,
@@ -490,7 +596,11 @@ func rhrJudge(t *testing.T, h *Registered, rec *rhrRecorded, cells []rhrCell, us
 			case rec.letter(t, c.route, rn) == 'D' || (c.refuses != nil && c.refuses(rn)):
 				head = 'D'
 			}
-			res, err := rhrRun(t, h, p, c)
+			cc := c
+			if c.victim != nil {
+				cc.path = c.victim(t)
+			}
+			res, err := rhrRun(t, h, p, cc)
 			ran++
 			label := fmt.Sprintf("%s as %s", c.route, p.Name)
 			if err != nil {
@@ -624,7 +734,15 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 		t.Fatalf("routes listed twice: %v", dup)
 	}
 	rec := rhrLoad(t)
-	h := bootRegistered(t, registeredConfig{})
+	// Under identity PATCH and DELETE /api/v1/auth/api-keys/:id change core's key.
+	// On one shared key the first admitted principal (session:admin, lucius.fox)
+	// disables it and then revokes it, and that key is keys[0], key:admin:view's
+	// own credential: every later cell of key:admin:view answered 401. Each request
+	// of those two cells gets a victim of its own instead. At most every recorded
+	// principal plus a core twin per key row runs a cell.
+	rows, _ := loadPrincipalTable(t)
+	victims := newRHRVictims(2*len(rows), "patch", "delete")
+	h := bootRegistered(t, registeredConfig{Seed: victims.seed})
 	ids := rhrDiscover(t, h, rec)
 	// The 23 routes of the in-handler sites are all in R0's recording; the owner
 	// routes (the last 9) are judged against owner_set, and two are newer than R0
@@ -700,9 +818,9 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 			body: map[string]any{"name": "batarang", "user_id": ids.target, "scopes": []string{}}, refuses: noOwnerMint},
 		{route: "GET /api/v1/auth/api-keys", method: "GET", path: "/api/v1/auth/api-keys"},
 		{route: "GET /api/v1/auth/api-keys/:id", method: "GET", path: "/api/v1/auth/api-keys/" + ids.keyID, refuses: otherUsersKey},
-		{route: "PATCH /api/v1/auth/api-keys/:id", method: "PATCH", path: "/api/v1/auth/api-keys/" + ids.keyID,
+		{route: "PATCH /api/v1/auth/api-keys/:id", method: "PATCH", victim: victims.path("patch", "/api/v1/auth/api-keys/"),
 			body: map[string]any{"status": "inactive"}, refuses: otherUsersKey},
-		{route: "DELETE /api/v1/auth/api-keys/:id", method: "DELETE", path: "/api/v1/auth/api-keys/" + ids.keyID, refuses: otherUsersKey},
+		{route: "DELETE /api/v1/auth/api-keys/:id", method: "DELETE", victim: victims.path("delete", "/api/v1/auth/api-keys/"), refuses: otherUsersKey},
 
 		{route: "PUT /api/v1/auth/me/password", method: "PUT", path: "/api/v1/auth/me/password",
 			body: map[string]any{"user_id": ids.target, "new_password": "batmobile-1939-gotham"}, refuses: notUsersManage},
@@ -759,6 +877,14 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 		problems, ran := rhrJudge(t, h, rec, cells, used)
 		t.Logf("%d cells over %d routes", ran, len(cells))
 		rhrReport(t, problems)
+	})
+
+	// No cell may cost a principal its credential: a 401 reads as a refusal, so
+	// a dead credential would pass every cell HEAD refuses and hide the rest.
+	t.Run("every credential still authenticates after the route cells", func(t *testing.T) {
+		for _, d := range rhrAlive(t, h) {
+			t.Errorf("a cell ended this principal's credential: %s", d)
+		}
 	})
 
 	t.Run("v3 starts with every recorded definition", func(t *testing.T) {
@@ -829,6 +955,12 @@ func TestReachRegisteredPath_HiddenHandlerChecks(t *testing.T) {
 		problems, ran := rhrJudge(t, h, rec, cells, used)
 		t.Logf("%d cells over %d owner routes", ran, len(cells))
 		rhrReport(t, problems)
+	})
+
+	t.Run("every credential still authenticates after every cell", func(t *testing.T) {
+		for _, d := range rhrAlive(t, h) {
+			t.Errorf("a cell ended this principal's credential: %s", d)
+		}
 	})
 
 	for _, k := range rhrKnownNarrowing {

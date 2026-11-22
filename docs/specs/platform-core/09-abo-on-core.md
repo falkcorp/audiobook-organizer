@@ -442,7 +442,19 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   §4.10–§4.11). An API key can now disable an API key through core (`PATCH /api/core/v1/me/api-keys/{id}` and
   `PATCH /api/core/v1/api-keys/{id}`; `core/internal/authhttp/me.go:362-366`, `keys.go:214`); HEAD's
   `PATCH /auth/api-keys/:id` refused every non-interactive caller. Re-enabling still needs a signed-in session, so the
-  change only restricts. Core's `GET /api/core/v1/users` and `GET /api/core/v1/users/{id}` need `core:users.view`;
+  change only restricts. `DELETE /api/v1/auth/api-keys/:id` sent with an API key now revokes only a key whose every
+  scope the calling key also holds (core's rule, 05-authn §4.4); HEAD let any key of the owner revoke any of the
+  owner's keys. A script that revokes a wider key with a narrower one now gets
+  `403 {"error":"cannot grant scope you don't have","code":"FORBIDDEN","status":403}`; revoke it from a signed-in
+  session or with a key that holds every scope of the key being revoked. Reading, disabling or revoking another user's
+  key through `/api/v1/auth/api-keys/:id` now needs `users.manage` and roles that outrank the owner's (core's dominance
+  rule, SEC-4), and disabling or revoking another user's key also needs a signed-in session, not an API key; HEAD needed
+  `users.manage` only. A custom role that holds `users.manage` without outranking the owner (for example one that does
+  not grant admin, acting on an admin's key) now gets
+  `403 {"error":"access denied","code":"FORBIDDEN","status":403}`, and the `?all=true` list leaves those keys out. The
+  SPA's API Keys page, the ABS apps and the seed roles are unaffected: the page uses a signed-in session and lists only
+  keys the caller may act on, the ABS apps never call these routes, and only the admin seed role holds `users.manage`,
+  which outranks every role. Core's `GET /api/core/v1/users` and `GET /api/core/v1/users/{id}` need `core:users.view`;
   HEAD's list needed `users.manage`. Imported seed roles are unaffected, because books' `users.manage` atom maps to
   `core:users.manage` plus `core:roles.view` (`internal/books/atoms.go`); only a role created natively that holds
   `core:users.view` alone gains the list. On first run, before the first user exists, the app shows the sign-in page in

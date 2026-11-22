@@ -67,6 +67,25 @@ type Identity struct {
 	// a server that left it nil refuses the merge instead of running it
 	// (usermerge.ErrUnavailableUnderIdentity).
 	Users coreauth.Identities
+	// Keys is the rule that turns a HEAD key request's atoms into core scopes,
+	// the same value M3 applies to every key it imports (m3.KeyScoper, F4-08
+	// B10z): books' POST /api/v1/auth/api-keys mints through Admin with the
+	// scopes it returns, so a key created after the flip has exactly the
+	// scopes an imported key with the same HEAD row has. Optional, as Users
+	// is: a server that left it nil refuses that route under identity (503)
+	// instead of minting with any other rule.
+	Keys KeyScoper
+}
+
+// KeyScoper is m3.KeyScoper as the server sees it (internal/server cannot
+// import internal/books' packages).
+type KeyScoper interface {
+	// Scopes is the key's core scopes for HEAD atoms and the owner's
+	// role-only scope set, and the atoms the table does not know.
+	Scopes(atoms []string, owner []rbac.Permission) ([]rbac.Permission, []string, error)
+	// Atoms is the HEAD atoms a key holding scopes can exercise, for showing
+	// a core key in HEAD's response shape.
+	Atoms(scopes []rbac.Permission) []string
 }
 
 // Validate reports a missing member. A server built over a partial Identity

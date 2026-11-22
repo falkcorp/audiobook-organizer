@@ -8,9 +8,11 @@ package books
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,6 +30,11 @@ import (
 // auth.Can reads). The clamp is core's: resolveKey reads the owner afresh and
 // authz.Compile intersects the key's scopes with the owner's role set.
 
+// coreDoClients numbers coreDo's requests: each comes from its own address in
+// 192.0.2.0/24 (TEST-NET-1), so core's stage-10 rate limiter, which buckets by
+// client address, never throttles a test that makes many requests at once.
+var coreDoClients atomic.Uint32
+
 // coreDo is one request to the composed app with a JSON body and, when
 // cookie is set, a signed-in session.
 func coreDo(t *testing.T, r *runningApp, method, path string, body any, cookie *http.Cookie, bearer string) *httptest.ResponseRecorder {
@@ -39,7 +46,7 @@ func coreDo(t *testing.T, r *runningApp, method, path string, body any, cookie *
 		require.NoError(t, err)
 	}
 	req := httptest.NewRequest(method, path, bytes.NewReader(raw))
-	req.RemoteAddr = "192.0.2.10:41000"
+	req.RemoteAddr = fmt.Sprintf("192.0.2.%d:41000", 1+coreDoClients.Add(1)%254)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
