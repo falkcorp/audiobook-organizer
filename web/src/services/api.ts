@@ -7620,10 +7620,14 @@ export interface APIKey {
   days_since_last_use: number | null;
   never_used: boolean;
   username?: string;
+  /** What the owner typed to tell this key from their others; absent when there is none. */
+  description?: string;
 }
 
 export interface CreateAPIKeyRequest {
   name: string;
+  /** Optional: at most 1024 characters, one line (core refuses a control character). */
+  description?: string;
   scopes?: string[];
   // The expiry: expires_in_days (1 to 1096; 0 is the default) or expires_at
   // (an RFC 3339 instant at most 1096 days out), never both; neither is the

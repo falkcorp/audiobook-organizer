@@ -51,6 +51,7 @@ import {
   expiryAfterDays,
   formatKeyExpiry,
 } from '../../utils/apiKeyExpiry';
+import { API_KEY_DESCRIPTION_MAX_CHARS } from '../../utils/apiKeyDescription';
 import { API_KEY_SCOPES } from '../../generated/permissions';
 
 function relativeTime(dateStr: string): string {
@@ -87,6 +88,7 @@ export function APIKeysTab() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
+  const [newDesc, setNewDesc] = useState('');
   const [newScopes, setNewScopes] = useState<string[]>([]);
   const [newExpires, setNewExpires] = useState<number | typeof API_KEY_CUSTOM_EXPIRY>(90);
   const [customDate, setCustomDate] = useState('');
@@ -140,6 +142,9 @@ export function APIKeysTab() {
     try {
       const resp = await api.createAPIKey({
         name: newName,
+        // One line, trimmed; blank sends none. Core refuses a line break or a
+        // control character and a text over API_KEY_DESCRIPTION_MAX_CHARS.
+        ...(newDesc.trim() ? { description: newDesc.trim() } : {}),
         scopes: newScopes,
         expires_in_days: expiryDays,
       });
@@ -148,6 +153,7 @@ export function APIKeysTab() {
       setCreatedExpiresAt(resp.expires_at ?? null);
       setCreateOpen(false);
       setNewName('');
+      setNewDesc('');
       setNewScopes([]);
       setNewExpires(90);
       setCustomDate('');
@@ -303,14 +309,16 @@ export function APIKeysTab() {
                       ]}
                     >
                       <TableCell>
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            fontWeight: 500,
-                          }}
-                        >
-                          {k.name}
-                        </Typography>
+                        <Tooltip title={k.description || ''} placement="top">
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontWeight: 500,
+                            }}
+                          >
+                            {k.name}
+                          </Typography>
+                        </Tooltip>
                       </TableCell>
                       <TableCell>
                         <Typography
@@ -441,6 +449,14 @@ export function APIKeysTab() {
               fullWidth
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
+            />
+            <TextField
+              label="Description"
+              fullWidth
+              value={newDesc}
+              onChange={(e) => setNewDesc(e.target.value)}
+              helperText="Optional. Shown when you hover the key's name."
+              slotProps={{ htmlInput: { maxLength: API_KEY_DESCRIPTION_MAX_CHARS } }}
             />
             <Box>
               <Typography variant="body2" gutterBottom>
