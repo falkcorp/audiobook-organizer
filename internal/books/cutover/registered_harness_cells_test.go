@@ -29,8 +29,7 @@ import (
 // row, its Route on the route side and, on the read side, its ReadSide when it has
 // one and its Route otherwise (the in-handler read-side entry exists for
 // users.manage alone: the table's own contract), and the refusals (an atom the
-// table does not know; an atom with no entry of the asked side, playlists.create's
-// zero Route among them). Empty means equal.
+// table does not know; an atom with no entry of the asked side). Empty means equal.
 func resolverDiffs(r httpapi.AtomResolver) []string {
 	var out []string
 	for _, a := range books.AtomTable() {
@@ -332,10 +331,6 @@ func TestRegisteredHarness_ChangedAtomRowFailsTheResolverCheck(t *testing.T) {
 		mutated := books.AtomTable()
 		mutated[i].Route = rbac.AllOf("books:fingerprint.worker")
 		if row.Name == "fingerprint.worker" {
-			mutated[i].Route = rbac.AllOf("books:view")
-		}
-		if row.Route.IsZero() {
-			// playlists.create: a route where the table has none.
 			mutated[i].Route = rbac.AllOf("books:view")
 		}
 		if len(resolverDiffs(resolver(mutated))) == 0 {
