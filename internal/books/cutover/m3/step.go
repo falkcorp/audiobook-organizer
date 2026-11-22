@@ -448,7 +448,7 @@ func (m *Migration) importKey(ctx context.Context, kv storage.KV, w *datamigrate
 	if err != nil {
 		return err
 	}
-	scopes, unknown, err := m.keyScopes(h.Scopes, ownerSet)
+	scopes, unknown, err := m.scoper.Scopes(h.Scopes, ownerSet)
 	if err != nil {
 		return m.blocked(key, prefixKey, "the key's scopes are refused by the catalog", fixHint)
 	}

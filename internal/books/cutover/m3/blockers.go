@@ -140,7 +140,7 @@ func (m *Migration) Preflight(ctx context.Context, r storage.Reader) ([]datamigr
 		if err != nil {
 			return nil, err
 		}
-		scopes, _, err := m.keyScopes(h.Scopes, owner)
+		scopes, _, err := m.scoper.Scopes(h.Scopes, owner)
 		if err != nil {
 			add(key, prefixKey, "the key's scopes are refused by the catalog", fixHint)
 			continue
