@@ -12,10 +12,12 @@ import (
 	"github.com/gin-gonic/gin"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
+	coreoidc "github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/rbac"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
 	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 )
@@ -39,8 +41,11 @@ import (
 //   - both then through Compat.CheckCredentialFor with the route's manifest
 //     Perm (rbac.Delegated of the compat method), which re-reads a key and
 //     refuses a confined credential (an fp-worker key) outside its scopes;
-//   - a verified Cloudflare Access assertion naming a person is refused
-//     (ResolveCFAssertion): resolving one reads and writes books' store.
+//   - a verified Cloudflare Access assertion naming a person is resolved by
+//     core's account resolver under the Access admission policy
+//     (Identity.Access; resolveCFThroughCore), never through books' store, and
+//     the user it returns is then admitted like any surface-resolved user
+//     (Compat.PrincipalFor with the epoch of the record core resolved).
 //
 // Nothing here runs without an Identity bound by Identity.Bind.
 
@@ -100,9 +105,16 @@ func (r *ABSIdentityResolver) coreCredential(c *gin.Context, id *legacyauth.Iden
 		seen.email = e.Email
 		return refuse(e.Status, e.Reason, e.Message, e.Mode)
 	} else if cf != nil {
-		// ResolveCFAssertion refuses every person under core identity; a
-		// resolved one here would be a user from books' store.
-		return refuse(http.StatusForbidden, ABSReasonCFUnderIdentity, "single sign-on is not available on this surface", ABSModeCF)
+		// A person core resolved. Admission is core's too: PrincipalFor judges
+		// standing, sign-in restriction and its throttle, with the epoch of the
+		// record the resolver just returned (the session-less Mode A has no
+		// older stamp to compare).
+		seen.mode, seen.email = ABSModeCF, cf.Email
+		return legacyauth.ABSCredential{
+			User:   &coreauth.User{ID: coreauth.UserID(cf.User.ID)},
+			Epoch:  cf.User.CredentialEpoch,
+			Client: client,
+		}, nil
 	}
 
 	if !r.cfg.Modes.JWT {
@@ -219,4 +231,74 @@ func coreRefusalReason(err error) string {
 	default:
 		return "credential-refused"
 	}
+}
+
+// Reasons of the Access sign-in's refusals under core identity that HEAD's
+// vocabulary does not have.
+const (
+	// absReasonAccessUnwired: the server runs under core identity but its
+	// Identity carries no Access resolver. Identity.Validate refuses that at
+	// boot; this is the terminal answer should one get past it.
+	absReasonAccessUnwired = "access-resolver-missing"
+	// absReasonResetRequired: core refused the person's sign-in because the
+	// account is restricted or needs a reset (auth.ErrResetRequired). HEAD's
+	// account-state refusal is absCheckUserActive's 403.
+	absReasonResetRequired = "reset-required"
+)
+
+// resolveCFThroughCore is ResolveCFAssertion's tail under core identity: the
+// verified person goes to core's account resolver under the Access admission
+// policy (Identity.Access) instead of books' ResolveUser, so nothing is read or
+// written in books' user store. Core admits by the allow-list, an invite or an
+// approval, finds the account by the linked subject, links one that holds the
+// verified address, or creates one, and refuses an account that may not sign in.
+//
+// Each outcome keeps the status HEAD answered for the same situation:
+//
+//   - the address is not verified, not on the allow-list, not plain ASCII, or
+//     held verified by an account the policy will not link (HEAD's
+//     ErrEmailNotVerified, ErrEmailNotAllowed, ErrEmailConflict) is 403
+//     email-not-allowed, and creates nothing;
+//   - an inactive account, or one core restricts (auth.ErrInactiveUser,
+//     auth.ErrResetRequired), is absCheckUserActive's 403;
+//   - anything else (the store down, a commit that kept conflicting, a resolver
+//     core has not bound) is a 500 identity-resolve-error. It is never a 401 or
+//     a 403: the assertion is not known to be bad, and a 401 would log a client
+//     out over a transient fault.
+//
+// The returned user is the books-shaped copy of core's (legacyauth.BooksUserFromCore),
+// which carries core's CredentialEpoch: the session, the authorization code and
+// the later PrincipalFor all compare it.
+func (r *ABSIdentityResolver) resolveCFThroughCore(c *gin.Context, id *legacyauth.Identity, claims *legacyoauth.IdentityClaims) (*ABSIdentity, *ABSAuthError) {
+	fail := func(status int, reason, msg string) (*ABSIdentity, *ABSAuthError) {
+		return nil, &ABSAuthError{Status: status, Reason: reason, Message: msg, Mode: ABSModeCF, Email: claims.Email}
+	}
+	if id == nil || id.Access == nil {
+		return fail(http.StatusInternalServerError, absReasonAccessUnwired, "could not resolve identity")
+	}
+	u, err := id.Access(c.Request.Context(), legacyauth.AccessClaims{
+		Subject: claims.Subject, Email: claims.Email, EmailVerified: claims.EmailVerified,
+	})
+	switch {
+	case err == nil && u != nil:
+	case err == nil:
+		return fail(http.StatusInternalServerError, "identity-resolve-error", "could not resolve identity")
+	case errors.Is(err, coreoidc.ErrEmailNotVerified),
+		errors.Is(err, coreoidc.ErrEmailNotAllowed),
+		errors.Is(err, coreauth.ErrEmailNotPlain),
+		errors.Is(err, coreauth.ErrEmailInUse):
+		return fail(http.StatusForbidden, "email-not-allowed", "identity is not authorized for this server")
+	case errors.Is(err, coreauth.ErrInactiveUser):
+		return fail(http.StatusForbidden, "user-inactive", "account is not active")
+	case errors.Is(err, coreauth.ErrResetRequired):
+		return fail(http.StatusForbidden, absReasonResetRequired, "account is not active")
+	default:
+		return fail(http.StatusInternalServerError, "identity-resolve-error", "could not resolve identity")
+	}
+	user := legacyauth.BooksUserFromCore(u)
+	if e := absCheckUserActive(user, ABSModeCF); e != nil {
+		e.Email = claims.Email
+		return nil, e
+	}
+	return &ABSIdentity{User: user, Mode: ABSModeCF, Email: claims.Email}, nil
 }

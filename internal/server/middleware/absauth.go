@@ -283,15 +283,11 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 			"invalid Cloudflare Access assertion", ABSModeCF)
 	}
 
-	if _, bound := legacyauth.IdentityFrom(c.Request.Context()); bound {
-		// Under core identity the account record is core's, and resolving a
-		// person here reads and writes books' store: a JIT create would be a
-		// user outside core, a link or an e-mail mark a write to a record core
-		// no longer owns, and a lookup would answer from a record the identity
-		// cutover emptied. Nothing below runs. The allowlist still answers
-		// first, so a stranger gets HEAD's 403 and an allowed person the
-		// distinct one; neither creates, links or marks anything.
-		return nil, r.refuseCFUnderIdentity(claims)
+	if id, bound := legacyauth.IdentityFrom(c.Request.Context()); bound {
+		// Under core identity the account record is core's: the person is
+		// resolved by core's account resolver under the Access admission
+		// policy, and nothing below (books' store) is read or written.
+		return r.resolveCFThroughCore(c, id, claims)
 	}
 
 	user, err := r.oauthCfg.ResolveUser(r.store, *claims)
@@ -316,29 +312,6 @@ func (r *ABSIdentityResolver) ResolveCFAssertion(c *gin.Context) (*ABSIdentity, 
 		return nil, e
 	}
 	return &ABSIdentity{User: user, Mode: ABSModeCF, Email: claims.Email}, nil
-}
-
-// ABSReasonCFUnderIdentity is the audit reason of a verified person whose
-// Cloudflare Access sign-in the ABS surface cannot resolve under core identity.
-const ABSReasonCFUnderIdentity = "cf-resolve-unavailable-under-core-identity"
-
-// refuseCFUnderIdentity is ResolveCFAssertion's answer for a verified assertion
-// under core identity. It is terminal (a 403, never a fall-through to the
-// bearer or password path, which HEAD did not have for an assertion that
-// verified) and touches no store.
-func (r *ABSIdentityResolver) refuseCFUnderIdentity(claims *legacyoauth.IdentityClaims) *ABSAuthError {
-	if !claims.EmailVerified || !r.oauthCfg.IsEmailAllowed(claims.Email) {
-		return &ABSAuthError{
-			Status: http.StatusForbidden, Reason: "email-not-allowed",
-			Message: "identity is not authorized for this server",
-			Mode:    ABSModeCF, Email: claims.Email,
-		}
-	}
-	return &ABSAuthError{
-		Status: http.StatusForbidden, Reason: ABSReasonCFUnderIdentity,
-		Message: "single sign-on is not available on this surface",
-		Mode:    ABSModeCF, Email: claims.Email,
-	}
 }
 
 // ResolveBearer runs ONLY step 2 — our own access JWT plus its abs_sess record.

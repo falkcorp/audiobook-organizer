@@ -50,6 +50,12 @@ type Identity struct {
 	// (permHoldsLive); under core identity that store is no longer the
 	// account's record, so the question goes to core.
 	Refresh func(context.Context, *coreauth.Principal) (*coreauth.Principal, error)
+	// Access resolves a verified Cloudflare Access person on the ABS surface
+	// (single sign-on, Mode A, and the A7 app hand-off's hop 2) through core's
+	// account resolver under the Access admission policy. Under core identity
+	// the account record is core's: resolving a person through books' store
+	// would create, link or mark rows core no longer owns.
+	Access AccessResolver
 }
 
 // Validate reports a missing member. A server built over a partial Identity
@@ -67,6 +73,8 @@ func (id *Identity) Validate() error {
 		return errors.New("legacyauth: identity has no client resolver")
 	case id.Refresh == nil:
 		return errors.New("legacyauth: identity has no principal refresh")
+	case id.Access == nil:
+		return errors.New("legacyauth: identity has no Cloudflare Access resolver")
 	}
 	return nil
 }

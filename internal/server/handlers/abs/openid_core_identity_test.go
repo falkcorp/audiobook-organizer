@@ -19,6 +19,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	coreauth "github.com/falkcorp/mediacore/auth"
+	coreoidc "github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/rbac"
 
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
@@ -51,6 +52,22 @@ type coreLikeCompat struct {
 	// rows. A test that moves core's record without moving books' (or the
 	// reverse) can then tell which of the two the handler asked.
 	core map[string]*coreRecord
+
+	// accessFn is core's account resolver as the Access sign-in reaches it
+	// (legacyauth.Identity.Access); nil answers an error, as a resolver core
+	// has not bound does. accessCalls records what it was asked.
+	accessFn    func(legacyauth.AccessClaims) (*coreauth.User, error)
+	accessCalls []legacyauth.AccessClaims
+}
+
+func (c *coreLikeCompat) resolveAccess(_ context.Context, a legacyauth.AccessClaims) (*coreauth.User, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.accessCalls = append(c.accessCalls, a)
+	if c.accessFn == nil {
+		return nil, errors.New("coreLikeCompat: no account resolver programmed")
+	}
+	return c.accessFn(a)
 }
 
 type coreRecord struct {
@@ -256,6 +273,7 @@ func (h *harness) underCoreIdentity(t *testing.T) *coreLikeCompat {
 	compat := &coreLikeCompat{h: h, throttle: coreauth.NewThrottle(coreauth.ThrottleLimits{}, nil, nil)}
 	id := &legacyauth.Identity{
 		Compat: compat,
+		Access: compat.resolveAccess,
 		// The client is the visitor a test names with visitorHeader, else the
 		// TCP peer, as core's stage 0 resolves it.
 		Client: func(r *http.Request) coreauth.ClientInfo {
@@ -277,9 +295,8 @@ func (h *harness) underCoreIdentity(t *testing.T) *coreLikeCompat {
 	return compat
 }
 
-// A code is minted before the identity is bound: under core identity hop 2
-// (the browser's Cloudflare Access assertion) refuses a person, see
-// TestOpenIDCoreIdentity_HopTwoRefusesAPersonUnderIdentity.
+// A code is minted before the identity is bound in most tests here; the hop 2
+// tests that bind first are TestOpenIDCoreIdentity_HopTwo*.
 
 // signInOnce mints and redeems one code so the person's user exists, then
 // moves the account's epoch to want (a user who changed credentials before).
@@ -530,15 +547,57 @@ func TestOpenIDCoreIdentity_EpochAndStatusAreCores(t *testing.T) {
 	})
 }
 
-// F4-08 B10b1, no shadow users outside core: under core identity the browser
-// hop's Cloudflare Access assertion is not resolved through books' store (it
-// would create, link or mark a user there). Hop 2 refuses the person and
-// delivers no code, so the flow cannot reach redemption. Without an identity
-// the same request mints a code (HEAD, every other test in the file).
-func TestOpenIDCoreIdentity_HopTwoRefusesAPersonUnderIdentity(t *testing.T) {
+// F4-08 B10n: under core identity the browser hop's Cloudflare Access assertion
+// is resolved by core's account resolver, never through books' store (which
+// would create, link or mark a user there). Hop 2 mints a code for the user core
+// resolved, stamped with core's epoch (non-zero here, so a code that stamped 0
+// is refused), and the code redeems through core's PrincipalFor at that epoch
+// into a session for that user. Books' store gains no user.
+func TestOpenIDCoreIdentity_HopTwoMintsForThePersonCoreResolves(t *testing.T) {
 	h := newOIDCHarness(t)
 	browser := h.hop1(t, s256(oidcVerifier), "client-state-1")
-	h.underCoreIdentity(t)
+	compat := h.underCoreIdentity(t)
+	const coreID = "u-core-bruce"
+	compat.core = map[string]*coreRecord{coreID: {status: "active", epoch: 4, username: "bruce-core", email: "owner@example.com"}}
+	compat.accessFn = func(legacyauth.AccessClaims) (*coreauth.User, error) {
+		return &coreauth.User{ID: coreID, Username: "bruce-core", Email: "owner@example.com", Status: coreauth.StatusActive, CredentialEpoch: 4}, nil
+	}
+	users := h.userCount()
+
+	code := h.allow(t, browser, oidcPersonAssertion).Get("code")
+	if code == "" {
+		t.Fatal("hop 2 delivered no code for a person core resolved")
+	}
+	if got := h.userCount(); got != users {
+		t.Fatalf("users %d -> %d: hop 2 provisioned a user outside core", users, got)
+	}
+	for _, a := range compat.accessCalls {
+		if a != (legacyauth.AccessClaims{Subject: "cf|owner", Email: "owner@example.com", EmailVerified: true}) {
+			t.Fatalf("core's resolver was asked %+v", a)
+		}
+	}
+	if len(compat.accessCalls) == 0 {
+		t.Fatal("core's resolver was never asked")
+	}
+	w := h.redeem(t, code, oidcVerifier, "&state=client-state-1")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "bruce-core") {
+		t.Fatalf("redeem = %d %s, want 200 for core's user", w.Code, w.Body.String())
+	}
+	calls := compat.recorded()
+	if len(calls) != 1 || calls[0].user != coreID || calls[0].epoch != 4 {
+		t.Fatalf("PrincipalFor was asked %+v, want one call for %s at epoch 4", calls, coreID)
+	}
+}
+
+// A person core does not admit gets the refusal redirect and no code, and
+// nothing is created in books' store.
+func TestOpenIDCoreIdentity_HopTwoRefusesAPersonCoreDoesNotAdmit(t *testing.T) {
+	h := newOIDCHarness(t)
+	browser := h.hop1(t, s256(oidcVerifier), "client-state-1")
+	compat := h.underCoreIdentity(t)
+	compat.accessFn = func(legacyauth.AccessClaims) (*coreauth.User, error) {
+		return nil, fmt.Errorf("resolve: %w", coreoidc.ErrEmailNotAllowed)
+	}
 	users := h.userCount()
 
 	w := h.get(t, browser, oidcPersonAssertion)
@@ -550,7 +609,7 @@ func TestOpenIDCoreIdentity_HopTwoRefusesAPersonUnderIdentity(t *testing.T) {
 		t.Fatalf("Location %q: want access_denied and no code", loc)
 	}
 	if got := h.userCount(); got != users {
-		t.Fatalf("users %d -> %d: hop 2 provisioned a user outside core", users, got)
+		t.Fatalf("users %d -> %d: a refused person provisioned a user", users, got)
 	}
 }
 
