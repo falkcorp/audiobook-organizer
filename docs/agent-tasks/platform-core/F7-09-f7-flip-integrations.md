@@ -19,6 +19,168 @@
 subsystems, registers M6, deletes what they replace and switches every first-party caller in the same PR. It merges
 alone in W37. The R2 freeze is on: do not touch `.github/workflows/prerelease.yml`.
 
+## Amendments (2026-11-22, pre-flip; these win over the text below where they differ)
+
+The body of this brief was written on 2026-11-12 against `ac4368bdb`. Since then F7-08 and every dark F7-09
+slice has merged, F3-07 has gone live, and the review rounds have left obligations that exist nowhere else in
+the repo. Read this section first; the sections below remain the contract for everything it does not change.
+
+**Base and state.**
+- Base: the F6-03 flip head (a draft PR stacked on F5-18, stacked on F4-08), not `origin/main`, until F6-03
+  merges. `START HERE`'s `origin/main` applies only once F6-03 is on main.
+- Merged dark slices you build on (do not rebuild them):
+  - T1 M6 follow-ups (#4833)
+  - T2 SMTP dial guard (#4831; `seams.d/F7-09-T2.md`)
+  - T3 per-kind validate and probe hooks, quota-safe `ClearBench`, derived spec checks in `specProblems`
+    (#4824; `seams.d/F7-09-T3.md`)
+  - T4 AI capability and notify topic catalogs `internal/books/aicaps`, `internal/books/topics` (#4834), and the
+    whisper adapters `internal/books/adapters/whisper` (#4893)
+  - T5 the six metadata adapters `internal/books/adapters/metadata` (#4906)
+  - T6 `internal/books/searchindex` (#4847; `seams.d/F7-09-T6.md`) and the core index gaps (#4896;
+    `seams.d/F7-09-T6-core.md`)
+  - T7 `internal/books/roots` (#4839)
+- F7-08 (M6) merged as #4755. `m6.RepairMetadataCredentials` (#4918) is also merged, with no caller yet.
+
+**Corrections to the text below.**
+1. Every `Descriptor()` returns `(integrations.Descriptor, error)`. The mail package is
+   `core/integrations/notify/mail`; `notifymail` does not exist.
+2. `internal/books/services.go` does not exist. ABO's one explicit service list is `serviceDefs` in
+   `internal/server/registry_wire.go`. It calls each registering package's `ServiceDefs()` (their `register.go`
+   files) plus `serverServiceDefs()` and `batchPollerServiceDefs()`; keys are in
+   `internal/serviceregistry/keys.go`. The batch-poller def carries no `Groups`, so it is never built in
+   production. Re-derive the defs to delete at your base.
+3. Re-verify grep 5 has no match: the hold methods are `ReleaseHolds` (the task body), `ReleaseHoldIf` and
+   `HoldFor`. `integrationhttp.HoldReleaser` is `{HoldFor, ReleaseHoldIf}`.
+   `integrationhttp.ErrHoldChanged` can become `= providerhttp.ErrHoldChanged`.
+4. F5-18 does not delete `internal/plugins/`; it deletes only the root test-only `internal/plugins` lint.
+5. Counts are stale:
+   - Grep 3 is 21 Go references, not 19.
+   - There are 13 books AI capabilities (05-ai wins over 04's "ten").
+   - The m6 deadcode prune is whatever `scripts/deadcode-baseline.txt` holds under
+     `internal/books/cutover/m6` at your base. `internal/books/cutover.PlanBlobResidual` stays: it is a
+     permanent test seam.
+6. "Un-skip only, no other change" cannot hold for `core/internal/integrationhttp/routes_test.go`. Its 10 cells
+   (4 read, 6 write) are a bare `t.Skip` with no body. They are written against F4-08's stage 13 (auth, RBAC,
+   audit and principal binding), possibly as a core-only PR right after F4-08 merges. Acceptance becomes
+   "the 10 cells have bodies and pass", not the skip-count grep.
+7. M6's position follows 03 §3.8 (M1, M7, M2..M6, M8): after the last data step, `After` its own level step,
+   before M8. Not "after M2 and before M7". F7 adds `books.level-<max+1>` on F4-08's ordered `Flip.Levels`
+   shape, and never edits an earlier level constant.
+
+**Preconditions and obligations to discharge in this PR.** Each comes from a merged slice's review or seams
+file:
+1. **SMTP guard.** T2 merged. Every new mail sender dials through `integrations.GuardedDial`, never
+   `mail.PlainDial` beside a host that is no longer operator-sourced (`seams.d/F7-09-T2.md`).
+2. **The ai validator.** Delete `RouterOptions.ValidateEndpoints` and make the validator unconditional, unless
+   a dark pre-PR has already done it.
+   - `Router.ObserveProbe` is wired to `Options.Probed` only with an owner decision
+     (`seams.d/F7-09-T3.md` obligation 3).
+   - The M6 importer gets `ImportValidator(reg)`, after every module has registered its AI capabilities and the
+     ai adapters are registered.
+3. **Embed batch (coordinator ruling 2026-11-22).** Core's `featureFitsKind` accepts `FeatureBatch` for
+   `KindEmbed`. The flip registers all 13 books capabilities, and a cell asserts 13.
+4. **M6 registration** (TODO-F7-08-REGISTER-AND-RELOAD, -REGISTER-CLAIMS-AND-WIRING and -M6-NITS):
+   - **Claims.** Declare `rootscan:` (owned) and the nested retired claims `counter:import_path` and
+     `idx:sidx:dirty:`, at the flip only (HEAD writes both families until then).
+   - **`m6.Config.Effective`.** This is the projection the integrations Registry applies, built from core
+     config's operator layer (`PassthroughValues`), not HEAD's environment. After F3-07 a boot with
+     `DELUGE_WEB_URL` set is refused. A module reaches the operator layer at P4b through a late-bound
+     `module.Importers` member (the `AllowKeyRegen` / `OperatorSet` pattern); `core/module/settings.go` is
+     F4-08's file until it merges.
+   - **Secrets.** `Config.SecretNames` and `Config.SecretValue` read the secrets store M2 writes.
+   - **Notify.** Build `notify.Service` after the data steps run (TODO-F7-05-IMPORTRULE-REFRESH).
+   - **Credentials repair.** Wire `m6.RepairMetadataCredentials` into the boot, or into the rehearsal before the
+     boot.
+   - **Census.** Before the flip, census production's `ai_endpoints` ticks: M6 drops unknown and wildcard ticks
+     and reports each one, never quarantining the whole endpoint.
+   - **Deadcode.** Delete the m6 deadcode lines.
+   - **Cells.** Add the M6 and level-step cells to `TestBootCrashMatrix_ABO`, and extend
+     `TestCutoverRefusedByOlderBuilds`.
+5. **Kernel duties recorded only in the seams files.** Each is part of this PR:
+   - **tasklint.** Delete the `bleveindex.Engine.RebuildTask` allowlist entry
+     (`core/archtest/tasklint/core_test.go`) once `core.index.rebuild` is registered.
+   - **AI.**
+     - Boot calls: `ai.Owner`/`ai.StorageSpec()`, `Provider.Core("ai", ai.ScopeKeys()...)`,
+       `Router.Close`, `Router.RefreshCaps`.
+     - `Registrar.AICapability` over `RegisterCapability`, then `FreezeCatalog` after every module's `Register`.
+   - **Integration routes.** `integrationhttp.Register` takes an untyped `nil` or a real value, never a typed
+     nil.
+   - **archtest.** Extend `IntegrationsDescriptorCallers`, or add an `internal/arch` twin, to cover ABO's
+     packages: T4 and T5 already import `mediacore/integrations`.
+   - **Health.** Register `core.integrations.health` and publish `core.integration.health.changed.v1`.
+   - **providerhttp.**
+     - Pass `r.Outbound` to `integrations.New`, and `r.ReleaseAuthHold` as `Options.ReleaseAuthHold`.
+     - Pass `LANAllow` and `Disabled` from config.
+     - Register `providerhttp.Owner`.
+     - Add `var _ integrationhttp.HoldReleaser = (*providerhttp.Registry)(nil)`.
+     - Switch `core.integrations.release-holds` to `ReleaseHoldsTask`.
+   - **Downloads.** Build `download.NewPool` and wire `Deps.Downloads`. Re-type `download.LocalPath` as
+     `library.Path` and feed its mappings from the library, unless a dark pre-PR has done it.
+   - **Library.**
+     - Register `TransferRecoverTask`.
+     - Build `library.New`, then `Reload`.
+     - Mount `libraryhttp` (`core:library.browse`).
+     - Type `core.library.roots` and `mappings` in `core_sections.go`.
+   - **Notify config.** `core.notify.max_attempts` and `max_age` go into `notify.Config`; delivery is an
+     `outbox.Consume` with `Unordered()`.
+   - **Release note.** An operator who moves a destination by env sees
+     `integration_secret_withheld_destination_moved` and must re-enter the secret.
+6. **The class-i keys after the blob is gone (Q11 (a); coordinator ruling 2026-11-22).**
+   - Every reader of the 16 class-`i` keys moves to its native source in this PR:
+     - `root_dir`, `protected_paths`, `itunes.path_mappings` go to `library.Scope`. Use T7's root accessor.
+       `AppConfig.RootDir` alone is about 142 reads.
+     - `metadata_sources`, `ai_endpoints`, `openai_base_url`, `deluge_web_url` and `download_client.*` go to the
+       integrations instances.
+     - `plugins.*` is deleted.
+   - Delete the Facade's class-`i` branch (`internal/config/facade.go`, `internal/books/appconfig/*`) and the
+     class-`i` `/api/v1/config` handlers.
+   - Add an archtest showing that no class-`i` read remains.
+   - The copy-on-write config sweep (`config.Get()`) converts every other `AppConfig` read on main beforehand.
+     The class-i sites are the part it leaves for this PR.
+7. **Metadata concurrency (#4806 m4).** HEAD honoured `metadata.rate_limit.max_concurrent`
+   (`metafetch/source_chain_walk.go`). After the flip the cap falls to the default of 2 unless the `books.<id>`
+   metadata adapters carry it. Carry it, or ship a release note.
+8. **Search (T6).**
+   - Follow the "switch at the fold" tables in `seams.d/F7-09-T6.md` and `F7-09-T6-core.md`.
+   - HEAD has no term-searcher cap and core defaults to 1024: make it a config key, and set ABO's default above
+     the largest wildcard or prefix expansion measured on a production copy.
+
+**Open questions, with recommendations (record the ruling in the PR).**
+- Q4, the `m6.Plan` report channel. Recommended: a core `DryRunOptions.Previews` seam called in the `Bind`
+  slot, printed by `DryRunReport.Lines()`.
+- Q8, derived-index crash cells. Recommended: one kill-during-rebuild cell, no per-file labels in `bleveindex`.
+- Q10, TODO-F7-05-WEBHOOK-HOLD-POLICY and TODO-F7-01-HOLD-PERSIST. Recommended: out of scope, but say in the PR
+  that one 5xx now holds a receiver for 30 minutes.
+
+**Rehearsal before merge.** M6 is one-way and the flip raises a level, so this PR needs the full production-copy
+rehearsal before it merges, not a smoke run: baseline, flip, export, older, restore. The checks:
+- the M6 report balances
+- instances, AI jobs, the webhook rule and roots are carried, with IDs kept
+- no metadata source is left `integration_settings_invalid`
+- the Deluge instance URL equals the canonical env value
+- the library root is served
+- search answers again after the rebuild, and the rebuild time is recorded
+- an older build refuses with nothing written
+- the restore puts back the pre-flip store
+
+**Files beyond the original table.** These are pre-registered in `inventory.json`:
+- `core/module/settings.go`, `core/kernel/`, `core/app/offline_storage.go`, `core/storage/migrate.go`,
+  `core/storage/dryrun.go`
+- `core/integrations/`, `core/internal/integrationhttp/`, `core/archtest/`, `core/examples/hello/`,
+  `core/coretest/crashmatrix/rows.go`
+- `internal/books/cutover.go`, `internal/books/cutover/`, `internal/books/appconfig/`,
+  `internal/books/crash_matrix_test.go`
+- the T4-T7 packages: `internal/books/aicaps/`, `internal/books/topics/`, `internal/books/adapters/`,
+  `internal/books/searchindex/`, `internal/books/roots/`
+- `internal/serviceregistry/keys.go`, `internal/telemetrypolicy/`
+- the class-i reader packages: `internal/metafetch/`, `internal/dedup/`, `internal/transcribe/`,
+  `internal/aiscan/`, `internal/audiobooks/`, `internal/playlist/`, `internal/maintenance/jobs/`,
+  `internal/plugins/deluge/`, `internal/plugins/maintenance/`, `internal/reconcile/`, `internal/itunes/service/`,
+  `internal/quarantine/`, `cmd/`
+- `scripts/deadcode-baseline.txt`
+- `docs/specs/platform-core/05-library.md`, `05-metadata.md`, `05-ai.md`
+- `docs/agent-tasks/platform-core/seams.d/F7-08.md`, and a new `seams.d/F7-09.md`
+
 ## START HERE (do this first, exactly)
 
 ```bash
