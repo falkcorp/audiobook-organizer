@@ -27,9 +27,9 @@ const oldKeyRecord = "j{\"v\":1,\"ID\":\"01JKOLDREC\",\"Owner\":\"01JBRUCE\",\"N
 	"\"hash\":\"abababababababababababababababababababababababababababababababab\"}"
 
 func oldShapedKey(desc string) keyRecord {
-	return keyRecord{APIKey: auth.APIKey{ID: "01JKOLDREC", Owner: "01JBRUCE", Name: "utility belt", Scopes: []rbac.Permission{"gotham:patrol"},
+	return keyRecord{ID: "01JKOLDREC", Owner: "01JBRUCE", Name: "utility belt", Scopes: []rbac.Permission{"gotham:patrol"},
 		Status: auth.KeyActive, CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), ExpiresAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
-		Version: 1, HashPrefix: "abababab", Description: desc},
+		Version: 1, HashPrefix: "abababab", Description: desc,
 		Hash: strings.Repeat("ab", 32)}
 }
 
