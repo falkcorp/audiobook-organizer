@@ -1378,6 +1378,9 @@ internal/cfaccess.extension.Authenticate
 internal/cfaccess.extension.Name
 internal/cfaccess.extension.authenticate
 internal/cfaccess.extension.warn
+internal/config.CheckSealed
+internal/config.Fixed
+internal/config.Get
 internal/decisions.AuthorTombstoneResolver
 internal/decisions.MaterialHash
 internal/decisions.Prefixes
