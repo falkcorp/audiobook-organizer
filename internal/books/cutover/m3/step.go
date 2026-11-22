@@ -31,6 +31,9 @@ const (
 	OutcomeIndex     = "index-dropped"     // an idx: row, derived data core rebuilds in its own form
 	OutcomeRewritten = "journal-rewritten" // a merge journal with its invite tokens hashed
 	OutcomeReported  = "reported"          // something the step names in its log: an unknown atom, an odd status
+	// OutcomeGuestPolicyCarried counts the guestpolicy: rows staged for HEAD
+	// grants whose sync had added the address to the Cloudflare guest policy.
+	OutcomeGuestPolicyCarried = "guest-policy-carried"
 )
 
 // How the step runs (05-authn §11; 05-storage §5S.3.13).
@@ -444,15 +447,20 @@ func (m *Migration) stepIdentity(ctx context.Context, kv storage.KV, w *datamigr
 // allow-list is not an identity.
 func (m *Migration) stepInviteAllow(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	key := string(kv.Key)
-	if _, derr := decodeInviteGrant(kv.Value); derr != nil {
+	grant, derr := decodeInviteGrant(kv.Value)
+	if derr != nil {
 		m.log.Warn("m3: an invite allow-list row does not decode and is quarantined", "step", m.cfg.StepID, "reason", derr.Error())
 		return w.Quarantine(kv.Key, kv.Value, "the allow-list row does not decode: "+derr.Error())
 	}
-	switch err := m.cfg.Auth.ImportInviteAllow(w.Batch(), strings.TrimPrefix(key, prefixInviteAllow)); {
+	email := strings.TrimPrefix(key, prefixInviteAllow)
+	switch err := m.cfg.Auth.ImportInviteAllow(w.Batch(), email); {
 	case errors.Is(err, auth.ErrImportRejected):
 		m.log.Warn("m3: an invite allow-list row is refused by the importer and quarantined", "step", m.cfg.StepID)
 		return w.Quarantine(kv.Key, kv.Value, "the importer rejects the allow-list row")
 	case err != nil:
+		return err
+	}
+	if err := m.carryGuestPolicy(w, email, grant); err != nil {
 		return err
 	}
 	if err := w.Delete(kv.Key); err != nil {
