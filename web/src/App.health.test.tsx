@@ -16,36 +16,49 @@ import App from './App';
 import { appTheme } from './theme';
 import { AuthProvider } from './contexts/AuthContext';
 import { loginPageResponse } from './test/loginRedirect';
-
-const listeners = vi.hoisted(() => ({
-  handlers: [] as Array<(event: { type: string }) => void>,
-}));
-
-vi.mock('./services/eventSourceManager', () => ({
-  eventSourceManager: {
-    subscribe: (handler: (event: { type: string }) => void) => {
-      listeners.handlers.push(handler);
-      return () => {
-        listeners.handlers = listeners.handlers.filter((h) => h !== handler);
-      };
-    },
-    subscribeStatus: () => () => {},
-    close: vi.fn(),
-    getStatus: () => ({ state: 'closed' }),
-  },
-}));
+import { sseStream, type FakeStream } from './test/eventStreamFake';
+import { resetSharedEventStream, TOPIC_CLOSED } from './services/coreEvents';
 
 vi.mock('./services/api', async (importOriginal) =>
   (await import('./test/appApiMock')).createAppApiMock(await importOriginal<typeof import('./services/api')>()),
 );
 
+// The streams the app opened on /api/core/v1/events, newest last. The shutdown the
+// overlay waits for is the server's own frame on one of them, so these tests send it
+// the way core's hub does (core.stream.closed.v1, reason "shutdown") rather than
+// calling into the client.
+let opened: FakeStream[] = [];
+
+/** The app's fetch: the event stream is a live fake, everything else answers `other`. */
+function appFetch(other: (url: string) => Response | Promise<Response>) {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/api/core/v1/events')) {
+      const stream = sseStream(init?.signal);
+      opened.push(stream);
+      return stream.response;
+    }
+    return other(url);
+  });
+}
+
+async function announceShutdown() {
+  await vi.waitFor(() => expect(opened.length).toBeGreaterThan(0));
+  vi.useFakeTimers();
+  await act(async () => {
+    opened.forEach((s) => s.control(TOPIC_CLOSED, { reason: 'shutdown' }));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
 beforeEach(() => {
-  listeners.handlers = [];
+  opened = [];
+  resetSharedEventStream();
 });
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  resetSharedEventStream();
 });
 
 describe('App reconnect poll', () => {
@@ -57,7 +70,7 @@ describe('App reconnect poll', () => {
       value: { ...realLocation, reload },
     });
     try {
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = appFetch((url) => {
         if (url === '/api/v1/health') return loginPageResponse();
         return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
       });
@@ -74,10 +87,7 @@ describe('App reconnect poll', () => {
       );
       await screen.findByText('Audiobook Organizer');
 
-      vi.useFakeTimers();
-      await act(async () => {
-        listeners.handlers.forEach((h) => h({ type: 'system.shutdown' }));
-      });
+      await announceShutdown();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5100);
       });
@@ -98,7 +108,7 @@ describe('App reconnect poll', () => {
       value: { ...realLocation, reload },
     });
     try {
-      const fetchMock = vi.fn(async (url: string) => {
+      const fetchMock = appFetch((url) => {
         if (url === '/api/v1/health') throw new TypeError('network unavailable');
         return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
       });
@@ -115,10 +125,7 @@ describe('App reconnect poll', () => {
       );
       await screen.findByText('Audiobook Organizer');
 
-      vi.useFakeTimers();
-      await act(async () => {
-        listeners.handlers.forEach((h) => h({ type: 'system.shutdown' }));
-      });
+      await announceShutdown();
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5100);
       });
