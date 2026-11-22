@@ -100,7 +100,7 @@ func (s *organizeSvcSpy) OrganizeOneBook(_ *organizer.Organizer, _ *database.Boo
 	return s.landing, s.err
 }
 
-func (s *organizeSvcSpy) CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, opID string, _ logger.Logger) (*database.Book, error) {
+func (s *organizeSvcSpy) CreateOrganizedVersionFollowTorrents(book *database.Book, landing *organizer.Landing, opID string, _ logger.Logger) (*database.Book, error) {
 	s.createCalls++
 	s.created = &database.Book{ID: "v2-" + book.ID, FilePath: landing.Path}
 	return s.created, nil

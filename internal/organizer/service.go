@@ -47,6 +47,11 @@ type OrganizerBookReader interface {
 // rescan when its files changed underneath it.
 type OrganizerBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
+	// CreateBookWithRelocation is CreateBook for the organized copy of the
+	// book originalID, with the follow-up that moves the original's torrents
+	// staged in the new row's own batch. Only CreateOrganizedVersionFollowTorrents
+	// calls it.
+	CreateBookWithRelocation(book *database.Book, originalID string) (*database.Book, error)
 	// UpdateBook is kept for the one whole-row write of a book CreateBook
 	// just returned; every write of an existing row goes through ModifyBook.
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
@@ -2299,6 +2304,23 @@ func RemoveCreated(landing *Landing, owner string, log logger.Logger) {
 // Nothing is locked under the key (ApplyOrganizedFileMetadata and
 // ComputeITunesPath take none).
 func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
+	return orgSvc.createOrganizedVersion(book, landing, operationID, log, false)
+}
+
+// CreateOrganizedVersionFollowTorrents is CreateOrganizedVersion for the
+// single-book organize request, the one organize flow that moved the original's
+// torrents (NotifyDelugeAfterOrganize, deleted at the events flip, F6-03): the
+// copy's row commits together with the staged follow-up that starts the run
+// moving the original book's Active torrents to the copy's stored path. The
+// bulk organize, library clone and metadata-apply callers use
+// CreateOrganizedVersion and move nothing, as they never did.
+func (orgSvc *Service) CreateOrganizedVersionFollowTorrents(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
+	return orgSvc.createOrganizedVersion(book, landing, operationID, log, true)
+}
+
+// createOrganizedVersion is the body of both; followTorrents selects
+// CreateBookWithRelocation for the copy's row.
+func (orgSvc *Service) createOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger, followTorrents bool) (*database.Book, error) {
 	if landing == nil || landing.Path == "" {
 		return nil, fmt.Errorf("organize: no landing for %s (%s) — refusing to create an organized version from nothing", book.Title, book.ID)
 	}
@@ -2526,7 +2548,13 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 		}
 	}
 
-	createdBook, err := orgSvc.db.CreateBook(&newBook)
+	var createdBook *database.Book
+	var err error
+	if followTorrents {
+		createdBook, err = orgSvc.db.CreateBookWithRelocation(&newBook, book.ID)
+	} else {
+		createdBook, err = orgSvc.db.CreateBook(&newBook)
+	}
 	if err != nil {
 		log.Error("Failed to create organized book record for %s: %v — removing the %d file(s) this organize wrote", book.Title, err, len(landing.Created))
 		// No row exists yet, so only the on-disk half of the rollback applies.
