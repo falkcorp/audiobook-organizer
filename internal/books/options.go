@@ -26,7 +26,6 @@ import (
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
-	"github.com/falkcorp/audiobook-organizer/internal/updater"
 	"github.com/falkcorp/mediacore/app"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -228,7 +227,7 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 	// the CLI's own prints) get the store the layers named, as HEAD's
 	// InitConfig gave them the database_path it resolved.
 	config.Mutate(func(c *config.Config) { c.DatabasePath, c.DatabaseType = dbPath, "pebble" })
-	coreOpts := updater.FetchOptions()
+	coreOpts := FetchOptions()
 	o := bootOptions(boot)
 	return app.Options{
 		RetiredConfigNames: o.RetiredConfigNames,

@@ -10,7 +10,6 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
-	coreupdater "github.com/falkcorp/mediacore/updater"
 )
 
 // TestAppIDIsTheBooksAppID: the updater's self-test holds a downloaded binary
@@ -20,42 +19,5 @@ import (
 func TestAppIDIsTheBooksAppID(t *testing.T) {
 	if updater.AppID != books.AppID {
 		t.Fatalf("updater.AppID = %q, books.AppID = %q: a release's --version-json would fail the self-test", updater.AppID, books.AppID)
-	}
-}
-
-// TestCoreOptions: what app.Options.Updater carries for this app.
-func TestCoreOptions(t *testing.T) {
-	o := updater.CoreOptions()
-	if o.AppID != books.AppID || o.BinaryName != "audiobook-organizer" || o.DefaultMode != coreupdater.ModeCheck {
-		t.Errorf("CoreOptions = %+v", o)
-	}
-	if _, ok := o.Source.(coreupdater.TagSource); !ok {
-		t.Error("the source cannot look a release up by tag, which `updater fetch-release` and a named apply need")
-	}
-	if _, ok := o.Source.(coreupdater.Binder); !ok {
-		t.Error("the source takes no HTTP client or user agent from the updater")
-	}
-	// The gin apply asks for HEAD's name, as it did before the move.
-	if o.AssetName != nil {
-		t.Error("CoreOptions names an asset: the gin apply must keep core's RawBinary default (HEAD's name)")
-	}
-	if got := coreupdater.RawBinary(o.BinaryName)(coreupdater.Release{}, "linux", "arm64"); got != "audiobook-organizer-linux-arm64" {
-		t.Errorf("the release asset is %q, want audiobook-organizer-linux-arm64", got)
-	}
-}
-
-// TestFetchOptions: what app.Options.Updater carries, which `updater
-// fetch-release` reads: CoreOptions' app, with the asset name releases publish.
-func TestFetchOptions(t *testing.T) {
-	o := updater.FetchOptions()
-	c := updater.CoreOptions()
-	if o.AppID != c.AppID || o.BinaryName != c.BinaryName || o.DefaultMode != c.DefaultMode {
-		t.Errorf("FetchOptions = %+v, CoreOptions = %+v", o, c)
-	}
-	if o.AssetName == nil {
-		t.Fatal("FetchOptions has no asset namer")
-	}
-	if got := o.AssetName(coreupdater.Release{}, "linux", "arm64"); got != "audiobook-organizer_Linux_arm64" {
-		t.Errorf("the fetched asset is %q, want audiobook-organizer_Linux_arm64", got)
 	}
 }
