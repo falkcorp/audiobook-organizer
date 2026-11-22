@@ -31,7 +31,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi, generateTestBooks, type MockAuthorDedupGroup } from './utils/test-helpers';
-import { bookPath, paths, reviewLanePath, reviewPath, urlContains } from './utils/paths';
+import { bookPath, reviewLanePath, reviewPath, urlContains } from './utils/paths';
 
 // ── Fixtures ──
 
