@@ -22,13 +22,13 @@ import (
 // maintenance.folder-cover-backfill picks up whatever this missed.
 func fillFolderCover(book *database.Book) {
 	store := getStore()
-	if store == nil || book == nil || book.ID == "" || config.AppConfig.RootDir == "" {
+	if store == nil || book == nil || book.ID == "" || config.Get().RootDir == "" {
 		return
 	}
 	if book.CoverURL != nil && *book.CoverURL != "" {
 		return
 	}
-	plan := foldercover.Apply(store, book, config.AppConfig.RootDir)
+	plan := foldercover.Apply(store, book, config.Get().RootDir)
 	switch plan.Outcome {
 	case foldercover.OutcomeApplied:
 		defaultLog.Info("folder cover set for %s from %s", book.ID, plan.Candidate.Path)

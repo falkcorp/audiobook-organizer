@@ -225,7 +225,7 @@ func withParseJournal(parser aiBatchParser, raw any, log logger.Logger) aiBatchP
 		log.Warn("AI parse journal: could not open (%v); results will NOT survive a restart", err)
 		return parser
 	}
-	cfg := &config.AppConfig
+	cfg := config.Get()
 	return &journalledParser{
 		inner:    parser,
 		journal:  j,

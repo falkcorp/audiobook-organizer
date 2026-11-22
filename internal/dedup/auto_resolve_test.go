@@ -340,9 +340,9 @@ func TestAutoResolveCertain_ApplyRequiresKillSwitch(t *testing.T) {
 	}
 	mustSeed(t, es, "A1", "B1", unified.BandCertain, unified.SigExactFile, unified.SigISBNASIN)
 
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = false
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = false })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 
 	res, err := engine.AutoResolveCertain(context.Background(), true, 200, 50)
 	if err == nil {
@@ -386,9 +386,9 @@ func setupRealStoreEngine(t *testing.T) (*Engine, database.Store, *database.Embe
 func TestAutoResolveCertain_ApplyMergesAndJournals(t *testing.T) {
 	engine, store, es := setupRealStoreEngine(t)
 
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = true
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 
 	// Create two eligible pairs (4 books) with plausible audio.
 	for _, id := range []string{"BA", "BB", "BC", "BD"} {
@@ -472,9 +472,9 @@ func TestAutoResolveCertain_ApplyMergesAndJournals(t *testing.T) {
 func TestAutoResolveCertain_SkipsAlreadyMergedBook(t *testing.T) {
 	engine, store, es := setupRealStoreEngine(t)
 
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = true
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 
 	for _, id := range []string{"PA", "PB", "PE"} {
 		if _, err := store.CreateBook(arPlausibleBook(id, "Dup Title "+id)); err != nil {

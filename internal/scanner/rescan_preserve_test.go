@@ -35,11 +35,11 @@ func TestSaveBookToDatabase_RescanPreservesEnrichedFields(t *testing.T) {
 		SetStore(nil)
 	})
 
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 
 	rootDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rootDir })
 
 	filePath := filepath.Join(rootDir, "rich-book.m4b")
 	if err := os.WriteFile(filePath, []byte("rich book content"), 0o644); err != nil {

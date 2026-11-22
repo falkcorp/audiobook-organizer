@@ -48,9 +48,9 @@ import (
 //
 // NOTE: does NOT use t.Parallel() because it mutates package-level config.AppConfig.
 func TestConfigRace_SaveBookHonorsCancellation(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	// A lot of books so some workers are still in-flight when we cancel.
 	const nBooks = 32
@@ -90,7 +90,7 @@ func TestConfigRace_SaveBookHonorsCancellation(t *testing.T) {
 	// Now simulate test-teardown: mutate the global config concurrently.
 	// If any worker goroutine is still alive reading config.AppConfig.RootDir,
 	// the race detector will fire here.
-	config.AppConfig.RootDir = t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = t.TempDir() })
 }
 
 // TestConfigRace_WorkersDontReadConfigAfterCancel verifies that after the
@@ -104,14 +104,18 @@ func TestConfigRace_SaveBookHonorsCancellation(t *testing.T) {
 //
 // NOTE: does NOT use t.Parallel() because it mutates package-level config.AppConfig.
 func TestConfigRace_WorkersDontReadConfigAfterCancel(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	oldRoot := config.AppConfig.RootDir
+	oldExts := config.Get().SupportedExtensions
+	oldRoot := config.Get().RootDir
 	t.Cleanup(func() {
-		config.AppConfig.SupportedExtensions = oldExts
-		config.AppConfig.RootDir = oldRoot
+		config.SetForTest(func(c *config.Config) {
+			c.SupportedExtensions = oldExts
+			c.RootDir = oldRoot
+		})
 	})
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.RootDir = t.TempDir()
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b"}
+		c.RootDir = t.TempDir()
+	})
 
 	tmp := t.TempDir()
 	books := make([]Book, 4)
@@ -137,5 +141,5 @@ func TestConfigRace_WorkersDontReadConfigAfterCancel(t *testing.T) {
 
 	// After ProcessBooksParallel returns all goroutines MUST be done.
 	// Mutate RootDir here — race detector fires if a worker is still alive.
-	config.AppConfig.RootDir = t.TempDir()
+	config.SetForTest(func(c *config.Config) { c.RootDir = t.TempDir() })
 }

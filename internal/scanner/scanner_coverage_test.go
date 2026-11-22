@@ -405,7 +405,7 @@ func TestScanDirectoryParallelReadDirError(t *testing.T) {
 	}
 
 	// This should not panic even if ReadDir fails on the file
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 	books, err := ScanDirectoryParallel(context.Background(), tmp, 2, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -418,7 +418,7 @@ func TestScanDirectoryParallelReadDirError(t *testing.T) {
 
 // TestScanDirectoryParallelWalkError tests error handling when Walk fails
 func TestScanDirectoryParallelWalkError(t *testing.T) {
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 	_, err := ScanDirectoryParallel(context.Background(), "/completely/nonexistent/path/12345", 2, nil)
 	if err == nil {
 		t.Error("expected error for nonexistent directory")
@@ -427,9 +427,9 @@ func TestScanDirectoryParallelWalkError(t *testing.T) {
 
 // TestProcessBooksParallelWithSaveError tests error handling when save fails
 func TestProcessBooksParallelWithSaveError(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	books := withTempBooks(t, []string{"book1.m4b"})
 
@@ -450,9 +450,9 @@ func TestProcessBooksParallelWithSaveError(t *testing.T) {
 
 // TestProcessBooksParallelNoProgressCallback tests processing without progress callback
 func TestProcessBooksParallelNoProgressCallback(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	books := withTempBooks(t, []string{"book1.m4b", "book2.m4b"})
 
@@ -515,12 +515,14 @@ func TestSaveBookToDatabaseNoDatabase(t *testing.T) {
 
 // TestProcessBooksParallelWithAIParsing tests AI parsing integration
 func TestProcessBooksParallelWithAIParsing(t *testing.T) {
-	oldConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = oldConfig })
+	oldConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(oldConfig) })
 
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.OpenAIAPIKey = "" // Empty key to trigger warning path
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b"}
+		c.EnableAIParsing = true
+		c.OpenAIAPIKey = ""
+	}) // Empty key to trigger warning path
 
 	books := withTempBooks(t, []string{"book1.m4b"})
 
@@ -537,9 +539,9 @@ func TestProcessBooksParallelWithAIParsing(t *testing.T) {
 
 // TestProcessBooksParallelContextTimeout tests context timeout handling
 func TestProcessBooksParallelContextTimeout(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	books := withTempBooks(t, []string{"book1.m4b"})
 
@@ -591,9 +593,9 @@ func TestExtractInfoFromPathSeriesPattern(t *testing.T) {
 
 // TestScanDirectoryParallelMultipleWorkers tests various worker counts
 func TestScanDirectoryParallelMultipleWorkers(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	tmp := t.TempDir()
 
@@ -625,8 +627,8 @@ func TestScanDirectoryParallelMultipleWorkers(t *testing.T) {
 
 // TestIsExcludedPath tests path exclusion logic
 func TestIsExcludedPath(t *testing.T) {
-	oldPatterns := config.AppConfig.ExcludePatterns
-	t.Cleanup(func() { config.AppConfig.ExcludePatterns = oldPatterns })
+	oldPatterns := config.Get().ExcludePatterns
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.ExcludePatterns = oldPatterns }) })
 
 	tests := []struct {
 		name     string
@@ -648,7 +650,7 @@ func TestIsExcludedPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			config.AppConfig.ExcludePatterns = tt.patterns
+			config.SetForTest(func(c *config.Config) { c.ExcludePatterns = tt.patterns })
 			got := isExcludedPath(tt.path)
 			if got != tt.want {
 				t.Errorf("isExcludedPath(%q) with patterns %v = %v, want %v", tt.path, tt.patterns, got, tt.want)
@@ -660,9 +662,9 @@ func TestIsExcludedPath(t *testing.T) {
 // TestProcessBooksDefault tests ProcessBooks
 func TestProcessBooksDefault(t *testing.T) {
 
-	oldExts := config.AppConfig.SupportedExtensions
-	t.Cleanup(func() { config.AppConfig.SupportedExtensions = oldExts })
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	oldExts := config.Get().SupportedExtensions
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) })
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	books := withTempBooks(t, []string{"test.m4b"})
 

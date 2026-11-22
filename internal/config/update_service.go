@@ -743,9 +743,11 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// config that memory had just reverted. Validating before the swap
 		// means an invalid config is refused with nothing written anywhere.
 		//
-		// Validate() also NORMALIZES (it resolves the iTunes shims and fills an
-		// empty embedding.vector_backend), so it is always run on the candidate
-		// — those fixups have to reach the config that gets stored.
+		// The candidate is NORMALIZED before it is validated and stored (the
+		// iTunes shims resolved, an empty embedding.vector_backend filled, and
+		// the other zero-means-default fields): those fixups have to reach the
+		// config that gets stored. Validate itself no longer writes its
+		// receiver (copy-on-write config), so the normalisation is explicit.
 		//
 		// Only a PUT that INTRODUCES invalidity is refused. If the config was
 		// ALREADY invalid before this request — an old blob predating a field
@@ -766,7 +768,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		// and AFTER, so a normalization cannot carry a change past it. Off
 		// with auth off, like every other credential guard; an unknown caller
 		// (no method on the context) is refused.
-		priorCheck := prior.Clone()
+		priorCheck := prior.Normalized()
 		priorValid := priorCheck.Validate() == nil
 		checkProtected := func() bool {
 			// The owner trust root first, and NOT skipped with auth off or
@@ -787,6 +789,7 @@ func (us *UpdateService) UpdateConfig(ctx context.Context, payload map[string]an
 		if !checkProtected() {
 			return
 		}
+		candidate = candidate.Normalized()
 		candidateErr := candidate.Validate()
 		if candidateErr != nil && priorValid {
 			validateErr = candidateErr

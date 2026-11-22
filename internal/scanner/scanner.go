@@ -787,7 +787,7 @@ func recordSkipDecision(reason skipReason) {
 
 // isExcludedPath checks whether a path matches any configured exclude pattern.
 func isExcludedPath(path string) bool {
-	for _, pattern := range config.AppConfig.ExcludePatterns {
+	for _, pattern := range config.Get().ExcludePatterns {
 		if pattern == "" {
 			continue
 		}
@@ -1051,7 +1051,7 @@ func writeBackScanCache(filePath string, fi os.FileInfo, scanLog logger.Logger) 
 	// covers both halves -- the row just created for a fresh file, and a
 	// re-read of a file that is STILL moving -- because every processed file
 	// reaches this same write-back.
-	if fi.ModTime().Unix() > rescanFreshCutoff(time.Now(), config.AppConfig.MinRescanAgeHours) {
+	if fi.ModTime().Unix() > rescanFreshCutoff(time.Now(), config.Get().MinRescanAgeHours) {
 		if merr := store.MarkNeedsRescan(dbBook.ID); merr != nil {
 			// Not silent: losing this leaves a still-changing file gated for a
 			// full period on half-written metadata, which is the precise
@@ -1112,7 +1112,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 
 	// Operators with unusually slow storage can widen the interval; 0 or unset
 	// means the default.
-	every := config.AppConfig.ScanProgressEvery
+	every := config.Get().ScanProgressEvery
 	if every <= 0 {
 		every = scanProgressEvery
 	}
@@ -1279,7 +1279,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 					continue
 				}
 				ext := strings.ToLower(filepath.Ext(path))
-				if slices.Contains(config.AppConfig.SupportedExtensions, ext) {
+				if slices.Contains(config.Get().SupportedExtensions, ext) {
 					audioFiles = append(audioFiles, path)
 				}
 			}
@@ -1329,7 +1329,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 	// out as one chapter per "<prefix> - N" subdir shatters into one book per
 	// chapter. Coalesce those siblings into one multi-file book before persisting.
 	// Path-based + prefix⊆parent guard; gated OFF by default (see CoalesceShatteredSiblings).
-	if config.AppConfig.CoalesceShatteredSiblings {
+	if config.Get().CoalesceShatteredSiblings {
 		before := len(books)
 		books = coalesceShatteredSiblings(ctx, books)
 		if len(books) != before {
@@ -1343,7 +1343,7 @@ func ScanDirectoryParallel(ctx context.Context, rootDir string, workers int, sca
 // ProcessBooks processes the discovered books to extract metadata and identify series.
 // If scanLog is nil, a default logger is used.
 func ProcessBooks(books []Book, scanLog logger.Logger) error {
-	return ProcessBooksParallel(context.Background(), books, config.AppConfig.ConcurrentScans, nil, scanLog)
+	return ProcessBooksParallel(context.Background(), books, config.Get().ConcurrentScans, nil, scanLog)
 }
 
 // ProcessBooksParallel processes books with parallel workers for improved performance.
@@ -1445,13 +1445,13 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 	// Computed ONCE for the run, not per file: a cutoff that drifts while the
 	// scan walks 40k files would make the gate's verdict depend on where in the
 	// run a file happened to land.
-	freshCutoff := rescanFreshCutoff(time.Now(), config.AppConfig.MinRescanAgeHours)
-	if config.AppConfig.MinRescanAgeHours > 0 {
+	freshCutoff := rescanFreshCutoff(time.Now(), config.Get().MinRescanAgeHours)
+	if config.Get().MinRescanAgeHours > 0 {
 		scanLog.Info("rescan-age gate active: a changed file is re-read only once its mtime is older than %dh",
-			config.AppConfig.MinRescanAgeHours)
+			config.Get().MinRescanAgeHours)
 	} else {
 		scanLog.Info("rescan-age gate disabled (min_rescan_age_hours=%d): every changed file is re-read",
-			config.AppConfig.MinRescanAgeHours)
+			config.Get().MinRescanAgeHours)
 	}
 
 	// progressCh serializes progress updates so callbacks and progress output
@@ -1628,7 +1628,7 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		filePath := books[idx].FilePath
 
 		// Suspicious-file guard: single files below MinBookSizeBytes skip heavy processing.
-		if threshold := config.AppConfig.MinBookSizeBytes; threshold > 0 {
+		if threshold := config.Get().MinBookSizeBytes; threshold > 0 {
 			if fi, statErr := os.Stat(filePath); statErr == nil && !fi.IsDir() && fi.Size() < threshold {
 				extractInfoFromPath(&books[idx])
 				books[idx].LibraryState = "suspicious"
@@ -1650,11 +1650,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		// Handle directory-based books (multi-file books grouped by album tag)
 		if info, statErr := os.Stat(filePath); statErr == nil && info.IsDir() {
 			dirPath := filePath
-			firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
+			firstFile := metadata.FindFirstAudioFile(dirPath, config.Get().SupportedExtensions)
 			if firstFile == "" {
 				return // No audio files found in directory
 			}
-			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
+			fileCount := countAudioFilesInDir(dirPath, config.Get().SupportedExtensions)
 			bm, bmErr := metadata.AssembleBookMetadataWith(dirPath, firstFile, fileCount, 0, FolderNameEvidence())
 			if bmErr == nil {
 				books[idx].folderParse = folderParsedFrom(bm)
@@ -1731,11 +1731,11 @@ func ProcessBooksParallel(ctx context.Context, books []Book, workers int, progre
 		// album-grouped multi-file path, which already routes via the folder.
 		if metadata.IsGenericPartFilename(filePath) || len(books[idx].SegmentFiles) > 1 {
 			dirPath := filepath.Dir(filePath)
-			firstFile := metadata.FindFirstAudioFile(dirPath, config.AppConfig.SupportedExtensions)
+			firstFile := metadata.FindFirstAudioFile(dirPath, config.Get().SupportedExtensions)
 			if firstFile == "" {
 				firstFile = filePath
 			}
-			fileCount := countAudioFilesInDir(dirPath, config.AppConfig.SupportedExtensions)
+			fileCount := countAudioFilesInDir(dirPath, config.Get().SupportedExtensions)
 			bm, bmErr := metadata.AssembleBookMetadataWith(dirPath, firstFile, fileCount, 0, FolderNameEvidence())
 			if bmErr != nil {
 				scanLog.Warn("AssembleBookMetadataWith failed for %s: %v", dirPath, bmErr)
@@ -2762,7 +2762,7 @@ func createBookFilesForBookWithAudio(bookFilePath string, segmentFiles []string,
 			return ""
 		}
 		audioExts := make(map[string]bool)
-		for _, ext := range config.AppConfig.SupportedExtensions {
+		for _, ext := range config.Get().SupportedExtensions {
 			audioExts[ext] = true
 		}
 		for _, entry := range entries {
@@ -3445,7 +3445,7 @@ func saveBookToDatabase(ctx context.Context, book *Book) (*ownershipSkip, error)
 	// Snapshot the fields we need from the global config so that even if
 	// config.AppConfig is written by another goroutine (e.g. the next test's
 	// setupTestServer) after this point, we use a consistent local copy.
-	rootDir := config.AppConfig.RootDir
+	rootDir := config.Get().RootDir
 
 	// Prefer using the unified Store API when available
 	if getStore() != nil {

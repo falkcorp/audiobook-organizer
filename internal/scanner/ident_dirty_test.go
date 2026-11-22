@@ -37,10 +37,10 @@ func TestScannerMarksDirtyOnTitleChange(t *testing.T) {
 		database.SetGlobalStore(prevStore)
 		SetStore(nil)
 	})
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 	rootDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = rootDir })
 	filePath := filepath.Join(rootDir, "book.m4b")
 	if err := os.WriteFile(filePath, []byte("test"), 0o644); err != nil {
 		t.Fatal(err)

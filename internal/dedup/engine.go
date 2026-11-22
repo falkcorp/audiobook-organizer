@@ -355,7 +355,7 @@ func (de *Engine) SetISBNIndexStore(s ISBNIndexStore) {
 // the pattern used by DedupReviewModel and DedupLLMAutoMergeHighConfidence so
 // a runtime settings toggle takes effect on the next FullScan without a restart.
 func (de *Engine) embeddingsEnabled() bool {
-	return de.embedClient != nil && config.AppConfig.Dedup.EmbeddingsEnabled
+	return de.embedClient != nil && config.Get().Dedup.EmbeddingsEnabled
 }
 
 // SetScoreConfig replaces the live unified scoring calibration. It is the
@@ -2757,8 +2757,8 @@ func (de *Engine) resolvedBookThresholds() (high, low float64) {
 		return high, low
 	}
 	model := de.embedClient.Model()
-	if _, ok := config.AppConfig.Dedup.EmbeddingThresholdsByModel[model]; ok {
-		return config.AppConfig.Dedup.ThresholdsForModel(model)
+	if _, ok := config.Get().Dedup.EmbeddingThresholdsByModel[model]; ok {
+		return config.Get().Dedup.ThresholdsForModel(model)
 	}
 	return high, low
 }
@@ -3040,7 +3040,7 @@ func (de *Engine) EmbedBooksAsync(ctx context.Context) (batchID string, count in
 	// backend would otherwise submit to OpenAI's Batch API with a dummy key.
 	// openai-fallback-local is intentionally also blocked — the Batch API has no
 	// fallback path. Callers should downgrade to the synchronous per-book path.
-	if mode := config.AppConfig.EffectiveEmbeddingMode(); mode != config.AIBackendModeOpenAI {
+	if mode := config.Get().EffectiveEmbeddingMode(); mode != config.AIBackendModeOpenAI {
 		return "", 0, fmt.Errorf("%w (mode=%s)", ai.ErrBatchUnsupported, mode)
 	}
 
@@ -4104,7 +4104,7 @@ func (de *Engine) RunLLMReviewWithHooks(ctx context.Context, hooks LLMReviewHook
 		Store:  de.aiJobsStore,
 		Client: &ai.AIJobsBatchClient{Parser: de.llmParser},
 	}
-	model := config.AppConfig.Dedup.ReviewModel // per-feature model knob (AI-MODEL-1)
+	model := config.Get().Dedup.ReviewModel // per-feature model knob (AI-MODEL-1)
 	if model == "" {
 		model = "gpt-5-mini"
 	}
@@ -4370,7 +4370,7 @@ func (de *Engine) ApplyVerdicts(verdicts []ai.DedupPairVerdict, byIndex map[int]
 		// — author merges are structural and user-visible enough
 		// that we require manual confirmation regardless of
 		// confidence.
-		if !config.AppConfig.Dedup.LLMAutoMergeHighConfidence {
+		if !config.Get().Dedup.LLMAutoMergeHighConfidence {
 			continue
 		}
 		if candidate.EntityType != "book" {

@@ -91,7 +91,7 @@ func runAIBatchPhase(ctx context.Context, parser aiBatchParser, books []Book, ca
 	// together from one resolver because they are one setting in two halves --
 	// see AIBackendConfig.ParseBatchSize for the measurements that forced this,
 	// and for why the timeout is clamped below the watchdog's ProgressTimeout.
-	batch := config.AppConfig.ResolveAIParseBatch()
+	batch := config.Get().ResolveAIParseBatch()
 	batchSize, batchTimeout := batch.Size, batch.Timeout
 	const delayBetweenBatches = 2 * time.Second
 

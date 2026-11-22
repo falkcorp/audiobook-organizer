@@ -2018,7 +2018,7 @@ func Mutate(fn func(*Config)) {
 	// guaranteed to see the write. It also fires when fn panics, because fn may
 	// have changed the config before it did.
 	defer generation.Add(1)
-	fn(&AppConfig)
+	mutateCOW(fn) // cow.go: fn edits a deep copy, which is then published
 }
 
 // generation counts completed Mutate calls; see Generation.
@@ -3911,18 +3911,94 @@ func validateParentDirWritable(path string, field string) error {
 	return nil
 }
 
-// Validate performs structural checks on runtime configuration values.
+// Normalized returns a deep copy of c with every normalisation applied: the
+// iTunes legacy path shims derived, and the zero values that mean "the
+// default" replaced by the default (embedding.vector_backend,
+// chapter_consolidation_threshold_min, log_retention_days,
+// min_book_size_bytes, min_rescan_age_hours). c itself is never changed, so it
+// is safe on a published snapshot from Get().
+//
+// Until the copy-on-write config these fixups lived inside Validate and ran on
+// its receiver, so `config.AppConfig.Validate()` at boot wrote into the live
+// global field by field while readers read it unlocked. Normalising is a WRITE
+// and now goes through the writer path: NormalizeAndValidate publishes the
+// normalised copy whole, and the settings write path normalises its candidate
+// before it is stored.
+func (c *Config) Normalized() *Config {
+	if c == nil {
+		return nil
+	}
+	n := c.Clone()
+	n.normalizeInPlace()
+	return n
+}
+
+// normalizeInPlace applies Normalized's fixups to c. Only ever called on a
+// private copy (Normalized's clone); never on a published snapshot.
+func (c *Config) normalizeInPlace() {
+	// iTunes 4-state model: derive the legacy path shims (itunes_libraries.go /
+	// spec §2) before validateNormalized runs the fail-closed library assertions.
+	c.ITunes.Resolve()
+	// embedding.vector_backend: the empty-string normalization is load-bearing,
+	// not cosmetic: an upgraded install whose stored config_blob predates the
+	// field gets "" from migrateEmbeddingBlob (persistence.go), and
+	// viper.SetDefault never sees that path. Without this those installs would
+	// stay on chromem forever, or, with the enum check, fail to start outright.
+	if c.Embedding.VectorBackend == "" {
+		c.Embedding.VectorBackend = "hnsw"
+	}
+	// chapter_consolidation_threshold_min: normalize, never reject. A 0 in a
+	// stored blob or config file predates the rule that 0 means the default,
+	// and refusing to start over it would turn a recovered setting into an
+	// outage. See ResolveChapterConsolidationThresholdMin.
+	normalizeChapterConsolidationThreshold(c, "the loaded configuration")
+	// log_retention_days: same rule, same reason. 0 means the default, never
+	// "keep forever" (that is -1); see ResolveLogRetentionDays.
+	normalizeLogRetentionDays(c, "the loaded configuration")
+	if c.MinBookSizeBytes == 0 {
+		c.MinBookSizeBytes = 5 * 1024 * 1024
+	}
+	// 0 means "unset" and takes the default; -1 (or any negative) disables the
+	// rescan-age gate outright. Same idiom as MinBookSizeBytes above.
+	if c.MinRescanAgeHours == 0 {
+		c.MinRescanAgeHours = 144
+	}
+}
+
+// NormalizeAndValidate is the boot step that used to be
+// `config.AppConfig.Validate()`: it publishes the normalised form of the
+// current config through the writer path (one atomic swap, so a reader sees
+// the config before normalisation or after it, never a half-normalised one)
+// and returns the validation error, if any, for the normalised config. The
+// normalised config is published even when it is invalid, exactly as the old
+// in-place normalisation happened before the error was returned; the caller
+// refuses to start on the error.
+func NormalizeAndValidate() error {
+	var err error
+	Mutate(func(c *Config) {
+		*c = *c.Normalized()
+		err = c.validateNormalized()
+	})
+	return err
+}
+
+// Validate reports whether c, once normalised, is a valid runtime
+// configuration. It does NOT change c (see Normalized): a zero that means "the
+// default" is valid. To store the normalised form, normalise first.
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("config is nil")
 	}
+	return c.Normalized().validateNormalized()
+}
 
+// validateNormalized performs the structural checks on a config Normalized has
+// already produced. It reads c and never writes it.
+func (c *Config) validateNormalized() error {
 	var errs []string
 
-	// iTunes 4-state model: derive the legacy path shims, then run the fail-closed
-	// library assertions (inert unless itunes.libraries is populated). See
-	// itunes_libraries.go / spec §2.
-	c.ITunes.Resolve()
+	// iTunes fail-closed library assertions (inert unless itunes.libraries is
+	// populated); the shims were derived by normalizeInPlace.
 	errs = append(errs, c.ITunes.ValidateLibraries(c.ProtectedPaths)...)
 
 	switch c.DatabaseType {
@@ -3942,32 +4018,13 @@ func (c *Config) Validate() error {
 	// internal/server/registry_wire.go selects HNSW only on an exact "hnsw"
 	// match and silently falls through to the brute-force chromem scan for
 	// every other value, so a typo cost two orders of magnitude with no error
-	// and no log line. Normalize-then-reject, the same shape as DatabaseType.
-	//
-	// The empty-string normalization is load-bearing, not cosmetic: an upgraded
-	// install whose stored config_blob predates the field gets "" from
-	// migrateEmbeddingBlob (persistence.go), and viper.SetDefault never sees
-	// that path. Without this line those installs would stay on chromem
-	// forever — or, once the enum check exists, fail to start outright.
-	if c.Embedding.VectorBackend == "" {
-		c.Embedding.VectorBackend = "hnsw"
-	}
+	// and no log line. Normalize-then-reject (the "" -> "hnsw" half is in
+	// normalizeInPlace), the same shape as DatabaseType.
 	switch c.Embedding.VectorBackend {
 	case "hnsw", "chromem":
 	default:
 		errs = append(errs, "embedding.vector_backend must be 'hnsw' or 'chromem'")
 	}
-
-	// chapter_consolidation_threshold_min: normalize, never reject. A 0 in a
-	// stored blob or config file predates the rule that 0 means the default,
-	// and refusing to start over it would turn a recovered setting into an
-	// outage. Validate runs after InitConfig, after the database overlay and
-	// on every PUT candidate, so this is where a zero is caught on every path
-	// that loads or changes config. See ResolveChapterConsolidationThresholdMin.
-	normalizeChapterConsolidationThreshold(c, "the loaded configuration")
-	// log_retention_days: same rule, same reason. 0 means the default, never
-	// "keep forever" (that is -1); see ResolveLogRetentionDays.
-	normalizeLogRetentionDays(c, "the loaded configuration")
 
 	// Backup compression is validated HERE, at startup and on PUT /config,
 	// rather than at backup time.
@@ -4004,14 +4061,6 @@ func (c *Config) Validate() error {
 	}
 	if c.ScanStandDownGraceSeconds < 0 || c.ScanStandDownGraceSeconds > 600 {
 		errs = append(errs, "scan_standdown_grace_seconds must be between 0 and 600")
-	}
-	if c.MinBookSizeBytes == 0 {
-		c.MinBookSizeBytes = 5 * 1024 * 1024
-	}
-	// 0 means "unset" and takes the default; -1 (or any negative) disables the
-	// rescan-age gate outright. Same idiom as MinBookSizeBytes above.
-	if c.MinRescanAgeHours == 0 {
-		c.MinRescanAgeHours = 144
 	}
 	if c.AutoScanDebounceSeconds < 0 {
 		errs = append(errs, "auto_scan_debounce_seconds must be >= 0")

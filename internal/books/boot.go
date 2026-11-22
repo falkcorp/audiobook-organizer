@@ -97,7 +97,9 @@ func bootSettings(store settingsStore, steps *startup.Steps, stateDir string) (*
 	syncConfigFromEnv()
 
 	if err := steps.Run("config.Validate", func() error {
-		if err := config.AppConfig.Validate(); err != nil {
+		// Publishes the normalised config whole (copy-on-write config); the
+		// old in-place Validate rewrote the live config field by field.
+		if err := config.NormalizeAndValidate(); err != nil {
 			return fmt.Errorf("invalid configuration: %w", err)
 		}
 		return nil

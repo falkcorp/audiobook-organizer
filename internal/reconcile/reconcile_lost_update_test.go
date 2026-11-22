@@ -53,10 +53,10 @@ func (s reconcileLostUpdateStore) ModifyBook(id string, fn func(*database.Book) 
 // write survives. Against the old GetBookByID -> UpdateBook(whole row) it fails
 // with "Duration reverted".
 func TestAssignOrphanVGs_DoesNotRevertConcurrentColumns(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 	const libRoot = "/lib"
-	config.AppConfig.RootDir = libRoot
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	inner := newFakeStore()
 	const id = "orphan"
@@ -91,9 +91,9 @@ func TestAssignOrphanVGs_DoesNotRevertConcurrentColumns(t *testing.T) {
 // set only LibraryState / MarkedForDeletion / MarkedForDeletionAt. Against the
 // old hydrate -> UpdateBook(whole row) it fails with "Duration reverted".
 func TestFindBrokenSegmentBooks_DoesNotRevertConcurrentColumns(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "" // disable the library-prefix skip; check all books
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" }) // disable the library-prefix skip; check all books
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 
 	dir := t.TempDir()
 	seg0 := writeFile(t, dir, "seg0.m4b", "s0")

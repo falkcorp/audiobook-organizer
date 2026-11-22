@@ -230,9 +230,9 @@ func TestEnqueueAIParseReportsTheChunkBoundaryItReached(t *testing.T) {
 }
 
 func TestRunAIParseForBooksIsANoopWhenAIParsingIsDisabled(t *testing.T) {
-	prev := config.AppConfig.EnableAIParsing
-	config.AppConfig.EnableAIParsing = false
-	t.Cleanup(func() { config.AppConfig.EnableAIParsing = prev })
+	prev := config.Get().EnableAIParsing
+	config.SetForTest(func(c *config.Config) { c.EnableAIParsing = false })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.EnableAIParsing = prev }) })
 
 	// A batch that arrives after the operator turned AI off is not an error.
 	// Returning one would mark the operation failed and, under a retrying

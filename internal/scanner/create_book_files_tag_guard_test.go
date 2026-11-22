@@ -229,9 +229,9 @@ func chapterFiles(n int) []string {
 // positional numbers must still follow the chapter numbers, not the
 // alphabet. With every tag readable the tag numbers are taken as before.
 func TestCreateBookFilesForBook_RefusedBookFallsBackToNaturalOrder(t *testing.T) {
-	oldExts := config.AppConfig.SupportedExtensions
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
-	defer func() { config.AppConfig.SupportedExtensions = oldExts }()
+	oldExts := config.Get().SupportedExtensions
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".mp3"} })
+	defer func() { config.SetForTest(func(c *config.Config) { c.SupportedExtensions = oldExts }) }()
 
 	for _, tc := range []struct {
 		name       string

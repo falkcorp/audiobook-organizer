@@ -980,18 +980,18 @@ func RunITunesHeal(ctx context.Context, store reconcileStore, reporter sdk.Repor
 //  5. fuzzyFindByAlbum — full index path-content scan for tracks with zero filename
 //     matches; finds files in correctly-named book folders with different filenames
 func RunITunesHealVia(ctx context.Context, env HealEnv, cp ITunesHealParams) error {
-	cfg := config.AppConfig.ITunes
+	cfg := config.Get().ITunes
 	if cfg.LibraryReadPath == "" {
 		return fmt.Errorf("itunes.library_read_path not configured")
 	}
-	rootDir := config.AppConfig.RootDir
+	rootDir := config.Get().RootDir
 	if rootDir == "" {
 		return fmt.Errorf("root_dir not configured")
 	}
 
 	// AcoustID client for layer 4 — nil when no key configured (layers 1–3 still work).
 	var ac *acoustid.Client
-	if key := config.AppConfig.AcoustIDAPIKey; key != "" {
+	if key := config.Get().AcoustIDAPIKey; key != "" {
 		ac = acoustid.NewClient(key)
 	}
 

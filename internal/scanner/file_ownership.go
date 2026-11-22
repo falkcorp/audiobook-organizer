@@ -108,8 +108,8 @@ func scannedFilesOf(book *Book) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", book.FilePath, err)
 	}
-	audioExts := make(map[string]bool, len(config.AppConfig.SupportedExtensions))
-	for _, ext := range config.AppConfig.SupportedExtensions {
+	audioExts := make(map[string]bool, len(config.Get().SupportedExtensions))
+	for _, ext := range config.Get().SupportedExtensions {
 		audioExts[ext] = true
 	}
 	var files []string

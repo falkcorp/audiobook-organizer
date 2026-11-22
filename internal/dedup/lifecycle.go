@@ -48,7 +48,7 @@ const defaultHydrationStopTimeout = 5 * time.Second
 // queries are rare (operator-triggered scans, dedup-on-import), so the
 // memory savings dominate for memory-constrained deployments.
 func dedupChromemLazy() bool {
-	return config.AppConfig.Dedup.ChromemLazy
+	return config.Get().Dedup.ChromemLazy
 }
 
 // stopTimeout returns the effective join-timeout for Stop().  Tests can

@@ -30,12 +30,12 @@ func syncMoveFixture(t *testing.T) *database.PebbleStore {
 	prevStore := database.GetGlobalStore()
 	database.SetGlobalStore(store)
 	SetStore(store)
-	prevConfig := config.AppConfig
-	config.AppConfig.RootDir = ""
+	prevConfig := config.Snapshot()
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
 	t.Cleanup(func() {
 		database.SetGlobalStore(prevStore)
 		SetStore(nil)
-		config.AppConfig = prevConfig
+		config.ReplaceForTest(prevConfig)
 	})
 	return store
 }

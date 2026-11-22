@@ -27,9 +27,9 @@ import (
 func pinEngine(t *testing.T) (*Engine, *vptest.Fixture, *database.EmbeddingStore) {
 	t.Helper()
 	f := vptest.New(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	es := database.NewEmbeddingStoreFromStore(f.S)
 	require.NotNil(t, es)
 	engine, err := NewEngine(es, f.S, nil, nil, merge.NewService(f.S), unified.DefaultScoreConfig())

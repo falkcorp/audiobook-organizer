@@ -627,10 +627,15 @@ func newAIParser(scanLog logger.Logger) (aiBatchParser, bool) {
 }
 
 func newAIParserUnjournalled(scanLog logger.Logger) (aiBatchParser, bool) {
-	if !config.AppConfig.EnableAIParsing {
+	// One snapshot for the whole construction, and the parsers below keep it:
+	// a parser is built per scan run (newAIParser's two callers), so the run
+	// sees the settings it started with. Before the copy-on-write config this
+	// was &config.AppConfig and a mid-run settings save changed the models a
+	// half-finished run asked for.
+	cfg := config.Get()
+	if !cfg.EnableAIParsing {
 		return nil, false
 	}
-	cfg := &config.AppConfig
 	mode := cfg.EffectiveLLMMode()
 
 	// ai_endpoints_routing (design rollout step 2): in the modes that use a

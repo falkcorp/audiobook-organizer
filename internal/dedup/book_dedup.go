@@ -330,7 +330,7 @@ func groupKeyForBooks(group []database.Book) string {
 // invariant; re-ranking is version-group-primary-repair's job. A held group
 // is left as it is (EnsureSinglePrimary logs it).
 func handOffRetiredPrimaries(ctx context.Context, store Store, groups map[string]bool) {
-	env := versionprimary.Env{RootDir: config.AppConfig.RootDir}
+	env := versionprimary.Env{RootDir: config.Get().RootDir}
 	for gid := range groups {
 		res, err := versionprimary.EnsureSinglePrimary(ctx, store, gid, env)
 		if err != nil {

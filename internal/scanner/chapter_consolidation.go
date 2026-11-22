@@ -144,7 +144,7 @@ func consolidateChapterGroupsMode(ctx context.Context, files []string, mode cons
 	// partially-populated Config -- did exactly that in production for eleven
 	// days with no log line, so 0 now resolves to the default like any other
 	// unusable value. See config.ResolveChapterConsolidationThresholdMin.
-	thresholdMin := config.AppConfig.ResolveChapterConsolidationThresholdMin()
+	thresholdMin := config.Get().ResolveChapterConsolidationThresholdMin()
 	thresholdSec := thresholdMin * 60
 
 	type candidate struct {

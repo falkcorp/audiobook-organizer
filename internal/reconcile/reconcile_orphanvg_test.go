@@ -20,8 +20,8 @@ import (
 // the counters are exact, and nothing outside the intended candidate set was
 // touched. Run with -race to exercise the pool.
 func TestAssignOrphanVGs_PoolCorrectness(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 
 	const libRoot = "/lib"
 	const n = 40 // enough to keep NumCPU workers genuinely contending
@@ -47,7 +47,7 @@ func TestAssignOrphanVGs_PoolCorrectness(t *testing.T) {
 	store.books = append(store.books, database.BookCore{ID: outside, Title: outside, FilePath: "/other/outside.m4b"})
 	store.byID[outside] = &database.Book{ID: outside, Title: outside, FilePath: "/other/outside.m4b"}
 
-	config.AppConfig.RootDir = libRoot
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	res, err := AssignOrphanVGs(store, libRoot)
 	if err != nil {
@@ -118,11 +118,11 @@ func TestAssignOrphanVGs_PoolCorrectness(t *testing.T) {
 // overwritten. Before this fix AssignOrphanVGs used the Core snapshot's
 // VersionGroupID check as the only guard and would clobber this race.
 func TestAssignOrphanVGs_ConcurrentAssignmentSkip(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 
 	const libRoot = "/lib"
-	config.AppConfig.RootDir = libRoot
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	store := newFakeStore()
 
@@ -274,10 +274,10 @@ func (p *pagingHazardStore) GetAllBooksCore(limit, offset int) ([]database.BookC
 // skips a book when the snapshot swaps between pages — and reports SUCCESS.
 // The single-call enumeration sees every book.
 func TestAssignOrphanVGs_SnapshotSwapCannotSkipBooks(t *testing.T) {
-	prevRoot := config.AppConfig.RootDir
-	defer func() { config.AppConfig.RootDir = prevRoot }()
+	prevRoot := config.Get().RootDir
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) }()
 	const libRoot = "/lib"
-	config.AppConfig.RootDir = libRoot
+	config.SetForTest(func(c *config.Config) { c.RootDir = libRoot })
 
 	// One more book than a page, so the old code needed two pages.
 	const n = 5001

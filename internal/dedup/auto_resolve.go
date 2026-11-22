@@ -147,7 +147,7 @@ func (de *Engine) AutoResolveCertain(ctx context.Context, apply bool, maxMerges,
 	// Apply path is gated behind the global kill switch. This check lives here
 	// in the engine (not only the op wrapper) so calling the method directly
 	// cannot bypass the greenlight gate. Dry-run is exempt.
-	if apply && !config.AppConfig.Dedup.AutoResolveEnabled {
+	if apply && !config.Get().Dedup.AutoResolveEnabled {
 		return res, fmt.Errorf("auto-resolve: apply=true requested but dedup.auto_resolve_enabled is false — owner greenlight required")
 	}
 	if apply && de.mergeService == nil {

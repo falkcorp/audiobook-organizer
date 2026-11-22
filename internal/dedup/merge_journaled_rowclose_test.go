@@ -35,9 +35,9 @@ func (f *failUpdateStore) ModifyBook(id string, fn func(*database.Book) error) (
 
 func engineOn(t *testing.T, f *vptest.Fixture, svcStore database.Store) (*Engine, *database.EmbeddingStore) {
 	t.Helper()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = f.Root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = f.Root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	es := database.NewEmbeddingStoreFromStore(f.S)
 	engine, err := NewEngine(es, f.S, nil, nil, merge.NewService(svcStore), unified.DefaultScoreConfig())
 	require.NoError(t, err)

@@ -160,7 +160,7 @@ func DetectSplitBookCandidatesWithVetoes(ctx context.Context, store Store, progr
 // (repair_chapter_max_min, the limit the fragment fixer's duration gate
 // uses), in seconds.
 func RepairChapterMaxSec() int {
-	return config.AppConfig.ResolveRepairChapterMaxMin() * 60
+	return config.Get().ResolveRepairChapterMaxMin() * 60
 }
 
 // withoutVetoed drops the clusters that carry a veto.

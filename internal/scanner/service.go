@@ -458,13 +458,13 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate, i
 		//
 		// The log line below states the exclusion out loud so this is a
 		// visible behaviour, not a silent one.
-		if (forceUpdate || includeRootDir) && config.AppConfig.RootDir != "" {
-			foldersToScan = append(foldersToScan, config.AppConfig.RootDir)
+		if (forceUpdate || includeRootDir) && config.Get().RootDir != "" {
+			foldersToScan = append(foldersToScan, config.Get().RootDir)
 			if forceUpdate {
-				log.Info("Full rescan: including library path %s", config.AppConfig.RootDir)
+				log.Info("Full rescan: including library path %s", config.Get().RootDir)
 			} else {
 				log.Info("Including library path %s (incremental: unchanged files are still skipped)",
-					config.AppConfig.RootDir)
+					config.Get().RootDir)
 			}
 		}
 
@@ -479,10 +479,10 @@ func (ss *ScanService) determineFoldersToScan(folderPath *string, forceUpdate, i
 			}
 		}
 		log.Info("Scanning %d total folders (%d import paths)", len(foldersToScan), len(folders))
-		if !forceUpdate && !includeRootDir && config.AppConfig.RootDir != "" {
+		if !forceUpdate && !includeRootDir && config.Get().RootDir != "" {
 			log.Info("Library root %s excluded from this incremental scan (organize destination); "+
 				"use include_root_dir=true to add it (still incremental), or force_update=true "+
-				"to add it AND re-hash everything", config.AppConfig.RootDir)
+				"to add it AND re-hash everything", config.Get().RootDir)
 		}
 	}
 
@@ -512,7 +512,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 	}
 
 	// Scan directory for audiobook files (parallel)
-	workers := config.AppConfig.ConcurrentScans
+	workers := config.Get().ConcurrentScans
 	if workers < 1 {
 		workers = 4
 	}
@@ -523,7 +523,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 
 	log.Info("Found %d audiobook files in %s", len(books), folderPath)
 	stats.TotalBooks += len(books)
-	if folderPath == config.AppConfig.RootDir {
+	if folderPath == config.Get().RootDir {
 		stats.LibraryBooks += len(books)
 	} else {
 		stats.ImportBooks += len(books)
@@ -555,7 +555,7 @@ func (ss *ScanService) scanFolder(ctx context.Context, folderIdx int, folderPath
 		// so that source_import_path is set on first insert and survives organize.
 		// Only apply when the folder being scanned is NOT the organized library root,
 		// otherwise we'd overwrite the original import path on re-scans.
-		if folderPath != config.AppConfig.RootDir {
+		if folderPath != config.Get().RootDir {
 			for i := range books {
 				if books[i].SourceImportPath == "" {
 					books[i].SourceImportPath = folderPath

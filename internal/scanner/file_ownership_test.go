@@ -63,11 +63,13 @@ func newOwnershipFixture(t *testing.T) ownershipFixture {
 	// when a live owner exists" would see only whichever row wrote last.
 	store.WaitForWarmup()
 
-	prevConfig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prevConfig })
+	prevConfig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prevConfig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.SupportedExtensions = []string{".mp3"}
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.SupportedExtensions = []string{".mp3"}
+	})
 
 	dir := filepath.Join(root, "Christopher Paolini", "Eldest")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -418,11 +420,13 @@ func TestProcessBooksParallel_OwnershipSkipTouchesNothingOfTheOwner(t *testing.T
 	t.Cleanup(func() { database.SetGlobalStore(origGlobal) })
 	useScannerStore(t, f.store)
 
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
-	config.AppConfig.AIBackend.LocalBaseURL = "http://192.0.2.1:1"
-	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
-	config.AppConfig.MinBookSizeBytes = 0
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.AIBackend.LLMMode = config.AIBackendModeLocal
+		c.AIBackend.LocalBaseURL = "http://192.0.2.1:1"
+		c.AIBackend.LocalLLMModel = "test-model"
+		c.MinBookSizeBytes = 0
+	})
 
 	// Durations make chapter synthesis productive: had it run on the owner,
 	// the owner would now have chapters.
@@ -476,8 +480,10 @@ func TestProcessBooksParallel_OwnershipSkipTouchesNothingOfTheOwner(t *testing.T
 func TestProcessBooksParallel_StagedArrivalAppendsToTheOwner(t *testing.T) {
 	f := newOwnershipFixture(t)
 	useScannerStore(t, f.store)
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.MinBookSizeBytes = 0
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = false
+		c.MinBookSizeBytes = 0
+	})
 
 	// The partial import left the owner with one chapter per file it had.
 	// PersistChaptersForBook never touches a book that has chapters, so the

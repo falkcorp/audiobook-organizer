@@ -123,15 +123,19 @@ func TestFindUntrackedFiles_SkipsAppDirs(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			prevRoot := config.AppConfig.RootDir
-			prevBackup, prevDump := config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir
-			prevExts := config.AppConfig.SupportedExtensions
-			prevDB, prevPlaylist := config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir
-			config.AppConfig.RootDir = root
-			config.AppConfig.SupportedExtensions = []string{".m4b"}
+			prevRoot := config.Get().RootDir
+			prevBackup, prevDump := config.Get().BackupDir, config.Get().OpenLibraryDumpDir
+			prevExts := config.Get().SupportedExtensions
+			prevDB, prevPlaylist := config.Get().DatabasePath, config.Get().PlaylistDir
+			config.SetForTest(func(c *config.Config) {
+				c.RootDir = root
+				c.SupportedExtensions = []string{".m4b"}
+			})
 			if tc.appDirs {
-				config.AppConfig.BackupDir = filepath.Join(root, "backups")
-				config.AppConfig.OpenLibraryDumpDir = filepath.Join(root, "openlibrary-dumps")
+				config.SetForTest(func(c *config.Config) {
+					c.BackupDir = filepath.Join(root, "backups")
+					c.OpenLibraryDumpDir = filepath.Join(root, "openlibrary-dumps")
+				})
 			} else {
 				// Zero EVERY field appdirs.FromConfig reads, not just these two.
 				// backup.ResolveDir SYNTHESIZES "backups" when BackupDir is unset and
@@ -141,17 +145,21 @@ func TestFindUntrackedFiles_SkipsAppDirs(t *testing.T) {
 				// guarantee: it fails loudly if FromConfig ever grows a source field that
 				// nobody zeroed here, instead of letting this subtest quietly stop testing
 				// the empty case while still passing.
-				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = "", ""
-				config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = "", ""
+				config.SetForTest(func(c *config.Config) {
+					c.BackupDir, c.OpenLibraryDumpDir = "", ""
+					c.DatabasePath, c.PlaylistDir = "", ""
+				})
 				if got := appdirs.Current(); got != (pathutil.AppDirs{}) {
 					t.Fatalf("the empty-AppDirs case is not actually empty: %+v", got)
 				}
 			}
 			t.Cleanup(func() {
-				config.AppConfig.RootDir = prevRoot
-				config.AppConfig.BackupDir, config.AppConfig.OpenLibraryDumpDir = prevBackup, prevDump
-				config.AppConfig.SupportedExtensions = prevExts
-				config.AppConfig.DatabasePath, config.AppConfig.PlaylistDir = prevDB, prevPlaylist
+				config.SetForTest(func(c *config.Config) {
+					c.RootDir = prevRoot
+					c.BackupDir, c.OpenLibraryDumpDir = prevBackup, prevDump
+					c.SupportedExtensions = prevExts
+					c.DatabasePath, c.PlaylistDir = prevDB, prevPlaylist
+				})
 			})
 
 			for _, p := range []string{

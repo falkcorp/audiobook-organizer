@@ -718,8 +718,8 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 	var dirs []string
 
 	// Priority 1: Library root (our organized folder — always preferred)
-	if config.AppConfig.RootDir != "" {
-		dirs = append(dirs, config.AppConfig.RootDir)
+	if config.Get().RootDir != "" {
+		dirs = append(dirs, config.Get().RootDir)
 	}
 
 	// Priority 2: Import paths
@@ -735,8 +735,8 @@ func FindUntrackedFiles(ctx context.Context, store Store, knownPaths map[string]
 	}
 
 	// Priority 3: iTunes library paths (lowest priority — never modify these)
-	if config.AppConfig.ITunes.LibraryReadPath != "" {
-		itunesMedia := filepath.Dir(config.AppConfig.ITunes.LibraryReadPath)
+	if config.Get().ITunes.LibraryReadPath != "" {
+		itunesMedia := filepath.Dir(config.Get().ITunes.LibraryReadPath)
 		// Walk up to find the iTunes Media/Audiobooks folder
 		if sp, err := library.Join(itunesMedia, "iTunes Media", "Audiobooks"); err == nil {
 			audiobooks := sp.String()
@@ -1405,7 +1405,7 @@ func FindBrokenSegmentBooks(store VersionGroupStore, dryRun bool) (*BrokenSegmen
 	//   - Counters are atomic and assigned once at the end.
 	// Snapshot the root once: the workers below read it, and must not read
 	// the global config after a test (or a settings write) replaces it.
-	rootDir := config.AppConfig.RootDir
+	rootDir := config.Get().RootDir
 	entries := make([]*BrokenSegmentEntry, len(allBooks))
 	var booksChecked, brokenBooks, markedForReview int64
 	var g errgroup.Group

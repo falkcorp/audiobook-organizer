@@ -47,7 +47,7 @@ func TestVersionLink_JoiningAnotherWritersGroupHandsPrimaryOn(t *testing.T) {
 
 	importSecondCopy(t, secondPath)
 
-	f := &vptest.Fixture{S: base, Root: config.AppConfig.RootDir}
+	f := &vptest.Fixture{S: base, Root: config.Get().RootDir}
 	f.RequireSinglePrimary(t, otherGroup, firstID)
 	second, err := base.GetBookByFilePath(secondPath)
 	if err != nil || second == nil {
