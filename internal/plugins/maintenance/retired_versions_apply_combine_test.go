@@ -218,7 +218,7 @@ func TestRetiredApply_UndoCombineSeesTheLinkedRetire(t *testing.T) {
 	// retire candidate the combine still names.
 	extra := &database.BookFile{BookID: hush, FilePath: rf.file("g1/hush-extra.mp3"), Format: "mp3"}
 	require.NoError(t, rf.st.CreateBookFile(extra))
-	b.VersionGroupID = retiredPtr("g1")
+	b.VersionGroupID = new("g1")
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(t, err)
 

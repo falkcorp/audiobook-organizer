@@ -36,7 +36,7 @@ func ValidISBN10(s string) (string, bool) {
 		return c, false
 	}
 	sum := 0
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		ch := c[i]
 		v := 0
 		switch {
@@ -92,7 +92,7 @@ func NormalizeISBN13(s string) string {
 // ean13Check is the EAN-13 check digit of the first twelve digits.
 func ean13Check(twelve string) byte {
 	sum := 0
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		d := int(twelve[i] - '0')
 		if i%2 == 1 {
 			d *= 3

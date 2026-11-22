@@ -233,7 +233,7 @@ func (s *Server) runPurgeSoftDeletedOp(ctx context.Context, raw json.RawMessage,
 	}
 	env := purgeSoftDeletedEnv{t7Env: t7HeadEnv(reporter, !dryRun)}
 	if s.audiobookService != nil {
-		h := headPurgeSoftDeleted{headT7Activity: headT7Activity{w: s.activityWriter}, svc: s.audiobookService}
+		h := headPurgeSoftDeleted{w: s.activityWriter, svc: s.audiobookService}
 		env.Store, env.Writer = h, h
 	}
 	_, err = purgeSoftDeletedCore(ctx, purgeSoftDeletedNativeParams{

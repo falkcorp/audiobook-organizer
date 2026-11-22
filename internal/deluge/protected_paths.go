@@ -9,6 +9,7 @@ package deluge
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -194,12 +195,7 @@ func resolveCandidate(filePath string) (abs, resolved string, err error) {
 // hasParentSegment reports whether p has a ".." path segment, before any
 // cleaning.
 func hasParentSegment(p string) bool {
-	for _, seg := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if seg == ".." {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }), "..")
 }
 
 // underResolvedPrefix reports whether path lies under any of roots, tested the

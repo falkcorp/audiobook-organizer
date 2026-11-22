@@ -40,8 +40,8 @@ type AIJob struct {
 	ErrorCount   int       `json:"error_count"`
 	RowErrors    string    `json:"row_errors,omitempty"` // JSON-encoded []AIJobRowError
 	ErrorMsg     string    `json:"error_msg,omitempty"`
-	SubmittedAt  time.Time `json:"submitted_at,omitempty"`
-	CompletedAt  time.Time `json:"completed_at,omitempty"`
+	SubmittedAt  time.Time `json:"submitted_at"`
+	CompletedAt  time.Time `json:"completed_at"`
 	CreatedAt    time.Time `json:"created_at"`
 	// Applied is set once the completion callback has applied the results
 	// (MarkAIJobApplied), before the job is marked completed. A job with
@@ -52,7 +52,7 @@ type AIJob struct {
 	ApplyAttempts int `json:"apply_attempts,omitempty"`
 	// LastApplyError / LastApplyAt describe the most recent failed apply.
 	LastApplyError string    `json:"last_apply_error,omitempty"`
-	LastApplyAt    time.Time `json:"last_apply_at,omitempty"`
+	LastApplyAt    time.Time `json:"last_apply_at"`
 }
 
 // AIJobRowError is one failed row within an otherwise successful batch.

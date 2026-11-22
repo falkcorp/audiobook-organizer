@@ -119,7 +119,7 @@ func jwRandomString(rng *rand.Rand) string {
 // Batman surnames, and one-edit variants of a surname.
 func jwPairs(seed int64, n int, each func(a, b string)) {
 	rng := rand.New(rand.NewSource(seed))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		switch i % 3 {
 		case 0:
 			each(jwRandomString(rng), jwRandomString(rng))

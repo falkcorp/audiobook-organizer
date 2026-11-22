@@ -53,7 +53,7 @@ func TestCreditsBackfillReview_SnapshotNamingAJoinMemberBlocksTheAuthorIDPrepend
 	jason := f.author("Jason Todd")
 	dick := f.author("Dick Grayson")
 	f.book("rv-b1", "Under the Red Hood", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: dick, Name: "Dick Grayson"}
 	}, ba("rv-b1", [2]int{dick, 0}), nil)
 	before := f.state("rv-b1")
@@ -82,13 +82,13 @@ func TestCreditsBackfillReview_CleanCasesKeepThePlansPrependRule(t *testing.T) {
 	dick := f.author("Dick Grayson")
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
-	f.book("rv-c1", "Under the Hood", func(b *database.Book) { b.AuthorID = intp(jason) }, ba("rv-c1", [2]int{dick, 0}), nil)
+	f.book("rv-c1", "Under the Hood", func(b *database.Book) { b.AuthorID = new(jason) }, ba("rv-c1", [2]int{dick, 0}), nil)
 	f.book("rv-c2", "Batman: Year One", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.Author = &database.Author{ID: bruce, Name: "Bruce Wayne"}
 	}, ba("rv-c2", [2]int{dick, 0}), nil)
 	f.book("rv-c3", "Batman: Hush", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.Author = &database.Author{ID: selina, Name: "Selina Kyle"} // outside the join
 	}, ba("rv-c3", [2]int{dick, 0}), nil)
 
@@ -119,21 +119,21 @@ func TestCreditsBackfillReview_AllZeroTieBreakGoesToReviewWhenTheSnapshotNamesTh
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
 	f.book("rv-z1", "The Long Halloween", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.Author = &database.Author{ID: selina, Name: "Selina Kyle"}
 	}, ba("rv-z1", [2]int{selina, 0}, [2]int{bruce, 0}), nil)
 	// No snapshot: the plan's tie-break (AuthorID first) applies.
-	f.book("rv-z2", "Dark Victory", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("rv-z2", "Dark Victory", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("rv-z2", [2]int{selina, 0}, [2]int{bruce, 0}), nil)
 	// The snapshot names AuthorID itself: also clean.
 	f.book("rv-z3", "Catwoman: When in Rome", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.Author = &database.Author{ID: bruce, Name: "Bruce Wayne"}
 	}, ba("rv-z3", [2]int{selina, 0}, [2]int{bruce, 0}), nil)
 	// The tie-break changes nothing (AuthorID already first): the snapshot is
 	// irrelevant and the renumber is written.
 	f.book("rv-z4", "Batman: Ego", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
+		b.AuthorID = new(bruce)
 		b.Author = &database.Author{ID: selina, Name: "Selina Kyle"}
 	}, ba("rv-z4", [2]int{bruce, 0}, [2]int{selina, 0}), nil)
 	before := f.state("rv-z1")
@@ -164,16 +164,16 @@ func TestCreditsBackfillReview_NarratorUserLockHoldsTheNarratorSide(t *testing.T
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Alfred Pennyworth")
 	f.book("rv-n1", "Knightfall", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("")
-		b.NarratorsJSON = strp(`["Alfred Pennyworth"]`)
+		b.AuthorID = new(bruce)
+		b.Narrator = new("")
+		b.NarratorsJSON = new(`["Alfred Pennyworth"]`)
 	}, ba("rv-n1", [2]int{bruce, 0}), nil)
 	f.lock("rv-n1", database.FieldKeyNarrator)
 	// The same lock on a book whose author side also has work: the author
 	// side is written, the narrator side held.
 	f.book("rv-n2", "Batman: Death of the Family", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Alfred Pennyworth")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Alfred Pennyworth")
 	}, nil, nil)
 	f.lock("rv-n2", database.FieldKeyNarrator)
 	before := f.state("rv-n1")
@@ -204,16 +204,16 @@ func TestCreditsBackfillReview_PlaceholderAuthorGoesToReview(t *testing.T) {
 	// AuthorID is the placeholder a rescan reverted to; the join holds the
 	// applied author; the snapshot agrees with AuthorID.
 	f.book("rv-p1", "Hush", func(b *database.Book) {
-		b.AuthorID = intp(unknown)
+		b.AuthorID = new(unknown)
 		b.Author = &database.Author{ID: unknown, Name: "Unknown Author"}
 	}, ba("rv-p1", [2]int{dick, 0}), nil)
 	// Same without a snapshot.
-	f.book("rv-p2", "Hush Returns", func(b *database.Book) { b.AuthorID = intp(unknown) }, ba("rv-p2", [2]int{dick, 0}), nil)
+	f.book("rv-p2", "Hush Returns", func(b *database.Book) { b.AuthorID = new(unknown) }, ba("rv-p2", [2]int{dick, 0}), nil)
 	// A placeholder-only join and no AuthorID: taking AuthorID from it would
 	// make the organizer read the book as resolved.
 	f.book("rv-p3", "Batman: Earth One", nil, ba("rv-p3", [2]int{unknown, 0}), nil)
 	// Empty join, AuthorID the placeholder.
-	f.book("rv-p4", "Batman: Zero Year", func(b *database.Book) { b.AuthorID = intp(unknown) }, nil, nil)
+	f.book("rv-p4", "Batman: Zero Year", func(b *database.Book) { b.AuthorID = new(unknown) }, nil, nil)
 	// Empty join, no AuthorID, snapshot the placeholder by id.
 	f.book("rv-p5", "Batman: Endgame", func(b *database.Book) { b.Author = &database.Author{ID: unknown, Name: "Unknown Author"} }, nil, nil)
 	ids := []string{"rv-p1", "rv-p2", "rv-p3", "rv-p4", "rv-p5"}
@@ -264,7 +264,7 @@ func TestCreditsBackfillReview_AuthorUserLockHoldsTheWholeAuthorSide(t *testing.
 	}, ba("rv-l1", [2]int{dick, 0}), nil)
 	f.lock("rv-l1", database.FieldKeyAuthorName)
 	f.book("rv-l2", "Nightwing: Rebirth", func(b *database.Book) {
-		b.Narrator = strp("Alfred Pennyworth")
+		b.Narrator = new("Alfred Pennyworth")
 	}, ba("rv-l2", [2]int{dick, 0}), nil)
 	f.lock("rv-l2", database.FieldKeyAuthorName)
 	before := f.state("rv-l1")
@@ -297,7 +297,7 @@ func TestCreditsBackfillReview_RevertRestoresTheOrganizersFilingAuthor(t *testin
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
-	f.book("rv-r1", "The Long Halloween", func(b *database.Book) { b.AuthorID = intp(bruce) },
+	f.book("rv-r1", "The Long Halloween", func(b *database.Book) { b.AuthorID = new(bruce) },
 		ba("rv-r1", [2]int{selina, 0}, [2]int{bruce, 0}), nil)
 	filing := func() string {
 		idx, err := buildCreditCensusIndex(f.s)
@@ -349,8 +349,8 @@ func TestCreditsBackfillReview_CountsBooksThatWouldBeReidentified(t *testing.T) 
 	bruce := f.author("Bruce Wayne")
 	dick := f.author("Dick Grayson")
 	f.book("rv-s2a", "Batman: Year Three", nil, ba("rv-s2a", [2]int{dick, 0}), nil)                                                         // AuthorID nil -> dick
-	f.book("rv-s2b", "Batman: Hush", func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)                                         // AuthorID unchanged
-	f.book("rv-s2c", "Batman: Year Two", func(b *database.Book) { b.AuthorID = intp(bruce) }, ba("rv-s2c", [2]int{dick, 0}), nil)           // prepend, AuthorID unchanged
+	f.book("rv-s2b", "Batman: Hush", func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)                                          // AuthorID unchanged
+	f.book("rv-s2c", "Batman: Year Two", func(b *database.Book) { b.AuthorID = new(bruce) }, ba("rv-s2c", [2]int{dick, 0}), nil)            // prepend, AuthorID unchanged
 	f.book("rv-s2d", "Batman: Zero Hour", func(b *database.Book) { b.Author = &database.Author{ID: dick, Name: "Dick Grayson"} }, nil, nil) // snapshot fill: nil -> dick
 
 	res, err := f.run(creditsBackfillParams{}, 2)
@@ -383,9 +383,9 @@ func TestCreditsBackfillReview_LimitCohortIsTheFirstEligibleIDsInBothModes(t *te
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	// cbl-00 is clean (not eligible) and sorts first: the cohort skips it.
-	f.book("cbl-00", "Batman: Year One", func(b *database.Book) { b.AuthorID = intp(bruce) }, ba("cbl-00", [2]int{bruce, 0}), nil)
+	f.book("cbl-00", "Batman: Year One", func(b *database.Book) { b.AuthorID = new(bruce) }, ba("cbl-00", [2]int{bruce, 0}), nil)
 	for _, id := range []string{"cbl-05", "cbl-03", "cbl-04", "cbl-01", "cbl-02"} {
-		f.book(id, "Batman: "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Batman: "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	want := []string{"cbl-01", "cbl-02", "cbl-03"}
 
@@ -447,15 +447,15 @@ func TestCreditsBackfillReview_JunkNarratorsGoToReview(t *testing.T) {
 	for id, name := range names {
 		ids = append(ids, id)
 		f.book(id, "Batman: "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp(name)
+			b.AuthorID = new(bruce)
+			b.Narrator = new(name)
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	slices.Sort(ids)
 	// The JSON path too.
 	f.book("rv-j7", "Batman: Gotham Central", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.NarratorsJSON = strp(`["Unknown Narrator"]`)
+		b.AuthorID = new(bruce)
+		b.NarratorsJSON = new(`["Unknown Narrator"]`)
 	}, ba("rv-j7", [2]int{bruce, 0}), nil)
 	ids = append(ids, "rv-j7")
 	narratorsBefore, _ := f.s.ListNarrators()
@@ -483,8 +483,8 @@ func TestCreditsBackfillReview_NarratorNamesMatchWithoutDiacritics(t *testing.T)
 	bruce := f.author("Bruce Wayne")
 	renee := f.narrator("Renée Montoya")
 	f.book("rv-d1", "Gotham Central: In the Line of Duty", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("rv-d1", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
 	if err != nil {
@@ -504,12 +504,12 @@ func TestCreditsBackfillReview_NewNarratorsOfOneFoldKeyShareARecord(t *testing.T
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	f.book("rv-d2", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("rv-d2", [2]int{bruce, 0}), nil)
 	f.book("rv-d3", "Gotham Central: Unresolved", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renée Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renée Montoya")
 	}, ba("rv-d3", [2]int{bruce, 0}), nil)
 
 	dry, err := f.run(creditsBackfillParams{}, 2)
@@ -541,8 +541,8 @@ func TestCreditsBackfillReview_AmbiguousFoldIsReview(t *testing.T) {
 	f.narrator("Renée Montoya")
 	f.narrator("Renèe Montoya")
 	f.book("rv-d4", "Gotham Central: Corrigan", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("rv-d4", [2]int{bruce, 0}), nil)
 	before := f.state("rv-d4")
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
@@ -591,7 +591,7 @@ func TestCreditsBackfillReview_ApplyWritesConcurrently(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	for _, id := range []string{"rv-w1", "rv-w2", "rv-w3", "rv-w4"} {
-		f.book(id, "Batman: "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Batman: "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	mod := &cbBarrierModifier{BookCreditsModifier: f.s, release: make(chan struct{}), timeout: 2 * time.Second}
 	rep := &cbReporter{id: cbTestOpID}
@@ -617,8 +617,8 @@ func TestCreditsBackfillReview_NarratorsCreatedCountsOnlySuccessfulWrites(t *tes
 	bruce := f.author("Bruce Wayne")
 	selina := f.author("Selina Kyle")
 	f.book("rv-m1", "Batman: Year One", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Harvey Bullock")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Harvey Bullock")
 	}, ba("rv-m1", [2]int{bruce, 0}), nil)
 	mod := &cbInterleavingModifier{BookCreditsModifier: f.s, bookID: "rv-m1", edit: func() {
 		if _, err := f.s.ModifyBookAuthors("rv-m1", func(cur []database.BookAuthor) ([]database.BookAuthor, error) {
@@ -664,9 +664,9 @@ func TestCreditsBackfillReview_FilingAuthorNameMirrorsTheOrganizer(t *testing.T)
 		want  string
 	}{
 		{"fn-1", func(b *database.Book) { b.Author = &database.Author{ID: dick, Name: "Dick Grayson"} }, ba("fn-1", [2]int{unknown, 0}), "Dick Grayson"},
-		{"fn-2", func(b *database.Book) { b.AuthorID = intp(bruce) }, ba("fn-2", [2]int{unknown, 0}), "Bruce Wayne"},
-		{"fn-3", func(b *database.Book) { b.AuthorID = intp(bruce); b.Author = &database.Author{Name: "  "} }, nil, ""},
-		{"fn-4", func(b *database.Book) { b.AuthorID = intp(bruce) }, ba("fn-4", [2]int{selina, 0}, [2]int{bruce, 0}), "Selina Kyle"},
+		{"fn-2", func(b *database.Book) { b.AuthorID = new(bruce) }, ba("fn-2", [2]int{unknown, 0}), "Bruce Wayne"},
+		{"fn-3", func(b *database.Book) { b.AuthorID = new(bruce); b.Author = &database.Author{Name: "  "} }, nil, ""},
+		{"fn-4", func(b *database.Book) { b.AuthorID = new(bruce) }, ba("fn-4", [2]int{selina, 0}, [2]int{bruce, 0}), "Selina Kyle"},
 		{"fn-5", func(b *database.Book) { b.Author = &database.Author{Name: "Unknown Author"} }, nil, "Unknown Author"},
 		{"fn-6", func(b *database.Book) { b.Author = &database.Author{ID: dick, Name: "Dick Grayson"} }, ba("fn-6", [2]int{999999, 0}), "Dick Grayson"},
 		{"fn-7", nil, nil, ""},

@@ -135,7 +135,7 @@ func TestPurgeVersion_NothingServedDoesNotCountATrashedOrPurgeFailedVersion(t *t
 	for _, status := range []string{database.BookVersionStatusTrash, database.BookVersionStatusPurgeFailed} {
 		t.Run(status, func(t *testing.T) {
 			f, v, slotFile := nothingServedPurging(t, status)
-			for n := 0; n < PurgeUndecidedEscalateAfter+2; n++ {
+			for n := range PurgeUndecidedEscalateAfter + 2 {
 				err := PurgeVersion(f.store, storedVersion(t, f, v.ID), testGuard)
 				if !errors.Is(err, ErrPurgeNothingServed) {
 					t.Fatalf("attempt %d = %v, want ErrPurgeNothingServed", n+1, err)

@@ -687,9 +687,7 @@ func TestApply_RacingAWriterOfTheSurvivorsListeningState(t *testing.T) {
 	}
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := 0; ; i++ {
 			select {
 			case <-stop:
@@ -701,7 +699,7 @@ func TestApply_RacingAWriterOfTheSurvivorsListeningState(t *testing.T) {
 			_ = f.s.SetUserPositionAt(f.a.ID, "book-both", "s1", float64(i), f.t0.Add(time.Duration(i)*time.Second))
 			unlock()
 		}
-	}()
+	})
 	_, err = f.svc.Apply(context.Background(), ApplyRequest{ActorID: f.a.ID, SurvivorID: f.a.ID, AbsorbedID: f.b.ID,
 		Digest: plan.Digest, AcknowledgeOwnerIdentity: true}, nil)
 	close(stop)

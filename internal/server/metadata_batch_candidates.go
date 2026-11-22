@@ -876,7 +876,7 @@ func (s *Server) handleGetLatestMetadataFetch(c *gin.Context) {
 		Type         string    `json:"type"`
 		Status       string    `json:"status"`
 		CreatedAt    time.Time `json:"created_at"`
-		CompletedAt  time.Time `json:"completed_at,omitempty"`
+		CompletedAt  time.Time `json:"completed_at"`
 		ResultCount  int       `json:"result_count"`
 		MatchedCount int       `json:"matched_count"`
 		NoMatchCount int       `json:"no_match_count"`

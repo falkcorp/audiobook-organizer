@@ -129,7 +129,7 @@ func TestNoSecondDefaultLogger(t *testing.T) {
 	assert.Contains(t, out, "robin stdlib sentinel", "the stdlib log is not the App's pipeline")
 	// The process default carries no module attribute (R1-15 review M2): its
 	// lines are the application's own, not core's.
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(l, "sentinel") {
 			assert.NotContains(t, l, "module=", "the process default wrote a module attribute: %s", l)
 		}
@@ -307,7 +307,7 @@ func TestActivityTap_CoreOwnRecordsMakeNoEntries(t *testing.T) {
 	assert.Contains(t, e.Summary, "alfred marker", "a core-owned record became an Activity entry: %+v", e)
 
 	var otelLine string
-	for _, l := range strings.Split(c.newLog.String(), "\n") {
+	for l := range strings.SplitSeq(c.newLog.String(), "\n") {
 		if strings.Contains(l, "gotham exporter") {
 			otelLine = l
 		}
@@ -366,7 +366,7 @@ func TestOpLogger_CapturedDuringRegisterKeepsLevelAndOpID(t *testing.T) {
 	// attribute, and its debug line (the level is debug).
 	var alarm string
 	require.Eventually(t, func() bool {
-		for _, line := range strings.Split(c.newLog.String(), "\n") {
+		for line := range strings.SplitSeq(c.newLog.String(), "\n") {
 			if strings.Contains(line, "batcave alarm raised") {
 				alarm = line
 				return true

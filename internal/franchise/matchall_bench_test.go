@@ -178,7 +178,6 @@ func TestAnchorsCoverEveryRule(t *testing.T) {
 	check("counter-measures", counterMeasuresAnchors, func(s string) bool { return counterMeasuresRe.MatchString(s) })
 	check("bf-download", bfDownloadAnchors, func(s string) bool { return bfDownloadRe.MatchString(s) })
 	for _, term := range extTerms {
-		term := term
 		check(term.id, term.anchors, func(s string) bool { return term.re.MatchString(Fold(s)) })
 	}
 	if len(anchorSamples) != len(extTerms)+4 {

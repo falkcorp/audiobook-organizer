@@ -28,7 +28,7 @@ func (d rowCacheDeps) OwnerVetoes() OwnerVetoReader { return NewOwnerVetoReader(
 
 // sharedRows points the fixture's fixer at readers that share one RowCache.
 func (rf *retiredFixture) sharedRows() {
-	rf.withDeps(rowCacheDeps{fakeDeps: fakeDeps{store: rf.st}, rows: decisions.NewRowCache()})
+	rf.withDeps(rowCacheDeps{store: rf.st, rows: decisions.NewRowCache()})
 }
 
 // loadCountingVetoes counts the loads of the readers it wraps.
@@ -62,11 +62,11 @@ func TestRetiredVersions_ReplanLoadsTheRejectsOnlyAfterTheTrashCheck(t *testing.
 	rf.trashed("left", "g", 20, rf.file("g/left.mp3"))
 	planned := rf.plan()
 	loads := &atomic.Int32{}
-	rf.withDeps(loadCountingDeps{fakeDeps: fakeDeps{store: rf.st}, loads: loads})
+	rf.withDeps(loadCountingDeps{store: rf.st, loads: loads})
 
 	b, err := rf.st.GetBookByID(rf.ids["left"])
 	require.NoError(t, err)
-	b.MarkedForDeletion, b.MarkedForDeletionAt = retiredPtr(false), nil
+	b.MarkedForDeletion, b.MarkedForDeletionAt = new(false), nil
 	_, err = rf.st.UpdateBook(b.ID, b)
 	require.NoError(t, err)
 

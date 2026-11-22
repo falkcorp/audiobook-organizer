@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"regexp"
 	"strings"
@@ -152,9 +153,7 @@ func kindReferencesSynthetic(t *testing.T) {
 	raw["act:info:"+n(8)+":01HBAT0008"] = "{not json"
 	raw["act:info:not-a-key"] = `{"type":"dedup.book-scan"}`
 	before := map[string]string{}
-	for k, v := range raw {
-		before[k] = v
-	}
+	maps.Copy(before, raw)
 
 	// The runs the task store holds, by operation: two repairs runs with
 	// different fixers, and a scan run (a kind that is no repairs kind).

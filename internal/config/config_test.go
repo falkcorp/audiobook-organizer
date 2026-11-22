@@ -432,7 +432,7 @@ func TestFactoryDefaults_MetadataScoringDefaults(t *testing.T) {
 // The incremental iTunes sync was removed on 2026-10-08 (import is manual
 // only), and with it the sync_enabled / sync_interval settings.
 func TestITunesConfigHasNoSyncSettings(t *testing.T) {
-	typ := reflect.TypeOf(ITunesConfig{})
+	typ := reflect.TypeFor[ITunesConfig]()
 	for _, name := range []string{"SyncEnabled", "SyncInterval"} {
 		_, ok := typ.FieldByName(name)
 		assert.False(t, ok, "ITunesConfig must carry no %s: there is no iTunes sync", name)

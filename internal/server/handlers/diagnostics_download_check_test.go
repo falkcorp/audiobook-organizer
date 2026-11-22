@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -238,12 +239,7 @@ func TestDownloadExport_ProgressMessageGoesThroughTheTextRule(t *testing.T) {
 	}
 	holding := func(perms ...auth.Permission) *opaccess.Repairs {
 		return opaccess.NewRepairs(nil, nil, func(_ *gin.Context, p auth.Permission) bool {
-			for _, q := range perms {
-				if p == q {
-					return true
-				}
-			}
-			return false
+			return slices.Contains(perms, p)
 		})
 	}
 

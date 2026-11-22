@@ -59,7 +59,7 @@ func TestWaitingFileRecordPaths_ListsOnlyWaitingPathsInOrderAndCapsThem(t *testi
 	assert.Equal(t, 2, l.Total)
 	assert.Equal(t, forgetMaxPaths, l.Limit)
 
-	for i := 0; i < forgetMaxPaths; i++ {
+	for i := range forgetMaxPaths {
 		waitingRecord(t, svc, fmt.Sprintf("bulk%03d", i), filepath.Join(lib, "Bulk"), fmt.Sprintf("hush-%03d.m4b", i))
 	}
 	l, err = svc.WaitingFileRecordPaths()
@@ -118,7 +118,7 @@ func TestForgetWaitingFileRecords_TheAuditRowNamesEveryForgottenPath(t *testing.
 	rec := &fakeRecorder{}
 	svc.auditOverride = rec
 	var want []string
-	for i := 0; i < 45; i++ {
+	for i := range 45 {
 		want = append(want, waitingRecord(t, svc, fmt.Sprintf("b%02d", i), filepath.Join(base, "lib", "Wayne"), fmt.Sprintf("hush-%02d.m4b", i)))
 	}
 	res, err := svc.ForgetWaitingFileRecords(context.Background(), "owner", listedWaiting(t, svc))

@@ -236,23 +236,21 @@ func TestNarratorFold_ConcurrentSpellingsMintOneRecord(t *testing.T) {
 	forBothTrustStates(t, func(t *testing.T, p *PebbleStore) {
 		const rounds = 40
 		spellings := [][2]string{{"Renée Montoya", "Renee Montoya"}, {"Renee Montoya", "Renée Montoya"}}
-		for i := 0; i < rounds; i++ {
+		for i := range rounds {
 			pair := spellings[i%2]
 			sfx := strings.Repeat("x", i+1) // a fresh fold every round
 			names := [2]string{pair[0] + " " + sfx, pair[1] + " " + sfx}
 			var wg sync.WaitGroup
 			var ids [4]int
 			start := make(chan struct{})
-			for g := 0; g < 4; g++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+			for g := range 4 {
+				wg.Go(func() {
 					<-start
 					n, err := p.resolveNarratorFolded(names[g%2])
 					if err == nil {
 						ids[g] = n.ID
 					}
-				}()
+				})
 			}
 			close(start)
 			wg.Wait()
@@ -333,7 +331,7 @@ func TestNarratorFoldIndex_ReconcileWritesOnlyAbsentKeys(t *testing.T) {
 func TestNarratorFoldIndex_ReconcileSpansChunks(t *testing.T) {
 	p := newNarratorSyncTestStore(t)
 	n := narratorFoldChunk*2 + 17
-	for i := 0; i < n; i++ {
+	for i := range n {
 		_, err := p.CreateNarrator(fmt.Sprintf("Gotham Voice %d", i))
 		require.NoError(t, err)
 	}

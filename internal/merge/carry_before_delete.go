@@ -116,8 +116,7 @@ func (e *PrecheckRefusedError) Unwrap() []error { return []error{ErrCarryPrechec
 // PrecheckCause returns what the caller's precheck returned when err is (or
 // wraps) a PrecheckRefusedError, and nil otherwise.
 func PrecheckCause(err error) error {
-	var pe *PrecheckRefusedError
-	if errors.As(err, &pe) {
+	if pe, ok := errors.AsType[*PrecheckRefusedError](err); ok {
 		return pe.Err
 	}
 	return nil

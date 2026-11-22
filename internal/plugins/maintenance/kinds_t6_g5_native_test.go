@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -171,9 +172,7 @@ func (s *t6g5Spy) note(name string) func() {
 		own := after
 		if len(f.claimed) > 0 {
 			own = make(map[string]string, len(after))
-			for k, v := range after {
-				own[k] = v
-			}
+			maps.Copy(own, after)
 			for k := range f.claimed {
 				if v, ok := before[k]; ok {
 					own[k] = v

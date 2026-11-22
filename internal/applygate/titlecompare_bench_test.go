@@ -73,7 +73,7 @@ func BenchmarkCheckTitle(b *testing.B) {
 func BenchmarkCheckTitle_Length(b *testing.B) {
 	title := func(words int, tail string) string {
 		parts := make([]string, 0, words+1)
-		for i := 0; i < words; i++ {
+		for i := range words {
 			parts = append(parts, "Gotham"+strconv.Itoa(i%7))
 		}
 		return strings.Join(parts, " ") + tail

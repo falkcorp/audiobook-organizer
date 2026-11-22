@@ -12,7 +12,6 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -327,7 +326,7 @@ func TestFingerprint(t *testing.T) {
 
 func TestEffects(t *testing.T) {
 	e := Writes(ResBooks, Deletes(ResBookFiles, ResSeries)).AlsoReads(ResAuthors)
-	sort.Slice(e.writes, func(i, j int) bool { return e.writes[i] < e.writes[j] })
+	slices.Sort(e.writes)
 	if !reflect.DeepEqual(e.WriteSet(), []Resource{ResBookFiles, ResBooks, ResSeries}) {
 		t.Fatalf("writes = %v", e.WriteSet())
 	}

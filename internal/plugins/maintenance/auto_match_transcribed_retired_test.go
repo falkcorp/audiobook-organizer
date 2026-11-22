@@ -51,8 +51,7 @@ func TestAutoMatchTranscribed_RetiredBooksAreNotSearchedOrApplied(t *testing.T) 
 	p := newAutoMatchPlugin(retiredAutoMatchBooks(), deps)
 
 	err := p.runAutoMatchTranscribed(context.Background(), autoMatchParams(false, 0), &fakeReporter{})
-	var ex *applycap.ExceededError
-	if errors.As(err, &ex) {
+	if _, ok := errors.AsType[*applycap.ExceededError](err); ok {
 		t.Fatalf("a retired book took a bulk-apply cap slot: %v", err)
 	}
 	if err != nil {

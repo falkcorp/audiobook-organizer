@@ -1192,8 +1192,7 @@ func TestScheduleFor_KeysDeclaredAndValid(t *testing.T) {
 	sched := NewSchedules(ScheduleDeps{})
 	fieldType := map[string]reflect.Type{}
 	st := reflect.TypeOf(schedulerDefaults().Schedules)
-	for i := range st.NumField() {
-		f := st.Field(i)
+	for f := range st.Fields() {
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		fieldType[name] = f.Type
 	}

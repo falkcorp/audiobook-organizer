@@ -529,7 +529,7 @@ func TestSweepKeptFiles_ManyVersionsRunInAPool(t *testing.T) {
 
 	base := newKeptFixture(t)
 	var free, owned []string
-	for i := 0; i < 24; i++ {
+	for i := range 24 {
 		ver, err := base.store.CreateBookVersion(&database.BookVersion{
 			BookID: base.book.ID, Status: database.BookVersionStatusInactivePurged, Format: "m4b", Source: "imported",
 		})

@@ -225,8 +225,8 @@ var t6g1WriterResources = t6g1WriterView()
 func t6g1WriterView() map[string][]string {
 	var types []reflect.Type
 	wt := reflect.TypeFor[t6g1Writers]()
-	for i := range wt.NumField() {
-		types = append(types, wt.Field(i).Type)
+	for field := range wt.Fields() {
+		types = append(types, field.Type)
 	}
 	out := map[string][]string{}
 	for method, row := range t6WriterView(map[string]string{"SetRaw": "SetRaw/authority_lists"}, types...) {
@@ -298,15 +298,15 @@ func t6g1RequireWritesDeclared(t *testing.T, def tasks.Definition, logs ...*t6g1
 }
 
 func TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod(t *testing.T) {
-	wt := reflect.TypeOf(t6g1Writers{})
+	wt := reflect.TypeFor[t6g1Writers]()
 	used := map[string]bool{}
-	for i := range wt.NumField() {
-		it := wt.Field(i).Type
-		require.Equal(t, reflect.Interface, it.Kind(), "%s is not a writer interface", wt.Field(i).Name)
-		for j := range it.NumMethod() {
-			name := it.Method(j).Name
+	for field := range wt.Fields() {
+		it := field.Type
+		require.Equal(t, reflect.Interface, it.Kind(), "%s is not a writer interface", field.Name)
+		for method := range it.Methods() {
+			name := method.Name
 			used[name] = true
-			require.Contains(t, t6g1WriterResources, name, "writer method %s.%s has no row in t6g1WriterResources", wt.Field(i).Name, name)
+			require.Contains(t, t6g1WriterResources, name, "writer method %s.%s has no row in t6g1WriterResources", field.Name, name)
 		}
 	}
 	for name := range t6g1WriterResources {
@@ -510,24 +510,24 @@ func TestT6G1Kinds_ReadDependenciesHaveNoWriteMethods(t *testing.T) {
 		"FilterIndexBackfillDone", "FilterIndexEarliestNanos", "ReconcileSupport",
 	}
 	var types []reflect.Type
-	st := reflect.TypeOf(t6g1Stores{})
-	for i := range st.NumField() {
-		types = append(types, st.Field(i).Type)
+	st := reflect.TypeFor[t6g1Stores]()
+	for field := range st.Fields() {
+		types = append(types, field.Type)
 	}
-	dt := reflect.TypeOf(t6g1Deps{})
+	dt := reflect.TypeFor[t6g1Deps]()
 	for _, name := range []string{"ActivityFilter", "PlanReader"} {
 		f, ok := dt.FieldByName(name)
 		require.True(t, ok, "t6g1Deps.%s", name)
 		types = append(types, f.Type)
 	}
-	mt := reflect.TypeOf(applygate.ManualOnlyReaders{})
-	for i := range mt.NumField() {
-		types = append(types, mt.Field(i).Type)
+	mt := reflect.TypeFor[applygate.ManualOnlyReaders]()
+	for field := range mt.Fields() {
+		types = append(types, field.Type)
 	}
 	for _, it := range types {
 		require.Equal(t, reflect.Interface, it.Kind(), "%s is not a read interface", it)
-		for j := range it.NumMethod() {
-			name := it.Method(j).Name
+		for method := range it.Methods() {
+			name := method.Name
 			_, isWrite := t6g1WriterResources[name]
 			require.False(t, isWrite, "%s.%s is a writer method on a read dependency: it would bypass the gated writer", it, name)
 			ok := slices.ContainsFunc(readVerbs, func(v string) bool { return strings.HasPrefix(name, v) })
@@ -542,7 +542,7 @@ func TestT6G1Kinds_ReadDependenciesHaveNoWriteMethods(t *testing.T) {
 // takes: dropping or adding a resource in an Effects declaration fails here
 // whether or not any test reaches the write.
 func TestT6G1Kinds_WriteSetEqualsTheWriterInterfaceUnion(t *testing.T) {
-	wt := reflect.TypeOf(t6g1Writers{})
+	wt := reflect.TypeFor[t6g1Writers]()
 	kindWriterField := t6g1KindWriterFields(t)
 	for _, d := range (&Plugin{}).t6g1Kinds(fakeT6G1Deps(t), nil) {
 		kind := d.Kind()
@@ -559,8 +559,8 @@ func TestT6G1Kinds_WriteSetEqualsTheWriterInterfaceUnion(t *testing.T) {
 		if field, ok := kindWriterField[kind]; ok {
 			sf, found := wt.FieldByName(field)
 			require.True(t, found, "%s: no t6g1Writers field %s", kind, field)
-			for j := range sf.Type.NumMethod() {
-				name := sf.Type.Method(j).Name
+			for method := range sf.Type.Methods() {
+				name := method.Name
 				res, mapped := t6g1WriterResources[name]
 				require.True(t, mapped, "%s: writer method %s has no row in t6g1WriterResources", kind, name)
 				for _, r := range res {

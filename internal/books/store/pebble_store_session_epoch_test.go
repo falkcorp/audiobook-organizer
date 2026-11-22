@@ -154,7 +154,7 @@ func TestSetUserPassword_KeepSessionMovesWithTheUserRow(t *testing.T) {
 func TestRevokeSession_IsNotLostToAConcurrentReStamp(t *testing.T) {
 	p := newABSSessionStore(t)
 	u := newEpochUser(t, p)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		cur := mustGetUser(t, p, u.ID)
 		s, err := p.CreateSession(u.ID, "192.0.2.1", "ua", time.Hour, cur.CredentialEpoch)
 		if err != nil {

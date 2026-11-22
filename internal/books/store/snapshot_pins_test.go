@@ -7,6 +7,7 @@ package store
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -53,8 +54,8 @@ func (f *pinFixture) timestamps(t *testing.T, id string) []int64 {
 	snaps, err := f.s.GetBookSnapshots(id, 1000)
 	require.NoError(t, err)
 	out := make([]int64, 0, len(snaps))
-	for i := len(snaps) - 1; i >= 0; i-- { // GetBookSnapshots is newest first
-		out = append(out, snaps[i].Timestamp.UnixNano())
+	for _, snap := range slices.Backward(snaps) { // GetBookSnapshots is newest first
+		out = append(out, snap.Timestamp.UnixNano())
 	}
 	return out
 }
@@ -450,15 +451,13 @@ func TestSnapshotPins_BuiltOncePerGenerationNotOncePerBook(t *testing.T) {
 	var wg sync.WaitGroup
 	got := make([]*SnapshotPins, 16)
 	for i := range got {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			p, perr := f.s.snapshotPins()
 			if perr != nil {
 				t.Error(perr)
 			}
 			got[i] = p
-		}()
+		})
 	}
 	wg.Wait()
 	for _, p := range got {

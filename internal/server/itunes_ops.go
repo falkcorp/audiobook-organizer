@@ -113,7 +113,7 @@ func (s *Server) itunesImportDef() opsregistry.OperationDef {
 			}
 			env := itunesImportEnv{t7Env: t7HeadEnv(reporter, true)}
 			if s.itunesSvc != nil {
-				env.Writer = headITunesImportWriter{importer: s.itunesSvc.Importer, headT7Activity: headT7Activity{w: s.activityWriter}}
+				env.Writer = headITunesImportWriter{importer: s.itunesSvc.Importer, w: s.activityWriter}
 			}
 			return itunesImportCore(ctx, p, env)
 		},

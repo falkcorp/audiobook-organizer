@@ -327,7 +327,7 @@ type headReconcile struct {
 }
 
 func (s *Server) headReconcile() headReconcile {
-	return headReconcile{headT7Activity: headT7Activity{w: s.activityWriter}, s: s}
+	return headReconcile{w: s.activityWriter, s: s}
 }
 
 func (h headReconcile) RunReconcileScan(ctx context.Context, saveResult reconcile.SaveResultFunc, progress operations.ProgressReporter, hooks reconcile.ScanHooks) error {

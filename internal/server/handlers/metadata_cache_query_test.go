@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1904,9 +1905,7 @@ func TestReviewQuery_ThresholdsMonotonicWithHideMultiBook(t *testing.T) {
 	base := baseFromSnapshot(t, snapshotFromCases(t, rows))
 	list := func(extra map[string]string) []string {
 		params := map[string]string{"hide_multi_book": "true"}
-		for k, v := range extra {
-			params[k] = v
-		}
+		maps.Copy(params, extra)
 		return listIDs(mustEvaluate(t, base, mustReviewQuery(t, params)))
 	}
 	steps := []struct {
