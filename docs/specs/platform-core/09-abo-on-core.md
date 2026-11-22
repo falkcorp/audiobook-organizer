@@ -437,7 +437,21 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   `PATCH /api/v1/admin/debug/book-files/:id` or `POST /api/v1/admin/debug/edits/:edit_id/undo`; use a signed-in
   admin session. The debug read routes are unchanged. ABO's
   `core.auth.disabled_allow_remote` defaults to `true`, with health Degraded `auth_disabled_remote` (05-rbac
-  §4.10–§4.11).
+  §4.10–§4.11). An API key can now disable an API key through core (`PATCH /api/core/v1/me/api-keys/{id}` and
+  `PATCH /api/core/v1/api-keys/{id}`; `core/internal/authhttp/me.go:362-366`, `keys.go:214`); HEAD's
+  `PATCH /auth/api-keys/:id` refused every non-interactive caller. Re-enabling still needs a signed-in session, so the
+  change only restricts. Core's `GET /api/core/v1/users` and `GET /api/core/v1/users/{id}` need `core:users.view`;
+  HEAD's list needed `users.manage`. Imported seed roles are unaffected, because books' `users.manage` atom maps to
+  `core:users.manage` plus `core:roles.view` (`internal/books/atoms.go`); only a role created natively that holds
+  `core:users.view` alone gains the list. On first run, before the first user exists, the app shows the sign-in page in
+  setup mode instead of the open app, because `requires_auth` is true before the first user. User-management writes
+  under core apply core's dominance, last-admin and role-assignment (`CanAssign`) checks, which HEAD did not. The
+  Users page's pending-invite list no longer shows a "Link" column (copy invite link): core never lists invite tokens.
+  The invite email and Resend still deliver the link. Per-user rows whose owner has no account are carried as they are
+  by M3; Verify counts them (`orphaned_refs`) and health keeps a standing warning: "Pre-existing orphaned rows are kept
+  and reported, never deleted." The invite-accept session keeps HEAD's 30 days (ABO compiles
+  `auth.Options.InviteSessionTTL` = 720h); remember-me sign-ins keep 7 days and plain sign-ins 24 hours. Core's own
+  `core.auth.session.remember_ttl` default stays 7 days and ABO does not change it.
 
 ### 9.2.7 Metrics
 

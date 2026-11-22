@@ -192,8 +192,8 @@ follow (05-rbac section 4.4, 05-authn section 4.8):
    setting that was not a sign-in setting.
 
 A key CAN still mint a key for itself, `POST /api/core/v1/me/api-keys`, with
-scopes it holds; list and revoke keys
-(`GET /api/core/v1/api-keys`, `DELETE /api/core/v1/api-keys/{id}`); and use
+scopes it holds; list, disable and revoke keys
+(`GET /api/core/v1/api-keys`, `PATCH /api/core/v1/api-keys/{id}` or `/api/core/v1/me/api-keys/{id}` to disable, `DELETE /api/core/v1/api-keys/{id}`; re-enabling needs a signed-in session); and use
 every non-guarded `core:admin` route and every books route whose requirement
 `core:admin` satisfies.
 
