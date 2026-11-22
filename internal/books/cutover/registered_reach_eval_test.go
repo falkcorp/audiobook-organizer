@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -599,6 +600,94 @@ func (h *Registered) twins(cells map[string]diffRow) map[string]diffRow {
 	return out
 }
 
+// handlerCells are the cells HEAD's handler, not its router, refuses: the 11 cells
+// the removed evaluator's handler-admin pin hid (reachPinnedCells) and the eight
+// auth-off cells of reachHandlerRefusalCells, split by the boot that has the
+// principal. Each is a route stage 13 may admit and the handler refuses, so the
+// oracle's comparison already holds the flip's letter to R0's D: this lists them so
+// a vanished cell, or one the flip answers with anything but a 401 or 403, fails by
+// name, and counts the ones stage 13 itself refuses.
+func handlerCells(authOff bool) []string {
+	var out []string
+	for _, c := range cutover.ReachPinnedCells() {
+		i := strings.LastIndex(c, " / ")
+		j := strings.Index(c[i:], ": R0")
+		who := c[i+3 : i+j]
+		if (who == Authoff) == authOff {
+			out = append(out, c[:i]+" / "+who)
+		}
+	}
+	if authOff {
+		for _, route := range cutover.ReachHandlerRefusalCells() {
+			out = append(out, route+" / "+Authoff)
+		}
+	}
+	return out
+}
+
+// checkHandlerCells holds handlerCells (and their core-key twins) to R0's D.
+func (h *Registered) checkHandlerCells(t *testing.T, pass *oraclePass, authOff bool) (cells, byStage13 int) {
+	t.Helper()
+	listed := map[string]diffRow{}
+	for _, k := range handlerCells(authOff) {
+		listed[k] = diffRow{}
+	}
+	maps.Copy(listed, h.twins(listed))
+	for k := range listed {
+		i := strings.LastIndex(k, " / ")
+		route, who := k[:i], k[i+3:]
+		c, ok := pass.cells[route][who]
+		switch {
+		case !ok:
+			t.Errorf("handler cell %s was not sent", k)
+		case c.letter != 'D':
+			t.Errorf("WIDENING: the flip admits where HEAD's handler refused: %s answered %d", k, c.status)
+		default:
+			cells++
+			if c.res.Stage13 == Stage13Refused {
+				byStage13++
+			}
+		}
+	}
+	return cells, byStage13
+}
+
+// checkR2OnlyLetters holds the routes R0 never recorded to the letters
+// reachWantR2OnlyVerdicts pins, for the principals this boot has. The letter is
+// stage 13's own: admitted or not, whatever the handler then answers.
+func (h *Registered) checkR2OnlyLetters(t *testing.T, r0 r0Recording, authOff bool) {
+	t.Helper()
+	for route, want := range cutover.ReachWantR2OnlyVerdicts() {
+		if len(want) != len(r0.Principals) {
+			t.Errorf("%s: %d letters pinned for %d recorded principals", route, len(want), len(r0.Principals))
+			continue
+		}
+		method, path, _ := strings.Cut(route, " ")
+		ri := h.match(method, probePath(path))
+		if ri == nil {
+			t.Errorf("%s is pinned as an R2-only route and the flip registers no pattern for it", route)
+			continue
+		}
+		for i, name := range r0.Principals {
+			if (name == Authoff) != authOff {
+				continue
+			}
+			res, err := h.probeCell(h.Principal(name), r0Route{Method: method, Path: path}, ri)
+			if err != nil {
+				t.Errorf("%s as %s: %v", route, name, err)
+				continue
+			}
+			got := byte('D')
+			if res.Admitted() {
+				got = 'A'
+			}
+			if got != want[i] {
+				t.Errorf("R2-only route %s as %s: stage 13 gives %c, pinned %c (%d)", route, name, got, want[i], res.Status)
+			}
+		}
+	}
+}
+
 // checkDiffs holds every differing cell to the tables: a cell no table lists is an
 // unlisted narrowing (or a WIDENING when R0 refused it), a listed cell that no
 // longer differs fails, and so does a table whose expansion is not the count it
@@ -1051,6 +1140,9 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 				t.Errorf("held-red cell no longer differs (remove it from its table): %s", k)
 			}
 		}
+		h.checkR2OnlyLetters(t, r0, false)
+		hc, hcStage13 := h.checkHandlerCells(t, pass, false)
+		t.Logf("handler cells (auth-on, core-key twins in): %d, of which stage 13 refuses %d", hc, hcStage13)
 		t.Logf("auth-on: %d routes probed, %d delegated, %d unregistered, %d cells compared, %d differing, %d held for B10y",
 			len(pass.probed), len(pass.delegated), len(pass.unregistered), compared, len(diffs), len(heldRed))
 		var five []string
@@ -1075,6 +1167,9 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 		for _, d := range diffs {
 			t.Logf("auth-off difference: %s: %q", d, d.res.excerpt())
 		}
+		h.checkR2OnlyLetters(t, r0, true)
+		hc, hcStage13 := h.checkHandlerCells(t, pass, true)
+		t.Logf("handler cells (auth-off): %d, of which stage 13 refuses %d", hc, hcStage13)
 		t.Logf("auth-off: %d cells compared, %d differing", compared, len(diffs))
 	})
 }
