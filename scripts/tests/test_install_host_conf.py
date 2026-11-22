@@ -18,7 +18,9 @@ pins that.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import os
 import shutil
 import stat
@@ -26,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from typing import Any
 
@@ -452,6 +455,43 @@ class InstallHostConf(unittest.TestCase):
         p = self.run_tool("--apply", unit="other.service")
         self.assert_untouched(before, p)
         self.assertIn("other.service", p.stderr)
+
+    # -- running as root from a checkout that is not root's ---------------------
+
+    def test_a_root_run_from_a_checkout_that_is_not_roots_is_refused_before_anything_loads(
+        self,
+    ) -> None:
+        """The refusal comes BEFORE rollback_helper.py is loaded: that file runs
+        as root from the checkout, so refusing after loading it is too late.
+        The staging tests above never see an untrusted checkout, so this patches
+        check_sources, geteuid and load, and calls main as the real run would."""
+        for argv in (["--apply"], []):  # the dry run as root is refused too
+            with self.subTest(argv=argv), contextlib.ExitStack() as stack:
+                patch = unittest.mock.patch.object
+                stack.enter_context(patch(IH, "check_sources", return_value=["/home/x/checkout"]))
+                stack.enter_context(patch(IH.os, "geteuid", return_value=0))
+                loaded = stack.enter_context(patch(IH, "load"))
+                cm = stack.enter_context(self.assertRaises(SystemExit))
+                IH.main([f"--host-conf={self.src}", *argv])
+            msg = str(cm.exception.code)
+            self.assertIn("REFUSING", msg)
+            self.assertIn("/home/x/checkout", msg)
+            self.assertIn("make install-host-conf APPLY=1", msg)
+            loaded.assert_not_called()
+
+    def test_an_ordinary_users_dry_run_from_a_checkout_that_is_not_roots_is_not_refused(
+        self,
+    ) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("this is the root case, refused above")
+        with contextlib.ExitStack() as stack:
+            patch = unittest.mock.patch.object
+            stack.enter_context(patch(IH, "check_sources", return_value=["/home/x/checkout"]))
+            loaded = stack.enter_context(patch(IH, "load", wraps=IH.load))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            rc = IH.main([f"--host-conf={self.src}", f"--root={self.root}"])
+        self.assertEqual(rc, 0)
+        loaded.assert_called_once()
 
     # -- the make target --------------------------------------------------------
 
