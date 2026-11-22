@@ -46,8 +46,14 @@ func reachStateOf(t *testing.T, in reachObligationInput, name string) reachOblig
 // today (the guard finds it with go/ast in the row's directory, so no
 // registration is involved): every other row is open. F4-07-RANDOM-ROLES is
 // discharged by TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits
-// in core/httpapi (F4-08 B6a). A row joins this set when its discharge lands.
-var reachDischargedRows = map[string]bool{"F4-07-RANDOM-ROLES": true}
+// in core/httpapi (F4-08 B6a). A row joins this set when its discharge lands:
+// a test in the row's directory, or a cutover_test cell file's
+// RegisterReachDischarge registration (the B10 rows below).
+var reachDischargedRows = map[string]bool{
+	"F4-07-RANDOM-ROLES":          true,
+	"F4-07-HANDLER-REFUSALS":      true, // TestReachRegisteredPath_HandlerRefusals (B10e2)
+	"F4-07-HIDDEN-HANDLER-CHECKS": true, // TestReachRegisteredPath_HiddenHandlerChecks (B10e2)
+}
 
 func TestReachObligations_TheTableIsStatedInTheSeamsAndEachRowIsOpenUntilItsDischargeLands(t *testing.T) {
 	for _, p := range reachObligationProblemsNow(t) {
