@@ -11,7 +11,7 @@
 //
 // Dependencies that lived on the *Server receiver are reached through narrow
 // interfaces (SystemStore, SystemService,
-// PluginHealthChecker, EventStreamer, OperationLogsProvider) plus three
+// PluginHealthChecker, OperationLogsProvider) plus three
 // injected funcs (getDiskStats, appVersion, filterReviewedAuthorGroups) that wrap
 // server-package helpers / build-tagged functions / mutable package vars that
 // stay in package server. As a result package system never imports package
@@ -57,7 +57,7 @@ type Handler struct {
 	// inject a mock — so snapshotting the store at wire time would capture the
 	// pre-swap store and miss the mock's expectations. The provider closure
 	// performs the typed-nil guard. Mirrors the operations handler's getScheduler
-	// and this handler's getHub seams.
+	// seam.
 	getStore  func() SystemStore
 	systemSvc SystemService
 	plugins   PluginHealthChecker
@@ -70,15 +70,6 @@ type Handler struct {
 	// not complete); nil is never in it. See WithConfigFirstRun.
 	configFirstRun func() bool
 	opLogs         OperationLogsProvider
-
-	// getHub resolves the SSE event hub lazily, at request time. The original
-	// handleEvents read s.hub at call time (late binding), and a test
-	// (TestHandleEventsUnavailable) nils s.hub AFTER wiring to exercise the 503
-	// guard — so snapshotting the hub at wire time would capture a live hub and
-	// invoke HandleSSE instead of returning 503. The provider closure performs
-	// the typed-nil guard so a nil *realtime.EventHub is never boxed into a
-	// non-nil interface. Mirrors the operations handler's getScheduler seam.
-	getHub func() EventStreamer
 
 	// now is the clock HealthCheck stamps its answer with; nil is time.Now.
 	// Set by WithClock, so a test can pin the one volatile field of an
@@ -264,7 +255,6 @@ func New(
 	getStore func() SystemStore,
 	systemSvc SystemService,
 	plugins PluginHealthChecker,
-	getHub func() EventStreamer,
 	opLogs OperationLogsProvider,
 	getDiskStats func(path string) (total, free uint64, err error),
 	appVersion func() string,
@@ -275,7 +265,6 @@ func New(
 		getStore:                   getStore,
 		systemSvc:                  systemSvc,
 		plugins:                    plugins,
-		getHub:                     getHub,
 		opLogs:                     opLogs,
 		getDiskStats:               getDiskStats,
 		appVersion:                 appVersion,
@@ -292,15 +281,6 @@ func (h *Handler) resolveStore() SystemStore {
 		return nil
 	}
 	return h.getStore()
-}
-
-// resolveHub returns the live SSE hub via the lazy provider, or nil if no
-// provider was supplied (e.g. some unit tests) or the provider yields nil.
-func (h *Handler) resolveHub() EventStreamer {
-	if h.getHub == nil {
-		return nil
-	}
-	return h.getHub()
 }
 
 // readinessSource is implemented by a store that warms an in-memory read layer
@@ -664,17 +644,6 @@ func (h *Handler) GetSystemActivityLog(c *gin.Context) {
 		logs = readable
 	}
 	httputil.RespondWithOK(c, gin.H{"items": logs, "count": len(logs)})
-}
-
-// HandleEvents handles Server-Sent Events (SSE) for real-time updates.
-// Implements GET /api/events.
-func (h *Handler) HandleEvents(c *gin.Context) {
-	hub := h.resolveHub()
-	if hub == nil {
-		httputil.RespondWithError(c, 503, "event hub not initialized", "SERVICE_UNAVAILABLE")
-		return
-	}
-	hub.HandleSSE(c)
 }
 
 // CreateBackup creates a database backup. Implements POST /backup/create.

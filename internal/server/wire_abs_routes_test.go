@@ -125,7 +125,6 @@ func TestABSReservedPath_DoesNotCaptureAppRoutes(t *testing.T) {
 	notReserved := []string{
 		"/api/audiobooks",
 		"/api/health",
-		"/api/events",
 		"/api/metrics",
 		"/api/v1/me",
 		"/api/v1/audiobooks",
@@ -154,7 +153,6 @@ func TestABSRedirectExclusion_LeavesABSPathsAlone(t *testing.T) {
 		if strings.HasPrefix(path, "/api/") &&
 			!strings.HasPrefix(path, "/api/v1/") &&
 			!strings.HasPrefix(path, "/api/health") &&
-			!strings.HasPrefix(path, "/api/events") &&
 			!strings.HasPrefix(path, "/api/metrics") &&
 			!absReservedPath(path) {
 			c.Redirect(http.StatusMovedPermanently, strings.Replace(path, "/api/", "/api/v1/", 1))

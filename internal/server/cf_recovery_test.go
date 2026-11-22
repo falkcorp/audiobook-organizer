@@ -31,7 +31,6 @@ func TestIsCFRecoverySPAPath(t *testing.T) {
 		{"/authors", true}, // must not be captured by "/auth/"
 		{"/api/v1/auth/me", false},
 		{"/api", false},
-		{"/api/events", false},
 		{"/auth/openid", false},
 		{"/auth/openid/browser", false},
 		{"/auth/openid/callback", false},
