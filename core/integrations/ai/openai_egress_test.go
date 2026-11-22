@@ -245,10 +245,11 @@ func newRecoveryRig(t *testing.T) *recoveryRig {
 	})
 	ref := aiRef("arkham")
 	cfg := compatConfig(t, ref, kit.URL()+"/v1", true, 0, func(m map[string]any) { m["capabilities"] = []any{"gotham.riddle"} })
+	c := h.capability("riddle") // registered before the Put that ticks it
 	if _, err := h.reg.Put(admin(), cfg, nil); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	return &recoveryRig{t: t, h: h, kit: kit, ref: ref, c: h.capability("riddle"), up: up}
+	return &recoveryRig{t: t, h: h, kit: kit, ref: ref, c: c, up: up}
 }
 
 func (r *recoveryRig) generate() (ai.TextResponse, error) {

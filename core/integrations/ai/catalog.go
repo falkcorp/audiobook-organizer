@@ -191,7 +191,11 @@ func validFeature(f Feature) bool {
 // featureFitsKind says which kind a required feature can be asked of.
 func featureFitsKind(f Feature, k Kind) bool {
 	switch f {
-	case FeatureJSONSchema, FeatureJSONMode, FeatureVision, FeatureBatch, FeatureTools:
+	case FeatureBatch:
+		// batch_api is asked of text work and of embedding work: HEAD's
+		// embed.text_batch requires it, and BatchResult carries an Embed answer.
+		return k == KindText || k == KindEmbed
+	case FeatureJSONSchema, FeatureJSONMode, FeatureVision, FeatureTools:
 		return k == KindText
 	case FeatureTimestamps:
 		return k == KindTranscribe

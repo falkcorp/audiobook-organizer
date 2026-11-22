@@ -200,7 +200,15 @@ type harnessOptions struct {
 	outbound          func(integrations.OutboundSpec) (integrations.HTTP, integrations.Gate)
 	adapters          []adapterReg
 	probed            func(integrations.Ref, integrations.Health)
-	validate          bool
+	legacy            []legacyRow
+}
+
+// legacyRow is an ai instance stored before the ai kind's validator existed.
+type legacyRow struct {
+	name     string
+	priority int
+	set      ai.EndpointSettings
+	backend  ai.Backend
 }
 
 // adapterReg is an adapter the harness registers besides its fake one.
@@ -233,9 +241,14 @@ func withProbed(f func(integrations.Ref, integrations.Health)) harnessOption {
 	return func(o *harnessOptions) { o.probed = f }
 }
 
-// withEndpointValidation builds the router with RouterOptions.ValidateEndpoints,
-// so Put runs Router.ValidateEndpoint.
-func withEndpointValidation() harnessOption { return func(o *harnessOptions) { o.validate = true } }
+// withLegacyEndpoint stores an enabled ai instance the way a row that predates
+// the ai kind's validator got into the store: through an importer built without
+// ImportValidator, before the Registry loads. The Router's validator refuses such
+// a row at Put (a wildcard, a retired tick), so a test that needs one, to prove
+// the router tolerates it, cannot use addEndpoint.
+func withLegacyEndpoint(name string, priority int, set ai.EndpointSettings, backend ai.Backend) harnessOption {
+	return func(o *harnessOptions) { o.legacy = append(o.legacy, legacyRow{name, priority, set, backend}) }
+}
 
 // withoutStager builds the router with no Stager, as a service that cannot
 // start module runs would be.
@@ -326,6 +339,24 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	if err := reg.Register("gotham", ai.Adapter(integrations.Meta{ID: fakeAdapter, DisplayName: "Bat-AI", Version: "1.0.0", Settings: schema}, build)); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
+	if len(ho.legacy) > 0 {
+		im := integrations.NativeImporter(iks, integrations.ImportAudit(au))
+		b := iks.NewBatch()
+		for _, row := range ho.legacy {
+			h.backends[aiRef(row.name).Instance] = row.backend
+			if err := im.ImportInstance(ctx, b, integrations.StoredInstance{Config: integrations.InstanceConfig{
+				Ref: aiRef(row.name), Adapter: fakeAdapter, Name: row.name, Enabled: true, Priority: row.priority,
+				Origin: integrations.OriginUI, Version: 1, Settings: settingsMap(t, row.set),
+			}}); err != nil {
+				_ = b.Close()
+				t.Fatalf("import legacy row %s: %v", row.name, err)
+			}
+		}
+		if err := b.Commit(ctx, storage.Sync); err != nil {
+			t.Fatalf("commit legacy rows: %v", err)
+		}
+		_ = b.Close()
+	}
 	if err := reg.Load(ctx, nil); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -359,7 +390,7 @@ func newHarness(t testing.TB, opts ...harnessOption) *harness {
 	}
 	r, err := ai.NewRouter(ai.RouterOptions{
 		Registry: reg, Disabled: h.disabled.Load, Jobs: h.hooks, NewBatch: h.ks.NewIndexedBatch,
-		Stager: stager, Now: clk.Now, Metrics: h.scope, ValidateEndpoints: ho.validate,
+		Stager: stager, Now: clk.Now, Metrics: h.scope,
 		Config: func() ai.Config {
 			h.cfgMu.Lock()
 			defer h.cfgMu.Unlock()

@@ -54,11 +54,11 @@ func TestRouter_DefaultDenyEmptyTicks(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	c := h.capability("riddle")
+	h.capability("cipher") // registered before the Put that ticks it
 	f := fake()
 	h.addEndpoint("arkham", 1, textEndpoint("joker-7b"), f)
 	other := fake()
 	h.addEndpoint("blackgate", 2, textEndpoint("joker-7b", "gotham.cipher"), other)
-	h.capability("cipher")
 
 	_, err := h.r.Generate(context.Background(), c, text("who?"))
 	nc := wantNoCapable(t, err)
@@ -80,7 +80,10 @@ func TestRouter_DefaultDenyEmptyTicks(t *testing.T) {
 // honoured.
 func TestRouter_WildcardRejectedOnPut(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
+	f := fake()
+	// The row is stored the way one written before the rule was: the Router's
+	// validator refuses it at Put.
+	h := newHarness(t, withLegacyEndpoint("arkham", 1, textEndpoint("joker-7b", "*"), f))
 	c := h.capability("riddle")
 
 	for _, tick := range []string{"*", "gotham.*", "*.riddle", "go*"} {
@@ -100,8 +103,9 @@ func TestRouter_WildcardRejectedOnPut(t *testing.T) {
 
 	// A row that holds "*" anyway (written before this rule, or by a store that
 	// skipped the check) matches no capability.
-	f := fake()
-	h.addEndpoint("arkham", 1, textEndpoint("joker-7b", "*"), f)
+	if _, err := aiPut(h, "blackgate", textEndpoint("joker-7b", "*")); !errors.Is(err, ai.ErrInvalidEndpoint) {
+		t.Errorf("Put of a wildcard tick: err = %v, want ErrInvalidEndpoint", err)
+	}
 	_, err := h.r.Generate(context.Background(), c, text("who?"))
 	nc := wantNoCapable(t, err)
 	if got := refusalFor(nc, "arkham"); !strings.Contains(got, "wildcard") {

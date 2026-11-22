@@ -11,7 +11,6 @@ import (
 	"iter"
 	"maps"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
@@ -88,32 +87,27 @@ func TestSpecs_ThirteenIDsInHEADOrder(t *testing.T) {
 	}
 }
 
-// refusedByCore is the one capability core's catalog refuses today: HEAD's
-// embed.text_batch is embedding work that requires batch_api, and core's
-// featureFitsKind lets batch_api be required of text work only. The spec stays as
-// HEAD has it (dropping the requirement would change routing at the flip), so the
-// registration test names the refusal. When core accepts it this test fails and
-// the exception is deleted; the core-side decision is todo.d/2026-11-20-f7-09-t4-embed-batch-feature.md.
-const refusedByCore = "books.embed_text_batch"
-
-// Every spec goes through the real catalog as module "books". All register but
-// refusedByCore, which is refused for the named reason and for no other.
-func TestSpecs_EveryCapabilityRegistersUnderBooks(t *testing.T) {
+// Every spec goes through the real catalog as module "books", and all 13
+// register. books.embed_text_batch requires batch_api of embedding work, which
+// core's featureFitsKind accepts since the 2026-11-22 ruling
+// (TODO-F7-09-EMBED-BATCH-FEATURE).
+func TestSpecs_AllThirteenRegisterUnderBooks(t *testing.T) {
 	r := newRouter(t)
 	for _, s := range aicaps.Specs() {
-		_, err := r.RegisterCapability(aicaps.Module, s)
-		switch {
-		case s.ID == refusedByCore:
-			if !errors.Is(err, ai.ErrInvalidCapability) || !strings.Contains(err.Error(), `feature "batch_api" cannot be required of embed work`) {
-				t.Errorf("%s: want core's batch_api-on-embed refusal, got %v (core changed: delete refusedByCore)", s.ID, err)
-			}
-		case err != nil:
+		if _, err := r.RegisterCapability(aicaps.Module, s); err != nil {
 			t.Errorf("%s: %v", s.ID, err)
 		}
 	}
 	r.FreezeCatalog()
-	if n := len(slices.Collect(r.Catalog())); n != len(wantIDs)-1 {
-		t.Errorf("catalog holds %d capabilities, want %d (13 less %s)", n, len(wantIDs)-1, refusedByCore)
+	var got []string
+	for e := range r.Catalog() {
+		got = append(got, e.ID)
+	}
+	slices.Sort(got)
+	want := slices.Clone(wantIDs)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Errorf("catalog holds %d capabilities\n got %v\nwant %v", len(got), got, want)
 	}
 }
 
@@ -227,9 +221,6 @@ func TestJobTypes_ApplyKindIsTheRoutersOwn(t *testing.T) {
 	for _, s := range aicaps.Specs() {
 		c, err := r.RegisterCapability(aicaps.Module, s)
 		if err != nil {
-			if s.ID == refusedByCore {
-				continue // pinned by TestSpecs_EveryCapabilityRegistersUnderBooks; no job type names it
-			}
 			t.Fatalf("%s: %v", s.ID, err)
 		}
 		handles[s.ID] = c

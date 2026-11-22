@@ -35,7 +35,7 @@ func aiPut(h *harness, name string, set ai.EndpointSettings) (integrations.Insta
 // nothing is stored.
 func TestAIInstancePut_WildcardCapabilityRefused(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, withEndpointValidation())
+	h := newHarness(t)
 	h.capability("riddle")
 
 	_, err := aiPut(h, "arkham", textEndpoint("joker-7b", "*"))
@@ -77,32 +77,24 @@ func TestAIInstancePut_WildcardCapabilityRefused(t *testing.T) {
 	}
 }
 
-// TestNewRouter_ValidationIsOptIn: without ValidateEndpoints a Router
-// installs no validator, so a Put stores what it stored before F7-09 (a
-// wildcard tick is kept and never honoured); with it, a second Router over one
-// Registry would own the ai kind's rule twice and is refused.
-func TestNewRouter_ValidationIsOptIn(t *testing.T) {
+// TestNewRouter_ValidatorIsUnconditional: every Router installs the ai kind's
+// rule, with no option to turn it off, so a Put of a wildcard tick is refused
+// (ErrInvalid) on a Router built from RouterOptions with only the Registry, and a
+// second Router over one Registry is refused for owning the rule twice. It fails
+// if the validator becomes optional again.
+func TestNewRouter_ValidatorIsUnconditional(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	h.capability("riddle")
-	if _, err := aiPut(h, "arkham", textEndpoint("joker-7b", "*")); err != nil {
-		t.Errorf("Put of a wildcard tick without ValidateEndpoints: %v, want it stored as before", err)
+	if _, err := aiPut(h, "arkham", textEndpoint("joker-7b", "*")); !errors.Is(err, integrations.ErrInvalid) || !errors.Is(err, ai.ErrInvalidEndpoint) {
+		t.Errorf("Put of a wildcard tick: err = %v, want ErrInvalid wrapping ErrInvalidEndpoint", err)
 	}
-	// The first ValidateEndpoints Router takes the rule, the next is refused.
-	first, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, ValidateEndpoints: true})
-	if err != nil {
-		t.Fatalf("NewRouter with ValidateEndpoints: %v", err)
+	if _, ok := h.reg.Config(aiRef("arkham")); ok {
+		t.Error("a refused Put stored an instance")
 	}
-	t.Cleanup(func() { _ = first.Close() })
-	if _, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, ValidateEndpoints: true}); !errors.Is(err, integrations.ErrInvalid) {
-		t.Errorf("a second validating Router on one Registry: err = %v, want ErrInvalid", err)
+	if _, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg}); !errors.Is(err, integrations.ErrInvalid) {
+		t.Errorf("a second Router on one Registry: err = %v, want ErrInvalid", err)
 	}
-	// A Router that does not validate never conflicts.
-	plain, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg})
-	if err != nil {
-		t.Fatalf("a non-validating Router beside a validating one: %v", err)
-	}
-	t.Cleanup(func() { _ = plain.Close() })
 }
 
 // quotaBench benches ref for core.ai.quota_cooldown through a scripted 429
@@ -397,24 +389,12 @@ var retiredTicks = []string{"gotham.riddle", "retired.capability"}
 func TestAIEndpoint_RetiredTickKeptOnPutRefusedOnImport(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newHarness(t)
+	// Rows stored before the rule existed, through an importer without the
+	// validator: the Router's own validator would refuse both at Put.
+	h := newHarness(t,
+		withLegacyEndpoint("arkham", 1, textEndpoint("joker-7b", retiredTicks...), fake()),
+		withLegacyEndpoint("blackgate", 2, textEndpoint("joker-7b", "gotham.riddle", "*"), fake()))
 	h.capability("riddle")
-	// Rows stored before the rule existed: no validator is installed yet.
-	if _, err := aiPut(h, "arkham", textEndpoint("joker-7b", retiredTicks...)); err != nil {
-		t.Fatalf("storing the retired tick: %v", err)
-	}
-	if _, err := aiPut(h, "blackgate", textEndpoint("joker-7b", "gotham.riddle", "*")); err != nil {
-		t.Fatalf("storing the wildcard tick: %v", err)
-	}
-	// The rule is installed by a Router whose catalog knows riddle only.
-	v, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, ValidateEndpoints: true})
-	if err != nil {
-		t.Fatalf("NewRouter: %v", err)
-	}
-	t.Cleanup(func() { _ = v.Close() })
-	if _, err := v.RegisterCapability("gotham", capSpec("riddle")); err != nil {
-		t.Fatal(err)
-	}
 
 	// Put: the retired tick is kept; the wildcard is refused.
 	if _, err := h.reg.Put(admin(), renamed(t, h, "arkham"), nil); err != nil {
@@ -470,7 +450,7 @@ func TestAIEndpoint_RetiredTickKeptOnPutRefusedOnImport(t *testing.T) {
 func TestAIInstancePut_OperatorLockedTickIsGrandfathered(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	h := newHarness(t, withEndpointValidation())
+	h := newHarness(t)
 	h.capability("riddle")
 	if _, err := aiPut(h, "arkham", textEndpoint("joker-7b", "gotham.riddle")); err != nil {
 		t.Fatalf("Put: %v", err)
@@ -503,7 +483,7 @@ func TestAIInstancePut_OperatorLockedTickIsGrandfathered(t *testing.T) {
 // own empty bench for every instance, over the live Router's.
 func TestNewRouter_FailedValidatorInstallReleasesTheGauge(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t, withMetrics(), withEndpointValidation())
+	h := newHarness(t, withMetrics())
 	h.setConfig(ai.Config{CooldownBase: time.Hour})
 	c := h.capability("riddle")
 	f := fake()
@@ -514,7 +494,7 @@ func TestNewRouter_FailedValidatorInstallReleasesTheGauge(t *testing.T) {
 		t.Fatal("not benched")
 	}
 
-	if _, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, Metrics: h.scope, ValidateEndpoints: true}); !errors.Is(err, integrations.ErrInvalid) {
+	if _, err := ai.NewRouter(ai.RouterOptions{Registry: h.reg, Metrics: h.scope}); !errors.Is(err, integrations.ErrInvalid) {
 		t.Fatalf("a second validating Router: err = %v, want ErrInvalid", err)
 	}
 	family := metricstest.FamilyPrefix(h.scope) + "endpoint_benched"

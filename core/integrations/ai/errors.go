@@ -32,6 +32,10 @@ var (
 	ErrCatalogFrozen = errors.New("ai: the capability catalog is frozen")
 	// ErrJobNotFound: no stored job has the ID.
 	ErrJobNotFound = errors.New("ai: no such batch job")
+	// ErrBatchKind: SubmitBatch of a capability whose kind has no batch items yet.
+	// BatchItem carries a TextRequest and the adapters submit chat completions, so
+	// a batch of embedding work would send chat requests to an embedding model.
+	ErrBatchKind = errors.New("ai: batches of this capability's kind are not supported")
 	// ErrNoJobStore: a batch operation on a Router built without a JobStore.
 	ErrNoJobStore = errors.New("ai: the router has no job store")
 	// ErrInvalidEndpoint: EndpointSettings that Router.ValidateEndpoint refuses.
