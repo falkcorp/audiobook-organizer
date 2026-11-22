@@ -1564,42 +1564,96 @@ func (s *Store) InviteAllowed(ctx context.Context, email string) (bool, error) {
 // ---------------------------------------------------------------------------
 // Merge.
 
-// StageMerge rewrites the owner of every record of plan from plan.Source to
-// plan.Target. Each row's write is derived from the bytes the plan read
-// (row.Seen) and carries Expect(key, row.Seen), so a record changed since the
-// plan was built fails the commit with storage.ErrConflict (DATA10-9). An
-// identity row's ID is "<provider>/<subject>"; an allow-list row (no owner)
-// is only expected unchanged.
-func (s *Store) StageMerge(b *storage.Batch, plan auth.UserMergePlan) error {
+// MergeRows reads the records a merge of source moves: every API key and
+// linked sign-in it owns, and the allow-list row of its e-mail address when
+// one exists, each with the stored bytes (the Expect value StageMerge
+// checks). Keys come first, then identities, then the allow-list row, each in
+// key order. Only the API-key and identity rows are re-owned; the allow-list
+// row has no owner and is pinned unchanged.
+func (s *Store) MergeRows(ctx context.Context, source auth.UserID) ([]auth.MergeRow, error) {
+	if source == "" {
+		return nil, fmt.Errorf("%w: a merge needs a source user", auth.ErrBadInput)
+	}
+	u, err := s.GetUser(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	var rows []auth.MergeRow
+	for k, err := range s.ScanAPIKeys(ctx, source) {
+		if err != nil {
+			return nil, err
+		}
+		raw, err := s.get(ctx, apiKeyKey(k.ID))
+		if errors.Is(err, auth.ErrNotFound) {
+			continue // deleted since the index row was read
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, auth.MergeRow{Kind: auth.MergeAPIKey, ID: k.ID, Seen: raw})
+	}
+	for id, err := range s.ScanIdentities(ctx, source) {
+		if err != nil {
+			return nil, err
+		}
+		raw, err := s.get(ctx, identityKey(id.Provider, id.Subject))
+		if errors.Is(err, auth.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, auth.MergeRow{Kind: auth.MergeIdentity, ID: id.Provider + "/" + id.Subject, Seen: raw})
+	}
+	if fold := auth.NormalizeEmail(u.Email); fold != "" {
+		raw, err := s.get(ctx, allowKey(fold))
+		switch {
+		case errors.Is(err, auth.ErrNotFound):
+		case err != nil:
+			return nil, err
+		default:
+			rows = append(rows, auth.MergeRow{Kind: auth.MergeInviteAllow, ID: fold, Seen: raw})
+		}
+	}
+	return rows, nil
+}
+
+// StageMerge rewrites the owner of every row from source to target. Each
+// row's write is derived from the bytes the plan read (row.Seen) and carries
+// Expect(key, row.Seen), so a record changed since MergeRows read it fails the
+// commit with storage.ErrConflict (DATA10-9). An identity row's ID is
+// "<provider>/<subject>"; an allow-list row (no owner) is only expected
+// unchanged.
+func (s *Store) StageMerge(b *storage.Batch, source, target auth.UserID, rows []auth.MergeRow) error {
 	if err := needBatch(b, "StageMerge"); err != nil {
 		return err
 	}
-	if plan.Source == "" || plan.Target == "" || plan.Source == plan.Target {
+	if source == "" || target == "" || source == target {
 		return fmt.Errorf("%w: a merge needs two distinct users", auth.ErrBadInput)
 	}
-	if err := s.ownerPresent(b, plan.Target); err != nil {
+	if err := s.ownerPresent(b, target); err != nil {
 		return fmt.Errorf("%w: %w", auth.ErrBadInput, err)
 	}
-	for _, row := range plan.Rows {
-		if err := s.mergeRow(b, plan, row); err != nil {
+	for _, row := range rows {
+		if err := s.mergeRow(b, source, target, row); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.MergeRow) error {
+func (s *Store) mergeRow(b *storage.Batch, source, target auth.UserID, row auth.MergeRow) error {
 	switch row.Kind {
 	case auth.MergeAPIKey:
 		rec, err := decodeKey(row.ID, row.Seen)
 		if err != nil {
 			return err
 		}
-		if rec.Owner != plan.Source {
+		if rec.Owner != source {
 			return fmt.Errorf("%w: apikey %s is not the source user's", auth.ErrBadInput, row.ID)
 		}
 		next := *rec
-		next.Owner = plan.Target
+		next.Owner = target
 		next.Version++
 		raw, err := codec.JSON[keyRecord](1).Encode(next)
 		if err != nil {
@@ -1608,10 +1662,10 @@ func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.Mer
 		if err := s.set(b, apiKeyKey(row.ID), row.Seen, raw); err != nil {
 			return err
 		}
-		if err := s.delCommitted(b, apiKeyUserKey(plan.Source, row.ID)); err != nil {
+		if err := s.delCommitted(b, apiKeyUserKey(source, row.ID)); err != nil {
 			return err
 		}
-		return s.set(b, apiKeyUserKey(plan.Target, row.ID), nil, []byte{})
+		return s.set(b, apiKeyUserKey(target, row.ID), nil, []byte{})
 	case auth.MergeIdentity:
 		provider, subject, ok := strings.Cut(row.ID, "/")
 		if !ok || provider == "" || subject == "" {
@@ -1621,11 +1675,11 @@ func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.Mer
 		if err != nil {
 			return err
 		}
-		if id.UserID != plan.Source || id.Provider != provider || id.Subject != subject {
+		if id.UserID != source || id.Provider != provider || id.Subject != subject {
 			return fmt.Errorf("%w: identity %s is not the source user's", auth.ErrBadInput, row.ID)
 		}
 		next := *id
-		next.UserID = plan.Target
+		next.UserID = target
 		raw, err := codec.JSON[auth.ExternalIdentity](1).Encode(next)
 		if err != nil {
 			return fmt.Errorf("authstore: encode identity: %w", err)
@@ -1633,10 +1687,10 @@ func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.Mer
 		if err := s.set(b, identityKey(provider, subject), row.Seen, raw); err != nil {
 			return err
 		}
-		if err := s.delCommitted(b, identityUserKey(plan.Source, provider, subject)); err != nil {
+		if err := s.delCommitted(b, identityUserKey(source, provider, subject)); err != nil {
 			return err
 		}
-		return s.set(b, identityUserKey(plan.Target, provider, subject), nil, []byte{})
+		return s.set(b, identityUserKey(target, provider, subject), nil, []byte{})
 	case auth.MergeInviteAllow:
 		b.Bind(s.ks)
 		return b.Expect(s.ks, allowKey(auth.NormalizeEmail(row.ID)), row.Seen)
