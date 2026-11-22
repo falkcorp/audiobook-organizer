@@ -198,9 +198,9 @@ func enqueuedIDs(h *kindHost) []string {
 // setEmbeddings sets the config flag run-all's plan reads, restoring it after.
 func setEmbeddings(t *testing.T, on bool) {
 	t.Helper()
-	old := config.AppConfig.Dedup.EmbeddingsEnabled
-	config.AppConfig.Dedup.EmbeddingsEnabled = on
-	t.Cleanup(func() { config.AppConfig.Dedup.EmbeddingsEnabled = old })
+	old := config.Get().Dedup.EmbeddingsEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.EmbeddingsEnabled = on })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.EmbeddingsEnabled = old }) })
 }
 
 // --- lsh-index-build ---

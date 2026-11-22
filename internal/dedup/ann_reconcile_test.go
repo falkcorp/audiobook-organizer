@@ -390,9 +390,9 @@ func TestPostInit_ReconcileLookupErrorStaysIncomplete(t *testing.T) {
 }
 
 func TestPostInit_LazyModeDiscardsStaleSnapshot(t *testing.T) {
-	prev := config.AppConfig.Dedup.ChromemLazy
-	config.AppConfig.Dedup.ChromemLazy = true
-	t.Cleanup(func() { config.AppConfig.Dedup.ChromemLazy = prev })
+	prev := config.Get().Dedup.ChromemLazy
+	config.SetForTest(func(c *config.Config) { c.Dedup.ChromemLazy = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.ChromemLazy = prev }) })
 	f := newANNFixture(t, annStorylines[:4])
 	f.putRow(t, "zero-year")
 

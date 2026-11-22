@@ -53,8 +53,8 @@ func TestCleanupDuplicateVersionGroups_SiblingIsNotALibraryCopy(t *testing.T) {
 }
 
 func TestFindBrokenSegmentBooks_SiblingOfRootIsChecked(t *testing.T) {
-	prev := config.AppConfig.RootDir
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 	base := t.TempDir()
 	root := filepath.Join(base, "lib")
 	bookDir := filepath.Join(base, "lib2", "Book")
@@ -65,7 +65,7 @@ func TestFindBrokenSegmentBooks_SiblingOfRootIsChecked(t *testing.T) {
 	if err := os.WriteFile(present, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config.AppConfig.RootDir = root
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
 
 	s := newFakeStore()
 	addCore(s, database.BookCore{ID: "b1", Title: "Book", FilePath: bookDir})

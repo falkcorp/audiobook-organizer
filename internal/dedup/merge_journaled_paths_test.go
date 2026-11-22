@@ -70,9 +70,9 @@ func TestHandleFileHashMatch_AutoMergeWritesJournalEntry(t *testing.T) {
 func TestApplyVerdicts_LLMAutoMergeWritesJournalEntry(t *testing.T) {
 	engine, store, es := setupRealStoreEngine(t)
 
-	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
-	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
-	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+	prev := config.Get().Dedup.LLMAutoMergeHighConfidence
+	config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = prev }) })
 
 	for _, id := range []string{"LLA", "LLB"} {
 		if _, err := store.CreateBook(arPlausibleBook(id, "LLM Dup "+id)); err != nil {

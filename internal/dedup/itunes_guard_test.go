@@ -90,9 +90,9 @@ func TestMergeSplitBookCluster_RefusesITunesBookWithoutWriting(t *testing.T) {
 func TestAutoResolveCertain_CountsITunesRefusal(t *testing.T) {
 	withGuardMediaRoot(t)
 	engine, store, es := setupRealStoreEngine(t)
-	prev := config.AppConfig.Dedup.AutoResolveEnabled
-	config.AppConfig.Dedup.AutoResolveEnabled = true
-	t.Cleanup(func() { config.AppConfig.Dedup.AutoResolveEnabled = prev })
+	prev := config.Get().Dedup.AutoResolveEnabled
+	config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.AutoResolveEnabled = prev }) })
 
 	itunesID, managedID := seedGuardPair(t, store)
 	mustSeed(t, es, itunesID, managedID, unified.BandCertain, unified.SigExactFile, unified.SigISBNASIN)
@@ -115,9 +115,9 @@ func TestAutoResolveCertain_CountsITunesRefusal(t *testing.T) {
 func TestApplyVerdicts_ITunesRefusalMergesNothing(t *testing.T) {
 	withGuardMediaRoot(t)
 	engine, store, es := setupRealStoreEngine(t)
-	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
-	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
-	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+	prev := config.Get().Dedup.LLMAutoMergeHighConfidence
+	config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = prev }) })
 
 	itunesID, managedID := seedGuardPair(t, store)
 	require.NoError(t, es.UpsertCandidate(database.DedupCandidate{

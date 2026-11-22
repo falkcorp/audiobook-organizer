@@ -27,9 +27,9 @@ import (
 func autoMergeFixture(t *testing.T) (*Engine, *database.EmbeddingStore, database.DedupCandidate, *atomic.Int32) {
 	t.Helper()
 	engine, mock, es := setupTestEngine(t)
-	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
-	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
-	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+	prev := config.Get().Dedup.LLMAutoMergeHighConfidence
+	config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = prev }) })
 
 	authorID := 1
 	books := map[string]*database.Book{
@@ -105,9 +105,9 @@ func TestApplyVerdicts_ReplayIsNoOp(t *testing.T) {
 // what the LLM thought), just never acted on.
 func TestApplyVerdicts_SamePathPair_VerdictRecordedButNeverAutoMerged(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
-	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
-	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
-	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+	prev := config.Get().Dedup.LLMAutoMergeHighConfidence
+	config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = prev }) })
 
 	authorID := 1
 	path := "/lib/Author/Book/Book - NN/32.m4b"
@@ -195,9 +195,9 @@ func TestApplyVerdicts_PinnedThenDismissed_NoAdvice(t *testing.T) {
 // the auto-merge path loads the books). The merge-time re-check must catch it.
 func TestApplyVerdicts_PinnedBeforeMerge_NotMerged(t *testing.T) {
 	engine, mock, es := setupTestEngine(t)
-	prev := config.AppConfig.Dedup.LLMAutoMergeHighConfidence
-	config.AppConfig.Dedup.LLMAutoMergeHighConfidence = true
-	t.Cleanup(func() { config.AppConfig.Dedup.LLMAutoMergeHighConfidence = prev })
+	prev := config.Get().Dedup.LLMAutoMergeHighConfidence
+	config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = true })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.LLMAutoMergeHighConfidence = prev }) })
 
 	authorID := 1
 	books := map[string]*database.Book{
