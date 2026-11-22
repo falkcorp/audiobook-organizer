@@ -125,6 +125,10 @@ func Rows() []Row {
 		{Phase: "P4d 2", Writer: "journal: backup.location.json, a temporary file written and fsynced, renamed over the file, the state directory fsynced, a failed temporary file removed (WriteLocation; §5B.3.6 row \"Where\")", Labels: []string{
 			backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync, backupjournal.LabelLocationCleanup,
 		}},
+		{Phase: "P4d 2 and 3", Writer: "journal: restore_hook_run.json, the ID of a restore hook run with no restore intent of its own (a replaced or external store), kept in the state directory outside the restorable keyspace: a temporary file written and fsynced, renamed into place, the state directory fsynced, a failed temporary file removed (EnsureHookRun, minted at P4d 2 for the re-apply's restriction lines and the hooks' keys); and its removal and the directory fsync once the run completed or found nothing owed (ClearHookRun; F4-08 B10m)", Labels: []string{
+			backupjournal.LabelHookRunTmp, backupjournal.LabelHookRunRename, backupjournal.LabelHookRunDirSync, backupjournal.LabelHookRunCleanup,
+			backupjournal.LabelHookRunClear, backupjournal.LabelHookRunClearDirSync,
+		}},
 		{Phase: "P4d 2", Writer: "journal: MoveFile, the source's open, the destination directory, a leftover temporary copy cleared, the copy written and fsynced, renamed into place, the directory fsynced, a failed copy removed, and the old file removed once the record points at the new one (RemoveMoved; §5B.3.6 row \"Where\")", Labels: []string{
 			backupjournal.LabelMoveSource, backupjournal.LabelMoveMkdir, backupjournal.LabelMoveClear, backupjournal.LabelMoveCopy, backupjournal.LabelMoveRename,
 			backupjournal.LabelMoveDirSync, backupjournal.LabelMoveCleanup, backupjournal.LabelMoveRemoveSource,
@@ -151,7 +155,7 @@ func Rows() []Row {
 		// conflicts trivially. The boot wires them behind app.Options.IdentityBoot
 		// (F4-08 B3); IdentityUnreachedLabels is what no fixture reaches yet.
 		{Phase: "P4d 2", Writer: "the kernel: the re-apply's store commits: each tail chunk's two batches (auth's revocations, then rbac's with the head), each drained chunk's two (the second with the dequeue of its entries), the head of the boot's own line committed alone, a restore boot's restore line with its head, the unapplied queue's batches, the dequeue of the entries a kept admin held, the kept admins' restriction, the withheld head, MarkUnappliedClosed, and served_boot (on a restore boot after the hooks) (restore_reapply.go; 05-backup §5B.3.6 \"Boot re-apply\")", Labels: kernel.ReapplyLabels()},
-		{Phase: "P4d 3", Writer: "the kernel: the restore hooks' run ID, written before a run with no restore line and cleared after it (journal.EnsureHookRun, journal.ClearHookRun), the hooks' report that the restore health tokens read, recorded before restore_hooked/<seq> (journal.PutRestoreReport), restore_hooked/<seq> once the hooks completed (journal.MarkHooked), the head a replaced store's restore line held back (journal.CommitHead), and the commits of auth's, rbac's and audit's restore hooks, each under its own region (restore_hooks.go)", Labels: kernel.HookRunLabels()},
+		{Phase: "P4d 3", Writer: "the kernel: the delete of a stale c/backup/restore_run row an older build or an archive carried (journal.ClearLegacyHookRun; the run ID itself is a state-directory file, see the journal rows), the hooks' report that the restore health tokens read, recorded before restore_hooked/<seq> (journal.PutRestoreReport), restore_hooked/<seq> once the hooks completed (journal.MarkHooked), the head a replaced store's restore line held back (journal.CommitHead), and the commits of auth's, rbac's and audit's restore hooks, each under its own region (restore_hooks.go)", Labels: kernel.HookRunLabels()},
 		{Phase: "P4d 4", Writer: "auth: BootWrites' commits: the _system user's seed, the bootstrap token's mint or the deletion of the stored ones, and the start-up key's revoke and mint (05-authn §3.2, §4.6)", Labels: auth.BootWritesLabels()},
 		{Phase: "P4d 2 (before the journal opens)", Writer: "the kernel: the effective backup directory created in the boot's journal filesystem, so the journal file can be created inside it (identity_p4d.go ensureBackupDir; a no-operation when the directory exists)", Labels: []string{kernel.LabelBackupDirMkdir}},
 		{Phase: "P4d 4", Writer: "auth: BootWrites' state files, each a temporary file written and fsynced, renamed into place and the state directory fsynced: the bootstrap token (written, or removed when bootstrap is disabled) and the start-up key's file (05-authn §4.6; auth.StateFiles over the labelled state directory)", Labels: []string{auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel}},
@@ -182,7 +186,9 @@ func IdentityUnreachedLabels() map[string]string {
 		roll     = "a failed append's cut back runs only after a journal write failed; core/backup/journal's own crash cells break it, and no fault-free boot appends a line that fails"
 		cut      = "the cut of an incomplete last line runs only when a journal ends mid-line, which a crash leaves; no fault-free boot starts from one"
 		tail     = "the re-apply's tail, drain, queue, restriction and head writers run only when the journal holds lines past the store's head or an unapplied queue, a journal state no fixture builds: the kernel's restore_* tests break each of them with a crash between its batches (TailBatch 1, a wrapped NewBatch); F4-08 B10 or a journal-tail fixture reaches them in the matrix"
-		hooks    = "the restore hooks' run ID is written only when the hooks run with no restore line (a replaced store whose line could not be journaled), a state no fixture builds: restore_runkey_test.go crashes between its ensure and its clear"
+		hooks    = "the legacy c/backup/restore_run row is deleted only when a store carries one (an older build's, or an archive taken by one), state no fixture builds: restore_runkey_test.go plants one and crashes around its removal"
+		hookrun  = "the restore hook run's ID file is written only when the hooks run with no restore intent of their own (a replaced or external store), and removed after such a run: a state no fixture builds; restore_runkey_test.go runs it through the kernel, and core/internal/journalfs's sites and TestKill_HookRunFileIsNeverTornOrReadAsAnotherRuns break its writes and its removal"
+		hookfail = "the failed run-ID temporary file's removal runs only after the temporary file's write or rename failed; the journalfs sites reach it, and no fault-free boot does"
 		startup  = "the start-up key's revoke and mint run only with core.auth.bootstrap.readonly_key set and an active admin, state no fixture builds (the kit's identity scenario has no user)"
 		disabled = "the deletion of stored bootstrap tokens runs only with core.auth.bootstrap.enabled false (the default mints one), a setting the kit's identity scenario leaves at its default"
 		appendOK = "a revocation line is appended only when something is revoked, which no fault-free boot does; core/backup/journal's own crash cells and the kernel's restore_* tests break the append"
@@ -214,6 +220,10 @@ func IdentityUnreachedLabels() map[string]string {
 			out[l] = hooks
 		}
 	}
+	for _, l := range []string{backupjournal.LabelHookRunTmp, backupjournal.LabelHookRunRename, backupjournal.LabelHookRunDirSync, backupjournal.LabelHookRunClear, backupjournal.LabelHookRunClearDirSync} {
+		out[l] = hookrun
+	}
+	out[backupjournal.LabelHookRunCleanup] = hookfail
 	out["kernel.hooks.held_head"] = held
 	out["kernel.hooks.rbac"] = rbacHook
 	out[auth.LabelBootBootstrapDelete] = disabled
