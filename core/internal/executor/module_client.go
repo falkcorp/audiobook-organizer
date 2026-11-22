@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"slices"
 
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -20,8 +21,9 @@ import (
 // context.
 type moduleKey struct{}
 
-// moduleChecker is the checker of a module's system actor (systemChecker),
-// marked with the module so mayView can tell a module's own kinds.
+// moduleChecker is the checker of a module's system actor for every operation
+// but a start (opsChecker), marked with the module so mayView and moduleMayAct
+// can tell a module's own kinds.
 type moduleChecker struct {
 	rbac.Checker
 	module string
@@ -40,9 +42,25 @@ func (e *executor) principal(ctx context.Context) (tasks.Actor, rbac.Checker, bo
 		}
 	}
 	if m, ok := ctx.Value(moduleKey{}).(string); ok && m != "" {
-		return tasks.Actor{AuthMethod: systemMethod, System: m}, moduleChecker{Checker: e.systemChecker(m), module: m}, true
+		return tasks.Actor{AuthMethod: systemMethod, System: m}, moduleChecker{Checker: e.opsChecker(m), module: m}, true
 	}
 	return tasks.Actor{}, nil, false
+}
+
+// moduleMayAct is the kind gate Start applies (moduleReach), applied to an
+// operation on an existing run: a module's system actor may cancel, discard or
+// decide only a run of a kind the module owns or lists in TaskStarts, or a run the
+// module itself started. A checker that is not a module's (a request's principal)
+// is not gated here: its own permissions decide.
+func (e *executor) moduleMayAct(who rbac.Checker, rec tasks.RunRecord, actor tasks.Actor) bool {
+	mc, ok := who.(moduleChecker)
+	if !ok {
+		return true
+	}
+	if actor != (tasks.Actor{}) && actor == rec.Actor {
+		return true
+	}
+	return rec.Kind.Module() == mc.module || slices.Contains(e.starts[mc.module], rec.Kind)
 }
 
 // ModuleClient is module's tasks.Client over x (module.Deps.Tasks, 05-tasks

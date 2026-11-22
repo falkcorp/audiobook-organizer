@@ -182,7 +182,7 @@ func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 		if err != nil {
 			return err
 		}
-		if !e.mayCancel(rec, actor, who) {
+		if !e.moduleMayAct(who, rec, actor) || !e.mayCancel(rec, actor, who) {
 			return fmt.Errorf("%w: cancel %s", ErrNotPermitted, id)
 		}
 	}
@@ -336,7 +336,7 @@ func (e *executor) Decide(ctx context.Context, id tasks.RunID, d tasks.Decision)
 	if req.IsZero() {
 		req = def.c.Perms.Start
 	}
-	if !who.Satisfies(req) {
+	if !e.moduleMayAct(who, rec, actor) || !who.Satisfies(req) {
 		return fmt.Errorf("%w: decide %s", ErrNotPermitted, id)
 	}
 	return e.DecideAs(ctx, id, d, actor)
@@ -513,7 +513,7 @@ func (e *executor) Discard(ctx context.Context, id tasks.RunID) error {
 	if e.held(rec.Kind) {
 		return fmt.Errorf("%w: %s", ErrHeld, id)
 	}
-	if actor, who := e.caller(ctx); who != nil && !e.mayCancel(rec, actor, who) {
+	if actor, who := e.caller(ctx); who != nil && (!e.moduleMayAct(who, rec, actor) || !e.mayCancel(rec, actor, who)) {
 		return fmt.Errorf("%w: discard %s", ErrNotPermitted, id)
 	}
 	e.mu.Lock()

@@ -256,8 +256,10 @@ func (k *Kernel) taskStartProblems() []module.Problem {
 			known[kind] = true
 		}
 	}
+	startsUnder := make(map[tasks.Kind][]rbac.Permission)
 	for _, d := range k.taskDefinitions() {
 		known[d.Kind()] = true
+		startsUnder[d.Kind()] = tasks.CommonOf(d).Perms.Start.Permissions()
 	}
 	var probs []module.Problem
 	for _, e := range k.entries {
@@ -269,6 +271,22 @@ func (k *Kernel) taskStartProblems() []module.Problem {
 			case !known[kind]:
 				probs = append(probs, module.Problem{Module: e.man.ID, Kind: module.ProblemTaskStartUnknown,
 					Detail: fmt.Sprintf("TaskStarts entry %q is neither registered nor listed in any manifest's TaskLedger", kind)})
+			}
+			if err != nil {
+				continue
+			}
+			// A module's system actor holds the union of its listed kinds'
+			// Perms.Start. A kind that starts under a core:* scope (core:tasks.manage,
+			// core:tasks.view, core:admin or any other of core's) would hand the
+			// module that scope, so it may not be listed: the module's own
+			// kinds, or a foreign module's kind under that module's own scope, are
+			// what a TaskStarts list is for.
+			for _, p := range startsUnder[kind] {
+				if ns, _, _ := strings.Cut(string(p), ":"); ns == "core" {
+					probs = append(probs, module.Problem{Module: e.man.ID, Kind: module.ProblemTaskStartUnknown,
+						Detail: fmt.Sprintf("TaskStarts entry %q starts under %q, a core scope a module's system actor never holds", kind, p)})
+					break
+				}
 			}
 		}
 	}
