@@ -51,9 +51,9 @@ func TestGetDBHealth_UsesCensusAndSkipsDecode(t *testing.T) {
 }
 
 func TestGetDBHealth_DeepCountsExpired(t *testing.T) {
-	prev := config.AppConfig.MetadataFetchCacheTTLDays
-	config.AppConfig.MetadataFetchCacheTTLDays = 30
-	t.Cleanup(func() { config.AppConfig.MetadataFetchCacheTTLDays = prev })
+	prev := config.Get().MetadataFetchCacheTTLDays
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 30 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = prev }) })
 
 	p := newCensusHandlerStore(t)
 	old := time.Now().Add(-90 * 24 * time.Hour)

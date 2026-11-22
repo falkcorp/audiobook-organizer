@@ -387,9 +387,9 @@ func TestITunesHandler_LibraryStatus_NoFingerprint_OK(t *testing.T) {
 // ── LibraryStats ─────────────────────────────────────────────────────────────
 
 func TestITunesHandler_LibraryStats_NoITLPath_400(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.ITunes.LibraryITLPath = ""
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = "" })
 
 	h := handlers.NewITunesHandler(enabledSvc(t), nil, nil, handlersmocks.NewMockITunesStore(t))
 	c, w := newITunesCtx(http.MethodGet, "/itunes/library-stats", "", nil)

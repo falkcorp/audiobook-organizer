@@ -73,9 +73,9 @@ func (r *httpResponse) data(t *testing.T) map[string]any {
 // directory (and the default backup directory beside it) for the test.
 func withDatabasePath(t *testing.T, dbPath string) {
 	t.Helper()
-	prevDB, prevBackup := config.AppConfig.DatabasePath, config.AppConfig.BackupDir
-	config.AppConfig.DatabasePath, config.AppConfig.BackupDir = dbPath, ""
-	t.Cleanup(func() { config.AppConfig.DatabasePath, config.AppConfig.BackupDir = prevDB, prevBackup })
+	prevDB, prevBackup := config.Get().DatabasePath, config.Get().BackupDir
+	config.SetForTest(func(c *config.Config) { c.DatabasePath, c.BackupDir = dbPath, "" })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DatabasePath, c.BackupDir = prevDB, prevBackup }) })
 }
 
 // TestRestoreBackupStagesAndRestarts (05-backup §5B.3.4; R1-25 Goal item 3):
