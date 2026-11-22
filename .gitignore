@@ -386,3 +386,6 @@ testdata/abs-oracle/library/
 /internal/books/testdata/r2corpus/**/.claude/
 # The startup read-only key file holds a raw abk_ key; the writer deletes it like .bootstrap-token.
 /internal/books/testdata/r2corpus/**/.readonly-key
+
+# The store the R2 release leaves behind, frozen (R3-02f): the Pebble store and its WAL are testdata.
+!/internal/books/testdata/r2store/**
