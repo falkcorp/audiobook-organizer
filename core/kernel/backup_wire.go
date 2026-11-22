@@ -20,10 +20,10 @@ import (
 	"github.com/falkcorp/mediacore/internal/backuphttp"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
-	"github.com/falkcorp/mediacore/tasks"
 )
 
 // The kernel's core.backup service (seams.d/F8-01.md, F8-04a slice G2): the
@@ -365,19 +365,28 @@ type backupMount struct {
 	Log            *slog.Logger
 }
 
-// mountBackup mounts 05-backup §5B.3.8's routes on g and returns the four
-// task definitions (core.backup.create, verify, prune and stage-restore) for
-// the caller to register. Neither happens at boot today: a nil Svc mounts
-// nothing and returns nothing, so a caller that has no service fails closed.
-func mountBackup(g *httpapi.Group, m backupMount) []tasks.Definition {
+// mountBackup mounts 05-backup §5B.3.8's routes on g. It is not called at boot
+// today: a nil Svc mounts nothing, so a caller that has no service fails
+// closed. The four task kinds are registerBackupTasks'.
+func mountBackup(g *httpapi.Group, m backupMount) {
 	if m.Svc == nil {
-		return nil
+		return
 	}
 	backuphttp.Register(g, backuphttp.Deps{
 		Catalogue: m.Svc, Restorer: m.Svc, Rewrapper: m.Svc, Enqueuer: m.Enqueuer, Audit: m.Audit,
 		OwnerRequired: m.OwnerRequired, MaxImportBytes: m.MaxImportBytes, Log: m.Log,
 	})
-	return []tasks.Definition{
-		backup.CreateTask(m.Svc), backup.VerifyTask(m.Svc), backup.PruneTask(m.Svc), backup.StageRestoreTask(m.Svc),
+}
+
+// registerBackupTasks records the four core.backup.* kinds (create, verify,
+// prune, stage-restore) on r, the one place the kernel builds them. A nil Svc
+// records nothing: the kinds would fail closed anyway (tasks.Problems reports
+// a definition with no Run), and an unwired service must not look registered.
+// Nothing calls it at boot: registering core's own kinds is G3, after F5-18,
+// which also settles whose Registrar this is.
+func registerBackupTasks(r *module.Registrar, svc *backup.Svc) {
+	if svc == nil {
+		return
 	}
+	r.Tasks(backup.CreateTask(svc), backup.VerifyTask(svc), backup.PruneTask(svc), backup.StageRestoreTask(svc))
 }
