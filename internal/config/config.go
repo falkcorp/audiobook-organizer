@@ -2085,6 +2085,38 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// Normalize makes the in-place normalisations Validate and Problems make,
+// without the checks: each zero that means "the default" becomes the default,
+// and the iTunes legacy path shims are derived. It is idempotent.
+//
+// Project calls it on every projection it publishes. HEAD normalised the
+// process config at boot (Validate) and on every PUT (Problems on the
+// candidate), so readers never saw these zeros; with the flip, a rebuild
+// publishes the raw rows, and without this a save would put them back.
+func (c *Config) Normalize() {
+	// iTunes 4-state model: derive the legacy path shims (inert unless
+	// itunes.libraries is populated). See itunes_libraries.go / spec §2.
+	c.ITunes.Resolve()
+
+	// The empty-string normalization is load-bearing, not cosmetic: an upgraded
+	// install whose stored config_blob predates the field gets "" from
+	// migrateEmbeddingBlob (persistence.go), and no default reaches that
+	// path. Without this line those installs would stay on chromem
+	// forever — or, once the enum check exists, fail to start outright.
+	if c.Embedding.VectorBackend == "" {
+		c.Embedding.VectorBackend = "hnsw"
+	}
+
+	if c.MinBookSizeBytes == 0 {
+		c.MinBookSizeBytes = 5 * 1024 * 1024
+	}
+	// 0 means "unset" and takes the default; -1 (or any negative) disables the
+	// rescan-age gate outright. Same idiom as MinBookSizeBytes above.
+	if c.MinRescanAgeHours == 0 {
+		c.MinRescanAgeHours = 144
+	}
+}
+
 // Problems is every structural problem Validate would report, one message
 // each, and the same normalisations Validate makes (a zero that means "the
 // default" is replaced). The settings write path asks for the list so it can
@@ -2092,10 +2124,11 @@ func (c *Config) Validate() error {
 func (c *Config) Problems() []string {
 	var errs []string
 
-	// iTunes 4-state model: derive the legacy path shims, then run the fail-closed
-	// library assertions (inert unless itunes.libraries is populated). See
-	// itunes_libraries.go / spec §2.
-	c.ITunes.Resolve()
+	c.Normalize()
+
+	// iTunes 4-state model: Normalize derived the legacy path shims; run the
+	// fail-closed library assertions (inert unless itunes.libraries is
+	// populated). See itunes_libraries.go / spec §2.
 	errs = append(errs, c.ITunes.ValidateLibraries(c.ProtectedPaths)...)
 
 	switch c.DatabaseType {
@@ -2117,14 +2150,7 @@ func (c *Config) Problems() []string {
 	// every other value, so a typo cost two orders of magnitude with no error
 	// and no log line. Normalize-then-reject, the same shape as DatabaseType.
 	//
-	// The empty-string normalization is load-bearing, not cosmetic: an upgraded
-	// install whose stored config_blob predates the field gets "" from
-	// migrateEmbeddingBlob (persistence.go), and no default reaches that
-	// path. Without this line those installs would stay on chromem
-	// forever — or, once the enum check exists, fail to start outright.
-	if c.Embedding.VectorBackend == "" {
-		c.Embedding.VectorBackend = "hnsw"
-	}
+	// Normalize has already turned "" into "hnsw" (see there).
 	switch c.Embedding.VectorBackend {
 	case "hnsw", "chromem":
 	default:
@@ -2177,14 +2203,6 @@ func (c *Config) Problems() []string {
 	}
 	if c.ScanStandDownGraceSeconds < 0 || c.ScanStandDownGraceSeconds > 600 {
 		errs = append(errs, "scan_standdown_grace_seconds must be between 0 and 600")
-	}
-	if c.MinBookSizeBytes == 0 {
-		c.MinBookSizeBytes = 5 * 1024 * 1024
-	}
-	// 0 means "unset" and takes the default; -1 (or any negative) disables the
-	// rescan-age gate outright. Same idiom as MinBookSizeBytes above.
-	if c.MinRescanAgeHours == 0 {
-		c.MinRescanAgeHours = 144
 	}
 	if c.AutoScanDebounceSeconds < 0 {
 		errs = append(errs, "auto_scan_debounce_seconds must be >= 0")
