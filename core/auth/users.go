@@ -456,7 +456,11 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserEnabled, Subject: subject, Epoch: up.CredentialEpoch})
 		}
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
-		return s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject, Details: details})
+		if err := s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject, Details: details}); err != nil {
+			return err
+		}
+		s.queueStatusChanged(inv, StatusChanged{UserID: id, Email: u.Email, From: u.Status, To: st})
+		return nil
 	})
 }
 

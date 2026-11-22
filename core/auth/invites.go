@@ -249,7 +249,8 @@ func (s *Service) openInvite(ctx context.Context, token string, client ClientInf
 // denied); or the username taken since it was created (wrapping
 // ErrUserExists).
 func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User, *IssuedSession, error) {
-	if _, err := s.openInvite(ctx, in.Token, in.Client); err != nil {
+	peek, err := s.openInvite(ctx, in.Token, in.Client)
+	if err != nil {
 		return nil, nil, err
 	}
 	if in.Password == "" {
@@ -267,10 +268,16 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 	if err != nil {
 		return nil, nil, err
 	}
+	if peek.Email != "" && inviteBindsEmail(peek) {
+		// Held across the displacement's reads and the commit, as every
+		// writer of an address does (UpdateProfile, CreateUser).
+		s.emailMu.Lock()
+		defer s.emailMu.Unlock()
+	}
 	var user *User
 	var out *IssuedSession
 	var refusal error
-	err = s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
+	err = s.commitInvalidatingN(ctx, claimRetries, func(b *storage.Batch, inv *invalidations) error {
 		refusal = nil
 		t, err := s.d.Store.TakeOneTime(b, OneTimeInvite, Token(in.Token)) // parsed by openInvite
 		if errors.Is(err, ErrNotFound) {
@@ -321,6 +328,15 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 			ID: UserID(id), Username: t.Username, Email: t.Email, HasPassword: true,
 			Roles: []rbac.RoleName{t.Role}, Status: StatusActive, CreatedAt: now, UpdatedAt: now, Version: 1,
 		}
+		var displaced []UserID
+		if t.Email != "" && inviteBindsEmail(t) {
+			// HEAD's refusal of an address a verified holder has leaves the
+			// invite unspent (planInviteAcceptLocked fails before any write):
+			// returning here commits nothing, the take included.
+			if displaced, err = s.displaceUnverifiedHolders(ctx, b, t.Email, u.ID); err != nil {
+				return fmt.Errorf("%w: %w", ErrInviteInvalid, err)
+			}
+		}
 		if err := s.d.Store.SetPassword(b, u, hash); err != nil {
 			if !errors.Is(err, ErrUserExists) {
 				return err
@@ -336,14 +352,26 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 			return err
 		}
 		user, out = u, issued
-		return s.d.Audit.RecordIn(ctx, b, audit.Event{
+		details := map[string]any{"invite": t.ID, "role": string(t.Role), "created_by": string(t.CreatedBy)}
+		if len(displaced) > 0 {
+			details["displaced_user_ids"] = displaced
+		}
+		if err := s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionInviteAccept, Outcome: audit.Success, Target: ref(refKindUser, id),
 			Actor: audit.Actor{
 				UserID: id, Username: u.Username, Method: string(MethodSessionDelegated), CredentialID: rec.PublicID,
 				ClientAddr: addrString(in.Client.Addr), UserAgent: in.Client.UserAgent,
 			},
-			Details: map[string]any{"invite": t.ID, "role": string(t.Role), "created_by": string(t.CreatedBy)},
+			Details: details,
+		}); err != nil {
+			return err
+		}
+		inv.after(func(ctx context.Context) { s.warnDisplaced(ctx, t.ID, u.ID, displaced) })
+		s.queueInviteAccepted(inv, InviteAccepted{
+			InviteID: t.ID, UserID: u.ID, CreatedBy: t.CreatedBy, Email: t.Email,
+			CreatorHeldAdmin: checker.Has(rbac.CoreAdmin), DisplacedUserIDs: displaced,
 		})
+		return nil
 	})
 	if err != nil {
 		return nil, nil, err

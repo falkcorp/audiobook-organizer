@@ -125,6 +125,15 @@ type Deps struct {
 	// without IdentityBoot.
 	AuthRefresh RefreshFunc
 
+	// AuthLifecycle is auth.Service.RegisterLifecycle as a plain func, for a
+	// module whose manifest declares Manifest.AuthLifecycle and for no other
+	// (nil for every module that did not). Call it once, from Register: a
+	// second call is refused (auth.ErrLifecycleRegistered). The callbacks
+	// are called after the write that caused them has committed, with ids and
+	// minimal facts, and cannot veto it; see auth.Lifecycle. Nil until the
+	// kernel builds the auth service, and on a boot without IdentityBoot.
+	AuthLifecycle LifecycleFunc
+
 	// Audit records audit events, the actor taken from the ctx (05-rbac §3.5:
 	// Record, RecordIn, Emit); the action namespace "<ID>." is checked. Nil
 	// until the kernel builds the audit logger for modules (F4-08, B3).
@@ -135,6 +144,9 @@ type Deps struct {
 // type of a legacy-auth bridge's own refresh hook, so a bridge takes the handle
 // by plain assignment.
 type RefreshFunc func(ctx context.Context, p *auth.Principal) (*auth.Principal, error)
+
+// LifecycleFunc is Deps.AuthLifecycle: auth.Service.RegisterLifecycle.
+type LifecycleFunc func(l auth.Lifecycle) error
 
 // ConfigAccess is Deps.Config: *config.Store's reads, one write, its
 // generation and the secrets the module's declaration admits. The store is
