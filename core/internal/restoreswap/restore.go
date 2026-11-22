@@ -99,6 +99,14 @@ func (s *Swapper) swappedBack(in restorejournal.Intent, err error) (Outcome, err
 	return Outcome{ID: in.ID, Intent: in, Last: StepSwappedBack, Degraded: DegradedRestoreFailed, Reason: err.Error()}, nil
 }
 
+// DefaultRecheck is defaultRecheck for a caller that composes it with F8's
+// archive re-hash (backup.Recheck): Options.Recheck replaces the default, so
+// whoever installs the manifest check keeps the rename pre-check by calling
+// this from it (kernel's backup wiring).
+func (s *Swapper) DefaultRecheck(ctx context.Context, in restorejournal.Intent) error {
+	return s.defaultRecheck(ctx, in)
+}
+
 // defaultRecheck is step b at R1 (decision D4): every placement's source
 // still exists, and the rename pre-check passes again. F8 installs the
 // archive manifest's re-hash in its place.

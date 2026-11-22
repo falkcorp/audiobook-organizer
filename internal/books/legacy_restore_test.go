@@ -218,10 +218,10 @@ func TestLegacyArchiveRestoreThenMigrate(t *testing.T) {
 			requireNoProblems(t, "the offline-restored store", drillProblems(pre, restored, c.wrote))
 			migratingBoot(t, work)
 		})
-		t.Run("staged", func(t *testing.T) {
+		stagedHalf := func(t *testing.T, stage func(t *testing.T, work, archive string) string) {
 			work := copyCorpus(t, c)
 			upgradeAndMark(t, work)
-			id := stageWithCore(t, work, archive)
+			id := stage(t, work, archive)
 
 			// Extracted: the staged store is the corpus' rows, and the live store
 			// was not written.
@@ -245,6 +245,11 @@ func TestLegacyArchiveRestoreThenMigrate(t *testing.T) {
 			for k, v := range live.rows {
 				require.NotContains(t, string(v), drillMarker, "the marker written after the upgrade survived the swap (%s)", k)
 			}
-		})
+		}
+		// Staged through core's Service directly, and through books' stager over
+		// it (core_restore_stager.go), the one the fold installs: the staged
+		// store and the boot that applies the swap and migrates it are the same.
+		t.Run("staged", func(t *testing.T) { stagedHalf(t, stageWithCore) })
+		t.Run("staged through books' stager", func(t *testing.T) { stagedHalf(t, stageWithBooksCoreStager) })
 	})
 }

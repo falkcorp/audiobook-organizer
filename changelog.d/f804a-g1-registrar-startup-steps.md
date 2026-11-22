@@ -1,0 +1,5 @@
+### Added
+
+#### Registrar.StartupSteps and the kernel's startup table, both dark (F8-04a G1)
+
+A module can now declare its rows of the startup table with `Registrar.StartupSteps`. The call only records them. It refuses a row the startup table would refuse (no name, no class, a Fatal row with a token, a Degraded row without a valid token, or a name the module already registered) and drops the whole call when it does. The kernel gains `newStartupTable`, which builds one `health.Startup` from core's rows and every enabled module's rows, names the module in the error when a row clashes with core's or another module's, and keeps the result in a struct field so the startup-table architecture guard can recognise its `Run` calls once the F8 flip adds them. Nothing in boot builds the table yet, so the registry's readiness is unchanged and no running binary behaves differently. The other two parts of this slice were already on the base: the `core.diagnostics` retention keys and the startup table rebased onto `gapFillStrip` with no `loadConfigFromDB` row.

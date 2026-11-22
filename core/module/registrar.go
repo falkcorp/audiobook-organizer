@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/events"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/tasks"
@@ -26,7 +27,8 @@ import (
 // than return errors (A4); Err reports them. Nothing recorded here takes
 // effect before P7 (A8). These are the R1 members, Tasks and Resources (F2),
 // and Topics and Subscribe (the identity flip's events surface, recorded
-// only until F4-08's boot wiring reads them); Lanes, ChangeSink, Health and
+// only until F4-08's boot wiring reads them), and StartupSteps (recorded only
+// until the F8 flip's kernel table reads it); Lanes, ChangeSink, Health and
 // the rest arrive with their packages (06 §6.4.10).
 type Registrar struct {
 	id            ID
@@ -93,6 +95,10 @@ type Registrations struct {
 	// refuses a bad entry (kernelEvents.declare, kernelEvents.subscribe).
 	Topics        []events.TopicSpec
 	Subscriptions []events.Subscription
+	// StartupSteps are the module's rows of the startup table, in call order
+	// (Registrar.StartupSteps). Recorded only: the kernel adds them to its
+	// health.Startup next to health.CoreStartupSteps() (05-health §5H.3.2).
+	StartupSteps []health.StartupStep
 }
 
 // NewRegistrar returns the registrar of one module's Register call.
@@ -126,6 +132,7 @@ func (r *Registrar) Close() Registrations {
 	rec.Resources = slices.Clone(rec.Resources)
 	rec.Topics = slices.Clone(rec.Topics)
 	rec.Subscriptions = slices.Clone(rec.Subscriptions)
+	rec.StartupSteps = slices.Clone(rec.StartupSteps)
 	return rec
 }
 
@@ -348,6 +355,28 @@ func (r *Registrar) Topics(t ...events.TopicSpec) {
 // after every topic is declared.
 func (r *Registrar) Subscribe(s ...events.Subscription) {
 	r.record("Subscribe", func() { r.rec.Subscriptions = append(r.rec.Subscriptions, s...) })
+}
+
+// StartupSteps adds the module's rows to the startup table (05-health
+// §5H.3.2): each row names a step the module runs through the kernel's
+// health.Startup and the class a failure of it has. It only records (06 §6.5.1
+// P6); the kernel adds the rows next to health.CoreStartupSteps() and refuses a
+// row whose name another module or core already holds.
+//
+// A row health.Startup would refuse (an empty name, no class, a Fatal row with
+// a token, a Degraded row without a valid token) or one whose name this module
+// already registered is ProblemInvalidRegistration, and none of that call's rows
+// is recorded: the call is all or none, as Startup.Add is. health.NewStartup is
+// the one validator, so this check cannot drift from the table's own.
+func (r *Registrar) StartupSteps(s ...health.StartupStep) {
+	r.record("StartupSteps", func() {
+		all := append(slices.Clone(r.rec.StartupSteps), s...)
+		if _, err := health.NewStartup(nil, nil, all...); err != nil {
+			r.problem(ProblemInvalidRegistration, "StartupSteps: %v", err)
+			return
+		}
+		r.rec.StartupSteps = all
+	})
 }
 
 // Err returns the problems recorded so far, as a *ValidationError; nil if

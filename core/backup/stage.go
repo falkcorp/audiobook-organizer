@@ -116,6 +116,14 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
 		return PendingRestore{}, err
 	}
+	// A caller that asked for a BeforeStageFunc gets it or nothing: a Stager
+	// that cannot run one would stage the restore without what the caller
+	// needs done first (books' clean-stop marker), so refuse before anything
+	// is read.
+	if BeforeStageFrom(ctx) != nil && !s.hooked {
+		s.o.Metrics.Restore(ctx, "rejected", o.Foreign)
+		return PendingRestore{}, ErrBeforeStageUnsupported
+	}
 	release, err := s.acquire()
 	if err != nil {
 		return PendingRestore{}, err
