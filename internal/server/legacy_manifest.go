@@ -144,10 +144,37 @@ func legacyManifest(absEnabled bool) []httpapi.LegacyRoute {
 // §8.2), so a route added without a reviewed row fails boot.
 func (s *Server) LegacyManifest() ([]httpapi.LegacyRoute, error) {
 	m := legacyManifest(config.AppConfig.ABSAPIEnabled)
+	// Under core identity the rows core serves are core's, not the mount's.
+	m = slices.DeleteFunc(m, func(lr httpapi.LegacyRoute) bool { return s.servedByCore(lr.Method, lr.GinPath) })
 	if err := checkLegacyManifest(s.router.Routes(), m); err != nil {
 		return nil, err
 	}
 	return m, nil
+}
+
+// servedByCore reports whether method and ginPath are one of the exact routes core
+// serves on its fixed group under core identity (httpapi.CoreExactPatterns: HEAD's
+// OAuth start and callback, kept at HEAD's paths so no identity provider's
+// registered redirect URI changes). Router.Build refuses a legacy mount route over
+// such a path (ErrPrefixCollision), and gin must not register one either, so both
+// the manifest and the gin wiring ask here. Always false on a server that is not
+// under core identity: HEAD's own handler serves the path there.
+func (s *Server) servedByCore(method, ginPath string) bool {
+	if s.identity == nil {
+		return false
+	}
+	return slices.Contains(httpapi.CoreExactPatterns(), method+" "+muxPath(ginPath))
+}
+
+// muxPath is a gin path in net/http ServeMux form: ":name" segments become "{name}".
+func muxPath(ginPath string) string {
+	segs := strings.Split(ginPath, "/")
+	for i, seg := range segs {
+		if name, ok := strings.CutPrefix(seg, ":"); ok {
+			segs[i] = "{" + name + "}"
+		}
+	}
+	return strings.Join(segs, "/")
 }
 
 // checkLegacyManifest compares a gin route walk with a manifest.
