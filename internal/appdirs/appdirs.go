@@ -67,10 +67,13 @@ func FromConfig(cfg *config.Config) pathutil.AppDirs {
 	}
 }
 
-// Current builds AppDirs from the process-wide config. Walkers that already
-// read config.AppConfig directly use this rather than threading a pointer.
+// Current builds AppDirs from the process-wide config. Walkers use this rather
+// than threading a pointer. It takes a Snapshot, so a walker running on a
+// worker goroutine beside a settings save (which replaces the whole config
+// under the lock) reads one consistent copy instead of racing the save.
 func Current() pathutil.AppDirs {
-	return FromConfig(&config.AppConfig)
+	cfg := config.Snapshot()
+	return FromConfig(&cfg)
 }
 
 // cleanAbs normalises an absolute path and drops everything else.
