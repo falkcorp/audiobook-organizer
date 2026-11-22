@@ -183,11 +183,11 @@ func TestBookRelocatedTopicSpec(t *testing.T) {
 	if err := bus.Declare("books", spec); err != nil {
 		t.Fatalf("books may not declare its own topic: %v", err)
 	}
-	raw, err := json.Marshal(BookRelocatedV1{BookID: "b1", FromPath: "/gotham/a", ToPath: "/gotham/b"})
+	raw, err := json.Marshal(BookRelocatedV1{BookID: "b1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != `{"book_id":"b1","from_path":"/gotham/a","to_path":"/gotham/b"}` {
+	if string(raw) != `{"book_id":"b1"}` {
 		t.Fatalf("payload wire form = %s", raw)
 	}
 }
@@ -203,8 +203,7 @@ func TestBookRelocated_StagedInThePathWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.staged(t)
-	want := []stagedRelocation{{Key: b.ID, Producer: "books", Payload: BookRelocatedV1{
-		BookID: b.ID, FromPath: "/gotham/library/long-halloween", ToPath: "/gotham/library/batman/long-halloween"}}}
+	want := []stagedRelocation{{Key: b.ID, Producer: "books", Payload: BookRelocatedV1{BookID: b.ID}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("staged = %+v, want %+v", got, want)
 	}
@@ -298,10 +297,57 @@ func TestBookRelocated_EmptyOldPathIsNoRelocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := r.staged(t)
-	want := []stagedRelocation{{Key: b.ID, Producer: "books", Payload: BookRelocatedV1{
-		BookID: b.ID, FromPath: "/gotham/library/dark-victory", ToPath: "/gotham/library/batman/dark-victory"}}}
+	want := []stagedRelocation{{Key: b.ID, Producer: "books", Payload: BookRelocatedV1{BookID: b.ID}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("staged = %+v, want %+v (the move after the first path is a relocation)", got, want)
+	}
+}
+
+// path -> "" -> path is not a relocation, through either write funnel (the
+// decision is documented on stageBookRelocated: HEAD's Deluge hand-off,
+// NotifyDelugeAfterOrganize, follows a file move from a current path, and the
+// write that gives a detached book a path moves nothing). Neither write stages,
+// the book's next move from the restored path stages exactly one message, and a
+// direct A -> B move still stages (so the pin is not an outbox that never fires).
+func TestBookRelocated_PathToEmptyToPathIsNoRelocation(t *testing.T) {
+	r := newRelocationRig(t, false)
+	r.store.SetRelocationOutbox(r.ob.Writer("books"))
+	const a, b, c = "/gotham/library/a-death-in-the-family", "/gotham/library/batman/a-death-in-the-family", "/gotham/library/batman/robin/a-death-in-the-family"
+	viaModify := r.book(t, "A Death in the Family", a)
+	if err := r.move(viaModify.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.move(viaModify.ID, b); err != nil {
+		t.Fatal(err)
+	}
+	viaUpdate := r.book(t, "A Lonely Place of Dying", a+"-2")
+	if err := r.move(viaUpdate.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.store.UpdateBook(viaUpdate.ID, &Book{Title: viaUpdate.Title, FilePath: b + "-2"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{viaModify.ID, viaUpdate.ID} {
+		if got := r.pathOf(t, id); got == "" {
+			t.Fatalf("book %s: the restored path was not committed", id)
+		}
+	}
+	if got := r.staged(t); len(got) != 0 {
+		t.Fatalf("path -> empty -> path staged %+v, want nothing for either write", got)
+	}
+	if err := r.move(viaModify.ID, c); err != nil {
+		t.Fatal(err)
+	}
+	want := []stagedRelocation{{Key: viaModify.ID, Producer: "books", Payload: BookRelocatedV1{BookID: viaModify.ID}}}
+	if got := r.staged(t); !reflect.DeepEqual(got, want) {
+		t.Fatalf("after the restored path moved, staged = %+v, want %+v", got, want)
+	}
+	direct := r.book(t, "Under the Red Hood", a+"-3")
+	if err := r.move(direct.ID, b+"-3"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.staged(t); len(got) != 2 || got[1].Payload.BookID != direct.ID {
+		t.Fatalf("a direct move did not stage: %+v", got)
 	}
 }
 
@@ -394,9 +440,8 @@ func TestBookRelocated_RawBatchIsRefused(t *testing.T) {
 
 // TestBookRelocated_ConcurrentMovesOfOneBook runs movers and non-path writers
 // on one book at once. Every move goes to a path no other write uses, so each
-// is a real change; the per-book stripe serializes the writes, so the staged
-// messages, in stage order, form one unbroken chain from the first path to the
-// stored one, and the non-path writes stage nothing.
+// is a real change, so each stages exactly one message keyed by the book (the
+// payload carries no paths to chain), and the non-path writes stage none.
 func TestBookRelocated_ConcurrentMovesOfOneBook(t *testing.T) {
 	r := newRelocationRig(t, false)
 	r.store.SetRelocationOutbox(r.ob.Writer("books"))
@@ -434,22 +479,12 @@ func TestBookRelocated_ConcurrentMovesOfOneBook(t *testing.T) {
 	if len(got) != movers*moves {
 		t.Fatalf("staged %d relocations, want exactly %d (one per move, none per edit)", len(got), movers*moves)
 	}
-	prev := start
-	seen := map[string]bool{}
 	for i, s := range got {
 		if s.Key != b.ID || s.Payload.BookID != b.ID {
 			t.Fatalf("row %d keyed %q for book %q, want %q", i, s.Key, s.Payload.BookID, b.ID)
 		}
-		if s.Payload.FromPath != prev {
-			t.Fatalf("row %d moves from %q, want %q (the chain broke: a stale old path)", i, s.Payload.FromPath, prev)
-		}
-		if seen[s.Payload.ToPath] {
-			t.Fatalf("row %d repeats the move to %q", i, s.Payload.ToPath)
-		}
-		seen[s.Payload.ToPath] = true
-		prev = s.Payload.ToPath
 	}
-	if stored := r.pathOf(t, b.ID); stored != prev {
-		t.Fatalf("stored path %q, the last staged move went to %q", stored, prev)
+	if stored := r.pathOf(t, b.ID); stored == start {
+		t.Fatalf("stored path %q is still the first path after %d moves", stored, movers*moves)
 	}
 }

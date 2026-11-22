@@ -73,13 +73,13 @@ func TestRelocationConsumer_UndeclaredNameRefused(t *testing.T) {
 
 func TestRelocationRunParams(t *testing.T) {
 	p, err := relocationRunParams(outbox.Message[database.BookRelocatedV1]{
-		Key: "partition-key-not-the-payload", Payload: database.BookRelocatedV1{BookID: "joker-01", FromPath: "/gotham/a", ToPath: "/gotham/b"},
+		Key: "partition-key-not-the-payload", Payload: database.BookRelocatedV1{BookID: "joker-01"},
 	})
 	require.NoError(t, err)
 	raw, err := json.Marshal(p)
 	require.NoError(t, err)
 	// The run gets the book ID only: it moves the torrents to the book's path
-	// as stored when it runs, never to the message's ToPath.
+	// as stored when it runs (the message carries no path).
 	require.JSONEq(t, `{"book_id":"joker-01"}`, string(raw))
 	got, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
 	require.NoError(t, err, "the params decode as the kind's own")
