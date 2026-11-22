@@ -1404,10 +1404,13 @@ func (h *Registered) requireCanary(canary map[string]int) {
 // defaults to one derived from the key. The corpus's usernames and roles are in
 // internal/books/rbacreach/principals.json; for example a Confined (fp-worker-style)
 // key is User "fp.worker" with Scopes {"fingerprint.worker"}, and a revoked admin key
-// is User "lucius.fox", Status "revoked".
+// is User "lucius.fox", Status "revoked". ExpiresAt is the row's expires_at: zero is a
+// year from now; a past instant with Status "active" is the shape of a key HEAD never
+// wrote the expiry back into the status of (it stores the time and leaves status active).
 type KeySeed struct {
 	ID, User, Name, Status string
 	Scopes                 []string
+	ExpiresAt              time.Time
 }
 
 // SeedAPIKey writes a HEAD key row in prod's shape and returns the raw key. The raw
@@ -1441,7 +1444,7 @@ func SeedAPIKey(ctx context.Context, lr storage.LegacyRange, ks KeySeed) (string
 	fields := map[string]any{
 		"id": id, "user_id": uid, "name": cmp.Or(ks.Name, "key-"+id[len(id)-4:]), "token_hash": hash, "scopes": ks.Scopes,
 		"status": status, "created_at": now.Add(-time.Hour).Format(time.RFC3339),
-		"expires_at": now.AddDate(1, 0, 0).Format(time.RFC3339), "use_count": 0,
+		"expires_at": cmp.Or(ks.ExpiresAt, now.AddDate(1, 0, 0)).UTC().Format(time.RFC3339), "use_count": 0,
 	}
 	if fields["scopes"] == nil {
 		fields["scopes"] = []string{}
