@@ -77,9 +77,10 @@ func TestRegisteredHarness_CredentialKindOnCoreMe(t *testing.T) {
 			}
 			switch {
 			case p.Kind == "anonymous":
-				if res.Stage13 != Stage13Refused || res.Status != http.StatusUnauthorized {
-					t.Errorf("anonymous: %d %s", res.Status, res.excerpt())
+				if res.Stage13 != Stage13Refused {
+					t.Errorf("anonymous was not refused by stage 13: %d %s", res.Status, res.excerpt())
 				}
+				h.Refused(res, http.StatusUnauthorized, "authentication_required")
 			case p.Core && (p.Twin == "key:admin:every" || p.Twin == "key:admin:empty"):
 				// Their scopes hold core:admin, which carries core:self.
 				if got, _ := kindOf(res); res.Status != http.StatusOK || got != "api_key" {

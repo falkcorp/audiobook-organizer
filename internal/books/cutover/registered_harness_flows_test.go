@@ -188,6 +188,10 @@ var smokeStatuses = map[string][7]int{
 	Owner: {200, 403, 403, 403, 200, 403, 403},
 }
 
+// smokeLegacyCode is the one refusal here that a legacy handler answers, not stage 13:
+// /auth/me with no user bound (auth off) is HEAD's own {"error", "code"} envelope.
+const smokeLegacyCode = "UNAUTHORIZED"
+
 func smoke(t *testing.T, h *Registered, p *Principal, want [7]int) {
 	t.Helper()
 	for i, r := range smokeRoutes {
@@ -195,8 +199,19 @@ func smoke(t *testing.T, h *Registered, p *Principal, want [7]int) {
 		if err != nil {
 			t.Fatalf("%s %s as %s: %v", r[0], r[1], p.Name, err)
 		}
-		if res.Status != want[i] {
-			t.Errorf("%s %s %s: %d %s, want %d", p.Name, r[0], r[1], res.Status, res.Code, want[i])
+		switch want[i] {
+		case http.StatusUnauthorized:
+			code := "authentication_required"
+			if p.Kind == "authoff" {
+				code = smokeLegacyCode
+			}
+			h.Refused(res, want[i], code)
+		case http.StatusForbidden:
+			h.Refused(res, want[i], "permission_denied")
+		default:
+			if res.Status != want[i] {
+				t.Errorf("%s %s %s: %d %s, want %d", p.Name, r[0], r[1], res.Status, res.excerpt(), want[i])
+			}
 		}
 	}
 }
@@ -260,13 +275,6 @@ func TestRegisteredHarness_MigratedAccountsSignIn(t *testing.T) {
 		req.RemoteAddr = h.nextPeer()
 		return h.Raw(req)
 	}
-	code := func(res Result) string {
-		var pd struct {
-			Type string `json:"type"`
-		}
-		_ = json.Unmarshal(res.Body, &pd)
-		return pd.Type[strings.LastIndex(pd.Type, "/")+1:]
-	}
 	// The hash HEAD stored, imported by M3, verified by core.
 	if res := login("dick.grayson", passwordGotham); res.Status != http.StatusOK {
 		t.Errorf("an imported password does not sign in: %d %s", res.Status, res.excerpt())
@@ -278,10 +286,8 @@ func TestRegisteredHarness_MigratedAccountsSignIn(t *testing.T) {
 		"unknown account":  {"nobody.here", passwordGotham, "invalid_credentials"},
 		"disabled account": {"jason.todd", passwordGotham, "inactive_user"},
 	} {
-		res := login(c.user, c.password)
-		if res.Status != http.StatusUnauthorized || code(res) != c.problem {
-			t.Errorf("%s: %d %s, want 401 %s", name, res.Status, res.excerpt(), c.problem)
-		}
+		t.Logf("%s", name)
+		h.Refused(login(c.user, c.password), http.StatusUnauthorized, c.problem)
 	}
 }
 
@@ -292,6 +298,10 @@ func TestRegisteredHarness_MigratedAccountsSignIn(t *testing.T) {
 // registered path. A listed person is admitted as the core user the Access resolver
 // found or created, the same one every time; a person who is not listed is refused
 // and creates nothing.
+// absNotAuthorized is the ABS surface's refusal of a Cloudflare Access identity that
+// maps to no account it may use.
+const absNotAuthorized = "identity is not authorized for this server"
+
 func TestRegisteredHarness_ABSAccessEntryPoint(t *testing.T) {
 	h := bootRegistered(t, registeredConfig{Owner: true, ABSModes: "cf,jwt", AccessAllowed: []string{feListedNewbie}})
 	me := func(sub, email string) Result {
@@ -316,9 +326,7 @@ func TestRegisteredHarness_ABSAccessEntryPoint(t *testing.T) {
 	}
 
 	res = me("sub-joker", feJokerEmail)
-	if res.Status != http.StatusForbidden || !strings.Contains(string(res.Body), "identity is not authorized for this server") {
-		t.Errorf("a person who is not listed: %d %s", res.Status, res.excerpt())
-	}
+	h.Refused(res, http.StatusForbidden, absNotAuthorized)
 	if n := len(coreUsers(t, h)); n != len(after) {
 		t.Errorf("a refused person created an account: %d -> %d", len(after), n)
 	}
@@ -349,9 +357,10 @@ func TestRegisteredHarness_ABSAccessSameAddress(t *testing.T) {
 		"the address as the subject": {feBruceEmail, feBruceEmail},
 		"a subject core never saw":   {feFreshSub, feBruceEmail},
 	} {
+		t.Logf("%s", name)
 		res := me(c.sub, c.email)
-		if res.Status != http.StatusForbidden || absUserID(t, res) != "" {
-			t.Errorf("%s: %d %s, want a refusal", name, res.Status, res.excerpt())
+		if h.Refused(res, http.StatusForbidden, absNotAuthorized) && absUserID(t, res) != "" {
+			t.Errorf("%s: a refusal that names a user: %s", name, res.excerpt())
 		}
 	}
 	if got := absUserID(t, me(feAlfredSub, feAlfredEmail)); got != feAlfred {
@@ -379,21 +388,29 @@ func TestRegisteredHarness_ABSKeys(t *testing.T) {
 		return err
 	}})
 	bearer := func(raw string) Result { return h.absRequest(http.MethodGet, "/api/me", raw, "") }
-	for name, want := range map[string]int{
-		"key:admin:view":       http.StatusOK,
-		"key:viewer:view":      http.StatusOK,
-		"key:admin:every":      http.StatusOK,
-		"key:fp-worker:worker": http.StatusForbidden,
+	for name, want := range map[string]struct {
+		status int
+		code   string // of the refusal; "" for an admit
+	}{
+		"key:admin:view":       {http.StatusOK, ""},
+		"key:viewer:view":      {http.StatusOK, ""},
+		"key:admin:every":      {http.StatusOK, ""},
+		"key:fp-worker:worker": {http.StatusForbidden, "this credential is limited to the fingerprint worker API"},
 		// The known gap: the core key of the cell above would be admitted under HEAD parity.
-		"corekey:admin:view": http.StatusUnauthorized,
+		"corekey:admin:view": {http.StatusUnauthorized, "invalid access token"},
 	} {
-		if res := bearer(h.Principal(name).bearer); res.Status != want {
-			t.Errorf("ABS /api/me as %s: %d %s, want %d", name, res.Status, res.excerpt(), want)
+		t.Logf("%s", name)
+		res := bearer(h.Principal(name).bearer)
+		if want.code == "" {
+			if res.Status != want.status {
+				t.Errorf("ABS /api/me as %s: %d %s, want %d", name, res.Status, res.excerpt(), want.status)
+			}
+		} else {
+			h.Refused(res, want.status, want.code)
 		}
 	}
-	if res := bearer(revoked); res.Status != http.StatusUnauthorized {
-		t.Errorf("ABS /api/me with a revoked abk_ key: %d %s", res.Status, res.excerpt())
-	}
+	t.Logf("revoked")
+	h.Refused(bearer(revoked), http.StatusUnauthorized, "authentication required")
 	if p := h.Principal("corekey:admin:view"); !strings.HasPrefix(p.bearer, "mck_") {
 		t.Errorf("the core key is %q, not an mck_ key: the cell proves nothing", p.bearer[:4])
 	}
