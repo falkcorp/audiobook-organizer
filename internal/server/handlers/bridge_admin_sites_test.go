@@ -97,7 +97,7 @@ func TestBridgeSites_SetUserEmail(t *testing.T) {
 				// books' store; the gates this test is about run before it.
 				acc = newFakeAccounts(time.Now)
 				acc.users[coreauth.UserID(r.viewer.ID)] = &coreauth.User{ID: coreauth.UserID(r.viewer.ID), Username: r.viewer.Username, Email: r.viewer.Email, Status: coreauth.StatusActive}
-				id.Accounts = acc
+				id.Admin = acc
 			}
 			r.bridgedEngine(id, coreauth.MethodSession, w.scopes...)
 			rec, _ := r.do(t, http.MethodPut, "/users/"+r.viewer.ID+"/email", map[string]any{"email": "nightwing@example.com"})

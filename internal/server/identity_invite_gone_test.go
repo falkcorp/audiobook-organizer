@@ -24,6 +24,10 @@ import (
 
 func inviteRouteServer(t *testing.T, opts ...ServerOption) *Server {
 	t.Helper()
+	// AppConfig is process-global: put it back, or every later test in the package
+	// runs with auth on (the full-package run saw 401 where tests expected 200).
+	prev := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = prev })
 	config.AppConfig = config.Config{DatabaseType: "pebble", RootDir: t.TempDir(), EnableAuth: true}
 	store, err := database.NewPebbleStoreInMemory(t.TempDir() + "/invite-gone.pebble")
 	require.NoError(t, err)

@@ -56,12 +56,16 @@ type Identity struct {
 	// the account record is core's: resolving a person through books' store
 	// would create, link or mark rows core no longer owns.
 	Access AccessResolver
-	// Admin and Users are core's actor-checked merge handle (module.Deps.
-	// AuthAdmin) and read-only identity view (module.Deps.Auth), which the
-	// admin user merge runs on. Optional: Validate does not require them, and
-	// a server that left either nil refuses the merge instead of running it
-	// (usermerge.ErrUnavailableUnderIdentity).
+	// Admin is core's actor-checked handle (module.Deps.AuthAdmin): the admin
+	// user merge, and the invite and admin set-email writes (F4-08 B10t), which
+	// the books routes serve under core identity by calling it with the request's
+	// own principal. Validate requires it: with it nil those routes would have
+	// nothing to call, and the account record is core's.
 	Admin coreauth.Admin
+	// Users is core's read-only identity view (module.Deps.Auth), which the
+	// admin user merge also runs on. Optional: Validate does not require it, and
+	// a server that left it nil refuses the merge instead of running it
+	// (usermerge.ErrUnavailableUnderIdentity).
 	Users coreauth.Identities
 }
 
@@ -82,6 +86,8 @@ func (id *Identity) Validate() error {
 		return errors.New("legacyauth: identity has no principal refresh")
 	case id.Access == nil:
 		return errors.New("legacyauth: identity has no Cloudflare Access resolver")
+	case id.Admin == nil:
+		return errors.New("legacyauth: identity has no account administration handle (core's auth.Admin)")
 	}
 	return nil
 }

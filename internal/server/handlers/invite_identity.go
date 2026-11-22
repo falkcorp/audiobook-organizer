@@ -7,7 +7,7 @@
 //
 // Under core identity the account record, including every invite and every
 // address, is core's, so the books routes that wrote books' store become
-// wrappers over core's own calls (legacyauth.AccountAdmin), made with the
+// wrappers over core's own calls (Identity.Admin, core's auth.AccountAdmin), made with the
 // REQUEST's principal so that every core rule runs for the caller. What stays
 // in books is what core does not do: the e-mail itself (HEAD's delivery code,
 // mailInvite) and a delivery record (database.InviteMailRecord) that holds only
@@ -16,8 +16,8 @@
 // address is core's BindEmailOnAccept, set by MarkInviteEmailDelivered only
 // after the mailer reported success.
 //
-// With no AccountAdmin on the Identity every route answers 503 and none falls
-// through to HEAD's store path, which under identity is no longer the record.
+// With no Admin on the Identity every route answers 503 and none falls through
+// to HEAD's store path, which under identity is no longer the record.
 
 package handlers
 
@@ -42,15 +42,15 @@ import (
 // never sent to a server, so the link does not reach any access log.
 const inviteLinkTokenMarker = "#token="
 
-// identityAccounts returns the identity's account handle for a route that runs
-// under core identity. ok is false after it answered 503 for a server whose
+// identityAccounts returns core's actor-checked admin handle for a route that
+// runs under core identity. ok is false after it answered 503 for a server whose
 // Identity carries none.
-func identityAccounts(c *gin.Context, id *legacyauth.Identity) (legacyauth.AccountAdmin, bool) {
-	if id.Accounts == nil {
+func identityAccounts(c *gin.Context, id *legacyauth.Identity) (coreauth.Admin, bool) {
+	if id.Admin == nil {
 		httputil.RespondWithServiceUnavailable(c, "this server's identity wiring has no account administration handle; invitations and e-mail changes are unavailable")
 		return nil, false
 	}
-	return id.Accounts, true
+	return id.Admin, true
 }
 
 // requestPrincipal is the request's own core principal, never built here. A
@@ -66,7 +66,9 @@ func requestPrincipal(c *gin.Context) (*coreauth.Principal, bool) {
 
 // respondAccountError maps a refusal of core's account calls to HEAD's
 // statuses: a bad address 400, an authority refusal 403, no such user or
-// invite 404, a username or address held elsewhere 409.
+// invite 404, a username or address held elsewhere 409. A refusal the caller
+// recognises by its own wording (an address another account holds, at create and
+// at set-email) is answered before this is called.
 func respondAccountError(c *gin.Context, what string, err error) {
 	switch {
 	case errors.Is(err, coreauth.ErrNotFound), errors.Is(err, coreauth.ErrInviteInvalid):
@@ -96,7 +98,7 @@ func inviteLinkParts(base, link string) (token, absolute string) {
 // inviteRecordView is the admin's view of an open core invite. Core never
 // returns a token for an existing invite, so Token is only ever set by the
 // create and resend responses, from the in-process return.
-func inviteRecordView(r legacyauth.InviteRecord, mail *database.InviteMailRecord) *pendingInviteView {
+func inviteRecordView(r coreauth.InviteView, mail *database.InviteMailRecord) *pendingInviteView {
 	v := &pendingInviteView{
 		ID: r.ID, Username: r.Username, Email: r.Email, RoleID: string(r.Role),
 		CreatedByUserID: string(r.CreatedBy), CreatedAt: r.CreatedAt, ExpiresAt: r.ExpiresAt,
@@ -110,7 +112,7 @@ func inviteRecordView(r legacyauth.InviteRecord, mail *database.InviteMailRecord
 
 // inviteForEmail is the invite value the shared mail code renders from. It is
 // built for the render only and never stored: it carries no token.
-func inviteForEmail(r legacyauth.InviteRecord) *database.Invite {
+func inviteForEmail(r coreauth.InviteView) *database.Invite {
 	return &database.Invite{Username: r.Username, Email: r.Email, RoleID: string(r.Role), ExpiresAt: r.ExpiresAt}
 }
 
@@ -164,11 +166,14 @@ func (h *UserHandler) dropMailRecord(id string) {
 // deliverIdentityInvite mails an invite under core identity and, only once the
 // mailer reported success, records the delivery and (when mark) asks core to
 // flag the invite so that accepting it binds the address. A send failure sets
-// nothing. markErr is non-empty when the mail went out but core refused the
-// flag: the admin is told, and the address will not be bound on accept. mark
-// false, or a sender who does not hold core:admin, makes no call to core: the
-// invite is mailed and left unflagged, as HEAD's creator_not_admin invite.
-func (h *UserHandler) deliverIdentityInvite(ctx context.Context, acc legacyauth.AccountAdmin, rec legacyauth.InviteRecord, absLink string, mark bool) (sentAt *time.Time, errMsg, markErr string) {
+// nothing. markErr is non-empty when the mail went out but the invite was not
+// flagged: core refused the flag, or the sender does not hold core:admin and so
+// cannot vouch for the address (core's MarkInviteEmailDelivered is admin-only).
+// The admin is told, and the address will not be bound on accept. mark false
+// makes no call to core. warnUnbound makes a sender who cannot flag an invite
+// that WAS flagged hear it (a resend); a create by such a sender is silent, as
+// HEAD's creator_not_admin invite was.
+func (h *UserHandler) deliverIdentityInvite(ctx context.Context, acc coreauth.Admin, rec coreauth.InviteView, absLink string, mark, warnUnbound bool) (sentAt *time.Time, errMsg, markErr string) {
 	bind := willBind(ctx, mark)
 	to, errMsg := h.mailInvite(ctx, inviteForEmail(rec), func() (string, bool, bool) {
 		return absLink,
@@ -181,14 +186,22 @@ func (h *UserHandler) deliverIdentityInvite(ctx context.Context, acc legacyauth.
 	now := h.delivery.now()
 	h.putMailRecord(database.InviteMailRecord{InviteID: rec.ID, To: to, SentAt: now, ExpiresAt: rec.ExpiresAt})
 	inviteLog.Info("invite email: sent invitation for %s", logger.SanitizeLogValue(rec.Username))
-	if bind {
+	switch {
+	case bind:
 		if err := acc.MarkInviteEmailDelivered(ctx, rec.ID); err != nil {
 			inviteLog.Warn("invite email: sent, but core would not flag the invite of %s to bind its address: %v", logger.SanitizeLogValue(rec.Username), err)
-			markErr = "the invitation was sent, but the address will not be marked verified when it is accepted"
+			markErr = notMarkedEmailedMessage
 		}
+	case mark && warnUnbound:
+		markErr = notMarkedEmailedMessage
 	}
 	return &now, "", markErr
 }
+
+// notMarkedEmailedMessage is what an admin is told when the invitation went out
+// but the invite was not flagged as e-mailed, so accepting it will not mark the
+// address verified. It is not an error: the mail was sent.
+const notMarkedEmailedMessage = "the invitation was sent, but it was not marked as e-mailed, so accepting it will not mark the address verified"
 
 // createInviteUnderIdentity is CreateInvite under core identity (B1). Core's
 // CreateInvite runs every rule with the request's principal. The link comes
@@ -231,6 +244,11 @@ func (h *UserHandler) createInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 	}
 	link, rec, err := acc.CreateInvite(ctx, actor, spec)
 	if err != nil {
+		if errors.Is(err, coreauth.ErrEmailInUse) {
+			// HEAD's answer to an address another account holds verified.
+			httputil.RespondWithConflict(c, database.ErrInviteEmailTaken.Error())
+			return
+		}
 		respondAccountError(c, "failed to create invite", err)
 		return
 	}
@@ -243,7 +261,7 @@ func (h *UserHandler) createInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 			resp["email_error"] = blocked
 		} else if why := h.sendLimiter.allow(inviteLimitKey(rec.Username), string(actor.User.ID)); why != "" {
 			resp["email_error"] = why
-		} else if sentAt, errMsg, markErr := h.deliverIdentityInvite(ctx, acc, rec, absLink, true); errMsg != "" {
+		} else if sentAt, errMsg, markErr := h.deliverIdentityInvite(ctx, acc, rec, absLink, true, false); errMsg != "" {
 			resp["email_error"] = errMsg
 		} else {
 			resp["email_sent"] = true
@@ -257,18 +275,24 @@ func (h *UserHandler) createInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 }
 
 // resendInviteUnderIdentity is ResendInvite under core identity (B2): it
-// ROTATES the invite. Core deletes the old invite and creates one with the same
-// spec through the request's principal, the new link is mailed, and the old
-// link dies. The per-invite limit keys on the folded username
-// (inviteLimitKey), which a rotation keeps, so rotating cannot reset it; the
-// limits are checked before anything is deleted, so a refused resend leaves the
-// old link alive. The lifetime is never extended:
-// the new invite expires when the old one would have.
+// ROTATES the invite. Core's RotateInvite replaces the open invite with one for
+// the same username, address and role and exactly the same expiry, in one batch,
+// so a failed rotation leaves the old link alive and the lifetime is never
+// extended. The new link is mailed and the old one dies.
 //
-// The new invite is flagged only if the old one was (BindEmailOnAccept: it was
-// emailed and its creator held core:admin). A resend therefore never makes an
-// address verify where the original invite would not have, even though the
-// resender is now the creator.
+// Everything books decides runs BEFORE the rotation, so a refused resend changes
+// nothing: the invite exists and is not expired (404), has an address (400),
+// mail is configured (503), and the limits allow it (429). The per-invite limit
+// keys on the folded username (inviteLimitKey), which a rotation keeps, so
+// rotating cannot reset it.
+//
+// The rotated invite is born unflagged. Only when the OLD invite was flagged
+// (InviteRotation.WasEmailBound) is it flagged again, and only after the mailer
+// succeeded: a resend never makes an address verify where the original invite
+// would not have. A sender who does not hold core:admin cannot flag it, so the
+// resend is "sent, but not marked as e-mailed" (email_binding_error), not an
+// error. That is stricter than HEAD, whose emailed state belonged to the
+// invite's creator and survived a resend by anyone.
 func (h *UserHandler) resendInviteUnderIdentity(c *gin.Context, id *legacyauth.Identity) {
 	acc, ok := identityAccounts(c, id)
 	if !ok {
@@ -283,11 +307,6 @@ func (h *UserHandler) resendInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 	old, err := acc.Invite(ctx, oldID)
 	if err != nil {
 		respondAccountError(c, "invite", err)
-		return
-	}
-	now := h.delivery.now()
-	if !now.Before(old.ExpiresAt) {
-		httputil.RespondWithNotFound(c, "invite", "")
 		return
 	}
 	if old.Email == "" {
@@ -307,22 +326,12 @@ func (h *UserHandler) resendInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 		httputil.RespondWithError(c, http.StatusTooManyRequests, why, "TOO_MANY_REQUESTS")
 		return
 	}
-	// Delete before create: core refuses a second open invite for the username.
-	if err := acc.DeleteInvite(ctx, actor, oldID); err != nil {
+	link, rot, err := acc.RotateInvite(ctx, oldID)
+	if err != nil {
 		respondAccountError(c, "invite", err)
 		return
 	}
-	link, rec, err := acc.CreateInvite(ctx, actor, coreauth.InviteSpec{
-		Username: old.Username, Email: old.Email, Role: old.Role, TTL: old.ExpiresAt.Sub(now),
-	})
-	if err != nil {
-		// The old invite is already gone and its token cannot be restored: say so.
-		h.dropMailRecord(oldID)
-		inviteLog.Error("invite resend: the old invite of %s was deleted but the new one could not be created: %v", logger.SanitizeLogValue(old.Username), err)
-		httputil.RespondWithError(c, http.StatusInternalServerError,
-			"the old invitation was revoked but a new one could not be created; create the invitation again", "INVITE_ROTATION_FAILED")
-		return
-	}
+	rec := rot.Invite
 	// The last send moves to the new invite before anything is mailed, so a
 	// failed send leaves the Users page as it was.
 	prev := h.getMailRecord(oldID)
@@ -337,7 +346,7 @@ func (h *UserHandler) resendInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 	view := inviteRecordView(rec, &next)
 	view.Token = token
 	rotated := gin.H{"invite": view, "token": token, "invite_url": absLink}
-	sentAt, errMsg, markErr := h.deliverIdentityInvite(ctx, acc, rec, absLink, old.BindEmailOnAccept)
+	sentAt, errMsg, markErr := h.deliverIdentityInvite(ctx, acc, rec, absLink, rot.WasEmailBound, true)
 	if errMsg != "" {
 		httputil.RespondWithErrorFields(c, http.StatusBadGateway, errMsg, "MAIL_SEND_FAILED", rotated)
 		return
@@ -361,13 +370,12 @@ func (h *UserHandler) listInvitesUnderIdentity(c *gin.Context, id *legacyauth.Id
 	if !ok {
 		return
 	}
-	invites, err := acc.Invites(c.Request.Context())
-	if err != nil {
-		respondAccountError(c, "failed to list invites", err)
-		return
-	}
-	views := make([]*pendingInviteView, 0, len(invites))
-	for _, r := range invites {
+	views := make([]*pendingInviteView, 0)
+	for r, err := range acc.AdminInvites(c.Request.Context()) {
+		if err != nil {
+			respondAccountError(c, "failed to list invites", err)
+			return
+		}
 		views = append(views, inviteRecordView(r, h.getMailRecord(r.ID)))
 	}
 	h.pruneMailRecords()

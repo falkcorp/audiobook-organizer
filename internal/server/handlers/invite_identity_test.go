@@ -39,8 +39,10 @@ import (
 //     and is idempotent;
 //   - every call records the principal it was made with.
 
-// fakeAccounts is legacyauth.AccountAdmin over maps.
+// fakeAccounts is core's auth.Admin over maps. The merge half (PlanUserMerge,
+// StageUserMerge) is the embedded nil interface: these routes never call it.
 type fakeAccounts struct {
+	coreauth.Admin
 	mu      sync.Mutex
 	now     func() time.Time
 	seq     int
@@ -56,7 +58,7 @@ type fakeAccounts struct {
 }
 
 type fakeInvite struct {
-	rec   legacyauth.InviteRecord
+	rec   coreauth.InviteView
 	token string
 }
 
@@ -80,16 +82,19 @@ func (f *fakeAccounts) log(format string, a ...any) {
 	f.calls = append(f.calls, fmt.Sprintf(format, a...))
 }
 
-func (f *fakeAccounts) CreateInvite(_ context.Context, actor *coreauth.Principal, in coreauth.InviteSpec) (string, legacyauth.InviteRecord, error) {
+func (f *fakeAccounts) CreateInvite(ctx context.Context, actor *coreauth.Principal, in coreauth.InviteSpec) (string, coreauth.InviteView, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log("create %s as %s", in.Username, actorName(actor))
+	if p, _ := coreauth.PrincipalFrom(ctx); actorName(p) != actorName(actor) {
+		return "", coreauth.InviteView{}, fmt.Errorf("%w: the actor is not the principal of the request", coreauth.ErrDenied)
+	}
 	if f.createErr != nil {
-		return "", legacyauth.InviteRecord{}, f.createErr
+		return "", coreauth.InviteView{}, f.createErr
 	}
 	for _, v := range f.invites {
 		if strings.EqualFold(v.rec.Username, in.Username) {
-			return "", legacyauth.InviteRecord{}, fmt.Errorf("%w: an open invite names %q", coreauth.ErrUserExists, in.Username)
+			return "", coreauth.InviteView{}, fmt.Errorf("%w: an open invite names %q", coreauth.ErrUserExists, in.Username)
 		}
 	}
 	f.seq++
@@ -99,7 +104,7 @@ func (f *fakeAccounts) CreateInvite(_ context.Context, actor *coreauth.Principal
 	}
 	now := f.now()
 	id := fmt.Sprintf("inv-%d", f.seq)
-	rec := legacyauth.InviteRecord{
+	rec := coreauth.InviteView{
 		ID: id, Username: in.Username, Email: in.Email, Role: in.Role, CreatedBy: actor.User.ID,
 		CreatedAt: now, ExpiresAt: now.Add(ttl),
 	}
@@ -108,10 +113,13 @@ func (f *fakeAccounts) CreateInvite(_ context.Context, actor *coreauth.Principal
 	return "/invite#token=" + tok, rec, nil
 }
 
-func (f *fakeAccounts) DeleteInvite(_ context.Context, actor *coreauth.Principal, id string) error {
+func (f *fakeAccounts) DeleteInvite(ctx context.Context, actor *coreauth.Principal, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log("delete %s as %s", id, actorName(actor))
+	if p, _ := coreauth.PrincipalFrom(ctx); actorName(p) != actorName(actor) {
+		return fmt.Errorf("%w: the actor is not the principal of the request", coreauth.ErrDenied)
+	}
 	if _, ok := f.invites[id]; !ok {
 		return coreauth.ErrNotFound
 	}
@@ -119,26 +127,58 @@ func (f *fakeAccounts) DeleteInvite(_ context.Context, actor *coreauth.Principal
 	return nil
 }
 
-func (f *fakeAccounts) Invite(ctx context.Context, id string) (legacyauth.InviteRecord, error) {
+func (f *fakeAccounts) Invite(ctx context.Context, id string) (coreauth.InviteView, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.log("invite %s as %s", id, ctxActor(ctx))
 	v, ok := f.invites[id]
-	if !ok {
-		return legacyauth.InviteRecord{}, coreauth.ErrNotFound
+	if !ok || !f.now().Before(v.rec.ExpiresAt) {
+		// An expired invite is not open: core answers ErrNotFound for it too.
+		return coreauth.InviteView{}, coreauth.ErrNotFound
 	}
 	return v.rec, nil
 }
 
-func (f *fakeAccounts) Invites(ctx context.Context) ([]legacyauth.InviteRecord, error) {
+func (f *fakeAccounts) AdminInvites(ctx context.Context) iter.Seq2[coreauth.InviteView, error] {
+	return func(yield func(coreauth.InviteView, error) bool) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.log("invites as %s", ctxActor(ctx))
+		for _, v := range f.invites {
+			if !yield(v.rec, nil) {
+				return
+			}
+		}
+	}
+}
+
+// RotateInvite is core's: one step that replaces the open invite by a new one for
+// the same username, address and role with EXACTLY the old expiry, born
+// unflagged, reporting whether the old one was flagged. An expired invite is
+// refused and nothing changes.
+func (f *fakeAccounts) RotateInvite(ctx context.Context, id string) (string, coreauth.InviteRotation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.log("invites as %s", ctxActor(ctx))
-	var out []legacyauth.InviteRecord
-	for _, v := range f.invites {
-		out = append(out, v.rec)
+	f.log("rotate %s as %s", id, ctxActor(ctx))
+	p, ok := coreauth.PrincipalFrom(ctx)
+	if !ok || p.User == nil {
+		return "", coreauth.InviteRotation{}, coreauth.ErrDenied
 	}
-	return out, nil
+	old, ok := f.invites[id]
+	if !ok {
+		return "", coreauth.InviteRotation{}, coreauth.ErrNotFound
+	}
+	if !f.now().Before(old.rec.ExpiresAt) {
+		return "", coreauth.InviteRotation{}, fmt.Errorf("%w: the invite expired", coreauth.ErrInviteInvalid)
+	}
+	delete(f.invites, id)
+	f.seq++
+	nid := fmt.Sprintf("inv-%d", f.seq)
+	rec := old.rec
+	rec.ID, rec.CreatedBy, rec.CreatedAt, rec.BindEmailOnAccept = nid, p.User.ID, f.now(), false
+	tok := fmt.Sprintf("tok-%d-0123456789abcdef", f.seq)
+	f.invites[nid] = &fakeInvite{rec: rec, token: tok}
+	return "/invite#token=" + tok, coreauth.InviteRotation{Invite: rec, WasEmailBound: old.rec.BindEmailOnAccept}, nil
 }
 
 // MarkInviteEmailDelivered refuses as core does: no principal holding core:admin,
@@ -267,7 +307,7 @@ func newIdentityInviteFixture(t *testing.T, scopes ...rbac.Permission) *identity
 		GuestServiceTokensEnabled: func() bool { return f.tokens },
 	})
 	id := bridgeIdentity(t)
-	id.Accounts = acc
+	id.Admin = acc
 	f.useIdentity(id, "bruce", scopes...)
 	return &identityInviteFixture{inviteFixture: f, acc: acc, clk: clk}
 }
@@ -402,6 +442,10 @@ func TestIdentityCreateInvite_CoreRefusalIsMapped(t *testing.T) {
 	if w, _ := f.do(t, http.MethodPost, "/users/invite", createBody("Selina", "", false)); w.Code != http.StatusConflict {
 		t.Fatalf("a username an open invite names: %d, want 409", w.Code)
 	}
+	f.acc.createErr = coreauth.ErrEmailInUse
+	if w, _ := f.do(t, http.MethodPost, "/users/invite", createBody("harvey", "robin@example.com", false)); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "another account already has that email address verified") {
+		t.Fatalf("an address another account holds verified: %d %s, want 409 with HEAD's text", w.Code, w.Body.String())
+	}
 	f.acc.createErr = coreauth.ErrScopeEscalation
 	if w, _ := f.do(t, http.MethodPost, "/users/invite", createBody("harvey", "", false)); w.Code != http.StatusForbidden {
 		t.Fatalf("a role the caller may not assign: %d, want 403", w.Code)
@@ -414,12 +458,12 @@ func TestIdentityCreateInvite_CoreRefusalIsMapped(t *testing.T) {
 	}
 }
 
-// TestIdentityInvite_NilAccountsAnswers503: an Identity with no account handle
+// TestIdentityInvite_NilAdminAnswers503: an Identity with no Admin handle
 // refuses at every route and never falls through to books' own store.
-func TestIdentityInvite_NilAccountsAnswers503(t *testing.T) {
+func TestIdentityInvite_NilAdminAnswers503(t *testing.T) {
 	f := newIdentityInviteFixture(t, rbac.CoreAdmin)
 	f.asUser(t, "bruce", "admin")
-	id := bridgeIdentity(t) // Accounts nil
+	id := bridgeIdentity(t) // Admin nil
 	f.useIdentity(id, "bruce", rbac.CoreAdmin)
 	for _, rt := range []struct{ method, path string }{
 		{http.MethodPost, "/users/invite"},
@@ -509,26 +553,55 @@ func mustInvite(t *testing.T, acc *fakeAccounts, id string) fakeInvite {
 	return v
 }
 
-// TestIdentityResend_DeleteComesBeforeCreate pins the order: core refuses a
-// second open invite for a username, so a create first would fail.
-func TestIdentityResend_DeleteComesBeforeCreate(t *testing.T) {
+// TestIdentityResend_IsOneCoreRotation: a resend is core's RotateInvite and
+// nothing else, so core's own batch is what keeps the old link alive when the
+// rotation fails. Books makes no separate delete or create.
+func TestIdentityResend_IsOneCoreRotation(t *testing.T) {
 	f := newIdentityInviteFixture(t, rbac.CoreAdmin)
 	f.asUser(t, "bruce", "admin")
 	old := f.openInvite(t, "selina", "selina@example.com", true)
+	before := len(f.acc.callLog())
 	if w, _ := f.do(t, http.MethodPost, "/users/invites/"+old+"/resend", nil); w.Code != http.StatusOK {
 		t.Fatalf("resend: %d", w.Code)
 	}
-	calls := f.acc.callLog()
-	del := slices.Index(calls, "delete "+old+" as bruce")
-	create := -1
-	for i := del + 1; del >= 0 && i < len(calls); i++ {
-		if strings.HasPrefix(calls[i], "create selina as bruce") {
-			create = i
-			break
+	for _, c := range f.acc.callLog()[before:] {
+		if strings.HasPrefix(c, "delete ") || strings.HasPrefix(c, "create ") {
+			t.Fatalf("a resend must be one RotateInvite, got %v", f.acc.callLog()[before:])
 		}
 	}
-	if del < 0 || create < 0 {
-		t.Fatalf("delete at %d, a later create at %d: %v", del, create, calls)
+	if !slices.Contains(f.acc.callLog(), "rotate "+old+" as bruce") {
+		t.Fatalf("no rotation as the request's principal: %v", f.acc.callLog())
+	}
+}
+
+// TestIdentityResend_NonAdminResendOfAFlaggedInvite: the rotated invite is born
+// unflagged and only an admin can flag it, so a resend by a users.manage holder
+// who is not core:admin is "sent, but not marked as e-mailed": email_sent is true,
+// email_binding_error says so, core is never asked to flag, and it is no error.
+// HEAD kept such an invite emailed (its creator, an admin, vouched at accept);
+// this is stricter, never wider.
+func TestIdentityResend_NonAdminResendOfAFlaggedInvite(t *testing.T) {
+	f := newIdentityInviteFixture(t, rbac.CoreAdmin)
+	f.asUser(t, "bruce", "admin")
+	old := f.openInvite(t, "selina", "selina@example.com", true)
+	id := bridgeIdentity(t)
+	id.Admin = f.acc
+	f.useIdentity(id, "alfred", "core:users.manage")
+	w, data := f.do(t, http.MethodPost, "/users/invites/"+old+"/resend", nil)
+	if w.Code != http.StatusOK || data["email_sent"] != true {
+		t.Fatalf("resend: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(fmt.Sprint(data["email_binding_error"]), "not marked as e-mailed") {
+		t.Fatalf("the admin must be told it was not marked: %v", data)
+	}
+	invv, _ := data["invite"].(map[string]any)
+	if mustInvite(t, f.acc, fmt.Sprint(invv["id"])).rec.BindEmailOnAccept {
+		t.Fatal("a non-admin's resend must not flag the invite")
+	}
+	for _, c := range f.acc.callLog() {
+		if strings.HasPrefix(c, "mark ") && strings.HasSuffix(c, "as alfred") {
+			t.Fatalf("core was asked to flag as a non-admin: %v", f.acc.callLog())
+		}
 	}
 }
 
@@ -644,6 +717,11 @@ func TestIdentityResend_SendFailureAfterRotation(t *testing.T) {
 			t.Fatal("a failed send flagged the rotated invite")
 		}
 	}
+	for _, c := range f.acc.callLog() {
+		if strings.HasPrefix(c, "mark ") {
+			t.Fatalf("mark called after a failed resend send: %v", f.acc.callLog())
+		}
+	}
 }
 
 // TestIdentityResend_FlagFollowsTheOldInvite: an admin resending a non-admin's
@@ -659,7 +737,7 @@ func TestIdentityResend_FlagFollowsTheOldInvite(t *testing.T) {
 	}
 	// An admin now resends it.
 	id := bridgeIdentity(t)
-	id.Accounts = f.acc
+	id.Admin = f.acc
 	f.useIdentity(id, "alfred", rbac.CoreAdmin, "core:users.manage")
 	w, data := f.do(t, http.MethodPost, "/users/invites/"+old+"/resend", nil)
 	if w.Code != http.StatusOK || data["email_sent"] != true {
