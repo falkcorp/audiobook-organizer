@@ -27,11 +27,31 @@ const (
 	msgAuthRequired  = "authentication required"
 	msgAdminRequired = "admin role required"
 	msgOwnerRequired = "this action needs the deployment owner's verified sign-in"
+	// msgAuthOffRefused is the body of a refusal of the auth-disabled principal
+	// (F4-08 ruling G5(a)): a 403, never the 401 that would end a no-auth
+	// install's SPA session. It is core's AuthOffRefusal detail.
+	msgAuthOffRefused = "turn authentication on to use this route"
 )
 
 // unauthenticated answers 401 and stops the chain.
 func unauthenticated(c *gin.Context) {
 	httputil.RespondWithUnauthorized(c, msgAuthRequired)
+	c.Abort()
+}
+
+// RespondNoUser is the refusal of a handler that needs a signed-in user and
+// finds none on the context: HEAD's 401, except that the auth-disabled
+// principal is answered 403 (msgAuthOffRefused). A 401 would end a no-auth
+// install's SPA session, and that install has nothing to sign in to (F4-08
+// ruling G5(a)); the request is refused all the same. A request with no
+// principal at all, or one that is not the auth-disabled one, keeps the 401.
+// It stops the chain.
+func RespondNoUser(c *gin.Context, msg string) {
+	if p, ok := coreauth.PrincipalFrom(c.Request.Context()); ok && p != nil && authDisabled(p) {
+		forbidden(c, msgAuthOffRefused)
+		return
+	}
+	httputil.RespondWithUnauthorized(c, msg)
 	c.Abort()
 }
 
@@ -42,9 +62,11 @@ func forbidden(c *gin.Context, msg string) {
 }
 
 // enforce runs rbac.RequireRequirement on r and answers a refusal as HEAD's
-// RespondPermissionDenied did: 401 when the caller has no user (the
-// auth-disabled principal, refused only an all-AuthRequired requirement,
-// 05-rbac §4.11), 403 with msg otherwise.
+// RespondPermissionDenied did, except for the auth-disabled principal (refused
+// only an all-AuthRequired requirement, 05-rbac §4.11): HEAD's 401 for a
+// caller with no user is a 403 for it (msgAuthOffRefused, F4-08 ruling
+// G5(a)), so a no-auth install's SPA is not signed out by a refused action.
+// Any other caller with no user is 401; one with a user is 403 with msg.
 func enforce(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg string) {
 	if holds(c, p, r, msg) {
 		c.Next()
@@ -55,11 +77,14 @@ func enforce(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg stri
 // the caller satisfies r and, when not, writes the refusal and stops the chain.
 func holds(c *gin.Context, p *coreauth.Principal, r rbac.Requirement, msg string) bool {
 	if err := rbac.RequireRequirement(c.Request.Context(), r); err != nil {
-		if p.User == nil {
+		switch {
+		case authDisabled(p):
+			forbidden(c, msgAuthOffRefused)
+		case p.User == nil:
 			unauthenticated(c)
-			return false
+		default:
+			forbidden(c, msg)
 		}
-		forbidden(c, msg)
 		return false
 	}
 	return true

@@ -231,7 +231,7 @@ func isAdminUser(c *gin.Context) bool {
 func (h *APIKeyHandler) Create(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 		return
 	}
 	var req CreateAPIKeyRequest
@@ -326,7 +326,7 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 func (h *APIKeyHandler) List(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 		return
 	}
 	showAll := c.Query("all") == "true" && isAdminUser(c)
@@ -374,7 +374,7 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 func (h *APIKeyHandler) Get(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 		return
 	}
 	id := c.Param("id")
@@ -404,7 +404,7 @@ func (h *APIKeyHandler) Get(c *gin.Context) {
 func (h *APIKeyHandler) UpdateStatus(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 		return
 	}
 	id := c.Param("id")
@@ -465,7 +465,7 @@ func (h *APIKeyHandler) UpdateStatus(c *gin.Context) {
 func (h *APIKeyHandler) Revoke(c *gin.Context) {
 	caller, ok := servermiddleware.CurrentUser(c)
 	if !ok || caller == nil {
-		httputil.RespondWithUnauthorized(c, "authentication required")
+		legacyauth.RespondNoUser(c, "authentication required")
 		return
 	}
 	id := c.Param("id")

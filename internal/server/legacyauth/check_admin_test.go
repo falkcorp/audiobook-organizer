@@ -30,8 +30,10 @@ func TestCheckAdmin(t *testing.T) {
 		"no principal":    {debug, ginCase{ctx: bound(nil, laxChecker{})}, false, http.StatusUnauthorized},
 		"a lacking scope": {debug, ginCase{ctx: as(coreauth.MethodSession, setChecker{"books:admin.view"})}, false, http.StatusForbidden},
 		"the scope":       {debug, ginCase{ctx: as(coreauth.MethodSession, setChecker{"books:admin.debug"})}, true, http.StatusOK},
+		// 403, not HEAD's 401: a 401 would end a no-auth install's SPA session
+		// (F4-08 ruling G5(a)).
 		"auth-disabled, checker refuses": {debug, ginCase{ctx: as(coreauth.MethodAuthDisabled, setChecker{})}, false,
-			http.StatusUnauthorized},
+			http.StatusForbidden},
 		"a Public requirement": {rbac.Public, ginCase{ctx: as(coreauth.MethodSession, laxChecker{})}, false, http.StatusForbidden},
 		"a zero requirement":   {rbac.Requirement{}, ginCase{ctx: as(coreauth.MethodSession, laxChecker{})}, false, http.StatusForbidden},
 	} {
