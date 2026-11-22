@@ -39,7 +39,12 @@ type legacyKVCleaner interface {
 // once the keys are gone each run is one empty scan per prefix. A failure is
 // logged and stops that prefix; the next startup retries it. Nothing reads
 // these keys any more, so a key left behind is dead weight, never a hazard.
-func purgeLegacyITunesWriteBackKeys(store legacyKVCleaner) int {
+//
+// extend, when set, is the start-timeout extension (05-health §5H.3.4): the
+// purge is a loop over however many keys an upgraded library left, so it asks
+// for start time before each page it deletes, on the caller's goroutine,
+// never from a timer. nil asks for none.
+func purgeLegacyITunesWriteBackKeys(store legacyKVCleaner, extend func(step string)) int {
 	if store == nil {
 		return 0
 	}
@@ -59,6 +64,9 @@ func purgeLegacyITunesWriteBackKeys(store legacyKVCleaner) int {
 			keys := make([]string, len(pairs))
 			for i, kv := range pairs {
 				keys[i] = kv.Key
+			}
+			if extend != nil {
+				extend("iTunes write-back cleanup page")
 			}
 			if err := store.DeleteRawBatch(keys); err != nil {
 				legacyITunesWriteBackLog.Warn("iTunes write-back cleanup: delete under %s failed; retried next startup: %v", prefix, err)

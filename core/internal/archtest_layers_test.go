@@ -41,7 +41,7 @@ const corePath = "github.com/falkcorp/mediacore"
 // internal/statefs entry, R4 packages the table missed.
 var coreLayerOf = map[string]int{
 	// L0
-	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "log": 0, "metrics": 0,
+	"entity": 0, "lifecycle": 0, "version": 0, "buildid": 0, "startprogress": 0, "log": 0, "metrics": 0,
 	"storage/keys": 0, "storage/codec": 0, "storage/restorejournal": 0,
 	"internal/keyedmutex": 0, "internal/jsonschemax": 0,
 	// internal/schedspec is F2-04's schedule grammar (cron, daily_at, the

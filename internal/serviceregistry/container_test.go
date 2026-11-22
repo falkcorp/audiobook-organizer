@@ -188,3 +188,61 @@ func TestTypedAccessor_UndeclaredDepStillPanics(t *testing.T) {
 func getWidget(c *Container) string {
 	return Get[string](c, "widget")
 }
+
+// TestContainer_StepExtender_AsksBeforeEveryServiceStep: with an extender, the
+// container asks for start time right before each service's Build, PostInit
+// and Start, in resolved order, and the request comes before the step's own
+// work (05-health §5H.3.4). A service added to the container is covered
+// without its own code asking.
+func TestContainer_StepExtender_AsksBeforeEveryServiceStep(t *testing.T) {
+	var log []string
+	svc := func(name string) ServiceDef {
+		return ServiceDef{Name: name, Build: func(*Container) (any, error) {
+			log = append(log, "work build "+name)
+			return &stepService{name: name, log: &log}, nil
+		}}
+	}
+	leaf, top := svc("leaf"), svc("top")
+	top.Needs = []string{"leaf"}
+	c := NewContainerFrom(top, leaf).WithStepExtender(func(step string) { log = append(log, "ask "+step) })
+	ctx := context.Background()
+	for _, run := range []func(context.Context) error{c.Build, c.PostInit, c.Start} {
+		if err := run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{
+		"ask service build leaf", "work build leaf", "ask service build top", "work build top",
+		"ask service postinit leaf", "work postinit leaf", "ask service postinit top", "work postinit top",
+		"ask service start leaf", "work start leaf", "ask service start top", "work start top",
+	}
+	if strings.Join(log, "|") != strings.Join(want, "|") {
+		t.Fatalf("steps:\n got %q\nwant %q", log, want)
+	}
+}
+
+// stepService records its PostInit and Start work in the shared log.
+type stepService struct {
+	name string
+	log  *[]string
+}
+
+func (s *stepService) PostInit(context.Context, *Container) error {
+	*s.log = append(*s.log, "work postinit "+s.name)
+	return nil
+}
+func (s *stepService) Start(context.Context) error {
+	*s.log = append(*s.log, "work start "+s.name)
+	return nil
+}
+
+// A container with no extender runs exactly as before.
+func TestContainer_NoStepExtender_RunsUnchanged(t *testing.T) {
+	c := NewContainerFrom(ServiceDef{Name: "leaf", Build: func(*Container) (any, error) { return &fakeService{name: "leaf"}, nil }})
+	ctx := context.Background()
+	for _, run := range []func(context.Context) error{c.Build, c.PostInit, c.Start} {
+		if err := run(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

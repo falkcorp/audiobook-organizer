@@ -365,6 +365,34 @@ and launchd have no equivalent):
    no-op without the socket and a failed write logged, never returned. From R1's storage flip core storage
    opens the store and calls the kernel's func itself; the first R2 boot's migration steps (05-storage) extend it
    per step like any other.
+   **Every blocking boot step asks, through one funnel each** (the pre-READY inventory). The boot
+   cannot rely on each author remembering, so the extension is made by the code that runs the step,
+   not by the step:
+
+   | Step | Where it asks | Unit |
+   | --- | --- | --- |
+   | Kernel phases P0 to P8 | `core/kernel/boot.go` `phase` | each phase |
+   | Run: mark checkpoint served, start core services, open listener | `core/kernel/supervisor.go` Run | each step |
+   | Hook `Start` (each module's start hooks) | `core/kernel/supervisor.go` hook loop | each hook, on the hook's own window |
+   | Core storage open, checkpoint, migrations, M8 rewrite | `core/storage/boot.go`, `core/storage/rewrite.go` | each step, copy table or 16 MiB, and each compaction chunk |
+   | Rows of `startup.Table` | `internal/startup/steps.go` `Steps.Run` | each row, Fatal and Degraded alike |
+   | Service container Build, PostInit, Start | `internal/serviceregistry/container.go` `extendFor` | each service for each of the three |
+   | HNSW snapshot import | `internal/server/server.go` `NewServer` | once before the import |
+   | Journal clock scan at store open | `internal/books/store/pebble_store_journal_clock.go` | every 50,000 journal rows |
+   | Books boot repairs (open repairs, ops reconcile) | `internal/books/module.go` `startRepairs` through `startprogress.Run` | each repair, each page of ops rows read, each batch written |
+   | iTunes write-back key purge | `internal/server/itunes_writeback_cleanup.go` | each page deleted |
+
+   A loop that scales with the library and runs on worker goroutines (the ops reconcile's parallel page
+   walks) cannot call `ExtendStart`, which is not safe for concurrent use. It raises `startprogress.Report(ctx)`
+   per unit instead, and `startprogress.Run` extends on the caller's goroutine, once per coalesced
+   signal and never on a clock. The work that deliberately never asks, because it is not a boot step and a
+   request from it would extend a boot with nothing in flight, is everything handed to a goroutine: the
+   in-memory warm-up, the cache warmers, dedup hydration, the search reconciler and the post-listener
+   `afterListen` steps. `TestBoot_EveryKernelStepAsksForTimeBeforeItRuns` (core/kernel, a real boot under a
+   fake clock) and `TestComposedBoot_EveryStepAsksForStartTime` (internal/books, the real composition)
+   name every request in boot order and fail when a phase, hook, table row or container service
+   stops asking; a new blocking call inside an existing step is covered only by that step's own
+   per-unit test.
 2. **Stop** — the tasks executor's one bounded extension for an in-flight `Uninterruptible` run
    ([05-tasks](05-tasks.md) 5T.4), at most `core.tasks.shutdown_extend_max` beyond the stop budget.
 
