@@ -118,7 +118,7 @@ describe('UserMergesPanel undo and resume', () => {
     async (code) => {
       stubServer([journal()], (url) =>
         url.endsWith('/undo')
-          ? jsonResponse({ code, error: `raw server text for ${code}` }, 409)
+          ? jsonResponse({ error: `raw server text for ${code}`, code, status: 409 }, 409)
           : undefined
       );
       const user = userEvent.setup();
@@ -131,15 +131,20 @@ describe('UserMergesPanel undo and resume', () => {
     }
   );
 
-  it('tells an actor without the authority so, on a 403', async () => {
+  it("shows the server's own sentence on a 403 (dominance or denied)", async () => {
     stubServer([journal()], (url) =>
-      url.endsWith('/undo') ? jsonResponse({ error: 'forbidden' }, 403) : undefined
+      url.endsWith('/undo')
+        ? jsonResponse(
+            { error: 'the account being merged is held by an admin who outranks you', status: 403 },
+            403
+          )
+        : undefined
     );
     const user = userEvent.setup();
     renderPanel();
     await user.click(await screen.findByRole('button', { name: 'Undo' }));
     await user.click(screen.getByRole('button', { name: 'Undo merge' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/outranks both accounts/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent('held by an admin who outranks you');
   });
 });
 
@@ -159,6 +164,7 @@ describe('userMergeRefusalMessage', () => {
       'receipt_missing',
       'merge_permanent',
       'last_admin',
+      'conflict',
     ]) {
       expect(USER_MERGE_REFUSAL_TEXT[code], code).toBeTruthy();
     }

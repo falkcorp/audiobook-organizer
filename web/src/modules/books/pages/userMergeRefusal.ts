@@ -4,7 +4,7 @@
 // last-edited: 2026-11-22
 
 // F4-08 B10p: the codes the account-merge undo and resume routes refuse with,
-// in words. The server answers 409 (or 403) with a problem body whose `code`
+// in words. The server answers 409 with a problem body ({error, code, status}) whose `code`
 // names the first thing that no longer matches; the panel shows the sentence
 // here instead of the code. A code with no sentence falls back to the server's
 // own text, so a code added later still shows something.
@@ -37,6 +37,8 @@ export const USER_MERGE_REFUSAL_TEXT: Readonly<Record<string, string>> = {
     'The merge did not finish moving the rows written while it ran. Run Resume on this merge first to finish that sweep, then undo it.',
   receipt_missing:
     'This merge was not recorded in enough detail to tell which sign-ins and keys it moved, so it cannot be undone.',
+  conflict:
+    'An account or a row changed while the undo was being prepared. Nothing was changed; try again.',
   merge_permanent:
     'This merge cannot be undone or resumed: it was made before the switch to the new account system, or it is already finished.',
 };
@@ -56,8 +58,5 @@ export function userMergeRefusalMessage(err: unknown, fallback: string): string 
   const code = userMergeRefusalCode(err);
   const text = USER_MERGE_REFUSAL_TEXT[code];
   if (text) return text;
-  if (err instanceof ApiError && err.status === 403) {
-    return 'You do not have the authority to undo this merge: it needs an admin who outranks both accounts.';
-  }
   return err instanceof Error && err.message ? err.message : fallback;
 }
