@@ -25,8 +25,13 @@ func TestIdentityFlip_OffByDefault(t *testing.T) {
 		t.Fatal("flipShapeOptions asks for the identity flip with the predicate off")
 	}
 	man := flipOn().Manifest()
-	if _, ok := versionOf(man.Storage.Migrations, cutover.BooksIdentityLevelStepID); ok {
-		t.Errorf("the manifest declares %s with the predicate off", cutover.BooksIdentityLevelStepID)
+	if flipShapeOptions().Tasks != nil {
+		t.Fatal("flipShapeOptions asks for the tasks flip with the predicate off")
+	}
+	for _, id := range []string{cutover.BooksIdentityLevelStepID, cutover.BooksTasksLevelStepID} {
+		if _, ok := versionOf(man.Storage.Migrations, id); ok {
+			t.Errorf("the manifest declares %s with the predicate off", id)
+		}
 	}
 	if man.Storage.Level != cutover.BooksCutoverLevel {
 		t.Errorf("Spec.Level = %d with the predicate off, want %d", man.Storage.Level, cutover.BooksCutoverLevel)
@@ -48,8 +53,17 @@ func TestIdentityFlip_SelectorMovesTheManifest(t *testing.T) {
 	if !ok {
 		t.Fatalf("no %s in the manifest with the predicate on", cutover.BooksIdentityLevelStepID)
 	}
-	if lvl.Version != booksLevelStepVersion+1 || lvl.RaisesLevel != cutover.BooksIdentityLevel || on.Level != cutover.BooksIdentityLevel {
-		t.Errorf("level-2 = %+v, Spec.Level %d; want version %d raising to %d", lvl, on.Level, booksLevelStepVersion+1, cutover.BooksIdentityLevel)
+	if lvl.Version != booksLevelStepVersion+1 || lvl.RaisesLevel != cutover.BooksIdentityLevel {
+		t.Errorf("level-2 = %+v; want version %d raising to %d", lvl, booksLevelStepVersion+1, cutover.BooksIdentityLevel)
+	}
+	// The tasks flip rides the same switch (F5-18): books.level-3 follows level-2
+	// and Spec.Level is the last level step's.
+	lvl3, ok := versionOf(on.Migrations, cutover.BooksTasksLevelStepID)
+	if !ok {
+		t.Fatalf("no %s in the manifest with the predicate on", cutover.BooksTasksLevelStepID)
+	}
+	if lvl3.Version != booksLevelStepVersion+2 || lvl3.RaisesLevel != cutover.BooksTasksLevel || on.Level != cutover.BooksTasksLevel {
+		t.Errorf("level-3 = %+v, Spec.Level %d; want version %d raising to %d", lvl3, on.Level, booksLevelStepVersion+2, cutover.BooksTasksLevel)
 	}
 	retired := func(s storage.Spec) (n int) {
 		for _, c := range s.Claims {
@@ -81,10 +95,12 @@ func TestIdentityFlip_StandaloneOpensFollowThePredicate(t *testing.T) {
 	base := flipOn().Manifest().Storage
 	t.Cleanup(SetIdentityFlipForTest(true))
 	spec := StandaloneSpec(base)
-	if spec.Level != cutover.BooksIdentityLevel {
-		t.Errorf("StandaloneSpec level = %d with the predicate on, want %d", spec.Level, cutover.BooksIdentityLevel)
+	if spec.Level != cutover.BooksTasksLevel {
+		t.Errorf("StandaloneSpec level = %d with the predicate on, want %d", spec.Level, cutover.BooksTasksLevel)
 	}
-	if !slices.ContainsFunc(spec.Migrations, func(m storage.Migration) bool { return m.Name == cutover.BooksIdentityLevelStepID }) {
-		t.Errorf("StandaloneSpec carries no %s with the predicate on", cutover.BooksIdentityLevelStepID)
+	for _, id := range []string{cutover.BooksIdentityLevelStepID, cutover.BooksTasksLevelStepID} {
+		if !slices.ContainsFunc(spec.Migrations, func(m storage.Migration) bool { return m.Name == id }) {
+			t.Errorf("StandaloneSpec carries no %s with the predicate on", id)
+		}
 	}
 }

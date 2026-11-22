@@ -52,7 +52,7 @@ func ownerIDs(k *Kernel) []storage.Owner {
 func TestConfigBoot_GateOnClaimsBothOwners(t *testing.T) {
 	h := newSwapHost(t)
 	k := h.mustBoot(h.envConfig(nil))
-	want := []storage.Owner{"core/audit", "core/tasks", configOwnerSpec().Owner, secretsOwnerID, "alfred"}
+	want := []storage.Owner{"core/audit", "core/tasks", logOwnerSpec().Owner, configOwnerSpec().Owner, secretsOwnerID, "alfred"}
 	if got := ownerIDs(k); !slices.Equal(got, want) {
 		t.Fatalf("storageOwners = %v, want %v", got, want)
 	}

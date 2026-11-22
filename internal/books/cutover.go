@@ -7,9 +7,13 @@ package books
 
 import (
 	"context"
+	"errors"
 	"slices"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m4"
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m5"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -17,6 +21,7 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // Books' half of F3's cutover (F3-07 d; 03 section 3.8 rows M2, M7, M8). The
@@ -119,7 +124,9 @@ func (m *booksModule) cutoverSteps() func(module.Importers) []datamigrate.DataMi
 			m.cutoverErr.Store(&err)
 			return nil
 		}
-		return f.Data
+		// The activity rewrite is no Cutover step, so it is not in Data; it registers
+		// beside them (cutover.Flip.InPlace).
+		return append(slices.Clone(f.Data), f.InPlace...)
 	}
 }
 
@@ -163,16 +170,93 @@ func (m *booksModule) identityDecl() (*identityDecl, error) {
 }
 
 // flipShapeOptions is the part of flipOptions the shape reads: the level step's
-// version and the identity switch. Identity is nil while identityOn is false (it
-// is, until B10g), so the list is F3's flip alone (books.level-1, M2, M8). With
-// it on the shape adds books.level-2 and the retired identity claims; M3's own
-// config is the manifest's (identityFlipOptions), which the shape does not read.
+// version and the identity and tasks switches. Identity and Tasks are nil while
+// identityOn is false (it is, until B10g), so the list is F3's flip alone
+// (books.level-1, M2, M8). With it on the shape adds books.level-2 and the
+// retired identity claims, and books.level-3 with the retired ops-family and
+// syslog: claims: the tasks flip is built over the identity flip and rides its
+// one switch, so the two cannot come apart (cutover.NewFlip refuses Tasks
+// without Identity). M3's and M4's own configs are the manifest's, which the
+// shape does not read.
 func flipShapeOptions() cutover.FlipOptions {
 	fo := cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion}
 	if identityOn() {
 		fo.Identity = &cutover.IdentityFlipOptions{}
+		fo.Tasks = &cutover.TasksFlipOptions{}
 	}
 	return fo
+}
+
+// scanStandDownKey is the concurrency key the library scan kinds run under, and
+// so the key HEAD's scan stand-down marker holds once imported: books.library.scan
+// and books.library.scan-full share it (05-tasks 5T.8.2; the native kinds
+// prefix HEAD's "library.scan" key with "books.").
+const scanStandDownKey tasks.Key = "books.library.scan"
+
+// tasksStampAt is the instant every Requires stamp M4 imports carries. HEAD
+// stored the dependency revision a completion was recorded at, never a time, so
+// the stamp has no source time, and the step takes one instant chosen once, not
+// read from the clock: a boot that resumes after a crash must import the stamps
+// an uninterrupted one would. The date is the day the step was wired; it is
+// earlier than every boot that can run the step, so a subject changed since is
+// seen as changed since its stamp and its kind runs again, never skipped.
+var tasksStampAt = time.Date(2026, 11, 22, 0, 0, 0, 0, time.UTC)
+
+// unboundRuns is the run reader of an Importers.Tasks that cannot read: every
+// call refuses as an unbound importer does.
+type unboundRuns struct{}
+
+func (unboundRuns) Get(context.Context, tasks.RunID) (tasks.RunRecord, error) {
+	return tasks.RunRecord{}, module.ErrImporterNotBound
+}
+
+// tasksFlipOptions is M4's and M5's configs over imp (the kernel's late
+// forwarders: the tasks and log importers refuse until it binds them at P4b),
+// books' legacy range and a logger that carries names and counts, never a value.
+func tasksFlipOptions(imp module.Importers) *cutover.TasksFlipOptions {
+	log := logger.FromContext(context.Background()).With("subsystem", "books-cutover")
+	return &cutover.TasksFlipOptions{
+		Runs: m4.Config{
+			Importer: imp.Tasks,
+			Legacy: func() storage.Reader {
+				if imp.Legacy == nil {
+					return nil
+				}
+				return imp.Legacy(cutover.BooksOwner)
+			},
+			// HEAD's reconcile, run by the step before it decodes a row. Retired
+			// claims refuse its repairs, so it verifies (see
+			// database.ReconcileOpsV3ForCutover).
+			Reconcile: func(ctx context.Context) error {
+				if imp.Legacy == nil {
+					return errors.New("books: tasks cutover: no legacy range is bound")
+				}
+				lr, ok := imp.Legacy(cutover.BooksOwner).(storage.LegacyRange)
+				if !ok {
+					return errors.New("books: tasks cutover: books' legacy range is not bound")
+				}
+				_, err := database.ReconcileOpsV3ForCutover(ctx, lr)
+				return err
+			},
+			ScanStandDownKey: scanStandDownKey,
+			// HEAD wrote the maintenance window's date as the local calendar day.
+			Location: time.Local,
+			StampAt:  tasksStampAt,
+			Logger:   log,
+		},
+		Activity: m4.ActivityConfig{
+			// A repairs row's fixer is named only by the run M4 imported, which the
+			// kernel's tasks importer reads back (module.Importers.Tasks).
+			Runs: func() m4.RunReader {
+				if r, ok := imp.Tasks.(m4.RunReader); ok {
+					return r
+				}
+				return unboundRuns{}
+			},
+			Logger: log,
+		},
+		Log: m5.Config{Importer: imp.Log, Logger: log},
+	}
 }
 
 // flipOptions are M2's inputs: HEAD's state directory, database path and
@@ -194,5 +278,8 @@ func (m *booksModule) flipOptions(imp module.Importers) cutover.FlipOptions {
 	}
 	fo := flipShapeOptions()
 	fo.Config = opts
+	if fo.Tasks != nil {
+		fo.Tasks = tasksFlipOptions(imp)
+	}
 	return fo
 }
