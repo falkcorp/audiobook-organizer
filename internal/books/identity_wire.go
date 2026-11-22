@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"maps"
 	"strings"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -59,6 +60,9 @@ const (
 	// oidcCallbackBase is the path prefix of HEAD's OAuth start and callback; see
 	// identityAuthOptions.
 	oidcCallbackBase = "/api/v1/auth/oauth"
+	// inviteSessionTTL is the session an accepted invite opens: HEAD's 30 days;
+	// see identityAuthOptions.
+	inviteSessionTTL = 30 * 24 * time.Hour
 )
 
 // identityAuthOptions is app.Options.Auth under the flip: the compile-time auth
@@ -90,12 +94,21 @@ const (
 //     fixed group at this base (httpapi.CoreExactPatterns, 05-authn §4.13), so no
 //     provider is re-registered. The server drops its own gin routes and manifest
 //     rows for them under core identity (Server.servedByCore).
+//   - InviteSessionTTL 30 days: HEAD's accept-invite opens a 30-day session
+//     (origin/main internal/server/handlers/user.go:380,
+//     CreateSession(..., 30*24*time.Hour, ...)), longer than its remember-me login
+//     (7 days, handlers/auth.go rememberMeSessionTTL) and its plain one (24h). Core
+//     gives the invite session core.auth.session.remember_ttl, 168h by default for
+//     every app, which would cut an invited user's first session to 7 days. The
+//     option is compile-time: no operator key, remember_ttl's default is untouched,
+//     and a login, remember-me or plain, keeps its own lifetime.
 func identityAuthOptions() coreauth.Options {
 	return coreauth.Options{
 		BootstrapTokenFile:         bootstrapTokenName,
 		ImportedKeyPrefixes:        []string{importedKeyPrefix},
 		DefaultDisabledAllowRemote: true,
 		OIDCCallbackBase:           oidcCallbackBase,
+		InviteSessionTTL:           inviteSessionTTL,
 	}
 }
 
