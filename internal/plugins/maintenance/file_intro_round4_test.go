@@ -363,9 +363,26 @@ func TestFileIntroResume_AResumedAttemptIsNotRefusedBehindAScanWhereAFreshStartI
 		if res.RunID != "run-resume-scan" || res.Stats == nil || !res.Stats.Done || res.Stats.Attempted != len(paths) {
 			t.Fatalf("the continued run did not finish: %+v stats=%+v", res, res.Stats)
 		}
-		// The wait did not move the bar backwards.
+		// The run's own start no longer waits. A wait there announced itself as
+		// (batches done, done+1): here (1, 2), where the batch gate's pause carries the
+		// real batch total (3 batches: 2*fileIntroBatchGroups+1 files, one group
+		// each, one already done). So a pause announced with total 2 is the start wait.
 		prog.mu.Lock()
 		defer prog.mu.Unlock()
+		sawBatchGate := false
+		for i, m := range prog.msgs {
+			if !strings.Contains(m, "paused") {
+				continue
+			}
+			sawBatchGate = true
+			if prog.tot[i] == prog.done[i]+1 {
+				t.Fatalf("the resumed attempt waited at its start (progress %d/%d %q); NotWhile holds it at dispatch now", prog.done[i], prog.tot[i], m)
+			}
+		}
+		if !sawBatchGate {
+			t.Fatal("no pause was announced at all: the per-batch gate did not hold the writes behind the scan")
+		}
+		// The wait did not move the bar backwards.
 		for _, d := range prog.done {
 			if d < 1 {
 				t.Fatalf("progress fell to %d during the wait, below the 1 batch already done", d)
