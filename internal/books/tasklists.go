@@ -37,11 +37,22 @@ type taskListInputs struct {
 // Module(): until the flip's registration commit nothing reaches it, so no
 // native kind is registered by it (F5-18 A6, dark).
 //
+// Not built yet (F5-18 A6 carries them, each its own slice of work, named in
+// notYetBuilt in tasklists_test.go with the kinds it will bring):
+//
+//   - TODO-F5-18-A6-MAINT-G157: maintenance groups 1, 5 and 7 deps builders
+//     (t6g1Deps with PlanRuns left for the flip until #5003 merges, t6g5Deps,
+//     t6g7Deps) and their entries in maintenance.BooksTaskLists.
+//   - TODO-F5-18-A6-DEDUP: the dedup plugin's KindDeps builder (five groups).
+//   - TODO-F5-18-A6-REPAIRS: repairs.KindDeps (the fixers, FixerStores binding,
+//     the six-capability repairs.Writer and the kernel's PlannedRows).
+//   - TODO-F5-18-A6-SERVER-T7: internal/server's t7Deps builder, in a new file.
+//
 // Left out on purpose: the 14 group-6 maintenance kinds. They hold a
 // library-scan stand-down for an apply's whole length and must not register
 // before core has Hold.Renew. TODO-F5-11-HOLD-RENEW (slice F5-18e):
 // once that merges, append maintenance.BooksHeldTaskLists here and delete
-// heldKinds from the registration test.
+// the group-6 entries from notYetBuilt in the registration test.
 func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	var out []tasks.Definition
 

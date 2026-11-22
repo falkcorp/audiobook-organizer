@@ -266,6 +266,32 @@ func TestF5_ScheduledKindsRegistered(t *testing.T) {
 	}
 }
 
+// Every list bookTaskLists is meant to carry is in it. The schedule check cannot
+// see a dropped list whose kinds are unscheduled (all of deluge and itunes), so
+// each list is pinned by one kind it owns.
+func TestF5_EveryBuiltListIsCarried(t *testing.T) {
+	defs, err := bookTaskLists(listsFixture(t))
+	require.NoError(t, err)
+	have := map[tasks.Kind]bool{}
+	for _, d := range defs {
+		have[d.Kind()] = true
+	}
+	for list, sentinel := range map[string]tasks.Kind{
+		"maintenance jobs":  "books.maintenance.fix-file-modes",
+		"maintenance g2":    "books.maintenance.external-id-backfill",
+		"maintenance g3":    "books.maintenance.purge-deleted",
+		"maintenance g4":    "books.maintenance.dedupe-book-file-rows",
+		"aux-store-compact": "books.maintenance.aux-store-compact",
+		"metafetch":         "books.metafetch.asin-backfill",
+		"deluge":            "books.deluge.centralize",
+		"itunes":            "books.itunes.position-sync",
+		"acoustid":          "books.acoustid.scan",
+		"scheduler":         "books.scheduler.metadata-upgrade",
+	} {
+		require.True(t, have[sentinel], "the %s list is not in bookTaskLists (no %s)", list, sentinel)
+	}
+}
+
 func TestF5_BookTaskListsBuild(t *testing.T) {
 	defs, err := bookTaskLists(listsFixture(t))
 	require.NoError(t, err)
