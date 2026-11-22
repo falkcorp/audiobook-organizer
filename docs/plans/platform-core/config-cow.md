@@ -377,6 +377,29 @@ scripts/config_cow_codemod.py [--write] [--test-writes] [--summary|--json] PATH.
 Re-measure with `--summary` at the merge base. These counts are at r10's head
 on 2026-11-21.
 
+**Whole-tree proof on r10 (2026-11-21, scratch checkout, not pushed).** The
+steps were:
+
+1. Copy `cow.go` in.
+2. Route `mutateLocal` through `mutateCOW`.
+3. Run `--write --test-writes` over `cmd/`, `internal/` and `main.go`.
+
+That rewrote 3,048 sites in 548 files, with `AppConfig` still present
+(transitional). `go build ./...` and `go vet ./...` are both green.
+`go vet ./...` type-checks every test file, so the rewrite compiles across the
+whole module.
+
+The first run had exactly one vet error: a loop variable `c`, read inside a
+rewritten test write, was shadowed by the closure's `c`. The codemod now picks
+a parameter name the statement does not use (`c`, `cfg`, `cc`, `conf`, `c2`,
+and so on), and a test pins this. The same run found that an in-package
+`return AppConfig` would have become a self-calling `Snapshot()`. Inside
+package config a value copy is now `*Get()`, also pinned by a test.
+
+What remains after the codemod is therefore the manual list, deleting
+`AppConfig`, and the test suites. No compile repair across 548 files is
+needed.
+
 ## 9. The ratchet (`internal/arch/appconfig_ratchet_test.go`, r10)
 
 The ratchet counts, per package, uses of `AppConfig`, `Snapshot` and `Mutate`,
@@ -445,7 +468,7 @@ fixes, and running the suites.
 | Slice | Files (disjoint) | Work | Worker-hours |
 |---|---|---|---|
 | A. core | `internal/config/*`, `internal/books/appconfig/write.go`, `internal/books/boot.go`, `cmd/root.go`, `internal/arch/*` (ratchet, guard) | delete `AppConfig`; port `cow.go`, `Normalized` and `Problems` onto r10; fix `Engine.Mutate`; `NormalizeAndValidate` at both boot sites; ratchet edit; in-package codemod | 3 |
-| B. mechanical | every remaining file the codemod touches **except** those in C–E | `--write --test-writes`, gofmt, build, fix the rare compile error (e.g. a value-copy site passed where a pointer was) | 2, plus suite time |
+| B. mechanical | every remaining file the codemod touches **except** those in C–E | `--write --test-writes`, gofmt, build and vet (green on r10 with no hand edits, section 8), then the package suites under `-race`; triage any test that depended on a direct write being seen before the next publish | 2, plus suite time |
 | C. AI parser + scanner | `internal/ai/*`, `internal/server/{server.go,diagnostics_ai_ops.go,ai_ops.go,entities_ops.go}`, `internal/server/handlers/ai.go`, `handlers/aibackends/*`, `internal/plugins/maintenance/dedup_ops.go` | per-op `config.Get()`; registry `Source` (server.go:976) and tools Source (server.go:1116) stay in this slice because they are in `server.go`; quarantine, search, deluge and itunes register consumers | 3 |
 | D. organizer + metafetch | `internal/organizer/*`, `internal/metafetch/{file_pipeline,service_apply}.go`, `internal/server/{batch_save_op.go,handlers/organize.go}`, organizer tests | `NewOrganizer(config.Get())`; tests to `Fixed` | 2 |
 | E. deluge + tools | `internal/deluge/*`, `internal/plugins/deluge/*`, `internal/maintenance/jobs/bulk_deluge_import*.go`, `internal/server/{deluge_discovery.go,wire_handlers.go}`, `internal/tools/registry.go`, `internal/server/handlers/tools/*`, `internal/appdirs/*` | per-run pin; `func() *tools.ToolsConfig` | 2 |
@@ -468,5 +491,9 @@ remote builders.
   were reworked by hand.
 - Guards: `internal/config/cow_test.go` and
   `internal/arch/config_cow_guard_test.go`.
+- Tests: `go test -race` is green for `internal/config`, `internal/scanner`,
+  `internal/dedup` and `internal/reconcile`; the arch guard tests pass; the
+  codemod has 14 unittest cases.
 - Base: `origin/main`. On r10 the hand edits differ (sections 4 and 6), and
-  the codemod output is regenerated, not merged.
+  the codemod output is regenerated, not merged. A whole-tree r10 run builds
+  and vets clean (section 8).
