@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -883,5 +884,90 @@ func TestBoot_SecondOpenOfAHeldJournalIsLocked(t *testing.T) {
 	}
 	if err := errors.Join(f1.Close(), f2.Close()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// logged is a reporter that keeps the kit's failures and its log lines.
+type logged struct {
+	reports
+	logs []string
+}
+
+func (r *logged) Logf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, fmt.Sprintf(format, args...))
+}
+
+// TestPartsDivideTheMatrix: Scenario.Part/Parts split one matrix into parts
+// that each take their share of the census's first-level jobs and whose union
+// is the whole: every part counts the same census, the parts' shares add up
+// to it with none taken twice, and each part still fails on the defect a whole
+// run finds (the trickster's unsafe recovery is a nested kill, so whichever
+// part owns the job reports it). An out-of-range Part fails the run.
+func TestPartsDivideTheMatrix(t *testing.T) {
+	t.Parallel()
+	scenario := func(part, parts int) Scenario {
+		dir := t.TempDir()
+		return Scenario{
+			Build: func(_ testing.TB, inj *Injector) error {
+				_, err := inj.New(context.Background(), app.Options{AppID: "gotham", Logger: slog.New(slog.DiscardHandler)}, trickster{dir: dir})
+				return err
+			},
+			Fixtures: []Fixture{{Name: "arkham", StateDir: dir}},
+			Rows:     []Row{{Phase: "P5 (test)", Writer: "trickster: a mark and its unsafe recovery", Labels: []string{trickLabel}}},
+			Part:     part, Parts: parts,
+		}
+	}
+	share := regexp.MustCompile(`part (\d+) of (\d+) \((\d+) of the census's (\d+) first-level jobs\)`)
+	whole := &logged{}
+	run(t, whole, scenario(0, 0), modeFull)
+	if len(whole.logs) != 1 || share.MatchString(whole.logs[0]) {
+		t.Fatalf("a whole run logs one line with no part: %q", whole.logs)
+	}
+	const parts = 3
+	var took, census int
+	var reported bool
+	for p := range parts {
+		rep := &logged{}
+		run(t, rep, scenario(p, parts), modeFull)
+		if len(rep.logs) != 1 {
+			t.Fatalf("part %d logged %q", p, rep.logs)
+		}
+		m := share.FindStringSubmatch(rep.logs[0])
+		if m == nil {
+			t.Fatalf("part %d's line names no share: %q", p, rep.logs[0])
+		}
+		k, _ := strconv.Atoi(m[3])
+		n, _ := strconv.Atoi(m[4])
+		if m[1] != strconv.Itoa(p+1) || m[2] != strconv.Itoa(parts) {
+			t.Errorf("part %d's line: %q", p, rep.logs[0])
+		}
+		if census == 0 {
+			census = n
+		} else if n != census {
+			t.Errorf("part %d counted %d first-level jobs, part 1 %d: the parts would not cover one matrix", p, n, census)
+		}
+		took += k
+		got := strings.Join(rep.errs, "\n")
+		if strings.Contains(got, "the fault-free boot") {
+			t.Fatalf("part %d: the fault-free boot failed:\n%s", p, got)
+		}
+		reported = reported || strings.Contains(got, "I5: no readiness")
+	}
+	if census < parts {
+		t.Fatalf("the census has %d first-level jobs, fewer than %d parts: the test divides nothing", census, parts)
+	}
+	if took != census {
+		t.Errorf("the parts took %d jobs between them, the census has %d", took, census)
+	}
+	if !reported {
+		t.Error("no part reported the trickster's unsafe recovery, which a whole run finds")
+	}
+
+	bad := &logged{}
+	run(t, bad, scenario(3, 3), modeFull)
+	if len(bad.errs) == 0 || !strings.Contains(bad.errs[0], "want 0 <= Part < Parts") {
+		t.Errorf("Part 3 of 3 ran: %q", bad.errs)
 	}
 }
