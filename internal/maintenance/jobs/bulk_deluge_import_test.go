@@ -432,11 +432,12 @@ func TestBulkDelugeImportJob_InPlaceProtectedLeftPending(t *testing.T) {
 					http.Error(w, "down", http.StatusServiceUnavailable)
 				}))
 				t.Cleanup(down.Close)
-				c.DelugeWebURL = down.URL
+				config.SetForTest(func(c *config.Config) { c.DelugeWebURL = down.URL })
 			} else if tc.seeding {
-				c.DelugeWebURL = bdiSeedingDeluge(t, dir)
+				url := bdiSeedingDeluge(t, dir)
+				config.SetForTest(func(c *config.Config) { c.DelugeWebURL = url })
 			} else {
-				c.ProtectedPaths = []string{dir}
+				config.SetForTest(func(c *config.Config) { c.ProtectedPaths = []string{dir} })
 			}
 
 			ps, err := database.NewPebbleStore(t.TempDir())
