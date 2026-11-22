@@ -46,6 +46,16 @@ type Scenario struct {
 	// Rows are the app's own writer-table rows, checked with core's (Rows):
 	// ABO's instance registers its boot writers here.
 	Rows []Row
+	// Part and Parts divide the matrix so one scenario can run as several
+	// tests (several processes when a CI slicer deals tests out by name):
+	// with Parts > 1, a run takes the census and the fault-free checks in
+	// full and then only every Parts-th first-level job (kill or error run)
+	// of the census, starting at the Part-th (0-based), with the nested kills
+	// under each. The parts' union is the whole matrix: the census is a
+	// function of the fixture, so every part numbers the same jobs. Parts 0
+	// or 1 is the whole matrix. A part dedups nested states only against
+	// itself, so the parts' boots add up to somewhat more than one run's.
+	Part, Parts int
 }
 
 // maxBoots is I5's bound: the broken boot's successors reach readiness
@@ -103,6 +113,10 @@ const maxReports = 25
 
 func run(tb testing.TB, rep reporter, s Scenario, m mode) map[string]bool {
 	rep.Helper()
+	if s.Parts > 1 && (s.Part < 0 || s.Part >= s.Parts) || s.Parts < 0 {
+		rep.Errorf("crashmatrix: Scenario.Part %d of Parts %d: want 0 <= Part < Parts", s.Part, s.Parts)
+		return nil
+	}
 	registered, retried := map[string]bool{}, map[string]bool{}
 	for _, r := range append(Rows(), s.Rows...) {
 		for _, l := range r.Labels {
@@ -150,6 +164,7 @@ type fixtureRun struct {
 type stats struct {
 	boots, kills, errorRuns, events, pebbleKills int
 	nested, nestedDup                            int // nested kill points booted, and those that left a state already booted
+	jobsAll                                      int // the census's first-level jobs, every part's
 }
 
 func (fr *fixtureRun) errorf(format string, args ...any) {
@@ -220,8 +235,12 @@ func (fr *fixtureRun) run(m mode) {
 		return
 	}
 	fr.matrix()
-	fr.rep.Logf("crashmatrix: fixture %s: %d boots (%d kill points, %d of them Pebble's; %d error runs; %d nested kill points booted, %d more that left a state already booted) over %d census operations in %s",
-		fr.f.Name, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.nested, fr.stats.nestedDup, fr.stats.events, time.Since(start).Round(time.Millisecond))
+	part := ""
+	if fr.s.Parts > 1 {
+		part = fmt.Sprintf(" part %d of %d (%d of the census's %d first-level jobs):", fr.s.Part+1, fr.s.Parts, fr.stats.kills+fr.stats.errorRuns, fr.stats.jobsAll)
+	}
+	fr.rep.Logf("crashmatrix: fixture %s:%s %d boots (%d kill points, %d of them Pebble's; %d error runs; %d nested kill points booted, %d more that left a state already booted) over %d census operations in %s",
+		fr.f.Name, part, fr.stats.boots, fr.stats.kills, fr.stats.pebbleKills, fr.stats.errorRuns, fr.stats.nested, fr.stats.nestedDup, fr.stats.events, time.Since(start).Round(time.Millisecond))
 }
 
 // untouched adds the second legal store of a fixture with a staged or
@@ -258,9 +277,20 @@ func (fr *fixtureRun) untouched() bool {
 // time: each on its own filesystem, so no run touches another's state.
 func (fr *fixtureRun) matrix() {
 	var jobs []func()
+	// n numbers every first-level job of the census in one fixed order (boot,
+	// then its clones, then its injectable events by errno); a part keeps
+	// the jobs n%Parts == Part (Scenario.Part).
+	n := 0
+	mine := func() bool {
+		defer func() { n++ }()
+		return fr.s.Parts <= 1 || n%fr.s.Parts == fr.s.Part
+	}
 	for b, br := range fr.census.boots {
 		fr.stats.events += len(br.events)
 		for _, c := range br.clones {
+			if !mine() {
+				continue
+			}
 			fr.stats.kills++
 			if c.Event.Pebble() {
 				fr.stats.pebbleKills++
@@ -272,11 +302,15 @@ func (fr *fixtureRun) matrix() {
 				continue
 			}
 			for _, errno := range errnos() {
+				if !mine() {
+					continue
+				}
 				fr.stats.errorRuns++
 				jobs = append(jobs, func() { fr.inject(b, ev, errno) })
 			}
 		}
 	}
+	fr.stats.jobsAll = n
 	sem := make(chan struct{}, runtime.GOMAXPROCS(0))
 	var wg sync.WaitGroup
 	for _, job := range jobs {
