@@ -59,7 +59,15 @@ type Dir struct {
 // through os.Root would go past it, unrecorded, and one through it could not
 // keep os.Root's refusals.
 func Open(ctx context.Context, dir string) (*Dir, error) {
-	seams := bootseam.From(ctx)
+	return OpenSeams(bootseam.From(ctx), dir)
+}
+
+// OpenSeams is Open over Seams already read from a context (nil in
+// production): for a holder that keeps the boot's seams and opens a Dir long
+// after the boot's context is gone, as storage keeps them for its writers. The
+// kernel does this for the handle it gives modules (Deps.State), whose calls
+// arrive on a context the kit did not build.
+func OpenSeams(seams *bootseam.Seams, dir string) (*Dir, error) {
 	mem, err := memOf(seams)
 	if err != nil {
 		return nil, err
@@ -344,6 +352,60 @@ func (d *Dir) Remove(label, name string) error {
 		return err
 	}
 	return d.mem.Remove(p)
+}
+
+// errRemoveRoot is RemoveAll's refusal of the directory itself.
+var errRemoveRoot = errors.New("cannot remove the directory itself")
+
+// RemoveAll removes name and everything under it, as (*os.Root).RemoveAll: a
+// name that is already gone is success, a symbolic link is removed as a link
+// and never followed, and a name that leaves the directory is refused. The
+// directory itself ("." or "") is refused: whoever opened it owns it.
+//
+// In production that is one call over many unlinks, and a crash part way
+// leaves the entries not yet reached. The in-memory filesystem models exactly
+// that: each entry is its own operation, children before their directory in
+// name order, so the kit kills (and fails) between any two of them, and a
+// retry finds what a crash left. The caller syncs the parent directory
+// (SyncDir) when it needs the removal durable.
+func (d *Dir) RemoveAll(label, name string) error {
+	if filepath.Clean(name) == "." {
+		return &fs.PathError{Op: "unlinkat", Path: name, Err: errRemoveRoot}
+	}
+	defer d.region(label)()
+	if d.mem == nil {
+		return d.root.RemoveAll(name)
+	}
+	p, err := d.full("unlinkat", name)
+	if err != nil {
+		return err
+	}
+	return memRemoveAll(d.mem, p)
+}
+
+// memRemoveAll removes p and what is under it, one operation per entry,
+// leaves first; an absent p is done.
+func memRemoveAll(mem vfs.FS, p string) error {
+	fi, err := mem.Stat(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		names, err := mem.List(p)
+		if err != nil {
+			return err
+		}
+		slices.Sort(names)
+		for _, n := range names {
+			if err := memRemoveAll(mem, filepath.Join(p, n)); err != nil {
+				return err
+			}
+		}
+	}
+	return mem.Remove(p)
 }
 
 // SyncDir fsyncs the directory name, so a create, link, rename or remove in
