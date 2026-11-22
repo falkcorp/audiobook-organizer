@@ -156,20 +156,6 @@ func reachAuthenticatedRoutes() func(string) bool {
 	return func(k string) bool { return set[k] }
 }
 
-// reachIdentityRoutes are the credential-metadata routes whose successors are
-// core's native ones (05-authn 4.11, 4.13): the manifest keeps them as
-// Authenticated until F4-08 deletes them, and core's replacement answers the
-// auth-disabled principal 401 itself, which is the core-route half's assertion.
-var reachIdentityRoutes = []string{
-	"GET /api/v1/auth/me",
-	"GET /api/v1/auth/sessions",
-	"DELETE /api/v1/auth/sessions/:id",
-	"GET /api/v1/auth/api-keys",
-	"GET /api/v1/auth/api-keys/:id",
-	"POST /api/v1/auth/api-keys",
-	"DELETE /api/v1/auth/api-keys/:id",
-}
-
 // reachExpected is the list of expected differences between R0's recorded reach
 // and R2's after M3. Each row is a clause of 05-rbac or a recorded decision; a
 // difference that is on none of them is STOP 2. A row names both letters.
