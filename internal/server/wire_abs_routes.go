@@ -589,6 +589,9 @@ func (s *Server) wireABSRoutes() {
 		Bookmarks: bookmarkStore,
 		// The failure throttle's bucket is the tunnel visitor, not the connector.
 		ThrottleKey: loginThrottleKey,
+		// Under core identity the bucket is the visitor ClientBucket names; nil
+		// (HEAD's gin copy decides) on a server built without an identity.
+		IdentityThrottleKey: s.identityThrottleKey(),
 		// One throttle for both password logins (see s.loginThrottle).
 		Throttle:    s.loginThrottle(),
 		AliasUses:   aliasUses,
