@@ -157,7 +157,7 @@ func (a *api) gate(p *auth.Principal, perm rbac.Permission, write, ready bool, n
 		return unauthenticated()
 	case !ready:
 		return unavailable()
-	case write && !p.Method.MayChangeCredentials():
+	case write && !p.MayChangeCredentials():
 		return &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: needInteractive}
 	case p.Perms == nil || !p.Perms.Has(perm) || !p.Perms.Satisfies(rbac.Need(perm)):
 		return httpapi.Forbidden(perm)

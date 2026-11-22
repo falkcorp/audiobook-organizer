@@ -122,8 +122,8 @@ func (b *Bridge) CheckAdmin(c *gin.Context, perm rbac.Requirement) bool {
 
 // RequireCredentialChange is the adapter of HEAD's credGuard (Guards.Interactive
 // at stage 13): the principal's method must be one that may change
-// credentials (coreauth.Method.MayChangeCredentials, the check stage 13 and
-// authhttp make). The auth-disabled principal is refused: HEAD's guard was a
+// credentials (coreauth.Principal.MayChangeCredentials, the check stage 13 and
+// authhttp make, which reads the registered MethodSpec of an extension). The auth-disabled principal is refused: HEAD's guard was a
 // pass-through with auth off, and core tightens it on purpose (05-authn
 // §4.11, 05-rbac §4.11 (a), SEC5-8). The body is HEAD's.
 func RequireCredentialChange() gin.HandlerFunc {
@@ -133,7 +133,7 @@ func RequireCredentialChange() gin.HandlerFunc {
 			unauthenticated(c)
 			return
 		}
-		if !p.Method.MayChangeCredentials() {
+		if !p.MayChangeCredentials() {
 			forbidden(c, auth.CredentialChangeRefusedMessage)
 			return
 		}
@@ -160,7 +160,7 @@ func (b *Bridge) RequireOwner() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if b.ownerRequired == nil || b.ownerRequired() || !p.Method.Interactive() {
+		if b.ownerRequired == nil || b.ownerRequired() || !p.Interactive() {
 			forbidden(c, msgOwnerRequired)
 			return
 		}

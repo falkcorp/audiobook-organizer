@@ -650,7 +650,7 @@ type writer struct {
 
 // writerOf reads the principal from ctx: absent, or without
 // core:integrations.manage, is ErrForbidden. ProtectAdmin is config's check
-// (05-config §1.3.7): core:admin and Method.MayChangeCredentials, which is
+// (05-config §1.3.7): core:admin and Principal.MayChangeCredentials, which is
 // what config.Actor.Interactive carries (a delegated session counts, the
 // owner's 2026-11-06 amendment; an API key and the auth-disabled principal
 // never do).
@@ -662,7 +662,7 @@ func writerOf(ctx context.Context) (writer, error) {
 	if !p.Perms.Has(ManagePerm) {
 		return writer{}, fmt.Errorf("%w: %s is required", ErrForbidden, ManagePerm)
 	}
-	return writer{p: p, admin: p.Method.MayChangeCredentials() && p.Perms.Has(rbac.CoreAdmin)}, nil
+	return writer{p: p, admin: p.MayChangeCredentials() && p.Perms.Has(rbac.CoreAdmin)}, nil
 }
 
 // origin is the Origin a write by w records: "api" for an API key, "ui" for

@@ -50,7 +50,7 @@ func (s spec) admit(p *auth.Principal) error {
 	if p == nil || (s.needUser && p.User == nil) {
 		return errUnauthenticated()
 	}
-	if s.guards.Interactive && !p.Method.MayChangeCredentials() {
+	if s.guards.Interactive && !p.MayChangeCredentials() {
 		return errInteractive()
 	}
 	if s.guards.Owner && p.Assurance&auth.AssuranceOwner == 0 {

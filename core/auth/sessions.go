@@ -497,13 +497,15 @@ func (s *Service) PrincipalFor(ctx context.Context, u *User, m Method, scopes []
 	if (m == MethodAPIKey && len(scopes) == 0) || (scopes != nil && len(scopes) == 0) {
 		return nil, fmt.Errorf("%w: a key credential carries at least one scope", ErrInvalidCredentials)
 	}
+	class := s.classify(m)
 	p := &Principal{
 		User:   u,
 		Method: m,
 		Perms: s.d.RBAC.Compile(rbac.CheckerInput{
-			Roles: slices.Clone(u.Roles), Scopes: slices.Clone(scopes), Interactive: s.interactive(m),
+			Roles: slices.Clone(u.Roles), Scopes: slices.Clone(scopes), Interactive: class.interactive,
 		}),
 		scopes: slices.Clone(scopes),
+		class:  class,
 	}
 	p.sealIdentity()
 	return p, nil
