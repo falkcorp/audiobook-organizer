@@ -197,6 +197,16 @@ type OneTimeToken struct {
 	// stored with a credential epoch bump in the session's own batch, and
 	// clears PasswordResetRequired. A plain temp-login takes no password.
 	Reset bool
+	// BindEmailOnAccept marks an invite whose address was mailed to that
+	// address by an admin (Admin.MarkInviteEmailDelivered), so that holding the
+	// token proves control of the inbox: accepting it binds the address to the
+	// new account VERIFIED (source "invite") when its creator still holds
+	// core:admin (inviteBindsEmail). It is HEAD's "emailed to this address"
+	// fact (database.inviteEmailDelivered) and is set nowhere else: never at
+	// issue, never by an accept. Omitted from the stored record while unset, so
+	// a record of an unflagged invite is byte-for-byte what it was before the
+	// field existed.
+	BindEmailOnAccept bool `json:"BindEmailOnAccept,omitempty"`
 	// ClearsRestriction marks a reset link an owner-verified actor minted:
 	// consuming it clears SignInRestricted (§4.14). It is set only with
 	// Reset; a token carrying it without Reset is refused.
@@ -484,4 +494,8 @@ type InviteView struct {
 	CreatedBy UserID
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// BindEmailOnAccept is the invite's flag (OneTimeToken.BindEmailOnAccept):
+	// its address was mailed by an admin, so accepting it may bind the address
+	// verified. A fact, not a secret: it names no token.
+	BindEmailOnAccept bool
 }

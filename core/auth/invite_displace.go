@@ -15,18 +15,27 @@ import (
 )
 
 // inviteBindsEmail reports whether accepting t binds its address to the new
-// account as that account's own, the way HEAD's accept did for an invitation
-// emailed to that address by an admin (ConsumeInvite, planInviteAcceptLocked).
+// account as that account's own, VERIFIED, the way HEAD's accept did for an
+// invitation emailed to that address by an admin (ConsumeInvite,
+// planInviteAcceptLocked: inviteEmailDelivered and InviteCreatorMayGrant).
+// Both facts are needed:
+//
+//   - t.BindEmailOnAccept: an admin mailed the invite to its address
+//     (Admin.MarkInviteEmailDelivered), so holding the token proves control of
+//     the inbox;
+//   - creatorAdmin: the creator, judged on the creator row the accept guards in
+//     its own batch (so a demotion after the invite was made counts, and the
+//     creator-epoch rule has already run in inviteRefusal), still holds
+//     core:admin. A users.manage holder who is not an admin may invite but may
+//     not widen who is trusted with an address.
+//
 // An accept that binds takes the address from the accounts that only typed it
 // in (displaceUnverifiedHolders), in its own batch; one that does not touches
 // no other account, because it claims nothing: the invitee's address is
 // stored unverified and shadows no one.
-//
-// It is false for every invite today: core's invite carries no "emailed to
-// this address" fact. F4-08 B10t makes it the invite's BindEmailOnAccept flag,
-// and the displacement below is already wired to it, in the accept's own
-// commit, so that change is this function and the account's EmailVerified.
-func inviteBindsEmail(*OneTimeToken) bool { return false }
+func inviteBindsEmail(t *OneTimeToken, creatorAdmin bool) bool {
+	return t.BindEmailOnAccept && creatorAdmin
+}
 
 // displaceUnverifiedHolders is HEAD's displacement of unverified holders, for
 // an accept that binds email to the account newUser (ConsumeInvite's

@@ -57,17 +57,24 @@ type InviteAccepted struct {
 	// CreatedBy is the invite's creator.
 	CreatedBy UserID
 	// Email is the address the creator named, normalised ("" when it named
-	// none). The account holds it as written to its record: core does not
-	// verify it on accept.
+	// none). The account holds it verified only when the accept bound it
+	// (BindEmailOnAccept and CreatorHeldAdmin); otherwise it is stored
+	// unverified.
 	Email string
 	// CreatorHeldAdmin is true when, at the moment of the accept, the creator
 	// was active and held core:admin: HEAD's InviteCreatorMayGrant, judged on
 	// the creator row the accept guards in its own batch (a demotion after the
 	// invite was made counts).
 	CreatorHeldAdmin bool
+	// BindEmailOnAccept is the invite's flag as stored: an admin mailed it to
+	// Email (Admin.MarkInviteEmailDelivered). The accept bound the address
+	// verified exactly when this AND CreatorHeldAdmin are true; a module that
+	// must act on the binding (a guest gate) reads both from here and keeps no
+	// flag of its own.
+	BindEmailOnAccept bool
 	// DisplacedUserIDs are the accounts that held Email unverified and lost it
-	// in the accept's own batch (displaceUnverifiedHolders). Empty while an
-	// accept binds no address.
+	// in the accept's own batch (displaceUnverifiedHolders). Empty unless the
+	// accept bound the address.
 	DisplacedUserIDs []UserID
 }
 
