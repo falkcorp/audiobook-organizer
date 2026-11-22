@@ -701,8 +701,10 @@ actor); a schedule edit is a write of its config key and is recorded as `core.se
 declares `Common.Yields = true` (meaning: it is `ResumeContinue` and safe to quiesce) can be stood
 down by `rc.StandDown(key)` from another run: running holders of `key` are quiesced
 (`stopping{quiesce}` → `interrupted_quiesced`, re-queued when the hold is released), new runs of
-`key` stay queued while the hold lives; the hold is a lease renewed by every `Writer.Do`, lost
-after `core.tasks.standdown_lease` (default 2 m) without renewal. While a hold lives its marker is
+`key` stay queued while the hold lives; the hold is a lease renewed by every `Writer.Do` and, for a run whose long
+read-only passes make no `Writer.Do`, by the holder calling `Hold.Renew()` from its own progress (HEAD's per-item
+heartbeat; `Renew` reports `ErrHoldLost` once the lease lapsed or the hold was released, and the run's writer is
+fenced either way), lost after `core.tasks.standdown_lease` (default 2 m) without renewal. While a hold lives its marker is
 persisted through `Stores.StandDown` (5T.3.13; MOD6-4): staged when the hold is taken, re-staged on
 renewal at most once a second (HEAD throttles the same write, `scan_standdown.go:257-258`), cleared
 when the last holder releases. A marker found at boot keeps the runs it quiesced from resuming that

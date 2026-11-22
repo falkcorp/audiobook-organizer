@@ -82,7 +82,7 @@ func runT6G6KindOn(t *testing.T, d tasks.Definition, h *t6g6Host, params string)
 func TestT6G6NativeRecover_RenewsTheHoldStampsLivenessAndStopsOnALapse(t *testing.T) {
 	c := t6g6RecoverCase(t)
 	gate := &t6g6GateWriter{name: "gotham"}
-	run := func(t *testing.T, lapse bool) (*t6g6Probe, *t6g6Host) {
+	run := func(t *testing.T, lapse bool) (*t6g6Probe, *t6g6Host, error) {
 		p := newT6G6Probe(t)
 		c.setup(t, p)
 		def := t6g6ByKind(t, (&Plugin{}).t6g6Kinds(p.deps(), nil), recoverMissingFilesKind)
@@ -90,16 +90,18 @@ func TestT6G6NativeRecover_RenewsTheHoldStampsLivenessAndStopsOnALapse(t *testin
 		if lapse {
 			h.lapseWhen(0)
 		}
-		require.NoError(t, runT6G6KindOn(t, def, h, c.params))
-		return p, h
+		return p, h, runT6G6KindOn(t, def, h, c.params)
 	}
 
-	p, h := run(t, false)
+	p, h, err := run(t, false)
+	require.NoError(t, err)
 	require.Equal(t, c.live, p.rec.snapshot(), "a held lease writes")
 	require.Positive(t, h.renewCount(), "the apply renewed the hold from its heartbeat")
 	require.Positive(t, h.touches.Load(), "the apply stamped the run's liveness from its heartbeat")
 
-	p, h = run(t, true)
+	p, h, err = run(t, true)
+	require.Error(t, err, "a lapsed lease fails the run")
+	require.Contains(t, err.Error(), "lease lapsed")
 	require.Empty(t, p.rec.snapshot(), "a lapsed hold writes nothing")
 	require.Positive(t, h.renewCount())
 	require.True(t, h.released, "the lapsed hold is still released at the end")
@@ -129,6 +131,8 @@ func TestT6G6NativeRepoint_ALapsedHoldLeavesTheRowAlone(t *testing.T) {
 	require.Equal(t, f.newPath, f.storedRow(t).FilePath, "a held lease repoints the row")
 	require.Positive(t, h.renewCount(), "the repoint renewed the hold")
 
+	// The repoint abandons the rows it has not reached and reports them; it does
+	// not fail the run (repoint_book_file_rows.go, the Lost check before each row).
 	f, p, h, _ := run(t, true)
 	require.Equal(t, f.oldPath, f.storedRow(t).FilePath, "a lapsed hold must not repoint the row")
 	require.NotContains(t, p.rec.snapshot(), "ModifyBookFile "+f.row)
