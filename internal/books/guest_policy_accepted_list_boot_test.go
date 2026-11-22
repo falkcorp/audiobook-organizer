@@ -166,7 +166,7 @@ func TestGuestPolicyAcceptedList_FullBoot(t *testing.T) {
 
 	t.Run("05_the_list_is_read_only", func(t *testing.T) {
 		before := e.outcome(t, barbaraID)
-		for i := 0; i < 3; i++ {
+		for range 3 {
 			code, _, body := acceptedList(t, r, "", ck, next())
 			require.Equal(t, http.StatusOK, code, body)
 		}
