@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 )
@@ -24,8 +25,9 @@ import (
 // F4-08 B7: configCan (the Actor.Can of PUT /config) answers through the bridge
 // under core identity and from HEAD's role-name and permission-set tests
 // otherwise. Under core identity there is no first-run grant (it read books' own
-// user count), core:admin is the permission itself, and any other permission is
-// held through the atom lookup's table entries.
+// user count), core:admin is HEAD's admin test plus the permission itself (F4-08
+// B10y), and any other permission is held through the atom lookup's table
+// entries.
 
 // bridgedActor serves PUT /config with the principal holding scopes bound and,
 // when id is non-nil, the Identity; pre shapes the request first (HEAD's user,
@@ -64,12 +66,30 @@ func TestBridgeSites_ConfigCan_CoreIdentityAnswersFromThePrincipal(t *testing.T)
 	settings := bridgeScope(string(auth.PermSettingsManage))
 	headAdmin := asUser("u-bruce", []string{"admin"}, auth.MethodSession, "")
 
-	t.Run("core:admin is held through the checker", func(t *testing.T) {
-		a := bridgedActor(t, id, false, coreauth.MethodSession, []rbac.Permission{rbac.CoreAdmin})
+	// core:admin is HEAD's admin test and core's together (F4-08 B10y, item 5):
+	// the active caller holds the admin role by name, its credential may act
+	// as admin, and the principal holds core:admin.
+	activeAdmin := activeUser("u-bruce", "admin")
+	t.Run("core:admin needs the admin role, the credential and the checker", func(t *testing.T) {
+		a := bridgedActor(t, id, false, coreauth.MethodSession, []rbac.Permission{rbac.CoreAdmin}, activeAdmin)
 		assert.True(t, a.Can("core:admin"))
 	})
-	t.Run("the admin role HEAD reads is not read", func(t *testing.T) {
+	t.Run("core:admin through the checker alone is not HEAD's admin", func(t *testing.T) {
+		a := bridgedActor(t, id, false, coreauth.MethodSession, []rbac.Permission{rbac.CoreAdmin})
+		assert.False(t, a.Can("core:admin"), "no user")
+		a = bridgedActor(t, id, false, coreauth.MethodSession, []rbac.Permission{rbac.CoreAdmin}, activeUser("u-selina", "custom-all"))
+		assert.False(t, a.Can("core:admin"), "a role other than admin holding core:admin")
+		a = bridgedActor(t, id, false, coreauth.MethodSession, []rbac.Permission{rbac.CoreAdmin}, asUser("u-bruce", []string{"admin"}, auth.MethodSession, ""))
+		assert.False(t, a.Can("core:admin"), "an admin account that is not active")
+	})
+	t.Run("an admin's key that may not act as admin", func(t *testing.T) {
+		a := bridgedActor(t, id, false, coreauth.MethodAPIKey, []rbac.Permission{rbac.CoreAdmin, settings}, activeAdmin)
+		assert.False(t, a.Can("core:admin"), "the key does not hold every atom (APIKeyMayActAsAdmin)")
+	})
+	t.Run("the admin role without core:admin", func(t *testing.T) {
 		a := bridgedActor(t, id, false, coreauth.MethodSession, nil, headAdmin)
+		assert.False(t, a.Can("core:admin"))
+		a = bridgedActor(t, id, false, coreauth.MethodSession, nil, activeAdmin)
 		assert.False(t, a.Can("core:admin"))
 	})
 	t.Run("an atom's table entry carries its scope", func(t *testing.T) {
@@ -94,6 +114,14 @@ func TestBridgeSites_ConfigCan_CoreIdentityAnswersFromThePrincipal(t *testing.T)
 		assert.False(t, a.Can("core:admin"))
 		assert.False(t, a.Can("core:settings.manage"))
 	})
+}
+
+// activeUser is HEAD's signed-in user record with roles, active.
+func activeUser(id string, roles ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set("auth_user", &database.User{ID: id, Roles: roles, Status: "active"})
+		c.Next()
+	}
 }
 
 // Without an Identity HEAD decides, and a core principal in the context changes
