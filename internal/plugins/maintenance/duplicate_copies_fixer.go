@@ -980,7 +980,7 @@ func (f *duplicateCopiesFixer) detailVia(st FixerStores, store OpsStore, run *dc
 	} else {
 		b.Doubt = "user-state store unavailable"
 	}
-	loader := versionprimary.Loader{Files: dcFiles{id: files}, Chapters: dcNoChapters{}, RootDir: config.AppConfig.RootDir, Stat: f.statFn}
+	loader := versionprimary.Loader{Files: dcFiles{id: files}, Chapters: dcNoChapters{}, RootDir: config.Snapshot().RootDir, Stat: f.statFn}
 	full := b.Core.ToBook()
 	s, err := loader.Load(context.Background(), &full, true)
 	if err != nil {
@@ -1612,7 +1612,7 @@ func (f *duplicateCopiesFixer) mergeRow(run *dcRun, edges map[[2]string]dcVerdic
 // dcCrownable is folder-books' noHeir rule for one member: organized, at
 // least one active row, every active row under the library root.
 func dcCrownable(b *dcBook) bool {
-	if b.Core.LibraryState == nil || *b.Core.LibraryState != "organized" || config.AppConfig.RootDir == "" {
+	if b.Core.LibraryState == nil || *b.Core.LibraryState != "organized" || config.Snapshot().RootDir == "" {
 		return false
 	}
 	return b.Signals.ActiveFiles > 0 && b.Signals.AllUnderRoot

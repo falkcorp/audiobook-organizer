@@ -503,7 +503,7 @@ func ApplyVersionGroup(store versionGroupWriter) func(context.Context, database.
 		// will have (versionprimary.GuardPlanned, and GuardPlannedCrown for a
 		// held group's fallback crown), so a refusal fails the item with
 		// nothing linked and no flag written.
-		rootDir := config.AppConfig.RootDir
+		rootDir := config.Snapshot().RootDir
 		mayWrite := itunesguard.MayWrite(store, target)
 		afterLink := make([]database.Book, 0, len(current)+len(books))
 		inHold := make(map[string]bool, len(books))

@@ -87,7 +87,7 @@ func heapOverCeiling(liveMB uint64, ok bool, ceilingMB uint64) bool {
 // tripped, which made the guard inert. heapCeilingMB therefore clamps the
 // ceiling to warmerMemLimitCapPercent of the memory limit.
 func warmerMemoryDeltaMB() uint64 {
-	if n := config.AppConfig.ListWarmerHeapDeltaMB; n > 0 {
+	if n := config.Snapshot().ListWarmerHeapDeltaMB; n > 0 {
 		return uint64(n)
 	}
 	return 4096
@@ -125,7 +125,7 @@ func heapCeilingMB(baselineMB, deltaMB uint64, memLimitBytes int64) uint64 {
 // config.AppConfig.ListWarmerTrickleIntervalMS (LIST_WARMER_TRICKLE_INTERVAL_MS
 // env var).
 func warmerTrickleInterval() time.Duration {
-	if n := config.AppConfig.ListWarmerTrickleIntervalMS; n >= 500 {
+	if n := config.Snapshot().ListWarmerTrickleIntervalMS; n >= 500 {
 		return time.Duration(n) * time.Millisecond
 	}
 	return 10 * time.Second

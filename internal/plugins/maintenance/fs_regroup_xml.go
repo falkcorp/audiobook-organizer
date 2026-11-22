@@ -480,10 +480,11 @@ func fsRegroupProtectedPath(p string) bool {
 		root = strings.TrimSuffix(strings.ReplaceAll(root, "\\", "/"), "/")
 		return root != "" && (clean == root || strings.HasPrefix(clean, root+"/"))
 	}
-	if slices.ContainsFunc(config.AppConfig.ProtectedPaths, under) {
+	cfg := config.Snapshot()
+	if slices.ContainsFunc(cfg.ProtectedPaths, under) {
 		return true
 	}
-	for _, lib := range []string{config.AppConfig.ITunes.LibraryReadPath, config.AppConfig.ITunes.LibraryITLPath} {
+	for _, lib := range []string{cfg.ITunes.LibraryReadPath, cfg.ITunes.LibraryITLPath} {
 		if lib != "" && under(filepath.Dir(lib)) {
 			return true
 		}
@@ -1699,7 +1700,7 @@ func (a *fsApplier) retire(kind, folder, shellID, targetID, note string) {
 	if wasPrimary && b.VersionGroupID != nil && *b.VersionGroupID != "" {
 		gid := *b.VersionGroupID
 		res, herr := versionprimary.EnsureSinglePrimary(context.Background(), a.store, gid,
-			versionprimary.Env{RootDir: config.AppConfig.RootDir, MayWrite: itunesguard.MayWrite(a.store, gid)})
+			versionprimary.Env{RootDir: config.Snapshot().RootDir, MayWrite: itunesguard.MayWrite(a.store, gid)})
 		if errors.Is(herr, versionprimary.ErrWriteRefused) {
 			a.handOffsRefused.Add(1)
 			a.log(slog.LevelWarn, "%s %q: primary hand-off in group %s after retiring %s refused, nothing written: %v",
