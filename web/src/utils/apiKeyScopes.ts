@@ -13,23 +13,12 @@
 //
 // The permission-literal rule (07 section 7.18) allows a permission string only in
 // src/generated, and the generated file speaks core's vocabulary only (cmd/permsgen
-// pins that), so this one list carries the rule's exception, with its reason.
-// components/settings/APIKeysTab.booksRoute.test.tsx pins the picker to this list.
+// pins that), so this one declaration carries the rule's exception, with its reason.
+// The exception is one eslint-disable-next-line, so the list is one line: a literal
+// added anywhere else in this file is still linted.
+// apiKeyScopes.test.ts pins the list, order included, to HEAD's picker.
+//
+// The last entry is the remote fingerprint worker API only: give a worker key that scope alone.
 
-/* eslint-disable no-restricted-syntax -- HEAD's atom names for the books key route; see the file comment. */
-export const API_KEY_ATOM_SCOPES: readonly string[] = [
-  'library.view',
-  'library.edit_metadata',
-  'library.delete',
-  'library.organize',
-  'scan.trigger',
-  'integrations.manage',
-  'users.manage',
-  'settings.manage',
-  'playlists.create',
-  'requests.create',
-  'requests.approve',
-  // Remote fingerprint worker API only; give a worker key this scope alone.
-  'fingerprint.worker',
-];
-/* eslint-enable no-restricted-syntax */
+// eslint-disable-next-line no-restricted-syntax -- HEAD's atom names for the books key route; see the file comment.
+export const API_KEY_ATOM_SCOPES: readonly string[] = ['library.view', 'library.edit_metadata', 'library.delete', 'library.organize', 'scan.trigger', 'integrations.manage', 'users.manage', 'settings.manage', 'playlists.create', 'requests.create', 'requests.approve', 'fingerprint.worker'];
