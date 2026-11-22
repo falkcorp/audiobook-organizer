@@ -8,7 +8,7 @@ export { AuthClientContext, AuthContext, ModulesHintsContext } from './context';
 export { grantsFor, grantsOf, hasPermission, useAction, useAuth, useAuthClient, useGrants, usePermission, type Grants } from './hooks';
 export { RequireAuth } from './RequireAuth';
 export { safeReturn } from './safeReturn';
-export { sanitizeReturn } from './sanitizeReturn';
+export { sanitizeReturn } from './safeReturn';
 export { default as InvitePage } from './InvitePage';
 export { default as LoginPage } from './LoginPage';
 export { default as SetupPage } from './SetupPage';

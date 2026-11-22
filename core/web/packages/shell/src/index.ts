@@ -13,7 +13,7 @@ export { defineModule } from './defineModule';
 export { setShellAppId, storageKey } from './app/appId';
 export { useApi } from './app/context';
 export { useAction, useAuth, usePermission } from './auth';
-export { sanitizeReturn } from './auth/sanitizeReturn';
+export { sanitizeReturn } from './auth/safeReturn';
 export { useResync, useTopic } from './realtime';
 export { useToast } from './toast';
 export { useTask, useTaskError } from './tasks';

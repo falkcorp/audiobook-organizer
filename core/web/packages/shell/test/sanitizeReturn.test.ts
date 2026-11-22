@@ -4,16 +4,16 @@
 // last-edited: 2026-11-22
 
 // Guards the two client-side navigation sinks (Login.tsx's location.state.from,
-// BookDetail.tsx's sessionStorage['library_return_url']) that previously handed
-// an attacker-controlled string straight to react-router's navigate() with no
-// validation. This is a TypeScript port of sanitizeReturn in
-// internal/server/handlers/oauth_login.go: same allow-list (a single leading
-// '/', no second leading '/' or '\', no backslash anywhere), same reject-to-''
-// contract so callers fall back to a known-safe default instead of throwing or
-// leaving the user stuck.
+// BookDetail.tsx's sessionStorage['library_return_url']) and the shell's own
+// ?return= (safeReturn). sanitizeReturn is the one client-side implementation;
+// core's Go oidc.SanitizeReturn applies the same rules, and both are checked
+// against the shared payload table core/auth/oidc/testdata/return_payloads.json.
+// Rejected input answers '' so callers fall back to a known-safe default.
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { sanitizeReturn } from '../src/auth/sanitizeReturn';
+import { safeReturn, sanitizeReturn } from '../src/auth/safeReturn';
 
 describe('sanitizeReturn — rejects open-redirect payloads', () => {
   it.each([
@@ -50,5 +50,33 @@ describe('sanitizeReturn — accepts ordinary internal paths (anti-over-suppress
     ['the root path alone', '/'],
   ])('passes %s through unchanged', (_label, input) => {
     expect(sanitizeReturn(input)).toBe(input);
+  });
+});
+
+// The shared table (core/auth/oidc/testdata/return_payloads.json): the Go
+// implementation's tests read the same file, so a payload added there is
+// checked on both sides.
+const table = JSON.parse(
+  readFileSync(resolve(__dirname, '../../../../auth/oidc/testdata/return_payloads.json'), 'utf8'),
+) as { reject: string[]; accept: string[] };
+
+describe('sanitizeReturn — the shared return-path payload table', () => {
+  it('has both lists', () => {
+    expect(table.reject.length).toBeGreaterThan(0);
+    expect(table.accept.length).toBeGreaterThan(0);
+  });
+  it.each(table.reject.map((p) => [p]))('refuses %j', (input) => {
+    expect(sanitizeReturn(input)).toBe('');
+    expect(safeReturn(input)).toBe('/');
+  });
+  it.each(table.accept.map((p) => [p]))('keeps %j unchanged', (input) => {
+    expect(sanitizeReturn(input)).toBe(input);
+    expect(safeReturn(input)).toBe(input);
+  });
+});
+
+describe('sanitizeReturn — dot segments that resolve to a scheme-relative URL', () => {
+  it.each([['/.//x'], ['/%2e//x'], ['/./%2F/x'], ['/a/..//x']])('refuses %j', (input) => {
+    expect(sanitizeReturn(input)).toBe('');
   });
 });

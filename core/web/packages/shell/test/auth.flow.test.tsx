@@ -225,10 +225,10 @@ describe('safeReturn', () => {
     ['\\/192.0.2.1', '/'],
     ['javascript:alert(1)', '/'],
     ['%2F%2F192.0.2.1', '/'],
-    // Encoded forms new URL keeps encoded stay same-origin paths, returned as normalized.
-    ['/%2F/192.0.2.1', '/%2F/192.0.2.1'],
-    ['/%252e%252e//192.0.2.1', '/%252e%252e//192.0.2.1'],
-    ['/%09/192.0.2.1', '/%09/192.0.2.1'],
+    // Encoded forms are decoded once and checked again: an encoded slash, dot or control character is refused.
+    ['/%2F/192.0.2.1', '/'],
+    ['/%252e%252e//192.0.2.1', '/'],
+    ['/%09/192.0.2.1', '/'],
     // Dot segments that stay inside the origin, with query and fragment kept.
     ['/a/./b/../c?x=1#y', '/a/c?x=1#y'],
     ['/../books', '/books'],
