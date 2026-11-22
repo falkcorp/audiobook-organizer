@@ -52,7 +52,7 @@ var errTransient = &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSE
 
 // runRetry runs pathUpdateCore live for the one-version fixture with the scripted
 // mover, recording the waits between attempts.
-func runRetry(t *testing.T, ctx context.Context, m *scriptedMover, sleep func(context.Context, time.Duration) error) (pathUpdateResult, error, []time.Duration) {
+func runRetry(t *testing.T, ctx context.Context, m *scriptedMover, sleep func(context.Context, time.Duration) error) (pathUpdateResult, []time.Duration, error) {
 	t.Helper()
 	f := newPUFixture()
 	f.versions = f.versions[:1]
@@ -71,7 +71,7 @@ func runRetry(t *testing.T, ctx context.Context, m *scriptedMover, sleep func(co
 		},
 	}
 	res, err := pathUpdateCore(ctx, pathUpdateCoreParams{BookID: "book-dark-knight-returns"}, env)
-	return res, err, waits
+	return res, waits, err
 }
 
 // TestPathUpdateRetry pins the in-run retry of a torrent's move (F6-03 m1). The
@@ -82,7 +82,7 @@ func TestPathUpdateRetry(t *testing.T) {
 
 	t.Run("transient twice then success is one move and no error", func(t *testing.T) {
 		m := &scriptedMover{script: map[string][]error{h1: {errTransient, errTransient}}}
-		res, err, waits := runRetry(t, context.Background(), m, nil)
+		res, waits, err := runRetry(t, context.Background(), m, nil)
 		require.NoError(t, err)
 		require.Equal(t, 3, m.callsFor(h1))
 		require.EqualValues(t, 1, res.Updated)
@@ -91,7 +91,7 @@ func TestPathUpdateRetry(t *testing.T) {
 
 	t.Run("a permanent refusal is not retried and the run names the torrent", func(t *testing.T) {
 		m := &scriptedMover{script: map[string][]error{h1: {errors.New("deluge error 4: InvalidTorrentError: not in session")}}}
-		res, err, waits := runRetry(t, context.Background(), m, nil)
+		res, waits, err := runRetry(t, context.Background(), m, nil)
 		require.EqualError(t, err, "move_storage failed for 1 torrent(s): "+h1)
 		require.Equal(t, 1, m.callsFor(h1))
 		require.Empty(t, waits)
@@ -100,7 +100,7 @@ func TestPathUpdateRetry(t *testing.T) {
 
 	t.Run("transient three times fails the run, and a fresh run moves it", func(t *testing.T) {
 		m := &scriptedMover{script: map[string][]error{h1: {errTransient, errTransient, errTransient}}}
-		res, err, waits := runRetry(t, context.Background(), m, nil)
+		res, waits, err := runRetry(t, context.Background(), m, nil)
 		require.EqualError(t, err, "move_storage failed for 1 torrent(s): "+h1)
 		require.NotContains(t, err.Error(), "/library", "hashes only, never paths")
 		require.Equal(t, moveAttempts, m.callsFor(h1), "the attempt bound is exactly moveAttempts")
@@ -108,7 +108,7 @@ func TestPathUpdateRetry(t *testing.T) {
 		require.EqualValues(t, 0, res.Updated)
 
 		// ResumeFromZero: the second run starts over and the script is spent.
-		res, err, _ = runRetry(t, context.Background(), m, nil)
+		res, _, err = runRetry(t, context.Background(), m, nil)
 		require.NoError(t, err)
 		require.Equal(t, moveAttempts+1, m.callsFor(h1))
 		require.EqualValues(t, 1, res.Updated)
@@ -117,7 +117,7 @@ func TestPathUpdateRetry(t *testing.T) {
 	t.Run("a canceled run stops the wait and reports the context, not the torrent", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		m := &scriptedMover{script: map[string][]error{h1: {errTransient, errTransient, errTransient}}}
-		_, err, _ := runRetry(t, ctx, m, func(ctx context.Context, _ time.Duration) error {
+		_, _, err := runRetry(t, ctx, m, func(ctx context.Context, _ time.Duration) error {
 			cancel()
 			return ctxSleep(ctx, time.Hour) // returns at once: ctx is done
 		})
