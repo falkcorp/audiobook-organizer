@@ -688,3 +688,32 @@ func TestChecker_Immutable(t *testing.T) {
 		}
 	}
 }
+
+// TestAnyAuthenticated_ModuleOnlyKeyReachesCoreEvents: GET /api/core/v1/events
+// asks AnyAuthenticated (eventhttp's route table pins that), and a key whose
+// whole scope list is a module's own (books:reading, no core:self, no core
+// scope) still meets it: §4.10 counts any non-Confining scope, not just core's,
+// so a module-only key such as a phone app's reaches the stream. A key that
+// names nothing its owner holds, and a Confining worker key, do not. The
+// stream then filters per topic (hub_filter_test), so reaching it is not
+// reading every topic.
+func TestAnyAuthenticated_ModuleOnlyKeyReachesCoreEvents(t *testing.T) {
+	cat := testCatalog(t)
+	for name, tc := range map[string]struct {
+		in   rbac.CompileInput
+		want bool
+	}{
+		"module-only key":                     {key([]string{"books:reading"}, "books:reading"), true},
+		"module-only key, owner is an admin":  {key([]string{"books:reading"}, "core:admin"), true},
+		"module-only key, no matching role":   {key([]string{"books:reading"}, "books:view"), false},
+		"confining worker key":                {key([]string{"books:fingerprint.worker"}, "books:fingerprint.worker"), false},
+		"module-only session":                 {session(true, "books:reading"), true},
+		"session holding nothing the catalog": {session(true, "bane:cowl"), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := Compile(tc.in, cat).Satisfies(rbac.AnyAuthenticated); got != tc.want {
+				t.Fatalf("Satisfies(AnyAuthenticated) = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
