@@ -417,9 +417,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if config.AppConfig.ABSAPIEnabled != m.abs {
 		return errABSFlagDrift
 	}
-	// The ABS surface's own settings, checked here because NewServer, which
-	// checks them again, can only exit the process: a returned error reaches
-	// app.New's caller with its reason, and Release still tears the store down.
+	// The ABS surface's own settings, checked here before the server is built:
+	// NewServer checks them again and returns the same error, but this reads the
+	// effective config at the one place that names it errABSMisconfigured, and
+	// builds nothing first. Release still tears the store down.
 	if err := server.ValidateABSConfig(config.Snapshot()); err != nil {
 		return fmt.Errorf("%w: %w", errABSMisconfigured, err)
 	}
@@ -447,7 +448,13 @@ func (m *booksModule) Register(r *module.Registrar) error {
 			// does, with the same semantics (identityPolicyFrom).
 			server.WithAccessAllowList(func() (string, error) { return cfaccessAllowedEmails(deps.Config) }))
 	}
-	srv := server.NewServer(store, srvOpts...)
+	// A refusal comes back as an error, and NewServer has released whatever it
+	// had begun to build, so there is no server for Release to tear down: the
+	// error returns to the kernel's caller, and Release closes the store.
+	srv, err := server.NewServer(store, srvOpts...)
+	if err != nil {
+		return fmt.Errorf("books: %w", err)
+	}
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
