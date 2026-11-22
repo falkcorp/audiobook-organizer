@@ -54,11 +54,11 @@ const (
 	// labelReapplyServedBoot is c/backup/served_boot (AdvanceServedBoot) at the
 	// end of step 2, or of step 3 on a restore boot.
 	labelReapplyServedBoot = "kernel.reapply.served_boot"
-	// labelHooksRunEnsure and labelHooksRunClear are the restore hooks' run ID,
-	// written before a run with no restore line and cleared after it
-	// (journal.EnsureHookRun, journal.ClearHookRun).
-	labelHooksRunEnsure = "kernel.hooks.run.ensure"
-	labelHooksRunClear  = "kernel.hooks.run.clear"
+	// labelHooksRunClear is the deletion of c/backup/restore_run, the row a build
+	// before F4-08 B10m kept the hooks' run ID in (journal.ClearLegacyHookRun). The
+	// ID of a run with no restore intent is a state file now: its writes carry the
+	// journal's own labels (journal.hookrun.*), through the boot's journal filesystem.
+	labelHooksRunClear = "kernel.hooks.run.clear"
 	// labelHooksMarkHooked is c/backup/restore_hooked/<seq>, the record that a
 	// restore line's hooks ran to completion (journal.MarkHooked), one batch per
 	// line the run covers.
@@ -97,7 +97,7 @@ func ReapplyLabels() []string {
 // head they commit, restore_hooks.go), for the writer table.
 func HookRunLabels() []string {
 	return []string{
-		labelHooksRunEnsure, labelHooksRunClear, labelHooksMarkHooked, labelHooksHeldHead, labelHooksReport,
+		labelHooksRunClear, labelHooksMarkHooked, labelHooksHeldHead, labelHooksReport,
 		labelHookAuth, labelHookRBAC, labelHookAudit,
 	}
 }

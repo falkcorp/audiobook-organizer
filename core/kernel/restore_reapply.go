@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
@@ -283,6 +284,45 @@ type reapplyResult struct {
 	// durable yet says the store was replaced; step 3 commits it once the hooks
 	// have completed. Zero when none is held.
 	Held journal.Head
+	// HostRun is the ID of the restore hook run this boot owes when it is no
+	// restore boot (a replaced store, with or without a journaled restore line, or
+	// the hooks an earlier boot's line still owes): minted here, before the
+	// restriction of any kept admin, so the lines of that restriction and every
+	// hook key on one live-host ID (journal.EnsureHookRun). Empty on a restore
+	// boot, which keys on its intent's ID, and on a boot that owes no hooks.
+	HostRun string
+}
+
+// owesHooksWithoutRestore reports whether this boot runs the restore hooks
+// although it is no restore boot: the external restore lines whose hooks are owed,
+// or a replaced store whose line the journal could not take. It is the same
+// condition as runRestoreHooks' for a boot with no restore of its own.
+func (r reapplyResult) owesHooksWithoutRestore() bool {
+	return len(r.Owed) > 0 || (r.Class == classReplaced && r.RestoreLine == 0)
+}
+
+// hostRunBinding is what the run ID of a run with no restore intent is minted
+// for (journal.EnsureHookRun): the same on every attempt of the run, and changed
+// by anything that finishes it. With external restore lines owed it is those
+// lines, by seq and MAC: a line is appended once and never changes, and the hooks
+// completing mark it done, so a finished run's lines are no longer owed. With none
+// it is the location file's content marker, which only the markers at the end of
+// the hooks rewrite (a replaced store whose line could not be journaled writes
+// neither before them): a run that finished since the file was written finds the
+// marker moved.
+func hostRunBinding(res reapplyResult, loc journal.Location, haveLoc bool) string {
+	if len(res.Owed) > 0 {
+		parts := make([]string, 0, len(res.Owed))
+		for _, l := range res.Owed {
+			parts = append(parts, fmt.Sprintf("%d/%s", l.Seq, l.MAC))
+		}
+		slices.Sort(parts)
+		return "owed:" + strings.Join(parts, ",")
+	}
+	if !haveLoc {
+		return "noline:nofile"
+	}
+	return fmt.Sprintf("noline:%d/%s", loc.ServedBoot.N, loc.ServedBoot.Nonce)
 }
 
 // reapplyRevocations is P4d step 2.
@@ -361,6 +401,15 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	if err != nil {
 		return res, err
 	}
+	// The hooks this boot owes without a restore of its own run under one ID, minted
+	// now: the restriction of a kept admin below journals under it, and a crash and
+	// the boot after it find the same ID again.
+	if !restoring && res.owesHooksWithoutRestore() {
+		binding := hostRunBinding(res, loc, haveLoc)
+		if res.HostRun, err = journal.EnsureHookRun(in.StateDir, binding, in.now(), in.fsOpt()); err != nil {
+			return res, fmt.Errorf("kernel: record the restore hooks' run ID: %w", err)
+		}
+	}
 	// A verdict nothing durable records holds the head back until the hooks ran.
 	hold := !restoring && res.Class == classReplaced && res.RestoreLine == 0
 	if hold {
@@ -401,7 +450,7 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	if plan.Pending != nil && plan.Pending.Head().Seq > after.Seq {
 		after = plan.Pending.Head()
 	}
-	if err := in.restrictKept(ctx, &owe, plan, after); err != nil {
+	if err := in.restrictKept(ctx, &owe, plan, after, in.restrictKey(&res)); err != nil {
 		return res, err
 	}
 	if hold && after.Seq > headBefore.Seq {
@@ -971,15 +1020,19 @@ func (k *keptAdmins) keep(users []string) {
 }
 
 // restrictKey keys the lines the restriction of the kept admins journals to this
-// restore, by its ID (a run that is no restore boot has none: its lines are
-// unkeyed, as they were). A boot resumed after a crash between those lines and the
-// commit that restricts the users is the same restore, so it finds them and
-// appends none again (auth.RestoreDeps.RunKey).
-func (in reapplyInput) restrictKey() string {
-	if in.Restore == nil || in.Restore.ID == "" {
-		return ""
+// restore, by its ID, or, for a run that is no restore boot but owes hooks (a
+// replaced store), by the run's ID (reapplyResult.HostRun); a boot that owes no
+// hooks has neither, and its lines are unkeyed, as they were. A boot resumed after
+// a crash between those lines and the commit that restricts the users is the same
+// restore, so it finds them and appends none again (auth.RestoreDeps.RunKey).
+func (in reapplyInput) restrictKey(res *reapplyResult) string {
+	switch {
+	case in.Restore != nil && in.Restore.ID != "":
+		return "restore:" + in.Restore.ID
+	case in.Restore == nil && res.HostRun != "":
+		return res.HostRun
 	}
-	return "restore:" + in.Restore.ID
+	return ""
 }
 
 // restrictKept restricts the admins the drain and the tail kept, once the whole
@@ -992,9 +1045,9 @@ func (in reapplyInput) restrictKey() string {
 // The head is committed here whether or not the restriction's own append moved it:
 // a journal that cannot take the line records a gap and leaves the head where it
 // is, and the commit never moves it back.
-func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head) error {
+func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head, runKey string) error {
 	if len(owe.Users) > 0 {
-		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users, in.restrictKey()) }); err != nil {
+		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users, runKey) }); err != nil {
 			return fmt.Errorf("kernel: restrict the last admins %v: %w", owe.Users, err)
 		}
 	}
