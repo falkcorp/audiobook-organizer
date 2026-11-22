@@ -956,7 +956,7 @@ func (w headT6g5Writer) SetBookNarrators(bookID string, narrators []database.Boo
 	return st.SetBookNarrators(bookID, narrators)
 }
 
-func (s headT6g5Store) LibraryReadPath() string { return config.AppConfig.ITunes.LibraryReadPath }
+func (s headT6g5Store) LibraryReadPath() string { return config.Snapshot().ITunes.LibraryReadPath }
 
 func (s headT6g5Store) ProbeSmartPlaylists(lib *itunes.ITLLibrary, ownerUserID string) itunesservice.PlaylistImportResult {
 	return itunesservice.NewPlaylistImporter(s.p.deps.PlaylistStore()).MigrateSmartPlaylists(lib,

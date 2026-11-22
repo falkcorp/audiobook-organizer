@@ -279,7 +279,7 @@ func autoMatchTranscribedCore(ctx context.Context, params autoMatchTranscribedPa
 	// the op with an error (RunItems' default ErrModeFail cancels the rest);
 	// everything admitted before it stays applied, and the checkpoint lets a
 	// deliberate re-dispatch continue from there under a fresh cap.
-	capCounter := applycap.NewCounter("maintenance.auto-match-transcribed", config.AppConfig.BulkApplyMaxItems)
+	capCounter := applycap.NewCounter("maintenance.auto-match-transcribed", config.Snapshot().BulkApplyMaxItems)
 
 	// Series names for the owner-manual pre-check, read once per run: the
 	// op's store has no per-id series read, and a book marked only by its

@@ -4208,7 +4208,8 @@ type fragPin struct {
 // reads it as "a group shorter than this is a fragment, not a book". The
 // resolver supplies the default for 0 or less, the same rule the scanner uses.
 func importChapterSec() int {
-	return config.AppConfig.ResolveChapterConsolidationThresholdMin() * 60
+	cfg := config.Snapshot()
+	return cfg.ResolveChapterConsolidationThresholdMin() * 60
 }
 
 // repairChapterMaxSec is the longest a file may run and still be a chapter
@@ -4217,7 +4218,8 @@ func importChapterSec() int {
 // them 2026-10-03 so the jobs could use 120 minutes without changing what
 // the scanner groups on import.
 func repairChapterMaxSec() int {
-	return config.AppConfig.ResolveRepairChapterMaxMin() * 60
+	cfg := config.Snapshot()
+	return cfg.ResolveRepairChapterMaxMin() * 60
 }
 
 // groupDir is the folder a fragment is grouped under: its import folder, or,

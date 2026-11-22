@@ -846,7 +846,7 @@ func (f *folderBooksFixer) common(store OpsStore, force bool) (*fbCommon, error)
 			c.authorNorm[n] = true
 		}
 	}
-	if root := config.AppConfig.RootDir; root != "" {
+	if root := config.Snapshot().RootDir; root != "" {
 		c.shelves = append(c.shelves, filepath.Clean(root))
 	}
 	ips, err := store.GetAllImportPaths()
@@ -2603,7 +2603,7 @@ func fbAllOwnerOK(blocks []fbBlock) bool {
 // and Audiobookshelf serves it. Not "under RootDir": an iTunes folder or an
 // import path nested below it is its own shelf (shelfOf is the deepest).
 func (lib *fbLib) inLibrary(g *fbGroup) bool {
-	root := config.AppConfig.RootDir
+	root := config.Snapshot().RootDir
 	if root == "" || len(g.Files) == 0 {
 		return false
 	}
@@ -2687,7 +2687,8 @@ func (lib *fbLib) noHeir(members []string) string {
 	for _, m := range members {
 		isMember[m] = true
 	}
-	root := filepath.Clean(config.AppConfig.RootDir)
+	cfg := config.Snapshot()
+	root := filepath.Clean(cfg.RootDir)
 	for _, m := range members {
 		b := lib.books[m]
 		if !fbPrimary(b) || b.VersionGroupID == nil || *b.VersionGroupID == "" {
@@ -2709,7 +2710,7 @@ func (lib *fbLib) noHeir(members []string) string {
 					continue
 				}
 				active++
-				if config.AppConfig.RootDir == "" || !pathutil.IsWithin(r.FilePath, root) {
+				if cfg.RootDir == "" || !pathutil.IsWithin(r.FilePath, root) {
 					under = false
 				}
 			}
@@ -3106,7 +3107,7 @@ func (f *folderBooksFixer) electHeirs(ctx context.Context, store OpsStore, membe
 		if vps == nil {
 			return nil, errors.New("version-primary store unavailable: cannot elect the group's heir")
 		}
-		loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: config.AppConfig.RootDir}
+		loader := versionprimary.Loader{Files: store, Chapters: vps, RootDir: config.Snapshot().RootDir}
 		alive := func(id string) bool { return !contains(members, id) }
 		ms, err := loader.LoadMembers(ctx, others, alive)
 		if err != nil {

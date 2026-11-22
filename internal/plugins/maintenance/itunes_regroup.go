@@ -211,7 +211,7 @@ func (p *Plugin) runITunesRegroup(ctx context.Context, raw json.RawMessage, repo
 	}
 	env := regroupEnv{
 		t6g5Base: p.t6g5HeadBase(ctx, reporter, !dryRun),
-		RootDir:  config.AppConfig.RootDir,
+		RootDir:  config.Snapshot().RootDir,
 		NewStore: func() (regroupCoreStore, func(itunesRegroupStore) t6g5RegroupUserState, error) {
 			rstore, err := newRegroupRunStore(store, p.deps.BookTagReader())
 			return rstore, p.t6g5RegroupUserStateFor, err

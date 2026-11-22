@@ -152,7 +152,8 @@ func (p *Plugin) runAIDedupBatch(ctx context.Context, raw json.RawMessage, repor
 	if jobs == nil {
 		return fmt.Errorf("store %T has no ai_jobs capability; the batch could not be collected after a restart", store)
 	}
-	parser := ai.NewOpenAIParser(&config.AppConfig, config.AppConfig.OpenAIAPIKey, config.AppConfig.EnableAIParsing)
+	cfg := config.Snapshot()
+	parser := ai.NewOpenAIParser(&cfg, cfg.OpenAIAPIKey, cfg.EnableAIParsing)
 	if !parser.IsEnabled() {
 		return fmt.Errorf("AI parsing is not enabled")
 	}
