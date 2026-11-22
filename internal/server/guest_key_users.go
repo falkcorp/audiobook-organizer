@@ -46,19 +46,25 @@ type guestKeyUsers interface {
 // caller: a route that reads other accounts is judged against the caller it
 // serves. A request reads its OWN record through the principal it carries
 // (Bridge.FromCorePrincipal), never through this. The method names are those of
-// AccountAdmin (B10t-books), whose Identity.Accounts is what guestAccounts
-// returns once it lands.
+// AccountAdmin, which auth.Admin embeds, so the Identity.Admin handle satisfies it
+// as it is.
 type guestAdminReader interface {
 	AdminUser(ctx context.Context, id coreauth.UserID) (*coreauth.User, error)
 	AdminUsers(ctx context.Context, f coreauth.UserFilter) iter.Seq2[*coreauth.User, error]
 }
 
-// guestAccounts is the reader of other accounts under core identity: nil
-// refuses those reads (fail closed) and never falls back to books' user store,
-// which holds no accounts under core identity. It is nil until B10t-books adds
-// legacyauth.Identity.Accounts; the swap is this one function's body.
+// guestAccounts is the reader of other accounts under core identity: core's
+// actor-checked Admin handle (legacyauth.Identity.Admin, module.Deps.AuthAdmin),
+// whose AdminUser and AdminUsers re-check the principal of the ctx they are
+// given. nil refuses those reads (fail closed) and never falls back to books'
+// user store, which holds no accounts under core identity. It returns an
+// untyped nil, not a nil Admin boxed in the interface, so callers' nil checks
+// hold.
 func (s *Server) guestAccounts() guestAdminReader {
-	return s.accountsForGuestKeys
+	if s.identity == nil || s.identity.Admin == nil {
+		return nil
+	}
+	return s.identity.Admin
 }
 
 // guestUsers is the seam for this server: core's record when it runs under
