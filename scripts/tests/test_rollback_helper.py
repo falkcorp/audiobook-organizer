@@ -173,7 +173,7 @@ class Host:
             "unit": "audiobook-organizer.service",
             "service_user": "alfred",
             "archive_dir": str(self.archives),
-            "offline_env": f"HOME={self.state} ABK_STATE_DIR={self.state}",
+            "offline_env": f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}",
         }
         values.update(config)
         self.write_config(values)
@@ -215,7 +215,7 @@ class Host:
             f"--property=StandardOutput=append:{log}",
             f"--property=StandardError=append:{log}",
             f"--setenv=HOME={self.state}",
-            f"--setenv=ABK_STATE_DIR={self.state}",
+            f"--setenv=ABO_CORE_PATHS_STATE_DIR={self.state}",
             "--",
             sys.executable,
             "-I",
@@ -449,7 +449,7 @@ class Restore(unittest.TestCase):
 
     def test_checkpoint_runs_the_exact_argv_as_the_service_user(self):
         h = Host(self)
-        self.fake_bin(h, "print('restored', os.environ.get('ABK_STATE_DIR'))")
+        self.fake_bin(h, "print('restored', os.environ.get('ABO_CORE_PATHS_STATE_DIR'))")
         code, out, err = h.run("restore", "checkpoint", NAME)
         self.assertEqual(code, 0, err)
         runs = [t for t in h.tools() if t["tool"] == "systemd-run"]
@@ -3520,6 +3520,7 @@ class Export(unittest.TestCase):
         self.tmp.mkdir()
         self.bin_log = h.root / "bin-calls.log"
         self.mode_file = h.root / "fake-run-mode"
+        self.raw_file = h.root / "fake-run-raw"
         self.set_bin()
         # The helper copy the fake systemd-run runs as _export-worker, with its
         # config path pointed into the sandbox (a unit really runs the installed one).
@@ -3530,7 +3531,7 @@ class Export(unittest.TestCase):
         self.patched.parent.mkdir()
         self.patched.write_text(src.replace(before, f"CONFIG = {h.mod.CONFIG!r}"))
         body = (
-            "import hashlib, subprocess\n"
+            "import hashlib, subprocess, time\n"
             "args = sys.argv[1:]\n"
             'cut = args.index("--")\n'
             "opts, cmd = args[:cut], args[cut + 1:]\n"
@@ -3543,6 +3544,15 @@ class Export(unittest.TestCase):
             f"mode = open({str(self.mode_file)!r}).read().strip() if os.path.exists({str(self.mode_file)!r}) else 'normal'\n"
             'if mode == "fail":\n'
             "    sys.exit(7)\n"
+            'if mode == "hang":\n'
+            "    time.sleep(5)\n"
+            'if mode == "closed-hang":\n'
+            "    os.close(1)\n"
+            "    time.sleep(5)\n"
+            'if mode == "raw":\n'
+            f"    sys.stdout.buffer.write(open({str(self.raw_file)!r}, 'rb').read())\n"
+            "    sys.stdout.buffer.flush()\n"
+            "    sys.exit(0)\n"
             "p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE)\n"
             "data = p.stdout\n"
             'if mode == "prefix": data = b"warning: hello\\n" + data\n'
@@ -3638,8 +3648,9 @@ class Export(unittest.TestCase):
                 "--service-type=exec",
                 "--uid=alfred",
                 "--property=PrivateTmp=yes",
+                "--property=RuntimeMaxSec=60",
                 f"--setenv=HOME={h.state}",
-                f"--setenv=ABK_STATE_DIR={h.state}",
+                f"--setenv=ABO_CORE_PATHS_STATE_DIR={h.state}",
             ],
         )
         self.assertEqual(
@@ -3657,7 +3668,8 @@ class Export(unittest.TestCase):
         out = a[5]
         self.assertTrue(out.startswith(str(self.tmp) + "/aorg-keyring-"), out)
         self.assertFalse(out.startswith(str(self.export)))
-        self.assertEqual(calls[0]["env"]["ABK_STATE_DIR"], str(h.state))
+        self.assertEqual(calls[0]["env"]["ABO_CORE_PATHS_STATE_DIR"], str(h.state))
+        self.assertEqual(calls[0]["env"]["ABK_STATE_DIR"], "")
         self.assertEqual(list(self.tmp.iterdir()), [], "the scratch copy is removed")
         self.assertFalse(h.restore_log().exists(), "no restore log is written")
 
@@ -3748,6 +3760,27 @@ class Export(unittest.TestCase):
             )
             self.assertEqual(self.h.run("export-keyring")[0], 0)
         self.assertEqual(calls, [(os.getuid(), 4343)])
+
+    def test_the_file_is_the_deploy_users_before_any_byte_is_written(self):
+        events: list[tuple[str, int]] = []
+        real_write = os.write
+
+        def write(fd, data):
+            events.append(("write", fd))
+            return real_write(fd, data)
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                unittest.mock.patch.object(
+                    os, "fchown", lambda fd, u, g: events.append(("fchown", fd))
+                )
+            )
+            stack.enter_context(unittest.mock.patch.object(os, "write", write))
+            self.assertEqual(self.h.run("export-keyring")[0], 0)
+        fd = next(fd for kind, fd in events if kind == "fchown")
+        seq = [kind for kind, f in events if f == fd]
+        self.assertEqual(seq[0], "fchown", "owned by SUDO_UID before the first byte lands")
+        self.assertIn("write", seq)
 
     def test_the_file_is_0600_whatever_the_umask(self):
         old = os.umask(0)
@@ -3906,10 +3939,79 @@ class Export(unittest.TestCase):
         self.refused("export-keyring", contains="exited 7")
 
     def test_output_that_is_not_exactly_one_frame_delivers_nothing(self):
-        for mode in ("prefix", "truncate", "flip", "extra", "big", "twice", "zero"):
+        # Each way the output can be wrong is refused by its own check, named here.
+        cases = {
+            "prefix": "did not start its output with a frame header",
+            "truncate": "followed (cut short",
+            "extra": "followed (cut short",
+            "twice": "followed (cut short",
+            "flip": "sha256 is not the one it stated",
+            "big": "wrote more than",
+            "zero": "framed an empty file",
+        }
+        for mode, why in cases.items():
             self.mode_file.write_text(mode)
-            self.refused("export-keyring", contains="", code=1)
-            self.refused("export-install-secrets", contains="", code=1)
+            with self.subTest(mode=mode):
+                self.refused("export-keyring", contains=why, code=1)
+                self.refused("export-install-secrets", contains=why, code=1)
+
+    def frame(self, claimed: int, body: bytes, digest: bytes | None = None) -> bytes:
+        digest = hashlib.sha256(body).hexdigest().encode() if digest is None else digest
+        return b"AORGEXPORT1 %d %s\n" % (claimed, digest) + body
+
+    def test_a_frame_whose_length_is_not_what_follows_is_refused_though_its_hash_is_right(self):
+        # sha256("abc") is right; only the stated length (5, not 3) is wrong.
+        self.mode_file.write_text("raw")
+        self.raw_file.write_bytes(
+            self.frame(5, b"abc", hashlib.sha256(b"abc").hexdigest().encode())
+        )
+        self.refused("export-keyring", contains="framed 5 bytes but 3 followed")
+
+    def test_a_valid_frame_over_the_size_limit_is_refused_even_with_trailing_bytes(self):
+        # Total output stays under the read cap, so only the limit on the framed
+        # length and body can refuse it.
+        h = self.h
+        body = b"k" * (h.mod.EXPORT_LIMIT + 10)
+        for trailing in (b"", b"junk"):
+            with self.subTest(trailing=trailing):
+                self.mode_file.write_text("raw")
+                self.raw_file.write_bytes(self.frame(len(body), body) + trailing)
+                self.refused("export-keyring", contains="over the")
+
+    # -- an export that hangs or misbehaves leaves no unit running --------------
+
+    def stops(self) -> list[list[str]]:
+        return [
+            t["argv"]
+            for t in self.h.tools()
+            if t["tool"] == "systemctl" and t["argv"][:1] == ["stop"]
+        ]
+
+    def test_a_hung_export_is_stopped_by_the_helper_and_delivers_nothing(self):
+        self.mode_file.write_text("hang")
+        with unittest.mock.patch.object(self.h.mod, "EXPORT_DEADLINE_SEC", 0.3):
+            self.refused("export-keyring", contains="did not finish within")
+        self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
+
+    def test_an_export_that_closes_its_output_then_hangs_is_stopped_too(self):
+        self.mode_file.write_text("closed-hang")
+        with unittest.mock.patch.object(self.h.mod, "EXPORT_DEADLINE_SEC", 0.5):
+            self.refused("export-keyring", contains="did not finish within")
+        self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
+
+    def test_an_oversized_export_is_stopped_by_the_helper(self):
+        self.mode_file.write_text("big")
+        self.refused("export-keyring", contains="wrote more than")
+        self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
+
+    def test_a_failing_export_unit_is_stopped_by_the_helper(self):
+        self.mode_file.write_text("fail")
+        self.refused("export-keyring", contains="exited 7")
+        self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
+
+    def test_a_good_export_stops_nothing(self):
+        self.assertEqual(self.h.run("export-keyring")[0], 0)
+        self.assertEqual(self.stops(), [])
 
     def test_worker_refuses_unsafe_source_files(self):
         h = self.h
@@ -3996,8 +4098,31 @@ class OfflineEnv(unittest.TestCase):
     def test_abo_names_are_accepted_alongside_abk_and_home(self):
         h = Host(
             self,
-            offline_env="HOME=/var/lib/x ABK_STATE_DIR=/var/lib/x ABO_CORE_PATHS_STATE_DIR=/var/lib/x",
+            offline_env="HOME=/var/lib/x ABK_LOG=/x ABO_CORE_PATHS_STATE_DIR=/var/lib/x",
         )
+        code, _, err = h.run("probe")
+        self.assertEqual(code, 0, err)
+
+    def test_abk_state_dir_alone_is_still_accepted(self):
+        # A conf written for a pre-flip binary stays valid until it is reinstalled.
+        h = Host(self, offline_env="HOME=/var/lib/x ABK_STATE_DIR=/var/lib/x")
+        code, _, err = h.run("probe")
+        self.assertEqual(code, 0, err)
+
+    def test_abk_state_dir_with_an_abo_state_dir_is_refused(self):
+        # The flipped binary refuses ABK_STATE_DIR in every offline command, whatever
+        # else is set, so this conf can never work: say so before running anything.
+        for abo in ("ABO_CORE_PATHS_STATE_DIR", "ABO_OTHER_PATHS_STATE_DIR", "ABO_STATE_DIR"):
+            with self.subTest(abo=abo):
+                h = Host(self, offline_env=f"HOME=/x ABK_STATE_DIR=/x {abo}=/x")
+                code, _, err = h.run("probe")
+                self.assertEqual(code, 1)
+                self.assertIn("ABK_STATE_DIR", err)
+                self.assertIn("ABO_ state directory", err)
+                self.assertEqual(h.tools(), [])
+
+    def test_abk_state_dir_with_an_unrelated_abo_name_is_accepted(self):
+        h = Host(self, offline_env="HOME=/x ABK_STATE_DIR=/x ABO_LOG_LEVEL=debug")
         code, _, err = h.run("probe")
         self.assertEqual(code, 0, err)
 
