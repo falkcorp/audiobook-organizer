@@ -481,3 +481,41 @@ func TestEventsFlip_TaskTopicsFollowTheDefinitionsViewRule(t *testing.T) {
 		}
 	}
 }
+
+// The kernel wires the outbox's moving parts at their phases, and each can be
+// seen from outside the outbox: P7 freezes registration after the bus froze and
+// every handler registered (a declaration or registration afterwards is
+// refused, which the relay depends on: it reads the registered set once), and the nudger is the
+// executor's companion, running after startTasks and gone after stopTasks. A
+// message still reaches its consumer without the nudger while the relay's run
+// is alive, so delivery alone cannot tell the nudger is missing.
+func TestEventsFlip_OutboxFrozenAndNudgerFollowTheExecutor(t *testing.T) {
+	k, _ := flipBoot(t)
+	ko := k.events.flip.outbox
+	if err := ko.ob.DeclareConsumers("alfred", "alfred.second-watch"); !errors.Is(err, outbox.ErrFrozen) {
+		t.Errorf("a consumer declared after boot: %v, want outbox.ErrFrozen (P7 did not freeze the outbox)", err)
+	}
+	nudging := func() bool {
+		ko.mu.Lock()
+		defer ko.mu.Unlock()
+		return ko.cancel != nil
+	}
+	if nudging() {
+		t.Fatal("the nudger runs before the executor starts")
+	}
+	if err := k.openEvents(); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.startTasks(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !nudging() {
+		t.Error("startTasks did not start the outbox nudger")
+	}
+	if err := k.stopTasks(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if nudging() {
+		t.Error("stopTasks left the outbox nudger running")
+	}
+}
