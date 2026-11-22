@@ -57,6 +57,15 @@ type Store struct {
 	// builds every section from scratch. Tests swap it to isolate a cache or,
 	// with newTemplateCache(0), to build every section from scratch.
 	builds *templateCache
+	// batching counts the RegisterSections calls in progress (batch): while
+	// it is above zero a Register leaves the key index to the batch's end
+	// and sets reindexDue, so a batch of n sections rebuilds the index once
+	// rather than n times. Each rebuild walks every registered key, so the
+	// per-Register rebuild made registration quadratic in the section count:
+	// a fifth of a kernel boot's CPU before the batch, with three stores built
+	// per boot (F3-07). Under mu.
+	batching   int
+	reindexDue bool
 	// claimed indexes the registered sections' claims, paths and entry-list
 	// parents, so a Register compares only the sections it could collide with
 	// (overlap.go). Written under mu, with sections, at the one place a
@@ -213,6 +222,29 @@ type storeRegistry struct{ s *Store }
 
 func (r storeRegistry) register(sp *sectionSpec) (*binding, error) { return r.s.register(sp) }
 
+func (r storeRegistry) batch() (done func()) { return r.s.batch() }
+
+// batch defers the key index of every Register until done, which rebuilds it
+// once if any Register ran (RegisterSections). Batches nest. A Register's
+// binding never reads the index, and until RegisterSections returns no
+// caller holds a handle of the sections it is adding, so the index a reader
+// sees mid-batch lacks only those; anything else that rebuilds the index
+// mid-batch (a Load) includes every section registered so far.
+func (s *Store) batch() (done func()) {
+	s.mu.Lock()
+	s.batching++
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.batching--
+		if s.batching == 0 && s.reindexDue {
+			s.reindexDue = false
+			s.reindex()
+		}
+	}
+}
+
 // Registry returns the registry the kernel registers sections through.
 func (s *Store) Registry() Registry { return storeRegistry{s: s} }
 
@@ -258,7 +290,11 @@ func (s *Store) register(sp *sectionSpec) (*binding, error) {
 	s.claimed.add(sec)
 	slices.SortFunc(s.sections, func(a, b *section) int { return strings.Compare(string(a.path), string(b.path)) })
 	s.install(sec, built, built, s.gen.Load(), true)
-	s.reindex()
+	if s.batching > 0 {
+		s.reindexDue = true
+	} else {
+		s.reindex()
+	}
 	paths := make([]Path, 0, len(s.sections))
 	for _, x := range s.sections {
 		paths = append(paths, x.path)
