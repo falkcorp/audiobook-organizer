@@ -41,7 +41,13 @@ func (e *Engine) Mutate(fn func(*config.Config)) error {
 	e.mu.RLock()
 	before := e.cur
 	e.mu.RUnlock()
-	after := before
+	// A deep copy, not `after := before`: a shallow copy shares every map and
+	// slice with e.cur and with each Snapshot already handed out. An fn that
+	// wrote into one in place (an element assignment, an append into spare
+	// capacity, a map key) would change before too, so the diff below would see
+	// no change and drop the write silently, and the store would race every
+	// reader holding that Snapshot.
+	after := *before.Clone()
 	fn(&after)
 	set, err := e.diff(before, after)
 	if err != nil {
