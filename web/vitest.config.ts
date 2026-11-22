@@ -23,7 +23,10 @@ function shellVersion(): string {
 export default defineConfig({
   // One copy of each peer singleton for code reached through the file: links
   // @mediacore/shell and ui-kit (07 §7.3.2); the same list as vite.config.ts.
-  resolve: { dedupe: SINGLETONS },
+  // zustand joins the list: the shell's copy of useAppStore (F9-05) lives under
+  // core/web, where vitest would load zustand as an external module with its own
+  // React. Deduped, it resolves to this app's copy, which shares this app's React.
+  resolve: { dedupe: [...SINGLETONS, 'zustand'] },
   // vitest reads the shell from source (the package's `development`
   // condition), which reads the build-time global the shell's own builds and
   // the mediacore() app preset define (07 §7.10). The preset replaces this at
