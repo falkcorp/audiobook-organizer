@@ -190,3 +190,44 @@ func TestStartIn_MergesInOneBatchChain(t *testing.T) {
 		t.Fatalf("%d merge events, want 2", merges)
 	}
 }
+
+// TestStartIn_EachBatchReadsTheQueueAfresh: a batch's view is its own. A run
+// that an earlier batch committed is found by the next batch's start (a view
+// shared across batches would hand it the queue as of the first read), and a
+// run a batch inserted is not visible to that same batch (the same as a
+// per-start read of the store, which does not see an uncommitted batch).
+func TestStartIn_EachBatchReadsTheQueueAfresh(t *testing.T) {
+	key := func(raw json.RawMessage) (string, error) {
+		var p noParams
+		err := json.Unmarshal(raw, &p)
+		return p.Case, err
+	}
+	h, _ := foldRig(t, tasks.DedupePolicy{Key: key})
+	ctx := context.Background()
+	stage := func(books ...string) []tasks.RunRef {
+		var refs []tasks.RunRef
+		err := h.e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
+			refs = nil
+			for _, c := range books {
+				ref, err := h.e.StartIn(ctx, b, "gotham.relocate", tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, c)})
+				if err != nil {
+					return err
+				}
+				refs = append(refs, ref)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return refs
+	}
+	first := stage("scarecrow", "scarecrow")
+	if first[0].Existing || first[1].Existing || first[0].ID == first[1].ID {
+		t.Fatalf("one batch: %+v, want two new runs (an uncommitted insert is not visible to its own batch)", first)
+	}
+	second := stage("scarecrow")
+	if !second[0].Existing || (second[0].ID != first[0].ID && second[0].ID != first[1].ID) {
+		t.Fatalf("next batch: %+v, want folded into a run the first batch committed (%+v)", second[0], first)
+	}
+}
