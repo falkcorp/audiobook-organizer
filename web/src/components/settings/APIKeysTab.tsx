@@ -87,7 +87,6 @@ export function APIKeysTab() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newDesc, setNewDesc] = useState('');
   const [newScopes, setNewScopes] = useState<string[]>([]);
   const [newExpires, setNewExpires] = useState<number | typeof API_KEY_CUSTOM_EXPIRY>(90);
   const [customDate, setCustomDate] = useState('');
@@ -141,7 +140,6 @@ export function APIKeysTab() {
     try {
       const resp = await api.createAPIKey({
         name: newName,
-        description: newDesc,
         scopes: newScopes,
         expires_in_days: expiryDays,
       });
@@ -150,7 +148,6 @@ export function APIKeysTab() {
       setCreatedExpiresAt(resp.expires_at ?? null);
       setCreateOpen(false);
       setNewName('');
-      setNewDesc('');
       setNewScopes([]);
       setNewExpires(90);
       setCustomDate('');
@@ -306,16 +303,14 @@ export function APIKeysTab() {
                       ]}
                     >
                       <TableCell>
-                        <Tooltip title={k.description || ''} placement="top">
-                          <Typography
-                            variant="body2"
-                            sx={{
-                              fontWeight: 500,
-                            }}
-                          >
-                            {k.name}
-                          </Typography>
-                        </Tooltip>
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            fontWeight: 500,
+                          }}
+                        >
+                          {k.name}
+                        </Typography>
                       </TableCell>
                       <TableCell>
                         <Typography
@@ -446,14 +441,6 @@ export function APIKeysTab() {
               fullWidth
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-            />
-            <TextField
-              label="Description"
-              fullWidth
-              multiline
-              rows={2}
-              value={newDesc}
-              onChange={(e) => setNewDesc(e.target.value)}
             />
             <Box>
               <Typography variant="body2" gutterBottom>

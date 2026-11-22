@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { Route, Routes } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
+import { BOOKS_PERMISSIONS } from '../generated/permissions';
 
 vi.mock('../services/collectionApi', async (orig) => ({
   ...(await orig<typeof import('../services/collectionApi')>()),
@@ -71,7 +72,7 @@ function renderPage(id: string) {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  asUser(['library.view', 'collections.manage']);
+  asUser([BOOKS_PERMISSIONS.VIEW, BOOKS_PERMISSIONS.COLLECTIONS_MANAGE]);
   m.getCollection.mockImplementation(async (id) => (id === 'c1' ? staticCol : dynamicCol));
   vi.mocked(getBooksByIds).mockImplementation(
     async (ids) =>
@@ -460,9 +461,9 @@ describe('dynamic collection', () => {
   });
 });
 
-describe('without collections.manage', () => {
+describe('without books:collections.manage', () => {
   it('shows members and Preview but no working write control', async () => {
-    asUser(['library.view']);
+    asUser([BOOKS_PERMISSIONS.VIEW]);
     renderPage('c2');
     await screen.findByRole('link', { name: 'Test Book b1' });
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
@@ -473,7 +474,7 @@ describe('without collections.manage', () => {
   });
 
   it('hides per-row remove and disables Add books on a static collection', async () => {
-    asUser(['library.view']);
+    asUser([BOOKS_PERMISSIONS.VIEW]);
     renderPage('c1');
     await screen.findByRole('link', { name: 'Test Book b1' });
     expect(screen.queryByRole('button', { name: /^Remove/ })).toBeNull();

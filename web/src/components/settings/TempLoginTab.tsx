@@ -7,7 +7,7 @@
 // copy it to the clipboard. Useful for signing yourself in on a new
 // phone / browser without typing a password.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -64,6 +64,8 @@ export function TempLoginTab() {
     };
   }, [selectedUserID]);
 
+  const selectedUser = users.find((u) => u.id === selectedUserID);
+
   const handleMint = async () => {
     if (!selectedUserID) return;
     setLoading(true);
@@ -91,12 +93,6 @@ export function TempLoginTab() {
     }
   };
 
-  const expiresMessage = useMemo(() => {
-    if (!result) return '';
-    const ts = new Date(result.expires_at);
-    return `Single-use. Expires ${ts.toLocaleString()}.`;
-  }, [result]);
-
   return (
     <Box sx={{ maxWidth: 720 }}>
       <Typography variant="h6" gutterBottom>
@@ -109,8 +105,8 @@ export function TempLoginTab() {
           color: 'text.secondary',
         }}
       >
-        Generate a single-use URL that signs the target user in for 24 hours when opened. URL is
-        valid for 15 minutes and can only be used once.
+        Generate a single-use URL that signs the target user in when opened. The URL expires
+        shortly and can only be used once.
       </Typography>
 
       {usersError && (
@@ -146,8 +142,7 @@ export function TempLoginTab() {
         {result && (
           <Alert severity="success" sx={{ flexDirection: 'column', alignItems: 'stretch' }}>
             <Typography variant="body2" gutterBottom>
-              URL for <strong>{result.user.username}</strong> — opens a {result.session_ttl_hours}h
-              session.
+              URL for <strong>{selectedUser?.username}</strong>. Shown once; it is single-use.
             </Typography>
             <Stack
               direction="row"
@@ -172,16 +167,6 @@ export function TempLoginTab() {
                 </IconButton>
               </Tooltip>
             </Stack>
-            <Typography
-              variant="caption"
-              sx={{
-                color: 'text.secondary',
-                mt: 1,
-                display: 'block',
-              }}
-            >
-              {expiresMessage}
-            </Typography>
           </Alert>
         )}
       </Stack>

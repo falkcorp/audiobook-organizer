@@ -30,6 +30,32 @@ import type {
   RowsPage as RepairRowsPage,
 } from '../types/generated/repairs';
 
+import { ApiError } from './apiError';
+import * as coreIdentity from './coreIdentity';
+
+export { ApiError };
+
+// Identity calls live in coreIdentity (core's /api/core/v1 routes); they are
+// re-exported here so importers of api.* did not change.
+export const {
+  getAuthStatus,
+  setupAdmin,
+  login,
+  logout,
+  getMe,
+  updateMe,
+  changePassword,
+  listAuthProviders,
+  oidcStartPath,
+  listAdminUsers,
+  createTempLoginToken,
+  listAPIKeys,
+  getAPIKey,
+  createAPIKey,
+  updateAPIKeyStatus,
+  revokeAPIKey,
+} = coreIdentity;
+
 const API_BASE = '/api/v1';
 
 // ---------------------------------------------------------------------------
@@ -90,21 +116,6 @@ function wrapTrigger<T extends { id?: string; operation_id?: string }>(
   fn: () => Promise<T>
 ): Promise<T> {
   return withOptimisticOperation(opName, fn, (r) => r?.id ?? r?.operation_id ?? null);
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly data?: unknown;
-  /** The response's Retry-After (a count of seconds), in ms; unset when absent or not a count. */
-  readonly retryAfterMs?: number;
-
-  constructor(message: string, status: number, data?: unknown, retryAfterMs?: number) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.data = data;
-    this.retryAfterMs = retryAfterMs;
-  }
 }
 
 export interface DeleteBookResponse {
@@ -3483,76 +3494,9 @@ export async function validateOpenAIKey(apiKey: string): Promise<ValidateOpenAIK
   return data.data ?? data;
 }
 
-// Auth
-export async function getAuthStatus(): Promise<AuthStatus> {
-  const response = await apiFetch(`${API_BASE}/auth/status`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch auth status');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function setupAdmin(payload: {
-  username: string;
-  password: string;
-  email?: string;
-}): Promise<{ message: string; user: AuthUser }> {
-  const response = await apiFetch(`${API_BASE}/auth/setup`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to create admin account');
-  }
-  const body = await response.json();
-  const data = body.data;
-  return data?.user ? { ...data, user: normalizeAuthUser(data.user) } : data;
-}
-
-export async function login(payload: {
-  username: string;
-  password: string;
-  remember_me?: boolean;
-}): Promise<{ user: AuthUser; session: AuthSession }> {
-  const response = await apiFetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to login');
-  }
-  const body = await response.json();
-  const data = body.data;
-  return data?.user ? { ...data, user: normalizeAuthUser(data.user) } : data;
-}
-
 export interface TempLoginTokenResponse {
-  token: string;
+  /** The absolute one-time link (`/login/temp#token=...`); shown once. */
   login_url: string;
-  expires_at: string;
-  user: { id: string; username: string };
-  session_ttl_hours: number;
-}
-
-export async function createTempLoginToken(userID: string): Promise<TempLoginTokenResponse> {
-  const response = await apiFetch(`${API_BASE}/auth/temp-tokens`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userID }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to mint temp-login token');
-  }
-  const body = await response.json();
-  return body.data ?? body;
 }
 
 export interface AdminUserSummary {
@@ -3561,16 +3505,8 @@ export interface AdminUserSummary {
   email: string;
   status: string;
   roles: string[];
-}
-
-export async function listAdminUsers(): Promise<AdminUserSummary[]> {
-  const response = await apiFetch(`${API_BASE}/users`, { credentials: 'include' });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to list users');
-  }
-  const body = await response.json();
-  const data = body.data ?? body;
-  return data.users ?? data.items ?? data ?? [];
+  /** Set when the account was merged into another; the server refuses to enable it (409 merged_away). */
+  merged_into_user_id?: string;
 }
 
 // --- Admin account merge (merge one account into another) ---
@@ -3734,56 +3670,6 @@ export async function undoUserMerge(journalId: string): Promise<{ operation_id: 
     { method: 'POST', credentials: 'include' }
   );
   return userMergeJSON<{ operation_id: string }>(response, 'Failed to undo the merge');
-}
-
-export async function getMe(): Promise<AuthUser> {
-  const response = await apiFetch(`${API_BASE}/auth/me`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch current user');
-  }
-  const data = await response.json();
-  return normalizeAuthUser(data.data?.user ?? data.user);
-}
-
-export async function updateMe(payload: { email: string }): Promise<AuthUser> {
-  const response = await apiFetch(`${API_BASE}/auth/me`, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to update profile');
-  }
-  const body = await response.json();
-  return normalizeAuthUser(body.data?.user ?? body.user);
-}
-
-export async function changePassword(payload: {
-  current_password: string;
-  new_password: string;
-}): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/auth/me/password`, {
-    method: 'PUT',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to change password');
-  }
-}
-
-export async function logout(): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/auth/logout`, {
-    method: 'POST',
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to logout');
-  }
 }
 
 // Version Management
@@ -7696,7 +7582,6 @@ export interface APIKey {
   id: string;
   user_id: string;
   name: string;
-  description: string;
   scopes: string[];
   status: 'active' | 'inactive' | 'revoked';
   created_at: string;
@@ -7714,7 +7599,6 @@ export interface APIKey {
 
 export interface CreateAPIKeyRequest {
   name: string;
-  description?: string;
   scopes?: string[];
   // The expiry: expires_in_days (1 to 1096; 0 is the default) or expires_at
   // (an RFC 3339 instant at most 1096 days out), never both; neither is the
@@ -7733,63 +7617,6 @@ export interface CreateAPIKeyResponse {
   created_at: string;
   /** Set when the server shortened the requested expiry (e.g. to the calling key's). */
   note?: string;
-}
-
-export async function createAPIKey(body: CreateAPIKeyRequest): Promise<CreateAPIKeyResponse> {
-  const response = await apiFetch(`${API_BASE}/auth/api-keys`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to create API key');
-  }
-  const body_data = await response.json();
-  return body_data.data;
-}
-
-export async function listAPIKeys(all?: boolean): Promise<APIKey[]> {
-  const url = all ? `${API_BASE}/auth/api-keys?all=true` : `${API_BASE}/auth/api-keys`;
-  const response = await apiFetch(url);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to list API keys');
-  }
-  const body_data = await response.json();
-  return body_data.data?.api_keys ?? [];
-}
-
-export async function getAPIKey(id: string): Promise<APIKey> {
-  const response = await apiFetch(`${API_BASE}/auth/api-keys/${id}`);
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to get API key');
-  }
-  const body_data = await response.json();
-  return body_data.data;
-}
-
-export async function updateAPIKeyStatus(
-  id: string,
-  status: 'active' | 'inactive'
-): Promise<APIKey> {
-  const response = await apiFetch(`${API_BASE}/auth/api-keys/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to update API key status');
-  }
-  const body_data = await response.json();
-  return body_data.data;
-}
-
-export async function revokeAPIKey(id: string): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/auth/api-keys/${id}`, {
-    method: 'DELETE',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to revoke API key');
-  }
 }
 
 // Cache stats types and functions

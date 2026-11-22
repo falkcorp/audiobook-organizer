@@ -20,7 +20,7 @@ import {
 } from '@mui/material';
 import { useAuth } from '../contexts/AuthContext';
 import { sanitizeReturn } from '../utils/safeReturn';
-import { apiFetch } from '../utils/apiFetch';
+import { listAuthProviders, oidcStartPath } from '../services/coreIdentity';
 
 type AuthMode = 'login' | 'setup';
 
@@ -67,18 +67,12 @@ export function Login() {
   useEffect(() => {
     const code = new URLSearchParams(location.search).get('error');
     if (code) setOauthError(oauthErrorMessage(code));
-    // Runs before a session exists. An ApiAuthRedirectError (a login page
-    // came back instead of JSON) means the server wants a login, not that SSO
-    // is configured, so it falls through to the catch: no SSO buttons.
-    apiFetch('/api/v1/auth/oauth-providers')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        const list = body?.data?.providers ?? body?.providers ?? [];
-        if (Array.isArray(list))
-          setProviders(list.filter((p): p is string => typeof p === 'string'));
-      })
+    // Runs before a session exists. A failure (a login page came back instead
+    // of JSON, or the route is absent) means no SSO buttons, not an error.
+    listAuthProviders()
+      .then((list) => setProviders(list))
       .catch(() => {
-        /* providers endpoint absent → no SSO buttons */
+        /* providers unavailable: no SSO buttons */
       });
   }, [location.search]);
 
@@ -246,7 +240,7 @@ export function Login() {
                     fullWidth
                     disabled={loading}
                     onClick={() => {
-                      window.location.href = `/api/v1/auth/oauth/${p}/start`;
+                      window.location.href = oidcStartPath(p);
                     }}
                   >
                     {OAUTH_LABELS[p]}

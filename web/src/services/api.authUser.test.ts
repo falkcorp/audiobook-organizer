@@ -4,67 +4,99 @@
 // last-edited: 2026-10-18
 //
 // AuthUser carries the caller's effective permissions so the UI can hide write
-// controls. A response without the field (an older server, or an endpoint that
-// does not report it) must read as NO permissions, never as all of them.
+// controls. Core's GET /me lists them as a sibling of `user`; a response without
+// the list (or with a malformed one) must read as NO permissions, never as all of them.
 
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { getMe, login, normalizeAuthUser, updateMe, type AuthUser } from './api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getAuthStatus, getMe, login, normalizeAuthUser, updateMe, type AuthUser } from './api';
+import { BOOKS_PERMISSIONS } from '../generated/permissions';
+import { coreJson, stubCoreFetch } from '../test/coreFetch';
 
-const baseUser = {
+const coreUser = {
   id: 'u1',
-  username: 'alice',
-  email: 'alice@example.test',
+  username: 'bruce.wayne',
+  email: 'bruce@example.test',
   roles: ['viewer'],
   status: 'active',
   created_at: '2026-01-01T00:00:00Z',
 };
 
-function respondWith(data: unknown) {
-  global.fetch = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ data }),
-  })) as unknown as typeof fetch;
-}
+const session = { public_id: 's1', expires_at: '2026-01-02T00:00:00Z' };
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('AuthUser permissions', () => {
-  beforeEach(() => vi.restoreAllMocks());
-  afterEach(() => vi.restoreAllMocks());
-
   it('keeps the permissions the server reported', () => {
-    const u = normalizeAuthUser({ ...baseUser, permissions: ['library.view', 'collections.manage'] });
-    expect(u.permissions).toEqual(['library.view', 'collections.manage']);
+    const user = { ...coreUser, created_at: 'x', permissions: [BOOKS_PERMISSIONS.VIEW] };
+    expect(normalizeAuthUser(user).permissions).toEqual([BOOKS_PERMISSIONS.VIEW]);
   });
 
   it('defaults an absent field to an empty list', () => {
-    const u = normalizeAuthUser(baseUser as unknown as AuthUser);
-    expect(u.permissions).toEqual([]);
+    expect(normalizeAuthUser(coreUser as unknown as AuthUser).permissions).toEqual([]);
   });
 
   it('ignores a malformed field instead of passing it on', () => {
-    const u = normalizeAuthUser({ ...baseUser, permissions: 'collections.manage' } as unknown as AuthUser);
-    expect(u.permissions).toEqual([]);
+    const bad = { ...coreUser, permissions: 'books:view' } as unknown as AuthUser;
+    expect(normalizeAuthUser(bad).permissions).toEqual([]);
   });
 
-  it('getMe returns the reported permissions', async () => {
-    respondWith({ user: { ...baseUser, permissions: ['collections.manage'] } });
-    expect((await getMe()).permissions).toEqual(['collections.manage']);
+  it('getMe returns the permissions /me lists', async () => {
+    stubCoreFetch({
+      'GET /me': coreJson({ user: coreUser, permissions: [BOOKS_PERMISSIONS.COLLECTIONS_MANAGE] }),
+    });
+    const me = await getMe();
+    expect(me.permissions).toEqual([BOOKS_PERMISSIONS.COLLECTIONS_MANAGE]);
+    expect(me.username).toBe('bruce.wayne');
   });
 
-  it('getMe fails closed against a server that does not report permissions', async () => {
-    respondWith({ user: baseUser });
+  it('getMe fails closed against a /me that lists no permissions', async () => {
+    stubCoreFetch({ 'GET /me': coreJson({ user: coreUser }) });
     expect((await getMe()).permissions).toEqual([]);
   });
 
-  it('login carries the permissions and defaults when absent', async () => {
-    respondWith({ user: { ...baseUser, permissions: ['library.view'] }, expires_at: 'x' });
-    expect((await login({ username: 'alice', password: 'pw' })).user.permissions).toEqual(['library.view']);
-    respondWith({ user: baseUser, expires_at: 'x' });
-    expect((await login({ username: 'alice', password: 'pw' })).user.permissions).toEqual([]);
+  it('login opens the session, then reads the permissions of the new session from /me', async () => {
+    const { calls } = stubCoreFetch({
+      'POST /auth/login': coreJson(session),
+      'GET /me': coreJson({ user: coreUser, permissions: [BOOKS_PERMISSIONS.VIEW] }),
+    });
+    const out = await login({ username: 'bruce.wayne', password: 'pw', remember_me: true });
+    expect(out.user.permissions).toEqual([BOOKS_PERMISSIONS.VIEW]);
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      path: '/auth/login',
+      body: { username: 'bruce.wayne', password: 'pw', remember: true },
+    });
   });
 
   it('updateMe never yields an undefined permissions list', async () => {
-    respondWith({ user: baseUser });
+    stubCoreFetch({
+      'PATCH /me': coreJson(coreUser),
+      'GET /me': coreJson({ user: coreUser }),
+    });
     expect((await updateMe({ email: 'a@example.test' })).permissions).toEqual([]);
+  });
+});
+
+describe('getAuthStatus', () => {
+  const status = (body: object) => stubCoreFetch({ 'GET /auth/status': () => coreJson(body) });
+
+  it('requires sign-in whenever auth is on, including before the first account, and offers setup then', async () => {
+    status({ auth_disabled: false, has_users: false, setup_required: true });
+    expect(await getAuthStatus()).toEqual({
+      has_users: false,
+      auth_enabled: true,
+      requires_auth: true,
+      bootstrap_ready: true,
+    });
+  });
+
+  it('requires sign-in and offers no setup once an account exists', async () => {
+    status({ auth_disabled: false, has_users: true, setup_required: false });
+    expect(await getAuthStatus()).toMatchObject({ requires_auth: true, bootstrap_ready: false });
+  });
+
+  it('requires nothing when auth is disabled', async () => {
+    status({ auth_disabled: true, has_users: true, setup_required: false });
+    expect(await getAuthStatus()).toMatchObject({ auth_enabled: false, requires_auth: false });
   });
 });
