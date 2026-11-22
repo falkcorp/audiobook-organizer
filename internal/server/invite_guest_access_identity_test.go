@@ -59,7 +59,9 @@ func TestKeepGuestPolicyEmail_ReadsTheAccessListUnderIdentity(t *testing.T) {
 			t.Cleanup(func() { store.Close() })
 			opts := []ServerOption{}
 			if tc.identity {
-				opts = append(opts, WithIdentity(adoptIdentity(t, nil, nil, nil)))
+				id := adoptIdentity(t, nil, nil, nil)
+				id.Users = guestUsersView{} // core's view, with no other account in it
+				opts = append(opts, WithIdentity(id))
 			}
 			if tc.allowList != nil {
 				opts = append(opts, WithAccessAllowList(tc.allowList))
@@ -70,7 +72,7 @@ func TestKeepGuestPolicyEmail_ReadsTheAccessListUnderIdentity(t *testing.T) {
 				c.OAuthAllowedEmails = inSnapshot
 			})
 			require.Equal(t, inSnapshot, config.Snapshot().OAuthAllowedEmails, "the fixture must put a different list in the snapshot")
-			require.Equal(t, tc.wantKeep, srv.keepGuestPolicyEmail("u-nobody", tc.email))
+			require.Equal(t, tc.wantKeep, srv.keepGuestPolicyEmail(t.Context(), "u-nobody", tc.email))
 		})
 	}
 }
