@@ -1,7 +1,7 @@
-// file: web/src/utils/apiKeyExpiry.test.ts
-// version: 1.0.0
-// guid: 0d4f6a2b-8c1e-4b7a-9f35-6e2d8a1c4b90
-// last-edited: 2026-10-07
+// file: core/web/packages/api-client/test/apiKeyExpiry.test.ts
+// version: 0.1.0
+// guid: 35a7d37d-7b2d-4e28-855b-f47af727de53
+// last-edited: 2026-11-22
 
 import { describe, it, expect } from 'vitest';
 import {
@@ -12,7 +12,7 @@ import {
   daysUntilDate,
   expiryAfterDays,
   formatKeyExpiry,
-} from './apiKeyExpiry';
+} from '../src/runtime/apiKeyExpiry';
 
 const NOW = Date.UTC(2026, 9, 7, 12, 0, 0);
 const HOUR = 3_600_000;

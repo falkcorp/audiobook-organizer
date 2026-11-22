@@ -1,10 +1,10 @@
-// file: web/src/utils/settingLocks.test.ts
-// version: 1.0.0
-// guid: 0a5c8e13-7d42-4b96-8f31-6e2b9d1c4a70
-// last-edited: 2026-11-19
+// file: core/web/packages/api-client/test/settingLocks.test.ts
+// version: 0.1.0
+// guid: dff10a1a-1f04-4c0b-a591-530efadf9b45
+// last-edited: 2026-11-22
 
 import { describe, expect, it } from 'vitest';
-import { describeLock } from './settingLocks';
+import { describeLock } from '../src/runtime/settingLocks';
 
 describe('describeLock', () => {
   it('names an environment variable', () => {

@@ -5,6 +5,13 @@
 
 import { defineConfig } from 'vitest/config';
 
+// The API key expiry tests assert local dates across a daylight-saving shift, so
+// every run, local or CI, uses one US zone with DST (a UTC runner would make
+// them blind). Set before the workers start, and again in test.env, as the
+// web app's vitest config does.
+const TEST_TZ = 'America/New_York';
+process.env.TZ = TEST_TZ;
+
 // Library mode, no React and no preset (07 §7.3.1: the api-client holds no React
 // code, so before the shell package exists it needs none). `dist/index.js` is what
 // an app's production build resolves; `tsc --emitDeclarationOnly` writes the .d.ts
@@ -17,6 +24,7 @@ export default defineConfig({
     sourcemap: true,
   },
   test: {
+    env: { TZ: TEST_TZ },
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.ts', 'test/**/*.test.ts'],

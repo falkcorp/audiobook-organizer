@@ -1,19 +1,19 @@
-// file: web/src/utils/apiResponse.test.ts
+// file: core/web/packages/api-client/test/apiResponse.test.ts
 // version: 0.1.0
-// guid: 3b0d7c52-9a4e-4f18-8c6d-1e5a72f0b9d4
+// guid: df377d0b-bad9-412e-b436-b80ccea208ce
 // last-edited: 2026-11-22
 
 // Pins apiResponse before F9-05 moves it to the api-client runtime: the moved
 // copy must pass this same table.
 
 import { describe, expect, it } from 'vitest';
-import { ApiAuthRedirectError } from './apiFetch';
+import { ApiAuthRedirectError } from '../src/errors';
 import {
   SESSION_EXPIRED_MESSAGE,
   describeRequestError,
   responseErrorMessage,
   unwrapData,
-} from './apiResponse';
+} from '../src/runtime/apiResponse';
 
 describe('unwrapData', () => {
   it('returns the payload of a { data } envelope', () => {
