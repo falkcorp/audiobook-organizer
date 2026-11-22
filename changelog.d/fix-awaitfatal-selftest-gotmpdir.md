@@ -1,0 +1,1 @@
+Fixed the `TestAwaitOrFatalDeadline_TimedOutWaitNeverClosesStoreUnderWorkers` self-test failing whenever `GOTMPDIR` is set (u0 CI, `rgo-host.sh`): the child process now gets `GOTMPDIR` as well as `TMPDIR`, because Go 1.27 `t.TempDir` prefers `GOTMPDIR`.
