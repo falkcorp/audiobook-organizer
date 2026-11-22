@@ -2115,6 +2115,18 @@ func (c *Config) Normalize() {
 	if c.MinRescanAgeHours == 0 {
 		c.MinRescanAgeHours = 144
 	}
+
+	// chapter_consolidation_threshold_min: normalize, never reject. A 0 in a
+	// stored blob or config file predates the rule that 0 means the default,
+	// and refusing to start over it would turn a recovered setting into an
+	// outage. Validate runs after InitConfig, after the database overlay and
+	// on every PUT candidate, and Project runs this on every projection, so
+	// this is where a zero is caught on every path that loads or changes
+	// config. See ResolveChapterConsolidationThresholdMin.
+	normalizeChapterConsolidationThreshold(c, "the loaded configuration")
+	// log_retention_days: same rule, same reason. 0 means the default, never
+	// "keep forever" (that is -1); see ResolveLogRetentionDays.
+	normalizeLogRetentionDays(c, "the loaded configuration")
 }
 
 // Problems is every structural problem Validate would report, one message
@@ -2156,17 +2168,6 @@ func (c *Config) Problems() []string {
 	default:
 		errs = append(errs, "embedding.vector_backend must be 'hnsw' or 'chromem'")
 	}
-
-	// chapter_consolidation_threshold_min: normalize, never reject. A 0 in a
-	// stored blob or config file predates the rule that 0 means the default,
-	// and refusing to start over it would turn a recovered setting into an
-	// outage. Validate runs after InitConfig, after the database overlay and
-	// on every PUT candidate, so this is where a zero is caught on every path
-	// that loads or changes config. See ResolveChapterConsolidationThresholdMin.
-	normalizeChapterConsolidationThreshold(c, "the loaded configuration")
-	// log_retention_days: same rule, same reason. 0 means the default, never
-	// "keep forever" (that is -1); see ResolveLogRetentionDays.
-	normalizeLogRetentionDays(c, "the loaded configuration")
 
 	// Backup compression is validated HERE, at startup and on PUT /config,
 	// rather than at backup time.
