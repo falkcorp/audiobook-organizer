@@ -314,7 +314,7 @@ export interface InvitePreview {
   phone_app_token?: boolean;
 }
 
-/** The accept answer's one-time phone-app key (a books feature; shown once, kept in state only). */
+/** The one-time phone-app key the claim answers with (a books feature; shown once, kept in state only). */
 export interface PhoneAppKey {
   status: 'issued' | 'unavailable';
   client_id?: string;
@@ -328,15 +328,16 @@ export async function lookupInvite(token: string): Promise<InvitePreview> {
   return body(core().POST('/api/core/v1/auth/invites/lookup', { body: { token } }), 'Could not load the invitation');
 }
 
-/** Accepts an invitation and opens its session (the cookie); the page then reloads into the app. */
-export async function acceptInvite(token: string, password: string): Promise<{ phone_app?: PhoneAppKey }> {
-  const opened = await body(
+/**
+ * Accepts an invitation and opens its session (the cookie); the page then reloads into the app.
+ * Core's answer carries no phone-app key: the guest's key is claimed by a separate call
+ * (services/phoneKeyClaim.ts) once this one has succeeded.
+ */
+export async function acceptInvite(token: string, password: string): Promise<void> {
+  await body(
     core().POST('/api/core/v1/auth/invites/accept', { body: { token, password } }),
     'Could not accept the invitation'
   );
-  // Core's SessionOpened has no phone_app; a later slice may add one beside it.
-  const extra = (opened as { phone_app?: PhoneAppKey } | null) ?? {};
-  return extra.phone_app ? { phone_app: extra.phone_app } : {};
 }
 
 /** Spends a temp-login link and opens its session (the cookie). */
