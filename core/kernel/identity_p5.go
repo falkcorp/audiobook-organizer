@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // This file is the identity boot's P5, P6 and P7 (06 §6.5.1): the events bus,
@@ -319,7 +320,7 @@ func (k *Kernel) identityConsume(ctx context.Context) error {
 		return errors.New("kernel: identity: P7 needs the services P5 built")
 	}
 	var probs []module.Problem
-	probs = append(probs, k.events.declareCore(coreTopics())...)
+	probs = append(probs, k.events.declareCore(tasks.WithViewRule(coreTopics(), k.taskViewRule()))...)
 	for _, e := range k.entries {
 		if e.enabled {
 			probs = append(probs, k.events.declare(e.man.ID, e.rec.Topics)...)
