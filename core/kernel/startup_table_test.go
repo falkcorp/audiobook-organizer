@@ -1,5 +1,5 @@
 // file: core/kernel/startup_table_test.go
-// version: 1.0.0
+// version: 0.1.0
 // guid: 1f7d3b58-6a20-4e94-8c3d-b5e9a02f7164
 // last-edited: 2026-11-22
 

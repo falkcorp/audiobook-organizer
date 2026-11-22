@@ -1,5 +1,5 @@
 // file: core/module/startup_steps_test.go
-// version: 1.0.0
+// version: 0.1.0
 // guid: 5c1e8d37-9a42-4b60-8f13-d27a6e0b4c95
 // last-edited: 2026-11-22
 
