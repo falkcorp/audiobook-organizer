@@ -75,7 +75,7 @@ export default defineConfig(({ command }) => ({
     // core/web, which has its own node_modules; the same list core's presets and
     // check-singletons.mjs use keeps react, react-router, MUI and emotion to one
     // copy each (07 §7.3.2).
-    dedupe: SINGLETONS,
+    dedupe: [...SINGLETONS, 'zustand'],
   },
   server: {
     port: 5173,

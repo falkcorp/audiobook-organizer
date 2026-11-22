@@ -1,10 +1,10 @@
-// file: web/src/stores/useAppStore.test.ts
-// version: 1.0.0
-// guid: f6a7b8c9-d0e1-4f2a-8b3c-4d5e6f7a8b9c
-// last-edited: 2026-07-03
+// file: core/web/packages/shell/test/appStore.test.ts
+// version: 0.1.0
+// guid: 9ec04d42-fa19-4af6-8bb0-554366b2b65d
+// last-edited: 2026-11-22
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useAppStore } from './useAppStore';
+import { useAppStore } from '../src/providers/appStore';
 
 // Regression coverage for an unbounded-memory-growth bug: error/warning
 // notifications never auto-remove and the array had no length cap, so a

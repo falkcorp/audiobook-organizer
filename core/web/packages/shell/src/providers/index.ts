@@ -7,6 +7,7 @@
 // operations indicator and the Activity page. AuthProvider, ToastProvider and
 // TaskTrackerProvider live in ../auth, ../toast and ../tasks (F9-01).
 
+export { useAppStore } from './appStore';
 export {
   byNewestFirst,
   GROUP_IDLE_GAP_MS,

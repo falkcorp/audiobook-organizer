@@ -1,7 +1,7 @@
-// file: web/src/utils/safeReturn.test.ts
-// version: 1.0.0
-// guid: 4f1a2b3c-5d6e-7f80-9a1b-2c3d4e5f6a7b
-// last-edited: 2026-08-21
+// file: core/web/packages/shell/test/sanitizeReturn.test.ts
+// version: 0.1.0
+// guid: 16560de2-1f3f-4543-a3c2-2f4484774f1e
+// last-edited: 2026-11-22
 
 // Guards the two client-side navigation sinks (Login.tsx's location.state.from,
 // BookDetail.tsx's sessionStorage['library_return_url']) that previously handed
@@ -13,7 +13,7 @@
 // leaving the user stuck.
 
 import { describe, expect, it } from 'vitest';
-import { sanitizeReturn } from './safeReturn';
+import { sanitizeReturn } from '../src/auth/sanitizeReturn';
 
 describe('sanitizeReturn — rejects open-redirect payloads', () => {
   it.each([
