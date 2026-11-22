@@ -518,33 +518,61 @@ func reachRouteHandlerProblems(src []byte, pin map[string]string, want map[strin
 
 const reachMountSource = "../module.go"
 
-// reachMountAuth is what books' MountLegacy call hands as Auth: the name of the
-// httpapi identifier, found in the httpapi.LegacyMount literal.
+// reachMountAuth is what books' MountLegacy call hands as Auth in PRODUCTION:
+// the name of the httpapi identifier in the one httpapi.LegacyMount literal.
+//
+// The mount is a variable (mount := httpapi.LegacyMount{...}; r.MountLegacy(mount)),
+// so the literal's Auth field is not the whole story: a later `mount.Auth =
+// httpapi.LegacyAuthCore` reaches the kernel and the guard that read only the
+// literal passed it as Gin (B10 finding 3). The guard therefore reads every
+// write to an Auth field in the file and accepts exactly ONE shape besides the
+// literal: the identity predicate's own,
+//
+//	if identityOn() { mount.Auth = httpapi.LegacyAuthCore }
+//
+// with no else, nothing else in the block and the condition the bare call, on
+// the variable the literal was assigned to. The predicate is off in production
+// until B10g (internal/arch's guard keeps its only writer a test), so that shape
+// does not change what the shipped binary mounts, and the name returned is the
+// literal's. Any other write to .Auth, a second LegacyMount literal, an unkeyed
+// one, a MountLegacy call that is not handed that variable, or two such calls,
+// is an error (fail closed).
 func reachMountAuth(src []byte) (string, error) {
 	f, err := parser.ParseFile(token.NewFileSet(), reachMountSource, src, 0)
 	if err != nil {
 		return "", err
 	}
-	found := ""
-	n := 0
+	found, lits := "", 0
+	litVar := "" // the variable the literal is assigned to, "" when it is passed directly
+	var problems []string
+	// The identifier the literal is bound to.
+	ast.Inspect(f, func(node ast.Node) bool {
+		as, ok := node.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		if lit, ok := as.Rhs[0].(*ast.CompositeLit); ok && reachIsLegacyMount(lit) {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok {
+				litVar = id.Name
+			}
+		}
+		return true
+	})
 	ast.Inspect(f, func(node ast.Node) bool {
 		lit, ok := node.(*ast.CompositeLit)
-		if !ok {
+		if !ok || !reachIsLegacyMount(lit) {
 			return true
 		}
-		sel, ok := lit.Type.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "LegacyMount" {
-			return true
-		}
+		lits++
 		for _, el := range lit.Elts {
 			kv, ok := el.(*ast.KeyValueExpr)
 			if !ok {
+				problems = append(problems, "a LegacyMount literal with an unkeyed element")
 				continue
 			}
 			if k, ok := kv.Key.(*ast.Ident); !ok || k.Name != "Auth" {
 				continue
 			}
-			n++
 			switch v := kv.Value.(type) {
 			case *ast.SelectorExpr:
 				found = v.Sel.Name
@@ -556,10 +584,111 @@ func reachMountAuth(src []byte) (string, error) {
 		}
 		return true
 	})
-	if n != 1 {
-		return "", fmt.Errorf("%s holds %d httpapi.LegacyMount literals with an Auth field, want exactly 1", reachMountSource, n)
+	gated := 0
+	{
+		ast.Inspect(f, func(node ast.Node) bool {
+			switch x := node.(type) {
+			case *ast.IfStmt:
+				if reachGatedMountWrite(x, litVar) {
+					gated++
+					return false // accepted whole: its body is the one write
+				}
+			case *ast.AssignStmt:
+				for _, l := range x.Lhs {
+					if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == "Auth" {
+						problems = append(problems, "a write to an Auth field outside the literal and the identity predicate's one gated statement")
+					}
+				}
+			case *ast.UnaryExpr:
+				if sel, ok := x.X.(*ast.SelectorExpr); ok && x.Op == token.AND && sel.Sel.Name == "Auth" {
+					problems = append(problems, "the address of an Auth field is taken")
+				}
+			case *ast.IncDecStmt:
+				if sel, ok := x.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Auth" {
+					problems = append(problems, "an Auth field is incremented")
+				}
+			}
+			return true
+		})
+	}
+	if gated > 1 {
+		problems = append(problems, fmt.Sprintf("%d identity-gated writes to .Auth, want at most 1", gated))
+	}
+	calls := 0
+	ast.Inspect(f, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "MountLegacy" {
+			return true
+		}
+		calls++
+		if len(call.Args) != 1 {
+			problems = append(problems, "MountLegacy is not called with one argument")
+			return true
+		}
+		switch a := call.Args[0].(type) {
+		case *ast.Ident:
+			if litVar == "" || a.Name != litVar {
+				problems = append(problems, "MountLegacy is handed "+a.Name+", not the variable the LegacyMount literal is assigned to")
+			}
+		case *ast.CompositeLit:
+			if litVar != "" || !reachIsLegacyMount(a) {
+				problems = append(problems, "MountLegacy is handed a literal that is not the one LegacyMount")
+			}
+		default:
+			problems = append(problems, "MountLegacy is handed an expression the guard cannot follow")
+		}
+		return true
+	})
+	switch {
+	case lits != 1:
+		return "", fmt.Errorf("%s holds %d httpapi.LegacyMount literals, want exactly 1", reachMountSource, lits)
+	case calls != 1:
+		return "", fmt.Errorf("%s calls MountLegacy %d times, want exactly 1", reachMountSource, calls)
+	case found == "":
+		return "", fmt.Errorf("%s: the httpapi.LegacyMount literal has no Auth field", reachMountSource)
+	case len(problems) > 0:
+		return "", fmt.Errorf("%s: %s", reachMountSource, strings.Join(problems, "; "))
 	}
 	return found, nil
+}
+
+// reachIsLegacyMount reports an httpapi.LegacyMount composite literal.
+func reachIsLegacyMount(lit *ast.CompositeLit) bool {
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "LegacyMount"
+}
+
+// reachGatedMountWrite reports the one accepted rewrite: `if identityOn() {
+// <v>.Auth = httpapi.LegacyAuthCore }` on the variable v the literal is
+// assigned to, with no init, no else and nothing else in the block.
+func reachGatedMountWrite(x *ast.IfStmt, litVar string) bool {
+	if litVar == "" || x.Init != nil || x.Else != nil || len(x.Body.List) != 1 {
+		return false
+	}
+	call, ok := x.Cond.(*ast.CallExpr)
+	if !ok || len(call.Args) != 0 {
+		return false
+	}
+	if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "identityOn" {
+		return false
+	}
+	as, ok := x.Body.List[0].(*ast.AssignStmt)
+	if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+		return false
+	}
+	lhs, ok := as.Lhs[0].(*ast.SelectorExpr)
+	if !ok || lhs.Sel.Name != "Auth" {
+		return false
+	}
+	if id, ok := lhs.X.(*ast.Ident); !ok || id.Name != litVar {
+		return false
+	}
+	rhs, ok := as.Rhs[0].(*ast.SelectorExpr)
+	return ok && rhs.Sel.Name == "LegacyAuthCore"
 }
 
 // reachFlipProblems is what the mount switch fails on, as text. While the pin
@@ -913,4 +1042,59 @@ func TestReachHandlerAdminPin_FailsWhenTheRefusalIsNotATopLevelStatement(t *test
 			}
 		})
 	}
+}
+
+// B10 finding 3: books' mount is a variable, so a rewrite of its Auth after the
+// literal reaches the kernel while the literal still reads LegacyAuthGin. The real
+// source (the literal plus the identity predicate's one gated statement) reads as
+// Gin; every other way to change what the mount hands the kernel is refused.
+func TestReachFlip_TheMountGuardRefusesEachWayToRewriteAuth(t *testing.T) {
+	src, err := os.ReadFile(reachMountSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const gated = "if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"
+	if bytes.Count(src, []byte(gated)) != 1 {
+		t.Fatalf("the premise changed: module.go no longer holds the one gated statement %q", gated)
+	}
+	if auth, err := reachMountAuth(src); err != nil || auth != "LegacyAuthGin" {
+		t.Fatalf("the real mount reads %q (%v), want LegacyAuthGin", auth, err)
+	}
+	for _, tc := range []struct {
+		name string
+		from string
+		to   string
+	}{
+		{"an unconditional rewrite to Core", gated, "mount.Auth = httpapi.LegacyAuthCore"},
+		{"a rewrite behind another condition", gated, "if os.Getenv(\"X\") != \"\" {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"a rewrite behind a constant true", gated, "if true {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"the predicate negated", gated, "if !identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"an else branch rewrites it too", gated, "if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t} else {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"a second statement in the gated block", gated, "if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t\tmount.ServesSPA = false\n\t}"},
+		{"the gated write names another value", gated, "if identityOn() {\n\t\tmount.Auth = authMode()\n\t}"},
+		{"the gated write goes to a different variable", gated, "if identityOn() {\n\t\tother.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"the gated write is a second gated write", gated, gated + "\n\tif identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"the gated write has an init", gated, "if ok := true; identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
+		{"the address of Auth is taken", gated, gated + "\n\t_ = &mount.Auth"},
+		{"MountLegacy is handed another variable", "r.MountLegacy(mount)", "r.MountLegacy(other)"},
+		{"MountLegacy is handed a call", "r.MountLegacy(mount)", "r.MountLegacy(buildMount(mount))"},
+		{"MountLegacy is called twice", "r.MountLegacy(mount)", "r.MountLegacy(mount)\n\tr.MountLegacy(mount)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mutant := reachMutate(t, src, tc.from, tc.to)
+			auth, err := reachMountAuth(mutant)
+			if err == nil {
+				t.Fatalf("the guard read %q from a source that rewrites the mount's Auth (%s)", auth, tc.name)
+			}
+			if got := reachFlipProblems(mutant, 0, true, nil); len(got) != 1 || !strings.Contains(got[0], "could not be read") {
+				t.Errorf("reachFlipProblems on the mutant: %q, want the fail-closed refusal", got)
+			}
+		})
+	}
+	t.Run("a second LegacyMount literal", func(t *testing.T) {
+		mutant := append(bytes.Clone(src), []byte("\nvar sneaky = httpapi.LegacyMount{Auth: httpapi.LegacyAuthCore}\n")...)
+		if _, err := reachMountAuth(mutant); err == nil {
+			t.Error("a second literal was accepted")
+		}
+	})
 }
