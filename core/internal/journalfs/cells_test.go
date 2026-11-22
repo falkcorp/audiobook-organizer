@@ -231,6 +231,81 @@ func TestKill_LocationFileIsNeverTorn(t *testing.T) {
 	}
 }
 
+// TestKill_HookRunFileIsNeverTornOrReadAsAnotherRuns: a crash before any single
+// durable step of EnsureHookRun or ClearHookRun, or just after it returned, leaves
+// restore_hook_run.json absent or whole (never an error from the next
+// EnsureHookRun, never a torn file served as an ID), and the next EnsureHookRun
+// over what the crash left returns an ID the call after it returns again. A run
+// that found the file after the crash keeps the ID it was minted (the crash fell
+// after the rename), and one that found none mints another: what a crash can
+// never do is hand a run an ID a record it did not write is keyed on.
+func TestKill_HookRunFileIsNeverTornOrReadAsAnotherRuns(t *testing.T) {
+	st := newStore(t)
+	const binding = "owed:7/ab"
+	ensure := func(e *env) (string, error) {
+		return journal.EnsureHookRun(stateDir, binding, fixedClock(), journal.WithFS(e.fsys))
+	}
+	for _, clearing := range []bool{false, true} {
+		got := reached{}
+		_, clones := crashRun(t, st, func(e *env) {
+			if clearing {
+				if _, err := ensure(e); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}, func(e *env) {
+			var err error
+			if clearing {
+				err = journal.ClearHookRun(stateDir, journal.WithFS(e.fsys))
+			} else {
+				_, err = ensure(e)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		want := 4 // the temporary file's sync, the rename, the directory sync, the settled state
+		if clearing {
+			want = 2 // the removal and the directory sync
+		}
+		if killPoints(clones) < want*(1+len(mixedSeeds)) {
+			t.Fatalf("clearing=%v took %d crash states, want at least %d", clearing, killPoints(clones), want*(1+len(mixedSeeds)))
+		}
+		for _, c := range clones {
+			t.Run(fmt.Sprintf("clearing=%v/%s", clearing, cloneName(c)), func(t *testing.T) {
+				e := (&env{t: t, st: st}).after(c)
+				present := exists(t, e.rec.FS(), stateDir+"/"+journal.HookRunFile)
+				if present {
+					got["file"]++
+				} else {
+					got["absent"]++
+				}
+				if exists(t, e.rec.FS(), stateDir+"/"+journal.HookRunFile+".tmp") {
+					got["temp left"]++
+				}
+				first, err := ensure(e)
+				if err != nil {
+					t.Fatalf("EnsureHookRun after a crash before %s: %v", c.Event.Label, err)
+				}
+				if again, err := ensure(e); err != nil || again != first {
+					t.Fatalf("a second EnsureHookRun = %q, %v, want %q", again, err, first)
+				}
+				if exists(t, e.rec.FS(), stateDir+"/"+journal.HookRunFile+".tmp") {
+					t.Fatal("a temporary file survived the next EnsureHookRun")
+				}
+				if err := journal.ClearHookRun(stateDir, journal.WithFS(e.fsys)); err != nil {
+					t.Fatalf("ClearHookRun after the crash: %v", err)
+				}
+			})
+		}
+		if clearing {
+			got.require(t, "file", "absent")
+		} else {
+			got.require(t, "file", "absent", "temp left")
+		}
+	}
+}
+
 // TestKill_TornLocationTempIsIgnoredAndReplaced: a temporary file a crash left
 // half written is never read as the location, and the next WriteLocation
 // replaces it rather than appending to it.

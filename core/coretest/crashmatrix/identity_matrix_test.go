@@ -129,6 +129,7 @@ func identityLabels() []string {
 		[]string{rbac.LabelCommitSeeds, kernel.LabelBackupDirMkdir, auth.BootstrapTokenLabel, auth.ReadOnlyKeyLabel},
 		[]string{backupjournal.LabelCreate, backupjournal.LabelHeader, backupjournal.LabelDirSync, backupjournal.LabelAppend},
 		[]string{backupjournal.LabelLocationTmp, backupjournal.LabelLocationRename, backupjournal.LabelLocationDirSync, backupjournal.LabelLocationCleanup},
+		[]string{backupjournal.LabelHookRunTmp, backupjournal.LabelHookRunRename, backupjournal.LabelHookRunDirSync, backupjournal.LabelHookRunCleanup, backupjournal.LabelHookRunClear, backupjournal.LabelHookRunClearDirSync},
 	)
 }
 
