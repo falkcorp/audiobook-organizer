@@ -33,3 +33,10 @@ func (s *Service) OwnerSatisfied(p *Principal) bool { return s.ownerSatisfied(p)
 // ClientOf is the ClientInfo the service builds for r when no resolver is
 // wired (Service.client).
 func (s *Service) ClientOf(r *http.Request) ClientInfo { return s.client(r) }
+
+// NewMergePlanForTest is a UserMergePlan a test assembles by hand, for the
+// refusals a real PlanUserMerge would stop before it could return a plan (the
+// plan is opaque to every other package).
+func NewMergePlanForTest(source, target UserID, srcVersion, tgtVersion int64, rows ...MergeRow) UserMergePlan {
+	return UserMergePlan{source: source, target: target, srcVersion: srcVersion, tgtVersion: tgtVersion, rows: rows}
+}

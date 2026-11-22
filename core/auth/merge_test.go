@@ -30,6 +30,43 @@ func (f *fx) keyRow(id string) auth.MergeRow {
 	return auth.MergeRow{Kind: auth.MergeAPIKey, ID: id, Seen: seen}
 }
 
+// planMerge is the plan Admin.PlanUserMerge gives actor for source into target.
+func (f *fx) planMerge(actor *auth.Principal, source, target auth.UserID) auth.UserMergePlan {
+	f.t.Helper()
+	plan, _, err := f.svc.PlanUserMerge(auth.WithPrincipal(context.Background(), actor), source, target)
+	if err != nil {
+		f.t.Fatalf("PlanUserMerge(%s, %s): %v", source, target, err)
+	}
+	return plan
+}
+
+// rawPlan is a plan assembled by hand over the users' current versions, for
+// the refusals a real preview would stop before it could return one.
+func (f *fx) rawPlan(source, target auth.UserID, rows ...auth.MergeRow) auth.UserMergePlan {
+	f.t.Helper()
+	return auth.NewMergePlanForTest(source, target, f.reload(source).Version, f.reload(target).Version, rows...)
+}
+
+// currentPlan is a plan assembled by hand over the users' current versions and
+// the source's current rows, for a refusal a real preview would stop before it
+// could return a plan: a plan that is stale in no respect, so the refusal under
+// test is the one reported (a stale plan is reported as ErrMergeConflict).
+func (f *fx) currentPlan(source, target auth.UserID) auth.UserMergePlan {
+	f.t.Helper()
+	rows, err := f.st.MergeRows(context.Background(), source)
+	if err != nil {
+		f.t.Fatalf("MergeRows(%s): %v", source, err)
+	}
+	return f.rawPlan(source, target, rows...)
+}
+
+// signable gives u a password: the merge's no-sign-in rule refuses a target
+// with no password and no linked sign-in.
+func (f *fx) signable(u *auth.User) *auth.User {
+	f.t.Helper()
+	return f.withPassword(u, "the-batcave-1939")
+}
+
 // stageMerge stages plan as actor into a fresh batch and commits it when
 // staging succeeded, then runs the merge's AfterCommit as a caller must. It
 // returns the staging error, else the commit's.
@@ -65,7 +102,7 @@ func TestUserMergeDeletesSourceInvites(t *testing.T) {
 	ctx := context.Background()
 	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 	jason := f.user("jason-todd", roleCommissioner)
-	dick := f.user("dick-grayson", "gotham.detective")
+	dick := f.signable(f.user("dick-grayson", "gotham.detective"))
 
 	sourceInvite, _ := f.invite(f.session(jason), detectiveInvite("harper-row"))
 	_, kept := f.invite(f.session(bruce), detectiveInvite("cassandra-cain"))
@@ -75,7 +112,7 @@ func TestUserMergeDeletesSourceInvites(t *testing.T) {
 	linesBefore := len(f.jrnl.lines)
 	f.jrnl.mu.Unlock()
 
-	plan := auth.UserMergePlan{Source: jason.ID, Target: dick.ID, Rows: []auth.MergeRow{f.keyRow(k.ID)}}
+	plan := f.planMerge(f.signedIn(bruce), jason.ID, dick.ID)
 	if err := f.stageMerge(f.signedIn(bruce), plan); err != nil {
 		t.Fatalf("StageUserMerge: %v", err)
 	}
@@ -123,28 +160,45 @@ func TestUserMergeDeletesSourceInvites(t *testing.T) {
 	}
 }
 
-// TestUserMerge_ChangedRowFailsTheCommit (DATA10-9): a record changed after
-// the plan read it fails the merge's commit with storage.ErrConflict, and
-// nothing of the merge lands: the source stays active with its invite.
-func TestUserMerge_ChangedRowFailsTheCommit(t *testing.T) {
+// TestUserMerge_ChangedRowFailsTheMerge (DATA10-9): a record changed after the
+// plan read it is refused at staging (ErrMergeConflict) when it changed before
+// StageUserMerge, and fails the commit with storage.ErrConflict when it
+// changed between staging and the commit. Either way nothing of the merge
+// lands: the source stays active with its invite.
+func TestUserMerge_ChangedRowFailsTheMerge(t *testing.T) {
 	f := newFx(t)
 	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 	jason := f.user("jason-todd", roleCommissioner)
-	dick := f.user("dick-grayson", "gotham.detective")
+	dick := f.signable(f.user("dick-grayson", "gotham.detective"))
 	f.invite(f.session(jason), detectiveInvite("harper-row"))
 	_, k := f.mint(f.session(jason), jason.ID, "gotham:patrol")
-	plan := auth.UserMergePlan{Source: jason.ID, Target: dick.ID, Rows: []auth.MergeRow{f.keyRow(k.ID)}}
+	plan := f.planMerge(f.signedIn(bruce), jason.ID, dick.ID)
 
-	renamed := f.key(k.ID)
-	renamed.Name, renamed.Version = "grappling hook", renamed.Version+1
-	f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, renamed) })
-
-	err := f.stageMerge(f.signedIn(bruce), plan)
-	wantErr(t, "a merge over a changed key", err, storage.ErrConflict)
-	if src := f.reload(jason.ID); src.Status != auth.StatusActive {
-		t.Fatalf("source after a failed merge: %s", src.Status)
+	rename := func(name string) {
+		renamed := f.key(k.ID)
+		renamed.Name, renamed.Version = name, renamed.Version+1
+		f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, renamed) })
 	}
-	if got := f.key(k.ID); got.Owner != jason.ID || got.Name != "grappling hook" {
+	rename("grappling hook")
+	err := f.stageMerge(f.signedIn(bruce), plan)
+	wantErr(t, "a merge staged over a changed key", err, auth.ErrMergeConflict)
+
+	// Replanned over the changed key, then changed again between staging and
+	// the commit: the batch's own Expect fails the commit.
+	plan = f.planMerge(f.signedIn(bruce), jason.ID, dick.ID)
+	ctx := auth.WithPrincipal(context.Background(), f.signedIn(bruce))
+	b := f.st.NewBatch()
+	defer func() { _ = b.Close() }()
+	if _, err := f.svc.StageUserMerge(ctx, b, plan); err != nil {
+		t.Fatalf("StageUserMerge: %v", err)
+	}
+	rename("batarang")
+	wantErr(t, "a commit over a key changed after staging", b.Commit(ctx, storage.Sync), storage.ErrConflict)
+
+	if src := f.reload(jason.ID); src.Status != auth.StatusActive || src.MergedInto != "" {
+		t.Fatalf("source after a failed merge: %+v", src)
+	}
+	if got := f.key(k.ID); got.Owner != jason.ID || got.Name != "batarang" {
 		t.Fatalf("key after a failed merge: %+v", got)
 	}
 	n := 0
@@ -168,8 +222,8 @@ func TestUserMerge_Gates(t *testing.T) {
 	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 	gordon := f.user("jim-gordon", roleCommissioner)
 	jason := f.user("jason-todd", "gotham.detective")
-	dick := f.user("dick-grayson", "gotham.detective")
-	plan := auth.UserMergePlan{Source: jason.ID, Target: dick.ID}
+	dick := f.signable(f.user("dick-grayson", "gotham.detective"))
+	plan := f.planMerge(f.signedIn(bruce), jason.ID, dick.ID)
 	owner := func(p *auth.Principal) *auth.Principal { p.Assurance |= auth.AssuranceOwner; return p }
 
 	wantErr(t, "no principal", f.stageMerge(nil, plan), auth.ErrDenied)
@@ -177,16 +231,37 @@ func TestUserMerge_Gates(t *testing.T) {
 	wantErr(t, "an admin's key", f.stageMerge(f.keyPrincipal(bruce, k), plan), auth.ErrDenied)
 	wantErr(t, "a user manager below admin, no owner gate", f.stageMerge(f.signedIn(gordon), plan), auth.ErrDenied)
 	wantErr(t, "a user manager who is not an admin, dominating neither admin",
-		f.stageMerge(owner(f.signedIn(gordon)), auth.UserMergePlan{Source: jason.ID, Target: bruce.ID}), auth.ErrDominance)
+		f.stageMerge(owner(f.signedIn(gordon)), f.rawPlan(jason.ID, bruce.ID)), auth.ErrDominance)
 	_, noBatch := f.svc.StageUserMerge(auth.WithPrincipal(context.Background(), f.signedIn(bruce)), nil, plan)
 	wantErr(t, "no batch", noBatch, auth.ErrBadInput)
 	// The sole admin, so a merge that went on would meet the last-admin rule.
-	wantErr(t, "one user twice", f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: bruce.ID, Target: bruce.ID}), auth.ErrBadInput)
+	wantErr(t, "one user twice", f.stageMerge(f.signedIn(bruce), f.rawPlan(bruce.ID, bruce.ID)), auth.ErrBadInput)
+	wantErr(t, "the zero plan", f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{}), auth.ErrBadInput)
 	alfred := f.edit(f.user("alfred-pennyworth"), func(u *auth.User) { u.Status = auth.StatusSystem })
-	wantErr(t, "the system user", f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: alfred.ID, Target: dick.ID}), auth.ErrBadInput)
-	wantErr(t, "into the system user", f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: jason.ID, Target: alfred.ID}), auth.ErrBadInput)
+	wantErr(t, "the system user", f.stageMerge(f.signedIn(bruce), f.rawPlan(alfred.ID, dick.ID)), auth.ErrBadInput)
+	wantErr(t, "into the system user", f.stageMerge(f.signedIn(bruce), f.rawPlan(jason.ID, alfred.ID)), auth.ErrBadInput)
+	// Core keeps the last-admin rule although the app cannot reach it: the books
+	// side refuses a survivor that is not an admin (internal/usermerge plan.go),
+	// and a sole-admin source merged into an admin survivor leaves that survivor
+	// as the other holder. Here the survivor is not an admin, which only a caller
+	// that skipped the books rule could ask for, and core refuses it on its own.
 	wantErr(t, "the sole admin merging itself away",
-		f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: bruce.ID, Target: dick.ID}), auth.ErrLastAdmin)
+		f.stageMerge(f.signedIn(bruce), f.currentPlan(bruce.ID, dick.ID)), auth.ErrLastAdmin)
+	// PlanUserMerge runs the same refusals, so none of these returns a plan.
+	for what, args := range map[string][2]auth.UserID{
+		"the sole admin merging itself away": {bruce.ID, dick.ID}, "one user twice": {bruce.ID, bruce.ID},
+		"the system user": {alfred.ID, dick.ID}, "into the system user": {jason.ID, alfred.ID},
+	} {
+		if _, _, err := f.svc.PlanUserMerge(auth.WithPrincipal(context.Background(), f.signedIn(bruce)), args[0], args[1]); err == nil {
+			t.Errorf("PlanUserMerge(%s) returned no error", what)
+		}
+	}
+	if _, _, err := f.svc.PlanUserMerge(context.Background(), jason.ID, dick.ID); !errors.Is(err, auth.ErrDenied) {
+		t.Errorf("PlanUserMerge with no principal = %v, want ErrDenied", err)
+	}
+	if _, _, err := f.svc.PlanUserMerge(auth.WithPrincipal(context.Background(), f.signedIn(gordon)), jason.ID, dick.ID); !errors.Is(err, auth.ErrDenied) {
+		t.Errorf("PlanUserMerge by a user manager below admin = %v, want ErrDenied", err)
+	}
 
 	required := true
 	f.setSettings(auth.Settings{OwnerRequired: &required})
@@ -217,7 +292,8 @@ func TestUserMerge_OwnerGateDefault(t *testing.T) {
 			f := newFx(t)
 			bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 			jason := f.user("jason-todd", "gotham.detective")
-			dick := f.user("dick-grayson", "gotham.detective")
+			dick := f.signable(f.user("dick-grayson", "gotham.detective"))
+			plan := f.planMerge(f.signedIn(bruce), jason.ID, dick.ID)
 			f.setSettings(auth.Settings{OwnerRequired: tc.setting})
 			svc, err := auth.New(context.Background(), auth.Options{}, auth.Deps{
 				Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
@@ -232,7 +308,7 @@ func TestUserMerge_OwnerGateDefault(t *testing.T) {
 				t.Fatal(err)
 			}
 			f.svc = svc
-			err = f.stageMerge(f.session(bruce), auth.UserMergePlan{Source: jason.ID, Target: dick.ID})
+			err = f.stageMerge(f.session(bruce), plan)
 			if tc.want == nil && err != nil || tc.want != nil && !errors.Is(err, tc.want) {
 				t.Fatalf("an admin's merge = %v, want %v", err, tc.want)
 			}

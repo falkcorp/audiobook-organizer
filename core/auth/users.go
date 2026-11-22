@@ -216,10 +216,10 @@ func (s *Service) CreateUser(ctx context.Context, actor *Principal, in NewUser) 
 	return u, nil
 }
 
-// emailVerifiedElsewhere reports whether an account other than except holds
-// email verified. An undecodable record cannot be ruled out, so it counts as
+// emailVerifiedElsewhere reports whether an account other than those in except
+// holds email verified. An undecodable record cannot be ruled out, so it counts as
 // one (HEAD's ErrUserEmailTaken rule).
-func (s *Service) emailVerifiedElsewhere(ctx context.Context, email string, except UserID) (bool, error) {
+func (s *Service) emailVerifiedElsewhere(ctx context.Context, email string, except ...UserID) (bool, error) {
 	for u, err := range s.d.Store.ScanUsers(ctx) {
 		if errors.Is(err, ErrUndecodableRecord) {
 			return true, nil
@@ -227,7 +227,7 @@ func (s *Service) emailVerifiedElsewhere(ctx context.Context, email string, exce
 		if err != nil {
 			return false, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 		}
-		if u.ID != except && u.EmailVerified && SameEmail(u.Email, email) {
+		if !slices.Contains(except, u.ID) && u.EmailVerified && SameEmail(u.Email, email) {
 			return true, nil
 		}
 	}

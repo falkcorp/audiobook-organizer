@@ -209,7 +209,7 @@ func TestTempLogin_CreatorChangesDeleteItsLinksEagerly(t *testing.T) {
 			return f.svc.RevokeAllSessions(context.Background(), f.signedIn(gordon), gordon.ID, "")
 		}},
 		"merged away": {run: func(f *fx, bruce, gordon *auth.User) error {
-			return f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: gordon.ID, Target: f.reload("u-dick-grayson").ID})
+			return f.stageMerge(f.signedIn(bruce), f.planMerge(f.signedIn(bruce), gordon.ID, "u-dick-grayson"))
 		}},
 		"loses core:users.manage": {run: func(f *fx, bruce, gordon *auth.User) error {
 			return f.svc.SetRoles(context.Background(), f.session(bruce), gordon.ID, []rbac.RoleName{"gotham.detective"})
@@ -224,7 +224,7 @@ func TestTempLogin_CreatorChangesDeleteItsLinksEagerly(t *testing.T) {
 			bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 			alfred := f.user("alfred-pennyworth", rbac.RoleAdmin)
 			gordon := f.user("jim-gordon", roleCommissioner)
-			f.user("dick-grayson", "gotham.detective")
+			f.signable(f.user("dick-grayson", "gotham.detective"))
 			tim := f.user("tim-drake", "gotham.detective")
 			jason := f.user("jason-todd", "gotham.detective")
 			reset := f.mintTemp(f.session(gordon), tim.ID, true)
