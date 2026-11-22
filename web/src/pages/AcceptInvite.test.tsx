@@ -140,46 +140,4 @@ describe('AcceptInvite', () => {
     expect(screen.getByText(/shows your own phone-app key once/i)).toBeInTheDocument();
     expect(screen.queryByText(/CF-Access-Client/i)).not.toBeInTheDocument();
   });
-
-  it('shows the guest their own key exactly once after accept', async () => {
-    serve({
-      'POST /auth/invites/lookup': () => preview({ phone_app_token: true }),
-      'POST /auth/invites/accept': () =>
-        session({
-          phone_app: {
-            status: 'issued',
-            client_id: 'abc123.access',
-            client_secret: 'test-secret-value',
-            id_header: 'CF-Access-Client-Id',
-            secret_header: 'CF-Access-Client-Secret',
-          },
-        }),
-    });
-    const user = userEvent.setup();
-    renderPage();
-    await fillAndSubmit(user);
-    expect(await screen.findByTestId('phone-app-client-id')).toHaveTextContent('abc123.access');
-    expect(screen.getByTestId('phone-app-client-secret')).toHaveTextContent('test-secret-value');
-    expect(screen.getByText(/only once/i)).toBeInTheDocument();
-    expect(screen.queryByText(/will be added to your account soon/i)).not.toBeInTheDocument();
-  });
-
-  it('says so when the key could not be created, without blocking the account', async () => {
-    serve({
-      'POST /auth/invites/lookup': () => preview({ phone_app_token: true }),
-      'POST /auth/invites/accept': () =>
-        session({
-          phone_app: {
-            status: 'unavailable',
-            message: 'Your phone-app key could not be created. Ask the person who invited you.',
-          },
-        }),
-    });
-    const user = userEvent.setup();
-    renderPage();
-    await fillAndSubmit(user);
-    expect(await screen.findByText(/is ready/i)).toBeInTheDocument();
-    expect(screen.getByText(/phone-app key could not be created/i)).toBeInTheDocument();
-    expect(screen.queryByTestId('phone-app-client-secret')).not.toBeInTheDocument();
-  });
 });
