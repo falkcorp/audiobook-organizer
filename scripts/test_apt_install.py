@@ -219,6 +219,12 @@ class AptInstallTest(unittest.TestCase):
             "Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n"
         )
         self.log = self.tmp / "calls.log"
+        # Hermetic stand-ins for the fallback source's inputs: never /etc.
+        self.fallback = self.tmp / "zz-fallback.sources"
+        self.os_release = self.tmp / "os-release"
+        self.os_release.write_text('NAME="Ubuntu"\nVERSION_CODENAME=resolute\nUBUNTU_CODENAME=resolute\n')
+        self.keyring = self.tmp / "ubuntu-archive-keyring.gpg"
+        self.keyring.write_bytes(b"key")
         _exe(self.bin / "sudo", 'exec "$@"\n')
         _exe(self.bin / "sed", f'exec "{SED}" "$@"\n')
         _exe(
@@ -232,7 +238,7 @@ class AptInstallTest(unittest.TestCase):
         _exe(
             self.bin / "apt-get",
             f"""
-            uri=$(grep -h '^URIs:' $APT_SOURCES_FILES | head -1 | awk '{{print $2}}')
+            uri=$(grep -h '^URIs:' $APT_SOURCES_FILES "$APT_FALLBACK_SOURCES" 2>/dev/null | grep -v packages.microsoft.com | head -1 | awk '{{print $2}}')
             case "$uri" in
               mirror+file:*) host=$(head -1 "$FAKE_MIRRORS_FILE" | sed -E 's#https?://([^/]*)/.*#\\1#') ;;
               *) host=$(echo "$uri" | sed -E 's#https?://([^/]*)/.*#\\1#') ;;
@@ -265,8 +271,12 @@ class AptInstallTest(unittest.TestCase):
             APT_MIRRORS=mirrors,
             FAKE_SLOW_HOSTS=slow_hosts,
             FAKE_SLEEP=sleep,
-            **extra_env,
+            APT_FALLBACK_SOURCES=str(self.fallback),
+            APT_OS_RELEASE=str(self.os_release),
+            APT_DPKG_ARCH="amd64",
+            APT_UBUNTU_KEYRING=str(self.keyring),
         )
+        env.update(extra_env)
         return subprocess.run(
             ["bash", str(CI / "apt_install.sh"), "pkg"],
             env=env, capture_output=True, text=True, timeout=60,
@@ -331,6 +341,111 @@ class AptInstallTest(unittest.TestCase):
         r = self.run_script(slow_hosts="")
         self.assertIn("keeping the configured mirror", r.stderr)
         self.assertEqual(self.src.read_text(), "URIs: http://mirror.example.test/ubuntu/\n")
+        # An operator's own /ubuntu/ mirror is an archive: no fallback beside it.
+        self.assertFalse(self.fallback.exists())
+
+    # --- a runner with no Ubuntu archive at all (2026-11-22) ----------------
+
+    MICROSOFT_ONLY = ("Types: deb\nURIs: https://packages.microsoft.com/ubuntu/26.04/prod\n"
+                      "Suites: resolute\nComponents: main\n")
+
+    def locate_needs_archive(self):
+        """A fake apt-get that, like the 2026-11-22 runner, cannot locate the
+        package unless some source names an Ubuntu archive host."""
+        _exe(
+            self.bin / "apt-get",
+            f"""
+            if grep -hqE '^URIs: http://[^ ]*archive\\.ubuntu\\.com/ubuntu/' "$APT_FALLBACK_SOURCES" 2>/dev/null; then
+              host=$(grep -h '^URIs:' "$APT_FALLBACK_SOURCES" | sed -E 's#URIs: https?://([^/]*)/.*#\\1#')
+              verb=update
+              for a in "$@"; do case "$a" in install) verb=install;; --download-only) verb=download;; esac; done
+              echo "$verb $host" >> "{self.log}"
+              case " $FAKE_SLOW_HOSTS " in *" $host "*) [ "$verb" = download ] && sleep 20;; esac
+              exit 0
+            fi
+            for a in "$@"; do [ "$a" = update ] && exit 0; done
+            echo "E: Unable to locate package pkg" >&2
+            exit 100
+            """,
+        )
+
+    def test_missing_archive_source_adds_a_fallback_and_installs_first_try(self):
+        self.src.write_text(self.MICROSOFT_ONLY)
+        self.locate_needs_archive()
+        r = self.run_script(slow_hosts="", mirrors="m1.archive.ubuntu.com m2.archive.ubuntu.com")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("attempt 1/3 failed", r.stderr)
+        self.assertIn(f"added {self.fallback}", r.stderr)
+        self.assertEqual(
+            self.fallback.read_text(),
+            "Types: deb\nURIs: http://m2.archive.ubuntu.com/ubuntu/\n"
+            "Suites: resolute resolute-updates resolute-backports resolute-security\n"
+            "Components: main restricted universe multiverse\n"
+            f"Signed-By: {self.keyring}\n",
+        )
+        self.assertEqual(self.src.read_text(), self.MICROSOFT_ONLY, "no existing source is edited")
+        self.assertEqual(self.calls(), ["update m2.archive.ubuntu.com", "download m2.archive.ubuntu.com",
+                                        "install m2.archive.ubuntu.com"])
+
+    def test_fallback_is_rotated_like_any_archive_source(self):
+        self.src.write_text(self.MICROSOFT_ONLY)
+        self.locate_needs_archive()
+        r = self.run_script(slow_hosts="m2.archive.ubuntu.com", mirrors="m1.archive.ubuntu.com m2.archive.ubuntu.com")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        hosts = [c.split()[1] for c in self.calls() if c.startswith("download")]
+        self.assertEqual(hosts, ["m2.archive.ubuntu.com", "m1.archive.ubuntu.com"])
+        self.assertIn("URIs: http://m1.archive.ubuntu.com/ubuntu/\n", self.fallback.read_text())
+        self.assertEqual(self.src.read_text(), self.MICROSOFT_ONLY)
+
+    def test_fallback_without_keyring_has_no_signed_by(self):
+        self.src.write_text(self.MICROSOFT_ONLY)
+        self.keyring.unlink()
+        self.locate_needs_archive()
+        r = self.run_script(slow_hosts="")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Signed-By", self.fallback.read_text())
+
+    def test_non_x86_fallback_uses_ports(self):
+        self.src.write_text(self.MICROSOFT_ONLY)
+        _exe(self.bin / "apt-get", "exit 0\n")
+        r = self.run_script(slow_hosts="", APT_DPKG_ARCH="arm64")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("URIs: http://ports.ubuntu.com/ubuntu-ports/\n", self.fallback.read_text())
+
+    def test_no_codename_adds_nothing(self):
+        self.src.write_text(self.MICROSOFT_ONLY)
+        self.os_release.write_text('NAME="Something"\n')
+        self.locate_needs_archive()
+        r = self.run_script(slow_hosts="")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no release codename", r.stderr)
+        self.assertFalse(self.fallback.exists())
+
+    def test_security_only_is_not_an_archive(self):
+        self.src.write_text("Types: deb\nURIs: http://security.ubuntu.com/ubuntu/\nSuites: resolute-security\n")
+        _exe(self.bin / "apt-get", "exit 0\n")
+        r = self.run_script(slow_hosts="")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.fallback.exists(), r.stderr)
+
+    def test_ports_alone_is_an_archive(self):
+        self.src.write_text("Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports/\nSuites: resolute\n")
+        _exe(self.bin / "apt-get", "exit 0\n")
+        r = self.run_script(slow_hosts="", APT_DPKG_ARCH="arm64")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.fallback.exists(), r.stderr)
+
+    def test_an_archive_source_means_no_fallback(self):
+        r = self.run_script(slow_hosts="")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.fallback.exists())
+        self.assertNotIn("added", r.stderr)
+
+    def test_real_runner_files_mean_no_fallback(self):
+        deb822, classic = self.real_sources()
+        r = self.run_script(slow_hosts="", sources=[classic, deb822])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.fallback.exists())
 
     # --- the runner image's real files -------------------------------------
 
@@ -425,6 +540,8 @@ class AptInstallTest(unittest.TestCase):
         self.assertIn("keeping the configured mirror", r.stderr)
         self.assertNotIn("archive mirror is now", r.stderr)
         self.assertEqual(lst.read_text(), text)
+        # ports.ubuntu.com is the archive of the non-x86 architectures.
+        self.assertFalse(self.fallback.exists())
 
     def test_rotating_to_the_host_already_in_use_still_counts_as_rotated(self):
         # archive.ubuntu.com -> archive.ubuntu.com must not log "no source".
