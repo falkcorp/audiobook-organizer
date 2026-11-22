@@ -42,6 +42,22 @@ import (
 // so its operations are not crash-matrix rows: a crash leaves the slot
 // taken or free, and an empty restore/<id>/ that P0a ignores.
 func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
+	if err := s.CheckStage(in); err != nil {
+		return err
+	}
+	return bootseam.Labelled(bootseam.From(ctx), "swap.stage", func() error {
+		return s.stageIntent(ctx, in)
+	})
+}
+
+// CheckStage is every refusal Stage makes before it writes anything: the
+// intent's shape, the targets rule, the early slot refusal (ErrSwapPending)
+// and the rename pre-check (ErrRenameRefused). It writes nothing and holds
+// nothing, so a caller that must do something irreversible only for an
+// intent Stage will accept (books' HNSW clean-stop marker) runs it first,
+// then that thing, then Stage. It is not a reservation: another stager can
+// take the slot after it returns, and Stage's own create still decides.
+func (s *Swapper) CheckStage(in restorejournal.Intent) error {
 	if !restorejournal.ValidID(in.ID) {
 		return fmt.Errorf("restoreswap: intent id %q is not one path segment", in.ID)
 	}
@@ -88,37 +104,37 @@ func (s *Swapper) Stage(ctx context.Context, in restorejournal.Intent) error {
 	}
 	// S2: DATA-23, before anything is written; and a reset's delete entries
 	// (rule (4)'s kept paths, the DB's filesystem; R1-21 review M1).
-	if err := errors.Join(restorejournal.Validate(s.o.Probe, moves),
-		restorejournal.ValidateDelete(s.o.Probe, s.o.StateDir, in, s.legacySuffixes())); err != nil {
+	return errors.Join(restorejournal.Validate(s.o.Probe, moves),
+		restorejournal.ValidateDelete(s.o.Probe, s.o.StateDir, in, s.legacySuffixes()))
+}
+
+// stageIntent is Stage's S3 to S5, after CheckStage passed.
+func (s *Swapper) stageIntent(ctx context.Context, in restorejournal.Intent) error {
+	// S3: the journal's directory. S4: the one create.
+	dir := s.journalDir(in.ID)
+	if ok, err := exists(s.fs, dir); err != nil {
+		return err
+	} else if ok {
+		return fmt.Errorf("restoreswap: restore/%s already exists; an intent id is never reused", in.ID)
+	}
+	if err := s.mkdirDurable(dir); err != nil {
 		return err
 	}
-	return bootseam.Labelled(bootseam.From(ctx), "swap.stage", func() error {
-		// S3: the journal's directory. S4: the one create.
-		dir := s.journalDir(in.ID)
-		if ok, err := exists(s.fs, dir); err != nil {
-			return err
-		} else if ok {
-			return fmt.Errorf("restoreswap: restore/%s already exists; an intent id is never reused", in.ID)
+	if err := restorejournal.CreateIntentFS(s.fs, s.o.StateDir, in); errors.Is(err, restorejournal.ErrIntentUnsynced) {
+		s.o.Logger.Warn("restoreswap: intent staged, but the slot directory could not be synced; a crash may lose it",
+			"id", in.ID, "kind", string(in.Kind), "err", err)
+	} else if err != nil {
+		if rmErr := s.fs.RemoveAll(dir); rmErr != nil {
+			err = errors.Join(err, fmt.Errorf("restoreswap: remove %s: %w", dir, rmErr))
 		}
-		if err := s.mkdirDurable(dir); err != nil {
-			return err
-		}
-		if err := restorejournal.CreateIntentFS(s.fs, s.o.StateDir, in); errors.Is(err, restorejournal.ErrIntentUnsynced) {
-			s.o.Logger.Warn("restoreswap: intent staged, but the slot directory could not be synced; a crash may lose it",
-				"id", in.ID, "kind", string(in.Kind), "err", err)
-		} else if err != nil {
-			if rmErr := s.fs.RemoveAll(dir); rmErr != nil {
-				err = errors.Join(err, fmt.Errorf("restoreswap: remove %s: %w", dir, rmErr))
-			}
-			return err
-		}
-		// S5: a create without this record is completed by P0a
-		// (ensureStaged), so its failure does not make the staged intent a
-		// failed Stage.
-		if err := s.appendRec(ctx, in.ID, stagedRecord(in)); err != nil {
-			s.o.Logger.Warn("restoreswap: intent staged; its staged record was not written and P0a writes it",
-				"id", in.ID, "kind", string(in.Kind), "err", err)
-		}
-		return nil
-	})
+		return err
+	}
+	// S5: a create without this record is completed by P0a
+	// (ensureStaged), so its failure does not make the staged intent a
+	// failed Stage.
+	if err := s.appendRec(ctx, in.ID, stagedRecord(in)); err != nil {
+		s.o.Logger.Warn("restoreswap: intent staged; its staged record was not written and P0a writes it",
+			"id", in.ID, "kind", string(in.Kind), "err", err)
+	}
+	return nil
 }

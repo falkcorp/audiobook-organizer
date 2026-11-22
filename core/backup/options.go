@@ -366,6 +366,11 @@ type Svc struct {
 	o    Options
 	hold sync.Mutex // the backup resource
 
+	// hooked: o.Stager runs a per-request BeforeStageFunc (stagehook.go), so a
+	// context that carries one is staged; otherwise StageRestore refuses it
+	// (ErrBeforeStageUnsupported) before it writes anything.
+	hooked bool
+
 	// importMu is held by an Import from its last duplicate check through its
 	// publication and sidecars (install), never while it reads the upload.
 	importMu sync.Mutex
@@ -384,7 +389,14 @@ func New(o Options) (*Svc, error) {
 	if err := o.validate(); err != nil {
 		return nil, err
 	}
-	return &Svc{o: o}, nil
+	// A Stager that can check an intent without writing (CheckedStager) is
+	// wrapped here, once, so an app's BeforeStageFunc runs after its refusals
+	// and before its create; any other Stager takes no hook.
+	hooked := false
+	if cs, ok := o.Stager.(CheckedStager); ok {
+		o.Stager, hooked = BeforeStage(cs), true
+	}
+	return &Svc{o: o, hooked: hooked}, nil
 }
 
 // Compile-time proof that Svc is the Service, the Ensurer and the Runner.
