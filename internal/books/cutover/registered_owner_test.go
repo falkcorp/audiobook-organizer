@@ -336,6 +336,108 @@ func ownerAccount(t *testing.T, h *Registered) (id string, roles []string) {
 	return me.User.ID, me.User.Roles
 }
 
+// TestReachRegisteredPath_OwnerAllow: on every owner route, the Access-verified
+// owner who lacks the route's requirement is refused and the owner who holds it is
+// admitted. R0's allow side is unrecorded (its boot had no verifier), so both are
+// asserted here: 9 routes, 2 cells each, 18 in all.
+//
+// THIS TEST FAILS UNTIL B10y LANDS, ON PURPOSE. All 9 "owner holding the
+// requirement" cells answer 403 interactive_required today: every owner route
+// carries Guards.Interactive, and stage 13's Authorize answers that guard with
+// p.Method.MayChangeCredentials(), a fixed allowlist (session and delegated
+// session) that never reads the extension's registered MethodSpec. The Access
+// owner's method is ext:cfaccess, so it is refused before the owner proof is looked
+// at, admin role and Access assertion both in place. HEAD's gate (OwnerProofWhyNot:
+// method cf_access, then the e-mail) admits that caller, so on an Access-only
+// install the owner would be locked out of backup restore, factory reset, user
+// merge and the guest-token routes. That is a B10g blocker, not a known difference:
+// B10y makes Interactive consult the registered MethodSpec, and this test is its
+// acceptance. The nine lacking-the-requirement cells pass now and must keep passing.
+//
+// The owner is one account throughout. The Access sign-in of an address no account
+// holds creates a viewer under the default role, which holds none of the routes'
+// requirements; the admin session then gives it the admin role through core's own
+// roles API, and the same assertion is tried again. Nothing but the roles differs
+// between the two halves.
+func TestReachRegisteredPath_OwnerAllow(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{Owner: true})
+	owner := h.Principal(Owner)
+	routes := ownerRoutes(t, h)
+
+	id, roles := ownerAccount(t, h)
+	if !slices.Equal(roles, []string{"viewer"}) {
+		t.Fatalf("the owner's new account has roles %v, want [viewer] (the Access default role)", roles)
+	}
+
+	// Lacking the requirement: refused. HEAD refuses it too (the permission leg);
+	// until B10y the Interactive guard answers first, so the code is either, and the
+	// cell holds that it is stage 13's 403.
+	refused := 0
+	for _, ri := range routes {
+		key := ri.Method + " " + ri.Pattern
+		res, err := h.DoRoute(owner, ri, nil)
+		if err != nil {
+			t.Errorf("%s as the owner lacking the requirement: %v", key, err)
+			continue
+		}
+		if res.Stage13 != Stage13Refused || res.Status != http.StatusForbidden ||
+			(res.Code != "permission_denied" && res.Code != "interactive_required") {
+			t.Errorf("%s as the owner lacking the requirement: %d %q (%s), want stage 13's 403", key, res.Status, res.Code, res.Stage13)
+			continue
+		}
+		refused++
+	}
+
+	// Holding it: admitted. Core's factory reset goes last: with no body it stages
+	// nothing (422 confirm_required), but it is the one route whose handler would act.
+	setRoles(t, h, id, "admin")
+	slices.SortStableFunc(routes, func(a, b httpapi.RouteInfo) int {
+		return boolInt(strings.HasSuffix(a.Pattern, "/factory-reset")) - boolInt(strings.HasSuffix(b.Pattern, "/factory-reset"))
+	})
+	admitted := 0
+	for _, ri := range routes {
+		key := ri.Method + " " + ri.Pattern
+		res, err := h.DoRoute(owner, ri, nil)
+		if err != nil {
+			t.Errorf("%s as the owner holding the requirement: %v", key, err)
+			continue
+		}
+		// Admitted: stage 13 let it through and nothing behind it refused it as an
+		// authorization failure (the dummy ids answer 404, the empty body 4xx).
+		if !res.Admitted() || res.Verdict() != 'A' {
+			t.Errorf("EXPECTED ADMIT (fails until B10y): %s as the owner holding the requirement: %d %q (%s) %s", key, res.Status, res.Code, res.Stage13, res.excerpt())
+			continue
+		}
+		if strings.HasSuffix(ri.Pattern, "/factory-reset") && res.Status != http.StatusUnprocessableEntity {
+			t.Errorf("factory reset with no body answered %d %s, want 422 confirm_required and nothing staged", res.Status, res.excerpt())
+		}
+		admitted++
+	}
+	if refused != 9 || admitted != 9 {
+		t.Fatalf("%d lacking-the-requirement cells and %d admitted cells, want 9 and 9 (18 cells)", refused, admitted)
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// The discharge of F4-07-OWNER-ALLOW: on every owner route the owner lacking the
+// requirement is refused and the owner holding it is admitted (R0 records no allowed
+// cell for the owner, so both halves are asserted here).
+func init() {
+	cutover.RegisterReachDischarge("F4-07-OWNER-ALLOW", "TestReachRegisteredPath_OwnerAllow", func() []string {
+		var out []string
+		for _, k := range ownerRouteKeys {
+			out = append(out, ownerBarKey(k)+"|owner lacking the requirement refused", ownerBarKey(k)+"|owner admitted")
+		}
+		return out
+	})
+}
+
 // accessUsers is the admin's list of core accounts: the user rows as
 // "username <email> [roles]" lines and the count.
 func accessUsers(t *testing.T, h *Registered) (lines []string) {
