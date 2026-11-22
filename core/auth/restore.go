@@ -1,5 +1,5 @@
 // file: core/auth/restore.go
-// version: 1.2.0
+// version: 1.3.0
 // guid: 2b7d94e1-6a30-4c58-b9f2-e41c8d05a763
 // last-edited: 2026-11-12
 
@@ -41,8 +41,8 @@ type RestoreDeps struct {
 	// kind, subject, object and detail (journal.Component.Journaled). Nil means
 	// the journal cannot be asked, and RestrictLastAdmins appends every line as
 	// it did before the key.
-	Journaled func(r journal.Revocation) (bool, error)
-	StateFiles  StateFiles                // bootstrap token and read-only key files (COR10-7); nil writes no file
+	Journaled  func(r journal.Revocation) (bool, error)
+	StateFiles StateFiles // bootstrap token and read-only key files (COR10-7); nil writes no file
 	// BootstrapTokenFile is Options.BootstrapTokenFile, the bootstrap token's
 	// file name under the state directory; "" is BootstrapTokenFile.
 	BootstrapTokenFile string
@@ -727,10 +727,31 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 	}
 	// Step 3 commits after the restrictions: a crash between the two leaves
 	// them applied and the sign-ins to be deleted on the re-run.
+	//
+	// The epoch bump is epoch+1, so a re-run cannot tell its own committed bump
+	// from an unbumped user. The batch therefore stages the run's marker with
+	// the bumps and the deletions it describes: they land together or not at
+	// all, and a re-run that finds its own key skips the bump (it still deletes
+	// whatever sign-ins exist) and reports the counts the first run committed.
+	// A run with no key has nothing to mark, so it bumps every time.
 	err = d.commit(ctx, func(b *storage.Batch) error {
+		var done RestoreEpochRun
+		resumed := false
+		if d.RunKey != "" {
+			prev, ok, err := d.Store.RestoreEpochRun(ctx)
+			if err != nil {
+				return err
+			}
+			resumed = ok && prev.RunKey == d.RunKey
+			done = prev
+		}
 		n, err := d.Store.RevokeSignInsBefore(b, time.Time{})
 		if err != nil {
 			return err
+		}
+		if resumed {
+			counts[CountSignInsDeleted], counts[CountEpochsBumped] = done.SignInsDeleted+n, done.Bumped
+			return nil
 		}
 		bumped := 0
 		for u, err := range d.Store.ScanUsers(ctx) {
@@ -749,6 +770,11 @@ func PostRestore(ctx context.Context, d RestoreDeps, rc journal.RestoreContext) 
 				return err
 			}
 			bumped++
+		}
+		if d.RunKey != "" {
+			if err := d.Store.StageRestoreEpochRun(b, RestoreEpochRun{RunKey: d.RunKey, Bumped: bumped, SignInsDeleted: n}); err != nil {
+				return err
+			}
 		}
 		counts[CountSignInsDeleted], counts[CountEpochsBumped] = n, bumped
 		return nil

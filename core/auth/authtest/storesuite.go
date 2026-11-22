@@ -1,7 +1,7 @@
 // file: core/auth/authtest/storesuite.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8cf164e8-2a54-46de-8eed-b0912673891b
-// last-edited: 2026-11-12
+// last-edited: 2026-11-21
 
 // Package authtest is the conformance kit of auth.Store and auth.Importer
 // (05-authn §3.4, §10 TestNativeStore_RoundTrip): StoreSuite runs every case
@@ -72,6 +72,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"TouchSessionLosesToDelete", touchSessionRace},
 		{"RestampSession", restampSession},
 		{"RevokeSignInsBefore", revokeSignIns},
+		{"RestoreEpochRunRoundTrip", restoreEpochRun},
 		{"APIKeyRoundTrip", apiKeyRoundTrip},
 		{"APIKeyRefusesEmptyOrWildcardScopes", apiKeyScopes},
 		{"APIKeyNeedsStoredOwner", apiKeyOwner},
@@ -565,6 +566,40 @@ func revokeSignIns(t *testing.T, fx Fixture) {
 	}))
 	_, err = fx.Store.SessionByToken(bg(), freshTok)
 	errIs(t, "every session after a zero t", err, auth.ErrNotFound)
+}
+
+// restoreEpochRun: the marker is absent until a run stages it, reads back what
+// was staged, is replaced by the next run's, refuses an empty key, and is not
+// swept by the sign-in deletion that commits beside it (PostRestore step 3).
+func restoreEpochRun(t *testing.T, fx Fixture) {
+	_, ok, err := fx.Store.RestoreEpochRun(bg())
+	must(t, "RestoreEpochRun on an empty store", err)
+	if ok {
+		t.Fatal("RestoreEpochRun reports a marker on an empty store")
+	}
+	first := auth.RestoreEpochRun{RunKey: "seq:11", Bumped: 3, SignInsDeleted: 2}
+	must(t, "StageRestoreEpochRun", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageRestoreEpochRun(b, first) }))
+	got, ok, err := fx.Store.RestoreEpochRun(bg())
+	must(t, "RestoreEpochRun", err)
+	if !ok || got != first {
+		t.Fatalf("RestoreEpochRun = %+v ok=%v, want %+v", got, ok, first)
+	}
+	must(t, "RevokeSignInsBefore beside the marker", commit(t, fx, func(b *storage.Batch) error {
+		_, err := fx.Store.RevokeSignInsBefore(b, time.Time{})
+		return err
+	}))
+	if _, ok, err := fx.Store.RestoreEpochRun(bg()); err != nil || !ok {
+		t.Fatalf("the sign-in deletion removed the marker: ok=%v err=%v", ok, err)
+	}
+	second := auth.RestoreEpochRun{RunKey: "run:r-bane", Bumped: 1}
+	must(t, "StageRestoreEpochRun again", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageRestoreEpochRun(b, second) }))
+	if got, _, _ := fx.Store.RestoreEpochRun(bg()); got != second {
+		t.Fatalf("RestoreEpochRun = %+v, want the later run's %+v", got, second)
+	}
+	err = commit(t, fx, func(b *storage.Batch) error {
+		return fx.Store.StageRestoreEpochRun(b, auth.RestoreEpochRun{Bumped: 1})
+	})
+	errIs(t, "StageRestoreEpochRun with no key", err, auth.ErrBadInput)
 }
 
 // ---------------------------------------------------------------------------

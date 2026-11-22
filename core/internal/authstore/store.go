@@ -1,7 +1,7 @@
 // file: core/internal/authstore/store.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a7b06243-983e-42c3-9979-3aacdb3d3374
-// last-edited: 2026-11-12
+// last-edited: 2026-11-21
 
 // Package authstore is core's one implementation of auth.Store and
 // auth.Importer (05-authn §3.4, §11 "Native store"): every identity record in
@@ -30,6 +30,7 @@
 //	session/id/<publicID>                  -> sha256 hex
 //	session/u/<user>/<publicID>            -> sha256 hex
 //	onetime/<kind>/<sha256 hex>            OneTimeToken + token hash
+//	restore_epoch_run                      the restore run whose epoch bump last committed (one row)
 //
 // A record row and an index row of one family differ in segment count, which
 // is how a scan tells them apart. No raw credential is ever stored: the store
@@ -80,6 +81,8 @@ const (
 	segSession  = "session"
 	segID       = "id"
 	segOneTime  = "onetime"
+	// segRestoreEpoch is the whole key of the single restore-run marker row.
+	segRestoreEpoch = "restore_epoch_run"
 )
 
 // Stored forms. Each embeds the core type and adds what the store alone
@@ -102,6 +105,12 @@ type sessionRecord struct {
 type oneTimeRecord struct {
 	auth.OneTimeToken
 	Hash string `json:"hash"`
+}
+
+type restoreEpochRecord struct {
+	RunKey         string `json:"run_key"`
+	Bumped         int    `json:"bumped"`
+	SignInsDeleted int    `json:"sign_ins_deleted"`
 }
 
 type allowRecord struct {
@@ -176,6 +185,7 @@ func apiKeyHashKey(h string) []byte {
 func identityKey(p, sub string) []byte {
 	return keys.Join(keys.Str(segIdentity), keys.Str(p), keys.Str(sub))
 }
+func restoreEpochKey() []byte     { return keys.Join(keys.Str(segRestoreEpoch)) }
 func allowKey(fold string) []byte { return keys.Join(keys.Str(segAllow), keys.Str(fold)) }
 func sessionKey(h string) []byte {
 	return keys.Join(keys.Str(segSession), keys.Str(segHash), keys.Str(h))
@@ -209,7 +219,7 @@ func keyDesc(key []byte) string {
 	family := "unrecognised"
 	if segs, err := keys.Split(key); err == nil && len(segs) > 0 {
 		switch top := string(segs[0]); top {
-		case segUser, segKey, segIdentity, segAllow, segSession, segOneTime:
+		case segUser, segKey, segIdentity, segAllow, segSession, segOneTime, segRestoreEpoch:
 			family = top
 			if len(segs) > 2 {
 				switch sub := string(segs[1]); sub {
@@ -873,6 +883,43 @@ func (s *Store) RevokeSignInsBefore(b *storage.Batch, t time.Time) (int, error) 
 		n++
 	}
 	return n, nil
+}
+
+// RestoreEpochRun reads the restore-run marker (auth.RestoreEpochStore).
+func (s *Store) RestoreEpochRun(ctx context.Context) (auth.RestoreEpochRun, bool, error) {
+	raw, err := s.get(ctx, restoreEpochKey())
+	if errors.Is(err, auth.ErrNotFound) {
+		return auth.RestoreEpochRun{}, false, nil
+	}
+	if err != nil {
+		return auth.RestoreEpochRun{}, false, err
+	}
+	rec, err := codec.JSON[restoreEpochRecord](1).Decode(raw)
+	if err != nil {
+		return auth.RestoreEpochRun{}, false, fmt.Errorf("%w: %s: %w", auth.ErrUndecodableRecord, keyDesc(restoreEpochKey()), err)
+	}
+	return auth.RestoreEpochRun{RunKey: rec.RunKey, Bumped: rec.Bumped, SignInsDeleted: rec.SignInsDeleted}, true, nil
+}
+
+// StageRestoreEpochRun stages r as the marker, expecting the committed bytes
+// it read (auth.RestoreEpochStore).
+func (s *Store) StageRestoreEpochRun(b *storage.Batch, r auth.RestoreEpochRun) error {
+	if err := needBatch(b, "StageRestoreEpochRun"); err != nil {
+		return err
+	}
+	if r.RunKey == "" {
+		return fmt.Errorf("%w: a restore-run marker needs a run key", auth.ErrBadInput)
+	}
+	key := restoreEpochKey()
+	cur, err := s.committed(key)
+	if err != nil {
+		return err
+	}
+	raw, err := codec.JSON[restoreEpochRecord](1).Encode(restoreEpochRecord{RunKey: r.RunKey, Bumped: r.Bumped, SignInsDeleted: r.SignInsDeleted})
+	if err != nil {
+		return fmt.Errorf("authstore: encode restore-run marker: %w", err)
+	}
+	return s.set(b, key, cur, raw)
 }
 
 // ---------------------------------------------------------------------------
