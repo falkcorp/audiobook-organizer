@@ -41,6 +41,12 @@ func TestCatalog_ForeignPrefixRejected(t *testing.T) {
 		{"vision required of embedding work", "gotham", func(s *ai.CapabilitySpec) {
 			s.Kind, s.RequiredFeatures = ai.KindEmbed, []ai.Feature{ai.FeatureVision}
 		}},
+		{"batch_api required of transcription work", "gotham", func(s *ai.CapabilitySpec) {
+			s.Kind, s.RequiredFeatures = ai.KindTranscribe, []ai.Feature{ai.FeatureBatch}
+		}},
+		{"json_schema required of embedding work", "gotham", func(s *ai.CapabilitySpec) {
+			s.Kind, s.RequiredFeatures = ai.KindEmbed, []ai.Feature{ai.FeatureJSONSchema}
+		}},
 		{"a missing description", "gotham", func(s *ai.CapabilitySpec) { s.Description = " " }},
 		{"a missing data-sent disclosure", "gotham", func(s *ai.CapabilitySpec) { s.DataSent = "" }},
 		{"a missing typical request", "gotham", func(s *ai.CapabilitySpec) { s.TypicalRequest = "" }},
@@ -134,11 +140,16 @@ func TestCatalog_LookupCatalogIDsOnly(t *testing.T) {
 // PUT cannot add one.
 func TestCatalog_UnknownTickKept(t *testing.T) {
 	t.Parallel()
-	h := newHarness(t)
-	c := h.capability("riddle")
 	f := fake()
 	f.ScriptText(coretest.FakeAIStep{Text: "ok"})
-	ref := h.addEndpoint("arkham", 1, textEndpoint("joker-7b", "gotham.riddle", "retired.capability"), f)
+	// Stored before the retired tick left the catalog, so through an importer
+	// without the validator: a Put of it is refused (see below).
+	h := newHarness(t, withLegacyEndpoint("arkham", 1, textEndpoint("joker-7b", "gotham.riddle", "retired.capability"), f))
+	c := h.capability("riddle")
+	ref := aiRef("arkham")
+	if _, err := aiPut(h, "blackgate", textEndpoint("joker-7b", "gotham.riddle", "retired.capability")); !errors.Is(err, ai.ErrUnknownCapability) {
+		t.Fatalf("Put of a retired tick: err = %v, want ErrUnknownCapability", err)
+	}
 
 	// Ignored: the row still serves what it ticks that the catalog knows.
 	if _, err := h.r.Generate(context.Background(), c, text("who?")); err != nil {
@@ -177,5 +188,46 @@ func TestCatalog_UnknownTickKept(t *testing.T) {
 	cands, _, err := h.r.Candidates(back)
 	if err != nil || len(cands) != 1 || cands[0].Ref != ref {
 		t.Errorf("after the module returned: candidates = %+v, %v; want the row that kept the tick", cands, err)
+	}
+}
+
+// batch_api may be required of text work and of embedding work (HEAD's
+// embed.text_batch requires it, coordinator ruling 2026-11-22), and of nothing
+// else.
+func TestCatalog_BatchAPIFitsTextAndEmbed(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	for _, kind := range []ai.Kind{ai.KindText, ai.KindEmbed} {
+		spec := capSpec("batch_" + string(kind))
+		spec.Kind, spec.RequiredFeatures = kind, []ai.Feature{ai.FeatureBatch}
+		if _, err := h.r.RegisterCapability("gotham", spec); err != nil {
+			t.Errorf("batch_api required of %s work: %v, want it accepted", kind, err)
+		}
+	}
+}
+
+// A capability of embedding work that requires batch_api registers, but the
+// batch path knows only text items, so SubmitBatch refuses it before a job row
+// exists instead of sending chat requests to an embedding model.
+func TestSubmitBatch_EmbedCapabilityRefusedBeforeAnyJob(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	spec := capSpec("embed_batch")
+	spec.Kind, spec.RequiredFeatures = ai.KindEmbed, []ai.Feature{ai.FeatureBatch}
+	c, err := h.r.RegisterCapability("gotham", spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := fake()
+	set := textEndpoint("joker-7b", "gotham.embed_batch")
+	set.EmbedModel = "joker-embed"
+	set.Features = []ai.Feature{ai.FeatureBatch}
+	h.addEndpoint("arkham", 1, set, f)
+	_, err = h.r.SubmitBatch(context.Background(), c, items(1), nil, ai.WithPinnedModel("joker-embed"))
+	if !errors.Is(err, ai.ErrBatchKind) {
+		t.Fatalf("SubmitBatch of an embed capability: err = %v, want ErrBatchKind", err)
+	}
+	if n := len(f.RemoteBatches()); n != 0 {
+		t.Errorf("%d remote batch(es) were created", n)
 	}
 }

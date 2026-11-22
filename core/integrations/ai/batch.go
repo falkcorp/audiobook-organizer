@@ -107,6 +107,12 @@ func (r *Router) SubmitBatch(ctx context.Context, c Capability, items []BatchIte
 	if err != nil {
 		return "", err
 	}
+	if e.spec.Kind != KindText {
+		// A capability may REQUIRE FeatureBatch for embedding work (the catalog
+		// accepts it), but the batch path only knows text items: refuse before a
+		// job row exists rather than submit chat requests to an embedding model.
+		return "", fmt.Errorf("%w: %s is %s work", ErrBatchKind, c.id, e.spec.Kind)
+	}
 	applyKind := r.applyKindOf(c.id)
 	if applyKind == "" {
 		return "", fmt.Errorf("%w: %s", ErrNoBatchApply, c.id)

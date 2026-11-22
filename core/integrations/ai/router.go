@@ -67,8 +67,8 @@ type capsEntry struct {
 
 // NewRouter builds a Router over opts. It fails on a missing Registry, a
 // JobStore without the NewBatch that stages into its keyspace, a metrics
-// scope that refuses an instrument, or, with ValidateEndpoints, a Registry
-// that already has an ai validator.
+// scope that refuses an instrument, or a Registry that already has an ai
+// validator (a second Router over one Registry would own the rule twice).
 func NewRouter(opts RouterOptions) (*Router, error) {
 	if opts.Registry == nil {
 		return nil, errors.New("ai: NewRouter needs the integrations Registry")
@@ -98,16 +98,14 @@ func NewRouter(opts RouterOptions) (*Router, error) {
 		return nil, err
 	}
 	r.m = m
-	if opts.ValidateEndpoints {
-		// The ai kind's rule runs inside the Registry's Put, Test and import, so
-		// no caller has to remember ValidateEndpoint (TODO-F7-03-VALIDATE-ENDPOINT).
-		// A second Router over one Registry would own the rule twice and is
-		// refused; the gauge callback it registered is released first.
-		if err := opts.Registry.SetValidator(integrations.KindAI, func(_ integrations.AdapterID, settings, stored map[string]any) error {
-			return r.ValidateEndpoint(settings, stored)
-		}); err != nil {
-			return nil, errors.Join(fmt.Errorf("ai: NewRouter: %w", err), m.close())
-		}
+	// The ai kind's rule runs inside the Registry's Put, Test and import, so no
+	// caller has to remember ValidateEndpoint (TODO-F7-03-VALIDATE-ENDPOINT). A
+	// second Router over one Registry would own the rule twice and is refused;
+	// the gauge callback it registered is released first.
+	if err := opts.Registry.SetValidator(integrations.KindAI, func(_ integrations.AdapterID, settings, stored map[string]any) error {
+		return r.ValidateEndpoint(settings, stored)
+	}); err != nil {
+		return nil, errors.Join(fmt.Errorf("ai: NewRouter: %w", err), m.close())
 	}
 	return r, nil
 }
