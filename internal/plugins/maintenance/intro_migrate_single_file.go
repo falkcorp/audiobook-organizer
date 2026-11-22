@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -185,13 +186,16 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 	return tasks.Task(introMigrateSingleFileKind, tasks.TaskSpec[introMigrateNativeParams, introMigrateResult]{
 		Title: "Migrate intro transcripts to single-file books",
 		Help:  "Tier 0 of the per-file intro backfill. Copies the book-level intro transcript onto the book's one BookFile row, for the ~33,780 single-file books (75.3% of the library). Zero GPU: it is a copy, not a transcription. Multi-file books are deliberately refused because the book-level transcript does not record which file produced it and the silence-retry path may have used file 2. Previews by default (a preview reports what it would copy and writes nothing); start it in live mode to write. A live run writes nothing itself: it starts one child run per 100 books, one at a time, and each child holds only its own books.",
-		// ReadOnly: the writes (UpdateBookFile's whole-row write-back on book_files,
-		// and the aggregate recompute it reaches: books, metadata_cache, indexes) are
-		// the children's, see introMigrateBatchKind. A ref lock cannot narrow an
-		// Effects hold, so the parent cannot hold them and still let a write to
-		// another book through.
-		Effects: tasks.ReadOnly(),
-		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		// The Effects are HEAD's, unchanged: the executor starts a kind with no
+		// declared writes in Live when the mode is omitted (core/internal/executor/
+		// start.go:149-152) where a writer kind starts in Preview, and this kind
+		// "previews by default". So the declaration stays HEAD's and the parent
+		// narrows what it HOLDS to nothing with Subjects; the writes (UpdateBookFile's
+		// write-back on book_files and the aggregate recompute: books,
+		// metadata_cache, indexes) happen in the children, see introMigrateBatchKind.
+		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
+		Subjects: batchParentHolds,
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 		// ResumeContinue (HEAD is ResumeRestart with no checkpoint): the parent's
 		// cursor, the child in flight and the rolled-up counts are checkpointed
 		// (batch_sweep.go), so a restart resumes at the cursor, and the kernel only

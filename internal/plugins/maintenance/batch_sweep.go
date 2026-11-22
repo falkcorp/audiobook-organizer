@@ -28,8 +28,10 @@ import (
 // A whole-library job that declares books/book_files as Effects holds the whole
 // kind for as long as it runs, which for transcribe-file-intros is days: every
 // other writer of those rows queues behind it. A ref lock cannot narrow an
-// Effects hold, so the parent declares no row writes (tasks.ReadOnly) and
-// enqueues one short child run per batch of batchSweepSize books through
+// Effects hold, so the parent narrows what it HOLDS to nothing (Subjects:
+// batchParentHolds; it keeps the kind's declared Effects so an omitted start mode
+// still resolves to Preview as at HEAD, see core/internal/executor/start.go:149)
+// and enqueues one short child run per batch of batchSweepSize books through
 // rc.Enqueue. The child declares the same Effects as the job always did, but
 // its Common.Subjects names only that batch's book and book_file refs, so the
 // dispatcher holds just those rows while it runs and a writer of any other book
@@ -182,6 +184,13 @@ func (s scopedFileWriter) UpdateBookFile(id string, f *database.BookFile) error 
 	}
 	return s.w.UpdateBookFile(id, f)
 }
+
+// batchParentHolds is every batch parent's Common.Subjects: the parent writes no
+// row itself, so a run of it holds none and an unrelated write is never queued
+// behind it. The parent still DECLARES HEAD's Effects.Writes (a kind with no
+// declared writes starts Live when the mode is omitted, where HEAD starts it in
+// Preview), and every Subjects ref must lie inside them: an empty list does.
+func batchParentHolds(json.RawMessage) ([]entity.Ref, error) { return nil, nil }
 
 // batchSubjects builds a child's Common.Subjects from its params type.
 func batchSubjects[P any](scopeOf func(P) batchScope, extra ...entity.Ref) tasks.SubjectsFunc {

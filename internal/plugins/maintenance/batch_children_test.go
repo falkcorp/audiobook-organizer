@@ -168,16 +168,19 @@ func TestBatchChildren_SubjectsLieInsideEffects(t *testing.T) {
 	}
 }
 
-// The parents declare no row writes, and a child shares neither the parent's
-// concurrency key, nor its write set, nor anything in its NotWhile: the kernel
-// refuses an Await on a run that would block on its own awaiter.
-func TestBatchChildren_ParentsAreReadOnlyAndNeverSelfBlock(t *testing.T) {
+// The parents HOLD no rows (Subjects names none), and a child shares neither the
+// parent's concurrency key, nor its held set, nor anything in its NotWhile: the
+// kernel refuses an Await on a run that would block on its own awaiter.
+func TestBatchChildren_ParentsHoldNothingAndNeverSelfBlock(t *testing.T) {
 	defs := batchDefs(t)
 	for _, k := range batchChildKinds {
 		t.Run(string(k.parent), func(t *testing.T) {
 			p, c := tasks.CommonOf(defs[k.parent]), tasks.CommonOf(defs[k.child])
-			if !p.Effects.IsReadOnly() || len(p.Effects.WriteSet()) != 0 {
-				t.Errorf("parent Effects %v, want ReadOnly: a parent that holds rows holds them for days", p.Effects.WriteSet())
+			if p.Subjects == nil {
+				t.Fatalf("parent has no Subjects: it would hold its whole Effects.Writes %v for days", p.Effects.WriteSet())
+			}
+			if held := holds(t, defs[k.parent], nil); len(held) != 0 {
+				t.Errorf("parent holds %v, want nothing", held)
 			}
 			if p.Resume != tasks.ResumeContinue {
 				t.Errorf("parent Resume = %v, want ResumeContinue (the kernel honours ErrContinueInPlace only for it)", p.Resume)
@@ -197,13 +200,56 @@ func TestBatchChildren_ParentsAreReadOnlyAndNeverSelfBlock(t *testing.T) {
 			if slices.Contains(c.NotWhile, k.parent) || slices.Contains(p.NotWhile, k.child) {
 				t.Errorf("NotWhile makes the child and parent wait on each other: %v / %v", c.NotWhile, p.NotWhile)
 			}
-			if overlapsAny(p.Effects.WriteSet(), c.Effects.WriteSet()) {
-				t.Errorf("the parent's write set overlaps the child's")
+			// awaitSelfBlock compares what each run HOLDS (core/internal/executor/
+			// dispatch.go:698-703), not what each declares.
+			if overlapsAny(holds(t, defs[k.parent], nil), holds(t, defs[k.child], scopeJSON(t, "bk-alfred"))) {
+				t.Errorf("the parent's held set overlaps the child's: the Await would refuse")
 			}
 			if !strings.HasSuffix(string(k.child), ".batch") || string(k.child) != string(k.parent)+".batch" {
 				t.Errorf("child kind %s is not parent kind + .batch", k.child)
 			}
 		})
+	}
+}
+
+// The mode an executor resolves for a start that names none, restated from
+// core/internal/executor/start.go:149-152 (HEAD): Preview for a kind with declared
+// writes, Live for one declared ReadOnly. A batch parent must not become the
+// second, or an omitted mode would run Live where HEAD's kind starts in Preview
+// (for extract-wav-clips, Live-only, that start is a refusal). The parents keep
+// HEAD's Effects for this reason and narrow what they hold with Subjects.
+func omittedModeOf(c tasks.Common) tasks.Mode {
+	if c.Effects.IsReadOnly() {
+		return tasks.ModeLive
+	}
+	return tasks.ModePreview
+}
+
+// A batch parent started with no mode does not run Live: it resolves to Preview
+// exactly as the same kind did at HEAD, and then does what a Preview run of it
+// did (extract-wav-clips refuses it, the other two count and start no child).
+func TestBatchParent_OmittedModeDoesNotRunLive(t *testing.T) {
+	defs := batchDefs(t)
+	for _, k := range batchChildKinds {
+		t.Run(string(k.parent), func(t *testing.T) {
+			c := tasks.CommonOf(defs[k.parent])
+			if got := omittedModeOf(c); got != tasks.ModePreview {
+				t.Fatalf("omitted mode resolves to %v, want Preview (HEAD's kind declared writes: start.go:149)", got)
+			}
+			// The declaration is HEAD's, not just "non-empty": the pinned set the
+			// rest of the suite holds every kind to.
+			pinnedWrites := strings.Fields(t6KindEffectsPinned[k.parent].writes)
+			slices.Sort(pinnedWrites)
+			if got, want := t6g4WriteKinds(c.Effects), pinnedWrites; !slices.Equal(got, want) {
+				t.Errorf("parent Effects.Writes %v, want HEAD's %v", got, want)
+			}
+		})
+	}
+	// And what the resolved Preview does, through the real shells.
+	for _, w := range t6g4Expected {
+		if w.batchParent {
+			t.Run("preview/"+string(w.kind), func(t *testing.T) { t6g4CheckBatchParentShell(t, w) })
+		}
 	}
 }
 
@@ -249,7 +295,7 @@ func TestBatchAdmission_OnlyTheBatchIsHeld(t *testing.T) {
 			if !overlapsAny(held, wholeKind) {
 				t.Errorf("a whole-kind books writer is admitted alongside a child that writes books")
 			}
-			if parent := tasks.CommonOf(defs[k.parent]).Effects.WriteSet(); overlapsAny(parent, wholeKind) || overlapsAny(parent, modify("bk-alfred")) {
+			if parent := holds(t, defs[k.parent], nil); len(parent) != 0 || overlapsAny(parent, wholeKind) || overlapsAny(parent, modify("bk-alfred")) {
 				t.Errorf("the parent holds %v: it must hold nothing", parent)
 			}
 		})
