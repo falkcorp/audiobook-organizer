@@ -267,8 +267,9 @@ func TestAtomTable_Golden(t *testing.T) {
 
 // masterListRoutes are the four routes HEAD gated by adminRole and
 // s.perm(users.manage): the manifest records them as 05-rbac §6.2's
-// AllOf(core:users.manage, books:admin.view), not as the atom (see
-// seams.d/R1-15.md for the §6.1/§6.2 difference).
+// AllOf(core:users.manage, core:roles.view, books:admin.view): the users.manage
+// atom's two scopes plus the read-only admin leg (see seams.d/R1-15.md for the
+// §6.1/§6.2 difference).
 func masterListRoutes() []string {
 	return []string{
 		"GET /api/v1/master-lists", "POST /api/v1/master-lists",

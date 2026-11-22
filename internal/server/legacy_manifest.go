@@ -36,7 +36,9 @@ import (
 //   - pNeed / pMasterList: the 20 RequireAdmin/adminRole routes, with
 //     05-rbac §6.2's native permission per admin kind. The four master-list
 //     routes run adminRole and s.perm(users.manage); §6.2 gives them
-//     AllOf(core:users.manage, books:admin.view), which holds both legs.
+//     AllOf(core:users.manage, core:roles.view, books:admin.view): the first
+//     two are the users.manage atom's own scopes (books.AtomTable), the third
+//     is the read-only admin leg.
 //   - pAuth: authenticated with no route-level permission (raw/09 §4, the 36
 //     routes), rbac.AnyAuthenticated (05-http-api §8.1 R1: R6 holds from R1).
 //   - pPublic: unauthenticated: HEAD's reviewed 15 (raw/09 §2.4) and the
@@ -95,7 +97,7 @@ var (
 	pAuth       = legacyPerm{req: func() rbac.Requirement { return rbac.AnyAuthenticated }}
 	pPublic     = legacyPerm{req: func() rbac.Requirement { return rbac.Public }}
 	pABS        = legacyPerm{req: func() rbac.Requirement { return rbac.Delegated(absAuthMethod) }, ownAuth: true}
-	pMasterList = pNeed("core:users.manage", "books:admin.view")
+	pMasterList = pNeed("core:users.manage", "core:roles.view", "books:admin.view")
 )
 
 // legacyRow is one reviewed manifest row.

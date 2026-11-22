@@ -37,7 +37,7 @@ var adminGateRoutes = []adminGateRoute{
 	{"per-route read-only (adminRoute)", http.MethodGet, "/api/v1/cache/stats/keys", "", []rbac.Permission{"books:admin.view"}, false},
 	{"per-route always-authenticated (adminRoute)", http.MethodPost, "/api/v1/cache/invalidate", "", []rbac.Permission{"core:admin"}, true},
 	{"per-route always-authenticated (adminGroup + credRoute)", http.MethodGet, "/api/v1/admin/guest-service-tokens", "", []rbac.Permission{"core:admin"}, true},
-	{"group-level read-only (master-list group)", http.MethodGet, "/api/v1/master-lists", "", []rbac.Permission{"core:users.manage", "books:admin.view"}, false},
+	{"group-level read-only (master-list group)", http.MethodGet, "/api/v1/master-lists", "", []rbac.Permission{"core:users.manage", "core:roles.view", "books:admin.view"}, false},
 	{"admindebug read gate", http.MethodGet, "/api/v1/admin/debug/lookup", "", []rbac.Permission{"books:admin.view"}, false},
 	{"admindebug write gate", http.MethodPatch, "/api/v1/admin/debug/books/b1", `{}`, []rbac.Permission{"books:admin.debug"}, true},
 }

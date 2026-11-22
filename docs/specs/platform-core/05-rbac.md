@@ -943,7 +943,7 @@ stay identical:
 |---|---|---|---|
 | read-only (`adminRole`) | `GET /cache/stats/keys` | `books:admin.view` | open (not `AuthRequired`) |
 | read-only (`adminRole`) | the four `GET /admin/debug/*` | `books:admin.view` | open |
-| read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, books:admin.view)` | open |
+| read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, core:roles.view, books:admin.view)` | open |
 | always-authenticated | `PATCH /admin/debug/books/:id`, `PATCH /admin/debug/book-files/:id`, `POST /admin/debug/edits/:edit_id/undo` | `books:admin.debug` | 401 |
 | always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/reset` and `POST /system/factory-reset` | deleted in release R1, whose only reset is the offline `storage reset` (A-17); from F4 the one native route `POST /api/core/v1/system/factory-reset` replaces both, with `core:admin` + `Guards.Interactive` + `Guards.Owner` (§4.10); only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin` | 401 |
 | always-authenticated | retired 410 stubs `/maintenance/wipe`, `/cache/invalidate`, `/admin/recompact-digests` | `core:admin` (stub keeps auth-first ordering) | 401 |
