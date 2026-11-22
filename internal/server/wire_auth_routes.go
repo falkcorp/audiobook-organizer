@@ -34,8 +34,18 @@ func (s *Server) wireAuthRoutes(
 		authGroup.GET("/status", authH.GetStatus)
 		authGroup.POST("/setup", authH.SetupInitialAdmin)
 		authGroup.POST("/login", s.loginCeilingMiddleware(nil, respondWebLoginError), authH.Login)
-		authGroup.POST("/accept-invite", inviteLimits.middleware(inviteTokenFromBody), s.handleAcceptInvite)
-		authGroup.GET("/invite/:token", inviteLimits.middleware(inviteTokenFromParam), userH.PublicInvite)
+		if s.identity != nil {
+			// Under core identity an invite is core's record: accepting and looking
+			// one up are core's routes (POST /auth/invites/accept and /lookup), and
+			// these two would read and write books' own, now unused, invite store.
+			// They answer 410 and read no token, so they need no limiter.
+			replacement := "core's invitation routes (POST /auth/invites/lookup and POST /auth/invites/accept)"
+			authGroup.POST("/accept-invite", gone(replacement))
+			authGroup.GET("/invite/:token", gone(replacement))
+		} else {
+			authGroup.POST("/accept-invite", inviteLimits.middleware(inviteTokenFromBody), s.handleAcceptInvite)
+			authGroup.GET("/invite/:token", inviteLimits.middleware(inviteTokenFromParam), userH.PublicInvite)
+		}
 		authGroup.POST("/bootstrap", s.handleBootstrap)
 		// OAuth2 / OIDC SSO — public: /start redirects to the IdP, /callback completes
 		// the handshake and starts a session. Both are no-ops for unconfigured providers.

@@ -76,6 +76,10 @@ type UserHandler struct {
 	// emailSetter sets another user's email as verified (SetUserEmail). nil
 	// when the store lacks the capability; SetUserEmail then refuses.
 	emailSetter database.AdminEmailSetter
+	// mailStore is books' delivery record of core invites' e-mail, used only
+	// under core identity (invite_identity.go). nil when the store lacks the
+	// capability; the record is UI and resend data and is then not kept.
+	mailStore database.InviteMailStore
 	// acceptChecker runs accept's own checks for the public lookup, so it
 	// answers 404 whenever accept would refuse. nil when the store lacks the
 	// capability; the lookup then checks only missing, used and expired.
@@ -103,6 +107,9 @@ func NewUserHandler(store UserStore) *UserHandler {
 	}
 	if es, ok := database.AsCapability[database.AdminEmailSetter](store); ok {
 		h.emailSetter = es
+	}
+	if ms, ok := database.AsCapability[database.InviteMailStore](store); ok {
+		h.mailStore = ms
 	}
 	if ac, ok := database.AsCapability[database.InviteAcceptChecker](store); ok {
 		h.acceptChecker = ac
@@ -154,6 +161,10 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 // the request: the response still carries the token and invite_url, so the
 // admin can hand the link over by hand, plus email_sent=false and email_error.
 func (h *UserHandler) CreateInvite(c *gin.Context) {
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.createInviteUnderIdentity(c, id)
+		return
+	}
 	var req struct {
 		Username  string `json:"username" binding:"required"`
 		RoleID    string `json:"role_id" binding:"required"`
@@ -316,6 +327,10 @@ func (h *UserHandler) findInvite(id string) (*database.Invite, error) {
 // ListInvites handles GET /api/v1/users/invites — returns active invites,
 // each with its ID and, only where inviteTokenVisible allows, its token.
 func (h *UserHandler) ListInvites(c *gin.Context) {
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.listInvitesUnderIdentity(c, id)
+		return
+	}
 	invites, err := h.store.ListActiveInvites()
 	if err != nil {
 		httputil.InternalError(c, "failed to list invites", err)
@@ -341,6 +356,10 @@ func (h *UserHandler) ListInvites(c *gin.Context) {
 // DeleteInvite handles DELETE /api/v1/users/invites/:id — revokes an invite
 // by its ID (database.InviteID), never its token.
 func (h *UserHandler) DeleteInvite(c *gin.Context) {
+	if idn, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.deleteInviteUnderIdentity(c, idn)
+		return
+	}
 	id := c.Param("id")
 	inv, err := h.findInvite(id)
 	if err != nil {
@@ -492,6 +511,12 @@ func (h *UserHandler) SetUserEmail(c *gin.Context) {
 		return
 	}
 	id := c.Param("id")
+	// Under core identity the account record is core's: the write below goes to
+	// core's SetUserEmail (invite_identity.go), after every gate above.
+	if idn, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.setUserEmailUnderIdentity(c, idn, id, email)
+		return
+	}
 	previous, err := h.emailSetter.SetUserEmailAsAdmin(id, email)
 	switch {
 	case errors.Is(err, database.ErrUserNotFound):
