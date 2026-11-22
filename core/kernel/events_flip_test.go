@@ -460,8 +460,24 @@ func TestEventsFlip_TaskTopicsFollowTheDefinitionsViewRule(t *testing.T) {
 			}
 		}
 	}
+	// core.task.log-appended.v1: a line names no kind, so no per-kind rule can
+	// apply and it stays with administrators. A core:tasks.view holder, who sees
+	// the runs themselves, does not see their log lines on the stream (they read
+	// them over REST, where the run is known).
 	logs, _ := k.events.bus.Catalog().Lookup(tasks.LogAppendedTopicName)
-	if logs.Visible(t.Context(), signal, run(string(alfredPatrol))) {
-		t.Error("core.task.log-appended.v1 took the definition rule: a log line names no kind")
+	admin := viewHolder{perms: []rbac.Permission{rbac.CoreAdmin}}
+	for _, c := range []struct {
+		name string
+		who  rbac.Checker
+		want bool
+	}{
+		{"alfred:signal holder", signal, false},
+		{"core:tasks.view holder", auditor, false},
+		{"core:admin holder", admin, true},
+		{"no checker", nil, false},
+	} {
+		if got := logs.Visible(t.Context(), c.who, run(string(alfredPatrol))); got != c.want {
+			t.Errorf("core.task.log-appended.v1, %s: visible = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
