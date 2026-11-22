@@ -48,8 +48,13 @@
 # install call takes seconds. Where the cap does not fit, the step cap fires
 # first and the last attempt may never start.
 #
+#   * A missing archive. When no Ubuntu archive source is configured at all
+#     (a runner whose cloud-init did not write ubuntu.sources), a fallback
+#     deb822 source is added before attempt 1; see ensure_archive_source.
+#
 # Test hooks (scripts/test_apt_install.py): APT_SOURCES_FILES (space-separated
-# files to rewrite), APT_INSTALL_ATTEMPTS, APT_INSTALL_BACKOFF (seconds per
+# files to rewrite), APT_FALLBACK_SOURCES (where the fallback source goes),
+# APT_OS_RELEASE, APT_DPKG_ARCH, APT_UBUNTU_KEYRING, APT_INSTALL_ATTEMPTS, APT_INSTALL_BACKOFF (seconds per
 # attempt number), APT_WATCHDOG_DIR, APT_WATCHDOG_ARGS.
 # CI-proof hook: APT_INSTALL_TEST_DL_LIMIT_KIB=N caps attempt 1's download at
 # N KiB/s (Acquire::http(s)::Dl-Limit), so a real run can show the floor killing
@@ -77,12 +82,75 @@ if [ -n "${APT_INSTALL_EXTRA_OPTS:-}" ]; then
 fi
 archive_dir="${APT_WATCHDOG_DIR:-$archive_dir}"
 
+fallback_file="${APT_FALLBACK_SOURCES:-/etc/apt/sources.list.d/zz-apt-install-ubuntu-archive.sources}"
+
 sources_files() {
   if [ -n "${APT_SOURCES_FILES:-}" ]; then
-    echo "$APT_SOURCES_FILES"
+    # Plus the fallback this script may have written (ensure_archive_source),
+    # so a later attempt's rotation rewrites it like any other archive
+    # source. Without the hook the *.sources glob already lists it.
+    case " $APT_SOURCES_FILES " in
+      *" $fallback_file "*) echo "$APT_SOURCES_FILES" ;;
+      *) echo "$APT_SOURCES_FILES $fallback_file" ;;
+    esac
   else
     echo /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list
   fi
+}
+
+# has_archive_source: is any Ubuntu archive configured? A live (uncommented)
+# line naming a *archive.ubuntu.com host, a mirror+/mirror: URI (the hosted
+# image's shape), or a URI whose path is exactly /ubuntu or /ubuntu-ports,
+# which covers ports.ubuntu.com (the archive of the non-x86 architectures) and
+# an operator's own mirror. security.ubuntu.com is not an archive (it serves
+# only -security), so its lines are dropped before the test, and a third-party
+# repo such as packages.microsoft.com/ubuntu/26.04/prod does not match.
+has_archive_source() {
+  local f live
+  for f in $(sources_files); do
+    [ -f "$f" ] || continue
+    live=$(grep -v -e '^[[:space:]]*#' -e 'security\.ubuntu\.com' "$f" || true)
+    if grep -Eq 'https?://[^/[:space:]]*archive\.ubuntu\.com|mirror(\+[a-z]+)?:[^[:space:]]+|https?://[^/[:space:]]+/ubuntu(-ports)?/?([[:space:]]|$)' <<<"$live"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ensure_archive_source HOST: when no Ubuntu archive is configured at all, add
+# one. On 2026-11-22 an ubuntu-26.04 runner (image 20261116.88.1) came up with
+# only packages.microsoft.com in its sources (cloud-init had not written
+# ubuntu.sources), so every attempt failed with "Unable to locate package
+# libtag1-dev" while sibling runners of the same image installed it; the
+# rotation below had nothing to rewrite. The fallback is a deb822 file of its
+# own (no existing file is edited) naming HOST for the release in os-release,
+# with the -updates, -backports and -security suites, signed by the image's
+# Ubuntu archive keyring when it has one. Non-x86 architectures use
+# ports.ubuntu.com instead, which the archive mirrors do not carry.
+ensure_archive_source() {
+  local host="$1" codename arch uri keyring
+  has_archive_source && return 0
+  # shellcheck source=/dev/null
+  codename=$(. "${APT_OS_RELEASE:-/etc/os-release}" 2>/dev/null && echo "${VERSION_CODENAME:-${UBUNTU_CODENAME:-}}")
+  if [ -z "$codename" ]; then
+    echo "apt_install: no Ubuntu archive source and no release codename in ${APT_OS_RELEASE:-/etc/os-release}; not adding one" >&2
+    return 0
+  fi
+  arch="${APT_DPKG_ARCH:-$(dpkg --print-architecture 2>/dev/null || echo amd64)}"
+  case "$arch" in
+    amd64 | i386) uri="http://${host}/ubuntu/" ;;
+    *) uri="http://ports.ubuntu.com/ubuntu-ports/" ;;
+  esac
+  keyring="${APT_UBUNTU_KEYRING:-/usr/share/keyrings/ubuntu-archive-keyring.gpg}"
+  {
+    printf 'Types: deb\nURIs: %s\nSuites: %s %s-updates %s-backports %s-security\n' "$uri" "$codename" "$codename" "$codename" "$codename"
+    printf 'Components: main restricted universe multiverse\n'
+    if [ -f "$keyring" ]; then printf 'Signed-By: %s\n' "$keyring"; fi
+  } | sudo tee "$fallback_file" >/dev/null || {
+    echo "apt_install: no Ubuntu archive source, and writing ${fallback_file} failed" >&2
+    return 0
+  }
+  echo "apt_install: no Ubuntu archive source was configured; added ${fallback_file} (${uri} ${codename})" >&2
 }
 
 # set_mirror HOST: point the Ubuntu archive sources at HOST. See the header for
@@ -129,6 +197,9 @@ download() {
   fi
 }
 
+# The LAST mirror of the list, so attempt 2 (which starts the rotation at the
+# first) moves to a different host.
+ensure_archive_source "${mirrors[$((${#mirrors[@]} - 1))]}"
 for attempt in $(seq 1 "$attempts"); do
   if [ "$attempt" -gt 1 ]; then
     set_mirror "${mirrors[$(((attempt - 2) % ${#mirrors[@]}))]}"
