@@ -135,13 +135,29 @@ func TestOpsSeries_Golden(t *testing.T) {
 	sm.ScheduleMissed(patrolKind, 2)
 	sm.ScheduleError(patrolKind)
 
-	metricstest.AssertSeries(t, k.provider, k.tasks.ops, "testdata/ops_series.golden")
-
-	// Every instrument is sampled in the golden or named in opsUncovered.
+	// A run's state is committed before the instruments that describe it are
+	// recorded (items trail the terminal state, queue_depth and dispatch_wait
+	// are written by a dispatch pass the state wait does not observe), so an
+	// immediate gather can miss a series. Wait for the golden's series to be
+	// exported, then assert.
 	want, err := metricstest.ReadGolden("testdata/ops_series.golden")
 	if err != nil {
 		t.Fatal(err)
 	}
+	gathered := time.Now().Add(30 * time.Second)
+	for {
+		got, gerr := metricstest.Gather(k.provider.Gatherer(), metricstest.FamilyPrefix(k.tasks.ops))
+		if gerr == nil && len(metricstest.Diff(want, got)) == 0 {
+			break
+		}
+		if time.Now().After(gathered) {
+			break // AssertSeries below reports the diff
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	metricstest.AssertSeries(t, k.provider, k.tasks.ops, "testdata/ops_series.golden")
+
+	// Every instrument is sampled in the golden or named in opsUncovered.
 	prefix := metricstest.FamilyPrefix(k.tasks.ops)
 	for _, n := range executor.InstrumentNames() {
 		norm := strings.ReplaceAll(n, ".", "_")
