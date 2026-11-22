@@ -25,7 +25,6 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
-	"github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
@@ -422,10 +421,9 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		slog.Warn("organize failed to stamp organized book", "createdBook", createdBook.ID, "updateErr", updateErr)
 	}
 
-	// Notify Deluge that the file moved so the torrent client keeps seeding
-	// from the new library path. Best-effort — errors are logged inside
-	// NotifyDelugeAfterOrganize; the organize operation already succeeded.
-	deluge.NotifyDelugeAfterOrganize(h.store, book.ID, newPath)
+	// Deluge follows the move through the durable relocation follow-up: the
+	// store stages books.book.relocated.v1 in the batch that wrote the new path,
+	// and books' outbox consumer starts the path-update run (F6-03).
 
 	if h.publisher != nil {
 		h.publisher.Publish(ctx, plugin.NewEvent(plugin.EventFileOrganized, createdBook.ID, map[string]any{
