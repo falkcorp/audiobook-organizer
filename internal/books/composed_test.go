@@ -332,6 +332,7 @@ func runComposedIn(t *testing.T, stateDir string, edit func(*config.Config), pre
 		if opt != nil {
 			opt(o)
 		}
+		o.Env = withLoopbackListen(o.Env)
 		listen := o.R1Listen
 		o.R1Listen = func(lo httpapi.ListenOptions, h http.Handler, l *slog.Logger) (app.R1Server, error) {
 			srv, err := listen(lo, h, l)
@@ -724,6 +725,24 @@ func TestOptions_FromReleaseReachesCore(t *testing.T) {
 // app.Options.Env must keep: the path the fixture's config holds, which
 // composedOptions put in the process environment for ResolveBootPaths.
 func storageEnv() string { return storagePathEnv + "=" + os.Getenv(storagePathEnv) }
+
+// loopbackListenEnv is the operator value that puts a running test App's
+// listener on a free loopback port.
+const loopbackListenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
+
+// withLoopbackListen keeps a running test App off ABO's compiled listen default
+// (localhost:8484). composedOptions sets the same value on the process
+// environment, but a test that hands the boot its own Options.Env replaces that
+// environment whole, and its App then bound 8484: two such tests on one host
+// (parallel packages, two worktrees, two CI pipelines) collided with "address
+// already in use". A nil env falls back to the process environment, which
+// already carries the value; an env that names a listen address keeps it.
+func withLoopbackListen(env []string) []string {
+	if env == nil || slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "ABO_CORE_HTTP_LISTEN=") }) {
+		return env
+	}
+	return append(slices.Clip(env), loopbackListenEnv)
+}
 
 // absEnv is the ABS layers (flag and signing secret, both operator-only) a
 // fixture that replaces app.Options.Env keeps when its config serves the ABS
