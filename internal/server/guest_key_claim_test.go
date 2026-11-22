@@ -399,14 +399,12 @@ func TestClaimGuestKey_ConcurrentClaimsMintOnce(t *testing.T) {
 	var mu sync.Mutex
 	codes := map[int]int{}
 	for range 12 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			w := f.claim(f.guest)
 			mu.Lock()
 			codes[w.Code]++
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 	assert.Equal(t, 1, codes[http.StatusOK], "exactly one claim wins: %v", codes)

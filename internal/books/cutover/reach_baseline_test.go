@@ -241,7 +241,7 @@ func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 		"manifest routes compared":               504,
 		"routes delegated to the ABS handler":    68,
 		"routes only R0 has":                     4,
-		"routes only R2 has":                     1,
+		"routes only R2 has":                     2,
 		"cells compared (task pseudo-routes in)": 27108,
 		"cells that differ":                      221,
 	}
