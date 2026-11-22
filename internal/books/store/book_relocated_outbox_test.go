@@ -488,3 +488,25 @@ func TestBookRelocated_ConcurrentMovesOfOneBook(t *testing.T) {
 		t.Fatalf("stored path %q is still the first path after %d moves", stored, movers*moves)
 	}
 }
+
+// TestBookRelocated_ImportMoveStagesNothing pins the Deluge-moves ruling for the
+// import move (F6-03): ImportToLibrary re-points the book's FILE rows
+// (UpdateBookFile) and never writes the book's own file_path, so a moved file
+// is not a book relocation and no path-update run follows it; the in-process
+// import call that moved the torrent is the only mover.
+func TestBookRelocated_ImportMoveStagesNothing(t *testing.T) {
+	r := newRelocationRig(t, false)
+	r.store.SetRelocationOutbox(r.ob.Writer("books"))
+	b := r.book(t, "The Cult", "/gotham/library/the-cult")
+	f := &BookFile{BookID: b.ID, FilePath: "/downloads/the-cult/part1.mp3", Format: "mp3"}
+	if err := r.store.CreateBookFile(f); err != nil {
+		t.Fatal(err)
+	}
+	f.FilePath = "/gotham/library/the-cult/part1.mp3"
+	if err := r.store.UpdateBookFile(f.ID, f); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.staged(t); len(got) != 0 {
+		t.Fatalf("an import's file re-point staged %d relocations, want 0: %+v", len(got), got)
+	}
+}
