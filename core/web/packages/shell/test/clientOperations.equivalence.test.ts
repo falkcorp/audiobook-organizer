@@ -4,14 +4,14 @@
 // last-edited: 2026-11-22
 
 // What the shell's client must keep doing when its hand-typed operation table
-// (api/interim.ts) is replaced by the generated one: every route the shell calls
+// (api/interim.ts, now deleted) is replaced by the generated one: every route the shell calls
 // is in core.json at the same method and path, with the same `public` flag, and
 // a client reads that flag the same way. The expected rows are written out here,
 // not imported, so the test outlives the table it was copied from.
 
 import { coreOperations } from '@mediacore/api-client';
 import { describe, expect, it } from 'vitest';
-import { createShellClient } from '../src/api/interim';
+import { createShellClient } from '../src/api/client';
 
 const API = '/api/core/v1';
 

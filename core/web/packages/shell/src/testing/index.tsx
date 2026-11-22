@@ -10,7 +10,7 @@
 import type { ReactElement } from 'react';
 import { render, type RenderResult } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
-import { createShellClient, type ShellClient } from '../api/interim';
+import { createShellClient, type ShellClient } from '../api/client';
 import { setShellAppId } from '../app/appId';
 import { MountedModulesContext } from '../app/context';
 import { ShellProviders } from '../app/createShell';

@@ -10,7 +10,7 @@ import { CssBaseline, ThemeProvider, Typography } from '@mui/material';
 import type { ThemeOptions } from '@mui/material/styles';
 import { readPageBuildId } from '@mediacore/api-client';
 import { BlockingPage, createMediaTheme, type MediaThemeInput } from '@mediacore/ui-kit';
-import { createShellClient, type ShellClient } from '../api/interim';
+import { createShellClient, type ShellClient } from '../api/client';
 import type { TaskRunView } from '../contracts';
 import { readAppMeta, readThemeMeta } from '../meta';
 import { createRealtimeClient } from '../realtime';

@@ -4,7 +4,7 @@
 // last-edited: 2026-11-20
 
 import { createContext, useContext } from 'react';
-import type { ShellClient } from '../api/interim';
+import type { ShellClient } from '../api/client';
 import type { Diagnostic } from '../version';
 import type { ModuleUI } from '../types';
 

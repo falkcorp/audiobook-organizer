@@ -6,7 +6,7 @@
 import { useContext, useMemo } from 'react';
 import type { AuthState } from '../contracts';
 import type { Permission } from '../types';
-import type { ShellClient } from '../api/interim';
+import type { ShellClient } from '../api/client';
 import { AuthClientContext, AuthContext, ModulesHintsContext } from './context';
 
 export function useAuth(): AuthState {

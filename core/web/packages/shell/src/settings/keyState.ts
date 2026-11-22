@@ -6,7 +6,7 @@
 // Pure helpers of the schema-driven settings renderer (07 §7.4.5): which widget a
 // key gets, the client-side format and range checks, ordering and comparison.
 
-import type { JsonSchema, KeyStateView } from '../api/interim';
+import type { JsonSchema, KeyStateView } from '../api/settingsInterim';
 
 export type WidgetKind = 'secret' | 'select' | 'switch' | 'number' | 'text' | 'list' | 'readonly';
 
