@@ -317,19 +317,19 @@ func (e *executor) systemChecker(module string) rbac.Checker {
 
 // opsChecker builds module's checker for every operation that is not a start:
 // viewing, cancelling, discarding and deciding runs, pausing. It is systemPerms
-// narrowed to the module's own namespace and never any core:tasks.* scope, so a
-// module whose TaskStarts name a kind that starts under core:tasks.manage or
-// core:tasks.view (or any other core:* scope) can start that kind and still
-// cannot view or manage runs of other modules, or pause the executor. A scope of
-// another namespace is what the start needed, not a right over the runs.
+// narrowed to the module's own namespace, so a module whose TaskStarts name a
+// kind that starts under core:tasks.manage, core:tasks.view or any other core:*
+// scope (the kernel refuses such a listing at boot; this is the executor's own
+// defense) can start that kind and still cannot view or manage runs of other
+// modules, or pause the executor. A scope of another namespace is what the start
+// needed, not a right over the runs. "core" is a reserved module ID, so no
+// module's namespace is core's.
 func (e *executor) opsChecker(module string) rbac.Checker {
 	var keep []rbac.Permission
 	for _, p := range e.systemPerms(module) {
-		ns, _, _ := strings.Cut(string(p), ":")
-		if ns != module || strings.HasPrefix(string(p), "core:tasks.") {
-			continue
+		if ns, _, _ := strings.Cut(string(p), ":"); ns == module {
+			keep = append(keep, p)
 		}
-		keep = append(keep, p)
 	}
 	return authz.ForSystem(e.opts.Catalog, keep)
 }
