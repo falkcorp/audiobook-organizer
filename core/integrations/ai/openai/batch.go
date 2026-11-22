@@ -53,13 +53,30 @@ type resultLine struct {
 	} `json:"error"`
 }
 
-// SubmitBatch uploads the items as a JSONL file and creates a chat-completions
-// batch over it with a 24 hour window, tagged with tags (the job ID, for the
-// router's orphan reconcile). One kind per batch: text.
+// SubmitBatch uploads the items as a JSONL file and creates a batch over it with
+// a 24 hour window, tagged with tags (the job ID, for the router's orphan
+// reconcile). One kind per batch: text items make a chat-completions batch, embed
+// items (ai.EmbedItem) a /v1/embeddings batch; a mix is refused (ClassInvalid)
+// before anything is uploaded.
 func (i *instance) SubmitBatch(ctx context.Context, model string, items []ai.BatchItem, tags map[string]string) (ai.BatchHandle, error) {
 	var buf bytes.Buffer
+	embed := len(items) > 0 && items[0].Embed != nil
+	url, endpoint := "/v1/chat/completions", oai.BatchNewParamsEndpointV1ChatCompletions
+	if embed {
+		url, endpoint = "/v1/embeddings", oai.BatchNewParamsEndpointV1Embeddings
+	}
 	for _, it := range items {
-		p, err := chatParams(model, it.Request)
+		if (it.Embed != nil) != embed {
+			return "", &integrations.Error{Ref: i.ref, Op: "batch submit", Class: integrations.ClassInvalid,
+				Err: fmt.Errorf("item %s: a batch holds one kind of item, text or embed", it.CustomID)}
+		}
+		var p any
+		var err error
+		if embed {
+			p = embedParams(model, *it.Embed)
+		} else {
+			p, err = chatParams(model, it.Request)
+		}
 		if err != nil {
 			return "", &integrations.Error{Ref: i.ref, Op: "batch submit", Class: integrations.ClassInvalid, Err: fmt.Errorf("item %s: %w", it.CustomID, err)}
 		}
@@ -67,7 +84,7 @@ func (i *instance) SubmitBatch(ctx context.Context, model string, items []ai.Bat
 		if err != nil {
 			return "", &integrations.Error{Ref: i.ref, Op: "batch submit", Class: integrations.ClassInvalid, Err: fmt.Errorf("item %s: %w", it.CustomID, err)}
 		}
-		line, err := json.Marshal(batchLine{CustomID: it.CustomID, Method: "POST", URL: "/v1/chat/completions", Body: body})
+		line, err := json.Marshal(batchLine{CustomID: it.CustomID, Method: "POST", URL: url, Body: body})
 		if err != nil {
 			return "", &integrations.Error{Ref: i.ref, Op: "batch submit", Class: integrations.ClassInvalid, Err: err}
 		}
@@ -85,7 +102,7 @@ func (i *instance) SubmitBatch(ctx context.Context, model string, items []ai.Bat
 	maps.Copy(md, tags)
 	batch, err := i.cl.Batches.New(ctx, oai.BatchNewParams{
 		InputFileID:      file.ID,
-		Endpoint:         oai.BatchNewParamsEndpointV1ChatCompletions,
+		Endpoint:         endpoint,
 		CompletionWindow: oai.BatchNewParamsCompletionWindow24h,
 		Metadata:         md,
 	})
@@ -215,8 +232,8 @@ func (i *instance) BatchResults(ctx context.Context, h ai.BatchHandle) (iter.Seq
 	}, nil
 }
 
-// result turns one result line into a BatchResult: the reply, or the provider's
-// per-row error as text.
+// result turns one result line into a BatchResult: the reply (text or
+// embeddings), or the provider's per-row error as text.
 func (i *instance) result(l resultLine) ai.BatchResult {
 	r := ai.BatchResult{CustomID: l.CustomID}
 	switch {
@@ -226,6 +243,18 @@ func (i *instance) result(l resultLine) ai.BatchResult {
 		r.Err = "no response"
 	case l.Response.StatusCode != 200:
 		r.Err = fmt.Sprintf("status %d: %s", l.Response.StatusCode, detail(string(l.Response.Body)))
+	case isEmbeddingBody(l.Response.Body):
+		var e oai.CreateEmbeddingResponse
+		vecs, ok := [][]float32(nil), false
+		if err := json.Unmarshal(l.Response.Body, &e); err == nil && len(e.Data) > 0 {
+			vecs, ok = vectorsOf(e.Data)
+		}
+		if !ok {
+			r.Err = "the reply is not a usable embeddings list"
+			break
+		}
+		r.Embed = &ai.EmbedResponse{Vectors: vecs, Model: e.Model,
+			Usage: ai.Usage{Requests: 1, InputTokens: e.Usage.PromptTokens}}
 	default:
 		var c oai.ChatCompletion
 		if err := json.Unmarshal(l.Response.Body, &c); err != nil || len(c.Choices) == 0 {
@@ -238,6 +267,16 @@ func (i *instance) result(l resultLine) ai.BatchResult {
 		}
 	}
 	return r
+}
+
+// isEmbeddingBody says a 200 reply body is an embeddings list rather than a
+// chat completion: the result file does not name its endpoint per row, but the
+// reply carries its object type.
+func isEmbeddingBody(body json.RawMessage) bool {
+	var probe struct {
+		Object string `json:"object"`
+	}
+	return json.Unmarshal(body, &probe) == nil && probe.Object == "list"
 }
 
 // CancelBatch cancels a batch at the provider.

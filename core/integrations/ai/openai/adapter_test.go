@@ -1385,3 +1385,116 @@ func TestFindBatches_Wire(t *testing.T) {
 		}
 	})
 }
+
+// Embed items make a /v1/embeddings batch: every line posts the pinned model and
+// the item's inputs (and dimensions) to /v1/embeddings, and the batch is created
+// for that endpoint.
+func TestSubmitBatch_EmbedItemsWire(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.on("POST /v1/files", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, 200, `{"id":"file-in-1","object":"file","bytes":1,"created_at":1,"filename":"batch.jsonl","purpose":"batch"}`)
+	})
+	r.on("POST /v1/batches", func(w http.ResponseWriter, _ *http.Request) { writeJSON(t, w, 200, batchAnswer("validating", "", "")) })
+	h, err := r.inst.SubmitBatch(context.Background(), "joker-embed", []ai.BatchItem{
+		ai.EmbedItem("e1", ai.EmbedRequest{Inputs: []string{"the batcave", "the bat signal"}, Dimensions: 8}),
+		ai.EmbedItem("e2", ai.EmbedRequest{Inputs: []string{"arkham"}}),
+	}, map[string]string{"job": "riddler-001"})
+	if err != nil || h != "batch_7" {
+		t.Fatalf("SubmitBatch = %q, %v", h, err)
+	}
+	reqs := r.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("requests = %+v", reqs)
+	}
+	f, _ := multipartOf(t, reqs[0]).File["file"][0].Open()
+	raw, _ := io.ReadAll(f)
+	_ = f.Close()
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("input file = %q", raw)
+	}
+	var first struct {
+		CustomID string         `json:"custom_id"`
+		URL      string         `json:"url"`
+		Body     map[string]any `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	inputs, _ := first.Body["input"].([]any)
+	if first.CustomID != "e1" || first.URL != "/v1/embeddings" || first.Body["model"] != "joker-embed" || len(inputs) != 2 || first.Body["dimensions"] != float64(8) {
+		t.Errorf("first line = %+v", first)
+	}
+	if _, chat := first.Body["messages"]; chat {
+		t.Error("an embed line carries chat messages")
+	}
+	if body := reqs[1].json(t); body["endpoint"] != "/v1/embeddings" {
+		t.Errorf("create body = %v, want the embeddings endpoint", body)
+	}
+}
+
+// A batch holds one kind of item: a mix is refused as invalid before anything
+// is uploaded.
+func TestSubmitBatch_MixedKindsRefusedBeforeUpload(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	_, err := r.inst.SubmitBatch(context.Background(), "m", []ai.BatchItem{
+		ai.EmbedItem("e1", ai.EmbedRequest{Inputs: []string{"a"}}),
+		{CustomID: "t1", Request: ai.TextRequest{System: "x"}},
+	}, nil)
+	var ie *integrations.Error
+	if !errors.As(err, &ie) || ie.Class != integrations.ClassInvalid {
+		t.Fatalf("mixed batch: err = %v, want a ClassInvalid error", err)
+	}
+	if n := len(r.requests()); n != 0 {
+		t.Errorf("%d request(s) sent for a refused batch", n)
+	}
+}
+
+// An embeddings row of a result file is an Embed answer in index order, with the
+// model and the prompt tokens; a row whose list is empty or whose indexes repeat
+// is a per-row error, never a padded vector list.
+func TestBatchResults_EmbeddingRows(t *testing.T) {
+	t.Parallel()
+	body := func(data string) string {
+		return `{"object":"list","data":[` + data + `],"model":"joker-embed","usage":{"prompt_tokens":7,"total_tokens":7}}`
+	}
+	row := func(id, b string) string {
+		return `{"id":"r","custom_id":"` + id + `","response":{"status_code":200,"request_id":"x","body":` + b + `},"error":null}`
+	}
+	good := row("e1", body(`{"object":"embedding","index":1,"embedding":[0.25]},{"object":"embedding","index":0,"embedding":[0.5]}`))
+	dup := row("e2", body(`{"object":"embedding","index":0,"embedding":[0.5]},{"object":"embedding","index":0,"embedding":[0.25]}`))
+	empty := row("e3", body(``))
+
+	r := newRig(t)
+	r.on("GET /v1/batches/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, 200, batchAnswer("completed", "file-out-1", ""))
+	})
+	r.on("GET /v1/files/{id}/content", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, good+"\n"+dup+"\n"+empty+"\n")
+	})
+	seq, err := r.inst.BatchResults(context.Background(), "batch_7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []ai.BatchResult
+	for res, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, res)
+	}
+	if len(got) != 3 {
+		t.Fatalf("results = %+v", got)
+	}
+	if got[0].Embed == nil || got[0].Text != nil || len(got[0].Embed.Vectors) != 2 || got[0].Embed.Vectors[0][0] != 0.5 || got[0].Embed.Vectors[1][0] != 0.25 ||
+		got[0].Embed.Model != "joker-embed" || got[0].Embed.Usage.InputTokens != 7 {
+		t.Errorf("row 1 = %+v, want two vectors in index order", got[0])
+	}
+	for _, i := range []int{1, 2} {
+		if got[i].Embed != nil || !strings.Contains(got[i].Err, "embeddings") {
+			t.Errorf("row %d = %+v, want a per-row embeddings error", i+1, got[i])
+		}
+	}
+}

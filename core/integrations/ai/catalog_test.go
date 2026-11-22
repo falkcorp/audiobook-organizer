@@ -205,29 +205,3 @@ func TestCatalog_BatchAPIFitsTextAndEmbed(t *testing.T) {
 		}
 	}
 }
-
-// A capability of embedding work that requires batch_api registers, but the
-// batch path knows only text items, so SubmitBatch refuses it before a job row
-// exists instead of sending chat requests to an embedding model.
-func TestSubmitBatch_EmbedCapabilityRefusedBeforeAnyJob(t *testing.T) {
-	t.Parallel()
-	h := newHarness(t)
-	spec := capSpec("embed_batch")
-	spec.Kind, spec.RequiredFeatures = ai.KindEmbed, []ai.Feature{ai.FeatureBatch}
-	c, err := h.r.RegisterCapability("gotham", spec)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f := fake()
-	set := textEndpoint("joker-7b", "gotham.embed_batch")
-	set.EmbedModel = "joker-embed"
-	set.Features = []ai.Feature{ai.FeatureBatch}
-	h.addEndpoint("arkham", 1, set, f)
-	_, err = h.r.SubmitBatch(context.Background(), c, items(1), nil, ai.WithPinnedModel("joker-embed"))
-	if !errors.Is(err, ai.ErrBatchKind) {
-		t.Fatalf("SubmitBatch of an embed capability: err = %v, want ErrBatchKind", err)
-	}
-	if n := len(f.RemoteBatches()); n != 0 {
-		t.Errorf("%d remote batch(es) were created", n)
-	}
-}

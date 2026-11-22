@@ -107,10 +107,9 @@ func (r *Router) SubmitBatch(ctx context.Context, c Capability, items []BatchIte
 	if err != nil {
 		return "", err
 	}
-	if e.spec.Kind != KindText {
-		// A capability may REQUIRE FeatureBatch for embedding work (the catalog
-		// accepts it), but the batch path only knows text items: refuse before a
-		// job row exists rather than submit chat requests to an embedding model.
+	if e.spec.Kind != KindText && e.spec.Kind != KindEmbed {
+		// A capability may REQUIRE FeatureBatch only of text and embedding work;
+		// the batch path knows no other item, so refuse before a job row exists.
 		return "", fmt.Errorf("%w: %s is %s work", ErrBatchKind, c.id, e.spec.Kind)
 	}
 	applyKind := r.applyKindOf(c.id)
@@ -129,8 +128,16 @@ func (r *Router) SubmitBatch(ctx context.Context, c Capability, items []BatchIte
 			return "", fmt.Errorf("ai: batch item custom IDs must be non-empty and unique (%q)", oneLine(it.CustomID))
 		}
 		seen[it.CustomID] = true
+		if err := checkItemKind(e.spec, it); err != nil {
+			return "", err
+		}
 	}
 	co := newCallOptions(opts)
+	if e.spec.Kind == KindEmbed && co.pinnedModel == "" {
+		// As for Call: vectors of different models are not comparable, so a
+		// batch of embeddings is served only by endpoints of the pinned model.
+		return "", fmt.Errorf("%w: capability %s", ErrEmbedModelNotPinned, e.spec.ID)
+	}
 	co.requireFeatures = append(slices.Clone(co.requireFeatures), FeatureBatch)
 	cfg := r.config()
 	cands, refusals := r.selectEndpoints(ctx, e.spec, co, cfg)
@@ -196,6 +203,21 @@ func (r *Router) SubmitBatch(ctx context.Context, c Capability, items []BatchIte
 	}
 	r.failPending(ctx, id)
 	return "", &ExhaustedError{Capability: c.id, Attempts: failed}
+}
+
+// checkItemKind refuses an item that does not match its capability's kind: a
+// batch holds one kind, and an item of the other would be sent to the wrong
+// provider endpoint. An embed item needs at least one input.
+func checkItemKind(spec CapabilitySpec, it BatchItem) error {
+	switch {
+	case spec.Kind == KindText && it.Embed != nil:
+		return fmt.Errorf("%w: item %q is an embed item in a batch of %s", ErrBatchKind, oneLine(it.CustomID), spec.ID)
+	case spec.Kind == KindEmbed && it.Embed == nil:
+		return fmt.Errorf("%w: item %q is not an embed item (use EmbedItem) in a batch of %s", ErrBatchKind, oneLine(it.CustomID), spec.ID)
+	case spec.Kind == KindEmbed && len(it.Embed.Inputs) == 0:
+		return fmt.Errorf("ai: embed item %q has no inputs", oneLine(it.CustomID))
+	}
+	return nil
 }
 
 // NotAccepted reports a class that says the provider did NOT create the batch:

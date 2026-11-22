@@ -305,7 +305,8 @@ func (f *FakeAI) BatchCallCount() int {
 }
 
 // AnswerBatchItems sets how a finished batch answers each item; the default
-// echoes the item's custom ID as the reply text.
+// echoes the item's custom ID as the reply text, and answers an embed item with
+// one one-dimension vector per input.
 func (f *FakeAI) AnswerBatchItems(fn func(ai.BatchItem) ai.BatchResult) *FakeAI {
 	f.mu.Lock()
 	f.batchItemFunc = fn
@@ -366,6 +367,13 @@ func (f *FakeAI) BatchResults(_ context.Context, h ai.BatchHandle) (iter.Seq2[ai
 			var r ai.BatchResult
 			if answer != nil {
 				r = answer(it)
+			} else if it.Embed != nil {
+				vecs := make([][]float32, len(it.Embed.Inputs))
+				for i := range vecs {
+					vecs[i] = []float32{float32(i + 1)}
+				}
+				r = ai.BatchResult{CustomID: it.CustomID, Embed: &ai.EmbedResponse{Vectors: vecs,
+					Usage: ai.Usage{Requests: 1, InputTokens: 10}}}
 			} else {
 				r = ai.BatchResult{CustomID: it.CustomID, Text: &ai.TextResponse{Text: it.CustomID,
 					Usage: ai.Usage{Requests: 1, InputTokens: 10, OutputTokens: 5}}}
