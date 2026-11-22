@@ -593,8 +593,8 @@ func restoreEpochRun(t *testing.T, fx Fixture) {
 	}
 	second := auth.RestoreEpochRun{RunKey: "run:r-bane", Bumped: 1}
 	must(t, "StageRestoreEpochRun again", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageRestoreEpochRun(b, second) }))
-	if got, _, _ := fx.Store.RestoreEpochRun(bg()); got != second {
-		t.Fatalf("RestoreEpochRun = %+v, want the later run's %+v", got, second)
+	if got, ok, err := fx.Store.RestoreEpochRun(bg()); err != nil || !ok || got != second {
+		t.Fatalf("RestoreEpochRun = %+v ok=%v err=%v, want the later run's %+v", got, ok, err, second)
 	}
 	err = commit(t, fx, func(b *storage.Batch) error {
 		return fx.Store.StageRestoreEpochRun(b, auth.RestoreEpochRun{Bumped: 1})
