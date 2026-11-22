@@ -16,6 +16,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/books/writer/writertest"
+	"github.com/falkcorp/audiobook-organizer/internal/maintenance/resources"
 )
 
 // booksSpy is the store under the builder: every read is the embedded nil
@@ -125,19 +126,8 @@ var (
 	}}
 )
 
-// knownGaps are the (kind, method) pairs whose stamp is wider than the kind's
-// declared Effects, so the executor's fence refuses the write after the flip. The
-// test asserts the refusal and fails the day the declaration widens: delete the
-// entry then. Widening a declaration is the flip's call (it changes what the kind
-// may write), so the builder does not.
-var knownGaps = map[string]string{
-	string(backfillKind) + "/UpdateBookFile": "backfill keeps HEAD's Writes [books, book_files] (kinds_backfill.go); the file row also stamps indexes and metadata_cache",
-	string(backfillKind) + "/ModifyBook":     "same declaration; ModifyBook's row is books, indexes and metadata_cache",
-}
-
 // Every call a kind's core can make is admitted by that kind's own Effects, in
-// Live and Preview, or is a named, asserted gap in knownGaps. The calls per kind
-// are the writes its core reaches (kinds_*.go comments).
+// Live and Preview. The calls per kind are the writes its core reaches (kinds_*.go comments).
 func TestBooksKindWriter_CallsAreAdmittedByTheKindsOwnEffects(t *testing.T) {
 	synth := []writerCall{callUpdateBookFile, callModifyBook, callClearSignature}
 	cases := []struct {
@@ -160,12 +150,6 @@ func TestBooksKindWriter_CallsAreAdmittedByTheKindsOwnEffects(t *testing.T) {
 					in := booksInputs(spy)
 					enforcing := writertest.New(kindByName(t, in, tc.kind), mode)
 					err := c.call(booksDeps(t, in).NewWriter(enforcing))
-					if gap, ok := knownGaps[string(tc.kind)+"/"+c.method]; ok {
-						require.Error(t, enforcing.RequireClean(), "the gap closed: drop it from knownGaps (%s)", gap)
-						require.ErrorIs(t, err, tasks.ErrOutsideEffects)
-						require.Empty(t, spy.calls, "a refused write reached the store")
-						return
-					}
 					require.NoError(t, enforcing.RequireClean(), "a stamp is wider than the kind's declared Effects")
 					if mode == tasks.ModePreview {
 						require.ErrorIs(t, err, tasks.ErrPreview)
@@ -255,4 +239,16 @@ func TestBooksTaskLists_MissingInputsRefuseAndDefinitionsAreClean(t *testing.T) 
 		_, err := BooksTaskLists(in)
 		require.ErrorContains(t, err, name)
 	}
+}
+
+// backfill's declared Effects are exactly the union of the rows of the store
+// writes its core makes (UpdateBookFile, ModifyBook, ClearBookSignature): a
+// narrower declaration is refused by the fence after the flip, a wider one is
+// access the kind does not use.
+func TestBooksKindWriter_BackfillDeclaresExactlyItsWriteRows(t *testing.T) {
+	rows, err := booksKindRows()
+	require.NoError(t, err)
+	union := resources.Union(rows["UpdateBookFile"], rows["ModifyBook"], rows["ClearBookSignature"])
+	def := kindByName(t, booksInputs(&booksSpy{}), backfillKind)
+	require.Equal(t, refStrings(union), refStrings2(tasks.CommonOf(def).Effects.WriteSet()))
 }

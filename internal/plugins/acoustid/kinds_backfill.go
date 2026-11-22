@@ -20,9 +20,18 @@ func (p *Plugin) backfillNative(d KindDeps, sched func(tasks.Kind) *tasks.Schedu
 	c := kindCommon(backfillKind, sched, false)
 	c.Title = "AcoustID backfill"
 	c.Help = backfillHelp
-	// HEAD-declared Writes (verified at HEAD 2026-08-07: UpdateBookFile for the
-	// fingerprint columns and ModifyBook for the signature): books and book_files.
-	c.Effects = tasks.Writes(res(ops.ResBooks, ops.ResBookFiles)...)
+	// HEAD declares Writes [books, book_files] (verified 2026-08-07). The body's
+	// store writes are UpdateBookFile (backfill.go:681 doFingerprintFile,
+	// backfill.go:710 markFingerprintFailure), ClearBookSignature (backfill.go:789)
+	// and ModifyBook (backfill.go:802), the last two in synthesizeBookSignatureForBook. The shared table's row for UpdateBookFile is
+	// book_files plus the books row, its metadata_cache stamp and its ident rows
+	// (indexes), because the store recomputes the book's aggregates after the file
+	// row commits; ModifyBook's row is the same books, metadata_cache and indexes.
+	// The kind declares the union: the fence refuses a write whose row is not
+	// inside the declaration, so HEAD's narrower set would break the backfill once
+	// the executor fences it. HEAD has no fence and already performs these writes;
+	// this declares them.
+	c.Effects = tasks.Writes(res(ops.ResBooks, ops.ResBookFiles, ops.ResIndexes, ops.ResMetadataCache)...)
 	// HEAD ResumeRestart: the body reads its checkpoint on restart (the last
 	// checkpoint is re-dispatched as its params and decoded into BackfillParams),
 	// so the native kind continues from it (Restore decodes HEAD's bytes).

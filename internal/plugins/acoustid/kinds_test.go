@@ -295,7 +295,7 @@ func kindRows() []kindRow {
 		{HeadID: "acoustid.backfill", Title: "AcoustID backfill", HeadResume: sdk.ResumeRestart, Resume: tasks.ResumeContinue,
 			Priority: tasks.PriorityLow, Timeout: 24 * time.Hour, HeadTimeout: 24 * time.Hour,
 			HeadWrites: []sdk.Resource{sdk.ResBooks, sdk.ResBookFiles},
-			Writes:     []ops.Resource{ops.ResBookFiles, ops.ResBooks},
+			Writes:     []ops.Resource{ops.ResBookFiles, ops.ResBooks, ops.ResIndexes, ops.ResMetadataCache},
 			Par:        []string{"fixed(4): "}, ParGot: []tasks.Parallelism{backfillParallelism(4)}, HeadKey: "acoustid.fingerprint"},
 		{HeadID: "acoustid.fingerprint-rescan", Title: "Fingerprint rescan", HeadResume: sdk.ResumeDrop, Resume: tasks.ResumeDrop,
 			Priority: tasks.PriorityLow, Timeout: 12 * time.Hour, HeadTimeout: 12 * time.Hour,

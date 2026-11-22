@@ -82,20 +82,15 @@ func TestBooksKindWriter_CallsAreAdmittedByTheKindsOwnEffects(t *testing.T) {
 		kind  tasks.Kind
 		calls func(w kindWriter) []error
 		want  []string
-		// knownGap names a recorded seam in which the kind declares less than its
-		// writer's row, so the fence refuses the write. The case then asserts the
-		// refusal and fails the day the declaration widens: delete knownGap then.
-		knownGap string
 	}{
 		{centralizeKind, func(w kindWriter) []error {
 			_, e1 := w.ModifyBookFile("b", "f", func(*database.BookFile) error { return nil })
 			return []error{e1, w.UpdateBookFile("f", &database.BookFile{ID: "f"})}
-		}, []string{"ModifyBookFile", "UpdateBookFile"}, ""},
+		}, []string{"ModifyBookFile", "UpdateBookFile"}},
 		{linkBackfillKind, func(w kindWriter) []error {
 			_, e1 := w.ModifyBookFile("b", "f", func(*database.BookFile) error { return nil })
 			return []error{e1}
-		}, []string{"ModifyBookFile"},
-			"seams.d/F5-05.md: link-backfill keeps HEAD's Writes [book_files], but ModifyBookFile's row is the wider fileRow"},
+		}, []string{"ModifyBookFile"}},
 	}
 	for _, tc := range cases {
 		for _, mode := range []tasks.Mode{tasks.ModeLive, tasks.ModePreview} {
@@ -104,14 +99,6 @@ func TestBooksKindWriter_CallsAreAdmittedByTheKindsOwnEffects(t *testing.T) {
 				deps := booksDeps(t, booksInputs(spy))
 				enforcing := writertest.New(kindByName(t, deps, tc.kind), mode)
 				errs := tc.calls(deps.NewWriter(enforcing))
-				if tc.knownGap != "" {
-					require.Error(t, enforcing.RequireClean(), "the gap closed: drop knownGap (%s)", tc.knownGap)
-					for _, err := range errs {
-						require.ErrorIs(t, err, tasks.ErrOutsideEffects)
-					}
-					require.Empty(t, spy.calls, "a refused write reached the store")
-					return
-				}
 				require.NoError(t, enforcing.RequireClean(), "a stamp is wider than the kind's declared Effects")
 				require.Len(t, enforcing.Writes(), len(tc.want))
 				for _, err := range errs {
@@ -188,4 +175,14 @@ func TestBooksTaskLists_MissingInputsRefuseAndDefinitionsAreClean(t *testing.T) 
 		_, err := BooksTaskLists(in)
 		require.ErrorContains(t, err, name)
 	}
+}
+
+// link-backfill's declared Effects are exactly the row of the one store write its
+// core makes (ModifyBookFile): a narrower declaration is refused by the fence
+// after the flip, a wider one is access the kind does not use.
+func TestBooksKindWriter_LinkBackfillDeclaresExactlyItsWriteRow(t *testing.T) {
+	rows, err := booksKindRows()
+	require.NoError(t, err)
+	def := kindByName(t, booksDeps(t, booksInputs(&booksSpy{})), linkBackfillKind)
+	require.Equal(t, refStrings(rows["ModifyBookFile"]), refStrings2(tasks.CommonOf(def).Effects.WriteSet()))
 }
