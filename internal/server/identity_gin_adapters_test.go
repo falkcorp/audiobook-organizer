@@ -82,7 +82,7 @@ func TestGinAdapters_Perm(t *testing.T) {
 			require.Equal(t, http.StatusOK, code, "the auth-disabled principal is judged by its own checker")
 			offNone, offNoneC := adoptPrincipal(coreauth.MethodAuthDisabled, nil)
 			code, _ = w.adapterServe(true, mw, offNone, offNoneC)
-			require.Equal(t, http.StatusUnauthorized, code, "and refused with 401 (no user) where its checker does not hold")
+			require.Equal(t, http.StatusForbidden, code, "and refused with 403 (no user; never the session-ending 401, F4-08 ruling G5(a)) where its checker does not hold")
 			code, _ = w.adapterServe(true, w.core.perm(auth.Permission("not.in.the.table")), yes, yesC)
 			require.Equal(t, http.StatusForbidden, code, "an atom the table does not know is refused")
 		}

@@ -477,7 +477,7 @@ func (h *AuthHandler) rehashPassword(user *database.User, plain string) {
 func (h *AuthHandler) Me(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok {
-		httputil.RespondWithUnauthorized(c, "not authenticated")
+		legacyauth.RespondNoUser(c, "not authenticated")
 		return
 	}
 	// The request's effective permissions, the set auth.Can reads: the role union
@@ -503,7 +503,7 @@ func requestPermissions(c *gin.Context) []auth.Permission {
 func (h *AuthHandler) UpdateMe(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok {
-		httputil.RespondWithUnauthorized(c, "not authenticated")
+		legacyauth.RespondNoUser(c, "not authenticated")
 		return
 	}
 	var req struct {
@@ -566,7 +566,7 @@ func sessionHandle(id string) string {
 func (h *AuthHandler) ListMySessions(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok {
-		httputil.RespondWithUnauthorized(c, "not authenticated")
+		legacyauth.RespondNoUser(c, "not authenticated")
 		return
 	}
 	currentSession, _ := servermiddleware.CurrentSession(c)
@@ -609,7 +609,7 @@ func (h *AuthHandler) ListMySessions(c *gin.Context) {
 func (h *AuthHandler) RevokeMySession(c *gin.Context) {
 	user, ok := servermiddleware.CurrentUser(c)
 	if !ok {
-		httputil.RespondWithUnauthorized(c, "not authenticated")
+		legacyauth.RespondNoUser(c, "not authenticated")
 		return
 	}
 	currentSession, _ := servermiddleware.CurrentSession(c)
@@ -648,7 +648,7 @@ func (h *AuthHandler) RevokeMySession(c *gin.Context) {
 func (h *AuthHandler) ChangePassword(c *gin.Context) {
 	caller, _ := servermiddleware.CurrentUser(c)
 	if caller == nil {
-		httputil.RespondWithUnauthorized(c, "not authenticated")
+		legacyauth.RespondNoUser(c, "not authenticated")
 		return
 	}
 	// API keys are refused at the route (server.credRoute), the one place

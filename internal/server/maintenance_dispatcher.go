@@ -80,7 +80,7 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 		}
 		if !held {
 			if _, hasUser := auth.UserFromContext(c.Request.Context()); !hasUser {
-				httputil.RespondWithUnauthorized(c, "authentication required")
+				legacyauth.RespondNoUser(c, "authentication required")
 			} else {
 				httputil.RespondWithForbidden(c, "permission denied: "+string(required))
 			}
