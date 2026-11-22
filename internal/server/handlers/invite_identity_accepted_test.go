@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"net/http"
 	"strings"
 	"testing"
@@ -213,5 +214,38 @@ func TestAcceptedInvites_PreFlipListIsHEADsAndIgnoresTheOutcomeFamily(t *testing
 	}
 	if strings.Contains(w.Body.String(), "u-selina") || strings.Contains(w.Body.String(), "inv-core") {
 		t.Fatalf("the outcome family leaked into the pre-flip list: %s", w.Body.String())
+	}
+}
+
+// refusingAdmin is core's admin handle for a caller whose principal may not list
+// invites: AdminInvites yields the refusal as its only element.
+type refusingAdmin struct{ *fakeAccounts }
+
+func (refusingAdmin) AdminInvites(context.Context) iter.Seq2[coreauth.InviteView, error] {
+	return func(yield func(coreauth.InviteView, error) bool) {
+		yield(coreauth.InviteView{}, fmt.Errorf("%w: core:users.manage is needed to list invites", coreauth.ErrDenied))
+	}
+}
+
+// The accepted rows come after core's gate, never around it: a caller core
+// refuses is answered 403 and the body carries no guest, though the family holds
+// one. The route's own users.manage check is the first layer; this is the second.
+func TestIdentityAcceptedInvites_ACallerCoreRefusesSeesNoGuest(t *testing.T) {
+	view := usersView{users: map[coreauth.UserID]*coreauth.User{"u-barbara": {ID: "u-barbara", Username: "barbara.gordon"}}}
+	f := newIdentityInviteFixture(t, rbac.CoreAdmin)
+	id := bridgeIdentity(t)
+	id.Admin = refusingAdmin{f.acc}
+	id.Users = view
+	f.useIdentity(id, "bruce", rbac.CoreAdmin)
+	f.asUser(t, "bruce", "admin")
+	if err := gpOutcomes(t, f.inviteFixture).RecordGuestPolicyOutcome("inv-b", "u-barbara", store.InviteGuestPolicyAdded, "", f.clk.now()); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := f.do(t, http.MethodGet, "/users/invites", nil)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("a refused caller got %d: %s", w.Code, w.Body.String())
+	}
+	if b := w.Body.String(); strings.Contains(b, "barbara.gordon") || strings.Contains(b, "u-barbara") || strings.Contains(b, "guest_policy") {
+		t.Fatalf("a refused caller was shown a guest: %s", b)
 	}
 }
