@@ -39,6 +39,10 @@ type Admin interface {
 	// that holds no credential. It stages and writes nothing.
 	PlanUserMerge(ctx context.Context, source, target UserID) (UserMergePlan, MergeSummary, error)
 	StageUserMerge(ctx context.Context, b *storage.Batch, plan UserMergePlan) (AfterCommit, error)
+	// PlanUserUnmerge and StageUserUnmerge undo a merge (unmerge.go); the same
+	// split of preview and staging, the same re-check of the ctx principal.
+	PlanUserUnmerge(ctx context.Context, rec UnmergeRecord) (UserUnmergePlan, UnmergeSummary, error)
+	StageUserUnmerge(ctx context.Context, b *storage.Batch, plan UserUnmergePlan) (AfterCommit, error)
 }
 
 // AfterCommit is what a staging method hands back for the caller to run once
@@ -75,6 +79,9 @@ func (s *Service) PlanUserMerge(ctx context.Context, source, target UserID) (pla
 	sum = MergeSummary{
 		Source: ev.src.ID, Target: ev.tgt.ID, RolesTransferred: slices.Clone(ev.added),
 		TargetHoldsAdmin: ev.tgtAdmin, Email: ev.email, APIKeys: []string{}, IdentityProviders: []string{},
+	}
+	if plan.receipt, err = s.mergeReceipt(ctx, ev.rows); err != nil {
+		return UserMergePlan{}, MergeSummary{}, err
 	}
 	for _, r := range ev.rows {
 		switch r.Kind {

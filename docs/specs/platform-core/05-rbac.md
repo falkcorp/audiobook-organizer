@@ -1097,7 +1097,7 @@ is normative; other files use these names.
 | `core.auth.*` | login success **sync**; failure/throttle **async** | `login` (success/failure; `Reason` `throttled` when the throttle refused), `logout`, `setup` |
 | `core.bootstrap.*`, `core.identity.*`, `core.templogin.*`, `core.invite.*` | sync | `bootstrap.redeem`; `identity.link`, `identity.unlink`, `identity.displace` (email displacement); `templogin.mint`, `templogin.consume`; `invite.create`, `invite.accept` |
 | `core.session.*`, `core.apikey.*` | sync (in batch) | `session.revoke` (05-authn §4.3); `apikey.create`, `apikey.revoke`, `apikey.set_status`, `apikey.require_confirmation` (05-authn §4.4, §4.14) |
-| `core.user.*` | sync (in batch) | `create`, `disable`, `enable`, `delete`, `reset_password`, `set_roles` |
+| `core.user.*` | sync (in batch) | `create`, `disable`, `enable`, `delete`, `reset_password`, `set_roles`, `unmerge` (undo of an admin user merge: the source account returns; F4-08 B10p) |
 | `core.role.*` | sync (in batch) | `create`, `update`, `delete`, `update_seed`, `accept_seed`, `review_admin` (§7.1); `reset` with seed-role editing (§3.6) |
 | `core.permission.deny` | async, coalesced | every 403 from httpapi stage 13, from `rbac.Require` (including books' `s.perm` adapter), every 403 `dominance_required` and every 403 `cross_origin_rejected` (until R2's identity flip, the access log's `security_event`, 05-http-api §4.2) |
 | `core.task.*` | sync | `approve`, `reject`, `cancel` (by another actor) |
