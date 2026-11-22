@@ -112,6 +112,8 @@ var verdictRows = []verdictRow{
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "POST", Route: "/api/v1/audiobooks/:id/status/repair", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
+	{Method: "POST", Route: "/api/v1/auth/api-keys", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
+		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "POST", Route: "/api/v1/auth/bootstrap", Class: classKnown, Principals: []string{"anonymous", "authoff", "key:admin:empty", "key:admin:every", "key:admin:settings", "key:admin:users", "key:admin:view", "key:admin:worker", "key:custom-all:empty", "key:custom-all:every", "key:custom-subset:empty", "key:custom-subset:outside", "key:editor:empty", "key:editor:every", "key:editor:settings", "key:editor:users", "key:editor:view", "key:editor:worker", "key:fp-worker:empty", "key:fp-worker:every", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view", "key:fp-worker:worker", "key:viewer:empty", "key:viewer:every", "key:viewer:settings", "key:viewer:users", "key:viewer:view", "key:viewer:worker", "session:admin", "session:custom-all", "session:custom-subset", "session:custom-unknown", "session:editor", "session:fp-worker", "session:viewer"},
 		Why: "accepted 11-22 06:29 (coordinator, bootstrap ruling option 2): under identity the books route refuses every caller up front, 401 invalid bootstrap token, before it reads the body (R0's 400 was the empty probe body); the token is redeemed at core's /api/core/v1/auth/bootstrap and the cutover deletes HEAD's token rows"},
 	{Method: "POST", Route: "/api/v1/auth/logout", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
@@ -130,18 +132,12 @@ var verdictRows = []verdictRow{
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
 	{Method: "PUT", Route: "/api/v1/playlists/:id", Class: classKnown, Principals: []string{"key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view"},
 		Why: "accepted 11-22 (coordinator): a role-Confined fp-worker key gets no ambient scopes (core:self, core:metrics.read, books:reading) and the route needs one"},
-	{Method: "GET", Route: "/api/v1/deluge/discover", Class: classB10y, Principals: []string{"authoff", "key:admin:empty", "key:admin:every", "key:custom-all:empty", "key:custom-all:every", "session:admin", "session:custom-all"},
-		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
 	{Method: "PATCH", Route: "/api/v1/admin/debug/book-files/:id", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
 	{Method: "PATCH", Route: "/api/v1/admin/debug/books/:id", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
 	{Method: "POST", Route: "/api/v1/admin/debug/edits/:edit_id/undo", Class: classB10y, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
-	{Method: "POST", Route: "/api/v1/deluge/discover/import", Class: classB10y, Principals: []string{"authoff", "key:admin:empty", "key:admin:every", "key:custom-all:empty", "key:custom-all:every", "session:admin", "session:custom-all"},
-		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
-	{Method: "POST", Route: "/api/v1/auth/api-keys", Class: classRuling, Principals: []string{"key:admin:empty", "key:admin:every", "key:admin:settings", "key:admin:users", "key:admin:view", "key:custom-all:empty", "key:custom-all:every", "key:custom-subset:empty", "key:custom-subset:outside", "key:editor:empty", "key:editor:every", "key:editor:settings", "key:editor:users", "key:editor:view", "key:editor:worker", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view", "key:viewer:empty", "key:viewer:every", "key:viewer:settings", "key:viewer:users", "key:viewer:view", "key:viewer:worker"},
-		Why: "narrowing not yet ruled on"},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
@@ -198,6 +194,27 @@ func recordedVerdicts(t testing.TB) (principals []string, routes []recordedRoute
 	return vf.Principals, vf.Routes
 }
 
+// recordedRequest is the request R0's recorder sent for r as p (the oracle's
+// probeRequest): the probe path, an empty JSON object for a writing method (two
+// config routes get the body their handlers refuse before any write), and for the
+// public invite routes a token of p's own. A cell sent any other way compares a
+// different request with R0's answer: with no body, POST /auth/api-keys refuses
+// every API key before its handler runs (apiKeyCreateForAnotherUser fails closed on
+// a body it cannot decode), where R0's {} reached the handler's 400.
+func recordedRequest(r recordedRoute, p *Principal) (path string, body any) {
+	return probeRequest(r.Method, r0Route{Method: r.Method, Path: r.Path, ProbePath: r.ProbePath}, p.Name)
+}
+
+// bootAsRecorded boots the registered path over the corpus as R0 recorded it: the
+// stored settings blob has deluge_discovery_enabled on, as the oracle's boots do
+// (seedDelugeDiscovery). With it off, GET /deluge/discover and its import answer 403
+// "deluge discovery is disabled" to every principal from inside the handler, so a
+// cell would compare a setting, not reach.
+func bootAsRecorded(t *testing.T, authOff bool) *Registered {
+	t.Helper()
+	return bootRegistered(t, registeredConfig{AuthOff: authOff, Seed: seedDelugeDiscovery})
+}
+
 // sweepCells runs every recorded route as every principal of the boot that has a
 // recorded name (a core key under its twin's) and calls cell with the answer and R0's
 // letter. The session-ending routes go last: logging out is what they do.
@@ -217,7 +234,8 @@ func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell fu
 				if i < 0 || !only(p) {
 					continue
 				}
-				res, err := h.Do(p, r.Method, r.ProbePath, nil)
+				path, body := recordedRequest(r, p)
+				res, err := h.Do(p, r.Method, path, body)
 				if err != nil {
 					// The ABS surface (OwnAuth) is not a stage-12/13 route; its cells
 					// are in the ABS tests.
@@ -294,11 +312,11 @@ func TestRegisteredHarness_EveryVerdictIsR0sOrNamed(t *testing.T) {
 		}
 	}
 	t.Run("auth on", func(t *testing.T) {
-		h := bootRegistered(t, registeredConfig{})
+		h := bootAsRecorded(t, false)
 		check(t, h, func(p *Principal) bool { return p != nil && p.Kind != "authoff" })
 	})
 	t.Run("auth off", func(t *testing.T) {
-		h := bootRegistered(t, registeredConfig{AuthOff: true})
+		h := bootAsRecorded(t, true)
 		check(t, h, func(p *Principal) bool { return p != nil && p.Kind == "authoff" })
 	})
 }

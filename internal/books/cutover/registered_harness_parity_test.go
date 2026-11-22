@@ -22,8 +22,9 @@ import (
 // requires the deletion). They sit last in the stack so the commits that must pass come
 // first.
 
-// parityMisses runs the cells rows name on h and returns, one line each, those whose
-// verdict is not the one R0 recorded for the principal. A principal not on h (the
+// parityMisses runs the cells rows name on h, each as the request R0's recorder sent
+// (recordedRequest), and returns, one line each, those whose verdict is not the one
+// R0 recorded for the principal. A principal not on h (the
 // auth-off one on the auth-on boot, and the reverse) is skipped by only. A core key is
 // held to its abk_ twin's verdict, as the sweep does.
 func parityMisses(t *testing.T, h *Registered, rows []verdictRow, only func(*Principal) bool) []string {
@@ -46,7 +47,8 @@ func parityMisses(t *testing.T, h *Registered, rows []verdictRow, only func(*Pri
 				if pi < 0 {
 					t.Fatalf("%s has no recorded verdict", p.Name)
 				}
-				res, err := h.Do(p, rec.Method, rec.ProbePath, nil)
+				path, body := recordedRequest(rec, p)
+				res, err := h.Do(p, rec.Method, path, body)
 				if errors.Is(err, ErrOwnAuth) {
 					continue
 				}
@@ -72,7 +74,7 @@ func onAuthOn(p *Principal) bool { return p != nil && p.Kind != "authoff" }
 // differ from R0 (the accepted fp-worker narrowing; a route R0 recorded and the flipped
 // build refuses to its key) must come back, and a cell that answers as R0 did must not.
 func TestRegisteredHarness_ParityMissesSeesADifference(t *testing.T) {
-	h := bootRegistered(t, registeredConfig{})
+	h := bootAsRecorded(t, false)
 	var known []verdictRow
 	for _, r := range verdictRows {
 		if r.Class == classKnown {
