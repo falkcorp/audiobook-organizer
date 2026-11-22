@@ -139,6 +139,12 @@ type OneTimeStore interface {
 	// DeleteOneTime stages the deletion of the token of kind whose public ID
 	// is id, with an Expect on its stored bytes.
 	DeleteOneTime(b *storage.Batch, kind OneTimeKind, id string) error
+	// PutOneTime stages t over the stored token of kind t.Kind whose public ID
+	// is t.ID, keeping the token's stored secret hash, with an Expect on the
+	// bytes it read: a take or another rewrite that lands first fails the
+	// commit (storage.ErrConflict), so a rewrite can never bring back a token
+	// a racing accept spent. auth.ErrNotFound when there is no such token.
+	PutOneTime(b *storage.Batch, t *OneTimeToken) error
 }
 
 // IdentityStore is the external-identity and invite allow-list family of

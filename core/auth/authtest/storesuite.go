@@ -84,6 +84,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"OneTimeConcurrentTakesOneWins", oneTimeConcurrent},
 		{"OneTimeLookupDoesNotSpend", oneTimeLookup},
 		{"OneTimeDeleteByID", oneTimeDelete},
+		{"OneTimePutKeepsTokenAndConflictsATake", oneTimePut},
 		{"IdentityRoundTrip", identityRoundTrip},
 		{"IdentityRelinkMovesIndex", identityRelink},
 		{"MergeRowsReadsWhatAMergeMoves", mergeRows},
@@ -909,6 +910,39 @@ func oneTimeDelete(t *testing.T, fx Fixture) {
 	errIs(t, "LookupOneTime(deleted)", err, auth.ErrNotFound)
 	err = commit(t, fx, func(b *storage.Batch) error { return fx.Store.DeleteOneTime(b, auth.OneTimeInvite, tok.ID) })
 	errIs(t, "DeleteOneTime(absent)", err, auth.ErrNotFound)
+}
+
+// oneTimePut: a rewrite by public ID keeps the token usable under its own
+// secret and carries the new fields; a rewrite staged before a take conflicts
+// the take's commit and one staged after it conflicts its own, so a rewrite
+// can never bring back a spent token; an absent ID is ErrNotFound.
+func oneTimePut(t *testing.T, fx Fixture) {
+	tok := oneTime(auth.OneTimeInvite)
+	raw := issueOneTime(t, fx, tok)
+	up := *tok
+	up.BindEmailOnAccept = true
+	must(t, "PutOneTime", commit(t, fx, func(b *storage.Batch) error { return fx.Store.PutOneTime(b, &up) }))
+	got, err := fx.Store.LookupOneTime(bg(), auth.OneTimeInvite, raw)
+	must(t, "LookupOneTime after the rewrite", err)
+	if !got.BindEmailOnAccept || got.ID != tok.ID || got.Email != tok.Email {
+		t.Fatalf("after PutOneTime: %+v", got)
+	}
+	absent := up
+	absent.ID = "no-such-invite"
+	errIs(t, "PutOneTime(absent)", commit(t, fx, func(b *storage.Batch) error { return fx.Store.PutOneTime(b, &absent) }), auth.ErrNotFound)
+
+	bPut, bTake := fx.NewBatch(), fx.NewBatch()
+	defer closeBatch(t, bPut)
+	defer closeBatch(t, bTake)
+	again := up
+	again.Username = "robin-again"
+	must(t, "stage rewrite", fx.Store.PutOneTime(bPut, &again))
+	_, err = fx.Store.TakeOneTime(bTake, auth.OneTimeInvite, raw)
+	must(t, "stage take", err)
+	must(t, "commit take", bTake.Commit(bg(), storage.Sync))
+	errIs(t, "commit of a rewrite staged before a take", bPut.Commit(bg(), storage.Sync), storage.ErrConflict)
+	_, err = fx.Store.LookupOneTime(bg(), auth.OneTimeInvite, raw)
+	errIs(t, "the spent token stays spent", err, auth.ErrNotFound)
 }
 
 // ---------------------------------------------------------------------------

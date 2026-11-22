@@ -188,7 +188,7 @@ func newOffFx(t *testing.T, p offPosture) *offFx {
 	}
 	fx.ids["user"] = string(u.ID)
 	owner := &auth.Principal{Method: auth.MethodSession, Perms: holdsAll{}, User: u}
-	link, inv, err := k.ident.svc.Auth.CreateInvite(t.Context(), owner, auth.InviteSpec{Username: "dick", Role: "relay-worker", TTL: time.Hour})
+	link, inv, err := k.ident.svc.Auth.CreateInvite(auth.WithPrincipal(t.Context(), owner), owner, auth.InviteSpec{Username: "dick", Role: "relay-worker", TTL: time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}

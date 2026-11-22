@@ -31,15 +31,15 @@ func coreActionGrammar() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
 }
 
-// TestAuditAction_Grammar (05-rbac §7.1): the action table has the 65 core
-// actions, sorted and unique, every one of them and every action named in an
+// TestAuditAction_Grammar (05-rbac §7.1): the action table has the 68 core
+// actions (65 of the table plus the three F4-08 B10t added), sorted and unique, every one of them and every action named in an
 // audit.Event literal under core/ matches <ns>.<noun>.<verb>, and ValidAction
 // agrees with the spec's regexp.
 func TestAuditAction_Grammar(t *testing.T) {
 	re := coreActionGrammar()
 	table := audit.CoreActions()
-	if len(table) != 65 {
-		t.Errorf("CoreActions has %d actions, want the 65 of §7.1", len(table))
+	if len(table) != 68 {
+		t.Errorf("CoreActions has %d actions, want the 68 (§7.1's 65 and B10t's 3)", len(table))
 	}
 	if !slices.IsSorted(table) {
 		t.Error("CoreActions is not sorted")
@@ -218,14 +218,14 @@ func TestCoreActions_CredentialAndIdentityActionsAreUserScoped(t *testing.T) {
 		"core.bootstrap.redeem",
 		"core.identity.displace", "core.identity.link", "core.identity.unlink",
 		"core.integration.change_url", "core.integration.local_migrated", "core.integration.write_secret",
-		"core.invite.accept", "core.invite.create",
+		"core.invite.accept", "core.invite.create", "core.invite.mark_delivered", "core.invite.rotate",
 		"core.oidc_provider.create", "core.oidc_provider.delete", "core.oidc_provider.update",
 		"core.permission.deny",
 		"core.restore.revoke",
 		"core.secret.rotate",
 		"core.session.revoke",
 		"core.templogin.consume", "core.templogin.mint",
-		"core.user.create", "core.user.delete", "core.user.disable", "core.user.enable", "core.user.reset_password", "core.user.set_roles",
+		"core.user.create", "core.user.delete", "core.user.disable", "core.user.enable", "core.user.reset_password", "core.user.set_email", "core.user.set_roles",
 	}
 	for _, a := range scoped {
 		if got := audit.VisibilityOf(a); got != audit.UserScoped {
