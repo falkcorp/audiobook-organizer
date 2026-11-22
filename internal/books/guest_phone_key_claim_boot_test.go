@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/mediacore/module"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
@@ -46,6 +48,7 @@ const (
 type cloudflareFake struct {
 	mu      sync.Mutex
 	tokens  int
+	deleted int
 	include []any
 	next    http.RoundTripper
 }
@@ -69,6 +72,12 @@ func (f *cloudflareFake) RoundTrip(r *http.Request) (*http.Response, error) {
 		return reply(http.StatusOK, map[string]any{
 			"id": claimTokenID, "client_id": claimClientID, "client_secret": claimSecret, "name": "aorg-guest-x",
 		})
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/access/service_tokens/"+claimTokenID):
+		// The revoke reads the token back and deletes it only when it is ours.
+		return reply(http.StatusOK, map[string]any{"id": claimTokenID, "client_id": claimClientID, "name": "aorg-guest-x"})
+	case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/access/service_tokens/"+claimTokenID):
+		f.deleted++
+		return reply(http.StatusOK, map[string]any{"id": claimTokenID})
 	case strings.Contains(r.URL.Path, "/access/policies/"+claimPolicyID):
 		if r.Method == http.MethodPut {
 			var body map[string]any
@@ -92,6 +101,13 @@ func (f *cloudflareFake) minted() int {
 	return f.tokens
 }
 
+// revoked is how many times the service token was deleted at Cloudflare.
+func (f *cloudflareFake) revoked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleted
+}
+
 func installCloudflareFake(t *testing.T) *cloudflareFake {
 	t.Helper()
 	f := &cloudflareFake{next: http.DefaultTransport}
@@ -101,7 +117,9 @@ func installCloudflareFake(t *testing.T) *cloudflareFake {
 	return f
 }
 
-func bootGuestKeyApp(t *testing.T) (*runningApp, *cloudflareFake) {
+// bootGuestKeyApp boots the composition with the phone-app key feature on; wrap,
+// when given, wraps the books module as runComposedWith takes it.
+func bootGuestKeyApp(t *testing.T, wrap ...func(module.Module) module.Module) (*runningApp, *cloudflareFake) {
 	t.Helper()
 	t.Cleanup(SetIdentityFlipForTest(true))
 	// The Cloudflare settings are operator-only: their layer is the environment.
@@ -117,7 +135,7 @@ func bootGuestKeyApp(t *testing.T) (*runningApp, *cloudflareFake) {
 		c.CFGuestsPolicyID = "eeeeeeee-1111-2222-3333-ffffffffffff"
 		c.CFServiceAuthPolicyID = claimPolicyID
 		c.CFGuestServiceTokens = true
-	}, nil, nil, nil)
+	}, nil, nil, nil, wrap...)
 	// After the boot, not before: Register clones http.DefaultTransport as an
 	// *http.Transport and panics on any other RoundTripper.
 	return r, installCloudflareFake(t)
@@ -158,13 +176,25 @@ func sessionCookie(t *testing.T, rec *httptest.ResponseRecorder) *http.Cookie {
 // robin's session cookie and the accepted user's id.
 func inviteAndAccept(t *testing.T, r *runningApp, username, email string) (guest *http.Cookie, guestID string, admin *http.Cookie) {
 	t.Helper()
-	h := r.app.Handler()
 	admin = bootstrapAdmin(t, r)
+	guest, guestID, _ = inviteGuest(t, r, admin, username, email)
+	return guest, guestID, admin
+}
+
+// inviteGuest is inviteAndAccept for an admin who is already signed in. It also
+// returns the invite's public id, the handle an admin's list and the lifecycle
+// payload name.
+func inviteGuest(t *testing.T, r *runningApp, admin *http.Cookie, username, email string) (guest *http.Cookie, guestID, inviteID string) {
+	t.Helper()
+	h := r.app.Handler()
 	rec := doJSON(t, h, http.MethodPost, "/api/core/v1/users/invites",
 		map[string]string{"username": username, "email": email, "role": "viewer"}, admin)
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	var created struct {
-		Link string `json:"link"`
+		Link   string `json:"link"`
+		Invite struct {
+			ID string `json:"id"`
+		} `json:"invite"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &created), rec.Body.String())
 	_, token, ok := strings.Cut(created.Link, "#token=")
@@ -184,7 +214,7 @@ func inviteAndAccept(t *testing.T, r *runningApp, username, email string) (guest
 	}
 	require.NoError(t, json.Unmarshal(acc.Body.Bytes(), &opened), acc.Body.String())
 	require.NotEmpty(t, opened.User.ID, acc.Body.String())
-	return sessionCookie(t, acc), opened.User.ID, admin
+	return sessionCookie(t, acc), opened.User.ID, created.Invite.ID
 }
 
 func claimKey(t *testing.T, r *runningApp, ck *http.Cookie) *httptest.ResponseRecorder {

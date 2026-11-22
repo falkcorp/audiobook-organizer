@@ -56,13 +56,6 @@ type Identity struct {
 	// the account record is core's: resolving a person through books' store
 	// would create, link or mark rows core no longer owns.
 	Access AccessResolver
-	// Users is the actor-checked read of core's user records (AdminUsers),
-	// which the guest phone-app key routes read OTHER accounts through. It is
-	// optional: nil refuses those reads (fail closed) and never falls back to
-	// books' user store, which holds no accounts under core identity. It is
-	// not part of Validate for that reason, and it is never an unchecked
-	// reader: core re-checks the request's principal on every call.
-	Users AdminUsers
 }
 
 // Validate reports a missing member. A server built over a partial Identity

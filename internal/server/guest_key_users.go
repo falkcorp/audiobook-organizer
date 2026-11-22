@@ -38,11 +38,34 @@ type guestKeyUsers interface {
 	ListUsers(ctx context.Context) ([]database.User, error)
 }
 
+// guestAdminReader is the actor-checked read of core's user records the guest
+// phone-app key routes read OTHER accounts through: core's AdminUser and
+// AdminUsers, which re-check the principal of ctx (core:users.manage and an
+// interactive sign-in), so holding it grants nothing, and the records carry no
+// credential material. It is deliberately not auth.Identities, which answers any
+// caller: a route that reads other accounts is judged against the caller it
+// serves. A request reads its OWN record through the principal it carries
+// (Bridge.FromCorePrincipal), never through this. The method names are those of
+// AccountAdmin (B10t-books), whose Identity.Accounts is what guestAccounts
+// returns once it lands.
+type guestAdminReader interface {
+	AdminUser(ctx context.Context, id coreauth.UserID) (*coreauth.User, error)
+	AdminUsers(ctx context.Context, f coreauth.UserFilter) iter.Seq2[*coreauth.User, error]
+}
+
+// guestAccounts is the reader of other accounts under core identity: nil
+// refuses those reads (fail closed) and never falls back to books' user store,
+// which holds no accounts under core identity. It is nil until B10t-books adds
+// legacyauth.Identity.Accounts; the swap is this one function's body.
+func (s *Server) guestAccounts() guestAdminReader {
+	return s.accountsForGuestKeys
+}
+
 // guestUsers is the seam for this server: core's record when it runs under
 // core identity, books' store otherwise.
 func (s *Server) guestUsers() guestKeyUsers {
 	if s.identity != nil {
-		return coreGuestUsers{admin: s.identity.Users, bridge: s.identity.Bridge}
+		return coreGuestUsers{admin: s.guestAccounts(), bridge: s.identity.Bridge}
 	}
 	return storeGuestUsers{r: s.storeForWiring()}
 }
@@ -54,18 +77,18 @@ func (s *Server) guestUsers() guestKeyUsers {
 // once for the request and every question is answered from it. HEAD's store
 // answers each row from an index, so it is unchanged.
 func (s *Server) guestUsersForList() guestKeyUsers {
-	if s.identity == nil || s.identity.Users == nil {
+	if s.identity == nil || s.guestAccounts() == nil {
 		return s.guestUsers()
 	}
-	return coreGuestUsers{admin: &adminUsersSnapshot{inner: s.identity.Users}, bridge: s.identity.Bridge}
+	return coreGuestUsers{admin: &adminUsersSnapshot{inner: s.guestAccounts()}, bridge: s.identity.Bridge}
 }
 
-// adminUsersSnapshot is legacyauth.AdminUsers over one read of the inner
+// adminUsersSnapshot is guestAdminReader over one read of the inner
 // reader's list, for the life of one request. The first call is judged by core
 // against the caller of that call's ctx; a later call reuses it, which is sound
 // only because one snapshot serves one request (one caller), never the server.
 type adminUsersSnapshot struct {
-	inner legacyauth.AdminUsers
+	inner guestAdminReader
 	once  sync.Once
 	list  []*coreauth.User
 	err   error
@@ -142,12 +165,12 @@ var (
 //     also refuses an account that is no longer active. This is the path the
 //     guest's own claim takes; it needs no admin right and exposes no one else.
 //   - Every other record is read through the actor-checked reader (admin,
-//     legacyauth.AdminUsers): core re-checks the ctx principal on each call
+//     guestAdminReader): core re-checks the ctx principal on each call
 //     (core:users.manage, interactive), so a caller without the right reads
 //     nothing. With no reader the read refuses, never falling back to books'
 //     store.
 type coreGuestUsers struct {
-	admin  legacyauth.AdminUsers
+	admin  guestAdminReader
 	bridge *legacyauth.Bridge
 }
 
