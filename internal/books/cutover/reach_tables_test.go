@@ -218,7 +218,7 @@ var reachHandlerRefusalCells = append(slices.Clone(reachIdentityRoutes), "POST /
 var (
 	reachWantR0Only = []string{
 		"GET /",           // the SPA handler, outside the manifest (served by the embedded frontend)
-		"GET /api/events", // F6-03: hub A's SSE stream, deleted; core's GET /api/core/v1/events succeeds it and /api/events answers 301 to /api/v1/events, 404 (TestAPIEventsGone)
+		"GET /api/events", // F6-03: hub A's SSE stream, deleted; core's GET /api/core/v1/events succeeds it and /api/events answers 301 to /api/v1/events, which is 404 (TestAPIEventsGone)
 	}
 	// R0 is main at f6698f9bf (F4-08), which serves the reissue route (1619250eb)
 	// and has dropped reconcile/preview (64fdc707e) and the reset pair (623da76d3),
