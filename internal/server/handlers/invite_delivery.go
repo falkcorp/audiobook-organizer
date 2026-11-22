@@ -40,6 +40,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	imail "github.com/falkcorp/mediacore/integrations/notify/mail"
@@ -347,29 +348,45 @@ func (h *UserHandler) invitePhoneAppToken(inv *database.Invite) bool {
 	return err == nil && database.InviteCreatorMayGrant(creator)
 }
 
-// sendInviteEmail renders and sends the invitation for inv and records the
-// send. It returns a message safe to show an admin: never the body.
-func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite) (sentAt *time.Time, errMsg string) {
+// mailInvite renders and sends the invitation for inv and returns the sent
+// message's recipient, or a message safe to show an admin (never the body). It
+// is the delivery both worlds share: HEAD's sendInviteEmail and the core
+// identity routes (invite_identity.go). link supplies the invitee's link and the
+// two promises the email may make, and is called only once the send is known to
+// be possible, so it may read the store.
+func (h *UserHandler) mailInvite(ctx context.Context, inv *database.Invite, link func() (inviteURL string, emailLogin, phoneAppToken bool)) (to string, errMsg string) {
 	if why := h.delivery.sendBlocked(); why != "" {
-		return nil, why
+		return "", why
 	}
 	sender := h.delivery.sender()
 	if inv.Email == "" {
-		return nil, "this invitation has no email address"
+		return "", "this invitation has no email address"
 	}
-	base := h.delivery.baseURL()
-	msg, err := renderInviteEmail(inv, InviteURL(base, inv.Token), base, h.inviteEmailLogin(inv), h.invitePhoneAppToken(inv))
+	inviteURL, emailLogin, phoneAppToken := link()
+	msg, err := renderInviteEmail(inv, inviteURL, h.delivery.baseURL(), emailLogin, phoneAppToken)
 	if err != nil {
 		inviteLog.Error("invite email: render failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), err)
-		return nil, "could not build the invitation email"
+		return "", "could not build the invitation email"
 	}
 	if err := sender.Send(ctx, msg); err != nil {
 		inviteLog.Warn("invite email: send failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), logger.SanitizeLogValue(err.Error()))
-		return nil, "sending failed: " + err.Error()
+		return "", "sending failed: " + err.Error()
+	}
+	return msg.To, ""
+}
+
+// sendInviteEmail renders and sends the invitation for inv and records the
+// send. It returns a message safe to show an admin: never the body.
+func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite) (sentAt *time.Time, errMsg string) {
+	to, errMsg := h.mailInvite(ctx, inv, func() (string, bool, bool) {
+		return InviteURL(h.delivery.baseURL(), inv.Token), h.inviteEmailLogin(inv), h.invitePhoneAppToken(inv)
+	})
+	if errMsg != "" {
+		return nil, errMsg
 	}
 	now := h.delivery.now()
 	if h.deliveryStore != nil {
-		if _, err := h.deliveryStore.MarkInviteEmailSent(inv.Token, msg.To, now); err != nil {
+		if _, err := h.deliveryStore.MarkInviteEmailSent(inv.Token, to, now); err != nil {
 			// The mail went out; only the bookkeeping failed (or the invite was
 			// accepted meanwhile). Report the send, log the rest.
 			inviteLog.Warn("invite email: sent, but recording it failed for invite of %s: %v", logger.SanitizeLogValue(inv.Username), err)
@@ -382,6 +399,10 @@ func (h *UserHandler) sendInviteEmail(ctx context.Context, inv *database.Invite)
 // ResendInvite handles POST /api/v1/users/invites/:id/resend: the invite is
 // named by its ID (database.InviteID), never its token.
 func (h *UserHandler) ResendInvite(c *gin.Context) {
+	if idn, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		h.resendInviteUnderIdentity(c, idn)
+		return
+	}
 	id := c.Param("id")
 	inv, err := h.findInvite(id)
 	if err != nil {

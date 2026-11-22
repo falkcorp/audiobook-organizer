@@ -90,9 +90,30 @@ func TestBridgeSites_SetUserEmail(t *testing.T) {
 	for _, w := range adminWorlds() {
 		t.Run(w.name, func(t *testing.T) {
 			r := newMergeRig(t)
-			r.bridgedEngine(w.identity(t), coreauth.MethodSession, w.scopes...)
+			id := w.identity(t)
+			var acc *fakeAccounts
+			if id != nil {
+				// Under core identity the write goes to core (F4-08 B10t), not to
+				// books' store; the gates this test is about run before it.
+				acc = newFakeAccounts(time.Now)
+				acc.users[coreauth.UserID(r.viewer.ID)] = &coreauth.User{ID: coreauth.UserID(r.viewer.ID), Username: r.viewer.Username, Email: r.viewer.Email, Status: coreauth.StatusActive}
+				id.Admin = acc
+			}
+			r.bridgedEngine(id, coreauth.MethodSession, w.scopes...)
 			rec, _ := r.do(t, http.MethodPut, "/users/"+r.viewer.ID+"/email", map[string]any{"email": "nightwing@example.com"})
 			got, _ := r.store.GetUserByID(r.viewer.ID)
+			if acc != nil {
+				if w.allowed {
+					if rec.Code != http.StatusOK || acc.users[coreauth.UserID(r.viewer.ID)].Email != "nightwing@example.com" || got.Email == "nightwing@example.com" {
+						t.Fatalf("set email = %d (core %q, books %q), want 200, core written, books untouched: %s", rec.Code, acc.users[coreauth.UserID(r.viewer.ID)].Email, got.Email, rec.Body.String())
+					}
+					return
+				}
+				if rec.Code != http.StatusForbidden || len(acc.callLog()) != 0 {
+					t.Fatalf("set email = %d, core calls %v, want 403 and core never reached", rec.Code, acc.callLog())
+				}
+				return
+			}
 			if w.allowed {
 				if rec.Code != http.StatusOK || got.Email != "nightwing@example.com" {
 					t.Fatalf("set email = %d (email %q), want 200 and the new address: %s", rec.Code, got.Email, rec.Body.String())
@@ -144,7 +165,13 @@ func TestBridgeSites_InviteTokenVisible(t *testing.T) {
 		return r
 	}
 
+	// Under core identity the list is core's and never carries a token
+	// (TestIdentityListAndDeleteInvites), so inviteTokenVisible is reached only
+	// in the legacy worlds; the identity worlds are not run here.
 	for _, w := range adminWorlds() {
+		if w.id {
+			continue
+		}
 		t.Run(w.name, func(t *testing.T) {
 			tok := tokenOf(t, rig(t, w.identity(t), coreauth.MethodSession, w.scopes...))
 			if w.allowed && tok != emailed {
@@ -155,18 +182,6 @@ func TestBridgeSites_InviteTokenVisible(t *testing.T) {
 			}
 		})
 	}
-	t.Run("core identity: the auth-disabled principal sees every token", func(t *testing.T) {
-		if tok := tokenOf(t, rig(t, bridgeIdentity(t), coreauth.MethodAuthDisabled)); tok != emailed {
-			t.Fatalf("token = %q, want it shown", tok)
-		}
-	})
-	t.Run("core identity: the wiring flag is not read", func(t *testing.T) {
-		r := rig(t, bridgeIdentity(t), coreauth.MethodSession)
-		r.h.SetAuthEnabled(false)
-		if tok := tokenOf(t, r); tok != "" {
-			t.Fatalf("token = %q: books' enable_auth flag opened what the principal's checker closes", tok)
-		}
-	})
 	t.Run("legacy: the wiring flag is HEAD's", func(t *testing.T) {
 		r := rig(t, nil, coreauth.MethodAuthDisabled)
 		r.h.SetAuthEnabled(false)
