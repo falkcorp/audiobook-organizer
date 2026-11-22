@@ -247,8 +247,6 @@ default does nothing.
 | `--playlists` | Playlist output directory for the one-shot commands (not a config key) | `playlists` |
 | `--log-level` | Log level (`debug`, `info`, `warn`, `error`); sets `core.log.level` when passed | `info` |
 
-The built-in help text for `--config` still says "default is
-`$HOME/.audiobook-organizer.yaml`"; as described above, that file is not read.
 The default `--db` is relative to the working directory, and the server refuses
 to start if no store path is configured and an `audiobooks.pebble` exists in
 the working directory, so it never silently opens a new empty database.

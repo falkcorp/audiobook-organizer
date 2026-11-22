@@ -316,7 +316,7 @@ func init() {
 		return initConfig()
 	}
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.audiobook-organizer.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "operator config file (YAML, nested by key path); there is no default, and a $HOME/.audiobook-organizer.yaml is not read")
 	rootCmd.PersistentFlags().StringVar(&rootDir, "dir", "", "root directory containing audiobooks")
 	rootCmd.PersistentFlags().StringVar(&databasePath, "db", "audiobooks.pebble", "path to database (default: audiobooks.pebble for PebbleDB)")
 	rootCmd.PersistentFlags().StringVar(&databaseType, "db-type", "pebble", "database type: pebble (default) or sqlite")
