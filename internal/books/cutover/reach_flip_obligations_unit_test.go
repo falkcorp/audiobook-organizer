@@ -85,8 +85,8 @@ func TestReachObligations_TheTableIsStatedInTheSeamsAndEachRowIsOpenUntilItsDisc
 		k, _, _ := strings.Cut(c, "|")
 		routes[k] = true
 	}
-	if len(routes) != 64 || len(abs.bar) != 64*len(in.vd.Principals) || len(abs.bar) != 2368 {
-		t.Errorf("the ABS bar is %d cells over %d routes and %d principals, want 2368 over 64 and 37 (derived: abs_only routes that are still delegated)", len(abs.bar), len(routes), len(in.vd.Principals))
+	if len(routes) != 68 || len(abs.bar) != 68*len(in.vd.Principals) || len(abs.bar) != 2516 {
+		t.Errorf("the ABS bar is %d cells over %d routes and %d principals, want 2516 over 68 and 37 (derived: abs_only routes that are still delegated)", len(abs.bar), len(routes), len(in.vd.Principals))
 	}
 	if n := len(reachStateOf(t, in, "F4-07-HANDLER-REFUSALS").bar); n != 8 {
 		t.Errorf("the HANDLER-REFUSALS bar is %d cells, want the 8 auth-off cells on non-Public routes: %v", n, reachStateOf(t, in, "F4-07-HANDLER-REFUSALS").bar)
@@ -126,12 +126,13 @@ func TestReachObligations_TheTableIsStatedInTheSeamsAndEachRowIsOpenUntilItsDisc
 	}
 }
 
-// The owner routes the bar names are the manifest's Guards.Owner routes, so the
-// R2-only reissue route is among them, and core's own route is a real one.
+// The owner routes the bar names are the manifest's Guards.Owner routes, so every
+// recorded owner route (reissue among them) is in it, and core's own route is a
+// real one.
 func TestReachObligations_TheOwnerBarHoldsTheReissueRouteAndCoresFactoryReset(t *testing.T) {
 	in := reachObligationInputOf(t)
 	owner := reachOwnerRoutes(in)
-	for _, want := range append(slices.Clone(reachOwnerR2Only), reachCoreOwnerRoutes...) {
+	for _, want := range append(slices.Clone(reachOwnerRecorded), reachCoreOwnerRoutes...) {
 		if !slices.Contains(owner, want) {
 			t.Errorf("%s is not an owner route of the bar: %v", want, owner)
 		}

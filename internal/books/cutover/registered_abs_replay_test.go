@@ -32,9 +32,10 @@ import (
 
 // The ABS replay (F4-08 B10e3, discharge of F4-07-ABS-REPLAY).
 //
-// R0 recorded the 64 routes the ABS handler authenticates itself (the routes the
+// R0 recorded the 68 routes the ABS handler authenticates itself (the routes the
 // oracle delegates: stage 12 and 13 never run on them, they are OwnAuth) for each of
-// the 37 principals: 2368 cells that nothing compared. This file sends the same
+// the 37 principals: 2516 cells that nothing compared (64 routes and 2368 cells
+// until F4-08 re-recorded R0 at main f6698f9bf, which has the four Lissen routes). This file sends the same
 // request, with the same credential, to the flipped build the registered-path
 // harness boots, and compares the letter of every cell with R0's.
 //
@@ -57,22 +58,24 @@ import (
 //
 // F-1's outcome on this surface (seams.d/F4-07.md, F-1). The three fp-worker keys
 // scoped outside the worker scope (view, settings, users) are admitted by the ABS
-// handler at R0 and are admitted by the flipped build on exactly the same 57 routes:
+// handler at R0 and are admitted by the flipped build on exactly the same 61 routes:
 // compat.CheckCredentialFor refuses a Confined key only outside its scopes, and
 // these keys are not Confined, so core's checker does not close the gap F-1 closes on
 // /api/v1. They are refused on the 7 collection write routes, as at R0 (the
-// in-handler collections.manage check). absFP1Admitted pins the 171 cells. This is
+// in-handler collections.manage check). absFP1Admitted pins the 183 cells (57 routes
+// and 171 cells until F4-08 re-recorded R0 at main, whose four Lissen routes admit
+// them as well). This is
 // parity, not a widening; it is the statement F-1 needed for this surface.
 
 const (
-	// absReplayCells is the bar reachBarABSReplay computes: the 64 delegated routes
+	// absReplayCells is the bar reachBarABSReplay computes: the 68 delegated routes
 	// times the 37 principals of verdicts.json.
-	absReplayCells  = 2368
-	absReplayRoutes = 64
+	absReplayCells  = 2516
+	absReplayRoutes = 68
 	absReplayPrinc  = 37
-	// absFP1Admitted: key:fp-worker:{view,settings,users} on the 57 delegated routes
+	// absFP1Admitted: key:fp-worker:{view,settings,users} on the 61 delegated routes
 	// that carry no in-handler permission check.
-	absFP1Admitted = 171
+	absFP1Admitted = 183
 	// absJWTSecret is the ABS JWT secret bootRegistered configures; the own-credential
 	// tests mint tokens with it. TestRegisteredAbs_OwnCredentialRefusals proves it is
 	// the booted one (a login token must parse under it).
@@ -97,19 +100,15 @@ var absGated = []string{
 }
 
 // absNewerThanR0 are the OwnAuth routes R2 registers that R0's router at the pinned
-// tag does not have, so there is no recorded cell to compare (reach_baseline_test.go
-// reachDelegatedNewerThanR0, the same 4).
-var absNewerThanR0 = []string{
-	"GET /api/authors/:id/image",
-	"GET /api/libraries/:libraryId/stats",
-	"HEAD /api/authors/:id/image",
-	"POST /api/items/batch/get",
-}
+// commit does not have, so there is no recorded cell to compare (reach_baseline_test.go
+// reachDelegatedNewerThanR0). None since F4-08 moved R0 to main at f6698f9bf: the
+// four Lissen routes it held (de84ff2c8) are recorded and replayed now.
+var absNewerThanR0 []string
 
 // absKnownDifferences are the cells where the flip refuses and R0 admitted, one row
 // each ("principal|METHOD path"), with why. A row is a decision for the F4-08 lead,
 // never something to widen back. There are none: the replay found the flip equal to
-// R0 on all 2368 cells.
+// R0 on all 2516 cells.
 var absKnownDifferences = map[string]string{}
 
 type absR0Route struct {
@@ -253,8 +252,8 @@ func absProblems(cells []absCell, known map[string]string) []string {
 	return out
 }
 
-// TestReachRegisteredPath_AbsReplay is the discharge of F4-07-ABS-REPLAY: the 2368
-// recorded cells of the 64 delegated ABS routes, replayed against the registered path.
+// TestReachRegisteredPath_AbsReplay is the discharge of F4-07-ABS-REPLAY: the 2516
+// recorded cells of the 68 delegated ABS routes, replayed against the registered path.
 func TestReachRegisteredPath_AbsReplay(t *testing.T) {
 	d := loadAbsR0(t)
 	if len(d.Principals) != absReplayPrinc {
@@ -281,8 +280,8 @@ func TestReachRegisteredPath_AbsReplay(t *testing.T) {
 		cells = append(cells, h.absReplay(t, d, top.delegated, func(n string) bool { return n == Authoff })...)
 	})
 
-	// The topology: the replay's 64 are R0's abs_only routes less the 11 Public ones,
-	// and the build has the 4 OwnAuth routes R0 does not.
+	// The topology: the replay's 68 are R0's abs_only routes less the 11 Public ones,
+	// and the build has no OwnAuth route R0 does not.
 	if len(top.missing) != 0 || len(top.dup) != 0 {
 		t.Errorf("abs_only routes the build does not register: %v; two R0 routes on one registered route: %v", top.missing, top.dup)
 	}

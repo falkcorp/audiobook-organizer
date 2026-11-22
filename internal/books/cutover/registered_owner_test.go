@@ -26,9 +26,11 @@ import (
 
 // The owner cells through the registered path (F4-08 B10e1r).
 //
-// HEAD gates nine routes on the owner: a caller passes only as the Cloudflare
-// Access-verified owner_email, and with owner_email set and no Access verifier
-// nobody does (R0's owner_set recording: 37 of 37 principals refused on all nine).
+// The flipped build gates nine routes on the owner: a caller passes only as the
+// Cloudflare Access-verified owner_email, and with owner_email set and no Access
+// verifier nobody does. Eight are books routes HEAD gates the same way (R0's
+// owner_set recording: 37 of 37 principals refused on each); the ninth is core's
+// factory reset, which main does not serve at all (ownerR2Only).
 // The flipped build must refuse everything HEAD refuses, so these cells boot the
 // flipped build and ask stage 13 itself, through the harness, in the two owner
 // configurations the flip meets:
@@ -46,9 +48,9 @@ import (
 // the same keys with "|owner lacking the requirement refused" and "|owner admitted").
 
 // ownerRouteKeys are the nine owner routes of the registered path, as
-// "METHOD pattern": the eight books routes the manifest guards with Guards.Owner
-// (seven of R0's nine recorded ones and the reissue route, which is newer than R0)
-// and core's own factory reset, which replaces R0's two reset routes.
+// "METHOD pattern": the eight books routes the manifest guards with Guards.Owner,
+// each recorded in R0's owner_set (R0 is main at f6698f9bf since F4-08), and core's
+// own factory reset, which has no recording (ownerR2Only).
 var ownerRouteKeys = []string{
 	"GET /api/v1/admin/guest-service-tokens/plan",
 	"POST /api/core/v1/system/factory-reset",
@@ -81,20 +83,34 @@ func init() {
 	})
 }
 
-// ownerRecordedTwin names, for each owner route, the row of verdicts.json's
-// owner_set recording that stands for it: the same route in HEAD's spelling, or its
-// declared twin (reachOwnerTwins: reissue is revoke's, and core's factory reset
-// replaces R0's, which is R0-only).
-var ownerRecordedTwin = map[string]string{
+// ownerRecordedRow names, for each books owner route, its row of verdicts.json's
+// owner_set recording: the same route in HEAD's spelling. Every one has its own row
+// since F4-08 re-recorded R0 at main; the reissue route was judged through revoke's
+// row, and core's factory reset through the v0.223.0 release's
+// POST /api/v1/system/factory-reset row, until then.
+var ownerRecordedRow = map[string]string{
 	"GET /api/v1/admin/guest-service-tokens/plan":              "GET /api/v1/admin/guest-service-tokens/plan",
-	"POST /api/core/v1/system/factory-reset":                   "POST /api/v1/system/factory-reset",
-	"POST /api/v1/admin/guest-service-tokens/{userId}/reissue": "POST /api/v1/admin/guest-service-tokens/:userId/revoke",
+	"POST /api/v1/admin/guest-service-tokens/{userId}/reissue": "POST /api/v1/admin/guest-service-tokens/:userId/reissue",
 	"POST /api/v1/admin/guest-service-tokens/{userId}/revoke":  "POST /api/v1/admin/guest-service-tokens/:userId/revoke",
 	"POST /api/v1/backup/restore":                              "POST /api/v1/backup/restore",
 	"POST /api/v1/users/merges/{jid}/resume":                   "POST /api/v1/users/merges/:jid/resume",
 	"POST /api/v1/users/merges/{jid}/undo":                     "POST /api/v1/users/merges/:jid/undo",
 	"POST /api/v1/users/{id}/merge-into/{target}/apply":        "POST /api/v1/users/:id/merge-into/:target/apply",
 	"POST /api/v1/users/{id}/merge-into/{target}/preview":      "POST /api/v1/users/:id/merge-into/:target/preview",
+}
+
+// ownerR2Only are the owner routes the flipped build serves and R0 (main at
+// f6698f9bf) does not, with the decision that sets their letters in place of a
+// recording. Core's factory reset is a deliberate addition versus main, NOT parity
+// with R0: main runs the reset only offline (623da76d3 deleted the gin reset routes),
+// and the flip serves it as core's staged reset under 05-rbac §6.2 (core:admin,
+// Guards.Interactive, Guards.Owner). Its expected letters (coordinator ruling,
+// 2026-11-22): every principal that is not the verified owner is refused, and the
+// owner is admitted only through an interactive sign-in. The non-owner side is
+// requireOwnerRefusal's sweep; the owner side is
+// TestReachRegisteredPath_OwnerFactoryReset.
+var ownerR2Only = map[string]string{
+	"POST /api/core/v1/system/factory-reset": "05-rbac §6.2: core:admin, Interactive and Owner; a deliberate addition versus main, which serves no reset route",
 }
 
 // ownerRecording is the part of verdicts.json this file reads: the principals in
@@ -111,12 +127,17 @@ type ownerRecording struct {
 	} `json:"owner_set"`
 }
 
-// headOwnerVerdict is HEAD's recorded letter for principal on the owner route key.
-func (o *ownerRecording) headOwnerVerdict(t testing.TB, key, principal string) byte {
+// expectedOwnerVerdict is the letter a non-owner principal must get on the owner
+// route key with an owner set: R0's recorded letter for a books route, and D for an
+// R2-only route, whose letters are the decision ownerR2Only names (never parity).
+func (o *ownerRecording) expectedOwnerVerdict(t testing.TB, key, principal string) byte {
 	t.Helper()
-	twin, ok := ownerRecordedTwin[key]
+	if _, ok := ownerR2Only[key]; ok {
+		return 'D'
+	}
+	twin, ok := ownerRecordedRow[key]
 	if !ok {
-		t.Fatalf("%s has no recorded twin", key)
+		t.Fatalf("%s has neither a recorded row nor an R2-only decision", key)
 	}
 	idx := slices.Index(o.Principals, principal)
 	if idx < 0 {
@@ -144,8 +165,8 @@ func loadOwnerRecording(t testing.TB) *ownerRecording {
 	if err := json.Unmarshal(raw, &o); err != nil {
 		t.Fatalf("verdicts.json: %v", err)
 	}
-	if o.OwnerSet.OwnerEmail == "" || len(o.OwnerSet.Routes) != 9 {
-		t.Fatalf("verdicts.json owner_set: owner %q with %d routes, want an owner and 9 routes", o.OwnerSet.OwnerEmail, len(o.OwnerSet.Routes))
+	if o.OwnerSet.OwnerEmail == "" || len(o.OwnerSet.Routes) != len(ownerRecordedRow) {
+		t.Fatalf("verdicts.json owner_set: owner %q with %d routes, want an owner and %d routes", o.OwnerSet.OwnerEmail, len(o.OwnerSet.Routes), len(ownerRecordedRow))
 	}
 	return &o
 }
@@ -191,9 +212,10 @@ func ownerRefusalCode(p *Principal) string {
 
 // requireOwnerRefusal sweeps every principal of the boot except the owner over every
 // owner route and fails on any that stage 13 does not refuse, with the code the
-// principal's kind must get. It also holds the answer to R0's recorded letter for
-// the route: an admit where HEAD refused is a widening and is named as one. It
-// returns the number of cells run.
+// principal's kind must get. It also holds the answer to the route's expected
+// letter (expectedOwnerVerdict: R0's recording, or an R2-only route's decision): an
+// admit where that letter refuses is a widening and is named as one. It returns the
+// number of cells run.
 func requireOwnerRefusal(t *testing.T, h *Registered, rec *ownerRecording) int {
 	t.Helper()
 	routes := ownerRoutes(t, h)
@@ -210,8 +232,8 @@ func requireOwnerRefusal(t *testing.T, h *Registered, rec *ownerRecording) int {
 				t.Errorf("%s as %s: %v (a judged route the harness could not see stage 13 on)", key, p.Name, err)
 				continue
 			}
-			if head := rec.headOwnerVerdict(t, key, p.Recorded()); head == 'D' && res.Verdict() != 'D' {
-				t.Errorf("WIDENING: %s as %s: HEAD refused, the flipped build answered %d (%s)", key, p.Name, res.Status, res.excerpt())
+			if want := rec.expectedOwnerVerdict(t, key, p.Recorded()); want == 'D' && res.Verdict() != 'D' {
+				t.Errorf("WIDENING: %s as %s: the expected letter is D (%s), the flipped build answered %d (%s)", key, p.Name, ownerLetterSource(key), res.Status, res.excerpt())
 				continue
 			}
 			if res.Stage13 != Stage13Refused || res.Code != ownerRefusalCode(p) {
@@ -239,10 +261,21 @@ func ownerPrincipalCounts(h *Registered) (imported, core int) {
 // ownerEmailEnv is the environment key of owner_email under the flip.
 const ownerEmailEnv = "ABO_BOOKS_IDENTITY_OWNER_EMAIL"
 
+// ownerLetterSource says where an owner route's expected letter comes from, for a
+// failure message.
+func ownerLetterSource(key string) string {
+	if why, ok := ownerR2Only[key]; ok {
+		return "R2-only, " + why
+	}
+	return "R0's owner_set recording"
+}
+
 // TestReachRegisteredPath_OwnerSet: on every owner route, a non-owner is refused by
 // stage 13, in each owner configuration. The nine routes are the plan's; every
 // principal of the table is swept, the admin session among them (a non-owner admin
-// is the case the row names), and each is held to R0's own recorded refusal.
+// is the case the row names), and each is held to its expected letter: R0's own
+// recorded refusal on the eight books routes, the ruled refusal on core's factory
+// reset.
 func TestReachRegisteredPath_OwnerSet(t *testing.T) {
 	rec := loadOwnerRecording(t)
 
@@ -283,7 +316,8 @@ func TestReachRegisteredPath_OwnerSet(t *testing.T) {
 	})
 
 	// The 37th principal of R0's table: the auth-off one, which R0 also refused on
-	// all nine routes with the owner set and no verifier.
+	// the eight books routes with the owner set and no verifier (core's factory
+	// reset: the same refusal, by its ruling).
 	t.Run("owner set with no verifier, auth off", func(t *testing.T) {
 		t.Setenv(ownerEmailEnv, ownerEmail)
 		h := bootRegistered(t, registeredConfig{AuthOff: true})
@@ -297,8 +331,8 @@ func TestReachRegisteredPath_OwnerSet(t *testing.T) {
 				t.Errorf("%s as authoff: %v", key, err)
 				continue
 			}
-			if head := rec.headOwnerVerdict(t, key, Authoff); head == 'D' && res.Verdict() != 'D' {
-				t.Errorf("WIDENING: %s as authoff: HEAD refused, the flipped build answered %d (%s)", key, res.Status, res.excerpt())
+			if want := rec.expectedOwnerVerdict(t, key, Authoff); want == 'D' && res.Verdict() != 'D' {
+				t.Errorf("WIDENING: %s as authoff: the expected letter is D (%s), the flipped build answered %d (%s)", key, ownerLetterSource(key), res.Status, res.excerpt())
 				continue
 			}
 			// The auth-off boot binds core's auth-disabled principal, which is not an
@@ -672,4 +706,83 @@ func TestReachRegisteredPath_OwnerAccessNonOwner(t *testing.T) {
 	if refused != 9 {
 		t.Fatalf("%d of 9 owner routes refused the non-owner admin", refused)
 	}
+}
+
+// ownerFactoryReset is core's factory reset, the R2-only owner route (ownerR2Only).
+const ownerFactoryReset = "POST /api/core/v1/system/factory-reset"
+
+// TestReachRegisteredPath_OwnerFactoryReset pins the owner side of core's factory
+// reset, an R2-only owner route whose letters are a ruling (ownerR2Only: 05-rbac
+// §6.2, a deliberate addition versus main, not parity with R0). In the owner boot:
+//
+//   - the owner, signed in through Access (an interactive method) and holding
+//     core:admin, passes stage 13; a body without the "RESET" confirmation is then
+//     refused by the handler (422 confirm_required), so nothing is staged;
+//   - the same owner through an API key of its own account (not an interactive
+//     sign-in) is refused by stage 13, interactive_required;
+//   - the owner without core:admin is refused by stage 13, permission_denied.
+//
+// The non-owner side is TestReachRegisteredPath_OwnerSet's sweep.
+func TestReachRegisteredPath_OwnerFactoryReset(t *testing.T) {
+	h := bootRegistered(t, registeredConfig{Owner: true})
+	var reset httpapi.RouteInfo
+	for _, ri := range ownerRoutes(t, h) {
+		if ri.Method+" "+ri.Pattern == ownerFactoryReset {
+			reset = ri
+		}
+	}
+	if reset.Pattern == "" {
+		t.Fatalf("%s is not an owner route of the registered build", ownerFactoryReset)
+	}
+	id, roles := ownerAccount(t, h)
+	if !slices.Contains(roles, "admin") {
+		setRoles(t, h, id, "admin")
+	}
+
+	// No "confirm": the handler refuses before anything is staged.
+	unconfirmed := map[string]any{"kind": "factory"}
+
+	t.Run("the owner through Access is admitted", func(t *testing.T) {
+		res, err := h.DoRoute(h.Principal(Owner), reset, unconfirmed)
+		if err != nil {
+			t.Fatalf("owner on %s: %v", ownerFactoryReset, err)
+		}
+		if res.Stage13 == Stage13Refused || res.Verdict() != 'A' {
+			t.Fatalf("WIDENING the wrong way: the verified owner with core:admin on %s: %d %q (%s) %s, want past stage 13", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
+		}
+		// res.Code holds stage 13's codes only; the handler's is the problem type's.
+		if code := problemCode(res); res.Status != http.StatusUnprocessableEntity || code != "confirm_required" {
+			t.Fatalf("owner on %s without the confirmation: %d %q %s, want the handler's 422 confirm_required (nothing staged)", ownerFactoryReset, res.Status, code, res.excerpt())
+		}
+	})
+
+	t.Run("the owner through a key is refused, interactive_required", func(t *testing.T) {
+		var made struct {
+			Key string `json:"key"`
+		}
+		h.coreJSON(h.Principal("session:admin"), http.MethodPost, "/api/core/v1/users/"+id+"/api-keys",
+			map[string]any{"name": "owner-reset-key", "scopes": []string{"core:admin"}, "expires_in": "1h"}, &made)
+		if made.Key == "" {
+			t.Fatal("core minted no key for the owner's account")
+		}
+		key := &Principal{Name: "owner-key", Kind: "key", User: id, bearer: made.Key}
+		res, err := h.DoRoute(key, reset, unconfirmed)
+		if err != nil {
+			t.Fatalf("owner key on %s: %v", ownerFactoryReset, err)
+		}
+		if res.Stage13 != Stage13Refused || res.Status != http.StatusForbidden || res.Code != "interactive_required" {
+			t.Fatalf("WIDENING: the owner's own key on %s: %d %q (%s) %s, want stage 13's 403 interactive_required", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
+		}
+	})
+
+	t.Run("the owner without core:admin is refused, permission_denied", func(t *testing.T) {
+		setRoles(t, h, id, "viewer")
+		res, err := h.DoRoute(h.Principal(Owner), reset, unconfirmed)
+		if err != nil {
+			t.Fatalf("owner on %s: %v", ownerFactoryReset, err)
+		}
+		if res.Stage13 != Stage13Refused || res.Status != http.StatusForbidden || res.Code != "permission_denied" {
+			t.Fatalf("WIDENING: the owner as a viewer on %s: %d %q (%s) %s, want stage 13's 403 permission_denied", ownerFactoryReset, res.Status, res.Code, res.Stage13, res.excerpt())
+		}
+	})
 }
