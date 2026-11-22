@@ -33,6 +33,12 @@ import (
 // so stage 12's own middleware records the failures Stage13 reads.
 func s13RealAuth(t *testing.T) *auth.Service {
 	t.Helper()
+	return s13RealAuthWith(t)
+}
+
+// s13RealAuthWith is s13RealAuth with the identity extensions exts registered.
+func s13RealAuthWith(t *testing.T, exts ...auth.Extension) *auth.Service {
+	t.Helper()
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
 		Path: filepath.Join(t.TempDir(), "main.pebble"),
@@ -97,6 +103,7 @@ func s13RealAuth(t *testing.T) *auth.Service {
 	svc, err := auth.New(ctx, auth.Options{}, auth.Deps{
 		Store: st, NewBatch: st.NewBatch, RBAC: rb, Audit: s13Audit{}, Revocations: s13Journal{},
 		Clock: func() time.Time { return now }, Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
+		Extensions: exts,
 	})
 	if err != nil {
 		t.Fatal(err)
