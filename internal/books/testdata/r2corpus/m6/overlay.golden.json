@@ -272,8 +272,7 @@
             "books.transcribe_intro_clip",
             "books.transcribe_batch"
           ],
-          "concurrency": 1,
-          "url": "local:uv-openai-whisper"
+          "concurrency": 1
         },
         "updated": "0001-01-01T00:00:00Z",
         "v": 1,
