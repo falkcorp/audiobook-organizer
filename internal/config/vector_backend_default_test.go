@@ -52,9 +52,7 @@ func TestValidate_VectorBackendEmptyNormalizesToHNSW(t *testing.T) {
 	c := &Config{DatabaseType: "pebble"}
 	c.Embedding.VectorBackend = ""
 
-	_ = c.Validate() // other fields may fail; we only care about this one
-
-	assert.Equal(t, "hnsw", c.Embedding.VectorBackend,
+	assert.Equal(t, "hnsw", c.Normalized().Embedding.VectorBackend,
 		"an empty vector_backend must normalize to the default, not fall through to chromem")
 }
 

@@ -427,15 +427,44 @@ func testWriteEdits(stmt ast.Stmt, depth int, match rootMatcher, off func(token.
 		rhs := string(src[off(a.Rhs[0].Pos()):off(a.Rhs[0].End())])
 		return kindTestRepl, []Edit{{Start: off(a.Pos()), End: off(a.End()), New: replCall + "(" + rhs + ")"}}, ""
 	}
-	body := replaceRoots(stmt, match, off, src, getCall, snapCall)
+	name := closureParam(stmt, match)
+	body := replaceRoots(stmt, match, off, src, getCall, snapCall, name)
 	return kindTestSet, []Edit{{Start: off(stmt.Pos()), End: off(stmt.End()),
-		New: fmt.Sprintf("%s(func(c %s) { %s })", setCall, param, body)}}, ""
+		New: fmt.Sprintf("%s(func(%s %s) { %s })", setCall, name, param, body)}}, ""
 }
 
-// replaceRoots returns stmt's source with every AppConfig root replaced: by c
-// when a selector or index follows it, by *c when it stands alone, and inside
+// closureParam picks the closure's parameter name: c, unless the statement
+// already uses that identifier (a loop variable `c` in the right-hand side
+// would otherwise be shadowed by the closure parameter, which at best fails to
+// compile and at worst compiles and reads the config instead).
+func closureParam(stmt ast.Node, match rootMatcher) string {
+	used := map[string]bool{}
+	ast.Inspect(stmt, func(n ast.Node) bool {
+		if n != nil && match(n, nil) {
+			return false
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			used[id.Name] = true
+		}
+		return true
+	})
+	for _, name := range []string{"c", "cfg", "cc", "conf"} {
+		if !used[name] {
+			return name
+		}
+	}
+	for i := 2; ; i++ {
+		if name := fmt.Sprintf("c%d", i); !used[name] {
+			return name
+		}
+	}
+}
+
+// replaceRoots returns stmt's source with every AppConfig root replaced: by the
+// closure parameter (name) when a selector or index follows it, by *name when
+// it stands alone, and inside
 // a function literal by the live getCall / snapCall.
-func replaceRoots(stmt ast.Node, match rootMatcher, off func(token.Pos) int, src []byte, getCall, snapCall string) string {
+func replaceRoots(stmt ast.Node, match rootMatcher, off func(token.Pos) int, src []byte, getCall, snapCall, name string) string {
 	base := off(stmt.Pos())
 	text := []byte(string(src[base:off(stmt.End())]))
 	type span struct {
@@ -477,9 +506,9 @@ func replaceRoots(stmt ast.Node, match rootMatcher, off func(token.Pos) int, src
 		case r.inFunc:
 			repl = snapCall
 		case field:
-			repl = "c"
+			repl = name
 		default:
-			repl = "*c"
+			repl = "*" + name
 		}
 		text = append(text[:r.start], append([]byte(repl), text[r.end:]...)...)
 	}

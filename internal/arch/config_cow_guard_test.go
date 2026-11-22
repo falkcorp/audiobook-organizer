@@ -132,12 +132,17 @@ func cowViolations(fset *token.FileSet, f *ast.File, isTest bool) []string {
 		return ok && id.Name == local
 	}
 
-	ast.Inspect(f, func(n ast.Node) bool {
-		if sel, ok := n.(*ast.SelectorExpr); ok && !isTest && cowTestOnly[sel.Sel.Name] {
-			if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
-				report(n, local+"."+sel.Sel.Name+" is test-only; production code writes the config with Mutate/MutateChecked")
+	if !isTest {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && cowTestOnly[sel.Sel.Name] {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == local {
+					report(n, local+"."+sel.Sel.Name+" is test-only; production code writes the config with Mutate/MutateChecked")
+				}
 			}
-		}
+			return true
+		})
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
 		if ok && fn.Body != nil {
 			out = append(out, cowFuncViolations(fset, fn.Body, isGetCall, nil)...)

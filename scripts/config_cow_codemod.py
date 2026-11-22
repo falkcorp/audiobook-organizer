@@ -162,7 +162,7 @@ def apply_edits(source: bytes, edits: list[Edit]) -> bytes:
 
 
 _SET_PREFIX_RE = re.compile(
-    r"^((?:\w+\.)?SetForTest\(func\(c \*(?:\w+\.)?Config\) \{ )(.*)( \}\))$", re.S
+    r"^((?:\w+\.)?SetForTest\(func\(\w+ \*(?:\w+\.)?Config\) \{ )(.*)( \}\))$", re.S
 )
 
 

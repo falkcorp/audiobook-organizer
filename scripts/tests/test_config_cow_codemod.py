@@ -186,6 +186,22 @@ func TestAlfred(t *testing.T) {
 """
 
 
+LOOP_TEST = """\
+package gotham
+
+import (
+	"testing"
+
+	"github.com/falkcorp/audiobook-organizer/internal/config"
+)
+
+func TestRobin(t *testing.T) {
+	for _, c := range []struct{ on bool }{{true}} {
+		config.AppConfig.EnableAIParsing = c.on
+	}
+}
+"""
+
 IN_PACKAGE = """\
 package config
 
@@ -313,6 +329,18 @@ class EndToEndTest(unittest.TestCase):
 
         again = [s for s in self.sites() if s.auto]
         self.assertEqual(again, [], "a second run must propose nothing")
+
+    def test_closure_parameter_never_shadows_a_name_the_statement_uses(self):
+        (self.dir / "loop_test.go").write_text(LOOP_TEST)
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(
+                cc.main(["--write", "--test-writes", str(self.dir / "loop_test.go")]), 0
+            )
+        out = (self.dir / "loop_test.go").read_text()
+        self.assertIn(
+            "config.SetForTest(func(cfg *config.Config) { cfg.EnableAIParsing = c.on })", out
+        )
 
     def test_in_package_bare_identifier(self):
         pkg = Path(self.tmp.name) / "internal" / "config"

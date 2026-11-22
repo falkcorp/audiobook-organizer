@@ -1168,15 +1168,13 @@ func TestSyncConfigFromEnvUnit(t *testing.T) {
 }
 
 func TestMinBookSizeBytesDefault(t *testing.T) {
-	c := &Config{MinBookSizeBytes: 0}
-	_ = c.Validate()
+	c := (&Config{MinBookSizeBytes: 0}).Normalized()
 	assert.Equal(t, int64(5*1024*1024), c.MinBookSizeBytes,
 		"zero value should be coerced to 5 MB default")
 }
 
 func TestMinBookSizeBytesDisable(t *testing.T) {
-	c := &Config{MinBookSizeBytes: -1}
-	_ = c.Validate()
+	c := (&Config{MinBookSizeBytes: -1}).Normalized()
 	assert.Equal(t, int64(-1), c.MinBookSizeBytes,
 		"-1 sentinel should not be coerced")
 }

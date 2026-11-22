@@ -47,19 +47,21 @@ func TestResolveRepairChapterMaxMin(t *testing.T) {
 	}
 }
 
-// TestValidateNormalizesZeroChapterThreshold: Validate runs after InitConfig,
-// after the database overlay and on every PUT candidate. It must rewrite the
-// zero (so GET /config never shows a 0 that behaves like 10) and must not
+// TestValidateNormalizesZeroChapterThreshold: normalisation runs at boot
+// (NormalizeAndValidate) and on every PUT candidate. It must rewrite the zero
+// (so GET /config never shows a 0 that behaves like 10) and Validate must not
 // reject it (refusing to start over a recovered setting would be an outage).
+// Normalized does the rewrite on a copy; Validate never changes its receiver.
 func TestValidateNormalizesZeroChapterThreshold(t *testing.T) {
 	for _, stored := range []int{0, -1} {
 		c := Config{DatabaseType: "pebble", ChapterConsolidationThresholdMin: stored}
 		require.NoError(t, c.Validate())
-		require.Equal(t, DefaultChapterConsolidationThresholdMin, c.ChapterConsolidationThresholdMin)
+		require.Equal(t, stored, c.ChapterConsolidationThresholdMin, "Validate must not write its receiver")
+		require.Equal(t, DefaultChapterConsolidationThresholdMin, c.Normalized().ChapterConsolidationThresholdMin)
 	}
 	c := Config{DatabaseType: "pebble", ChapterConsolidationThresholdMin: 7}
 	require.NoError(t, c.Validate())
-	require.Equal(t, 7, c.ChapterConsolidationThresholdMin, "a real value is left alone")
+	require.Equal(t, 7, c.Normalized().ChapterConsolidationThresholdMin, "a real value is left alone")
 }
 
 // TestLoadedBlobWithZeroChapterThresholdUsesDefault is the incident shape: a
