@@ -34,8 +34,8 @@ renders them into the systemd drop-in
 [`runbooks.md`](runbooks.md#systemd-service) for the existing deploy runbook).
 Every other setting of the host (the `ExecStart=` command line with its TLS
 and DB paths, `TimeoutStopSec=`, `WorkingDirectory=`, `MemoryMax=`) lives in
-`host.conf` beside it, which the owner writes once as root and no deploy
-touches; see "host.conf: the settings deploy does not write" below.
+`host.conf` beside it, which the owner installs once as root (`make
+install-host-conf`) and no deploy touches; see "host.conf: the settings deploy does not write" below.
 `Makefile.local` is picked up automatically by the committed `Makefile` via
 `-include Makefile.local`.
 
@@ -536,13 +536,42 @@ text, so it cannot print a file the deploy user could not read.
 
 Since `local.conf` carries only `Environment=` lines, the rest of what it used
 to hold moves to `/etc/systemd/system/audiobook-organizer.service.d/host.conf`,
-which the owner writes once as root (`sudoedit` it, then
-`sudo systemctl daemon-reload`). `deploy/local.conf.example` shows the block
-in comments: the `ExecStart=` reset and the full command line with its TLS
-and DB paths. Put `WorkingDirectory=`, `MemoryMax=` and any other
-host-specific setting there too. Leave `TimeoutStopSec=` unset unless you
-need more than the base unit's 60 s, which is sized to the server's stop
-budget.
+which the owner installs once, as root, with a make target. Write
+`deploy/host.conf` (gitignored; copy `deploy/host.conf.example`, which holds the
+`ExecStart=` reset and the full command line with its TLS and DB paths, then
+`WorkingDirectory=`, `MemoryMax=` and any other host-specific setting), then run
+`make install-host-conf` (a dry run) and `make install-host-conf APPLY=1` on the
+deploy host. Leave `TimeoutStopSec=` unset unless you need more than the base
+unit's 60 s, which is sized to the server's stop budget.
+
+`make install-host-conf` is `install_helpers.py --host-conf`, run after
+`make install-rollback-helpers` (it takes the service user, group and unit from
+the `rollback.conf` that wrote). The source defaults to `deploy/host.conf`;
+`HOST_CONF=<path>` overrides it. It:
+
+- opens the source once, as the helper opens a staged file: no symlink in any
+  component of the path, a regular file with one link, owned by the user who ran
+  `sudo`. The bytes it checks are the bytes it writes.
+- checks it with the helper's own code, not a copy of the rules
+  (`_read_root_conf` and `_check_rules` in `rollback_helper.py`), so the two
+  cannot drift. A refusal names the file and the line, never the text.
+- by default is a dry run: it prints `create`, `replace`, `fix` or `unchanged`
+  for the drop-in directory and the file, and the diff against the installed
+  file, and changes nothing. The source must pass in the dry run too.
+- with `APPLY=1` exports `HEAD` to a fresh root-made `mktemp -d` under
+  `ROLLBACK_EXPORT_DIR` and runs from there under your own `sudo` inside the
+  recipe, exactly as `install-rollback-helpers` does. It refuses a group- or
+  world-writable `<unit>.d` or parent, installs `root:root` `0644` atomically
+  (a temporary file in the same directory, `fsync`, rename), checks the
+  installed file with the helper's own `_check_host_conf`, runs
+  `systemctl daemon-reload` and prints `systemctl show -p DropInPaths <unit>`.
+  Before the first deploy installs the unit itself, systemd may not list the
+  drop-in yet; it then says so.
+- **never restarts the service** and adds no sudoers line: it grants the deploy
+  user nothing. The running service keeps its old settings until its next
+  restart.
+- is idempotent: the same file reports `unchanged` and is not rewritten (the
+  reload still runs, so a reload that failed last time is not skipped).
 
 host.conf, and every other drop-in systemd applies to the unit, must run
 nothing but the service user's `ExecStart=`: no other `Exec*=` line
@@ -649,7 +678,8 @@ It is idempotent: a file already as it should be is `unchanged` and is not
 rewritten, so running it again after a release that changes a helper replaces
 exactly that helper. A `rollback.conf` that exists and differs is yours: it is
 shown as a diff and left alone unless you pass `REPLACE_CONF=1`. It does not
-write `host.conf` (below) and it never touches `Makefile.local`.
+write `host.conf` (`make install-host-conf` does, below) and it never touches
+`Makefile.local`.
 
 What the installer trusts, because it runs as root and writes what root later
 executes:
@@ -915,7 +945,8 @@ Do them in this order. The first one is a command, not a file to put in place.
 1. **Install the helper bundle, the sudoers drop-in and `rollback.conf`:**
    `make install-rollback-helpers` (it shows the plan), then
    `make install-rollback-helpers APPLY=1` (see "Rollback helpers" above for
-   the arguments). Write `host.conf` once as root (below). `rollback.conf`'s
+   the arguments). Write `deploy/host.conf`, then `make install-host-conf` and
+   `make install-host-conf APPLY=1` (below). `rollback.conf`'s
    `offline_env` must use the name the installed bundle's version reads
    (`ABK_STATE_DIR`; `ABO_CORE_PATHS_STATE_DIR` once the config flip is
    deployed), so a bundle reinstalled after the flip carries the new one.
