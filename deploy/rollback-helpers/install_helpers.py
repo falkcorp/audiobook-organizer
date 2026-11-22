@@ -528,29 +528,32 @@ def checked_host_conf(rh: ModuleType, cfg: dict[str, str], data: bytes, source: 
 
 def host_conf_main(a: argparse.Namespace) -> int:
     """`--host-conf SOURCE`: see the module docstring."""
+    # Before anything is loaded: rollback_helper.py is run as root from this
+    # checkout, so a checkout that is not root's is refused first (as the bundle
+    # mode does), not after its code has already run.
+    bad = check_sources()
+    if bad and (a.apply or os.geteuid() == 0):
+        raise SystemExit(
+            "install_helpers: REFUSING to run as root from a checkout that is not root's (owner, "
+            f"group/other write bit, ACL or symlink on a path it reads or sits under): {', '.join(bad[:6])}"
+            + (f" and {len(bad) - 6} more" if len(bad) > 6 else "")
+            + ". It loads rollback_helper.py as root, so whoever can edit it gets root. Run "
+            "`make install-host-conf APPLY=1`, which exports HEAD to a root-owned directory first"
+        )
     rh = load("rollback_helper", HERE / "rollback_helper.py")
     try:
-        return install_host_conf(a, rh)
+        return install_host_conf(a, rh, bad)
     except rh.RefusedError as e:
         print(f"install_helpers: {e}", file=sys.stderr)
         return 1
 
 
-def install_host_conf(a: argparse.Namespace, rh: ModuleType) -> int:
+def install_host_conf(a: argparse.Namespace, rh: ModuleType, bad: list[str]) -> int:
     root = a.root.rstrip("/")
     rh.CONFIG = f"{root}{rh.CONFIG}"
     rh.SYSTEMD_DIR = f"{root}{rh.SYSTEMD_DIR}"
     if a.systemctl:
         rh.TOOLS["systemctl"] = a.systemctl
-    bad = check_sources()
-    if bad and (a.apply or os.geteuid() == 0):
-        raise rh.RefusedError(
-            "REFUSING to run as root from a checkout that is not root's (owner, group/other "
-            f"write bit, ACL or symlink on a path it reads or sits under): {', '.join(bad[:6])}"
-            + (f" and {len(bad) - 6} more" if len(bad) > 6 else "")
-            + ". It loads rollback_helper.py as root, so whoever can edit it gets root. Run "
-            "`make install-host-conf APPLY=1`, which exports HEAD to a root-owned directory first"
-        )
     try:
         cfg = rh.load_config()
     except rh.RefusedError as e:
@@ -642,7 +645,7 @@ def install_host_conf(a: argparse.Namespace, rh: ModuleType) -> int:
         print(f"  wrote {dest}")
     # The exact check install-staged runs before it copies anything.
     rh._check_host_conf(cfg)
-    print("  the helper accepts it (the same check `install-staged unit` runs)")
+    print("  the helper's own host.conf check accepts it (`_check_host_conf`)")
     rh._daemon_reload()
     print("  systemctl daemon-reload done; the service was NOT restarted")
     shown = subprocess.run(  # noqa: S603 (argv, no shell)
