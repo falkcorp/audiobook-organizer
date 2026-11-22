@@ -1349,7 +1349,7 @@ jobs:
   #
   # `make test-fixtures` discovers the packages at run time
   # (scripts/ci/fixture_test_packages.py), so a new short-skipped test is
-  # covered without editing this job. Three shards, balanced by measured
+  # covered without editing this job. Six shards (SHARDS in that script), balanced by measured
   # per-package time. A package too heavy for one process (internal/server and
   # internal/plugins/maintenance took about 1300 s each in Woodpecker, against
   # the 25m = 1500 s go test timeout) is split by test name into several
@@ -1375,7 +1375,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1/4', '2/4', '3/4', '4/4']
+        shard: ['1/6', '2/6', '3/6', '4/6', '5/6', '6/6']
     # INVARIANT (same as go-test-short-shards): the job cap must stay strictly greater
     # than the 25m `-timeout` (FIXTURE_TIMEOUT's default) that `make test-fixtures` passes to go test, plus
     # setup, or the runner kills the job before Go prints the goroutine dump.
