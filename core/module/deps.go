@@ -65,7 +65,9 @@ type Deps struct {
 	// writer's crash-matrix label, so the kit sees it (state.go). Never nil
 	// from the kernel; a path with no state directory or store directory
 	// under it is refused (ErrStateConfined), which is every path in
-	// app.Describe, where no store is open.
+	// app.Describe, where no store is open. A path that is, holds or lies
+	// inside what core owns (the store, the keyring, the boot record) is
+	// refused too (ErrStateCoreOwned).
 	State StateFS
 
 	// SecretsKeyringExported reports whether core.secrets is not raising

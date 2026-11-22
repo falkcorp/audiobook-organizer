@@ -8,6 +8,7 @@ package module
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // StateFS is Deps.State: the labelled state filesystem (05-storage §5S.3.16,
@@ -27,6 +28,14 @@ import (
 // directory it is under, through ".." or a symbolic link, is refused too, and
 // a symbolic link as the last element is removed as a link and never
 // followed. Neither root itself can be removed.
+//
+// Both refuse, with ErrStateCoreOwned, a path that is, lies inside or contains
+// something core owns: the open store and its sidecars, checkpoints and
+// restore directories, the swap lock, the keyring and its export record, the
+// config boot record, the bootstrap token and the backup location file. The
+// owners' own constants name them (kernel/stateowned.go), so the list moves
+// with a rename. An app's own state files (Config.StorageStateFiles) are not
+// core's: a hook may remove those.
 //
 // label is the crash-matrix label of the writer (the writer-table row the app
 // registers, for example "<module>.legacy-file-cleanup.<file>"); an empty
@@ -53,6 +62,16 @@ type StateFS interface {
 // ErrStateConfined is what a StateFS call returns for a path outside the
 // state directory and the store's directory, or one that names a root itself.
 var ErrStateConfined = errors.New("module: the path is outside the state filesystem's confinement")
+
+// ErrStateCoreOwned is what a StateFS call returns for a path that is, lies
+// inside or contains something core owns: the open store (and its sidecars,
+// swap lock, checkpoints and restore directories), the keyring and its export
+// record, the config boot record, the bootstrap token and the backup location
+// file. A module's start hook must never remove those, so the handle refuses
+// them whatever the label. It wraps ErrStateConfined: errors.Is(err,
+// ErrStateConfined) holds too, so a caller that only checks confinement
+// refuses as well.
+var ErrStateCoreOwned = fmt.Errorf("%w: it is core's own state", ErrStateConfined)
 
 // ErrStateUnlabelled is what a StateFS call returns for an empty crash label.
 var ErrStateUnlabelled = errors.New("module: a state filesystem call needs a crash-matrix label")

@@ -118,6 +118,74 @@ func TestModuleStateHookCrashMatrix(t *testing.T) {
 	crashmatrix.Run(t, cleanerScenario(t))
 }
 
+// meddler is hello plus a start hook that reaches for what core owns: the open
+// store, a file inside it, the keyring and the config boot record, each through
+// Deps.State. It records what the handle answered.
+type meddler struct {
+	*hello.Module
+	state string
+	got   *map[string]error
+}
+
+func (m meddler) targets() map[string]string {
+	db := filepath.Join(m.state, "storage", "main.pebble")
+	return map[string]string{
+		"the store":         db,
+		"a file in it":      filepath.Join(db, "MANIFEST-000001"),
+		"the keyring":       filepath.Join(m.state, "secrets.keyring"),
+		"the boot record":   filepath.Join(m.state, "config.boot.json"),
+		"the checkpoints":   filepath.Join(m.state, "storage", ".mediacore-checkpoints"),
+		"the swap lock":     filepath.Join(m.state, "swap.lock"),
+		"the store's level": db + ".storage-levels",
+	}
+}
+
+func (m meddler) Register(r *module.Registrar) error {
+	if err := m.Module.Register(r); err != nil {
+		return err
+	}
+	st := r.Deps().State
+	r.Hook(module.Hook{Name: string(hello.ID) + ".meddle", Start: func(ctx context.Context) error {
+		got := map[string]error{}
+		for name, p := range m.targets() {
+			got[name] = st.RemoveAll(ctx, "hello.meddler.remove", p)
+		}
+		*m.got = got
+		return nil
+	}})
+	return r.Err()
+}
+
+// TestModuleStateRefusesCoreOwnedPaths: through a real boot, a start hook that
+// removes the open store, a file inside it, the keyring, the boot record, the
+// checkpoints or the swap lock through Deps.State is refused with
+// ErrStateCoreOwned, nothing is removed, and the next boot opens the same
+// store: the kernel hands modules a handle that carries the core-owned rule.
+func TestModuleStateRefusesCoreOwnedPaths(t *testing.T) {
+	f := crashmatrix.Fixture{Name: "meddled", StateDir: t.TempDir()}
+	var got map[string]error
+	mod := meddler{Module: hello.New(), state: f.StateDir, got: &got}
+	boot(t, f, mod)
+	if len(got) != len(mod.targets()) {
+		t.Fatalf("the hook ran %d of %d removals (did it run at all?)", len(got), len(mod.targets()))
+	}
+	for name, err := range got {
+		if !errors.Is(err, module.ErrStateCoreOwned) {
+			t.Errorf("%s: %v, want ErrStateCoreOwned", name, err)
+		}
+	}
+	for _, p := range []string{filepath.Join(f.StateDir, "secrets.keyring"), filepath.Join(f.StateDir, "storage", "main.pebble")} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("the refused hook removed %s: %v", p, err)
+		}
+	}
+	got = nil
+	boot(t, f, mod) // the store is intact: it opens, and the hook is refused again
+	if len(got) == 0 {
+		t.Fatal("the hook did not run at the second boot")
+	}
+}
+
 func labelsOf(m map[string]bool) []string {
 	var out []string
 	for l := range m {

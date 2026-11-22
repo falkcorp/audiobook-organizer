@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 )
 
 // The boot record (05-config §1.3.5): the UI-made values of ReloadBoot keys,
@@ -145,4 +146,15 @@ func (r bootRecordIO) syncDir(label string) error {
 		return fmt.Errorf("config: sync the state directory: %w", err)
 	}
 	return nil
+}
+
+// OwnsStateName reports whether name, a path relative to the state directory,
+// is the boot record, its temporary file or its quarantined copy: what the
+// config boot owns there, which nothing else may remove.
+func OwnsStateName(name string) bool {
+	switch filepath.Clean(name) {
+	case bootRecordName, bootRecordTemp, bootRecordBad:
+		return true
+	}
+	return false
 }

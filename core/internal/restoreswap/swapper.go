@@ -171,9 +171,13 @@ type Outcome struct {
 }
 
 // legacySuffixes are the build's LegacyGuard sidecar suffixes.
-func (s *Swapper) legacySuffixes() []string {
+func (s *Swapper) legacySuffixes() []string { return LegacySuffixes(s.o.Owners) }
+
+// LegacySuffixes are the LegacyGuard sidecar suffixes of owners: the files
+// beside the store a swap moves with it and a reset keeps (restorejournal.Kept).
+func LegacySuffixes(owners []storage.OwnerSpec) []string {
 	var out []string
-	for _, o := range s.o.Owners {
+	for _, o := range owners {
 		if g := o.Spec.LegacyGuard; g != nil && g.SidecarSuffix != "" {
 			out = append(out, g.SidecarSuffix)
 		}

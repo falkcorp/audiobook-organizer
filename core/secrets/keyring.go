@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -270,6 +271,29 @@ func cleanKeyFile(name string) (string, error) {
 // secrets.keyring.exported for the default key file (05-config §2.4).
 func exportedRecordName(keyFile string) string { return keyFile + ".exported" }
 
+// tempInfix joins a keyring or export-record name to the random suffix of the
+// temporary file writeFile stages it through.
+const tempInfix = ".tmp-"
+
+// OwnsStateName reports whether name, a path relative to the state directory,
+// is the keyring (keyFile, relative to it; "" is the default name), its export
+// record, a temporary file either is staged through, or a directory holding any
+// of them: what core.secrets owns there, which nothing else may remove. It is
+// the one place the keyring's file names are listed for that question.
+func OwnsStateName(keyFile, name string) bool {
+	if keyFile == "" {
+		keyFile = defaultKeyFile
+	}
+	name = filepath.Clean(name)
+	for _, base := range []string{keyFile, exportedRecordName(keyFile)} {
+		base = filepath.Clean(base)
+		if name == base || strings.HasPrefix(name, base+tempInfix) || strings.HasPrefix(base, name+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // readKeyring reads and decodes the keyring file name under root.
 func readKeyring(root StateFiles, name string) (*keyringFile, error) {
 	fh, err := root.Open(name)
@@ -362,7 +386,7 @@ func writeFile(root StateFiles, label, name string, data []byte, noReplace bool)
 	if err != nil {
 		return err
 	}
-	tmp := name + ".tmp-" + suffix
+	tmp := name + tempInfix + suffix
 	renamed, created := false, false
 	defer func() {
 		if created && !renamed {
