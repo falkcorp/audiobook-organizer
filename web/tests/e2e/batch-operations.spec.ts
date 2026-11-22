@@ -10,11 +10,12 @@ import {
   waitForTagPanel,
   waitForToast,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 const arrangeLibrary = async (page: Page, count = 40) => {
   const books = generateTestBooks(count);
   await setupLibraryWithBooks(page, books);
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
   // Every test here clicks a selection control next; the Browse-by-Tag panel
   // mounting shifts them, so let the layout settle first.
@@ -177,7 +178,7 @@ test.describe('Batch Operations', () => {
       marked_for_deletion: index < 3,
     }));
     await setupLibraryWithBooks(page, books);
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     await selectFirstBooks(page, 3);
 
@@ -211,7 +212,7 @@ test.describe('Batch Operations', () => {
       marked_for_deletion: index % 2 === 0,
     }));
     await setupLibraryWithBooks(page, books);
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     await selectFirstBooks(page, 2);
 

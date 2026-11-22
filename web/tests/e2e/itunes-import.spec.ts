@@ -5,6 +5,7 @@
 
 import { test, expect } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 test.describe('iTunes Import', () => {
   test.beforeEach(async ({ page }) => {
@@ -13,7 +14,7 @@ test.describe('iTunes Import', () => {
 
   test('validates iTunes library', async ({ page }) => {
     // Act
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
     await page.getByRole('tab', { name: 'iTunes Import' }).click();
     await page
@@ -27,7 +28,7 @@ test.describe('iTunes Import', () => {
 
   test('imports iTunes library', async ({ page }) => {
     // Act
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
     await page.getByRole('tab', { name: 'iTunes Import' }).click();
     await page
@@ -58,7 +59,7 @@ test.describe('iTunes Import again', () => {
 
   test.beforeEach(async ({ page }) => {
     await setupMockApi(page, { itunes: { linkedBookCount: 3 } });
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
     await page.getByRole('tab', { name: 'iTunes Import' }).click();
     await page.getByLabel('iTunes Library Path').fill('/path/to/test/library.xml');

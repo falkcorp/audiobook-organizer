@@ -8,13 +8,14 @@ import {
   generateTestBooks,
   setupMockApi,
 } from './utils/test-helpers';
+import { bookPath, paths, urlGlob } from './utils/paths';
 
 const openLibrary = async (
   page: Page,
   options: Parameters<typeof setupMockApi>[1] = {}
 ) => {
   await setupMockApi(page, options);
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
 };
 
@@ -37,7 +38,7 @@ test.describe('Error Handling', () => {
     await setupMockApi(page, { books: [] });
 
     // Act
-    await page.goto('/library/does-not-exist');
+    await page.goto(bookPath('does-not-exist'));
     await page.waitForLoadState('networkidle');
 
     // Assert
@@ -67,7 +68,7 @@ test.describe('Error Handling', () => {
     await setupMockApi(page, { books });
 
     // Act
-    await page.goto('/library/book-1');
+    await page.goto(bookPath('book-1'));
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'Edit Metadata' }).click();
     // The Edit Metadata dialog now renders a per-field "Lock <field>" icon
@@ -92,7 +93,7 @@ test.describe('Error Handling', () => {
     await setupMockApi(page, { books });
 
     // Act
-    await page.goto('/library/book-1');
+    await page.goto(bookPath('book-1'));
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: 'Edit Metadata' }).click();
     // Title is required, so its accessible name carries the asterisk; the
@@ -115,7 +116,7 @@ test.describe('Error Handling', () => {
     await openLibrary(page, { failures: { getBooks: 401 } });
 
     // Act + Assert
-    await page.waitForURL('**/login');
+    await page.waitForURL(urlGlob(paths.login));
   });
 
   test('recovers from SSE connection loss', async ({ page }) => {

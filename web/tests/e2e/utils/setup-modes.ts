@@ -6,6 +6,7 @@
 import { Page } from '@playwright/test';
 import type { MockApiOptions } from './test-helpers';
 import { skipWelcomeWizard, setupMockApiRoutes, mockEventSource } from './test-helpers';
+import { paths } from './paths';
 
 /**
  * Phase 1: API-Driven Setup
@@ -76,7 +77,7 @@ export async function setupPhase2Interactive(
   // enough to interrupt the spec's own first goto. The page is served by the
   // e2e server even though its API calls are mocked, so a failure here fails
   // the test instead of leaving the page on an error document.
-  const initialURL = baseURL ? `${baseURL}/` : '/';
+  const initialURL = baseURL ? `${baseURL}${paths.home}` : paths.home;
   console.log('[Setup] Initial navigation to:', initialURL);
   await page.goto(initialURL, { waitUntil: 'domcontentloaded' });
 

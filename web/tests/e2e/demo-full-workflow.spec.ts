@@ -13,6 +13,7 @@ import {
   humanType,
   demoScreenshot,
 } from './utils/demo-helpers';
+import { paths } from './utils/paths';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -40,7 +41,7 @@ test.describe('Full End-to-End Demo Workflow', () => {
       // ==============================================
       console.log('\n=== PHASE 1: Welcome Wizard Setup ===');
 
-      await page.goto('/', { waitUntil: 'domcontentloaded' });
+      await page.goto(paths.home, { waitUntil: 'domcontentloaded' });
       await page.waitForTimeout(2000);
 
       await demoScreenshot(page, 1, 'welcome_screen', DEMO_ARTIFACTS_DIR);

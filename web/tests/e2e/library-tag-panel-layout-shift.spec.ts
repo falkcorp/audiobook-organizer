@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
+import { libraryPath, paths } from './utils/paths';
 
 /**
  * The Browse-by-Tag panel used to mount only after the facets response landed,
@@ -110,7 +111,7 @@ test.describe('library tag panel layout stability', () => {
       test(`${name} at ${width}px: Select All does not move`, async ({ page }) => {
         await open(page, width, false);
         const facets = await gateFacets(page, tags);
-        await page.goto('/library');
+        await page.goto(paths.library);
         await expect(page.getByTestId('tag-cloud-skeleton').first()).toBeVisible();
         await expect(page.getByLabel('Select All')).toBeVisible();
         const before = await geometry(page);
@@ -130,7 +131,7 @@ test.describe('library tag panel layout stability', () => {
     }) => {
       await open(page, width, true);
       const facets = await gateFacets(page, GENRES);
-      await page.goto('/library');
+      await page.goto(paths.library);
       await expect(page.getByTestId('tag-cloud-skeleton').first()).toBeVisible();
       await expect(page.getByLabel('Select All')).toBeVisible();
       const before = await geometry(page);
@@ -146,7 +147,7 @@ test.describe('library tag panel layout stability', () => {
   test('an answer made only of hidden-namespace tags keeps the panel mounted', async ({ page }) => {
     await open(page, 1280, false);
     const facets = await gateFacets(page, HIDDEN_ONLY);
-    await page.goto('/library');
+    await page.goto(paths.library);
     await expect(page.getByTestId('tag-cloud-skeleton').first()).toBeVisible();
     await expect(page.getByLabel('Select All')).toBeVisible();
     const before = await geometry(page);
@@ -170,7 +171,7 @@ test.describe('library tag panel layout stability', () => {
       const tags: Tag[] = [...GENRES.slice(0, 8), { tag: LONG, count: 1 }];
       await open(page, width, true); // saved expanded, so we exercise collapse
       const facets = await gateFacets(page, tags);
-      await page.goto(`/library?search=${encodeURIComponent(`tag:"${LONG}"`)}`);
+      await page.goto(libraryPath(`search=${encodeURIComponent(`tag:"${LONG}"`)}`));
       facets.release();
       await expect(page.getByTestId('tag-cloud-panel')).toHaveAttribute('aria-busy', 'false');
       await page.getByRole('button', { name: 'Collapse tag cloud' }).click();
@@ -195,7 +196,7 @@ test.describe('library tag panel layout stability', () => {
   test('geometry is stable across a filter change (reload, then new answer)', async ({ page }) => {
     await open(page, 1024, false);
     const facets = await gateFacets(page, GENRES);
-    await page.goto('/library');
+    await page.goto(paths.library);
     await expect(page.getByLabel('Select All')).toBeVisible();
     const skeleton = await geometry(page);
 

@@ -5,6 +5,7 @@
 
 import { test, expect } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 test.describe('iTunes Import (manual, re-runnable)', () => {
   test.beforeEach(async ({ page }) => {
@@ -12,7 +13,7 @@ test.describe('iTunes Import (manual, re-runnable)', () => {
   });
 
   test('import from iTunes - happy path', async ({ page }) => {
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
 
     // Navigate to iTunes tab
@@ -32,7 +33,7 @@ test.describe('iTunes Import (manual, re-runnable)', () => {
     await expect(page.getByText('Import Complete', { exact: true })).toBeVisible({ timeout: 10000 });
 
     // Verify books appear in library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     // At least one book should appear from iTunes import
     const bookElements = await page.locator('[role="button"]').filter({ hasText: /.+/ }).count();
@@ -40,7 +41,7 @@ test.describe('iTunes Import (manual, re-runnable)', () => {
   });
 
   test('selective import - import only selected books', async ({ page }) => {
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
     await page.getByRole('tab', { name: 'iTunes Import' }).click();
 

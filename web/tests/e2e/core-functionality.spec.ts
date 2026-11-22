@@ -5,6 +5,7 @@
 
 import { test, expect } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 test.describe('Core Functionality', () => {
   test('app dashboard loads successfully', async ({ page }) => {
@@ -12,7 +13,7 @@ test.describe('Core Functionality', () => {
     await setupPhase2Interactive(page);
 
     // Dashboard loads
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.getByText('Audiobook Organizer')).toBeVisible();
   });
@@ -22,7 +23,7 @@ test.describe('Core Functionality', () => {
     await setupPhase2Interactive(page);
 
     // Load dashboard
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('domcontentloaded');
 
     // Check for error indicators

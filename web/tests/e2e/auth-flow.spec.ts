@@ -5,6 +5,7 @@
 
 import { test, expect } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
+import { paths, urlEndsWith } from './utils/paths';
 
 test.describe('Authentication Flow', () => {
   test('redirects protected routes to login when auth is required', async ({
@@ -20,8 +21,8 @@ test.describe('Authentication Flow', () => {
       },
     });
 
-    await page.goto('/dashboard');
-    await expect(page).toHaveURL(/\/login$/);
+    await page.goto(paths.dashboard);
+    await expect(page).toHaveURL(urlEndsWith(paths.login));
     await expect(
       page.getByRole('heading', { name: 'Login' })
     ).toBeVisible();
@@ -36,7 +37,7 @@ test.describe('Authentication Flow', () => {
       },
     });
 
-    await page.goto('/login');
+    await page.goto(paths.login);
     await expect(
       page.getByRole('heading', { name: 'Create Admin Account' })
     ).toBeVisible();
@@ -46,7 +47,7 @@ test.describe('Authentication Flow', () => {
     await page.getByLabel('Password').fill('very-strong-password');
     await page.getByRole('button', { name: 'Create And Login' }).click();
 
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page).toHaveURL(urlEndsWith(paths.dashboard));
     // The logout control moved into UserMenu: the header now shows a Chip
     // labelled with the username (UserMenu.tsx:134-146) that opens a menu whose
     // Logout entry is a MenuItem, not a labelled button. Assert the same thing
@@ -70,7 +71,7 @@ test.describe('Authentication Flow', () => {
       },
     });
 
-    await page.goto('/login');
+    await page.goto(paths.login);
     await page.getByLabel('Username').fill('admin');
     await page.getByLabel('Password').fill('wrong-password');
     await page.getByRole('button', { name: 'Login' }).click();
@@ -78,7 +79,7 @@ test.describe('Authentication Flow', () => {
 
     await page.getByLabel('Password').fill('secretpass123');
     await page.getByRole('button', { name: 'Login' }).click();
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page).toHaveURL(urlEndsWith(paths.dashboard));
   });
 });
 
@@ -107,7 +108,7 @@ test.describe('Authentication — Real Server Smoke', () => {
     }
 
     // Fresh DB: exercise the real first-run path.
-    await page.goto('/login');
+    await page.goto(paths.login);
     await expect(
       page.getByRole('heading', { name: 'Create Admin Account' })
     ).toBeVisible({ timeout: 10000 });
@@ -117,11 +118,11 @@ test.describe('Authentication — Real Server Smoke', () => {
     await page.getByRole('button', { name: 'Create And Login' }).click();
 
     // Real session cookie must be set — the redirect only works with a valid cookie.
-    await expect(page).toHaveURL(/\/dashboard$/, { timeout: 10000 });
+    await expect(page).toHaveURL(urlEndsWith(paths.dashboard), { timeout: 10000 });
     await expect(page.getByLabel('logout')).toBeVisible();
 
     // Confirm the session survives a reload (cookie persists across navigation).
     await page.reload();
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page).toHaveURL(urlEndsWith(paths.dashboard));
   });
 });

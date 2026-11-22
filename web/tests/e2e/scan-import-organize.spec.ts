@@ -12,6 +12,7 @@ import {
   waitForToast,
   waitForTagPanel,
 } from './utils/test-helpers';
+import { libraryPath, paths, settingsPath } from './utils/paths';
 
 type ScanMockOptions = {
   scanBooks: Array<Record<string, unknown>>;
@@ -371,7 +372,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     });
 
     // Act: add import path and scan
-    await page.goto('/settings#paths');
+    await page.goto(settingsPath('paths'));
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/audiobooks');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -383,7 +384,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     await expect(page.getByText(/Scan complete/)).toBeVisible();
 
     // Act: filter import books and organize
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     await page.getByRole('button', { name: /filters/i }).click();
     await page.getByLabel('Library State').click();
@@ -470,7 +471,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
   }) => {
     // Arrange
     await setupScanWorkflow(page, { scanBooks: [] });
-    await page.goto('/settings#paths');
+    await page.goto(settingsPath('paths'));
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/books');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -497,7 +498,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
         },
       ],
     });
-    await page.goto('/settings#paths');
+    await page.goto(settingsPath('paths'));
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/cancel');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -513,7 +514,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
 
     // Assert
     await expect(page.getByText(/Scan cancelled/)).toBeVisible();
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     await expect(page.getByText('Import Book 1')).toBeVisible();
   });
@@ -533,7 +534,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       ],
       scanErrors: ['Corrupt file: book2.m4b'],
     });
-    await page.goto('/settings#paths');
+    await page.goto(settingsPath('paths'));
     await page.getByRole('button', { name: 'Add Import Path' }).click();
     await page.getByLabel('Folder Path').fill('/test/corrupt');
     await page.getByRole('button', { name: 'Add Path' }).click();
@@ -568,7 +569,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       config: { root_dir: '/library' },
     });
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     await waitForTagPanel(page);
 
@@ -617,7 +618,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
       config: { root_dir: '/library' },
     });
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
     await waitForTagPanel(page);
 
@@ -645,7 +646,7 @@ test.describe('Scan/Import/Organize Workflow', () => {
     // Drive the filter from the URL rather than the Filters button: three books
     // are still selected at this point, and BatchToolbar replaces the header row
     // whenever a selection is active, so that button is not rendered.
-    await page.goto('/library?state=imported');
+    await page.goto(libraryPath('state=imported'));
     await page.waitForLoadState('networkidle');
 
     // Verify books are back in import state

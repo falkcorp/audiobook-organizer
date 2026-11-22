@@ -5,6 +5,7 @@
 
 import { test, expect } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 test.describe('Import paths workflows', () => {
   // Setup handled per-test; setupMockApi provides base routes
@@ -90,7 +91,7 @@ test.describe('Import paths workflows', () => {
       route.fulfill({ status: 200, body: JSON.stringify({ status: 'ok' }) });
     });
 
-    await page.goto('/settings');
+    await page.goto(paths.settings);
 
     await expect(
       page.getByText('Settings', { exact: true }).first()

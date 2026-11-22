@@ -7,6 +7,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   setupMockApi,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 const filesystem = {
   '/': {
@@ -111,7 +112,7 @@ const openImportFileBrowser = async (page: Page) => {
     books: [],
     homeDirectory: '/Users/jdfalk',
   });
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
   // Two "Import Files" buttons exist (header + empty-state); use .first()
   await page.getByRole('button', { name: 'Import Files' }).first().click();

@@ -6,6 +6,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 /**
  * Regression coverage for the Library empty-state fix (#2195).
@@ -48,7 +49,7 @@ test.describe('Library empty state', () => {
       failures: { getBooks: 503 },
     });
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // THEN: the user is told we are still loading, NOT that they own nothing.
@@ -62,7 +63,7 @@ test.describe('Library empty state', () => {
       failures: { getBooks: 503 },
     });
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await expect(page.getByText(RECONNECTING)).toBeVisible();
 
     // The backoff starts at 500ms and caps at 5s, so several attempts land
@@ -79,7 +80,7 @@ test.describe('Library empty state', () => {
     // first-run users depend on the guidance in that panel.
     await setupLibraryWithBooks(page, []);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByText(EMPTY_STATE)).toBeVisible();
@@ -89,7 +90,7 @@ test.describe('Library empty state', () => {
   test('a healthy library shows neither panel', async ({ page }) => {
     await setupLibraryWithBooks(page, generateTestBooks(5));
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByText(EMPTY_STATE)).toHaveCount(0);

@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
+import { libraryPath, paths } from './utils/paths';
 
 /**
  * MEASUREMENT harness for "the library page freezes the browser on load".
@@ -154,7 +155,7 @@ test.describe('library load cost (measurement only)', () => {
       await setupLibraryWithBooks(page, generateTestBooks(1200));
 
       const t0 = Date.now();
-      await page.goto(`/library?limit=${n}`);
+      await page.goto(libraryPath(`limit=${n}`));
       await cardTitles(page).first().waitFor({ timeout: 240_000 });
       const navMs = Date.now() - t0;
       await expect
@@ -222,7 +223,7 @@ test.describe('library load cost (measurement only)', () => {
       });
 
       const t0 = Date.now();
-      await page.goto('/library');
+      await page.goto(paths.library);
       await cardTitles(page).first().waitFor({ timeout: 240_000 });
       const navMs = Date.now() - t0;
       await expect
@@ -284,7 +285,7 @@ test.describe('library load cost (measurement only)', () => {
       });
 
       const t0 = Date.now();
-      await page.goto('/library');
+      await page.goto(paths.library);
       await cardTitles(page).first().waitFor({ timeout: 240_000 });
       const navMs = Date.now() - t0;
       await expect

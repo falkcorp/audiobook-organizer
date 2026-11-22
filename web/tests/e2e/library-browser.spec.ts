@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
+import { bookPath, libraryPath, paths } from './utils/paths';
 
 /**
  * Click a pagination control and wait for it to actually take effect.
@@ -66,7 +67,7 @@ test.describe('Library Browser', () => {
     await setupLibraryWithBooks(page, books);
 
     // WHEN: User navigates to /library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // THEN: Grid displays books with title and author
@@ -82,7 +83,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(3);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User clicks "List View" button
@@ -113,7 +114,7 @@ test.describe('Library Browser', () => {
     // state itself still works and is still sent to the API; the only surviving
     // way to set it is the URL, which is also how it persists across reloads.
     // The missing control is filed in todo.d as a product question.
-    await page.goto('/library?sort=title&order=asc');
+    await page.goto(libraryPath('sort=title&order=asc'));
     await page.waitForLoadState('networkidle');
 
     // THEN: Books are ordered alphabetically by title
@@ -137,7 +138,7 @@ test.describe('Library Browser', () => {
     // state itself still works and is still sent to the API; the only surviving
     // way to set it is the URL, which is also how it persists across reloads.
     // The missing control is filed in todo.d as a product question.
-    await page.goto('/library?sort=title&order=desc');
+    await page.goto(libraryPath('sort=title&order=desc'));
     await page.waitForLoadState('networkidle');
 
     // THEN: Books are ordered reverse alphabetically
@@ -176,7 +177,7 @@ test.describe('Library Browser', () => {
     // state itself still works and is still sent to the API; the only surviving
     // way to set it is the URL, which is also how it persists across reloads.
     // The missing control is filed in todo.d as a product question.
-    await page.goto('/library?sort=author&order=asc');
+    await page.goto(libraryPath('sort=author&order=asc'));
     await page.waitForLoadState('networkidle');
 
     // THEN: Books are ordered by author name
@@ -205,7 +206,7 @@ test.describe('Library Browser', () => {
 
     // The "Sort by" combobox no longer exists — see the note on the title-sort
     // test above. 'created_at' is the SortField the old "Date Added" option set.
-    await page.goto('/library?sort=created_at&order=desc');
+    await page.goto(libraryPath('sort=created_at&order=desc'));
     await page.waitForLoadState('networkidle');
 
     // THEN: Books are reordered by created_at (newest first)
@@ -234,7 +235,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User selects "Organized" filter
@@ -267,7 +268,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User selects "Import" filter
@@ -301,7 +302,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User selects "Deleted" filter
@@ -333,7 +334,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User filters by author
@@ -365,7 +366,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User filters by series
@@ -399,7 +400,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User selects "Organized" state filter and "Brandon Sanderson" author filter
@@ -420,7 +421,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(6);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /filters/i }).click();
@@ -441,7 +442,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(60);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User selects "50" from items-per-page dropdown
@@ -459,7 +460,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(50);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: Page 1 is shown, "Test Book 5" (late alphabetically) is NOT visible
@@ -477,7 +478,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(50);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     await clickPagination(page, /page 2/i, /[?&]page=2/);
@@ -496,7 +497,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(60);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User clicks page "3" button
@@ -517,7 +518,7 @@ test.describe('Library Browser', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User clicks on a book card
@@ -526,7 +527,7 @@ test.describe('Library Browser', () => {
     // THEN: Navigates to /library/{bookId}
     await page.waitForLoadState('networkidle');
     const url = page.url();
-    expect(url).toContain('/library/test-book-123');
+    expect(url).toContain(bookPath('test-book-123'));
   });
 
   test('shows empty state when no books match filters', async ({ page }) => {
@@ -534,7 +535,7 @@ test.describe('Library Browser', () => {
     const books = generateTestBooks(5);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User filters by deleted state with no deleted books
@@ -552,7 +553,7 @@ test.describe('Library Browser', () => {
     await setupLibraryWithBooks(page, []);
 
     // WHEN: User navigates to /library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // THEN: Shows "No Audiobooks Found" message
@@ -570,7 +571,7 @@ test.describe('Library Browser', () => {
     // state itself still works and is still sent to the API; the only surviving
     // way to set it is the URL, which is also how it persists across reloads.
     // The missing control is filed in todo.d as a product question.
-    await page.goto('/library?sort=author&order=desc');
+    await page.goto(libraryPath('sort=author&order=desc'));
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /filters/i }).click();

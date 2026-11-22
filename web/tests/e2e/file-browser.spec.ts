@@ -7,6 +7,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   setupMockApi,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 const filesystem = {
   '/': {
@@ -88,7 +89,7 @@ const filesystem = {
 
 const openImportFileBrowser = async (page: Page) => {
   await setupMockApi(page, { filesystem, books: [] });
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
   await page.getByRole('button', { name: 'Import Files' }).first().click();
   await expect(
@@ -221,7 +222,7 @@ test.describe('File Browser', () => {
   test('selects folder as import path', async ({ page }) => {
     // Arrange
     await setupMockApi(page, { filesystem, importPaths: [] });
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
 
     // Act — import paths moved onto a dedicated "Paths" tab in Settings.

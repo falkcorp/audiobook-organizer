@@ -5,6 +5,7 @@
 
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
+import { reviewLanePath } from './utils/paths';
 
 /**
  * MEASUREMENT harness for "is /review responsive at 50 and 100 items?".
@@ -681,7 +682,7 @@ const ROWS: Record<string, (page: Page) => Locator> = {
 /** goto the lane and wait until exactly N rows have committed to the DOM. */
 async function loadLane(page: Page, lane: string, n: number): Promise<number> {
   const t0 = Date.now();
-  await page.goto(`/review?lane=${lane}`);
+  await page.goto(reviewLanePath(lane));
   await ROWS[lane](page).first().waitFor({ timeout: 240_000 });
   await expect.poll(() => ROWS[lane](page).count(), { timeout: 240_000 }).toBe(n);
   return Date.now() - t0;
