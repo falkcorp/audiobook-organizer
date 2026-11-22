@@ -34,6 +34,7 @@ const reasonMerged = "merged"
 type Admin interface {
 	InviteAdmin
 	AccountAdmin
+	KeyAdmin
 
 	// PlanUserMerge previews folding source into target: it re-checks the
 	// principal exactly as StageUserMerge does, reads the records the merge
