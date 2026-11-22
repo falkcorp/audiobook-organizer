@@ -30,6 +30,10 @@ type Registry interface {
 	register(spec *sectionSpec) (*binding, error)
 }
 
+// batcher is a Registry that can defer per-section bookkeeping to the end of
+// a batch of registrations (the Store's key index; Store.batch).
+type batcher interface{ batch() (done func()) }
+
 // Register binds a section. It is a generic free function because interface
 // methods cannot have type parameters.
 func Register[T any](r Registry, s Section[T]) (*Handle[T], error) {
@@ -58,7 +62,13 @@ func (s Section[T]) registerWith(r Registry) (any, error) { return Register(r, s
 // coined by F3-01: the kernel's core-section list (kernel.coreSections) is a
 // []any of config.Define values, and Register needs T. Any element that is not
 // a Section fails with ErrInvalid, before or after the ones registered.
+//
+// On a Store's registry the sections are one batch: the key index is rebuilt
+// once at the end (also when an element fails), not after each section.
 func RegisterSections(r Registry, sections ...any) ([]any, error) {
+	if b, ok := r.(batcher); ok {
+		defer b.batch()()
+	}
 	out := make([]any, 0, len(sections))
 	for i, s := range sections {
 		rs, ok := s.(registrar)
