@@ -7,6 +7,7 @@ package cutover
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -378,9 +379,27 @@ var (
 	}
 )
 
+// reachWantR2OnlyVerdicts pins what each R2-only route admits, principal by
+// principal (the letters of reachR2.verdict, in the order of the principal table).
+// An R2-only route has no R0 recording, so no cell is compared and a change of its
+// requirement or of its Interactive guard would move reach and fail nothing; the
+// letters are the decision, taken from the spec, and a mutant that moves one fails
+// here. The reissue route is not listed: its Owner guard masks its requirement,
+// which reachMaskedRoutes and the owner-set twin pin instead.
+var reachWantR2OnlyVerdicts = map[string]string{
+	"POST /api/v1/auth/phone-key/claim": "AAADAAADDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+}
+
 // reachOneSideProblems is what the pinned one-sided routes fail on, as text.
 func reachOneSideProblems(res reachDiffResult) []string {
 	var out []string
+	if res.r2 != nil {
+		for _, k := range slices.Sorted(maps.Keys(reachWantR2OnlyVerdicts)) {
+			if got := res.r2.verdict[k]; got != reachWantR2OnlyVerdicts[k] {
+				out = append(out, fmt.Sprintf("%s admits %q, pinned %q (an R2-only route has no R0 cell to compare: its letters are pinned here)", k, got, reachWantR2OnlyVerdicts[k]))
+			}
+		}
+	}
 	if !slices.Equal(res.r0Only, reachWantR0Only) {
 		out = append(out, fmt.Sprintf("routes only R0 has:\n got %q\nwant %q", res.r0Only, reachWantR0Only))
 	}
