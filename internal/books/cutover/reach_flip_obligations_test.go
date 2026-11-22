@@ -86,9 +86,10 @@ type reachObligation struct {
 const reachAuthOffName = "authoff"
 
 // reachCoreOwnerRoutes are the owner routes core's own router carries, which no
-// manifest holds. POST /api/core/v1/system/factory-reset is the successor of the
-// R0-only reset pair (05-rbac 6.2); TestReachObligations_TheCoreOwnerRouteIsStillCores
-// holds the claim to core's source.
+// manifest holds. POST /api/core/v1/system/factory-reset is core's staged reset
+// (05-rbac 6.2), a deliberate addition versus R0 (main at f6698f9bf runs the reset
+// only offline) whose letters are ruled (registered_owner_test.go ownerR2Only);
+// TestReachObligations_TheCoreOwnerRouteIsStillCores holds the claim to core's source.
 var reachCoreOwnerRoutes = []string{"POST /api/core/v1/system/factory-reset"}
 
 const reachCoreOwnerSource = "../../../core/internal/storagehttp/routes.go"

@@ -787,27 +787,6 @@ var registeredFPWorkerNarrowing = diffTable{
 	},
 }
 
-// registeredHeadDrift: cells where HEAD itself changed after R0 was recorded
-// (v0.223.0), so the flip matches today's HEAD and not R0's recording. The D-to-A
-// row is not a flip widening: HEAD now admits that principal too.
-var registeredHeadDrift = diffTable{
-	name:     "R0 drift: HEAD changed after the recording",
-	want:     4,
-	wantTwin: 3,
-	rows: []diffRow{
-		{
-			routes: []string{"POST /api/v1/operations/reconcile"},
-			who:    []string{"session:editor", "key:editor:every", "key:editor:empty"}, r0: 'A', flip: 'D', status: 403, code: "permission_denied",
-			why: "ed8d80f4b: POST /operations/reconcile enforces the settings.manage that reconcile.apply declares; an editor never held it",
-		},
-		{
-			routes: []string{"POST /api/v1/operations/reconcile"},
-			who:    []string{"key:admin:settings"}, r0: 'D', flip: 'A', status: 400,
-			why: "ed8d80f4b: the settings-only admin key now passes the route's gate and the handler refuses its empty body (400)",
-		},
-	},
-}
-
 // registeredRuledNarrowings: the 6 cells F4-07 pinned (reachHandlerAdmin's
 // narrowing rows), reproduced on the flip. F4-07's restore row is gone: B10y's
 // ruling (ii) restores HEAD's owner gate, so a custom role holding settings.manage
@@ -907,8 +886,6 @@ var registeredUnregistered = []struct {
 	why    string
 }{
 	{"GET /", http.StatusOK, "the SPA index: served by the static handler, public, so no route carries a requirement"},
-	{"POST /api/v1/system/reset", http.StatusNotFound, "623da76d3 deleted the gin reset routes: the reset runs only offline (wire_system_routes.go)"},
-	{"POST /api/v1/system/factory-reset", http.StatusNotFound, "623da76d3, as above; core's POST /api/core/v1/system/factory-reset is the successor"},
 }
 
 // registeredCanaryNarrowing: the principals whose canary (GET /auth/me) answers
@@ -922,9 +899,9 @@ var registeredCanaryNarrowing = map[string][2]int{
 // ---- counts ----
 
 const (
-	registeredR0Routes     = 572
+	registeredR0Routes     = 574
 	registeredProbed       = 505
-	registeredDelegated    = 64
+	registeredDelegated    = 68
 	registeredPrincipals   = 36 // the recorded abk_ keys, sessions and the anonymous caller
 	registeredCoreKeys     = 18 // core-native mck_ twins, held to their imported twin's recording
 	registeredNoCoreTwin   = 10
@@ -934,7 +911,7 @@ const (
 
 // The recorded task starts and approvals, as pseudo-routes.
 const (
-	registeredTasks     = 234
+	registeredTasks     = 236
 	registeredApprovals = 1
 )
 
@@ -1060,7 +1037,7 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 			t.Errorf("R0 recorded %d task starts and %d approvals, the oracle pins %d and %d", len(r0.Tasks), len(r0.Approvals), registeredTasks, registeredApprovals)
 		}
 		t.Logf("compared %d cells (%d route cells pinned)", compared, registeredAuthOnCells)
-		tables := []diffTable{registeredFPWorkerNarrowing, registeredHeadDrift, registeredRuledNarrowings, registeredBootstrapRefused}
+		tables := []diffTable{registeredFPWorkerNarrowing, registeredRuledNarrowings, registeredBootstrapRefused}
 		h.checkDiffs(t, diffs, tables)
 		h.checkR2OnlyLetters(t, r0, false)
 		hc, hcStage13 := h.checkHandlerCells(t, pass, false)

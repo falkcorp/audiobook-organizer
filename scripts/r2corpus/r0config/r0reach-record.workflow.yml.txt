@@ -5,14 +5,22 @@
 #
 # A template, not a workflow: it is a .txt outside .github/workflows, so it never
 # runs from here. It is the temporary workflow that recorded
-# internal/books/rbacreach (GitHub Actions run 43412869288, ubuntu-26.04), with its
-# trigger changed and its listing step dropped; its record, upload and log steps are
-# the same. To re-record R0's reach, or to run --check, copy
-# it to .github/workflows/r0reach-record.yml on a throwaway branch named
-# r0reach-record/<anything>, push, read the `r0reach` artifact, and never merge that
-# branch. The probes run against a throwaway copy of the overlay store, so the
+# internal/books/rbacreach (its run is verdicts.json's recorded.run_id). To
+# re-record R0's reach, or to run --check, copy it to
+# .github/workflows/r0reach-record.yml on a throwaway branch named
+# r0reach-record/<anything>, push it with git (never the contents API), download
+# the `r0reach` artifact with `gh run download`, delete the branch, and never merge
+# it. The probes run against a throwaway copy of the overlay store, so the
 # destructive routes they reach are harmless there. Replace --regenerate with
-# --check to compare instead of write. See scripts/r2corpus/record_r0_reach.py.
+# --check to compare instead of write (and drop the dump step, which rewrites
+# routes.json). See scripts/r2corpus/record_r0_reach.py.
+#
+# R0 is main at the commit r0config/r0_reach_commit.txt pins (F4-08), built here
+# from source by build_r0_reach.py with the release asset's recipe; nothing is
+# downloaded. The build runs twice, into two directories, and both digests go to
+# the log: the evidence for whether a rebuild is bit-identical on one runner. The
+# recording uses the first. The binary is static (CGO_ENABLED=0), so it needs no
+# runtime libraries.
 
 name: R0 reach record (temporary)
 
@@ -26,7 +34,7 @@ permissions:
 jobs:
   record:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -34,12 +42,25 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - name: Runtime libraries for the R0 binary
-        run: sudo apt-get update -q && sudo apt-get install -y -q libtag1v5 || sudo apt-get install -y -q libtag2
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Build R0 from the pinned commit, twice
+        run: |
+          python3 scripts/r2corpus/build_r0_reach.py --out "${RUNNER_TEMP}/r0-a"
+          python3 scripts/r2corpus/build_r0_reach.py --out "${RUNNER_TEMP}/r0-b"
+          sha256sum "${RUNNER_TEMP}/r0-a/audiobook-organizer_Linux_x86_64" "${RUNNER_TEMP}/r0-b/audiobook-organizer_Linux_x86_64"
+          go version -m "${RUNNER_TEMP}/r0-a/audiobook-organizer_Linux_x86_64" | grep -v '^\s*dep'
+      - name: Dump the pinned commit's routes
+        run: python3 scripts/r2corpus/dump_r0_routes.py
       - name: Record R0's reach
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/r2corpus/record_r0_reach.py --regenerate
+        run: >-
+          python3 scripts/r2corpus/record_r0_reach.py --regenerate
+          --binary "${RUNNER_TEMP}/r0-a/audiobook-organizer_Linux_x86_64"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
