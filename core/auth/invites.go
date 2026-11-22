@@ -229,7 +229,9 @@ func (s *Service) Invites(ctx context.Context) iter.Seq2[InviteView, error] {
 // DeleteInvite deletes the invite with public ID id (§4.13): core:users.manage
 // through an interactive method; ErrNotFound when there is none. CoreActions
 // names no invite deletion, so it is not audited (seams.d/F4-02.md). actor is
-// held to the same rule as CreateInvite's (ctxActor).
+// held to the same rule as CreateInvite's (ctxActor). It is core's native
+// DELETE route's; a module deletes through Admin.AdminDeleteInvite, whose rule
+// is the legacy surface's (mayAdministerInvites).
 func (s *Service) DeleteInvite(ctx context.Context, actor *Principal, id string) error {
 	actor, err := s.ctxActor(ctx, actor)
 	if err != nil {

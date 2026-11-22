@@ -173,7 +173,7 @@ func (h *UserHandler) dropMailRecord(id string) {
 // makes no call to core. warnUnbound makes a sender who cannot flag an invite
 // that WAS flagged hear it (a resend); a create by such a sender is silent, as
 // HEAD's creator_not_admin invite was.
-func (h *UserHandler) deliverIdentityInvite(ctx context.Context, acc coreauth.Admin, rec coreauth.InviteView, absLink string, mark, warnUnbound bool) (sentAt *time.Time, errMsg, markErr string) {
+func (h *UserHandler) deliverIdentityInvite(ctx context.Context, acc coreauth.InviteAdmin, rec coreauth.InviteView, absLink string, mark, warnUnbound bool) (sentAt *time.Time, errMsg, markErr string) {
 	bind := willBind(ctx, mark)
 	to, errMsg := h.mailInvite(ctx, inviteForEmail(rec), func() (string, bool, bool) {
 		return absLink,
@@ -362,7 +362,8 @@ func (h *UserHandler) resendInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 }
 
 // listInvitesUnderIdentity is ListInvites under core identity: core's open
-// invites through the actor-checked read, each with the delivery record's
+// invites through the actor-checked read (InviteAdmin.AdminInvites, HEAD's
+// reach for this route: users.manage through any method, or auth off), each with the delivery record's
 // sent-at and recipient and never a token (core keeps none). Accepted invites
 // are not listed: the accept is core's and its outcome is the account itself.
 func (h *UserHandler) listInvitesUnderIdentity(c *gin.Context, id *legacyauth.Identity) {
@@ -415,18 +416,17 @@ func (h *UserHandler) pruneMailRecords() {
 }
 
 // deleteInviteUnderIdentity is DeleteInvite under core identity: core deletes
-// the invite with the request's principal, and the delivery record goes with it.
+// the invite for the request's principal under HEAD's reach for this route
+// (InviteAdmin.AdminDeleteInvite: users.manage through any method, or auth
+// off), and the delivery record goes with it. It asks for no user: HEAD's
+// route needed none, and a 401 here would end the SPA's session (F4-08 B10y).
 func (h *UserHandler) deleteInviteUnderIdentity(c *gin.Context, id *legacyauth.Identity) {
 	acc, ok := identityAccounts(c, id)
 	if !ok {
 		return
 	}
-	actor, ok := requestPrincipal(c)
-	if !ok {
-		return
-	}
 	inviteID := c.Param("id")
-	if err := acc.DeleteInvite(c.Request.Context(), actor, inviteID); err != nil {
+	if err := acc.AdminDeleteInvite(c.Request.Context(), inviteID); err != nil {
 		respondAccountError(c, "invite", err)
 		return
 	}

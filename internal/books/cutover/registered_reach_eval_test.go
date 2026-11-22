@@ -691,8 +691,8 @@ func (h *Registered) checkR2OnlyLetters(t *testing.T, r0 r0Recording, authOff bo
 // checkDiffs holds every differing cell to the tables: a cell no table lists is an
 // unlisted narrowing (or a WIDENING when R0 refused it), a listed cell that no
 // longer differs fails, and so does a table whose expansion is not the count it
-// claims. Cells in heldRed are skipped (the held-red commit holds them to HEAD).
-func (h *Registered) checkDiffs(t *testing.T, diffs []oracleDiff, tables []diffTable, heldRed map[string]diffRow) {
+// claims.
+func (h *Registered) checkDiffs(t *testing.T, diffs []oracleDiff, tables []diffTable) {
 	t.Helper()
 	expect := map[string]diffRow{}
 	for _, tb := range tables {
@@ -712,9 +712,6 @@ func (h *Registered) checkDiffs(t *testing.T, diffs []oracleDiff, tables []diffT
 	}
 	seen := map[string]bool{}
 	for _, d := range diffs {
-		if _, held := heldRed[d.cell()]; held {
-			continue
-		}
 		row, ok := expect[d.cell()]
 		switch {
 		case !ok && d.r0 == 'D':
@@ -905,45 +902,6 @@ var registeredAuthOffTightening = diffTable{
 	},
 }
 
-// registeredAuthOffNeedsUser: the invite list and removal answer the auth-disabled
-// principal as a user-less caller, where HEAD admitted it. NOT ruled: the coordinator
-// has these as a fix by B10y (the SPA's UsersPage calls both under auth-off, and a
-// 401 there ends the shell's session), so they are pinned here and held red with the
-// B10y family in the last commit.
-var registeredAuthOffNeedsUser = diffTable{
-	name: "auth-off: the invite routes need a user the auth-disabled principal has not got (B10y)",
-	want: 2,
-	rows: []diffRow{
-		{
-			routes: []string{"GET /api/v1/users/invites"},
-			who:    []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "FORBIDDEN", handler: true,
-			why: "403 FORBIDDEN \"you may not do that\" from the handler",
-		},
-		{
-			routes: []string{"DELETE /api/v1/users/invites/:id"},
-			who:    []string{Authoff}, r0: 'A', flip: 'D', status: 401, code: "UNAUTHORIZED", handler: true,
-			why: "401 UNAUTHORIZED \"authentication required\" from the handler: a session-ending shape for the SPA",
-		},
-	},
-}
-
-// registeredB10yFamily: the invite narrowings found by the registered-path sweep
-// (B10d-h2). Not ruled; B10y owns them. The main oracle leaves them out of its exact
-// diff and holds each to still differ, so the fix that makes one answer R0's letter
-// must delete it here.
-var registeredB10yFamily = diffTable{
-	name:     "B10y family: keys on the invite routes",
-	want:     10,
-	wantTwin: 10,
-	rows: []diffRow{
-		{
-			routes: []string{"GET /api/v1/users/invites", "DELETE /api/v1/users/invites/:id"},
-			who:    []string{"key:admin:users", "key:admin:every", "key:admin:empty", "key:custom-all:every", "key:custom-all:empty"}, r0: 'A', flip: 'D', status: 403,
-			why: "invites: HEAD let a key act on them; the flip's credential guard refuses every key",
-		},
-	},
-}
-
 // registeredUnregistered are R0 routes no registered pattern matches, with what
 // the flip answers every principal. Pinned so a change either way shows.
 var registeredUnregistered = []struct {
@@ -1106,31 +1064,12 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 		}
 		t.Logf("compared %d cells (%d route cells pinned)", compared, registeredAuthOnCells)
 		tables := []diffTable{registeredFPWorkerNarrowing, registeredHeadDrift, registeredRuledNarrowings, registeredBootstrapRefused}
-		heldRed := map[string]diffRow{}
-		for _, tb := range []diffTable{registeredB10yFamily} {
-			cells := tb.expand()
-			twin := h.twins(cells)
-			if len(cells) != tb.want || len(twin) != tb.wantTwin {
-				t.Errorf("table %q expands to %d cells and %d core-key twin cells, claims %d and %d", tb.name, len(cells), len(twin), tb.want, tb.wantTwin)
-			}
-			maps.Copy(heldRed, cells)
-			maps.Copy(heldRed, twin)
-		}
-		h.checkDiffs(t, diffs, tables, heldRed)
-		differing := map[string]bool{}
-		for _, d := range diffs {
-			differing[d.cell()] = true
-		}
-		for k := range heldRed {
-			if !differing[k] {
-				t.Errorf("held-red cell no longer differs (remove it from its table): %s", k)
-			}
-		}
+		h.checkDiffs(t, diffs, tables)
 		h.checkR2OnlyLetters(t, r0, false)
 		hc, hcStage13 := h.checkHandlerCells(t, pass, false)
 		t.Logf("handler cells (auth-on, core-key twins in): %d, of which stage 13 refuses %d", hc, hcStage13)
-		t.Logf("auth-on: %d routes probed, %d delegated, %d unregistered, %d cells compared, %d differing, %d held for B10y",
-			len(pass.probed), len(pass.delegated), len(pass.unregistered), compared, len(diffs), len(heldRed))
+		t.Logf("auth-on: %d routes probed, %d delegated, %d unregistered, %d cells compared, %d differing",
+			len(pass.probed), len(pass.delegated), len(pass.unregistered), compared, len(diffs))
 		var five []string
 		for k, n := range pass.serverErrors {
 			five = append(five, fmt.Sprintf("%s x%d", k, n))
@@ -1146,7 +1085,7 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 			t.Fatalf("no verdict: %v; canary drift: %v", pass.noVerdict, pass.canaryDrift)
 		}
 		diffs, compared := compareToR0(r0, pass)
-		h.checkDiffs(t, diffs, []diffTable{registeredAuthOffTightening, registeredAuthOffNeedsUser, registeredBootstrapRefusedAuthOff}, nil)
+		h.checkDiffs(t, diffs, []diffTable{registeredAuthOffTightening, registeredBootstrapRefusedAuthOff})
 		if compared != registeredAuthOffCells {
 			t.Errorf("auth-off compared %d cells, pinned %d", compared, registeredAuthOffCells)
 		}
