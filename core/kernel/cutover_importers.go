@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -235,7 +236,49 @@ func (a lateAuth) ImportInviteAllow(b *storage.Batch, email string) error {
 	return imp.ImportInviteAllow(b, email)
 }
 
+// GetUser reads a user the identity store holds, committed by an earlier chunk
+// of the identity step (books' M3 reads a key's owner back through it:
+// m3.NativeReader). It is the one read on Importers.Auth: the bound store is
+// the auth service's own *authstore.Store, which has it, and the importer
+// interface does not, so a caller asks for it with a type assertion on
+// Importers.Auth. It refuses with module.ErrImporterNotBound until
+// bindIdentity ran, and with errNoNativeRead when the bound importer cannot read.
+func (a lateAuth) GetUser(ctx context.Context, id auth.UserID) (*auth.User, error) {
+	imp, err := a.get()
+	if err != nil {
+		return nil, err
+	}
+	r, ok := imp.(interface {
+		GetUser(context.Context, auth.UserID) (*auth.User, error)
+	})
+	if !ok {
+		return nil, errNoNativeRead
+	}
+	return r.GetUser(ctx, id)
+}
+
+// errNoNativeRead is the answer of GetUser and GetRole when the importer bound
+// to them cannot read back: no caller could tell an absent record from a store
+// that cannot be asked, so it is its own error and never auth.ErrNotFound.
+var errNoNativeRead = errors.New("kernel: the identity importer bound at this boot cannot read back what it stored")
+
 type lateRoles struct{ l *lateImporters }
+
+// GetRole reads a role the role store holds, committed by an earlier chunk
+// (m3.NativeReader, as lateAuth.GetUser). It refuses like GetUser.
+func (r lateRoles) GetRole(ctx context.Context, name rbac.RoleName) (*rbac.Role, error) {
+	_, imp, _ := r.l.identity()
+	if imp == nil {
+		return nil, module.ErrImporterNotBound
+	}
+	rd, ok := imp.(interface {
+		GetRole(context.Context, rbac.RoleName) (*rbac.Role, error)
+	})
+	if !ok {
+		return nil, errNoNativeRead
+	}
+	return rd.GetRole(ctx, name)
+}
 
 func (r lateRoles) ImportRole(b *storage.Batch, role *rbac.Role) error {
 	_, imp, _ := r.l.identity()
