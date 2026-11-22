@@ -40,8 +40,9 @@ func importableStatus(st UserStatus) bool {
 }
 
 // CheckImportUser is Importer.ImportUser's rule for u and its stored hash: an
-// ID and a username, a known status, and a hash that is argon2id or bcrypt
-// (or empty: an account without a password).
+// ID and a username, a known status, a hash that is argon2id or bcrypt (or
+// empty: an account without a password), and, for an account marked merged into
+// another (User.MergedInto), status disabled and a target that is not itself.
 func CheckImportUser(u *User, passwordHash string) error {
 	if u == nil || u.ID == "" || strings.TrimSpace(u.Username) == "" {
 		return importReject("a user needs an ID and a username")
@@ -52,6 +53,17 @@ func CheckImportUser(u *User, passwordHash string) error {
 	if passwordHash != "" {
 		if a := password.AlgoOf(passwordHash); a != password.AlgoArgon2id && a != password.AlgoBcrypt {
 			return importReject("user %s: password hash is not argon2id or bcrypt", u.ID)
+		}
+	}
+	if u.MergedInto != "" {
+		// A merged-away account stays disabled for good (SetStatus refuses to
+		// enable it): an import that holds one active, or merged into itself,
+		// would hand the store a state no merge writes.
+		if u.MergedInto == u.ID {
+			return importReject("user %s is marked merged into itself", u.ID)
+		}
+		if u.Status != StatusDisabled {
+			return importReject("user %s is marked merged into %s but has status %q, not disabled", u.ID, u.MergedInto, u.Status)
 		}
 	}
 	return nil
