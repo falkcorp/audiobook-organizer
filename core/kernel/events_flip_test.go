@@ -363,3 +363,39 @@ func TestEventsFlip_ExecutorPublishesTaskTopics(t *testing.T) {
 		t.Fatal("no core.task.run-changed.v1 reached a subscriber: the executor has no bus")
 	}
 }
+
+// depsScopingEvents is TestDepsScoping's F6 cell (06 §6.4.4): on the identity
+// boot every module's Deps.Outbox and Deps.Events are bound to that module. A
+// second module "bane" stages and publishes through its own handles: the topic
+// alfred declared is refused to it with ErrNotOwner (outbox) and never reaches
+// the bus (events), while alfred's own staging into the same topic works.
+func depsScopingEvents(t *testing.T) {
+	var bane module.Deps
+	k, alfred := flipBoot(t, func(c *Config) {
+		c.Modules = append(c.Modules, storageMod("bane", func(r *module.Registrar) error {
+			bane = r.Deps()
+			return r.Err()
+		}))
+	})
+	if bane.Outbox == (outbox.Writer{}) {
+		t.Fatal("bane got the zero Deps.Outbox on an identity boot")
+	}
+	if alfred.deps.Outbox == bane.Outbox {
+		t.Fatal("two modules share one Deps.Outbox writer: it is not module-scoped")
+	}
+	ks, _ := k.store.db.Keyspace("alfred")
+	stage := func(w outbox.Writer) error {
+		b := ks.NewBatch()
+		defer func() { _ = b.Close() }()
+		return outbox.Stage(w, b, alertTopic(), "gotham", alertRaised{Block: "Crime Alley"})
+	}
+	if err := stage(bane.Outbox); !errors.Is(err, outbox.ErrNotOwner) {
+		t.Fatalf("bane staging into alfred's topic = %v, want ErrNotOwner", err)
+	}
+	if err := stage(alfred.deps.Outbox); err != nil {
+		t.Fatalf("alfred staging into its own topic: %v", err)
+	}
+	if alfred.deps.Events == bane.Events {
+		t.Fatal("two modules share one Deps.Events scope")
+	}
+}
