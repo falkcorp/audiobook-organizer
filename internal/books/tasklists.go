@@ -10,7 +10,11 @@ import (
 
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
 )
 
 // taskListInputs is everything bookTaskLists builds the module's task lists
@@ -20,6 +24,10 @@ import (
 type taskListInputs struct {
 	Schedules   func(tasks.Kind) *tasks.Schedule
 	Maintenance maintenance.BooksTaskInputs
+	Metafetch   metafetch.BooksTaskInputs
+	Deluge      deluge.BooksTaskInputs
+	ITunes      itunes.BooksTaskInputs
+	Acoustid    acoustid.BooksTaskInputs
 }
 
 // bookTaskLists is every task definition the books module registers through
@@ -42,6 +50,38 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 		return nil, fmt.Errorf("books task lists: %w", err)
 	}
 	out = append(out, m...)
+
+	mf := in.Metafetch
+	mf.Schedules = in.Schedules
+	l, err := metafetch.BooksTaskLists(mf)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
+
+	dl := in.Deluge
+	dl.Schedules = in.Schedules
+	l, err = deluge.BooksTaskLists(dl)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
+
+	it := in.ITunes
+	it.Schedules = in.Schedules
+	l, err = itunes.BooksTaskLists(it)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
+
+	ac := in.Acoustid
+	ac.Schedules = in.Schedules
+	l, err = acoustid.BooksTaskLists(ac)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
 
 	return out, nil
 }
