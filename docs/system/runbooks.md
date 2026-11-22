@@ -25,6 +25,8 @@ flowchart TD
     FixBuild --> Build
 ```
 
+For the R2 cutover (the one-way move to the core platform), follow [r2-cutover-runbook.md](r2-cutover-runbook.md) instead of the steps below.
+
 ### Step-by-step
 
 1. Ensure you are on `main` with a clean working tree: `git status`
