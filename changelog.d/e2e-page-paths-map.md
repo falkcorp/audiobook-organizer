@@ -1,0 +1,1 @@
+The e2e specs now take every SPA page path from `web/tests/e2e/utils/paths.ts` instead of spelling it in `goto`, `toHaveURL` and `waitForURL`, and `paths.spec.ts` fails when a spec spells one out again. Behaviour-neutral: the values are unchanged. F9-03's move of the audiobook pages under `/books/` becomes a one-file change.
