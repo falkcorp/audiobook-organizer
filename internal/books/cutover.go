@@ -53,7 +53,7 @@ func StandaloneSpec(base storage.Spec) storage.Spec {
 	// else): the data steps need M2's inputs, which a standalone open has none
 	// of and never runs.
 	level := cutover.BooksLevelStep(booksLevelStepVersion, cutover.BooksCutoverLevel)
-	return cutover.Flip{Level: level}.Spec(base)
+	return withUpgradeFloor(cutover.Flip{Level: level}.Spec(base))
 }
 
 // StandaloneOptions is o with the flip's storage declarations added for an open
