@@ -109,6 +109,13 @@ type Service struct {
 	merger database.UserMerger
 	creds  database.UserCredentialWriter
 	abs    ABSSessionRevoker // optional
+	// core and idMerger are the identity-era wiring (identity.go): core's
+	// handles for the account half, and the store's one-batch commit. Both are
+	// optional; the merge fails closed under identity without them.
+	core     *CoreIdentity
+	idMerger database.IdentityUserMerger
+	// batchCap overrides MergeBatchCap (tests only; zero is the constant).
+	batchCap int64
 
 	// ownerEmail and backfillUserID read config at call time (package tests
 	// replace the fields; other packages set the config).
@@ -161,6 +168,9 @@ func New(store Store, opts ...Option) (*Service, error) {
 	}
 	if r, ok := database.AsCapability[ABSSessionRevoker](store); ok {
 		s.abs = r
+	}
+	if m, ok := database.AsCapability[database.IdentityUserMerger](store); ok {
+		s.idMerger = m
 	}
 	for _, o := range opts {
 		o(s)

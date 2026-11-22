@@ -56,6 +56,13 @@ type Identity struct {
 	// the account record is core's: resolving a person through books' store
 	// would create, link or mark rows core no longer owns.
 	Access AccessResolver
+	// Admin and Users are core's actor-checked merge handle (module.Deps.
+	// AuthAdmin) and read-only identity view (module.Deps.Auth), which the
+	// admin user merge runs on. Optional: Validate does not require them, and
+	// a server that left either nil refuses the merge instead of running it
+	// (usermerge.ErrUnavailableUnderIdentity).
+	Admin coreauth.Admin
+	Users coreauth.Identities
 }
 
 // Validate reports a missing member. A server built over a partial Identity

@@ -14,12 +14,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )
 
-// F4-08 B10l guard: once core identity is wired the merge plans and writes
-// against rows books no longer holds, so preview and apply answer 409
-// merge_unavailable_under_identity before any account is resolved, any body is
-// read, any plan is built or any grant is minted. So does resume, before any
-// journal is read, as does the footprint; an undo stays B10b2's merge_permanent
-// and the merge listing stays readable.
+// A server wired for core identity WITHOUT the core handles the merge runs on
+// fails closed: preview and apply answer 409 merge_unavailable_under_identity
+// before any account is resolved, any body is read, any plan is built or any
+// grant is minted, and so does the footprint (which has no core read at all).
+// Resume and undo are B10b2's merge_permanent, and the merge listing stays
+// readable. With the handles wired, the merge runs (identity_merge_test.go).
 
 func problemCode(t *testing.T, body []byte) string {
 	t.Helper()
@@ -87,23 +87,28 @@ func TestUserMergeRoutes_ApplyIsUnavailableUnderIdentity(t *testing.T) {
 	}
 }
 
-func TestUserMergeRoutes_ResumeIsUnavailableUnderIdentity(t *testing.T) {
+func TestUserMergeRoutes_ResumeIsPermanentUnderIdentity(t *testing.T) {
 	r := newMergeRig(t)
 	r.flipped(t, true)
 	r.journal(t, "j-applying", journalJSON("j-applying", usermerge.StatusApplying))
 	// A journal that exists, one that does not and one that cannot be decoded:
-	// the guard answers before any journal is read, so all three are the same 409.
+	// an identity-era merge is one batch, so there is nothing to resume, and a
+	// pre-flip journal's remaining ops write keys the cutover retired. Resume is
+	// the permanence refusal for a journal that is there (decodable or not); a
+	// journal that is not there stays a 404.
 	r.journal(t, "j-garbled", `{not json`)
-	for _, jid := range []string{"j-applying", "j-nope", "j-garbled"} {
+	for jid, want := range map[string]int{"j-applying": http.StatusConflict, "j-garbled": http.StatusConflict, "j-nope": http.StatusNotFound} {
 		w, _ := r.do(t, http.MethodPost, "/users/merges/"+jid+"/resume", nil)
-		if w.Code != http.StatusConflict || problemCode(t, w.Body.Bytes()) != usermerge.ProblemUnavailableUnderIdentity {
-			t.Errorf("resume %s under identity: %d %s, want 409 %s", jid, w.Code, w.Body.String(), usermerge.ProblemUnavailableUnderIdentity)
+		if w.Code != want {
+			t.Errorf("resume %s under identity: %d %s, want %d", jid, w.Code, w.Body.String(), want)
+		}
+		if want == http.StatusConflict && problemCode(t, w.Body.Bytes()) != usermerge.ProblemMergePermanent {
+			t.Errorf("resume %s under identity: %s, want code %s", jid, w.Body.String(), usermerge.ProblemMergePermanent)
 		}
 	}
 	if len(r.enq.calls) != 0 {
 		t.Fatalf("a refused resume enqueued %d operation(s)", len(r.enq.calls))
 	}
-	// An undo has no such guard: it stays the permanence refusal (B10b2).
 	w, _ := r.do(t, http.MethodPost, "/users/merges/j-applying/undo", nil)
 	if w.Code != http.StatusConflict || problemCode(t, w.Body.Bytes()) != usermerge.ProblemMergePermanent {
 		t.Errorf("undo under identity: %d %s, want 409 %s", w.Code, w.Body.String(), usermerge.ProblemMergePermanent)
