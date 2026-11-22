@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
@@ -139,6 +140,9 @@ func scanRows(ctx context.Context, r storage.Reader, prefix string) ([]storage.K
 	for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: []byte(prefix), End: prefixEnd(prefix)}) {
 		if err != nil {
 			return nil, err
+		}
+		if len(out)%progressEvery == progressEvery-1 {
+			startprogress.Report(ctx) // a no-op outside the runner's Verify
 		}
 		out = append(out, kv.Clone())
 	}

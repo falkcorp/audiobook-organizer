@@ -13,10 +13,12 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -194,5 +196,33 @@ func TestRefFamilyPrefixes(t *testing.T) {
 			t.Errorf("prefix %q repeated or not family-shaped", p)
 		}
 		seen[p] = true
+	}
+}
+
+// TestVerify_RaisesProgressUnitsThatScaleWithTheRows: Verify raises a progress
+// unit (startprogress.Report, which the runner turns into a request for start
+// time) before each probe and each per-family scan, one per progressEvery rows
+// of a scan, and from the referential workers as well as the caller. A store
+// of key-owner rows that is three scan units longer raises exactly three more.
+func TestVerify_RaisesProgressUnitsThatScaleWithTheRows(t *testing.T) {
+	units := func(rows int) int64 {
+		m := memReader{}
+		for i := range rows {
+			m[fmt.Sprintf("upl:p%06d", i)] = `{"created_by_user_id":"` + vKnown + `"}`
+		}
+		var n atomic.Int64
+		ctx := startprogress.With(context.Background(), func() { n.Add(1) })
+		mig := testMigrationOver(t, nativeUsers{vKnown: true}, func() storage.Reader { return m })
+		if _, err := mig.Verify(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		return n.Load()
+	}
+	base := units(0)
+	if base < 3 {
+		t.Fatalf("an empty store raised %d units, want a unit per probe and per family scan", base)
+	}
+	if got, want := units(3*progressEvery+7), base+3; got != want {
+		t.Fatalf("%d rows raised %d units, want %d (the empty store's %d plus one per %d rows)", 3*progressEvery+7, got, want, base, progressEvery)
 	}
 }

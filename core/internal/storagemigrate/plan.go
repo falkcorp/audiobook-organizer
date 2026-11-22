@@ -26,6 +26,11 @@ const samplesPerShard = 64
 // n-quantiles. The pass is deterministic, so two plans of one store agree;
 // but only the first is ever used, because it is persisted before any shard
 // runs and every resume reads it back.
+//
+// The pass reads every key of the source once, so it is a step that scales
+// with the library (a million-row op history, the system log): it asks for
+// start time every PlanExtendKeys keys it reads, on this goroutine, never from
+// a timer, so a scan that stops reading stops extending.
 func (r *Runner) newPlan(ctx context.Context, src storage.Reader, mg *migration) (planRecord, error) {
 	n := max(r.opts.PlanShards(mg.m.Parallelism), 1)
 	limit := samplesPerShard * n
@@ -49,6 +54,9 @@ func (r *Runner) newPlan(ctx context.Context, src storage.Reader, mg *migration)
 				}
 			}
 			seen++
+			if seen%r.opts.PlanExtendKeys == 0 {
+				r.extend("storage.data_migration " + mg.m.ID + " plan")
+			}
 		}
 	}
 	var bounds [][]byte

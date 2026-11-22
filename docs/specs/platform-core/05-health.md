@@ -375,7 +375,8 @@ and launchd have no equivalent):
    | Run: mark checkpoint served, start core services, open listener | `core/kernel/supervisor.go` Run | each step |
    | Hook `Start` (each module's start hooks) | `core/kernel/supervisor.go` hook loop | each hook, on the hook's own window |
    | Core storage open, checkpoint, migrations, M8 rewrite | `core/storage/boot.go`, `core/storage/rewrite.go` | each step, copy table or 16 MiB, and each compaction chunk |
-   | Rows of `startup.Table` | `internal/startup/steps.go` `Steps.Run` | each row, Fatal and Degraded alike |
+   | Data migrations (cutover M3-M6) | `core/internal/storagemigrate/run.go` (start, chunk loop, `verify`), `plan.go` (sampling scan), `internal/books/cutover/m3..m6` `Verify` through `startprogress.Report` | start, each committed chunk, every 100,000 keys of the plan scan, before `Verify` and each unit it raises (05-storage §5S.3.13 "Systemd") |
+| Rows of `startup.Table` | `internal/startup/steps.go` `Steps.Run` | each row, Fatal and Degraded alike |
    | Service container Build, PostInit, Start | `internal/serviceregistry/container.go` `extendFor` | each service for each of the three |
    | HNSW snapshot import | `internal/server/server.go` `NewServer` | once before the import |
    | Journal clock scan at store open | `internal/books/store/pebble_store_journal_clock.go` | every 50,000 journal rows |

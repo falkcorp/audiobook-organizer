@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -272,7 +273,15 @@ func (r *Runner) verify(ctx context.Context, sks storage.Keyspace, src source, m
 	var rep datamigrate.VerifyReport
 	var verr error
 	if mg.m.Verify != nil {
-		rep, verr = mg.m.Verify(ctx, src)
+		// Verify reads the migrated families back, which scales with the
+		// library: it asks for start time before it runs and at every
+		// progress unit it raises (startprogress.Report on this ctx). The
+		// hook goes through r.extend, which serialises, so a Verify that
+		// reads on several workers may raise its units from any of them.
+		step := "storage.data_migration " + id + " verify"
+		r.extend(step)
+		vctx := startprogress.With(ctx, func() { r.extend(step) })
+		rep, verr = mg.m.Verify(vctx, src)
 		if verr != nil && ctx.Err() != nil {
 			return context.Cause(ctx) // a stopping boot failed nothing
 		}
