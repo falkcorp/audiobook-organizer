@@ -6,7 +6,7 @@
 import { useNavigate } from 'react-router';
 import { IconButton, Tooltip } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
-import { eventSourceConnection } from '../../modules/books/layout/connection';
+import { coreEventsConnection } from '../../modules/books/layout/connection';
 import { LibrarySearch } from '../../modules/books/layout/LibrarySearch';
 import { OperationsIndicator } from './OperationsIndicator';
 import { TopBarFrame } from './TopBarFrame';
@@ -26,7 +26,7 @@ export function TopBar({ onMenuClick, drawerWidth }: TopBarProps) {
       drawerWidth={drawerWidth}
       title="Audiobook Organizer"
       onTitleClick={() => navigate('/dashboard')}
-      connection={eventSourceConnection}
+      connection={coreEventsConnection}
       center={<LibrarySearch />}
       actions={
         <>

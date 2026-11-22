@@ -14,7 +14,7 @@
 //    gets its own closed frame, and re-arms when the shared stream opens again;
 //  - the detach removes every listener it added and releases the stream.
 //
-// UNWIRED: nothing in the running app imports this until the F6 flip.
+// Wired by the F6-03 flip: App.tsx, TopBar and the Library use it.
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
 

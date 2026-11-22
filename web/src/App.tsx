@@ -18,7 +18,7 @@ import { AcceptInvite } from './pages/AcceptInvite';
 import { TempLogin } from './pages/TempLogin';
 import { NotFound } from './pages/NotFound';
 import { ABS_REDIRECTS } from './utils/absRedirects';
-import { eventSourceManager } from './services/eventSourceManager';
+import { useServerShutdown } from './services/coreEvents';
 import { useAuth } from './contexts/AuthContext';
 import { useOperationsStore } from './stores/useOperationsStore';
 import { useReviewStore } from './stores/useReviewStore';
@@ -68,6 +68,17 @@ const ReviewWorkspace = lazy(() =>
   import('./components/review/ReviewWorkspace').then((m) => ({ default: m.ReviewWorkspace }))
 );
 
+/**
+ * Tells App when the server announces it is going down (core.stream.closed.v1 with
+ * reason "shutdown"). It is a component, not a hook call in App, because it must mount
+ * only once a session exists: it holds the shared stream open, and the stream is
+ * authenticated, so on the login page it would be refused in a loop. It renders nothing.
+ */
+function ServerShutdownWatcher({ onShutdown }: { onShutdown: () => void }) {
+  useServerShutdown(onShutdown);
+  return null;
+}
+
 function App() {
   const auth = useAuth();
   const location = useLocation();
@@ -78,6 +89,7 @@ function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   const handleShowShortcuts = useCallback(() => setShortcutsOpen(true), []);
+  const handleServerShutdown = useCallback(() => setServerShutdown(true), []);
   useKeyboardShortcuts({ onShowHelp: handleShowShortcuts });
 
   useEffect(() => {
@@ -138,18 +150,6 @@ function App() {
     review.startPolling();
     return () => review.stopPolling();
   }, [auth.initialized, auth.isAuthenticated, auth.requiresAuth]);
-
-  // Listen for server shutdown events and handle reconnection
-  useEffect(() => {
-    const unsubscribe = eventSourceManager.subscribe((event) => {
-      if (event.type === 'system.shutdown') {
-        setServerShutdown(true);
-        eventSourceManager.close();
-      }
-    });
-
-    return () => unsubscribe();
-  }, []);
 
   // Reconnect attempts when server is down
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -228,6 +228,10 @@ function App() {
       {/* Offers a reload when apiFetch sees a response from a newer build. Fixed
           position, so it sits over the login page and the app alike. */}
       <StaleBuildBanner />
+
+      {/* The backdrop below waits for the server's shutdown frame. Once it has come the
+          watcher is unmounted, which lets go of the stream (the overlay's poll takes over). */}
+      {!requiresLogin && !serverShutdown && <ServerShutdownWatcher onShutdown={handleServerShutdown} />}
 
       {/* Shutdown/Restart Overlay */}
       <Backdrop
