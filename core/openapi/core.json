@@ -2619,6 +2619,9 @@
           },
           "imported": {
             "type": "boolean"
+          },
+          "description": {
+            "type": "string"
           }
         },
         "required": [
@@ -3047,6 +3050,9 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "description": {
+            "type": "string"
           }
         },
         "required": [
@@ -3121,6 +3127,9 @@
               },
               "imported": {
                 "type": "boolean"
+              },
+              "description": {
+                "type": "string"
               }
             },
             "required": [
@@ -3534,6 +3543,9 @@
                 },
                 "imported": {
                   "type": "boolean"
+                },
+                "description": {
+                  "type": "string"
                 }
               },
               "required": [
