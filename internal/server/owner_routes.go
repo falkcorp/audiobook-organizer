@@ -26,6 +26,9 @@ import (
 // skipped with local auth off. The permission leg is left to the route's own
 // s.perm / RequireAdmin.
 func (s *Server) ownerGateWhenOwnerSet() gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateOwner})
+	}
 	ownerEmail := func() string { return config.Snapshot().OwnerEmail }
 	ownerSet := func(*gin.Context) bool { return strings.TrimSpace(ownerEmail()) != "" }
 	// Under core identity (F4-08 B10b2) the same gate reads core's principal:
