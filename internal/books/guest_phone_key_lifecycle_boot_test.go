@@ -265,35 +265,19 @@ func TestIdentityBoot_DeletingTheGuestRevokesTheKey(t *testing.T) {
 	}
 }
 
-// The two things the SSO-granted cases need that production cannot supply yet.
-// They are variables, not constants, so each skip below is a runtime decision:
-// flipping one to true when its dependency lands runs the cases it gates.
-var (
-	// invitesCanBeMailed: books' invite mailer can flag an invite e-mailed
-	// (core's AccountAdmin.MarkInviteEmailDelivered). Its only writer is
-	// B10t-books' mailer, and core hands a module no AccountAdmin until it lands.
-	invitesCanBeMailed = false
-	// accountsReaderWired: legacyauth.Identity.Accounts (B10t-books) is supplied,
-	// so the admin reissue can read other accounts under core identity.
-	accountsReaderWired = false
-)
+// invitesCanBeMailed: books' invite mailer can flag an invite e-mailed (core's
+// AccountAdmin.MarkInviteEmailDelivered). Its only writer is B10t-books' mailer,
+// so no production code can mail an invite yet. It is a variable, not a
+// constant, so the skip is a runtime decision (a bare t.Skip trips staticcheck
+// SA4006 on the code after it): flipping it when the mailer lands runs the case.
+var invitesCanBeMailed = false
 
 func skipUntilInvitesCanBeMailed(t *testing.T) {
 	t.Helper()
 	if !invitesCanBeMailed {
-		t.Skip("B10t-books: nothing can flag an invite e-mailed (Admin.MarkInviteEmailDelivered has no caller) " +
-			"and Identity.Accounts (core's AdminUser/AdminUsers) is not supplied, so an SSO-granted accept and the " +
-			"guest's reissue eligibility cannot be driven end to end until B10t-books lands; B10r-p2 registers the " +
-			"books Lifecycle these tests then prove")
-	}
-}
-
-func skipUntilAccountsReaderWired(t *testing.T) {
-	t.Helper()
-	if !accountsReaderWired {
-		t.Skip("B10t-books: Identity.Accounts (core's AdminUser/AdminUsers) is not supplied, so every admin reissue is " +
-			"refused today and the refusal would pass without exercising the verified-holder rule; " +
-			"B10r-p2 registers the books Lifecycle that makes the unbound case meaningful")
+		t.Skip("B10t-books: nothing can flag an invite e-mailed (Admin.MarkInviteEmailDelivered has no books " +
+			"caller), so an SSO-granted accept and the guest's reissue eligibility cannot be driven end to end " +
+			"until B10t-books lands; B10r-p2 registers the books Lifecycle this test then proves")
 	}
 }
 
@@ -325,15 +309,17 @@ func TestIdentityBoot_SSOGrantedAcceptIsClaimableAndReissueEligible(t *testing.T
 }
 
 // TestIdentityBoot_UnboundAcceptRefusesReissue: the unbound accept's address is
-// unverified, so the admin reissue refuses; it reads other accounts through core's
-// AdminUser/AdminUsers (Identity.Accounts, B10t-books), which is absent today, so every reissue is
-// refused and the refusal proves nothing about the verified-holder rule.
+// unverified, so the admin reissue refuses. The admin reads the guest through core's
+// actor-checked AdminUser/AdminUsers (Identity.Admin) on its own request, so the
+// refusal is the verified-holder rule's, not a failed read.
 func TestIdentityBoot_UnboundAcceptRefusesReissue(t *testing.T) {
-	skipUntilAccountsReaderWired(t)
 	r, _, _ := bootLifecycleApp(t)
 	admin := bootstrapAdmin(t, r)
 	_, guestID, _ := inviteGuest(t, r, admin, "robin", "robin@wayne.example")
 	rec := doJSON(t, r.app.Handler(), http.MethodPost, "/api/v1/admin/guest-service-tokens/"+guestID+"/reissue", nil, admin)
 	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	assert.Contains(t, rec.Body.String(), "GUEST_TOKEN_REISSUE_BLOCKED")
+	// The reason is the verified-holder rule, not a read that failed ("could
+	// not be read" / "could not be checked").
+	assert.Contains(t, rec.Body.String(), "no trusted email address")
 }

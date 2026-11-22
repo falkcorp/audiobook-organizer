@@ -4,4 +4,4 @@
 
 ### Changed
 
-- The phone-app key code (the admin Reissue route, the Phone app keys panel and the mint's deactivation re-check) reads accounts through one seam: books' own store as before, and under core identity the caller's own record through its principal (`legacyauth.Bridge`) and every other account through core's actor-checked `AdminUser`/`AdminUsers` reader (nil until B10t-books supplies `legacyauth.Identity.Accounts`), which needs `core:users.manage`. A server without that reader refuses these routes rather than reading books' empty user store.
+- The phone-app key code (the admin Reissue route, the Phone app keys panel and the mint's deactivation re-check) reads accounts through one seam: books' own store as before, and under core identity the caller's own record through its principal (`legacyauth.Bridge`) and every other account through core's actor-checked `AdminUser`/`AdminUsers` reader (`legacyauth.Identity.Admin`), which needs `core:users.manage`. A server without that reader refuses these routes rather than reading books' empty user store.
