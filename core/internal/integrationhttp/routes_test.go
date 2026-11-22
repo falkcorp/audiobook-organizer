@@ -210,42 +210,187 @@ func TestRegister_BuildFailsOnlyForWantOfAuth(t *testing.T) {
 
 // ---- the permission and 401 tables (stage 13: F4-08) ----------------------
 
-// TestIntegrationHTTP_ReadNeedsIntegrationsRead: every read route refuses a
-// principal without core:integrations.read (403) and answers 401 with no
-// principal. Route permission (stage 13) arrives at F4-08, so each cell skips;
-// F7-09, which mounts the package, un-skips them.
+// s13Decode decodes a success answer's JSON body into T.
+func s13Decode[T any](t *testing.T, res s13Result) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(res.rec.Body.Bytes(), &v); err != nil {
+		t.Fatalf("body %q: %v", res.rec.Body.String(), err)
+	}
+	return v
+}
+
+// wantOK judges the part of a success every cell shares: the status, no deny
+// row, and the audit actions the request committed (05-rbac 7.1: none for a
+// read, a hold release or a refusal; create, update, delete and test for the
+// writes).
+func wantOK(t *testing.T, e *s13Env, res s13Result, status int, actions ...string) {
+	t.Helper()
+	if res.rec.Code != status {
+		t.Fatalf("status = %d (%s), want %d", res.rec.Code, res.rec.Body.String(), status)
+	}
+	if len(res.denials) != 0 {
+		t.Errorf("an admitted request emitted deny rows %+v", res.denials)
+	}
+	want := slices.Sorted(slices.Values(actions))
+	if got := e.added(t); !slices.Equal(got, want) {
+		t.Errorf("committed audit actions = %v, want %v", got, want)
+	}
+}
+
+// TestIntegrationHTTP_ReadNeedsIntegrationsRead: every read route answers 401
+// with no principal, 403 naming core:integrations.read to a caller without it,
+// and its answer to a holder of core:integrations.read or of
+// core:integrations.manage, which implies it (05-rbac). A read commits no audit
+// row, and the answer holds no secret value.
 func TestIntegrationHTTP_ReadNeedsIntegrationsRead(t *testing.T) {
-	for _, c := range []struct{ name, method, path string }{
-		{"adapters", http.MethodGet, "/integrations/adapters"},
-		{"list", http.MethodGet, "/integrations/notify/instances"},
-		{"get", http.MethodGet, "/integrations/notify/instances/gcpd-roof"},
-		{"health", http.MethodGet, "/integrations/notify/instances/gcpd-roof/health"},
+	holders := []s13Caller{readHolder, manageHolder}
+	for _, r := range []s13Route{
+		{name: "adapters", method: http.MethodGet, path: "/integrations/adapters", perm: permRead, holders: holders,
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK)
+				page := s13Decode[httpapi.Page[IntegrationAdapter]](t, res)
+				var ids []string
+				for _, a := range page.Items {
+					ids = append(ids, a.ID)
+					if len(a.SettingsSchema) == 0 {
+						t.Errorf("adapter %s answers no settings schema", a.ID)
+					}
+				}
+				if want := []string{string(batsignal), string(oracle)}; !slices.Equal(slices.Sorted(slices.Values(ids)), want) || page.Total != 2 {
+					t.Errorf("adapters = %v (total %d), want %v", ids, page.Total, want)
+				}
+			}},
+		{name: "list", method: http.MethodGet, path: "/integrations/notify/instances", perm: permRead, holders: holders,
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK)
+				page := s13Decode[httpapi.Page[IntegrationInstance]](t, res)
+				if len(page.Items) != 1 || page.Total != 1 || page.Items[0].ID != roofID || page.Items[0].Kind != kindNotify ||
+					!page.Items[0].SecretsSet["password"] {
+					t.Errorf("list = %+v, want gcpd-roof alone with its password marked set", page)
+				}
+				assertNoLeak(t, "the list", res.rec.Body.String(), "alfred-1")
+			}},
+		{name: "get", method: http.MethodGet, path: "/integrations/notify/instances/gcpd-roof", perm: permRead, holders: holders,
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK)
+				got := s13Decode[IntegrationInstance](t, res)
+				if got.ID != roofID || got.Kind != kindNotify || got.Adapter != string(batsignal) || got.Version != 1 || !got.Stored ||
+					!got.SecretsSet["password"] {
+					t.Errorf("instance = %+v, want stored gcpd-roof v1 with its password marked set", got)
+				}
+				assertNoLeak(t, "the instance", res.rec.Body.String(), "alfred-1")
+			}},
+		{name: "health", method: http.MethodGet, path: "/integrations/notify/instances/gcpd-roof/health", perm: permRead, holders: holders,
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK)
+				got := s13Decode[IntegrationHealth](t, res)
+				if got.Status != integrations.HealthOK.String() || got.Breaker == "" || got.CheckedAt.IsZero() {
+					t.Errorf("health = %+v, want an ok status, a breaker state and a check time", got)
+				}
+				if n := e.probes(); n != 1 {
+					t.Errorf("the health read probed %d times, want 1", n)
+				}
+				assertNoLeak(t, "the health", res.rec.Body.String(), "alfred-1")
+			}},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
-		})
+		t.Run(r.name, r.run)
 	}
 }
 
 // TestIntegrationHTTP_WritesNeedIntegrationsManage: every write route,
-// including the two test routes and the hold route, refuses a principal
-// without core:integrations.manage (403) and answers 401 with no principal; a
-// hold-route refusal calls no ReleaseHold. Skipped until stage 13 (F4-08).
+// including the two test routes and the hold route, answers 401 with no
+// principal and 403 naming core:integrations.manage to a caller without it,
+// including a holder of core:integrations.read alone; a holder of manage gets
+// the route's success and the audit rows 05-rbac 7.1 requires (create, update,
+// delete and test each one action; a hold release none). A refusal changes
+// nothing: no audit row, no outbound request, no stored change, and for the
+// hold route no ReleaseHold and no read of the hold.
 func TestIntegrationHTTP_WritesNeedIntegrationsManage(t *testing.T) {
-	for _, c := range []struct {
-		name, method, path string
-		holdUntouched      bool
-	}{
-		{"create", http.MethodPost, "/integrations/notify/instances", false},
-		{"update", http.MethodPut, "/integrations/notify/instances/gcpd-roof", false},
-		{"delete", http.MethodDelete, "/integrations/notify/instances/gcpd-roof", false},
-		{"test", http.MethodPost, "/integrations/notify/test", false},
-		{"instanceTest", http.MethodPost, "/integrations/notify/instances/gcpd-roof/test", false},
-		{"hold", http.MethodDelete, "/integrations/notify/instances/gcpd-roof/hold", true},
+	holders := []s13Caller{manageHolder}
+	const stored, moved = "http://192.0.2.20/", "http://192.0.2.78/"
+	for _, r := range []s13Route{
+		{name: "create", method: http.MethodPost, path: "/integrations/notify/instances", perm: integrations.ManagePerm, holders: holders,
+			body: func() any { return signalBody(annexID, "http://192.0.2.21/", "alfred-9") },
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusCreated, "core.integration.create", "core.integration.write_secret")
+				if loc, want := res.rec.Header().Get("Location"), "/api/core/v1/integrations/notify/instances/"+annexID; loc != want {
+					t.Errorf("Location = %q, want %q", loc, want)
+				}
+				if got := s13Decode[IntegrationInstance](t, res); got.ID != annexID || got.Version != 1 || !got.Stored || !got.SecretsSet["password"] {
+					t.Errorf("created = %+v, want stored gcpd-annex v1 with its password marked set", got)
+				}
+				assertNoLeak(t, "the created instance", res.rec.Body.String(), "alfred-9")
+				if got := e.secretValue(t, kindNotify, annexID, "password"); got != "alfred-9" {
+					t.Errorf("the stored secret = %q, want the one the body carried", got)
+				}
+			}},
+		{name: "update", method: http.MethodPut, path: "/integrations/notify/instances/gcpd-roof", perm: integrations.ManagePerm, holders: holders,
+			body: func() any {
+				b := signalBody("", stored, "")
+				b.Name, b.Version = "GCPD roof, night shift", 1
+				return replaceOf(b)
+			},
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK, "core.integration.update")
+				if got := s13Decode[IntegrationInstance](t, res); got.ID != roofID || got.Version != 2 || got.Name != "GCPD roof, night shift" {
+					t.Errorf("updated = %+v, want gcpd-roof v2 renamed", got)
+				}
+				if got := e.secretValue(t, kindNotify, roofID, "password"); got != "alfred-1" {
+					t.Errorf("an update that omitted the secret left %q, want the stored one", got)
+				}
+			}},
+		{name: "delete", method: http.MethodDelete, path: "/integrations/notify/instances/gcpd-roof", perm: integrations.ManagePerm, holders: holders,
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusNoContent, "core.integration.delete")
+				if res.rec.Body.Len() != 0 {
+					t.Errorf("a 204 carried a body %q", res.rec.Body.String())
+				}
+				if _, ok := e.reg.Config(e.ref); ok {
+					t.Error("the instance is still stored after its delete")
+				}
+				if got := e.secretValue(t, kindNotify, roofID, "password"); got != "" {
+					t.Errorf("the deleted instance's secret = %q, want none", got)
+				}
+			}},
+		{name: "test", method: http.MethodPost, path: "/integrations/notify/test", perm: integrations.ManagePerm, holders: holders,
+			body: func() any { return signalBody("", moved, "alfred-3") },
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK, "core.integration.test")
+				if got := s13Decode[IntegrationTestResult](t, res); !got.OK {
+					t.Errorf("test = %+v, want ok", got)
+				}
+				if got := e.credentialsSentTo(moved); !slices.Equal(got, []string{"alfred-3"}) {
+					t.Errorf("credentials sent = %v, want only the body's", got)
+				}
+				if e.get(t, adminCtx(), kindNotify, roofID).Version != 1 {
+					t.Error("an unscoped test changed the stored instance")
+				}
+			}},
+		{name: "instanceTest", method: http.MethodPost, path: "/integrations/notify/instances/gcpd-roof/test", perm: integrations.ManagePerm, holders: holders,
+			body: func() any { return signalBody("", stored, "") },
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusOK, "core.integration.test")
+				if got := s13Decode[IntegrationTestResult](t, res); !got.OK {
+					t.Errorf("test = %+v, want ok", got)
+				}
+				if got := e.credentialsSentTo(stored); !slices.Equal(got, []string{"alfred-1"}) {
+					t.Errorf("credentials sent to the stored origin = %v, want the stored secret", got)
+				}
+				if e.get(t, adminCtx(), kindNotify, roofID).Version != 1 {
+					t.Error("a scoped test changed the stored instance")
+				}
+			}},
+		{name: "hold", method: http.MethodDelete, path: "/integrations/notify/instances/gcpd-roof/hold", perm: integrations.ManagePerm, holders: holders,
+			setup: func(t *testing.T, e *s13Env) { e.holds.holdOn(e.ref, e.hold("gcpd-roof-quota", 0)) },
+			success: func(t *testing.T, e *s13Env, res s13Result) {
+				wantOK(t, e, res, http.StatusNoContent)
+				if got := e.holds.released(); !slices.Equal(got, []string{"gcpd-roof-quota"}) {
+					t.Errorf("released holds = %v, want the instance's one", got)
+				}
+			}},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
-		})
+		t.Run(r.name, r.run)
 	}
 }
 
