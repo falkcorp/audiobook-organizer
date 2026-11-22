@@ -573,8 +573,38 @@ func (s *Service) commitInvalidating(ctx context.Context, stage func(b *storage.
 	return s.commitInvalidatingN(ctx, conflictRetries, stage)
 }
 
-// commitInvalidatingN is commitInvalidating over attempts tries.
+// commitInvalidatingN is commitInvalidating over attempts tries. The
+// lifecycle callbacks the committed attempt queued (Lifecycle) run when it
+// returns, the batch closed and no lock of the caller's released yet: a
+// caller that holds a lock a callback may need uses commitQueueingN and
+// runs them itself after releasing it.
 func (s *Service) commitInvalidatingN(ctx context.Context, attempts int, stage func(b *storage.Batch, inv *invalidations) error) error {
+	post, err := s.commitQueueingN(ctx, attempts, stage)
+	post.run(ctx)
+	return err
+}
+
+// afterCommit is the lifecycle callbacks of the one attempt that committed.
+type afterCommit []func(ctx context.Context)
+
+// run calls every queued callback, in the order the write queued them. It is
+// a no-op on nil: a write that never committed queued nothing that stands.
+func (a afterCommit) run(ctx context.Context) {
+	for _, fn := range a {
+		fn(ctx)
+	}
+}
+
+// commitQueueingN is commitInvalidatingN that hands back the lifecycle
+// callbacks the committed attempt queued instead of running them, so the
+// caller runs them (afterCommit.run) once it holds no lock a callback might
+// take: UpdateProfile holds the account e-mail lock across its commit, and a
+// callback that reached LockEmails, CreateUser or another profile write would
+// wait on it forever. The slice is empty unless a commit succeeded: an
+// attempt that conflicted, was refused or failed queued nothing that stands,
+// and a retry starts from an empty list.
+func (s *Service) commitQueueingN(ctx context.Context, attempts int, stage func(b *storage.Batch, inv *invalidations) error) (afterCommit, error) {
+	var committed afterCommit
 	err := storage.RetryOnConflict(ctx, attempts, func(ctx context.Context) (err error) {
 		b := s.d.NewBatch()
 		defer func() {
@@ -591,12 +621,13 @@ func (s *Service) commitInvalidatingN(ctx context.Context, attempts int, stage f
 		}
 		// Published here, on the commit's own success: the deferred Close
 		// can still turn the attempt's result into an error, but the
-		// revocation is durable by now.
+		// revocation is durable by now, and so are the callbacks' facts.
 		s.publishInvalidations(ctx, inv)
+		committed = inv.post
 		return nil
 	})
 	if errors.Is(err, storage.ErrConflict) {
-		return fmt.Errorf("%w: %w", ErrContended, err)
+		return committed, fmt.Errorf("%w: %w", ErrContended, err)
 	}
-	return err
+	return committed, err
 }

@@ -536,3 +536,39 @@ func TestDisplaceUnverifiedHolders(t *testing.T) {
 		}
 	})
 }
+
+// UpdateProfile holds the account e-mail lock across its commit; the
+// callback runs after the lock is released, so one that takes it (as a
+// sign-up, an OIDC resolve or another profile write does) does not wait on
+// the call that is calling it.
+func TestLifecycle_EmailChangedRunsWithTheEmailLockReleased(t *testing.T) {
+	f := newFx(t)
+	selina := f.userWithEmail("selina-kyle", "selina.kyle@example.test", true, "gotham.detective")
+	took := make(chan struct{})
+	if err := f.svc.RegisterLifecycle(auth.Lifecycle{EmailChanged: func(context.Context, auth.EmailChanged) {
+		unlock := f.svc.LockEmails() // blocks forever while UpdateProfile still holds the lock
+		unlock()
+		close(took)
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	to := "irena.dubrovna@example.test"
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.svc.UpdateProfile(context.Background(), f.session(f.reload(selina.ID)), auth.ProfileUpdate{Email: &to})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("UpdateProfile never returned: the callback waited on the e-mail lock the call still held")
+	}
+	select {
+	case <-took:
+	default:
+		t.Fatal("the callback never took the e-mail lock")
+	}
+}

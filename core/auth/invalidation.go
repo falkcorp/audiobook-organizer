@@ -44,8 +44,8 @@ type invalidation struct {
 // invalidations collects one commit attempt's invalidations (commitInvalidating).
 type invalidations struct {
 	list []invalidation
-	// post are the lifecycle callbacks (Lifecycle) the attempt queued, run
-	// after the commit like the invalidations are.
+	// post are the lifecycle callbacks (Lifecycle) the attempt queued; they
+	// run after the commit, once the batch is closed (commitQueueingN).
 	post []func(ctx context.Context)
 }
 
@@ -86,15 +86,12 @@ func (s *Service) invalidateSessions(ctx context.Context, v *invalidations, u Us
 }
 
 // publishInvalidations hands every recorded invalidation to
-// Deps.OnInvalidated, in the order the write recorded them, then runs the
-// lifecycle callbacks the write queued (lifecycle.go).
+// Deps.OnInvalidated, in the order the write recorded them.
 func (s *Service) publishInvalidations(ctx context.Context, v *invalidations) {
-	if s.d.OnInvalidated != nil {
-		for _, inv := range v.list {
-			s.d.OnInvalidated(ctx, string(inv.User), inv.Credential, string(inv.Reason))
-		}
+	if s.d.OnInvalidated == nil {
+		return
 	}
-	for _, fn := range v.post {
-		fn(ctx)
+	for _, inv := range v.list {
+		s.d.OnInvalidated(ctx, string(inv.User), inv.Credential, string(inv.Reason))
 	}
 }

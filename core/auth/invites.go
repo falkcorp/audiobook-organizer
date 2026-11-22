@@ -13,6 +13,7 @@ import (
 	"iter"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -268,16 +269,19 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 	if err != nil {
 		return nil, nil, err
 	}
+	unlock := func() {} // releases the e-mail lock, once, before the callbacks run
 	if peek.Email != "" && inviteBindsEmail(peek) {
 		// Held across the displacement's reads and the commit, as every
 		// writer of an address does (UpdateProfile, CreateUser).
 		s.emailMu.Lock()
-		defer s.emailMu.Unlock()
+		var once sync.Once
+		unlock = func() { once.Do(s.emailMu.Unlock) }
+		defer unlock()
 	}
 	var user *User
 	var out *IssuedSession
 	var refusal error
-	err = s.commitInvalidatingN(ctx, claimRetries, func(b *storage.Batch, inv *invalidations) error {
+	post, err := s.commitQueueingN(ctx, claimRetries, func(b *storage.Batch, inv *invalidations) error {
 		refusal = nil
 		t, err := s.d.Store.TakeOneTime(b, OneTimeInvite, Token(in.Token)) // parsed by openInvite
 		if errors.Is(err, ErrNotFound) {
@@ -373,6 +377,10 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 		})
 		return nil
 	})
+	// The lifecycle callbacks run with the e-mail lock released (see
+	// UpdateProfile).
+	unlock()
+	post.run(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
