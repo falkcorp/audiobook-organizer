@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"time"
 )
 
 // Lifecycle is the account events a module may observe (F4-08 B10r). It is a
@@ -62,6 +63,13 @@ type InviteAccepted struct {
 	InviteID string
 	// UserID is the account the accept created.
 	UserID UserID
+	// Username is the name the account was created under: the invite's, as the
+	// accept batch wrote it to the account row.
+	Username string
+	// AcceptedAt is the accept's own clock reading: the one the account row's
+	// CreatedAt and the accept's audit and session carry. It is not the time a
+	// callback runs, so a delayed callback does not move it.
+	AcceptedAt time.Time
 	// CreatedBy is the invite's creator.
 	CreatedBy UserID
 	// Email is the address the creator named, normalised ("" when it named

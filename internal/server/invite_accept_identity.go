@@ -7,16 +7,11 @@ package server
 
 import (
 	"context"
-	"errors"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	coreauth "github.com/falkcorp/mediacore/auth"
 )
-
-// errNoAcceptedAccount is why an accept could not be recorded: core's identity
-// view did not hand back the account the accept created.
-var errNoAcceptedAccount = errors.New("core's identity view has no account for the accept")
 
 // recordInviteAccept writes books' own record of an accepted invite
 // (database.InviteAccept) from core's InviteAccepted event. It is the first
@@ -36,35 +31,29 @@ var errNoAcceptedAccount = errors.New("core's identity view has no account for t
 //     is "bound" and "granted". The event documents the last as exactly
 //     BindEmailOnAccept AND CreatorHeldAdmin.
 //   - the displaced accounts are the event's DisplacedUserIDs.
-//   - the username and the accept time are NOT on the event. Both are read from the
-//     account the accept created, through core's actor-free identity view:
-//     core builds that account in the accept's own batch with CreatedAt set to the
-//     accept's clock reading (the one it audits and issues the session with), and
-//     the username it was created under. Neither is the time books' callback
-//     happens to run, so a delayed sync, or a delayed callback, moves neither.
+//   - the username and the accept time are the event's own (Username, AcceptedAt):
+//     core stamps them in the accept's batch, the account row is written with the
+//     same two values, and the accept time is the one reading of core's clock the
+//     accept's audit record and session carry. Neither is the time books' callback
+//     happens to run, so a delayed sync, or a delayed callback, moves neither, and
+//     nothing is read back from core to get them, so no read can fail and cost the
+//     accept its row.
 //
-// When the account cannot be read (no view, a storage fault, or an account that was
-// deleted in the instants between core's commit and this call) there is no real
-// accept time to record, and none is made up: the accept is logged, with no value
-// in the line, and no row is written. The event is the gap: a core InviteAccepted
-// that carried the accept time and the username would remove this read.
+// A row is refused (never written with a made-up value) only if the store cannot
+// keep one or the event somehow carries no accept time; both are logged with no
+// value in the line.
 func (s *Server) recordInviteAccept(ctx context.Context, e coreauth.InviteAccepted) {
 	st, ok := database.AsCapability[database.InviteAcceptStore](s.storeForWiring())
 	if !ok {
 		inviteAccessLog.Warn("invite accept: the store cannot keep accepted-invite rows, so the Users page will not list this accept")
 		return
 	}
-	u, err := s.acceptedAccount(ctx, e.UserID)
-	if err != nil {
-		inviteAccessLog.Warn("invite accept: the accepted account could not be read, so the Users page will not list this accept: %v", err)
-		return
-	}
 	a := database.InviteAccept{
 		InviteID:   e.InviteID,
 		UserID:     string(e.UserID),
-		Username:   u.Username,
+		Username:   e.Username,
 		Email:      coreauth.NormalizeEmail(e.Email),
-		AcceptedAt: u.CreatedAt,
+		AcceptedAt: e.AcceptedAt,
 	}
 	a.EmailBinding, a.SSOGrant = inviteAcceptBinding(a.Email, e.BindEmailOnAccept, e.CreatorHeldAdmin)
 	for _, id := range e.DisplacedUserIDs {
@@ -73,21 +62,6 @@ func (s *Server) recordInviteAccept(ctx context.Context, e coreauth.InviteAccept
 	if err := st.RecordInviteAccept(a); err != nil {
 		inviteAccessLog.Warn("invite accept: recording the accepted-invite row for user %s failed: %v", logger.SanitizeLogValue(a.UserID), err)
 	}
-}
-
-// acceptedAccount reads the account an accept created from core's identity view.
-func (s *Server) acceptedAccount(ctx context.Context, id coreauth.UserID) (*coreauth.User, error) {
-	if s.identity == nil || s.identity.Users == nil {
-		return nil, errNoIdentityUsers
-	}
-	u, err := s.identity.Users.User(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	if u == nil {
-		return nil, errNoAcceptedAccount
-	}
-	return u, nil
 }
 
 // inviteAcceptBinding is HEAD's EmailBinding and SSOGrant for an accept of an invite

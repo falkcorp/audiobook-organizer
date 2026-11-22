@@ -434,7 +434,7 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 		}
 		inv.after(func(ctx context.Context) { s.warnDisplaced(ctx, t.ID, u.ID, displaced) })
 		s.queueInviteAccepted(inv, InviteAccepted{
-			InviteID: t.ID, UserID: u.ID, CreatedBy: t.CreatedBy, Email: t.Email,
+			InviteID: t.ID, UserID: u.ID, Username: u.Username, AcceptedAt: u.CreatedAt, CreatedBy: t.CreatedBy, Email: t.Email,
 			CreatorHeldAdmin: creatorAdmin, BindEmailOnAccept: t.BindEmailOnAccept, DisplacedUserIDs: displaced,
 		})
 		return nil
