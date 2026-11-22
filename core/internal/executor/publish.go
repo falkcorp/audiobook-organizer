@@ -235,8 +235,8 @@ func outcome(em emission) bool {
 func (p *publisher) shed() {
 	seen := map[tasks.RunID]bool{}
 	kept := p.q[:0:0]
-	for i := len(p.q) - 1; i >= 0; i-- {
-		em := p.q[i]
+	for _, em := range slices.Backward(p.q) {
+
 		if em.kind == emitRunChanged {
 			if seen[em.run] {
 				p.coalesced.Add(1)
