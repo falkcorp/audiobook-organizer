@@ -35,27 +35,30 @@ vi.mock('../../../hooks/usePendingFileOps', () => ({
   usePendingFileOps: (opts: unknown) => pendingOps(opts),
 }));
 
-type Status = { state: 'open' | 'reconnecting' | 'closed' | 'error'; attempt: number };
+// The shared core event stream, as far as the connection chip reads it: a status feed.
+// `state` is the stream's own vocabulary (core/web StreamState), not the chip's.
+type StreamState = 'idle' | 'hidden' | 'connecting' | 'open' | 'reconnecting';
+type Status = { state: StreamState; attempt: number; streamKey: string };
 const connection = vi.hoisted(() => ({
-  statusListener: null as null | ((s: {
-    state: 'open' | 'reconnecting' | 'closed' | 'error';
-    attempt: number;
-  }) => void),
+  statusListener: null as null | ((s: Status) => void),
   unsubscribe: undefined as unknown as ReturnType<typeof vi.fn>,
   subscribed: 0,
+  current: { state: 'idle', attempt: 0, streamKey: '' } as Status,
 }));
-vi.mock('../../../services/eventSourceManager', () => ({
-  eventSourceManager: {
-    subscribe: (_l: unknown, status?: (s: Status) => void) => {
+vi.mock('../../../services/coreEvents', () => ({
+  getEventStream: () => ({
+    getStatus: () => connection.current,
+    onStatus: (listener: (s: Status) => void) => {
       connection.subscribed += 1;
-      connection.statusListener = status ?? null;
+      connection.statusListener = listener;
       return connection.unsubscribe;
     },
-  },
+  }),
 }));
 
-function pushStatus(state: Status['state']) {
-  act(() => connection.statusListener?.({ state, attempt: 0 }));
+function pushStatus(state: StreamState, streamKey = '') {
+  connection.current = { state, attempt: 0, streamKey };
+  act(() => connection.statusListener?.(connection.current));
 }
 
 beforeEach(() => {
@@ -64,6 +67,7 @@ beforeEach(() => {
   connection.unsubscribe = vi.fn();
   connection.statusListener = null;
   connection.subscribed = 0;
+  connection.current = { state: 'idle', attempt: 0, streamKey: '' };
   useReviewStore.setState({ count: 0, byKind: {}, items: [], itemsLoading: false, _pollTimer: null });
 });
 
@@ -147,15 +151,30 @@ describe('frame slots equivalence: TopBar', () => {
     expect(screen.queryByText(/Connection/)).not.toBeInTheDocument();
   });
 
-  it.each(['reconnecting', 'error'] as const)('shows "Connection lost" on %s', (state) => {
+  it('shows "Connection lost" while the stream is reconnecting', () => {
     renderTopBar();
-    pushStatus(state);
+    pushStatus('reconnecting');
     expect(screen.getByText('Connection lost')).toBeInTheDocument();
   });
 
-  it('keeps no chip for a closed connection that was never lost', () => {
+  it('says so at once when the bar mounts while the stream is already reconnecting', () => {
+    connection.current = { state: 'reconnecting', attempt: 2, streamKey: '' };
     renderTopBar();
-    pushStatus('closed');
+    expect(screen.getByText('Connection lost')).toBeInTheDocument();
+  });
+
+  it.each(['idle', 'hidden', 'connecting'] as const)(
+    'keeps no chip for a stream that is %s: that says nothing about the link',
+    (state) => {
+      renderTopBar();
+      pushStatus(state);
+      expect(screen.queryByText(/Connection/)).not.toBeInTheDocument();
+    },
+  );
+
+  it('ignores a keyed stream: another view owns its status', () => {
+    renderTopBar();
+    pushStatus('reconnecting', 'book-batman-year-one');
     expect(screen.queryByText(/Connection/)).not.toBeInTheDocument();
   });
 
@@ -176,10 +195,10 @@ describe('frame slots equivalence: TopBar', () => {
 
     it('restarts the 3 second window when the connection drops and returns again', () => {
       renderTopBar();
-      pushStatus('error');
+      pushStatus('reconnecting');
       pushStatus('open');
       act(() => vi.advanceTimersByTime(2000));
-      pushStatus('error');
+      pushStatus('reconnecting');
       pushStatus('open');
       act(() => vi.advanceTimersByTime(2000));
       expect(screen.getByText('Connection restored')).toBeInTheDocument();

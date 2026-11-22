@@ -7,7 +7,7 @@
 // consumes, the connection status and the refusal errors. Wire facts come from
 // core/realtime and core/internal/sse (05-realtime 4.1, 4.2, 4.7, 6).
 //
-// UNWIRED: nothing in the running app imports this module until the F6 flip.
+// Wired by the F6-03 flip: App.tsx, TopBar and the Library use it.
 
 /** The envelope every frame's `data:` carries (core/internal/sse/serve.go controlFrame). */
 export interface StreamEnvelope<T = unknown> {
