@@ -34,6 +34,10 @@ const (
 	// OutcomeGuestPolicyCarried counts the guestpolicy: rows staged for HEAD
 	// grants whose sync had added the address to the Cloudflare guest policy.
 	OutcomeGuestPolicyCarried = "guest-policy-carried"
+	// OutcomeInviteAcceptCarried counts the acceptedinvite: rows staged for HEAD
+	// invites used inside AcceptedInviteWindow: the accepts HEAD's Users page still
+	// listed on the day of the flip.
+	OutcomeInviteAcceptCarried = "invite-accept-carried"
 )
 
 // How the step runs (05-authn §11; 05-storage §5S.3.13).
@@ -78,10 +82,18 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		return m.stepIdentity(ctx, kv, w)
 	case strings.HasPrefix(key, prefixInviteAllow):
 		return m.stepInviteAllow(ctx, kv, w)
-	case strings.HasPrefix(key, prefixInvite), strings.HasPrefix(key, prefixSession), key == bootstrapHashKey, key == bootstrapExpiresKey:
-		// Deleted by rule (ownership table rows 4a, 6 and 8): an open invite is
-		// re-sent, a web user signs in once, and core auth mints its own
-		// bootstrap token.
+	case strings.HasPrefix(key, prefixInvite):
+		// Deleted by rule (ownership table row 4a): an open invite is re-sent. An
+		// invite that was USED inside the window first leaves books' accepted-invite
+		// row (inviteaccept.go), the one thing of it HEAD's Users page still shows.
+		if err := m.carryInviteAccept(w, key, kv.Value); err != nil {
+			return err
+		}
+		w.Count(OutcomeDeleted)
+		return w.Delete(kv.Key)
+	case strings.HasPrefix(key, prefixSession), key == bootstrapHashKey, key == bootstrapExpiresKey:
+		// Deleted by rule (ownership table rows 6 and 8): a web user signs in once,
+		// and core auth mints its own bootstrap token.
 		w.Count(OutcomeDeleted)
 		return w.Delete(kv.Key)
 	case strings.HasPrefix(key, prefixUser), strings.HasPrefix(key, prefixRole):
