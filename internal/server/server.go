@@ -476,6 +476,9 @@ type Server struct {
 	// guestTokens: the per-guest Cloudflare service token clients and test
 	// overrides (guest_service_tokens.go).
 	guestTokens guestTokenState
+	// guestKeyClaims holds the unclaimed phone-app key entitlements of accepted
+	// invitations (guest_key_claim.go).
+	guestKeyClaims guestKeyClaims
 	// mailSenderOverride replaces the SMTP sender (tests only).
 	mailSenderOverride imail.Sender
 	// opsV3Closing is closed when Shutdown begins (closeOpsV3Streams), before

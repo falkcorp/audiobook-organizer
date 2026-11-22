@@ -63,6 +63,12 @@ func (s *Server) wireAuthRoutes(
 		authProtected.GET("/sessions", authH.ListMySessions)
 		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)
 		s.credRoute(authProtected, http.MethodPut, "/me/password", authH.ChangePassword)
+		// The guest's one-time phone-app key under core identity: the page calls it
+		// right after core's accept with the session the accept gave it
+		// (guest_key_claim.go). A credRoute because it hands out a credential, so
+		// an API key or ABS token is refused; the delegated session of an accept
+		// passes.
+		s.credRoute(authProtected, http.MethodPost, "/phone-key/claim", s.handleClaimGuestKey)
 		s.credRoute(authProtected, http.MethodPost, "/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
 
 		// A key may manage its own user's keys (clamped to its own expiry);
