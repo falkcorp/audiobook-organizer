@@ -554,9 +554,9 @@ func TestOpsV3Routes_EventStreamsEndOnShutdownAndStartLazily(t *testing.T) {
 // permission (a definition's set plus the start floor); the first-run check
 // behind it is one CountUsers per request, not one per permission.
 func TestOpsV3Authz_FirstRunCheckReadOncePerRequest(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.EnableAuth = true
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.EnableAuth = true })
 	store := mocks.NewMockStore(t)
 	store.EXPECT().CountUsers().Return(3, nil).Times(2)
 	s := &Server{store: store}

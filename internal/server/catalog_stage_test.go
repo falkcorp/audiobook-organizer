@@ -44,7 +44,7 @@ func TestCatalogStage_EndToEnd_CountersAndSummaryLine(t *testing.T) {
 	ps := seedCatalogLibrary(t)
 	cat := database.NewCatalogStoreFromStore(ps)
 	rep := &catalogTestReporter{}
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, &catalogFakeLister{}, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, &catalogFakeLister{}, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if joined := strings.Join(rep.logs, "\n"); !strings.Contains(joined, "author aliases: 2 entries read") {
@@ -69,13 +69,14 @@ func TestCatalogStage_EndToEnd_CountersAndSummaryLine(t *testing.T) {
 	exact := mkBook("Second", "Ann Author")
 	variant := mkBook("First", "A. Author")
 
-	prev := config.AppConfig.MetadataFetch
-	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
-	config.AppConfig.MetadataFetch = config.DefaultMetadataFetchConfig()
-	config.AppConfig.MetadataFetch.SharedCache = false
+	prev := config.Get().MetadataFetch
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetch = prev }) })
+	cowV1 := config.DefaultMetadataFetchConfig()
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch.SharedCache = false })
 
 	audibleCalls := func(stageOn bool) int64 {
-		config.AppConfig.MetadataFetch.CatalogStage = stageOn
+		config.SetForTest(func(c *config.Config) { c.MetadataFetch.CatalogStage = stageOn })
 		aud := &silentAudible{}
 		svc := metafetch.NewService(ps)
 		svc.SetOverrideSources([]metadata.MetadataSource{aud})

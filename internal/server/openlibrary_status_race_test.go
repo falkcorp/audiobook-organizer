@@ -29,9 +29,9 @@ import (
 func TestOLStoreReaders_RaceWithDeleteAndReopen(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	dumpDir := filepath.Join(t.TempDir(), "ol-dumps")
-	prev := config.AppConfig.OpenLibraryDumpDir
-	config.AppConfig.OpenLibraryDumpDir = dumpDir
-	t.Cleanup(func() { config.AppConfig.OpenLibraryDumpDir = prev })
+	prev := config.Get().OpenLibraryDumpDir
+	config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = dumpDir })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.OpenLibraryDumpDir = prev }) })
 
 	svc := &metafetch.OpenLibraryService{
 		Tracker:   openlibrary.NewDownloadTracker(),

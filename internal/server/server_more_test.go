@@ -248,12 +248,14 @@ func TestSearchAndFetchMetadata(t *testing.T) {
 		ASIN: "B0TESTSRF1", Title: "Test Book", Authors: []string{"Test Author"},
 		Publisher: "Test Publisher", Language: "eng", ReleaseDate: "2020-01-01",
 	}, "Test Book"))
-	origSources := config.AppConfig.MetadataSources
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: openLibrary.URL},
-		{ID: "audible", Name: "Audible", Enabled: true, Priority: 2, BaseURL: audible.URL},
-	}
-	t.Cleanup(func() { config.AppConfig.MetadataSources = origSources })
+	origSources := config.Get().MetadataSources
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "openlibrary", Name: "Open Library", Enabled: true, Priority: 1, BaseURL: openLibrary.URL},
+			{ID: "audible", Name: "Audible", Enabled: true, Priority: 2, BaseURL: audible.URL},
+		}
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = origSources }) })
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/metadata/search", nil)
 	w := httptest.NewRecorder()
@@ -283,7 +285,7 @@ func TestImportFileEndpoint(t *testing.T) {
 
 	tempDir := t.TempDir()
 	filePath := copyFixtureToDir(t, "test_sample.m4b", tempDir)
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
+	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 	// Allow the temp dir through the import path allow-list gate by registering
 	// it on the store (parallel-safe; avoids global config mutation).
 	if _, err := database.GetGlobalStore().CreateImportPath(tempDir, "test-allow"); err != nil {
@@ -316,8 +318,10 @@ func TestAddImportPathAutoScan(t *testing.T) {
 
 	importDir := t.TempDir()
 	copyFixtureToDir(t, "test_sample.m4b", importDir)
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.ConcurrentScans = 1
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b"}
+		c.ConcurrentScans = 1
+	})
 
 	payload := map[string]any{
 		"path":    importDir,
@@ -360,9 +364,11 @@ func TestAddImportPathFallbackScan(t *testing.T) {
 
 	importDir := t.TempDir()
 	copyFixtureToDir(t, "test_sample.m4b", importDir)
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.AutoOrganize = true
-	config.AppConfig.RootDir = ""
+	config.SetForTest(func(c *config.Config) {
+		c.SupportedExtensions = []string{".m4b"}
+		c.AutoOrganize = true
+		c.RootDir = ""
+	})
 
 	payload := map[string]any{
 		"path":    importDir,
@@ -421,8 +427,10 @@ func TestServerStartGracefulShutdown(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 1
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = false
+	config.SetForTest(func(c *config.Config) {
+		c.PurgeSoftDeletedAfterDays = 1
+		c.PurgeSoftDeletedDeleteFiles = false
+	})
 
 	_, err := database.GetGlobalStore().CreateBook(&database.Book{
 		Title:    "Heartbeat Book",
@@ -616,8 +624,10 @@ func TestParseAudiobookWithAIEndpoint(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.OpenAIAPIKey = ""
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = false
+		c.OpenAIAPIKey = ""
+	})
 
 	book, err := database.GetGlobalStore().CreateBook(&database.Book{
 		Title:    "AI Book",
@@ -765,10 +775,12 @@ func TestStartScanOperation(t *testing.T) {
 
 	rootDir := t.TempDir()
 	importDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.ConcurrentScans = 1
-	config.AppConfig.AutoOrganize = false
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = rootDir
+		c.SupportedExtensions = []string{".m4b"}
+		c.ConcurrentScans = 1
+		c.AutoOrganize = false
+	})
 
 	copyFixtureToDir(t, "test_sample.m4b", rootDir)
 	copyFixtureToDir(t, "test_sample.m4b", importDir)
@@ -809,12 +821,14 @@ func TestStartOrganizeOperation(t *testing.T) {
 
 	rootDir := t.TempDir()
 	sourceDir := t.TempDir()
-	config.AppConfig.RootDir = rootDir
-	config.AppConfig.OrganizationStrategy = "copy"
-	config.AppConfig.FolderNamingPattern = "{title}"
-	config.AppConfig.FileNamingPattern = "{title}"
-	config.AppConfig.SupportedExtensions = []string{".m4b"}
-	config.AppConfig.ConcurrentScans = 1
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = rootDir
+		c.OrganizationStrategy = "copy"
+		c.FolderNamingPattern = "{title}"
+		c.FileNamingPattern = "{title}"
+		c.SupportedExtensions = []string{".m4b"}
+		c.ConcurrentScans = 1
+	})
 
 	filePath := copyFixtureToDir(t, "test_sample.m4b", sourceDir)
 	_, err := database.GetGlobalStore().CreateBook(&database.Book{
@@ -858,12 +872,14 @@ func TestRunAutoPurgeSoftDeleted(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	config.AppConfig.PurgeSoftDeletedAfterDays = 1
-	config.AppConfig.PurgeSoftDeletedDeleteFiles = true
+	config.SetForTest(func(c *config.Config) {
+		c.PurgeSoftDeletedAfterDays = 1
+		c.PurgeSoftDeletedDeleteFiles = true
+	})
 
 	// The purge deletes only inside the library root (purgePathInsideRoot,
 	// 2026-10-06), so the file lives under RootDir.
-	filePath := filepath.Join(config.AppConfig.RootDir, "old.m4b")
+	filePath := filepath.Join(config.Get().RootDir, "old.m4b")
 	require.NoError(t, os.WriteFile(filePath, []byte("audio"), 0o644))
 	marked := true
 	deletedAt := time.Now().AddDate(0, 0, -2)

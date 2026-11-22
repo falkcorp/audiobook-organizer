@@ -101,7 +101,7 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
-	origCfg := config.AppConfig
+	origCfg := config.Snapshot()
 
 	// A fresh test server stands in for a fresh PROCESS, so it must not inherit
 	// provider throttles an earlier test installed — see the helper's comment.
@@ -113,18 +113,18 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	require.NoError(t, err)
 
 	// Initialize test configuration
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		DatabaseType: "pebble",
 		DatabasePath: filepath.Join(tempDir, "test.pebble"),
 		RootDir:      tempDir,
-	}
+	})
 
 	// Initialize database
 	var store *database.PebbleStore
 	if inMemory {
-		store, err = database.NewPebbleStoreInMemory(config.AppConfig.DatabasePath)
+		store, err = database.NewPebbleStoreInMemory(config.Get().DatabasePath)
 	} else {
-		store, err = database.NewPebbleStore(config.AppConfig.DatabasePath)
+		store, err = database.NewPebbleStore(config.Get().DatabasePath)
 	}
 	require.NoError(t, err)
 	// Wait for the async memdb warmup: the fail-closed reads (BookFilesAtPath,
@@ -181,7 +181,7 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 			store.Close()
 		}
 		_ = os.RemoveAll(tempDir)
-		config.AppConfig = origCfg
+		config.ReplaceForTest(origCfg)
 	}
 
 	return server, cleanup
@@ -214,13 +214,13 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 	// can be non-empty here through cross-test (and, under `go test -count=N`,
 	// cross-iteration) config pollution, so pin it to "" instead of trusting
 	// ambient state.
-	origCfg := config.AppConfig
+	origCfg := config.Snapshot()
 
 	// A fresh test server stands in for a fresh PROCESS, so it must not inherit
 	// provider throttles an earlier test installed — see the helper's comment.
 	metadata.ResetThrottlesForTesting()
 	t.Cleanup(metadata.ResetThrottlesForTesting)
-	config.AppConfig.RootDir = ""
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
 
 	// Boot registers every OperationDef unconditionally (it used to be gated
 	// on RootDir, which meant an unset RootDir silently produced a server with
@@ -239,7 +239,7 @@ func setupTestServerWithStore(t *testing.T, store database.Store) (*Server, func
 		if server.fileIOPool != nil {
 			server.fileIOPool.Stop()
 		}
-		config.AppConfig = origCfg
+		config.ReplaceForTest(origCfg)
 		// Don't close the store - caller is responsible for cleanup
 	}
 

@@ -77,9 +77,11 @@ func newCatalogTestThrottles() *metadata.ThrottleRegistry { return metadata.NewT
 
 func withCatalogEnabled(t *testing.T, on bool) {
 	t.Helper()
-	prev := config.AppConfig.Catalog
-	config.AppConfig.Catalog = config.CatalogConfig{Enabled: on, Language: "english", Marketplace: "us", HarvestRateFraction: 1, MaxProductsPerAuthor: 2000}
-	t.Cleanup(func() { config.AppConfig.Catalog = prev })
+	prev := config.Get().Catalog
+	config.SetForTest(func(c *config.Config) {
+		c.Catalog = config.CatalogConfig{Enabled: on, Language: "english", Marketplace: "us", HarvestRateFraction: 1, MaxProductsPerAuthor: 2000}
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Catalog = prev }) })
 }
 
 // seedCatalogLibrary: "Ann Author" has a live book with a present file;
@@ -147,7 +149,7 @@ func TestCatalogHarvest_DryRunThenLive(t *testing.T) {
 	zero := 0
 
 	// Dry run (the default): census only, nothing written.
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{SampleAuthors: &zero}, true, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{SampleAuthors: &zero}, true, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := cat.CountEntries(); n != 0 {
@@ -165,7 +167,7 @@ func TestCatalogHarvest_DryRunThenLive(t *testing.T) {
 	}
 
 	// Live: only Ann Author is in scope.
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(lister.names, ",") != "Ann Author" {
@@ -181,21 +183,21 @@ func TestCatalogHarvest_DryRunThenLive(t *testing.T) {
 
 	// Second live run inside the interval: nothing due, no requests.
 	lister.names = nil
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if len(lister.names) != 0 {
 		t.Errorf("complete author refetched inside the interval: %v", lister.names)
 	}
 	// Manual trigger bypasses the interval.
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"ann  author"}}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"ann  author"}}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if len(lister.names) != 1 {
 		t.Errorf("manual trigger made %d listings; want 1", len(lister.names))
 	}
 	// An out-of-scope manual trigger is refused, not silently a no-op.
-	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"Ghost Writer"}}, false, config.AppConfig.Catalog); err == nil {
+	if err := runCatalogHarvest(context.Background(), rep, ps, cat, lister, newCatalogTestThrottles(), catalogHarvestParams{Authors: []string{"Ghost Writer"}}, false, config.Get().Catalog); err == nil {
 		t.Error("out-of-scope author accepted")
 	}
 }
@@ -221,7 +223,7 @@ func TestCatalogHarvest_RecordsHoldInItsOwnRegistryOnly(t *testing.T) {
 	cat := database.NewCatalogStoreFromStore(ps)
 	private := newCatalogTestThrottles()
 	// The run stands down on the hold it just recorded; that error is expected.
-	_ = runCatalogHarvest(context.Background(), &catalogTestReporter{}, ps, cat, &throttledLister{}, private, catalogHarvestParams{}, false, config.AppConfig.Catalog)
+	_ = runCatalogHarvest(context.Background(), &catalogTestReporter{}, ps, cat, &throttledLister{}, private, catalogHarvestParams{}, false, config.Get().Catalog)
 	if !private.Throttled(metadata.SourceIDAudible) {
 		t.Error("the harvest's own registry did not record the 429 hold")
 	}
@@ -240,7 +242,7 @@ func TestCatalogHarvest_IgnoresProcessWideAudibleHold(t *testing.T) {
 	throttleProvider(t, metadata.SourceIDAudible, 429, "slow down")
 	ps := seedCatalogLibrary(t)
 	cat := database.NewCatalogStoreFromStore(ps)
-	if err := runCatalogHarvest(context.Background(), &catalogTestReporter{}, ps, cat, &catalogFakeLister{}, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.AppConfig.Catalog); err != nil {
+	if err := runCatalogHarvest(context.Background(), &catalogTestReporter{}, ps, cat, &catalogFakeLister{}, newCatalogTestThrottles(), catalogHarvestParams{}, false, config.Get().Catalog); err != nil {
 		t.Fatal(err)
 	}
 	if st, _ := cat.GetAuthorState(catalog.HarvestKey("Ann Author")); st == nil || st.Created == 0 {

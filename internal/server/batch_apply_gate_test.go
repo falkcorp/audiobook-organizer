@@ -175,9 +175,11 @@ func TestBulkApplyPreview_WritesNothing(t *testing.T) {
 }
 
 func bulkApplyPreviewWritesNothing(t *testing.T, stamp, wrongVerdict, wrongReason string) {
-	oldRename, oldRoot := config.AppConfig.AutoRenameOnApply, config.AppConfig.RootDir
-	config.AppConfig.AutoRenameOnApply, config.AppConfig.RootDir = true, ""
-	t.Cleanup(func() { config.AppConfig.AutoRenameOnApply, config.AppConfig.RootDir = oldRename, oldRoot })
+	oldRename, oldRoot := config.Get().AutoRenameOnApply, config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.AutoRenameOnApply, c.RootDir = true, "" })
+	t.Cleanup(func() {
+		config.SetForTest(func(c *config.Config) { c.AutoRenameOnApply, c.RootDir = oldRename, oldRoot })
+	})
 
 	store := failOnWriteStore(t)
 	authorID := 7

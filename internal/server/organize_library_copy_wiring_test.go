@@ -40,8 +40,8 @@ type orgWiringFixture struct {
 func newOrgWiringFixture(t *testing.T) *orgWiringFixture {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 	base := t.TempDir()
 	root, itunes := filepath.Join(base, "library"), filepath.Join(base, "itunes")
 	for _, d := range []string{root, itunes} {
@@ -49,14 +49,15 @@ func newOrgWiringFixture(t *testing.T) *orgWiringFixture {
 			t.Fatal(err)
 		}
 	}
-	config.AppConfig = config.Config{
+	config.ReplaceForTest(config.Config{
 		RootDir:              root,
 		FolderNamingPattern:  "{author}/{title}",
 		FileNamingPattern:    "{title}",
 		OrganizationStrategy: "copy",
-	}
+	})
 	// isProtectedPath treats the iTunes library's directory as protected.
-	config.AppConfig.ITunes.LibraryReadPath = filepath.Join(itunes, "iTunes Library.xml")
+	cowV1 := filepath.Join(itunes, "iTunes Library.xml")
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryReadPath = cowV1 })
 
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	if err != nil {

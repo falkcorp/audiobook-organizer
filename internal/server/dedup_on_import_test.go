@@ -85,9 +85,9 @@ func checkBookStandIn(t *testing.T) (*opsregistry.Registry, <-chan []string) {
 
 func setOnImportViaScheduler(t *testing.T, on bool) {
 	t.Helper()
-	prev := config.AppConfig.Dedup.OnImportViaScheduler
-	config.AppConfig.Dedup.OnImportViaScheduler = on
-	t.Cleanup(func() { config.AppConfig.Dedup.OnImportViaScheduler = prev })
+	prev := config.Get().Dedup.OnImportViaScheduler
+	config.SetForTest(func(c *config.Config) { c.Dedup.OnImportViaScheduler = on })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Dedup.OnImportViaScheduler = prev }) })
 }
 
 func TestFireDedupOnImport_ViaScheduler_EnqueuesOpAndStartsNoGoroutine(t *testing.T) {

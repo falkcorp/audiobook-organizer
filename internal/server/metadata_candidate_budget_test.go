@@ -19,13 +19,15 @@ import (
 // configured, and never past what the slowest source drains within its
 // timeout.
 func TestCandidateFetchBudget(t *testing.T) {
-	prev := config.AppConfig.MetadataSources
-	t.Cleanup(func() { config.AppConfig.MetadataSources = prev })
-	config.AppConfig.MetadataSources = []config.MetadataSource{
-		{ID: "audible", Enabled: true, RateLimit: config.MetadataSourceRateLimit{RPS: 8, Burst: 4}},
-		{ID: "openlibrary", Enabled: true, RateLimit: config.MetadataSourceRateLimit{RPS: 5, Burst: 2, TimeoutSeconds: 10}},
-		{ID: "google-books", Enabled: false, RateLimit: config.MetadataSourceRateLimit{RPS: 0.1, Burst: 50}},
-	}
+	prev := config.Get().MetadataSources
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = prev }) })
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{
+			{ID: "audible", Enabled: true, RateLimit: config.MetadataSourceRateLimit{RPS: 8, Burst: 4}},
+			{ID: "openlibrary", Enabled: true, RateLimit: config.MetadataSourceRateLimit{RPS: 5, Burst: 2, TimeoutSeconds: 10}},
+			{ID: "google-books", Enabled: false, RateLimit: config.MetadataSourceRateLimit{RPS: 0.1, Burst: 50}},
+		}
+	})
 	b := metafetch.EnabledSourcesBudget()
 	// Worst case Audible takes 5 calls a book (4 variants + an ASIN lookup)
 	// and Open Library 2 (asked again only while empty), so Audible (8/s /

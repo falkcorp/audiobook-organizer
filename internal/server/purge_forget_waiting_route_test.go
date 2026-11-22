@@ -58,7 +58,7 @@ func TestForgetWaitingFileRecordsRoute_PermissionAndEffect(t *testing.T) {
 	onlyOrganize := f.exactPermGoneSession(t, "only-organize", auth.PermLibraryOrganize)
 
 	// Folders that do not exist under the library root: the records wait for them.
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	pathA := filepath.Join(root, "Hush", "hush.m4b")
 	pathB := filepath.Join(root, "Knightfall", "knightfall.m4b")
 	f.seedPendingJournal(t, "waiting-a", pathA, true)

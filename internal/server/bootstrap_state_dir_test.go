@@ -33,12 +33,13 @@ func TestBootstrapToken_WriteAndConsumeResolveTheSameDirectory(t *testing.T) {
 	stateDir := t.TempDir()
 	t.Setenv(config.SecureStateDirEnv, stateDir)
 
-	prev := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = prev })
+	prev := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(prev) })
 	// Deliberately point the database somewhere COMPLETELY different. If either
 	// side still derives from database_path, the two will disagree and the
 	// assertions below will catch it.
-	config.AppConfig.DatabasePath = filepath.Join(t.TempDir(), "elsewhere", "audiobooks.pebble")
+	cowV1 := filepath.Join(t.TempDir(), "elsewhere", "audiobooks.pebble")
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
 
 	settings := newFakeSettingsStore()
 	if err := InitBootstrapToken(settings, config.SecureStateDir()); err != nil {
@@ -56,7 +57,7 @@ func TestBootstrapToken_WriteAndConsumeResolveTheSameDirectory(t *testing.T) {
 	}
 
 	// It must NOT have been written beside the database.
-	dbSide := BootstrapTokenPath(filepath.Dir(config.AppConfig.DatabasePath))
+	dbSide := BootstrapTokenPath(filepath.Dir(config.Get().DatabasePath))
 	if _, err := os.Stat(dbSide); err == nil {
 		t.Errorf("a token was also written beside the database at %s", dbSide)
 	}

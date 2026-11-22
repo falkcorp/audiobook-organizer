@@ -153,7 +153,7 @@ func TestScanService_OrphanBooks_FileDeleted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Organize should skip books with missing files
-	config.AppConfig.AutoOrganize = false
+	config.SetForTest(func(c *config.Config) { c.AutoOrganize = false })
 	svc := audiobookspkg.NewOrganizeService(env.Store)
 	err = svc.PerformOrganize(context.Background(), &OrganizeRequest{}, logger.New("test"))
 	require.NoError(t, err)

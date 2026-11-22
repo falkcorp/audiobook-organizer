@@ -24,7 +24,7 @@ func TestQuarantineBook_MovesFileAndUpdatesDB(t *testing.T) {
 	require.NotNil(t, store)
 
 	// Create a real file in the library dir
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 	src := filepath.Join(root, "Author", "Book", "book.m4b")
 	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0755))
 	require.NoError(t, os.WriteFile(src, []byte("fake audio"), 0644))
@@ -75,7 +75,7 @@ func TestUnquarantineBook_MovesFileBack(t *testing.T) {
 	defer cleanup()
 
 	store := srv.storeForWiring()
-	root := config.AppConfig.RootDir
+	root := config.Get().RootDir
 
 	// Set up a file already in .failed/
 	quarPath := filepath.Join(root, ".failed", "Author", "Book", "book.m4b")

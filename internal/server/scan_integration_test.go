@@ -49,7 +49,7 @@ func TestScanService_AutoOrganize(t *testing.T) {
 	env, cleanup := testutil.SetupIntegration(t)
 	defer cleanup()
 
-	config.AppConfig.AutoOrganize = true
+	config.SetForTest(func(c *config.Config) { c.AutoOrganize = true })
 
 	env.CopyFixture("test_sample.m4b", env.ImportDir, "The Hobbit.m4b")
 
@@ -59,10 +59,10 @@ func TestScanService_AutoOrganize(t *testing.T) {
 		if len(books) == 0 {
 			return
 		}
-		if !config.AppConfig.AutoOrganize || config.AppConfig.RootDir == "" {
+		if !config.Get().AutoOrganize || config.Get().RootDir == "" {
 			return
 		}
-		org := organizer.NewOrganizer(&config.AppConfig)
+		org := organizer.NewOrganizer(config.Get())
 		for i := range books {
 			if l.IsCanceled() {
 				break

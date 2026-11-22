@@ -109,11 +109,12 @@ func TestRedeemBootstrapToken_CorrectTokenConsumes(t *testing.T) {
 // 8 hours when nothing configures it (it was 30 days until 2026-10-07), and
 // the JSON response surfaces expires_at.
 func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
-	origCfg := config.AppConfig
-	defer func() { config.AppConfig = origCfg }()
-	config.AppConfig.BootstrapKeyTTL = ""    // unset: the 8h default
-	config.AppConfig.BootstrapKeyTTLDays = 0 // no legacy days value either
-	config.AppConfig.DatabasePath = t.TempDir() + "/db"
+	origCfg := config.Snapshot()
+	defer func() { config.ReplaceForTest(origCfg) }()
+	config.SetForTest(func(c *config.Config) { c.BootstrapKeyTTL = "" })    // unset: the 8h default
+	config.SetForTest(func(c *config.Config) { c.BootstrapKeyTTLDays = 0 }) // no legacy days value either
+	cowV1 := t.TempDir() + "/db"
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
 	// Sandbox the credential directory. handleBootstrap -> RedeemBootstrapToken
 	// calls os.Remove(BootstrapTokenPath(dataDir)) and DISCARDS the error, so
 	// without this the test silently tries to delete
@@ -197,10 +198,12 @@ func TestHandleBootstrap_IssuesExpiringKey(t *testing.T) {
 // deprecated bootstrap_key_ttl_days (here the old default, 30) is honoured
 // but capped at 24 hours.
 func TestHandleBootstrap_LegacyDaysCappedAt24h(t *testing.T) {
-	origCfg := config.AppConfig
-	defer func() { config.AppConfig = origCfg }()
-	config.AppConfig.BootstrapKeyTTL = ""
-	config.AppConfig.BootstrapKeyTTLDays = 30
+	origCfg := config.Snapshot()
+	defer func() { config.ReplaceForTest(origCfg) }()
+	config.SetForTest(func(c *config.Config) {
+		c.BootstrapKeyTTL = ""
+		c.BootstrapKeyTTLDays = 30
+	})
 	config.ResetStateDirForTest()
 	t.Cleanup(config.ResetStateDirForTest)
 	t.Setenv(config.SecureStateDirEnv, t.TempDir())

@@ -39,9 +39,9 @@ func TestHashBackfill_TimeoutSizedRunFinishesUnderOneOperationID(t *testing.T) {
 
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "Gotham"), 0o755))
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 
 	store, err := database.NewPebbleStoreInMemory(t.TempDir())
 	require.NoError(t, err)

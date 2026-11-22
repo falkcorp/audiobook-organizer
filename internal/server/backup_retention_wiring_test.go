@@ -28,10 +28,12 @@ func TestServerBackupRetentionDays(t *testing.T) {
 		{"both unset falls back to 30", 0, 0, 30},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prev := config.AppConfig
-			t.Cleanup(func() { config.AppConfig = prev })
-			config.AppConfig.BackupRetentionDays = tc.backup
-			config.AppConfig.PurgeSoftDeletedAfterDays = tc.soft
+			prev := config.Snapshot()
+			t.Cleanup(func() { config.ReplaceForTest(prev) })
+			config.SetForTest(func(c *config.Config) {
+				c.BackupRetentionDays = tc.backup
+				c.PurgeSoftDeletedAfterDays = tc.soft
+			})
 
 			require.Equal(t, tc.want, (&Server{}).BackupRetentionDays())
 		})

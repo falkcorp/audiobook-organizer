@@ -434,7 +434,7 @@ func TestReactivationDoesNotReviveWebSessions(t *testing.T) {
 func TestOpenStreamEndsOnACredentialChange(t *testing.T) {
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
-	config.AppConfig.EnableAuth = true // setupTestServer restores AppConfig on cleanup
+	config.SetForTest(func(c *config.Config) { c.EnableAuth = true }) // setupTestServer restores AppConfig on cleanup
 	w := newWebRig(t, s, s.storeForWiring())
 	stands := s.sessionStillStands()
 	var got bool

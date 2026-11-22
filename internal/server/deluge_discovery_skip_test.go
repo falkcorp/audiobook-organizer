@@ -29,12 +29,16 @@ func TestHandleDiscoveryImport_SourceIsDestination_ReportedSkippedNotImported(t 
 	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
 	require.NoError(t, os.WriteFile(src, []byte("audiodata"), 0o644))
 
-	origRoot, origMove := config.AppConfig.RootDir, config.AppConfig.DelugeMoveEnabled
-	config.AppConfig.RootDir = root
-	config.AppConfig.DelugeMoveEnabled = false
+	origRoot, origMove := config.Get().RootDir, config.Get().DelugeMoveEnabled
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.DelugeMoveEnabled = false
+	})
 	t.Cleanup(func() {
-		config.AppConfig.RootDir = origRoot
-		config.AppConfig.DelugeMoveEnabled = origMove
+		config.SetForTest(func(c *config.Config) {
+			c.RootDir = origRoot
+			c.DelugeMoveEnabled = origMove
+		})
 	})
 	client, err := deluge.New("http://deluge.invalid:8112", "deluge")
 	require.NoError(t, err)

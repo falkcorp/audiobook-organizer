@@ -25,9 +25,9 @@ func movementResumeFixture(t *testing.T, n int) *Server {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	root := t.TempDir()
-	prevRoot := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prevRoot })
+	prevRoot := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prevRoot }) })
 	withAppDirConfig(t, root)
 	// "Batman" and "Batman-Begins" straddle '/' in string order: the case a
 	// cursor over a raw WalkDir order gets wrong.

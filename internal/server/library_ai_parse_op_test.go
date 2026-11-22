@@ -172,16 +172,20 @@ func (r *aiParseStubReporter) seen() []string {
 func TestLibraryAIParseOpReportsPerBatchProgressToTheReporter(t *testing.T) {
 	restoreEnqueueHook(t)
 
-	oldAI := config.AppConfig.EnableAIParsing
-	oldBackend := config.AppConfig.AIBackend
+	oldAI := config.Get().EnableAIParsing
+	oldBackend := config.Get().AIBackend
 	t.Cleanup(func() {
-		config.AppConfig.EnableAIParsing = oldAI
-		config.AppConfig.AIBackend = oldBackend
+		config.SetForTest(func(c *config.Config) {
+			c.EnableAIParsing = oldAI
+			c.AIBackend = oldBackend
+		})
 	})
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
-	config.AppConfig.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
-	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.AIBackend.LLMMode = config.AIBackendModeLocal
+		c.AIBackend.LocalBaseURL = "http://127.0.0.1:1"
+		c.AIBackend.LocalLLMModel = "test-model"
+	})
 
 	reg := aiParseTestReg(t)
 	require.NoError(t, (&Server{opRegistry: reg}).RegisterLibraryAIParseOp(reg))
@@ -274,16 +278,20 @@ func TestLibraryAIParseOpReportsDiscardedRowsNotAFullyGreenParse(t *testing.T) {
 	}))
 	t.Cleanup(llm.Close)
 
-	oldAI := config.AppConfig.EnableAIParsing
-	oldBackend := config.AppConfig.AIBackend
+	oldAI := config.Get().EnableAIParsing
+	oldBackend := config.Get().AIBackend
 	t.Cleanup(func() {
-		config.AppConfig.EnableAIParsing = oldAI
-		config.AppConfig.AIBackend = oldBackend
+		config.SetForTest(func(c *config.Config) {
+			c.EnableAIParsing = oldAI
+			c.AIBackend = oldBackend
+		})
 	})
-	config.AppConfig.EnableAIParsing = true
-	config.AppConfig.AIBackend.LLMMode = config.AIBackendModeLocal
-	config.AppConfig.AIBackend.LocalBaseURL = llm.URL
-	config.AppConfig.AIBackend.LocalLLMModel = "test-model"
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = true
+		c.AIBackend.LLMMode = config.AIBackendModeLocal
+		c.AIBackend.LocalBaseURL = llm.URL
+		c.AIBackend.LocalLLMModel = "test-model"
+	})
 
 	reg := aiParseTestReg(t)
 	// After aiParseTestReg, which clears the scanner store: this test needs a

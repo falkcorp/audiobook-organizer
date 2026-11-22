@@ -35,7 +35,7 @@ func (c countFailStore) CountQuarantinedBooks() (int, error) { return 0, c.err }
 // moves the file into .failed/, so the file must actually exist on disk.
 func seedQuarantinedBook(t *testing.T, srv *Server, store database.Store, title string) *database.Book {
 	t.Helper()
-	src := filepath.Join(config.AppConfig.RootDir, "Author", title, "book.m4b")
+	src := filepath.Join(config.Get().RootDir, "Author", title, "book.m4b")
 	require.NoError(t, os.MkdirAll(filepath.Dir(src), 0o755))
 	require.NoError(t, os.WriteFile(src, []byte("fake audio"), 0o644))
 

@@ -38,7 +38,7 @@ func singleJSONDoc(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 // census, with tracks_in_itl 0, and writes nothing after it.
 func TestPIDIntegrity_UnsetITLPath_CensusWithoutITL(t *testing.T) {
 	f := setupCredGuardServer(t)
-	config.AppConfig.ITunes.LibraryITLPath = ""
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = "" })
 
 	w := f.do(t, f.sessionToken, http.MethodGet, "/api/v1/itunes/pid-integrity", nil)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
@@ -54,7 +54,7 @@ func TestPIDIntegrity_UnsetITLPath_CensusWithoutITL(t *testing.T) {
 // not usable answers one 500 and stops; the census is not written after it.
 func TestPIDIntegrity_InvalidITLPath_SingleInternalError(t *testing.T) {
 	f := setupCredGuardServer(t)
-	config.AppConfig.ITunes.LibraryITLPath = "relative/not-absolute.itl"
+	config.SetForTest(func(c *config.Config) { c.ITunes.LibraryITLPath = "relative/not-absolute.itl" })
 
 	w := f.do(t, f.sessionToken, http.MethodGet, "/api/v1/itunes/pid-integrity", nil)
 	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
