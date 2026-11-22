@@ -122,12 +122,12 @@ func seedHEAD(t *testing.T, out *headKeys) func(*database.PebbleStore) {
 		out.password = "correct-horse-battery-staple-gotham"
 		algo, hash, err := password.New(password.Options{}).Hash(out.password)
 		require.NoError(t, err)
-		bruce, err := s.CreateUser(wayne, "bruce.wayne@wayne-enterprises.example", algo, hash, []string{"admin"}, "active")
+		bruce, err := s.CreateUser(wayne, "bruce.wayne@wayne-enterprises.example.test", algo, hash, []string{"admin"}, "active")
 		require.NoError(t, err)
 		out.bruceUser = bruce.ID
-		lucius, err := s.CreateUser("lucius.fox", "lucius.fox@wayne-enterprises.example", algo, hash, []string{"editor"}, "active")
+		lucius, err := s.CreateUser("lucius.fox", "lucius.fox@wayne-enterprises.example.test", algo, hash, []string{"editor"}, "active")
 		require.NoError(t, err)
-		harvey, err := s.CreateUser("harvey.dent", "harvey.dent@gcpd.example", algo, hash, []string{"viewer"}, "inactive")
+		harvey, err := s.CreateUser("harvey.dent", "harvey.dent@gcpd.example.test", algo, hash, []string{"viewer"}, "inactive")
 		require.NoError(t, err)
 
 		now := time.Now()
@@ -179,11 +179,16 @@ func bootOverHEADStore(t *testing.T, fx *flipFixture) *runningApp {
 		// sandboxStateDirAt wrote a fixed key; the store's rows are sealed under this one.
 		require.NoError(t, os.WriteFile(database.EncryptionKeyPath(fx.stateDir), fx.key, 0o600))
 	}, nil)
-	require.Eventually(t, func() bool {
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
 		ready, err := shapedReady(r.composed)
 		require.NoError(t, err)
-		return ready
-	}, 2*time.Minute, 50*time.Millisecond, "/health never reported ready")
+		if ready {
+			break
+		}
+		require.True(t, time.Now().Before(deadline), "/health never reported ready")
+		time.Sleep(50 * time.Millisecond)
+	}
 	return r
 }
 
