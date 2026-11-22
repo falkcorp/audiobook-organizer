@@ -37,13 +37,21 @@ import (
 //     not run for either.
 //   - EmailChanged: UpdateProfile, when the account's address became a
 //     different address by SameEmail (a change of spelling only fires
-//     nothing: it is the address that was verified).
+//     nothing: it is the address that was verified). SetUserEmail fires it
+//     the same way.
+//   - UserDeleted: DeleteUser, once the user and its credentials are gone.
+//     The address is the one the account held at the delete, captured in the
+//     delete's own batch.
+//   - UserMergedAway: the admin user merge (Admin.StageUserMerge), once per
+//     source account, after the merge commits.
 //
 // Any callback may be nil.
 type Lifecycle struct {
 	InviteAccepted func(ctx context.Context, e InviteAccepted)
 	StatusChanged  func(ctx context.Context, e StatusChanged)
 	EmailChanged   func(ctx context.Context, e EmailChanged)
+	UserDeleted    func(ctx context.Context, e UserDeleted)
+	UserMergedAway func(ctx context.Context, e UserMergedAway)
 }
 
 // InviteAccepted is what an accepted invite did. The payload is a struct so a
@@ -97,6 +105,27 @@ type EmailChanged struct {
 	From, To string
 }
 
+// UserDeleted is a committed delete of a user.
+type UserDeleted struct {
+	UserID UserID
+	// Email is the address the account held at the delete ("" when none), as
+	// stored: the account is gone, so a callback that must act on it (a
+	// pending guest invite for the address) has no other way to learn it.
+	Email string
+}
+
+// UserMergedAway is one source account of a committed user merge: it was
+// merged into MergedInto and stays disabled for good.
+type UserMergedAway struct {
+	UserID UserID
+	// Email is the address the source held before the merge cleared it
+	// ("" when none), captured in the merge's evaluation because the
+	// committed row no longer carries it.
+	Email string
+	// MergedInto is the surviving account.
+	MergedInto UserID
+}
+
 // ErrLifecycleRegistered is RegisterLifecycle's refusal of a second call.
 var ErrLifecycleRegistered = errors.New("auth: a lifecycle hook is already registered")
 
@@ -143,6 +172,24 @@ func (s *Service) queueEmailChanged(v *invalidations, e EmailChanged) {
 	if l := s.lifecycle.Load(); l != nil && l.EmailChanged != nil {
 		v.after(func(ctx context.Context) {
 			s.callHook(ctx, "email_changed", func(ctx context.Context) { l.EmailChanged(ctx, e) })
+		})
+	}
+}
+
+// queueUserDeleted and queueUserMergedAway are queueInviteAccepted for the
+// account-removal callbacks.
+func (s *Service) queueUserDeleted(v *invalidations, e UserDeleted) {
+	if l := s.lifecycle.Load(); l != nil && l.UserDeleted != nil {
+		v.after(func(ctx context.Context) {
+			s.callHook(ctx, "user_deleted", func(ctx context.Context) { l.UserDeleted(ctx, e) })
+		})
+	}
+}
+
+func (s *Service) queueUserMergedAway(v *invalidations, e UserMergedAway) {
+	if l := s.lifecycle.Load(); l != nil && l.UserMergedAway != nil {
+		v.after(func(ctx context.Context) {
+			s.callHook(ctx, "user_merged_away", func(ctx context.Context) { l.UserMergedAway(ctx, e) })
 		})
 	}
 }
