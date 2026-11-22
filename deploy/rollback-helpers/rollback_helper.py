@@ -236,7 +236,9 @@ _BASENAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,199}")
 _PATH = re.compile(r"/[A-Za-z0-9._/@+-]+")
 _USER = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 _UNIT = re.compile(r"[A-Za-z0-9@._-]+\.service")
-_ENV = re.compile(r"(HOME|ABK_STATE_DIR|ABK_[A-Z0-9_]+)=[A-Za-z0-9._/@+:-]*")
+# ABO_* is the config flip's name for the state directory (ABO_CORE_PATHS_STATE_DIR):
+# the flipped binary refuses ABK_STATE_DIR at boot, and so does every offline command.
+_ENV = re.compile(r"(HOME|ABK_STATE_DIR|ABK_[A-Z0-9_]+|ABO_[A-Z0-9_]+)=[A-Za-z0-9._/@+:-]*")
 _KEYS = {
     "bin": True,
     "db": True,
@@ -333,7 +335,7 @@ def load_config() -> dict[str, str]:
     for tok in cfg.get("offline_env", "").split():
         if not _ENV.fullmatch(tok):
             raise RefusedError(
-                f"{CONFIG}: offline_env token {tok!r} is not HOME=, ABK_STATE_DIR= or ABK_*="
+                f"{CONFIG}: offline_env token {tok!r} is not HOME=, ABK_*= or ABO_*="
             )
     return cfg
 
