@@ -433,7 +433,7 @@ func (r *headRig) boot(at time.Time) {
 	r.mu.Lock()
 	r.now, r.timers = at, nil
 	r.mu.Unlock()
-	cfg := hconfig.AppConfig
+	cfg := hconfig.Snapshot()
 	ts := scheduler.NewTaskScheduler(scheduler.SchedulerDeps{
 		Maintenance:               scheduler.MaintenanceSettings{Enabled: cfg.Maintenance.Enabled, WindowStart: cfg.Maintenance.WindowStart, WindowEnd: cfg.Maintenance.WindowEnd},
 		Store:                     r.schedStore,
@@ -676,14 +676,30 @@ type parityResult struct {
 	sched      func(tasks.Kind) *tasks.Schedule
 }
 
+// setHeadConfig makes cfg the process config HEAD's scheduler reads, under the
+// config lock (Mutate with no Facade installed is a locked whole-struct write).
+// Never `hconfig.AppConfig = cfg`: a rig's scheduler goroutines (the
+// maintenance-window ticker, the on-start runs) read the config through
+// Snapshot while the test moves between steps, and an unlocked assignment
+// races them under -race (seen at -count=20 on the journal-prune parity test
+// that reuses this rig). Not Project: it normalises, and the oracle must hand HEAD the
+// scenario's values exactly.
+func setHeadConfig(t *testing.T, cfg hconfig.Config) {
+	t.Helper()
+	if hconfig.Current() != nil {
+		t.Fatal("a config Facade is installed: Mutate would write through it, not set HEAD's config")
+	}
+	hconfig.Mutate(func(c *hconfig.Config) { *c = cfg })
+}
+
 // runParity plays sc on both sides and reports every step where they differ.
 func runParity(t *testing.T, sc parityScenario) parityResult {
 	t.Helper()
-	saved := hconfig.AppConfig
-	t.Cleanup(func() { hconfig.AppConfig = saved })
+	saved := hconfig.Snapshot()
+	t.Cleanup(func() { setHeadConfig(t, saved) })
 
 	head := sc.head
-	hconfig.AppConfig = head
+	setHeadConfig(t, head)
 	view := coreViewOf(t, head)
 	reads := &fakeReads{}
 	reads.set(view.inputs)
@@ -726,7 +742,7 @@ func runParity(t *testing.T, sc parityScenario) parityResult {
 		var edit func(*schedule.Config)
 		if st.edit != nil {
 			head = withHead(t, head, st.edit)
-			hconfig.AppConfig = head
+			setHeadConfig(t, head)
 			next := coreViewOf(t, head)
 			cur = next
 			edit = func(c *schedule.Config) {
