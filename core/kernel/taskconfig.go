@@ -295,8 +295,6 @@ func (c *coreConfig) schedulePoll() time.Duration {
 	return time.Duration(c.tasks.Get().SchedulePoll)
 }
 
-// bootSectionCache is the section cache a test handed the boot through
-// bootseam.Seams.SectionCache, nil when it handed none (every production boot).
 // bootConfigStoreSeen is the boot's bootseam.Seams.ConfigStore, the observer
 // newConfigStore tells about each store; nil in every production boot.
 func bootConfigStoreSeen(ctx context.Context) func(any) {
@@ -306,14 +304,17 @@ func bootConfigStoreSeen(ctx context.Context) func(any) {
 	return nil
 }
 
+// bootSectionCache is the section cache a test handed the boot
+// (bootseam.SectionCache: Seams.SectionCache, else bootseam.WithSectionCache),
+// nil when it handed none (every production boot).
 func bootSectionCache(ctx context.Context) (*config.SectionCache, error) {
-	s := bootseam.From(ctx)
-	if s == nil || s.SectionCache == nil {
+	sc := bootseam.SectionCache(ctx)
+	if sc == nil {
 		return nil, nil
 	}
-	c, ok := s.SectionCache.(*config.SectionCache)
+	c, ok := sc.(*config.SectionCache)
 	if !ok {
-		return nil, fmt.Errorf("kernel: bootseam.Seams.SectionCache is a %T, want *config.SectionCache", s.SectionCache)
+		return nil, fmt.Errorf("kernel: the boot's section cache is a %T, want *config.SectionCache", sc)
 	}
 	return c, nil
 }
