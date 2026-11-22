@@ -2542,11 +2542,34 @@ func (p *PebbleStore) booksByAuthorIDForMutation(authorID int, includeTrashed bo
 }
 
 func (p *PebbleStore) CreateBook(book *Book) (*Book, error) {
-	created, err := p.createBook(book)
+	created, err := p.createBook(book, bookCreateOpts{})
 	if err == nil && created != nil {
 		p.syncNarratorJunctionAfterWrite(created.ID, "", created)
 	}
 	return created, err
+}
+
+// CreateBookWithRelocation is CreateBook for the organized copy of book
+// originalID, and the one write that stages books.book.relocated.v1: the
+// message naming originalID and the new row commits in the same batch as the
+// row, so the copy exists if and only if its follow-up is staged. The message
+// starts the run that moves the original's torrents to the copy's stored path
+// (book_relocated_outbox.go). It stages nothing while no relocation outbox is
+// installed, or when originalID is empty.
+func (p *PebbleStore) CreateBookWithRelocation(book *Book, originalID string) (*Book, error) {
+	created, err := p.createBook(book, bookCreateOpts{relocatedFrom: originalID})
+	if err == nil && created != nil {
+		p.syncNarratorJunctionAfterWrite(created.ID, "", created)
+	}
+	return created, err
+}
+
+// bookCreateOpts varies createBook. The zero value is a plain CreateBook.
+type bookCreateOpts struct {
+	// relocatedFrom, when set, is the book whose torrents follow the new row:
+	// the row's batch also stages the relocation follow-up for it
+	// (stageBookRelocated).
+	relocatedFrom string
 }
 
 // writeThroughThenBump runs a book's memdb write-through, then bumps the
@@ -2700,7 +2723,7 @@ func cloneIntPtr(p *int) *int {
 
 // createBook is CreateBook's body; it takes and releases the book stripe
 // itself, so CreateBook can run the narrator junction sync after it.
-func (p *PebbleStore) createBook(book *Book) (*Book, error) {
+func (p *PebbleStore) createBook(book *Book, opts bookCreateOpts) (*Book, error) {
 	// A caller-supplied ID is written into the key verbatim, so it must be a
 	// single key segment. See ValidateBookID (book_id.go).
 	if err := ValidateBookID(book.ID); err != nil {
@@ -2755,6 +2778,12 @@ func (p *PebbleStore) createBook(book *Book) (*Book, error) {
 	// Main key
 	key := []byte(fmt.Sprintf("book:%s", book.ID))
 	if err := batch.Set(key, data, nil); err != nil {
+		batch.Close()
+		return nil, err
+	}
+	// The organized copy's relocation follow-up, in the row's own batch: the
+	// copy exists if and only if the message is staged (book_relocated_outbox.go).
+	if err := p.stageBookRelocated(batch, opts.relocatedFrom, book.ID); err != nil {
 		batch.Close()
 		return nil, err
 	}
@@ -3177,12 +3206,6 @@ func (p *PebbleStore) updateBookLockedMode(id string, book *Book, opts bookWrite
 			return nil, err
 		}
 		if err := p.setBookPathKeyIfFree(batch, book.FilePath, id); err != nil {
-			batch.Close()
-			return nil, err
-		}
-		// The relocation follow-up commits in this batch or not at all
-		// (book_relocated_outbox.go; dark until SetRelocationOutbox).
-		if err := p.stageBookRelocated(batch, id, oldBook.FilePath, book.FilePath); err != nil {
 			batch.Close()
 			return nil, err
 		}

@@ -47,12 +47,12 @@ func (_m *MockOrganizeServicer) EXPECT() *MockOrganizeServicer_Expecter {
 	return &MockOrganizeServicer_Expecter{mock: &_m.Mock}
 }
 
-// CreateOrganizedVersion provides a mock function for the type MockOrganizeServicer
-func (_mock *MockOrganizeServicer) CreateOrganizedVersion(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*store.Book, error) {
+// CreateOrganizedVersionFollowTorrents provides a mock function for the type MockOrganizeServicer
+func (_mock *MockOrganizeServicer) CreateOrganizedVersionFollowTorrents(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*store.Book, error) {
 	ret := _mock.Called(book, landing, operationID, log)
 
 	if len(ret) == 0 {
-		panic("no return value specified for CreateOrganizedVersion")
+		panic("no return value specified for CreateOrganizedVersionFollowTorrents")
 	}
 
 	var r0 *store.Book
@@ -75,21 +75,21 @@ func (_mock *MockOrganizeServicer) CreateOrganizedVersion(book *store.Book, land
 	return r0, r1
 }
 
-// MockOrganizeServicer_CreateOrganizedVersion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateOrganizedVersion'
-type MockOrganizeServicer_CreateOrganizedVersion_Call struct {
+// MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CreateOrganizedVersionFollowTorrents'
+type MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call struct {
 	*mock.Call
 }
 
-// CreateOrganizedVersion is a helper method to define mock.On call
+// CreateOrganizedVersionFollowTorrents is a helper method to define mock.On call
 //   - book *store.Book
 //   - landing *organizer.Landing
 //   - operationID string
 //   - log logger.Logger
-func (_e *MockOrganizeServicer_Expecter) CreateOrganizedVersion(book any, landing any, operationID any, log any) *MockOrganizeServicer_CreateOrganizedVersion_Call {
-	return &MockOrganizeServicer_CreateOrganizedVersion_Call{Call: _e.mock.On("CreateOrganizedVersion", book, landing, operationID, log)}
+func (_e *MockOrganizeServicer_Expecter) CreateOrganizedVersionFollowTorrents(book any, landing any, operationID any, log any) *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call {
+	return &MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call{Call: _e.mock.On("CreateOrganizedVersionFollowTorrents", book, landing, operationID, log)}
 }
 
-func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Run(run func(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger)) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_c *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call) Run(run func(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger)) *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 *store.Book
 		if args[0] != nil {
@@ -117,12 +117,12 @@ func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Run(run func(book *s
 	return _c
 }
 
-func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) Return(book1 *store.Book, err error) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_c *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call) Return(book1 *store.Book, err error) *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call {
 	_c.Call.Return(book1, err)
 	return _c
 }
 
-func (_c *MockOrganizeServicer_CreateOrganizedVersion_Call) RunAndReturn(run func(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*store.Book, error)) *MockOrganizeServicer_CreateOrganizedVersion_Call {
+func (_c *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call) RunAndReturn(run func(book *store.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*store.Book, error)) *MockOrganizeServicer_CreateOrganizedVersionFollowTorrents_Call {
 	_c.Call.Return(run)
 	return _c
 }
