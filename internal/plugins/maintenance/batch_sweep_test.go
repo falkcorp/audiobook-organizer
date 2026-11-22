@@ -57,6 +57,9 @@ type sweepParams struct {
 	Books []batchBook
 }
 
+// batchTestRunaway bounds the children a fake host will accept.
+const batchTestRunaway = 500
+
 func newSweepEnv() *sweepEnv { return &sweepEnv{seen: map[string][]string{}} }
 
 func (e *sweepEnv) host(ctx context.Context) batchHost {
@@ -68,6 +71,12 @@ func (e *sweepEnv) host(ctx context.Context) batchHost {
 			sp := params.(sweepParams)
 			if err := e.enqueueErr[sp.Batch]; err != nil {
 				return "", err
+			}
+			// A sweep over a few hundred books never needs this many children: a
+			// cursor that stopped moving must fail the test, not spin until the
+			// package timeout.
+			if len(e.enqueued) >= batchTestRunaway {
+				return "", fmt.Errorf("runaway sweep: %d children enqueued, the cursor is not moving", len(e.enqueued))
 			}
 			e.nextID++
 			id := fmt.Sprintf("child-%d", e.nextID)
