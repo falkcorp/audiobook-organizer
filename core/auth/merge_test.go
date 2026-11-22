@@ -47,6 +47,19 @@ func (f *fx) rawPlan(source, target auth.UserID, rows ...auth.MergeRow) auth.Use
 	return auth.NewMergePlanForTest(source, target, f.reload(source).Version, f.reload(target).Version, rows...)
 }
 
+// currentPlan is a plan assembled by hand over the users' current versions and
+// the source's current rows, for a refusal a real preview would stop before it
+// could return a plan: a plan that is stale in no respect, so the refusal under
+// test is the one reported (a stale plan is reported as ErrMergeConflict).
+func (f *fx) currentPlan(source, target auth.UserID) auth.UserMergePlan {
+	f.t.Helper()
+	rows, err := f.st.MergeRows(context.Background(), source)
+	if err != nil {
+		f.t.Fatalf("MergeRows(%s): %v", source, err)
+	}
+	return f.rawPlan(source, target, rows...)
+}
+
 // signable gives u a password: the merge's no-sign-in rule refuses a target
 // with no password and no linked sign-in.
 func (f *fx) signable(u *auth.User) *auth.User {
@@ -233,7 +246,7 @@ func TestUserMerge_Gates(t *testing.T) {
 	// as the other holder. Here the survivor is not an admin, which only a caller
 	// that skipped the books rule could ask for, and core refuses it on its own.
 	wantErr(t, "the sole admin merging itself away",
-		f.stageMerge(f.signedIn(bruce), f.rawPlan(bruce.ID, dick.ID)), auth.ErrLastAdmin)
+		f.stageMerge(f.signedIn(bruce), f.currentPlan(bruce.ID, dick.ID)), auth.ErrLastAdmin)
 	// PlanUserMerge runs the same refusals, so none of these returns a plan.
 	for what, args := range map[string][2]auth.UserID{
 		"the sole admin merging itself away": {bruce.ID, dick.ID}, "one user twice": {bruce.ID, bruce.ID},
