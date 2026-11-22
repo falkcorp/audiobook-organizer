@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/outbox"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/realtime"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
@@ -375,4 +376,21 @@ func mountEventsRoutes(r *httpapi.Router, hub *realtime.Hub, ob outboxhttp.Opera
 	}
 	outboxhttp.Register(g, ob, cat, rec, outboxhttp.WithLogger(l))
 	return nil
+}
+
+// taskViewRule is the View requirement of every registered task kind, as the
+// executor's mayView reads it, for the Visible of the run-carrying task topics
+// (tasks.WithViewRule). It is built from the registrations at declare time, so
+// a kind of a disabled module is not in it and takes core:tasks.view, the same
+// default Client.Get applies to a run whose definition is not loaded.
+func (k *Kernel) taskViewRule() func(tasks.Kind) (rbac.Requirement, bool) {
+	defs := k.taskDefinitions()
+	view := make(map[tasks.Kind]rbac.Requirement, len(defs))
+	for _, d := range defs {
+		view[d.Kind()] = tasks.CommonOf(d).Perms.View
+	}
+	return func(kind tasks.Kind) (rbac.Requirement, bool) {
+		r, ok := view[kind]
+		return r, ok
+	}
 }
