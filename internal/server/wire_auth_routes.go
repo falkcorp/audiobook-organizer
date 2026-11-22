@@ -41,8 +41,14 @@ func (s *Server) wireAuthRoutes(
 		// the handshake and starts a session. Both are no-ops for unconfigured providers.
 		if oauthH != nil {
 			authGroup.GET("/oauth-providers", oauthH.Providers)
-			authGroup.GET("/oauth/:provider/start", oauthH.Start)
-			authGroup.GET("/oauth/:provider/callback", oauthH.Callback)
+			// Under core identity core serves these two exact paths on its fixed
+			// group (app.Options.Auth.OIDCCallbackBase), so gin does not.
+			if !s.servedByCore(http.MethodGet, "/api/v1/auth/oauth/:provider/start") {
+				authGroup.GET("/oauth/:provider/start", oauthH.Start)
+			}
+			if !s.servedByCore(http.MethodGet, "/api/v1/auth/oauth/:provider/callback") {
+				authGroup.GET("/oauth/:provider/callback", oauthH.Callback)
+			}
 		}
 	}
 

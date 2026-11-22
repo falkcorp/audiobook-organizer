@@ -47,6 +47,17 @@ const (
 	metricNamespace = "audiobook_organizer"
 	serviceName     = "audiobook-organizer"
 	displayName     = "Audiobook Organizer"
+
+	// archivePrefix is Options.ArchivePrefix: the prefix HEAD's backup writer gives
+	// every archive it names, "audiobooks_<database type>_<YYYYMMDD_HHMMSS><ext>"
+	// (internal/backup/backup.go CreateBackup, with the database type "pebble" the
+	// only one a core-storage boot opens), and so the prefix core's backup
+	// catalogue lists and prunes by and its revocation journal's file name and
+	// header carry (<backup dir>/<prefix>revocations.journal). Core's default is
+	// "<AppID>_", which would leave every archive an install already holds
+	// unrecognised by restore and retention. Serve and the offline commands read
+	// the one value, so a journal one writes is the file the other finds.
+	archivePrefix = "audiobooks_pebble_"
 )
 
 // ServeInputs are the values of serve books needs.
@@ -168,6 +179,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		StateDir:              m.stateDir,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
 		FromRelease:           in.FromRelease,
+		ArchivePrefix:         archivePrefix,
 	}
 	if identityOn() {
 		if err := m.identityOptions(&ao); err != nil {
@@ -226,6 +238,7 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 		ConfigFlags:        o.ConfigFlags,
 		CoreDefaults:       coreDefaults,
 		AppID:              AppID,
+		ArchivePrefix:      archivePrefix,
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve
 		// boot computes, or its P0a rejects the intent as another binary's.

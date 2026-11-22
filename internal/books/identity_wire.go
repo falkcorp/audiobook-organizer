@@ -52,18 +52,51 @@ const (
 	cookieNameKey coreconfig.Path = "core.auth.session.cookie_name"
 	// ownerRequiredKey is core.auth.owner.required.
 	ownerRequiredKey coreconfig.Path = "core.auth.owner.required"
+
+	// importedKeyPrefix is the prefix of every API key HEAD minted; see
+	// identityAuthOptions. A key core mints is "mck_".
+	importedKeyPrefix = "abk_"
+	// oidcCallbackBase is the path prefix of HEAD's OAuth start and callback; see
+	// identityAuthOptions.
+	oidcCallbackBase = "/api/v1/auth/oauth"
 )
 
-// identityAuthOptions is app.Options.Auth under the flip: the one auth value
-// books sets, the bootstrap token's file name.
+// identityAuthOptions is app.Options.Auth under the flip: the compile-time auth
+// values, each of them HEAD's behaviour and none wider than it.
 //
-// Not set here, on purpose: ImportedKeyPrefixes ("abk_"), DefaultDisabledAllowRemote,
-// OIDCCallbackBase and Options.ArchivePrefix are in the spec's list for ABO but are
-// not in this slice's scope, and two of them (DefaultDisabledAllowRemote true, an
-// imported key prefix that makes more keys verify) change who is admitted, so they
-// are the lead's to add with their own tests, not a default carried in here.
+//   - BootstrapTokenFile is HEAD's name for the emergency token (see
+//     bootstrapTokenName).
+//   - ImportedKeyPrefixes "abk_": HEAD's API keys are "abk_" + base64url of 32
+//     random bytes (internal/books/store/apikey_token.go GenerateAPIKeyToken) and
+//     HEAD's middleware routes any "abk_" bearer to API-key validation
+//     (internal/server/middleware/auth.go:196). M3 imports those rows keeping
+//     their SHA-256 hash, and core's key authenticator admits an imported prefix
+//     only when it is listed (core/auth/middleware.go isKey and resolveKey), so
+//     without it every existing key is refused after the flip (D12 (b)). The
+//     lookup is still by hash, then core's status, expiry and owner rules: a prefix
+//     admits a key to the lookup, never past it.
+//   - DefaultDisabledAllowRemote true: HEAD refuses nothing for auth off on a
+//     non-loopback listener or behind a proxy; it logs a warning and serves
+//     (internal/server/server_lifecycle.go:2908-2909). Core's default refuses to
+//     boot there, which would crash-loop every Docker install (it always listens
+//     on a non-loopback address) that runs with auth off (05-authn §4.11, SEC4-8:
+//     "ABO's default is true"). While it stands core still reports health degraded
+//     with auth_disabled_remote, as HEAD's warning did. The value is only a
+//     default: an operator layer or an override still wins.
+//   - OIDCCallbackBase "/api/v1/auth/oauth": HEAD's callback and start paths are
+//     GET /api/v1/auth/oauth/:provider/callback and .../start
+//     (internal/server/wire_auth_routes.go:44-45), the redirect URIs identity
+//     providers have registered. Core serves exactly those two patterns on its
+//     fixed group at this base (httpapi.CoreExactPatterns, 05-authn §4.13), so no
+//     provider is re-registered. The server drops its own gin routes and manifest
+//     rows for them under core identity (Server.servedByCore).
 func identityAuthOptions() coreauth.Options {
-	return coreauth.Options{BootstrapTokenFile: bootstrapTokenName}
+	return coreauth.Options{
+		BootstrapTokenFile:         bootstrapTokenName,
+		ImportedKeyPrefixes:        []string{importedKeyPrefix},
+		DefaultDisabledAllowRemote: true,
+		OIDCCallbackBase:           oidcCallbackBase,
+	}
 }
 
 // identityConfigFlags is flags with the identity pins added, on a copy. The flag
