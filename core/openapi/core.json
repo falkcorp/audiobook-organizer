@@ -2704,6 +2704,13 @@
               "updated_at": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "merged_into_user_id": {
+                "type": "string"
+              },
+              "merged_at": {
+                "type": "string",
+                "format": "date-time"
               }
             },
             "required": [
@@ -3225,6 +3232,13 @@
                 "format": "date-time"
               },
               "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "merged_into_user_id": {
+                "type": "string"
+              },
+              "merged_at": {
                 "type": "string",
                 "format": "date-time"
               }
@@ -3844,6 +3858,13 @@
                 "updated_at": {
                   "type": "string",
                   "format": "date-time"
+                },
+                "merged_into_user_id": {
+                  "type": "string"
+                },
+                "merged_at": {
+                  "type": "string",
+                  "format": "date-time"
                 }
               },
               "required": [
@@ -4232,6 +4253,13 @@
               "updated_at": {
                 "type": "string",
                 "format": "date-time"
+              },
+              "merged_into_user_id": {
+                "type": "string"
+              },
+              "merged_at": {
+                "type": "string",
+                "format": "date-time"
               }
             },
             "required": [
@@ -4518,6 +4546,13 @@
             "format": "date-time"
           },
           "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "merged_into_user_id": {
+            "type": "string"
+          },
+          "merged_at": {
             "type": "string",
             "format": "date-time"
           }
