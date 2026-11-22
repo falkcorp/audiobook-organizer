@@ -587,6 +587,9 @@ func (h *batchRunHost) Enqueue(kind tasks.Kind, params any, _ ...tasks.StartOpti
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if len(h.runs) >= batchTestRunaway {
+		return tasks.RunRef{}, fmt.Errorf("runaway sweep: %d children enqueued, the cursor is not moving", len(h.runs))
+	}
 	c := &hostChild{id: tasks.RunID(fmt.Sprintf("child-%d", len(h.runs)+1)), kind: kind, raw: raw, subject: subj}
 	h.runs = append(h.runs, c)
 	return tasks.RunRef{ID: c.id}, nil
