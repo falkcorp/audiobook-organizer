@@ -62,6 +62,8 @@ func coreActionTable() []actionRow {
 		{"core.integration.write_secret", UserScoped},
 		{"core.invite.accept", UserScoped},
 		{"core.invite.create", UserScoped},
+		{"core.invite.mark_delivered", UserScoped},
+		{"core.invite.rotate", UserScoped},
 		{"core.oidc_provider.create", UserScoped},
 		{"core.oidc_provider.delete", UserScoped},
 		{"core.oidc_provider.update", UserScoped},
@@ -100,6 +102,7 @@ func coreActionTable() []actionRow {
 		{"core.user.disable", UserScoped},
 		{"core.user.enable", UserScoped},
 		{"core.user.reset_password", UserScoped},
+		{"core.user.set_email", UserScoped},
 		{"core.user.set_roles", UserScoped},
 	}
 }

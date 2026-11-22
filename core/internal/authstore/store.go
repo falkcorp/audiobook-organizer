@@ -1401,6 +1401,38 @@ func (s *Store) DeleteOneTime(b *storage.Batch, kind auth.OneTimeKind, id string
 	return fmt.Errorf("%w: one-time token %s/%s", auth.ErrNotFound, kind, id)
 }
 
+// PutOneTime stages t over the token of t.Kind whose public ID is t.ID: the
+// stored secret hash is kept, the rest is t's, and the write expects the bytes
+// it read, so a concurrent take or rewrite conflicts the commit.
+func (s *Store) PutOneTime(b *storage.Batch, t *auth.OneTimeToken) error {
+	if err := needBatch(b, "PutOneTime"); err != nil {
+		return err
+	}
+	if t == nil {
+		return fmt.Errorf("%w: nil one-time token", auth.ErrBadInput)
+	}
+	if _, ok := kindPrefix(t.Kind); !ok || t.ID == "" {
+		return fmt.Errorf("%w: one-time token %s/%s", auth.ErrNotFound, t.Kind, t.ID)
+	}
+	prefix := keys.Prefix(keys.Str(segOneTime), keys.Str(string(t.Kind)))
+	for kv, err := range s.ks.ScanPrefix(context.Background(), prefix) {
+		if err != nil {
+			return fmt.Errorf("%w: scan one-time tokens: %w", auth.ErrStoreUnavailable, err)
+		}
+		rec, err := decodeOneTime(kv.Value)
+		if err != nil || rec.ID != t.ID {
+			continue
+		}
+		kv = kv.Clone()
+		raw, err := codec.JSON[oneTimeRecord](1).Encode(oneTimeRecord{OneTimeToken: *t, Hash: rec.Hash})
+		if err != nil {
+			return fmt.Errorf("authstore: encode one-time token: %w", err)
+		}
+		return s.set(b, kv.Key, kv.Value, raw)
+	}
+	return fmt.Errorf("%w: one-time token %s/%s", auth.ErrNotFound, t.Kind, t.ID)
+}
+
 // ---------------------------------------------------------------------------
 // External identities and the invite allow-list.
 

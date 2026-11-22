@@ -439,14 +439,13 @@ func (f *fx) rebuildLogging(log *slog.Logger) {
 	f.svc = svc
 }
 
-// STEP 0 (F4-08 B10r, ruling 5): what core's AcceptInvite does when another
-// account already holds the invite's address. HEAD's accept took the address
-// from accounts that held it UNVERIFIED, in its own batch, and refused one a
-// verified holder had (ConsumeInvite). Core's accept binds no address: the
-// invitee's copy is stored unverified (invites.go: an invite never binds an
-// address), so it claims nothing and displaces nothing, and a verified holder
-// does not block it. This pins that, so B10t's binding (which does claim the
-// address) has to change the test on purpose.
+// STEP 0 (F4-08 B10r, ruling 5), as B10t left it: what core's AcceptInvite does
+// when another account holds the invite's address and the invite does NOT bind
+// it (never flagged by MarkInviteEmailDelivered). It claims nothing: the
+// invitee's copy is stored unverified, the existing holder is untouched, and a
+// verified holder does not block it. The holder appears after the invite was
+// made, because CreateInvite refuses a verified holder (HEAD's rule at
+// create). The bound accept is in invite_bind_test.go.
 func TestAcceptInvite_AnotherHolderOfTheInviteAddress(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -455,8 +454,8 @@ func TestAcceptInvite_AnotherHolderOfTheInviteAddress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFx(t)
 			bruce := f.user("bruce", rbac.RoleAdmin)
-			holder := f.userWithEmail("selina-kyle", "selina.kyle@example.test", tc.verified, "gotham.detective")
 			tok, _ := f.invite(f.session(bruce), auth.InviteSpec{Username: "irena-dubrovna", Email: "Selina.Kyle@Example.test", Role: "gotham.detective"})
+			holder := f.userWithEmail("selina-kyle", "selina.kyle@example.test", tc.verified, "gotham.detective")
 			u, _, err := f.accept(tok, "catwoman-1234")
 			if err != nil {
 				t.Fatalf("accept: %v", err)
@@ -473,7 +472,7 @@ func TestAcceptInvite_AnotherHolderOfTheInviteAddress(t *testing.T) {
 	}
 }
 
-// displaceUnverifiedHolders is the helper B10t's binding calls in the
+// displaceUnverifiedHolders is the helper the invite's bind calls in the
 // accept's own commit: HEAD's clearEmailFromHolders over the unproven holders.
 func TestDisplaceUnverifiedHolders(t *testing.T) {
 	ctx := context.Background()
