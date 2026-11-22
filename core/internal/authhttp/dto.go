@@ -35,6 +35,12 @@ type User struct {
 	SignInRestricted      bool      `json:"sign_in_restricted"`
 	CreatedAt             time.Time `json:"created_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
+
+	// MergedIntoUserID names the account an admin user merge folded this one
+	// into; set, the account stays disabled and enabling it is refused
+	// (409 merged_away). MergedAt is when. Both absent otherwise.
+	MergedIntoUserID string    `json:"merged_into_user_id,omitempty"`
+	MergedAt         time.Time `json:"merged_at,omitzero"`
 }
 
 func userBody(u *auth.User) User {
@@ -46,6 +52,7 @@ func userBody(u *auth.User) User {
 		ID: string(u.ID), Username: u.Username, Email: u.Email, EmailVerified: u.EmailVerified, DisplayName: u.DisplayName,
 		Roles: roles, Status: string(u.Status), HasPassword: u.HasPassword, PasswordResetRequired: u.PasswordResetRequired,
 		SignInRestricted: u.SignInRestricted, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt,
+		MergedIntoUserID: string(u.MergedInto), MergedAt: u.MergedAt,
 	}
 }
 

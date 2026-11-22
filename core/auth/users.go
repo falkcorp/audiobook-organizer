@@ -391,7 +391,9 @@ func (s *Service) restampOwnSession(ctx context.Context, b *storage.Batch, actor
 // and an invite is refused for as long as its creator is disabled and for
 // good once the re-enable's own bump has moved the epoch past it. Disabling
 // the last active core:admin holder is refused (ErrLastAdmin). Setting the
-// status a user already has writes nothing. A disable's audit record carries
+// status a user already has writes nothing. Enabling an account an admin user
+// merge folded into another (User.MergedInto) is refused (ErrMergedAway), for
+// every caller of this method: the merged-away account stays disabled. A disable's audit record carries
 // links_deleted, how many links it deleted, as a merge and
 // sign-out-everywhere do.
 func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st UserStatus) error {
@@ -415,6 +417,9 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 		}
 		if err := s.dominates(actor, u); err != nil {
 			return err
+		}
+		if st == StatusActive && u.MergedInto != "" {
+			return fmt.Errorf("%w: %s was merged into %s", ErrMergedAway, u.ID, u.MergedInto)
 		}
 		if u.Status == st {
 			return nil

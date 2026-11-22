@@ -232,12 +232,22 @@ func userRoundTrip(t *testing.T, fx Fixture) {
 	_, err = fx.Store.UserByUsername(bg(), "joker")
 	errIs(t, "UserByUsername(absent)", err, auth.ErrNotFound)
 	putUser(t, fx, user("01JALFRED", "alfred", 1))
+	// The merged-into marker survives a write and a read.
+	marked := user("01JJASON", "jason", 1)
+	marked.Status, marked.MergedInto, marked.MergedAt = auth.StatusDisabled, "01JBRUCE", stamp()
+	putUser(t, fx, marked)
+	if got := getUser(t, fx, marked.ID); !reflect.DeepEqual(got, marked) {
+		t.Fatalf("GetUser(merged-away) = %+v, want %+v", got, marked)
+	}
+	if got := getUser(t, fx, "01JALFRED"); got.MergedInto != "" || !got.MergedAt.IsZero() {
+		t.Fatalf("an unmerged user reads back a marker: %+v", got)
+	}
 	var ids []auth.UserID
 	for u, err := range fx.Store.ScanUsers(bg()) {
 		must(t, "ScanUsers", err)
 		ids = append(ids, u.ID)
 	}
-	if want := []auth.UserID{"01JALFRED", "01JBRUCE"}; !slices.Equal(ids, want) {
+	if want := []auth.UserID{"01JALFRED", "01JBRUCE", "01JJASON"}; !slices.Equal(ids, want) {
 		t.Fatalf("ScanUsers = %v, want %v in ID order (the username index is not a user)", ids, want)
 	}
 }
