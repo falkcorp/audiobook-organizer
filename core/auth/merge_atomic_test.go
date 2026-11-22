@@ -79,6 +79,13 @@ func (f *atomicFx) get(key string) string {
 // staging failed) and the first staging or commit error.
 func (f *atomicFx) merge(actor *auth.Principal, plan auth.UserMergePlan, rows []booksRow) (auth.AfterCommit, error) {
 	f.t.Helper()
+	return f.mergeWith(actor, plan, rows, nil)
+}
+
+// mergeWith is merge with a step run between staging and the commit, where a
+// concurrent writer lands in the real caller.
+func (f *atomicFx) mergeWith(actor *auth.Principal, plan auth.UserMergePlan, rows []booksRow, betweenStageAndCommit func()) (auth.AfterCommit, error) {
+	f.t.Helper()
 	ctx := auth.WithPrincipal(context.Background(), actor)
 	b := f.lr.NewBatch()
 	defer func() { _ = b.Close() }()
@@ -95,6 +102,9 @@ func (f *atomicFx) merge(actor *auth.Principal, plan auth.UserMergePlan, rows []
 	after, err := f.svc.StageUserMerge(ctx, b, plan)
 	if err != nil {
 		return nil, err
+	}
+	if betweenStageAndCommit != nil {
+		betweenStageAndCommit()
 	}
 	if booksBatch != b {
 		if err := booksBatch.Commit(ctx, storage.Sync); err != nil {
@@ -119,10 +129,10 @@ func (f *atomicFx) scene() mergeScene {
 	s := mergeScene{}
 	s.bruce = f.user("bruce-wayne", rbac.RoleAdmin)
 	s.jason = f.user("jason-todd", roleCommissioner)
-	s.dick = f.user("dick-grayson", "gotham.detective")
+	s.dick = f.signable(f.user("dick-grayson", "gotham.detective"))
 	_, s.key = f.mint(f.session(s.jason), s.jason.ID, "gotham:patrol")
 	s.epoch = uint64(f.reload(s.jason.ID).CredentialEpoch)
-	s.plan = auth.UserMergePlan{Source: s.jason.ID, Target: s.dick.ID, Rows: []auth.MergeRow{f.keyRow(s.key.ID)}}
+	s.plan = f.planMerge(f.signedIn(s.bruce), s.jason.ID, s.dick.ID)
 	s.rows = []booksRow{
 		{key: "readstate:jason:b1", seen: "jason:page-12", next: "dick:page-12"},
 		{key: "readstate:jason:b2", seen: "jason:page-40", next: "dick:page-40"},
@@ -232,38 +242,59 @@ func TestMergeAtomic_ModuleRowConflictLandsNothing(t *testing.T) {
 }
 
 // TestMergeAtomic_AuthRowConflictLandsNothing: a credential row changed after
-// the preview fails the one Commit, and no module row moves.
+// the preview lands nothing and moves no module row, whether the change came
+// before StageUserMerge (the merge is refused with ErrMergeConflict, no
+// AfterCommit) or between staging and the one Commit (the Commit fails with
+// storage.ErrConflict).
 func TestMergeAtomic_AuthRowConflictLandsNothing(t *testing.T) {
-	f := newAtomicFx(t)
-	s := f.scene()
-	renamed := f.key(s.key.ID)
-	renamed.Name, renamed.Version = "grappling hook", renamed.Version+1
-	f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, renamed) })
-
-	after, err := f.merge(f.signedIn(s.bruce), s.plan, s.rows)
-	if !errors.Is(err, storage.ErrConflict) {
-		t.Fatalf("merge with a changed credential row = %v, want storage.ErrConflict", err)
+	rename := func(f *atomicFx, s mergeScene) {
+		renamed := f.key(s.key.ID)
+		renamed.Name, renamed.Version = "grappling hook", renamed.Version+1
+		f.commit(func(b *storage.Batch) error { return f.st.PutAPIKey(b, renamed) })
 	}
-	if after == nil {
-		t.Fatal("staging succeeded, so the merge must have handed back its AfterCommit")
-	}
-	after(context.Background())
-
-	if got := f.key(s.key.ID); got.Owner != s.jason.ID || !bytes.Equal([]byte(got.Name), []byte("grappling hook")) {
-		t.Errorf("key after a failed merge: owner %s name %q, want %s and the writer's rename", got.Owner, got.Name, s.jason.ID)
-	}
-	src := f.reload(s.jason.ID)
-	if src.Status != auth.StatusActive || uint64(src.CredentialEpoch) != s.epoch {
-		t.Errorf("source after a failed merge: status %s epoch %d, want active at %d", src.Status, src.CredentialEpoch, s.epoch)
-	}
-	for _, r := range s.rows {
-		if got := f.get(r.key); got != r.seen {
-			t.Errorf("%s = %q after a failed merge, want %q", r.key, got, r.seen)
+	check := func(t *testing.T, f *atomicFx, s mergeScene, after auth.AfterCommit) {
+		t.Helper()
+		if after != nil {
+			after(context.Background())
+		}
+		if got := f.key(s.key.ID); got.Owner != s.jason.ID || !bytes.Equal([]byte(got.Name), []byte("grappling hook")) {
+			t.Errorf("key after a failed merge: owner %s name %q, want %s and the writer's rename", got.Owner, got.Name, s.jason.ID)
+		}
+		src := f.reload(s.jason.ID)
+		if src.Status != auth.StatusActive || uint64(src.CredentialEpoch) != s.epoch {
+			t.Errorf("source after a failed merge: status %s epoch %d, want active at %d", src.Status, src.CredentialEpoch, s.epoch)
+		}
+		for _, r := range s.rows {
+			if got := f.get(r.key); got != r.seen {
+				t.Errorf("%s = %q after a failed merge, want %q", r.key, got, r.seen)
+			}
+		}
+		if got := f.inval.take(); len(got) != 0 {
+			t.Errorf("a failed merge published %v, want nothing", got)
 		}
 	}
-	if got := f.inval.take(); len(got) != 0 {
-		t.Errorf("AfterCommit after a failed commit published %v, want nothing", got)
-	}
+	t.Run("changed before staging", func(t *testing.T) {
+		f := newAtomicFx(t)
+		s := f.scene()
+		rename(f, s)
+		after, err := f.merge(f.signedIn(s.bruce), s.plan, s.rows)
+		if !errors.Is(err, auth.ErrMergeConflict) || after != nil {
+			t.Fatalf("merge over a row changed before staging = (%v, %v), want ErrMergeConflict and no AfterCommit", after != nil, err)
+		}
+		check(t, f, s, after)
+	})
+	t.Run("changed between staging and the commit", func(t *testing.T) {
+		f := newAtomicFx(t)
+		s := f.scene()
+		after, err := f.mergeWith(f.signedIn(s.bruce), s.plan, s.rows, func() { rename(f, s) })
+		if !errors.Is(err, storage.ErrConflict) {
+			t.Fatalf("merge with a row changed after staging = %v, want storage.ErrConflict", err)
+		}
+		if after == nil {
+			t.Fatal("staging succeeded, so the merge must have handed back its AfterCommit")
+		}
+		check(t, f, s, after)
+	})
 }
 
 // TestMergeAtomic_ExpectNeedsASerializedFamily pins the limit the port meets:

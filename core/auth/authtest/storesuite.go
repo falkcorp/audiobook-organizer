@@ -85,6 +85,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"OneTimeDeleteByID", oneTimeDelete},
 		{"IdentityRoundTrip", identityRoundTrip},
 		{"IdentityRelinkMovesIndex", identityRelink},
+		{"MergeRowsReadsWhatAMergeMoves", mergeRows},
 		{"StageMergeMovesRecords", stageMerge},
 		{"StageMergeStaleRowConflicts", stageMergeStale},
 		{"ImportUserKeepsHashAndEpoch", importUser},
@@ -943,13 +944,45 @@ func mergeFixture(t *testing.T, fx Fixture) (keyID string) {
 	return k.ID
 }
 
-func stageMerge(t *testing.T, fx Fixture) {
+// mergeRows: MergeRows returns the source's API keys, linked sign-ins and the
+// allow-list row of its address, each with the stored bytes, and nothing of
+// another user's; a user with none gets none.
+func mergeRows(t *testing.T, fx Fixture) {
 	keyID := mergeFixture(t, fx)
-	plan := auth.UserMergePlan{Source: "01JDICK", Target: "01JNIGHTWING", Rows: []auth.MergeRow{
+	must(t, "ImportInviteAllow", importOne(t, fx, func(b *storage.Batch) error {
+		return fx.Importer.ImportInviteAllow(b, "dick@gotham.example")
+	}))
+	other := key("01JNIGHTWING", "gotham:patrol")
+	issueKey(t, fx, other)
+	rows, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows", err)
+	want := []auth.MergeRow{
 		{Kind: auth.MergeAPIKey, ID: keyID, Seen: fx.Raw(t, auth.MergeAPIKey, keyID)},
 		{Kind: auth.MergeIdentity, ID: "wayne-sso/sub-1939", Seen: fx.Raw(t, auth.MergeIdentity, "wayne-sso/sub-1939")},
-	}}
-	must(t, "StageMerge", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageMerge(b, plan) }))
+		{Kind: auth.MergeInviteAllow, ID: "dick@gotham.example", Seen: fx.Raw(t, auth.MergeInviteAllow, "dick@gotham.example")},
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("MergeRows = %+v, want %+v", rows, want)
+	}
+	again, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows(again)", err)
+	if !reflect.DeepEqual(again, rows) {
+		t.Fatalf("two reads of unchanged records differ: %+v then %+v", rows, again)
+	}
+	none, err := fx.Store.MergeRows(bg(), "01JNIGHTWING")
+	must(t, "MergeRows(no records)", err)
+	if len(none) != 1 || none[0].Kind != auth.MergeAPIKey || none[0].ID != other.ID {
+		t.Fatalf("MergeRows of the target = %+v, want only its own key", none)
+	}
+	_, err = fx.Store.MergeRows(bg(), "01JJOKER")
+	errIs(t, "MergeRows(absent user)", err, auth.ErrNotFound)
+}
+
+func stageMerge(t *testing.T, fx Fixture) {
+	keyID := mergeFixture(t, fx)
+	rows, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows", err)
+	must(t, "StageMerge", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageMerge(b, "01JDICK", "01JNIGHTWING", rows) }))
 	k, err := fx.Store.APIKeyByID(bg(), keyID)
 	must(t, "APIKeyByID", err)
 	if k.Owner != "01JNIGHTWING" {
@@ -964,18 +997,18 @@ func stageMerge(t *testing.T, fx Fixture) {
 		t.Fatalf("merged identity user = %s", id.UserID)
 	}
 	err = commit(t, fx, func(b *storage.Batch) error {
-		return fx.Store.StageMerge(b, auth.UserMergePlan{Source: "01JDICK", Target: "01JDICK"})
+		return fx.Store.StageMerge(b, "01JDICK", "01JDICK", nil)
 	})
 	errIs(t, "StageMerge(source = target)", err, auth.ErrBadInput)
 }
 
 func stageMergeStale(t *testing.T, fx Fixture) {
 	keyID := mergeFixture(t, fx)
-	seen := fx.Raw(t, auth.MergeAPIKey, keyID)
-	plan := auth.UserMergePlan{Source: "01JDICK", Target: "01JNIGHTWING", Rows: []auth.MergeRow{{Kind: auth.MergeAPIKey, ID: keyID, Seen: seen}}}
+	rows, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows", err)
 	b := fx.NewBatch()
 	defer closeBatch(t, b)
-	must(t, "StageMerge", fx.Store.StageMerge(b, plan))
+	must(t, "StageMerge", fx.Store.StageMerge(b, "01JDICK", "01JNIGHTWING", rows))
 	revoke(t, fx, keyID) // the key changes after the preview read it
 	errIs(t, "merge of a changed key", b.Commit(bg(), storage.Sync), storage.ErrConflict)
 	k, err := fx.Store.APIKeyByID(bg(), keyID)

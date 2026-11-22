@@ -44,8 +44,26 @@ type Store interface {
 	APIKeyStore
 	OneTimeStore
 	IdentityStore
-	// StageMerge rewrites the owner of every record of plan (Admin.StageUserMerge).
-	StageMerge(b *storage.Batch, plan UserMergePlan) error
+	MergeStore
+}
+
+// MergeStore is the merge family of Store (Admin.PlanUserMerge and
+// Admin.StageUserMerge; the records a merge moves are the ones the store
+// holds, so reading and re-owning them is the store's, never core's or a
+// module's).
+type MergeStore interface {
+	// MergeRows reads every record a merge of source moves to another user, as
+	// the stored bytes (the Expect value StageMerge checks): each of source's
+	// API keys and linked sign-ins, and the allow-list row of source's e-mail
+	// address when one exists. The rows come back in a stable order, so two
+	// reads of unchanged records are equal. A record it cannot decode is an
+	// error (ErrUndecodableRecord): a merge must not leave it behind.
+	MergeRows(ctx context.Context, source UserID) ([]MergeRow, error)
+	// StageMerge rewrites the owner of every row from source to target. Each
+	// row's write is derived from the bytes in row.Seen and expects them, so a
+	// record changed since MergeRows read it fails the commit with
+	// storage.ErrConflict.
+	StageMerge(b *storage.Batch, source, target UserID, rows []MergeRow) error
 }
 
 // UserStore is the user family of Store.
