@@ -114,6 +114,10 @@ type Migration struct {
 	// of them to Step as the chunk's first item, after begin pulled it forward;
 	// that item has nothing left to do.
 	chunkPulled map[string]struct{}
+	// chunkSystem is how this chunk treated the HEAD _system row (systemuser.go):
+	// only the chunk that pulls the user rows sees it, and it pulls every key and
+	// identity that names the row forward with it.
+	chunkSystem systemUsers
 }
 
 // New validates cfg and builds M3. It never writes.
