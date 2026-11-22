@@ -266,6 +266,16 @@ func (fx *offFx) send(method, path, body string) offCell {
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// The event stream answers 200 and then holds the connection until the request's
+	// context ends, so its probe is ended by the caller going away, which is what a
+	// closed tab does; the status and headers it wrote are the verdict. Every other
+	// route answers and returns.
+	if path == "/api/core/v1/events" {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		req = req.WithContext(ctx)
+		time.AfterFunc(500*time.Millisecond, cancel)
+	}
 	rec := httptest.NewRecorder()
 	fx.h.ServeHTTP(rec, req)
 	c := offCell{status: rec.Code}
