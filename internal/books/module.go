@@ -197,7 +197,7 @@ type booksModule struct {
 // (server.LegacyPrefixes: every route's subtree, every top segment and
 // "login") follow from the ABS flag Module captured.
 func (m *booksModule) Manifest() module.Manifest {
-	return module.Manifest{
+	mf := module.Manifest{
 		ID:             ID,
 		Version:        moduleVersion,
 		DisplayName:    "Audiobooks",
@@ -224,9 +224,21 @@ func (m *booksModule) Manifest() module.Manifest {
 		// rename table maps (config_wire.go).
 		AppConfig: appConfigSpec(),
 		Rewrite:   m.rewriteStep(),
+		// The legacy-auth bridge re-derives the principal stage 12 bound
+		// (after a password reset or a role change), so books receives
+		// Deps.AuthRefresh on an identity boot; the kernel hands it to no
+		// other module, and none else declares it (TestAuthRefresh_...).
+		AuthRefresh: true,
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
+	if identityOn() {
+		// The scopes the atom table, the seed sets and the ambient list name,
+		// and books' one seed role (identity_declarations.go): declared only
+		// when the flip is, so a boot without it declares nothing to rbac.
+		mf.Permissions, mf.Roles, mf.ImportedRoleIDs = booksPermissions(), booksRoles(), booksImportedRoleIDs()
+	}
+	return mf
 }
 
 // beforeMigration is the observer the manifest passes database.BooksSpec:
