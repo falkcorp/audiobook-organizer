@@ -1215,22 +1215,32 @@ install-rollback-helpers:
 # refuses a symlink in any component, a non-regular file, a file with a second
 # link or one that is not owned by the user who ran sudo.
 HOST_CONF ?= deploy/host.conf
+# The values reach the recipe as environment variables, never as text spliced
+# into the shell line: a quote, space or `;` in HOST_CONF, DEPLOY_UNIT, APPLY or
+# ROLLBACK_EXPORT_DIR cannot add an argument (--systemctl, say) to a command that
+# runs under sudo. The installer also refuses a unit name that is not a unit name
+# and takes --systemctl only with --root (its tests).
+install-host-conf: export AORG_HC_SOURCE = $(HOST_CONF)
+install-host-conf: export AORG_HC_UNIT = $(DEPLOY_UNIT)
+install-host-conf: export AORG_HC_EXPORT = $(ROLLBACK_EXPORT_DIR)
+install-host-conf: export AORG_HC_APPLY = $(APPLY)
 .PHONY: install-host-conf
 install-host-conf:
-	@[ -e "$(HOST_CONF)" ] || [ -L "$(HOST_CONF)" ] || (echo "ERROR: $(HOST_CONF) does not exist. Copy deploy/host.conf.example to it, fill in this host's values, and run again (or give HOST_CONF=<absolute path>)."; exit 1)
-	@if [ -n "$(APPLY)" ]; then \
+	@[ -e "$$AORG_HC_SOURCE" ] || [ -L "$$AORG_HC_SOURCE" ] || (echo "ERROR: $$AORG_HC_SOURCE does not exist. Copy deploy/host.conf.example to deploy/host.conf, fill in this host's values, and run again (or give HOST_CONF=<path>)."; exit 1)
+	@hc="$$AORG_HC_SOURCE"; case "$$hc" in /*) ;; *) hc="$$PWD/$$hc";; esac; \
+	if [ -n "$$AORG_HC_APPLY" ]; then \
 	  set -e; \
-	  echo "→ Exporting HEAD to a fresh root-owned directory under $(ROLLBACK_EXPORT_DIR) (the installer runs as root and will not run from a checkout that is not root's)..."; \
+	  echo "→ Exporting HEAD to a fresh root-owned directory under $$AORG_HC_EXPORT (the installer runs as root and will not run from a checkout that is not root's)..."; \
 	  git archive HEAD deploy/rollback-helpers > /dev/null; \
-	  exp=$$(sudo mktemp -d "$(ROLLBACK_EXPORT_DIR)/aorg-install.XXXXXX"); \
-	  case "$$exp" in "$(ROLLBACK_EXPORT_DIR)"/aorg-install.??????) ;; *) echo "ERROR: unexpected export directory '$$exp'"; exit 1;; esac; \
+	  exp=$$(sudo mktemp -d "$$AORG_HC_EXPORT/aorg-install.XXXXXX"); \
+	  case "$$exp" in "$$AORG_HC_EXPORT"/aorg-install.??????) ;; *) echo "ERROR: unexpected export directory '$$exp'"; exit 1;; esac; \
 	  trap 'sudo rm -rf -- "$$exp"' EXIT; \
 	  git -c tar.umask=0022 archive HEAD deploy/rollback-helpers | sudo tar -x -f - --no-same-owner -C "$$exp"; \
 	  sudo python3 -I -B "$$exp/deploy/rollback-helpers/install_helpers.py" \
-	    --host-conf="$(abspath $(HOST_CONF))" --unit="$(DEPLOY_UNIT)" --apply; \
+	    --host-conf="$$hc" --unit="$$AORG_HC_UNIT" --apply; \
 	else \
 	  python3 -I -B deploy/rollback-helpers/install_helpers.py \
-	    --host-conf="$(abspath $(HOST_CONF))" --unit="$(DEPLOY_UNIT)"; \
+	    --host-conf="$$hc" --unit="$$AORG_HC_UNIT"; \
 	fi
 
 # Quick aliases

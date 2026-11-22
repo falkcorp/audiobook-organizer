@@ -92,6 +92,7 @@ if __name__ == "__main__" and not sys.flags.isolated:
 import argparse
 import contextlib
 import difflib
+import hashlib
 import shlex
 import stat
 import subprocess
@@ -505,13 +506,38 @@ HOST_CONF_MODE = 0o644
 UNIT_DIR_MODE = 0o755
 
 
+# Settings systemd applies to the RUNNING unit at `daemon-reload` (cgroup
+# resource control), not at its next restart. ExecStart=, WorkingDirectory= and
+# TimeoutStopSec= wait for the restart.
+RESOURCE_PREFIXES = ("Memory", "CPU", "Tasks", "IO")
+
+
+def scratch_dir() -> str | None:
+    """Where the private copy of the source is made. As root, inside the
+    root-made export this runs from (TMPDIR is the caller's to set, and sudo
+    does not always clear it); as a user, the default."""
+    return str(REPO) if os.geteuid() == 0 else None
+
+
+def resource_settings(rh: ModuleType, text: str, path: str) -> dict[str, str]:
+    """The Memory*/CPU*/Tasks*/IO* settings text carries (the last assignment of
+    each key wins; an empty one resets it)."""
+    out: dict[str, str] = {}
+    for _, line in rh._logical_lines(text, path):
+        key, sep, value = line.partition("=")
+        key = key.strip(" \t")
+        if sep and key.startswith(RESOURCE_PREFIXES):
+            out[key] = value.strip(" \t")
+    return out
+
+
 def checked_host_conf(rh: ModuleType, cfg: dict[str, str], data: bytes, source: str) -> str:
     """The text of data (the bytes read from source), after the helper's own
     checks: _read_root_conf's (size, UTF-8, no CR or NUL; it wants a file root
     or this user owns, so it reads a private copy) and _check_rules. A refusal
     names source and the line, never the text. The bytes returned are the
     bytes checked: the copy is read back and compared."""
-    with tempfile.TemporaryDirectory(prefix="aorg-host-conf.") as d:
+    with tempfile.TemporaryDirectory(prefix="aorg-host-conf.", dir=scratch_dir()) as d:
         copy = os.path.join(d, "host.conf")
         fd = os.open(copy, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "wb") as f:
@@ -531,6 +557,11 @@ def host_conf_main(a: argparse.Namespace) -> int:
     # Before anything is loaded: rollback_helper.py is run as root from this
     # checkout, so a checkout that is not root's is refused first (as the bundle
     # mode does), not after its code has already run.
+    if a.systemctl and not a.root:
+        raise SystemExit(
+            "install_helpers: --systemctl is a test seam; it needs --root (a root run never "
+            "takes the systemctl to run from its arguments)"
+        )
     bad = check_sources()
     if bad and (a.apply or os.geteuid() == 0):
         raise SystemExit(
@@ -552,6 +583,10 @@ def install_host_conf(a: argparse.Namespace, rh: ModuleType, bad: list[str]) -> 
     root = a.root.rstrip("/")
     rh.CONFIG = f"{root}{rh.CONFIG}"
     rh.SYSTEMD_DIR = f"{root}{rh.SYSTEMD_DIR}"
+    if not rh._UNIT.fullmatch(a.unit):
+        raise rh.RefusedError(f"--unit {a.unit!r} is not a .service unit name; nothing installed")
+    if a.host_conf.startswith("/"):
+        a.host_conf = os.path.normpath(a.host_conf)
     if a.systemctl:
         rh.TOOLS["systemctl"] = a.systemctl
     try:
@@ -606,12 +641,18 @@ def install_host_conf(a: argparse.Namespace, rh: ModuleType, bad: list[str]) -> 
         )
     print(f"  {dir_state:<9} {unit_dir}")
     print(f"  {file_state:<9} {dest}")
+    # What the installed file sets, for the resource-control notice below: None
+    # when it cannot be read (every such setting in the new file then counts).
+    old_res: dict[str, str] | None = {} if file_state == "create" else None
+    if file_state in ("unchanged", "fix"):
+        old_res = resource_settings(rh, text, a.host_conf)
     if file_state == "replace" and not os.path.islink(dest):
         try:
             old = rh._read_root_conf(dest)
         except (rh.RefusedError, OSError):
             print(f"{dest} is not a file the helper accepts; it is replaced (not shown).")
         else:
+            old_res = resource_settings(rh, old, dest)
             print(f"Change to {dest}:")
             print(
                 "\n".join(
@@ -624,11 +665,20 @@ def install_host_conf(a: argparse.Namespace, rh: ModuleType, bad: list[str]) -> 
         print(f"{dest} has the right text; its owner or mode is fixed.")
     elif file_state == "unreadable":
         print(f"{dest} cannot be read by this run; APPLY=1 compares it as root.")
+    new_res = resource_settings(rh, text, a.host_conf)
+    changed = sorted(
+        k for k in new_res if old_res is None or old_res.get(k) != new_res[k]
+    ) + sorted(k for k in (old_res or {}) if k not in new_res)
+    if changed:
+        print(
+            "  NOTICE: `systemctl daemon-reload` applies resource-control settings to the RUNNING "
+            f"service now, with no restart. This changes: {', '.join(changed)}."
+        )
     if not a.apply:
         print(
             "\nThis was a dry run: nothing was changed. Run it again with APPLY=1 "
             "(make install-host-conf APPLY=1) to install it, then daemon-reload. "
-            "The service is not restarted."
+            "The service is not restarted (the reload itself applies resource-control settings)."
         )
         return 0
     if os.geteuid() != 0 and not root:
@@ -648,6 +698,19 @@ def install_host_conf(a: argparse.Namespace, rh: ModuleType, bad: list[str]) -> 
     print("  the helper's own host.conf check accepts it (`_check_host_conf`)")
     rh._daemon_reload()
     print("  systemctl daemon-reload done; the service was NOT restarted")
+    ours = hashlib.sha256((HERE / "rollback_helper.py").read_bytes()).hexdigest()
+    installed = f"{root}{rh.LIBDIR}/rollback_helper.py"
+    try:
+        theirs = hashlib.sha256(Path(installed).read_bytes()).hexdigest()
+    except OSError:
+        theirs = ""
+    if theirs != ours:
+        print(
+            "  NOTICE: the installed helper bundle "
+            + ("is missing" if not theirs else "differs from this checkout")
+            + f" ({installed}); the next deploy judges host.conf with the installed one; "
+            "reinstall with make install-rollback-helpers."
+        )
     shown = subprocess.run(  # noqa: S603 (argv, no shell)
         [rh.TOOLS["systemctl"], "show", "-p", "DropInPaths", cfg["unit"]],
         capture_output=True,
@@ -662,8 +725,9 @@ def install_host_conf(a: argparse.Namespace, rh: ModuleType, bad: list[str]) -> 
             "itself, systemd may not list a drop-in; run `make rollback-check` after a deploy."
         )
     print(
-        "\nDone. The running service keeps its old settings until its next restart "
-        "(`make deploy`, or restart it yourself when you choose)."
+        "\nDone. The service was not restarted: ExecStart=, WorkingDirectory= and TimeoutStopSec= "
+        "take effect at its next restart (`make deploy`, or restart it yourself when you choose); "
+        "resource-control settings (MemoryMax= and the like) were applied to it by the reload."
     )
     return 0
 
