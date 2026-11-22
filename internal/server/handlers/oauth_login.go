@@ -14,6 +14,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	coreoidc "github.com/falkcorp/mediacore/auth/oidc"
+
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	"github.com/falkcorp/audiobook-organizer/internal/legacyoauth"
@@ -79,7 +81,7 @@ func (h *OAuthHandler) Start(c *gin.Context) {
 	}
 
 	blob, err := h.codec.Encode(legacyoauth.StatePayload{
-		State: state, Verifier: verifier, Provider: provider, Return: sanitizeReturn(c.Query("return")),
+		State: state, Verifier: verifier, Provider: provider, Return: coreoidc.SanitizeReturn(c.Query("return")),
 		// Empty unless the caller is a registered native client (see
 		// appDeepLinkParams). The two PKCE exchanges are kept apart here: Verifier
 		// above is ours for the IdP hop, AppChallenge is the client's for its own.
@@ -258,23 +260,6 @@ func clearOAuthStateCookie(c *gin.Context) {
 // frontend can surface, without leaking internals.
 func redirectToLogin(c *gin.Context, reason string) {
 	http.Redirect(c.Writer, c.Request, "/login?error="+reason, http.StatusFound)
-}
-
-// sanitizeReturn only allows a same-site absolute path (prevents open-redirect). It
-// must be a single leading slash: reject "//host" and "/\host" (browsers normalize
-// backslashes to slashes, so "/\evil.com" is protocol-relative to evil.com), and any
-// path containing a backslash.
-func sanitizeReturn(ret string) string {
-	if ret == "" || !strings.HasPrefix(ret, "/") {
-		return ""
-	}
-	if strings.ContainsRune(ret, '\\') {
-		return ""
-	}
-	if len(ret) > 1 && (ret[1] == '/' || ret[1] == '\\') {
-		return ""
-	}
-	return ret
 }
 
 // oauthHandlerStore is what the login flow needs: legacyoauth.Config.ResolveUser

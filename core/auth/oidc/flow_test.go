@@ -651,8 +651,8 @@ func TestOIDC_WebSignInReturnPath(t *testing.T) {
 		"":                             "",
 		"/" + strings.Repeat("a", 600): "",
 	} {
-		if got := sanitizeReturn(ret); got != want {
-			t.Errorf("sanitizeReturn(%q) = %q, want %q", ret, got, want)
+		if got := SanitizeReturn(ret); got != want {
+			t.Errorf("SanitizeReturn(%q) = %q, want %q", ret, got, want)
 		}
 	}
 	h := newHX(t)

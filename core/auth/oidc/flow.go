@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -257,7 +256,7 @@ func (f *Flow) Start(ctx context.Context, req StartRequest) (*Started, error) {
 	if err != nil {
 		return nil, err
 	}
-	pl := Payload{Provider: cfg.ID, Return: sanitizeReturn(req.Return)}
+	pl := Payload{Provider: cfg.ID, Return: SanitizeReturn(req.Return)}
 	if app := strings.TrimSpace(req.RedirectURI); app != "" && strings.TrimSpace(req.CodeChallenge) != "" {
 		challenge := strings.TrimSpace(req.CodeChallenge)
 		if !f.appRedirectAllowed(app) {
@@ -479,20 +478,4 @@ func sameTarget(location, target string) bool {
 	// Opaque too: "scheme:other" has no host and no path, so two opaque URIs
 	// would otherwise compare equal whatever they say.
 	return strings.EqualFold(l.Scheme, t.Scheme) && strings.EqualFold(l.Host, t.Host) && l.Path == t.Path && l.Opaque == t.Opaque
-}
-
-// sanitizeReturn allows only a same-site absolute path (no open redirect): a
-// single leading slash, so "//host" and "/\host" (browsers read a backslash as
-// a slash) are refused, and no backslash anywhere.
-func sanitizeReturn(ret string) string {
-	if ret == "" || len(ret) > 512 || !strings.HasPrefix(ret, "/") || strings.ContainsRune(ret, '\\') {
-		return ""
-	}
-	if len(ret) > 1 && (ret[1] == '/' || ret[1] == '\\') {
-		return ""
-	}
-	if slices.ContainsFunc([]rune(ret), func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-		return ""
-	}
-	return ret
 }
