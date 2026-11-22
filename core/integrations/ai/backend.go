@@ -110,10 +110,19 @@ type BatchState struct {
 	Failed    int
 }
 
-// BatchItem is one request of a batch.
+// BatchItem is one request of a batch. A batch holds one kind: text items set
+// Request, embed items set Embed (build one with EmbedItem), and SubmitBatch
+// refuses a batch whose items do not all match the capability's kind.
 type BatchItem struct {
 	CustomID string
-	Request  TextRequest // one kind per batch: text
+	Request  TextRequest   // a text item's request
+	Embed    *EmbedRequest // an embed item's request; nil on a text item
+}
+
+// EmbedItem is the embed item of a batch: one embedding request (its inputs
+// are embedded together, as in Router.Embed) answered by one BatchResult.Embed.
+func EmbedItem(customID string, req EmbedRequest) BatchItem {
+	return BatchItem{CustomID: customID, Embed: &req}
 }
 
 // BatchResult is one row of a finished batch.

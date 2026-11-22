@@ -146,6 +146,24 @@ func (i *instance) Generate(ctx context.Context, model string, req ai.TextReques
 // Embed runs one embeddings call. A reply with a different number of vectors
 // than inputs is unusable, never padded or truncated.
 func (i *instance) Embed(ctx context.Context, model string, req ai.EmbedRequest) (ai.EmbedResponse, error) {
+	resp, err := i.cl.Embeddings.New(ctx, embedParams(model, req))
+	if err != nil {
+		return ai.EmbedResponse{}, i.fail(ctx, "embed", err)
+	}
+	if len(resp.Data) != len(req.Inputs) {
+		return ai.EmbedResponse{}, i.badOutput("embed", fmt.Sprintf("the server returned %d vectors for %d inputs", len(resp.Data), len(req.Inputs)))
+	}
+	vecs, ok := vectorsOf(resp.Data)
+	if !ok {
+		return ai.EmbedResponse{}, i.badOutput("embed", "the server returned vectors with a bad index")
+	}
+	return ai.EmbedResponse{Vectors: vecs, Model: resp.Model,
+		Usage: ai.Usage{Requests: 1, InputTokens: resp.Usage.PromptTokens}}, nil
+}
+
+// embedParams is req as an embeddings request body, for a call and for a
+// batch line alike.
+func embedParams(model string, req ai.EmbedRequest) oai.EmbeddingNewParams {
 	p := oai.EmbeddingNewParams{
 		Input: oai.EmbeddingNewParamsInputUnion{OfArrayOfStrings: req.Inputs},
 		Model: oai.EmbeddingModel(model),
@@ -153,17 +171,17 @@ func (i *instance) Embed(ctx context.Context, model string, req ai.EmbedRequest)
 	if req.Dimensions > 0 {
 		p.Dimensions = param.NewOpt(int64(req.Dimensions))
 	}
-	resp, err := i.cl.Embeddings.New(ctx, p)
-	if err != nil {
-		return ai.EmbedResponse{}, i.fail(ctx, "embed", err)
-	}
-	if len(resp.Data) != len(req.Inputs) {
-		return ai.EmbedResponse{}, i.badOutput("embed", fmt.Sprintf("the server returned %d vectors for %d inputs", len(resp.Data), len(req.Inputs)))
-	}
-	vecs := make([][]float32, len(resp.Data))
-	for _, d := range resp.Data {
+	return p
+}
+
+// vectorsOf orders the returned embeddings by their index. It reports false
+// when an index is out of range or repeated, so the reply is unusable: never
+// padded, never reordered by guesswork.
+func vectorsOf(data []oai.Embedding) ([][]float32, bool) {
+	vecs := make([][]float32, len(data))
+	for _, d := range data {
 		if d.Index < 0 || int(d.Index) >= len(vecs) || vecs[d.Index] != nil {
-			return ai.EmbedResponse{}, i.badOutput("embed", "the server returned vectors with a bad index")
+			return nil, false
 		}
 		v := make([]float32, len(d.Embedding))
 		for j, f := range d.Embedding {
@@ -171,8 +189,7 @@ func (i *instance) Embed(ctx context.Context, model string, req ai.EmbedRequest)
 		}
 		vecs[d.Index] = v
 	}
-	return ai.EmbedResponse{Vectors: vecs, Model: resp.Model,
-		Usage: ai.Usage{Requests: 1, InputTokens: resp.Usage.PromptTokens}}, nil
+	return vecs, true
 }
 
 // ---- transcription ----------------------------------------------------------------------
