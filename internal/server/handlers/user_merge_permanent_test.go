@@ -14,10 +14,12 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
 )
 
-// F4-08 B10b2 (A9): once the identity flip has happened every merge journal is
-// permanent. The journal routes ask the service before they read a journal, so
-// an undo or a resume answers 409 merge_permanent for a journal of any status,
-// an undecodable one included, and enqueues nothing.
+// F4-08 B10b2 (A9), narrowed by B10p: once the identity flip has happened a
+// merge journal with no core half (one written before the flip), or one that
+// cannot be decoded, is permanent. The journal routes ask the service before
+// they read a journal, so an undo or a resume of such a journal answers 409
+// merge_permanent for any status and enqueues nothing. A journal written after
+// the flip is undone by core (user_merge_unmerge_test.go).
 
 func (r *mergeRig) flipped(t *testing.T, flipped bool) {
 	t.Helper()
@@ -53,8 +55,9 @@ func TestUserMergeRoutes_FlippedJournalActionsArePermanent(t *testing.T) {
 	}
 	r.journal(t, "j-garbled", `{not json`)
 	for _, jid := range []string{"j-applying", "j-applied", "j-undone", "j-garbled"} {
-		// A resume is answered by the B10l guard first (user_merge_unavailable_test.go);
-		// only an undo reaches the permanence check, so only it is pinned here.
+		// Without a core handle wired a resume is answered by the unavailable guard
+		// first (user_merge_unavailable_test.go); only an undo reaches the
+		// permanence check here, so only it is pinned in this rig.
 		for _, action := range []string{"undo"} {
 			w, _ := r.do(t, http.MethodPost, "/users/merges/"+jid+"/"+action, nil)
 			if w.Code != http.StatusConflict {

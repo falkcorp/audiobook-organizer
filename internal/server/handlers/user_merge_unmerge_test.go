@@ -180,3 +180,24 @@ func TestUserMergeRoutes_UndoOfAPreFlipJournalUnderIdentityStaysPermanent(t *tes
 		t.Error("an operation was enqueued")
 	}
 }
+
+// noGuard is the real service with the permanence gate left open, so the
+// handler's own predicate is what decides: it must still refuse a resume of an
+// identity-era journal whose sweep is not pending (defence behind CheckAction).
+type noGuard struct{ *usermerge.Service }
+
+func (noGuard) CheckAction(usermerge.Action, string) error { return nil }
+
+func TestUserMergeRoutes_TheResumePredicateAloneRefusesACleanIdentityJournal(t *testing.T) {
+	r, _ := idMergeRig(t)
+	r.h.SetUserMerge(noGuard{r.svc}, r.enq, r.grants)
+	r.idEngine(t, true)
+	r.identityJournal(t, "j-clean", false)
+	w, _ := r.do(t, http.MethodPost, "/users/merges/j-clean/resume", nil)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("resume of a clean identity journal with the service gate open: %d %s, want 409", w.Code, w.Body.String())
+	}
+	if len(r.enq.calls) != 0 {
+		t.Errorf("enqueued %d operation(s)", len(r.enq.calls))
+	}
+}
