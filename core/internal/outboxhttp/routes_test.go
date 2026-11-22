@@ -534,11 +534,11 @@ func (c stage13Caller) principal(cat *rbac.Catalog) *auth.Principal {
 		p.Perms = authz.AuthDisabled(cat)
 	case auth.MethodAPIKey:
 		p.Perms = authz.Compile(rbac.CompileInput{
-			CheckerInput: rbac.CheckerInput{Scopes: slices.Clone(c.scopes)}, RolePatterns: slices.Clone(c.scopes),
+			Scopes: slices.Clone(c.scopes), RolePatterns: slices.Clone(c.scopes),
 		}, cat)
 	default:
 		p.Perms = authz.Compile(rbac.CompileInput{
-			CheckerInput: rbac.CheckerInput{Interactive: c.method.Interactive()}, RolePatterns: slices.Clone(c.scopes),
+			Interactive: c.method.Interactive(), RolePatterns: slices.Clone(c.scopes),
 		}, cat)
 	}
 	return p
