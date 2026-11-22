@@ -1,0 +1,3 @@
+### Added
+
+- The tasks flip's data steps are registered behind the same switch as the identity flip. With it on, the store declares `books.level-3` and raises books to level 3; the run rows, run data, clocks, pauses, stand-downs and debounce buckets of the old operations store are moved into the core task store by a cutover step, the old activity rows are rewritten in place to point at the moved runs, and the old system-log rows are moved into the core log journal by a second step. The kernel hands the books module the task and log importers and claims the core log keyspace. Nothing runs by default: the switch is still off.

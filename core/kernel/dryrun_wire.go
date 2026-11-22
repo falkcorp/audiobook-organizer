@@ -105,7 +105,7 @@ func (w *dryRunWiring) bind(ctx context.Context) func(*storage.DB) error {
 			return err
 		}
 		w.imp.bindLegacy(db, allowRegen)
-		return nil
+		return bindNativeImporters(w.imp, db)
 	}
 }
 

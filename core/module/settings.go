@@ -15,9 +15,11 @@ import (
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // SettingsSection wraps a config.Section[T] so a Manifest can list sections
@@ -147,7 +149,7 @@ func defaultsHandle[T any](s config.Section[T]) *config.Handle[T] {
 // each bound by the kernel to its subsystem's keyspace and staging into the
 // CALLER's batch (06 §6.4.2). A field exists from the R2 flip that lands its
 // importer; the config flip (F3) lands Config and Secrets, the identity flip
-// (F4) Auth, Roles and Audit.
+// (F4) Auth, Roles and Audit, the tasks flip (F5) Tasks and Log.
 //
 // The values a Cutover func receives are bound late: the kernel builds the
 // migration list at P2, the importers' stores open at P4b, so each is a
@@ -199,6 +201,23 @@ type Importers struct {
 	// lists no audit field: this one is coined by F4-08, because audit has no
 	// importer of its own.
 	Audit audit.Logger
+
+	// Tasks is core's task-store importer (F5; 05-tasks 5T.8.3): books' M4
+	// stages runs with their data, schedule clocks, pause and stand-down
+	// markers, debounce buckets and Requires stamps through it, into the
+	// caller's batch, every run's ID kept. The kernel binds it over c/tasks/ at
+	// the start of P4b. Like Auth, it also answers a read a caller asks for with
+	// a type assertion: Get(ctx, tasks.RunID) (tasks.RunRecord, error) returns a
+	// run an earlier chunk committed, which books' activity rewrite uses to find a
+	// repairs row's fixer (m4.RunReader). It refuses with ErrImporterNotBound until
+	// bound.
+	Tasks tasks.Importer
+	// Log is core's journal importer (F5; 05-logging §5): books' M5 hands it the
+	// decoded system-log rows. Unlike the others it commits its own batches (log
+	// is L0 and cannot name a storage type), so M5 relies on the key being a
+	// function of each record. The kernel binds it over c/log/ at the start of
+	// P4b; it refuses with ErrImporterNotBound until then.
+	Log log.Importer
 }
 
 // ErrImporterNotBound is what a late-bound importer returns before the

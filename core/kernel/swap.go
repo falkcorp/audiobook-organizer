@@ -75,10 +75,11 @@ func (k *Kernel) swapWanted(describe bool) bool { return !describe && k.cfg.Stat
 // store at its first P4b, whether or not tasks start: the keyspace is storage's
 // to register, the start rule is the kernel's (tasks.go).
 func (k *Kernel) storageOwners() []storage.OwnerSpec {
-	// c/config/ and c/secrets/ (05-config 1.3.3, 2.3) are claimed in every
-	// app's store. Every reader of the owners reads this one function: P0a's
-	// swapper, the P2 open, the offline opens and the dry run.
-	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec(), configOwnerSpec(), secretsOwnerSpec()}
+	// c/config/ and c/secrets/ (05-config 1.3.3, 2.3) and c/log/ (the journal,
+	// F5-18) are claimed in every app's store. Every reader of the owners reads
+	// this one function: P0a's swapper, the P2 open, the offline opens and the
+	// dry run.
+	owners := []storage.OwnerSpec{auditOwnerSpec(), taskOwnerSpec(), logOwnerSpec(), configOwnerSpec(), secretsOwnerSpec()}
 	// Core's half of M7 (core_level.go): registered when a manifest declares a
 	// cutover, so a build with none raises no level.
 	owners = append(owners, k.coreOwners()...)

@@ -281,6 +281,11 @@ func (k *Kernel) migrateStorage(ctx context.Context) error {
 	// P4b); with no config or secrets store wired (the gate off) they stay
 	// unbound and a step that reaches one fails with module.ErrImporterNotBound.
 	k.importers().bind(k.importerCfg, k.importerSec)
+	// Importers.Tasks and Log bind over c/tasks/ and c/log/ (F5-18): books' M4
+	// and M5 stage into them.
+	if err := bindNativeImporters(k.importers(), db); err != nil {
+		return err
+	}
 	// Importers.Legacy and AllowKeyRegen bind with them: the legacy ranges exist
 	// as soon as Prepare returned the DB, gate or no gate.
 	k.importers().bindLegacy(db, k.importerAllowRegen)

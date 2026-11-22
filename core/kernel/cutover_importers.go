@@ -10,14 +10,18 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // lateImporters are the importers Manifest.Cutover receives (06 §6.4.2).
@@ -47,6 +51,12 @@ type lateImporters struct {
 	usr   auth.Importer
 	roles rbac.Importer
 	aud   audit.Logger
+	// taskImp, taskRuns and logImp back Importers.Tasks and Log (F5-18): the
+	// native task store's importer and run reader over c/tasks/, and the journal's
+	// importer over c/log/, bound by bindNative at the start of P4b; nil = unbound.
+	taskImp  tasks.Importer
+	taskRuns runGetter
+	logImp   log.Importer
 }
 
 // values are the importers a Cutover func is handed.
@@ -54,6 +64,7 @@ func (l *lateImporters) values() module.Importers {
 	return module.Importers{
 		Config: lateConfig{l}, Secrets: lateSecrets{l},
 		Auth: lateAuth{l}, Roles: lateRoles{l}, Audit: lateAudit{l},
+		Tasks: lateTasks{l}, Log: lateLog{l},
 		Legacy: l.legacyReader, AllowKeyRegen: l.allowKeyRegen,
 		OperatorSet: l.operatorSet,
 	}
@@ -320,4 +331,124 @@ func (a lateAudit) Emit(ctx context.Context, e audit.Event) {
 	if lg, err := a.get(); err == nil {
 		lg.Emit(ctx, e)
 	}
+}
+
+// runGetter is the read of one stored run: tasks.RunStore.Get.
+type runGetter interface {
+	Get(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error)
+}
+
+// bindNative points Importers.Tasks at the native task store's importer, with
+// the run reader the importer's Get answers from, and Importers.Log at the
+// journal's importer (F5-18; 05-tasks 5T.8.3, 05-logging §5). A nil argument
+// leaves that importer unbound. Binding twice replaces the first binding.
+func (l *lateImporters) bindNative(ti tasks.Importer, runs runGetter, li log.Importer) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.taskImp, l.taskRuns, l.logImp = ti, runs, li
+}
+
+func (l *lateImporters) native() (tasks.Importer, runGetter, log.Importer) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.taskImp, l.taskRuns, l.logImp
+}
+
+// lateTasks forwards to the native task importer and refuses with
+// module.ErrImporterNotBound until bindNative ran.
+type lateTasks struct{ l *lateImporters }
+
+func (t lateTasks) get() (tasks.Importer, error) {
+	if imp, _, _ := t.l.native(); imp != nil {
+		return imp, nil
+	}
+	return nil, module.ErrImporterNotBound
+}
+
+func (t lateTasks) Run(ctx context.Context, b *storage.Batch, r tasks.RunRecord) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.Run(ctx, b, r)
+}
+
+func (t lateTasks) RunData(ctx context.Context, b *storage.Batch, id tasks.RunID, d tasks.RunData) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.RunData(ctx, b, id, d)
+}
+
+func (t lateTasks) Clock(ctx context.Context, b *storage.Batch, k tasks.Kind, c tasks.Clock) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.Clock(ctx, b, k, c)
+}
+
+func (t lateTasks) Pause(ctx context.Context, b *storage.Batch, p tasks.Pause) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.Pause(ctx, b, p)
+}
+
+func (t lateTasks) StandDown(ctx context.Context, b *storage.Batch, s tasks.StandDown) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.StandDown(ctx, b, s)
+}
+
+func (t lateTasks) Debounce(ctx context.Context, b *storage.Batch, d tasks.DebounceBucket) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.Debounce(ctx, b, d)
+}
+
+func (t lateTasks) Stamp(ctx context.Context, b *storage.Batch, subject entity.Ref, k tasks.Kind, at time.Time) error {
+	imp, err := t.get()
+	if err != nil {
+		return err
+	}
+	return imp.Stamp(ctx, b, subject, k, at)
+}
+
+func (t lateTasks) RenameKind(ctx context.Context, b *storage.Batch, from, to tasks.Kind, cursor string, limit int) (string, error) {
+	imp, err := t.get()
+	if err != nil {
+		return "", err
+	}
+	return imp.RenameKind(ctx, b, from, to, cursor, limit)
+}
+
+// Get reads a run the native store holds, committed by an earlier chunk of the
+// tasks step (books' activity rewrite asks for a repairs row's run through a type
+// assertion on Importers.Tasks: m4.RunReader). It refuses with
+// module.ErrImporterNotBound until bindNative ran.
+func (t lateTasks) Get(ctx context.Context, id tasks.RunID) (tasks.RunRecord, error) {
+	_, runs, _ := t.l.native()
+	if runs == nil {
+		return tasks.RunRecord{}, module.ErrImporterNotBound
+	}
+	return runs.Get(ctx, id)
+}
+
+// lateLog forwards to the journal importer and refuses with
+// module.ErrImporterNotBound until bindNative ran.
+type lateLog struct{ l *lateImporters }
+
+func (g lateLog) Import(ctx context.Context, recs []log.ImportedRecord) error {
+	_, _, imp := g.l.native()
+	if imp == nil {
+		return module.ErrImporterNotBound
+	}
+	return imp.Import(ctx, recs)
 }
