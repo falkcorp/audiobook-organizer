@@ -604,6 +604,7 @@ func (k *Kernel) register(ctx context.Context) error {
 		}
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
 			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
+			State: k.moduleState(ctx), SecretsKeyringExported: k.keyringExported(),
 			Config: k.configAccess(e.man)}
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,
