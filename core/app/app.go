@@ -28,6 +28,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/sdnotify"
@@ -151,6 +152,14 @@ func (a *App) StorageAdmin() *storage.Admin { return a.k.StorageAdmin() }
 // module builds from this; the accessor is deleted when core reports them
 // itself. Zero, with no error, when New opened no store.
 func (a *App) CheckpointHealth() (storage.CheckpointHealth, error) { return a.k.CheckpointHealth() }
+
+// HealthSnapshot is the health registry's state now: each component with its
+// current Result, copied (05-health section 5H.3.1). ABO's books module reads it to
+// put the registry's posture tokens (core.auth's auth_disabled_remote, core.backup's
+// restore and journal tokens) on the authenticated degraded field of
+// GET /api/v1/system/status; the accessor goes when core serves that field
+// itself. Zero for an App whose kernel built no registry.
+func (a *App) HealthSnapshot() health.Snapshot { return a.k.HealthSnapshot() }
 
 // Handler is the fully assembled root handler (for tests and embedding in
 // another server). Valid after New. Embedding still needs Run: Handler alone
