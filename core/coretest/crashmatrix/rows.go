@@ -1,7 +1,7 @@
 // file: core/coretest/crashmatrix/rows.go
-// version: 1.0.11
+// version: 1.0.12
 // guid: d18639c8-9b23-4ce6-a83c-4b77e83754c1
-// last-edited: 2026-11-19
+// last-edited: 2026-11-21
 
 package crashmatrix
 
@@ -138,6 +138,9 @@ func Rows() []Row {
 		{Phase: "P4d 3 (R1)", Writer: "the kernel, on a restore boot with no restore hooks: marker_written, applied, inflight.json removed (DATA9-5)", Labels: []string{
 			"swap.journal.marker_written", "swap.journal.applied", "swap.slot.remove",
 		}},
+		{Phase: "P4d 2 and 3 (identity restore boot walk)", Writer: "the kernel, on an identity restore boot that walks the journal's edges: restore_line once the restore line is committed and hooks_done once the hooks completed, between opened and marker_written (identity_p4d.go and restore_derive.go, through swap.go's restoreWalks; 05-backup §5B.3.4)", Labels: []string{
+			"swap.journal.restore_line", "swap.journal.hooks_done",
+		}},
 		{Phase: "Run 0 (before start step 1)", Writer: "storage: ready_at and status served on the live store's open checkpoint records ((*DB).MarkServed, 05-storage §5S.3.12)", Labels: []string{
 			"storage.checkpoint.ready",
 		}},
@@ -196,6 +199,8 @@ func IdentityUnreachedLabels() map[string]string {
 		// A restore boot's own writers: the restore line, restore_hooked, and the
 		// auth and audit hooks' commits (the scenario's revert fixture stages a restore).
 		[]string{"kernel.reapply.served_boot", "kernel.reapply.restore_line", "kernel.hooks.marked", "kernel.hooks.report", "kernel.hooks.auth", "kernel.hooks.audit"},
+		// The walk's own journal edges between them.
+		[]string{"swap.journal.restore_line", "swap.journal.hooks_done"},
 	) {
 		out[l] = identityFlipOnly
 	}
