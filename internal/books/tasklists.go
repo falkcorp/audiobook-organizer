@@ -44,9 +44,9 @@ type taskListInputs struct {
 // Not built yet (F5-18 A6 carries them, each its own slice of work, named in
 // notYetBuilt in tasklists_test.go with the kinds it will bring):
 //
-//   - TODO-F5-18-A6-MAINT-G157: maintenance groups 1, 5 and 7 deps builders
-//     (t6g1Deps with PlanRuns left for the flip until #5003 merges, t6g5Deps,
-//     t6g7Deps) and their entries in maintenance.BooksTaskLists.
+//   - TODO-F5-18-A6-MAINT-G15: maintenance groups 1 and 5 deps builders
+//     (t6g1Deps with PlanRuns left for the flip until #5003 merges, t6g5Deps)
+//     and their entries in maintenance.BooksTaskLists.
 //   - TODO-F5-18-A6-DEDUP: the dedup plugin's KindDeps builder (five groups).
 //   - TODO-F5-18-A6-SERVER-T7: internal/server's t7Deps builder, in a new file.
 //
