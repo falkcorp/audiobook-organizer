@@ -113,6 +113,15 @@ type Options struct {
 	// upgrade breaks no tooling that reads it. It must be a plain file name
 	// (New refuses a path, "." or "..") and not ReadOnlyKeyFile.
 	BootstrapTokenFile string
+	// InviteSessionTTL is how long the session an accepted invite opens
+	// lives (§4.13). Zero, which hello and new apps keep, gives it
+	// core.auth.session.remember_ttl, as a remember-me sign-in. An app that
+	// already gave invited users a longer first session sets it (ABO: 720h,
+	// HEAD's 30 days), so the flip does not narrow it. It is a compile-time
+	// value with no operator key: remember_ttl's default stays the same for
+	// every app, and an operator who lowers remember_ttl does not shorten
+	// invite sessions. It must not be negative (New refuses it).
+	InviteSessionTTL time.Duration
 }
 
 // Settings are the live core.auth.* values the service reads on each call
@@ -395,6 +404,9 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 	}
 	if err := checkBootstrapTokenFile(opts.BootstrapTokenFile); err != nil {
 		return nil, err
+	}
+	if opts.InviteSessionTTL < 0 {
+		return nil, fmt.Errorf("%w: Options.InviteSessionTTL %v is negative", ErrBadInput, opts.InviteSessionTTL)
 	}
 	s.opts.ImportedKeyPrefixes = slices.Clone(opts.ImportedKeyPrefixes)
 	s.methods = map[Method]MethodSpec{}

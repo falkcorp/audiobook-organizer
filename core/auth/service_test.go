@@ -55,6 +55,9 @@ type fx struct {
 	// loginSleep, when set, replaces the sign-in delays of every service
 	// rebuild builds.
 	loginSleep func(time.Duration)
+	// inviteSessionTTL is auth.Options.InviteSessionTTL of every service
+	// rebuild builds; set it, then rebuild.
+	inviteSessionTTL time.Duration
 
 	mu       sync.Mutex
 	now      time.Time
@@ -199,7 +202,7 @@ func newFxOwners(t testing.TB, wrap func(rbac.Store) rbac.Store, extra ...storag
 // fixture stores users behind the service, and HasUsers is a flag New sets.
 func (f *fx) rebuild() {
 	f.t.Helper()
-	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
+	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}, InviteSessionTTL: f.inviteSessionTTL}, auth.Deps{
 		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
 		Hasher: f.hasher, Settings: f.liveSettings, OnInvalidated: f.inval.callback(),
 	})

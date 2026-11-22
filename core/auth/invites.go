@@ -286,7 +286,9 @@ func (s *Service) openInvite(ctx context.Context, token string, client ClientInf
 // AcceptInvite spends an invite and creates its account (§4.13): the
 // username and role the creator chose, the e-mail unverified, in.Password
 // (at least core.auth.password.min_length) as its password, and a delegated
-// session (OriginInvite, core.auth.session.remember_ttl) in the same batch.
+// session (OriginInvite) in the same batch. The session lives
+// Options.InviteSessionTTL when the app set one, else
+// core.auth.session.remember_ttl.
 // The throttle applies as in LookupInvite; a malformed request, a short
 // password and a busy hasher leave the invite unspent.
 //
@@ -408,7 +410,7 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 			// conflicts and the retry finds it spent.
 			return refuse(fmt.Errorf("%w: %w", ErrInviteInvalid, err))
 		}
-		rec, issued, err := s.stageSession(b, u, OriginInvite, true, in.Client, now)
+		rec, issued, err := s.stageSession(b, u, OriginInvite, lifeInvite, in.Client, now)
 		if err != nil {
 			return err
 		}

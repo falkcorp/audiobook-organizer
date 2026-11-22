@@ -40,7 +40,7 @@ func (s *Service) issueSession(ctx context.Context, u *User, origin SessionOrigi
 	now := s.now().UTC()
 	var out *IssuedSession
 	err := s.commitRetrying(ctx, func(b *storage.Batch) error {
-		rec, issued, err := s.stageSession(b, u, origin, remember, client, now)
+		rec, issued, err := s.stageSession(b, u, origin, lifeOfRemember(remember), client, now)
 		if err != nil {
 			return err
 		}
@@ -58,16 +58,46 @@ func (s *Service) issueSession(ctx context.Context, u *User, origin SessionOrigi
 	return out, nil
 }
 
+// sessionLife names which lifetime stageSession gives a session. It is the one
+// decision point for how long a session lives: a caller says what kind of
+// session it opens, and stageSession alone maps the kind to a duration.
+type sessionLife int
+
+const (
+	// lifeSession is core.auth.session.ttl, a plain sign-in's.
+	lifeSession sessionLife = iota
+	// lifeRemember is core.auth.session.remember_ttl, a remember-me sign-in's.
+	lifeRemember
+	// lifeInvite is the session an accepted invite opens: Options.InviteSessionTTL
+	// when the app set one, else core.auth.session.remember_ttl.
+	lifeInvite
+)
+
+// lifeOfRemember is the lifetime of a sign-in that does or does not ask to be
+// remembered.
+func lifeOfRemember(remember bool) sessionLife {
+	if remember {
+		return lifeRemember
+	}
+	return lifeSession
+}
+
 // stageSession stages into b a session for u opened at now, stamped with
-// u.CredentialEpoch: core.auth.session.remember_ttl when remember, else
-// core.auth.session.ttl. A caller that changes u in the same batch (a reset
-// link's epoch bump, an invite's new account) passes the record as staged.
-func (s *Service) stageSession(b *storage.Batch, u *User, origin SessionOrigin, remember bool, client ClientInfo, now time.Time,
+// u.CredentialEpoch and living as life says (see sessionLife). A caller that
+// changes u in the same batch (a reset link's epoch bump, an invite's new
+// account) passes the record as staged.
+func (s *Service) stageSession(b *storage.Batch, u *User, origin SessionOrigin, life sessionLife, client ClientInfo, now time.Time,
 ) (*SessionRecord, *IssuedSession, error) {
 	st := s.settings()
 	ttl := st.SessionTTL
-	if remember {
+	switch life {
+	case lifeRemember:
 		ttl = st.RememberTTL
+	case lifeInvite:
+		ttl = st.RememberTTL
+		if s.opts.InviteSessionTTL > 0 {
+			ttl = s.opts.InviteSessionTTL
+		}
 	}
 	rec := &SessionRecord{
 		UserID: u.ID, Origin: origin, CredentialEpoch: u.CredentialEpoch,
