@@ -311,7 +311,7 @@ class FakeHost:
             "service_user": USER,
             "archive_dir": str(self.archives),
             "checkpoint_dir": "",
-            "offline_env": f"HOME={self.state} ABK_STATE_DIR={self.state}",
+            "offline_env": f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}",
             "export_dir": str(self.export),
         }
         values.update(config)
@@ -684,7 +684,13 @@ class RollbackRestoreTest(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            runs[0]["env"], {"HOME": str(host.state), "ABK_STATE_DIR": str(host.state)}
+            runs[0]["env"],
+            {
+                "HOME": str(host.state),
+                "ABK_STATE_DIR": "",
+                "ABO_CORE_PATHS_STATE_DIR": str(host.state),
+            },
+            "the flipped binary refuses ABK_STATE_DIR in an offline command",
         )
         sdrun = [e for e in host.calls() if e["kind"] == "tool" and e["tool"] == "systemd-run"]
         self.assertIn(f"--uid={USER}", sdrun[0]["argv"], "as the service user, never root")
@@ -902,8 +908,11 @@ class RollbackRestoreTest(unittest.TestCase):
         )
         fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
         self.assertIn(
-            "ABK_STATE_DIR=", fetch, "a scratch state directory: no access to the service's"
+            "ABO_CORE_PATHS_STATE_DIR=",
+            fetch,
+            "a scratch state directory: no access to the service's",
         )
+        self.assertNotIn("ABK_STATE_DIR", fetch, "the flipped binary refuses that name")
         runs = [e for e in host.calls() if e["kind"] == "app" and e["args"][:1] == ["updater"]]
         self.assertEqual([r["name"] for r in runs], ["current"], "the CURRENT binary fetches")
         self.assertEqual(
@@ -1133,7 +1142,8 @@ class DeployReleaseTest(unittest.TestCase):
             "the hash is measured on the host; enforced is unknown, never read from this checkout",
         )
         fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
-        self.assertIn("ABK_STATE_DIR=", fetch)
+        self.assertIn("ABO_CORE_PATHS_STATE_DIR=", fetch)
+        self.assertNotIn("ABK_STATE_DIR", fetch)
         self.assertEqual(host.installed(), f"fetched-{self.TAG}")
         self.assertEqual(fake_ssh.fake_app_name(host.prev), "current", ".prev is the replaced one")
         self.assertTrue(

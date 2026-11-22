@@ -167,7 +167,7 @@ class InstallHelpers(unittest.TestCase):
             "db = /path/to/audiobooks.pebble",
             "service_user = audiobook",
             "stage_bin = /home/alfred/audiobook-organizer",
-            "offline_env = HOME=/var/lib/audiobook-organizer ABK_STATE_DIR=/var/lib/audiobook-organizer",
+            "offline_env = HOME=/var/lib/audiobook-organizer ABO_CORE_PATHS_STATE_DIR=/var/lib/audiobook-organizer",
         ):
             self.assertIn(line, text)
         self.assertEqual(stat.S_IMODE(self.dropin.stat().st_mode), 0o440)

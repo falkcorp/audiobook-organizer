@@ -232,7 +232,7 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         # (the command reads no store); then the discard of the file it
         # wrote, and the helper's install of it as .prev.
         "fetch_release": (
-            'd=$(mktemp -d) && ABK_STATE_DIR="$d" HOME="$d" '
+            'd=$(mktemp -d) && ABO_CORE_PATHS_STATE_DIR="$d" HOME="$d" '
             f"{o.bin} updater fetch-release --version {o.release} --out {o.stage_bin}; "
             'rc=$?; rm -rf "$d"; exit $rc'
         ),

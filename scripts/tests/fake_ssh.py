@@ -256,7 +256,7 @@ IDENT = json.loads({ident!r})
 args = sys.argv[1:]
 with open(IDENT["log"], "a", encoding="utf-8") as f:
     f.write(json.dumps({{"kind": "app", "name": IDENT["name"], "path": sys.argv[0], "args": args,
-                        "env": {{k: os.environ.get(k, "") for k in ("HOME", "ABK_STATE_DIR")}}}}) + "\\n")
+                        "env": {{k: os.environ.get(k, "") for k in ("HOME", "ABK_STATE_DIR", "ABO_CORE_PATHS_STATE_DIR")}}}}) + "\\n")
 def unknown(flag):
     sys.stderr.write("Error: unknown flag: " + flag + "\\n")
     sys.exit(1)
