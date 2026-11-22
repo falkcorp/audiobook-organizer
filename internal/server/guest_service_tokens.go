@@ -789,7 +789,7 @@ type guestTokenView struct {
 }
 
 func (s *Server) guestTokenViews(ctx context.Context) (views []guestTokenView, lastSeenNote string, err error) {
-	users := s.guestUsers()
+	users := s.guestUsersForList()
 	tokens, ok := database.AsCapability[database.GuestServiceTokenStore](s.storeForWiring())
 	if !ok {
 		return []guestTokenView{}, "", nil
