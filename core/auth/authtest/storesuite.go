@@ -1118,7 +1118,8 @@ func importKey(t *testing.T, fx Fixture) {
 	putUser(t, fx, user("01JLUCIUS", "lucius", 1))
 	const raw = "abk_wayne-enterprises-applied-sciences-0001"
 	k := &auth.APIKey{ID: "01JKEY1", Owner: "01JLUCIUS", Name: "cowl", Scopes: []rbac.Permission{"gotham:patrol"},
-		Status: auth.KeyActive, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour), UseCount: 41}
+		Status: auth.KeyActive, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour), UseCount: 41,
+		Description: "grappling hook, spare"}
 	must(t, "ImportAPIKey", importOne(t, fx, func(b *storage.Batch) error {
 		return fx.Importer.ImportAPIKey(b, k, auth.HashCredential(raw))
 	}))
@@ -1126,6 +1127,9 @@ func importKey(t *testing.T, fx Fixture) {
 	must(t, "APIKeyByToken(imported abk_)", err)
 	if got.ID != "01JKEY1" || !got.Imported || got.UseCount != 41 || got.HashPrefix != auth.HashHex(raw)[:8] {
 		t.Fatalf("imported key = %+v", got)
+	}
+	if got.Description != "grappling hook, spare" {
+		t.Fatalf("imported key's description = %q, want the one the record carried", got.Description)
 	}
 }
 
@@ -1157,6 +1161,10 @@ func importKeyRejects(t *testing.T, fx Fixture) {
 		"unknown status": func(k *auth.APIKey) { k.Status = "lost" },
 		"no expiry":      func(k *auth.APIKey) { k.ExpiresAt = time.Time{} },
 		"no owner":       func(k *auth.APIKey) { k.Owner = "01JGHOST" },
+		"long description": func(k *auth.APIKey) {
+			k.Description = strings.Repeat("a", auth.MaxKeyDescriptionRunes+1)
+		},
+		"description with a line break": func(k *auth.APIKey) { k.Description = "grapnel\nspare" },
 	}
 	for name, mutate := range cases {
 		k := base()

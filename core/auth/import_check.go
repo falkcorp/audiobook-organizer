@@ -73,7 +73,8 @@ func CheckImportUser(u *User, passwordHash string) error {
 // its raw value: an ID, at least one parseable concrete scope, a known status,
 // a token hash, and an expiry unless the key is revoked (a key whose RevokedAt
 // is set counts as revoked whatever its Status says: early fix 3's most
-// restrictive reading).
+// restrictive reading), and a description CheckKeyDescription accepts (an
+// over-long one, or one with a control character, is refused, never cut).
 func CheckImportAPIKey(k *APIKey, tokenSHA256 [32]byte) error {
 	if k == nil || k.ID == "" {
 		return importReject("a key needs an ID")
@@ -95,6 +96,12 @@ func CheckImportAPIKey(k *APIKey, tokenSHA256 [32]byte) error {
 	revoked := k.Status == KeyRevoked || !k.RevokedAt.IsZero()
 	if !revoked && k.ExpiresAt.IsZero() {
 		return importReject("apikey %s has no expiry", k.ID)
+	}
+	// A description that breaks CheckKeyDescription is refused, never
+	// shortened or cleaned: the owner tells keys apart by it. The text names
+	// the key by ID and the reason by a fixed class, never the description.
+	if err := CheckKeyDescription(k.Description); err != nil {
+		return importReject("apikey %s: %v", k.ID, err)
 	}
 	return nil
 }
