@@ -34,6 +34,9 @@ const (
 type fpSeed struct {
 	admin, viewer, target string
 	keyRaw, keyHash       string
+	// adminKeyRaw is an unscoped key of the administrator; adminScopedKeyRaw is
+	// the same administrator's key scoped to users.manage alone.
+	adminKeyRaw, adminScopedKeyRaw string
 }
 
 func seedFootprint(t *testing.T, s *database.PebbleStore, out *fpSeed) {
@@ -69,6 +72,23 @@ func seedFootprint(t *testing.T, s *database.PebbleStore, out *fpSeed) {
 	put("pref:"+u+":theme", map[string]any{"key": "theme", "value": "dark"})
 	put("pref:"+u+":speed", map[string]any{"key": "speed", "value": "1.5"})
 	put("playp:"+u+":1", database.PlaybackProgress{UserID: u, BookID: 1, UpdatedAt: t0})
+
+	// The administrator's keys: HEAD's handler admitted a key that may act as
+	// admin (unscoped) and refused one scoped short of that (users.manage only).
+	for _, k := range []struct {
+		name   string
+		scopes []string
+		raw    *string
+	}{
+		{"batcomputer", nil, &out.adminKeyRaw},
+		{"batsignal", []string{"users.manage"}, &out.adminScopedKeyRaw},
+	} {
+		raw, khash, err := database.GenerateAPIKeyToken()
+		require.NoError(t, err)
+		_, err = s.CreateAPIKey(&database.APIKey{UserID: out.admin, Name: k.name, TokenHash: khash, Scopes: k.scopes, Status: "active"})
+		require.NoError(t, err)
+		*k.raw = raw
+	}
 
 	// Core's families: one key and one sign-in (opaque sub) on the target.
 	raw, khash, err := database.GenerateAPIKeyToken()
@@ -175,6 +195,12 @@ func TestIdentityBoot_FootprintAnswersUnderCoreIdentity(t *testing.T) {
 	}{
 		{"a non-admin session", func() *httpResult { return &httpResult{doJSON(t, h, http.MethodGet, path, nil, viewer).Code} }, http.StatusForbidden},
 		{"an api key of a non-admin", func() *httpResult { return &httpResult{withKey(r, http.MethodGet, path, seed.keyRaw).Code} }, http.StatusForbidden},
+		{"an admin's key scoped to users.manage", func() *httpResult {
+			return &httpResult{withKey(r, http.MethodGet, path, seed.adminScopedKeyRaw).Code}
+		}, http.StatusForbidden},
+		// The admission side: an unscoped key of the administrator may act as
+		// admin, as HEAD's handler decided, so a refusal above is the scope's.
+		{"an admin's unscoped key", func() *httpResult { return &httpResult{withKey(r, http.MethodGet, path, seed.adminKeyRaw).Code} }, http.StatusOK},
 		{"no credential", func() *httpResult { return &httpResult{doJSON(t, h, http.MethodGet, path, nil, nil).Code} }, http.StatusUnauthorized},
 	} {
 		require.Equal(t, c.want, c.do().code, "%s must be refused as HEAD refused it", c.name)
