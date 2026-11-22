@@ -194,6 +194,10 @@ type APIKey struct {
 	LastUsedIP    string     `json:"last_used_ip,omitempty"`
 	UseCount      int64      `json:"use_count"`
 	Imported      bool       `json:"imported"`
+
+	// Description is the key's optional description, the text its owner tells
+	// it from their other keys by; absent when there is none.
+	Description string `json:"description,omitempty"`
 }
 
 func keyBody(k *auth.APIKey, ownerName string) APIKey {
@@ -203,7 +207,8 @@ func keyBody(k *auth.APIKey, ownerName string) APIKey {
 	}
 	out := APIKey{ID: k.ID, Owner: string(k.Owner), OwnerUsername: ownerName, Name: k.Name, Scopes: scopes,
 		Status: string(k.Status), CreatedAt: k.CreatedAt, UseCount: k.UseCount, Imported: k.Imported,
-		ExpiresAt: when(k.ExpiresAt), RevokedAt: when(k.RevokedAt), LastUsedAt: when(k.LastUsedAt)}
+		ExpiresAt: when(k.ExpiresAt), RevokedAt: when(k.RevokedAt), LastUsedAt: when(k.LastUsedAt),
+		Description: k.Description}
 	if k.LastUsedIP.IsValid() {
 		out.LastUsedIP = k.LastUsedIP.String()
 	}
@@ -231,6 +236,10 @@ type KeyCreate struct {
 	Scopes    []string   `json:"scopes"`
 	ExpiresIn *string    `json:"expires_in,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+
+	// Description is optional: at most 1024 characters, valid text with no
+	// control character (a line break is one). It is stored as sent.
+	Description string `json:"description,omitempty"`
 }
 
 // KeyCreated is shown once: the key itself, which no later call returns.

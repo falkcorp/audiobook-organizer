@@ -94,6 +94,12 @@ type KeySpec struct {
 	// ErrBadInput (a caller that must refuse "both fields present" even when
 	// one is zero checks presence itself, as authhttp does).
 	ExpiresAt time.Time
+
+	// Description is optional text telling this key from the owner's others
+	// (CheckKeyDescription is the rule). It is stored as given and never
+	// changes after the key is made.
+	Description string
+
 	// Purpose and Module are deferred-build members (§3.5).
 }
 
@@ -159,6 +165,13 @@ type APIKey struct {
 	Imported   bool
 	HashPrefix string
 	Version    int64
+
+	// Description is the key's optional description (KeySpec.Description,
+	// HEAD's api key description on an import). It is omitted from the stored
+	// record while empty, so the record of a key without one is byte-for-byte
+	// what it was before the field existed and an older record decodes
+	// unchanged. Set at creation; no write changes it.
+	Description string `json:"Description,omitempty"`
 }
 
 // OneTimeKind is the family of a one-time token (§3.4).
