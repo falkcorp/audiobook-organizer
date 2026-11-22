@@ -402,11 +402,11 @@ func TestLegacyManifest_RegistersAsMuxPatterns(t *testing.T) {
 				_, ok := served[gr.Method+" "+gr.Path]
 				assert.True(t, ok, "gin route %s %s is not served by a mux pattern", gr.Method, gr.Path)
 			}
-			want := 494
+			want := 495
 			if abs {
-				want = 573
+				want = 574
 			}
-			assert.Equal(t, want, n, "gin routes besides GET / (495 and 574 with it)")
+			assert.Equal(t, want, n, "gin routes besides GET / (496 and 575 with it)")
 			assert.Len(t, served, n)
 
 			gen, kept := generalised(abs)

@@ -9,6 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"slices"
+	"sync"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -39,9 +42,78 @@ type guestKeyUsers interface {
 // core identity, books' store otherwise.
 func (s *Server) guestUsers() guestKeyUsers {
 	if s.identity != nil {
-		return coreGuestUsers{admin: s.adminUsers, bridge: s.identity.Bridge}
+		return coreGuestUsers{admin: s.identity.Users, bridge: s.identity.Bridge}
 	}
 	return storeGuestUsers{r: s.storeForWiring()}
+}
+
+// guestUsersForList is the seam for a request that reads MANY accounts (the Phone
+// app keys panel asks, per row, who holds an address verified). Under core
+// identity every call of the actor-checked reader is a judged read of core's
+// whole user list, so the panel would make one per row; here the list is read
+// once for the request and every question is answered from it. HEAD's store
+// answers each row from an index, so it is unchanged.
+func (s *Server) guestUsersForList() guestKeyUsers {
+	if s.identity == nil || s.identity.Users == nil {
+		return s.guestUsers()
+	}
+	return coreGuestUsers{admin: &adminUsersSnapshot{inner: s.identity.Users}, bridge: s.identity.Bridge}
+}
+
+// adminUsersSnapshot is legacyauth.AdminUsers over one read of the inner
+// reader's list, for the life of one request. The first call is judged by core
+// against the caller of that call's ctx; a later call reuses it, which is sound
+// only because one snapshot serves one request (one caller), never the server.
+type adminUsersSnapshot struct {
+	inner legacyauth.AdminUsers
+	once  sync.Once
+	list  []*coreauth.User
+	err   error
+}
+
+func (a *adminUsersSnapshot) load(ctx context.Context) {
+	a.once.Do(func() {
+		for u, err := range a.inner.AdminUsers(ctx, coreauth.UserFilter{}) {
+			if err != nil {
+				a.err = err
+				return
+			}
+			if u != nil {
+				a.list = append(a.list, u)
+			}
+		}
+	})
+}
+
+func (a *adminUsersSnapshot) AdminUser(ctx context.Context, id coreauth.UserID) (*coreauth.User, error) {
+	a.load(ctx)
+	if a.err != nil {
+		return nil, a.err
+	}
+	for _, u := range a.list {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return nil, coreauth.ErrNotFound
+}
+
+func (a *adminUsersSnapshot) AdminUsers(ctx context.Context, f coreauth.UserFilter) iter.Seq2[*coreauth.User, error] {
+	return func(yield func(*coreauth.User, error) bool) {
+		a.load(ctx)
+		if a.err != nil {
+			yield(nil, a.err)
+			return
+		}
+		for _, u := range a.list {
+			if (f.Status != "" && u.Status != f.Status) || (f.Role != "" && !slices.Contains(u.Roles, f.Role)) {
+				continue
+			}
+			if !yield(u, nil) {
+				return
+			}
+		}
+	}
 }
 
 // storeGuestUsers is HEAD's reads, unchanged: the store ignores the context.
