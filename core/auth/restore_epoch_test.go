@@ -1,5 +1,5 @@
 // file: core/auth/restore_epoch_test.go
-// version: 0.1.0
+// version: 0.2.0
 // guid: 3d5b3d3e-6b0a-4c77-a0a4-9b4fd2f6a1c2
 // last-edited: 2026-11-21
 
@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/storage"
@@ -38,6 +39,24 @@ func (k epochKill) PutUser(b *storage.Batch, u *auth.User) error {
 		return errKilled
 	}
 	return k.Store.PutUser(b, u)
+}
+
+// afterMarker is a store that runs hook once the marker is staged, as the step's
+// last act before its commit.
+type afterMarker struct {
+	auth.Store
+	hook func()
+}
+
+func (a *afterMarker) StageRestoreEpochRun(b *storage.Batch, r auth.RestoreEpochRun) error {
+	if err := a.Store.StageRestoreEpochRun(b, r); err != nil {
+		return err
+	}
+	if h := a.hook; h != nil {
+		a.hook = nil
+		h()
+	}
+	return nil
 }
 
 // epochFixture is dick with a session (one sign-in for step 3 to delete) and
@@ -106,6 +125,27 @@ func TestPostRestore_AResumedRunBumpsTheEpochOnce(t *testing.T) {
 			if counts[auth.CountEpochsBumped] != want[auth.CountEpochsBumped] || counts[auth.CountSignInsDeleted] != want[auth.CountSignInsDeleted] {
 				t.Errorf("%s: resumed counts %v, want the fault-free %v", name, counts, want)
 			}
+		}
+	})
+
+	t.Run("a commit that conflicts after the marker is staged retries and bumps once", func(t *testing.T) {
+		// A write to a user lands between the step's reads and its commit, so the
+		// commit fails with storage.ErrConflict and the step runs again. The marker
+		// staged by the failed attempt was never committed, so the retry must still
+		// bump: a marker committed beside the bumps would make it skip.
+		f, dick, start := epochFixture(t)
+		st := &afterMarker{Store: f.st, hook: func() {
+			f.edit(dick, func(u *auth.User) { u.UpdatedAt = u.UpdatedAt.Add(time.Second) })
+		}}
+		counts, err := postRestoreRun(t, f, st, "seq:11")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := f.reload(dick.ID).CredentialEpoch; got != start+1 {
+			t.Errorf("epoch %d after a retried step, want %d", got, start+1)
+		}
+		if counts[auth.CountEpochsBumped] != want[auth.CountEpochsBumped] {
+			t.Errorf("counts %v, want the fault-free %v", counts, want)
 		}
 	})
 
