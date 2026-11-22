@@ -808,11 +808,13 @@ var registeredHeadDrift = diffTable{
 	},
 }
 
-// registeredRuledNarrowings: the 7 cells F4-07 pinned (reachHandlerAdmin's
-// narrowing rows and the restore row), reproduced on the flip.
+// registeredRuledNarrowings: the 6 cells F4-07 pinned (reachHandlerAdmin's
+// narrowing rows), reproduced on the flip. F4-07's restore row is gone: B10y's
+// ruling (ii) restores HEAD's owner gate, so a custom role holding settings.manage
+// is admitted again while no owner is set.
 var registeredRuledNarrowings = diffTable{
-	name:     "narrowings ruled in F4-07 (05-rbac 6.2, 05-authn 4.8)",
-	want:     7,
+	name:     "narrowings ruled in F4-07 (05-rbac 6.2)",
+	want:     6,
 	wantTwin: 6,
 	rows: []diffRow{
 		{
@@ -821,11 +823,6 @@ var registeredRuledNarrowings = diffTable{
 			},
 			who: adminKeys, r0: 'A', flip: 'D', status: 403, code: "interactive_required",
 			why: "05-rbac 6.2 / 4.4 rule 1: books:admin.debug is Sensitive, so a non-interactive principal is refused even with core:admin",
-		},
-		{
-			routes: []string{"POST /api/v1/backup/restore"},
-			who:    []string{"session:custom-all"}, r0: 'A', flip: 'D', status: 403, code: "permission_denied",
-			why: "05-authn 4.8: restore's owner guard needs core:admin when no OwnerVerifier is set, which a custom role never holds",
 		},
 	},
 }

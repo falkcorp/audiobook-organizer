@@ -142,8 +142,6 @@ var verdictRows = []verdictRow{
 		Why: "key:admin:{every,empty} (and the deluge cells): refused where R0 admitted; slice B10y"},
 	{Method: "POST", Route: "/api/v1/auth/api-keys", Class: classRuling, Principals: []string{"key:admin:empty", "key:admin:every", "key:admin:settings", "key:admin:users", "key:admin:view", "key:custom-all:empty", "key:custom-all:every", "key:custom-subset:empty", "key:custom-subset:outside", "key:editor:empty", "key:editor:every", "key:editor:settings", "key:editor:users", "key:editor:view", "key:editor:worker", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:view", "key:viewer:empty", "key:viewer:every", "key:viewer:settings", "key:viewer:users", "key:viewer:view", "key:viewer:worker"},
 		Why: "narrowing not yet ruled on"},
-	{Method: "POST", Route: "/api/v1/backup/restore", Class: classRuling, Principals: []string{"session:custom-all"},
-		Why: "narrowing not yet ruled on"},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
