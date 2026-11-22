@@ -14,9 +14,10 @@ package cutover_test
 //	    the 19 ROLE-NAME-GATE rows. For each, a custom role holding exactly the
 //	    row's scopes passes stage 13, which is the manifest scope gate that B10g
 //	    leaves as the only gate. It is refused only by gin's role-name test
-//	    (RequireAdmin: "admin role required"). An admin's key holding exactly the
-//	    row's scope is the same: stage 13 admits it and gin refuses it because it
-//	    lacks every atom. The name gate and the scope gate therefore admit
+//	    (RequireAdmin: "admin role required"). On the books:admin.view and
+//	    master-list rows an admin's key holding exactly the row's scopes is the
+//	    same: stage 13 admits it and gin refuses it because it lacks an atom (a
+//	    core:admin key gets one answer from both gates). The name gate and the scope gate therefore admit
 //	    different sets, and no rbac.Requirement can close the gap, because core lets
 //	    an admin create such a role (§4.7 role CRUD, custom.<slug>). The test fails
 //	    as soon as stage 13 refuses the custom role (the row was narrowed) or gin
@@ -94,13 +95,22 @@ var rnRows = []rnRow{
 	{"GET /api/v1/master-lists/elsewhere", "GET", "/api/v1/master-lists/elsewhere", rnMasterList},
 }
 
-// rnKeyScopes are the row classes an admin's core key can hold exactly. A key cannot
-// hold core:admin (05-rbac §4.6), and books:admin.debug is Sensitive, which no key
-// satisfies (§4.4), so on those rows stage 13 and gin both refuse the key.
+// rnKeyScopes are the admin's core keys, one per row class, each holding exactly
+// that class's scopes. books:admin.debug is Sensitive, which no key satisfies
+// (05-rbac §4.4), so the debug write rows have no key: there stage 13 and gin both
+// refuse every key.
 var rnKeyScopes = map[string][]string{
 	rnAdminView:  {"books:admin.view"},
 	rnMasterList: {"core:users.manage", "core:roles.view", "books:admin.view"},
+	rnCoreAdmin:  {"core:admin"},
 }
+
+// rnKeyAgrees: the classes on which the key gets the same answer from both gates.
+// A core:admin key satisfies every atom's route requirement (none of them is
+// Sensitive), so gin's every-atom test passes it too, and the guest-service-token
+// rows' Guards.Interactive refuses it at stage 13. On the other classes the key
+// splits the gates the way the custom role does.
+var rnKeyAgrees = map[string]bool{rnCoreAdmin: true}
 
 // The two refusals gin's RequireAdmin writes (internal/server/middleware/auth.go):
 // the role-name test, and the test that an admin's key holds every atom.
@@ -237,6 +247,15 @@ func TestReachRegisteredPath_RoleNameRowsScopeAdmitsNameRefuses(t *testing.T) {
 			res, err = h.Do(k, r.method, r.path, nil)
 			if err != nil {
 				t.Fatalf("%s: %v", k.Name, err)
+			}
+			if rnKeyAgrees[r.perm] {
+				// Both gates refuse (stage 13 does), or both admit (gin then lets
+				// the request through to the handler).
+				if res.Stage13 != Stage13Refused && res.Verdict() == 'D' {
+					t.Errorf("stage 13 admits %s and gin refuses it (%d %s): the core:admin key now splits the gates too; redo the table", k.Name, res.Status, res.excerpt())
+				}
+				t.Logf("%s: %d stage13=%v", k.Name, res.Status, res.Stage13)
+				return
 			}
 			if res.Stage13 == Stage13Refused {
 				t.Errorf("stage 13 refuses %s (%s %s): an admin's key holding %s no longer passes the scope gate; redo the table", k.Name, res.Code, res.excerpt(), r.perm)
