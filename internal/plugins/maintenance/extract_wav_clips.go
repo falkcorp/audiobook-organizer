@@ -22,6 +22,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
+	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -111,19 +112,21 @@ func (p *Plugin) runExtractWAVClips(ctx context.Context, rawParams json.RawMessa
 // extractWAVClipsKind is the native shell (rule R2 item 3), and since F5-18h the
 // PARENT of the per-batch children (batch_children.go). HEAD has no preview and
 // the run writes book_files.file_hash, so it is a Live-only writer (rule R7); the
-// parent itself writes nothing, so it is declared ReadOnly and its children hold
-// the writes, a batch at a time.
+// parent itself writes nothing and HOLDS nothing (Subjects: batchParentHolds), and
+// its children hold the writes, a batch at a time.
 func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(extractWAVClipsKind, tasks.TaskSpec[extractWAVNativeParams, extractWAVResult]{
 		Title: "Extract WAV clips for transcription cache",
 		Help:  "Extracts the first 90 seconds of each book's first audio file and saves the result in {library}/.wav-cache/{hash}.wav. Also hashes the source file with the canonical book_files.file_hash digest (internal/filehash), persists it to BookFile.FileHash only when that row has none, and creates a content-stable hardlink so the transcription cache survives organize path changes. The run itself writes nothing: it starts one child run per 100 books, one at a time, and each child holds only its own books.",
-		// ReadOnly: the writes (the file hash it persists in book_files; books,
-		// metadata_cache and indexes through the aggregate recompute SetBookFileHash
-		// can reach; files, the clips and hardlinks it makes) are the children's, see
-		// extractWAVBatchKind. A ref lock cannot narrow an Effects hold, so the
-		// parent cannot hold them and still let a write to another book through.
-		Effects: tasks.ReadOnly(),
-		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		// The Effects are HEAD's, unchanged: the executor starts a kind with no
+		// declared writes in Live when the mode is omitted (core/internal/executor/
+		// start.go:149-152) where a writer kind starts in Preview, which for this
+		// Live-only kind is a refusal. So the declaration stays HEAD's and the
+		// parent narrows what it HOLDS to nothing with Subjects; the writes happen
+		// in the children, see extractWAVBatchKind.
+		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
+		Subjects: batchParentHolds,
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
 		// ResumeContinue (HEAD is ResumeRestart with no checkpoint): the parent's
 		// cursor, the child in flight and the rolled-up tallies are checkpointed
 		// (batch_sweep.go), so a restart resumes at the cursor, and the kernel

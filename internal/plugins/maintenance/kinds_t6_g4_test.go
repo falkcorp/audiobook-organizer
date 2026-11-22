@@ -751,13 +751,15 @@ type t6g4Want struct {
 	// by that ruling and not by rule R5's mapping. The file-intro kind and the
 	// three batch parents do this.
 	yieldsNatively bool
-	// batchParent: the native kind is a parent that declares no row writes and
-	// starts one short child run per batch of books (batch_sweep.go). The row's
-	// calls and outside are then the CHILD's: the writer methods its core can call
-	// and what it writes outside the writer. The parent is ReadOnly, ResumeContinue
-	// (it checkpoints a cursor and yields) and runs to tasks.MaxTimeout, and its
-	// Help says so; the child (parent kind + ".batch") declares the derived write
-	// set. HEAD's v2 shell for the same ID is unchanged and still writes itself.
+	// batchParent: the native kind is a parent that writes no row and HOLDS none
+	// (Subjects: batchParentHolds) and starts one short child run per batch of
+	// books (batch_sweep.go). The row's calls and outside are the CHILD's: the
+	// writer methods its core can call and what it writes outside the writer. The
+	// parent keeps the derived write set as its declared Effects (so an omitted
+	// mode resolves to Preview as at HEAD), is ResumeContinue (it checkpoints a
+	// cursor and yields) and runs to tasks.MaxTimeout, and its Help says so; the
+	// child (parent kind + ".batch") declares the same derived write set and holds
+	// only its batch. HEAD's v2 shell for the same ID is unchanged.
 	batchParent bool
 	// writes is the native write set, spelled with the pkg/ops constants (and
 	// checked against pkg/ops/effects.go by TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant);
@@ -811,9 +813,9 @@ var t6g4Expected = t6g4DeriveWrites([]t6g4Want{
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
 		resume: tasks.ResumeDrop, calls: []string{"ModifyBook", "ModifyBookFileDeferAggregates", "ModifyBookFileReportingRecompute", "RecomputeBookAggregates", "UpdateBookFiles"}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, readOnly: true, calls: []string{"SetBookFileHash"}, outside: []ops.Resource{ops.ResFiles}, liveOnly: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, calls: []string{"SetBookFileHash"}, outside: []ops.Resource{ops.ResFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, readOnly: true, calls: []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, calls: []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
 		resume: tasks.ResumeDrop, calls: []string{"AppendFileEvent"}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
@@ -827,7 +829,7 @@ var t6g4Expected = t6g4DeriveWrites([]t6g4Want{
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, readOnly: true, calls: []string{"UpdateBookFile"}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, calls: []string{"UpdateBookFile"}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
 		resume: tasks.ResumeFromZero, calls: []string{"ClearIntroTimeouts", "ModifyBook", "OpenWhisperJournal", "RecordIntroTimeout"}, outside: []ops.Resource{ops.ResFiles}, noLive: true, helpReworded: true},
 })
@@ -1044,9 +1046,16 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			}
 			slices.Sort(want)
 			if w.batchParent {
-				// The parent writes no rows; the writes in the row are its child's.
-				if !c.Effects.IsReadOnly() || len(c.Effects.WriteSet()) != 0 {
-					t.Errorf("batch parent Effects: readOnly=%v writes=%v, want ReadOnly", c.Effects.IsReadOnly(), t6g4WriteKinds(c.Effects))
+				// The parent keeps HEAD's declaration (a ReadOnly kind would start Live
+				// when the mode is omitted, where HEAD starts it in Preview) and holds
+				// nothing: Subjects names no row. The writes in the row are its child's.
+				if got := t6g4WriteKinds(c.Effects); c.Effects.IsReadOnly() || !slices.Equal(got, want) {
+					t.Errorf("batch parent Effects: readOnly=%v writes=%v, want HEAD's writes %v", c.Effects.IsReadOnly(), got, want)
+				}
+				if c.Subjects == nil {
+					t.Errorf("batch parent has no Subjects: it would hold its whole Effects")
+				} else if held, err := c.Subjects(nil); err != nil || len(held) != 0 {
+					t.Errorf("batch parent holds %v (err %v), want nothing", held, err)
 				}
 				child := tasks.CommonOf(t6g4KindByName(t, defs, w.kind+".batch"))
 				if got := t6g4WriteKinds(child.Effects); child.Effects.IsReadOnly() || !slices.Equal(got, want) {
@@ -1216,7 +1225,7 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 	}
 	refused := 0
 	for _, w := range t6g4Expected {
-		if w.readOnly && !w.batchParent {
+		if w.readOnly {
 			continue
 		}
 		t.Run(string(w.kind), func(t *testing.T) {
