@@ -111,7 +111,26 @@ type StartOption func(*StartRequest)
 
 // Hold is a held stand-down (rc.StandDown). Release it when the write phase
 // ends; the executor also releases it when the run ends.
-type Hold interface{ Release() }
+//
+// The hold is a lease (core.tasks.standdown_lease). Every Writer.Do and every
+// item start of the holding run renews it; a run that works between writes
+// calls Renew from its own progress points (HEAD renewed on its per-item
+// heartbeat the same way). The lease tracks progress, not liveness: a run that
+// stops reaching a renew point loses the hold, the key dispatches again and the
+// run's writer is fenced.
+type Hold interface {
+	// Release gives the hold back. Safe to call more than once, from any
+	// goroutine, and after the lease lapsed.
+	Release()
+	// Renew extends this hold's lease by a full lease from now and returns nil
+	// while the run still holds it. It returns an error that wraps ErrHoldLost
+	// once the lease had already lapsed (the hold is then gone for good: no later
+	// Renew succeeds and the run's writer refuses with ErrFenced) and once the
+	// hold was released; a released hold is never revived, and a Renew after
+	// Release never touches the lease of another holder of the same key. Safe for
+	// concurrent use by the run's pool workers.
+	Renew() error
+}
 
 // The causes an RC context is canceled with (context.Cause). All wrap
 // context.Canceled or context.DeadlineExceeded so existing errors.Is checks hold.

@@ -104,7 +104,9 @@ type t6g6Env struct {
 // t6g6Hold is a held scan stand-down.
 type t6g6Hold struct {
 	// Lost renews the lease and reports whether it lapsed (the caller must stop
-	// writing). Native: always false, the kernel fences the writer instead.
+	// writing). Native: Hold.Renew, so the lease lives while the shell reaches
+	// this call and a lapse stops the shell as it does at HEAD; the kernel also
+	// fences the writer, so a write that slips past still fails.
 	Lost func() bool
 	// Release gives the hold back; safe to call when nothing was held.
 	Release func()
@@ -257,8 +259,17 @@ func t6g6NativeEnv(rc *tasks.RC) t6g6Env {
 }
 
 // t6g6NativeStandDown is the native stand-down: rc.StandDown over key. An empty
-// key refuses, so a live apply never runs without the interlock. The kernel
-// fences the run's writer if the lease is lost, so Lost is always false.
+// key refuses, so a live apply never runs without the interlock.
+//
+// Lost is HEAD's per-item heartbeat (scanStandDownLostForApply): it renews the
+// hold and reports a lapse. The shells call it per item and from inside the long
+// pre-write passes, which is what keeps the lease alive across a long recover or
+// repoint; core's own renewals (every Writer.Do and item start) are not enough
+// for a stretch of reads. Renewal follows progress, not a timer, as HEAD's does:
+// a run that stops reaching these calls loses the hold, and the kernel then
+// fences its writer (tasks.ErrFenced), so a lapse stops the run on both sides.
+// Any Renew error counts as lost, as it does in Writer.Do: a hold that cannot be
+// shown to be held is not relied on.
 func t6g6NativeStandDown(rc *tasks.RC, key tasks.Key) func(ctx context.Context, reason string) (t6g6Hold, error) {
 	return func(_ context.Context, reason string) (t6g6Hold, error) {
 		if key == "" {
@@ -268,7 +279,7 @@ func t6g6NativeStandDown(rc *tasks.RC, key tasks.Key) func(ctx context.Context, 
 		if err != nil {
 			return t6g6Hold{}, fmt.Errorf("%s: the library scan did not stand down: %w", reason, err)
 		}
-		return t6g6Hold{Lost: func() bool { return false }, Release: h.Release}, nil
+		return t6g6Hold{Lost: func() bool { return h.Renew() != nil }, Release: h.Release}, nil
 	}
 }
 
