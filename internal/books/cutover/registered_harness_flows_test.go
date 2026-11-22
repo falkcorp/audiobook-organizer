@@ -181,16 +181,19 @@ var smokeStatuses = map[string][7]int{
 	"session:viewer":       {200, 403, 403, 403, 200, 403, 403},
 	"key:admin:view":       {200, 403, 403, 403, 200, 403, 403},
 	"key:fp-worker:worker": {403, 403, 403, 404, 403, 403, 403},
-	// Auth off admits every route, and /auth/me describes a user it has none of.
-	Authoff: {200, 200, 200, 404, 401, 404, 200},
+	// Auth off admits every route, and /auth/me describes a user it has none of:
+	// 403 FORBIDDEN, not the 401 it answered until F4-08 ruling G5(a) (B10sr),
+	// because a 401 there ends a no-auth install's SPA session.
+	Authoff: {200, 200, 200, 404, 403, 404, 200},
 	// The owner (Access-verified, an ordinary viewer account of its own) reads
 	// the library and its own profile and nothing the administrator's role gates.
 	Owner: {200, 403, 403, 403, 200, 403, 403},
 }
 
 // smokeLegacyCode is the one refusal here that a legacy handler answers, not stage 13:
-// /auth/me with no user bound (auth off) is HEAD's own {"error", "code"} envelope.
-const smokeLegacyCode = "UNAUTHORIZED"
+// /auth/me with no user bound (auth off) is HEAD's own {"error", "code"} envelope,
+// 403 FORBIDDEN under F4-08 ruling G5(a) (was 401 UNAUTHORIZED).
+const smokeLegacyCode = "FORBIDDEN"
 
 func smoke(t *testing.T, h *Registered, p *Principal, want [7]int) {
 	t.Helper()
@@ -207,7 +210,11 @@ func smoke(t *testing.T, h *Registered, p *Principal, want [7]int) {
 			}
 			h.Refused(res, want[i], code)
 		case http.StatusForbidden:
-			h.Refused(res, want[i], "permission_denied")
+			code := "permission_denied"
+			if p.Kind == "authoff" {
+				code = smokeLegacyCode
+			}
+			h.Refused(res, want[i], code)
 		default:
 			if res.Status != want[i] {
 				t.Errorf("%s %s %s: %d %s, want %d", p.Name, r[0], r[1], res.Status, res.excerpt(), want[i])

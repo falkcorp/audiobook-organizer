@@ -115,10 +115,12 @@ func TestRegisteredHarness_CredentialKindOnCoreMe(t *testing.T) {
 	})
 	t.Run("auth off", func(t *testing.T) {
 		off := bootRegistered(t, registeredConfig{AuthOff: true})
-		// /me describes a user and auth-off has none: stage 13 admits the auth-off
-		// principal on every route, and this one answers it as no signed-in user.
+		// /me describes a user and auth-off has none: the route needs a user and
+		// answers the auth-off principal 403 interactive_required (F4-08 ruling
+		// G5(a), B10sr; it was 401 authentication_required, which ends a no-auth
+		// install's SPA session).
 		res := off.MustDo(t, off.Principal(Authoff), http.MethodGet, route, nil)
-		if res.Status != http.StatusUnauthorized || res.Code != "authentication_required" {
+		if res.Status != http.StatusForbidden || res.Code != "interactive_required" {
 			t.Errorf("auth-off GET %s: %d %s", route, res.Status, res.excerpt())
 		}
 	})

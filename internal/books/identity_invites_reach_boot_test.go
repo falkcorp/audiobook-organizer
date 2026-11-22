@@ -98,7 +98,8 @@ func TestInvitesReachBoot_KeyListsAndDeletesButNeverCreates(t *testing.T) {
 // TestInvitesReachBoot_AuthOffListsAndDeletesAsHEADDid: with auth off, books'
 // list answers 200 and its delete answers the invite's own 404, never 401
 // (which ends the SPA's session) or 403; core's native routes still refuse the
-// auth-disabled principal: the list 401 (needUser, 05-authn §4.11), the delete
+// auth-disabled principal: the list 403 interactive_required (needUser; it was
+// 401 until F4-08 ruling G5(a), which would end the SPA's session), the delete
 // 403 at its interactive guard.
 func TestInvitesReachBoot_AuthOffListsAndDeletesAsHEADDid(t *testing.T) {
 	t.Cleanup(SetIdentityFlipForTest(true))
@@ -109,7 +110,7 @@ func TestInvitesReachBoot_AuthOffListsAndDeletesAsHEADDid(t *testing.T) {
 	}{
 		{"books list", http.MethodGet, "/api/v1/users/invites", http.StatusOK},
 		{"books delete of an absent invite", http.MethodDelete, "/api/v1/users/invites/01BATMANNOSUCHINVITE00000", http.StatusNotFound},
-		{"core's native list", http.MethodGet, "/api/core/v1/users/invites", http.StatusUnauthorized},
+		{"core's native list", http.MethodGet, "/api/core/v1/users/invites", http.StatusForbidden},
 		// Its interactive guard answers first (05-rbac §4.11(a), SEC5-8).
 		{"core's native delete", http.MethodDelete, "/api/core/v1/users/invites/01BATMANNOSUCHINVITE00000", http.StatusForbidden},
 	}
