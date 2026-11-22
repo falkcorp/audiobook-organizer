@@ -166,15 +166,16 @@ func TestEncryptionKeyIsFoundWhereTheCheckpointSavesIt(t *testing.T) {
 // Standalone openers (the op-runner child, the live-restore verifier) open a
 // store the flip has raised only when they plan the flip's levels: the plain
 // options refuse it as a store newer than the build, StandaloneOptions open it.
+//
+// The raised store is the frozen one R2 leaves (testdata/r2store).
 func TestStandaloneOptionsOpenAFlippedStore(t *testing.T) {
-	fx := newFlipFixture(t, nil, "")
-	fx.runFlipped(t, nil)
+	dbPath := r2StoreDB(copyR2Store(t))
 
-	st, err := database.OpenStandalone(fx.dbPath, StandaloneOptions(database.StandaloneOptions{}))
+	st, err := database.OpenStandalone(dbPath, StandaloneOptions(database.StandaloneOptions{}))
 	require.NoError(t, err, "the flip's levels were not planned")
 	require.NoError(t, st.Close())
 
-	_, err = database.OpenStandalone(fx.dbPath, database.StandaloneOptions{})
+	_, err = database.OpenStandalone(dbPath, database.StandaloneOptions{})
 	require.Error(t, err, "a standalone open that does not plan the flip's levels accepted a raised store")
 }
 

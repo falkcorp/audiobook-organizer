@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -26,16 +25,12 @@ import (
 // guard before it stages (database.VerifyStoreOpensWith), so an archive whose
 // store the boot after the swap would refuse is refused now, the slot left
 // empty and nothing extracted left behind. The archive here holds a HEAD
-// store with core keys and no install marker (the crash matrix's
-// foreign-keys fixture), which core storage refuses.
+// store with core keys and no install marker (the frozen R2 store of
+// testdata/r2store with its marker deleted), which core storage refuses.
 func TestRestoreStagerRefusesAStoreThisBuildCannotOpen(t *testing.T) {
 	h := newOfflineABO(t)
-	src := filepath.Join(tempDir(t), "joker.pebble")
-	headStoreAt(t, src, nil)
-	db, err := pebble.Open(src, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
-	require.NoError(t, err)
-	require.NoError(t, db.Set([]byte("c/rogue"), []byte("x"), pebble.Sync))
-	require.NoError(t, db.Close())
+	src := r2StoreDB(copyR2Store(t))
+	r2StoreWithForeignKeys(t, src, map[string]string{"c/rogue": "x"})
 	backups := backup.ResolveDir("", h.path)
 	info, err := backup.CreateBackup(src, "pebble", backup.BackupConfig{BackupDir: backups, MaxBackups: 5})
 	require.NoError(t, err)

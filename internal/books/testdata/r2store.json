@@ -1,0 +1,85 @@
+{
+  "command": "go test -count=1 -tags regen_r2fixture -run TestRegenerateR2Fixture ./internal/books/",
+  "build_dir": "/tmp/r2store-generator",
+  "books_version": 69,
+  "topped_up": [
+    "books.identity-cutover",
+    "books.tasks-cutover",
+    "books.log-cutover",
+    "books.integrations-cutover"
+  ],
+  "files": [
+    {
+      "path": "db/audiobooks.pebble.storage-format",
+      "sha256": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3"
+    },
+    {
+      "path": "db/audiobooks.pebble.storage-levels",
+      "sha256": "a375dea80fd410e925da836240cf89ca64866d187581d7f41a6d3f842a439ae6"
+    },
+    {
+      "path": "db/audiobooks.pebble/000014.log",
+      "sha256": "da8ca8a325b3cbc0aec60c135c103bc7ad58429cf13abc4eb6955106ecddaed4"
+    },
+    {
+      "path": "db/audiobooks.pebble/000016.sst",
+      "sha256": "b3959f86e9cd4befa29be33332cd607d213dd2193ac063b2b10ebab0e5c46f92"
+    },
+    {
+      "path": "db/audiobooks.pebble/LOCK",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "db/audiobooks.pebble/MANIFEST-000008",
+      "sha256": "10a0903e93a9e2d5d4370418761bf7a2999afec56485369a4c5f39c5c29d4094"
+    },
+    {
+      "path": "db/audiobooks.pebble/MANIFEST-000013",
+      "sha256": "c5a58063ad4da7e632f25bb55b322f44c612f48892fba43734d396becf857a32"
+    },
+    {
+      "path": "db/audiobooks.pebble/OPTIONS-000015",
+      "sha256": "ad59307d1540da25088ce7283695981ea4d1a0fb2bec10f9c4be1fce009487ab"
+    },
+    {
+      "path": "db/audiobooks.pebble/marker.format-version.000012.024",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "db/audiobooks.pebble/marker.manifest.000003.MANIFEST-000013",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "db/config.yaml",
+      "sha256": "2f676d61d7c4498a655453bd0175ef647b1b2782a8dee5684273114b08bfc5b4"
+    },
+    {
+      "path": "db/library.bleve.mapping",
+      "sha256": "7de1555df0c2700329e815b93b32c571c3ea54dc967b89e81ab73b9972b72d1d"
+    },
+    {
+      "path": "db/library.bleve.rebuilding",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "db/library.bleve/index_meta.json",
+      "sha256": "6e47169208d1b28483a0654246537f68ad90852725e92cad5852561b9ab086b8"
+    },
+    {
+      "path": "db/library.bleve/store/000000000063.zap",
+      "sha256": "3ce0fbd8fd273d6f3b01b51ccc2961f1184b06125f30c9066b47a66639d2bb2b"
+    },
+    {
+      "path": "db/library.bleve/store/root.bolt",
+      "sha256": "9750fe043eb9c1f38e1af2821235c721edf268af85dc46cfe7483c55a542cd0b"
+    },
+    {
+      "path": "state/.encryption_key",
+      "sha256": "c349325968f2f71f4bacb0d0267b051dee226d93c3aeac87e09507883f783800"
+    },
+    {
+      "path": "state/secrets.keyring",
+      "sha256": "0f1c7575534dab17671f255ec1a9a93726439c20be714367410ac377ecb31158"
+    }
+  ]
+}
