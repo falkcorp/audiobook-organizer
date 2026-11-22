@@ -379,6 +379,11 @@ type entry struct {
 	// (config_boot.go applyBootEnabled); "" = the manifest default.
 	disabledBy string
 	rec        module.Registrations // P6, enabled modules only
+	// tasksDep and healthDep are the forwarders behind the module's Deps.Tasks
+	// and Deps.Health, built at P6 and bound at P7 (module_tasks.go); nil for
+	// a disabled module, which never ran Register.
+	tasksDep  *moduleTasks
+	healthDep *moduleHealth
 }
 
 // New runs the boot phases that exist (P1, P5, P6, P7, P8). It starts no
@@ -653,9 +658,10 @@ func (k *Kernel) register(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("kernel: metrics scope of module %s: %w", id, err))
 			continue
 		}
+		e.tasksDep, e.healthDep = &moduleTasks{}, &moduleHealth{}
 		deps := module.Deps{Module: id, Log: k.moduleLog(id), Metrics: scope, ExtendStart: k.extendStart(id),
 			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
-			Config: k.configAccess(e.man)}
+			Config: k.configAccess(e.man), Tasks: e.tasksDep, Health: e.healthDep}
 		k.applyIdentityDeps(&deps, e.man)
 		r := module.NewRegistrar(module.RegistrarConfig{
 			Context:       regCtx,

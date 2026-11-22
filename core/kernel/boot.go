@@ -178,6 +178,9 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 				return err
 			}
 		}
+		if err := k.bindModuleHealth(); err != nil {
+			return err
+		}
 		return k.buildTasks(ctx)
 	}); err != nil {
 		return nil, err

@@ -123,6 +123,8 @@ func (k *Kernel) taskProblems() []module.Problem {
 		}
 		probs = append(probs, k.moduleTaskProblems(e)...)
 	}
+	probs = append(probs, k.laneProblems()...)
+	probs = append(probs, k.taskStartProblems()...)
 	// ValidateSchedules judges the registered definitions' schedules over the
 	// declared keys, so with no definition there is nothing to judge and the
 	// config store is not built (Kernel.coreConfig). With one, a module kind's
@@ -195,6 +197,78 @@ func (k *Kernel) moduleTaskProblems(e *entry) []module.Problem {
 				bad(module.ProblemInvalidRegistration, "task kind %q writes %s/%s, another module's resource", kind, r.Module, r.Kind)
 			case !slices.Contains(resources, r.Kind):
 				bad(module.ProblemInvalidRegistration, "task kind %q writes resource kind %q, which module %s did not declare with Registrar.Resources", kind, r.Kind, id)
+			}
+		}
+	}
+	return probs
+}
+
+// laneProblems is P7's check of Registrar.Lanes (05-tasks 5T.3.9): a lane is
+// named in its registering module's namespace, <module>.<name>, like a kind
+// (the same rule Common.Lanes entries follow), and every lane a registered
+// definition lists in Common.Lanes is declared by some enabled module. A kind
+// that names a lane nobody declared would otherwise fail at its first lease,
+// ErrLaneNotDeclared, at run time and in the middle of a run.
+func (k *Kernel) laneProblems() []module.Problem {
+	var probs []module.Problem
+	declared := make(map[tasks.LaneID]bool)
+	for _, e := range k.entries {
+		if !e.enabled {
+			continue
+		}
+		id := e.man.ID
+		for _, l := range e.rec.Lanes {
+			kind, err := tasks.ParseKind(string(l.ID))
+			switch {
+			case err != nil:
+				probs = append(probs, module.NewProblem(id, module.ProblemInvalidRegistration, fmt.Errorf("lane %q: %w", l.ID, err)))
+			case kind.Module() != string(id):
+				probs = append(probs, module.Problem{Module: id, Kind: module.ProblemInvalidRegistration,
+					Detail: fmt.Sprintf("lane %q is not in module %s's namespace (%s.<name>)", l.ID, id, id)})
+			default:
+				declared[l.ID] = true
+			}
+		}
+	}
+	for _, d := range k.taskDefinitions() {
+		for _, l := range tasks.CommonOf(d).Lanes {
+			if !declared[l] {
+				probs = append(probs, module.Problem{Module: module.ID(d.Kind().Module()), Kind: module.ProblemInvalidRegistration,
+					Detail: fmt.Sprintf("task kind %q lists lane %q, which no enabled module declared with Registrar.Lanes", d.Kind(), l)})
+			}
+		}
+	}
+	return probs
+}
+
+// taskStartProblems is P7's check of Manifest.TaskStarts (SEC2-15, COR3-10),
+// pure and by name: each entry parses as a kind and is known, that is
+// registered by an enabled module (or core) or listed in some manifest's
+// TaskLedger, enabled or not. The kind of a DISABLED module is known through
+// its ledger, so the app boots and the start is refused at run time as held
+// (tasks.ErrHeld), as the manifest's doc promises; a kind no manifest or
+// registration names is ProblemTaskStartUnknown. Every manifest is checked,
+// enabled or not: a disabled module's manifest stays known.
+func (k *Kernel) taskStartProblems() []module.Problem {
+	known := make(map[tasks.Kind]bool)
+	for _, e := range k.entries {
+		for _, kind := range e.man.TaskLedger {
+			known[kind] = true
+		}
+	}
+	for _, d := range k.taskDefinitions() {
+		known[d.Kind()] = true
+	}
+	var probs []module.Problem
+	for _, e := range k.entries {
+		for _, raw := range e.man.TaskStarts {
+			kind, err := tasks.ParseKind(string(raw))
+			switch {
+			case err != nil:
+				probs = append(probs, module.NewProblem(e.man.ID, module.ProblemTaskStartUnknown, fmt.Errorf("TaskStarts entry %q: %w", raw, err)))
+			case !known[kind]:
+				probs = append(probs, module.Problem{Module: e.man.ID, Kind: module.ProblemTaskStartUnknown,
+					Detail: fmt.Sprintf("TaskStarts entry %q is neither registered nor listed in any manifest's TaskLedger", kind)})
 			}
 		}
 	}

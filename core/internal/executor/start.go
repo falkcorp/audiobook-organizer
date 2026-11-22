@@ -101,10 +101,7 @@ func (e *executor) startLocked(ctx context.Context, kind tasks.Kind, req tasks.S
 // stamp applies Options.Principal to req (COR-21): the actor in ctx
 // replaces req.Actor. It returns the caller's checker (nil: none).
 func (e *executor) stamp(ctx context.Context, req *tasks.StartRequest) (rbac.Checker, error) {
-	if e.opts.Principal == nil {
-		return nil, nil
-	}
-	actor, who, ok := e.opts.Principal(ctx)
+	actor, who, ok := e.principal(ctx)
 	if !ok {
 		return nil, nil
 	}
