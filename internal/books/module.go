@@ -433,7 +433,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// Stage 5's values for the mount's responses (R1-17): HEAD's
 	// per-response CSP, its report URL and the embedded bundle's build ID.
 	csp, cspReport, buildID := srv.LegacyPerimeter()
-	r.MountLegacy(httpapi.LegacyMount{
+	mount := httpapi.LegacyMount{
 		Handler:     srv.LegacyHandler(),
 		Auth:        httpapi.LegacyAuthGin,
 		ServesSPA:   true,
@@ -447,7 +447,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		// Stage 8: the Basic gate that was gin's middleware (F3-07 e4).
 		BasicGate:         server.LegacyBasicGate(),
 		BasicExemptAssets: server.LegacyBasicExemptAssets,
-	})
+	}
+	// The one place the mount's authentication can differ from the literal
+	// above: the identity predicate (identity_flip.go), off in production
+	// until B10g, so the shipped mount is the literal's LegacyAuthGin.
+	// reachMountAuth (internal/books/cutover) accepts exactly this statement,
+	// in exactly this shape, and fails closed on any other write to .Auth.
+	if identityOn() {
+		mount.Auth = httpapi.LegacyAuthCore
+	}
+	r.MountLegacy(mount)
 	cfg := m.serveConfig()
 	r.Hook(module.Hook{
 		Name: string(ID) + ".server",
