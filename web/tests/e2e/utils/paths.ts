@@ -33,6 +33,110 @@ export const paths = {
   booksDedup: '/books/dedup',
 } as const;
 
+/** One row of the old-to-new page-path table (07 section 7.11, last row). */
+export interface PagePathMove {
+  /** The path today (what `paths` holds, or a parameterised page). */
+  from: string;
+  /**
+   * The path after F9-03's shell adoption, or null when no page lives there any
+   * more: D13 redirects no former path, so a bookmark lands on the shell's NotFound.
+   */
+  to: string | null;
+  /** Who serves it after the flip. */
+  owner: 'shell' | 'books';
+  note?: string;
+}
+
+/**
+ * The second table: where each page goes at F9-03 (07 section 7.11). The e2e
+ * specs still use `paths` above until the flip's commit 2 switches them to
+ * `shellPaths`; paths.spec.ts pins every row so the two tables cannot drift from
+ * the spec or from each other. Rows are in the order of the spec's table.
+ */
+export const PAGE_PATH_MOVES: readonly PagePathMove[] = [
+  // Pages the shell owns.
+  { from: '/', to: '/', owner: 'shell', note: 'today redirects to /dashboard; the shell home is the dashboard' },
+  { from: '/dashboard', to: '/', owner: 'shell', note: '07 7.11: /dashboard -> /' },
+  { from: '/login', to: '/login', owner: 'shell' },
+  { from: '/setup', to: '/setup', owner: 'shell' },
+  { from: '/invite/:token', to: '/invite/:token', owner: 'shell' },
+  { from: '/users', to: '/users', owner: 'shell' },
+  { from: '/settings', to: '/settings', owner: 'shell', note: 'the frame; books panels are settingsPanels' },
+  { from: '/system', to: '/system', owner: 'shell' },
+  { from: '/maintenance', to: '/system', owner: 'shell', note: '07 7.11: /maintenance -> /system (was a redirect to /system?tab=maintenance)' },
+  { from: '/diagnostics', to: '/system/diagnostics', owner: 'shell', note: '07 7.11' },
+  { from: '/activity', to: '/activity', owner: 'shell' },
+  { from: '/operations', to: '/activity', owner: 'shell', note: '07 7.11: /operations -> /activity' },
+  // Pages that move under /books/.
+  { from: '/library', to: '/books/library', owner: 'books' },
+  { from: '/library/:id', to: '/books/library/:id', owner: 'books' },
+  { from: '/fingerprints', to: '/books/fingerprints', owner: 'books' },
+  { from: '/works', to: '/books/works', owner: 'books' },
+  { from: '/files', to: '/books/files', owner: 'books', note: '07 7.11: /files -> /books/files' },
+  { from: '/series', to: '/books/series', owner: 'books' },
+  { from: '/authors', to: '/books/authors', owner: 'books' },
+  { from: '/authors/:id', to: '/books/authors/:id', owner: 'books' },
+  { from: '/playlists', to: '/books/playlists', owner: 'books' },
+  { from: '/playlists/:id', to: '/books/playlists/:id', owner: 'books' },
+  { from: '/collections', to: '/books/collections', owner: 'books' },
+  { from: '/collections/:id', to: '/books/collections/:id', owner: 'books' },
+  { from: '/versions', to: '/books/versions', owner: 'books' },
+  { from: '/review', to: '/books/review', owner: 'books' },
+  // The four old addresses that redirect into a Review lane today (App.tsx
+  // DedupRedirect). Each is a former path, and D13 allows no redirect from one:
+  // commit 2 decides whether DedupRedirect goes. /books/dedup is listed too
+  // because /books/ is books' prefix after the flip, so it must not stay a redirect.
+  { from: '/dedup', to: null, owner: 'books', note: 'old-URL redirect today; D13 -> NotFound (confirm in commit 2)' },
+  { from: '/dedup/labels', to: null, owner: 'books', note: 'as /dedup' },
+  { from: '/authors/dedup', to: null, owner: 'books', note: 'as /dedup' },
+  { from: '/books/dedup', to: null, owner: 'books', note: 'as /dedup; the /books/ prefix is books\' after the flip' },
+];
+
+/**
+ * HEAD's ABS_REDIRECTS (web/src/utils/absRedirects.ts) with the targets 07 7.11
+ * says they take after the flip. They map Audiobookshelf web-client URLs, not
+ * ABO's own former paths, so D13 does not remove them. `/settings?tab=` is
+ * unresolved: seams.d/F9-03-prep-pages.md lists the Settings tab strip versus
+ * panel routes as commit 2's gap, so only the `/` target and the pathnames are settled.
+ */
+export const ABS_REDIRECT_TARGETS: ReadonlyArray<{ from: string; to: string }> = [
+  { from: '/config', to: '/settings' },
+  { from: '/config/api-keys', to: '/settings?tab=api-keys' },
+  { from: '/audiobookshelf', to: '/' },
+  { from: '/audiobookshelf/config', to: '/settings' },
+  { from: '/audiobookshelf/config/api-keys', to: '/settings?tab=api-keys' },
+];
+
+/** The row for `from`; throws on a path the table does not list. */
+function moveOf(from: string): PagePathMove {
+  const row = PAGE_PATH_MOVES.find((m) => m.from === from);
+  if (!row) throw new Error(`PAGE_PATH_MOVES has no row for ${from}`);
+  return row;
+}
+
+/**
+ * `paths` after the flip, by the same keys. null = no page there any more
+ * (the shell's NotFound answers it).
+ */
+export const shellPaths = {
+  home: moveOf(paths.home).to,
+  dashboard: moveOf(paths.dashboard).to,
+  login: moveOf(paths.login).to,
+  library: moveOf(paths.library).to,
+  settings: moveOf(paths.settings).to,
+  diagnostics: moveOf(paths.diagnostics).to,
+  collections: moveOf(paths.collections).to,
+  series: moveOf(paths.series).to,
+  authors: moveOf(paths.authors).to,
+  operations: moveOf(paths.operations).to,
+  activity: moveOf(paths.activity).to,
+  review: moveOf(paths.review).to,
+  dedup: moveOf(paths.dedup).to,
+  dedupLabels: moveOf(paths.dedupLabels).to,
+  authorsDedup: moveOf(paths.authorsDedup).to,
+  booksDedup: moveOf(paths.booksDedup).to,
+} as const satisfies Record<keyof typeof paths, string | null>;
+
 /** `path` plus `?query` when there is one. `query` has no leading `?`. */
 function withQuery(path: string, query?: string): string {
   return query ? `${path}?${query}` : path;

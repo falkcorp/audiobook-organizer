@@ -16,8 +16,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
+import { ABS_REDIRECTS } from '../../../src/utils/absRedirects';
 import { findRawPagePaths } from './pathLiteralGuard';
 import {
+  ABS_REDIRECT_TARGETS,
+  PAGE_PATH_MOVES,
   bookPath,
   collectionPath,
   dedupPath,
@@ -26,6 +29,7 @@ import {
   reviewLanePath,
   reviewPath,
   settingsPath,
+  shellPaths,
   urlContains,
   urlContainsAny,
   urlEndsWith,
@@ -180,6 +184,85 @@ test.describe('paths: no spec spells a page path out', () => {
     ];
     for (const source of fine) {
       expect(findRawPagePaths(source), source).toEqual([]);
+    }
+  });
+});
+
+test.describe('paths: the shell table (07 section 7.11, F9-03)', () => {
+  const moves = new Map(PAGE_PATH_MOVES.map((m) => [m.from, m]));
+
+  test('every row names one old path once', () => {
+    expect(moves.size).toBe(PAGE_PATH_MOVES.length);
+    for (const m of PAGE_PATH_MOVES) {
+      expect(m.from.startsWith('/')).toBe(true);
+      if (m.to !== null) expect(m.to.startsWith('/')).toBe(true);
+    }
+  });
+
+  test('every page path the specs use today has a row', () => {
+    for (const [key, value] of Object.entries(paths)) {
+      expect(moves.has(value), `paths.${key} (${value}) has no PAGE_PATH_MOVES row`).toBe(true);
+    }
+  });
+
+  test('the spec rows, from the 07 section 7.11 table', () => {
+    const to = (from: string) => moves.get(from)?.to;
+    // Pages the shell absorbs.
+    expect(to('/dashboard')).toBe('/');
+    expect(to('/files')).toBe('/books/files');
+    expect(to('/diagnostics')).toBe('/system/diagnostics');
+    expect(to('/operations')).toBe('/activity');
+    expect(to('/maintenance')).toBe('/system');
+    // Every other audiobook page moves under /books/.
+    expect(to('/library')).toBe('/books/library');
+    expect(to('/library/:id')).toBe('/books/library/:id');
+    expect(to('/series')).toBe('/books/series');
+    expect(to('/authors')).toBe('/books/authors');
+    expect(to('/collections')).toBe('/books/collections');
+    expect(to('/review')).toBe('/books/review');
+    // Shell pages keep their address.
+    for (const keep of ['/login', '/setup', '/users', '/settings', '/system', '/activity']) {
+      expect(to(keep), keep).toBe(keep);
+    }
+  });
+
+  test('books pages are under /books/ and shell pages are not', () => {
+    for (const m of PAGE_PATH_MOVES) {
+      if (m.to === null) continue;
+      expect(m.to.startsWith('/books/'), `${m.from} -> ${m.to} (${m.owner})`).toBe(m.owner === 'books');
+    }
+  });
+
+  test('a former path that is not a new path is not reachable, so D13 holds', () => {
+    // No old path may stay as a second route to a moved page: a "from" that
+    // is moved must not also be some other row's "to".
+    const targets = new Set(PAGE_PATH_MOVES.flatMap((m) => (m.to === null ? [] : [m.to])));
+    for (const m of PAGE_PATH_MOVES) {
+      if (m.to === null || m.to === m.from) continue;
+      expect(targets.has(m.from), `${m.from} moved to ${m.to} but is also a destination`).toBe(false);
+    }
+  });
+
+  test('shellPaths mirrors paths key for key', () => {
+    expect(Object.keys(shellPaths).sort()).toEqual(Object.keys(paths).sort());
+    expect(shellPaths.home).toBe('/');
+    expect(shellPaths.dashboard).toBe('/');
+    expect(shellPaths.library).toBe('/books/library');
+    expect(shellPaths.diagnostics).toBe('/system/diagnostics');
+    expect(shellPaths.operations).toBe('/activity');
+    // The four old dedup addresses are former paths: NotFound after the flip.
+    expect(shellPaths.dedup).toBeNull();
+    expect(shellPaths.dedupLabels).toBeNull();
+    expect(shellPaths.authorsDedup).toBeNull();
+    expect(shellPaths.booksDedup).toBeNull();
+  });
+
+  test('ABS_REDIRECT_TARGETS keeps HEAD sources and points them at live pages', () => {
+    expect(ABS_REDIRECT_TARGETS.map((r) => r.from)).toEqual(ABS_REDIRECTS.map((r) => r.from));
+    const live = new Set(PAGE_PATH_MOVES.flatMap((m) => (m.to === null ? [] : [m.to])));
+    for (const r of ABS_REDIRECT_TARGETS) {
+      const pathname = r.to.split('?')[0];
+      expect(live.has(pathname), `${r.from} -> ${r.to}`).toBe(true);
     }
   });
 });
