@@ -339,8 +339,9 @@ func t6g5HeadLeaseOn(scan ScanController, reporter sdk.Reporter) t6g5LeaseFunc {
 }
 
 // t6g5NativeLease is the native acquire: rc.StandDown over the library scan's
-// key. A lost lease fences the run's writer and cancels its context, which the
-// check below reports.
+// key. When the lease lapses (the executor's reaper or a renewal finds it
+// expired) the executor cancels the run's context with cause tasks.ErrHoldLost
+// and the run's writer refuses its next write, which the check below reports.
 func t6g5NativeLease(rc *tasks.RC, deps t6g5Deps) t6g5LeaseFunc {
 	return func(ctx context.Context, reason string) (t6g5Lease, error) {
 		none := t6g5Lease{Lost: func() bool { return false }, Release: func() {}}

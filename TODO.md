@@ -521,7 +521,7 @@ into one of the curated sections below, is a normal direct edit.
       the F5-18 seams note and the kind's Effects match it. Brief:
       `docs/agent-tasks/platform-core/seams.d/F5-09.md`.
 
-- [ ] **TODO-F5-11-HOLD-RENEW** Do not register the 14 native group 6 maintenance
+- [x] **TODO-F5-11-HOLD-RENEW** (done 2026-11-22, #5028: core `Hold.Renew`, renewal on `Writer.Do`, item start and every progress `Set`/`Tick`, a lapse cancels the run and refuses its writer, `t6g6NativeStandDown` renews; tests in `core/internal/executor/standdown_renew_test.go` and `standdown_race_test.go` fail when either is removed) Do not register the 14 native group 6 maintenance
       kinds (`books.maintenance.*`, `books.itunes.heal`) until core has `Hold.Renew`
       and the native shells use it. A native apply takes the library-scan stand-down
       once and keeps it for the run, but a lease can lapse in a long recover or
@@ -546,7 +546,7 @@ into one of the curated sections below, is a normal direct edit.
       run's ledger (rows on the judging run keyed by the source id, or a journal
       annotation) and have the lister read them from there; the marker failure is
       only logged, so every later apply would silently re-judge.
-- [ ] **TODO-F5-18-FOLDER-COVER-SCAN-GUARD** The folder-cover scan guard reads the
+- [x] **TODO-F5-18-FOLDER-COVER-SCAN-GUARD** (done 2026-11-22, #5028: folder-cover-backfill, fs-regroup-xml, itunes-clone-into-library and repoint-missing-to-folder-audio carry `NotWhile` (`nativeScanNotWhile`), and the live applies of folder-cover-backfill and fs-regroup-xml take `rc.StandDown` over the owner's scan key) The folder-cover scan guard reads the
       v2 queue for `DefID == "library.scan"` (`cover_ops.go`,
       `fs_regroup_xml.go`) and goes dead once the scan is native. It must move to
       `NotWhile`/`StandDown`; this is a must, not a may.
@@ -579,7 +579,7 @@ into one of the curated sections below, is a normal direct edit.
 
 - [ ] **TODO-AWAIT-YIELD** A `ResumeContinue` parent cannot yield (`ErrContinueInPlace`) around a long child: `rc.Await` is not interrupted by `ShouldYield`, so the parent runs to `timed_out`. Have `Await` return a yield sentinel once `ShouldYield()` holds, so the parent can checkpoint the child's run reference and re-await after its requeue; `yieldNext` still needs real progress. Found in the review of the Await liveness relay (core/internal/executor/dispatch.go `await`).
 
-- [ ] **TODO-F5-09-RESUMED-INTRO-SCAN-HOLD** Hold a continued
+- [x] **TODO-F5-09-RESUMED-INTRO-SCAN-HOLD** (done 2026-11-22, #5028: `fileIntroNativeNotWhile` holds every attempt at dispatch and the in-run wait for a resumed attempt is deleted) Hold a continued
       `books.maintenance.transcribe-file-intros` attempt at dispatch while a v2
       library scan or bulk metadata apply is queued or running, instead of waiting
       inside the run. Today a resumed attempt (a cursor exists) waits for the scan
