@@ -1,0 +1,3 @@
+### Added
+
+- Two new tests run against the upgraded server and record what the step that removes the old permission layer has to decide. The first covers the 19 admin routes the old release opened only to the role named "admin". On each of them, a custom role that holds exactly the route's permission gets past the new permission check and is stopped only by the old role-name test. An admin's API key limited to that permission gets the same result. Today these routes stay exactly as closed as before, but they would open wider if the old layer were removed without a decision. The second test shows that the new server's own API-key routes refuse an API key that tries to create a key for another user, or disable or revoke another user's key.
