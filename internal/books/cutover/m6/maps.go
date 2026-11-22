@@ -61,6 +61,33 @@ var headCapabilities = map[string]bool{
 	"transcribe.batch": true, "transcribe.intro_clip": true,
 }
 
+// legacyKeyCapabilities are the capabilities HEAD's legacy OpenAI path served,
+// which is what the ai/openai row M6 synthesises stands for (05-metadata M1.10).
+// They are the capabilities of the call sites that read the scalar
+// openai_api_key and were never routed through the endpoint pool, each gated on
+// the key and on enable_ai_parsing:
+//
+//   - llm.author_review and llm.author_discovery: aiAuthorReviewCore
+//     (internal/server/ai_ops.go) runs handlers.AIReviewGroupsMode
+//     (parser.ReviewAuthorDuplicates) and AIReviewFullMode
+//     (parser.DiscoverAuthorDuplicates) on newAIParser(key, EnableAIParsing);
+//   - llm.author_dedup_batch: runAIDedupBatch
+//     (internal/plugins/maintenance/dedup_ops.go) submits the author dedup batch
+//     with the key, refusing when AI parsing is off;
+//   - llm.diagnostics: diagnosticsAICore (internal/server/diagnostics_ai_ops.go)
+//     submits the diagnostics batch, refusing without the key or EnableAIParsing.
+//
+// llm.filename_parse, embed.text and llm.cover_art_vision are left out on
+// purpose: the pool routes them (internal/ai/pool_routing.go, cover_text.go), so
+// a tick would let the router send paid scan, embedding and vision calls to
+// OpenAI that HEAD, routing on, sent only where a row was ticked. The other
+// key-reading sites are outside this set and fail closed after the flip, each to
+// be decided on its own (TODO-F7-09-M6-OTHER-KEY-SITES). Pinned by
+// TestSynthesisedOpenAI_TicksMatchHEADsLegacySites.
+var legacyKeyCapabilities = []string{
+	"llm.author_review", "llm.author_discovery", "llm.author_dedup_batch", "llm.diagnostics",
+}
+
 // coreFeatures are the features core's endpoint validator accepts
 // (core/integrations/ai declaredFeatures), plus the shared_fs:<root> form. HEAD
 // stores features as free strings, and core refuses an endpoint carrying any
@@ -88,10 +115,18 @@ func protocolAdapter(protocol string) (integrations.AdapterID, bool) {
 	case "whisper_server":
 		return "books.whisper_server", true
 	case "local_process":
-		return "books.whisper_local", true
+		return whisperLocalAdapter, true
 	}
 	return "", false
 }
+
+// whisperLocalAdapter is books' local_process adapter (whisper.LocalAdapterID),
+// frozen here and pinned by TestWhisperLocal_AdapterAndMarkerArePinned.
+const whisperLocalAdapter integrations.AdapterID = "books.whisper_local"
+
+// localUVEndpointURL is HEAD's config.LocalUVEndpointURL: the marker a local
+// process row carries in place of an address. Frozen, and pinned.
+const localUVEndpointURL = "local:uv-openai-whisper"
 
 // webhookTopics is the event-name map of 05-notify section 10 ("plugin event
 // types"): HEAD's plugin event types (internal/plugin/events.go) to the books

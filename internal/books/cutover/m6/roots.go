@@ -562,20 +562,35 @@ func (g *groupRun) pathAliases(planned []plannedRoot) error {
 		if taken[k] {
 			continue
 		}
-		if err := g.quarantineMember(al.member.name, al.member.raw, aliasReason(al.root, planned)); err != nil {
+		roots := make([]string, k)
+		for j := range roots {
+			roots[j] = all[j].root
+		}
+		if err := g.quarantineMember(al.member.name, al.member.raw, aliasReason(al.root, roots, planned)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// aliasReason is why an alias no root took is quarantined.
-func aliasReason(root string, planned []plannedRoot) string {
+// aliasReason is why an alias no root took is quarantined. root is the alias's
+// cleaned Root ("" when it is no absolute path), earlier the cleaned Roots of the
+// aliases listed before it.
+func aliasReason(root string, earlier []string, planned []plannedRoot) string {
 	if root == "" {
 		return reasonAliasNoRoot
 	}
 	for _, p := range planned {
 		if rp := filepath.Clean(p.spec.Path); root != rp && library.WithinRoot(root, rp) {
+			// Inside a root. HEAD rendered a path through the first alias whose Root
+			// contains it, so an alias listed after one that contains its Root was
+			// never used: there is no rendering to lose. One listed before every such
+			// alias was, and core's per-root model cannot hold it.
+			for _, e := range earlier {
+				if e != "" && library.WithinRoot(root, e) {
+					return reasonAliasShadowedByEarlier
+				}
+			}
 			return reasonAliasSubRoot
 		}
 	}

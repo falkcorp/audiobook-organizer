@@ -118,13 +118,17 @@ const (
 	reasonAliasSubRoot = "the path alias's root is inside a library root, not at one, and core's aliases are per root: its display rendering is not carried"
 	// reasonAliasShadowed: HEAD renders a path through the first alias in list
 	// order whose root contains it (web/src/utils/pathAliases.ts matchAlias).
-	reasonAliasShadowed      = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
-	reasonDroppedValue       = "a value HEAD selected by nothing with, left out of the migrated instance: kept here so it can be recovered"
-	reasonUnreadCredential   = "a secret setting of a metadata source that HEAD never read for it, or that another of its secrets overrode, and its adapter declares no field for: left unbound, its secret stays in the store"
-	reasonMappingRootRefused = "core refused the library roots this iTunes mapping's To resolves against"
-	reasonRootPath           = "the root path is not an absolute host path"
-	reasonUnreadMember       = "a settings blob member that no part of M6 reads"
-	reasonWebhookEvent       = "the webhook rule's events map to no topic"
+	reasonAliasShadowed = "every library root at or under the path alias's root matched an alias listed before it first: HEAD rendered none of their paths with it, and its display rendering is not carried"
+	// reasonAliasShadowedByEarlier: the alias's root is inside a library root, but
+	// an alias listed before it has a root that contains that root, so HEAD's
+	// first-match rendering took every path under it first and never used it.
+	reasonAliasShadowedByEarlier = "the path alias's root is inside a library root, but an alias listed before it has a root that contains its root: HEAD rendered none of its paths with it, and its display rendering is not carried"
+	reasonDroppedValue           = "a value HEAD selected by nothing with, left out of the migrated instance: kept here so it can be recovered"
+	reasonUnreadCredential       = "a secret setting of a metadata source that HEAD never read for it, or that another of its secrets overrode, and its adapter declares no field for: left unbound, its secret stays in the store"
+	reasonMappingRootRefused     = "core refused the library roots this iTunes mapping's To resolves against"
+	reasonRootPath               = "the root path is not an absolute host path"
+	reasonUnreadMember           = "a settings blob member that no part of M6 reads"
+	reasonWebhookEvent           = "the webhook rule's events map to no topic"
 )
 
 // Config is what the step needs besides its declaration.
@@ -163,6 +167,14 @@ type Config struct {
 	// (internal/config applyEnvAuthoritativeConfig), so the blob's may be empty or
 	// stale. Required: a caller with no overlay passes a function returning nil.
 	Effective func(ctx context.Context, ref integrations.Ref) (map[string]string, error)
+	// EnableAIParsing is HEAD's enable_ai_parsing in effect at cutover. M2 moves
+	// it to modules.books.ai.enable_ai_parsing and leaves nothing of it in the
+	// blob, so M6 cannot learn it from its own input; it decides whether the
+	// ai/openai row M6 synthesises for HEAD's legacy OpenAI path is enabled
+	// (legacyKeyCapabilities). Read only when that row is synthesised. The caller
+	// answers the effective value, the operator's layer over the stored one, with
+	// HEAD's own default when neither is set. Required.
+	EnableAIParsing func(ctx context.Context) (bool, error)
 	// Report receives one entry per instance, trust grant, root and quarantined
 	// row. nil keeps none.
 	Report *Report
@@ -261,6 +273,8 @@ func (c Config) checkReads() error {
 		return errors.New("m6: Config.SecretNames and Config.SecretValue are required")
 	case c.Effective == nil:
 		return errors.New("m6: Config.Effective is required (a caller with no operator overlay passes a function returning nil)")
+	case c.EnableAIParsing == nil:
+		return errors.New("m6: Config.EnableAIParsing is required (HEAD's enable_ai_parsing in effect, which M2 moved out of the blob)")
 	case c.Legacy == nil:
 		return errors.New("m6: Config.Legacy is books' legacy range")
 	}

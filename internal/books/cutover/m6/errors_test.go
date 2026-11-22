@@ -21,7 +21,7 @@ func TestNew_RefusesAnIncompleteConfig(t *testing.T) {
 	r := newRig(t, withRows(headRows(t)))
 	good := m6.Config{
 		Integrations: lazyInteg{r}, AI: lazyAI{r}, Notify: lazyNotify{r}, Config: r.cfg, Secrets: r.secrets,
-		SecretNames: r.secrets.names, SecretValue: r.secrets.value, Legacy: r.legacy, Effective: r.overlay,
+		SecretNames: r.secrets.names, SecretValue: r.secrets.value, Legacy: r.legacy, Effective: r.overlay, EnableAIParsing: r.aiParsing,
 	}
 	after := []storage.StepRef{{Version: 1}}
 	if _, err := m6.New(good, "step", 3, after); err != nil {
@@ -37,6 +37,7 @@ func TestNew_RefusesAnIncompleteConfig(t *testing.T) {
 		"secret value": func(c *m6.Config) { c.SecretValue = nil },
 		"legacy":       func(c *m6.Config) { c.Legacy = nil },
 		"effective":    func(c *m6.Config) { c.Effective = nil },
+		"ai parsing":   func(c *m6.Config) { c.EnableAIParsing = nil },
 	} {
 		c := good
 		mut(&c)

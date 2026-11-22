@@ -35,7 +35,7 @@ import (
 // native side is empty (every store M6 runs against at cutover) the two agree.
 //
 // cfg needs the reads (Legacy is ignored in favour of legacy; SecretNames,
-// SecretValue and Effective are called); its importers and Report are ignored.
+// SecretValue, Effective and EnableAIParsing are called); its importers and Report are ignored.
 // Plan is for the dry run F7-09 wires to the storage CLI, beside the runner's
 // scratch-copy rehearsal (05-storage 5S.3.6), which is the one that exercises the
 // importers.
