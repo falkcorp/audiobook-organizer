@@ -41,6 +41,10 @@ type kernelEvents struct {
 	bus        *events.Bus
 	log        *slog.Logger
 	closeDrain time.Duration
+
+	// flip is the events flip's outbox and hub (events_flip.go); nil until P5's
+	// buildEventsFlip builds them, and always nil for a bus built alone.
+	flip *eventsFlip
 }
 
 // defaultCloseDrain is core.events.close_drain's default (05-events §5E.9).
