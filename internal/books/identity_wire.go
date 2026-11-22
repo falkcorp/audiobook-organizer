@@ -192,10 +192,12 @@ func (w *identityWiring) bindAccess(ctx context.Context, teamDomain, aud string,
 
 // atomResolver is the atom table as the two shapes that consume it: stage 13's
 // httpapi.AtomResolver (resolve) and the bridge's legacyauth.Resolver. The route
-// requirement is the table's Route (AllOf every scope, XFILE-5); an atom no route
-// enforces (playlists.create) has a zero Route and resolves to nothing, so
-// neither a route nor an in-handler check can be satisfied by it, the refusal side
-// of "when in doubt".
+// requirement is the table's Route (AllOf every scope, XFILE-5), which no atom
+// leaves zero (TestAtomTable_NoZeroRoute): an atom no HEAD route enforces
+// (playlists.create) still resolves to its scopes, as HEAD's in-handler
+// auth.Can and its all-atoms tests held it. A zero Route would be refused here
+// (the refusal side of "when in doubt") and would fail every all-atoms check
+// for every caller (F4-08 B10y).
 type atomResolver struct{ rows []Atom }
 
 func newAtomResolver() atomResolver { return atomResolver{rows: AtomTable()} }

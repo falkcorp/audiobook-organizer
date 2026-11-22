@@ -68,8 +68,13 @@ func s13AuthOff(cat *rbac.Catalog) *auth.Principal {
 }
 
 // s13Resolver resolves s13Atoms; users.manage has the read-side entry
-// core:users.view, and playlists.create resolves to the zero requirement as
-// books' table does.
+// core:users.view. s13ZeroAtom resolves to the zero requirement, the answer of
+// a table row with no route requirement: books' table has none now
+// (playlists.create carries AllOf its scope, F4-08 B10y), but stage 13 must
+// still refuse one if a resolver gives it.
+// s13ZeroAtom is an atom whose table row has a zero route requirement.
+const s13ZeroAtom = "batcave.sealed"
+
 func s13Resolver(atom string, readSide bool) (rbac.Requirement, bool) {
 	if readSide {
 		if atom == "users.manage" {
@@ -77,7 +82,7 @@ func s13Resolver(atom string, readSide bool) (rbac.Requirement, bool) {
 		}
 		return rbac.Requirement{}, false
 	}
-	if atom == "playlists.create" {
+	if atom == s13ZeroAtom {
 		return rbac.Requirement{}, true
 	}
 	scopes, ok := s13Atoms()[atom]
@@ -207,7 +212,7 @@ func TestStage13_Decision(t *testing.T) {
 		{"legacy atom resolved and refused", AuthzRequest{Perm: rbac.LegacyAtom("library.edit_metadata"), Principal: robin}, opts, s13Want{403, "permission_denied", "books:edit", false}},
 		{"legacy atom with no resolver refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: admin}, noResolver, s13Want{403, "permission_denied", "", false}},
 		{"unknown legacy atom refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom("joker.laugh"), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
-		{"an atom with no route requirement refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom("playlists.create"), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
+		{"an atom with no route requirement refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom(s13ZeroAtom), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
 		{"a resolver answering Public is refused", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: robin}, answering(rbac.Public), s13Want{403, "permission_denied", "", false}},
 		{"a resolver answering AnyAuthenticated is refused", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: robin}, answering(rbac.AnyAuthenticated), s13Want{403, "permission_denied", "", false}},
 		{"a resolver answering a legacy kind is refused", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: admin}, answering(rbac.LegacyAtom("library.view")), s13Want{403, "permission_denied", "", false}},
@@ -380,7 +385,7 @@ func TestStage13_RefusesWhatItCannotResolveWhateverTheChecker(t *testing.T) {
 		{"nil resolver", rbac.LegacyAtom("library.view"), AuthzOptions{OwnerRequired: true}},
 		{"nil resolver, legacy check", rbac.LegacyCheck("users.manage", true), AuthzOptions{OwnerRequired: true}},
 		{"unknown atom", rbac.LegacyAtom("joker.laugh"), opts},
-		{"no route requirement", rbac.LegacyAtom("playlists.create"), opts},
+		{"no route requirement", rbac.LegacyAtom(s13ZeroAtom), opts},
 		{"resolver says not ok but answers", rbac.LegacyAtom("library.view"), AuthzOptions{OwnerRequired: true, ResolveAtom: func(string, bool) (rbac.Requirement, bool) { return rbac.Need("books:view"), false }}},
 		{"Delegated", rbac.Delegated("abs"), opts},
 		{"zero", rbac.Requirement{}, opts},
