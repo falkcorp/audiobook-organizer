@@ -3608,6 +3608,11 @@ export interface UserMergeJournal {
   conflict_total: number;
   warnings?: string[];
   error?: string;
+  /**
+   * An applied merge (core identity) whose straggler sweep did not finish: it
+   * is resumed to finish the sweep, and cannot be undone until then.
+   */
+  sweep_pending?: boolean;
   created_at: string;
   updated_at: string;
   applied_at?: string;
