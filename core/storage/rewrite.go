@@ -6,10 +6,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	cpebble "github.com/cockroachdb/pebble/v2"
@@ -157,45 +159,6 @@ func (db *DB) extendStart(step string) {
 	}
 }
 
-// runWithProgress runs work on its own goroutine and calls extend, on the
-// caller's, each time progress fires, until work returns. It is the whole of
-// how a call that gives no progress of its own (Pebble's Flush and Compact
-// block until done) shows the service manager it is advancing: extend is
-// called only for a progress signal, never on a clock, so a work that stalls
-// gets no further start time and is killed once its last extension runs out.
-// A signal that arrives after work returned is dropped. A panic in work is
-// re-raised here, as if work had run inline.
-func runWithProgress(work func() error, progress <-chan struct{}, extend func()) error {
-	type result struct {
-		err   error
-		panic any
-		died  bool
-	}
-	done := make(chan result, 1)
-	go func() {
-		r := result{died: true}
-		defer func() {
-			if r.died {
-				r.panic = recover()
-			}
-			done <- r
-		}()
-		r.err = work()
-		r.died = false
-	}()
-	for {
-		select {
-		case r := <-done:
-			if r.died {
-				panic(r.panic)
-			}
-			return r.err
-		case <-progress:
-			extend()
-		}
-	}
-}
-
 // RewriteRecord is M8's record state ("" when it has none).
 func (db *DB) RewriteRecord(ctx context.Context, id string) (string, error) {
 	raw, err := db.storageKS().Get(ctx, DataMigrationKey(id))
@@ -221,14 +184,96 @@ func (db *DB) SetRewriteRecord(ctx context.Context, id, state string) error {
 	return db.labelled(LabelRewriteState, func() error { return db.storageKS().Set(ctx, DataMigrationKey(id), raw) })
 }
 
-// RewriteCompact is M8's phase 1: flush, then compact the whole range,
-// parallelized. Pebble's Compact reports no progress and one call over a
-// store of tens of GB outlasts sdnotify.StartupStepBudget, so the flush and
-// the compaction run under runWithProgress: the engine's ObserveTables
-// signal (a flush or compaction starting another output table, about one
-// per 128 MiB at the bottom level) extends the start timeout, and nothing
-// else does. The compaction keeps Pebble's own parallelism over the whole
-// range.
+// rewriteCompactBytes is the table data one compaction chunk covers (the sum
+// of the sizes of the tables whose first key falls in the chunk, over every
+// level, so a key range that has versions at several levels counts each).
+// Prod's store held 1106 tables over 74.2 GB, about 67 MB each, so a chunk is
+// about 8 tables and the store about 150 chunks. The prod-copy rehearsal's
+// copy ran at 18 to 27 MB/s, which puts a chunk at 20 to 30 s, a tenth of
+// the 5 min the rehearsal gate allows between two extensions; a chunk that
+// takes longer than sdnotify.StartupStepBudget (under 0.9 MB/s, twenty times
+// slower than the slowest measured) is wedged for the budget's purpose and is
+// killed, not extended.
+const rewriteCompactBytes = 512 << 20
+
+// compactRanges splits the key space [start, end] into consecutive closed
+// ranges at table boundaries, each covering about chunkBytes of table data. A
+// store with no table, or one smaller than a chunk, is one range. The ranges
+// overlap by at most the boundary key, so a table that starts exactly on a
+// boundary can be compacted by both neighbours, which costs one table per
+// boundary and changes no result. They are computed once, after the flush, so
+// every key is in the tables listed.
+func compactRanges(db *cpebble.DB, start, end []byte, chunkBytes int64) ([][2][]byte, error) {
+	levels, err := db.SSTables()
+	if err != nil {
+		return nil, err
+	}
+	type table struct {
+		first []byte
+		size  int64
+	}
+	var tables []table
+	for _, lvl := range levels {
+		for _, t := range lvl {
+			tables = append(tables, table{first: t.Smallest.UserKey, size: int64(t.Size)})
+		}
+	}
+	slices.SortFunc(tables, func(a, b table) int { return bytes.Compare(a.first, b.first) })
+	var ranges [][2][]byte
+	from, acc := start, int64(0)
+	for _, t := range tables {
+		// A cut at a table's first key, once the chunk holds enough; a key
+		// at or before the chunk's own start, or at or after the end, would
+		// make an empty or inverted range (Pebble refuses start >= end).
+		if acc >= chunkBytes && bytes.Compare(t.first, from) > 0 && bytes.Compare(t.first, end) < 0 {
+			ranges = append(ranges, [2][]byte{from, bytes.Clone(t.first)})
+			from, acc = bytes.Clone(t.first), 0
+		}
+		acc += t.size
+	}
+	return append(ranges, [2][]byte{from, end}), nil
+}
+
+// RewriteCompact is M8's phase 1: flush, then compact the whole key range
+// parallelized, in chunks. Pebble's Compact reports no progress and one call
+// over a store of tens of GB outlasts sdnotify.StartupStepBudget, so the
+// compaction is cut into compactRanges and the step asks for start time
+// before the flush and before each chunk, on this goroutine, as each chunk's
+// Compact returns: the request follows the step's own work, never a clock and
+// never an engine event.
+//
+// Why not an engine event (the table-created event of #4989's first cut): the
+// event listener sees every flush and compaction of the engine, the
+// background ones included, and Pebble (v2.1.7) gives no way to tell the
+// manual compaction's from them, so a wedged Compact beside any background
+// work would be kept alive for good. The sources, all in
+// github.com/cockroachdb/pebble/v2@v2.1.7:
+//   - compaction.go:494-503, makeInfo: CompactionInfo.Reason is
+//     c.kind.String(), and a manual compaction has no kind of its own
+//     (compaction.go:139-157, compactionKindDefault to
+//     compactionKindBlobFileRewrite): it is "default", or "move" when it
+//     only relinks tables (compaction_picker.go:2005-2008 picks it as an
+//     ordinary pickedTableCompaction with manualID set), the same as an
+//     automatic one.
+//   - compaction_picker.go:231, ManualID, is the one marker, and nothing
+//     exported carries it: CompactionInfo (event.go:203-231) has JobID,
+//     Reason, Input, Output, Duration, Annotations and no manual field.
+//   - event.go:482-489, TableCreateInfo is JobID, Reason ("compacting",
+//     "flushing" or "ingesting"), Path, FileNum; its JobID joins to a
+//     CompactionBegin's, which is no help when the begin cannot be told
+//     apart; and compaction.go:3568 emits it from every flush and compaction
+//     alike.
+//   - a key-range test is vacuous: the range is the whole key space, so every
+//     background compaction lies inside it (db.go:1825, Compact; db.go:1925-1932, manualCompact).
+//   - a move compaction (a manual one over tables that do not overlap) writes
+//     no table at all (compaction.go:3215-3216, runCompaction calls
+//     runMoveCompaction, which relinks; compact1, compaction.go:2687-2742,
+//     emits only CompactionBegin and CompactionEnd around it), so a table
+//     event could not show progress there even for a manual compaction.
+//
+// A chunk's Compact still parallelizes inside its range (parallelize=true,
+// db.go:1825 splitManualCompaction), and the chunks' union is the whole range,
+// so the result is the same as one call.
 func (db *DB) RewriteCompact(ctx context.Context) error {
 	return db.labelled(LabelRewriteCompact, func() error {
 		release, err := db.lease()
@@ -236,24 +281,31 @@ func (db *DB) RewriteCompact(ctx context.Context) error {
 			return err
 		}
 		defer release()
-		eng := db.engine()
-		progress := make(chan struct{}, 1)
-		stop := eng.ObserveTables(func() {
-			select {
-			case progress <- struct{}{}:
-			default: // one is pending; it extends for this one too
-			}
-		})
-		defer stop()
-		extend := func() { db.extendStart(stepRewriteCompact) }
-		extend()
-		if err := runWithProgress(eng.DB().Flush, progress, extend); err != nil {
+		pdb := db.engine().DB()
+		db.extendStart(stepRewriteCompact)
+		if err := pdb.Flush(); err != nil {
 			return fmt.Errorf("storage: rewrite flush: %w", err)
 		}
 		start, end := fullRange()
-		err = runWithProgress(func() error { return eng.DB().Compact(ctx, start, end, true) }, progress, extend)
+		chunkBytes := int64(rewriteCompactBytes)
+		if db.boot != nil && db.boot.opts.rewriteCompactBytes > 0 {
+			chunkBytes = db.boot.opts.rewriteCompactBytes
+		}
+		ranges, err := compactRanges(pdb, start, end, chunkBytes)
 		if err != nil {
-			return fmt.Errorf("storage: rewrite compact: %w", err)
+			return fmt.Errorf("storage: rewrite compact: list the tables: %w", err)
+		}
+		compact := func(ctx context.Context, pdb *cpebble.DB, from, to []byte) error {
+			return pdb.Compact(ctx, from, to, true)
+		}
+		if db.boot != nil && db.boot.opts.compactRange != nil {
+			compact = db.boot.opts.compactRange
+		}
+		for _, r := range ranges {
+			db.extendStart(stepRewriteCompact)
+			if err := compact(ctx, pdb, r[0], r[1]); err != nil {
+				return fmt.Errorf("storage: rewrite compact: %w", err)
+			}
 		}
 		return nil
 	})
