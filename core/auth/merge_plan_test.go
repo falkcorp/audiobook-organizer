@@ -697,3 +697,98 @@ func TestUserMerge_TargetChangedBeforeTheCommit(t *testing.T) {
 		})
 	}
 }
+
+// mergeRowsHook wraps the store a service reads through and runs onFirst after
+// the first MergeRows read of an evaluation, the point after the plan's pins
+// have been checked and before the e-mail scan: a writer that lands there is
+// the interleaving evalMerge's reads (not one snapshot) cannot rule out.
+type mergeRowsHook struct {
+	auth.Store
+	onFirst func(rows []auth.MergeRow, err error) ([]auth.MergeRow, error)
+}
+
+func (h *mergeRowsHook) MergeRows(ctx context.Context, id auth.UserID) ([]auth.MergeRow, error) {
+	rows, err := h.Store.MergeRows(ctx, id)
+	if fn := h.onFirst; fn != nil {
+		h.onFirst = nil
+		return fn(rows, err)
+	}
+	return rows, err
+}
+
+// TestUserMerge_PlanStaleDuringEvaluation: a refusal that follows the pin check
+// is reported as ErrMergeConflict when the plan went stale while the evaluation
+// ran, whatever the refusal, and as itself otherwise. The interleaving is forced
+// with a hook on the store, not hoped for.
+func TestUserMerge_PlanStaleDuringEvaluation(t *testing.T) {
+	t.Run("the winner commits between the pin check and the e-mail scan", func(t *testing.T) {
+		f := newFx(t)
+		bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+		actor := f.signedIn(bruce)
+		jason := f.setMail(f.user("jason-todd", "gotham.detective"), oracleMail, true)
+		dick := f.signable(f.user("dick-grayson", "gotham.detective"))
+		tim := f.signable(f.user("tim-drake", "gotham.detective"))
+		winner := f.planMerge(actor, jason.ID, dick.ID)
+		loser := f.planMerge(actor, jason.ID, tim.ID)
+
+		hook := &mergeRowsHook{Store: f.st}
+		hook.onFirst = func(rows []auth.MergeRow, err error) ([]auth.MergeRow, error) {
+			if werr := f.stageMerge(actor, winner); werr != nil {
+				t.Errorf("the winning merge: %v", werr)
+			}
+			return rows, err // the loser read its rows before the winner landed
+		}
+		ctx := auth.WithPrincipal(context.Background(), actor)
+		b := f.st.NewBatch()
+		defer func() { _ = b.Close() }()
+		after, err := f.over(hook).StageUserMerge(ctx, b, loser)
+		if !errors.Is(err, auth.ErrMergeConflict) {
+			t.Fatalf("the losing merge = %v, want ErrMergeConflict (the plan is stale), not the e-mail refusal the winner's commit caused", err)
+		}
+		if errors.Is(err, auth.ErrEmailInUse) || after != nil {
+			t.Fatalf("the losing merge = %v, after %v", err, after != nil)
+		}
+		if got := f.reload(jason.ID); got.MergedInto != dick.ID {
+			t.Fatalf("source = %+v, want merged into the winner's target", got)
+		}
+		if got := f.reload(tim.ID); got.Version != tim.Version {
+			t.Fatalf("the losing target was written: %+v", got)
+		}
+	})
+
+	t.Run("a record changed while the refusal was decided", func(t *testing.T) {
+		f := newFx(t)
+		bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+		actor := f.signedIn(bruce)
+		jason := f.user("jason-todd", "gotham.detective")
+		dick := f.user("dick-grayson", "gotham.detective") // no password, no sign-in: the merge is refused
+		f.mint(f.session(f.reload(jason.ID)), jason.ID, "gotham:patrol")
+		plan := f.rawPlan(jason.ID, dick.ID) // read before the key existed: no rows
+
+		hook := &mergeRowsHook{Store: f.st}
+		hook.onFirst = func([]auth.MergeRow, error) ([]auth.MergeRow, error) { return nil, nil } // the stale read
+		ctx := auth.WithPrincipal(context.Background(), actor)
+		b := f.st.NewBatch()
+		defer func() { _ = b.Close() }()
+		_, err := f.over(hook).StageUserMerge(ctx, b, plan)
+		if !errors.Is(err, auth.ErrMergeConflict) {
+			t.Fatalf("a merge refused over rows that moved = %v, want ErrMergeConflict", err)
+		}
+	})
+
+	t.Run("nothing changed: the refusal stands", func(t *testing.T) {
+		f := newFx(t)
+		bruce := f.user("bruce-wayne", rbac.RoleAdmin)
+		actor := f.signedIn(bruce)
+		jason := f.user("jason-todd", "gotham.detective")
+		dick := f.user("dick-grayson", "gotham.detective")
+		plan := f.rawPlan(jason.ID, dick.ID)
+		err := f.stageMerge(actor, plan)
+		if got := refusalCode(err); got != auth.RefusedNoSignIn {
+			t.Fatalf("a refused merge over an unchanged plan = %v, want the %s refusal", err, auth.RefusedNoSignIn)
+		}
+		if errors.Is(err, auth.ErrMergeConflict) {
+			t.Fatalf("an unchanged plan reported as stale: %v", err)
+		}
+	})
+}

@@ -8,6 +8,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -195,6 +196,55 @@ func (s *Service) evalMerge(ctx context.Context, b *storage.Batch, source, targe
 	if plan != nil && (src.Version != plan.srcVersion || tgt.Version != plan.tgtVersion) {
 		return nil, fmt.Errorf("%w: %s or %s changed since the merge preview", ErrMergeConflict, src.ID, tgt.ID)
 	}
+	ev, err := s.evalPinned(ctx, b, actor, src, tgt, plan)
+	if err != nil && plan != nil {
+		err = s.stalePlanOr(ctx, plan, err)
+	}
+	return ev, err
+}
+
+// stalePlanOr is err, unless the plan went stale while the evaluation ran: a
+// refusal that follows the pin check can be the effect of a merge that landed
+// after src and tgt were read (the reads are not one snapshot), and the true
+// cause is then the stale plan, ErrMergeConflict, not the refusal (a verified
+// address "held elsewhere" by the winner of a race). The users and the rows are
+// read again; a version or a row that moved since the plan means the plan is
+// stale. A read that fails leaves err as it was.
+func (s *Service) stalePlanOr(ctx context.Context, plan *UserMergePlan, err error) error {
+	if errors.Is(err, ErrMergeConflict) {
+		return err
+	}
+	src, serr := s.d.Store.GetUser(ctx, plan.source)
+	if serr != nil {
+		return err
+	}
+	tgt, terr := s.d.Store.GetUser(ctx, plan.target)
+	if terr != nil {
+		return err
+	}
+	if src.Version != plan.srcVersion || tgt.Version != plan.tgtVersion {
+		return fmt.Errorf("%w: %s or %s changed since the merge preview (refused meanwhile: %v)", ErrMergeConflict, src.ID, tgt.ID, err)
+	}
+	rows, rerr := s.d.Store.MergeRows(ctx, src.ID)
+	if rerr != nil {
+		return err
+	}
+	if !plan.rowsMatch(rows) {
+		return fmt.Errorf("%w: a record of %s changed since the merge preview (refused meanwhile: %v)", ErrMergeConflict, src.ID, err)
+	}
+	return err
+}
+
+// rowsMatch reports whether rows are the records the plan read, byte for byte.
+func (p *UserMergePlan) rowsMatch(rows []MergeRow) bool {
+	return slices.EqualFunc(rows, p.rows, func(a, b MergeRow) bool {
+		return a.Kind == b.Kind && a.ID == b.ID && bytes.Equal(a.Seen, b.Seen)
+	})
+}
+
+// evalPinned is evalMerge from the source-already-merged refusal on: src and
+// tgt are read, authorised and (for a plan) at the versions the plan pinned.
+func (s *Service) evalPinned(ctx context.Context, b *storage.Batch, actor *Principal, src, tgt *User, plan *UserMergePlan) (*mergeEval, error) {
 	if src.MergedInto != "" {
 		return nil, mergeRefusal(RefusedAlreadyMerged, "%s was already merged into %s", src.ID, src.MergedInto)
 	}
@@ -208,9 +258,7 @@ func (s *Service) evalMerge(ctx context.Context, b *storage.Batch, source, targe
 	if err != nil {
 		return nil, err
 	}
-	if plan != nil && !slices.EqualFunc(rows, plan.rows, func(a, b MergeRow) bool {
-		return a.Kind == b.Kind && a.ID == b.ID && bytes.Equal(a.Seen, b.Seen)
-	}) {
+	if plan != nil && !plan.rowsMatch(rows) {
 		return nil, fmt.Errorf("%w: a record of %s changed since the merge preview", ErrMergeConflict, src.ID)
 	}
 	ev := &mergeEval{src: src, tgt: tgt, tgtAfter: *tgt, rows: rows}
