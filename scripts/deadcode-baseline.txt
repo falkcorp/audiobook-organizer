@@ -1937,6 +1937,7 @@ internal/plugins/maintenance.creditCensusParallelism
 internal/plugins/maintenance.creditsBackfillParallelism
 internal/plugins/maintenance.duplicateCopiesFixer.detail
 internal/plugins/maintenance.durationPoolOn
+internal/plugins/maintenance.fileIntroNativeNotWhile
 internal/plugins/maintenance.folderBooksFixer.handOff
 internal/plugins/maintenance.forwardedBookmarkReads.ListBookmarks
 internal/plugins/maintenance.forwardedBookmarkReads.ListBookmarksForUser
@@ -1968,6 +1969,7 @@ internal/plugins/maintenance.nativeCBFingerprint
 internal/plugins/maintenance.nativeCBLedger.judgedSources
 internal/plugins/maintenance.nativeCBLedger.markJudged
 internal/plugins/maintenance.nativeCBLedger.others
+internal/plugins/maintenance.nativeScanNotWhile
 internal/plugins/maintenance.newBooksGate
 internal/plugins/maintenance.newJobsDeps
 internal/plugins/maintenance.newT6G2Deps
