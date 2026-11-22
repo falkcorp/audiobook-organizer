@@ -91,6 +91,9 @@ func TestPanickingMutatePublishesNothing(t *testing.T) {
 	if Get() != before || Get().RootDir != "/tmp/wayne-manor" {
 		t.Fatalf("a panicking Mutate published a half-made config: %q", Get().RootDir)
 	}
+	if AppConfig.RootDir != "/tmp/wayne-manor" {
+		t.Fatalf("a panicking Mutate left a half-made write in the mirror: %q", AppConfig.RootDir)
+	}
 }
 
 func TestGenerationMovesAfterThePointer(t *testing.T) {
@@ -117,10 +120,8 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 	})
 	var stop atomic.Bool
 	var wg sync.WaitGroup
-	for r := 0; r < 8; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			for !stop.Load() {
 				c := Get()
 				_ = len(c.SupportedExtensions)
@@ -130,9 +131,9 @@ func TestConcurrentReadersAndWriters(t *testing.T) {
 				_ = c.Dedup.Signals.Confidence["isbn"]
 				_ = c.RootDir
 			}
-		}()
+		})
 	}
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		Mutate(func(c *Config) {
 			c.SupportedExtensions = append(c.SupportedExtensions, ".m4b")
 			c.Dedup.Signals.Confidence["isbn"] = DedupKindConfidence{MinConfidence: float64(i)}
@@ -368,10 +369,8 @@ func TestConcurrentReadersAndProject(t *testing.T) {
 	restoreConfig(t)
 	var stop atomic.Bool
 	var wg sync.WaitGroup
-	for r := 0; r < 8; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 8 {
+		wg.Go(func() {
 			for !stop.Load() {
 				c := Get()
 				for _, e := range c.SupportedExtensions {
@@ -380,10 +379,10 @@ func TestConcurrentReadersAndProject(t *testing.T) {
 				_ = c.Dedup.Signals.Confidence["isbn"]
 				_ = c.RootDir
 			}
-		}()
+		})
 	}
 	base := Config{DatabaseType: "pebble", Dedup: DedupConfig{Signals: DedupSignalConfig{Confidence: map[string]DedupKindConfidence{}}}}
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		base.SupportedExtensions = append(base.SupportedExtensions, ".m4b")
 		base.Dedup.Signals.Confidence["isbn"] = DedupKindConfidence{MinConfidence: float64(i)}
 		Project(base) // base keeps changing in place after each publish, like the Engine's next projection
