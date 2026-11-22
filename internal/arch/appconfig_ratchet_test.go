@@ -72,7 +72,7 @@ var appConfigRatchet = map[string]int{
 	"internal/scanner":                    35,
 	"internal/scheduler":                  78,
 	"internal/search":                     1,
-	"internal/server":                     174,
+	"internal/server":                     173,
 	"internal/server/handlers":            25,
 	"internal/server/handlers/aibackends": 2,
 	"internal/server/handlers/audiobooks": 4,
