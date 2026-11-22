@@ -55,8 +55,13 @@ func actorOf(p *auth.Principal) tasks.Actor {
 // two cells that need identity data this package cannot see (an app-level
 // authenticator extension whose MethodSpec.Interactive is true, and an API
 // key whose scopes name the requirement explicitly) are Deps.VerifiedMethod's.
+//
+// It asks Method's core-only list on purpose, not the principal's registered
+// classification: the extension cell is the kernel's to widen
+// (kernel/verified_method.go), and core's default refuses it
+// (TestApprove_CoreDefaultRefusesWhatOnlyTheKernelWidens).
 func DefaultVerifiedMethod(p *auth.Principal, _ rbac.Requirement) bool {
-	return p != nil && p.Interactive()
+	return p != nil && p.Method.Interactive()
 }
 
 // holdsNothing is the checker of a principal that carries none.
