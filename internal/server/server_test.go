@@ -51,12 +51,12 @@ import (
 // ends, so it stays. Every test in this package builds its server through
 // here (or through setupTestServer*, which call it) rather than calling
 // NewServer directly.
-func newTestServer(t testing.TB, store database.Store) *Server {
+func newTestServer(t testing.TB, store database.Store, opts ...ServerOption) *Server {
 	t.Helper()
 	// GET/PUT /api/v1/config answer over the installed config.Facade (F3-07
 	// e3): every route test that builds a server has one.
 	installServerConfigFacade(t)
-	s := NewServer(store)
+	s := NewServer(store, opts...)
 	t.Cleanup(s.releaseUnstarted)
 	attachTestMetrics(t, s)
 	return s
@@ -90,6 +90,11 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 	return setupTestServerFS(t, true)
 }
 
+// setupTestServerWithOptions is setupTestServer with NewServer options.
+func setupTestServerWithOptions(t *testing.T, opts ...ServerOption) (*Server, func()) {
+	return setupTestServerFS(t, true, opts...)
+}
+
 // setupTestServerRealFS builds a test server whose database is real files on
 // disk. Only for tests that operate on those files directly; everything else
 // should use setupTestServer, which is ~150x faster to construct.
@@ -97,7 +102,7 @@ func setupTestServerRealFS(t *testing.T) (*Server, func()) {
 	return setupTestServerFS(t, false)
 }
 
-func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
+func setupTestServerFS(t *testing.T, inMemory bool, opts ...ServerOption) (*Server, func()) {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
 
@@ -137,7 +142,7 @@ func setupTestServerFS(t *testing.T, inMemory bool) (*Server, func()) {
 	database.SetGlobalStore(store)
 
 	// Create server (NewServer creates hub, queue, batcher, fileIOPool internally)
-	server := newTestServer(t, store)
+	server := newTestServer(t, store, opts...)
 
 	// Start the operations registry's dispatcher + worker pool. Without
 	// this, ops enqueued by the test never execute (enqueued in the v2

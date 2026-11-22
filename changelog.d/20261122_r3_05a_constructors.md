@@ -1,0 +1,3 @@
+### Changed
+
+- Eight of the service registry's remaining clusters (work, audiobook, organize, quarantine, scan, merge, importpath, batch) are built by plain constructors in `internal/server/domain_services.go` instead of registry defs, and the server reads their handles directly instead of through `serviceregistry.Get` (R3-05a). No behaviour change: the same services are built and serve the same routes (the router's 495 method+path pairs are identical before and after). The itunes cluster stays registry-built until F5-18 or F7-09 lands, because its plugin and its event-bus and metafetch dependencies sit on opposite sides of the registry's single Build step.
