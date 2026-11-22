@@ -229,6 +229,52 @@ func TestMapUser(t *testing.T) {
 	}
 }
 
+// TestMapUser_MergedMarker: HEAD's admin user merge locks an account and then
+// stamps merged_into_user_id and merged_at on it, and HEAD's ReactivateUser
+// refuses an account that has one. The import carries the marker (auth.User
+// MergedInto, MergedAt) so core's enable path refuses it too; a locked row
+// without the marker imports without one, and a stray merged_at on an unmarked
+// row is not a merge.
+func TestMapUser_MergedMarker(t *testing.T) {
+	mergedAt := testNow.Add(-24 * time.Hour)
+	head := func(mut func(*headUser)) *headUser {
+		h := &headUser{
+			ID: "01M7ZZZJASON000000000000001", Username: "jason.todd", Email: "", PasswordHashAlgo: "bcrypt",
+			PasswordHash: "$2a$04$mck", Roles: []string{"viewer"}, Status: "locked", CreatedAt: testNow.Add(-time.Hour), UpdatedAt: testNow, Version: 3,
+		}
+		mut(h)
+		return h
+	}
+	roles := []rbac.RoleName{"viewer"}
+	for _, c := range []struct {
+		name       string
+		mut        func(*headUser)
+		wantInto   auth.UserID
+		wantAt     time.Time
+		wantStatus auth.UserStatus
+	}{
+		{"a locked account the merge folded away", func(h *headUser) {
+			h.MergedIntoUserID, h.MergedAt = "01M7ZZZDICK0000000000000001", &mergedAt
+		}, "01M7ZZZDICK0000000000000001", mergedAt, auth.StatusDisabled},
+		{"a marker with no time", func(h *headUser) { h.MergedIntoUserID = "01M7ZZZDICK0000000000000001" },
+			"01M7ZZZDICK0000000000000001", time.Time{}, auth.StatusDisabled},
+		{"a locked account nobody merged", func(h *headUser) {}, "", time.Time{}, auth.StatusDisabled},
+		{"a stray merged_at on an unmarked row", func(h *headUser) { h.MergedAt = &mergedAt }, "", time.Time{}, auth.StatusDisabled},
+		{"an active account nobody merged", func(h *headUser) { h.Status = "active" }, "", time.Time{}, auth.StatusActive},
+	} {
+		u, _, _ := mapUser(head(c.mut), roles)
+		if u.MergedInto != c.wantInto || !u.MergedAt.Equal(c.wantAt) || u.Status != c.wantStatus {
+			t.Errorf("%s: merged into %q at %v status %v; want %q at %v status %v", c.name, u.MergedInto, u.MergedAt, u.Status, c.wantInto, c.wantAt, c.wantStatus)
+		}
+		// The mapped user is one the importer accepts, the marker included (the
+		// blockers pass runs this check on every row).
+		hash := "$2a$04$mck"
+		if err := auth.CheckImportUser(&u, hash); err != nil {
+			t.Errorf("%s: CheckImportUser: %v", c.name, err)
+		}
+	}
+}
+
 func TestMapKey(t *testing.T) {
 	m := testMigration(t)
 	hex64 := strings.Repeat("cd", 32)

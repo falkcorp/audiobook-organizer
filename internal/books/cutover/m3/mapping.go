@@ -195,6 +195,15 @@ func mapUser(h *headUser, roles []rbac.RoleName) (auth.User, string, string) {
 		UpdatedAt:             h.UpdatedAt,
 		Version:               1,
 	}
+	// The merged-into marker rides along only with its account id: a stray
+	// merged_at on an unmarked row is not a merge, and HEAD's reactivate check
+	// reads MergedIntoUserID alone.
+	if h.MergedIntoUserID != "" {
+		u.MergedInto = auth.UserID(h.MergedIntoUserID)
+		if h.MergedAt != nil {
+			u.MergedAt = *h.MergedAt
+		}
+	}
 	return u, h.PasswordHash, reported
 }
 
