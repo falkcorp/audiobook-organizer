@@ -76,13 +76,17 @@ matrix:
     - SUITE: short-core
       MAKE_ARGS: test-short-shard SHARD=core/2
     - SUITE: fixtures-1
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=1/4 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=1/6 FIXTURE_TIMEOUT=25m
     - SUITE: fixtures-2
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=2/4 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=2/6 FIXTURE_TIMEOUT=25m
     - SUITE: fixtures-3
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=3/4 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=3/6 FIXTURE_TIMEOUT=25m
     - SUITE: fixtures-4
-      MAKE_ARGS: test-fixtures FIXTURE_SHARD=4/4 FIXTURE_TIMEOUT=25m
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=4/6 FIXTURE_TIMEOUT=25m
+    - SUITE: fixtures-5
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=5/6 FIXTURE_TIMEOUT=25m
+    - SUITE: fixtures-6
+      MAKE_ARGS: test-fixtures FIXTURE_SHARD=6/6 FIXTURE_TIMEOUT=25m
 
 clone:
   - name: clone
