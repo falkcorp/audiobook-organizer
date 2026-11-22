@@ -27,10 +27,12 @@ const reasonMerged = "merged"
 // module.Deps.AuthAdmin (05-authn §3.1, 06 §6.4.4). *Service implements it.
 // Every method re-checks the principal bound on ctx, so holding it grants
 // nothing. PlanUserMerge and StageUserMerge stage into the caller's batch and
-// never commit; the account methods of AccountAdmin (invites, set-email, the
-// admin user reads), which Admin embeds, are self-contained writes that commit
-// in their own batch with their audit record in it (F4-08 B10t).
+// never commit; the account methods of InviteAdmin and AccountAdmin (invites,
+// set-email, the admin user reads), which Admin embeds, are self-contained
+// writes that commit in their own batch with their audit record in it (F4-08
+// B10t).
 type Admin interface {
+	InviteAdmin
 	AccountAdmin
 
 	// PlanUserMerge previews folding source into target: it re-checks the
