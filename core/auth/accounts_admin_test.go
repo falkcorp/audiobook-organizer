@@ -223,8 +223,8 @@ func TestAdminUsers_CheckAndNoCredential(t *testing.T) {
 	// The record type holds no credential field: pin the whole field set, so a
 	// credential added to User fails here and gets a decision.
 	var fields []string
-	for i := range reflect.TypeFor[auth.User]().NumField() {
-		fields = append(fields, reflect.TypeFor[auth.User]().Field(i).Name)
+	for field := range reflect.TypeFor[auth.User]().Fields() {
+		fields = append(fields, field.Name)
 	}
 	want := []string{
 		"ID", "Username", "Email", "EmailVerified", "HasPassword", "DisplayName", "Roles", "Status", "CredentialEpoch",
