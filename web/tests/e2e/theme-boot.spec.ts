@@ -7,7 +7,7 @@
 // boot script, so a dark-mode load never flashes the default scheme. The script is
 // ABO's hand-written one in web/index.html until commit 1, and the one the
 // mediacore() preset writes (from ABO's themeStorageKey and defaultMode) after it;
-// every test here holds on both sides of that commit.
+// every test here holds on both sides of that commit except the last block, which needs the preset's metas.
 //
 // The app's own bundle is blocked in each test, so React never mounts and MUI's
 // ThemeProvider cannot be what sets the attribute: only the boot script can.
@@ -61,10 +61,7 @@ test.describe('theme boot script', () => {
 });
 
 // The preset also writes <meta name="mediacore-app"> and <meta name="mediacore-theme">.
-// Before commit 1 the page has neither, so these two wait for it.
 test.describe('theme boot script: the preset metas', () => {
-  test.skip(true, 'needs F9-03 commit 1 (vite preset): index.html has no mediacore-app or mediacore-theme meta before it');
-
   test('names the app and the theme key and default', async ({ page }) => {
     await loadWithoutApp(page, null);
     await expect(page.locator('meta[name="mediacore-app"]')).toHaveAttribute('content', 'abo');

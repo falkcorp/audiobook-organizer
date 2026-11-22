@@ -32,7 +32,7 @@ RUN npm_config_prefer_offline=true sh ../scripts/ci/build_web.sh deps
 
 # Step 4. The optional UI build ID (07 §7.6.3): the context has no .git to derive
 # one from, so a release passes --build-arg BUILD_ID=...; empty or unset falls
-# through to the timestamp rule of web/build-id.ts. Only this stage declares it.
+# through to the timestamp rule of the mediacore vite preset. Only this stage declares it.
 ARG BUILD_ID=
 COPY web/ ./
 RUN npm run build

@@ -21,9 +21,8 @@ import { SINGLETONS } from '@mediacore/shell/vite';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { SHELL_APP_ID } from '../shellAppId';
 
-// Skipped until F9-03 commit 1 (the vite preset) lands: they are red at HEAD. Commit 1
-// replaces `describe.skip` with `describe` here.
-const preset = describe.skip;
+// Red at HEAD (before F9-03 commit 1, the vite preset): 6 failing.
+const preset = describe;
 
 interface HtmlTag {
   tag: string;
@@ -51,6 +50,7 @@ const indexHtml = readFileSync(path.resolve(import.meta.dirname, '../../index.ht
 async function resolveConfig(command: 'build' | 'serve'): Promise<ResolvedConfig> {
   const file = path.resolve(import.meta.dirname, '../../vite.config.ts');
   const config: unknown = ((await import(/* @vite-ignore */ file)) as { default: unknown }).default;
+  if (typeof config !== 'function') return config as ResolvedConfig; // an object export
   const make = config as (env: { command: string; mode: string }) => ResolvedConfig | Promise<ResolvedConfig>;
   return make({ command, mode: command === 'build' ? 'production' : 'development' });
 }
@@ -110,6 +110,12 @@ preset('web/vite.config.ts on mediacore(...)', () => {
     // react() also has an HTML hook, but only the dev-server preamble; it returns nothing in a build.
     const writers = pluginsOf(await resolveConfig('build')).filter((p) => p.transformIndexHtml && /^mediacore/.test(p.name));
     expect(writers.map((p) => p.name)).toEqual(['mediacore-html']);
+  });
+
+  it('lists no plugin twice (a merged config must not double the React or babel plugins)', async () => {
+    const names = pluginsOf(await resolveConfig('build')).map((p) => p.name);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter((n, i) => names.indexOf(n) !== i)).toEqual([]);
   });
 
   it('writes the build, app and theme metas and one boot script in a build', async () => {

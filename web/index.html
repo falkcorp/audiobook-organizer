@@ -9,33 +9,8 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Audiobook Organizer - Manage your audiobook library" />
-    <!-- The UI build ID. `vite build` rewrites content (build-id.ts, 07 §7.6.3); under `vite serve` it stays dev, which never triggers the stale-build reload rule. Keep the double quotes and the name before content: the server and the image probe both parse this tag. -->
-    <meta name="mediacore-build" content="dev" />
+    <!-- The mediacore preset (vite.config.ts) writes the mediacore-build, mediacore-app and mediacore-theme metas and the one theme boot script into <head>; index.html must carry none of them. -->
     <title>Audiobook Organizer</title>
-    <script>
-      // Set the colour scheme before the first paint. Without this the document
-      // renders in the default scheme until React mounts and MUI reads storage,
-      // which shows as a light flash on a dark-mode load.
-      //
-      // Kept deliberately in sync with three things in the app: the attribute
-      // matches `cssVariables.colorSchemeSelector` in theme.ts, the storage key
-      // matches `modeStorageKey` in main.tsx (STORAGE_KEYS.APP_THEME_MODE), and
-      // the fallback matches `defaultColorScheme`. Change one, change all four.
-      (function () {
-        try {
-          var stored = localStorage.getItem("app-theme-mode");
-          var scheme =
-            stored === "light" || stored === "dark"
-              ? stored
-              : window.matchMedia("(prefers-color-scheme: light)").matches && stored === "system"
-                ? "light"
-                : "dark";
-          document.documentElement.setAttribute("data-mui-color-scheme", scheme);
-        } catch (e) {
-          // Private mode or storage disabled: fall through to the theme default.
-        }
-      })();
-    </script>
   </head>
   <body>
     <div id="root"></div>

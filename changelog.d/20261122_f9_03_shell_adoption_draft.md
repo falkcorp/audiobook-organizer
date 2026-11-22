@@ -1,0 +1,5 @@
+### Added
+
+#### F9-03 shell adoption (draft): the web build runs on the mediacore preset, with e2e support for the shell
+
+The audiobook web app's `vite.config.ts` now builds on the core `mediacore(...)` preset, and `web/index.html` no longer carries its own theme script or build-ID meta: the preset writes the build-ID, `mediacore-app` and `mediacore-theme` metas and the one pre-paint boot script, which is the form the server's UI bundle check requires. A saved light or dark preference (`app-theme-mode`) is applied before first paint as before; the preset's script has no branch for a hand-edited saved `system` value, which HEAD's script followed on a light OS (no UI control writes it). The e2e suite gains an opt-in mock for the core HTTP API (`/api/core/v1`: session probe, modules, task runs, settings) that the shell boots on, the old-path to new-path table for the move under `/books/`, and specs for the theme boot script and the stale-build banner (including the rollback case). Nothing changes for users until the shell itself is switched on in a later commit.
