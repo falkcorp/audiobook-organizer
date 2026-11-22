@@ -26,7 +26,7 @@ import (
 func candidateFetchTaskFixture(t *testing.T, active ...database.OperationV2Row) (*TaskScheduler, *[]database.OperationV2Row) {
 	t.Helper()
 	restoreCfg := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restoreCfg })
+	t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
@@ -95,7 +95,7 @@ func TestCandidateFetchTask_SkipsWhileAFetchIsActive(t *testing.T) {
 // interval 0 turns it off.
 func TestCandidateFetchTask_IntervalZeroDisables(t *testing.T) {
 	ts, _ := candidateFetchTaskFixture(t)
-	config.AppConfig.Scheduled.CandidateFetch.Interval = 0
+	config.SetForTest(func(c *config.Config) { c.Scheduled.CandidateFetch.Interval = 0 })
 	task, _ := ts.GetTask(candidateFetchTaskName)
 	assert.False(t, task.IsEnabled())
 }

@@ -28,7 +28,7 @@ func TestLabelRefinementRegistered(t *testing.T) {
 // startup unless an owner opts in.
 func TestLabelRefinementDisabledByDefault(t *testing.T) {
 	// Default/zero-value config ⇒ Enabled=false, OnStartup=false, Interval=0.
-	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{}
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LabelRefinement = config.ScheduledTaskConfig{} })
 
 	ts := NewTaskScheduler(testDeps())
 	def, ok := ts.GetTask("label_refinement")
@@ -51,14 +51,14 @@ func TestLabelRefinementIntervalGuard(t *testing.T) {
 	def, ok := ts.GetTask("label_refinement")
 	assert.True(t, ok)
 
-	config.AppConfig.Scheduled.LabelRefinement.Interval = 0
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LabelRefinement.Interval = 0 })
 	assert.Zero(t, def.GetInterval(), "interval 0 ⇒ manual only, never scheduled")
-	config.AppConfig.Scheduled.LabelRefinement.Interval = -5
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LabelRefinement.Interval = -5 })
 	assert.Zero(t, def.GetInterval(), "negative interval ⇒ zero duration (no busy-loop)")
-	config.AppConfig.Scheduled.LabelRefinement.Interval = 10080
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LabelRefinement.Interval = 10080 })
 	assert.Equal(t, int64(10080*60), int64(def.GetInterval().Seconds()), "positive interval maps to minutes")
 
-	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{} // reset
+	config.SetForTest(func(c *config.Config) { c.Scheduled.LabelRefinement = config.ScheduledTaskConfig{} }) // reset
 }
 
 // TestLabelRefinementEnqueuesTheParentOp pins the 04-P9 contract: the task is
@@ -77,9 +77,11 @@ func TestLabelRefinementEnqueuesTheParentOp(t *testing.T) {
 // without it must stay inert rather than enqueue an unregistered def id. The
 // engine alone is not enough, and an unwired dep counts as absent.
 func TestLabelRefinementNeedsTheDedupPlugin(t *testing.T) {
-	prev := config.AppConfig.Scheduled.LabelRefinement
-	t.Cleanup(func() { config.AppConfig.Scheduled.LabelRefinement = prev })
-	config.AppConfig.Scheduled.LabelRefinement = config.ScheduledTaskConfig{Enabled: true, Interval: 60}
+	prev := config.Get().Scheduled.LabelRefinement
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.Scheduled.LabelRefinement = prev }) })
+	config.SetForTest(func(c *config.Config) {
+		c.Scheduled.LabelRefinement = config.ScheduledTaskConfig{Enabled: true, Interval: 60}
+	})
 
 	deps := testDeps()
 	deps.HasDedupPlugin = nil

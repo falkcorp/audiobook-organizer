@@ -28,7 +28,7 @@ import (
 func asinBackfillTaskFixture(t *testing.T, registerDef bool, prevStatus string, active ...database.OperationV2Row) (*TaskScheduler, *[]database.OperationV2Row) {
 	t.Helper()
 	restoreCfg := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restoreCfg })
+	t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 	config.ResetToDefaultsForTest()
 
 	store := dbmocks.NewMockStore(t)
@@ -170,14 +170,14 @@ func TestASINBackfillTask_FullWalkParamsBlock(t *testing.T) {
 func TestASINBackfillTask_IntervalConfig(t *testing.T) {
 	ts, _ := asinBackfillTaskFixture(t, true, "")
 	task, _ := ts.GetTask(asinBackfillTaskName)
-	require.Equal(t, 360, config.AppConfig.Scheduled.ASINBackfill.Interval, "default must be 6h")
+	require.Equal(t, 360, config.Get().Scheduled.ASINBackfill.Interval, "default must be 6h")
 	assert.True(t, task.IsEnabled())
 
-	config.AppConfig.Scheduled.ASINBackfill.Interval = 90
+	config.SetForTest(func(c *config.Config) { c.Scheduled.ASINBackfill.Interval = 90 })
 	assert.Equal(t, 90*time.Minute, task.GetInterval())
 	assert.True(t, task.IsEnabled())
 
-	config.AppConfig.Scheduled.ASINBackfill.Interval = 0
+	config.SetForTest(func(c *config.Config) { c.Scheduled.ASINBackfill.Interval = 0 })
 	assert.Equal(t, time.Duration(0), task.GetInterval())
 	assert.False(t, task.IsEnabled(), "interval 0 must disable the task")
 }

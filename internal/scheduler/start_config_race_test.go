@@ -24,8 +24,8 @@ import (
 // Start.
 func TestStart_ReadsMaintenanceFromDepsNotTheGlobalConfig(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
-	config.AppConfig.Maintenance.Enabled = false
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
+	config.SetForTest(func(c *config.Config) { c.Maintenance.Enabled = false })
 
 	ts := &TaskScheduler{
 		deps: SchedulerDeps{
@@ -39,9 +39,11 @@ func TestStart_ReadsMaintenanceFromDepsNotTheGlobalConfig(t *testing.T) {
 	var writer sync.WaitGroup
 	writer.Go(func() {
 		for i := range 100 {
-			config.AppConfig.Maintenance.Enabled = i%2 == 0
-			config.AppConfig.Maintenance.WindowStart = i
-			config.AppConfig.Maintenance.WindowEnd = i + 1
+			config.SetForTest(func(c *config.Config) {
+				c.Maintenance.Enabled = i%2 == 0
+				c.Maintenance.WindowStart = i
+				c.Maintenance.WindowEnd = i + 1
+			})
 		}
 	})
 
@@ -58,7 +60,7 @@ func TestStart_ReadsMaintenanceFromDepsNotTheGlobalConfig(t *testing.T) {
 // says.
 func TestStart_RunsTheMaintenanceCheckerOnlyWhenTheDepsEnableIt(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 
 	for _, tc := range []struct {
 		name         string
@@ -69,9 +71,11 @@ func TestStart_RunsTheMaintenanceCheckerOnlyWhenTheDepsEnableIt(t *testing.T) {
 		{"deps off, config on", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			config.AppConfig.Maintenance.Enabled = tc.global
-			config.AppConfig.Maintenance.WindowStart = 11
-			config.AppConfig.Maintenance.WindowEnd = 12
+			config.SetForTest(func(c *config.Config) {
+				c.Maintenance.Enabled = tc.global
+				c.Maintenance.WindowStart = 11
+				c.Maintenance.WindowEnd = 12
+			})
 			buf := captureLogs(t, slog.LevelInfo)
 			ts := &TaskScheduler{
 				deps: SchedulerDeps{

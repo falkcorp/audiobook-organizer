@@ -22,7 +22,7 @@ import (
 // iterates taskV2DefIDs.
 func TestAcoustIDBackfillTask_RegisteredAndDisabledByDefault(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
@@ -37,6 +37,6 @@ func TestAcoustIDBackfillTask_RegisteredAndDisabledByDefault(t *testing.T) {
 	assert.Equal(t, "acoustid.backfill", taskV2DefIDs["acoustid_backfill"],
 		"isTaskRunning reads this map; a missing key answers 'not running' silently")
 
-	config.AppConfig.Scheduled.AcoustIDBackfill.Enabled = true
+	config.SetForTest(func(c *config.Config) { c.Scheduled.AcoustIDBackfill.Enabled = true })
 	assert.True(t, task.IsEnabled(), "the config key must actually turn it on")
 }

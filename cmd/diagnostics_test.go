@@ -74,9 +74,9 @@ func TestPromptYesNo(t *testing.T) {
 }
 
 func TestRunDiagnosticsQueryErrors(t *testing.T) {
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	if err := runDiagnosticsQuery(0, "", false); err == nil {
@@ -84,7 +84,7 @@ func TestRunDiagnosticsQueryErrors(t *testing.T) {
 	}
 
 	// SQLite is no longer supported; raw query with sqlite type should error.
-	config.AppConfig.DatabaseType = "sqlite"
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "sqlite" })
 	if err := runDiagnosticsQuery(1, "book:", true); err == nil {
 		t.Fatal("expected error for raw query with non-pebble db")
 	}
@@ -92,9 +92,9 @@ func TestRunDiagnosticsQueryErrors(t *testing.T) {
 
 func TestRunDiagnosticsQuerySuccess(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -111,8 +111,10 @@ func TestRunDiagnosticsQuerySuccess(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
@@ -122,9 +124,9 @@ func TestRunDiagnosticsQuerySuccess(t *testing.T) {
 
 func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -134,8 +136,10 @@ func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
@@ -145,9 +149,9 @@ func TestRunDiagnosticsQueryNoBooks(t *testing.T) {
 
 func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -170,8 +174,10 @@ func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {
@@ -181,9 +187,9 @@ func TestRunDiagnosticsQueryPrintsHashes(t *testing.T) {
 
 func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -200,8 +206,10 @@ func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runCleanupInvalidBooks(false, true); err != nil {
@@ -211,9 +219,9 @@ func TestRunCleanupInvalidBooksDryRun(t *testing.T) {
 
 func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -230,8 +238,10 @@ func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	r, w, err := os.Pipe()
@@ -254,9 +264,9 @@ func TestRunCleanupInvalidBooksPromptAbort(t *testing.T) {
 
 func TestRunCleanupInvalidBooksDelete(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -273,8 +283,10 @@ func TestRunCleanupInvalidBooksDelete(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	r, w, err := os.Pipe()
@@ -311,7 +323,7 @@ func TestRunRawPebbleQuery(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = tempDir })
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 	if err := runRawPebbleQuery(1, "book:"); err != nil {
 		t.Fatalf("runRawPebbleQuery failed: %v", err)
@@ -358,9 +370,9 @@ func TestRawPebbleQuery_OpensStoreTheGuardRefuses(t *testing.T) {
 		}
 	}
 
-	origPath := config.AppConfig.DatabasePath
-	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
-	config.AppConfig.DatabasePath = dbPath
+	origPath := config.Get().DatabasePath
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DatabasePath = origPath }) })
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = dbPath })
 	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 	if err := runRawPebbleQuery(1, "preference:"); err != nil {
 		t.Fatalf("runRawPebbleQuery on a store the guard refuses: %v", err)
@@ -401,9 +413,9 @@ func TestRawPebbleQuery_OpensReadOnly(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	origPath := config.AppConfig.DatabasePath
-	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
-	config.AppConfig.DatabasePath = dbPath
+	origPath := config.Get().DatabasePath
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DatabasePath = origPath }) })
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = dbPath })
 	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 
 	before := storeFileNames(t, dbPath)
@@ -424,7 +436,7 @@ func TestRawPebbleQuery_OpensReadOnly(t *testing.T) {
 	}
 
 	missing := filepath.Join(t.TempDir(), "joker.pebble")
-	config.AppConfig.DatabasePath = missing
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = missing })
 	t.Setenv("ABO_CORE_STORAGE_PATH", missing)
 	if err := runRawPebbleQuery(1, "book:"); err == nil {
 		t.Fatal("runRawPebbleQuery where there is no store succeeded")
@@ -502,9 +514,9 @@ func TestRawPebbleQuery_DoesNotRatchetPebbleFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origPath := config.AppConfig.DatabasePath
-	t.Cleanup(func() { config.AppConfig.DatabasePath = origPath })
-	config.AppConfig.DatabasePath = dbPath
+	origPath := config.Get().DatabasePath
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.DatabasePath = origPath }) })
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = dbPath })
 	t.Setenv("ABO_CORE_STORAGE_PATH", dbPath)
 	if err := runRawPebbleQuery(1, "book:"); err != nil {
 		t.Fatalf("runRawPebbleQuery: %v", err)
@@ -721,13 +733,13 @@ func TestTruncateStringWithBuffer(t *testing.T) {
 }
 
 func TestEnsureDiagnosticsStoreError(t *testing.T) {
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	// Set invalid database type
-	config.AppConfig.DatabaseType = "invalid"
+	config.SetForTest(func(c *config.Config) { c.DatabaseType = "invalid" })
 
 	_, _, err := ensureDiagnosticsStore(false)
 	if err == nil {
@@ -737,14 +749,16 @@ func TestEnsureDiagnosticsStoreError(t *testing.T) {
 
 func TestEnsureDiagnosticsStorePebble(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	// The offline open never creates a store: an empty directory is a
@@ -765,9 +779,9 @@ func TestEnsureDiagnosticsStorePebble(t *testing.T) {
 
 func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -784,8 +798,10 @@ func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	// Test force mode (no prompt)
@@ -796,9 +812,9 @@ func TestRunCleanupInvalidBooksForceMode(t *testing.T) {
 
 func TestRunDiagnosticsQueryPebble(t *testing.T) {
 	isolateStateDir(t)
-	origConfig := config.AppConfig
+	origConfig := config.Snapshot()
 	defer func() {
-		config.AppConfig = origConfig
+		config.ReplaceForTest(origConfig)
 	}()
 
 	tempDir := t.TempDir()
@@ -815,8 +831,10 @@ func TestRunDiagnosticsQueryPebble(t *testing.T) {
 	}
 	_ = store.Close()
 
-	config.AppConfig.DatabaseType = "pebble"
-	config.AppConfig.DatabasePath = tempDir
+	config.SetForTest(func(c *config.Config) {
+		c.DatabaseType = "pebble"
+		c.DatabasePath = tempDir
+	})
 	t.Setenv("ABO_CORE_STORAGE_PATH", tempDir)
 
 	if err := runDiagnosticsQuery(5, "book:", false); err != nil {

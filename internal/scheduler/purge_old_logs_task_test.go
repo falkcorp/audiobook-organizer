@@ -22,19 +22,19 @@ import (
 // path this has to survive.
 func TestPurgeOldLogsTask_ZeroMeansDefaultOnlyNegativeDisables(t *testing.T) {
 	restore := config.Snapshot()
-	t.Cleanup(func() { config.AppConfig = restore })
+	t.Cleanup(func() { config.ReplaceForTest(restore) })
 	config.ResetToDefaultsForTest()
 
 	ts := NewTaskScheduler(testDeps())
 	task, ok := ts.GetTask("purge_old_logs")
 	require.True(t, ok, "purge_old_logs must be a registered TaskScheduler task")
 
-	config.AppConfig.LogRetentionDays = 0
+	config.SetForTest(func(c *config.Config) { c.LogRetentionDays = 0 })
 	assert.True(t, task.IsEnabled(), "0 means the default 90 days, not keep-forever")
 
-	config.AppConfig.LogRetentionDays = 30
+	config.SetForTest(func(c *config.Config) { c.LogRetentionDays = 30 })
 	assert.True(t, task.IsEnabled())
 
-	config.AppConfig.LogRetentionDays = logging.LogRetentionKeepForever
+	config.SetForTest(func(c *config.Config) { c.LogRetentionDays = logging.LogRetentionKeepForever })
 	assert.False(t, task.IsEnabled(), "-1 keeps logs forever: the task must not run")
 }

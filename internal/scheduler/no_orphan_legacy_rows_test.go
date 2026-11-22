@@ -50,7 +50,7 @@ func TestScheduledTasksDoNotWriteOrphanLegacyRows(t *testing.T) {
 			// shipped defaults it is zero, the sweep is never due, and the
 			// task correctly declines to enqueue.
 			restoreCfg := config.Snapshot()
-			t.Cleanup(func() { config.AppConfig = restoreCfg })
+			t.Cleanup(func() { config.ReplaceForTest(restoreCfg) })
 			config.ResetToDefaultsForTest()
 
 			store := dbmocks.NewMockStore(t)
