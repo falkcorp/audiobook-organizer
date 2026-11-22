@@ -51,8 +51,6 @@ type InterimHolds interface {
 // resource, ResumeDrop, one minute, core:integrations.manage to start, high
 // priority, no schedule. A nil b yields a definition whose Run is nil, which
 // tasks.Problems reports ("Task has no Run"), so registration fails closed.
-//
-//tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 when the app supplies an InterimHolds backend (F5-18); this package registers nothing
 func ReleaseHoldsTask(b InterimHolds) tasks.Definition {
 	var run func(rc *tasks.RC, p ReleaseHoldsParams) (ReleaseHoldsResult, error)
 	if b != nil {

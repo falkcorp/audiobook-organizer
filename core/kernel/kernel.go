@@ -60,6 +60,15 @@ type Config struct {
 	ServiceName           string // "" = AppID
 	Version               string // the app's release version: the resource's service.version
 	ReservedAPINamespaces []string
+	// TasksBoot is the F5 tasks switch (app.Options.TasksBoot): core registers
+	// its own task kinds and the interim backends' kinds, and the start rule
+	// (tasksNeeded) then starts the executor and the scheduler over them. false,
+	// the default, registers none of core's kinds, so a boot whose modules
+	// register no kind and find no stored run builds and starts nothing, exactly
+	// as before the flip. Requires an open store (StoragePath).
+	TasksBoot bool
+	// Interim are the late-owner kinds' backends, read only with TasksBoot.
+	Interim InterimBackends
 	// Logger replaces the log.Logging the kernel would build (tests).
 	Logger *slog.Logger
 	// LogOutput is where the kernel's log.Logging writes; nil = the stream of
@@ -317,7 +326,10 @@ type Kernel struct {
 	healthReg       *health.Registry
 	reporters       kernelReporters
 	tasks           *kernelTasks
-	dataMig         *DataMigrations
+	// core is core's own task registration (core_kinds.go), set at the end of P6
+	// when the tasks switch is on; nil otherwise.
+	core    *entry
+	dataMig *DataMigrations
 	// imp are the importers Manifest.Cutover receives, bound at the start of
 	// P4b once the stores they write through are open (cutover_importers.go).
 	// importerCfg and importerSec are what P4b binds: nil until the config

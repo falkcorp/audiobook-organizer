@@ -15,7 +15,10 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/health/diagnostics"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/integrations/ai"
+	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/storage"
@@ -157,6 +160,25 @@ type Options struct {
 	// makes identity unconditional and deletes the field.
 	IdentityBoot bool
 
+	// TasksBoot declares the F5 tasks switch (F5-18): the kernel registers
+	// core's own task kinds (core.storage.*, core.tasks.prune,
+	// core.log.journal.prune, one core.window.<name> per core.tasks.windows
+	// entry) and the kinds InterimBackends supplies, and the start rule then
+	// builds and starts the executor and the scheduler over them. Requires an
+	// open store (core.storage.path): with the switch on and none, boot fails
+	// instead of running nothing. false, the default, registers no core kind, so
+	// an app whose modules register no kind boots exactly as before the flip
+	// (hello, and ABO until its switch). Temporary like IdentityBoot: the ABO
+	// switch makes it unconditional and deletes the field.
+	TasksBoot bool
+
+	// InterimBackends are the three late-owner task kinds' backends (05-tasks
+	// 5T.8.2): each kind is registered over its backend only with TasksBoot and
+	// only when the backend is set, so an app with no provider holds, no AI
+	// batch jobs or no diagnostics export registers none of the three. F7 and F8
+	// move each backend into its owner and delete the field.
+	InterimBackends InterimBackends
+
 	// ResolveAtom is the app's atom table for stage 13: it resolves the
 	// rbac.LegacyAtom and rbac.LegacyCheck requirements of the routes it
 	// mounts through a legacy mount (ABO: books.AtomTable().Route, and its
@@ -290,6 +312,14 @@ type Options struct {
 	// mounts the four routes. The Options' Source names the repository and its
 	// AssetName the release asset, so core names no app.
 	Updater *updater.Options
+}
+
+// InterimBackends is the value of Options.InterimBackends. It mirrors
+// kernel.InterimBackends field for field, so New converts one into the other.
+type InterimBackends struct {
+	Holds  providerhttp.InterimHolds // core.integrations.release-holds
+	Poll   ai.InterimPoll            // core.ai.batch-poll
+	Export diagnostics.InterimExport // core.diagnostics.export
 }
 
 // CoreDefaults is the value of Options.CoreDefaults. It mirrors

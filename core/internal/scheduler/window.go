@@ -286,8 +286,6 @@ func (s *Scheduler) runWindow(h windowHost) error {
 // core:tasks.manage, dropped rather than resumed after a crash (HEAD's
 // ResumeDrop; the next opening runs again), at most 12 hours (HEAD's
 // timeout).
-//
-//tasklint:constructor the kernel passes the result to Registrar.Tasks for each core.tasks.windows entry (F2-16); this package registers nothing
 func WindowDefinition(name string, run func(rc *tasks.RC) error) tasks.Definition {
 	return tasks.Task(tasks.WindowKind(name), tasks.TaskSpec[struct{}, struct{}]{
 		Title:    "Maintenance window " + name,

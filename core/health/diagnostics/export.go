@@ -74,8 +74,6 @@ type InterimExport interface {
 // core:system.manage to start, no schedule. A nil b yields a definition whose
 // Run is nil, which tasks.Problems reports ("Task has no Run"), so
 // registration fails closed.
-//
-//tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 when the app supplies an InterimExport backend (F5-18); this package registers nothing
 func ExportTask(b InterimExport) tasks.Definition {
 	var run func(rc *tasks.RC, p ExportParams) (ExportResult, error)
 	if b != nil {

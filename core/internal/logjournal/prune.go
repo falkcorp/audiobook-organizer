@@ -77,8 +77,6 @@ type PruneResult struct {
 // Perms.Start is core:tasks.manage for the reason core.outbox.relay's is: the
 // scheduler starts the kind as core's system actor, which holds no
 // AuthRequired scope (SEC2-15).
-//
-//tasklint:constructor the kernel passes the result to the executor's definition list from the tasks flip F5 (F5-18); nothing registers it before
 func PruneDefinition(store log.JournalStore, settings func() Settings, now func() time.Time) tasks.Definition {
 	var run func(rc *tasks.RC, _ PruneParams) (PruneResult, error)
 	if store != nil && settings != nil {

@@ -75,8 +75,6 @@ type InterimPoll interface {
 // core:integrations.manage to start, scheduled live from BatchPollScheduleKey.
 // A nil b yields a definition whose Run is nil, which tasks.Problems reports
 // ("Task has no Run"), so registration fails closed.
-//
-//tasklint:constructor the kernel passes the result to Registrar.Tasks at P6 when the app supplies an InterimPoll backend (F5-18); this package registers nothing
 func BatchPollTask(b InterimPoll) tasks.Definition {
 	var run func(rc *tasks.RC, p BatchPollParams) (BatchPollResult, error)
 	if b != nil {
