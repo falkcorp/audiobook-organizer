@@ -1068,21 +1068,21 @@ func TestReviewQuery_IDsAllPinsOmittedPastTheApplyCap(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	prev := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	prev := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
 
 	full, _ := serveIDsWithPins(t, h, "pins=true")
 	n := len(full.Data.IDs)
 	require.Greater(t, n, 2)
 	evaluations := h.reviewQuery.evaluations.Load()
 
-	config.AppConfig.BulkApplyMaxItems = n - 1
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = n - 1 })
 	over, raw := serveIDsWithPins(t, h, "pins=true")
 	require.True(t, over.Data.PinsOmitted)
 	require.NotContains(t, raw, "pins")
 	require.Equal(t, full.Data.IDs, over.Data.IDs)
 
-	config.AppConfig.BulkApplyMaxItems = n
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = n })
 	at, _ := serveIDsWithPins(t, h, "pins=true")
 	require.False(t, at.Data.PinsOmitted)
 	require.Equal(t, full.Data.Pins, at.Data.Pins)
@@ -1422,11 +1422,11 @@ func TestReviewPage_CarriesTheApplyCap(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	prev := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	prev := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
 
 	for _, tc := range []struct{ configured, want int }{{0, applycap.Effective(0)}, {37, 37}} {
-		config.AppConfig.BulkApplyMaxItems = tc.configured
+		config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = tc.configured })
 		code, body, _ := serveReviewRaw(t, h, "view=page&limit=5")
 		require.Equal(t, http.StatusOK, code, string(body))
 		var got struct {
@@ -1573,9 +1573,9 @@ func TestReviewSelectionCheck_RefusalsAndMetric(t *testing.T) {
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
 	reg := metricstest.Registry(t)
-	prev := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
-	config.AppConfig.BulkApplyMaxItems = 2
+	prev := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = 2 })
 	before := reviewRequestCount(t, reg, metrics.ReviewViewSelection)
 
 	code, body := serveSelection(t, h, "", []string{"a", "b", "c"})
@@ -1621,9 +1621,9 @@ func TestReviewPage_IDsAllCarriesTheApplyCap(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, svc := goldenReviewStore(t)
 	h := NewMetadataCacheHandler(store, svc, nil, nil, nil)
-	prev := config.AppConfig.BulkApplyMaxItems
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
-	config.AppConfig.BulkApplyMaxItems = 37
+	prev := config.Get().BulkApplyMaxItems
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = 37 })
 	_, body, _ := serveReviewRaw(t, h, "view=page&ids=all")
 	var got struct {
 		Data struct {

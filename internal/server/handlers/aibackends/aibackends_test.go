@@ -23,14 +23,14 @@ import (
 func TestHandlerStatusDisabledModesSkipProbe(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig = config.Config{
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.ReplaceForTest(config.Config{
 		AIBackend: config.AIBackendConfig{
 			EmbeddingMode: config.AIBackendModeDisabled,
 			LLMMode:       config.AIBackendModeDisabled,
 		},
-	}
+	})
 
 	h := aibackendshandler.New(nil, nil)
 	r := gin.New()
@@ -56,16 +56,16 @@ func TestHandlerStatusDisabledModesSkipProbe(t *testing.T) {
 func TestHandlerStatusLocalModeUnreachableEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig = config.Config{
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.ReplaceForTest(config.Config{
 		AIBackend: config.AIBackendConfig{
 			EmbeddingMode:       config.AIBackendModeLocal,
 			LLMMode:             config.AIBackendModeDisabled,
 			LocalBaseURL:        "http://127.0.0.1:1/v1", // nothing listens here
 			LocalEmbeddingModel: "bge-m3",
 		},
-	}
+	})
 
 	h := aibackendshandler.New(nil, nil)
 	r := gin.New()

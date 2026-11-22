@@ -242,9 +242,9 @@ func TestGetSystemAnnouncements_Empty(t *testing.T) {
 
 func TestGetSystemStorage_NoRootDir(t *testing.T) {
 	h, _ := newTestHandler(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = ""
-	defer func() { config.AppConfig.RootDir = prev }()
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "" })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) }()
 
 	w := run(http.MethodGet, "/system/storage", "/system/storage", nil, func(r *gin.Engine) {
 		r.GET("/system/storage", h.GetSystemStorage)
@@ -254,9 +254,9 @@ func TestGetSystemStorage_NoRootDir(t *testing.T) {
 
 func TestGetSystemStorage_OK(t *testing.T) {
 	h, _ := newTestHandler(t)
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = "/tmp/library"
-	defer func() { config.AppConfig.RootDir = prev }()
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = "/tmp/library" })
+	defer func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) }()
 
 	w := run(http.MethodGet, "/system/storage", "/system/storage", nil, func(r *gin.Engine) {
 		r.GET("/system/storage", h.GetSystemStorage)
@@ -382,9 +382,9 @@ func TestHandleEvents_DelegatesToHub(t *testing.T) {
 
 func TestCreateBackup_Error(t *testing.T) {
 	h, _ := newTestHandler(t)
-	prev := config.AppConfig.DatabasePath
-	config.AppConfig.DatabasePath = "/nonexistent/path/does-not-exist.db"
-	defer func() { config.AppConfig.DatabasePath = prev }()
+	prev := config.Get().DatabasePath
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = "/nonexistent/path/does-not-exist.db" })
+	defer func() { config.SetForTest(func(c *config.Config) { c.DatabasePath = prev }) }()
 
 	w := run(http.MethodPost, "/backup/create", "/backup/create", []byte(`{}`), func(r *gin.Engine) {
 		r.POST("/backup/create", h.CreateBackup)
@@ -397,9 +397,10 @@ func TestCreateBackup_Error(t *testing.T) {
 
 func TestListBackups_EmptyDir(t *testing.T) {
 	h, _ := newTestHandler(t)
-	prev := config.AppConfig.DatabasePath
-	config.AppConfig.DatabasePath = t.TempDir() + "/audiobooks.db"
-	defer func() { config.AppConfig.DatabasePath = prev }()
+	prev := config.Get().DatabasePath
+	cowV1 := t.TempDir() + "/audiobooks.db"
+	config.SetForTest(func(c *config.Config) { c.DatabasePath = cowV1 })
+	defer func() { config.SetForTest(func(c *config.Config) { c.DatabasePath = prev }) }()
 
 	w := run(http.MethodGet, "/backup/list", "/backup/list", nil, func(r *gin.Engine) {
 		r.GET("/backup/list", h.ListBackups)

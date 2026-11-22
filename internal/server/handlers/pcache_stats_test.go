@@ -24,12 +24,13 @@ import (
 // past its 14-day negative TTL), one product row and one pointer row.
 func pcacheFixtureStore(t *testing.T) *database.PebbleStore {
 	t.Helper()
-	prevMF, prevTTL := config.AppConfig.MetadataFetch, config.AppConfig.MetadataFetchCacheTTLDays
+	prevMF, prevTTL := config.Get().MetadataFetch, config.Get().MetadataFetchCacheTTLDays
 	t.Cleanup(func() {
-		config.AppConfig.MetadataFetch, config.AppConfig.MetadataFetchCacheTTLDays = prevMF, prevTTL
+		config.SetForTest(func(c *config.Config) { c.MetadataFetch, c.MetadataFetchCacheTTLDays = prevMF, prevTTL })
 	})
-	config.AppConfig.MetadataFetch = config.DefaultMetadataFetchConfig()
-	config.AppConfig.MetadataFetchCacheTTLDays = 180
+	cowV1 := config.DefaultMetadataFetchConfig()
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch = cowV1 })
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 180 })
 
 	p := newCensusHandlerStore(t)
 	now := time.Now()

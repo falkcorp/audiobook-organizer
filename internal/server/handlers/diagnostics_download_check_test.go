@@ -72,9 +72,9 @@ func downloadVia(h *handlers.DiagnosticsHandler, id string) (int, string) {
 
 func withAuth(t *testing.T, on bool) {
 	t.Helper()
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.EnableAuth = on
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) { c.EnableAuth = on })
 }
 
 // The scope decision is made on the row DownloadExport serves: the handler reads
@@ -182,7 +182,7 @@ func TestDownloadExport_UnwiredCheckRefusesWhenAuthIsOn(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, code)
 	assert.NotContains(t, got, body)
 
-	config.AppConfig.EnableAuth = false
+	config.SetForTest(func(c *config.Config) { c.EnableAuth = false })
 	code, got = downloadVia(h, "op-owls")
 	assert.Equal(t, http.StatusOK, code, "auth off: nothing to compare")
 	assert.Equal(t, body, got)

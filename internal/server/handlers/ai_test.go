@@ -49,10 +49,12 @@ func newAICtx(method, path, body string, params gin.Params) (*gin.Context, *http
 // call. Returns a restore func.
 func disableAI(t *testing.T) func() {
 	t.Helper()
-	orig := config.AppConfig
-	config.AppConfig.EnableAIParsing = false
-	config.AppConfig.OpenAIAPIKey = ""
-	return func() { config.AppConfig = orig }
+	orig := config.Snapshot()
+	config.SetForTest(func(c *config.Config) {
+		c.EnableAIParsing = false
+		c.OpenAIAPIKey = ""
+	})
+	return func() { config.ReplaceForTest(orig) }
 }
 
 // newAIHandler builds an AIHandler with the supplied dependencies; any nil arg

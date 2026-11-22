@@ -211,9 +211,9 @@ func TestDiagnosticsHandler_DownloadExport_Completed_ServesZipFromV2Result(t *te
 // ── SubmitAI ──────────────────────────────────────────────────────────────
 
 func TestDiagnosticsHandler_SubmitAI_NoAPIKey_400(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.OpenAIAPIKey = ""
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.SetForTest(func(c *config.Config) { c.OpenAIAPIKey = "" })
 
 	store := databasemocks.NewMockStore(t)
 	h := handlers.NewDiagnosticsHandler(store, nil, nil, nil, nil)
@@ -230,9 +230,9 @@ func TestDiagnosticsHandler_SubmitAI_NoAPIKey_400(t *testing.T) {
 // arrives. SubmitAI used to mint its own ULID and hand-drive a legacy row; the
 // run is now the diagnostics.ai-analyze op and the id must be that op's.
 func TestDiagnosticsHandler_SubmitAI_ReturnsEnqueuedOpID(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.OpenAIAPIKey = "test-key"
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.SetForTest(func(c *config.Config) { c.OpenAIAPIKey = "test-key" })
 
 	store := databasemocks.NewMockStore(t)
 	reg := handlersmocks.NewMockOperationsRegistry(t)
@@ -269,9 +269,9 @@ func TestDiagnosticsHandler_SubmitAI_ReturnsEnqueuedOpID(t *testing.T) {
 // default is applied before the params are handed to the op, not left for the
 // op to guess.
 func TestDiagnosticsHandler_SubmitAI_EmptyCategoryDefaultsToGeneral(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.OpenAIAPIKey = "test-key"
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.SetForTest(func(c *config.Config) { c.OpenAIAPIKey = "test-key" })
 
 	store := databasemocks.NewMockStore(t)
 	reg := handlersmocks.NewMockOperationsRegistry(t)
@@ -292,9 +292,9 @@ func TestDiagnosticsHandler_SubmitAI_EmptyCategoryDefaultsToGeneral(t *testing.T
 // is not reported as an accepted submission. The old handler could not fail this
 // way — it answered 202 and then lost the work in a goroutine.
 func TestDiagnosticsHandler_SubmitAI_EnqueueFailureIs500(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.OpenAIAPIKey = "test-key"
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.SetForTest(func(c *config.Config) { c.OpenAIAPIKey = "test-key" })
 
 	store := databasemocks.NewMockStore(t)
 	reg := handlersmocks.NewMockOperationsRegistry(t)
@@ -469,9 +469,9 @@ func TestDiagnosticsHandler_GetDBHealth_NilStore_500(t *testing.T) {
 // sub-objects also stay zero-valued. This test therefore asserts the
 // metadata-cache path (CountPrefix) and a clean 200 rather than deep DB stats.
 func TestDiagnosticsHandler_GetDBHealth_MockStore(t *testing.T) {
-	orig := config.AppConfig
-	defer func() { config.AppConfig = orig }()
-	config.AppConfig.MetadataFetchCacheTTLDays = 0 // skip the ScanPrefix expiry scan
+	orig := config.Snapshot()
+	defer func() { config.ReplaceForTest(orig) }()
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 0 }) // skip the ScanPrefix expiry scan
 
 	store := databasemocks.NewMockStore(t)
 	store.EXPECT().CountPrefix("metadata_fetch_cache:").Return(int64(7), nil)
