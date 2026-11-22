@@ -171,6 +171,12 @@ type headInviteGrant struct {
 	UserID      string    `json:"user_id"`
 	InviteToken string    `json:"invite_token,omitempty"`
 	GrantedAt   time.Time `json:"granted_at"`
+	// CFAdded is HEAD's note that the accept-time sync itself put the address
+	// on the Cloudflare guest policy. Core's allow-list is by address alone and
+	// has no such field, so the step carries a true one into books' own
+	// guestpolicy: row (guestPolicyRow), or a disable, delete or merge of the
+	// guest after the flip would leave the entry that HEAD removes.
+	CFAdded bool `json:"cf_added,omitempty"`
 }
 
 // ---- decoding ----
