@@ -44,6 +44,7 @@ import {
   type UserMergePlan,
 } from '../../../services/api';
 import { IdentityList } from '../../../components/users/IdentityList';
+import { userMergeRefusalMessage } from './userMergeRefusal';
 import { errorText, familyLabel, type MergeableUser } from '../../../components/users/userAccountParts';
 
 /**
@@ -365,7 +366,8 @@ export function UserMergesPanel({
       onNotice(done);
       await load();
     } catch (err) {
-      setError(errorText(err, 'The request failed'));
+      // A refusal from the undo or resume routes carries a code; show it in words.
+      setError(userMergeRefusalMessage(err, 'The request failed'));
     }
   };
 
@@ -419,9 +421,15 @@ export function UserMergesPanel({
                     Stopped: see the operation log, then resume
                   </Typography>
                 )}
+                {j.sweep_pending && (
+                  <Typography variant="caption" color="warning.main" sx={{ display: 'block' }}>
+                    Still moving rows written while the merge ran: resume it to finish, then it can
+                    be undone
+                  </Typography>
+                )}
               </TableCell>
               <TableCell align="right">
-                {j.status === 'applying' && (
+                {(j.status === 'applying' || (j.status === 'applied' && j.sweep_pending)) && (
                   <Button
                     size="small"
                     onClick={() =>
@@ -432,9 +440,24 @@ export function UserMergesPanel({
                   </Button>
                 )}
                 {j.status !== 'undone' && (
-                  <Button size="small" color="warning" onClick={() => setConfirmUndo(j)}>
-                    Undo
-                  </Button>
+                  <Tooltip
+                    title={
+                      j.sweep_pending
+                        ? 'The merge has not finished moving every row. Resume it first, then undo.'
+                        : ''
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        color="warning"
+                        disabled={!!j.sweep_pending}
+                        onClick={() => setConfirmUndo(j)}
+                      >
+                        Undo
+                      </Button>
+                    </span>
+                  </Tooltip>
                 )}
               </TableCell>
             </TableRow>
@@ -448,7 +471,8 @@ export function UserMergesPanel({
           <Typography variant="body2">
             The merged-away account gets its sign-ins, keys and data back. Anything either account
             changed since the merge is left as it is and reported. If sign-ins or keys move back,
-            the account that stayed is signed out of the web and Audiobookshelf clients.
+            the account that stayed is signed out of the web and Audiobookshelf clients. A guest's
+            Cloudflare access and phone key are not restored: reissue them afterwards.
           </Typography>
         </DialogContent>
         <DialogActions>
