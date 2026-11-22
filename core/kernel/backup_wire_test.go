@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/internal/taskstore"
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 	"github.com/falkcorp/mediacore/tasks"
@@ -144,6 +145,25 @@ func TestBackupWireInput_RefusesBeforeItsHandlesExist(t *testing.T) {
 	_, err := (&Kernel{}).newBackup(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "journal component") {
 		t.Fatalf("a bare kernel built a backup service: %v", err)
+	}
+}
+
+// TestBackupWireInput_RefusesAHalfBuiltIdentityBoot: an identity boot whose
+// P4d has not built the journal component is as unready as no boot at all, and
+// is refused before the service is built on a nil handle.
+func TestBackupWireInput_RefusesAHalfBuiltIdentityBoot(t *testing.T) {
+	_, err := (&Kernel{ident: &identityBoot{}}).newBackup(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "journal component") {
+		t.Fatalf("an identity boot with no journal built a backup service: %v", err)
+	}
+}
+
+// TestNewBackupSvc_RefusesNoSwapper: with nothing to stage a restore through,
+// no service is built, so a restore can never reach a nil Stager.
+func TestNewBackupSvc_RefusesNoSwapper(t *testing.T) {
+	fx := newRxFx(t, nil)
+	if svc, err := newBackupSvc(bwInput(t, fx, nil)); err == nil || svc != nil {
+		t.Fatalf("newBackupSvc with no swapper = (%v, %v), want a refusal", svc, err)
 	}
 }
 
@@ -512,14 +532,11 @@ func TestBackupRecheck_RunsTheDefaultAndTheArchiveCheck(t *testing.T) {
 	}
 }
 
-// TestMountBackup mounts the routes of 05-backup §5B.3.8 and returns the four
-// task definitions in the order create, verify, prune, stage-restore; a nil
-// service mounts nothing.
+// TestMountBackup: a nil service mounts nothing; a built one mounts core
+// backup's routes.
 func TestMountBackup(t *testing.T) {
 	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: slog.New(slog.DiscardHandler)})
-	if defs := mountBackup(r.CoreGroup(), backupMount{}); defs != nil {
-		t.Fatalf("a nil service returned %d definitions", len(defs))
-	}
+	mountBackup(r.CoreGroup(), backupMount{})
 	if n := countRoutes(r); n != 0 {
 		t.Fatalf("a nil service mounted %d routes", n)
 	}
@@ -529,15 +546,7 @@ func TestMountBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defs := mountBackup(r.CoreGroup(), backupMount{Svc: svc})
-	var kinds []tasks.Kind
-	for _, d := range defs {
-		kinds = append(kinds, d.Kind())
-	}
-	want := []tasks.Kind{backup.KindCreate, backup.KindVerify, backup.KindPrune, backup.KindStageRestore}
-	if !slices.Equal(kinds, want) {
-		t.Fatalf("kinds = %v, want %v", kinds, want)
-	}
+	mountBackup(r.CoreGroup(), backupMount{Svc: svc})
 	var names []string
 	for ri := range r.Routes() {
 		names = append(names, ri.Method+" "+ri.Pattern)
@@ -546,6 +555,38 @@ func TestMountBackup(t *testing.T) {
 		if !slices.Contains(names, want) {
 			t.Errorf("%s was not mounted; routes: %q", want, names)
 		}
+	}
+}
+
+// TestRegisterBackupTasks: a built service records the four core.backup.* kinds
+// on the registrar, in that order, with no problem; a nil one records none.
+func TestRegisterBackupTasks(t *testing.T) {
+	newReg := func() *module.Registrar {
+		return module.NewRegistrar(module.RegistrarConfig{Deps: module.Deps{Module: "core"}})
+	}
+	r := newReg()
+	registerBackupTasks(r, nil)
+	if got := r.Close().Tasks; len(got) != 0 {
+		t.Fatalf("a nil service recorded %d definitions", len(got))
+	}
+
+	fx := newRxFx(t, nil)
+	svc, err := newBackupSvc(bwInput(t, fx, &bwStager{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = newReg()
+	registerBackupTasks(r, svc)
+	if err := r.Err(); err != nil {
+		t.Fatal(err)
+	}
+	var kinds []tasks.Kind
+	for _, d := range r.Close().Tasks {
+		kinds = append(kinds, d.Kind())
+	}
+	want := []tasks.Kind{backup.KindCreate, backup.KindVerify, backup.KindPrune, backup.KindStageRestore}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("kinds = %v, want %v", kinds, want)
 	}
 }
 
