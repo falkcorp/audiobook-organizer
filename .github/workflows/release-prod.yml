@@ -45,8 +45,41 @@ permissions:
   attestations: write
 
 jobs:
+  # Refuses to release while books' upgrade floor still names the placeholder
+  # R2 tag (R3-02d). A release with "install v0.0.0-r2-placeholder first" in its
+  # refusal would leave an operator on a pre-R2 store with nowhere to go. The
+  # guard test exists only under -tags release (internal/books/floor_release_test.go);
+  # the grep makes a renamed or deleted test fail here instead of passing as
+  # "no tests to run".
+  floor-guard:
+    name: Upgrade floor names a real R2 tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go (no built-in cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          cache: false
+
+      - name: Run the release-tagged floor guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test -count=1 -tags release -run '^TestUpgradeFloorTagIsNotPlaceholder$' -v ./internal/books/ \
+            | tee "$RUNNER_TEMP/floor-guard.log"
+          grep -q -- '--- PASS: TestUpgradeFloorTagIsNotPlaceholder' "$RUNNER_TEMP/floor-guard.log"
+
   release:
     name: Create Production Release
+    needs: floor-guard
     uses: falkcorp/github-common/.github/workflows/reusable-release.yml@bd20b40305cb645129af0f498f46b506264d3aac # main 2026-11-07; every github-common pin uses this SHA, move them with .github/ghcommon-ref.txt
     with:
       release-type: ${{ github.event.inputs.release-type }}
