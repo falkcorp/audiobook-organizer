@@ -1,5 +1,5 @@
 // file: core/coretest/crashmatrix/restore_paths_test.go
-// version: 0.1.0
+// version: 0.2.0
 // guid: 4f7d2a9e-6b13-4c85-a0d7-3e91c58b2f64
 // last-edited: 2026-11-21
 
@@ -169,7 +169,7 @@ func (c pathCell) chain(ctx context.Context, mem *vfs.MemFS) (end endState, boot
 
 // liveObs is what the services and the registry say at readiness.
 type liveObs struct {
-	Users  []string // "<name> <status> roles=<sorted> reset=<bool> restricted=<bool>"
+	Users  []string // "<name> <status> roles=<sorted> reset=<bool> restricted=<bool> epoch=<n>"
 	Keys   []string // "<owner> <name> <status>"
 	Admins []string // the users holding the admin role, with their standing
 	Health string   // core.backup: status, reason, detail
@@ -231,9 +231,11 @@ func differ(a, b endState) []string {
 }
 
 // observeLive reads the services and the registry of a booted kernel. Standing
-// is status, roles, the two reset flags and a key's status: no version, epoch or
-// time, which a re-run of an idempotent hook moves without changing anyone's
-// standing.
+// is status, roles, the two reset flags, the credential epoch and a key's
+// status: no version or time, which a re-run of an idempotent hook moves without
+// changing anyone's standing. The epoch is in because the hook that bumps it is
+// idempotent per restore run (auth.RestoreEpochRun): a boot resumed after the
+// bump committed must leave it where the fault-free run does.
 func observeLive(ctx context.Context, k *kernel.Kernel) (liveObs, error) {
 	var o liveObs
 	a, _, ok := k.IdentityServices()
@@ -252,7 +254,7 @@ func observeLive(ctx context.Context, k *kernel.Kernel) (liveObs, error) {
 			roles[i] = string(r)
 		}
 		slices.Sort(roles)
-		row := fmt.Sprintf("%s %s roles=%s reset=%t restricted=%t", u.Username, u.Status, strings.Join(roles, ","), u.PasswordResetRequired, u.SignInRestricted)
+		row := fmt.Sprintf("%s %s roles=%s reset=%t restricted=%t epoch=%d", u.Username, u.Status, strings.Join(roles, ","), u.PasswordResetRequired, u.SignInRestricted, u.CredentialEpoch)
 		o.Users = append(o.Users, row)
 		if slices.Contains(roles, string(rbac.RoleAdmin)) {
 			o.Admins = append(o.Admins, row)
@@ -706,27 +708,6 @@ var hostLossForwardRows = map[string]knownRow{
 		}},
 }
 
-// epochDriftRows (a restore with a pre-swap store): auth.PostRestore bumps every
-// user's credential epoch on each run, so a boot resumed after the auth hook
-// committed bumps it again, and the kept admin's password.changed line, which the
-// rbac hook journals after it, records the epoch of its run (2, not 1). The
-// standing is the same: the users field leaves the epoch out for this reason.
-var epochDriftRows = map[string]knownRow{
-	"kernel.hooks.rbac #1": {why: "the resumed auth hook bumped the credential epoch again before the rbac hook's restriction line", normalise: dropEpochs},
-}
-
-// dropEpochs is e with the epoch of every journal line removed.
-func dropEpochs(e endState) endState {
-	lines := make([]string, len(e.Raw.Lines))
-	for i, l := range e.Raw.Lines {
-		parts := strings.Split(l, ",")
-		parts = slices.DeleteFunc(parts, func(p string) bool { return strings.HasPrefix(p, "epoch=") })
-		lines[i] = strings.Join(parts, ",")
-	}
-	e.Raw.Lines = lines
-	return e
-}
-
 // checkSpecCites fails when the spec no longer holds the text a known row cites.
 func checkSpecCites(t *testing.T, k string, kr knownRow) {
 	t.Helper()
@@ -752,11 +733,10 @@ func checkSpecCites(t *testing.T, k string, kr knownRow) {
 
 // known is the known row for kill point k in the fixture.
 func known(k string, hostLoss bool) (knownRow, bool) {
-	m := epochDriftRows
-	if hostLoss {
-		m = hostLossForwardRows
+	if !hostLoss {
+		return knownRow{}, false
 	}
-	kr, ok := m[k]
+	kr, ok := hostLossForwardRows[k]
 	return kr, ok
 }
 
