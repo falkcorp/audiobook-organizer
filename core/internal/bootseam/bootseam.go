@@ -74,6 +74,13 @@ type Seams struct {
 	// of any other type fails the boot. nil, and so no sharing, in every
 	// production boot.
 	SectionCache any
+	// ConfigStore, when set, is called with the section cache each config
+	// store a boot builds was given (its config.Options.SectionCache, so a
+	// *config.SectionCache, nil when none), before the store is built: a test
+	// asserts that a boot over a section cache builds every store over it.
+	// Typed any for the same reason as SectionCache. nil, and so never called,
+	// in every production boot.
+	ConfigStore func(sectionCache any)
 	// Shared is the state the adapters a boot builds over FS share between
 	// them, so two adapters made from two Seams values over one boot (a
 	// recorder builds a new Seams on every call) still see one lock set:

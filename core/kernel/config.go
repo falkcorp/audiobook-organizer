@@ -53,11 +53,17 @@ const (
 // configOwnerSpec is c/config/'s storage owner (05-config §1.3.3).
 func configOwnerSpec() storage.OwnerSpec { return configstore.OwnerSpec() }
 
-// newConfigStore is config.NewStore, the one constructor every config store
-// the kernel makes goes through. A variable so a test can see each store a
-// boot makes and the options it was given (sectioncache_test.go asserts that a
-// boot over a section cache builds every store over it).
-var newConfigStore = config.NewStore
+// newConfigStore is config.NewStore, the one constructor every config store a
+// boot makes goes through. seen is the boot's bootseam.Seams.ConfigStore (nil
+// in production): it is told the section cache each store was given, so
+// sectioncache_test.go can assert a boot over a section cache builds every
+// store over it.
+func newConfigStore(seen func(any), o config.Options) (*config.Store, error) {
+	if seen != nil {
+		seen(o.SectionCache)
+	}
+	return config.NewStore(o)
+}
 
 // configInput is what the config boot takes from app.Options.
 type configInput struct {
@@ -77,6 +83,9 @@ type configInput struct {
 	// SectionCache is the section cache a test handed the boot; nil in every
 	// production boot.
 	SectionCache *config.SectionCache
+	// StoreSeen is the boot's bootseam.Seams.ConfigStore (newConfigStore);
+	// nil in every production boot.
+	StoreSeen func(any)
 	// OwnerVerifier is true when the app configured an owner-proof verifier
 	// (F4's app.Options.Authenticators; nothing sets it before then). OwnerSet
 	// is then required: config checks ProtectOwner with Actor.Owner only once an
@@ -201,7 +210,7 @@ func (in configInput) operatorOptions() config.Options {
 func newStep0Store(in configInput, bootRecord func(string) (config.StateFiles, error)) (*config.Store, []any, error) {
 	o := in.operatorOptions()
 	o.BootRecordRoot = bootRecord
-	st, err := newConfigStore(o)
+	st, err := newConfigStore(in.StoreSeen, o)
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel: config store: %w", err)
 	}
@@ -237,7 +246,7 @@ func step0(ctx context.Context, st *config.Store, in configInput, mkdir func(str
 	judge := in.operatorOptions()
 	judge.Logger = slog.New(slog.DiscardHandler) // the real Boot judges again and warns
 	if _, err := CheckConfig(ctx, ConfigCheck{
-		Config: judge, StateDirDefault: in.StateDirDefault, Modules: in.Modules,
+		Config: judge, StateDirDefault: in.StateDirDefault, Modules: in.Modules, storeSeen: in.StoreSeen,
 	}); err != nil {
 		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
 			return step0Result{}, fmt.Errorf("kernel: config boot: %w", rerr)
@@ -349,6 +358,9 @@ type ConfigCheck struct {
 	// the retired-name verdicts do not depend on them, but OperatorConfig's
 	// effective values do.
 	Defaults CoreDefaults
+	// storeSeen is the boot's bootseam.Seams.ConfigStore when step 0 runs the
+	// check (newConfigStore); nil for the offline command.
+	storeSeen func(any)
 }
 
 // CheckConfig is the engine of the offline command config check (05-config
@@ -380,7 +392,7 @@ func loadOperatorLayers(ctx context.Context, c ConfigCheck) (st *config.Store, l
 	o := c.Config
 	o.BootRecordRoot = nil
 	o.Metrics, o.Secrets = nil, nil
-	st, err = newConfigStore(o)
+	st, err = newConfigStore(c.storeSeen, o)
 	if err != nil {
 		return nil, nil, fmt.Errorf("kernel: config check: %w", err)
 	}

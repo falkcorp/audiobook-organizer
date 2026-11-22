@@ -72,6 +72,7 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	if k.sectionCache, err = bootSectionCache(ctx); err != nil {
 		return nil, err
 	}
+	k.configStoreSeen = bootConfigStoreSeen(ctx)
 	if err := k.phase(phaseP1, func() error { return k.catalog(describe) }); err != nil {
 		return nil, err
 	}

@@ -88,7 +88,7 @@ func (k *Kernel) coreConfig() (*coreConfig, error) {
 				c.shared = true
 			}
 		} else {
-			c, err = newCoreConfig(k.cfg.AppID, k.cfg.CoreDefaults, k.sectionCache)
+			c, err = newCoreConfig(k.cfg.AppID, k.cfg.CoreDefaults, k.sectionCache, k.configStoreSeen)
 		}
 		if err != nil {
 			return nil, err
@@ -99,9 +99,10 @@ func (k *Kernel) coreConfig() (*coreConfig, error) {
 }
 
 // newCoreConfig builds the defaults-only store over coreSections(). cache, when
-// non-nil, is where it gets its sections built (config.Options.SectionCache).
-func newCoreConfig(appID string, d CoreDefaults, cache *config.SectionCache) (*coreConfig, error) {
-	st, err := newConfigStore(config.Options{
+// non-nil, is where it gets its sections built (config.Options.SectionCache);
+// seen is the boot's bootseam.Seams.ConfigStore (newConfigStore).
+func newCoreConfig(appID string, d CoreDefaults, cache *config.SectionCache, seen func(any)) (*coreConfig, error) {
+	st, err := newConfigStore(seen, config.Options{
 		AppID:        appID,
 		Environ:      []string{}, // no environment layer: os.Environ is not read
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -296,6 +297,15 @@ func (c *coreConfig) schedulePoll() time.Duration {
 
 // bootSectionCache is the section cache a test handed the boot through
 // bootseam.Seams.SectionCache, nil when it handed none (every production boot).
+// bootConfigStoreSeen is the boot's bootseam.Seams.ConfigStore, the observer
+// newConfigStore tells about each store; nil in every production boot.
+func bootConfigStoreSeen(ctx context.Context) func(any) {
+	if s := bootseam.From(ctx); s != nil {
+		return s.ConfigStore
+	}
+	return nil
+}
+
 func bootSectionCache(ctx context.Context) (*config.SectionCache, error) {
 	s := bootseam.From(ctx)
 	if s == nil || s.SectionCache == nil {
