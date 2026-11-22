@@ -24,9 +24,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/falkcorp/mediacore/storage"
-
 	"github.com/falkcorp/audiobook-organizer/internal/server/absauth"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // The ABS replay (F4-08 B10e3, discharge of F4-07-ABS-REPLAY).
@@ -592,6 +591,42 @@ func TestRegisteredAbs_RemoveFromContinueListeningServed(t *testing.T) {
 	id := items.Results[0].ID
 	if ri := h.match(http.MethodGet, "/api/me/item/"+id+"/remove-from-continue-listening"); ri == nil || !ri.OwnAuth {
 		t.Fatalf("GET /api/me/item/:id/remove-from-continue-listening is not an OwnAuth route of the flipped build: %+v", ri)
+	}
+	// The GET alias alone does the work: the item is hidden from Continue Listening
+	// afterwards (read back through /api/me), not merely answered 200.
+	hidden := func() (hide, present bool) {
+		res := absBearer(h, key, http.MethodGet, "/api/me")
+		var me struct {
+			MediaProgress []struct {
+				LibraryItemID string `json:"libraryItemId"`
+				Hide          bool   `json:"hideFromContinueListening"`
+			} `json:"mediaProgress"`
+		}
+		_ = json.Unmarshal(res.Body, &me)
+		for _, m := range me.MediaProgress {
+			if m.LibraryItemID == id {
+				return m.Hide, true
+			}
+		}
+		return false, false
+	}
+	// Give the item a started progress row first: /api/me lists only items the
+	// listener has started, and the control read must show the row unhidden.
+	patch := httptest.NewRequest(http.MethodPatch, "/api/me/progress/"+id, strings.NewReader(`{"currentTime":30,"duration":3600}`))
+	patch.Header.Set("Authorization", "Bearer "+key)
+	patch.Header.Set("Content-Type", "application/json")
+	patch.RemoteAddr = h.nextPeer()
+	if res := h.Raw(patch); res.Status != http.StatusOK {
+		t.Fatalf("starting the item: %d %s", res.Status, res.excerpt())
+	}
+	if hide, present := hidden(); hide || !present {
+		t.Fatalf("before the alias: hidden %v, listed in /api/me %v, want listed and not hidden: the effect check would prove nothing", hide, present)
+	}
+	if res := absBearer(h, key, http.MethodGet, "/api/me/item/"+id+"/remove-from-continue-listening"); res.Status != http.StatusOK {
+		t.Fatalf("GET alias: %d %s", res.Status, res.excerpt())
+	}
+	if hide, present := hidden(); !hide || !present {
+		t.Errorf("GET /api/me/item/:id/remove-from-continue-listening answered 200 but did not hide the item (hidden %v, listed %v)", hide, present)
 	}
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/api/me/item/" + id + "/remove-from-continue-listening"},
