@@ -85,6 +85,9 @@ func (s *Server) credRouteWhen(g *gin.RouterGroup, method, rel string, guarded f
 }
 
 func (s *Server) credGuardMiddleware(guarded func(*gin.Context) bool) gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateCred, Conditional: guarded != nil})
+	}
 	// Under core identity (WithIdentity, F4-08 B7) the principal's method
 	// decides (coreauth.Principal.MayChangeCredentials), and books' EnableAuth is
 	// not read: the auth-disabled principal is refused, as core tightens HEAD's

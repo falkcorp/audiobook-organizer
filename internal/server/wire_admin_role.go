@@ -77,6 +77,9 @@ func (s *Server) recordAdminRoute(method, fullPath string, kind adminRouteKind) 
 // with it off (read once, at wiring, like s.perm). Only read-only introspection
 // belongs behind it; see the rule at the top of this file.
 func (s *Server) adminRole() gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateAdmin, Admin: adminRouteReadOnly})
+	}
 	if s.identity != nil {
 		return s.bridgedAdminGate(adminRouteReadOnly)
 	}
@@ -88,6 +91,9 @@ func (s *Server) adminRole() gin.HandlerFunc {
 
 // adminGate returns the middleware for a route of the given kind.
 func (s *Server) adminGate(kind adminRouteKind) gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateAdmin, Admin: kind})
+	}
 	if s.identity != nil {
 		return s.bridgedAdminGate(kind)
 	}

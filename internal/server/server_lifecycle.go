@@ -2720,6 +2720,9 @@ func allSet(keys []string, settingTrue func(key string) bool) bool {
 }
 
 func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gatePerm, Atom: string(p)})
+	}
 	// Under core identity (WithIdentity, F4-08 B7) the atom's table entry
 	// decides, through the principal stage 12 bound. Books' EnableAuth is not
 	// read: core's mode is what makes a request anonymous, and the
@@ -2738,6 +2741,9 @@ func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
 // handlers the user stage 12 resolved. With auth disabled and no identity it is
 // a pass-through, as it was.
 func (s *Server) requireAuth() gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateAuth})
+	}
 	if s.identity != nil {
 		return s.identity.Bridge.Authenticate(servermiddleware.BindCurrentUser)
 	}
