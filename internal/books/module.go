@@ -236,6 +236,12 @@ func (m *booksModule) Manifest() module.Manifest {
 		// Deps.AuthRefresh on an identity boot; the kernel hands it to no
 		// other module, and none else declares it (TestAuthRefresh_...).
 		AuthRefresh: true,
+		// The Cloudflare Access guest policy and the guest's phone-app key follow
+		// core's account events (account_lifecycle_wire.go): books receives
+		// Deps.AuthLifecycle on an identity boot and registers the one hook from
+		// Register. Declared statically like AuthRefresh; the kernel hands it to
+		// no other module (TestAuthLifecycle_...).
+		AuthLifecycle: true,
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
@@ -445,6 +451,11 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
+	if identity != nil {
+		if err := registerAccountLifecycle(deps, srv); err != nil {
+			return err
+		}
+	}
 	// The search index opens in the start hook, a long step: it asks for
 	// start time through the kernel's Deps.ExtendStart, which extends the
 	// service manager's deadline and this hook's own start window (05-health

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -37,10 +38,13 @@ import (
 const (
 	claimAccountID = "0123456789abcdef0123456789abcdef"
 	claimPolicyID  = "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"
-	claimTokenID   = "cccccccc-1111-2222-3333-dddddddddddd"
-	claimClientID  = "robin-client-id.access"
-	claimSecret    = "SENTINEL-boot-claim-secret-0123456789abcdef"
-	claimGuestPass = "Gotham-Robin-Passw0rd-9931"
+	// claimGuestsPolicyID is the guest e-mail policy the guest-policy sync edits
+	// (the service-auth policy above is the token policy).
+	claimGuestsPolicyID = "eeeeeeee-1111-2222-3333-ffffffffffff"
+	claimTokenID        = "cccccccc-1111-2222-3333-dddddddddddd"
+	claimClientID       = "robin-client-id.access"
+	claimSecret         = "SENTINEL-boot-claim-secret-0123456789abcdef"
+	claimGuestPass      = "Gotham-Robin-Passw0rd-9931"
 )
 
 // cloudflareFake serves the two Cloudflare endpoints the mint uses: the service
@@ -121,28 +125,44 @@ func installCloudflareFake(t *testing.T) *cloudflareFake {
 // when given, wraps the books module as runComposedWith takes it.
 func bootGuestKeyApp(t *testing.T, wrap ...func(module.Module) module.Module) (*runningApp, *cloudflareFake) {
 	t.Helper()
+	return bootGuestKeyWithMail(t, "mail.batcave.example", "587", wrap...)
+}
+
+// bootGuestKeyMailed is bootGuestKeyApp with a mail server that really receives
+// what the deployment sends, so an admin's invitation with send_email goes out
+// and core's e-mailed flag is set through books' own invite route (B10t).
+func bootGuestKeyMailed(t *testing.T, wrap ...func(module.Module) module.Module) (*runningApp, *cloudflareFake, *bootSMTP) {
+	t.Helper()
+	smtp, port := startBootSMTP(t)
+	r, cf := bootGuestKeyWithMail(t, "127.0.0.1", strconv.Itoa(port), wrap...)
+	return r, cf, smtp
+}
+
+func bootGuestKeyWithMail(t *testing.T, mailHost, mailPort string, wrap ...func(module.Module) module.Module) (*runningApp, *cloudflareFake) {
+	t.Helper()
 	t.Cleanup(SetIdentityFlipForTest(true))
 	// The Cloudflare settings are operator-only: their layer is the environment.
 	t.Setenv("ABO_BOOKS_CFGUESTS_ACCOUNT_ID", claimAccountID)
 	t.Setenv("ABO_BOOKS_CFGUESTS_POLICY_API_TOKEN", "Fox-policy-token-0902")
-	t.Setenv("ABO_BOOKS_CFGUESTS_GUESTS_POLICY_ID", "eeeeeeee-1111-2222-3333-ffffffffffff")
+	t.Setenv("ABO_BOOKS_CFGUESTS_GUESTS_POLICY_ID", claimGuestsPolicyID)
 	t.Setenv("ABO_BOOKS_CFGUESTS_SERVICE_AUTH_POLICY_ID", claimPolicyID)
 	t.Setenv("ABO_BOOKS_CFGUESTS_GUEST_SERVICE_TOKENS", "true")
 	// A key is e-mailed on an admin reissue, so the deployment must be able to
 	// mail (the reissue's deployment check comes before its account check).
 	t.Setenv("ABO_CORE_HTTP_PUBLIC_BASE_URL", "https://batcave.example")
-	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_HOST", "mail.batcave.example")
-	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_PORT", "587")
+	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_HOST", mailHost)
+	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_PORT", mailPort)
 	t.Setenv("ABO_INTEGRATIONS_NOTIFY_EMAIL_FROM", "alfred@batcave.example")
+	port, _ := strconv.Atoi(mailPort)
 	r := runComposedWith(t, func(c *config.Config) {
 		c.EnableAuth = true
 		c.CFAccountID = claimAccountID
 		c.CFPolicyAPIToken = "Fox-policy-token-0902"
-		c.CFGuestsPolicyID = "eeeeeeee-1111-2222-3333-ffffffffffff"
+		c.CFGuestsPolicyID = claimGuestsPolicyID
 		c.CFServiceAuthPolicyID = claimPolicyID
 		c.CFGuestServiceTokens = true
 		c.PublicBaseURL = "https://batcave.example"
-		c.SMTPHost, c.SMTPPort, c.SMTPFrom = "mail.batcave.example", 587, "alfred@batcave.example"
+		c.SMTPHost, c.SMTPPort, c.SMTPFrom = mailHost, port, "alfred@batcave.example"
 	}, nil, nil, nil, wrap...)
 	// After the boot, not before: Register clones http.DefaultTransport as an
 	// *http.Transport and panics on any other RoundTripper.

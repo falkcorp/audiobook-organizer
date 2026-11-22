@@ -135,12 +135,12 @@ func accepted(email string, mailed, adminCreator bool) coreauth.InviteAccepted {
 
 func (h guestHook) accept(t *testing.T, e coreauth.InviteAccepted) {
 	t.Helper()
-	h.srv.GuestPolicyLifecycle().InviteAccepted(t.Context(), e)
+	h.srv.AccountLifecycle().InviteAccepted(t.Context(), e)
 }
 
 func TestGuestLifecycle_EveryEventHasACallback(t *testing.T) {
 	h := newGuestHook(t, &fakeGuestPolicy{res: cfaccesspolicy.Added}, nil)
-	l := h.srv.GuestPolicyLifecycle()
+	l := h.srv.AccountLifecycle()
 	v := reflect.ValueOf(l)
 	for i := 0; i < v.NumField(); i++ {
 		require.Falsef(t, v.Field(i).IsNil(), "Lifecycle.%s is nil: books ignores that account event", v.Type().Field(i).Name)
@@ -192,7 +192,7 @@ func TestGuestLifecycle_AcceptGatesAreHEADs(t *testing.T) {
 		h.setUsers(guestUser(gUserID, gSelina, true, coreauth.StatusActive))
 		h.accept(t, accepted(gSelina, true, true))
 		h.waitOutcome(t, "inv-1", database.InviteGuestPolicyAlreadyPresent)
-		h.srv.GuestPolicyLifecycle().StatusChanged(t.Context(), coreauth.StatusChanged{UserID: gUserID, Email: gSelina, From: coreauth.StatusActive, To: coreauth.StatusDisabled})
+		h.srv.AccountLifecycle().StatusChanged(t.Context(), coreauth.StatusChanged{UserID: gUserID, Email: gSelina, From: coreauth.StatusActive, To: coreauth.StatusDisabled})
 		h.srv.bgWG.Wait()
 		_, removed := h.cf.snapshot()
 		require.Empty(t, removed)
@@ -274,13 +274,13 @@ func TestGuestLifecycle_EventsThatEndAccessRemoveTheEntry(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newGuestHook(t, &fakeGuestPolicy{res: cfaccesspolicy.Added}, nil)
 			h.seedAdded(t, gSelina)
-			fire(h.srv.GuestPolicyLifecycle(), t.Context())
+			fire(h.srv.AccountLifecycle(), t.Context())
 			h.waitRemoved(t, gSelina)
 			g, err := h.store.GuestPolicyGrants().GetInviteEmailGrant(gSelina)
 			require.NoError(t, err)
 			require.Nil(t, g)
 			// A second delivery (the HEAD handler twin, a re-fired event) finds nothing.
-			fire(h.srv.GuestPolicyLifecycle(), t.Context())
+			fire(h.srv.AccountLifecycle(), t.Context())
 			h.srv.bgWG.Wait()
 			_, removed := h.cf.snapshot()
 			require.Len(t, removed, 1)
@@ -289,19 +289,19 @@ func TestGuestLifecycle_EventsThatEndAccessRemoveTheEntry(t *testing.T) {
 	t.Run("re-enable does nothing", func(t *testing.T) {
 		h := newGuestHook(t, &fakeGuestPolicy{res: cfaccesspolicy.Added}, nil)
 		h.seedAdded(t, gSelina)
-		h.srv.GuestPolicyLifecycle().StatusChanged(t.Context(), coreauth.StatusChanged{UserID: gUserID, Email: gSelina, From: coreauth.StatusDisabled, To: coreauth.StatusActive})
+		h.srv.AccountLifecycle().StatusChanged(t.Context(), coreauth.StatusChanged{UserID: gUserID, Email: gSelina, From: coreauth.StatusDisabled, To: coreauth.StatusActive})
 		h.noCloudflareCall(t)
 	})
 	t.Run("a grant the sync did not add is dropped, never removed from Cloudflare", func(t *testing.T) {
 		h := newGuestHook(t, &fakeGuestPolicy{res: cfaccesspolicy.Added}, nil)
 		require.NoError(t, h.store.PutGuestPolicyGrant(database.GuestPolicyGrant{Email: gSelina, UserID: gUserID, GrantedAt: time.Now()}))
-		h.srv.GuestPolicyLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: gSelina})
+		h.srv.AccountLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: gSelina})
 		h.noCloudflareCall(t)
 	})
 	t.Run("a cloudflare failure on remove fails nothing", func(t *testing.T) {
 		h := newGuestHook(t, &fakeGuestPolicy{removeErr: errors.New("cloudflare 500")}, nil)
 		h.seedAdded(t, gSelina)
-		h.srv.GuestPolicyLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: gSelina})
+		h.srv.AccountLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: gSelina})
 		h.waitRemoved(t, gSelina)
 	})
 }
@@ -329,7 +329,7 @@ func TestGuestLifecycle_KeepRules(t *testing.T) {
 			h := newGuestHook(t, &fakeGuestPolicy{res: cfaccesspolicy.Added}, tc.readErr)
 			h.setUsers(tc.others...)
 			h.seedAdded(t, tc.email)
-			h.srv.GuestPolicyLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: tc.email})
+			h.srv.AccountLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: tc.email})
 			h.srv.bgWG.Wait()
 			if tc.wantKeep {
 				h.noCloudflareCall(t)
@@ -342,7 +342,7 @@ func TestGuestLifecycle_KeepRules(t *testing.T) {
 		h := newGuestHook(t, &fakeGuestPolicy{res: cfaccesspolicy.Added}, nil)
 		h.srv.accessAllowList = func() (string, error) { return "batgirl@example.test, " + gSelina, nil }
 		h.seedAdded(t, gSelina)
-		h.srv.GuestPolicyLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: gSelina})
+		h.srv.AccountLifecycle().UserDeleted(t.Context(), coreauth.UserDeleted{UserID: gUserID, Email: gSelina})
 		h.noCloudflareCall(t)
 	})
 }
