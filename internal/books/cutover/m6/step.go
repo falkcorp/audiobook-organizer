@@ -47,6 +47,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/integrations/notify"
 	"github.com/falkcorp/mediacore/secrets"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -417,6 +418,7 @@ func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.V
 	}
 	m.mu.Unlock()
 	for _, rg := range SourceRanges() {
+		startprogress.Report(ctx) // one unit per probe: the seek can cross many tombstones
 		for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: rg.Start, End: rg.End, KeysOnly: true, Limit: 1}) {
 			if err != nil {
 				return rep, err

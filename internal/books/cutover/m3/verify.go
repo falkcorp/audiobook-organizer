@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
@@ -50,6 +51,12 @@ func RefFamilyPrefixes() []string {
 	return out
 }
 
+// progressEvery is how many rows Verify's scans read between two progress
+// units (startprogress.Report): the runner turns each unit into a request for
+// start time, so the boot's silence is bounded by the time to read this many
+// rows, not by the size of a family.
+const progressEvery = 5000
+
 // Verify is the step's invariant gate, over the store alone: every Source
 // range is empty, the bootstrap hash and HEAD's expiry flag are gone, no merge
 // journal keeps a raw invite token in a key image, and every user ID a books
@@ -59,6 +66,7 @@ func RefFamilyPrefixes() []string {
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	var rep datamigrate.VerifyReport
 	for _, p := range identityPrefixes {
+		startprogress.Report(ctx)
 		for _, err := range r.Scan(ctx, storage.ScanOptions{Start: []byte(p), End: prefixEnd(p), KeysOnly: true, Limit: 1}) {
 			if err != nil {
 				return rep, err
@@ -69,6 +77,7 @@ func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.V
 	// The two bootstrap rows are Source keys (ownership table row 8) and the
 	// expiry flag is the one row outside Source that M3 deletes (row 16).
 	for _, key := range append(SourceKeys(), expiryDoneKey) {
+		startprogress.Report(ctx)
 		switch _, err := r.Get(ctx, []byte(key)); {
 		case errors.Is(err, storage.ErrNotFound):
 		case err != nil:
@@ -168,9 +177,13 @@ func (m *Migration) orphansIn(ctx context.Context, r storage.Reader, res *resolv
 	var n int64
 	switch {
 	case f.field != "":
+		var read int
 		for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: []byte(f.prefix), End: end}) {
 			if err != nil {
 				return 0, err
+			}
+			if read++; read%progressEvery == 0 {
+				startprogress.Report(ctx)
 			}
 			var row map[string]json.RawMessage
 			if json.Unmarshal(kv.Value, &row) != nil {
@@ -189,9 +202,13 @@ func (m *Migration) orphansIn(ctx context.Context, r storage.Reader, res *resolv
 			}
 		}
 	case f.exact:
+		var read int
 		for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: []byte(f.prefix), End: end, KeysOnly: true}) {
 			if err != nil {
 				return 0, err
+			}
+			if read++; read%progressEvery == 0 {
+				startprogress.Report(ctx)
 			}
 			ok, err := res.has(ctx, strings.TrimPrefix(string(kv.Key), f.prefix))
 			if err != nil {
@@ -204,6 +221,7 @@ func (m *Migration) orphansIn(ctx context.Context, r storage.Reader, res *resolv
 	default:
 		start := []byte(f.prefix)
 		for {
+			startprogress.Report(ctx) // one unit per user's rows
 			var first []byte
 			for kv, err := range r.Scan(ctx, storage.ScanOptions{Start: start, End: end, KeysOnly: true, Limit: 1}) {
 				if err != nil {
