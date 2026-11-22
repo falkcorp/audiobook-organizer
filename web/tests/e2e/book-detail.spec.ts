@@ -5,6 +5,7 @@
 
 import { expect, test } from '@playwright/test';
 import { mockEventSource } from './utils/test-helpers';
+import { bookPath, paths, urlEndsWith } from './utils/paths';
 
 const bookId = 'book-1';
 
@@ -405,7 +406,7 @@ test.describe('Book Detail page', () => {
 
   test('renders info, files, and versions tabs', async ({ page }) => {
     await setupRoutes(page);
-    await page.goto(`/library/${bookId}`);
+    await page.goto(bookPath(bookId));
 
     await expect(
       page.getByRole('heading', { name: 'The Test Book' })
@@ -423,7 +424,7 @@ test.describe('Book Detail page', () => {
 
   test('soft delete, restore, and purge flow', async ({ page }) => {
     await setupRoutes(page);
-    await page.goto(`/library/${bookId}`);
+    await page.goto(bookPath(bookId));
 
     await page.getByRole('button', { name: 'Delete' }).click();
     await page.getByRole('button', { name: 'Soft Delete' }).click();
@@ -476,12 +477,12 @@ test.describe('Book Detail page', () => {
     // Must check the confirmation checkbox before purging
     await page.getByRole('checkbox').check();
     await page.getByRole('button', { name: 'Purge Permanently' }).click();
-    await expect(page).toHaveURL(/\/library$/);
+    await expect(page).toHaveURL(urlEndsWith(paths.library));
   });
 
   test('metadata refresh and AI parse actions', async ({ page }) => {
     await setupRoutes(page);
-    await page.goto(`/library/${bookId}`);
+    await page.goto(bookPath(bookId));
 
     await page.getByRole('button', { name: 'Fetch Metadata' }).click();
     await expect(

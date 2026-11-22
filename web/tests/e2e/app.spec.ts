@@ -5,6 +5,7 @@
 
 import { test, expect } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
+import { paths, urlReaches } from './utils/paths';
 
 test.describe('App smoke', () => {
   test.beforeEach(async ({ page }) => {
@@ -13,7 +14,7 @@ test.describe('App smoke', () => {
   });
 
   test('loads dashboard and shows title', async ({ page }) => {
-    await page.goto('/');
+    await page.goto(paths.home);
     await expect(
       page.getByText('Audiobook Organizer', { exact: true }).first()
     ).toBeVisible();
@@ -23,16 +24,16 @@ test.describe('App smoke', () => {
   });
 
   test('shows import path empty state on Library page', async ({ page }) => {
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('domcontentloaded');
-    await expect(page).toHaveURL(/.*\/library/);
+    await expect(page).toHaveURL(urlReaches(paths.library));
   });
 
   test('navigates to Settings page', async ({ page }) => {
     // Navigate directly to Settings page
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     // Verify we're on the Settings page
-    await expect(page).toHaveURL(/.*\/settings/);
+    await expect(page).toHaveURL(urlReaches(paths.settings));
     // Verify the page has loaded some content
     const content = await page.locator('main, [role="main"]').first();
     await expect(content).toBeVisible({ timeout: 10000 });

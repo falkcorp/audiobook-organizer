@@ -5,6 +5,7 @@
 
 import { test, expect, type Page, type Route } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
+import { collectionPath, paths, urlEndsWith } from './utils/paths';
 
 // The page against a mocked API. The collection routes are served by a small
 // in-memory store so create -> list -> open round-trips; /auth/me is overridden
@@ -157,13 +158,13 @@ async function mockCollectionsApi(page: Page, permissions: string[]) {
 test.describe('Collections page', () => {
   test('lists collections and opens one with its members', async ({ page }) => {
     await mockCollectionsApi(page, ['library.view', 'collections.manage']);
-    await page.goto('/collections');
+    await page.goto(paths.collections);
 
     await expect(page.getByText('Test Static Collection')).toBeVisible();
     await expect(page.getByText('Test Dynamic Collection')).toBeVisible();
 
     await page.getByText('Test Static Collection').click();
-    await expect(page).toHaveURL(/\/collections\/c-static$/);
+    await expect(page).toHaveURL(urlEndsWith(collectionPath('c-static')));
     await expect(page.getByRole('link', { name: 'Test Book One' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Test Book Two' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Members (2)' })).toBeVisible();
@@ -171,16 +172,16 @@ test.describe('Collections page', () => {
 
   test('clicking a count lands on the member view', async ({ page }) => {
     await mockCollectionsApi(page, ['library.view', 'collections.manage']);
-    await page.goto('/collections');
+    await page.goto(paths.collections);
 
     await page.getByRole('button', { name: /the 1 books in Test Dynamic Collection/ }).click();
-    await expect(page).toHaveURL(/\/collections\/c-dynamic$/);
+    await expect(page).toHaveURL(urlEndsWith(collectionPath('c-dynamic')));
     await expect(page.getByRole('link', { name: 'Test Book Two' })).toBeVisible();
   });
 
   test('creates a static collection and lists it, with the exact payload', async ({ page }) => {
     const { posted } = await mockCollectionsApi(page, ['library.view', 'collections.manage']);
-    await page.goto('/collections');
+    await page.goto(paths.collections);
 
     await page.getByRole('button', { name: /New Collection/ }).click();
     const dialog = page.getByRole('dialog');
@@ -197,7 +198,7 @@ test.describe('Collections page', () => {
 
   test('creates a dynamic collection and shows its preview', async ({ page }) => {
     const { posted } = await mockCollectionsApi(page, ['library.view', 'collections.manage']);
-    await page.goto('/collections');
+    await page.goto(paths.collections);
 
     await page.getByRole('button', { name: /New Collection/ }).click();
     const dialog = page.getByRole('dialog');
@@ -227,7 +228,7 @@ test.describe('Collections page', () => {
     page,
   }) => {
     await mockCollectionsApi(page, ['library.view']);
-    await page.goto('/collections');
+    await page.goto(paths.collections);
 
     await expect(page.getByText('Test Static Collection')).toBeVisible();
     await expect(page.getByRole('button', { name: /New Collection/ })).toHaveCount(0);

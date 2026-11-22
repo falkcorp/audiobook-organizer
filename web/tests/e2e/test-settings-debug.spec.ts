@@ -1,4 +1,5 @@
 import { test } from '@playwright/test';
+import { paths, urlReaches } from './utils/paths';
 
 test('Debug: navigate to Settings', async ({ page }) => {
   // Skip wizard
@@ -8,7 +9,7 @@ test('Debug: navigate to Settings', async ({ page }) => {
   
   // Navigate to app
   console.log('🔍 Navigating to /', new Date().toISOString());
-  await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.goto(paths.home, { waitUntil: 'domcontentloaded' });
   console.log('✅ Navigated to /', new Date().toISOString());
   
   // Check what's on the page
@@ -32,7 +33,7 @@ test('Debug: navigate to Settings', async ({ page }) => {
     console.log('✅ Clicked');
     
     console.log('🔍 Waiting for URL to change to /settings');
-    await page.waitForURL(/.*\/settings/, { timeout: 5000 });
+    await page.waitForURL(urlReaches(paths.settings), { timeout: 5000 });
     console.log('✅ URL changed to /settings');
   } else {
     console.error('❌ No Settings elements found');

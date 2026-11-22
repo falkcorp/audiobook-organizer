@@ -11,6 +11,7 @@
 
 import { expect, test } from '@playwright/test';
 import { mockEventSource, skipWelcomeWizard } from './utils/test-helpers';
+import { bookPath } from './utils/paths';
 
 const bookId = 'prov-test-book';
 
@@ -292,7 +293,7 @@ const setupMockRoutes = async (page: import('@playwright/test').Page) => {
  * Navigates to book detail and opens the Edit Metadata dialog.
  */
 const openEditDialog = async (page: import('@playwright/test').Page) => {
-  await page.goto(`/library/${bookId}`);
+  await page.goto(bookPath(bookId));
   // Wait for book detail to load
   await expect(page.getByRole('heading', { name: 'Provenance Test Book' })).toBeVisible();
   // Click Edit Metadata button

@@ -10,6 +10,7 @@ import {
   type MockApiOptions,
   type TestBook,
 } from './utils/test-helpers';
+import { bookPath, paths } from './utils/paths';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -128,7 +129,7 @@ async function setupWithTranscode(
 // not a button. The overflow IconButton has no accessible name
 // (AudiobookCard.tsx:183), so it can only be found by the icon inside it.
 const openVersionManagerFor = async (page: Page, title: string) => {
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
   const card = page
     .getByText(title, { exact: true })
@@ -141,7 +142,7 @@ test.describe('M4B Transcode', () => {
   test('shows Convert to M4B button for MP3 books', async ({ page }) => {
     const book = mp3Book();
     await setupMockApi(page, { books: [book] });
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByRole('button', { name: /Convert to M4B/i })).toBeVisible();
@@ -150,7 +151,7 @@ test.describe('M4B Transcode', () => {
   test('does NOT show Convert to M4B for books already in M4B format', async ({ page }) => {
     const book = m4bBook({ version_group_id: undefined, version_notes: undefined });
     await setupMockApi(page, { books: [book] });
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByRole('button', { name: /Convert to M4B/i })).not.toBeVisible();
@@ -159,7 +160,7 @@ test.describe('M4B Transcode', () => {
   test('triggers transcode and shows progress', async ({ page }) => {
     const book = mp3Book();
     const tracker = await setupWithTranscode(page, [book]);
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     // Click Convert to M4B
@@ -180,7 +181,7 @@ test.describe('M4B Transcode', () => {
   test('shows success toast after transcode completes', async ({ page }) => {
     const book = mp3Book();
     await setupWithTranscode(page, [book]);
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
@@ -361,7 +362,7 @@ test.describe('File Count Display', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('networkidle');
 
     // Should display file count somewhere on dashboard
@@ -420,7 +421,7 @@ test.describe('File Count Display', () => {
       }
     );
 
-    await page.goto('/authors');
+    await page.goto(paths.authors);
     await page.waitForLoadState('networkidle');
 
     // Should show book counts
@@ -456,7 +457,7 @@ test.describe('File Count Display', () => {
       }
     );
 
-    await page.goto('/series');
+    await page.goto(paths.series);
     await page.waitForLoadState('networkidle');
 
     // Should show book count
@@ -537,7 +538,7 @@ test.describe('Multi-file Book Handling', () => {
       return route.fallback();
     });
 
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     // Book detail should show info about the multi-file nature
@@ -569,7 +570,7 @@ test.describe('Multi-file Book Handling', () => {
     ];
 
     await setupMockApi(page, { books });
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // All books should be visible
@@ -601,7 +602,7 @@ test.describe('Transcode Error Handling', () => {
       });
     });
 
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
@@ -625,7 +626,7 @@ test.describe('Transcode Error Handling', () => {
       });
     });
 
-    await page.goto(`/library/${book.id}`);
+    await page.goto(bookPath(book.id));
     await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: /Convert to M4B/i }).click();
@@ -686,7 +687,7 @@ test.describe('Counting Accuracy', () => {
       });
     });
 
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('networkidle');
 
     // Should show 2 books, not 3
@@ -708,7 +709,7 @@ test.describe('Counting Accuracy', () => {
     });
 
     await setupMockApi(page, { books: [primary, nonPrimary] });
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // Both versions should be visible in library list

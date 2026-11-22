@@ -8,6 +8,7 @@ import {
   generateTestBooks,
   setupMockApi,
 } from './utils/test-helpers';
+import { paths, urlContainsAny } from './utils/paths';
 
 const buildBooks = () => {
   const base = generateTestBooks(1)[0];
@@ -89,7 +90,7 @@ const openDashboard = async (page: Page) => {
       disk_total_bytes: 500 * 1024 * 1024 * 1024,
     },
   });
-  await page.goto('/');
+  await page.goto(paths.home);
   await page.waitForLoadState('networkidle');
 };
 
@@ -144,7 +145,7 @@ test.describe('Dashboard', () => {
     await page.getByRole('button', { name: 'Scan All Import Paths' }).click();
 
     // Assert — /operations now redirects to /activity (route rename)
-    await expect(page).toHaveURL(/\/(operations|activity)/);
+    await expect(page).toHaveURL(urlContainsAny([paths.operations, paths.activity]));
   });
 
   test('quick action: organize all import books', async ({ page }) => {
@@ -159,6 +160,6 @@ test.describe('Dashboard', () => {
       .click();
 
     // Assert — /operations now redirects to /activity (route rename)
-    await expect(page).toHaveURL(/\/(operations|activity)/);
+    await expect(page).toHaveURL(urlContainsAny([paths.operations, paths.activity]));
   });
 });

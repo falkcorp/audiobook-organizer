@@ -9,6 +9,7 @@ import {
   generateTestBooks,
   generateTestBook,
 } from './utils/test-helpers';
+import { paths, urlReaches } from './utils/paths';
 
 /**
  * Phase 2: Interactive UI Testing Example
@@ -47,20 +48,20 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
   // Test 1: Basic navigation to library with empty state
   test('user navigates to library and sees empty state', async ({ page }) => {
     // GIVEN: User is on the home page
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User navigates directly to library page
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // THEN: User is on the library page
-    await expect(page).toHaveURL(/.*\/library/);
+    await expect(page).toHaveURL(urlReaches(paths.library));
 
     // AND: Either empty state or page is displayed
     // (Empty state may not always show depending on implementation)
     const pageUrl = page.url();
-    expect(pageUrl).toContain('/library');
+    expect(pageUrl).toContain(paths.library);
   });
 
   // Test 2: User navigates through settings page
@@ -68,15 +69,15 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     page,
   }) => {
     // GIVEN: User navigates directly to settings page
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
 
     // THEN: User is on the settings page
-    await expect(page).toHaveURL(/.*\/settings/);
+    await expect(page).toHaveURL(urlReaches(paths.settings));
 
     // AND: Settings page is loaded (verify URL change)
     const pageUrl = page.url();
-    expect(pageUrl).toContain('/settings');
+    expect(pageUrl).toContain(paths.settings);
   });
 
   // Test 3: User can see library with populated mock books
@@ -95,7 +96,7 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     });
 
     // WHEN: User navigates to the library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // THEN: Books are displayed in a grid layout
@@ -142,7 +143,7 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     await setupPhase2Interactive(page, undefined, { books });
 
     // WHEN: User navigates to the library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // AND: User searches for "Tolkien"
@@ -180,7 +181,7 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     });
 
     // WHEN: User navigates to the home/dashboard
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('networkidle');
 
     // THEN: Dashboard title is visible
@@ -204,7 +205,7 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     await setupPhase2Interactive(page, undefined, { books });
 
     // WHEN: User navigates to the library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // AND: User clicks on the book title
@@ -239,11 +240,11 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     await setupPhase2Interactive(page, undefined, { books });
 
     // WHEN: User navigates to the library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // THEN: User is on the library page
-    await expect(page).toHaveURL(/.*\/library/);
+    await expect(page).toHaveURL(urlReaches(paths.library));
 
     // AND: Some books are displayed (verify books exist on the page)
     const bookElements = page.locator('h2').filter({ hasText: /Test Book/ });
@@ -267,7 +268,7 @@ test.describe('Phase 2: Interactive Import Workflow', () => {
     }
 
     // WHEN: User navigates back and tries search if available
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     const searchInput = page.getByPlaceholder(/search|find/i).first();

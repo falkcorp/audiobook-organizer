@@ -6,6 +6,7 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
 
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
+import { libraryPath, paths } from './utils/paths';
 
 /**
  * Regression coverage for the Library sidebar filter items (#2193).
@@ -129,7 +130,7 @@ function expectNeverDropped(samples: string[], token: string) {
 
 async function openLibrary(page: Page) {
   await setupLibraryWithBooks(page, generateTestBooks(5));
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
 }
 
@@ -263,7 +264,7 @@ test.describe('Library sidebar filters', () => {
     await setupLibraryWithBooks(page, generateTestBooks(5));
     await installUrlRecorder(page);
 
-    await page.goto('/library?search=read_status:finished');
+    await page.goto(libraryPath('search=read_status:finished'));
     await expect
       .poll(() => new URL(page.url()).searchParams.get('search'))
       .toBe('read_status:finished');
@@ -282,7 +283,7 @@ test.describe('Library sidebar filters', () => {
     await setupLibraryWithBooks(page, generateTestBooks(5));
     await installUrlRecorder(page);
 
-    await page.goto('/library?tag=scifi');
+    await page.goto(libraryPath('tag=scifi'));
     await expect.poll(() => new URL(page.url()).searchParams.get('tag')).toBe('scifi');
 
     expectNeverDropped(await recordedUrls(page), 'tag=scifi');

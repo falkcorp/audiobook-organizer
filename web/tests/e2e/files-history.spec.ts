@@ -4,6 +4,7 @@
 
 import { expect, test } from '@playwright/test';
 import { mockEventSource } from './utils/test-helpers';
+import { bookPath } from './utils/paths';
 
 const bookId = 'book-fh-1';
 
@@ -270,7 +271,7 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
 test.describe('Files & History tab', () => {
   test.beforeEach(async ({ page }) => {
     await setupRoutes(page);
-    await page.goto(`/library/${bookId}?tab=files`);
+    await page.goto(bookPath(bookId, 'tab=files'));
   });
 
   test('tab shows "Files & History" label', async ({ page }) => {

@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupPhase2Interactive } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 const backups = [
   {
@@ -29,7 +30,7 @@ const openBackupSettings = async (
   // This also mocks EventSource to prevent SSE connections
   await setupPhase2Interactive(page, undefined, { backups: backupsToUse, failures });
   // Now navigate to settings
-  await page.goto('/settings');
+  await page.goto(paths.settings);
   await page.waitForLoadState('domcontentloaded');
   // Wait for the page to settle and API calls to complete
   await page.waitForLoadState('networkidle');

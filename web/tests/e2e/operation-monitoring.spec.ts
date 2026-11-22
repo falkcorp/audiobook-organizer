@@ -22,6 +22,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
+import { paths, reviewLanePath } from './utils/paths';
 
 /**
  * Build an OperationV2 timeline row. Note `display_name` is deliberately left
@@ -150,7 +151,7 @@ const openActivity = async (
     activity: seed.activity ?? [],
   });
   // Go straight to /activity: /operations only exists as a redirect now.
-  await page.goto('/activity');
+  await page.goto(paths.activity);
   await page.waitForLoadState('networkidle');
 };
 
@@ -336,7 +337,7 @@ test.describe('Scheduler Tasks for Dedup', () => {
   test('system tasks endpoint returns dedup tasks', async ({ page }) => {
     await setupSchedulerMocks(page);
 
-    await page.goto('/operations');
+    await page.goto(paths.operations);
     await page.waitForLoadState('networkidle');
 
     const response = await page.evaluate(async () => {
@@ -352,7 +353,7 @@ test.describe('Scheduler Tasks for Dedup', () => {
 
   test('manual task trigger creates operation', async ({ page }) => {
     await setupSchedulerMocks(page);
-    await page.goto('/review?lane=authors');
+    await page.goto(reviewLanePath('authors'));
     await page.waitForLoadState('networkidle');
 
     const response = await page.evaluate(async () => {

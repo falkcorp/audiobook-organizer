@@ -7,6 +7,7 @@ import { test, expect, type Page } from '@playwright/test';
 import {
   setupMockApi,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 const BLOCKED_HASH = 'a'.repeat(64);
 
@@ -54,7 +55,7 @@ const openSettings = async (
   options: Parameters<typeof setupMockApi>[1] = {}
 ) => {
   await setupMockApi(page, options);
-  await page.goto('/settings');
+  await page.goto(paths.settings);
   await page.waitForLoadState('networkidle');
 };
 

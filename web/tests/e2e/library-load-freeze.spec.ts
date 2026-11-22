@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { generateTestBooks, setupLibraryWithBooks } from './utils/test-helpers';
+import { libraryPath, paths } from './utils/paths';
 
 /**
  * Regression gate for "the library page freezes the browser ON LOAD".
@@ -106,7 +107,7 @@ test.describe('library load does not build invisible work', () => {
     await mockSoftDeleted(page, 3000, requestedLimits);
 
     // WHEN: the user simply opens the library
-    await page.goto('/library');
+    await page.goto(paths.library);
     await cardTitles(page).first().waitFor();
     // The count chip proves the soft-deleted response has been applied, so a
     // zero row count below cannot be "the fetch had not landed yet".
@@ -137,7 +138,7 @@ test.describe('library load does not build invisible work', () => {
     await setupLibraryWithBooks(page, generateTestBooks(40));
     await mockSoftDeleted(page, 3000, requestedLimits);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await cardTitles(page).first().waitFor();
     await expect(page.getByText('3000 items').first()).toBeVisible();
 
@@ -182,7 +183,7 @@ test.describe('library page size', () => {
     });
 
     // WHEN: they open the library with no ?limit in the URL
-    await page.goto('/library');
+    await page.goto(paths.library);
     await cardTitles(page).first().waitFor();
 
     // THEN: 20 cards, same as before the fix — this is NOT a rendering change.
@@ -203,7 +204,7 @@ test.describe('library page size', () => {
     // do it again on every future visit.
     await setupLibraryWithBooks(page, generateTestBooks(1200));
 
-    await page.goto('/library?limit=1000');
+    await page.goto(libraryPath('limit=1000'));
     await cardTitles(page).first().waitFor();
     await expect
       .poll(() => cardTitles(page).count(), { timeout: 60_000 })
@@ -217,7 +218,7 @@ test.describe('library page size', () => {
     // exists to enforce, on load.
     await setupLibraryWithBooks(page, generateTestBooks(1200));
 
-    await page.goto('/library?limit=50000');
+    await page.goto(libraryPath('limit=50000'));
     await cardTitles(page).first().waitFor();
     await expect
       .poll(() => cardTitles(page).count(), { timeout: 60_000 })

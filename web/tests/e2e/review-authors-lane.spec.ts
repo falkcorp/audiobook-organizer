@@ -31,6 +31,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi, generateTestBooks, type MockAuthorDedupGroup } from './utils/test-helpers';
+import { bookPath, paths, reviewLanePath, reviewPath, urlContains } from './utils/paths';
 
 // ── Fixtures ──
 
@@ -95,7 +96,7 @@ async function openLane(
       body: JSON.stringify({ items: opts.books ?? booksForAuthor, count: (opts.books ?? booksForAuthor).length }),
     });
   });
-  await page.goto('/review?lane=authors');
+  await page.goto(reviewLanePath('authors'));
   await expect(page.getByTestId('authors-panel')).toBeVisible();
 }
 
@@ -338,7 +339,7 @@ test.describe('Book Preview Popover', () => {
     await openLane(page);
     await page.getByText('12 credit(s)').click();
     await page.getByText('Book One').click();
-    await expect(page).toHaveURL(/\/library\/b1/);
+    await expect(page).toHaveURL(urlContains(bookPath('b1')));
   });
 
   test('closes when clicking outside', async ({ page }) => {
@@ -504,7 +505,7 @@ test.describe('Dedup Error Handling', () => {
         body: JSON.stringify({ data: { groups: authorGroups, needs_refresh: false } }),
       });
     });
-    await page.goto('/review?lane=authors');
+    await page.goto(reviewLanePath('authors'));
 
     const alert = page.getByTestId('authors-error');
     await expect(alert).toContainText('Internal server error');
@@ -573,7 +574,7 @@ const seriesGroups: SeriesFixture[] = [
   },
 ];
 
-const seriesPath = (id: string) => (id ? `/review?lane=authors&view=${id}` : '/review?lane=authors');
+const seriesPath = (id: string) => (id ? reviewPath(`lane=authors&view=${id}`) : reviewLanePath('authors'));
 
 /** Mocks the series endpoints this lane calls. A route registered here beats setupMockApi's. */
 async function openSeries(
@@ -1007,7 +1008,7 @@ async function openAI(
   await page.route('**/api/v1/ai/scans/*/cancel', async (route) => {
     await route.fulfill(json({ status: 'canceled' }, 200));
   });
-  await page.goto(opts.url ?? '/review?lane=authors&view=ai');
+  await page.goto(opts.url ?? reviewPath('lane=authors&view=ai'));
   await expect(page.getByTestId('ai-scans-panel')).toBeVisible();
 }
 

@@ -5,13 +5,14 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi } from './utils/test-helpers';
+import { paths, settingsPath } from './utils/paths';
 
 const openSettings = async (
   page: Page,
   options: Parameters<typeof setupMockApi>[1] = {}
 ) => {
   await setupMockApi(page, options);
-  await page.goto('/settings');
+  await page.goto(paths.settings);
   await page.waitForLoadState('networkidle');
 };
 
@@ -190,7 +191,7 @@ test.describe('Settings Tab Persistence', () => {
 
   test('navigating to settings#security opens Security tab', async ({ page }) => {
     await setupMockApi(page);
-    await page.goto('/settings#security');
+    await page.goto(settingsPath('security'));
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByRole('tab', { name: 'Security' })).toHaveAttribute(
@@ -220,7 +221,7 @@ test.describe('Open Library Dump Upload', () => {
   test('OL upload endpoint returns success via mock', async ({ page }) => {
     // Directly test that the mock route works
     await setupMockApi(page);
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
 
     // Make a direct API call to verify the mock handles the upload endpoint
@@ -243,7 +244,7 @@ test.describe('Open Library Dump Upload', () => {
 
   test('OL status endpoint returns data via mock', async ({ page }) => {
     await setupMockApi(page);
-    await page.goto('/settings');
+    await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
 
     const result = await page.evaluate(async () => {

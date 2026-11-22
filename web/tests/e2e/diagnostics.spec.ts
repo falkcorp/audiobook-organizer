@@ -9,6 +9,7 @@ import {
   setupMockApi,
   type MockApiOptions,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 // ---------------------------------------------------------------------------
 // Shared mock data
@@ -121,7 +122,7 @@ test.describe('Diagnostics', () => {
   // -------------------------------------------------------------------
   test('category selection renders all 4 options', async ({ page }) => {
     await setupDiagnosticsMocks(page);
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     await expect(page.getByText('Error Analysis')).toBeVisible();
@@ -135,7 +136,7 @@ test.describe('Diagnostics', () => {
   // -------------------------------------------------------------------
   test('category selection highlights selected card', async ({ page }) => {
     await setupDiagnosticsMocks(page);
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     const dedupCard = page.getByText('Deduplication').first();
@@ -221,7 +222,7 @@ test.describe('Diagnostics', () => {
       });
     });
 
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     // Select a category first
@@ -251,7 +252,7 @@ test.describe('Diagnostics', () => {
     await setupDiagnosticsMocks(page);
     await setupAiResultsMocks(page);
 
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     // Select a category
@@ -305,7 +306,7 @@ test.describe('Diagnostics', () => {
       return route.fallback();
     });
 
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     // Select category and submit to AI
@@ -360,7 +361,7 @@ test.describe('Diagnostics', () => {
     await setupDiagnosticsMocks(page);
     await setupAiResultsMocks(page);
 
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     // Select category and submit
@@ -407,7 +408,7 @@ test.describe('Diagnostics', () => {
       return route.fallback();
     });
 
-    await page.goto('/diagnostics');
+    await page.goto(paths.diagnostics);
     await page.waitForLoadState('networkidle');
 
     // Select a category

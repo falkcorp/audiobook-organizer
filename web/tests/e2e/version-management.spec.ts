@@ -8,6 +8,7 @@ import {
   generateTestBooks,
   setupMockApi,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 const baseBook = generateTestBooks(1)[0];
 
@@ -31,7 +32,7 @@ const openVersionManager = async (
   targetIndex = 0
 ) => {
   await setupMockApi(page, { books });
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('networkidle');
 
   const title = String(books[targetIndex].title);

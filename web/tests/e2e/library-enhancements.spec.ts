@@ -10,6 +10,7 @@ import {
   waitForTagPanel,
   type MockApiOptions,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 /**
  * Builds mock books with diverse metadata for library enhancement tests.
@@ -100,7 +101,7 @@ async function setupAdditionalMocks(page: Page) {
  * Navigate to the library page and wait for books to render.
  */
 async function goToLibrary(page: Page) {
-  await page.goto('/library');
+  await page.goto(paths.library);
   await page.waitForLoadState('domcontentloaded');
   // Wait for book data to be loaded (either grid cards or table rows)
   await page.waitForSelector('table tbody tr, [class*="MuiCard"]', {

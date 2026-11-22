@@ -10,6 +10,7 @@
 
 import { test, expect, type Page } from '@playwright/test';
 import { setupMockApi, generateTestBooks } from './utils/test-helpers';
+import { bookPath, paths } from './utils/paths';
 
 /**
  * routeTrigger stubs the generic v2 trigger for ONE def_id, answering `opId`
@@ -203,7 +204,7 @@ test.describe('Dynamic UI - BookDetail Page', () => {
       });
     });
 
-    await page.goto('/library/test-book-id');
+    await page.goto(bookPath('test-book-id'));
     await page.waitForLoadState('networkidle');
   });
 
@@ -293,7 +294,7 @@ test.describe('Dynamic UI - Library Page', () => {
     await routeTrigger(page, 'library.organize', 'op-organize-123', 1000);
     await routeRunningStatus(page);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
   });
 
@@ -383,7 +384,7 @@ test.describe('Dynamic UI - Dashboard Page', () => {
     await routeTrigger(page, 'library.scan', 'op-scan-123', 1000);
     await routeTrigger(page, 'library.organize', 'op-organize-123', 1000);
 
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('networkidle');
   });
 
@@ -428,7 +429,7 @@ test.describe('Visual Regression - Button States', () => {
     // Override scan POST with delay to capture loading state
     await routeTrigger(page, 'library.scan', 'op-vis-1', 5000);
 
-    await page.goto('/');
+    await page.goto(paths.home);
     await page.waitForLoadState('networkidle');
 
     const scanButton = page.getByRole('button', { name: /scan all import paths/i });

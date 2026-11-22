@@ -8,6 +8,7 @@ import {
   setupLibraryWithBooks,
   generateTestBooks,
 } from './utils/test-helpers';
+import { paths } from './utils/paths';
 
 test.describe('Search and Filter Functionality', () => {
   // Setup handled by setupLibraryWithBooks() which calls setupMockApi()
@@ -31,7 +32,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "The Way of Kings" in search box
@@ -71,7 +72,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "Found" in search box
@@ -114,7 +115,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "Sanderson" in search
@@ -160,7 +161,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "Stormlight" in search box
@@ -191,7 +192,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "the hobbit" (lowercase) in search
@@ -211,7 +212,7 @@ test.describe('Search and Filter Functionality', () => {
     const books = generateTestBooks(5);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "zzznonexistent" in search
@@ -240,7 +241,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     const searchInput = page.getByPlaceholder(/search audiobooks/i);
@@ -287,7 +288,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     const searchInput = page.getByPlaceholder(/search audiobooks/i);
@@ -342,7 +343,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User selects "Organized" state filter
@@ -382,7 +383,7 @@ test.describe('Search and Filter Functionality', () => {
     ];
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     const searchInput = page.getByPlaceholder(/search audiobooks/i);
@@ -413,7 +414,7 @@ test.describe('Search and Filter Functionality', () => {
     const books = generateTestBooks(2);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // WHEN: User types "Hobbit" in search
@@ -438,7 +439,7 @@ test.describe('Search and Filter Functionality', () => {
     const books = generateTestBooks(5);
     await setupLibraryWithBooks(page, books);
 
-    await page.goto('/library');
+    await page.goto(paths.library);
     await page.waitForLoadState('networkidle');
 
     // Track search/audiobooks API requests after initial load
