@@ -15,8 +15,8 @@
 // Nothing here logs, and no one-time token is ever placed in a URL: an invite or
 // temp-login token travels in a request body only (07 section 7.4.3).
 //
-// A failed call throws an ApiError carrying the Problem's detail (or title) as
-// its message, the HTTP status, and the Problem as `data`, so the SPA's existing
+// A failed call throws an ApiError carrying the Problem's detail (else its first
+// field message, else its title) as its message, the HTTP status, and the Problem as `data`, so the SPA's existing
 // error handling (err.status, err.message) reads it unchanged.
 //
 // api.ts re-exports the account functions, so their importers did not change;
@@ -40,8 +40,8 @@ import { ApiError } from './apiError';
 type Schemas = components['schemas'];
 type CoreUserBody = Schemas['core.User'];
 
-/** core's list routes cap a page at 1000; every list here asks for the whole of it. */
-const PAGE = { limit: 1000 } as const;
+/** core's list routes cap a page at 1000 (httpapi/page.go maxPageLimit); a list asks for the largest page and then keeps paging. */
+const PAGE_LIMIT = 1000;
 
 let client: CoreClient | undefined;
 
@@ -56,8 +56,14 @@ export function resetCoreIdentityClientForTest(): void {
   client = undefined;
 }
 
+/**
+ * The text of a Problem: its detail; for a 422 validation_failed, which carries
+ * its text only in errors[] (httpapi.Invalid sets no detail), the first field
+ * message; else its title (the bare status text), else the caller's fallback.
+ */
 function problemMessage(problem: Problem | undefined, fallback: string): string {
-  const text = problem?.detail?.trim() || problem?.title?.trim();
+  const fieldMessage = problem?.errors?.find((e) => e.message?.trim())?.message.trim();
+  const text = problem?.detail?.trim() || fieldMessage || problem?.title?.trim();
   return text || fallback;
 }
 
@@ -86,6 +92,30 @@ async function done(settled: Promise<Settled<unknown>>, fallback: string): Promi
   const { error, response } = await settled;
   if (!response.ok) {
     throw new ApiError(problemMessage(error, fallback), response.status, error, retryAfterMs(response));
+  }
+}
+
+/** One page of a core list: core's Page body (httpapi/page.go), `items` null when empty. */
+interface ListPage<T> {
+  items: T[] | null;
+  total: number;
+}
+
+/**
+ * Every item of a core list. A list route answers one page of at most 1000, so a
+ * longer list is read page by page, by offset, until the server's `total` is
+ * reached; an empty page also ends it, so a total that outruns the items cannot loop.
+ */
+async function allPages<T>(
+  page: (offset: number) => Promise<Settled<ListPage<T>>>,
+  fallback: string
+): Promise<T[]> {
+  const all: T[] = [];
+  for (;;) {
+    const got = await body(page(all.length), fallback);
+    const items = got.items ?? [];
+    all.push(...items);
+    if (items.length === 0 || all.length >= got.total) return all;
   }
 }
 
@@ -215,16 +245,17 @@ function adminUserOf(u: CoreUserBody): AdminUserSummary {
     email: u.email ?? '',
     status: u.status,
     roles: u.roles ?? [],
+    created_at: u.created_at,
     ...(u.merged_into_user_id ? { merged_into_user_id: u.merged_into_user_id } : {}),
   };
 }
 
 export async function listAdminUsers(): Promise<AdminUserSummary[]> {
-  const page = await body(
-    core().GET('/api/core/v1/users', { params: { query: PAGE } }),
+  const users = await allPages(
+    (offset) => core().GET('/api/core/v1/users', { params: { query: { limit: PAGE_LIMIT, offset } } }),
     'Failed to list users'
   );
-  return (page.items ?? []).map(adminUserOf);
+  return users.map(adminUserOf);
 }
 
 /** Disables an account. The server refuses to disable the last admin. */
@@ -256,11 +287,19 @@ export async function createTempLoginToken(userID: string): Promise<TempLoginTok
 }
 
 export async function listRoleNames(): Promise<string[]> {
-  const page = await body(core().GET('/api/core/v1/roles', { params: { query: PAGE } }), 'Failed to list roles');
-  return (page.items ?? []).map((r) => r.name);
+  const roles = await allPages(
+    (offset) => core().GET('/api/core/v1/roles', { params: { query: { limit: PAGE_LIMIT, offset } } }),
+    'Failed to list roles'
+  );
+  return roles.map((r) => r.name);
 }
 
 // --- Invites ---------------------------------------------------------------
+//
+// Listing and revoking pending invites is NOT here: those two calls go through the
+// books routes (services/booksInvites.ts), whose reach is HEAD's (users.manage by any
+// method, or auth off). Core's native list and delete need a signed-in user, and their
+// 401 under auth-off ends the session in the shared client.
 
 export interface PendingInvite {
   id: string;
@@ -270,14 +309,6 @@ export interface PendingInvite {
   created_by: string;
   created_at: string;
   expires_at: string;
-}
-
-export async function listInvites(): Promise<PendingInvite[]> {
-  const page = await body(
-    core().GET('/api/core/v1/users/invites', { params: { query: PAGE } }),
-    'Failed to list invites'
-  );
-  return page.items ?? [];
 }
 
 export interface CreatedInvite {
@@ -295,10 +326,6 @@ export async function createInvite(input: { username: string; role: string; emai
     'Failed to create invite'
   );
   return { link: absoluteLink(made.link), invite: made.invite };
-}
-
-export async function deleteInvite(id: string): Promise<void> {
-  await done(core().DELETE('/api/core/v1/users/invites/{id}', { params: { path: { id } } }), 'Failed to revoke invite');
 }
 
 /** What an invitation link is for. The token goes in the body, never a URL. */

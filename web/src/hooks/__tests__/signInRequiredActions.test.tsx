@@ -124,13 +124,14 @@ describe('temp-login mint (POST /auth/temp-tokens, now core temp-login)', () => 
       'POST /users/u1/temp-login': mint,
     });
 
-  it('under auth-off shows the message and link and disables Generate', async () => {
+  it('under auth-off shows the message and link and hides Generate and the user picker (F4-08 B10sq)', async () => {
     authOff();
     const { calls } = serve(coreJson({ link: '/login/temp#token=x' }));
     render(<TempLoginTab />);
     expect(await screen.findByText(NOTICE)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /turn on sign-in/i })).toHaveAttribute('href', SIGN_IN_HELP_URL);
-    expect(screen.getByRole('button', { name: 'Generate Login URL' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Generate Login URL' })).toBeNull();
+    expect(screen.queryByLabelText('User')).toBeNull();
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0);
   });
 

@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../test/renderWithProviders';
 import { coreJson, coreProblem, stubCoreFetch } from '../test/coreFetch';
 import Setup from './Setup';
+import { BOOTSTRAP_INVALID_MESSAGE, SETUP_CLOSED_MESSAGE } from '../utils/setupErrorMessage';
 
 const mockNavigate = vi.fn();
 vi.mock('react-router', async (importOriginal) => {
@@ -48,14 +49,37 @@ describe('Setup', () => {
     });
   });
 
-  it('shows the refusal the server gave and does not navigate', async () => {
+  it('says setup is not available on a 403 setup_closed, and does not navigate', async () => {
     stubCoreFetch({
-      'POST /auth/setup': coreProblem(403, 'setup_closed', 'the bootstrap token is required'),
+      'POST /auth/setup': coreProblem(403, 'setup_closed', 'setup is not available'),
     });
     const user = userEvent.setup();
     renderWithProviders(<Setup />);
     await fillAndSubmit(user);
-    expect(await screen.findByText(/bootstrap token is required/i)).toBeInTheDocument();
+    expect(await screen.findByText(SETUP_CLOSED_MESSAGE)).toBeInTheDocument();
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('says the token is wrong on a 401 bootstrap_invalid, not that a login is needed (G3)', async () => {
+    stubCoreFetch({
+      'POST /auth/setup': coreProblem(401, 'bootstrap_invalid', 'the bootstrap token is wrong, expired or spent'),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<Setup />);
+    await user.type(screen.getByLabelText(/bootstrap token/i), 'btok-wrong');
+    await fillAndSubmit(user);
+    expect(await screen.findByText(BOOTSTRAP_INVALID_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByText(/requires a login/i)).toBeNull();
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('shows another refusal by the server text', async () => {
+    stubCoreFetch({
+      'POST /auth/setup': coreProblem(409, 'user_exists', 'that username or e-mail address is taken'),
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<Setup />);
+    await fillAndSubmit(user);
+    expect(await screen.findByText('that username or e-mail address is taken')).toBeInTheDocument();
   });
 });

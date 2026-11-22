@@ -26,7 +26,8 @@ const batman = {
 function serve() {
   stubCoreFetch({
     'GET /users': coreJson({ items: [batman], total: 1 }),
-    'GET /users/invites': coreJson({ items: [], total: 0 }),
+    // The pending-invite list is books' route (it answers under auth-off); core's native one is not called.
+    'GET /api/v1/users/invites': coreJson({ data: { invites: [], count: 0 } }),
     'GET /roles': coreJson({ items: [{ name: 'editor' }], total: 1 }),
     // The sign-ins drawer is books' route, not core's.
     'GET /api/v1/users/u1/footprint': () =>

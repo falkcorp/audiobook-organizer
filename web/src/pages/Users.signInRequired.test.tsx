@@ -22,7 +22,7 @@ const bruce = { id: 'u1', username: 'bruce.wayne', roles: ['admin'], status: 'ac
 const serve = () =>
   stubCoreFetch({
     'GET /users': () => coreJson({ items: [bruce], total: 1 }),
-    'GET /users/invites': () => coreJson({ items: [], total: 0 }),
+    'GET /api/v1/users/invites': () => coreJson({ data: { invites: [], count: 0 } }),
     'GET /roles': () => coreJson({ items: [{ name: 'admin' }], total: 1 }),
   });
 
