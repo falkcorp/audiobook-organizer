@@ -7,6 +7,7 @@ package writer
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/tasks"
@@ -40,4 +41,29 @@ func Ref(resource, id string) entity.Ref {
 		return tasks.Res(Module, resource)
 	}
 	return tasks.ResID(Module, resource, id)
+}
+
+// ForRun is New for one run's tasks.Writer. A nil w is a ReadOnly kind (core
+// hands a ReadOnly run no tasks.Writer): every gated write then refuses with
+// tasks.ErrOutsideEffects instead of dereferencing nil. A method whose row is
+// empty never reaches w (see Gate.Do), so it works for a ReadOnly kind as it
+// did before the gate.
+func ForRun(w tasks.Writer, rows Rows) *Gate {
+	if w == nil {
+		w = noRunWriter{}
+	}
+	return New(w, rows)
+}
+
+// noRunWriter is the tasks.Writer of a run that has none.
+type noRunWriter struct{}
+
+var errNoRunWriter = fmt.Errorf("%w: the run has no writer (a ReadOnly kind writes nothing)", tasks.ErrOutsideEffects)
+
+func (noRunWriter) Do(context.Context, tasks.Write, func(context.Context) ([]tasks.Change, error)) error {
+	return errNoRunWriter
+}
+func (noRunWriter) MarkRowApplied(context.Context, string) {}
+func (noRunWriter) RowApplied(context.Context, string) (bool, error) {
+	return false, errNoRunWriter
 }
