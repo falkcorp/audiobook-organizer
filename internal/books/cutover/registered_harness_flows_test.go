@@ -380,14 +380,9 @@ func TestRegisteredHarness_ABSAccessSameAddress(t *testing.T) {
 
 // TestRegisteredHarness_ABSKeys: what the ABS surface does with keys. An imported
 // abk_ key is admitted as HEAD admitted it, a Confined one is limited to the worker
-// API, a revoked one is refused.
-//
-// KNOWN GAP, pinned: a core-native mck_ key is refused on the ABS surface
-// ("invalid access token"), because PresentedAPIKey and absAPIKeyFromRequest take
-// only abk_ keys. HEAD has no mck_ keys, so this is not a regression of a HEAD
-// answer, but a key created through core after the flip is useless to an ABS app.
-// The fix is being scoped; the cell that expects the key to be admitted is held red
-// in the last commits of the stack.
+// API, a revoked one is refused, and a key core minted after the flip (mck_) is
+// admitted, judged by core and never as an ABS token, as HEAD admitted its own
+// application keys there.
 func TestRegisteredHarness_ABSKeys(t *testing.T) {
 	var revoked string
 	h := bootRegistered(t, registeredConfig{Seed: func(ctx context.Context, lr storage.LegacyRange) (err error) {
@@ -403,8 +398,7 @@ func TestRegisteredHarness_ABSKeys(t *testing.T) {
 		"key:viewer:view":      {http.StatusOK, ""},
 		"key:admin:every":      {http.StatusOK, ""},
 		"key:fp-worker:worker": {http.StatusForbidden, "this credential is limited to the fingerprint worker API"},
-		// The known gap: the core key of the cell above would be admitted under HEAD parity.
-		"corekey:admin:view": {http.StatusUnauthorized, "invalid access token"},
+		"corekey:admin:view":   {http.StatusOK, ""},
 	} {
 		t.Logf("%s", name)
 		res := bearer(h.Principal(name).bearer)

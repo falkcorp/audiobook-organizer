@@ -80,7 +80,7 @@ func (u userDTO) withLegacyTokenOnly(token string) userDTO {
 func currentAccessToken(c *gin.Context) string {
 	header := strings.TrimSpace(c.GetHeader("Authorization"))
 	if len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
-		if tok := strings.TrimSpace(header[7:]); tok != "" && !strings.HasPrefix(tok, "abk_") {
+		if tok := strings.TrimSpace(header[7:]); tok != "" && !servermiddleware.IsABSAPIKey(c, tok) {
 			return tok
 		}
 	}

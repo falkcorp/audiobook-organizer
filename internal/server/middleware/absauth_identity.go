@@ -36,8 +36,9 @@ import (
 //     the epoch the SESSION was stamped at (never a fresh read, which would
 //     match by construction) and no scopes, so core answers standing, epoch,
 //     sign-in restriction and its throttle;
-//   - an abk_ key: the raw key goes to Compat.AuthenticateKey, which applies
-//     every stage 12 key rule;
+//   - an API key, an M3-imported abk_ one or an mck_ one core minted after
+//     the flip (IsABSAPIKey): the raw key goes to Compat.AuthenticateKey,
+//     which applies every stage 12 key rule;
 //   - both then through Compat.CheckCredentialFor with the route's manifest
 //     Perm (rbac.Delegated of the compat method), which re-reads a key and
 //     refuses a confined credential (an fp-worker key) outside its scopes;

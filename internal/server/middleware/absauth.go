@@ -745,36 +745,68 @@ func absBearerFromRequest(c *gin.Context) string {
 	header := strings.TrimSpace(c.GetHeader("Authorization"))
 	if len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
 		if tok := strings.TrimSpace(header[7:]); tok != "" {
-			// An `abk_` token is an app API key, not an ABS access token. Ignore it
-			// here so the two schemes stay strictly separate.
-			if !strings.HasPrefix(tok, "abk_") {
+			// An API key (IsABSAPIKey) is an app key, not an ABS access token.
+			// Ignore it here so the two schemes stay strictly separate.
+			if !IsABSAPIKey(c, tok) {
 				return tok
 			}
 			return ""
 		}
 	}
 	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
-		// Same `abk_` exclusion as the header branch above. Without it an API key
+		// Same key exclusion as the header branch above. Without it an API key
 		// sent as ?token= (AudioBooth's ebook-reader and Watch download URLs, for
 		// a user signed in with an API key) was handed to ResolveBearer as a JWT,
 		// failed token-invalid, and Resolve returned 401 before ResolveAPIKey —
 		// which accepts the query form — ever ran. Measured on prod 2026-09-19.
-		if tok := strings.TrimSpace(c.Query("token")); tok != "" && !strings.HasPrefix(tok, "abk_") {
+		if tok := strings.TrimSpace(c.Query("token")); tok != "" && !IsABSAPIKey(c, tok) {
 			return tok
 		}
 	}
 	return ""
 }
 
-// absAPIKeyFromRequest reads an `abk_` application API key from the request. It is
-// the exact mirror of absBearerFromRequest: that one returns everything EXCEPT an
-// `abk_` token, this one returns ONLY an `abk_` token, so the two credential schemes
-// stay strictly separate and a token can only ever take one path.
+// The prefixes of an application API key on the ABS surface. HEAD mints only
+// "abk_" keys. Under core identity a key minted after the flip is core's
+// "mck_" (coreauth.KindKey) and an M3-imported one keeps HEAD's "abk_"
+// (internal/books identityAuthOptions ImportedKeyPrefixes), so both are keys
+// there. Core verifies either kind (Compat.AuthenticateKey); this list only
+// decides which credential path a token takes, never whether it is admitted.
+var (
+	absHEADKeyPrefixes     = []string{"abk_"}
+	absIdentityKeyPrefixes = []string{"abk_", string(coreauth.KindKey)}
+)
+
+// IsABSAPIKey reports whether tok is an application API key on c's ABS
+// surface: an "abk_" token on a HEAD server, and an "abk_" or "mck_" token on
+// a server running under core identity (legacyauth.IdentityFrom; the mode is
+// the wiring's, never the request's). It is the one rule every ABS reader
+// shares: a key never reaches the access-token path and an access token never
+// reaches the key path, so a key is never parsed as an ABS JWT.
+func IsABSAPIKey(c *gin.Context, tok string) bool {
+	prefixes := absHEADKeyPrefixes
+	if c != nil && c.Request != nil {
+		if _, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+			prefixes = absIdentityKeyPrefixes
+		}
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(tok, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// absAPIKeyFromRequest reads an application API key (IsABSAPIKey) from the
+// request. It is the exact mirror of absBearerFromRequest: that one returns
+// everything EXCEPT a key, this one returns ONLY a key, so the two credential
+// schemes stay strictly separate and a token can only ever take one path.
 //
 // `?token=` is accepted on safe methods only, matching absBearerFromRequest, so a key
 // cannot leak into a referer or an access log on a state-changing request.
-// PresentedAPIKey returns the "abk_" key the request carries in the places
-// the ABS surface accepts one, or "".
+// PresentedAPIKey returns the key the request carries in the places the ABS
+// surface accepts one ("abk_", and "mck_" under core identity), or "".
 func PresentedAPIKey(c *gin.Context) string { return absAPIKeyFromRequest(c) }
 
 func absAPIKeyFromRequest(c *gin.Context) string {
@@ -783,12 +815,12 @@ func absAPIKeyFromRequest(c *gin.Context) string {
 	}
 	header := strings.TrimSpace(c.GetHeader("Authorization"))
 	if len(header) > 7 && strings.EqualFold(header[:7], "bearer ") {
-		if tok := strings.TrimSpace(header[7:]); strings.HasPrefix(tok, "abk_") {
+		if tok := strings.TrimSpace(header[7:]); IsABSAPIKey(c, tok) {
 			return tok
 		}
 	}
 	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
-		if tok := strings.TrimSpace(c.Query("token")); strings.HasPrefix(tok, "abk_") {
+		if tok := strings.TrimSpace(c.Query("token")); IsABSAPIKey(c, tok) {
 			return tok
 		}
 	}
