@@ -1725,7 +1725,18 @@ so.
   steps behind `UpgradeFloor{Owner: "books", Version: LegacyCap, Requires: <M2–M6>, InstallFirst: <R2 tag>}`
   (§5S.3.5), so a store that skipped R2 is refused before any write.
 - **Systemd (14 E7).** Every step and every group of chunks calls `ExtendStart` (§5S.3.5), so the long first
-  boot is not killed by the start timeout.
+  boot is not killed by the start timeout. Inside a data migration the runner asks at each unit of work it can
+  bound, never from a timer: at the step's start, **after every committed chunk** (`ExtendEvery`, default 1: a chunk is
+  at most `chunk_items` items or `chunk_bytes` bytes, so the longest silence of the chunk loop is one chunk's
+  own time whatever a `Step` costs per item; one datagram per chunk is negligible beside the chunk's fsync, and
+  the earlier default of 16 chunks left 32,000 items between requests), **every `PlanExtendKeys` keys (default
+  100,000) the plan's keys-only sampling scan reads** (that scan reads the whole source once, before the first
+  chunk), and **before `Verify` and at each unit `Verify` raises** through `startprogress.Report(ctx)` on the
+  context it is handed (core/startprogress; the runner serialises the requests, so a `Verify` that reads on
+  workers may raise units from any of them). M3's `Verify` raises one per 5,000 rows of its journal and
+  referential scans and one per user of its per-user families; M4, M5 and M6 verify with one seek per source
+  family and raise one unit per seek, since a seek across the tombstones the step just left can itself be long.
+  A scan or a `Verify` that stops making progress stops asking.
 
 **Tests.** `TestCutoverOnR0Corpus` (the fixture corpus 09 §9.3 defines: written by the R0 binary itself,
 plus a separate, labelled, hand-built overlay for the cases R0's API cannot write — corrupt rows, unknown

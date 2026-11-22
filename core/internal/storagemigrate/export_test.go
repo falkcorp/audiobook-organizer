@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/storage/keys"
 )
 
@@ -34,4 +35,12 @@ func CursorOf(ctx context.Context, sks storage.Keyspace, id string, n int) ([]by
 func ReportOf(ctx context.Context, sks storage.Keyspace, id string) (state, errText string, failures []string, found bool, err error) {
 	r, found, err := read(ctx, sks, reportKey(id), reportCodec())
 	return r.State, r.Error, r.Report.Failures, found, err
+}
+
+// PlanScan runs the shard plan's keys-only sampling scan of ranges over src
+// as migration id would, so a test can feed it a reader of its own (tests
+// only).
+func (r *Runner) PlanScan(ctx context.Context, src storage.Reader, id string, ranges []storage.Range) error {
+	_, err := r.newPlan(ctx, src, &migration{m: datamigrate.DataMigration{ID: id}, source: ranges})
+	return err
 }

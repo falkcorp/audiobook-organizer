@@ -28,6 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -484,7 +485,9 @@ func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.V
 	}
 	for _, rg := range SourceRanges() {
 		// One probe per family is enough: any key in the range is a row the
-		// step missed.
+		// step missed. Each probe is one progress unit: a seek over the
+		// tombstones the step just left can itself be long.
+		startprogress.Report(ctx)
 		it, err := r.NewIterator(ctx, storage.ScanOptions{Start: rg.Start, End: rg.End, KeysOnly: true})
 		if err != nil {
 			return rep, err

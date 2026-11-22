@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/log"
+	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -274,7 +275,10 @@ func parseKey(key string) (t time.Time, source string, ok bool) {
 // after a crash reports only what it stepped.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
 	rep := datamigrate.VerifyReport{Read: m.read.Load(), Written: m.imported.Load(), Quarantined: m.quarantined.Load()}
-	// One probe is enough: any key in the range is a row the step missed.
+	// One probe is enough: any key in the range is a row the step missed. It
+	// is one progress unit: a seek over the tombstones the step just left can
+	// itself be long.
+	startprogress.Report(ctx)
 	it, err := r.NewIterator(ctx, storage.ScanOptions{Start: SourceRanges()[0].Start, End: SourceRanges()[0].End, KeysOnly: true})
 	if err != nil {
 		return rep, err

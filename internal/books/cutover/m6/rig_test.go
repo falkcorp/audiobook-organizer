@@ -416,6 +416,9 @@ func (r *rig) refused(kind, id string) error {
 type rig struct {
 	t          testing.TB
 	chunkItems int
+	// extended records the boot's requests for start time (the runner serialises
+	// them); read it after the boot.
+	extended []string
 	// mutate edits books' legacy range after the pre-freeze boot.
 	mutate func(ctx context.Context, t testing.TB, lr storage.LegacyRange)
 	// effective is the operator overlay the step's Effective answers, by
@@ -641,7 +644,8 @@ func (r *rig) seed(t testing.TB) *vfs.MemFS {
 func (r *rig) open(ctx context.Context, fsys vfs.FS, migs []datamigrate.DataMigration) (*storage.Opened, error) {
 	owners := r.owners(true)
 	cfg := kernel.DataMigrationsConfig{ChunkItems: r.chunkItems, Build: rigBuildNew, Logger: slog.New(slog.DiscardHandler),
-		Quarantine: storage.QuarantineWriter(sealer{r.secrets}), Preflight: kernel.CutoverPreflight(slog.New(slog.NewTextHandler(r.logs, nil)))}
+		ExtendStart: func(step string) { r.extended = append(r.extended, step) },
+		Quarantine:  storage.QuarantineWriter(sealer{r.secrets}), Preflight: kernel.CutoverPreflight(slog.New(slog.NewTextHandler(r.logs, nil)))}
 	dms, err := kernel.NewDataMigrations(cfg, owners, migs...)
 	if err != nil {
 		return nil, err

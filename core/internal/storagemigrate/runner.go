@@ -75,11 +75,21 @@ type Options struct {
 	// Clock nil is time.Now.
 	Clock func() time.Time
 	// ExtendStart is the boot's start-timeout extension (Supervisor
-	// ExtendStart, §5S.3.13 "Systemd"): called at every migration's start
-	// and every ExtendEvery committed chunks. nil = none. The runner calls
-	// it from one goroutine at a time.
+	// ExtendStart, §5S.3.13 "Systemd"): called at every migration's start,
+	// every ExtendEvery committed chunks, every PlanExtendKeys keys the plan's
+	// sampling scan reads, before Verify and at each progress unit Verify
+	// raises (startprogress.Report on the ctx it is handed). nil = none. The
+	// runner calls it from one goroutine at a time (extendMu), so a Verify
+	// that reads on several workers may raise its units from any of them.
 	ExtendStart func(step string)
-	ExtendEvery int // 0 = 16
+	// ExtendEvery is how many committed chunks pass between two extensions;
+	// 0 = 1. A chunk is the unit of work the runner can bound (ChunkBytes or
+	// ChunkItems, whichever comes first), so the longest silence is one
+	// chunk's own time, whatever a Step costs per item.
+	ExtendEvery int
+	// PlanExtendKeys is how many keys the plan's keys-only sampling scan reads
+	// between two extensions; 0 = 100 000 (the bound M8's copy uses).
+	PlanExtendKeys int
 	// Quarantine stages quarantine records; nil until F3-04, and then
 	// StepWriter.Quarantine fails the chunk (ErrQuarantineNotWired).
 	Quarantine QuarantineWriter
@@ -95,7 +105,9 @@ type Options struct {
 const (
 	DefaultChunkBytes  = 4 << 20
 	DefaultChunkItems  = 2000
-	DefaultExtendEvery = 16
+	DefaultExtendEvery = 1
+	// DefaultPlanExtendKeys is Options.PlanExtendKeys' default.
+	DefaultPlanExtendKeys = 100_000
 )
 
 func (o *Options) defaults() {
@@ -107,6 +119,9 @@ func (o *Options) defaults() {
 	}
 	if o.ExtendEvery <= 0 {
 		o.ExtendEvery = DefaultExtendEvery
+	}
+	if o.PlanExtendKeys <= 0 {
+		o.PlanExtendKeys = DefaultPlanExtendKeys
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
