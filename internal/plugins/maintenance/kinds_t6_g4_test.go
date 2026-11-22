@@ -703,18 +703,36 @@ func t6g4KindByName(t *testing.T, defs []tasks.Definition, kind tasks.Kind) task
 func TestT6G4Kinds_Conformance(t *testing.T) {
 	deps, _ := fakeT6G4Deps(t)
 	defs := t6g4KindsUnchecked(deps, nil)
-	if got, want := len(defs), len(t6g4Expected); got != want {
+	if got, want := len(defs), t6g4DefCount(); got != want {
 		t.Fatalf("t6g4Kinds returned %d definitions, want %d", got, want)
 	}
 	for i, def := range defs {
-		if def.Kind() != t6g4Expected[i].kind {
-			t.Errorf("definition %d is %s, want %s (file order)", i, def.Kind(), t6g4Expected[i].kind)
+		// HEAD's fourteen in file order, then the per-batch children.
+		want := t6g4WantKindAt(i)
+		if def.Kind() != want {
+			t.Errorf("definition %d is %s, want %s (file order)", i, def.Kind(), want)
 		}
 		if def.Shape() != tasks.ShapeTask {
 			t.Errorf("%s has shape %v, want task", def.Kind(), def.Shape())
 		}
 	}
 	taskstest.Conformance(t, defs...)
+}
+
+// t6g4DefCount is how many definitions t6g4Kinds lists: one per row of
+// t6g4Expected (each mirrors a HEAD v2 definition), then the per-batch child of
+// each batch parent (batchChildKinds), which have no HEAD counterpart.
+func t6g4DefCount() int { return len(t6g4Expected) + len(batchChildKinds) }
+
+// t6g4WantKindAt is the kind the i-th definition is listed as.
+func t6g4WantKindAt(i int) tasks.Kind {
+	if i < len(t6g4Expected) {
+		return t6g4Expected[i].kind
+	}
+	if j := i - len(t6g4Expected); j < len(batchChildKinds) {
+		return batchChildKinds[j].child
+	}
+	return ""
 }
 
 // t6g4Want is one row of the HEAD-parity table (rule R8).
@@ -730,8 +748,17 @@ type t6g4Want struct {
 	headCheckpoints bool
 	// yieldsNatively: HEAD checkpoints nothing, but the native shell checkpoints a
 	// cursor and yields before its deadline (review M4), so its Resume is Continue
-	// by that ruling and not by rule R5's mapping. Exactly one kind does this.
+	// by that ruling and not by rule R5's mapping. The file-intro kind and the
+	// three batch parents do this.
 	yieldsNatively bool
+	// batchParent: the native kind is a parent that declares no row writes and
+	// starts one short child run per batch of books (batch_sweep.go). The row's
+	// calls and outside are then the CHILD's: the writer methods its core can call
+	// and what it writes outside the writer. The parent is ReadOnly, ResumeContinue
+	// (it checkpoints a cursor and yields) and runs to tasks.MaxTimeout, and its
+	// Help says so; the child (parent kind + ".batch") declares the derived write
+	// set. HEAD's v2 shell for the same ID is unchanged and still writes itself.
+	batchParent bool
 	// writes is the native write set, spelled with the pkg/ops constants (and
 	// checked against pkg/ops/effects.go by TestT6G4Kinds_EveryDeclaredResourceIsAPkgOpsConstant);
 	// nil with readOnly true means "Declared ReadOnly".
@@ -784,9 +811,9 @@ var t6g4Expected = t6g4DeriveWrites([]t6g4Want{
 	{kind: durationBackfillKind, head: func(p *Plugin) sdk.OperationDef { return p.durationBackfillDef() },
 		resume: tasks.ResumeDrop, calls: []string{"ModifyBook", "ModifyBookFileDeferAggregates", "ModifyBookFileReportingRecompute", "RecomputeBookAggregates", "UpdateBookFiles"}, helpReworded: true},
 	{kind: extractWAVClipsKind, head: func(p *Plugin) sdk.OperationDef { return p.extractWAVClipsDef() },
-		resume: tasks.ResumeFromZero, calls: []string{"SetBookFileHash"}, outside: []ops.Resource{ops.ResFiles}, liveOnly: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, readOnly: true, calls: []string{"SetBookFileHash"}, outside: []ops.Resource{ops.ResFiles}, liveOnly: true},
 	{kind: fileIntroKind, head: func(p *Plugin) sdk.OperationDef { return p.fileIntroTranscribeDef() },
-		resume: tasks.ResumeContinue, yieldsNatively: true, calls: []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, readOnly: true, calls: []string{"SetBookFileIntro", "ClearBookFileIntro", "RecordIntroTimeout", "ClearIntroTimeouts", "ModifyBook"}, helpReworded: true},
 	{kind: fileProvenanceCaptureKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceCaptureDef() },
 		resume: tasks.ResumeDrop, calls: []string{"AppendFileEvent"}, timeout: 120 * time.Minute, helpReworded: true},
 	{kind: fileProvenanceExportKind, head: func(p *Plugin) sdk.OperationDef { return p.fileProvenanceExportDef() },
@@ -800,7 +827,7 @@ var t6g4Expected = t6g4DeriveWrites([]t6g4Want{
 	{kind: integrityCheckKind, head: func(p *Plugin) sdk.OperationDef { return p.integrityCheckDef() },
 		resume: tasks.ResumeDrop, readOnly: true},
 	{kind: introMigrateSingleFileKind, head: func(p *Plugin) sdk.OperationDef { return p.introMigrateSingleFileDef() },
-		resume: tasks.ResumeFromZero, calls: []string{"UpdateBookFile"}, helpReworded: true},
+		resume: tasks.ResumeContinue, yieldsNatively: true, batchParent: true, readOnly: true, calls: []string{"UpdateBookFile"}, helpReworded: true},
 	{kind: introTranscribeKind, head: func(p *Plugin) sdk.OperationDef { return p.introTranscribeDef() },
 		resume: tasks.ResumeFromZero, calls: []string{"ClearIntroTimeouts", "ModifyBook", "OpenWhisperJournal", "RecordIntroTimeout"}, outside: []ops.Resource{ops.ResFiles}, noLive: true, helpReworded: true},
 })
@@ -966,7 +993,7 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 			if t6g4NamesModeKey(c.Help) {
 				t.Errorf("native Help still names a mode param: %q", c.Help)
 			}
-			if w.helpReworded {
+			if w.helpReworded || w.batchParent {
 				if c.Help == "" || c.Help == head.Description {
 					t.Errorf("Help must be set and reworded, got %q", c.Help)
 				}
@@ -977,6 +1004,12 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 				t.Errorf("Resume = %v, table %v, mapping of HEAD's %v (checkpoints=%v) is %v", c.Resume, w.resume, head.ResumePolicy, w.headCheckpoints, wantResume)
 			}
 			wantTimeout := min(head.Timeout, tasks.MaxTimeout)
+			if w.batchParent {
+				// A parent yields (ErrContinueInPlace, fresh Timeout) rather than time
+				// out, and a timeout is terminal, so it takes the largest the kernel
+				// allows whatever HEAD's single-run limit was.
+				wantTimeout = tasks.MaxTimeout
+			}
 			if w.timeout != 0 {
 				if head.Timeout != 0 {
 					t.Errorf("table gives an explicit timeout %v but HEAD declares %v", w.timeout, head.Timeout)
@@ -1010,7 +1043,19 @@ func TestT6G4Kinds_MatchHEADDefs(t *testing.T) {
 				want[i] = string(r)
 			}
 			slices.Sort(want)
-			if got := t6g4WriteKinds(c.Effects); w.readOnly != c.Effects.IsReadOnly() || !slices.Equal(got, want) {
+			if w.batchParent {
+				// The parent writes no rows; the writes in the row are its child's.
+				if !c.Effects.IsReadOnly() || len(c.Effects.WriteSet()) != 0 {
+					t.Errorf("batch parent Effects: readOnly=%v writes=%v, want ReadOnly", c.Effects.IsReadOnly(), t6g4WriteKinds(c.Effects))
+				}
+				child := tasks.CommonOf(t6g4KindByName(t, defs, w.kind+".batch"))
+				if got := t6g4WriteKinds(child.Effects); child.Effects.IsReadOnly() || !slices.Equal(got, want) {
+					t.Errorf("child %s.batch Effects: readOnly=%v writes=%v, want writes %v", w.kind, child.Effects.IsReadOnly(), got, want)
+				}
+				if c.Help == head.Description || !strings.Contains(c.Help, "one child run per 100 books") {
+					t.Errorf("batch parent Help does not say it starts a child per 100 books: %q", c.Help)
+				}
+			} else if got := t6g4WriteKinds(c.Effects); w.readOnly != c.Effects.IsReadOnly() || !slices.Equal(got, want) {
 				t.Errorf("Effects: readOnly=%v writes=%v, want readOnly=%v writes=%v", c.Effects.IsReadOnly(), got, w.readOnly, want)
 			}
 			// Every declared name (reads included) is a pkg/ops resource constant:
@@ -1043,8 +1088,8 @@ func t6g4CheckScheduleHookAndParallelism(t *testing.T) {
 			t.Errorf("%s: Schedule = %v, want the hook's value for that kind", d.Kind(), got)
 		}
 	}
-	if len(by) != len(t6g4Expected) {
-		t.Errorf("hook called for %d kinds, want %d", len(by), len(t6g4Expected))
+	if len(by) != t6g4DefCount() {
+		t.Errorf("hook called for %d kinds, want %d", len(by), t6g4DefCount())
 	}
 	for _, c := range []struct {
 		conc int
@@ -1089,6 +1134,15 @@ func t6g4RunSafely(t *testing.T, d tasks.Definition, rc *tasks.RC, params string
 func TestT6G4Kinds_WritesThroughShell(t *testing.T) {
 	for _, w := range t6g4Expected {
 		t.Run(string(w.kind), func(t *testing.T) {
+			if w.batchParent {
+				// The parent writes nothing and builds no writer; each child does (its
+				// own test, TestBatchChildren_WritesThroughShell).
+				t6g4CheckBatchParentShell(t, w)
+				if scenario, ok := t6g4WriteScenarios[w.kind]; ok {
+					scenario(t)
+				}
+				return
+			}
 			if w.readOnly {
 				return
 			}
@@ -1150,7 +1204,7 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 	}
 	refused := 0
 	for _, w := range t6g4Expected {
-		if w.readOnly {
+		if w.readOnly && !w.batchParent {
 			continue
 		}
 		t.Run(string(w.kind), func(t *testing.T) {
@@ -1178,8 +1232,10 @@ func TestT6G4Kinds_RefuseModeKeys(t *testing.T) {
 			}
 		})
 	}
-	// 12 writing kinds x (3 values for the first spelling + 1 each for the other
-	// two) x 3 keys: a kind dropping out of the table would shrink this.
+	// 12 kinds (the 9 that write and the 3 batch parents, which decode the same
+	// params and refuse the same keys) x (3 values for the first spelling + 1 each
+	// for the other two) x 3 keys: a kind dropping out of the table would shrink
+	// this. The children refuse them too (TestBatchChildren_RefuseModeKeys).
 	if want := 12 * 3 * (3 + 1 + 1); refused != want {
 		t.Errorf("exercised %d refusals, want %d (12 writing kinds x 3 keys x 5 spellings/values)", refused, want)
 	}
