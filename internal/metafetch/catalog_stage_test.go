@@ -60,9 +60,9 @@ func (f *fakeCatalogMatcher) MatchBook(_ context.Context, q metadata.CatalogQues
 // defaults (stage off).
 func withCatalogStage(t *testing.T, on bool) {
 	t.Helper()
-	prev := config.AppConfig.MetadataFetch
-	t.Cleanup(func() { config.AppConfig.MetadataFetch = prev })
-	config.AppConfig.MetadataFetch.CatalogStage = on
+	prev := config.Get().MetadataFetch
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetch = prev }) })
+	config.SetForTest(func(c *config.Config) { c.MetadataFetch.CatalogStage = on })
 }
 
 const (

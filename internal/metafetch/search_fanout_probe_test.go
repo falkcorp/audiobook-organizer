@@ -265,9 +265,11 @@ func TestLookupASIN_AudnexusFallsBackToTheOtherRegions(t *testing.T) {
 		_, _ = w.Write([]byte(`{"statusCode":404}`))
 	}))
 	defer server.Close()
-	prev := config.AppConfig.MetadataSources
-	t.Cleanup(func() { config.AppConfig.MetadataSources = prev })
-	config.AppConfig.MetadataSources = []config.MetadataSource{{ID: metadata.SourceIDAudnexus, Enabled: true, BaseURL: server.URL}}
+	prev := config.Get().MetadataSources
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = prev }) })
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{{ID: metadata.SourceIDAudnexus, Enabled: true, BaseURL: server.URL}}
+	})
 	metadata.DefaultThrottleRegistry().RecordSuccess(metadata.SourceIDAudnexus, time.Now())
 
 	svc := NewService(&database.MockStore{})

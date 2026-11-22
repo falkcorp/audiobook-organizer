@@ -49,20 +49,22 @@ func googleQuotaHarness(t *testing.T) (*httptest.Server, *atomic.Int64) {
 // The defaults are the owner's numbers: one 1,000/day counter, background
 // stopping at 800.
 func TestGoogleBooksBudgetLimits_Defaults(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.GoogleBooksDailyLimit, config.AppConfig.GoogleBooksBackgroundDailyLimit = 0, 0
-	config.AppConfig.GoogleBooksFallbackDailyLimit = 0
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.GoogleBooksDailyLimit, c.GoogleBooksBackgroundDailyLimit = 0, 0
+		c.GoogleBooksFallbackDailyLimit = 0
+	})
 	if got := GoogleBooksBudgetLimits(); got != (dailyquota.Limits{Total: 1000, Background: 800}) {
 		t.Fatalf("defaults = %+v, want {1000 800}", got)
 	}
 	// The pre-2026-10-06 fallback limit may lower the background cap, never
 	// raise it.
-	config.AppConfig.GoogleBooksFallbackDailyLimit = 950
+	config.SetForTest(func(c *config.Config) { c.GoogleBooksFallbackDailyLimit = 950 })
 	if got := GoogleBooksBudgetLimits().Background; got != 800 {
 		t.Fatalf("legacy 950 raised the background cap to %d", got)
 	}
-	config.AppConfig.GoogleBooksFallbackDailyLimit = 300
+	config.SetForTest(func(c *config.Config) { c.GoogleBooksFallbackDailyLimit = 300 })
 	if got := GoogleBooksBudgetLimits().Background; got != 300 {
 		t.Fatalf("legacy 300: background cap %d, want 300", got)
 	}
@@ -74,10 +76,12 @@ func TestGoogleBooksBudgetLimits_Defaults(t *testing.T) {
 // counter, and the 800 background refusals neither open the circuit breaker
 // nor install a throttle hold that would lock the interactive lookups out.
 func TestGoogleBooksClient_SharedBudgetCannotBeBypassed(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.GoogleBooksDailyLimit, config.AppConfig.GoogleBooksBackgroundDailyLimit = 0, 0
-	config.AppConfig.GoogleBooksFallbackDailyLimit = 0
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.GoogleBooksDailyLimit, c.GoogleBooksBackgroundDailyLimit = 0, 0
+		c.GoogleBooksFallbackDailyLimit = 0
+	})
 	srv, hits := googleQuotaHarness(t)
 
 	// Two independent clients (the chain's and, say, the bulk fetch's own):

@@ -34,9 +34,9 @@ func TestComputeITunesPath_SeparatorBoundary(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			orig := config.AppConfig
-			t.Cleanup(func() { config.AppConfig = orig })
-			config.AppConfig.ITunes.PathMappings = tt.mappings
+			orig := config.Snapshot()
+			t.Cleanup(func() { config.ReplaceForTest(orig) })
+			config.SetForTest(func(c *config.Config) { c.ITunes.PathMappings = tt.mappings })
 			if got := ComputeITunesPath(tt.input); got != tt.want {
 				t.Fatalf("ComputeITunesPath(%q) = %q, want %q", tt.input, got, tt.want)
 			}

@@ -59,9 +59,9 @@ func (s *capStubStore) GetBooksByTag(string) ([]string, error) {
 
 func withUpgradeBulkApplyCap(t *testing.T, n int) {
 	t.Helper()
-	prev := config.AppConfig.BulkApplyMaxItems
-	config.AppConfig.BulkApplyMaxItems = n
-	t.Cleanup(func() { config.AppConfig.BulkApplyMaxItems = prev })
+	prev := config.Get().BulkApplyMaxItems
+	config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = n })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.BulkApplyMaxItems = prev }) })
 }
 
 // The bulk apply cap (internal/applycap) on RunUpgrade: `limit` bounds how

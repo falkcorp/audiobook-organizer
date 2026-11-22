@@ -28,14 +28,16 @@ import (
 )
 
 func TestRunApplyPipeline_RepeatedTrackNumbersRenameToDistinctTargets(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.AutoWriteTagsOnApply = false
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = true
+		c.AutoWriteTagsOnApply = false
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+	})
 
 	oldDir := filepath.Join(root, "incoming", "Mynoghra 3")
 	disc1 := filepath.Join(oldDir, "CD1", "01.mp3")
@@ -106,12 +108,14 @@ func TestRunApplyPipeline_RepeatedTrackNumbersRenameToDistinctTargets(t *testing
 // spec is the plan error reachable with a mock store; ErrDuplicateRenameTarget
 // takes the same branch.
 func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = true
+		c.FolderNamingPattern = "{author}/{title}"
+	})
 
 	dir := filepath.Join(root, "Someone", "Old")
 	a, b := filepath.Join(dir, "1.mp3"), filepath.Join(dir, "2.mp3")
@@ -129,10 +133,10 @@ func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
 	})
 	cand := MetadataCandidate{Title: "New Title", Author: "Someone"}
 
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) { c.FileNamingPattern = "{title} - {track:02d}" })
 	require.NoError(t, svc.RenamePreflight("b1", cand, nil), "a plannable rename must not be refused")
 
-	config.AppConfig.FileNamingPattern = "{title} - {track:x}"
+	config.SetForTest(func(c *config.Config) { c.FileNamingPattern = "{title} - {track:x}" })
 	err := svc.RenamePreflight("b1", cand, nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrApplyFileWorkWouldFail)
@@ -148,13 +152,15 @@ func TestRenamePreflight_RefusesWhenThePlanCannotBeComputed(t *testing.T) {
 // book the subset leaves, not the whole candidate: a subset without the title
 // keeps the old title, so the rename is planned under the old name.
 func TestRenamePreflight_PlansTheAppliedFieldSubset(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = true
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+	})
 
 	dir := filepath.Join(root, "Someone", "Old")
 	a := filepath.Join(dir, "1.mp3")
@@ -192,13 +198,15 @@ func TestRenamePreflight_PlansTheAppliedFieldSubset(t *testing.T) {
 // that has gone stale: clearing it is the real rename's job, and the apply this
 // check guards may yet be refused.
 func TestRenamePreflight_DoesNotClearAStaleFailureRecord(t *testing.T) {
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
 	root := t.TempDir()
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = true
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = true
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+	})
 
 	dir := filepath.Join(root, "Someone", "Old")
 	a := filepath.Join(dir, "1.mp3")

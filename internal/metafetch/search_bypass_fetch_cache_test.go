@@ -25,9 +25,9 @@ import (
 // off; the shared-cache counterpart is TestSearchAgainBustDeletesPointedKeys.
 func TestSearchMetadataForBook_BypassFetchCacheReasksAndRewrites(t *testing.T) {
 	withSharedCache(t, false)
-	prevTTL := config.AppConfig.MetadataFetchCacheTTLDays
-	config.AppConfig.MetadataFetchCacheTTLDays = 30
-	t.Cleanup(func() { config.AppConfig.MetadataFetchCacheTTLDays = prevTTL })
+	prevTTL := config.Get().MetadataFetchCacheTTLDays
+	config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = 30 })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataFetchCacheTTLDays = prevTTL }) })
 
 	raw := map[string][]byte{}
 	svc, src := fetchCacheHarness(t, raw, "The Way of Kings", "Brandon Sanderson")

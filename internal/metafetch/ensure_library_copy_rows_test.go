@@ -37,12 +37,14 @@ func libraryCopyFixture(t *testing.T) (*database.PebbleStore, *database.Book, st
 	libRoot := t.TempDir()
 	importRoot := t.TempDir()
 
-	orig := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = orig })
-	config.AppConfig.RootDir = libRoot
-	config.AppConfig.FolderNamingPattern = "{author}/{title}"
-	config.AppConfig.FileNamingPattern = "{title} - {track:02d}"
-	config.AppConfig.OrganizationStrategy = "copy"
+	orig := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(orig) })
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = libRoot
+		c.FolderNamingPattern = "{author}/{title}"
+		c.FileNamingPattern = "{title} - {track:02d}"
+		c.OrganizationStrategy = "copy"
+	})
 
 	_, err = store.CreateImportPath(importRoot, "Imports")
 	require.NoError(t, err)

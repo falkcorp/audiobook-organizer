@@ -36,9 +36,9 @@ var retiredCopyShapes = []retiredCopyShape{
 
 func withRootDir(t *testing.T, root string) {
 	t.Helper()
-	prev := config.AppConfig.RootDir
-	config.AppConfig.RootDir = root
-	t.Cleanup(func() { config.AppConfig.RootDir = prev })
+	prev := config.Get().RootDir
+	config.SetForTest(func(c *config.Config) { c.RootDir = root })
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.RootDir = prev }) })
 }
 
 func versionPair() (book, cp *database.Book) {

@@ -73,8 +73,10 @@ func TestFetchMetadataForBook_BackupOptOutReachesPooledTagWrite(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, _ := fileWorkHarness(t, "/lib", false, true, nil)
-			config.AppConfig.WriteBackMetadata = true
-			config.AppConfig.CreateBackups = true
+			config.SetForTest(func(c *config.Config) {
+				c.WriteBackMetadata = true
+				c.CreateBackups = true
+			})
 			var wanted []bool
 			svc.tagWriter = func(ctx context.Context, _ string) (int, error) {
 				wanted = append(wanted, tagger.BackupWanted(ctx))

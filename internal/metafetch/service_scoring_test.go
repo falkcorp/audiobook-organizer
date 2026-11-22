@@ -41,10 +41,10 @@ func (f *fakeCandidateScorer) Name() string {
 // for the duration of the test and restores the prior value on cleanup.
 func withEmbeddingScoringEnabled(t *testing.T, enabled bool) {
 	t.Helper()
-	prev := config.AppConfig.MetadataScoring.EmbeddingEnabled
-	config.AppConfig.MetadataScoring.EmbeddingEnabled = enabled
+	prev := config.Get().MetadataScoring.EmbeddingEnabled
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = enabled })
 	t.Cleanup(func() {
-		config.AppConfig.MetadataScoring.EmbeddingEnabled = prev
+		config.SetForTest(func(c *config.Config) { c.MetadataScoring.EmbeddingEnabled = prev })
 	})
 }
 
@@ -361,10 +361,10 @@ func TestDurationScoringGolden(t *testing.T) {
 // config.AppConfig global.
 func withMetadataScoringConfig(t *testing.T, cfg config.MetadataScoringConfig) {
 	t.Helper()
-	prev := config.AppConfig.MetadataScoring
-	config.AppConfig.MetadataScoring = cfg
+	prev := config.Get().MetadataScoring
+	config.SetForTest(func(c *config.Config) { c.MetadataScoring = cfg })
 	t.Cleanup(func() {
-		config.AppConfig.MetadataScoring = prev
+		config.SetForTest(func(c *config.Config) { c.MetadataScoring = prev })
 	})
 }
 

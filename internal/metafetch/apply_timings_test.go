@@ -50,11 +50,13 @@ func dirBookFixture(t *testing.T, nFiles int) (*Service, *database.Book, []strin
 		files = append(files, p)
 	}
 
-	saved := config.AppConfig
-	t.Cleanup(func() { config.AppConfig = saved })
-	config.AppConfig.RootDir = root
-	config.AppConfig.AutoRenameOnApply = false
-	config.AppConfig.AutoWriteTagsOnApply = false
+	saved := config.Snapshot()
+	t.Cleanup(func() { config.ReplaceForTest(saved) })
+	config.SetForTest(func(c *config.Config) {
+		c.RootDir = root
+		c.AutoRenameOnApply = false
+		c.AutoWriteTagsOnApply = false
+	})
 
 	metadata.SetMetadataExtractor(unreadableTags{})
 	t.Cleanup(func() { metadata.SetMetadataExtractor(nil) })

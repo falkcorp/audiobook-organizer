@@ -877,9 +877,11 @@ func TestMetafetchNative_ASINBackfillCountsFailedHistoryRows(t *testing.T) {
 // enabled source in the config has its budget applied by the run.
 func TestMetafetchEnv_HEADASINShellBuildsTheSourceChainFirst(t *testing.T) {
 	id := fmt.Sprintf("gotham-probe-%d", time.Now().UnixNano())
-	saved := config.AppConfig.MetadataSources
-	config.AppConfig.MetadataSources = []config.MetadataSource{{ID: id, Enabled: true, Priority: 1}}
-	t.Cleanup(func() { config.AppConfig.MetadataSources = saved })
+	saved := config.Get().MetadataSources
+	config.SetForTest(func(c *config.Config) {
+		c.MetadataSources = []config.MetadataSource{{ID: id, Enabled: true, Priority: 1}}
+	})
+	t.Cleanup(func() { config.SetForTest(func(c *config.Config) { c.MetadataSources = saved }) })
 	_, s := newASINTestPlugin(t, &fakeAudible{})
 	p := New(s, metafetch.NewService(s)) // no newAudible seam: the shell builds the chain
 	require.NoError(t, p.runASINBackfill(context.Background(), nil, &asinTestReporter{}))
