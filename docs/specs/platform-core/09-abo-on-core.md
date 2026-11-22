@@ -453,7 +453,12 @@ The mechanism is 05-rbac (§6 the migration, §6.1 the table) and 05-http-api §
   by M3; Verify counts them (`orphaned_refs`) and health keeps a standing warning: "Pre-existing orphaned rows are kept
   and reported, never deleted." The invite-accept session keeps HEAD's 30 days (ABO compiles
   `auth.Options.InviteSessionTTL` = 720h); remember-me sign-ins keep 7 days and plain sign-ins 24 hours. Core's own
-  `core.auth.session.remember_ttl` default stays 7 days and ABO does not change it.
+  `core.auth.session.remember_ttl` default stays 7 days and ABO does not change it. The admin footprint read (`GET /api/v1/users/:id/footprint`,
+  the "Sign-ins & data" drawer) answers under core identity in HEAD's shape, with two differences: `invite_grants`
+  is 1 when the account's own e-mail is on core's invite allow-list (core's allow-list rows have no owner, so HEAD's
+  per-owner count cannot be kept; this is the merge preview's count), and the user object has no `email_source`
+  member, which core's user does not carry. Active sessions count the unexpired ones whose credential epoch is the
+  account's current one, as core's session check does.
 
 ### 9.2.7 Metrics
 
