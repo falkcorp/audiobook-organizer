@@ -938,9 +938,10 @@ type t6g3NativeCBHold struct {
 
 func (h t6g3NativeCBHold) Context() context.Context { return h.e.rc.Context() }
 
-// Lost is always false: tasks.Hold is interface{ Release() } with no lease
-// (core/tasks/rc.go), so a native hold cannot lapse. The callers' `hold == nil
-// || !hold.Lost()` is the HEAD hold's check, not an oversight here.
+// Lost is always false here: this shell does not call Hold.Renew (group 6's
+// t6g6NativeStandDown does, F5-18e), so it never reports a lapse itself; the
+// kernel still fences the run's writer when the lease lapses. The callers'
+// `hold == nil || !hold.Lost()` is the HEAD hold's check, not an oversight here.
 func (h t6g3NativeCBHold) Lost() bool              { return false }
 func (h t6g3NativeCBHold) Release()                { h.h.Release() }
 func (h t6g3NativeCBHold) Items(int) t6g3ItemsFunc { return h.e.Items(0) }
