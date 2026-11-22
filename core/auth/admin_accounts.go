@@ -72,6 +72,13 @@ type AccountAdmin interface {
 	// an interactive method. A record carries no credential material.
 	AdminUser(ctx context.Context, id UserID) (*User, error)
 	AdminUsers(ctx context.Context, f UserFilter) iter.Seq2[*User, error]
+	// AdminAccountFootprint is the masked footprint of one account: its linked
+	// sign-ins with the subject masked, and counts of its API keys, invites,
+	// invite grants and open sessions (account_footprint.go). It is the legacy
+	// surface's read (HEAD's GET /api/v1/users/:id/footprint): core:users.manage
+	// and core:admin, held through any method. It never returns a key, a hash,
+	// a token or a raw subject. ErrNotFound when there is no such account.
+	AdminAccountFootprint(ctx context.Context, id UserID) (AccountFootprint, error)
 }
 
 var (
