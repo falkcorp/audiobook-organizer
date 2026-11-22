@@ -65,8 +65,8 @@ func TestProblemUnavailableUnderIdentity_IsTheSpecsCode(t *testing.T) {
 }
 
 // A service wired for the flip with no core handles fails closed: no entry
-// point plans, applies or reads a footprint, resume is the permanence refusal,
-// and none calls into the store to find out. Each entry point is its own
+// point plans, applies, resumes, undoes or reads a footprint, and none calls
+// into the store to find out. Each entry point is its own
 // subtest so a guard dropped from one of them (the others still refuse, one
 // layer down) is caught by its own check.
 func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlippedWithoutCore(t *testing.T) {
@@ -84,6 +84,10 @@ func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlippedWithoutCore(t *
 			_, err := svc.Resume(ctx, "j1", nil)
 			return err
 		},
+		"Undo": func(svc *Service) error {
+			_, err := svc.Undo(ctx, UndoRequest{JournalID: "j1", ActorID: "bruce"}, nil)
+			return err
+		},
 		"Footprint": func(svc *Service) error {
 			_, err := svc.Footprint("bruce")
 			return err
@@ -96,12 +100,8 @@ func TestMergeEntryPoints_RefuseBeforeTouchingTheStoreWhenFlippedWithoutCore(t *
 			store := &touchedStore{journalRows: journalRows{rows: journalRow("j1", StatusApplying)}}
 			flipped := true
 			svc := &Service{store: store, identityFlipped: func() bool { return flipped }}
-			want := ErrUnavailableUnderIdentity
-			if name == "Resume" {
-				want = ErrMergePermanent // one batch: nothing to resume, ever
-			}
-			if err := call(svc); !errors.Is(err, want) {
-				t.Errorf("%s = %v, want %v", name, err, want)
+			if err := call(svc); !errors.Is(err, ErrUnavailableUnderIdentity) {
+				t.Errorf("%s = %v, want %v", name, err, ErrUnavailableUnderIdentity)
 			}
 			if n := store.calls.Load(); n != 0 {
 				t.Errorf("%s called into the store %d time(s) before refusing", name, n)
