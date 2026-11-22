@@ -232,6 +232,15 @@ type LegacyRoute struct {
 	AuthMethod      string    // required iff OwnAuth (SEC2-17)
 	RateClass       RateClass // RateDefault iff the gin chain includes the API rate limiter today, else RateExempt
 	NoCompress      bool      // stage 9 skips it (COR3-6)
+	// OwnerWhenSet is HEAD's ownerGateWhenOwnerSet on a Guards.Owner route
+	// (F4-08 B10y): the owner is demanded only while core.auth.owner.required
+	// holds, as before; while it does not, the route has no owner leg at all
+	// and its Guards.Interactive and Perm decide, as HEAD's gate passed
+	// through with owner_email unset. Without it a Guards.Owner route takes
+	// 05-authn §4.8's fallback (MayChangeCredentials and core:admin). It
+	// exists only here, never on Guards or Route, so a core-native route
+	// cannot opt out of §4.8; it needs Guards.Owner (ErrLegacyManifest).
+	OwnerWhenSet bool
 }
 
 // claim is one subtree (trailing "/") or exact path an owner occupies.
@@ -862,7 +871,7 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 func (r *Router) wrapRoute(e *routeEntry) http.Handler {
 	h := e.handler
 	if r.authRuns(e) {
-		h = r.authWrap(e.info.Perm, e.info.Guards, routeLabel(e.info), h)
+		h = r.authWrap(e.info.Perm, e.info.Guards, false, routeLabel(e.info), h)
 	}
 	return r.chain.Route(httpmw.RouteSpec{
 		Pattern: e.info.Pattern,

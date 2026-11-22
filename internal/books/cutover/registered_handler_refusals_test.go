@@ -455,8 +455,6 @@ var rhrKnownNarrowing = []rhrNarrow{
 		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
 	{route: "PUT /api/v1/config", who: "key:admin:every", head: 0, flip: 403,
 		why: "core refuses an API key on a protected key (activity_backend, a database location); HEAD admitted a key that may act as admin (derived, not recorded, hence head 0)"},
-	{route: "POST /api/v1/backup/restore", who: "session:custom-all", head: 400, flip: 403,
-		why: "the restore's route guard under the flip: a custom role holding every atom but not core:admin is refused (403); HEAD's s.perm(settings.manage) admitted it"},
 }
 
 func (r rhrNarrow) key() string { return r.route + "|" + r.who }
