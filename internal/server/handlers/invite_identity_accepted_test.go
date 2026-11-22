@@ -179,7 +179,7 @@ func TestIdentityAcceptedInvites_ListNeverWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	before, _ := gp.ListGuestPolicyOutcomesSince(time.Time{})
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		listAccepted(t, f.inviteFixture)
 	}
 	after, _ := gp.ListGuestPolicyOutcomesSince(time.Time{})
