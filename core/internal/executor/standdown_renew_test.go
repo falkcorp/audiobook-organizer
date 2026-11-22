@@ -132,6 +132,54 @@ func TestHoldRenew_ALapsedLeaseFailsClosed(t *testing.T) {
 	}
 }
 
+// A run that lost one hold lost its writer, so no other hold of that run reports
+// itself healthy: Renew on the surviving hold fails too, instead of telling the
+// shell all is well while every write is refused. The reaper is kept out of this
+// (a 1 h tick) so the loss is found by Renew alone.
+func TestHoldRenew_ALostHoldFailsEveryHoldOfTheRun(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		holds := make(chan [2]tasks.Hold, 1)
+		rcs := make(chan *tasks.RC, 1)
+		free := make(chan struct{})
+		def := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+			a, err := rc.StandDown("gotham.scan")
+			if err != nil {
+				return "", err
+			}
+			b, err := rc.StandDown("arkham.scan")
+			if err != nil {
+				return "", err
+			}
+			holds <- [2]tasks.Hold{a, b}
+			rcs <- rc
+			<-free
+			return "case closed", nil
+		})
+		h := newHarness(t, []tasks.Definition{def}, func(o *Options) {
+			o.Config = Config{DispatchTick: time.Hour, WatchdogInterval: time.Hour}
+		})
+		h.start("gotham.compact", tasks.StartRequest{})
+		pair := <-holds
+		rc := <-rcs
+		defer close(free)
+
+		time.Sleep(90 * time.Second)
+		if err := pair[1].Renew(); err != nil {
+			t.Fatalf("renew of the second hold inside its lease: %v", err)
+		}
+		time.Sleep(60 * time.Second) // the first hold is 150 s old, its second hold 60 s
+		if err := pair[0].Renew(); !errors.Is(err, tasks.ErrHoldLost) {
+			t.Fatalf("Renew of the lapsed first hold: %v, want tasks.ErrHoldLost", err)
+		}
+		if err := pair[1].Renew(); !errors.Is(err, tasks.ErrHoldLost) {
+			t.Fatalf("Renew of the second hold after the run lost one: %v, want tasks.ErrHoldLost (the run is fenced)", err)
+		}
+		if called, err := write(rc, "gotham.compact"); !errors.Is(err, tasks.ErrFenced) || called {
+			t.Fatalf("write: err %v, called %v; want ErrFenced", err, called)
+		}
+	})
+}
+
 // Renew is for the hold it is called on. After Release it never extends the
 // lease another holder of the same key still relies on, and it is safe to call
 // from the run's pool workers while another worker releases (go test -race).
