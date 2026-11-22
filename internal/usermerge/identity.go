@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -443,6 +444,16 @@ type CoreJournal struct {
 	// summary does not carry the sign-ins' ids, and none is derived here.
 	IdentityProviders []string `json:"identity_providers"`
 	AllowListRows     int      `json:"allow_list_rows"`
+	// IdentityIDs are the external subject ids of the sign-ins that moved, in
+	// the order of IdentityProviders, and APIKeyVersions the version each moved
+	// key was left at (the one the merge committed, StageMerge's bump included).
+	// An unmerge reverses exactly these and only while each is still as the merge
+	// left it. A subject id names a person at an identity provider, so these two
+	// live in the journal alone: CoreSummary (the preview and the plan view) does
+	// not carry them and no response or log line prints this struct (the
+	// journal's Core is shown only as counts; TestCoreJournal_SubjectStaysInTheJournal).
+	IdentityIDs    []string         `json:"identity_ids,omitempty"`
+	APIKeyVersions map[string]int64 `json:"api_key_versions,omitempty"`
 	// SweepPending is true from the committed batch until the post-commit
 	// straggler sweep has finished cleanly and the journal has been re-saved
 	// without it. It starts true IN THE BATCH, so a crash, a failed sweep or a
@@ -466,6 +477,7 @@ func rolesOf(u *coreauth.User) []string {
 // plan (src, tgt) and core's summary.
 func coreJournalOf(p *Plan, src, tgt *coreauth.User) *CoreJournal {
 	c := p.Core
+	rcpt := p.corePlan.Receipt()
 	return &CoreJournal{
 		Era:                       eraIdentity,
 		SourceStatusBefore:        string(src.Status),
@@ -483,6 +495,8 @@ func coreJournalOf(p *Plan, src, tgt *coreauth.User) *CoreJournal {
 		APIKeyIDs:                 slices.Clone(c.APIKeyIDs),
 		IdentityProviders:         slices.Clone(c.IdentityProviders),
 		AllowListRows:             c.AllowListRows,
+		IdentityIDs:               slices.Clone(rcpt.IdentityIDs),
+		APIKeyVersions:            maps.Clone(rcpt.APIKeyVersions),
 		SweepPending:              true,
 	}
 }
