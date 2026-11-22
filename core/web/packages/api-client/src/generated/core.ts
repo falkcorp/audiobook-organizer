@@ -931,6 +931,9 @@ export type components = {
                 email_verified: boolean;
                 has_password: boolean;
                 id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
                 password_reset_required: boolean;
                 roles: null | string[];
                 sign_in_restricted: boolean;
@@ -1065,6 +1068,9 @@ export type components = {
                 email_verified: boolean;
                 has_password: boolean;
                 id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
                 password_reset_required: boolean;
                 roles: null | string[];
                 sign_in_restricted: boolean;
@@ -1194,6 +1200,9 @@ export type components = {
                 email_verified: boolean;
                 has_password: boolean;
                 id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
                 password_reset_required: boolean;
                 roles: null | string[];
                 sign_in_restricted: boolean;
@@ -1282,6 +1291,9 @@ export type components = {
                 email_verified: boolean;
                 has_password: boolean;
                 id: string;
+                /** Format: date-time */
+                merged_at?: string;
+                merged_into_user_id?: string;
                 password_reset_required: boolean;
                 roles: null | string[];
                 sign_in_restricted: boolean;
@@ -1356,6 +1368,9 @@ export type components = {
             email_verified: boolean;
             has_password: boolean;
             id: string;
+            /** Format: date-time */
+            merged_at?: string;
+            merged_into_user_id?: string;
             password_reset_required: boolean;
             roles: null | string[];
             sign_in_restricted: boolean;
