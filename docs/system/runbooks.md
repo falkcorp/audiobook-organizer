@@ -260,7 +260,7 @@ These CI issues are pre-existing and not caused by your changes:
 
 - API keys are prefixed `abk_`
 - Obtain via browser login → Settings → API Keys, or via `POST /api/v1/auth/api-keys`
-- Bootstrap key (first-run): `POST /api/v1/auth/bootstrap` → `response.data.api_key`
+- Bootstrap key (first-run): `POST /api/core/v1/auth/bootstrap` → `response.key` (core's route; the books route `POST /api/v1/auth/bootstrap` answers 401 since the identity flip; see `.claude/skills/server-bootstrap/SKILL.md`)
 - Never commit API keys to source control
 - Credentials for CI are stored in the repository secrets, not in `.env` files
 
