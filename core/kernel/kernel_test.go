@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
 	"github.com/falkcorp/mediacore/httpapi"
+	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics/metricstest"
 	"github.com/falkcorp/mediacore/module"
@@ -111,13 +113,33 @@ func withState(t testing.TB, c Config) Config {
 // newK is New over withState(t, c), with the test's context.
 func newK(t testing.TB, c Config) (*Kernel, error) {
 	t.Helper()
-	return New(t.Context(), withState(t, c))
+	return newKCtx(t, t.Context(), c)
 }
 
 // newKCtx is newK with the caller's context (a boot seam, a cancellation).
+// Every boot of one test builds its config stores over that test's section
+// cache (testSectionCache), so a test that boots the kernel hundreds of times
+// (a kill matrix) builds each core section once, not once per boot. A context
+// whose Seams name a cache keeps it.
 func newKCtx(t testing.TB, ctx context.Context, c Config) (*Kernel, error) {
 	t.Helper()
-	return New(ctx, withState(t, c))
+	return New(bootseam.WithSectionCache(ctx, testSectionCache(t)), withState(t, c))
+}
+
+// testSectionCaches holds one section cache per test (testing.TB) that boots
+// a kernel, dropped when the test ends. Per test, not one for the package:
+// a cache holds at most 1,024 section specs and a spec's key includes its
+// defaults, which carry each test's own state directory, so a package-wide
+// cache would fill with one test's paths section after another and then
+// build everything uncached.
+var testSectionCaches sync.Map // testing.TB -> *config.SectionCache
+
+func testSectionCache(t testing.TB) *config.SectionCache {
+	c, loaded := testSectionCaches.LoadOrStore(t, config.NewSectionCache())
+	if !loaded {
+		t.Cleanup(func() { testSectionCaches.Delete(t) })
+	}
+	return c.(*config.SectionCache)
 }
 
 // mustNew boots c or fails the test.
