@@ -191,10 +191,6 @@ func oidcRedirectCode(err error) string {
 // the callback answers it as a server error instead of a redirect.
 const codeOAuthFailed = "oauth_failed"
 
-func errUnauthenticated() *httpapi.Error {
-	return &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "sign in to use this route"}
-}
-
 func errInteractive() *httpapi.Error {
 	return &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive sign-in, not an API key"}
 }

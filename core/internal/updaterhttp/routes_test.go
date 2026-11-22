@@ -216,16 +216,13 @@ func TestUpdaterRoutes_Permissions(t *testing.T) {
 			// The auth-disabled principal holding the scope: a guarded route
 			// refuses it as the router does; an unguarded one, which the
 			// router admits, meets authorise's own rule that a route names an
-			// actor (401).
+			// actor; both answer 403 interactive_required, never the
+			// session-ending 401 (F4-08 ruling G5(a)).
 			off := uhAs(auth.MethodAuthDisabled, rbac.Permission(c.perm))
 			off.User = nil // the auth-disabled principal has no user
 			rep = r.do(off, c.method, c.path, "", c.body)
-			if c.interactive {
-				if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
-					t.Errorf("auth disabled: %d %s, want 403 interactive_required", rep.status, rep.body)
-				}
-			} else if rep.status != 401 {
-				t.Errorf("auth disabled: %d %s, want 401", rep.status, rep.body)
+			if rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+				t.Errorf("auth disabled: %d %s, want 403 interactive_required", rep.status, rep.body)
 			}
 			if n := r.st.n(); n != 0 || len(r.upd.prepped) != 0 {
 				t.Errorf("a refused request enqueued %d tasks and asked Prepare %d times", n, len(r.upd.prepped))
@@ -466,17 +463,14 @@ func TestUpdaterRoutes_AuthorisationReadsBothCheckerAnswers(t *testing.T) {
 		if rep := r.do(p, c.method, c.path, "", c.body); rep.status != 403 {
 			t.Errorf("%s with a scope held but its requirement unsatisfied: %d, want 403", c.name, rep.status)
 		}
-		// The auth-disabled principal has no user to name as the actor: 401,
-		// unless the route's interactive guard refuses it first (403), as at
-		// stage 13.
+		// The auth-disabled principal has no user to name as the actor: 403
+		// interactive_required, whether the route's interactive guard or the
+		// no-user rule refuses it (F4-08 ruling G5(a): never the
+		// session-ending 401).
 		p = uhAs(auth.MethodAuthDisabled, rbac.CoreAdmin)
 		p.User = nil
-		want := 401
-		if c.interactive {
-			want = 403
-		}
-		if rep := r.do(p, c.method, c.path, "", c.body); rep.status != want {
-			t.Errorf("%s with no user: %d, want %d", c.name, rep.status, want)
+		if rep := r.do(p, c.method, c.path, "", c.body); rep.status != 403 || problemCode(t, rep) != "interactive_required" {
+			t.Errorf("%s with no user: %d %s, want 403 interactive_required", c.name, rep.status, rep.body)
 		}
 		if r.st.n() != 0 {
 			t.Errorf("%s: a refused request enqueued a task", c.name)
