@@ -358,6 +358,9 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 			return finish(err)
 		}
 		h.Log(slog.LevelInfo, "Re-attaching to the batch in flight", slog.String("child", st.InFlight.RunID), slog.Int("batch", st.InFlight.Batch))
+		// Reported now, not only counted: the kernel judges a yield by the progress
+		// the attempt REPORTED past the previous attempt's last report.
+		report(fmt.Sprintf("Batch %d/%d still running (re-attached)", st.InFlight.Batch+1, totalBatches()))
 		yield, err := await()
 		if err != nil {
 			return finish(err)
