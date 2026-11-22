@@ -139,7 +139,7 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 		Scoring:    in.Scoring,
 		NewAudible: in.NewAudible,
 		NewWriter: func(w tasks.Writer) kindWriter {
-			return &booksKindWriter{src: src, gate: writer.New(w, rows)}
+			return &booksKindWriter{src: src, gate: writer.ForRun(w, rows)}
 		},
 		BuildSourceChain: in.BuildSourceChain,
 	}, nil

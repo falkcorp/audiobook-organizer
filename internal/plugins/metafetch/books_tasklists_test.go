@@ -152,6 +152,9 @@ func TestBooksKindWriter_ReadOnlyKindAndNoWriterRefuse(t *testing.T) {
 	require.ErrorIs(t, deps.NewWriter(enforcing).DeleteRawBatch([]string{"pcache:a"}), tasks.ErrOutsideEffects)
 	_, err := deps.NewWriter(enforcing).ModifyBook("b", func(*database.Book) error { return nil })
 	require.ErrorIs(t, err, tasks.ErrOutsideEffects)
+	_, err = deps.NewWriter(nil).ModifyBook("b", func(*database.Book) error { return nil })
+	require.ErrorIs(t, err, tasks.ErrOutsideEffects, "a nil run writer refuses")
+	require.ErrorIs(t, deps.NewWriter(nil).DeleteRawBatch([]string{"pcache:a"}), tasks.ErrOutsideEffects)
 	require.Empty(t, spy.calls)
 }
 
