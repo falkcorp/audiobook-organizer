@@ -269,8 +269,13 @@ const folderCoverBackfillOpID = "maintenance.folder-cover-backfill"
 // tasks.RunItems as tasks.Fixed.
 func (p *Plugin) folderCoverBackfillKind(deps t6g3Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	eff := tasks.Writes(append(slices.Clone(t6g3ModifyBookWrites), t6g3Res(ops.ResFiles))...)
+	c := t6g3Common(p.folderCoverBackfillDef(), t6g3FolderCoverBackfillKind, eff, sched)
+	// HEAD refuses an apply while a library scan runs ("refused while a library
+	// scan runs" in the def's description; t6g3RefuseWhileScan). Natively that is a
+	// dispatch-time hold, so the run waits for the scan instead of failing.
+	c.NotWhile = nativeScanNotWhile()
 	return tasks.Task(t6g3FolderCoverBackfillKind, tasks.TaskSpec[json.RawMessage, struct{}]{
-		Common: t6g3Common(p.folderCoverBackfillDef(), t6g3FolderCoverBackfillKind, eff, sched),
+		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (struct{}, error) {
 			var params coverOpParams
 			if err := t6g3DecodeParams(t6g3FolderCoverBackfillKind, raw, &params, t6g3ModeKeys...); err != nil {
