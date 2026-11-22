@@ -42,15 +42,15 @@ func TestBootSectionCache(t *testing.T) {
 // store never shows in another over the same cache.
 func TestNewCoreConfig_SharedCache(t *testing.T) {
 	cache := config.NewSectionCache()
-	plain, err := newCoreConfig("gotham", CoreDefaults{}, nil)
+	plain, err := newCoreConfig("gotham", CoreDefaults{}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := newCoreConfig("gotham", CoreDefaults{}, cache)
+	first, err := newCoreConfig("gotham", CoreDefaults{}, cache, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newCoreConfig("arkham", CoreDefaults{}, cache)
+	second, err := newCoreConfig("arkham", CoreDefaults{}, cache, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,17 +135,14 @@ func TestKernelBoot_CoreConfigUsesSeamCache(t *testing.T) {
 func TestKernelBoot_EveryConfigStoreUsesSeamCache(t *testing.T) {
 	cache := config.NewSectionCache()
 	var stores, bypassed int
-	orig := newConfigStore
-	newConfigStore = func(o config.Options) (*config.Store, error) {
+	seen := func(sc any) {
 		stores++
-		if o.SectionCache != cache {
+		if c, _ := sc.(*config.SectionCache); c != cache {
 			bypassed++
 		}
-		return orig(o)
 	}
-	t.Cleanup(func() { newConfigStore = orig })
 
-	ctx := bootseam.With(t.Context(), &bootseam.Seams{SectionCache: cache})
+	ctx := bootseam.With(t.Context(), &bootseam.Seams{SectionCache: cache, ConfigStore: seen})
 	state := t.TempDir()
 	boot := func() {
 		t.Helper()

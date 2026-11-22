@@ -266,12 +266,15 @@ type Kernel struct {
 	// bootseam.Seams (read at the start of the boot), for the layered store
 	// P0 builds and the core config built at P7; nil in every production boot.
 	sectionCache *config.SectionCache
-	audit        *audit.Store
-	auditSc      *metrics.Scope // "<namespace>.audit"
-	healthReg    *health.Registry
-	reporters    kernelReporters
-	tasks        *kernelTasks
-	dataMig      *DataMigrations
+	// configStoreSeen is bootseam.Seams.ConfigStore (newConfigStore); nil in
+	// every production boot.
+	configStoreSeen func(any)
+	audit           *audit.Store
+	auditSc         *metrics.Scope // "<namespace>.audit"
+	healthReg       *health.Registry
+	reporters       kernelReporters
+	tasks           *kernelTasks
+	dataMig         *DataMigrations
 	// imp are the importers Manifest.Cutover receives, bound at the start of
 	// P4b once the stores they write through are open (cutover_importers.go).
 	// importerCfg and importerSec are what P4b binds: nil until the config
