@@ -240,6 +240,16 @@ type LegacyRoute struct {
 	// 05-authn §4.8's fallback (MayChangeCredentials and core:admin). It
 	// exists only here, never on Guards or Route, so a core-native route
 	// cannot opt out of §4.8; it needs Guards.Owner (ErrLegacyManifest).
+	//
+	// Deliberate HEAD parity (F4-08 ruling (ii), 2026-11-22): on a legacy
+	// owner route with owner_email unset, HEAD's ownerGateWhenOwnerSet passed
+	// through and the route's own perm applied (settings.manage on backup
+	// restore), so the route asks no core:admin then (origin/main
+	// internal/server/owner_routes.go:18-33). Proof cells: core
+	// TestOwnerWhenSet_* and books TestOwnerRoutesBoot_*: owner unset, a
+	// custom-all/settings.manage session is admitted, a key is 403
+	// interactive_required, auth-off is refused; owner set, only the owner
+	// (403 owner_required for everyone else, admin included).
 	OwnerWhenSet bool
 }
 
