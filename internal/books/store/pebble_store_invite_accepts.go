@@ -8,6 +8,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -69,6 +70,10 @@ type InviteAcceptStore interface {
 	// refuses a row with no invite id, user id or accept time: a row with no time
 	// could never be listed, so it is refused rather than written unlistable.
 	RecordInviteAccept(a InviteAccept) error
+	// ListInviteAcceptsSince returns the rows accepted at or after since, newest
+	// first (ties by invite id, descending, so the order is the same on every
+	// read). A row that does not decode is skipped. The result is never nil.
+	ListInviteAcceptsSince(since time.Time) ([]InviteAccept, error)
 }
 
 var _ InviteAcceptStore = (*PebbleStore)(nil)
@@ -88,4 +93,38 @@ func (p *PebbleStore) RecordInviteAccept(a InviteAccept) error {
 		return err
 	}
 	return p.db.Set([]byte(inviteAcceptPrefix+a.InviteID), data, pebble.Sync)
+}
+
+// ListInviteAcceptsSince implements InviteAcceptStore.
+func (p *PebbleStore) ListInviteAcceptsSince(since time.Time) ([]InviteAccept, error) {
+	// ';' is the byte after ':', so the bounds span exactly the family.
+	iter, err := p.db.NewIter(&pebble.IterOptions{
+		LowerBound: []byte(inviteAcceptPrefix),
+		UpperBound: []byte("acceptedinvite;"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	out := []InviteAccept{}
+	for iter.First(); iter.Valid(); iter.Next() {
+		var a InviteAccept
+		if err := json.Unmarshal(iter.Value(), &a); err != nil {
+			continue
+		}
+		if a.AcceptedAt.Before(since) {
+			continue
+		}
+		out = append(out, a)
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].AcceptedAt.Equal(out[j].AcceptedAt) {
+			return out[i].AcceptedAt.After(out[j].AcceptedAt)
+		}
+		return out[i].InviteID > out[j].InviteID
+	})
+	return out, nil
 }

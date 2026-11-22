@@ -365,7 +365,7 @@ func (h *UserHandler) resendInviteUnderIdentity(c *gin.Context, id *legacyauth.I
 // invites through the actor-checked read (InviteAdmin.AdminInvites, HEAD's
 // reach for this route: users.manage through any method, or auth off), each with the delivery record's
 // sent-at and recipient and never a token (core keeps none). The accepted
-// members are books' own guest-policy outcomes (acceptedInvitesUnderIdentity),
+// members are books' own accept records (acceptedInvitesUnderIdentity),
 // read only after core's gate has let the caller through: AdminInvites checks
 // inside its sequence, so a refused caller has been answered before the family
 // is touched.
@@ -385,7 +385,7 @@ func (h *UserHandler) listInvitesUnderIdentity(c *gin.Context, id *legacyauth.Id
 	h.pruneMailRecords()
 	httputil.RespondWithOK(c, gin.H{
 		"invites": views, "count": len(views),
-		"accepted":                     h.acceptedInvitesUnderIdentity(c.Request.Context(), id),
+		"accepted":                     h.acceptedInvitesUnderIdentity(),
 		"mail_configured":              h.delivery.sendBlocked() == "",
 		"mail_unavailable_reason":      h.delivery.sendBlocked(),
 		"guest_policy_sync_configured": h.delivery.policySync(),
@@ -393,64 +393,56 @@ func (h *UserHandler) listInvitesUnderIdentity(c *gin.Context, id *legacyauth.Id
 }
 
 // acceptedInvitesUnderIdentity is acceptedInvites under core identity, the same
-// view over the same 30 days, newest first. The invite is core's and is gone
-// once accepted, so the rows are books' guest-policy outcomes
-// (database.GuestPolicyStore), one per accepted invite that reached the sync:
+// view over the same 30 days, newest first. The invite is core's and is gone once
+// accepted, so the rows are books' own accept records (database.InviteAccept,
+// written from core's InviteAccepted event, and for an accept made before the flip
+// by M3 from HEAD's used invite), each joined to the guest-policy sync's outcome:
 //
-//   - username is the accepted account's, read from core's identity view by the
-//     outcome's user id ("" when that account no longer exists or the server has
-//     no view);
-//   - accepted_user_id, guest_policy_status and guest_policy_detail are the
-//     outcome's, and accepted_at and guest_policy_at are both the time the
-//     outcome was last recorded, which is when the sync last reported (seconds
-//     after the accept), not an accept time core hands over;
-//   - email, email_binding, sso_grant and displaced_user_ids are not recorded
-//     and are left out, never guessed (all four are omitempty at HEAD too).
+//   - username, email, accepted_user_id, email_binding, sso_grant and
+//     displaced_user_ids are the accept row's, which is what HEAD's invite held;
+//   - accepted_at is the accept row's time: when the accept happened (core's time
+//     for it, or HEAD's used_at), never the time the sync reported;
+//   - guest_policy_status, guest_policy_detail and guest_policy_at are the sync's
+//     outcome for the invite id (database.GuestPolicyStore) when there is one. A
+//     row with no outcome (the sync never ran, as for an invite with no address, or
+//     has not finished) shows the guest-policy members the row itself holds, which
+//     are HEAD's own for a carried accept and empty otherwise.
 //
-// It reads and never writes. Like HEAD's, it answers [] when there is nothing to
-// show or the family cannot be read (logged), so the pending half of the body
-// still reaches the admin.
-func (h *UserHandler) acceptedInvitesUnderIdentity(ctx context.Context, id *legacyauth.Identity) []acceptedInviteView {
+// A row is window-filtered on the accept time, so an accept whose sync reported
+// after the window edge is judged by when it was accepted. It reads and never
+// writes. Like HEAD's, it answers [] when there is nothing to show or the family
+// cannot be read (logged), so the pending half of the body still reaches the admin;
+// an outcome that cannot be read costs that row only its sync members.
+func (h *UserHandler) acceptedInvitesUnderIdentity() []acceptedInviteView {
 	out := []acceptedInviteView{}
-	if h.outcomes == nil {
+	if h.accepts == nil {
 		return out
 	}
-	list, err := h.outcomes.ListGuestPolicyOutcomesSince(h.delivery.now().Add(-acceptedInviteWindow))
+	list, err := h.accepts.ListInviteAcceptsSince(h.delivery.now().Add(-acceptedInviteWindow))
 	if err != nil {
 		inviteLog.Warn("list accepted invites: %v", err)
 		return out
 	}
-	for _, o := range list {
-		at := o.At
-		out = append(out, acceptedInviteView{
-			Username:          h.acceptedUsername(ctx, id, o.UserID),
-			AcceptedAt:        &at,
-			AcceptedUserID:    o.UserID,
-			GuestPolicyStatus: o.Status,
-			GuestPolicyDetail: o.Detail,
-			GuestPolicyAt:     &at,
-		})
+	for _, a := range list {
+		at := a.AcceptedAt
+		v := acceptedInviteView{
+			Username: a.Username, Email: a.Email, AcceptedAt: &at, AcceptedUserID: a.UserID,
+			EmailBinding: a.EmailBinding, SSOGrant: a.SSOGrant,
+			GuestPolicyStatus: a.GuestPolicyStatus, GuestPolicyDetail: a.GuestPolicyDetail, GuestPolicyAt: a.GuestPolicyAt,
+			DisplacedUserIDs: a.DisplacedUserIDs,
+		}
+		if h.outcomes != nil {
+			o, err := h.outcomes.GetGuestPolicyOutcome(a.InviteID)
+			if err != nil {
+				inviteLog.Warn("list accepted invites: reading the guest-policy outcome of invite %s failed: %v", logger.SanitizeLogValue(a.InviteID), err)
+			} else if o != nil {
+				oat := o.At
+				v.GuestPolicyStatus, v.GuestPolicyDetail, v.GuestPolicyAt = o.Status, o.Detail, &oat
+			}
+		}
+		out = append(out, v)
 	}
 	return out
-}
-
-// acceptedUsername is the username of an accepted invite's account from core's
-// actor-free identity view, "" when there is none to read.
-func (h *UserHandler) acceptedUsername(ctx context.Context, id *legacyauth.Identity, userID string) string {
-	if id.Users == nil || userID == "" {
-		return ""
-	}
-	u, err := id.Users.User(ctx, coreauth.UserID(userID))
-	if err != nil {
-		if !errors.Is(err, coreauth.ErrNotFound) {
-			inviteLog.Warn("list accepted invites: reading account %s failed: %v", logger.SanitizeLogValue(userID), err)
-		}
-		return ""
-	}
-	if u == nil {
-		return ""
-	}
-	return u.Username
 }
 
 // mailRecordGrace is how long past its invite's expiry a delivery record is

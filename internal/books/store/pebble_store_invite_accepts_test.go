@@ -7,6 +7,7 @@ package store
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,4 +96,47 @@ func TestInviteAcceptFamily_IsRegistered(t *testing.T) {
 		}
 	}
 	t.Errorf("%s is not a registered key family", inviteAcceptPrefix)
+}
+
+// The list is the family only: windowed on the accept time (the edge itself is in),
+// newest first, deterministic on a tie, skipping a row that does not decode, never
+// nil, and it writes nothing.
+func TestInviteAccept_ListSinceIsWindowedNewestFirstAndFamilyOnly(t *testing.T) {
+	s := newInviteTestStore(t)
+	if got, err := s.ListInviteAcceptsSince(time.Time{}); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("empty family = %#v, %v, want a non-nil empty list", got, err)
+	}
+	base := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	for _, o := range []struct {
+		inv string
+		at  time.Time
+	}{
+		{"inv-a", base}, {"inv-b", base.Add(time.Hour)}, {"inv-c", base.Add(time.Hour)}, {"inv-old", base.Add(-time.Second)},
+	} {
+		if err := s.RecordInviteAccept(InviteAccept{InviteID: o.inv, UserID: "u-" + o.inv, Username: o.inv, AcceptedAt: o.at}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What the scan must not return: a row of the outcome family, which the list
+	// joins by id and never lists, and a corrupt row inside this family.
+	if err := s.RecordGuestPolicyOutcome("inv-outcome", "u-x", InviteGuestPolicyAdded, "", base.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.Set([]byte(inviteAcceptPrefix+"inv-corrupt"), []byte("{not json"), nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ListInviteAcceptsSince(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, a := range got {
+		ids = append(ids, a.InviteID)
+	}
+	if want := "inv-c,inv-b,inv-a"; strings.Join(ids, ",") != want {
+		t.Fatalf("list = %v, want %s (window edge included, newest first, tie by id descending, corrupt row skipped)", ids, want)
+	}
+	if all, _ := s.ListInviteAcceptsSince(time.Time{}); len(all) != 4 {
+		t.Fatalf("an unbounded list has %d rows, want 4", len(all))
+	}
 }

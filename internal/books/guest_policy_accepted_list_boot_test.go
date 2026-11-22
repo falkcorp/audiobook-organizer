@@ -26,8 +26,8 @@ import (
 // GET /api/v1/users/invites answers HEAD's body, whose "accepted" member is the
 // last 30 days of accepted invites with their Cloudflare guest-policy outcome:
 // how the owner sees whether a guest (a Lissen phone user) got in. Under core
-// identity the invite is core's, so the list is read from books' own outcome
-// family (guestpolicyout:), keyed by the invite core reported. A real flipped
+// identity the invite is core's, so the list is read from books' own accept rows
+// (acceptedinvite:), joined to the guest-policy outcome by the invite id. A real flipped
 // boot: core's invites, accounts and sessions, books' registered lifecycle, and a
 // fake only of Cloudflare's API.
 
@@ -128,7 +128,8 @@ func TestGuestPolicyAcceptedList_FullBoot(t *testing.T) {
 		require.NoError(t, json.Unmarshal(raw, &generic))
 		for _, m := range generic {
 			for k := range m {
-				assert.Contains(t, []string{"username", "accepted_at", "accepted_user_id", "guest_policy_status", "guest_policy_detail", "guest_policy_at"}, k,
+				assert.Contains(t, []string{"username", "email", "accepted_at", "accepted_user_id", "email_binding", "sso_grant", "guest_policy_status",
+					"guest_policy_detail", "guest_policy_at", "displaced_user_ids"}, k,
 					"a member HEAD's accepted view does not have: %s", body)
 			}
 		}
@@ -178,7 +179,8 @@ func TestGuestPolicyAcceptedList_FullBoot(t *testing.T) {
 
 // With authentication off the list is served to every request, as HEAD served
 // it. Core's invites cannot be made with auth off (it refuses the auth-disabled
-// principal), so the outcome rows are written the way the lifecycle writes them.
+// principal), so the accept row and the outcome row are written the way the
+// lifecycle writes them.
 func TestGuestPolicyAcceptedList_AuthOffListsAsHEADDid(t *testing.T) {
 	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, nil, nil, func(o *app.Options) { o.ConfigFlags["core.auth.mode"] = "disabled" }, nil)
@@ -188,11 +190,18 @@ func TestGuestPolicyAcceptedList_AuthOffListsAsHEADDid(t *testing.T) {
 
 	gp, ok := database.AsCapability[database.GuestPolicyStore](r.store)
 	require.True(t, ok)
+	ia, ok := database.AsCapability[database.InviteAcceptStore](r.store)
+	require.True(t, ok)
+	acceptedAt := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, ia.RecordInviteAccept(database.InviteAccept{InviteID: "01BATMANGUESTINVITE000001", UserID: "u-alfred", Username: "alfred.pennyworth", AcceptedAt: acceptedAt}))
 	require.NoError(t, gp.RecordGuestPolicyOutcome("01BATMANGUESTINVITE000001", "u-alfred", database.InviteGuestPolicyFailed, "the Access policy refused the update", time.Now()))
 	code, raw, body = acceptedList(t, r, "", nil, "127.0.0.32:41000")
 	require.Equal(t, http.StatusOK, code, body)
 	rows := acceptedRows(t, raw)
 	require.Len(t, rows, 1, body)
 	assert.Equal(t, "u-alfred", rows[0].AcceptedUserID)
+	assert.Equal(t, "alfred.pennyworth", rows[0].Username)
 	assert.Equal(t, database.InviteGuestPolicyFailed, rows[0].GuestPolicyStatus)
+	require.NotNil(t, rows[0].AcceptedAt, body)
+	assert.WithinDuration(t, acceptedAt, *rows[0].AcceptedAt, time.Second, "accepted_at is the accept row's time, not the outcome's")
 }

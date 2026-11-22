@@ -8,7 +8,6 @@ package store
 import (
 	"encoding/json"
 	"errors"
-	"sort"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -81,12 +80,6 @@ type GuestPolicyStore interface {
 	RecordGuestPolicyOutcome(inviteID, userID, status, detail string, at time.Time) error
 	// GetGuestPolicyOutcome returns the outcome recorded for an invite, or nil.
 	GetGuestPolicyOutcome(inviteID string) (*GuestPolicyOutcome, error)
-	// ListGuestPolicyOutcomesSince returns every outcome recorded at or after
-	// since, newest first (ties by invite id, descending, so the order is the
-	// same on every read). It reads and never writes. A row that does not decode
-	// is skipped, as HEAD's ListAcceptedInvitesSince skipped an invite row it
-	// could not read.
-	ListGuestPolicyOutcomesSince(since time.Time) ([]GuestPolicyOutcome, error)
 }
 
 var _ GuestPolicyStore = (*PebbleStore)(nil)
@@ -144,40 +137,6 @@ func (p *PebbleStore) GetGuestPolicyOutcome(inviteID string) (*GuestPolicyOutcom
 		return nil, err
 	}
 	return &o, nil
-}
-
-// ListGuestPolicyOutcomesSince implements GuestPolicyStore.
-func (p *PebbleStore) ListGuestPolicyOutcomesSince(since time.Time) ([]GuestPolicyOutcome, error) {
-	// ';' is the byte after ':', so the bounds span exactly the family.
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte(guestPolicyOutcomePrefix),
-		UpperBound: []byte("guestpolicyout;"),
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
-	out := []GuestPolicyOutcome{}
-	for iter.First(); iter.Valid(); iter.Next() {
-		var o GuestPolicyOutcome
-		if err := json.Unmarshal(iter.Value(), &o); err != nil {
-			continue
-		}
-		if o.At.Before(since) {
-			continue
-		}
-		out = append(out, o)
-	}
-	if err := iter.Error(); err != nil {
-		return nil, err
-	}
-	sort.Slice(out, func(a, b int) bool {
-		if !out[a].At.Equal(out[b].At) {
-			return out[a].At.After(out[b].At)
-		}
-		return out[a].InviteID > out[b].InviteID
-	})
-	return out, nil
 }
 
 // guestPolicyRows is the InviteEmailGrantStore over the guestpolicy: family.
