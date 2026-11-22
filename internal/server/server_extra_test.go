@@ -21,6 +21,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -448,20 +449,41 @@ func TestBlockedHashEndpoints(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestHandleEventsUnavailable(t *testing.T) {
-	server, cleanup := setupTestServer(t)
-	defer cleanup()
+// TestAPIEventsGone: hub A's GET /api/events is deleted (F6-03). No handler
+// serves it on the gin engine or on books' legacy mount, and nothing is
+// registered for it: it falls through to the generic /api/* compatibility rule
+// like any other unversioned path, which sends it to /api/v1/events, and that
+// is not a route either. The replacement is core's /api/core/v1/events,
+// mounted by the kernel, so the old URL is not kept as an alias (D10).
+func TestAPIEventsGone(t *testing.T) {
+	f := legacyEngine(t, false, false)
+	_, mount := booksMount(t, f)
 
-	origHub := server.hub
-	server.hub = nil
-	defer func() {
-		server.hub = origHub
-	}()
+	routes := f.srv.router.Routes()
+	for _, r := range routes {
+		assert.NotEqual(t, "/api/events", r.Path, "gin still registers %s /api/events", r.Method)
+		assert.NotEqual(t, "/api/v1/events", r.Path, "gin registers %s /api/v1/events", r.Method)
+	}
+	manifest, err := f.srv.LegacyManifest()
+	require.NoError(t, err)
+	for _, lr := range manifest {
+		assert.NotEqual(t, "/api/events", lr.GinPath, "legacy manifest row %s %s", lr.Method, lr.GinPath)
+		assert.NotEqual(t, "/api/v1/events", lr.GinPath, "legacy manifest row %s %s", lr.Method, lr.GinPath)
+	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/events", nil)
-	w := httptest.NewRecorder()
-	server.router.ServeHTTP(w, req)
-	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	loc, redirected := legacyAPIRedirect(http.MethodGet, "/api/events")
+	require.True(t, redirected, "no exclusion is left for /api/events")
+	assert.Equal(t, "/api/v1/events", loc)
+
+	for name, srv := range map[string]http.Handler{"gin": f.srv.router, "mount": mount} {
+		w := probe(srv, http.MethodGet, "/api/events", "")
+		assert.Equal(t, http.StatusMovedPermanently, w.Code, name)
+		assert.Equal(t, "/api/v1/events", w.Header().Get("Location"), name)
+		assert.NotContains(t, w.Header().Get("Content-Type"), "text/event-stream", name)
+
+		w = probe(srv, http.MethodGet, "/api/v1/events", "")
+		assert.Equal(t, http.StatusNotFound, w.Code, "%s: the redirect target serves nothing", name)
+	}
 }
 
 func TestBackupEndpointsErrors(t *testing.T) {

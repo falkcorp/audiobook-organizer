@@ -694,7 +694,7 @@ func TestCollidingNamespacesStillRedirect_VersionedLookalikes(t *testing.T) {
 		}
 	}
 	// HEAD's exclusions: still not redirected.
-	for _, p := range []string{"/api/v1/audiobooks", "/api/v3/ops/defs", "/api/health", "/api/events", "/api/metrics", "/api/me"} {
+	for _, p := range []string{"/api/v1/audiobooks", "/api/v3/ops/defs", "/api/health", "/api/metrics", "/api/me"} {
 		_, ok := legacyAPIRedirect(http.MethodGet, p)
 		assert.False(t, ok, p)
 	}

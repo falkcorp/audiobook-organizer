@@ -76,7 +76,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/opscatalog"
 	maintenanceplugin "github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/quarantine"
-	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/search"
@@ -258,7 +257,7 @@ type Server struct {
 	// time.
 	operationsHandler *operationshandlers.Handler
 	// systemHandler is the migrated system-domain handler (instantiated in
-	// wireHandlers). The public /health and /api/events routes are registered in
+	// wireHandlers). The public /health routes are registered in
 	// setupRoutes (before the /api/* redirect middleware, so their pre-middleware
 	// ordering is preserved) via closures that delegate to this handler; the
 	// remaining protected system routes are registered directly in wireHandlers.
@@ -359,7 +358,6 @@ type Server struct {
 	// claim a book before fetching it (candidate_refetch.go).
 	candidateFetchClaims bookFetchClaims
 
-	hub        *realtime.EventHub
 	fileIOPool *FileIOPool
 	// opRegistry is the UOS-02 registry. Plugins register their OperationDefs
 	// here; the registry owns dispatch and worker pool lifecycle.
@@ -446,8 +444,8 @@ type Server struct {
 	// owns the teardown, and ReleaseUnstarted does nothing.
 	startHookRan atomic.Bool
 	// streamsClosing is closed by the pre-drain step (closeStreams), before
-	// the listener drains, so the long-lived event streams (/api/events, the
-	// ops v2 events) end instead of holding the drain for its whole budget.
+	// the listener drains, so the long-lived event streams (the ops v2 events)
+	// end instead of holding the drain for its whole budget.
 	streamsClosing   chan struct{}
 	closeStreamsOnce sync.Once
 
@@ -1281,17 +1279,9 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		})
 	}
 
-	// Create hub, batcher, and file I/O pool as Server fields
-	server.hub = realtime.NewEventHub()
-
-	// books.changed: every committed book write (the store's library-generation
-	// funnel) is coalesced into 250 ms batches and broadcast, so the Library
-	// patches the affected rows in place instead of reloading the page.
-	bookChanges := realtime.NewBookChangeCoalescer(250*time.Millisecond, server.hub.Broadcast)
-	database.SetBookChangeObserver(func(kind database.BookChangeKind, id string) {
-		bookChanges.Add(string(kind), id)
-	})
-
+	// The file I/O pool is a Server field. (Hub A, the SSE event hub, and the
+	// books.changed coalescer that fed it are gone: books publishes
+	// books.book.changed.v1 on core's bus, module.go.)
 	server.fileIOPool = NewFileIOPool(4)
 	server.fileIOPool.SetStore(store)
 
