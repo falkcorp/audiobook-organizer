@@ -320,6 +320,10 @@ type Service struct {
 	// then create one, and the store indexes usernames only.
 	setupMu sync.Mutex
 
+	// lifecycle is the one registered Lifecycle (RegisterLifecycle); nil
+	// until then.
+	lifecycle atomic.Pointer[Lifecycle]
+
 	extensions []Extension
 	// methods are the registered extension and compat methods; compat
 	// methods join at P7 (RegisterCompat), while requests are not yet served

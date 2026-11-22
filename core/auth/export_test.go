@@ -6,8 +6,11 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"time"
+
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // Test-only views of a Service's sign-in protections for the external test
@@ -39,4 +42,11 @@ func (s *Service) ClientOf(r *http.Request) ClientInfo { return s.client(r) }
 // plan is opaque to every other package).
 func NewMergePlanForTest(source, target UserID, srcVersion, tgtVersion int64, rows ...MergeRow) UserMergePlan {
 	return UserMergePlan{source: source, target: target, srcVersion: srcVersion, tgtVersion: tgtVersion, rows: rows}
+}
+
+// DisplaceUnverifiedHolders is Service.displaceUnverifiedHolders: no accept
+// binds an address yet (inviteBindsEmail), so the helper B10t's binding calls
+// is exercised directly over a batch the test commits.
+func (s *Service) DisplaceUnverifiedHolders(ctx context.Context, b *storage.Batch, email string, newUser UserID) ([]UserID, error) {
+	return s.displaceUnverifiedHolders(ctx, b, email, newUser)
 }
