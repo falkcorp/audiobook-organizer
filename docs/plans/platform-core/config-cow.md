@@ -161,11 +161,12 @@ See section 6.
 
 ### 4.4 `Engine.Mutate` (r10, `internal/books/appconfig/write.go:38`)
 
-Replace `after := before` with `after := *before.Clone()`. One line in F3-07's
-own file. It is listed here because the COW guarantee depends on it: until it
-lands, an in-place edit in an `fn` passed through the Facade writes into
-`e.cur`. The F3-07 lead may take it in the stack; if not, this lane carries
-it.
+**Done upstream.** r10 `795b798e5` ("Mutate applies its fn to a deep copy")
+makes `Engine.Mutate` copy with `Config.Clone`, pinned by
+`TestEngine_MutateInPlaceWriteIsSavedAndLeavesSnapshotsAlone` under `-race`.
+The COW guarantee depended on it: with the shallow copy, an in-place edit in
+an `fn` passed through the Facade wrote into `e.cur`. This lane has nothing
+left to do here.
 
 ## 5. Readers
 
@@ -354,7 +355,7 @@ take a `config.Source` and call it once per operation.**
 | `server/server.go:1116` `tools.NewToolRegistry(&config.AppConfig.Tools)`, `server/wire_handlers.go:680` `toolshandler.New(..., &config.AppConfig.Tools)` | **long-lived** | `internal/tools` cannot import `internal/config` (config imports tools), so both take `func() *tools.ToolsConfig`, wired as `func() *tools.ToolsConfig { t := config.Get().Tools; return &t }`. That returns a pointer to a copy of the struct. `&config.Get().Tools` would compile, but the guard refuses it, rightly: it is an address into the snapshot. The copy is shallow, and the registry and handler only read it |
 | `config/config.go` (`fn(&AppConfig)`) | n/a | gone: `mutateCOW` |
 
-19 test-file hand-offs (`organizer/*_test.go` ×10, `bulk_deluge_import_test.go`
+19 test-file hand-offs (`organizer/*_test.go` ×12, `bulk_deluge_import_test.go`
 ×2, `scheduler/on_startup_dropped_test.go`'s `&config.AppConfig.Scheduled`, and
 others) become `config.Get()`, or `config.Fixed(&cfg)` where the test wants its
 own config. They follow mechanically once the production signatures settle.
@@ -471,9 +472,11 @@ with ceilings that may only fall. End state:
 
 ## 10. Acceptance, and what this deletes
 
-- **TestFlip quiesce.** The F3-07 lead is adding a test-fixture quiesce in the
-  TestFlip fixture under `internal/books`, with a comment naming this lane. It
-  is not pushed yet. This lane **deletes it**. The acceptance test is TestFlip*
+- **TestFlip quiesce.** r10 `929c3d74c` (pushed) adds
+  `quiesceBackgroundForFlipPUT`. `runFlipped` calls it before `atReady`; it
+  shuts the operations registry down so no maintenance op runs during the
+  fixture's saves, and its comment names this lane. This lane **deletes the
+  helper and its call site**. The acceptance test is TestFlip*
   running its maintenance ops concurrently with settings saves under
   `go test -race -count=20 ./internal/books/ -run 'TestFlip'`, green, plus
   `config.CheckSealed()` clean at the end of each.
@@ -487,7 +490,7 @@ with ceilings that may only fall. End state:
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| Rebase churn: the F3-07 stack is still moving and rewrites `internal/config` (r10 deletes `update_service.go` and most of `persistence.go`) | certain | Core API in a new file (`cow.go`); the codemod is re-run, never hand-merged; the main-only `update_service.go` edits disappear with the file. On r10 the only hand edits are `mutateLocal`, `Normalized` on top of `Normalize`, pure `Problems`/`Validate`, `Engine.Mutate` and `validateCandidate` |
+| Rebase churn: the F3-07 stack is still moving and rewrites `internal/config` (r10 deletes `update_service.go` and most of `persistence.go`) | certain | Core API in a new file (`cow.go`); the codemod is re-run, never hand-merged; the main-only `update_service.go` edits disappear with the file. On r10 the only hand edits are `mutateLocal`, `Normalized` on top of `Normalize`, pure `Problems`/`Validate`, the branching `NormalizeAndValidate` and `validateCandidate` (`Engine.Mutate` is already fixed upstream, `795b798e5`) |
 | A reader writes through `Get()` (compiles) | medium | arch guard (syntax) and seal (runtime, tests); the codemod refuses such sites |
 | Two normalisation bodies after the rebase (main's `normalizeInPlace` and r10's `Normalize`) | certain without care | section 6: `Normalized()` is defined on `Normalize()`; `normalizeInPlace` is deleted on rebase |
 | Per-run pinning changes behaviour for long runs | low, intended | listed per site in section 7; long-lived services use a Source |
@@ -524,7 +527,7 @@ references it. Every slice's files are disjoint from every other slice's.
 
 | Slice | Files (disjoint) | Work | Worker-hours |
 |---|---|---|---|
-| A. core and every shared signature | `internal/config/*` (incl. `register.go`), `internal/books/appconfig/write.go`, `internal/books/boot.go`, `cmd/root.go`, `internal/arch/*`; the registry: `internal/server/server.go` (all three of its hand-offs: `:128`, `:976`, `:1116`), `internal/server/registry_wire.go`, `internal/quarantine/*`, `internal/search/register.go`, `internal/activity/register.go`, `internal/plugins/itunes/register.go`, `internal/plugins/deluge/register.go`; the tools Source: `internal/tools/registry.go`, `internal/server/handlers/tools/*`, `internal/server/wire_handlers.go` | port `cow.go`, `Normalized`, pure `Problems`/`Validate`, the branching `NormalizeAndValidate` (section 6) onto r10, with the `AppConfig` mirror **kept**; fix `Engine.Mutate`; `GetConfig` returns a `Source` and its 8 callers adapt; `func() *tools.ToolsConfig`; guard and ratchet; in-package codemod | 4 |
+| A. core and every shared signature | `internal/config/*` (incl. `register.go`), `internal/books/appconfig/write.go` (`validateCandidate` only), `internal/books/boot.go`, `cmd/root.go`, `internal/arch/*`; the registry: `internal/server/server.go` (all three of its hand-offs: `:128`, `:976`, `:1116`), `internal/server/registry_wire.go`, `internal/quarantine/*`, `internal/search/register.go`, `internal/activity/register.go`, `internal/plugins/itunes/register.go`, `internal/plugins/deluge/register.go`; the tools Source: `internal/tools/registry.go`, `internal/server/handlers/tools/*`, `internal/server/wire_handlers.go` | port `cow.go`, `Normalized`, pure `Problems`/`Validate`, the branching `NormalizeAndValidate` (section 6) onto r10, with the `AppConfig` mirror **kept**; `validateCandidate` normalises explicitly; `GetConfig` returns a `Source` and its 8 callers adapt; `func() *tools.ToolsConfig`; guard and ratchet; in-package codemod | 4 |
 | B. mechanical | every remaining file the codemod touches, **except** those in A and C–E | `--write --test-writes` with `--exclude` on A and C–E files, gofmt, build and vet, then the package suites under `-race`; triage any test that depended on seeing a direct write before the next publish | 2, plus triage (unmeasured) |
 | C. AI parser | `internal/ai/*`, `internal/server/{diagnostics_ai_ops.go,ai_ops.go,entities_ops.go}`, `internal/server/handlers/ai.go`, `internal/server/handlers/aibackends/*`, `internal/scanner/ai_parse_{async,journal}.go` | per-op `config.Get()`; the parser reads the key and the enabled flag off one snapshot | 2 |
 | D. organizer + metafetch | `internal/organizer/*` (incl. its tests), `internal/metafetch/{file_pipeline,service_apply}.go`, `internal/server/{batch_save_op.go,handlers/organize.go}`, `internal/audiobooks/organize_inplace_undo_test.go`, `internal/server/{apikey_credential_guard,scan_integration}_test.go` | `NewOrganizer(config.Get())`; tests use `Fixed` | 2 |
@@ -559,17 +562,26 @@ and by the `-race` suite runs on the remote builders.
   - 5 pass: `server/handlers/system`, `audiobooks`, `decisions`, `importer`
     and `metafetch`.
   - 3 fail: `plugins/dedup` (1 test), `plugins/maintenance` (5) and
-    `internal/server` (5).
+    `internal/server` (5). This is a **lower bound**. Only packages that
+    import the three converted packages directly and write `AppConfig` in
+    tests were run; transitive callers were not, and `internal/books` ran
+    only its Boot, Settings and Validate tests.
   - Causal check: running the codemod over those three packages (not
     committed) turns `plugins/dedup` and `plugins/maintenance` fully green.
   - In `internal/server`, 4 of the 5 failures clear and 10 new route tests
-    fail. All 10 go through `setupCredGuardServerOpts`, whose
+    fail. All 10 are in the four files that build their server with
+    `setupCredGuardServer`/`setupCredGuardServerWith` (`admin_routes`,
+    `legacy_manifest`, `master_list_handler`, `owner_routes`; checked by grep,
+    not re-run). That fixture's
     `cfg(&config.AppConfig)` (`apikey_credential_guard_test.go:81`) is one
     of the 19 manual test hand-offs. It writes the mirror, which `Get()`
     never reads.
   - `TestCalculateLibrarySizes_ExcludesAppDirs` still fails and is not
-    diagnosed. On main, `appdirs.Current()` is itself a manual hand-off
-    (`&config.AppConfig`), so this is triage for slice E.
+    diagnosed by conversion. **It is not the prototype's.** On `origin/main`
+    `368be5b83`, on the same builder, it fails 3 of 3 runs at the same
+    assertion (`"2048" is not greater than "500000"`). The builder's
+    filesystem likely stores the test's 500 kB zero-filled file in about 2 kB
+    on disk, and the walker counts disk usage. It is outside this lane.
   - This is the first data point for slice B's test triage: mechanical
     conversion fixes the transitional failures, and the manual test
     hand-offs are load-bearing.
