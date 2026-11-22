@@ -705,3 +705,65 @@ func absReplayCovers() []string {
 func init() {
 	cutover.RegisterReachDischarge("F4-07-ABS-REPLAY", "TestReachRegisteredPath_AbsReplay", absReplayCovers)
 }
+
+// TestReachRegisteredPath_AbsReplayCoreKeys is the core-native key column of the ABS
+// replay: the 18 mck_ keys the harness mints through core's own routes, with the
+// owner and scopes M3 gave their abk_ twins, on the same 64 delegated routes (1152
+// cells). A core key has no HEAD recording, so each cell is held to its twin's R0
+// verdict and status (p.Recorded()): what HEAD's ABS handler did for a key of that
+// owner and scope set, which is what a phone app holding a key core minted must get.
+//
+// RED until B10z: the ABS surface reads only abk_ bearers (absAPIKeyFromRequest), so
+// under the identity cutover every mck_ key is refused 401 where its abk_ twin is
+// admitted. That is a narrowing the flip must not ship; it is held out of the green
+// commits and goes in last. The test is the pin B10z turns green, and the table of
+// known differences stays empty on purpose: no row may excuse it.
+func TestReachRegisteredPath_AbsReplayCoreKeys(t *testing.T) {
+	d := loadAbsR0(t)
+	h := bootRegistered(t, registeredConfig{})
+	col := map[string]int{}
+	for i, n := range d.Principals {
+		col[n] = i
+	}
+	var keys []*Principal
+	for _, p := range h.Principals {
+		if p.Core {
+			if !strings.HasPrefix(p.bearer, "mck_") {
+				t.Fatalf("%s holds %q..., want a core-native mck_ key", p.Name, p.bearer[:min(4, len(p.bearer))])
+			}
+			keys = append(keys, p)
+		}
+	}
+	const wantKeys, wantNoTwin = 18, 10
+	if len(keys) != wantKeys || len(h.NoCoreTwin) != wantNoTwin {
+		t.Fatalf("%d core keys and %d keys with no core twin, want %d and %d", len(keys), len(h.NoCoreTwin), wantKeys, wantNoTwin)
+	}
+	top := h.absTopology(d)
+	if len(top.delegated) != absReplayRoutes {
+		t.Fatalf("%d delegated routes, want %d", len(top.delegated), absReplayRoutes)
+	}
+	var cells []absCell
+	for _, r := range top.delegated {
+		var body any
+		if slices.Contains([]string{http.MethodPost, http.MethodPut, http.MethodPatch}, r.Method) {
+			body = map[string]any{}
+		}
+		for _, p := range keys {
+			i, ok := col[p.Recorded()]
+			if !ok {
+				t.Fatalf("%s names the twin %q, which verdicts.json does not list", p.Name, p.Recorded())
+			}
+			res, err := h.Do(p, r.Method, probePath(r.Path), body)
+			if !errors.Is(err, ErrOwnAuth) {
+				t.Fatalf("%s as %s: want ErrOwnAuth, got %v (status %d)", r.key(), p.Name, err, res.Status)
+			}
+			cells = append(cells, absCell{route: r.key(), principal: p.Name, head: r.Verdict[i], flip: res.Verdict(), headSt: r.Status[i], flipSt: res.Status})
+		}
+	}
+	if want := absReplayRoutes * wantKeys; len(cells) != want {
+		t.Fatalf("replayed %d core-key cells, want exactly %d (%d routes x %d keys)", len(cells), want, absReplayRoutes, wantKeys)
+	}
+	for _, p := range absProblems(cells, map[string]string{}) {
+		t.Error(p)
+	}
+}
