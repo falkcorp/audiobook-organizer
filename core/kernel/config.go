@@ -429,13 +429,19 @@ func loadOperatorLayers(ctx context.Context, c ConfigCheck) (st *config.Store, l
 	if _, _, _, err := registerPathsAndModules(st, c.StateDirDefault, c.Modules); err != nil {
 		return fail(err)
 	}
-	for _, m := range c.Modules {
-		man := m.Manifest()
-		for _, sec := range man.Settings {
-			if _, err := sec.Register(st.Registry()); err != nil {
-				return fail(fmt.Errorf("kernel: config check: register %s's section %s: %w", man.ID, sec.Path(), err))
+	reg := st.Registry()
+	if err := config.Batch(reg, func() error {
+		for _, m := range c.Modules {
+			man := m.Manifest()
+			for _, sec := range man.Settings {
+				if _, err := sec.Register(reg); err != nil {
+					return fmt.Errorf("kernel: config check: register %s's section %s: %w", man.ID, sec.Path(), err)
+				}
 			}
 		}
+		return nil
+	}); err != nil {
+		return fail(err)
 	}
 	return st, st.Load(ctx), nil
 }
@@ -585,12 +591,18 @@ func (cb *configBoot) loadConfig(ctx context.Context, moduleSections ...any) ([]
 // and the live handles come back by path.
 func (cb *configBoot) loadSettings(ctx context.Context, secs []module.SettingsSection) (map[config.Path]any, error) {
 	live := make(map[config.Path]any, len(secs))
-	for _, s := range secs {
-		h, err := s.Register(cb.store.Registry())
-		if err != nil {
-			return nil, fmt.Errorf("kernel: config: register the module section %s: %w", s.Path(), err)
+	reg := cb.store.Registry()
+	if err := config.Batch(reg, func() error {
+		for _, s := range secs {
+			h, err := s.Register(reg)
+			if err != nil {
+				return fmt.Errorf("kernel: config: register the module section %s: %w", s.Path(), err)
+			}
+			live[s.Path()] = h
 		}
-		live[s.Path()] = h
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	if err := cb.seal(ctx); err != nil {
 		return nil, err
