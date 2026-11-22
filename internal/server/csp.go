@@ -97,15 +97,16 @@ func newCSPState(hashes []string, team string) *cspState {
 // buildCSP is cspBase with script-src allowing 'self' and each hash source, and
 // connect-src allowing 'self' and the Access team host when there is one.
 func buildCSP(hashSources []string, team string) string {
-	script := "script-src 'self'"
+	var script strings.Builder
+	script.WriteString("script-src 'self'")
 	for _, h := range hashSources {
-		script += " " + h
+		script.WriteString(" " + h)
 	}
 	connect := "connect-src 'self'"
 	if team != "" {
 		connect += " https://" + team
 	}
-	return script + "; " + connect + "; " + cspBase
+	return script.String() + "; " + connect + "; " + cspBase
 }
 
 // accessTeamHostRE is what a team domain must look like to go into the policy:

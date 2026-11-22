@@ -43,12 +43,12 @@ func TestCreditsBackfill_SpellingMoveRespellsOnlyTheMatchedNameInTheColumn(t *te
 	const moved = "Read by Renee Montoya, Bruce Wayne, Lucius Fox - translator"
 	const control = "Read by Leslie Thompkins, Bruce Wayne, Lucius Fox - translator"
 	f.book("sp-moved", "Gotham Central: Unresolved", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp(moved)
+		b.AuthorID = new(bruce)
+		b.Narrator = new(moved)
 	}, ba("sp-moved", [2]int{bruce, 0}), nil)
 	f.book("sp-control", "Gotham Central: Control", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp(control)
+		b.AuthorID = new(bruce)
+		b.Narrator = new(control)
 	}, ba("sp-control", [2]int{bruce, 0}), nil)
 
 	// The dry run says which books an apply would respell, and writes nothing.
@@ -97,8 +97,8 @@ func TestCreditsBackfill_PunctuationFoldedNameIsRespelledInPlace(t *testing.T) {
 	bruce := f.author("Bruce Wayne")
 	jp := f.narrator("Jean-Paul Valley")
 	f.book("pf-1", "Knightfall: Azrael", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Narrated by Jean Paul Valley")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Narrated by Jean Paul Valley")
 	}, ba("pf-1", [2]int{bruce, 0}), nil)
 
 	if _, err := f.run(creditsBackfillParams{Apply: true}, 1); err != nil {
@@ -125,13 +125,13 @@ func TestCreditsBackfill_FoldLinkedNarratorsJSONIsRespelledInTheSameWrite(t *tes
 	jp := f.narrator("Jean-Paul Valley")
 	renee := f.narrator("Renée Montoya")
 	f.book("fj-only", "Gotham Central: Soft Targets", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.NarratorsJSON = strp(`["Renee Montoya"]`)
+		b.AuthorID = new(bruce)
+		b.NarratorsJSON = new(`["Renee Montoya"]`)
 	}, ba("fj-only", [2]int{bruce, 0}), nil)
 	f.book("fj-both", "Knightfall: Broken Bat", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Read by Jean Paul Valley")
-		b.NarratorsJSON = strp(`["Jean Paul Valley"]`)
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Read by Jean Paul Valley")
+		b.NarratorsJSON = new(`["Jean Paul Valley"]`)
 	}, ba("fj-both", [2]int{bruce, 0}), nil)
 
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
@@ -187,8 +187,8 @@ func TestCreditsBackfill_UnreconcilableSpellingMoveHasItsOwnClassAndWritesNothin
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Dick & Grayson")
 	f.book("uj-sep", "Batman: Year Two", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Dick Grayson")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Dick Grayson")
 	}, ba("uj-sep", [2]int{bruce, 0}), nil)
 
 	dry, err := f.run(creditsBackfillParams{}, 1)
@@ -224,9 +224,9 @@ func TestCreditsBackfill_NarratorsJSONEntryThatDiffersOnlyByCaseIsRespelledToo(t
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Renée Montoya")
 	f.book("uj-json", "Gotham Central: Half a Life", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
-		b.NarratorsJSON = strp(`["RENEE MONTOYA"]`)
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
+		b.NarratorsJSON = new(`["RENEE MONTOYA"]`)
 	}, ba("uj-json", [2]int{bruce, 0}), nil)
 	res, err := f.run(creditsBackfillParams{Apply: true}, 1)
 	if err != nil {
@@ -295,8 +295,8 @@ func TestCreditsBackfill_FoldSharedNewNarratorTakesTheMostFrequentSpelling(t *te
 					differing = append(differing, id)
 				}
 				f.book(id, "No Man's Land "+id, func(b *database.Book) {
-					b.AuthorID = intp(bruce)
-					b.Narrator = strp(n)
+					b.AuthorID = new(bruce)
+					b.Narrator = new(n)
 				}, ba(id, [2]int{bruce, 0}), nil)
 			}
 			dry, err := f.run(creditsBackfillParams{}, 4)
@@ -357,8 +357,8 @@ func TestCreditsBackfill_IndexIsBuiltAfterTheScanStandDown(t *testing.T) {
 	f := newCBFixture(t)
 	bruce := f.author("Bruce Wayne")
 	f.book("ix-1", "Gotham Central: Corrigan", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Renee Montoya")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Renee Montoya")
 	}, ba("ix-1", [2]int{bruce, 0}), nil)
 	renee := 0
 	env := creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}
@@ -389,21 +389,21 @@ func TestCreditsBackfill_SnapshotWithoutAResolvableIDIsComparedByName(t *testing
 	f := newCBFixture(t)
 	jason := f.author("Jason Todd")
 	f.book("sn-zero", "A Death in the Family", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: 0, Name: "Dick Grayson"}
 	}, nil, nil)
 	f.book("sn-dangle", "A Lonely Place of Dying", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: 987654, Name: "Dick Grayson"}
 	}, nil, nil)
 	// Controls: the same person under a different case and spacing is no
 	// contradiction, and neither is a snapshot with no name at all.
 	f.book("sn-same", "Under the Red Hood", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: 0, Name: "  jason  TODD "}
 	}, nil, nil)
 	f.book("sn-blank", "Red Hood and the Outlaws", func(b *database.Book) {
-		b.AuthorID = intp(jason)
+		b.AuthorID = new(jason)
 		b.Author = &database.Author{ID: 0, Name: ""}
 	}, nil, nil)
 

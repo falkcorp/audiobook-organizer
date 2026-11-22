@@ -24,7 +24,7 @@ import (
 // import's page key is the number, and a repeat would replace the earlier line.
 func TestCutover_LogLinesOfSeveralBootsAllImported(t *testing.T) {
 	done := epoch.Add(time.Hour)
-	spec := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(done)}
+	spec := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(done)}
 	raw := map[string]string{}
 	line := func(at time.Time, seq int, msg string) {
 		raw[fmt.Sprintf("opv3:log:%s:%020d:%010d", spec.id, at.UnixNano(), seq)] = fmt.Sprintf(`{"at":%q,"level":"info","message":%q}`, at.Format(time.RFC3339Nano), msg)
@@ -65,7 +65,7 @@ func TestCutover_LogLinesOfSeveralBootsAllImported(t *testing.T) {
 // quarantined.
 func TestCutover_ItemWithTwoOutcomesKeepsBoth(t *testing.T) {
 	done := epoch.Add(time.Hour)
-	spec := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(done)}
+	spec := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(done)}
 	item := func(outcome string, chunk int) string {
 		return fmt.Sprintf(`{"key":"year-one","outcome":%q,"error":"mislabeled","chunk":%d}`, outcome, chunk)
 	}
@@ -109,8 +109,8 @@ func TestCutover_ItemWithTwoOutcomesKeepsBoth(t *testing.T) {
 // and its rows stay in the quarantine, readable; its neighbour imports.
 func TestCutover_DuplicatePageKeyQuarantinesTheRun(t *testing.T) {
 	done := epoch.Add(time.Hour)
-	dup := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(done), evts: 2}
-	ok := runSpec{id: runID(2), def: "dedup.book-scan", st: "succeeded", completed: tptr(done), evts: 2}
+	dup := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(done), evts: 2}
+	ok := runSpec{id: runID(2), def: "dedup.book-scan", st: "succeeded", completed: new(done), evts: 2}
 	raw := map[string]string{}
 	// A third transition row whose body repeats sequence 2.
 	at := epoch.Add(5 * time.Second)
@@ -150,12 +150,12 @@ func TestCutover_DuplicatePageKeyQuarantinesTheRun(t *testing.T) {
 // no such checkpoint.
 func TestCutover_RunFieldsWithoutANativeHomeRideAlong(t *testing.T) {
 	done := epoch.Add(time.Hour)
-	rich := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(done), mutateRec: func(r *store.RunRecord) {
+	rich := runSpec{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(done), mutateRec: func(r *store.RunRecord) {
 		r.Approval = &store.ApprovalRecord{ApprovedBy: store.Actor{UserID: "alfred"}, ApprovedAt: done, Decision: "approve", Note: "the Batcave may proceed"}
 		r.ItemOutcomes = &store.ItemOutcomeCounts{Stored: 10, Dropped: 4}
 		r.PipelineStage, r.IdemKey, r.SuccessorID, r.TraceID, r.SpanID = "plan", "idem-1", runID(9), "trace-1", "span-1"
 	}}
-	plain := runSpec{id: runID(2), def: "dedup.book-scan", st: "succeeded", completed: tptr(done), mutateRec: func(r *store.RunRecord) {
+	plain := runSpec{id: runID(2), def: "dedup.book-scan", st: "succeeded", completed: new(done), mutateRec: func(r *store.RunRecord) {
 		r.ItemOutcomes = &store.ItemOutcomeCounts{Stored: 3} // nothing dropped: nothing to say
 	}}
 	r := newRig(t, withRuns(nil, rich, plain))

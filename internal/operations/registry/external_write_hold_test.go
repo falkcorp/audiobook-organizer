@@ -177,8 +177,7 @@ func TestHoldWriteSet_ADuplicateHolderIsRefusedAndKeepsTheFirstClaim(t *testing.
 	}
 
 	_, err = r.HoldWriteSet("revert:dup", "the revert of dup", []registry.Resource{registry.ResSeries})
-	var conflict *registry.WriteSetConflict
-	if !errors.As(err, &conflict) {
+	if _, ok := errors.AsType[*registry.WriteSetConflict](err); !ok {
 		t.Fatalf("duplicate holder: want conflict, got %v", err)
 	}
 

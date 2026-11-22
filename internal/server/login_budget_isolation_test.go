@@ -80,7 +80,7 @@ func TestLoginBudget_DeadRefreshTokensDoNotSpendTheWebLoginBudget(t *testing.T) 
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.90:4000"
-	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		require.Equal(t, http.StatusUnauthorized, budgetRefresh(fx, v, i), "refresh %d", i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "refresh past its own budget")
@@ -92,7 +92,7 @@ func TestLoginBudget_WebTyposDoNotSpendTheRefreshBudget(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.91:4000"
-	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		require.Equal(t, http.StatusUnauthorized, budgetLogin(fx, "/api/v1/auth/login", v, fmt.Sprintf("typo%d", i), "x"), "typo %d", i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetLogin(fx, "/api/v1/auth/login", v, "budget-eve", "eve-pw"), "web login past its budget")
@@ -106,7 +106,7 @@ func TestLoginBudget_SpentRefreshBudgetRefusesRefreshOnly(t *testing.T) {
 	fx := budgetFixture(t)
 	budgetUser(t, fx, "budget-eve", "eve-pw")
 	const v = "192.0.2.92:4000"
-	for i := 0; i < coreauth.DefaultMaxFailuresPerSource; i++ {
+	for i := range coreauth.DefaultMaxFailuresPerSource {
 		budgetRefresh(fx, v, i)
 	}
 	require.Equal(t, http.StatusTooManyRequests, budgetRefresh(fx, v, 99), "the refresh budget is really spent")

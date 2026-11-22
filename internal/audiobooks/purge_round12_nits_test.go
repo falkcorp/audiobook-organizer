@@ -103,16 +103,14 @@ func TestFolderCheck_EmptyFolderIsUnexplainedUnlessTheRunEmptiedItOrItIsTheRoot(
 func TestDirSet_IsSafeForConcurrentWorkers(t *testing.T) {
 	var set dirSet
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
+	for i := range 16 {
+		wg.Go(func() {
+			for j := range 50 {
 				dir := filepath.Join("/lib", "Gotham", fmt.Sprintf("w%02d-%02d", i, j))
 				set.add(dir)
 				assert.True(t, set.has(dir))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	assert.True(t, set.has("/lib/Gotham/w15-49"))

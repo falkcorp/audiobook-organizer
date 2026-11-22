@@ -97,7 +97,6 @@ func TestDiagnosticsExport_OperationsJSONBlanksActorPermissionsWithoutUsersManag
 		QueuedAt: now, CompletedAt: &now,
 	}))
 	for id, actor := range map[string]string{"op-export-scope-mgr": mgr.ID, "op-export-scope-admin": admin.ID} {
-		actor := actor
 		require.NoError(t, store.InsertOperationV2(database.OperationV2Row{
 			ID: id, DefID: "diagnostics.export", Plugin: "diagnostics", Status: "running",
 			Params: `{"category":"general"}`, ActorUserID: &actor, QueuedAt: now,

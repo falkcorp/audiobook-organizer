@@ -94,7 +94,7 @@ var unguardedOK = map[string]bool{}
 func guardTexts(seed1, seed2 uint64, n, pieces int) []string {
 	r := rand.New(rand.NewPCG(seed1, seed2))
 	texts := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		texts = append(texts, randomGuardText(r, pieces))
 	}
 	return texts

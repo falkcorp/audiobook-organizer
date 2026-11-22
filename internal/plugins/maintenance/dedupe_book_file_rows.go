@@ -345,34 +345,32 @@ func (p *Plugin) runDedupeBookFileRows(ctx context.Context, raw json.RawMessage,
 // the same rows this run deletes.
 func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(dedupeBookFileRowsKind, tasks.TaskSpec[dedupeBookFileRowsNativeParams, dedupeBookFileRowsResult]{
-		Common: tasks.Common{
-			Title: "De-duplicate book_file rows",
-			Help:  "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Optional: book_ids scopes the run; cross_folder:true also deletes a missing row whose basename and size match exactly one present row in the same book; remove_row_ids removes named rows that have an identical-hash present twin (or confirmed_duplicate:true). A preview (the default) reports what it would remove and deletes nothing; start in live mode to delete.",
-			// Declared write-set: never runs beside another op that rewrites
-			// book_file rows, e.g. maintenance.fs-regroup-xml. HEAD declares
-			// book_files only; the body also recomputes the book's aggregates
-			// (RecomputeBookAggregates: books), carries a deleted row's
-			// fingerprint windows to its twin (CarryOverFingerprintWindows:
-			// fingerprint_index) and journals each deletion for undo
-			// (CreateOperationChange: operations).
-			// It also writes the per-book and per-row decisions TSVs under the
-			// library root (files: bytes on disk, written outside the writer).
-			// The file-row methods it calls recompute the books aggregate, so the row also carries
-			// the rest of the ModifyBook row: metadata_cache, indexes (THE RULE, internal/maintenance/resources).
-			Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles)...),
-			Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
-			// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
-			// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is
-			// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
-			Resume:          tasks.ResumeFromZero,
-			Priority:        tasks.PriorityLow,
-			ConcurrencyKey:  tasks.Key("books.maintenance.dedupe-book-file-rows"),
-			Timeout:         2 * time.Hour,
-			ProgressTimeout: 30 * time.Minute,
-			NotWhile:        []tasks.Kind{"books.library.scan", "books.library.scan-full"},
-			Schedule:        sched,
-			Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
-		},
+		Title: "De-duplicate book_file rows",
+		Help:  "Finds books holding MORE THAN ONE book_file row for the same file_path and removes the redundant rows, then recomputes the book's aggregates. Duplicated rows inflate a book's total duration and file size by the duplication factor. Optional: book_ids scopes the run; cross_folder:true also deletes a missing row whose basename and size match exactly one present row in the same book; remove_row_ids removes named rows that have an identical-hash present twin (or confirmed_duplicate:true). A preview (the default) reports what it would remove and deletes nothing; start in live mode to delete.",
+		// Declared write-set: never runs beside another op that rewrites
+		// book_file rows, e.g. maintenance.fs-regroup-xml. HEAD declares
+		// book_files only; the body also recomputes the book's aggregates
+		// (RecomputeBookAggregates: books), carries a deleted row's
+		// fingerprint windows to its twin (CarryOverFingerprintWindows:
+		// fingerprint_index) and journals each deletion for undo
+		// (CreateOperationChange: operations).
+		// It also writes the per-book and per-row decisions TSVs under the
+		// library root (files: bytes on disk, written outside the writer).
+		// The file-row methods it calls recompute the books aggregate, so the row also carries
+		// the rest of the ModifyBook row: metadata_cache, indexes (THE RULE, internal/maintenance/resources).
+		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles)...),
+		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
+		// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is
+		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
+		Resume:          tasks.ResumeFromZero,
+		Priority:        tasks.PriorityLow,
+		ConcurrencyKey:  tasks.Key("books.maintenance.dedupe-book-file-rows"),
+		Timeout:         2 * time.Hour,
+		ProgressTimeout: 30 * time.Minute,
+		NotWhile:        []tasks.Kind{"books.library.scan", "books.library.scan-full"},
+		Schedule:        sched,
+		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in dedupeBookFileRowsNativeParams) (dedupeBookFileRowsResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return dedupeBookFileRowsResult{}, err

@@ -252,8 +252,8 @@ func TestCutover_V1RowsSetAside(t *testing.T) {
 	}
 	v1Op{id: runID(2), typ: "dedup.book-scan", status: "exploded", logs: 1}.put(raw)
 	v1Op{id: runID(3), typ: "dedup.book-scan", status: "completed"}.put(raw) // no completion time
-	v1Op{id: runID(4), typ: "dedup.book-scan", status: "completed", done: tptr(epoch.Add(time.Hour)), logs: 2, badLog: true}.put(raw)
-	v1Op{id: runID(5), typ: "dedup.book-scan", status: "completed", done: tptr(epoch.Add(time.Hour)), journal: true}.put(raw)
+	v1Op{id: runID(4), typ: "dedup.book-scan", status: "completed", done: new(epoch.Add(time.Hour)), logs: 2, badLog: true}.put(raw)
+	v1Op{id: runID(5), typ: "dedup.book-scan", status: "completed", done: new(epoch.Add(time.Hour)), journal: true}.put(raw)
 	r := newRig(t, withRaw(raw))
 	r.runObserve(t, func(ctx context.Context, s *snap) {
 		want := map[string]bool{
@@ -297,7 +297,7 @@ func TestCutover_V1RowsSetAside(t *testing.T) {
 // operation; the v1 row must not import over it and delete it unread) are all
 // quarantined whole.
 func TestCutover_V1OperationRowsSetAside(t *testing.T) {
-	done := tptr(epoch.Add(time.Hour))
+	done := new(epoch.Add(time.Hour))
 	raw := map[string]string{}
 	v1Op{id: runID(1), typ: "dedup.book-scan", status: "completed", done: done}.put(raw)
 	raw["operation:"+runID(1)] = strings.Replace(raw["operation:"+runID(1)], `"id":"`+runID(1)+`"`, `"id":"`+runID(9)+`"`, 1)
@@ -334,7 +334,7 @@ func TestCutover_V1OperationRowsSetAside(t *testing.T) {
 // on its own and then imported the v1 operation, because the v2 row was no
 // longer there to make the v1 row an orphan too.
 func TestCutover_V1OperationBesideAnOrphanV2RowInEitherOrder(t *testing.T) {
-	done := tptr(epoch.Add(time.Hour))
+	done := new(epoch.Add(time.Hour))
 	op1, op2, log1 := "operation:"+runID(3), "opv2:op:"+runID(3), fmt.Sprintf("operationlog:%s:%d:1", runID(3), epoch.Add(time.Second).UnixNano())
 	// next sorts after op2, so it is the v2 shard's next chunk; it is an
 	// orphan of its own (no v1 or v3 row names it).
@@ -416,7 +416,7 @@ func TestCutover_V1OperationBesideAnOrphanV2RowInEitherOrder(t *testing.T) {
 // nothing is left in the source; the same operation without the stray row
 // imports.
 func TestCutover_V1StrayRowsQuarantineTheOperation(t *testing.T) {
-	done := tptr(epoch.Add(time.Hour))
+	done := new(epoch.Add(time.Hour))
 	raw := map[string]string{}
 	for i, stray := range []string{
 		"opv3:prog:" + runID(1),
@@ -472,7 +472,7 @@ func TestCutover_V1CheckpointOfAFinishedRunDeleted(t *testing.T) {
 	v1Op{id: runID(1), typ: "dedup.book-scan", status: "completed", state: true}.put(raw)
 	v1Op{id: runID(2), typ: "dedup.book-scan", status: "running", state: true}.put(raw)
 	specs := []runSpec{
-		{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: tptr(epoch.Add(time.Hour))},
+		{id: runID(1), def: "dedup.book-scan", st: "succeeded", completed: new(epoch.Add(time.Hour))},
 		{id: runID(2), def: "dedup.book-scan", st: "running"},
 	}
 	r := newRig(t, withRuns(nil, specs...), withRaw(raw))

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"sort"
 	"strings"
@@ -477,14 +478,14 @@ func (s *Server) mintGuestTokenCore(parent context.Context, store database.UserR
 var errGuestTokenLostRace = errors.New("the record was revoked while the token was being made")
 
 func joinProblems(p []string) string {
-	out := ""
+	var out strings.Builder
 	for i, x := range p {
 		if i > 0 {
-			out += "; "
+			out.WriteString("; ")
 		}
-		out += x
+		out.WriteString(x)
 	}
-	return out
+	return out.String()
 }
 
 // cleanupLostMint removes a token whose mint lost a race with a revoke, and
@@ -704,9 +705,7 @@ func (s *Server) recordGuestTokenAuditWith(typ, level, userID, tokenID, detail, 
 		return
 	}
 	d := map[string]any{"user_id": userID}
-	for k, v := range extra {
-		d[k] = v
-	}
+	maps.Copy(d, extra)
 	if tokenID != "" {
 		d["token_id"] = tokenID
 	}

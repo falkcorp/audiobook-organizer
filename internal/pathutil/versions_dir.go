@@ -7,6 +7,7 @@ package pathutil
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -31,12 +32,7 @@ func UnderVersionsDir(path, folder string) bool {
 	if !ok {
 		return false
 	}
-	for _, part := range strings.Split(filepath.ToSlash(rest), "/") {
-		if part == VersionsDirName {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Split(filepath.ToSlash(rest), "/"), VersionsDirName)
 }
 
 // HasSlotPair reports whether p has the consecutive path components

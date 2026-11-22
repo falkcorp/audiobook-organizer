@@ -55,7 +55,7 @@ func resumeFixture(t *testing.T, n int) (root string, files []string) {
 	root = t.TempDir()
 	withRemuxAppDirs(t, root, true)
 	dirs := []string{"Batman", "Batman-Begins", "Robin", "Batman/Year One"}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		f := filepath.Join(root, dirs[i%len(dirs)], fmt.Sprintf("book-%03d.m4b", i))
 		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
 			t.Fatal(err)

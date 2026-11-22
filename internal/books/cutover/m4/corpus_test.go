@@ -341,8 +341,8 @@ func TestCutover_TasksFixtureFromR0(t *testing.T) {
 					if want, ok := c.ImportedAs["state"]; ok {
 						var id string
 						for _, k := range c.Keys {
-							if strings.HasPrefix(k, "opv3:run:") {
-								id = strings.TrimPrefix(k, "opv3:run:")
+							if after, ok0 := strings.CutPrefix(k, "opv3:run:"); ok0 {
+								id = after
 							}
 						}
 						rec, err := s.Stores.Runs.Get(ctx, tasks.RunID(id))

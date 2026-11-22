@@ -175,15 +175,15 @@ func TestZombies_SumsSources(t *testing.T) {
 		t.Errorf("ops.zombies = %d, want 5 (2 + 3)", got)
 	}
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		wg.Go(func() {
-			for j := 0; j < 50; j++ {
+			for range 50 {
 				a.Add(1)
 				a.Add(-1)
 			}
 		})
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		collect()
 	}
 	wg.Wait()
@@ -451,15 +451,15 @@ func TestAbandonedCalls_ReportsEachSource(t *testing.T) {
 	stat.Store(2)
 	stat2.Store(4)
 	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		wg.Go(func() {
-			for j := 0; j < 50; j++ {
+			for range 50 {
 				resolver.Add(1)
 				resolver.Add(-1)
 			}
 		})
 	}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		collect()
 	}
 	wg.Wait()

@@ -84,7 +84,7 @@ func cbAuthorFillFixture(t *testing.T, n int) (*cbFixture, []string) {
 	var ids []string
 	for i := range n {
 		id := "ab-" + string(rune('a'+i))
-		f.book(id, "Batman: Year One "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Batman: Year One "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 		ids = append(ids, id)
 	}
 	return f, ids
@@ -141,19 +141,19 @@ func TestCreditsBackfill_ApplyCanceledInTheReplanFilesEveryPlannedBook(t *testin
 	bruce := f.author("Bruce Wayne")
 	f.narrator("Harvey Bullock")
 	f.book("c-solo", "Batman: The Long Halloween", func(b *database.Book) {
-		b.AuthorID = intp(bruce)
-		b.Narrator = strp("Selina Kyle")
+		b.AuthorID = new(bruce)
+		b.Narrator = new("Selina Kyle")
 	}, ba("c-solo", [2]int{bruce, 0}), nil)
 	ids := []string{"a-split-1", "a-split-2", "c-solo"}
 	for _, id := range ids[:2] {
 		f.book(id, "Batman: Dark Victory "+id, func(b *database.Book) {
-			b.AuthorID = intp(bruce)
-			b.Narrator = strp("Selina Kyle and Harvey Bullock")
+			b.AuthorID = new(bruce)
+			b.Narrator = new("Selina Kyle and Harvey Bullock")
 		}, ba(id, [2]int{bruce, 0}), nil)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	rep := &cbCancelOnReplanReporter{cbReporter: cbReporter{id: cbTestOpID}, cancel: cancel}
+	rep := &cbCancelOnReplanReporter{id: cbTestOpID, cancel: cancel}
 	res, err := f.runEnv(ctx, creditsBackfillEnv{store: f.s, mod: f.s, opID: cbTestOpID, workers: 1}, creditsBackfillParams{Apply: true}, rep)
 	if err == nil || res.Complete {
 		t.Fatalf("a canceled apply must be incomplete: err=%v", err)
@@ -497,7 +497,7 @@ func TestCreditsBackfill_LinkedRecordOfACrashedOperationIsNotALeftover(t *testin
 	cbSeedOtherOp(t, f, cbCrashedOp, creditsBackfillOpID, "failed", rec)
 	alfred := f.author("Alfred Pennyworth")
 	f.narrators[rec.ID] = true
-	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = intp(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
+	f.book("bystander", "Gotham Central: Soft Targets", func(b *database.Book) { b.AuthorID = new(alfred) }, ba("bystander", [2]int{alfred, 0}), nil)
 	if err := f.s.SetBookNarrators("bystander", []database.BookNarrator{{BookID: "bystander", NarratorID: rec.ID, Role: "narrator"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -719,7 +719,7 @@ func TestCreditsBackfill_LostStandDownLeavesTheOperationUnjudged(t *testing.T) {
 	f.narrators[rec.ID] = true // f.book drops every record the fixture has not registered
 	for i := range 4 {
 		id := fmt.Sprintf("sd-%d", i)
-		f.book(id, "Hush "+id, func(b *database.Book) { b.AuthorID = intp(bruce) }, nil, nil)
+		f.book(id, "Hush "+id, func(b *database.Book) { b.AuthorID = new(bruce) }, nil, nil)
 	}
 	reads := &sync.Map{}
 	writes := &atomic.Int64{}

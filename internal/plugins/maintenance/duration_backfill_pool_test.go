@@ -268,7 +268,7 @@ func TestDurationPoolOn_DeclaresWorkersTimeoutDenominatorAndBookLabels(t *testin
 	var n int
 	each := func(ctx context.Context, items int, o t6g4EachOpts, fn func(ctx context.Context, i int) error) error {
 		got, n = o, items
-		for i := 0; i < items; i++ {
+		for i := range items {
 			if err := fn(ctx, i); err != nil {
 				return err
 			}
@@ -370,7 +370,7 @@ func TestDurationBackfill_PoolErrorUnblocksTheProducer(t *testing.T) {
 func TestDurationPoolHEAD_RunsExactlyTheWorkersAndWaitsForThem(t *testing.T) {
 	var started, running, handled atomic.Int32
 	jobs := make(chan database.Book, 6)
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		jobs <- database.Book{ID: fmt.Sprintf("robin-%d", i)}
 	}
 	close(jobs)

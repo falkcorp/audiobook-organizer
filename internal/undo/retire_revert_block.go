@@ -8,6 +8,7 @@ package undo
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 )
@@ -54,14 +55,14 @@ func formatRetireTypes(types map[string]int) string {
 		keys = append(keys, k)
 	}
 	slices.Sort(keys)
-	out := ""
+	var out strings.Builder
 	for i, k := range keys {
 		if i > 0 {
-			out += ", "
+			out.WriteString(", ")
 		}
-		out += fmt.Sprintf("%s x%d", k, types[k])
+		out.WriteString(fmt.Sprintf("%s x%d", k, types[k]))
 	}
-	return out
+	return out.String()
 }
 
 // RetireRevertBlock returns the refusal for an operation whose rows hold a

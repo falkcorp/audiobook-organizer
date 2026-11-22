@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	coreconfig "github.com/falkcorp/mediacore/config"
@@ -145,9 +146,9 @@ func (u *undoSet) secret(e *Engine, name secrets.Name, head, by string) undoStep
 func (e *Engine) compensate(ctx context.Context, done []undoStep, cause error) error {
 	ctx = context.WithoutCancel(ctx)
 	var failed []string
-	for i := len(done) - 1; i >= 0; i-- {
-		if err := done[i].run(ctx); err != nil {
-			failed = append(failed, fmt.Sprintf("%s (%v)", done[i].what, err))
+	for _, d := range slices.Backward(done) {
+		if err := d.run(ctx); err != nil {
+			failed = append(failed, fmt.Sprintf("%s (%v)", d.what, err))
 		}
 	}
 	if err := e.Rebuild(ctx); err != nil {

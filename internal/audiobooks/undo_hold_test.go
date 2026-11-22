@@ -442,7 +442,7 @@ func (s *distrustAfterStore) OpChangeByBookIndexUsable() bool {
 func TestRunPurge_LostLedgerTrustMidPassStopsThePassWithAReason(t *testing.T) {
 	svc, store, _ := setupPurgeBoundary(t)
 	const n = 400
-	for i := 0; i < n; i++ {
+	for i := range n {
 		softDeleted(t, store, fmt.Sprintf("b%03d", i), "")
 	}
 	svc.store = &distrustAfterStore{PebbleStore: store, trusted: 60}

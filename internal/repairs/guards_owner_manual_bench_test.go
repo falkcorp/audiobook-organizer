@@ -59,12 +59,12 @@ func newBenchGuardLibrary(tb testing.TB, root string, n int) (*benchGuardLibrary
 		authors: map[string][]database.BookAuthor{}, narrs: map[string][]database.BookNarrator{},
 		tags: map[string][]database.BookTag{}, authorBy: map[int]*database.Author{}, narrBy: map[int]*database.Narrator{},
 	}
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		l.authorBy[i] = &database.Author{ID: i, Name: fmt.Sprintf("Author%03d Sample", i)}
 		l.narrBy[i] = &database.Narrator{ID: i, Name: fmt.Sprintf("Narrator%03d Sample", i)}
 	}
 	const folders = 600
-	for f := 0; f < folders; f++ {
+	for f := range folders {
 		dir := filepath.Join(root, fmt.Sprintf("a%03d", f%400), fmt.Sprintf("book-%03d", f))
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			tb.Fatal(err)
@@ -78,7 +78,7 @@ func newBenchGuardLibrary(tb testing.TB, root string, n int) (*benchGuardLibrary
 		}
 	}
 	ids := make([]string, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id := fmt.Sprintf("bench-%06d", i)
 		ids = append(ids, id)
 		dir := filepath.Join(root, fmt.Sprintf("a%03d", (i%folders)%400), fmt.Sprintf("book-%03d", i%folders))
@@ -111,10 +111,8 @@ func BenchmarkGuardOwnerManualBooks51k(b *testing.B) {
 		var mu sync.Mutex
 		var flagged int
 		next := make(chan string)
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range workers {
+			wg.Go(func() {
 				for id := range next {
 					kind, _, err := GuardOwnerManualBooks(lib, lib, func(int) string { return "" }, res, []string{id})
 					if err != nil {
@@ -127,7 +125,7 @@ func BenchmarkGuardOwnerManualBooks51k(b *testing.B) {
 						mu.Unlock()
 					}
 				}
-			}()
+			})
 		}
 		for _, id := range ids {
 			next <- id

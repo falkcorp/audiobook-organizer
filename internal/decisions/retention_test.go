@@ -471,15 +471,15 @@ func TestRetention_CanaryEveryPruneLikeMethodIsCovered(t *testing.T) {
 	}
 	var missing []string
 	for _, typ := range []reflect.Type{
-		reflect.TypeOf((*database.PebbleStore)(nil)),
-		reflect.TypeOf((*database.PebbleActivityStore)(nil)),
-		reflect.TypeOf((*database.PebbleMetricsStore)(nil)),
-		reflect.TypeOf((*activity.Service)(nil)),
+		reflect.TypeFor[*database.PebbleStore](),
+		reflect.TypeFor[*database.PebbleActivityStore](),
+		reflect.TypeFor[*database.PebbleMetricsStore](),
+		reflect.TypeFor[*activity.Service](),
 	} {
 		short := strings.TrimPrefix(typ.String(), "*")
 		short = short[strings.LastIndexByte(short, '.')+1:]
-		for i := 0; i < typ.NumMethod(); i++ {
-			m := typ.Method(i).Name
+		for method := range typ.Methods() {
+			m := method.Name
 			if !pruneLike(m) {
 				continue
 			}

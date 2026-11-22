@@ -115,9 +115,9 @@ func TestPreviewAuthorStripPlans_NeverRunsMoreReadsThanThePoolAllows(t *testing.
 	inFlight, maxSeen := 0, 0
 	db := overlapDB{PebbleStore: st, mu: &mu, inFlight: &inFlight, maxSeen: &maxSeen}
 	env := authorStripMergeEnv{
-		t6g1Env: t6g1Env{Progress: func(int, int, string) {}},
-		Store:   t6g1HeadStore{OpsStore: db},
-		Writer:  t6g1HeadWriter{db},
+		Progress: func(int, int, string) {},
+		Store:    t6g1HeadStore{OpsStore: db},
+		Writer:   t6g1HeadWriter{db},
 	}
 	plans := make([]authorStripPlan, 3*authorStripPreviewParallelism())
 	for i := range plans {

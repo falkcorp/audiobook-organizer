@@ -54,8 +54,7 @@ func t6WriterMethods(writers ...reflect.Type) []string {
 	var names []string
 	var walk func(w reflect.Type)
 	walk = func(w reflect.Type) {
-		for i := range w.NumMethod() {
-			m := w.Method(i)
+		for m := range w.Methods() {
 			if capIface, ok := t6CapabilityGetter(m); ok {
 				walk(capIface)
 				continue

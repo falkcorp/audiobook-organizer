@@ -913,8 +913,7 @@ func (h *Handler) pruneBookCOWVersionsImpl(c *gin.Context) {
 		// A merge journal row that cannot be read blocks every prune (it may be the
 		// row that names the snapshot an undo needs). Say which row, so the owner
 		// can repair it, instead of the generic failure.
-		var unreadable *database.MergeJournalRowUnreadableError
-		if errors.As(err, &unreadable) {
+		if unreadable, ok := errors.AsType[*database.MergeJournalRowUnreadableError](err); ok {
 			snapshotPruneLog.Error("snapshot prune of book %s blocked by an unreadable merge journal row %s: %v",
 				logger.SanitizeLogValue(id), logger.SanitizeLogValue(unreadable.Key), err)
 			httputil.RespondWithConflict(c, "a merge journal row is unreadable: "+unreadable.Key+"; prune is blocked until it is repaired")

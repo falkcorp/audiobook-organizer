@@ -98,8 +98,8 @@ func r2ReadStore(t *testing.T, store string) map[string][]byte {
 func r2Blocking(rows map[string][]byte) []string {
 	users := map[string]bool{}
 	for k := range rows {
-		if strings.HasPrefix(k, "u:") {
-			users[strings.TrimPrefix(k, "u:")] = true
+		if after, ok := strings.CutPrefix(k, "u:"); ok {
+			users[after] = true
 		}
 	}
 	var out []string

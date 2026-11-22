@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,12 +60,12 @@ func (c hbCounts) outcomes() int {
 // hbSummary finds the job's closing summary line among the reporter's logs.
 func hbSummary(t *testing.T, rep *noopReporter) (hbCounts, string) {
 	t.Helper()
-	for i := len(rep.logs) - 1; i >= 0; i-- {
-		if !strings.Contains(rep.logs[i], "hashed=") {
+	for _, v := range slices.Backward(rep.logs) {
+		if !strings.Contains(v, "hashed=") {
 			continue
 		}
 		c := hbCounts{}
-		for _, m := range hbPairRe.FindAllStringSubmatch(rep.logs[i], -1) {
+		for _, m := range hbPairRe.FindAllStringSubmatch(v, -1) {
 			v, err := strconv.Atoi(m[2])
 			require.NoError(t, err)
 			if v != 0 {
@@ -72,7 +73,7 @@ func hbSummary(t *testing.T, rep *noopReporter) (hbCounts, string) {
 			}
 		}
 		report := ""
-		if m := hbReportRe.FindStringSubmatch(rep.logs[i]); m != nil {
+		if m := hbReportRe.FindStringSubmatch(v); m != nil {
 			report = m[1]
 		}
 		return c, report
@@ -671,7 +672,7 @@ func TestBackfillFileHashes_CancelMidChunkThenResumeIsExact(t *testing.T) {
 
 			// What an uninterrupted run reports, from the rows' shape.
 			want := hbCounts{}
-			for i := 0; i < total; i++ {
+			for i := range total {
 				switch {
 				case i%10 == 0:
 					want["hashed"]++
@@ -889,7 +890,7 @@ func TestBackfillFileHashes_KillInsideACommitThenResumeIsExact(t *testing.T) {
 			rep, c, report := runHB(t, h.store(), hbRun{opID: opID, dryRun: tc.dryRun})
 
 			want := hbCounts{}
-			for i := 0; i < total; i++ {
+			for i := range total {
 				switch {
 				case i%10 == 0:
 					want["hashed"]++
@@ -921,7 +922,7 @@ func TestBackfillFileHashes_KillInsideACommitThenResumeIsExact(t *testing.T) {
 // hbWant is what an uninterrupted run over hbMixedLibrary reports.
 func hbWant(total int) hbCounts {
 	want := hbCounts{}
-	for i := 0; i < total; i++ {
+	for i := range total {
 		switch {
 		case i%10 == 0:
 			want["hashed"]++

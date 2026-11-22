@@ -200,10 +200,7 @@ var bookFileRestageSleep = time.Sleep
 // already refused): 10ms doubling to a 100ms cap, with the actual wait drawn
 // uniformly from the upper half of that interval.
 func restageBackoff(refusedRounds int) time.Duration {
-	d := restageBackoffBase << min(refusedRounds-1, 4)
-	if d > restageBackoffMax {
-		d = restageBackoffMax
-	}
+	d := min(restageBackoffBase<<min(refusedRounds-1, 4), restageBackoffMax)
 	return d/2 + rand.N(d/2+1)
 }
 

@@ -76,8 +76,6 @@ func stampWorker(out map[string]transcribe.BatchResult) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 func TestResolveExtractMode(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -92,11 +90,11 @@ func TestResolveExtractMode(t *testing.T) {
 		{"prod default with a path worker goes remote", false, false, nil, true, extractRemote, "", true},
 		{"prod default with no path worker stays local (and Check will refuse)", false, false, nil, false, extractLocal, "", true},
 		{"dev host that opted in keeps local and never probes", true, false, nil, true, extractLocal, "", false},
-		{"explicit false is local without probing", false, false, boolPtr(false), true, extractLocal, "", false},
-		{"explicit true goes remote even on a dev host", true, false, boolPtr(true), true, extractRemote, "", true},
-		{"explicit true with no path worker is an error, never a silent local", false, false, boolPtr(true), false, extractLocal, "no whisper endpoint can serve path jobs", true},
+		{"explicit false is local without probing", false, false, new(false), true, extractLocal, "", false},
+		{"explicit true goes remote even on a dev host", true, false, new(true), true, extractRemote, "", true},
+		{"explicit true with no path worker is an error, never a silent local", false, false, new(true), false, extractLocal, "no whisper endpoint can serve path jobs", true},
 		{"extract_only is always local", false, true, nil, true, extractLocal, "", false},
-		{"extract_only with remote_extract=true is refused", false, true, boolPtr(true), true, extractLocal, "cannot be combined with extract_only", false},
+		{"extract_only with remote_extract=true is refused", false, true, new(true), true, extractLocal, "cannot be combined with extract_only", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

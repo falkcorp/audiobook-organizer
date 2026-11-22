@@ -276,7 +276,7 @@ func TestSweepKeptFiles_ReportOnlyEscalatesARealError(t *testing.T) {
 	noRemovals(t)
 
 	var res KeptSweepResult
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
+	for range PurgeUndecidedEscalateAfter {
 		res = sweepReport(t, s, testGuard)
 	}
 	if len(res.Escalated) != 1 {
@@ -303,7 +303,7 @@ func TestSweepKeptFiles_ReportOnlyNeverEscalatesAWouldRemove(t *testing.T) {
 		f := newKeptFixture(t)
 		p := f.addKept(t, "kept once")
 		noRemovals(t)
-		for night := 0; night < PurgeUndecidedEscalateAfter+2; night++ {
+		for night := range PurgeUndecidedEscalateAfter + 2 {
 			res := sweepReport(t, f.store, testGuard)
 			if res.WouldRemove != 1 || len(res.Escalated) != 0 {
 				t.Fatalf("night %d: %+v", night, res)
@@ -321,7 +321,7 @@ func TestSweepKeptFiles_ReportOnlyNeverEscalatesAWouldRemove(t *testing.T) {
 			t.Fatal(err)
 		}
 		noRemovals(t)
-		for night := 0; night < PurgeUndecidedEscalateAfter+2; night++ {
+		for range PurgeUndecidedEscalateAfter + 2 {
 			sweepReport(t, f.store, testGuard)
 		}
 		if cur := f.stored(t); cur.Status != database.BookVersionStatusInactivePurged || cur.PurgeUndecidedNights != 0 {
@@ -343,7 +343,7 @@ func TestSweepKeptFiles_ApplyNeverEscalatesABookThatServesNothing(t *testing.T) 
 	if err := os.Remove(filepath.Join(f.bookDir, "year-one.m4b")); err != nil {
 		t.Fatal(err)
 	}
-	for night := 0; night < PurgeUndecidedEscalateAfter+3; night++ {
+	for night := range PurgeUndecidedEscalateAfter + 3 {
 		res := sweep(t, f.store, testGuard)
 		requireCounts(t, res, 0, 0, 0, 1)
 		if len(res.Escalated) != 0 {
@@ -363,7 +363,7 @@ func TestSweepKeptFiles_FailedUnlinkEscalates(t *testing.T) {
 	failRemovals(t, func(string) error { return syscall.EROFS })
 
 	var res KeptSweepResult
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
+	for range PurgeUndecidedEscalateAfter {
 		res = sweep(t, f.store, testGuard)
 	}
 	if len(res.Escalated) != 1 {
@@ -386,7 +386,7 @@ func TestSweepKeptFiles_EnvironmentalFailuresDoNotCount(t *testing.T) {
 		p2 := f.addKept(t, "kept once")
 		s := &flakyOwnerStore{PebbleStore: f.store, path: p2, down: true} // a real error beside it
 		guard := &fsGuard{rootErr: errors.New("library root is not mounted")}
-		for night := 0; night < PurgeUndecidedEscalateAfter+2; night++ {
+		for range PurgeUndecidedEscalateAfter + 2 {
 			sweep(t, s, guard)
 		}
 		if cur := f.stored(t); cur.Status != database.BookVersionStatusInactivePurged || cur.PurgeUndecidedNights != 0 {
@@ -402,7 +402,7 @@ func TestSweepKeptFiles_EnvironmentalFailuresDoNotCount(t *testing.T) {
 		t.Cleanup(func() { BackgroundMergeLockWait = oldWait })
 		merge.LockMergeRMW()
 		defer merge.UnlockMergeRMW()
-		for night := 0; night < PurgeUndecidedEscalateAfter+2; night++ {
+		for night := range PurgeUndecidedEscalateAfter + 2 {
 			res := sweep(t, f.store, testGuard)
 			if res.KeptOnError != 1 {
 				t.Fatalf("night %d: kept_on_error = %d, want 1", night, res.KeptOnError)
@@ -423,7 +423,7 @@ func TestCleanup_ReportsAVersionTheSweepEscalated(t *testing.T) {
 	s := &flakyOwnerStore{PebbleStore: f.store, path: p, down: true}
 
 	var res CleanupResult
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
+	for range PurgeUndecidedEscalateAfter {
 		var err error
 		nextNight(t)
 		if res, err = cleanupTrashedVersionsAt(s, testClock, testGuard, true); err != nil {
@@ -444,7 +444,7 @@ func TestPurgeVersion_RetriesTheNotesOfAnEscalatedVersion(t *testing.T) {
 	owned := f.addKept(t, "kept once")
 	f.rowOwner(t, owned)
 	s := &flakyOwnerStore{PebbleStore: f.store, path: retry, down: true}
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
+	for range PurgeUndecidedEscalateAfter {
 		sweep(t, s, testGuard)
 	}
 	esc := f.stored(t)
@@ -473,7 +473,7 @@ func TestEscalatedVersionCanBeHardDeleted(t *testing.T) {
 	f := newKeptFixture(t)
 	p := f.addKept(t, "kept once")
 	s := &flakyOwnerStore{PebbleStore: f.store, path: p, down: true}
-	for night := 0; night < PurgeUndecidedEscalateAfter; night++ {
+	for range PurgeUndecidedEscalateAfter {
 		sweep(t, s, testGuard)
 	}
 	if err := f.store.DeleteBookVersion(f.ver.ID); err != nil {

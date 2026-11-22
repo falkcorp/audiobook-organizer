@@ -111,7 +111,7 @@ func TestCollections_AStoredQueryTheEvaluatorRefusesReadsAsUnavailable(t *testin
 	store := &colFakeStore{cols: []database.Collection{
 		perViewerRow("c1", "read_status:completed OR title:Alpha", "b1"),
 	}}
-	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+	rig := newFailureRig(t, store, &countingEval{states: viewerStates()}, true)
 
 	got := decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
 	assert.True(t, got.MembersUnavailable)
@@ -170,7 +170,7 @@ func TestCollections_MemberListsAreCutToTheBoundAndReportTheTotal(t *testing.T) 
 	over := database.MaxMaterializedMembers + 300
 	docs := syntheticDocs(over)
 	newRig := func(t *testing.T, store *colFakeStore) *failureRig {
-		return newFailureRigDocs(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true, docs)
+		return newFailureRigDocs(t, store, &countingEval{states: viewerStates()}, true, docs)
 	}
 	type view struct {
 		Members []string `json:"materialized_book_ids"`
@@ -240,7 +240,7 @@ func TestCollections_MemberListsAreCutToTheBoundAndReportTheTotal(t *testing.T) 
 
 	t.Run("a collection under the bound reports no total", func(t *testing.T) {
 		store := &colFakeStore{}
-		rig := newFailureRigDocs(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true, syntheticDocs(50))
+		rig := newFailureRigDocs(t, store, &countingEval{states: viewerStates()}, true, syntheticDocs(50))
 		got := decode(t, rig.do(t, http.MethodPost, "/api/v1/collections", "alice",
 			map[string]any{"name": "Year One", "type": "dynamic", "query": "Synthetic"}))
 		assert.Len(t, got.Members, 50)
@@ -277,7 +277,7 @@ func TestCollections_ACancelledRequestLeavesTheSlotQueue(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var scans atomic.Int64
-	ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}
+	ev := &countingEval{states: viewerStates()}
 	ev.onList = func() {
 		if scans.Add(1) == 1 {
 			close(started)
@@ -324,7 +324,7 @@ func TestCollections_ACancelledRequestLeavesTheSlotQueue(t *testing.T) {
 
 func TestCollections_ViewerMembersWithACancelledContextReturnsItsError(t *testing.T) {
 	store := &colFakeStore{cols: []database.Collection{perViewerRow("c1", "read_status:finished")}}
-	rig := newFailureRig(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true)
+	rig := newFailureRig(t, store, &countingEval{states: viewerStates()}, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	res, err := rig.h.ViewerMembers(ctx, store.cols, "alice")
@@ -358,7 +358,7 @@ func TestCollections_EvaluationFailureLogLinesAreRedactedOnlyForStateReads(t *te
 	for _, tc := range stateReads {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &colFakeStore{cols: []database.Collection{perViewerRow("c1", "read_status:finished")}}
-			ev := &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}, listErr: tc.err}
+			ev := &countingEval{states: viewerStates(), listErr: tc.err}
 			rig := newFailureRig(t, store, ev, true)
 			_ = decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
 			lines := rig.warns()
@@ -378,7 +378,7 @@ func TestCollections_EvaluationFailureLogLinesAreRedactedOnlyForStateReads(t *te
 		row.SortJSON = "title"
 		store := &colFakeStore{cols: []database.Collection{row}}
 		docs := []search.BookDocument{{BookID: "b1", Title: "Alpha"}, {BookID: "b2", Title: "Bravo"}, {BookID: "b3", Title: "Charlie"}}
-		rig := newFailureRigDocs(t, store, &countingEval{colFakeBooks: colFakeBooks{states: viewerStates()}}, true, docs)
+		rig := newFailureRigDocs(t, store, &countingEval{states: viewerStates()}, true, docs)
 		got := decodeViewerResponse(t, rig.do(t, http.MethodGet, "/api/v1/collections/c1", "alice", nil))
 		assert.True(t, got.MembersUnavailable)
 		lines := rig.warns()

@@ -14,10 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func tsPtr(t time.Time) *time.Time { return &t }
-
-func boolPtr(b bool) *bool { return &b }
-
 func TestEnforceTrashStamp(t *testing.T) {
 	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-90 * 24 * time.Hour)
@@ -25,10 +21,10 @@ func TestEnforceTrashStamp(t *testing.T) {
 	minted := now.Add(-time.Second)
 
 	live := func(stamp *time.Time) *Book {
-		return &Book{MarkedForDeletion: boolPtr(false), MarkedForDeletionAt: stamp, UpdatedAt: tsPtr(lastWrite)}
+		return &Book{MarkedForDeletion: new(false), MarkedForDeletionAt: stamp, UpdatedAt: new(lastWrite)}
 	}
 	trashed := func(stamp *time.Time) *Book {
-		return &Book{MarkedForDeletion: boolPtr(true), MarkedForDeletionAt: stamp, UpdatedAt: tsPtr(lastWrite)}
+		return &Book{MarkedForDeletion: new(true), MarkedForDeletionAt: stamp, UpdatedAt: new(lastWrite)}
 	}
 
 	for _, tc := range []struct {
@@ -60,8 +56,8 @@ func TestEnforceTrashStamp(t *testing.T) {
 	}
 
 	// A legacy trashed row with neither a stamp nor a last write: now.
-	b := &Book{MarkedForDeletion: boolPtr(true)}
-	enforceTrashStamp(b, &Book{MarkedForDeletion: boolPtr(true)}, now)
+	b := &Book{MarkedForDeletion: new(true)}
+	enforceTrashStamp(b, &Book{MarkedForDeletion: new(true)}, now)
 	require.NotNil(t, b.MarkedForDeletionAt)
 	assert.True(t, now.Equal(*b.MarkedForDeletionAt))
 }
@@ -101,7 +97,7 @@ func TestStoreStampsATrashWriteAndIgnoresAStaleStamp(t *testing.T) {
 
 	before := time.Now()
 	_, err = p.ModifyBook("stale", func(b *Book) error {
-		b.MarkedForDeletion = boolPtr(true)
+		b.MarkedForDeletion = new(true)
 		return nil
 	})
 	require.NoError(t, err)
@@ -120,7 +116,7 @@ func TestStoreStampsATrashWriteAndIgnoresAStaleStamp(t *testing.T) {
 func TestCreateBookTrashedWithoutAStampIsStamped(t *testing.T) {
 	p := trashStampStore(t)
 	before := time.Now()
-	created, err := p.CreateBook(&Book{ID: "t1", Title: "t1", FilePath: "/l/t1.m4b", MarkedForDeletion: boolPtr(true)})
+	created, err := p.CreateBook(&Book{ID: "t1", Title: "t1", FilePath: "/l/t1.m4b", MarkedForDeletion: new(true)})
 	require.NoError(t, err)
 	require.NotNil(t, created.MarkedForDeletionAt)
 	assert.False(t, created.MarkedForDeletionAt.Before(before))
@@ -134,7 +130,7 @@ func TestRetentionFilterJudgesAnUnstampedRowByItsLastWrite(t *testing.T) {
 	_, err := p.CreateBook(&Book{ID: "legacy", Title: "legacy", FilePath: "/l/legacy.m4b"})
 	require.NoError(t, err)
 	_, err = p.SeedLegacyBookRowForTest("legacy", func(b *Book) error {
-		b.MarkedForDeletion = boolPtr(true)
+		b.MarkedForDeletion = new(true)
 		b.MarkedForDeletionAt = nil
 		return nil
 	})

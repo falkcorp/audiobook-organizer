@@ -8,6 +8,7 @@ package operations_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -40,12 +41,7 @@ func (noOpRows) GetOperationV2(string) (*database.OperationV2Row, error) { retur
 // repairsAccessHolding is the access check for a caller who holds exactly held.
 func repairsAccessHolding(held ...auth.Permission) *opaccess.Repairs {
 	return opaccess.NewRepairs(fixerSet{"plain": scopedFixer{}}, noOpRows{}, func(_ *gin.Context, p auth.Permission) bool {
-		for _, h := range held {
-			if h == p {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(held, p)
 	})
 }
 

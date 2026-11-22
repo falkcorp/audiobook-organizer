@@ -886,7 +886,7 @@ func TestCheckTitle_MatchesTheOracle(t *testing.T) {
 	skipped, bad := 0, 0
 	feature := map[string]int{}
 	pairs := scaled(25000)
-	for i := 0; i < pairs; i++ {
+	for range pairs {
 		a := genSide(r)
 		var b atitle
 		if r.IntN(4) == 0 {
@@ -1201,7 +1201,7 @@ func TestCheckTitle_AddedTextNeverAgrees(t *testing.T) {
 		b := genMutate(r, a)
 		a.path, b.path = nil, nil
 		baseGot := oClass(b, a)
-		for how := 0; how < 6; how++ {
+		for how := range 6 {
 			for _, onCand := range []bool{true, false} {
 				cand, book := a, b
 				if onCand {

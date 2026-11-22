@@ -686,9 +686,7 @@ func previewAuthorStripPlans(ctx context.Context, env authorStripMergeEnv, plans
 			continue // the loop skips the fallback row too
 		}
 		sem <- struct{}{} // blocks while the pool is full
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
 			if pl.into != nil {
 				_, _, out[i].err = mergeAuthorIntoVia(ctx, env.Store, env.Writer, pl.from, *pl.into, true, "", log)
@@ -700,7 +698,7 @@ func previewAuthorStripPlans(ctx context.Context, env authorStripMergeEnv, plans
 				env.Progress(int(n), len(plans), "Previewing author repairs…")
 				progressMu.Unlock()
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return out

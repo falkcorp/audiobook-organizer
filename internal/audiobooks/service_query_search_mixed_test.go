@@ -76,7 +76,7 @@ func TestSearchWithBleve_PerUserOrCountsAndPagesExactly(t *testing.T) {
 	assert.Equal(t, 3, total)
 
 	var seen []string
-	for offset := 0; offset < 3; offset++ {
+	for offset := range 3 {
 		page, total, err := svc.searchWithBleve(context.Background(), q, 1, offset, "alice", nil, hydratePage)
 		require.NoError(t, err)
 		require.Len(t, page, 1)
