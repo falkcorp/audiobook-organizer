@@ -20,9 +20,10 @@ import (
 // which made registration quadratic in the section count and cost a fifth of
 // a boot's CPU with three config stores per boot). The index a batch leaves
 // must be the one the per-section rebuilds left: for the kernel's real core
-// section set, registered one section per call (each call its own batch, so
-// each rebuilds the index, as every Register used to) and all in one call,
-// every key's state is identical, in the same order, and again after Load.
+// section set, registered one at a time through a registry that cannot batch
+// (each Register rebuilds the index, as every Register used to) and all in
+// one call, every key's state is identical, in the same order, and again
+// after Load.
 // A batch that fails part-way still indexes the sections it registered.
 func TestRegisterSectionsBatchIndexMatchesPerSection(t *testing.T) {
 	secs := coreSectionsWith(CoreDefaults{})
@@ -62,9 +63,13 @@ func TestRegisterSectionsBatchIndexMatchesPerSection(t *testing.T) {
 		}
 	}
 
+	// unbatched hides the store registry's batch method, so RegisterSections
+	// over it takes the per-section path every Register took before the
+	// batch: an index rebuild after each section.
+	unbatched := func(st *config.Store) config.Registry { return struct{ config.Registry }{st.Registry()} }
 	one, batch := newStore(t), newStore(t)
 	for _, s := range secs {
-		if _, err := config.RegisterSections(one.Registry(), s); err != nil {
+		if _, err := config.RegisterSections(unbatched(one), s); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -85,7 +90,7 @@ func TestRegisterSectionsBatchIndexMatchesPerSection(t *testing.T) {
 			t.Fatalf("a non-Section element: %v, want ErrInvalid", err)
 		}
 		for _, s := range secs[:3] {
-			if _, err := config.RegisterSections(ref.Registry(), s); err != nil {
+			if _, err := config.RegisterSections(unbatched(ref), s); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -63,12 +63,29 @@ func (s Section[T]) registerWith(r Registry) (any, error) { return Register(r, s
 // []any of config.Define values, and Register needs T. Any element that is not
 // a Section fails with ErrInvalid, before or after the ones registered.
 //
-// On a Store's registry the sections are one batch: the key index is rebuilt
-// once at the end (also when an element fails), not after each section.
-func RegisterSections(r Registry, sections ...any) ([]any, error) {
+// On a Store's registry the sections are one batch (Batch): the key index is
+// rebuilt once at the end (also when an element fails), not after each one.
+func RegisterSections(r Registry, sections ...any) (out []any, err error) {
+	err = Batch(r, func() error {
+		out, err = registerSections(r, sections)
+		return err
+	})
+	return out, err
+}
+
+// Batch runs fn, which registers sections through r, as one batch: on a
+// Store's registry the per-section bookkeeping (the key index) is done once
+// when fn returns, whether or not it failed, instead of after every Register.
+// A loop of Register calls (a module's SettingsSection list) wraps itself in
+// it; RegisterSections always does. On any other Registry it just runs fn.
+func Batch(r Registry, fn func() error) error {
 	if b, ok := r.(batcher); ok {
 		defer b.batch()()
 	}
+	return fn()
+}
+
+func registerSections(r Registry, sections []any) ([]any, error) {
 	out := make([]any, 0, len(sections))
 	for i, s := range sections {
 		rs, ok := s.(registrar)
