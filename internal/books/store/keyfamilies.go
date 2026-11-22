@@ -76,6 +76,7 @@ var keyFamilies = []KeyFamily{
 	{"invitemail:", "books' delivery record of a core invite's e-mail (sent-at, recipient; never a token)", "internal/books/store/pebble_store_invite_mail.go"},
 	{"guestpolicy:", "books' record of the Cloudflare guest-policy entries it added under core identity, one per address (user id, invite id, cf_added; never a token)", "internal/books/store/pebble_store_guest_policy.go"},
 	{"guestpolicyout:", "outcome of the guest-policy sync per core invite id (status, short detail)", "internal/books/store/pebble_store_guest_policy.go"},
+	{"acceptedinvite:", "books' record of an accepted invite under core identity, per invite id (user id, username, address, accept time, binding, grant, displaced ids; never a token)", "internal/books/store/pebble_store_invite_accepts.go"},
 	{"oauthid:", "OAuth identities", "internal/books/store/oauth_identity.go"},
 	{"role:", "roles", "internal/books/store/pebble_store_auth.go"},
 	{"sess:", "web sessions", "internal/books/store/pebble_store_auth.go"},
