@@ -607,3 +607,40 @@ func f(cfg *a.Config) {
 		t.Fatalf("unseeded scan of b found %+v; the control no longer proves the seeding", got)
 	}
 }
+
+// TestSteps_Extender_AsksBeforeEveryRow: a Steps with an extender calls it with
+// the row's name right before the row's fn, for every row, Fatal and Degraded
+// alike and whether fn fails or not (05-health §5H.3.4); an unknown name asks
+// for nothing, and a nil extender removes it.
+func TestSteps_Extender_AsksBeforeEveryRow(t *testing.T) {
+	var log []string
+	st := New().SetErrorLog(func(string, ...any) {}).SetExtender(func(step string) { log = append(log, "ask "+step) })
+	for _, s := range Table {
+		fail := s.Class == Degraded
+		if err := st.Run(s.Name, func() error {
+			log = append(log, "work "+s.Name)
+			if fail {
+				return errors.New("alfred")
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: %v", s.Name, err)
+		}
+	}
+	var want []string
+	for _, s := range Table {
+		want = append(want, "ask "+s.Name, "work "+s.Name)
+	}
+	if strings.Join(log, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q, want %q", log, want)
+	}
+	log = nil
+	if err := st.Run("not-a-row", func() error { t.Fatal("ran"); return nil }); err == nil || len(log) != 0 {
+		t.Fatalf("an unknown step asked for time: err %v, log %q", err, log)
+	}
+	st.SetExtender(nil)
+	_ = st.Run("opCatalogGate", func() error { return nil })
+	if len(log) != 0 {
+		t.Fatalf("a removed extender was still called: %q", log)
+	}
+}
