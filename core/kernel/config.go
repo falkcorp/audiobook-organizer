@@ -232,6 +232,39 @@ type step0Result struct {
 	dbPath   string // core.storage.path from the operator layers, "" = unset
 }
 
+// refuseRetiredAtStep0 is step 0's retired-name judgement: the
+// *config.RetiredNameError a set retired name refuses boot with, before step
+// 0 creates anything (§1.3.6), and nil otherwise. The judgement runs on a
+// scratch store over the same operator layers, every core and module section
+// registered and Loaded (st cannot judge core.paths before step 0 registers
+// it); the real Boot judges again and warns, and any other operator-layer
+// error is the real store's to report, in its own words.
+//
+// That scratch store is the most expensive thing a boot builds, and almost
+// no boot has a retired name set. Only a set name is ever judged, so with
+// none set (config.Store.AnyRetiredNameSet over st, which holds the same
+// layers) the judgement cannot refuse and is skipped. When st cannot tell (the
+// operator file does not parse) it runs. Before this check every boot built
+// it, a third of each boot's CPU in the crash matrices, which boot the kernel
+// tens of thousands of times; TestRetiredNameFastPathAgreesWithCheckConfig
+// (internal/books) holds the check to the full judgement over every name of
+// ABO's list in every layer.
+func refuseRetiredAtStep0(ctx context.Context, st *config.Store, in configInput) error {
+	if set, err := st.AnyRetiredNameSet(); err == nil && !set {
+		return nil
+	}
+	judge := in.operatorOptions()
+	judge.Logger = slog.New(slog.DiscardHandler) // the real Boot judges again and warns
+	if _, err := CheckConfig(ctx, ConfigCheck{
+		Config: judge, StateDirDefault: in.StateDirDefault, Modules: in.Modules, storeSeen: in.StoreSeen,
+	}); err != nil {
+		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
+			return fmt.Errorf("kernel: config boot: %w", rerr)
+		}
+	}
+	return nil
+}
+
 // step0 is 05-config §1.7's step 0 (OPS5-13) over st, a store holding the
 // operator layers: a retired name that refuses boot is judged first, so a
 // refused boot creates nothing (§1.3.6); then core.paths.state_dir (env and
@@ -240,19 +273,8 @@ type step0Result struct {
 // made absolute. bootConfig runs it before Boot reads the boot record, and
 // ResolveStorage runs it alone.
 func step0(ctx context.Context, st *config.Store, in configInput, mkdir func(string) error) (step0Result, error) {
-	// The judgement runs on a scratch store over the same operator layers
-	// (st cannot judge core.paths before step 0 registers it); the real Boot
-	// judges again and warns.
-	judge := in.operatorOptions()
-	judge.Logger = slog.New(slog.DiscardHandler) // the real Boot judges again and warns
-	if _, err := CheckConfig(ctx, ConfigCheck{
-		Config: judge, StateDirDefault: in.StateDirDefault, Modules: in.Modules, storeSeen: in.StoreSeen,
-	}); err != nil {
-		if rerr, refused := errors.AsType[*config.RetiredNameError](err); refused {
-			return step0Result{}, fmt.Errorf("kernel: config boot: %w", rerr)
-		}
-		// Any other operator-layer error is the real store's to report, in
-		// its own words.
+	if err := refuseRetiredAtStep0(ctx, st, in); err != nil {
+		return step0Result{}, err
 	}
 	explicit, err := operatorString(st, stateDirKey)
 	if err != nil {
