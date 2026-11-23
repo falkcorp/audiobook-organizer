@@ -10,6 +10,7 @@ import type { BooksChangedEvent } from '../../hooks/useLibraryQuery';
 import { createFakeServer } from '../../test/eventStreamFake';
 import {
   BOOK_CHANGED_TOPIC,
+  BOOK_CHANGE_MAX_IDS,
   BOOK_CHANGE_WINDOW_MS,
   createBookChangeBatcher,
   parseBookChange,
@@ -102,6 +103,26 @@ describe('createBookChangeBatcher', () => {
     for (const id of ['bk-1', 'bk-2', 'bk-3', 'bk-4', 'bk-5']) b.add('updated', id);
     b.flush();
     expect(batches.map((x) => x.ids)).toEqual([['bk-1', 'bk-2'], ['bk-3', 'bk-4'], ['bk-5']]);
+  });
+
+  it('uses hub A coalescer constants by default: 500 ids per batch, a 250 ms window, the server topic name', () => {
+    // books.book.changed.v1 is the name internal/books/store/book_changed_topic.go publishes.
+    expect(BOOK_CHANGED_TOPIC).toBe('books.book.changed.v1');
+    expect(BOOK_CHANGE_WINDOW_MS).toBe(250);
+    expect(BOOK_CHANGE_MAX_IDS).toBe(500);
+    const { batches, onBatch } = collect();
+    const b = createBookChangeBatcher(onBatch);
+    for (let i = 0; i < 501; i++) b.add('updated', `bk-${String(i).padStart(3, '0')}`);
+    b.flush();
+    expect(batches.map((x) => x.ids.length)).toEqual([500, 1]);
+  });
+
+  it('ignores a change with an empty id', () => {
+    const { batches, onBatch } = collect();
+    const b = createBookChangeBatcher(onBatch);
+    b.add('created', '');
+    b.flush();
+    expect(batches).toEqual([]);
   });
 
   it('a throwing handler does not stop the remaining batches', () => {
