@@ -52,6 +52,12 @@ func (e *executor) principal(ctx context.Context) (tasks.Actor, rbac.Checker, bo
 // decide only a run of a kind the module owns or lists in TaskStarts, or a run the
 // module itself started. A checker that is not a module's (a request's principal)
 // is not gated here: its own permissions decide.
+//
+// The gate is only half the rule, and deliberately the narrower half for a
+// listed foreign kind (least privilege, a ruling that narrows the wording of
+// SEC2-15's first draft): opsChecker holds no scope of another namespace, so a
+// module may cancel or discard its OWN runs of a listed foreign kind (the actor
+// match below) but not anyone else's, although this gate lets that kind through.
 func (e *executor) moduleMayAct(who rbac.Checker, rec tasks.RunRecord, actor tasks.Actor) bool {
 	mc, ok := who.(moduleChecker)
 	if !ok {
