@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
@@ -239,47 +240,105 @@ func TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish(t *testing.T) {
 	}
 }
 
-// TestFinishOnly_RestartMidFinishStaysFinishOnly: a restart while the
-// finish-only attempt is running resumes the run as finish-only, never as a
-// full run. Boot 2 is shut down inside Finish; boot 3's resume sweep
-// re-queues the run, which finishes over the same ledger without reading the
-// source or running an item.
-func TestFinishOnly_RestartMidFinishStaysFinishOnly(t *testing.T) {
-	t.Run("a kind that asks", func(t *testing.T) {
-		second := &finishOnlyRig{finishBlocks: true, finishStarted: make(chan struct{})}
-		h, id := interruptedArchive(t, nil, second)
+// restartedMidFinish runs gotham.archive to an interrupted first boot, lets
+// the person choose Finish, shuts boot 2 down inside Finish, and reboots a
+// third time. It checks what HEAD does with such a run (registry/
+// batch_runner.go:282-288): the run is back at awaiting_decision with the
+// marker kept, the ledger, attempt and stored total untouched, no work done
+// and nothing re-queued on its own. It returns boot 3, the run and the rig
+// that boot ran.
+func restartedMidFinish(t *testing.T) (*harness, tasks.RunID, *finishOnlyRig) {
+	t.Helper()
+	second := &finishOnlyRig{finishBlocks: true, finishStarted: make(chan struct{})}
+	h, id := interruptedArchive(t, nil, second)
+	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
+		t.Fatal(err)
+	}
+	<-second.finishStarted
+	if err := h.x.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stopped := h.waitState(id, tasks.StateInterrupted)
+	if !stopped.FinishOnly {
+		t.Fatal("the attempt stopped by the shutdown lost the finish-only marker")
+	}
+	ledger := chunkNumbers(t, h, id)
+	third := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
+	h = h.reboot([]tasks.Definition{third.def()}, nil)
+	r := h.waitState(id, tasks.StateAwaitingDecision, tasks.StateQueued, tasks.StateRunning, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateAwaitingDecision || r.Reason != "resume_ask" || !r.FinishOnly {
+		t.Fatalf("after the restart the run is %s (reason %q, finish-only %v), want awaiting_decision, resume_ask, marker kept", r.State, r.Reason, r.FinishOnly)
+	}
+	if r.Total != stopped.Total || r.Total != 10 || r.Attempt != stopped.Attempt || r.Done != stopped.Done {
+		t.Fatalf("the restart changed the run's progress: %+v -> %+v", stopped, r)
+	}
+	if after := chunkNumbers(t, h, id); !slices.Equal(after, ledger) {
+		t.Fatalf("the restart changed the ledger: chunks %v -> %v", ledger, after)
+	}
+	if _, ok, err := h.stores.Runs.Checkpoint(context.Background(), id, ckptZero); err != nil || ok {
+		t.Fatalf("the restart wrote the from-zero marker (%v, %v), voiding the ledger", ok, err)
+	}
+	h.stays(id, tasks.StateAwaitingDecision, 100*time.Millisecond) // nothing re-queues it on its own
+	if n := third.sources.Load() + third.items.Load() + third.finishes.Load(); n != 0 {
+		t.Fatalf("the restart ran work (%d source reads, items or finishes), want none until the person chooses", n)
+	}
+	return h, id, third
+}
+
+// TestFinishOnly_RestartMidFinishReturnsToAwaitingDecision (HEAD
+// registry/batch_runner.go:282-288): a restart in the middle of a finish-only
+// attempt sends the run back to awaiting_decision with the marker kept,
+// where the person chooses again: Finish runs finish-only, Resume clears the
+// marker and runs the run normally, Drop drops it.
+func TestFinishOnly_RestartMidFinishReturnsToAwaitingDecision(t *testing.T) {
+	t.Run("then finish", func(t *testing.T) {
+		h, id, third := restartedMidFinish(t)
 		if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
 			t.Fatal(err)
 		}
-		<-second.finishStarted
-		if err := h.x.Shutdown(context.Background()); err != nil {
-			t.Fatal(err)
+		r := h.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
+		if r.State != tasks.StateSucceeded || r.FinishOnly {
+			t.Fatalf("run %s (%q, finish-only %v), want succeeded with the marker cleared", r.State, r.Error, r.FinishOnly)
 		}
-		r := h.waitState(id, tasks.StateInterrupted)
-		if !r.FinishOnly {
-			t.Fatal("the attempt stopped by the shutdown lost the finish-only marker")
-		}
-		third := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
-		h = h.reboot([]tasks.Definition{third.def()}, nil)
-		r = h.waitState(id, tasks.StateSucceeded, tasks.StateFailed, tasks.StateAwaitingDecision)
-		if r.State != tasks.StateSucceeded {
-			t.Fatalf("after the restart the run is %s (%q), want it finished", r.State, r.Error)
-		}
-		if s := <-third.summary; s.Done != 6 || s.ChunksDone != 2 {
-			t.Fatalf("the resumed finish saw %+v, want the first boot's 6 files in 2 chunks", s)
+		if s := <-third.summary; s.Done != 6 || s.ChunksDone != 2 || s.Total != 10 {
+			t.Fatalf("the finish saw %+v, want the first boot's 6 files in 2 chunks, total 10", s)
 		}
 		if n := third.sources.Load() + third.items.Load(); n != 0 {
-			t.Fatalf("the resumed finish-only run read the source or ran an item %d times, want none", n)
+			t.Fatalf("the finish-only run read the source or ran an item %d times, want none", n)
 		}
+	})
+	t.Run("then resume", func(t *testing.T) {
+		h, id, third := restartedMidFinish(t)
+		if err := h.e.DecideAs(context.Background(), id, tasks.DecideResume, gordon); err != nil {
+			t.Fatal(err)
+		}
+		r := h.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
+		if r.State != tasks.StateSucceeded || r.FinishOnly {
+			t.Fatalf("run %s (%q, finish-only %v), want succeeded with the marker cleared", r.State, r.Error, r.FinishOnly)
+		}
+		if third.sources.Load() == 0 || third.items.Load() == 0 {
+			t.Fatalf("a resumed run read the source %d times and ran %d items: it ran as finish-only", third.sources.Load(), third.items.Load())
+		}
+	})
+	t.Run("then drop", func(t *testing.T) {
+		h, id, third := restartedMidFinish(t)
+		if err := h.e.DecideAs(context.Background(), id, tasks.DecideDrop, gordon); err != nil {
+			t.Fatal(err)
+		}
+		r := h.waitState(id, tasks.StateInterruptedDropped)
 		if r.FinishOnly {
-			t.Error("a run that ended still carries the finish-only marker")
+			t.Error("a dropped run still carries the finish-only marker")
+		}
+		if n := third.sources.Load() + third.items.Load() + third.finishes.Load(); n != 0 {
+			t.Fatalf("a dropped run ran work (%d), want none", n)
 		}
 	})
 	t.Run("a from-zero kind is not restarted from zero", func(t *testing.T) {
 		// Only ResumeAsk reaches awaiting_decision, so the marker goes on a
-		// running ResumeFromZero run by hand: whatever the policy, a
-		// finish-only run's restart is finish-only, and a from-zero requeue
-		// would void the ledger and reset the progress Finish reads.
+		// running ResumeFromZero run by hand: whatever the policy, the
+		// restart of a finish-only run is awaiting_decision, not a from-zero
+		// requeue, which would void the ledger and reset the progress Finish
+		// reads.
 		finishOnlyFromZeroRestart(t, false, 10)
 	})
 	t.Run("after an earlier from-zero restart", func(t *testing.T) {
@@ -290,16 +349,13 @@ func TestFinishOnly_RestartMidFinishStaysFinishOnly(t *testing.T) {
 	})
 }
 
-// finishOnlyFromZeroRestart marks a running ResumeFromZero Batch run finish-only,
-// restarts it, and checks the Finish that follows. With afterFromZeroRestart the
-// run was first restarted from zero without the marker.
+// finishOnlyFromZeroRestart marks a running ResumeFromZero Batch run
+// finish-only and restarts it: it must land in awaiting_decision with its
+// ledger, progress and from-zero marker as they were, and a following
+// Decide(finish) must run Finish over that ledger. With afterFromZeroRestart
+// the run was first restarted from zero without the marker.
 func finishOnlyFromZeroRestart(t *testing.T, afterFromZeroRestart bool, wantTotal int64) {
-	// Only ResumeAsk reaches awaiting_decision, so this puts the marker on
-	// a running ResumeFromZero run by hand: whatever the policy, a
-	// finish-only run's restart is finish-only, and a from-zero requeue
-	// would void the ledger Finish reads. Boot 2 is itself a from-zero
-	// requeue (it voids boot 1's chunks, then blocks before writing any of
-	// its own), so only a Finish that reads past the void line sees them.
+	t.Helper()
 	fromZero := func(r *finishOnlyRig) tasks.Definition {
 		s := tasks.BatchSpec[noParams, string, tasks.Summary]{
 			Common: common("gotham.archive", withResume(tasks.ResumeFromZero)),
@@ -346,17 +402,36 @@ func finishOnlyFromZeroRestart(t *testing.T, afterFromZeroRestart bool, wantTota
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
+	ledger := chunkNumbers(t, h, id)
+	zero, zeroOK, err := h.stores.Runs.Checkpoint(context.Background(), id, ckptZero)
+	if err != nil {
+		t.Fatal(err)
+	}
 	second := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
 	next := h.crashBoot([]tasks.Definition{fromZero(second)}, nil)
-	r := next.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
+	r := next.waitState(id, tasks.StateAwaitingDecision, tasks.StateQueued, tasks.StateRunning, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateAwaitingDecision || !r.FinishOnly || r.Total != int(wantTotal) {
+		t.Fatalf("restarted finish-only run: %s (finish-only %v, total %d), want awaiting_decision, marker kept, total %d", r.State, r.FinishOnly, r.Total, wantTotal)
+	}
+	if after := chunkNumbers(t, next, id); !slices.Equal(after, ledger) {
+		t.Fatalf("the restart changed the ledger: chunks %v -> %v", ledger, after)
+	}
+	if z, ok, err := next.stores.Runs.Checkpoint(context.Background(), id, ckptZero); err != nil || ok != zeroOK || string(z) != string(zero) {
+		t.Fatalf("the restart changed the from-zero marker: %q,%v -> %q,%v (%v)", zero, zeroOK, z, ok, err)
+	}
+	next.stays(id, tasks.StateAwaitingDecision, 100*time.Millisecond)
+	if err := next.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
+		t.Fatal(err)
+	}
+	r = next.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
 	if r.State != tasks.StateSucceeded {
-		t.Fatalf("restarted finish-only run: %s (%q)", r.State, r.Error)
+		t.Fatalf("finish after the restart: %s (%q)", r.State, r.Error)
 	}
 	if s := <-second.summary; s.Done != 6 || s.ChunksDone != 2 || s.Total != wantTotal {
 		t.Fatalf("Finish saw %+v, want boot 1's 6 files in 2 chunks of a stored total of %d (the ledger and the progress a from-zero requeue voids are still what the finish reads)", s, wantTotal)
 	}
 	if n := second.sources.Load() + second.items.Load(); n != 0 {
-		t.Fatalf("the restarted finish-only run read the source or ran an item %d times, want none", n)
+		t.Fatalf("the finish-only run read the source or ran an item %d times, want none", n)
 	}
 }
 
