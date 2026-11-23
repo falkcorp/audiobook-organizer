@@ -32,10 +32,20 @@ func newUnlessHeldFixture(t *testing.T) *unlessHeldFixture {
 	require.NotNil(t, ps)
 	book, err := ps.CreateBook(&Book{Title: "Batman: Year One", FilePath: "/lib/unless/year-one"})
 	require.NoError(t, err)
-	other, err := ps.CreateBook(&Book{Title: "Batman: The Long Halloween", FilePath: "/lib/unless/long-halloween"})
-	require.NoError(t, err)
 	row := &BookFile{BookID: book.ID, FilePath: "/lib/unless/year-one/missing.m4b", Format: "m4b"}
 	require.NoError(t, ps.CreateBookFile(row))
+	// A row created under the second book takes that book's OWNER stripe at its
+	// commit (lockBookOwners), and the move being tested holds the first book's
+	// owner stripe and the moved row's file stripe across its verify-to-apply
+	// window. With two random ULIDs the books shared an owner stripe about 1 run
+	// in 256 (256 stripes), and the creator then waited on the stripe instead of
+	// reaching the single-owner index mutex the test waits for: the test failed
+	// with "never reached the single-owner index mutex" on a runner of any speed.
+	// So the second book's id is chosen on a stripe neither the first book nor the
+	// moved row can hold.
+	other, err := ps.CreateBook(&Book{ID: distinctStripeID(t, book.ID, row.ID), Title: "Batman: The Long Halloween", FilePath: "/lib/unless/long-halloween"})
+	require.NoError(t, err)
+	require.NotEqual(t, stripeFor(book.ID), stripeFor(other.ID), "the second book shares the first book's owner stripe")
 	return &unlessHeldFixture{ps: ps, book: book, other: other, row: row,
 		from: row.FilePath, to: "/lib/unless/year-one/found.m4b"}
 }
