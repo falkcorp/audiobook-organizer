@@ -115,12 +115,15 @@ make install-rollback-helpers APPLY=1 REPLACE_CONF=1 DEPLOY_BIN=<bin> DEPLOY_DB=
 token in `offline_env`, and `make rollback-check` still lists the generations. `make export-install-secrets`
 is not the check: it ignores the offline environment, so it passes while Step 7 would fail.
 
-**Undo:** in a checkout of the previous commit, run the same command with two changes: leave out `--export-dir`, and
-pass the host's previous `offline_env` explicitly:
+**Undo:** in a checkout of the previous commit, run this. It is the command above with two changes: no
+`--export-dir`, and the host's previous `offline_env` (`ABK_STATE_DIR`). Add `--checkpoint-dir` and
+`--service-group` exactly as you did above, if you passed them:
 
 ```bash
 make install-rollback-helpers APPLY=1 REPLACE_CONF=1 DEPLOY_BIN=<bin> DEPLOY_DB=<db> \
-  ROLLBACK_INSTALL_ARGS="<the same arguments as above, without --export-dir>
+  ROLLBACK_INSTALL_ARGS="--deploy-user <deploy user> --service-user <service_user> \
+    --state-dir <state_dir> --archive-dir <archive_dir> \
+    --stage-bin <stage_bin> --stage-local-conf <stage_local_conf> \
     --offline-env 'HOME=<state_dir> ABK_STATE_DIR=<state_dir>'"
 ```
 
