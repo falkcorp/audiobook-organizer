@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
+	corebackup "github.com/falkcorp/mediacore/backup"
 )
 
 // extractLog logs ExtractStore.
@@ -56,8 +57,8 @@ var extractLog = logger.New("backup.extract-store")
 //
 // Release R1 only: F8's backup extractor replaces it.
 func ExtractStore(ctx context.Context, archivePath, storeDir string) (string, error) {
-	sum, _, err := extractStore(ctx, archivePath, storeDir)
-	return sum, err
+	x, err := extractStoreRecording(ctx, archivePath, storeDir)
+	return x.sum, err
 }
 
 // extractStore is ExtractStore, also reporting whether the archive was
@@ -65,41 +66,65 @@ func ExtractStore(ctx context.Context, archivePath, storeDir string) (string, er
 // requires verification (StageRestore) learns what the extraction checked
 // rather than reading the sidecar again after it.
 func extractStore(ctx context.Context, archivePath, storeDir string) (string, bool, error) {
+	x, err := extractStoreRecording(ctx, archivePath, storeDir)
+	return x.sum, x.verified, err
+}
+
+// extractedStore is what an extraction into a store directory reports.
+type extractedStore struct {
+	// sum is the archive's SHA-256, the scan's digest over its bytes.
+	sum string
+	// verified: the archive was checked against its sidecar.
+	verified bool
+	// codec is the compression the archive was read with (gzip, zstd, none).
+	codec string
+	// entries are the files extracted, each with the size and SHA-256 taken as
+	// it was written. Paths are slash-separated and relative to the store
+	// directory's parent (the swap's staging directory), so a file of a store
+	// directory named db is "db/<name>", the form core's legacy manifest
+	// records.
+	entries []corebackup.Entry
+}
+
+// extractStoreRecording is the extraction itself, extractStore with the codec
+// and the written files' digests as well.
+func extractStoreRecording(ctx context.Context, archivePath, storeDir string) (extractedStore, error) {
+	var none extractedStore
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return none, err
 	}
 	if !filepath.IsAbs(archivePath) || !filepath.IsAbs(storeDir) {
-		return "", false, fmt.Errorf("backup: extract store: %q and %q must be absolute", archivePath, storeDir)
+		return none, fmt.Errorf("backup: extract store: %q and %q must be absolute", archivePath, storeDir)
 	}
 	fi, err := os.Stat(archivePath)
 	if err != nil {
-		return "", false, fmt.Errorf("backup: extract store: %w", err)
+		return none, fmt.Errorf("backup: extract store: %w", err)
 	}
 	if !fi.Mode().IsRegular() {
-		return "", false, fmt.Errorf("backup: extract store: %s is not a regular file", archivePath)
+		return none, fmt.Errorf("backup: extract store: %s is not a regular file", archivePath)
 	}
 	if entries, err := os.ReadDir(storeDir); err != nil {
-		return "", false, fmt.Errorf("backup: extract store: %w", err)
+		return none, fmt.Errorf("backup: extract store: %w", err)
 	} else if len(entries) > 0 {
-		return "", false, fmt.Errorf("backup: extract store: %s is not empty", storeDir)
+		return none, fmt.Errorf("backup: extract store: %s is not empty", storeDir)
 	}
 	sum, scanErr := scanArchive(archivePath)
 	if sum == "" {
-		return "", false, fmt.Errorf("backup: extract store: checksum %s: %w", archivePath, scanErr)
+		return none, fmt.Errorf("backup: extract store: checksum %s: %w", archivePath, scanErr)
 	}
 	verified, err := checkSidecar(archivePath, sum)
 	if err != nil {
-		return "", false, err
+		return none, err
 	}
 	if scanErr != nil {
-		return "", false, fmt.Errorf("backup: extract store: %s: %w", filepath.Base(archivePath), scanErr)
+		return none, fmt.Errorf("backup: extract store: %s: %w", filepath.Base(archivePath), scanErr)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return none, err
 	}
 	tmp, err := os.MkdirTemp(filepath.Dir(storeDir), ".extract-")
 	if err != nil {
-		return "", false, fmt.Errorf("backup: extract store: %w", err)
+		return none, fmt.Errorf("backup: extract store: %w", err)
 	}
 	defer func() {
 		if rerr := os.RemoveAll(tmp); rerr != nil {
@@ -112,29 +137,53 @@ func extractStore(ctx context.Context, archivePath, storeDir string) (string, bo
 	// extractArchive refuses one an entry would write through. The live
 	// snapshot directory sits beside the live store, which the extraction
 	// never touches.
-	if err := extractArchive(archivePath, tmp, nil); err != nil {
-		return "", false, fmt.Errorf("backup: extract store: %w", err)
+	ledger := newEntryLedger()
+	if err := extractArchiveRecording(archivePath, tmp, nil, ledger); err != nil {
+		return none, fmt.Errorf("backup: extract store: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return none, err
 	}
 	root, err := archiveRoot(tmp)
 	if err != nil {
-		return "", false, fmt.Errorf("backup: extract store: %s: %w", filepath.Base(archivePath), err)
+		return none, fmt.Errorf("backup: extract store: %s: %w", filepath.Base(archivePath), err)
 	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", false, fmt.Errorf("backup: extract store: %w", err)
+		return none, fmt.Errorf("backup: extract store: %w", err)
 	}
 	for _, e := range entries {
 		if err := os.Rename(filepath.Join(root, e.Name()), filepath.Join(storeDir, e.Name())); err != nil {
-			return "", false, fmt.Errorf("backup: extract store: %w", err)
+			return none, fmt.Errorf("backup: extract store: %w", err)
 		}
 	}
 	if err := syncTree(storeDir); err != nil {
-		return "", false, fmt.Errorf("backup: extract store: sync %s: %w", storeDir, err)
+		return none, fmt.Errorf("backup: extract store: sync %s: %w", storeDir, err)
 	}
-	return sum, verified, nil
+	written, err := ledgerEntries(ledger, filepath.Base(root), filepath.Base(storeDir))
+	if err != nil {
+		return none, fmt.Errorf("backup: extract store: %w", err)
+	}
+	return extractedStore{sum: sum, verified: verified, codec: ledger.codec, entries: written}, nil
+}
+
+// ledgerEntries is the ledger's files as core manifest entries, each path made
+// relative to the staging directory: the archive's one root directory (root)
+// becomes the store directory (store, the name of storeDir under staging), which
+// extractStoreRecording moves its children into. Every file is a system-of-record file, the class core's own legacy
+// staging gives them.
+func ledgerEntries(l *entryLedger, root, store string) ([]corebackup.Entry, error) {
+	prefix := root + "/"
+	out := make([]corebackup.Entry, 0, len(l.files))
+	for _, name := range l.names() {
+		rel, ok := strings.CutPrefix(name, prefix)
+		if !ok {
+			return nil, fmt.Errorf("the extracted file %q is not under the archive's root %q", name, root)
+		}
+		f := l.files[name]
+		out = append(out, corebackup.Entry{Path: store + "/" + rel, Size: f.size, SHA256: f.sha256, Class: corebackup.SystemOfRecord})
+	}
+	return out, nil
 }
 
 // checkSidecar compares sum with the digest the sidecar beside archivePath

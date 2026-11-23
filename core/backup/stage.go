@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -524,14 +525,50 @@ func (s *Svc) extractLegacy(ctx context.Context, archive, staging, verified stri
 		ents = append(ents, Entry{Path: dbPrefix + "/" + w.Name, Size: w.Size, SHA256: w.SHA256, Class: SystemOfRecord})
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Path < ents[j].Path })
-	b, err := json.Marshal(legacyStaged{Format: FormatLegacyABO, Archive: info.SHA256, Codec: info.Codec, Entries: ents})
+	return WriteLegacyStaged(staging, info.SHA256, info.Codec, ents)
+}
+
+// WriteLegacyStaged writes the legacy manifest of a staged legacy-abo/0 restore
+// into stagingDir (the directory that holds the extracted store as db/, never
+// the store itself: the store directory is moved onto the live path) and
+// returns the manifest's SHA-256, the intent's manifest_sha256 that
+// ReadStagedManifest and Recheck check it against. It is the one encoder of
+// the format: core's own staging (extractLegacy) and a host that extracts a
+// legacy archive itself (ABO's restore stager) both write it here, so what
+// ReadStagedManifest decodes is what was written.
+//
+// archiveSHA256 is the SHA-256 of the archive's bytes, codec the compression
+// the archive was read with (gzip, zstd or none), and entries the extracted
+// files with the size and SHA-256 taken as each was written. Each entry's Path
+// is slash-separated and relative to stagingDir (db/CURRENT), the way Recheck
+// joins it. An entry whose path is not a relative path inside stagingDir, or
+// that has no digest, is refused: the manifest would name a file Recheck
+// cannot find, or one it cannot re-hash. The entries are written sorted by
+// path, and the directory is synced so the manifest survives a crash with the
+// intent that names it.
+func WriteLegacyStaged(stagingDir, archiveSHA256, codec string, entries []Entry) (manifestSHA string, err error) {
+	if stagingDir == "" || archiveSHA256 == "" {
+		return "", errors.New("backup: write legacy manifest: the staging directory and the archive digest are required")
+	}
+	ents := make([]Entry, len(entries))
+	copy(ents, entries)
+	for _, e := range ents {
+		if !fs.ValidPath(e.Path) || e.Path == "." {
+			return "", fmt.Errorf("backup: write legacy manifest: %q is not a path inside the staging directory", e.Path)
+		}
+		if e.SHA256 == "" {
+			return "", fmt.Errorf("backup: write legacy manifest: %q has no digest", e.Path)
+		}
+	}
+	sort.Slice(ents, func(i, j int) bool { return ents[i].Path < ents[j].Path })
+	b, err := json.Marshal(legacyStaged{Format: FormatLegacyABO, Archive: archiveSHA256, Codec: codec, Entries: ents})
 	if err != nil {
 		return "", err
 	}
-	if err := writeFileAtomic(filepath.Join(staging, legacyManifestName), b); err != nil {
+	if err := writeFileAtomic(filepath.Join(stagingDir, legacyManifestName), b); err != nil {
 		return "", err
 	}
-	if err := syncDir(staging); err != nil {
+	if err := syncDir(stagingDir); err != nil {
 		return "", err
 	}
 	return SumManifest(b), nil

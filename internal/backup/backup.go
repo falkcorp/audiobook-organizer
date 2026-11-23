@@ -1066,6 +1066,13 @@ func landsIn(p string, keep []keepOutDir) (string, bool, error) {
 // (writeEntry), so a hard link there leaves the file it names as it was
 // (SF1).
 func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
+	return extractArchiveRecording(archivePath, targetPath, snapshotDirs, nil)
+}
+
+// extractArchiveRecording is extractArchive that also records each regular
+// file's size and SHA-256 in ledger as the file is written, and the codec the
+// archive was read with (nil: record nothing).
+func extractArchiveRecording(archivePath, targetPath string, snapshotDirs []string, ledger *entryLedger) error {
 	// Open backup file
 	backupFile, err := os.Open(archivePath)
 	if err != nil {
@@ -1086,6 +1093,9 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 		return fmt.Errorf("failed to create %s reader: %w", codec.Name(), err)
 	}
 	defer compReader.Close()
+	if ledger != nil {
+		ledger.codec = codec.Name()
+	}
 
 	// Create tar reader
 	tarReader := tar.NewReader(compReader)
@@ -1175,8 +1185,17 @@ func extractArchive(archivePath, targetPath string, snapshotDirs []string) error
 			if err := os.MkdirAll(filepath.Dir(target), 0775); err != nil {
 				return fmt.Errorf("failed to create parent directory for %s: %w", target, err)
 			}
-			if err := writeEntry(target, tarReader, os.FileMode(header.Mode)); err != nil {
+			var src io.Reader = tarReader
+			var counted *ledgerReader
+			if ledger != nil {
+				counted = newLedgerReader(tarReader)
+				src = counted
+			}
+			if err := writeEntry(target, src, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("archive entry %q: %w", header.Name, err)
+			}
+			if counted != nil {
+				ledger.add(entryName, counted.n, counted.sum())
 			}
 			changed.add(filepath.Dir(target))
 		default:
