@@ -100,7 +100,9 @@ func (g *gate) acquire(ctx context.Context, limit int) (func(), error) {
 		g.mu.Unlock()
 		return func() {}, nil
 	}
-	if g.held < limit && len(g.waiters) == 0 {
+	// admitLocked has just seated every waiter the bound has room for, so a free
+	// slot here means nobody is queued ahead: this caller cannot barge past one.
+	if g.held < limit {
 		g.held++
 		g.mu.Unlock()
 		return g.releaser(), nil
