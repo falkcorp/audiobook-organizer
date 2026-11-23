@@ -7,10 +7,12 @@ package organizer
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 // createSpy records which create call the organize service made for the copy.
@@ -102,9 +104,23 @@ func TestCreateOrganizedVersionFollowTorrents_RefusesWithoutACreator(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	landing := &Landing{Path: filepath.Join(t.TempDir(), "organized-dark-victory.m4b")}
+	rootDir := t.TempDir()
+	prev := config.AppConfig
+	t.Cleanup(func() { config.AppConfig = prev })
+	config.AppConfig.RootDir = rootDir // the rollback removes only files under the root
+	landing := &Landing{Path: filepath.Join(rootDir, "organized-dark-victory.m4b")}
+	// The caller has already written the organized file when the refusal comes: the
+	// refusal removes it (the same rollback as any failed CreateBook), so neither a
+	// row nor a file is left behind.
+	if err := os.WriteFile(landing.Path, []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	landing.Created = []string{landing.Path}
 	if _, err := svc.CreateOrganizedVersionFollowTorrents(src, landing, "", &noopLogger{}); !errors.Is(err, ErrRelocatingCopyCreatorNotWired) {
 		t.Fatalf("err = %v, want ErrRelocatingCopyCreatorNotWired", err)
+	}
+	if _, err := os.Stat(landing.Path); !os.IsNotExist(err) {
+		t.Fatalf("the organized file survives the refusal: stat err = %v", err)
 	}
 	all, err := ps.GetAllBooksCore(100, 0)
 	if err != nil || len(all) != 1 {
