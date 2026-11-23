@@ -65,6 +65,7 @@ func g7Inputs(t *testing.T) (G7Inputs, *g7FakeMerge, *atomic.Int32, string) {
 		RootDir:               func() string { return t.TempDir() },
 		StandDownKey:          "books.gotham-watch",
 		InvalidateSeriesCache: func() {},
+		SupportedExtensions:   func() []string { return []string{".m4b"} },
 	}, merge, wb, id
 }
 
@@ -161,11 +162,18 @@ func TestBooksT6G7Deps_NilInputsStayUnsetAndDefaultsAreHEADs(t *testing.T) {
 	require.Nil(t, d.ResolveReportPath, "no root, no report path to confine")
 
 	bare := in
-	bare.AgreedChapterTitle, bare.ChapterProber = nil, nil
+	bare.AgreedChapterTitle, bare.ChapterProber, bare.SupportedExtensions = nil, nil, nil
 	d = newT6G7Deps(bare)
-	require.NotNil(t, d.AgreedChapterTitle)
+	require.Nil(t, d.AgreedChapterTitle, "no injected extension accessor, no global-config fallback")
 	require.NotNil(t, d.ChapterProber)
 }
+
+// Keep the full store compatibility proof in tests: production depends only
+// on the narrow roles, so the database.Store reference ratchet does not grow.
+var (
+	_ G7Reads  = database.Store(nil)
+	_ G7Writes = database.Store(nil)
+)
 
 // The report path is confined under the library root, as HEAD's resolver does.
 func TestBooksT6G7Deps_ReportPathIsConfinedUnderTheRoot(t *testing.T) {

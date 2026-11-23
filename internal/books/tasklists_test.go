@@ -159,6 +159,7 @@ func listsFixture(t *testing.T) taskListInputs {
 			G7: maintenance.G7Inputs{
 				Reads: store, Writes: store,
 				InvalidateSeriesCache: func() {},
+				SupportedExtensions:   func() []string { return []string{".m4b"} },
 			},
 			StandDownKey: tasks.Key("books.library.scan"),
 		},
@@ -411,6 +412,7 @@ func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 		"G7.Reads":                 func(in *taskListInputs) { in.Maintenance.G7.Reads = nil },
 		"G7.Writes":                func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
 		"G7.InvalidateSeriesCache": func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
+		"G7.SupportedExtensions":   func(in *taskListInputs) { in.Maintenance.G7.SupportedExtensions = nil },
 		"Schedules":                func(in *taskListInputs) { in.Schedules = nil },
 	} {
 		t.Run(name, func(t *testing.T) {

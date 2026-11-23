@@ -139,6 +139,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	n.check("G7.Reads", isSet(in.G7.Reads))
 	n.check("G7.Writes", isSet(in.G7.Writes))
 	n.check("G7.InvalidateSeriesCache", in.G7.InvalidateSeriesCache != nil)
+	n.check("G7.SupportedExtensions", in.G7.SupportedExtensions != nil)
 	if err := n.err("BooksTaskLists"); err != nil {
 		return nil, err
 	}
