@@ -26,7 +26,7 @@ type OrganizeService = organizer.Service
 type OrganizeRequest = organizer.Request
 type OrganizeStats = organizer.Stats
 
-// organizeServiceStore is what this wrapper forwards its store into: the
+// organizeServiceBase is what this wrapper forwards its store into: the
 // organizer service it constructs, and the metafetch service the
 // FetchMetadataForBook callback builds per call. Naming both rather than
 // inlining their methods keeps this at two entries and means it re-narrows on
@@ -36,14 +36,27 @@ type OrganizeStats = organizer.Stats
 // metafetch.NewService still took the union until the four-layer forwarding
 // chain beneath it was narrowed first.
 //
-// organizer.RelocatingCopyCreator is on it, and not on database.Store (which may
-// not grow): the one value in the container's "store" slot is a
-// *database.PebbleStore, which has the method, and the registry's Get panics at
-// boot, naming both types, if a store without it is ever put there.
-type organizeServiceStore interface {
+// It is what a store in the container's "store" slot is guaranteed to be: that
+// slot holds whatever database.Store NewServer was given (a wrapper that embeds
+// the interface, a generated mock), which does not have
+// CreateBookWithRelocation, so the registry's Build cannot require it.
+type organizeServiceBase interface {
 	organizer.Store
-	organizer.RelocatingCopyCreator
 	metafetch.Store
+}
+
+// organizeServiceStore is organizeServiceBase plus organizer.RelocatingCopyCreator,
+// which is on it and not on database.Store (which may not grow:
+// TestStoreFlattenedWidth). A direct caller of NewOrganizeService must hand in a
+// store that has the method, and the compiler checks it. The production store
+// is books' *database.PebbleStore (database.NewBooksStore returns the concrete
+// type, so the assertion below is the proof); a container built over a store
+// without it (a test's wrapper or mock) wires no creator, and the single-book
+// organize copy then refuses (organizer.ErrRelocatingCopyCreatorNotWired)
+// instead of creating a copy that moves no torrent.
+type organizeServiceStore interface {
+	organizeServiceBase
+	organizer.RelocatingCopyCreator
 }
 
 // Compile-time proof that the production store satisfies it.
@@ -52,8 +65,16 @@ var _ organizeServiceStore = (*database.PebbleStore)(nil)
 // NewOrganizeService creates a new organizer.Service and wires up
 // server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
 func NewOrganizeService(db organizeServiceStore) *OrganizeService {
+	return newOrganizeService(db, db)
+}
+
+// newOrganizeService is NewOrganizeService over a store whose creator may be
+// nil (the container's case: see organizeServiceBase).
+func newOrganizeService(db organizeServiceBase, creator organizer.RelocatingCopyCreator) *OrganizeService {
 	svc := organizer.NewService(db)
-	svc.SetRelocatingCopyCreator(db)
+	if creator != nil {
+		svc.SetRelocatingCopyCreator(creator)
+	}
 
 	// Wire server-specific callbacks. iTunes callbacks are set later in
 	// Server.New() after itunesSvc is constructed (see server.go).

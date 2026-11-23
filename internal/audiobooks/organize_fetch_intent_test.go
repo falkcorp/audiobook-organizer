@@ -16,6 +16,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
+	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
 // The fetch-first callback NewOrganizeService wires into the organizer is an
@@ -78,4 +79,37 @@ func TestNewOrganizeService_WiresTheRelocatingCopyCreator(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, copyBook)
 	require.Equal(t, []string{src.ID}, spy.originals)
+}
+
+// The container builds the organize service over whatever store the "store"
+// slot holds. A store with the method wires it (the copy stages its follow-up);
+// one without wires none, and the single-book copy refuses rather than creating a
+// copy that moves no torrent (the silent loss the relocation exists to prevent).
+func TestServiceDefs_OrganizeCopyNeedsTheCreatorTheStoreHas(t *testing.T) {
+	for name, wrap := range map[string]func(*database.PebbleStore) database.Store{
+		"store_has_the_method": func(ps *database.PebbleStore) database.Store { return ps },
+		"wrapped_store":        func(ps *database.PebbleStore) database.Store { return struct{ database.Store }{ps} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ps, err := database.NewPebbleStore(t.TempDir())
+			require.NoError(t, err)
+			ps.WaitForWarmup()
+			t.Cleanup(func() { _ = ps.Close() })
+			imported := "imported"
+			src, err := ps.CreateBook(&database.Book{Title: "Year One", FilePath: filepath.Join(t.TempDir(), "year-one.m4b"), LibraryState: &imported})
+			require.NoError(t, err)
+
+			c := serviceregistry.NewContainerFrom(ServiceDefs()...).Override(serviceregistry.KeyStore, wrap(ps))
+			require.NoError(t, c.Resolve())
+			require.NoError(t, c.Build(t.Context()))
+			svc := serviceregistry.Get[*OrganizeService](c, serviceregistry.KeyOrganize)
+
+			_, err = svc.CreateOrganizedVersionFollowTorrents(src, &organizer.Landing{Path: filepath.Join(t.TempDir(), "organized-year-one.m4b")}, "", logger.New("test"))
+			if name == "store_has_the_method" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, organizer.ErrRelocatingCopyCreatorNotWired)
+		})
+	}
 }
