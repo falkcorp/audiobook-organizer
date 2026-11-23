@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
 
 // TestRegisteredHarness_RelocationIsStagedByTheBootedModule (F6-03): on the
@@ -79,7 +80,11 @@ func TestRegisteredHarness_RelocationIsStagedByTheBootedModule(t *testing.T) {
 	if n := backlog(); n != 0 {
 		t.Fatalf("path changes of a stored book left %d relocation message(s), want 0: only a copy-organize stages", n)
 	}
-	if _, err := s.CreateBookWithRelocation(&store.Book{Title: b.Title, Format: "m4b", FilePath: "/library/batman/year-one-copy/year-one.m4b"}, b.ID); err != nil {
+	copier, ok := s.(organizer.RelocatingCopyCreator)
+	if !ok {
+		t.Fatalf("the booted store %T cannot create a relocating copy", s)
+	}
+	if _, err := copier.CreateBookWithRelocation(&store.Book{Title: b.Title, Format: "m4b", FilePath: "/library/batman/year-one-copy/year-one.m4b"}, b.ID); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(20 * time.Second)

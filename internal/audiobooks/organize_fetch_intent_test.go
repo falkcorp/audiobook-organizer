@@ -7,11 +7,13 @@ package audiobooks
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 )
@@ -44,4 +46,36 @@ func TestNewOrganizeService_FetchFirstCallbackIsUnattended(t *testing.T) {
 			require.Nil(t, resp)
 		})
 	}
+}
+
+// relocationSpy records the copy NewOrganizeService's service creates through
+// the relocating writer, over a real store.
+type relocationSpy struct {
+	*database.PebbleStore
+	originals []string
+}
+
+func (s *relocationSpy) CreateBookWithRelocation(b *database.Book, originalID string) (*database.Book, error) {
+	s.originals = append(s.originals, originalID)
+	return s.PebbleStore.CreateBookWithRelocation(b, originalID)
+}
+
+// NewOrganizeService hands its store to the organizer as the writer of the
+// single-book organize's copy (F6-03): without that wiring the copy is refused
+// (ErrRelocatingCopyCreatorNotWired) and no torrent follow-up could be staged.
+func TestNewOrganizeService_WiresTheRelocatingCopyCreator(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	ps.WaitForWarmup()
+	t.Cleanup(func() { _ = ps.Close() })
+	spy := &relocationSpy{PebbleStore: ps}
+	imported := "imported"
+	src, err := ps.CreateBook(&database.Book{Title: "Year One", FilePath: filepath.Join(t.TempDir(), "year-one.m4b"), LibraryState: &imported})
+	require.NoError(t, err)
+
+	svc := NewOrganizeService(spy)
+	copyBook, err := svc.CreateOrganizedVersionFollowTorrents(src, &organizer.Landing{Path: filepath.Join(t.TempDir(), "organized-year-one.m4b")}, "", logger.New("test"))
+	require.NoError(t, err)
+	require.NotNil(t, copyBook)
+	require.Equal(t, []string{src.ID}, spy.originals)
 }
