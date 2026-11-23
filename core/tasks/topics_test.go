@@ -102,7 +102,7 @@ func TestTaskTopics_VisibleFailsClosed(t *testing.T) {
 // (a RunPayload for run-changed and finished, a LogAppended for log-appended).
 func TestTaskTopics_SchemaCarriesThePayload(t *testing.T) {
 	for name, field := range map[string]string{
-		"core.task.run-changed.v1":  "current",
+		"core.task.run-changed.v1":  "message",
 		"core.task.finished.v1":     "reason",
 		"core.task.log-appended.v1": "message",
 	} {
@@ -158,7 +158,7 @@ func TestTaskTopics_DeclareAndDeliver(t *testing.T) {
 	t.Cleanup(func() { _ = bus.Close(context.Background()) })
 
 	view := tasks.NewRunPayload(tasks.RunView{ID: "run-nightwing-1", Kind: "batcave.sweep", Mode: tasks.ModeLive, State: tasks.StateSucceeded, Done: 3, Total: 3, Current: "Dick Grayson"})
-	line := tasks.NewLogAppended(tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit", Fields: map[string]string{"by": "Gordon"}})
+	line := tasks.NewLogAppended("run-nightwing-1", tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit", Fields: map[string]string{"by": "Gordon"}})
 	scope := bus.Scope("core")
 	events.Publish(scope, context.Background(), tasks.RunChangedTopic(), view.ID, view)
 	events.Publish(scope, context.Background(), tasks.LogAppendedTopic(), view.ID, line)
@@ -210,7 +210,7 @@ func TestTaskTopics_LogLineWithoutFieldsDelivered(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = bus.Close(context.Background()) })
 	events.Publish(bus.Scope("core"), context.Background(), tasks.LogAppendedTopic(), "run-robin-1",
-		tasks.NewLogAppended(tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit"}))
+		tasks.NewLogAppended("run-nightwing-1", tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit"}))
 	select {
 	case e := <-got:
 		var m map[string]json.RawMessage
@@ -355,7 +355,7 @@ func TestTaskTopics_SpecRedactIsARedactor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log, err := json.Marshal(tasks.NewLogAppended(tasks.LogLine{Level: "info", Message: "Oswald Cobblepot paged", Fields: map[string]string{"who": "oswald"}}))
+	log, err := json.Marshal(tasks.NewLogAppended("run-nightwing-1", tasks.LogLine{Level: "info", Message: "Oswald Cobblepot paged", Fields: map[string]string{"who": "oswald"}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,12 +368,12 @@ func TestTaskTopics_SpecRedactIsARedactor(t *testing.T) {
 		"core.task.run-changed.v1": {run, func(b json.RawMessage) (string, error) {
 			var v tasks.RunPayload
 			err := json.Unmarshal(b, &v)
-			return v.Current, err
+			return v.Current + v.Message, err
 		}},
 		"core.task.finished.v1": {run, func(b json.RawMessage) (string, error) {
 			var v tasks.RunPayload
 			err := json.Unmarshal(b, &v)
-			return v.Current, err
+			return v.Current + v.Message, err
 		}},
 		"core.task.log-appended.v1": {log, func(b json.RawMessage) (string, error) {
 			var v tasks.LogAppended
@@ -423,7 +423,7 @@ func TestRunPayload_WireKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]any{"id": "run-robin-1", "kind": "batcave.sweep", "mode": "preview", "state": "succeeded", "held": true,
-		"done": 2.0, "total": 5.0, "current": "the cowl", "reason": "r", "parent": "p", "plan_ref": "pl", "trigger": "manual",
+		"done": 2.0, "total": 5.0, "current": "the cowl", "message": "the cowl", "reason": "r", "parent": "p", "plan_ref": "pl", "trigger": "manual",
 		"created": "2026-11-20T09:00:00Z", "started": "2026-11-20T09:01:00Z", "finished": "2026-11-20T10:00:00Z",
 		"deferred": "writeset", "blocked_by": "run-robin-0", "deferred_since": "2026-11-20T09:02:00Z",
 		"actor": map[string]any{"user_id": "bruce", "auth_method": "session", "system": "core.scheduler"}}
@@ -446,5 +446,43 @@ func TestRunPayload_WireKeys(t *testing.T) {
 	}
 	if a, ok := m["actor"].(map[string]any); !ok || len(a) != 0 {
 		t.Errorf("an empty actor = %v, want {}: %s", m["actor"], b)
+	}
+}
+
+// TestRunPayload_MessageIsTheLatestProgressMessage: the ops bell reads
+// op.updated.message, so a progress update's text is the payload's message, on
+// the wire form and on a payload that round-trips through the redaction rule.
+func TestRunPayload_MessageIsTheLatestProgressMessage(t *testing.T) {
+	p := tasks.NewRunPayload(tasks.RunView{ID: "run-robin-1", State: tasks.StateRunning, Current: "Scanning Crime Alley"})
+	if p.Message != "Scanning Crime Alley" {
+		t.Errorf("Message = %q, want the run's latest progress message", p.Message)
+	}
+	if got := tasks.NewRunPayload(tasks.RunView{ID: "run-robin-2"}).Message; got != "" {
+		t.Errorf("a run with no progress message carries message %q", got)
+	}
+	if got := tasks.RedactRunPayload(nil, p); got.Message != "" || got.Current != "" {
+		t.Errorf("redacted payload kept progress text: message %q current %q", got.Message, got.Current)
+	}
+	holder := checker{[]rbac.Permission{"core:users.view"}}
+	if got := tasks.RedactRunPayload(holder, p); got.Message != "Scanning Crime Alley" {
+		t.Errorf("a holder of core:users.view lost the message: %q", got.Message)
+	}
+}
+
+// TestLogAppended_NamesItsRun: the payload carries the run whose log the line
+// belongs to, so a consumer holding only the payload can name the run, and the
+// run survives the redaction that blanks the line's text.
+func TestLogAppended_NamesItsRun(t *testing.T) {
+	l := tasks.NewLogAppended("run-nightwing-1", tasks.LogLine{Level: "info", Message: "Bat-Signal lit"})
+	if l.RunID != "run-nightwing-1" {
+		t.Errorf("RunID = %q, want the run the line was logged to", l.RunID)
+	}
+	b, err := json.Marshal(tasks.RedactLogAppended(nil, l))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil || m["run_id"] != "run-nightwing-1" {
+		t.Errorf("redacted wire form = %s (%v), want run_id run-nightwing-1", b, err)
 	}
 }

@@ -403,7 +403,7 @@ func finishedOf(em emission) emission {
 
 // logAppendedOf is the log-appended emission for one line of run id's log.
 func logAppendedOf(id tasks.RunID, l tasks.LogLine, seq uint64) emission {
-	return emission{kind: emitLogAppended, run: id, line: tasks.NewLogAppended(l), seq: seq}
+	return emission{kind: emitLogAppended, run: id, line: tasks.NewLogAppended(id, l), seq: seq}
 }
 
 // emitRunChanged stages the run-changed emission for r into ctx's stage.

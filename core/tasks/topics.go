@@ -75,6 +75,14 @@ type RunPayload struct {
 	Total    int          `json:"total"`
 	Current  string       `json:"current,omitempty"`
 
+	// Message is the run's latest progress message, the text the ops bell shows
+	// as op.updated.message. It is the same stored text as Current (Note and a
+	// progress report's label both set it), spelled under the key the bell
+	// reads. NewRunPayload derives it from Current and runView ignores it, so
+	// RedactRunView's blanking of Current blanks it on the stream and on REST
+	// with no second rule: a run's progress text can name a user.
+	Message string `json:"message,omitempty"`
+
 	// Deferred, BlockedBy and DeferredSince are RunView's read-time deferral
 	// fields: why a queued run waits, behind which running run, and since when.
 	Deferred      string    `json:"deferred,omitempty"`
@@ -89,7 +97,7 @@ func NewRunPayload(v RunView) RunPayload {
 		ID: string(v.ID), Kind: string(v.Kind), Mode: v.Mode.String(), State: string(v.State), Held: v.Held,
 		Reason: v.Reason, Actor: NewActorPayload(v.Actor), Trigger: string(v.Trigger), Parent: string(v.Parent),
 		PlanRef: string(v.PlanRef), Created: v.Created, Started: v.Started, Finished: v.Finished,
-		Done: v.Done, Total: v.Total, Current: v.Current,
+		Done: v.Done, Total: v.Total, Current: v.Current, Message: v.Current,
 		Deferred: v.Deferred, BlockedBy: string(v.BlockedBy), DeferredSince: v.DeferredSince,
 	}
 }
@@ -163,17 +171,19 @@ func RunChangedTopic() events.Topic[RunPayload] {
 // "Fields":null, which the reflected schema (an object) refuses, so the bus
 // would drop every line that carries no fields; LogLine's stored shape cannot
 // take tags without changing the keys already on disk. The run is the
-// envelope's Key, not a field.
+// envelope's Key, and RunID repeats it in the payload so a consumer that
+// holds only the payload (the activity mirror, the ops bell) can name the run.
 type LogAppended struct {
+	RunID   string            `json:"run_id,omitempty"`
 	At      time.Time         `json:"at"`
 	Level   string            `json:"level"`
 	Message string            `json:"message"`
 	Fields  map[string]string `json:"fields,omitempty"`
 }
 
-// NewLogAppended is the payload for l.
-func NewLogAppended(l LogLine) LogAppended {
-	return LogAppended(l) // same fields, in order; only the tags differ
+// NewLogAppended is the payload for l, the line of run's log.
+func NewLogAppended(run RunID, l LogLine) LogAppended {
+	return LogAppended{RunID: string(run), At: l.At, Level: l.Level, Message: l.Message, Fields: l.Fields}
 }
 
 // LogAppendedTopic is the typed log-appended topic; the publisher keys each
