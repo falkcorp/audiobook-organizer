@@ -8,11 +8,13 @@
 package books
 
 import (
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
@@ -23,6 +25,7 @@ import (
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // The generator of testdata/r2store, the frozen store the R2 release leaves
@@ -44,6 +47,11 @@ import (
 // floor-declaring build writes for it (r2StoreToppedUp lists which). The
 // fixture must be regenerated with the one command in r2storeRegenCommand once
 // those flips are on main, and TestR2StoreTopUpIsNotStale fails until it is.
+//
+// The scheduler clocks. Nothing in the R2 build runs the scheduler over the
+// corpus, so the built store holds no c/tasks/ row. The generator adds the
+// clocks of r2StoreClockRows through the real writer (r2StoreSchedulerClocks),
+// not through M4, which R3-02e-1 deletes.
 //
 // Where it builds. The boot validates the directories the effective config
 // names, so the store is built under a fixed synthetic directory
@@ -140,6 +148,36 @@ func r2StorePutRows(t *testing.T, path string, rows map[string]string) {
 	require.NoError(t, db.Close())
 }
 
+// r2StoreSchedulerClocks returns the rows of r2StoreClockRows as the real writer
+// stores them. The built store is closed and cannot be opened with core/tasks
+// alone, so the clocks are written with tasks.NativeStores(ks).Clocks into a
+// scratch store of that one owner, and only its c/tasks/ rows are returned (the
+// scratch store's own c/storage rows are its, not the fixture's). M4 does not
+// run: the rows are the ones r2StoreClockRows names.
+func r2StoreSchedulerClocks(t *testing.T) map[string]string {
+	t.Helper()
+	ctx := context.Background()
+	db, path := r2StoreTasksDB(t)
+	ks, ok := db.Keyspace(r2StoreTasksOwner)
+	require.True(t, ok, "the scratch store has no %s keyspace", r2StoreTasksOwner)
+	clocks := tasks.NativeStores(ks).Clocks
+	b := ks.NewIndexedBatch()
+	for _, row := range r2StoreClockRows() {
+		require.NoError(t, clocks.Advance(ctx, b, row.Kind, tasks.Clock{}, false, row.Clock), row.Kind)
+	}
+	require.NoError(t, b.Commit(ctx, storage.Sync))
+	require.NoError(t, db.Close())
+
+	out := map[string]string{}
+	for k, v := range r2StoreRows(t, path) {
+		if strings.HasPrefix(k, r2StoreTasksPrefix) {
+			out[k] = v
+		}
+	}
+	require.Len(t, out, len(r2StoreClockRows()), "one row per clock under %s", r2StoreTasksPrefix)
+	return out
+}
+
 // r2StoreBuilt is what buildR2Store returns.
 type r2StoreBuilt struct {
 	// Dir is r2StoreBuildDir: the built store, with everything the boots left.
@@ -177,6 +215,7 @@ func buildR2Store(t *testing.T) r2StoreBuilt {
 	for id, ok := range r2StoreDone(t, storeDB(dir), r2StoreSteps...) {
 		require.True(t, ok, "%s is still not recorded", id)
 	}
+	r2StorePutRows(t, storeDB(dir), r2StoreSchedulerClocks(t))
 	return r2StoreBuilt{Dir: dir, ToppedUp: missing}
 }
 

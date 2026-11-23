@@ -40,7 +40,7 @@
   deletion_size_ratio_threshold=0.500000
   tombstone_dense_compaction_threshold=0.100000
   strict_wal_tail=true
-  table_cache_shards=48
+  table_cache_shards=10
   validate_on_ingest=false
   wal_dir=
   wal_bytes_per_sync=0
