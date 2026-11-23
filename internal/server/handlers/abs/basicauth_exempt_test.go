@@ -107,7 +107,7 @@ func newBasicAuthGatedABS(t *testing.T) (engine *gin.Engine, stack http.Handler,
 	}
 	r.AllowAuthMethods("abs", absAuthMethodForTest)
 	if err := r.MountLegacy(httpapi.LegacyMount{
-		Owner: "abs", Handler: engine, Auth: httpapi.LegacyAuthGin,
+		Owner: "abs", Handler: engine, Auth: httpapi.LegacyAuthCore,
 		Routes: slices.Values(manifest), TopSegments: top, BasicGate: server.LegacyBasicGate(),
 		BasicExemptAssets: server.LegacyBasicExemptAssets,
 	}); err != nil {

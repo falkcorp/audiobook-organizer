@@ -563,7 +563,6 @@ func TestTelemetry_TracerFromEnv(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	// No books: the tracer is the App's, whatever modules it runs.
-	opts.LegacyAuthGinUntil = ""
 	a, err := app.New(ctx, opts)
 	if err != nil {
 		t.Fatal(err)

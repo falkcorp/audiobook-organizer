@@ -100,8 +100,6 @@ type ServeInputs struct {
 //   - R1Listen: HEAD's listener stack behind the perimeter shim
 //     (internal/server R1Listener);
 //   - Telemetry: HEAD's OTLP tracing and metric push and its environment;
-//   - LegacyAuthGinUntil: books, whose gin mount keeps HEAD's authentication
-//     until the identity flip;
 //   - ReservedAPINamespaces: the ABS protocol's /api/<seg> names;
 //   - LogOutput, R1Log and StateDir: the log pipeline's stream, its level
 //     (log_level, --log-level) and its file under the state directory
@@ -169,7 +167,6 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		DisplayName:           displayName,
 		Version:               m.version,
 		ReservedAPINamespaces: reservedAPINamespaces(),
-		LegacyAuthGinUntil:    ID,
 		CoreDefaults:          coreDefaults,
 		R1Listen:              m.r1Listen,
 		Telemetry:             telemetryFromConfig(in.Telemetry),

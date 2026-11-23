@@ -29,13 +29,11 @@ func TestIdentityTies_EachWayTheFlipCanComeApart(t *testing.T) {
 		mount     httpapi.LegacyAuth
 		wantErr   bool
 	}{
-		{"off, as HEAD", false, false, httpapi.LegacyAuthGin, false},
 		{"on, all three agree", true, true, httpapi.LegacyAuthCore, false},
 		{"core identity without WithIdentity", true, false, httpapi.LegacyAuthCore, true},
-		{"WithIdentity under Gin", true, true, httpapi.LegacyAuthGin, true},
-		{"WithIdentity with the predicate off", false, true, httpapi.LegacyAuthGin, true},
+		{"WithIdentity with invalid mount auth", true, true, httpapi.LegacyAuthCore + 1, true},
+		{"WithIdentity with the predicate off", false, true, httpapi.LegacyAuthCore, true},
 		{"a Core mount with the predicate off", false, false, httpapi.LegacyAuthCore, true},
-		{"core identity, no WithIdentity and a Gin mount", true, false, httpapi.LegacyAuthGin, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := identityTies(tc.predicate, tc.server, tc.mount)

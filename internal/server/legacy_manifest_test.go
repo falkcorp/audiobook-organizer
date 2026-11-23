@@ -349,7 +349,7 @@ func mountBooksWith(t *testing.T, srv *Server, deps httpapi.Deps) (*httpapi.Rout
 	r.AllowAuthMethods("books", absAuthMethod)
 	csp, report, build := srv.LegacyPerimeter()
 	require.NoError(t, r.MountLegacy(httpapi.LegacyMount{
-		Owner: "books", Handler: srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
+		Owner: "books", Handler: srv.router, Auth: httpapi.LegacyAuthCore, ServesSPA: true,
 		Routes:      slices.Values(manifest),
 		Redirects:   srv.LegacyRedirects(),
 		TopSegments: LegacyTopSegments(),
