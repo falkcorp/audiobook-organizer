@@ -186,3 +186,11 @@ func TestBooksKindWriter_LinkBackfillDeclaresExactlyItsWriteRow(t *testing.T) {
 	def := kindByName(t, booksDeps(t, booksInputs(&booksSpy{})), linkBackfillKind)
 	require.Equal(t, refStrings(rows["ModifyBookFile"]), refStrings2(tasks.CommonOf(def).Effects.WriteSet()))
 }
+
+// Several inputs missing are named in sorted order, the same way every call.
+func TestBooksTaskLists_MissingInputsAreNamedInSortedOrder(t *testing.T) {
+	for range 20 {
+		_, err := BooksTaskLists(BooksTaskInputs{})
+		require.ErrorContains(t, err, "missing input(s): [Cache Config Schedules Source]")
+	}
+}

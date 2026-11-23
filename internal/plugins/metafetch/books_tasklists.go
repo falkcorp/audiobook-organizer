@@ -8,6 +8,7 @@ package metafetch
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/falkcorp/mediacore/tasks"
@@ -77,6 +78,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 			missing = append(missing, name)
 		}
 	}
+	sort.Strings(missing) // map order is random; name them the same way every time
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("metafetch: BooksTaskLists: missing input(s): %v", missing)
 	}

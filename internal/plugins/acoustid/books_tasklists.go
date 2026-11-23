@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/falkcorp/mediacore/tasks"
 
@@ -91,6 +92,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 			missing = append(missing, name)
 		}
 	}
+	sort.Strings(missing) // map order is random; name them the same way every time
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("acoustid: BooksTaskLists: missing input(s): %v", missing)
 	}
@@ -107,7 +109,7 @@ func booksReceiver(in BooksTaskInputs) *Plugin { return in.Plugin }
 // booksKindRows is the rows of the writer's methods. The shared table has the
 // two book writes; the rest follow what each kind's own Effects already decided
 // (kinds_*.go): the fpwin: sidecar and the batched wipe's index entries are
-// fingerprint_index, a book-signature key is books, the dedup candidates are
+// fingerprint_index, a book-signature clear is the book-write row, the dedup candidates are
 // embeddings, and the batched wipe is the file row plus fingerprint_index.
 func booksKindRows() (writer.Rows, error) {
 	shared := writer.SharedRows()
@@ -119,7 +121,9 @@ func booksKindRows() (writer.Rows, error) {
 		}
 		rows[m] = row
 	}
-	rows["ClearBookSignature"] = []ops.Resource{ops.ResBooks}
+	// ClearBookSignature is a ModifyBook (backfill.go:789), so it takes the whole
+	// book-write row (books, metadata_cache, indexes), not the books resource alone.
+	rows["ClearBookSignature"] = rows["ModifyBook"]
 	rows["ReplaceFingerprintWindows"] = []ops.Resource{ops.ResFingerprintIndex}
 	rows["RecordFingerprintWindowFailure"] = []ops.Resource{ops.ResFingerprintIndex}
 	rows["DeleteCandidates"] = []ops.Resource{ops.ResEmbeddings}
