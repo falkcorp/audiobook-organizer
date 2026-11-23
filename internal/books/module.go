@@ -428,8 +428,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	}
 	database.SetGlobalStore(store)
 	if out := r.Deps().Outbox; out != (outbox.Writer{}) {
-		// Before anything writes through the store: every committed path change
-		// stages books.book.relocated.v1 in the batch that writes the path.
+		// Before anything writes through the store: the organized copy of a
+		// single-book organize (CreateBookWithRelocation) stages
+		// books.book.relocated.v1 in the batch that creates the copy. No other
+		// write stages it.
 		store.SetRelocationOutbox(out)
 	}
 	// Every committed book write publishes books.book.changed.v1 (the zero
