@@ -140,18 +140,11 @@ func TestCleanStopClaimWaitsForTheStoreLock(t *testing.T) {
 // the void Options reads from the slot keeps it from vouching. The control,
 // the same marker with nothing staged, is trusted.
 func TestSwapBootVoidsTheCleanStopClaim(t *testing.T) {
-	type variant struct{ staged, flip bool }
-	variants := map[string]variant{
-		"nothing staged":                  {false, false},
-		"a staged restore":                {true, false},
-		"nothing staged, identity boot":   {false, true},
-		"a staged restore, identity boot": {true, true},
-	}
-	for name, v := range variants {
-		staged := v.staged
+	for name, staged := range map[string]bool{
+		"nothing staged":   false,
+		"a staged restore": true,
+	} {
 		t.Run(name, func(t *testing.T) {
-			// The harness booted and the archive was taken before the flip; the
-			// boot that applies the swap is the one under core identity.
 			h := newOfflineABO(t)
 			// The harness booted serve over this path, so the store carries the
 			// flip's level: a standalone open plans it (StandaloneSpec).
@@ -171,9 +164,6 @@ func TestSwapBootVoidsTheCleanStopClaim(t *testing.T) {
 			require.NoError(t, os.MkdirAll(dir, 0o700))
 			plantCleanStop(t, dir)
 
-			if v.flip {
-				t.Cleanup(SetIdentityFlipForTest(true))
-			}
 			c := bootComposedWith(t, false, h.state, func(cfg *config.Config) {
 				h.edit(cfg)
 				cfg.Embedding.Dimensions = 4

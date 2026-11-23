@@ -31,7 +31,7 @@ import (
 // The cell is a boot, not a parse: the archive holds a book the live store
 // no longer has, and the boot after the stage must serve it.
 func TestIdentityBoot_ABooksStagedRestoreServesTheRestoredStore(t *testing.T) {
-	h := newOfflineABO(t) // booted before the flip: a HEAD-shape store
+	h := newOfflineABO(t)
 	openStore := func() *database.PebbleStore {
 		store, err := database.OpenStandalone(h.path, StandaloneOptions(database.StandaloneOptions{}))
 		require.NoError(t, err)
@@ -59,7 +59,6 @@ func TestIdentityBoot_ABooksStagedRestoreServesTheRestoredStore(t *testing.T) {
 	require.FileExists(t, filepath.Join(in.Staging, "legacy-manifest.json"))
 	require.NoFileExists(t, filepath.Join(in.Staging, "db", "legacy-manifest.json"))
 
-	t.Cleanup(SetIdentityFlipForTest(true))
 	c := bootComposedWith(t, false, h.state, func(cfg *config.Config) {
 		h.edit(cfg)
 		cfg.Embedding.Dimensions = 4
