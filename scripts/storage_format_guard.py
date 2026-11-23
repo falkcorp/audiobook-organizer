@@ -298,6 +298,11 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         # granted with "" (none admitted).
         "export_keyring": f"sudo -n {h}/export-keyring",
         "export_install_secrets": f"sudo -n {h}/export-install-secrets",
+        # `make cutover-blockers-list` and `make cutover-blockers-apply`
+        # (scripts/cutover_blockers_offhost.py): no arguments each, granted with
+        # "". The worker op (_blockers-worker) is not a stub and is not granted.
+        "cutover_blockers_list": f"sudo -n {h}/cutover-blockers-list",
+        "cutover_blockers_apply": f"sudo -n {h}/cutover-blockers-apply",
     }
 
 
@@ -326,6 +331,8 @@ def sudoers(o: Opts, deploy_user: str) -> str:
         "pprof_on",
         "export_keyring",
         "export_install_secrets",
+        "cutover_blockers_list",
+        "cutover_blockers_apply",
         "record",
     ):
         argv = shlex.split(c[key])

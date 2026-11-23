@@ -799,7 +799,9 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop audiobook-organizer.service,
     /usr/local/libexec/audiobook-organizer/rollback/install-staged, \
     /usr/local/libexec/audiobook-organizer/rollback/pprof, \
     /usr/local/libexec/audiobook-organizer/rollback/export-keyring "", \
-    /usr/local/libexec/audiobook-organizer/rollback/export-install-secrets ""
+    /usr/local/libexec/audiobook-organizer/rollback/export-install-secrets "", \
+    /usr/local/libexec/audiobook-organizer/rollback/cutover-blockers-list "", \
+    /usr/local/libexec/audiobook-organizer/rollback/cutover-blockers-apply ""
 deploy ALL=(audiobook) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-levels, \
     /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
     /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
