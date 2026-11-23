@@ -227,17 +227,34 @@ func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor)
 // is canceled takes the runs it enqueued with it, as HEAD's cancel stopped the
 // work the run had started. It does so after the run's own stop, never before:
 // a parent whose child is canceled first could see the child's canceled outcome
-// from rc.Await and enqueue the next one before its own context ends. A repeat
-// cancel of a run already stopping for any reason answers nil and still reaches
-// the descendants, so a cancel whose cascade failed can be sent again.
+// from rc.Await and enqueue the next one before its own context ends.
+//
+// The cascade runs on a context detached from the caller's (WithoutCancel): the
+// run's own stop has committed by then, so a caller that gave up (a request that
+// was abandoned) must not leave the children running with nothing left to stop
+// them. A cascade that still fails (a store error) is reported, and a repeat
+// cancel finishes it: of a run still stopping (stopOne answers nil) and of one a
+// cancel already ended (stopOne answers "not found", which is still the answer
+// when the cascade has nothing to report, HEAD's repeat-cancel rule). A run that
+// ended any other way (the watchdog, its timeout) is not cascaded from.
 func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, reason string, cause error) error {
-	if err := e.stopOne(ctx, id, by, reason, cause); err != nil {
+	err := e.stopOne(ctx, id, by, reason, cause)
+	if reason != reasonCancel {
 		return err
 	}
-	if reason != reasonCancel {
-		return nil
+	if err != nil {
+		if !errors.Is(err, tasks.ErrRunNotFound) {
+			return err
+		}
+		if rec, gerr := e.runs.Get(ctx, id); gerr != nil || !canceledByCancel(rec) {
+			return err
+		}
+		if cerr := e.cancelDescendants(context.WithoutCancel(ctx), id, by); cerr != nil {
+			return cerr
+		}
+		return err
 	}
-	return e.cancelDescendants(ctx, id, by)
+	return e.cancelDescendants(context.WithoutCancel(ctx), id, by)
 }
 
 // stopOne is stop for one run: the in-process attempt is looked up inside the
