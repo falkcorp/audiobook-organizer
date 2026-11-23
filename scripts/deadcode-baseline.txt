@@ -1667,7 +1667,9 @@ internal/plugins/maintenance.auxStoreCompactDef
 internal/plugins/maintenance.auxStoreCompactDefEvery
 internal/plugins/maintenance.auxStoreCompactKindList
 internal/plugins/maintenance.batchBooksOf
+internal/plugins/maintenance.batchCacheRefs
 internal/plugins/maintenance.batchParentHolds
+internal/plugins/maintenance.batchRequireParent
 internal/plugins/maintenance.batchScope.subjects
 internal/plugins/maintenance.batchScope.validate
 internal/plugins/maintenance.batchSubjects
