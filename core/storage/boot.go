@@ -1188,6 +1188,14 @@ func (db *DB) freshInstall(ctx context.Context) (err error) {
 	if err := db.stageLedgers(b, now, true); err != nil {
 		return err
 	}
+	// The sidecars lead the stamps (machine 2, I3): a kill between the two must
+	// never leave a committed stamp above its sidecar, because an older build
+	// reads the sidecar to refuse a store at a level it does not know. Written
+	// first, a kill before the batch leaves an empty store (which the next boot
+	// installs fresh again, rewriting them) and a kill after it leaves both.
+	if err := db.labelled(labelFreshSidecars, func() error { return db.writeSidecarsFor(st.supported) }); err != nil {
+		return err
+	}
 	if err := db.labelled(labelFreshBatch, func() error { return b.Commit(ctx, Sync) }); err != nil {
 		return fmt.Errorf("storage: fresh install: %w", err)
 	}
@@ -1199,9 +1207,6 @@ func (db *DB) freshInstall(ctx context.Context) (err error) {
 		for _, step := range appliedSteps(db.owners[o].spec, v, now, st.opts.Build) {
 			st.applied[o][step.Version] = step
 		}
-	}
-	if err := db.labelled(labelFreshSidecars, db.writeSidecars); err != nil {
-		return err
 	}
 	return db.planDAG(ctx)
 }
