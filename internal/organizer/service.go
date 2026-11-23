@@ -47,11 +47,6 @@ type OrganizerBookReader interface {
 // rescan when its files changed underneath it.
 type OrganizerBookWriter interface {
 	CreateBook(book *database.Book) (*database.Book, error)
-	// CreateBookWithRelocation is CreateBook for the organized copy of the
-	// book originalID, with the follow-up that moves the original's torrents
-	// staged in the new row's own batch. Only CreateOrganizedVersionFollowTorrents
-	// calls it.
-	CreateBookWithRelocation(book *database.Book, originalID string) (*database.Book, error)
 	// UpdateBook is kept for the one whole-row write of a book CreateBook
 	// just returned; every write of an existing row goes through ModifyBook.
 	UpdateBook(id string, book *database.Book) (*database.Book, error)
@@ -64,6 +59,17 @@ type OrganizerBookWriter interface {
 	// NOT a general delete path for this package -- CreateOrganizedVersion is
 	// the sole caller, and only on a failure it has already logged.
 	DeleteBook(id string) error
+}
+
+// RelocatingCopyCreator is CreateBook for the organized copy of the book
+// originalID, with the follow-up that moves the original's torrents staged in
+// the new row's own batch (database.PebbleStore.CreateBookWithRelocation). It is
+// its own interface, not part of Store, because Store is what every organize
+// caller hands in and database.Store may not grow (TestStoreFlattenedWidth):
+// only the single-book organize request needs it, and audiobooks.NewOrganizeService
+// requires it of its store and hands it to Service.SetRelocatingCopyCreator.
+type RelocatingCopyCreator interface {
+	CreateBookWithRelocation(book *database.Book, originalID string) (*database.Book, error)
 }
 
 // OrganizerBookFileStore is the per-file half: the organizer repoints file rows
@@ -161,6 +167,10 @@ var ErrFetchSkippedRetired = errors.New("organize: metadata fetch skipped, book 
 type Service struct {
 	db            Store
 	organizeHooks OrganizeHooks
+	// relocatingCopies creates the copy CreateOrganizedVersionFollowTorrents
+	// makes. Nil until SetRelocatingCopyCreator, and that method then fails
+	// rather than creating a copy that moves no torrent.
+	relocatingCopies RelocatingCopyCreator
 	// ScanEnqueuer enqueues a background library scan. Wired by the server
 	// package after construction to avoid a circular import.
 	ScanEnqueuer func(ctx context.Context) error
@@ -258,6 +268,16 @@ func NewService(db Store) *Service {
 		FetchMetadataForBook:       func(_ context.Context, _ string) (any, error) { return nil, nil },
 	}
 }
+
+// SetRelocatingCopyCreator wires the writer CreateOrganizedVersionFollowTorrents
+// uses for the copy's row. audiobooks.NewOrganizeService sets it, from a store
+// type that requires the method, so the production wiring cannot omit it.
+func (orgSvc *Service) SetRelocatingCopyCreator(c RelocatingCopyCreator) { orgSvc.relocatingCopies = c }
+
+// ErrRelocatingCopyCreatorNotWired is what CreateOrganizedVersionFollowTorrents
+// returns on a Service nobody gave a RelocatingCopyCreator: the copy is not
+// created, so no file is left without its torrent follow-up.
+var ErrRelocatingCopyCreatorNotWired = errors.New("organize: no relocating copy creator wired (Service.SetRelocatingCopyCreator)")
 
 // Request describes an organize operation request.
 type Request struct {
@@ -2551,7 +2571,11 @@ func (orgSvc *Service) createOrganizedVersion(book *database.Book, landing *Land
 	var createdBook *database.Book
 	var err error
 	if followTorrents {
-		createdBook, err = orgSvc.db.CreateBookWithRelocation(&newBook, book.ID)
+		if orgSvc.relocatingCopies == nil {
+			err = ErrRelocatingCopyCreatorNotWired
+		} else {
+			createdBook, err = orgSvc.relocatingCopies.CreateBookWithRelocation(&newBook, book.ID)
+		}
 	} else {
 		createdBook, err = orgSvc.db.CreateBook(&newBook)
 	}
