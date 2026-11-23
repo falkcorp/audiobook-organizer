@@ -160,6 +160,6 @@ nohup sh -c "sleep $EXPIRES_IN_SECONDS && rm -f '$TOKEN_FILE' && echo 'Cleaned u
 echo ""
 echo "✅ Bootstrap complete! ($MODE mode)"
 echo "   API Key: ${API_KEY:0:12}...${API_KEY: -5}"
-echo "   Expires: $(date -d @$EXPIRES_AT '+%Y-%m-%d %H:%M:%S')"
+echo "   Expires: $(date -d "@$EXPIRES_AT" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || date -r "$EXPIRES_AT" '+%Y-%m-%d %H:%M:%S')"
 echo ""
 echo "This API key is shared across all worktrees. Other worktrees can now use it."
