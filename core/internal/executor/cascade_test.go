@@ -136,6 +136,13 @@ func (l *writeLog) leaf(res tasks.Resource, started chan<- tasks.RunID) func(rc 
 	}
 }
 
+// refusal is the first refusal a write saw, under the log's lock.
+func (l *writeLog) refusal() (refused, cause error, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.refused, l.cause, l.at
+}
+
 func (l *writeLog) writesAfter(t time.Time) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -167,7 +174,7 @@ func TestCancelCascade_ParentCancelStopsTheChildsWrites(t *testing.T) {
 		parent := h.start(string(chainKind("wc", 0)), tasks.StartRequest{})
 		child := <-started
 		time.Sleep(3500 * time.Millisecond)
-		if n := len(l.wrote); n < 3 {
+		if n := l.writesAfter(time.Time{}); n < 3 {
 			t.Fatalf("the child made %d writes in 3.5s, want it writing", n)
 		}
 		canceledAt := time.Now()
@@ -180,13 +187,14 @@ func TestCancelCascade_ParentCancelStopsTheChildsWrites(t *testing.T) {
 		if n := l.writesAfter(canceledAt); n != 0 {
 			t.Errorf("%d child writes ran after the parent's cancel, want none", n)
 		}
-		if !errors.Is(l.refused, tasks.ErrFenced) {
-			t.Errorf("the child's first write after the cancel: %v, want ErrFenced", l.refused)
+		refused, cause, at := l.refusal()
+		if !errors.Is(refused, tasks.ErrFenced) {
+			t.Errorf("the child's first write after the cancel: %v, want ErrFenced", refused)
 		}
-		if !errors.Is(l.cause, tasks.ErrCanceled) || !strings.Contains(l.cause.Error(), string(parent)) {
-			t.Errorf("the child was canceled with %v, want a cancel that names parent %s", l.cause, parent)
+		if !errors.Is(cause, tasks.ErrCanceled) || !strings.Contains(cause.Error(), string(parent)) {
+			t.Errorf("the child was canceled with %v, want a cancel that names parent %s", cause, parent)
 		}
-		if lag := l.at.Sub(canceledAt); lag > 2*time.Second {
+		if lag := at.Sub(canceledAt); lag > 2*time.Second {
 			t.Errorf("the child's writes stopped %s after the cancel, want within its next write", lag)
 		}
 		if c := h.get(child); c.State != tasks.StateCanceled || c.Reason != reasonCancel || c.Finished.IsZero() {
@@ -446,19 +454,26 @@ func TestCancelCascade_ARepeatCancelRetriesTheCascade(t *testing.T) {
 // (these kinds resume with ResumeContinue, so an unhandled child would be
 // requeued and its body would start again): each is ended canceled, whether the
 // parent had finished canceling or was still stopping, and a grandchild goes with
-// its parent.
+// its parent. Kinds that drop on a restart are ended canceled too, not
+// interrupted_dropped: the boot pass, not the dispatch guard alone, decides it.
 func TestCancelCascade_RestartMidCancelLeavesNoChildRunning(t *testing.T) {
 	for _, c := range []struct {
 		name       string
-		parentEnds bool // the parent's body returns on its context; else it ignores it and is still stopping at the crash
+		parentEnds bool               // the parent's body returns on its context; else it ignores it and is still stopping at the crash
+		resume     tasks.ResumePolicy // the children's: ResumeDrop would end an unhandled child interrupted_dropped, not canceled
 	}{
-		{"the parent had ended canceled", true},
-		{"the parent was still stopping", false},
+		{"the parent had ended canceled", true, tasks.ResumeContinue},
+		{"the parent was still stopping", false, tasks.ResumeContinue},
+		{"the children drop on a restart", true, tasks.ResumeDrop},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			leafStarts := make(chan tasks.RunID, 8)
 			release := make(chan struct{})
-			defs := chainDefs("rs", 3, leafStarts, nil, nil)
+			defs := chainDefs("rs", 3, leafStarts, nil, func(i int, cm *tasks.Common) {
+				if i > 0 {
+					cm.Resume = c.resume
+				}
+			})
 			if !c.parentEnds {
 				defs[0] = taskDef(string(chainKind("rs", 0)), func(rc *tasks.RC, _ noParams) (string, error) {
 					if _, err := rc.Enqueue(chainKind("rs", 1), noParams{}); err != nil {
@@ -660,5 +675,221 @@ func TestCancelCascade_OnlyACancelCascades(t *testing.T) {
 				time.Sleep(5 * time.Second)
 			})
 		})
+	}
+}
+
+// tripCtx is a context that reports canceled once trip is: the caller of a cancel
+// that gives up the moment the run it canceled stops.
+type tripCtx struct {
+	context.Context
+	trip context.Context
+}
+
+func (c tripCtx) Err() error {
+	if c.trip.Err() != nil {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+func (c tripCtx) Done() <-chan struct{} { return c.trip.Done() }
+
+// TestCancelCascade_ACallerThatGivesUpDoesNotLoseTheCascade: the cancel's caller
+// abandons its context the moment the parent's own context is canceled (the
+// request that carried it was dropped), which is before the cascade has run. The
+// cascade is not the caller's to abandon: the parent's stop has committed, so
+// nothing else would stop the child. The cancel answers nil and the child ends
+// canceled.
+func TestCancelCascade_ACallerThatGivesUpDoesNotLoseTheCascade(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 1)
+		parentCtx := make(chan context.Context, 1)
+		defs := chainDefs("gu", 2, started, nil, nil)
+		defs[0] = taskDef(string(chainKind("gu", 0)), func(rc *tasks.RC, _ noParams) (string, error) {
+			if _, err := rc.Enqueue(chainKind("gu", 1), noParams{}); err != nil {
+				return "", err
+			}
+			parentCtx <- rc.Context()
+			<-rc.Context().Done()
+			return "", context.Cause(rc.Context())
+		}, func(c *tasks.Common) {
+			c.Effects = tasks.Writes(chainRes("gu", 0))
+			c.Cancel = tasks.Cooperative(time.Second)
+		})
+		h := newHarness(t, defs, cascadeOpts(t, time.Second))
+		parent := h.start(string(chainKind("gu", 0)), tasks.StartRequest{})
+		child := <-started
+		caller := tripCtx{Context: context.Background(), trip: <-parentCtx}
+		if err := h.x.CancelAs(caller, parent, tasks.Actor{UserID: "gordon"}); err != nil {
+			t.Fatalf("cancel whose caller gave up after the parent's stop: %v, want nil", err)
+		}
+		time.Sleep(5 * time.Second)
+		if r := h.get(child); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+			t.Errorf("child %s/%q, want canceled/cancel: the cascade was lost with the caller's context", r.State, r.Reason)
+		}
+	})
+}
+
+// TestCancelCascade_ARepeatCancelOfAnEndedParentFinishesTheCascade: a cancel that
+// ended the parent but not its child (the first half is staged by stopOne) is
+// finished by the repeat cancel even though the parent is terminal. The repeat
+// still answers "not found" (HEAD's repeat-cancel rule); a parent the watchdog
+// ended is not cascaded from, so a cancel of it leaves the child alone.
+func TestCancelCascade_ARepeatCancelOfAnEndedParentFinishesTheCascade(t *testing.T) {
+	for _, c := range []struct {
+		name        string
+		reason      string
+		wantStopped bool
+	}{
+		{"ended by a cancel", reasonCancel, true},
+		{"ended by the watchdog", reasonWatchdog, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := make(chan tasks.RunID, 1)
+				h := newHarness(t, chainDefs("re", 2, started, nil, nil), cascadeOpts(t, time.Second))
+				parent := h.start(string(chainKind("re", 0)), tasks.StartRequest{})
+				child := <-started
+				if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, c.reason, tasks.ErrCanceled); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(5 * time.Second)
+				if r := h.get(parent); r.State != tasks.StateCanceled || r.Reason != c.reason {
+					t.Fatalf("parent %s/%q, want canceled/%s", r.State, r.Reason, c.reason)
+				}
+				if r := h.get(child); r.State != tasks.StateRunning {
+					t.Fatalf("child %s before the repeat, want running: stopOne alone does not cascade", r.State)
+				}
+				if err := h.x.CancelAs(context.Background(), parent, tasks.Actor{UserID: "gordon"}); !errors.Is(err, tasks.ErrRunNotFound) {
+					t.Errorf("repeat cancel of an ended run: %v, want ErrRunNotFound", err)
+				}
+				time.Sleep(5 * time.Second)
+				r := h.get(child)
+				if c.wantStopped && (r.State != tasks.StateCanceled || r.Reason != reasonCancel) {
+					t.Errorf("child %s/%q after the repeat cancel, want canceled/cancel", r.State, r.Reason)
+				}
+				if !c.wantStopped && r.State != tasks.StateRunning {
+					t.Errorf("child %s/%q after a cancel of a run the watchdog ended, want running", r.State, r.Reason)
+				}
+			})
+		})
+	}
+}
+
+// TestCancelCascade_AParentThatIsNotExecutingStillTakesItsChild: a parent that is
+// not executing in this process (queued behind a run that holds its resource) ends
+// canceled at once, with no attempt to cancel, and its running child still goes
+// with it. The child is started naming the queued run as its parent, which is how
+// a run comes to have a child while it is not executing.
+func TestCancelCascade_AParentThatIsNotExecutingStillTakesItsChild(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan tasks.RunID, 3)
+		holder := taskDef("gotham.holder", blockUntilCtx(started), func(c *tasks.Common) {
+			c.Effects = tasks.Writes(tasks.Res("gotham", "ledger"))
+		})
+		stakeout := taskDef("gotham.stakeout", okBody, func(c *tasks.Common) {
+			c.Effects = tasks.Writes(tasks.Res("gotham", "ledger"))
+		})
+		child := taskDef("gotham.case", blockUntilCtx(started), func(c *tasks.Common) {
+			c.Effects = tasks.Writes(tasks.Res("gotham", "case"))
+		})
+		h := newHarness(t, []tasks.Definition{holder, stakeout, child}, cascadeOpts(t, time.Second))
+		hold := h.start("gotham.holder", tasks.StartRequest{})
+		<-started
+		parent := h.start("gotham.stakeout", tasks.StartRequest{})
+		ref, err := h.x.Start(context.Background(), "gotham.case", tasks.StartRequest{
+			Mode: tasks.ModeRequestLive, Parent: parent, Trigger: tasks.TriggerParent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		<-started
+		if r := h.get(parent); r.State != tasks.StateQueued {
+			t.Fatalf("parent %s, want queued behind the holder", r.State)
+		}
+		if err := h.x.CancelAs(context.Background(), parent, tasks.Actor{UserID: "gordon"}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Second)
+		if r := h.get(parent); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+			t.Errorf("parent %s/%q, want canceled/cancel", r.State, r.Reason)
+		}
+		if r := h.get(ref.ID); r.State != tasks.StateCanceled || r.Reason != reasonCancel {
+			t.Errorf("child %s/%q, want canceled/cancel: the parent never executed, the child did", r.State, r.Reason)
+		}
+		if r := h.get(hold); r.State != tasks.StateRunning {
+			t.Errorf("the run holding the parent's resource is %s, want running", r.State)
+		}
+	})
+}
+
+// cancelEventAt is when run id recorded its first cancel event.
+func (h *harness) cancelEventAt(id tasks.RunID) time.Time {
+	h.t.Helper()
+	for p, err := range h.stores.Runs.Pages(context.Background(), id, tasks.PageQuery{Page: tasks.PageEvents, Limit: 1000}) {
+		if err != nil {
+			h.t.Fatalf("events: %v", err)
+		}
+		if p.Event.Event == "cancel" {
+			return p.Event.At
+		}
+	}
+	h.t.Fatalf("run %s has no cancel event", id)
+	return time.Time{}
+}
+
+// TestCancelCascade_TheParentIsStoppedBeforeItsChildren: the parent's own stop
+// commits before any child's. A parent that is waiting on a child and is let see
+// that child canceled while its own context is still live goes on to enqueue the
+// next one, which no cascade is left to reach. The order is read off the runs'
+// own cancel events (the real clock: a frozen one cannot order two commits).
+func TestCancelCascade_TheParentIsStoppedBeforeItsChildren(t *testing.T) {
+	started := make(chan tasks.RunID, 4)
+	h := newHarness(t, chainDefs("so", 3, started, nil, nil), cascadeOpts(t, 20*time.Millisecond))
+	parent := h.start(string(chainKind("so", 0)), tasks.StartRequest{})
+	<-started
+	child := h.childOf(parent)
+	grand := h.childOf(child)
+	if err := h.x.CancelAs(context.Background(), parent, tasks.Actor{UserID: "gordon"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []tasks.RunID{parent, child, grand} {
+		h.waitState(id, tasks.StateCanceled)
+	}
+	pAt, cAt, gAt := h.cancelEventAt(parent), h.cancelEventAt(child), h.cancelEventAt(grand)
+	if cAt.Before(pAt) {
+		t.Errorf("the child's cancel (%s) was committed before its parent's (%s)", cAt, pAt)
+	}
+	if gAt.Before(cAt) {
+		t.Errorf("the grandchild's cancel (%s) was committed before its parent's (%s)", gAt, cAt)
+	}
+}
+
+// TestCancelCascade_ARestartAfterAWatchdogStopResumesTheChild: only a cancel
+// orphans a child. A parent the watchdog ended (canceled, reason watchdog) leaves
+// its child's lifecycle as it was: after a restart the child resumes, as it would
+// under any other parent.
+func TestCancelCascade_ARestartAfterAWatchdogStopResumesTheChild(t *testing.T) {
+	leafStarts := make(chan tasks.RunID, 8)
+	defs := chainDefs("wd", 2, leafStarts, nil, nil)
+	h := newHarness(t, defs, cascadeOpts(t, 20*time.Millisecond))
+	parent := h.start(string(chainKind("wd", 0)), tasks.StartRequest{})
+	<-leafStarts
+	child := h.childOf(parent)
+	if err := h.e.stopOne(context.Background(), parent, tasks.Actor{}, reasonWatchdog, tasks.ErrCanceled); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.waitState(parent, tasks.StateCanceled); r.Reason != reasonWatchdog {
+		t.Fatalf("parent %s/%q, want canceled/watchdog", r.State, r.Reason)
+	}
+	second := h.crashBoot(defs, cascadeOpts(t, 20*time.Millisecond))
+	select {
+	case id := <-leafStarts:
+		if id != child {
+			t.Fatalf("run %s started, want the child %s", id, child)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the child never resumed after the restart: it is %s/%q", second.get(child).State, second.get(child).Reason)
+	}
+	if r := second.get(child); r.State != tasks.StateRunning {
+		t.Errorf("child %s/%q after the restart, want running", r.State, r.Reason)
 	}
 }
