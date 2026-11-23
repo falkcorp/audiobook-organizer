@@ -224,7 +224,7 @@ func (s *Server) getLog(w http.ResponseWriter, r *http.Request, p *auth.Principa
 			s.fail(w, r, err)
 			return
 		}
-		lines = append(lines, tasks.RedactLogAppended(p.Perms, tasks.NewLogAppended(l)))
+		lines = append(lines, tasks.RedactLogAppended(p.Perms, tasks.NewLogAppended(runID(r), l)))
 		if len(lines) == limit {
 			break
 		}

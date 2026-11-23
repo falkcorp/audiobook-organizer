@@ -281,6 +281,9 @@ func TestExecutor_LogAppendedKeyedByRunID(t *testing.T) {
 		}
 		for i, em := range got {
 			want := fmt.Sprintf("%s %02d", tag, i+1)
+			if em.line.RunID != string(id) {
+				t.Errorf("run %s line %d names run %q in its payload", id, i, em.line.RunID)
+			}
 			if em.line.Message != want || em.line.Level != "info" || em.line.At.IsZero() {
 				t.Errorf("run %s line %d = %+v, want %q at info with a time", id, i, em.line, want)
 			}
@@ -1078,5 +1081,29 @@ func TestPublisher_SameRunCollectorsSerialiseThroughTheGate(t *testing.T) {
 	got := tp.of(emitRunChanged, "robin")
 	if len(got) != 2 || got[0].view.Done != 1 || got[1].view.Done != 2 {
 		t.Errorf("robin's emissions left in order %+v, want commit order 1 then 2", got)
+	}
+}
+
+// TestExecutor_RunChangedCarriesTheProgressMessage: a progress note shows up as
+// the message of a run-changed payload (the ops bell's op.updated.message), and
+// the terminal view keeps the last one.
+func TestExecutor_RunChangedCarriesTheProgressMessage(t *testing.T) {
+	p := &tape{}
+	h := tapeHarness(t, p, []tasks.Definition{
+		taskDef("gotham.signal", func(rc *tasks.RC, _ noParams) (string, error) {
+			rc.Progress().Note("Lighting the Bat-Signal")
+			return "lit", nil
+		}, readOnly("gotham.signal")),
+	}, nil, false)
+	id := h.start("gotham.signal", tasks.StartRequest{})
+	h.waitState(id, tasks.StateSucceeded)
+	h.drained()
+	got := p.of(emitRunChanged, id)
+	if len(got) == 0 {
+		t.Fatal("no run-changed emission")
+	}
+	last := got[len(got)-1].view
+	if last.Message != "Lighting the Bat-Signal" {
+		t.Errorf("terminal run-changed message = %q, want the last progress note", last.Message)
 	}
 }
