@@ -2245,7 +2245,7 @@ class ExportTargets(unittest.TestCase):
             [ln for ln in text.splitlines() if "export-" in ln],
             [
                 f'    {guard.HELPER_DIR}/export-keyring "", \\',
-                f'    {guard.HELPER_DIR}/export-install-secrets ""',
+                f'    {guard.HELPER_DIR}/export-install-secrets "", \\',
             ],
         )
 

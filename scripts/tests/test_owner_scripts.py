@@ -61,7 +61,23 @@ _STAT = f"""#!{_PY}
 import os, sys
 a = [x for x in sys.argv[1:] if x != "--"]
 st = os.stat(a[-1])
-print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", str(st.st_uid)))
+uid = str(st.st_uid)
+if os.environ.get("SHIM_FAKE_UID_FOR") and os.environ["SHIM_FAKE_UID_FOR"] in a[-1]:
+    uid = "4242"
+print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", uid))
+"""
+
+# install(1) that, when SHIM_RACE_FILE is set, makes that file right after installing:
+# a stand-in for another process creating the fixed request name mid-run.
+_INSTALL = f"""#!{_PY}
+import os, subprocess, sys
+r = subprocess.run(["/usr/bin/install", *sys.argv[1:]]).returncode
+race = os.environ.get("SHIM_RACE_FILE")
+if race and r == 0:
+    with open(race, "w") as f:
+        f.write("RACE")
+    os.chmod(race, 0o600)
+sys.exit(r)
 """
 _SUDO = f"""#!{_PY}
 import os, sys
@@ -125,7 +141,12 @@ class Sandbox:
         self.shims = self.root / "shims"
         self.shims.mkdir()
         self.log = self.root / "shim.log"
-        for name, body in (("stat", _STAT), ("sudo", _SUDO), ("systemctl", _SYSTEMCTL)):
+        for name, body in (
+            ("stat", _STAT),
+            ("sudo", _SUDO),
+            ("systemctl", _SYSTEMCTL),
+            ("install", _INSTALL),
+        ):
             p = self.shims / name
             p.write_text(body)
             p.chmod(0o755)
@@ -186,8 +207,8 @@ class BlockersBase(unittest.TestCase):
         self.blocks = self.box.home / "aorg-owner" / "blockers"
         return host
 
-    def run_script(self, *args: str) -> subprocess.CompletedProcess:
-        return self.box.run(self.script, *args)
+    def run_script(self, *args: str, extra: dict | None = None) -> subprocess.CompletedProcess:
+        return self.box.run(self.script, *args, extra=extra)
 
     def exported(self) -> list[str]:
         return sorted(p.name for p in self.fh.export.iterdir())
@@ -347,6 +368,29 @@ class ListScript(BlockersBase):
         self.assertEqual(self.delivered(), [])
         self.assertTrue(target.exists())
 
+    def test_a_directory_that_is_not_yours_is_refused(self) -> None:
+        host = self.host()
+        p = self.run_script(extra={"SHIM_FAKE_UID_FOR": str(host.export)})
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not owned by", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_reported_file_that_is_not_yours_stays_put(self) -> None:
+        host = self.host()
+        p = self.run_script(extra={"SHIM_FAKE_UID_FOR": "aorg-cutover-blockers-2"})
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not owned by", p.stderr)
+        self.assertEqual(self.delivered(), [])
+        self.assertEqual(len(self.exported()), 2, "both files stay in export_dir")
+        self.assertTrue(host.export.exists())
+
+    def test_a_config_value_with_a_shell_character_is_refused(self) -> None:
+        self.host(config={"export_dir": "/x;touch pwned"})
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("character this script will not pass on", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
     def test_arguments_other_than_dry_run_are_refused(self) -> None:
         self.host()
         for args in (["--run"], ["x"], ["--dry-run", "x"]):
@@ -450,6 +494,47 @@ class ApplyScript(BlockersBase):
         self.assertEqual(self.box.sudo_calls(), [])
         self.assertEqual(self.app_calls(), [])
         self.assertTrue(host.export.exists())
+
+    def test_a_request_file_that_is_not_yours_is_refused(self) -> None:
+        self.host()
+        req = self.request()
+        p = self.run_script(str(req), extra={"SHIM_FAKE_UID_FOR": req.name})
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not owned by", p.stderr)
+        self.assertEqual(self.exported(), [])
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_waiting_request_that_is_not_yours_or_not_0600_is_refused(self) -> None:
+        host = self.host()
+        waiting = host.export / REQUEST
+        waiting.write_text(json.dumps({"action": "delete", "key": ROBIN}))
+        waiting.chmod(0o644)
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("must be mode 0600", p.stderr)
+        waiting.chmod(0o600)
+        p = self.run_script(extra={"SHIM_FAKE_UID_FOR": REQUEST})
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not owned by", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_request_that_appears_while_placing_is_never_replaced(self) -> None:
+        host = self.host()
+        p = self.run_script(
+            str(self.request()), extra={"SHIM_RACE_FILE": str(host.export / REQUEST)}
+        )
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("could not place the request", p.stderr)
+        self.assertEqual((host.export / REQUEST).read_text(), "RACE")
+        self.assertEqual(self.box.sudo_calls(), [])
+        self.assertEqual([f for f in self.exported() if f != REQUEST], [], "no temp file is left")
+
+    def test_a_config_value_with_a_shell_character_is_refused(self) -> None:
+        self.host(config={"export_dir": "/x;touch pwned"})
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("character this script will not pass on", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
 
     def test_nothing_given_and_nothing_waiting_refuses(self) -> None:
         self.host()

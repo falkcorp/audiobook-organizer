@@ -145,6 +145,23 @@ class Parse(unittest.TestCase):
             self.assertIsInstance(cbo.parse(text, want, opt, removed=False), str, label)
 
 
+class Pull(unittest.TestCase):
+    def test_a_local_file_that_exists_is_never_overwritten_and_nothing_is_fetched(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        dest = Path(tmp.name)
+        name = f"aorg-cutover-blockers-{STAMP}.txt"
+        (dest / name).write_text("mine")
+        with mock.patch.object(cbo.subprocess, "run", side_effect=AssertionError("scp ran")):
+            code, why = cbo.pull(None, "h", "/x", dest, {"list": (name, 4, SHA)})
+        self.assertEqual(code, 1)
+        self.assertIn("already exists", why)
+        self.assertEqual((dest / name).read_text(), "mine")
+
+
 class CheckRequest(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
@@ -450,6 +467,22 @@ class Targets(unittest.TestCase):
         self.assertIn("not inactive", out(p))
         self.assertEqual(self.blocker_calls(host), [])
         self.assertEqual(self.remote_files(host), [REQUEST], "the sent request is still there")
+
+    def test_a_success_that_does_not_report_removing_the_request_is_a_failure(self) -> None:
+        host = self.host(
+            rules=[
+                {
+                    "match": r"cutover-blockers-apply$",
+                    "responses": [
+                        {"stdout": f"EXPORTED aorg-cutover-blockers-result-{STAMP}.txt 5 {SHA}\n"}
+                    ],
+                }
+            ]
+        )
+        req = self.request(host)
+        p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertIn("did not report removing the request", out(p))
 
     def test_a_failed_apply_says_it_may_have_applied_and_keeps_the_request(self) -> None:
         host = self.host(current={"blockers_exit": 3})
