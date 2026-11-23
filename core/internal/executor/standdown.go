@@ -286,12 +286,20 @@ func (e *executor) writeMarkers(ctx context.Context, ws ...markerWrite) error {
 	})
 }
 
-// reapHolds releases holds whose lease expired without renewal: their
-// keys dispatch again, their quiesced runs are re-queued, and each holder's
+// reapHolds cleans up holds whose lease expired without renewal: each holder's
 // run loses its hold (its writer refuses and its context is canceled with
-// tasks.ErrHoldLost). The expiry test and the holders' loss are one critical
-// section, so a renewal that extended the lease is either before it (the hold
-// is not dead) or after it (the renewal fails): never both.
+// tasks.ErrHoldLost), the holders are dropped, the marker is cleared and the runs
+// the hold quiesced are re-queued. It does not free the key: the key is free from
+// the instant of expiry, because dispatch (dispatchOnce) and keyHeld test
+// liveLocked(now) themselves, however long the reaper takes to get here. The
+// expiry test and the holders' loss are one critical section, so a renewal that
+// extended the lease is either before it (the hold is not dead) or after it (the
+// renewal fails): never both.
+//
+// What it cannot do is stop an fn already running inside a Writer.Do (or a body
+// between writes) that outlasts a whole lease: the permit is checked before fn
+// runs, not during it, so that fn can still commit after the lapse. That is the
+// shape of HEAD's Fence.Check, not something this reaper closes.
 func (e *executor) reapHolds(_ context.Context) {
 	type dead struct {
 		h       *standHold

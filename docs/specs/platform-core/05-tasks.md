@@ -704,10 +704,13 @@ down by `rc.StandDown(key)` from another run: running holders of `key` are quies
 `key` stay queued while the hold lives; the hold is a lease renewed by every `Writer.Do`, every item start and every `rc.Progress()` `Set` or `Tick`
 (throttled to one renewal a second) of the holding run and, for a run whose long read-only passes do none of those, by the
 holder calling `Hold.Renew()` from its own progress (HEAD's per-item heartbeat; `Renew` reports `ErrHoldLost` once the
-lease lapsed or the hold was released). A lapse is decided under the executor lock, by the reaper or by a renewal,
-whichever reaches the expired lease first (a renewal that reads its clock under the lock cannot extend a lease the reaper
-already dropped, nor the reaper drop one just renewed): the run's context is canceled with cause `ErrHoldLost` and its
-writer refuses the next write (`ErrFenced` wrapping `ErrHoldLost`). The lease is lost after `core.tasks.standdown_lease`
+lease lapsed or the hold was released). A lapse is decided under the executor lock, by the reaper, by a renewal or by a new `rc.StandDown` of the same
+key that replaces the expired hold, whichever reaches the expired lease first (a renewal that reads its clock under the lock
+cannot extend a lease the reaper already dropped, nor the reaper drop one just renewed): the run's context is canceled with
+cause `ErrHoldLost` and its writer refuses the next write (`ErrFenced` wrapping `ErrHoldLost`). The key is free from the
+instant of expiry (dispatch tests the lease itself); an `fn` already inside a `Writer.Do` that outlasts a whole lease can
+still commit, which is HEAD's `Fence.Check` shape. A run whose hold lapsed never ends `succeeded`, whatever its body
+returned: it ends `failed` (HEAD's `ScanStandDownHold.Finish` fails the op the same way). The lease is lost after `core.tasks.standdown_lease`
 (default 5 m, as HEAD's) without renewal; the executor's own bookkeeping (a status note, the writer's liveness stamp) does
 not renew, so a wedged run still loses it. While a hold lives its marker is
 persisted through `Stores.StandDown` (5T.3.13; MOD6-4): staged when the hold is taken, re-staged on
