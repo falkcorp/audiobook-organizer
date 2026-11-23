@@ -176,11 +176,13 @@ def plan(a: argparse.Namespace, rh: ModuleType, guard: ModuleType) -> tuple[list
     root = a.root.rstrip("/")
     # The default offline_env names the state directory only as
     # ABO_CORE_PATHS_STATE_DIR: the flipped binary refuses ABK_STATE_DIR in every
-    # offline command (restore, fetch-release, export-keyring). ABO-only also
-    # serves a pre-flip binary ONLY when state_dir is the compiled default
-    # (/var/lib/audiobook-organizer): it ignores the ABO name and falls back to
-    # that default. A generation-aware default for any other state_dir is a
-    # pending owner decision, not built here.
+    # offline command (restore, fetch-release, export-keyring). ABO-only works
+    # with a pre-flip binary ONLY when state_dir is the compiled default
+    # (/var/lib/audiobook-organizer): a pre-flip build refuses, fail-closed
+    # ("core's state directory ... is not ABO's ..."), when
+    # ABO_CORE_PATHS_STATE_DIR differs from ABO's state directory
+    # (ABK_STATE_DIR, else that default), so on any other state_dir it refuses.
+    # A generation-aware default is a pending owner decision, not built here.
     values = {
         "bin": a.bin,
         "db": a.db,

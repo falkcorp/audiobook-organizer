@@ -912,7 +912,6 @@ class RollbackRestoreTest(unittest.TestCase):
             fetch,
             "a scratch state directory: no access to the service's",
         )
-        self.assertNotIn("ABK_STATE_DIR", fetch, "the flipped binary refuses that name")
         runs = [e for e in host.calls() if e["kind"] == "app" and e["args"][:1] == ["updater"]]
         self.assertEqual([r["name"] for r in runs], ["current"], "the CURRENT binary fetches")
         self.assertEqual(
@@ -1104,6 +1103,44 @@ class DeployReleaseTest(unittest.TestCase):
     def installs(self, host: FakeHost) -> list[str]:
         return [c for c in host.ssh() if "install-staged binary" in c]
 
+    def fetches(self, host: FakeHost) -> list[dict]:
+        return [
+            e
+            for e in host.calls()
+            if e["kind"] == "app" and e["args"][:2] == ["updater", "fetch-release"]
+        ]
+
+    def test_a_flipped_binary_fetches_once_with_the_abo_name_and_no_abk_name(self) -> None:
+        host = self.host(current={"generation": "flipped"})
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertEqual(p.returncode, 0, out(p))
+        runs = self.fetches(host)
+        self.assertEqual(len(runs), 1)
+        env = runs[0]["env"]
+        self.assertEqual(env["ABK_STATE_DIR"], "")
+        self.assertTrue(env["ABO_CORE_PATHS_STATE_DIR"])
+        self.assertEqual(env["ABO_CORE_PATHS_STATE_DIR"], env["HOME"], "a scratch directory")
+
+    def test_a_preflip_binary_that_refuses_the_abo_mismatch_is_retried_once_with_abk(self) -> None:
+        host = self.host(current={"generation": "preflip"})
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertEqual(p.returncode, 0, out(p))
+        first, second = self.fetches(host)
+        self.assertEqual(first["env"]["ABK_STATE_DIR"], "")
+        self.assertEqual(first["env"]["ABO_CORE_PATHS_STATE_DIR"], first["env"]["HOME"])
+        self.assertEqual(second["env"]["ABO_CORE_PATHS_STATE_DIR"], "", "no ABO name on the retry")
+        self.assertEqual(second["env"]["ABK_STATE_DIR"], second["env"]["HOME"])
+        self.assertEqual(len(self.fetches(host)), 2)
+        self.assertEqual(host.installed(), f"fetched-{self.TAG}")
+
+    def test_any_other_fetch_failure_is_not_retried_and_its_message_is_shown(self) -> None:
+        host = self.host(current={"fetch_fails": True})
+        p = host.make("deploy-release", RELEASE=self.TAG)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(len(self.fetches(host)), 1)
+        self.assertIn("network is unreachable", out(p))
+        self.assertEqual(self.installs(host), [])
+
     def test_fetches_checks_the_version_installs_and_keeps_the_replaced_environment(self) -> None:
         host = self.host()
         replaced = hashlib.sha256(host.bin.read_bytes()).hexdigest()
@@ -1143,7 +1180,6 @@ class DeployReleaseTest(unittest.TestCase):
         )
         fetch = next(c for c in host.ssh() if "updater fetch-release" in c)
         self.assertIn("ABO_CORE_PATHS_STATE_DIR=", fetch)
-        self.assertNotIn("ABK_STATE_DIR", fetch)
         self.assertEqual(host.installed(), f"fetched-{self.TAG}")
         self.assertEqual(fake_ssh.fake_app_name(host.prev), "current", ".prev is the replaced one")
         self.assertTrue(
@@ -2143,8 +2179,13 @@ class ExportTargets(unittest.TestCase):
         )
         rm = [c for c in host.ssh() if c.startswith("rm ")]
         self.assertEqual(len(rm), 1)
+        # Deleted in the order the helper reported them: the key, then the config.
         self.assertEqual(
-            rm[0], "rm -f -- " + " ".join(f"{host.export}/{f.name}" for f in got.values())
+            rm[0],
+            "rm -f -- "
+            + " ".join(
+                f"{host.export}/{got[k].name}" for k in ("aorg-encryption-key", "aorg-config")
+            ),
         )
 
     def test_a_config_yaml_that_does_not_exist_is_absent_not_an_error(self) -> None:

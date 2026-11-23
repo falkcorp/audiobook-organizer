@@ -214,6 +214,7 @@ EXPORT_LIMIT = 1 << 20
 # it started: a hung unit would otherwise block every later export, and the deploy
 # user has no grant to stop it.
 EXPORT_RUNTIME_SEC = 60
+EXPORT_TOKEN_VAR = "AORG_EXPORT_TOKEN"
 EXPORT_DEADLINE_SEC = EXPORT_RUNTIME_SEC + 30
 # The worker's exit status for "this file does not exist" (config.yaml only).
 EXPORT_ABSENT = 4
@@ -2444,6 +2445,11 @@ def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
         f"--property=RuntimeMaxSec={EXPORT_RUNTIME_SEC}",
     ]
     argv += [f"--setenv={tok}" for tok in cfg.get("offline_env", "").split()]
+    # A token only this call knows, in the unit's environment: _export_stop
+    # stops the unit only when it carries it, so a call whose systemd-run lost
+    # a race for the unit name never stops the other caller's unit.
+    token = _export_token()
+    argv.append(f"--setenv={EXPORT_TOKEN_VAR}={token}")
     argv += ["--", TOOLS["python3"], "-I", os.path.abspath(__file__), "_export-worker", kind]
     proc = subprocess.Popen(  # noqa: S603 (fixed argv built above)
         argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE
@@ -2455,19 +2461,41 @@ def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
         # Whatever went wrong, no unit of ours is left running: killing
         # systemd-run alone would leave the unit, and the deploy user has no
         # grant to stop it.
-        _export_stop(proc)
+        _export_stop(proc, token)
         raise
     finally:
         proc.stdout.close()
 
 
-def _export_stop(proc: subprocess.Popen[bytes]) -> None:
-    """Stop the export unit (as root, here; no sudoers line for it) and reap
-    systemd-run. Harmless when the unit already ended."""
-    with contextlib.suppress(OSError, subprocess.SubprocessError):
-        subprocess.run(  # noqa: S603
-            [TOOLS["systemctl"], "stop", EXPORT_UNIT], check=False, timeout=30
+def _export_token() -> str:
+    return os.urandom(16).hex()
+
+
+def _export_unit_is_ours(token: str) -> bool:
+    """True when the export unit that exists carries this call's token. A unit
+    that already ended (--collect removed it) or one a racing caller started
+    does not."""
+    try:
+        r = subprocess.run(  # noqa: S603
+            [TOOLS["systemctl"], "show", "-p", "Environment", "--value", EXPORT_UNIT],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
         )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 and f"{EXPORT_TOKEN_VAR}={token}" in r.stdout.split()
+
+
+def _export_stop(proc: subprocess.Popen[bytes], token: str) -> None:
+    """Stop the export unit if it is this call's (as root, here; no sudoers
+    line for it) and reap systemd-run."""
+    if _export_unit_is_ours(token):
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(  # noqa: S603
+                [TOOLS["systemctl"], "stop", EXPORT_UNIT], check=False, timeout=30
+            )
     with contextlib.suppress(OSError):
         proc.kill()
     with contextlib.suppress(OSError, subprocess.SubprocessError):

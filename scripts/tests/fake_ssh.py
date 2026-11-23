@@ -323,6 +323,21 @@ if args[:2] == ["secrets", "export-keyring"]:
     print("Wrote the keyring to " + rest["--out"])
     sys.exit(0)
 if args[:2] == ["updater", "fetch-release"]:
+    # generation "flipped" refuses the retired ABK_STATE_DIR; "preflip" refuses an
+    # ABO state directory that is not ABK_STATE_DIR (else the compiled default),
+    # as each build does. Unset: no check.
+    gen = IDENT.get("generation")
+    abo = os.environ.get("ABO_CORE_PATHS_STATE_DIR", "")
+    abk = os.environ.get("ABK_STATE_DIR", "")
+    if gen == "flipped" and abk:
+        sys.stderr.write("Error: retired names of protected or secret keys are set: env ABK_STATE_DIR (now env ABO_CORE_PATHS_STATE_DIR)\\n")
+        sys.exit(1)
+    if gen == "preflip" and abo and abo != (abk or "/var/lib/audiobook-organizer"):
+        sys.stderr.write("Error: books: core's state directory " + repr(abo) + " is not ABO's " + repr(abk or "/var/lib/audiobook-organizer") + " (ABO_CORE_PATHS_STATE_DIR); set one, or set both to the same path\\n")
+        sys.exit(1)
+    if IDENT.get("fetch_fails"):
+        sys.stderr.write("Error: updater fetch-release: network is unreachable\\n")
+        sys.exit(1)
     # releases: tag -> the text of the fake binary that release is (fake_app_text).
     rest = dict(zip(args[2::2], args[3::2]))
     text = IDENT.get("releases", {{}}).get(rest.get("--version", ""))

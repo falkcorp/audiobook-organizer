@@ -231,10 +231,22 @@ def commands(o: Opts, name: str = "") -> dict[str, str]:
         # directory so the deploy user needs no access to the service's
         # (the command reads no store); then the discard of the file it
         # wrote, and the helper's install of it as .prev.
+        #
+        # The scratch directory is named ABO_CORE_PATHS_STATE_DIR, which a flipped
+        # binary reads (and refuses ABK_STATE_DIR). A pre-flip binary refuses
+        # that name unless it equals ABO's state directory ("core's state
+        # directory ... is not ABO's ..."), which a scratch directory never
+        # does; on exactly that refusal the fetch is retried once with
+        # ABK_STATE_DIR and no ABO name. Any other failure is the failure.
         "fetch_release": (
             'd=$(mktemp -d) && ABO_CORE_PATHS_STATE_DIR="$d" HOME="$d" '
-            f"{o.bin} updater fetch-release --version {o.release} --out {o.stage_bin}; "
-            'rc=$?; rm -rf "$d"; exit $rc'
+            f"{o.bin} updater fetch-release --version {o.release} --out {o.stage_bin} "
+            '2>"$d/err"; rc=$?; '
+            'if [ "$rc" -ne 0 ] && grep -qF "is not ABO\'s" "$d/err"; then '
+            'ABK_STATE_DIR="$d" HOME="$d" '
+            f"{o.bin} updater fetch-release --version {o.release} --out {o.stage_bin}; rc=$?; "
+            'else cat "$d/err" >&2; fi; '
+            'rm -rf "$d"; exit $rc'
         ),
         "discard_fetched": f"rm -f {o.stage_bin} {o.stage_bin}.part",
         "install_prev": f"sudo -n {h}/install-staged prev",
