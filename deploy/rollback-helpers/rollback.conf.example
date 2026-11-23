@@ -39,8 +39,9 @@ service_group =
 # deploy/audiobook-organizer.service installed with the helpers.
 stage_bin = /home/USER/audiobook-organizer
 stage_local_conf = /home/USER/audiobook-organizer-local.conf
-# The directory make export-keyring and make export-install-secrets hand their
-# files to: owned by the deploy user, mode 0700, created by that user
+# The directory make export-keyring, make export-install-secrets,
+# make cutover-blockers-list and make cutover-blockers-apply (and the owner's
+# scripts in deploy/owner/) hand their files to or read their request from: owned by the deploy user, mode 0700, created by that user
 # (`mkdir -m 700 <it>`). The helpers refuse a symlink in any component, an owner
 # other than the user who ran sudo, or any other mode. Unset, the export
 # helpers refuse.

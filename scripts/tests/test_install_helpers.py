@@ -203,9 +203,16 @@ class InstallHelpers(unittest.TestCase):
             self.assertNotEqual(p.returncode, 0, bad)
             self.assertEqual([x for x in self.root.rglob("*") if x.is_file()], [], bad)
 
-    def test_the_two_export_stubs_and_their_sudoers_lines_are_installed(self) -> None:
+    def test_the_export_and_cutover_blockers_stubs_and_their_sudoers_lines_are_installed(
+        self,
+    ) -> None:
         self.assertEqual(self.run_tool("--apply").returncode, 0)
-        for stub in ("export-keyring", "export-install-secrets"):
+        for stub in (
+            "export-keyring",
+            "export-install-secrets",
+            "cutover-blockers-list",
+            "cutover-blockers-apply",
+        ):
             self.assertIn(stub, RH.STUBS)
             f = self.libdir / stub
             self.assertEqual(f.read_bytes(), (HELPERS / stub).read_bytes())
