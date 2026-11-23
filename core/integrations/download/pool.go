@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 
 	"github.com/falkcorp/mediacore/integrations"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/metrics"
 )
 
@@ -34,9 +35,11 @@ const defaultParallelism = 4
 // Pool as "per App" and leaves its construction to the kernel, which wires
 // module.Deps.Downloads at F7-09).
 type PoolOptions struct {
-	// Paths maps client paths to host paths and back. nil maps nothing: every
-	// item's LocalPath stays "" and Relocate is refused (fail closed).
-	Paths PathMapper
+	// Paths maps client paths to library paths and back, over the rows whose
+	// Source is Source(instance): the library's PathMapper (Manager.Mapper()).
+	// nil maps nothing: every item's LocalPath stays zero and Relocate is
+	// refused (fail closed).
+	Paths library.PathMapper
 	// CapsTTL is how long the Pool keeps an instance's Caps (core.download.caps_ttl,
 	// default 1h). The key is not declared here; the kernel passes its value.
 	CapsTTL time.Duration
@@ -165,7 +168,7 @@ func (p *Pool) Lease(ctx context.Context, ref integrations.Ref) (Client, func(),
 }
 
 // Items lists ref's items matching f, with LocalPath filled (05-download
-// §4.4); an item no mapping covers keeps LocalPath "" and is counted in
+// §4.4); an item no mapping covers keeps a zero LocalPath and is counted in
 // mediacore_download_unmapped_paths_total. Cross-instance discovery is the
 // caller looping Instances; each call is one client.
 func (p *Pool) Items(ctx context.Context, ref integrations.Ref, f ItemFilter) ([]Item, error) {
@@ -225,15 +228,15 @@ func (p *Pool) Files(ctx context.Context, item ItemRef) ([]File, error) {
 	return files, nil
 }
 
-// Relocate moves the data of items to localDir (a host path), grouping the
+// Relocate moves the data of items to localDir (a library path), grouping the
 // refs by instance and mapping localDir to each client's own path. Nothing is
 // sent anywhere until every instance accepted the call: an instance without
 // Caps.Relocate or a Relocator is ClassUnsupported, and a localDir no mapping
 // of an instance covers is ClassInvalid ("no mapping covers <path>"), never a
-// host path the client cannot see. Instances are then called at most
+// path the client cannot see. Instances are then called at most
 // PoolOptions.Parallelism at a time; their errors are joined, the instance
 // order being the order of their IDs.
-func (p *Pool) Relocate(ctx context.Context, items []ItemRef, localDir LocalPath) error {
+func (p *Pool) Relocate(ctx context.Context, items []ItemRef, localDir library.Path) error {
 	if len(items) == 0 {
 		return nil
 	}
@@ -331,10 +334,10 @@ func (p *Pool) adapterOf(ref integrations.Ref) integrations.AdapterID {
 	return cfg.Adapter
 }
 
-// toLocal maps a client path; "" when no mapping covers it.
-func (p *Pool) toLocal(ctx context.Context, ref integrations.Ref, remote string) LocalPath {
+// toLocal maps a client path; the zero Path when no mapping covers it.
+func (p *Pool) toLocal(ctx context.Context, ref integrations.Ref, remote string) library.Path {
 	if remote == "" {
-		return ""
+		return library.Path{}
 	}
 	if p.o.Paths != nil {
 		if lp, err := p.o.Paths.ToLocal(Source(ref.Instance), remote); err == nil {
@@ -342,19 +345,19 @@ func (p *Pool) toLocal(ctx context.Context, ref integrations.Ref, remote string)
 		}
 	}
 	p.count(ctx, p.unmapped, attribute.String("instance", string(ref.Instance)))
-	return ""
+	return library.Path{}
 }
 
 // toRemote maps a host path to ref's client; no mapping is ClassInvalid.
-func (p *Pool) toRemote(ctx context.Context, ref integrations.Ref, local LocalPath) (string, error) {
-	if local != "" && p.o.Paths != nil {
+func (p *Pool) toRemote(ctx context.Context, ref integrations.Ref, local library.Path) (string, error) {
+	if local != (library.Path{}) && p.o.Paths != nil {
 		if remote, err := p.o.Paths.ToRemote(Source(ref.Instance), local); err == nil {
 			return remote, nil
 		}
 	}
 	p.count(ctx, p.unmapped, attribute.String("instance", string(ref.Instance)))
 	return "", &integrations.Error{Ref: ref, Op: "relocate", Class: integrations.ClassInvalid,
-		Err: fmt.Errorf("%w: no mapping covers %s", integrations.ErrInvalid, string(local))}
+		Err: fmt.Errorf("%w: no mapping covers %s", integrations.ErrInvalid, local)}
 }
 
 // count adds one to c when metrics are on.
