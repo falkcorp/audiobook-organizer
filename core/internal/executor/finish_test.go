@@ -180,9 +180,9 @@ func TestFinishOnly_FinishErrorEndsTheRunFailed(t *testing.T) {
 	}
 }
 
-// cancelOnChunks is a run store that cancels a run the first time the
-// finish-only attempt reads that run's chunk ledger (armed by the test): a
-// stop that arrives while the attempt is reading, before it calls Finish.
+// cancelOnChunks is a run store that cancels a run once the finish-only
+// attempt has read that run's whole chunk ledger (armed by the test): a stop
+// that arrives after the reads and before the attempt calls Finish.
 type cancelOnChunks struct {
 	tasks.RunStore
 	cancel func(context.Context)
@@ -190,17 +190,23 @@ type cancelOnChunks struct {
 }
 
 func (c *cancelOnChunks) Chunks(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Chunk, error] {
-	if c.armed.CompareAndSwap(true, false) {
-		c.cancel(ctx)
+	return func(yield func(tasks.Chunk, error) bool) {
+		for ch, err := range c.RunStore.Chunks(ctx, id) {
+			if !yield(ch, err) {
+				return
+			}
+		}
+		if c.armed.CompareAndSwap(true, false) {
+			c.cancel(ctx)
+		}
 	}
-	return c.RunStore.Chunks(ctx, id)
 }
 
 // TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish (HEAD
 // batch_runner.go:283-288): when a stop ends the finish-only attempt before
 // it reaches Finish, Finish does not run and the run ends by that stop:
 // Finish runs once, in the attempt that ends the run. Here an operator
-// cancel lands while the attempt reads the ledger.
+// cancel lands right after the attempt has read the ledger.
 func TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish(t *testing.T) {
 	second := &finishOnlyRig{}
 	h, id := interruptedArchive(t, nil, second)
