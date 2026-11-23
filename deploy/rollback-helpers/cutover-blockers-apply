@@ -1,0 +1,14 @@
+#!/bin/sh
+# file: deploy/rollback-helpers/cutover-blockers-apply
+# version: 0.1.0
+# guid: 590f95c2-f670-4360-83c3-f70dec669182
+# last-edited: 2026-11-22
+#
+# cutover-blockers-apply (no arguments), as root: the one fix or delete request file in export_dir, applied by the service-user cutover-blockers command.
+# The service must already be stopped; this stub never stops or starts it. The
+# service-user work runs in a transient unit.
+# A sudoers-granted stub: it runs one fixed operation of rollback_helper.py,
+# which validates every argument itself (docs/system/deploy-and-gpu-ops.md,
+# "Rollback helpers"). Install root-owned, mode 0755, in
+# /usr/local/libexec/audiobook-organizer/rollback/.
+exec /usr/bin/python3 -I /usr/local/libexec/audiobook-organizer/rollback/rollback_helper.py cutover-blockers-apply "$@"
