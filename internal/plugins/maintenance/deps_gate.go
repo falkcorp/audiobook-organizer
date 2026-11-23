@@ -43,23 +43,7 @@ type booksGate struct{ g *writer.Gate }
 // empty never reach w (see writer.Gate.Do), so they work for a ReadOnly kind as
 // they did.
 func newBooksGate(w tasks.Writer, rows map[string][]ops.Resource) booksGate {
-	if w == nil {
-		w = noRunWriter{}
-	}
-	return booksGate{g: writer.New(w, writer.Rows(rows))}
-}
-
-// noRunWriter is the tasks.Writer of a run that has none.
-type noRunWriter struct{}
-
-var errNoRunWriter = fmt.Errorf("%w: the run has no writer (a ReadOnly kind writes nothing)", tasks.ErrOutsideEffects)
-
-func (noRunWriter) Do(context.Context, tasks.Write, func(context.Context) ([]tasks.Change, error)) error {
-	return errNoRunWriter
-}
-func (noRunWriter) MarkRowApplied(context.Context, string) {}
-func (noRunWriter) RowApplied(context.Context, string) (bool, error) {
-	return false, errNoRunWriter
+	return booksGate{g: writer.ForRun(w, writer.Rows(rows))}
 }
 
 // runless is the context a writer method that takes none gives the gate. The

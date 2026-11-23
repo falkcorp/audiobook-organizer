@@ -289,6 +289,28 @@ func TestBooksT6G7_MissingServicesRefuseByName(t *testing.T) {
 	require.ErrorIs(t, err, errT6g7NoUserMerge)
 }
 
+// A nil *g7FakeMerge in the interface is not == nil. It must refuse by name like
+// the untyped nil, not panic at the first call.
+func TestBooksT6G7_TypedNilUserMergeRefusesByName(t *testing.T) {
+	in, _, _, _ := g7Inputs(t)
+	var typedNil *g7FakeMerge
+	in.UserMerge = typedNil
+	deps := newT6G7Deps(in)
+	w := deps.NewWriter(&booksGateRecorder{})
+	_, err := w.ApplyUserMerge(context.Background(), usermerge.ApplyRequest{}, nil)
+	require.ErrorIs(t, err, errT6g7NoUserMerge)
+	_, err = deps.Store.ActorIsAdmin("u")
+	require.ErrorIs(t, err, errT6g7NoUserMerge)
+}
+
+// A typed nil passes != nil but is not a value: BooksTaskLists and newT6G7Deps use isSet.
+func TestIsSet_TypedNilIsNotSet(t *testing.T) {
+	require.False(t, isSet((*g7FakeMerge)(nil)))
+	require.False(t, isSet(nil))
+	require.True(t, isSet(&g7FakeMerge{}))
+	require.True(t, isSet(bareG7Reads{}))
+}
+
 // bareG7Reads and bareG7Writes expose only the interface's own methods, so no
 // optional capability resolves through them.
 type bareG7Reads struct{ G7Reads }
