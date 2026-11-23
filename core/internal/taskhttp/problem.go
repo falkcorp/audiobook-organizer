@@ -133,6 +133,8 @@ func mapError(err error) (problem, bool) {
 		return problem{Status: 409, Code: "tasks.no_approval", Detail: detail}, true
 	case errors.Is(err, executor.ErrNotAwaitingDecision):
 		return problem{Status: 409, Code: "tasks.not_awaiting_decision", Detail: detail}, true
+	case errors.Is(err, executor.ErrNotFinishable):
+		return problem{Status: 409, Code: "tasks.not_finishable", Detail: detail}, true
 	case errors.Is(err, executor.ErrShuttingDown):
 		return problem{Status: 503, Code: "unavailable", Detail: detail}, true
 	case errors.Is(err, tasks.ErrModeUnset):

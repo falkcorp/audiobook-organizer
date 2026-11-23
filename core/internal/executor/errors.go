@@ -60,6 +60,11 @@ var (
 	ErrAwaitSelfBlocked = errors.New("executor: awaited child cannot start while the awaiting run runs")
 	// ErrNotAwaitingDecision: Decide on a run that is not awaiting_decision.
 	ErrNotAwaitingDecision = errors.New("executor: run is not awaiting a decision")
+	// ErrNotFinishable: Decide(DecideFinish) on a run whose kind is neither a
+	// Batch nor a Fixer, the only shapes with a ledger and a Finish (or
+	// AfterApply) to run over it (HEAD: Registry.CanFinishWithoutResuming,
+	// registry/finish.go; 409 tasks.not_finishable).
+	ErrNotFinishable = errors.New("executor: the run's kind cannot be finished without resuming")
 	// ErrHoldLost: a stand-down hold's lease expired without renewal; the
 	// holder's next write is refused (5T.3.7).
 	ErrHoldLost = errors.New("executor: stand-down hold lost: its lease expired")

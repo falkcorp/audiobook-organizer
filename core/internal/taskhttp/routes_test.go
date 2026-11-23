@@ -220,6 +220,7 @@ func TestMapError(t *testing.T) {
 		{executor.ErrPlanDecided, 409, "tasks.plan_decided"},
 		{executor.ErrNoApproval, 409, "tasks.no_approval"},
 		{executor.ErrNotAwaitingDecision, 409, "tasks.not_awaiting_decision"},
+		{executor.ErrNotFinishable, 409, "tasks.not_finishable"},
 		{executor.ErrShuttingDown, 503, "unavailable"},
 		{tasks.ErrModeUnset, 400, "tasks.mode_unset"},
 		{config.ErrLocked, 409, "tasks.schedule_locked"},

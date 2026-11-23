@@ -195,6 +195,17 @@ func (e *executor) resumeOne(ctx context.Context, rec tasks.RunRecord) error {
 		e.log.Warn("run restarted too often; failed by the restart guard", "run", string(rec.ID), "attempts", rec.Attempt)
 		return e.fail(ctx, rec, "restart_loop")
 	}
+	if rec.FinishOnly {
+		// A restart in the middle of a finish-only attempt: the person has
+		// already chosen "finish without resuming", so the run goes back to
+		// the queue still finish-only, whatever the kind's resume policy,
+		// and never from zero (which would void the ledger Finish reads).
+		// It is never a full run: only an explicit Decide(DecideResume)
+		// clears the marker. HEAD instead sends such a run back to
+		// awaiting_decision for the person to choose again
+		// (registry/batch_runner.go:282-288), keeping the marker.
+		return e.requeue(ctx, rec, rec.State, false)
+	}
 	switch d.c.Resume {
 	case tasks.ResumeContinue:
 		return e.requeue(ctx, rec, rec.State, false)

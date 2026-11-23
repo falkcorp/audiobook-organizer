@@ -592,6 +592,9 @@ func (a *attempt) body() (res json.RawMessage, err error) {
 		return nil, err
 	}
 	rc := tasks.NewRC(a)
+	if a.rec.FinishOnly {
+		return a.runFinishOnly(rc, p)
+	}
 	switch {
 	case a.d.task != nil:
 		return a.d.task.Run(rc, p)

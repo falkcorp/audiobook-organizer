@@ -140,6 +140,49 @@ func TestNativeStores_RoundTrip(t *testing.T) {
 			t.Fatalf("run imported by NativeImporter, read by NativeStores: %+v %v", got, err)
 		}
 	})
+	t.Run("FinishOnlyRoundTrips", func(t *testing.T) {
+		// F5-18 F1: the finish-only marker is part of the stored record, on
+		// every path that writes one: Insert, Transition and the Importer.
+		h := newHarness(t)
+		ctx := t.Context()
+		commit := func(stage func(b *storage.Batch) error) {
+			t.Helper()
+			b := h.ks.NewIndexedBatch()
+			defer func() { _ = b.Close() }()
+			if err := stage(b); err != nil {
+				t.Fatal(err)
+			}
+			if err := b.Commit(ctx, storage.Sync); err != nil {
+				t.Fatal(err)
+			}
+		}
+		inserted := runOf("01FINISHINSERTED", tasks.StateQueued)
+		inserted.FinishOnly = true
+		commit(func(b *storage.Batch) error { return h.native.Runs.Insert(ctx, b, inserted) })
+		if got, err := h.native.Runs.Get(ctx, inserted.ID); err != nil || !got.FinishOnly {
+			t.Fatalf("inserted finish-only run read back as %+v, %v", got, err)
+		}
+		running := inserted
+		running.State, running.Attempt, running.FenceEpoch = tasks.StateRunning, 2, 2
+		commit(func(b *storage.Batch) error {
+			return h.native.Runs.Transition(ctx, b, inserted.ID, tasks.Expect{State: tasks.StateQueued, Attempt: 1, FenceEpoch: 1}, running)
+		})
+		if got, err := h.native.Runs.Get(ctx, inserted.ID); err != nil || !got.FinishOnly || got.State != tasks.StateRunning {
+			t.Fatalf("transitioned finish-only run read back as %+v, %v", got, err)
+		}
+		imported := runOf("01FINISHIMPORTED", tasks.StateAwaitingDecision)
+		imported.FinishOnly = true
+		imp := tasks.NativeImporter(h.ks)
+		commit(func(b *storage.Batch) error { return imp.Run(ctx, b, imported) })
+		if got, err := h.native.Runs.Get(ctx, imported.ID); err != nil || !got.FinishOnly {
+			t.Fatalf("imported finish-only run read back as %+v, %v", got, err)
+		}
+		plain := runOf("01FINISHPLAIN", tasks.StateQueued)
+		commit(func(b *storage.Batch) error { return h.native.Runs.Insert(ctx, b, plain) })
+		if got, err := h.native.Runs.Get(ctx, plain.ID); err != nil || got.FinishOnly {
+			t.Fatalf("a run never marked reads back as %+v, %v", got, err)
+		}
+	})
 	t.Run("RenameKindMovesTheDefinitionSnapshot", func(t *testing.T) {
 		h := newHarness(t)
 		ctx := t.Context()

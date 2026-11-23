@@ -233,6 +233,15 @@ func TestDecide(t *testing.T) {
 			t.Fatal("a refused decision was recorded as a success")
 		}
 	})
+	t.Run("finish refused for a kind without a ledger", func(t *testing.T) {
+		g := newRig(t)
+		g.client.add(view("run-sweep", kindSweep, tasks.StateAwaitingDecision, "bruce"))
+		g.client.failWith("Decide", executor.ErrNotFinishable)
+		wantProblem(t, g.do(decideReq("run-sweep", "finish", session("lucius", scopeRun))), 409, "tasks.not_finishable")
+		if len(g.aud.recorded) != 0 {
+			t.Fatal("a refused finish was recorded as a success")
+		}
+	})
 }
 
 // TestCancel: the executor decides who may cancel; this route records a

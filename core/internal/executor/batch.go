@@ -27,12 +27,19 @@ type chunkState struct {
 }
 
 func (a *attempt) loadChunks(ctx context.Context) (chunkState, error) {
+	return a.loadChunksFrom(ctx, a.zeroFrom)
+}
+
+// loadChunksFrom is loadChunks with the void line given: chunks written by
+// an attempt before zeroFrom are left out (0 keeps every chunk, which is how
+// a finish-only attempt reads the ledger, finish.go).
+func (a *attempt) loadChunksFrom(ctx context.Context, zeroFrom int) (chunkState, error) {
 	st := chunkState{byN: map[int]tasks.Chunk{}, doneKeys: map[string]bool{}, maxN: -1}
 	for c, err := range a.e.runs.Chunks(ctx, a.id) {
 		if err != nil {
 			return st, err
 		}
-		if int(c.Counters[chunkAttempt]) < a.zeroFrom {
+		if int(c.Counters[chunkAttempt]) < zeroFrom {
 			continue
 		}
 		st.byN[c.N] = c
