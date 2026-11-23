@@ -2030,6 +2030,7 @@ internal/plugins/maintenance.gatedStampWriter.SetUserPositionAt
 internal/plugins/maintenance.gatedSyncWrites.MintOrGetSyncID
 internal/plugins/maintenance.gatedSyncWrites.RecordSyncMerge
 internal/plugins/maintenance.groupRows
+internal/plugins/maintenance.isSet
 internal/plugins/maintenance.itunesHealCore
 internal/plugins/maintenance.itunesHealParallelism
 internal/plugins/maintenance.jobsRawLabel
