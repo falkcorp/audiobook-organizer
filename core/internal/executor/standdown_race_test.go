@@ -8,6 +8,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -323,6 +324,181 @@ func TestMarker_ReleasingAReplacedHoldKeepsTheNewHoldsMarker(t *testing.T) {
 		}
 		if got.Holder != m.Holder {
 			t.Fatalf("the marker's holder changed from %s to %s", m.Holder, got.Holder)
+		}
+	})
+}
+
+// A lapse ends the run's context whichever call finds it, and not only the reaper's:
+// the reaper is the slow path (a tick a second), while a write, a progress report,
+// a RenewHold and a Hold.Renew find a lapse the moment they run. Each is driven here
+// with the reaper quiet, in the two states the lapse is found in: the lease has run
+// out and nothing has noticed, and a decision to drop the hold was made (the flag is
+// set under the lock) whose cancel has not run yet.
+func TestHoldLapse_EveryDetectorCancelsTheRun(t *testing.T) {
+	detectors := []struct {
+		name   string
+		okLost bool // meaningful once the lost flag is already set: Writer.Do refuses at the permit before it renews
+		find   func(t *testing.T, rc *tasks.RC, hold tasks.Hold, a *attempt)
+	}{
+		{"Writer.Do", false, func(t *testing.T, rc *tasks.RC, _ tasks.Hold, _ *attempt) {
+			called, err := write(rc, "gotham.compact")
+			if !errors.Is(err, tasks.ErrFenced) || !errors.Is(err, tasks.ErrHoldLost) || called {
+				t.Fatalf("write on a lapsed hold: err %v, called %v; want ErrFenced wrapping ErrHoldLost and fn never called", err, called)
+			}
+		}},
+		{"RenewHold", true, func(t *testing.T, _ *tasks.RC, _ tasks.Hold, a *attempt) {
+			if err := a.RenewHold(context.Background()); !errors.Is(err, tasks.ErrHoldLost) {
+				t.Fatalf("RenewHold on a lapsed hold: %v, want tasks.ErrHoldLost", err)
+			}
+		}},
+		{"Progress.Set", true, func(_ *testing.T, rc *tasks.RC, _ tasks.Hold, _ *attempt) { rc.Progress().Set(1, tasks.Unknown()) }},
+		{"Hold.Renew", true, func(t *testing.T, _ *tasks.RC, hold tasks.Hold, _ *attempt) {
+			if err := hold.Renew(); !errors.Is(err, tasks.ErrHoldLost) {
+				t.Fatalf("Hold.Renew on a lapsed hold: %v, want tasks.ErrHoldLost", err)
+			}
+		}},
+	}
+	states := []struct {
+		name  string
+		lapse func(h *harness, a *attempt)
+	}{
+		{"the lease ran out", func(h *harness, _ *attempt) { time.Sleep(h.e.config().StandDownLease + time.Second) }},
+		{"marked lost, cancel pending", func(_ *harness, a *attempt) { a.holdLost.Store(true) }},
+	}
+	for _, d := range detectors {
+		for _, st := range states {
+			if st.name != states[0].name && !d.okLost {
+				continue
+			}
+			t.Run(d.name+" / "+st.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					p := newHoldProbe()
+					h := newHarness(t, []tasks.Definition{p.def("gotham.compact")}, quietTick)
+					id := h.start("gotham.compact", tasks.StartRequest{})
+					hold, rc := <-p.holds, <-p.rcs
+					defer close(p.free)
+					a := attemptOf(t, h, id)
+
+					st.lapse(h, a)
+					if err := rc.Context().Err(); err != nil {
+						t.Fatalf("the run's context ended before anything looked at the hold: %v", err)
+					}
+					d.find(t, rc, hold, a)
+					if rc.Context().Err() == nil {
+						t.Fatal("the call found the lapse and the run's context is still live")
+					}
+					if cause := context.Cause(rc.Context()); !errors.Is(cause, tasks.ErrHoldLost) {
+						t.Fatalf("the run was canceled with %v, want tasks.ErrHoldLost", cause)
+					}
+				})
+			})
+		}
+	}
+}
+
+// A hold whose lease ran out and that the reaper has not reached is replaced by the
+// next run that stands the same key down. The reaper walks only the holds in
+// e.holds, so a replaced hold's holders would never be marked lost or canceled by
+// it: a silent old holder would keep a live context and a working writer beside the
+// new holder. The replacement takes the hold from them itself. (Every dispatch pass
+// reaps first, so the window is a lease that expires between a pass and the
+// StandDown call; the test calls standDown directly, with no pass in between.)
+func TestHoldReplace_TheReplacedHoldsHoldersLoseIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		first := newHoldProbe()
+		started, idle := make(chan struct{}, 1), make(chan struct{})
+		bystander := taskDef("arkham.compact", func(*tasks.RC, noParams) (string, error) {
+			started <- struct{}{}
+			<-idle
+			return "case closed", nil
+		})
+		h := newHarness(t, []tasks.Definition{first.def("gotham.compact"), bystander}, quietTick)
+		id1 := h.start("gotham.compact", tasks.StartRequest{})
+		<-first.holds
+		rc1 := <-first.rcs
+		defer close(first.free)
+		id2 := h.start("arkham.compact", tasks.StartRequest{})
+		<-started
+		defer close(idle)
+		a1, a2 := attemptOf(t, h, id1), attemptOf(t, h, id2)
+
+		time.Sleep(h.e.config().StandDownLease + time.Minute) // the first hold lapses; no pass has reaped it
+		hold2, err := h.e.standDown(a2, "gotham.scan")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer hold2.Release()
+
+		if !a1.holdLost.Load() {
+			t.Error("the replaced hold's holder was not marked lost")
+		}
+		if err := rc1.Context().Err(); err == nil {
+			t.Error("the replaced hold's holder still has a live context")
+		} else if cause := context.Cause(rc1.Context()); !errors.Is(cause, tasks.ErrHoldLost) {
+			t.Errorf("the replaced holder was canceled with %v, want tasks.ErrHoldLost", cause)
+		}
+		if called, err := write(rc1, "gotham.compact"); !errors.Is(err, tasks.ErrHoldLost) || called {
+			t.Errorf("write by the replaced holder: err %v, called %v; want ErrHoldLost and fn never called", err, called)
+		}
+		if a2.holdLost.Load() || a2.ctx.Err() != nil {
+			t.Error("the run that took the key over was marked lost or canceled")
+		}
+		if !h.e.keyHeld("gotham.scan") {
+			t.Error("the new holder's hold is not live")
+		}
+	})
+}
+
+// clockProbe is an executor clock that notes whether the executor lock was held
+// the first time it was read after arm.
+type clockProbe struct {
+	e     atomic.Pointer[executor]
+	armed atomic.Bool
+	state atomic.Int32 // 0 unread, 1 read under e.mu, 2 read without it
+}
+
+func (c *clockProbe) now() time.Time {
+	if e := c.e.Load(); e != nil && c.armed.CompareAndSwap(true, false) {
+		if e.mu.TryLock() {
+			e.mu.Unlock()
+			c.state.Store(2)
+		} else {
+			c.state.Store(1)
+		}
+	}
+	return time.Now()
+}
+
+// standDown reads its clock under e.mu, as the reaper and the renewals do. A clock
+// read before the lock can be stale once the lock is won: a hold that expired in
+// between would still look live, and the call would join it and extend a lease
+// the reaper (reading its own clock under the lock) had already judged dead.
+func TestHoldStandDown_ReadsItsClockUnderTheExecutorLock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		clk := &clockProbe{}
+		p := newHoldProbe()
+		h := newHarness(t, []tasks.Definition{p.def("gotham.compact")}, func(o *Options) {
+			quietTick(o)
+			o.Now = clk.now
+		})
+		id := h.start("gotham.compact", tasks.StartRequest{})
+		<-p.holds
+		<-p.rcs
+		defer close(p.free)
+		a := attemptOf(t, h, id)
+		clk.e.Store(h.e)
+
+		clk.armed.Store(true)
+		hold, err := h.e.standDown(a, "gotham.vault")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer hold.Release()
+		switch clk.state.Load() {
+		case 0:
+			t.Fatal("standDown never read the clock")
+		case 2:
+			t.Fatal("standDown read its clock without holding the executor lock")
 		}
 	})
 }

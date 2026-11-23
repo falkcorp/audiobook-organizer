@@ -63,7 +63,7 @@ func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Con
 		return err
 	}
 	if err := a.e.renewHolds(ctx, a); err != nil {
-		return fmt.Errorf("%w: %v", tasks.ErrFenced, err)
+		return fmt.Errorf("%w: %w", tasks.ErrFenced, err)
 	}
 	a.touch()
 	intent := func(changes []tasks.Change) error {

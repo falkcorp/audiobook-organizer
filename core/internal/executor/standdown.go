@@ -51,11 +51,21 @@ func (h *holdHandle) Renew() error { return h.renew() }
 // new runs of key stay queued while the hold lives, and the marker is
 // persisted through Stores.StandDown.
 func (e *executor) standDown(a *attempt, key tasks.Key) (tasks.Hold, error) {
-	now := e.now()
 	lease := e.config().StandDownLease
 	e.mu.Lock()
+	now := e.now() // under the lock, like the reaper's and the renewals': a clock read before it could be stale by the time it joins a hold
 	h := e.holds[key]
+	var replaced []*attempt
 	if h == nil || !h.liveLocked(now) {
+		if h != nil {
+			// An expired hold the reaper has not reached is swapped out of e.holds,
+			// so the reaper (which walks only e.holds) never will: its holders lose
+			// the hold here, the same way the reaper and a failed renewal take it.
+			replaced = slices.Clone(h.holders)
+			for _, r := range replaced {
+				r.holdLost.Store(true)
+			}
+		}
 		h = &standHold{key: key}
 		e.holds[key] = h
 	}
@@ -74,6 +84,9 @@ func (e *executor) standDown(a *attempt, key tasks.Key) (tasks.Hold, error) {
 	h.staged = now
 	set := markerWrite{key: key, m: &marker, ticket: e.markerTicketLocked(key)}
 	e.mu.Unlock()
+	for _, r := range replaced {
+		r.cancel(tasks.ErrHoldLost)
+	}
 	if err := e.writeMarkers(context.Background(), set); err != nil {
 		e.dropHolder(a, h)
 		return nil, err
