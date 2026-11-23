@@ -196,15 +196,15 @@ func (e *executor) resumeOne(ctx context.Context, rec tasks.RunRecord) error {
 		return e.fail(ctx, rec, "restart_loop")
 	}
 	if rec.FinishOnly {
-		// A restart in the middle of a finish-only attempt: the person has
-		// already chosen "finish without resuming", so the run goes back to
-		// the queue still finish-only, whatever the kind's resume policy,
-		// and never from zero (which would void the ledger Finish reads).
-		// It is never a full run: only an explicit Decide(DecideResume)
-		// clears the marker. HEAD instead sends such a run back to
-		// awaiting_decision for the person to choose again
-		// (registry/batch_runner.go:282-288), keeping the marker.
-		return e.requeue(ctx, rec, rec.State, false)
+		// A restart in the middle of a finish-only attempt (HEAD
+		// registry/batch_runner.go:282-288): the run returns to
+		// awaiting_decision with the marker kept, whatever the kind's resume
+		// policy, so the person chooses again (Finish re-queues it
+		// finish-only, Resume clears the marker, Drop drops it). It is never
+		// re-queued here, and never from zero, which would void the ledger
+		// Finish reads. The ledger, the marks and the stored total are not
+		// touched.
+		return e.toState(ctx, rec, tasks.StateAwaitingDecision, "resume_ask")
 	}
 	switch d.c.Resume {
 	case tasks.ResumeContinue:

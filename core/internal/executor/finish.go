@@ -23,14 +23,16 @@ import (
 // runs only the definition's Finish (a Batch) or AfterApply (a Fixer) over
 // the ledger and marks the earlier attempts left, and ends succeeded, or
 // failed when that returns an error. The record's FinishOnly marker stays
-// while the run is not terminal, so a restart in the middle resumes it as
-// finish-only again (resume.go), and is cleared when the run ends (move).
+// while the run is not terminal: a restart in the middle sends the run back
+// to awaiting_decision with the marker kept (resume.go), where the person
+// chooses again, and the marker is cleared when the run ends (move) and by
+// Decide(resume).
 //
 // A stop that is already ending this attempt (a shutdown, a stand-down, a
-// cancel) skips the Finish: the run then ends or resumes by that stop and
-// Finish runs once, in the attempt that ends the run (HEAD: batch_runner.go
-// finishOnly branch, "Finish is still skipped when a shutdown or stand-down
-// is stopping this very attempt").
+// cancel) skips the Finish: the run then ends or returns to awaiting_decision
+// by that stop and Finish runs once, in the attempt that ends the run (HEAD:
+// batch_runner.go finishOnly branch, "Finish is still skipped when a
+// shutdown or stand-down is stopping this very attempt").
 func (a *attempt) runFinishOnly(rc *tasks.RC, p any) (json.RawMessage, error) {
 	a.Touch()
 	switch {
