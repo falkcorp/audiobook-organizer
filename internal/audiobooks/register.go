@@ -5,6 +5,7 @@
 package audiobooks
 
 import (
+	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
@@ -26,8 +27,12 @@ func ServiceDefs() []serviceregistry.ServiceDef {
 			Needs:  []string{serviceregistry.KeyStore},
 			Groups: []string{"core"},
 			Build: func(c *serviceregistry.Container) (any, error) {
-				store := serviceregistry.Get[organizeServiceStore](c, serviceregistry.KeyStore)
-				return NewOrganizeService(store), nil
+				store := serviceregistry.Get[organizeServiceBase](c, serviceregistry.KeyStore)
+				// nil when the store has no CreateBookWithRelocation (never the
+				// production *database.PebbleStore): the service then refuses the
+				// single-book copy rather than creating one that moves no torrent.
+				creator, _ := store.(organizer.RelocatingCopyCreator)
+				return newOrganizeService(store, creator), nil
 			},
 		},
 	}
