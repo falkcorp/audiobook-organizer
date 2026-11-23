@@ -41,6 +41,15 @@ type RunRecord struct {
 	Attempt    int
 	FenceEpoch uint64
 	Yields     int
+	// FinishOnly marks a run whose next attempt leases no work and runs only
+	// its definition's Finish (a Batch) or AfterApply (a Fixer) over the
+	// stored ledger and marks: the third decision on an awaiting_decision run,
+	// "finish without resuming" (HEAD: RunRecord.FinishOnly,
+	// internal/books/store/iface_ops_v3.go). Set by Decide(DecideFinish);
+	// cleared by Decide(DecideResume) and when the run ends. Stored with the
+	// rest of the record (codec.JSON, version 1): a row written before the
+	// field existed decodes with it false.
+	FinishOnly bool
 	Seq        RunSeqs // per-run numbering of events, intents and log lines (DATA-19)
 }
 

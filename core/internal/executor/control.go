@@ -339,8 +339,15 @@ func (e *executor) Decide(ctx context.Context, id tasks.RunID, d tasks.Decision)
 }
 
 // DecideAs answers a run awaiting a decision (ResumeAsk): Resume re-queues
-// it to continue from its checkpoint, Finish ends it succeeded without
-// resuming, Drop ends it interrupted_dropped.
+// it to continue from its checkpoint (a full attempt), Finish re-queues it
+// to run only its Finish (Batch) or AfterApply (Fixer) over the stored
+// ledger without resuming (finishOnly, finish.go), Drop ends it
+// interrupted_dropped.
+//
+// Finish is refused with ErrNotFinishable, before any write, for a kind
+// that is neither a Batch nor a Fixer (HEAD's CanFinishWithoutResuming,
+// registry/finish.go:34-44, which has no "succeed now" for a plain task
+// either: its "finish" would be a full run, Retry under another name).
 func (e *executor) DecideAs(ctx context.Context, id tasks.RunID, d tasks.Decision, by tasks.Actor) error {
 	rec, err := e.runs.Get(ctx, id)
 	if err != nil {
@@ -348,6 +355,15 @@ func (e *executor) DecideAs(ctx context.Context, id tasks.RunID, d tasks.Decisio
 	}
 	if e.held(rec.Kind) {
 		return fmt.Errorf("%w: %s", ErrHeld, id)
+	}
+	if d == tasks.DecideFinish {
+		def := e.defs[rec.Kind]
+		switch {
+		case def == nil:
+			return fmt.Errorf("%w: %s", ErrUnknownKind, rec.Kind)
+		case def.batch == nil && def.fixer == nil:
+			return fmt.Errorf("%w: %s is a %s run of %s", ErrNotFinishable, id, def.shape, rec.Kind)
+		}
 	}
 	actor := by
 	_, err = e.move(ctx, id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
@@ -358,10 +374,16 @@ func (e *executor) DecideAs(ctx context.Context, id tasks.RunID, d tasks.Decisio
 		ev := tasks.RunEvent{Event: "decide", Actor: &actor}
 		switch d {
 		case tasks.DecideResume:
-			next.State, next.Reason = tasks.StateQueued, ""
+			// An explicit resume is a full attempt: it clears a finish-only
+			// marker (HEAD: every entry into queued but decide_finish and
+			// wait_cleared does, pebble_store_ops_v3.go:1080-1085).
+			next.State, next.Reason, next.FinishOnly = tasks.StateQueued, "", false
 			ev.Reason = "resume"
 		case tasks.DecideFinish:
-			next.State, next.Reason, next.Finished = tasks.StateSucceeded, "decided_finish", e.now()
+			// Back to queued under the same run ID with the marker set: the
+			// next attempt is dispatched like any other (fresh lease and
+			// fence) and runs only Finish (attempt.runFinishOnly).
+			next.State, next.Reason, next.FinishOnly = tasks.StateQueued, "", true
 			ev.Reason = "finish"
 		case tasks.DecideDrop:
 			next.State, next.Reason, next.Finished = tasks.StateInterruptedDropped, "decided_drop", e.now()

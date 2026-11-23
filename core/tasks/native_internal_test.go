@@ -485,3 +485,26 @@ func TestRenameKind_EdgeCases(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeRun_RowWithoutFinishOnly (F5-18 F1): the finish-only marker is an
+// additive field of the version 1 value, so a run row written before it
+// existed decodes with it false, with no migration of stored runs.
+func TestDecodeRun_RowWithoutFinishOnly(t *testing.T) {
+	old := []byte(`j{"v":1,"ID":"01BEFOREFINISHONLY","Kind":"gotham.patrol","State":"awaiting_decision","Attempt":2,"FenceEpoch":2,"Yields":1}`)
+	got, err := decodeRun(old)
+	if err != nil {
+		t.Fatalf("decode a row written before FinishOnly: %v", err)
+	}
+	if got.FinishOnly || got.State != StateAwaitingDecision || got.Attempt != 2 || got.Yields != 1 {
+		t.Fatalf("decoded %+v, want the stored fields and FinishOnly false", got)
+	}
+	marked := batRun("01AFTERFINISHONLY", StateQueued)
+	marked.FinishOnly = true
+	raw, err := encodeValue(marked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := decodeRun(raw); err != nil || !again.FinishOnly {
+		t.Fatalf("a marked row decodes as %+v, %v", again, err)
+	}
+}

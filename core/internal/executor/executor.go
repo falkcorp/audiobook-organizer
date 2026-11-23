@@ -367,6 +367,9 @@ func (e *executor) move(ctx context.Context, id tasks.RunID, edit editFunc,
 			if err != nil {
 				return err
 			}
+			if next.State.Terminal() {
+				next.FinishOnly = false // the marker lives only while the finish is still to run
+			}
 			terminal := next.State.Terminal() && !cur.State.Terminal()
 			next.Seq.Event = cur.Seq.Event + 1
 			if terminal && notifyErr != nil {
