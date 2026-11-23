@@ -98,6 +98,11 @@ type BooksTaskInputs struct {
 // store; tasks.RunStore satisfies it.
 type CreditsRunStore = cbRunStore
 
+// tasks.RunStore, the store core hands the host, must satisfy CreditsRunStore: the
+// flip passes one for the other, and a method dropped from either is caught here
+// at compile time instead of at the wiring.
+var _ CreditsRunStore = tasks.RunStore(nil)
+
 // need collects the names of the missing inputs.
 type need []string
 
@@ -131,8 +136,8 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	n.check("AuxStores", in.AuxStores != nil)
 	n.check("StandDownKey", in.StandDownKey != "")
 	n.check("Schedules", in.Schedules != nil)
-	n.check("G7.Reads", in.G7.Reads != nil)
-	n.check("G7.Writes", in.G7.Writes != nil)
+	n.check("G7.Reads", isSet(in.G7.Reads))
+	n.check("G7.Writes", isSet(in.G7.Writes))
 	n.check("G7.InvalidateSeriesCache", in.G7.InvalidateSeriesCache != nil)
 	if err := n.err("BooksTaskLists"); err != nil {
 		return nil, err

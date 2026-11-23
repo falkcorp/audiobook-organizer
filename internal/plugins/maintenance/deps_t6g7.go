@@ -178,15 +178,35 @@ func newT6G7Deps(in G7Inputs) t6g7Deps {
 	if in.RootDir != nil {
 		d.ResolveReportPath = reportPathOver(in.RootDir)
 	}
-	if in.Reads == nil || in.Writes == nil {
+	if !isSet(in.Reads) || !isSet(in.Writes) {
 		return d
 	}
+	// A nil *usermerge.Service held in the interface is not == nil: it would pass
+	// every nil check below and panic at the first call. Normalize it to the
+	// untyped nil those checks (and errT6g7NoUserMerge) are written for.
+	merge := in.UserMerge
+	if !isSet(merge) {
+		merge = nil
+	}
 	rows := groupRows(nil, reflect.TypeFor[t6g7Writer]())
-	d.Store = &booksT6G7Store{reads: in.Reads, writes: in.Writes, merge: in.UserMerge}
+	d.Store = &booksT6G7Store{reads: in.Reads, writes: in.Writes, merge: merge}
 	d.NewWriter = func(w tasks.Writer) t6g7Writer {
-		return &booksT6G7Writer{src: in.Writes, merge: in.UserMerge, writeBack: in.BulkWriteBack, gate: newBooksGate(w, rows)}
+		return &booksT6G7Writer{src: in.Writes, merge: merge, writeBack: in.BulkWriteBack, gate: newBooksGate(w, rows)}
 	}
 	return d
+}
+
+// isSet reports whether v is a usable interface value: not nil, and not a typed
+// nil (a nil pointer, map, slice, func or chan held in a non-nil interface).
+func isSet(v any) bool {
+	if v == nil {
+		return false
+	}
+	switch rv := reflect.ValueOf(v); rv.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan, reflect.Interface:
+		return !rv.IsNil()
+	}
+	return true
 }
 
 // booksT6G7Store is the group's reads: the store's own, the user-merge service's,
