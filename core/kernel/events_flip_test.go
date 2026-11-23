@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -251,9 +252,13 @@ func TestEventsFlip_RunHandsTheListenerTheHubClose(t *testing.T) {
 	h := newSwapHost(t)
 	c := h.envConfig(nil)
 	c.IdentityBoot = true
+	// Listen runs on Run's goroutine and the poll below on the test's.
+	var mu sync.Mutex
 	var got httpapi.ListenOptions
 	c.Listen = func(o httpapi.ListenOptions, _ http.Handler, _ *slog.Logger) (Server, error) {
+		mu.Lock()
 		got = o
+		mu.Unlock()
 		return &fakeServer{rec: &recorder{}, stopped: make(chan struct{})}, nil
 	}
 	c.Notifier = notifier{&recorder{}}
@@ -263,7 +268,11 @@ func TestEventsFlip_RunHandsTheListenerTheHubClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { done <- k.Run(ctx) }()
-	pollFor(t, func() bool { return len(got.OnShutdown) > 0 }, "Run never gave the listener a shutdown hook")
+	pollFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(got.OnShutdown) > 0
+	}, "Run never gave the listener a shutdown hook")
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run: %v", err)
