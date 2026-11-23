@@ -56,7 +56,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 		name string
 		set  bool
 	}{
-		{"Upgrader", in.Upgrader != nil}, {"StandDownKey", in.StandDownKey != ""}, {"Schedules", in.Schedules != nil},
+		{"Schedules", in.Schedules != nil}, {"StandDownKey", in.StandDownKey != ""}, {"Upgrader", in.Upgrader != nil},
 	} {
 		if !c.set {
 			missing = append(missing, c.name)
@@ -75,11 +75,12 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 }
 
 // booksT7Row is the row of the sweep's one gated call: every resource the kind
-// declares (extra_ops.go: books, authors, series, metadata_cache, operations).
+// declares. It is the same list the kind's Effects are built from
+// (metadataUpgradeWrites), so the row cannot drift narrower than the declaration
+// (the fence would then refuse the sweep's write) or wider; a test also compares
+// the row to the registered definition's Effects.
 func booksT7Row() writer.Rows {
-	return writer.Rows{"RunUpgrade": resources.Union([]ops.Resource{
-		ops.ResBooks, ops.ResAuthors, ops.ResSeries, ops.ResMetadataCache, ops.ResOperations,
-	})}
+	return writer.Rows{"RunUpgrade": resources.Union(metadataUpgradeWrites)}
 }
 
 func newBooksT7Deps(in BooksTaskInputs) (t7Deps, error) {

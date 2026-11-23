@@ -8,6 +8,7 @@ package scheduler
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/falkcorp/mediacore/tasks"
@@ -101,4 +102,40 @@ func TestBooksTaskLists_MissingInputsRefuse(t *testing.T) {
 	for _, d := range defs {
 		require.Empty(t, tasks.Problems(d), d.Kind())
 	}
+}
+
+// metadata-upgrade declares exactly the resources its sweep writes today, traced
+// call by call in extra_ops.go (metadataUpgradeNative): the books row and its
+// metadata_cache and indexes, authors, series, field_states, book_files and the
+// operation cursor. A narrower declaration is refused by the fence after the
+// flip; a wider one is access the sweep does not use.
+func TestBooksT7_MetadataUpgradeDeclaresExactlyItsTracedWrites(t *testing.T) {
+	defs, err := BooksTaskLists(booksT7Inputs(&countingUpgrader{}))
+	require.NoError(t, err)
+	var got []string
+	for _, ref := range tasks.CommonOf(defs[0]).Effects.WriteSet() {
+		got = append(got, string(ref.Kind))
+	}
+	sort.Strings(got)
+	require.Equal(t, []string{
+		"authors", "book_files", "books", "field_states", "indexes", "metadata_cache", "operations", "series",
+	}, got)
+}
+
+// The sweep's gated row is the kind's declaration, resource for resource: a row
+// that drifted narrower would refuse the sweep's write after the flip.
+func TestBooksT7Row_EqualsTheKindsDeclaredEffects(t *testing.T) {
+	defs, err := BooksTaskLists(booksT7Inputs(&countingUpgrader{}))
+	require.NoError(t, err)
+	var declared []string
+	for _, ref := range tasks.CommonOf(defs[0]).Effects.WriteSet() {
+		declared = append(declared, string(ref.Kind))
+	}
+	var row []string
+	for _, r := range booksT7Row()["RunUpgrade"] {
+		row = append(row, string(r))
+	}
+	sort.Strings(declared)
+	sort.Strings(row)
+	require.Equal(t, declared, row)
 }

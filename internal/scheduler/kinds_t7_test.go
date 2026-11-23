@@ -179,11 +179,14 @@ func TestT7SchedulerKinds_MatchHEADDefs(t *testing.T) {
 		// this is the "Writes found" row.
 		require.False(t, c.Effects.IsReadOnly(), "%s read-only", r.id)
 		// HEAD declares none; the sweep applies metadata to books (with their
-		// authors and series and the metadata cache) and saves its cursor as
-		// operation state. Written out by hand.
+		// authors, series, field states, segment titles, the metadata cache and
+		// the ident rows) and saves its cursor as operation state. The trace,
+		// call by call, is in extra_ops.go (metadataUpgradeNative). Written out
+		// by hand.
 		require.ElementsMatch(t, []entity.Ref{
 			tasks.Res("books", "books"), tasks.Res("books", "authors"), tasks.Res("books", "series"),
 			tasks.Res("books", "metadata_cache"), tasks.Res("books", "operations"),
+			tasks.Res("books", "book_files"), tasks.Res("books", "field_states"), tasks.Res("books", "indexes"),
 		}, c.Effects.WriteSet(), "%s write set", r.id)
 		require.Empty(t, head.Writes, "%s: HEAD now declares Writes, re-derive the row", r.id)
 

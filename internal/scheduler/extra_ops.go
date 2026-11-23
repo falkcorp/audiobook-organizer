@@ -170,15 +170,41 @@ func metadataUpgradeCore(ctx context.Context, env metadataUpgradeEnv) (res *meta
 	return result, nil
 }
 
+// metadataUpgradeWrites is the resource set the metadata-upgrade sweep writes (see
+// metadataUpgradeNative). It is the one source of both the kind's Effects and
+// the gated row of its writer.
+var metadataUpgradeWrites = []ops.Resource{
+	ops.ResBooks, ops.ResAuthors, ops.ResSeries, ops.ResBookFiles, ops.ResMetadataCache,
+	ops.ResFieldStates, ops.ResIndexes, ops.ResOperations,
+}
+
 // metadataUpgradeNative is the native books.scheduler.metadata-upgrade kind. HEAD
 // declares no Writes, no Preview and a library write capability, so a Preview run
-// is refused. Its write set is inferred from what the sweep writes: the books it
-// applies metadata to (with their authors and series and the metadata cache) and
-// the sweep cursor it saves as operation state.
+// is refused. Its write set is what the sweep writes today (HEAD has no fence and
+// already performs every one of these writes; this declares them). The sweep's
+// one write call is metabatch.MetadataUpgradeService.applyOne ->
+// Fetcher.ApplyMetadataCandidateWithOptions (metabatch/upgrade.go:555), which with
+// BookRowOnly unset runs the whole apply in metafetch (service_apply.go):
+//   - books: ModifyBook (service_apply.go:448, :545, :1224) and its change
+//     record (RecordMetadataChange, apply_history.go:169); ModifyBook's row also
+//     carries metadata_cache and the ident rows (indexes), the shared table's
+//     bookW (internal/maintenance/resources/resources.go);
+//   - authors: ModifyBookAuthors (service_apply.go:293), SetBookAuthors
+//     (service_apply.go:551);
+//   - series: CreateSeries (service_apply.go:233);
+//   - field_states: persistFetchedMetadata (service_apply.go:1095) ->
+//     updateFetchedMetadataState (helpers.go:767) -> WithStateSnapshot ->
+//     UpsertMetadataFieldState (state_snapshot.go:110);
+//   - book_files: generateSegmentTitles (service_apply.go:1098) ->
+//     PatchBookFileFields (service_writeback.go:58);
+//   - operations: the sweep cursor, SaveOperationState (metabatch/upgrade.go:200).
+//
+// The list is metadataUpgradeWrites, shared with the books module's gated row
+// (booksT7Row), so the two cannot drift.
 func (r *ExtraOpsRegistrar) metadataUpgradeNative(deps t7Deps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
 	kind := t7KindFor(metadataUpgradeOpID)
 	c := t7Common(r.metadataUpgradeDef(), sched)
-	c.Effects = t7Writes(ops.ResBooks, ops.ResAuthors, ops.ResSeries, ops.ResMetadataCache, ops.ResOperations)
+	c.Effects = t7Writes(metadataUpgradeWrites...)
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, metabatch.UpgradeResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (metabatch.UpgradeResult, error) {
