@@ -1,0 +1,3 @@
+### Fixed
+
+- A fresh install now writes the store's `.storage-format` and level sidecars before it commits the step-stamp batch, not after. Before, a process killed between the two left committed stamps with no sidecar beside them, so an older build had nothing to refuse the store on (crash-matrix invariant I3). The crash matrix missed it because its books spec registered level 0. With the new order, a kill before the batch leaves an empty store that the next boot installs fresh again, and a kill after it leaves both. `TestFreshInstallWritesTheSidecarsBeforeTheStampBatch` reads the level sidecar at the batch's label and fails with the old order.
