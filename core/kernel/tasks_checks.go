@@ -275,6 +275,11 @@ func (k *Kernel) taskStartProblems() []module.Problem {
 			if err != nil {
 				continue
 			}
+			// Rejecting every core:* scope is deliberate and fails closed: no
+			// manifest lists a core kind in TaskStarts today. When a real need for
+			// a non-management core kind appears, loosen this to an explicit
+			// allowlist of (kind, scope) pairs, after review, not to a prefix test.
+			//
 			// A module's system actor holds the union of its listed kinds'
 			// Perms.Start. A kind that starts under a core:* scope (core:tasks.manage,
 			// core:tasks.view, core:admin or any other of core's) would hand the
