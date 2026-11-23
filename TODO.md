@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.59 -->
+<!-- version: 10.78.60 -->
 <!-- version: 10.78.57 -->
 <!-- version: 10.78.56 -->
 <!-- version: 10.78.49 -->
@@ -14,7 +14,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-21 -->
+<!-- last-edited: 2026-11-23 -->
 
 # Project TODO — live items only
 
@@ -26,6 +26,20 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **Decide whether `DELETE /api/v1/health` should keep answering 401 under the Basic gate.** F3-07 moved the gate to core's stage 8; HEAD's gin gate exempted `/api/v1/health` for every method, stage 8 exempts only the manifest's `GET /api/v1/health` route, so another method on that path is gated. The 401 is the safer answer and the owner accepted it; this is open only if a monitor sends another method.
+
+- [ ] **TODO-BOOKS-SHAPE-RULE-WAIVED-KEYS** Decide whether five books config keys need `ProtectAdmin`. 05-config 1.3.7's name-shape rule would class `modules.books.embedding.base_url`, `whisper.endpoints` and `whisper.remote_url` (URLs) and `cfguests.guest_service_tokens` and `cfguests.invite_email_service_token` (booleans HEAD names like credentials). HEAD leaves all five unprotected and the rename table's admin column is false, so `internal/books/config.go` keeps them unprotected under `ProtectionWaivers` with a reason (pinned by `TestBooksSettings_ShapeRuleClassified`). Raising a URL key to admin turns its retired-name verdict from a warning into a boot refusal and regenerates `internal/books/cutover/testdata/rename_table.golden`; the two booleans can keep their waiver. Owner call; F3-07 slice (b) did not make it.
+
+- [ ] **TODO-M4-CREDITS-MARKER-AND-ROWIX** Before M4 converts v2 operations into native runs, fix two losses in `internal/books/cutover/m4/convert.go` `rows`. First, the credits backfill's judged marker (`credits-backfill-leftovers-judged`, written by `cbOpsLedger.markJudged`) is an op row whose data is the raw fingerprint string, not JSON. `rows` refuses non-JSON row data (`reasonRowBlob`), so M4 quarantines every HEAD credits-backfill run that was ever judged. Convert the marker into the native form (the judging run's `judged_sources` result) or drop it on purpose. Second, `rows` decodes `opv2:rowix:` values as JSON `{"class":...}`, but HEAD writes the raw index bytes (`database.SaveClassLists` stores the raw class key), so every converted class-list row loses its `Class`. Seam: `docs/agent-tasks/platform-core/seams.d/F5-18d.md` ("HEAD markers and M4").
+
+- [ ] **TODO-F5-18-RUN-ROW-POINT-READ** (owner decision) Each class-list page of a native credits-backfill run decodes every row of the run, because `tasks.RunStore` has no point read or prefix scan of run rows (`runRowStore.GetOpRows` and `ScanOpRowIndex` in `internal/plugins/maintenance/credits_backfill_native.go`). That is a few hundred rows per page for a library-scale result. Adding a point read to `tasks.RunStore` is behind the API-stability gate, so the owner decides whether to add one or accept the scan. Seam: `docs/agent-tasks/platform-core/seams.d/F5-18d.md` ("Reading a native run's class lists").
+
+- [ ] **F3-07-ROOTS-CHECK** Check `path_aliases` and `root_dir` against the import roots when they are saved, as M6 will at F7. Today a save stores any alias list and any absolute `root_dir`, as HEAD did. At F7, M6 quarantines an alias whose root is not books-library or an `import-<n>` root, and an `import_path` row at `root_dir`'s path, so such a save is accepted now and set aside then. The settings write path (`internal/books/appconfig/write.go`, the residual branch) has no import paths to check against. Cost: an Engine option that reads books' `import_path` rows, the check, a refusal naming the alias, and about five test cells. Small, one PR.
+
+- [ ] **OWNER** Drop `AUDIOBOOK_ROOT_DIR` from the live unit (refresh the helper bundle). The repo's unit template no longer sets it, but the installed unit comes from the root-owned helper bundle. No build ever read the name. After the flip, every boot that finds it logs a warning to delete it and raises `config_retired_name_ignored`.
+
+- [ ] **TODO-F7-09-M6-OTHER-KEY-SITES** The `ai/openai` row M6 synthesises (F7-09 D1) is ticked only for the capabilities of the three sites the review named (`ai_ops.go` author review and discovery, `dedup_ops.go` author dedup batch, `diagnostics_ai_ops.go` diagnostics). Other HEAD sites also read the scalar OpenAI key and are not carried by it, so they fail closed (default-deny) after the flip until an admin ticks a row: `internal/server/handlers/ai.go` ParseAudiobook (`llm.audiobook_parse`, gated on the key and `enable_ai_parsing`, not pool-routed) and ParseFilename (`llm.filename_parse`; the scan path is pool-routed, the one-off handler is not, and a tick cannot tell them apart), the cover analysis in `internal/server/entities_ops.go` (`llm.cover_art_vision`, same split), and the `llmparser` service behind metadata rerank and dedup review (`llm.metadata_rerank`, `llm.dedup_review`, gated by `llm_mode`, which M6 does not read). Decide per site whether the flip ticks it, and with what gate; widening past what routing=true served needs the owner.
 
 - [ ] **F5-12-F518-WIRING** F5-18 must fill every `t6g7Deps` field when it registers the group 7 kinds (`internal/plugins/maintenance/kinds_t6_g7.go`): `Store`, `NewWriter`, `RootDir`, `AgreedChapterTitle`, `StandDownKey`, `ResolveReportPath`, `InvalidateSeriesCache`, `ChapterProber`. `Store` must resolve the capability reads and fail closed when one is absent (`GetAllBookFilesCoreIncludingRetired`, `GetAllSeriesBookRefCounts`, `GetSeriesBookRefCount`, `GetBooksBySeriesIDsAllVersions`, `SeriesApplyReady`, `ListActiveOperationsV2`); the writer must provide `DeleteSeriesIfUnreferenced` as the store's check-and-delete. Details in `docs/agent-tasks/platform-core/seams.d/F5-12.md`.
 - [ ] **F5-12-F518-RUN-SEAMS** Three behaviours F5-18 must settle when it registers the group 7 kinds, recorded in `docs/agent-tasks/platform-core/seams.d/F5-12.md`: (1) reports-prune reads the live set from `ListActiveOperationsV2`, and a native run is not a v2 operation, so the native `Store` must list native runs there or the prune can delete a report a native run is still using (harmless in practice: it keeps the newest 3 and anything under 14 days, and every kind's timeout is 4h or less); (2) bulk-write-back is one writer call, so a per-write fence is checked once for the whole file-rewriting pass: say whether a native hold cannot lapse or a lapse cancels the run's ctx; (3) tag-backfill's native pool is `min(NumCPU*4, 64)` where HEAD's is the raw `NumCPU*4`.

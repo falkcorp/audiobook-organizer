@@ -1,1 +1,0 @@
-- [ ] **OWNER** Drop `AUDIOBOOK_ROOT_DIR` from the live unit (refresh the helper bundle). The repo's unit template no longer sets it, but the installed unit comes from the root-owned helper bundle. No build ever read the name. After the flip, every boot that finds it logs a warning to delete it and raises `config_retired_name_ignored`.
