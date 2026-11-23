@@ -31,8 +31,8 @@ type OpRow struct {
 //
 // It is a capability, not part of Store (nobody edits store.go): resolve it
 // with AsCapability[OpRowStore](store). A row set belongs to the operation id
-// and is removed when the operation row is deleted (DeleteOperationV2,
-// DeleteRunV3 and SweepHollowOperationsV2 all remove it). In production the only
+// and is removed when the operation row is deleted (DeleteOperationV2 and
+// DeleteRunV3 both remove it). In production the only
 // caller of those that runs on request is a person discarding the operation
 // (registry.Discard); nothing prunes operation rows, or their row sets, by age,
 // so a set stays until the operation is discarded.

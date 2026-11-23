@@ -169,6 +169,9 @@ func dmDone(t *testing.T, path string, ids ...string) map[string]bool {
 	return out
 }
 
+// dmStateKey is the row core storage keeps a data migration's state in.
+func dmStateKey(id string) string { return "c/storage/" + string(storage.DataMigrationKey(id)) }
+
 func floorStepIDs() []string {
 	return []string{floorConfigCutoverID, floorIdentityCutoverID, floorTasksCutoverID, floorLogCutoverID, floorIntegrationsCutoverID}
 }
@@ -185,23 +188,14 @@ func deleteRow(t *testing.T, path, key string) {
 // TestPreR2StoreRefusedByR3 (R3-02 I-floor-1; 09 section 9.2.2): a build with
 // books' floor refuses a store that skipped R2 before it checkpoints or writes
 // anything: ErrUpgradeFloor naming the release to install first, exit 78, the
-// last stderr line "install <tag> first", and the store byte-identical. Four
-// stores: the R0-written corpus, books at a version below LegacyCap (and one
-// below it by one), and an R2 store whose cutover did not finish (a fresh
-// install with M4's record taken away, M7's level step applied).
+// last stderr line "install <tag> first", and the store byte-identical. Three
+// kinds of store: books at a version below LegacyCap (and at it, with no
+// cutover step done), and an R2 store whose cutover did not finish (a fresh
+// install with M4's record taken away, M7's level step applied). The R0-written
+// corpus subtest went with the cutover code: nothing builds that store now.
 // The control is the same boot of a store at the floor, which succeeds.
 func TestPreR2StoreRefusedByR3(t *testing.T) {
 	allSteps := func() []storage.StepRef { return floorRequires() }
-
-	t.Run("the R0 corpus", func(t *testing.T) {
-		work := copyCorpus(t, r0Corpus(t))
-		before := snapshotStore(t, storeDB(work))
-		err := bootAt(t, work, func(o *app.Options) { o.Env = bootEnv(absEnv()...) })
-		floor := refusedByFloor(t, err)
-		assert.Equal(t, allSteps(), floor.Missing, "no cutover step is done in an R0 store")
-		assert.LessOrEqual(t, floor.Have, database.LegacyCap)
-		before.assertUnchanged(t, storeDB(work))
-	})
 
 	for _, version := range []int{40, database.LegacyCap - 1, database.LegacyCap} {
 		t.Run(fmt.Sprintf("books at version %d", version), func(t *testing.T) {
@@ -244,31 +238,19 @@ func TestPreR2StoreRefusedByR3(t *testing.T) {
 
 // TestFreshInstallPostFloorBootsTwice (R3-02 I-floor-2; IMPL-7): an empty
 // store is exempt from the floor, and its one fresh-install batch records
-// books' versions up to the floor as applied and M2-M6 as done whether or not
-// the build registers the steps, so the second boot (now a non-empty store)
-// passes. The second build here is the pre-flip module, which registers none of
-// the cutover steps: the records come from the floor's Requires, not from the
-// steps.
+// books' versions up to the floor as applied and M2-M6 as done, so the second
+// boot (now a non-empty store) passes. This build registers none of M2-M6 (R3
+// deleted them): the records come from the floor's Requires, not from steps.
 func TestFreshInstallPostFloorBootsTwice(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		wrap []func(module.Module) module.Module
-	}{
-		{"the flipped build", nil},
-		{"a build that registers none of M2-M6", []func(module.Module) module.Module{func(m module.Module) module.Module { return preFlip{m} }}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(tempDir(t), "gotham.pebble")
-			state := t.TempDir()
-			require.NoError(t, bootOnDisk(t, path, state, tc.wrap...), "first boot (fresh install)")
-			assert.Equal(t, map[string]bool{
-				floorConfigCutoverID: true, floorIdentityCutoverID: true, floorTasksCutoverID: true,
-				floorLogCutoverID: true, floorIntegrationsCutoverID: true,
-			}, dmDone(t, path, floorStepIDs()...))
-			require.NoError(t, bootOnDisk(t, path, state, tc.wrap...), "second boot")
-			require.NoError(t, bootOnDisk(t, path, state, tc.wrap...), "third boot")
-		})
-	}
+	path := filepath.Join(tempDir(t), "gotham.pebble")
+	state := t.TempDir()
+	require.NoError(t, bootOnDisk(t, path, state), "first boot (fresh install)")
+	assert.Equal(t, map[string]bool{
+		floorConfigCutoverID: true, floorIdentityCutoverID: true, floorTasksCutoverID: true,
+		floorLogCutoverID: true, floorIntegrationsCutoverID: true,
+	}, dmDone(t, path, floorStepIDs()...))
+	require.NoError(t, bootOnDisk(t, path, state), "second boot")
+	require.NoError(t, bootOnDisk(t, path, state), "third boot")
 }
 
 // TestFactoryResetPostFloorBoots (R3-02 I-floor-2; 05-storage 5S.3.15; DATA7-7):
@@ -352,44 +334,6 @@ func TestRestoreBelowUpgradeFloorRefusedAtStaging(t *testing.T) {
 	})
 }
 
-// noFloor is the R2 build: the flipped module with books' floor undeclared (R2
-// ships the cutover steps and no floor). It is the build that leaves a store
-// behind for the R3 build to refuse or accept.
-type noFloor struct{ module.Module }
-
-func (n noFloor) Manifest() module.Manifest {
-	m := n.Module.Manifest()
-	m.Storage.UpgradeFloor = nil
-	return m
-}
-
-// putRows writes rows into the closed store at path.
-func putRows(t *testing.T, path string, rows map[string]string) {
-	t.Helper()
-	db, err := pebble.Open(path, &pebble.Options{FormatMajorVersion: database.PebbleFormatMajorVersion})
-	require.NoError(t, err)
-	for k, v := range rows {
-		require.NoError(t, db.Set([]byte(k), []byte(v), pebble.Sync))
-	}
-	require.NoError(t, db.Close())
-}
-
-// freshInstallRecords boots a fresh install of this build in its own directory
-// and returns the done records it wrote for the steps in ids, keyed by row key.
-func freshInstallRecords(t *testing.T, ids ...string) map[string]string {
-	t.Helper()
-	src := filepath.Join(tempDir(t), "src", "gotham.pebble")
-	require.NoError(t, bootOnDisk(t, src, t.TempDir()))
-	kv := rawKVs(t, src)
-	out := map[string]string{}
-	for _, id := range ids {
-		raw, ok := kv[dmStateKey(id)]
-		require.True(t, ok, "the fresh install wrote no record for %s", id)
-		out[dmStateKey(id)] = raw
-	}
-	return out
-}
-
 // lowerBooksVersion drops books' applied-version records above version from the
 // closed store at path, so books' version (read from them) is version and
 // nothing else about the store changes: the install marker and every step
@@ -426,50 +370,6 @@ func lowerBooksVersion(t *testing.T, path string, version int) {
 	require.NoError(t, b.Set(key, row, nil))
 	require.NoError(t, b.Commit(pebble.Sync))
 	require.NoError(t, db.Close())
-}
-
-// TestStoreLeftByR2PassesTheFloor (R3-02 I-floor-1, the converse): the floor
-// must not refuse a store R2 would leave behind. The R0-written corpus goes
-// through the R2 build (the flipped module, floor undeclared); the R3 build,
-// with the floor, then boots it, and boots it again.
-//
-// At the base this was written against only M2 is live: M3-M6 are F4-08's and
-// F5-18's flips, and the R2 build records none of them. For each step the R2
-// build did not record, the test writes the record a fresh install writes in its
-// place and logs it, so the converse is proved now for what is live and
-// becomes the real thing, with no top-up, when the last of those flips is on
-// main.
-func TestStoreLeftByR2PassesTheFloor(t *testing.T) {
-	work := copyCorpus(t, r0Corpus(t))
-	repointCorpusPaths(t, work)
-	env := func(o *app.Options) { o.Env = bootEnv(absEnv()...) }
-
-	require.NoError(t, bootAt(t, work, env, func(m module.Module) module.Module { return noFloor{m} }), "the R2 build")
-	done := dmDone(t, storeDB(work), floorStepIDs()...)
-	require.True(t, done[floorConfigCutoverID], "the R2 build did not run M2: this is not an R2 store")
-
-	var missing []string
-	for _, id := range floorStepIDs() {
-		if !done[id] {
-			missing = append(missing, id)
-		}
-	}
-	if len(missing) > 0 {
-		t.Logf("steps the R2 build at this base did not record (stood in by a fresh install's record): %v", missing)
-		putRows(t, storeDB(work), freshInstallRecords(t, missing...))
-	}
-	require.Empty(t, func() []string {
-		var left []string
-		for id, ok := range dmDone(t, storeDB(work), floorStepIDs()...) {
-			if !ok {
-				left = append(left, id)
-			}
-		}
-		return left
-	}(), "a required step is still not recorded")
-
-	require.NoError(t, bootAt(t, work, env), "the R3 build refused a store the R2 build left behind")
-	require.NoError(t, bootAt(t, work, env), "the second R3 boot")
 }
 
 // TestUpgradeFloorVersionBoundary pins the version half of the floor apart from

@@ -341,6 +341,8 @@ func TestWarmupWriteLoss_BufferOverflowDegradesLoudly(t *testing.T) {
 
 	dir := t.TempDir()
 	// Seed raw keys: fast to write, slow to warm, so the window is wide.
+	// (seedPebbleDir boots a fresh store first, so the seeded one is past the
+	// upgrade floor.)
 	seedPebbleDir(t, vfs.Default, dir, 20000)
 
 	store, err := NewPebbleStore(dir)

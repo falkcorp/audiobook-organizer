@@ -703,7 +703,7 @@ func (db *DB) readBookkeeping(ctx context.Context) (map[Owner]int, map[Owner]map
 	versions := map[Owner]int{}
 	applied := map[Owner]map[int]AppliedStep{}
 	for _, o := range sortedInfos(db.owners) {
-		if len(o.spec.Migrations) == 0 && len(o.spec.Legacy) == 0 && o.spec.VersionSource == nil {
+		if len(o.spec.Migrations) == 0 && o.spec.UpgradeFloor == nil && o.spec.VersionSource == nil {
 			continue
 		}
 		var v int
@@ -1224,7 +1224,7 @@ func setEnc[T any](b *Batch, key []byte, c codec.Codec[T], v T) error {
 
 // freshAppliedThrough is the highest version a fresh install records
 // applied: every step below the owner's lowest Seed step (all of them without
-// one), legacy steps included.
+// one), the steps up to its UpgradeFloor included.
 func freshAppliedThrough(s Spec) int {
 	top := highestVersion(s)
 	for _, m := range s.Migrations {
@@ -1235,13 +1235,13 @@ func freshAppliedThrough(s Spec) int {
 	return top
 }
 
-// appliedSteps are the records of an owner's steps 1..upTo.
+// appliedSteps are the records of an owner's steps 1..upTo: a generic record
+// for each version up to the owner's UpgradeFloor, whose steps this build does
+// not register (R3 deleted their code), then each registered step's own.
 func appliedSteps(s Spec, upTo int, now time.Time, build string) []AppliedStep {
 	var out []AppliedStep
-	for _, l := range s.Legacy {
-		if l.Version <= upTo {
-			out = append(out, AppliedStep{Version: l.Version, Name: l.Name, AppliedAt: now, Build: build})
-		}
+	for v := 1; v <= min(stepBase(s), upTo); v++ {
+		out = append(out, AppliedStep{Version: v, Name: fmt.Sprintf("below the upgrade floor (step %d)", v), AppliedAt: now, Build: build})
 	}
 	for _, m := range s.Migrations {
 		if m.Version <= upTo {

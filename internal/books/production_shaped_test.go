@@ -366,3 +366,24 @@ func TestCopyShapedStore_LinksTablesAndLeavesTheManifestBehind(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "wal", string(got), "a boot's write reached the generated store")
 }
+
+// corpusBuilderDir is the directory the corpus' builder ran in (a scratch
+// checkout of stage 1): the stored path settings name it.
+const corpusBuilderDir = "/tmp/r2corpus/stage1"
+
+// repointCorpusPaths rewrites the stored config blob's builder-relative paths
+// to the copy at work, so the boot validates directories that exist (the
+// builder's scratch directory is gone by then). A store whose blob names no
+// builder path is left alone.
+func repointCorpusPaths(t *testing.T, work string) {
+	t.Helper()
+	st, err := database.OpenStandalone(r2StoreDB(work), database.StandaloneOptions{})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, st.Close()) }()
+	s, err := st.GetSetting("config_blob")
+	require.NoError(t, err)
+	if s == nil || !strings.Contains(s.Value, corpusBuilderDir) {
+		return
+	}
+	require.NoError(t, st.SetSetting("config_blob", strings.ReplaceAll(s.Value, corpusBuilderDir, work), s.Type, false))
+}

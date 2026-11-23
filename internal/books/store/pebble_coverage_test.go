@@ -8,8 +8,6 @@ package store
 import (
 	"encoding/json"
 	"testing"
-
-	"github.com/cockroachdb/pebble/v2"
 )
 
 func TestPebbleUpdateBookAndImportPaths(t *testing.T) {
@@ -149,49 +147,5 @@ func TestNewPebbleStoreExistingCounters(t *testing.T) {
 	}
 	if err := store.Close(); err != nil {
 		t.Fatalf("close store failed: %v", err)
-	}
-}
-
-func TestPebbleMigrateImportPathKeysLegacy(t *testing.T) {
-	store, cleanup := setupPebbleTestDB(t)
-	defer cleanup()
-	pebbleStore := store.(*PebbleStore)
-
-	if err := pebbleStore.db.Set([]byte("library:path:/tmp/legacy"), []byte("1"), pebble.Sync); err != nil {
-		t.Fatalf("failed to seed legacy path key: %v", err)
-	}
-	if err := pebbleStore.db.Set([]byte("library:1"), []byte("payload"), pebble.Sync); err != nil {
-		t.Fatalf("failed to seed legacy key: %v", err)
-	}
-	if err := pebbleStore.db.Set([]byte("counter:library"), []byte("7"), pebble.Sync); err != nil {
-		t.Fatalf("failed to seed legacy counter: %v", err)
-	}
-
-	if err := pebbleStore.migrateImportPathKeys(); err != nil {
-		t.Fatalf("migrateImportPathKeys failed: %v", err)
-	}
-
-	if _, closer, err := pebbleStore.db.Get([]byte("import_path:path:/tmp/legacy")); err != nil {
-		t.Fatalf("expected migrated path key: %v", err)
-	} else {
-		closer.Close()
-	}
-	if _, closer, err := pebbleStore.db.Get([]byte("import_path:1")); err != nil {
-		t.Fatalf("expected migrated key: %v", err)
-	} else {
-		closer.Close()
-	}
-	if _, closer, err := pebbleStore.db.Get([]byte("counter:import_path")); err != nil {
-		t.Fatalf("expected migrated counter: %v", err)
-	} else {
-		closer.Close()
-	}
-	if _, closer, err := pebbleStore.db.Get([]byte("library:path:/tmp/legacy")); err == nil {
-		closer.Close()
-		t.Fatal("expected legacy path key to be removed")
-	}
-	if _, closer, err := pebbleStore.db.Get([]byte("counter:library")); err == nil {
-		closer.Close()
-		t.Fatal("expected legacy counter to be removed")
 	}
 }

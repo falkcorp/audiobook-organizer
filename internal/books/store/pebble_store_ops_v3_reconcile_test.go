@@ -151,25 +151,6 @@ func TestReconcileOpsV3NoWritesAfterEveryWriter(t *testing.T) {
 			return err
 		}},
 		{"DeleteOperationV2", func() error { _, _, err := p.DeleteOperationV2(b, []string{"completed"}); return err }},
-		{"SweepHollowOperationsV2", func() error {
-			// A run with a record whose row an older binary left as a shell
-			// (raw, so stale until the sweep deletes both).
-			h := newRunID()
-			if err := p.InsertOperationV2(OperationV2Row{ID: h, DefID: "test.every-writer", Plugin: "test", Status: "queued", QueuedAt: now}); err != nil {
-				return err
-			}
-			if err := p.db.Set(opv2OpKey(h), []byte(`{}`), pebble.Sync); err != nil {
-				return err
-			}
-			n, err := p.SweepHollowOperationsV2()
-			if err == nil && n != 1 {
-				err = fmt.Errorf("swept %d rows, want 1", n)
-			}
-			if r, gerr := p.GetRunV3(h); err == nil && (gerr != nil || r != nil) {
-				err = fmt.Errorf("the swept row's run record survived: %+v, %v", r, gerr)
-			}
-			return err
-		}},
 	}
 	var nat string
 	steps = append(steps, []struct {

@@ -733,17 +733,3 @@ const listenEnv = "ABO_CORE_HTTP_LISTEN=127.0.0.1:0"
 func bootEnv(extra ...string) []string {
 	return append([]string{storageEnv(), listenEnv}, extra...)
 }
-
-// absEnv is the ABS layers (flag and signing secret, both operator-only) a
-// fixture that replaces app.Options.Env keeps when its config serves the ABS
-// surface: the module reads the flag from the process environment, and the
-// config boot must see the same value or the boot refuses (errABSFlagDrift).
-func absEnv() []string {
-	var env []string
-	for _, k := range []string{absEnabledEnv, "ABO_BOOKS_ABS_JWT_SECRET"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
-	}
-	return env
-}

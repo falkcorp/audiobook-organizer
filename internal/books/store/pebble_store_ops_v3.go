@@ -557,7 +557,7 @@ func (p *PebbleStore) stageRunV3FromV2(s *opsV3Stage, row *OperationV2Row, data 
 }
 
 // stageRunV3DeleteForV2 stages the removal of the v3 record of a v2 row being
-// deleted (DeleteOperationV2, SweepHollowOperationsV2).
+// deleted (DeleteOperationV2).
 func (p *PebbleStore) stageRunV3DeleteForV2(s *opsV3Stage, id string) error {
 	cur, err := p.loadRunV3(id)
 	if err != nil {

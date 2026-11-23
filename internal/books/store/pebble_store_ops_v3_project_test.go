@@ -1,4 +1,4 @@
-// file: internal/books/store/migration065_test.go
+// file: internal/books/store/pebble_store_ops_v3_project_test.go
 // version: 1.3.1
 // guid: e5ee898b-db8a-404e-9646-fac05de9b33d
 // last-edited: 2026-11-09
@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -93,15 +92,26 @@ func everyV2StatusRows(base time.Time) ([]OperationV2Row, map[string]state.V3) {
 	return rows, want
 }
 
-func TestMigration065MapsEveryV2Status(t *testing.T) {
-	p := newTimelineStore(t)
-	rows, want := everyV2StatusRows(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
-	seedV2Rows(t, p, rows)
-	rep, err := p.MigrateOpsV2ToV3(500, nil)
+// reconcileAll runs the boot reconcile (the production entry of the opv2 ->
+// opv3 projection that migration 065 once drove over a whole store, before R3
+// deleted it behind the upgrade floor) and fails the test on an error. A store
+// seeded with opv2: rows and no opv3: records has every run stale, so one call
+// builds every record.
+func reconcileAll(t testing.TB, p *PebbleStore) OpsV3ReconcileReport {
+	t.Helper()
+	rep, err := p.ReconcileOpsV3WithV2(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Scanned != len(rows) || rep.Written != len(rows) || rep.Unmapped["pending"] != 1 || len(rep.Unmapped) != 1 {
+	return rep
+}
+
+func TestOpsV3ProjectionMapsEveryV2Status(t *testing.T) {
+	p := newTimelineStore(t)
+	rows, want := everyV2StatusRows(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	seedV2Rows(t, p, rows)
+	rep := reconcileAll(t, p)
+	if rep.Checked != len(rows) || rep.Stale != len(rows) || rep.Rebuilt != len(rows) {
 		t.Fatalf("report = %+v", rep)
 	}
 	for id, w := range want {
@@ -137,7 +147,7 @@ func TestMigration065MapsEveryV2Status(t *testing.T) {
 	checkV3Consistency(t, p)
 }
 
-func TestMigration065TimeoutPrefix(t *testing.T) {
+func TestOpsV3ProjectionTimeoutPrefix(t *testing.T) {
 	p := newTimelineStore(t)
 	q := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC)
 	c := q.Add(time.Hour)
@@ -146,9 +156,7 @@ func TestMigration065TimeoutPrefix(t *testing.T) {
 		v2Row(a, "test.t", "canceled", "timeout: run exceeded 1h0m0s", q, &c),
 		v2Row(b, "test.t", "canceled", "canceled by user", q, &c),
 	})
-	if _, err := p.MigrateOpsV2ToV3(500, nil); err != nil {
-		t.Fatal(err)
-	}
+	reconcileAll(t, p)
 	if s := mustRun(t, p, a).State; s != state.V3TimedOut {
 		t.Errorf("timeout row -> %s", s)
 	}
@@ -161,7 +169,7 @@ func TestMigration065TimeoutPrefix(t *testing.T) {
 	}
 }
 
-func TestMigration065SuccessorHeuristic(t *testing.T) {
+func TestOpsV3ProjectionSuccessorHeuristic(t *testing.T) {
 	p := newTimelineStore(t)
 	base := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
 	retired := base.Add(time.Hour)
@@ -178,18 +186,12 @@ func TestMigration065SuccessorHeuristic(t *testing.T) {
 		v2Row(lonely, "test.requeue", "interrupted_dropped", state.RequeuedMessage, base.Add(time.Minute), &lonelyDone),
 		v2Row(tooLate, "test.requeue", "queued", "", lonelyDone.Add(3*time.Second), nil),
 	})
-	rep, err := p.MigrateOpsV2ToV3(500, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reconcileAll(t, p)
 	if got := mustRun(t, p, old).SuccessorID; got != succ {
 		t.Errorf("successor = %q, want %q", got, succ)
 	}
 	if got := mustRun(t, p, lonely).SuccessorID; got != "" {
 		t.Errorf("a row with no run within 1 s got successor %q", got)
-	}
-	if rep.SuccessorsFilled != 1 || rep.SuccessorsMissing != 1 {
-		t.Errorf("report: filled %d missing %d, want 1 and 1", rep.SuccessorsFilled, rep.SuccessorsMissing)
 	}
 	// The mirror of a dropped run with a successor is the v2 requeue row.
 	if st, msg := state.ToV2(state.V3Dropped, "", "", true, false, ""); st != "interrupted_dropped" || msg != state.RequeuedMessage {
@@ -197,7 +199,7 @@ func TestMigration065SuccessorHeuristic(t *testing.T) {
 	}
 }
 
-func TestMigration065LeavesV2Untouched(t *testing.T) {
+func TestOpsV3ProjectionLeavesV2Untouched(t *testing.T) {
 	p := newTimelineStore(t)
 	rows, _ := everyV2StatusRows(time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC))
 	seedV2Rows(t, p, rows)
@@ -205,11 +207,9 @@ func TestMigration065LeavesV2Untouched(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := v3Digest(t, p, "opv2:")
-	if _, err := p.MigrateOpsV2ToV3(500, nil); err != nil {
-		t.Fatal(err)
-	}
+	reconcileAll(t, p)
 	if v3Digest(t, p, "opv2:") != before {
-		t.Fatal("migration 065 changed an opv2: key")
+		t.Fatal("the projection changed an opv2: key")
 	}
 	ck, err := p.GetCheckpointV3(rows[2].ID)
 	if err != nil || ck == nil {
@@ -221,24 +221,19 @@ func TestMigration065LeavesV2Untouched(t *testing.T) {
 	}
 }
 
-func TestMigration065Idempotent(t *testing.T) {
+func TestOpsV3ProjectionIdempotent(t *testing.T) {
 	p := newTimelineStore(t)
 	rows, _ := everyV2StatusRows(time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC))
 	seedV2Rows(t, p, rows)
-	if _, err := p.MigrateOpsV2ToV3(500, nil); err != nil {
-		t.Fatal(err)
-	}
+	reconcileAll(t, p)
 	first := v3Digest(t, p, "opv2:", "opv3:")
 	firstKeys := len(timelineKeys(t, p, "opv3:"))
-	rep, err := p.MigrateOpsV2ToV3(500, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Written != 0 || rep.Skipped != len(rows) {
+	rep := reconcileAll(t, p)
+	if rep.Rebuilt != 0 || rep.Stale != 0 || rep.Checked != len(rows) {
 		t.Errorf("second pass: %+v", rep)
 	}
 	if v3Digest(t, p, "opv2:", "opv3:") != first || len(timelineKeys(t, p, "opv3:")) != firstKeys {
-		t.Fatal("a second migration pass changed the key set")
+		t.Fatal("a second pass changed the key set")
 	}
 
 	// A run the live façade wrote after the first pass is current with its
@@ -248,20 +243,19 @@ func TestMigration065Idempotent(t *testing.T) {
 	if err := p.UpdateOperationV2Status(rows[0].ID, "running", &now, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	rep, err = p.MigrateOpsV2ToV3(500, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Written != 0 || rep.Skipped != len(rows) {
+	rep = reconcileAll(t, p)
+	if rep.Rebuilt != 0 || rep.Stale != 0 || rep.Checked != len(rows) {
 		t.Errorf("after a live write: %+v (the façade write must keep the record current)", rep)
 	}
 	if s := mustRun(t, p, rows[0].ID).State; s != state.V3Running {
-		t.Errorf("the live write's state was overwritten by the migration: %s", s)
+		t.Errorf("the live write's state was overwritten by the projection: %s", s)
 	}
 	checkV3Consistency(t, p)
 }
 
-func TestMigration065Batches(t *testing.T) {
+// TestOpsV3ProjectionBatchesManyRows: 1250 rows are three repair batches, and
+// the counts the batches maintain are exact.
+func TestOpsV3ProjectionBatchesManyRows(t *testing.T) {
 	p := newTimelineStore(t)
 	base := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
 	rows := make([]OperationV2Row, 1250)
@@ -271,18 +265,8 @@ func TestMigration065Batches(t *testing.T) {
 		rows[i] = v2Row(idAt(q), fmt.Sprintf("test.batch-%d", i%7), "completed", "", q, &c)
 	}
 	seedV2Rows(t, p, rows)
-	var calls []int
-	rep, err := p.MigrateOpsV2ToV3(500, func(done, total int) {
-		if total != 1250 {
-			t.Errorf("progress total = %d", total)
-		}
-		calls = append(calls, done)
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Pages != 3 || fmt.Sprint(calls) != "[500 1000 1250]" {
-		t.Fatalf("pages = %d, progress = %v; want 3 pages at 500/1000/1250", rep.Pages, calls)
+	if rep := reconcileAll(t, p); rep.Rebuilt != len(rows) {
+		t.Fatalf("report = %+v, want %d rebuilt", rep, len(rows))
 	}
 	c, err := p.OpCountsV3()
 	if err != nil || c.Total != 1250 || c.ByState[state.V3Succeeded] != 1250 {
@@ -290,37 +274,20 @@ func TestMigration065Batches(t *testing.T) {
 	}
 }
 
-// TestMigration065RerunRewritesNothing: Up run again over the records it
-// built (a replay after a lost version bump) rewrites no opv3: key and keeps
-// one run per opv2 row.
-func TestMigration065RerunRewritesNothing(t *testing.T) {
+// TestOpsV3ProjectionRerunRewritesNothing: the projection run again over the
+// records it built rewrites no opv3: key and keeps one run per opv2 row.
+func TestOpsV3ProjectionRerunRewritesNothing(t *testing.T) {
 	p := newTimelineStore(t)
 	rows, _ := everyV2StatusRows(time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC))
 	seedV2Rows(t, p, rows)
-	if err := migration065Up(p); err != nil {
-		t.Fatal(err)
-	}
+	reconcileAll(t, p)
 	before := v3Digest(t, p, "opv3:")
 	if len(timelineKeys(t, p, opv3RunPrefix)) != len(rows) {
-		t.Fatalf("Up built %d runs for %d opv2 rows", len(timelineKeys(t, p, opv3RunPrefix)), len(rows))
+		t.Fatalf("the projection built %d runs for %d opv2 rows", len(timelineKeys(t, p, opv3RunPrefix)), len(rows))
 	}
-	if err := migration065Up(p); err != nil {
-		t.Fatal(err)
-	}
+	reconcileAll(t, p)
 	if v3Digest(t, p, "opv3:") != before {
-		t.Fatal("re-running Up rewrote opv3: keys")
-	}
-}
-
-// A store that cannot build opv3 records must fail migration 65, not skip
-// it: a nil return records 65 as applied, and the records would then never
-// be built.
-func TestMigration065ErrorsWithoutTheCapability(t *testing.T) {
-	if _, ok := any(&MockStore{}).(opsV3Migrator); ok {
-		t.Fatal("setup: MockStore implements opsV3Migrator; pick a store without it")
-	}
-	if err := migration065Up(&MockStore{}); err == nil {
-		t.Fatal("migration065Up returned nil for a store without MigrateOpsV2ToV3; it would be recorded as applied")
+		t.Fatal("running the projection again rewrote opv3: keys")
 	}
 }
 
@@ -343,12 +310,15 @@ func failOpsCommitN(t testing.TB, p *PebbleStore, n int64) func() {
 	return clear
 }
 
-// TestMigration065ResumesAfterACrash: a pass that dies part-way (here at a
-// main-pass batch, then again at the successor fill) leaves only whole
-// batches behind, and the next pass (RunMigrations re-runs Up, the version
-// was never advanced) finishes the job: every run migrated once, one migrate
-// event each, the requeued run's successor filled, counts exact.
-func TestMigration065ResumesAfterACrash(t *testing.T) {
+// TestOpsV3ProjectionResumesAfterACrash: a pass that dies part-way (here at
+// the second repair batch) leaves only whole batches behind, and the next boot's
+// reconcile finishes the job: every run built once, one migrate event each,
+// the requeued run's successor filled, counts exact. (A crash between the last
+// batch and the successor fill, which migration 065's own driver could resume,
+// is not resumable by the reconcile: the run it left without a successor is
+// current by its hash, so the reconcile does not revisit it. That driver is
+// deleted; the window is a single batch wide.)
+func TestOpsV3ProjectionResumesAfterACrash(t *testing.T) {
 	p := newTimelineStore(t)
 	base := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
 	rows := make([]OperationV2Row, 1250)
@@ -366,8 +336,8 @@ func TestMigration065ResumesAfterACrash(t *testing.T) {
 		v2Row(succ, "test.resume-requeue", "queued", "", retired.Add(300*time.Millisecond), nil))
 	seedV2Rows(t, p, rows)
 
-	clear := failOpsCommitN(t, p, 2) // die at the second main-pass batch
-	if _, err := p.MigrateOpsV2ToV3(500, nil); err == nil {
+	clear := failOpsCommitN(t, p, 2) // die at the second repair batch
+	if _, err := p.ReconcileOpsV3WithV2(context.Background()); err == nil {
 		t.Fatal("the injected crash was not reported")
 	}
 	clear()
@@ -375,25 +345,9 @@ func TestMigration065ResumesAfterACrash(t *testing.T) {
 		t.Fatalf("after a crash at batch 2: %d records, want exactly batch 1's 500", n)
 	}
 
-	clear = failOpsCommitN(t, p, 3) // batches 2 and 3 land; die at the successor fill
-	rep, err := p.MigrateOpsV2ToV3(500, nil)
-	if err == nil {
-		t.Fatal("the injected successor-fill crash was not reported")
-	}
-	clear()
-	if rep.Written != len(rows)-500 || rep.Skipped != 500 {
-		t.Fatalf("resumed pass = %+v; want %d written, 500 skipped", rep, len(rows)-500)
-	}
-	if got := mustRun(t, p, old).SuccessorID; got != "" {
-		t.Fatalf("successor %q landed despite the crash", got)
-	}
-
-	rep, err = p.MigrateOpsV2ToV3(500, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rep.Written != 0 || rep.SuccessorsFilled != 1 {
-		t.Errorf("final pass = %+v; want nothing rewritten and the pending successor filled", rep)
+	rep := reconcileAll(t, p)
+	if rep.Rebuilt != len(rows)-500 {
+		t.Fatalf("resumed pass = %+v; want %d rebuilt", rep, len(rows)-500)
 	}
 	if got := mustRun(t, p, old).SuccessorID; got != succ {
 		t.Errorf("successor = %q, want %q", got, succ)
@@ -406,49 +360,4 @@ func TestMigration065ResumesAfterACrash(t *testing.T) {
 		t.Errorf("counts = %+v, %v; want %d", c, err, len(rows))
 	}
 	checkV3Consistency(t, p)
-}
-
-// TestMigration065Timing100k seeds 100,000 v2 rows and times the migration.
-// Opt-in (OPSV3_MIGRATION_100K=1): it exists to produce the figure the
-// 05-PR4 report asks for, not to gate CI.
-func TestMigration065Timing100k(t *testing.T) {
-	if os.Getenv("OPSV3_MIGRATION_100K") == "" {
-		t.Skip("set OPSV3_MIGRATION_100K=1 to time migration 065 on 100,000 rows")
-	}
-	p := newTimelineStore(t)
-	base := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	statuses := []string{"completed", "completed", "completed", "failed", "canceled", "interrupted_dropped", "interrupted_quiesced"}
-	rows := make([]OperationV2Row, 100000)
-	for i := range rows {
-		q := base.Add(time.Duration(i) * 7 * time.Second)
-		c := q.Add(3 * time.Second)
-		rows[i] = v2Row(idAt(q), fmt.Sprintf("test.def-%02d", i%40), statuses[i%len(statuses)], "", q, &c)
-		rows[i].ProgressCurrent, rows[i].ProgressTotal = i%500, 500
-	}
-	seedV2Rows(t, p, rows)
-	start := time.Now()
-	rep, err := p.MigrateOpsV2ToV3(opsV3MigrationBatch, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("migration 065 on %d rows: %s (%d pages, %d written)", len(rows), time.Since(start).Round(time.Millisecond), rep.Pages, rep.Written)
-	start = time.Now()
-	if _, err := p.MigrateOpsV2ToV3(opsV3MigrationBatch, nil); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("second (idempotent) pass: %s", time.Since(start).Round(time.Millisecond))
-	rep2, err := p.ReconcileOpsV3WithV2(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("boot reconcile, all %d runs current: %s (%d workers)", rep2.Checked, rep2.Duration.Round(time.Millisecond), opsV3ReconcileWorkers)
-	for _, row := range rows[:1000] {
-		row.Status = "failed"
-		rawSetOp(t, p, row)
-	}
-	rep2, err = p.ReconcileOpsV3WithV2(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("boot reconcile, %d of %d runs stale: %s (%d rebuilt)", rep2.Stale, rep2.Checked, rep2.Duration.Round(time.Millisecond), rep2.Rebuilt)
 }

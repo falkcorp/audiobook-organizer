@@ -6,12 +6,10 @@
 package books
 
 import (
-	"context"
 	"slices"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
@@ -19,47 +17,80 @@ import (
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 )
 
-// Books' half of F3's cutover (F3-07 d; 03 section 3.8 rows M2, M7, M8). The
-// manifest declares three things together or none of them, on one predicate
-// (declaresFlip): the level step books.level-1 on its storage spec with the
-// spec's Level raised to match (M7), M2 in Manifest.Cutover, and M8 in
-// Manifest.Rewrite. Core's half of M7 is the kernel's, registered when a
-// manifest declares a cutover (kernel.CoreCutoverOwner). Every boot of the
-// module over a database declares them: the config boot they need is core's
-// own and always runs.
+// What books keeps of F3's cutover once R3 has deleted its steps (R3-02e-1; 03
+// section 3.8 rows M2, M7, M8). The data steps M2-M6 and the rewrite M8 are
+// gone: a store the R2 build left has them done (the upgrade floor, floor.go,
+// refuses every other non-empty store), and a fresh install records them with
+// the floor's Requires. What a store at level 1 still needs from this build is
+// the level it was raised to and the steps the raise left in its ledger, so
+// the manifest declares, on one predicate (declaresFlip): the level step
+// books.level-1 on its storage spec with the spec's Level raised to match, the
+// four retired secret claims, and an empty Manifest.Cutover. The level step
+// stays registered because a fresh install records every registered version
+// as applied, so a fresh store and an R2 store hold the same ledger; the
+// Cutover stays non-nil because core registers its own level owner
+// (kernel.CoreOwners) for a manifest that declares one, and a store the
+// R2 build stamped holds core's level step in that owner's ledger.
 
 // flipConfigNames are the config lists app.Options carries: the retired env
 // names and file keys (HEAD's names, which core config replaces) and the OPENAI
 // ecosystem bindings, with the predicate that lets core config place those
-// bindings (and the integrations values M2 stages) onto paths no registered
-// section owns (cutover.ConfigPassthrough).
+// bindings onto paths no registered section owns (cutover.ConfigPassthrough).
 func flipConfigNames() (retired []coreconfig.RetiredName, bindings []coreconfig.EnvName, passthrough func(coreconfig.Path) bool) {
 	return cutover.RetiredConfigNames(), cutover.ConfigEnvBindings(), cutover.ConfigPassthrough
 }
 
 // booksLevelStepVersion is the version books.level-1 takes: books' next
-// contiguous one, pinned. The cutover-list cell fails when
-// nextBooksVersion (the tests' count of the R1 steps) drifts from it, which is a versioned step added
-// ahead of the level step that has already shipped.
+// contiguous one, pinned. TestManifest_LevelStepIsBooksNextVersion fails when
+// a versioned step is added ahead of the level step that has already shipped.
 const booksLevelStepVersion = database.LegacyCap + 3
+
+// booksLevel is the level the cutover raised books to, and booksLevelStepID
+// the name of the step that raised it (storage.LevelStepName). Both are written
+// in every store the R2 build left, so neither changes.
+const (
+	booksLevel       = 1
+	booksLevelStepID = "books.level-1"
+)
+
+// retiredSecretClaims are the four settings rows M2 drained into the secret
+// store. A store the R2 build left holds none of them, so their claims are
+// retired: books reads and writes none of them, and the key guard refuses a
+// row that appears under one.
+var retiredSecretClaims = []string{
+	"setting:openai_api_key", "setting:google_books_api_key",
+	"setting:hardcover_api_token", "setting:basic_auth_password",
+}
+
+// withBooksLevel is base (books' spec without the level) with books.level-1
+// appended after its versioned steps, Spec.Level raised to match, and the four
+// drained secret rows' claims retired. The blob stays a read-write claim (M6
+// deleted its rows but the claim covers the family, 05-storage section 5S.9.1).
+func withBooksLevel(base storage.Spec) storage.Spec {
+	spec := base
+	spec.Migrations = append(slices.Clone(base.Migrations), storage.LevelStep(database.BooksOwner, booksLevelStepVersion, booksLevel))
+	spec.Level = booksLevel
+	spec.Claims = slices.Clone(base.Claims)
+	for i := range spec.Claims {
+		if c := &spec.Claims[i]; c.Key != "" && slices.Contains(retiredSecretClaims, c.Key) {
+			c.Mode = storage.ClaimRetired
+		}
+	}
+	return spec
+}
 
 // StandaloneSpec is books' storage spec for the openers that plan no manifest
 // (the op-runner child's store, the restore stager's verify of an archive): the
-// R1 spec with the level step and the level the serve boot raises the store to
-// (cutover.Flip.Spec). Without it those opens refuse a flipped store as written
-// by a newer build.
+// R1 spec with the level step and the level the serve boot raised the store to.
+// Without it those opens refuse a store at level 1 as written by a newer build.
 func StandaloneSpec(base storage.Spec) storage.Spec {
-	// Only the level step and the claims are applied (Flip.Spec reads nothing
-	// else): the data steps need M2's inputs, which a standalone open has none
-	// of and never runs.
-	level := cutover.BooksLevelStep(booksLevelStepVersion, cutover.BooksCutoverLevel)
-	return withUpgradeFloor(cutover.Flip{Level: level}.Spec(base))
+	return withUpgradeFloor(withBooksLevel(base))
 }
 
-// StandaloneOptions is o with the flip's storage declarations added for an open
-// that plans no manifest: books' spec through StandaloneSpec and core's level
-// owner (kernel.CoreOwners), so a store the serve boot raised opens at both of
-// its levels.
+// StandaloneOptions is o with the level declarations added for an open that
+// plans no manifest: books' spec through StandaloneSpec and core's level owner
+// (kernel.CoreOwners), so a store the serve boot raised opens at both of its
+// levels.
 func StandaloneOptions(o database.StandaloneOptions) database.StandaloneOptions {
 	o.Spec = StandaloneSpec
 	m := Module().(*booksModule)
@@ -70,76 +101,40 @@ func StandaloneOptions(o database.StandaloneOptions) database.StandaloneOptions 
 
 // FastExitModule is books' module as main's app.FastExit reads it
 // (--print-storage-levels, --print-capabilities): the manifest a serve boot
-// hands app.New, the flip's level step included. Module() alone names no
-// database and so declares no flip (declaresFlip); a level vector printed from
-// it would read books 0 for a build that raises the store to the cutover
-// level. Only the declaration is read: nothing opens the placeholder path.
+// hands app.New, the level step included. Module() alone names no database and
+// so declares no level (declaresFlip); a level vector printed from it would
+// read books 0 for a build that serves a store at level 1. Only the
+// declaration is read: nothing opens the placeholder path.
 func FastExitModule() module.Module {
 	m := Module().(*booksModule)
 	m.dbPath = "fast-exit"
 	return m
 }
 
-// declaresFlip reports whether this manifest declares F3's cutover: Options
-// has named the database (the steps read HEAD's paths, and a module built
-// without one, the help listing's, plans no cutover, so a dry run over it never
-// raises a level without M2 behind it).
+// declaresFlip reports whether this manifest declares books' level: Options
+// has named the database (a module built without one, the help listing's,
+// plans no level, so a dry run over it never raises one).
 func (m *booksModule) declaresFlip() bool { return m.dbPath != "" }
 
 // storageSpec is books' storage declaration: the R1 spec, plus the level step,
-// its level and the retired claims of the rows M2 drains when the flip is
-// declared (cutover.Flip.Spec). The step is appended after the observed ones:
-// it writes nothing, so it must not run the HNSW observer.
+// its level and the retired claims when the level is declared. The step is
+// appended after the observed ones: it writes nothing, so it must not run the
+// HNSW observer.
 func (m *booksModule) storageSpec() storage.Spec {
 	spec := database.BooksSpec(m.beforeMigration)
 	if m.declaresFlip() {
-		spec = m.flipSteps(module.Importers{}).Spec(spec)
+		spec = withBooksLevel(spec)
 	}
 	return spec
 }
 
-// cutoverSteps is Manifest.Cutover: nil unless the flip is declared. The func
-// is called at P2 (and by Describe and the offline opens, whose importers
-// refuse every call); it builds the steps and runs nothing.
+// cutoverSteps is Manifest.Cutover: nil unless the level is declared, and then
+// a func that returns no step. Books owns no cutover data step at R3; the
+// non-nil value is what makes the kernel register core's level owner, so a
+// store the R2 build stamped at core level 1 still opens.
 func (m *booksModule) cutoverSteps() func(module.Importers) []datamigrate.DataMigration {
 	if !m.declaresFlip() {
 		return nil
 	}
-	return func(imp module.Importers) []datamigrate.DataMigration { return m.flipSteps(imp).Data }
-}
-
-// rewriteStep is Manifest.Rewrite (M8): nil unless the flip is declared.
-func (m *booksModule) rewriteStep() *storage.RewriteStep {
-	if !m.declaresFlip() {
-		return nil
-	}
-	r := m.flipSteps(module.Importers{}).Rewrite
-	return &r
-}
-
-// flipSteps is F3's list over imp: the one value the manifest registers and the
-// cutover-list cell validates. Zero importers are for the parts that carry no
-// importer (the level step, M8).
-func (m *booksModule) flipSteps(imp module.Importers) cutover.Flip {
-	return cutover.NewFlip(imp.Config, imp.Secrets, m.flipOptions(imp))
-}
-
-// flipOptions are M2's inputs: HEAD's state directory, database path and
-// config.yaml, the legacy range and the key-regen switch the kernel binds at
-// P4b through imp, and a logger that carries names and counts, never a value.
-func (m *booksModule) flipOptions(imp module.Importers) cutover.FlipOptions {
-	opts := cutover.ConfigStepOptions{
-		StateDir:     m.stateDir,
-		DatabasePath: m.dbPath,
-		ConfigFile:   gapFillPath(m.dbPath),
-		Logger:       logger.FromContext(context.Background()).With("subsystem", "books-cutover"),
-	}
-	if imp.Legacy != nil {
-		opts.Legacy = func() storage.Reader { return imp.Legacy(cutover.BooksOwner) }
-	}
-	opts.AllowKeyRegen = imp.AllowKeyRegen
-	if imp.OperatorSet != nil {
-		opts.OperatorSet = func(p string) (string, bool) { return imp.OperatorSet(coreconfig.Path(p)) }
-	}
-	return cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion, Config: opts}
+	return func(module.Importers) []datamigrate.DataMigration { return nil }
 }

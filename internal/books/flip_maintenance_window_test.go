@@ -13,7 +13,6 @@ import (
 
 	coreconfig "github.com/falkcorp/mediacore/config"
 
-	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
@@ -40,21 +39,6 @@ func missingRows(t *testing.T) []string {
 	m, ok := config.Current().(interface{ Missing() []string })
 	require.True(t, ok, "the installed Facade does not report Missing")
 	return m.Missing()
-}
-
-func TestMaintenanceWindow_StoredWindowProjectsFromCore(t *testing.T) {
-	fx := newFlipFixture(t, func(s *database.PebbleStore) {
-		// The stored shape of HEAD's save: the window is a nested object in config_blob.
-		require.NoError(t, s.SetSetting("config_blob", `{"maintenance":{"enabled":false,"window_start":3,"window_end":6}}`, "json", false))
-	}, "")
-	var got windowView
-	var missing []string
-	fx.runFlipped(t, func(*composed) {
-		got = windowOf(config.Snapshot())
-		missing = missingRows(t)
-	})
-	require.Equal(t, windowView{false, 3, 6}, got, "the stored window did not reach the projected Config")
-	require.Empty(t, missing, "rows the core store does not register")
 }
 
 func TestMaintenanceWindow_UpdateRoundTripsOnRealCore(t *testing.T) {

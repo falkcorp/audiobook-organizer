@@ -62,8 +62,7 @@ type Spec struct {
 	MinVersionToServe int                    // 0 = every registered versioned step must be applied before the owner starts
 	Claims            []Claim                // legacy claims; books in practice
 	Serialized        []string               // relative sub-prefixes of the keyspace that are Serialized; "" = the whole keyspace; every Set/Delete in them carries an Expect (R6-1)
-	Migrations        []Migration            // versioned, §5S.3.5
-	Legacy            []LegacyMigration      // books only, versions 1..LegacyCap, §5S.3.5
+	Migrations        []Migration            // versioned, §5S.3.5; numbered from UpgradeFloor.Version+1 (from 1 without a floor)
 	LegacyGuard       *LegacyGuardProjection // books only, §5S.3.7
 	UpgradeFloor      *UpgradeFloor          // §5S.3.5 (R2-4)
 	Derived           []DerivedIndex         // declarative part only; hooks and rebuild task via Registrar.DerivedIndex (§5S.3.9)
@@ -73,12 +72,12 @@ type Spec struct {
 }
 
 // StepRef names one migration step of any owner, for cross-owner ordering.
-// Its one printed spelling is "<owner>#<version>" ("core/tasks#1", "books#66")
+// Its one printed spelling is "<owner>#<version>" ("core/tasks#1", "books#67")
 // or "<owner>#<data-migration-id>"; bookkeeping is keyed by the same owner ID
 // (c/storage/ks/core/auth/...), never by "core" alone (DATA2-29).
 type StepRef struct {
 	Owner         Owner
-	Version       int    // a versioned or books legacy step; or
+	Version       int    // a versioned step; or
 	DataMigration string // a storage/datamigrate ID
 }
 
@@ -92,7 +91,7 @@ func (r StepRef) String() string {
 
 // Migration is one forward-only step of one keyspace. There is no Down.
 type Migration struct {
-	Version     int // 1..n, contiguous per owner; books' are numbered from LegacyCap+1, contiguous with its legacy track (DATA7-7)
+	Version     int // contiguous per owner from the UpgradeFloor's Version+1 (1 without a floor); books' are numbered from LegacyCap+1 (DATA7-7)
 	Name        string
 	Compat      MigrationCompat // zero rejected at registration
 	RaisesLevel int             // required when Compat == Breaking: the owner's new level (§5S.3.7)
@@ -115,7 +114,9 @@ type Migration struct {
 
 // UpgradeFloor lets a build delete step code that an older store would still
 // need (books' legacy steps 1..LegacyCap, the store methods they call and
-// the HEAD-format readers of the cutover steps; R2-4, DATA4-19). A store
+// the HEAD-format readers of the cutover steps; R2-4, DATA4-19). The owner's
+// registered steps are numbered from Version+1: versions 1..Version have no
+// step in the build. A store
 // whose applied version for Owner is below Version, or on which a step in
 // Requires is not done, is refused before anything is written. An empty
 // store is exempt: it is a fresh install, whose one batch records every
@@ -129,17 +130,6 @@ type UpgradeFloor struct {
 	Version      int       // the minimum applied version
 	Requires     []StepRef // data migrations that must be done (R3: books' cutover steps, §5S.3.13)
 	InstallFirst string    // the tag of the release to install first (the R2 release's tag), named in the refusal
-}
-
-// LegacyMigration is books' existing step form, kept for versions
-// 1..LegacyCap only (DATA-8, DATA4-19). Up runs ABO's MigrationFunc through
-// the books repository layer over books' own LegacyRange r (§5S.3.4); its
-// store methods commit their own batches and allocate IDs with their own
-// Sync writes, so the step is NOT atomic.
-type LegacyMigration struct {
-	Version int
-	Name    string
-	Up      func(ctx context.Context, r LegacyRange) error
 }
 
 // AppliedStep is one applied step's bookkeeping record:

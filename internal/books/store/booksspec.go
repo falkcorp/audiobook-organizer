@@ -21,19 +21,21 @@ import (
 // Books' storage declaration (05-storage §5S.9.1-§5S.9.3).
 //
 // From release R1 core storage opens the one store, and books declares here
-// what core needs to run it: its claims (booksclaims.go), its HEAD-style
-// migrations 1..LegacyCap as LegacyMigrations, every later books step as a
-// versioned Migration numbered from LegacyCap+1, the version source that
-// keeps HEAD's migration-version rows books' bookkeeping, and the legacy
-// guard projection that keeps HEAD's storage-format stamp, marker and
-// sidecar meaning what HEAD reads them as.
+// what core needs to run it: its claims (booksclaims.go), every books step as
+// a versioned Migration numbered from LegacyCap+1 (HEAD's migrations
+// 1..LegacyCap are gone: R3 deletes them behind books' upgrade floor, so the
+// spec declares the floor's version and the manifest completes the floor,
+// internal/books/floor.go), the version source that keeps HEAD's
+// migration-version rows books' bookkeeping, and the legacy guard projection
+// that keeps HEAD's storage-format stamp, marker and sidecar meaning what HEAD
+// reads them as.
 //
 // The spec is built fresh on every call: the bookkeeping adapter keeps
 // per-batch state (see booksBookkeeping), and one store's boot must never
 // share it with another's.
 
-// BooksSpec is books' storage.Spec at release R1. Every migration step,
-// legacy or versioned, calls ran before it runs (nil: none), and an error
+// BooksSpec is books' storage.Spec at release R1. Every migration step
+// calls ran before it runs (nil: none), and an error
 // from ran fails the step before it writes anything. An opener passes ran
 // to act before a step writes the store in this boot: the steps write
 // through their own step stores and batches, so nothing the opener's store
@@ -45,8 +47,12 @@ import (
 func BooksSpec(ran func() error) storage.Spec {
 	bk := &booksBookkeeping{}
 	return storage.Spec{
-		Claims:        BooksClaims(),
-		Legacy:        observeLegacySteps(booksLegacySteps(), ran),
+		Claims: BooksClaims(),
+		// Only the version the steps are numbered after: the manifest's
+		// declaration (internal/books/floor.go) replaces it with the full
+		// floor, its Requires and InstallFirst. A store below it is refused
+		// either way.
+		UpgradeFloor:  &storage.UpgradeFloor{Owner: BooksOwner, Version: LegacyCap},
 		Migrations:    observeMigrations(booksMigrations(), ran),
 		VersionSource: bk,
 		LegacyGuard: &storage.LegacyGuardProjection{
@@ -57,24 +63,6 @@ func BooksSpec(ran func() error) storage.Spec {
 			Stage:           bk.stageProjection,
 		},
 	}
-}
-
-// observeLegacySteps makes each step call ran before its Up, and fail with
-// its error (nil: as is).
-func observeLegacySteps(steps []storage.LegacyMigration, ran func() error) []storage.LegacyMigration {
-	if ran == nil {
-		return steps
-	}
-	for i := range steps {
-		up := steps[i].Up
-		steps[i].Up = func(ctx context.Context, r storage.LegacyRange) error {
-			if err := ran(); err != nil {
-				return err
-			}
-			return up(ctx, r)
-		}
-	}
-	return steps
 }
 
 // observeMigrations makes each step call ran before its Up, and fail with
@@ -101,37 +89,6 @@ func observeMigrations(steps []storage.Migration, ran func() error) []storage.Mi
 // such release refuses.
 const legacyMaxFormat = 1
 
-// booksLegacySteps wraps HEAD's migrations 1..LegacyCap as core
-// LegacyMigrations. Each runs HEAD's MigrationFunc over a step store built on
-// the LegacyRange core hands the step (books' own claims, §5S.3.4): its store
-// methods commit their own batches, so a step is not atomic, which is why
-// every Up is idempotent (TestMigrationUpFunctionsAreIdempotent,
-// TestLegacyMigrationsReplayIdempotent).
-func booksLegacySteps() []storage.LegacyMigration {
-	out := make([]storage.LegacyMigration, 0, len(migrations))
-	for _, m := range migrations {
-		out = append(out, storage.LegacyMigration{Version: m.Version, Name: m.Description, Up: legacyStepUp(m)})
-	}
-	return out
-}
-
-// legacyStepUp runs one HEAD migration over the step's LegacyRange.
-func legacyStepUp(m Migration) func(ctx context.Context, r storage.LegacyRange) error {
-	return func(ctx context.Context, r storage.LegacyRange) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		s, err := newStepStore(r)
-		if err != nil {
-			return fmt.Errorf("migration %d: %w", m.Version, err)
-		}
-		if err := m.Up(s); err != nil {
-			return fmt.Errorf("migration %d failed: %w", m.Version, err)
-		}
-		return nil
-	}
-}
-
 // booksMigrations are books' versioned steps, numbered from LegacyCap+1
 // (DATA7-7): HEAD's two open-time data writers that §5S.9.3 makes books
 // Migrations. Both are Additive: HEAD itself performs each at open, so a
@@ -156,8 +113,7 @@ func booksMigrations() []storage.Migration {
 // migrateImportPathKeysStep is HEAD's migrateImportPathKeys as a versioned
 // step: every library: key moves to its import_path: name and counter:library
 // to counter:import_path (an existing import_path counter wins), in the
-// step's one batch. Migration 007 still calls the store method for stores
-// that ran it before this step existed; both are idempotent.
+// step's one batch. Idempotent.
 func migrateImportPathKeysStep(ctx context.Context, tx *storage.MigrationTx) error {
 	r := tx.Legacy()
 	var legacy []storage.KV

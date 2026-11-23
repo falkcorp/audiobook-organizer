@@ -59,16 +59,13 @@ type ReservedPreferenceChange struct {
 }
 
 // LatestMigrationVersion is the highest books migration version this build
-// registers: the legacy migrations (1..LegacyCap) and books' Migrations after
-// them, which core storage records in db_version too. `diagnostics
+// registers: books' Migrations (numbered from LegacyCap+1; versions 1..LegacyCap
+// are the upgrade floor's), which core storage records in db_version too. `diagnostics
 // reserved-prefs --set db_version=N` refuses anything above it: core storage
 // refuses to open a store whose db_version is past the last migration with
 // no applied record for the versions in between.
 func LatestMigrationVersion() int {
 	latest := 0
-	for _, m := range migrations {
-		latest = max(latest, m.Version)
-	}
 	for _, m := range booksMigrations() {
 		latest = max(latest, m.Version)
 	}

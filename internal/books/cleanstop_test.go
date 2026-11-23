@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,8 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/app"
+	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
@@ -197,62 +200,33 @@ func TestSwapBootVoidsTheCleanStopClaim(t *testing.T) {
 }
 
 // TestServedBootHandsTheCleanStopMarkerToTheImport boots the composition over
-// a store on disk with a snapshot and its marker beside it, and reads what
-// the server's own snapshot import, inside Register, made of it. A store the
-// boot does not migrate keeps the marker for the import, which loads the
-// snapshot as fresh; a HEAD store, whose books steps run inside New, voids
-// it, and the import reconciles.
+// the frozen R2 store (copyR2Store) with a snapshot and its marker beside it,
+// and reads what the server's own snapshot import, inside Register, made of it.
+// No books step runs at this build's boot (the floor refuses every store with
+// one pending), so the boot keeps the marker for the import, which loads the
+// snapshot as fresh. The case a boot that migrates voids the marker, and the
+// import reconciles, is TestServedBootRefusesAMigrationOverAMarkerThatMayStillVouch's
+// and TestBeforeMigrationDiscardsTheMarkerOnce's: no store this build accepts
+// has a step to run, so there is no served boot of it left to test here.
 func TestServedBootHandsTheCleanStopMarkerToTheImport(t *testing.T) {
-	for name, tc := range map[string]struct {
-		head      bool
-		reconcile bool
-	}{
-		"a store at this build's schema": {head: false, reconcile: false},
-		"a HEAD store the boot migrates": {head: true, reconcile: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			// The case a boot does not migrate runs on the frozen R2 store
-			// (copyR2Store); the HEAD case is a pre-R2 store, which books'
-			// upgrade floor refuses, so it stays red until R3-02e deletes
-			// the migrations it exists for.
-			path := filepath.Join(tempDir(t), "gotham.pebble")
-			var work string
-			if tc.head {
-				headStoreAt(t, path, func(store *database.PebbleStore) { seedCleanStopRows(t, store, path) })
-			} else {
-				work = copyR2Store(t)
-				path = r2StoreDB(work)
-				store, err := database.OpenStandalone(path, StandaloneOptions(database.StandaloneOptions{}))
-				require.NoError(t, err)
-				seedCleanStopRowsDims(t, store, path, r2StoreEmbeddingDims)
-				require.NoError(t, store.Close())
-			}
-			dir := database.HNSWSnapshotDir(path)
-			require.NoError(t, os.MkdirAll(dir, 0o700))
-			edit, disk := onDisk(path)
-			stateDir, dims, model := "", 4, ""
-			if tc.head {
-				plantCleanStop(t, dir)
-			} else {
-				// The R2 store's own settings give the embedding width and
-				// model; the marker must record them to be the current one.
-				edit, disk = r2StoreBootConfig(t, work)
-				stateDir, dims, model = r2StoreState(work), r2StoreEmbeddingDims, r2StoreEmbeddingModel
-				plantCleanStopAs(t, dir, dims, model)
-			}
-			c := bootComposedWith(t, false, stateDir, func(cfg *config.Config) {
-				edit(cfg)
-				if tc.head {
-					cfg.Embedding.Dimensions = 4
-				}
-			}, nil, disk)
-			cleanStopGone(t, dir, "after the boot")
-			require.Equal(t, tc.head, c.mod.migrated.Load(), "whether a books step ran in New: the case proves nothing")
+	work := copyR2Store(t)
+	path := r2StoreDB(work)
+	store, err := database.OpenStandalone(path, StandaloneOptions(database.StandaloneOptions{}))
+	require.NoError(t, err)
+	seedCleanStopRowsDims(t, store, path, r2StoreEmbeddingDims)
+	require.NoError(t, store.Close())
+	dir := database.HNSWSnapshotDir(path)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	// The R2 store's own settings give the embedding width and model; the
+	// marker must record them to be the current one.
+	edit, disk := r2StoreBootConfig(t, work)
+	plantCleanStopAs(t, dir, r2StoreEmbeddingDims, r2StoreEmbeddingModel)
+	c := bootComposedWith(t, false, r2StoreState(work), edit, nil, disk)
+	cleanStopGone(t, dir, "after the boot")
+	require.False(t, c.mod.migrated.Load(), "a books step ran in New: the case proves nothing")
 
-			want := fmt.Sprintf("hnsw: loaded from on-disk snapshot in %s (reconcile_pending=%t)", dir, tc.reconcile)
-			require.Contains(t, c.newLog.String(), want, "the server's snapshot import")
-		})
-	}
+	want := fmt.Sprintf("hnsw: loaded from on-disk snapshot in %s (reconcile_pending=false)", dir)
+	require.Contains(t, c.newLog.String(), want, "the server's snapshot import")
 }
 
 // TestBeforeMigrationDiscardsTheMarkerOnce: the observer books' manifest
@@ -293,35 +267,47 @@ func TestBeforeMigrationDiscardsTheMarkerOnce(t *testing.T) {
 	require.ErrorIs(t, fresh.beforeMigration(), database.ErrCleanStopNotDiscarded)
 }
 
-// TestServedBootRefusesAMigrationOverAMarkerThatMayStillVouch: on a HEAD
-// store, whose books steps run inside app.New, a marker the first step
-// cannot discard fails that step before it writes, and the boot with it:
-// a legacy step (a store below LegacyCap) and a versioned one (a store at
-// LegacyCap) alike.
-func TestServedBootRefusesAMigrationOverAMarkerThatMayStillVouch(t *testing.T) {
-	for name, version := range map[string]int{
-		"a legacy step":    database.LegacyCap - 1,
-		"a versioned step": database.LegacyCap,
-	} {
-		t.Run(name, func(t *testing.T) {
-			path := filepath.Join(tempDir(t), "gotham.pebble")
-			headStoreAtVersion(t, path, version, nil)
-			marker := filepath.Join(database.HNSWSnapshotDir(path), "hnsw.clean-stop")
-			require.NoError(t, os.MkdirAll(filepath.Join(marker, "riddle"), 0o700))
+// pendingStep is the module with one more versioned step registered after
+// books' last, which the R2 store does not hold: the pending step a release
+// after R3 will add. Its Up runs the observer books' manifest passes its own
+// steps (beforeMigration), so it meets the clean-stop marker as a real step does.
+type pendingStep struct {
+	module.Module
+	observe func() error
+}
 
-			edit, disk := onDisk(path)
-			mod, opts, _ := composedOptions(t, false, "", edit, nil)
-			disk(&opts)
-			a, err := app.New(t.Context(), opts, mod)
-			t.Cleanup(func() { Release(mod) })
-			if a != nil {
-				_ = a.Close(context.Background())
-			}
-			require.ErrorIs(t, err, database.ErrCleanStopNotDiscarded)
-			require.True(t, mod.migrated.Load(), "no books step began: the case proves nothing")
-			require.Nil(t, mod.store.Load(), "Register ran after a failed migration")
-		})
+func (p pendingStep) Manifest() module.Manifest {
+	m := p.Module.Manifest()
+	m.Storage.Migrations = append(slices.Clone(m.Storage.Migrations), storage.Migration{
+		Version: booksLevelStepVersion + 1, Name: "test.pending-step", Compat: storage.Additive,
+		Up: func(context.Context, *storage.MigrationTx) error { return p.observe() },
+	})
+	return m
+}
+
+// TestServedBootRefusesAMigrationOverAMarkerThatMayStillVouch: on the R2 store
+// with one versioned step pending (a release after R3's step, pendingStep),
+// whose books step runs inside app.New, a marker the first step cannot
+// discard fails that step before it writes, and the boot with it. The steps
+// books itself had pending at R1 are gone (the floor refuses those stores), so
+// the step is the test's own; the observer it runs is books' real one.
+func TestServedBootRefusesAMigrationOverAMarkerThatMayStillVouch(t *testing.T) {
+	work := copyR2Store(t)
+	path := r2StoreDB(work)
+	marker := filepath.Join(database.HNSWSnapshotDir(path), "hnsw.clean-stop")
+	require.NoError(t, os.MkdirAll(filepath.Join(marker, "riddle"), 0o700))
+
+	edit, disk := r2StoreBootConfig(t, work)
+	mod, opts, _ := composedOptions(t, false, r2StoreState(work), edit, nil)
+	disk(&opts)
+	a, err := app.New(t.Context(), opts, pendingStep{Module: mod, observe: mod.beforeMigration})
+	t.Cleanup(func() { Release(mod) })
+	if a != nil {
+		_ = a.Close(context.Background())
 	}
+	require.ErrorIs(t, err, database.ErrCleanStopNotDiscarded)
+	require.True(t, mod.migrated.Load(), "no books step began: the case proves nothing")
+	require.Nil(t, mod.store.Load(), "Register ran after a failed migration")
 }
 
 // TestServedBootRefusesAClaimOfAMarkerThatMayStillVouch (R1-25 review S-1):

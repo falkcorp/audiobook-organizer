@@ -22,6 +22,16 @@ import (
 // fsync for them.
 func seedPebbleDir(t *testing.T, fs vfs.FS, path string, n int) {
 	t.Helper()
+	// Boot a fresh store first: a store holding data and no books version is
+	// below the upgrade floor and is refused, so the seed goes into one that
+	// is already past it.
+	booted, err := newPebbleStore(path, fs)
+	if err != nil {
+		t.Fatalf("seed boot: %v", err)
+	}
+	if err := booted.Close(); err != nil {
+		t.Fatalf("seed boot close: %v", err)
+	}
 	db, err := pebble.Open(path, &pebble.Options{FS: fs})
 	if err != nil {
 		t.Fatalf("seed open: %v", err)

@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
@@ -251,14 +250,6 @@ func retentionEntries() []retentionEntry {
 			run: func(t *testing.T, kv *database.PebbleStore) (int, error) {
 				return kv.PruneBookSnapshots(bookIDForSnapshots, 2)
 			},
-		},
-		{
-			name: "PebbleStore.SweepHollowOperationsV2", wantDeleted: true,
-			seed: func(t *testing.T, kv *database.PebbleStore) {
-				// An undecodable operation row: the sweep's target.
-				require.NoError(t, kv.DB().Set([]byte("opv2:op:01HOLLOW00000000000000000000"), []byte("not json"), pebble.Sync))
-			},
-			run: func(t *testing.T, kv *database.PebbleStore) (int, error) { return kv.SweepHollowOperationsV2() },
 		},
 		{
 			name: "PebbleStore.SweepBookFileSegDrop", wantDeleted: true,

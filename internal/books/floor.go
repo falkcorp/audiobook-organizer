@@ -51,8 +51,10 @@ func floorRequires() []storage.StepRef {
 //
 // InstallFirst is a PLACEHOLDER until OWNER-05 records the R2 production
 // release: replace the literal below, and only it, with the tag from
-// OWNER-05's tracking-issue record (its "decision: kept (R2 release <tag>,
-// cut from <rc tag>)" line), never from `gh release list` or the newest RC.
+// OWNER-05's tracking-issue record (its kept-decision line, "R2 release <tag>,
+// cut from <rc tag>"), never from `gh release list` or the newest RC. (The
+// decisions package forbids the literal key prefix anywhere else in the tree,
+// comments included, so the line is not quoted with it.)
 // It stays a string literal in the declaration because R3-04's acceptance
 // greps `InstallFirst: "..."` under internal/books/ and checks that the
 // release note names the same tag. TestUpgradeFloorTagIsNotPlaceholder

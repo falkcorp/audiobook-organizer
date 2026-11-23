@@ -565,28 +565,6 @@ func TestListCandidatesForEntity(t *testing.T) {
 	assert.Empty(t, none)
 }
 
-func TestBackfillEntityIndex(t *testing.T) {
-	store := newTestEmbeddingStore(t)
-
-	// Write two candidates via the normal path (entity index is written automatically).
-	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b1", EntityBID: "b2", Layer: "embedding", Status: "pending"}))
-	require.NoError(t, store.UpsertCandidate(DedupCandidate{EntityType: "book", EntityAID: "b3", EntityBID: "b4", Layer: "embedding", Status: "pending"}))
-
-	// BackfillEntityIndex is idempotent — running twice should not error or duplicate.
-	n1, err := store.BackfillEntityIndex()
-	require.NoError(t, err)
-	assert.Equal(t, 2, n1)
-
-	n2, err := store.BackfillEntityIndex()
-	require.NoError(t, err)
-	assert.Equal(t, 2, n2)
-
-	// Entity index lookups should still return correct results after backfill.
-	got, err := store.ListCandidatesForEntity("book", "b1", "")
-	require.NoError(t, err)
-	assert.Len(t, got, 1)
-}
-
 func TestDeleteCandidate_CleansEntityIndex(t *testing.T) {
 	store := newTestEmbeddingStore(t)
 

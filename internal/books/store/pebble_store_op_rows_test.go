@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2"
-
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
@@ -129,7 +127,7 @@ func rowKeysOf(t *testing.T, p *PebbleStore, id string) []string {
 // way of deleting the operation removes both families, with the v3 mirror on
 // and with it off (no v3 record: the path whose v3 delete is a no-op).
 func TestOpRows_SurviveCompletionAndDieWithTheOperation(t *testing.T) {
-	for _, via := range []string{"DeleteOperationV2", "DeleteRunV3", "SweepHollowOperationsV2"} {
+	for _, via := range []string{"DeleteOperationV2", "DeleteRunV3"} {
 		for _, mirror := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/mirror=%v", via, mirror), func(t *testing.T) {
 				if via == "DeleteRunV3" && !mirror {
@@ -164,14 +162,6 @@ func TestOpRows_SurviveCompletionAndDieWithTheOperation(t *testing.T) {
 					if _, deleted, err := p.DeleteOperationV2(id, []string{"completed"}); err != nil || !deleted {
 						t.Fatalf("DeleteOperationV2: %v %v", deleted, err)
 					}
-				case "SweepHollowOperationsV2":
-					// A row that no longer decodes is what the sweep removes.
-					if err := p.db.Set(opv2OpKey(id), []byte("not json"), nil); err != nil {
-						t.Fatal(err)
-					}
-					if n, err := p.SweepHollowOperationsV2(); err != nil || n != 1 {
-						t.Fatalf("SweepHollowOperationsV2 = %d, %v", n, err)
-					}
 				}
 				if got := rowKeysOf(t, p, id); len(got) != 0 {
 					t.Fatalf("row keys survive the delete: %v", got)
@@ -184,50 +174,9 @@ func TestOpRows_SurviveCompletionAndDieWithTheOperation(t *testing.T) {
 	}
 }
 
-// recordingDeleter records the ranges stageOpRowsDelete stages.
-type recordingDeleter struct{ ranges [][2]string }
-
-func (r *recordingDeleter) DeleteRange(start, end []byte, _ *pebble.WriteOptions) error {
-	r.ranges = append(r.ranges, [2]string{string(start), string(end)})
-	return nil
-}
-
-// TestStageOpRowsDelete: it stages exactly the ranges opv2RowFamilyPrefixes
-// names (so a family added there is swept and replaced with it), and refuses an
-// id a row set cannot be keyed by without staging anything: an empty one, and
-// one with the key separator, whose prefix delete would reach another
-// operation's rows.
-func TestStageOpRowsDelete(t *testing.T) {
-	var ok recordingDeleter
-	if err := stageOpRowsDelete(&ok, "01HZ"); err != nil {
-		t.Fatal(err)
-	}
-	want := opv2RowFamilyPrefixes("01HZ")
-	if len(ok.ranges) != len(want) || len(want) != 2 {
-		t.Fatalf("staged %d ranges, want the %d of opv2RowFamilyPrefixes (2)", len(ok.ranges), len(want))
-	}
-	for i, pfx := range want {
-		if ok.ranges[i] != [2]string{string(pfx), string(prefixEnd(pfx))} {
-			t.Errorf("range %d = %q, want %q..%q", i, ok.ranges[i], pfx, prefixEnd(pfx))
-		}
-	}
-	if string(want[0]) != "opv2:row:01HZ:" || string(want[1]) != "opv2:rowix:01HZ:" {
-		t.Errorf("row family prefixes = %q", want)
-	}
-
-	for _, id := range []string{"", "a:b", ":", "a:"} {
-		var bad recordingDeleter
-		if err := stageOpRowsDelete(&bad, id); err == nil {
-			t.Errorf("id %q accepted", id)
-		}
-		if len(bad.ranges) != 0 {
-			t.Errorf("id %q staged %v before refusing", id, bad.ranges)
-		}
-	}
-}
-
-// TestReplaceOpRowsPrefixRefusesSeparatorIDs: the same ids are refused where a row
-// set is written, so none can exist for the sweep to miss.
+// TestReplaceOpRowsPrefixRefusesSeparatorIDs: an id holding the key separator
+// is refused where a row set is written, so no row set exists under one and a
+// prefix delete of "a" can never reach "a:b"'s rows.
 func TestReplaceOpRowsPrefixRefusesSeparatorIDs(t *testing.T) {
 	st, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -236,38 +185,6 @@ func TestReplaceOpRowsPrefixRefusesSeparatorIDs(t *testing.T) {
 		if err := p.ReplaceOpRowsPrefix(id, "row-", 0, nil); err == nil {
 			t.Errorf("id %q accepted", id)
 		}
-	}
-}
-
-// TestSweepSkipsRowRangeOfSeparatorID: a hollow record whose key holds the
-// separator is still swept, only its row-range delete is skipped, and the
-// sweep does not fail (which would stop the boot that runs it). The point of
-// the refusal is what the delete would reach: the prefix of the id "a:b" is
-// opv2:row:a:b:, and the row "b:x" of the op "a" is stored at
-// opv2:row:a:b:x, so an unguarded sweep of "a:b" deletes a row of "a".
-func TestSweepSkipsRowRangeOfSeparatorID(t *testing.T) {
-	st, cleanup := setupTestDB(t)
-	defer cleanup()
-	p := st.(*PebbleStore)
-	if err := p.ReplaceOpRowsPrefix("a", "b:", 1, func(int) (OpRow, error) {
-		return OpRow{ID: "b:x", Index: []byte("i"), Data: []byte("d")}, nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.db.Set([]byte("opv2:op:a:b"), []byte("{not json"), pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	n, err := p.SweepHollowOperationsV2()
-	if err != nil || n != 1 {
-		t.Fatalf("sweep = %d, %v; want 1, nil", n, err)
-	}
-	got, err := p.GetOpRows("a", []string{"b:x"})
-	if err != nil || got[0] == nil {
-		t.Fatalf("the sweep of \"a:b\" deleted the row \"b:x\" of op \"a\": %q, %v", got, err)
-	}
-	ids, _ := scanIDs(t, p, "a")
-	if len(ids) != 1 {
-		t.Fatalf("index entries of op a = %v, want the one for b:x", ids)
 	}
 }
 

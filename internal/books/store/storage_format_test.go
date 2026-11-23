@@ -153,9 +153,20 @@ func TestStorageFormat_FreshStoreStampedAtOne(t *testing.T) {
 	require.Equal(t, SupportedStorageFormat, decodeStampRow(t, row))
 }
 
+// A store whose stamp row is gone (the shape HEAD left a store it never
+// stamped) is stamped by the first core boot at the value an absent stamp
+// already reads as. The store here is a booted one with its stamp row and
+// sidecar removed: a store with data and no books version is below the
+// upgrade floor and is refused before the stamp is looked at.
 func TestStorageFormat_DataWithoutStampReadsAsLegacy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.pebble")
-	rawSet(t, path, nil, "book:x", "{}")
+	openAndClose(t, path)
+	db := rawOpen(t, path, nil)
+	require.NoError(t, db.Delete([]byte("preference:"+storageFormatPreferenceKey), pebble.Sync))
+	require.NoError(t, db.Close())
+	require.NoError(t, os.Remove(StorageFormatSidecarPath(path)))
+	_, present := rawStampAt(t, path, nil)
+	require.False(t, present, "the fixture removed the stamp")
 
 	openAndClose(t, path)
 
@@ -341,7 +352,6 @@ func TestStorageFormat_AcceptedOpenRatchetsToPinnedFormat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "min-format-ok.pebble")
 	db, err := pebble.Open(path, &pebble.Options{FormatMajorVersion: pebble.FormatMinSupported})
 	require.NoError(t, err)
-	require.NoError(t, db.Set([]byte("book:x"), []byte("{}"), pebble.Sync))
 	require.NoError(t, db.Close())
 
 	openAndClose(t, path)

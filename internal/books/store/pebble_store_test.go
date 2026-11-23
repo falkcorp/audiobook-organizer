@@ -819,10 +819,15 @@ func TestPebbleFormatVersion(t *testing.T) {
 	}
 }
 
+// TestPebbleFormatVersion_UpgradesExisting: opening a store whose Pebble is
+// below the pinned format ratchets it to FormatNewest, and a row written
+// after the upgrade survives a reopen. The store is empty because a store
+// holding data and no books version is below the upgrade floor and is
+// refused.
 func TestPebbleFormatVersion_UpgradesExisting(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "pebble-upgrade")
 
-	// Create a DB at minimum supported format
+	// Create an empty DB at an old format.
 	db, err := pebble.Open(dbPath, &pebble.Options{
 		FormatMajorVersion: pebble.FormatFlushableIngest,
 	})
@@ -830,18 +835,13 @@ func TestPebbleFormatVersion_UpgradesExisting(t *testing.T) {
 		t.Fatalf("Failed to create old-format DB: %v", err)
 	}
 	oldVersion := db.FormatMajorVersion()
-	if err := db.Set([]byte("quick_query_cache:test"), []byte("value"), pebble.Sync); err != nil {
-		t.Fatalf("Failed to write test key: %v", err)
-	}
 	db.Close()
 
-	// Reopen via NewPebbleStore — should upgrade to FormatNewest
+	// Reopen via NewPebbleStore: should upgrade to FormatNewest.
 	store, err := NewPebbleStore(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to reopen with NewPebbleStore: %v", err)
 	}
-	defer store.Close()
-
 	newVersion := store.db.FormatMajorVersion()
 	if newVersion == oldVersion {
 		t.Errorf("Format version was not upgraded: still %s", newVersion)
@@ -849,76 +849,26 @@ func TestPebbleFormatVersion_UpgradesExisting(t *testing.T) {
 	if newVersion != pebble.FormatNewest {
 		t.Errorf("Expected FormatNewest (%s), got %s", pebble.FormatNewest, newVersion)
 	}
+	if err := store.SetRaw("quick_query_cache:test", []byte("value")); err != nil {
+		t.Fatalf("Failed to write test key: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 
-	// Verify data survived the upgrade
+	// The row survives a reopen at the upgraded format.
+	store, err = NewPebbleStore(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to reopen: %v", err)
+	}
+	defer store.Close()
 	val, closer, err := store.db.Get([]byte("quick_query_cache:test"))
 	if err != nil {
-		t.Fatalf("Data lost after format upgrade: %v", err)
+		t.Fatalf("Data lost after reopen: %v", err)
 	}
 	defer closer.Close()
 	if string(val) != "value" {
 		t.Errorf("Expected 'value', got %q", string(val))
-	}
-}
-
-func TestPebbleMigrateImportPathKeys(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "pebble-migrate")
-	db, err := pebble.Open(dbPath, &pebble.Options{
-		FormatMajorVersion: pebble.FormatNewest,
-	})
-	if err != nil {
-		t.Fatalf("Failed to open Pebble: %v", err)
-	}
-	defer db.Close()
-
-	legacyFolder := []byte(`{"id":1,"path":"/legacy","name":"Legacy","enabled":true,"book_count":0}`)
-	if err := db.Set([]byte("library:1"), legacyFolder, pebble.Sync); err != nil {
-		t.Fatalf("Failed to write legacy key: %v", err)
-	}
-	if err := db.Set([]byte("library:path:/legacy"), []byte("1"), pebble.Sync); err != nil {
-		t.Fatalf("Failed to write legacy index key: %v", err)
-	}
-	if err := db.Set([]byte("counter:library"), []byte("2"), pebble.Sync); err != nil {
-		t.Fatalf("Failed to write legacy counter: %v", err)
-	}
-
-	store := &PebbleStore{db: NewGatedDB(db)}
-	if err := store.migrateImportPathKeys(); err != nil {
-		t.Fatalf("migrateImportPathKeys failed: %v", err)
-	}
-
-	if _, closer, err := db.Get([]byte("import_path:1")); err != nil {
-		t.Fatalf("expected migrated import_path key: %v", err)
-	} else {
-		closer.Close()
-	}
-	if _, closer, err := db.Get([]byte("import_path:path:/legacy")); err != nil {
-		t.Fatalf("expected migrated import_path index: %v", err)
-	} else {
-		closer.Close()
-	}
-
-	if _, _, err := db.Get([]byte("library:1")); err != pebble.ErrNotFound {
-		t.Fatalf("expected legacy key removed, got %v", err)
-	}
-	if _, _, err := db.Get([]byte("library:path:/legacy")); err != pebble.ErrNotFound {
-		t.Fatalf("expected legacy index removed, got %v", err)
-	}
-
-	if val, closer, err := db.Get([]byte("counter:import_path")); err != nil {
-		t.Fatalf("expected migrated counter: %v", err)
-	} else {
-		if string(val) != "2" {
-			t.Fatalf("unexpected counter value: %s", string(val))
-		}
-		closer.Close()
-	}
-	if _, _, err := db.Get([]byte("counter:library")); err != pebble.ErrNotFound {
-		t.Fatalf("expected legacy counter removed, got %v", err)
-	}
-
-	if err := store.migrateImportPathKeys(); err != nil {
-		t.Fatalf("idempotent migration failed: %v", err)
 	}
 }
 

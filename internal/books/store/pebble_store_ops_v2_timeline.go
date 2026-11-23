@@ -787,7 +787,7 @@ func (p *PebbleStore) detectOpsV2TimelineDrift(ctx context.Context) (opsV2IndexD
 	if err := runOpsV2TimelinePool(ctx, snap, workers, opPrefix, prefixEnd(opPrefix), true, func(w int, item opsV2TimelineKV) error {
 		var row opV2IndexFields
 		if err := json.Unmarshal(item.v, &row); err != nil || row.ID == "" {
-			return nil // SweepHollowOperationsV2's job
+			return nil // an undecodable row: nothing to index
 		}
 		id := string(item.k[len(opPrefix):])
 		perWorker[w][id] = string(desiredOpv2IndexKey(id, row.CompletedAt))

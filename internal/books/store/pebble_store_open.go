@@ -404,19 +404,11 @@ func (p *PebbleStore) AttachStorageAdmin(a *storage.Admin) {
 	p.db.setStorageAdmin(a)
 }
 
-// newStepStore is the store a legacy migration step runs HEAD's
-// MigrationFunc over: books' LegacyRange for the step, constructed like
-// books' own store but without the memdb warmup (reads fall back to Pebble),
-// and never closed (it owns nothing).
-func newStepStore(r storage.LegacyRange) (*PebbleStore, error) {
-	return newCoreStore(r, nil, warmNever)
-}
-
 // warmMode is when a core store starts its memdb warmup.
 type warmMode int
 
 const (
-	// warmNever: no warmup; reads go to Pebble (a migration step's store).
+	// warmNever: no warmup; reads go to Pebble.
 	warmNever warmMode = iota
 	// warmNow: the constructor starts it (the standalone opener, as HEAD's
 	// open did).

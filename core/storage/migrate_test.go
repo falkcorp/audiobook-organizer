@@ -594,18 +594,6 @@ func TestStepErrorIsOnlyTheStepsOwnFailure(t *testing.T) {
 			t.Fatalf("err = %v, want a *StepError wrapping ErrMigrationTooLarge", err)
 		}
 	})
-	t.Run("legacy-up", func(t *testing.T) {
-		boom := errors.New("the penguin's umbrella jammed")
-		vs := &fakeVersionSource{}
-		e := newEnv(t, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamVSClaims(), VersionSource: vs}})
-		upgrade(t, e, OwnerSpec{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamVSClaims(), VersionSource: vs,
-			Legacy: []LegacyMigration{{Version: 1, Name: "umbrella", Up: func(context.Context, LegacyRange) error { return boom }}}}})
-		_, err := e.tryOpen()
-		var se *StepError
-		if !errors.As(err, &se) || se.Step.String() != "gotham#1" || !errors.Is(err, boom) {
-			t.Fatalf("err = %v, want a *StepError naming gotham#1", err)
-		}
-	})
 	t.Run("level-sidecar-write", func(t *testing.T) {
 		mem := vfs.NewCrashableMem()
 		rec := bootseamtest.New(mem, bootseamtest.Options{Fail: func(ev bootseamtest.Event) error {

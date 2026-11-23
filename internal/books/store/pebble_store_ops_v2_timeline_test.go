@@ -786,39 +786,6 @@ func TestOpsV2Timeline_RollbackForward(t *testing.T) {
 		t.Fatalf("ListWaitingDepsOps after boot 3 = %v %v, want [%s]", rowIDs(rows), err, waiting)
 	}
 }
-func TestOpsV2Timeline_SweepHollowRemovesDoneKey(t *testing.T) {
-	p := newTimelineStore(t)
-	const hollow = "01HOLLOW00000000000000000000"
-	if err := p.db.Set(opv2OpKey(hollow), []byte("not json"), pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.db.Set(opv2DoneKey(time.Now(), hollow), nil, pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.db.Set(opv2OpenKey(hollow), nil, pebble.Sync); err != nil {
-		t.Fatal(err)
-	}
-	keep := ulid.Make().String()
-	c := time.Now().UTC()
-	if err := p.InsertOperationV2(OperationV2Row{ID: keep, Status: "completed", QueuedAt: c, CompletedAt: &c}); err != nil {
-		t.Fatal(err)
-	}
-	n, err := p.SweepHollowOperationsV2()
-	if err != nil || n != 1 {
-		t.Fatalf("sweep = %d, %v; want 1", n, err)
-	}
-	for _, fam := range []string{opv2OpenPrefix, opv2DonePrefix} {
-		for _, k := range timelineKeys(t, p, fam) {
-			if strings.HasSuffix(k, hollow) {
-				t.Fatalf("index key %s still names the swept row", k)
-			}
-		}
-	}
-	if got := timelineKeys(t, p, opv2DonePrefix); len(got) != 1 || !strings.HasSuffix(got[0], keep) {
-		t.Fatalf("done keys = %v, want only the kept row", got)
-	}
-}
-
 func TestOpsV2Timeline_ResumeMovesDoneToOpen(t *testing.T) {
 	p := newTimelineStore(t)
 	id := ulid.Make().String()
@@ -984,11 +951,9 @@ var opv2OpKeyAllowlist = map[string]string{
 	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).updateOperationV2Status":                "stage", // body of UpdateOperationV2Status and UpdateOperationV2StatusIf
 	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).ResetOperationV2ForResume":              "stage",
 	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).DeleteOperationV2":                      "stage",
-	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).SweepHollowOperationsV2":                "sweep",
 	"internal/books/store/pebble_store_ops_v2.go:stageOpV2RowWrite":                                     "stage", // the opv2 mirror row of a native opv3 write (05-PR4)
 	"internal/books/store/pebble_store_ops_v2.go:stageOpV2RowDelete":                                    "stage", // DeleteRunV3's mirror row delete (05-PR4)
-	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).listOpV2IDsPage":                        "read",  // migration 065's key-only pager (05-PR4)
-	"internal/books/store/pebble_store_ops_v3_migrate.go:(*PebbleStore).getOpV2Raw":                     "read",  // migration 065 / the opv3 reconcile hash the stored row bytes (05-PR4)
+	"internal/books/store/pebble_store_ops_v3_migrate.go:(*PebbleStore).getOpV2Raw":                     "read",  // the opv3 reconcile hashes the stored row bytes (05-PR4)
 	"internal/books/store/pebble_store_ops_v3_reconcile.go:(*PebbleStore).findStaleRunsV3":              "read",  // the opv3 boot reconcile's detection walk (05-PR4)
 	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).opv2RowExists":                          "read",  // the opv3 reconcile's orphan check
 	"internal/books/store/pebble_store_ops_v2.go:(*PebbleStore).InsertOperationV2":                      "read",

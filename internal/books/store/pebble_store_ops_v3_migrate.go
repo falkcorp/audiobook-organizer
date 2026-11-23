@@ -3,10 +3,12 @@
 // guid: e3dede70-3460-4dd5-8185-a94a66839551
 // last-edited: 2026-11-09
 
-// Migration 065's engine: build opv3: run records from opv2: operation rows
-// (state-and-persistence.md sections 3 and 4), and the boot reconcile that
-// re-runs it for the rows a previous binary changed (ReconcileOpsV3WithV2).
-// Every opv2: key is left in place; no op id changes.
+// The opv2 -> opv3 projection engine: build opv3: run records from opv2:
+// operation rows (state-and-persistence.md sections 3 and 4). The boot
+// reconcile (ReconcileOpsV3WithV2) runs it for the rows a previous binary
+// changed; migration 065 once ran it over every row, and R3 deleted that
+// driver behind the upgrade floor. Every opv2: key is left in place; no op id
+// changes.
 
 package store
 
@@ -26,10 +28,10 @@ import (
 )
 
 const (
-	// opsV3MigrationBatch is migration 065's rows per Pebble batch.
+	// opsV3MigrationBatch is the rows per Pebble batch of the opv2 -> opv3
+	// projection (the boot reconcile's repair batch; migration 065's too,
+	// before R3 deleted it).
 	opsV3MigrationBatch = 500
-	// opsV3MigrationLogEvery is how often (in rows) the migration logs progress.
-	opsV3MigrationLogEvery = 10000
 	// opsV3SuccessorWindow is how close a newer run's queued_at must be to a
 	// requeued row's completed_at to be taken as its successor.
 	opsV3SuccessorWindow = time.Second
@@ -126,88 +128,6 @@ func migratedRunRecord(cur *RunRecord, row *OperationV2Row, hash string) (*RunRe
 		ErrMessage:  rec.Error,
 	}
 	return &rec, why, ok
-}
-
-// MigrateOpsV2ToV3 builds an opv3:run: record, its indexes and one synthetic
-// migrate event for every opv2:op: row, batchSize rows per Pebble batch, and
-// leaves every opv2: key in place.
-//
-// Idempotent: a run whose record is current with the row (its V2RowHash
-// names the row's bytes: migrated from it, or written by the live v2 façade
-// or the mirror since) is skipped, and any other is (re-)derived from the
-// row. opv2:state: is copied into opv3:ckpt: as legacy_state; opv2:log: is
-// not copied (ListLogV3 reads through).
-//
-// CONCURRENCY: deliberately one streaming writer in key order, not a worker
-// pool (repo CLAUDE.md "Concurrency" rule, ordering case). Each batch is a
-// read-then-write of run records and the shared opv3:meta:counts key under
-// opsMu, the same lock every live ops writer takes, so a second writer would
-// only queue on that lock; and the migration runs once, at boot, before the
-// registry starts. The bounded cost is the 500-row batch: opsMu is held for
-// one batch at a time and released between them, so a live writer is never
-// stalled for the whole pass. Each page is read with a fresh key-only
-// iterator that is closed before the batch commits.
-func (p *PebbleStore) MigrateOpsV2ToV3(batchSize int, progress func(done, total int)) (rep OpsV3MigrationReport, err error) {
-	defer recoverPebbleClosed("MigrateOpsV2ToV3", &err)
-	if batchSize <= 0 {
-		batchSize = opsV3MigrationBatch
-	}
-	rep.PerStatus = map[string]int{}
-	rep.Unmapped = map[string]int{}
-
-	// Key-only count for progress, page by page like the main pass.
-	total := 0
-	for after := ""; ; {
-		ids, err := p.listOpV2IDsPage(after, opsV3MigrationLogEvery)
-		if err != nil {
-			return rep, err
-		}
-		if len(ids) == 0 {
-			break
-		}
-		total += len(ids)
-		after = ids[len(ids)-1]
-	}
-	opsV3Log.Info("opv3 migration: building run records from %d opv2 operation rows (%d per batch)", total, batchSize)
-
-	var requeued []string
-	done := 0
-	nextLog := opsV3MigrationLogEvery
-	for after := ""; ; {
-		ids, err := p.listOpV2IDsPage(after, batchSize)
-		if err != nil {
-			return rep, err
-		}
-		if len(ids) == 0 {
-			break
-		}
-		after = ids[len(ids)-1]
-		more, err := p.migrateOpsV3Batch(ids, &rep)
-		if err != nil {
-			return rep, err
-		}
-		requeued = append(requeued, more...)
-		rep.Pages++
-		done += len(ids)
-		if progress != nil {
-			progress(done, total)
-		}
-		if done >= nextLog {
-			opsV3Log.Info("opv3 migration: %d/%d rows (%d written, %d skipped)", done, total, rep.Written, rep.Skipped)
-			nextLog += opsV3MigrationLogEvery
-		}
-	}
-
-	if err := p.fillMigratedSuccessors(requeued, batchSize, &rep); err != nil {
-		return rep, err
-	}
-	if err := p.rebuildOpCountsV3(); err != nil {
-		return rep, err
-	}
-	opsV3Log.Info("opv3 migration: done: scanned %d, written %d, skipped %d (current), undecodable %d, pages %d; successors filled %d, not found %d",
-		rep.Scanned, rep.Written, rep.Skipped, rep.Undecodable, rep.Pages, rep.SuccessorsFilled, rep.SuccessorsMissing)
-	opsV3Log.Info("opv3 migration: v2 status counts %v; anything else (recorded as failed) %v", rep.PerStatus, rep.Unmapped)
-	return rep, nil
 }
 
 // migrateOpsV3Batch (re-)derives the records of one page of ids from their
@@ -452,42 +372,4 @@ func (p *PebbleStore) findSuccessorV3(rec *RunRecord) (string, error) {
 		return true
 	})
 	return best, err
-}
-
-// rebuildOpCountsV3 recomputes opv3:meta:counts from the ix:state and ix:def
-// indexes under opsMu. It is exact and idempotent: run twice over the same
-// indexes it writes the same bytes.
-func (p *PebbleStore) rebuildOpCountsV3() error {
-	p.opsMu.Lock()
-	defer p.opsMu.Unlock()
-	c := OpCounts{ByState: map[state.V3]int64{}, ByDef: map[string]int64{}}
-	stPrefix := []byte(opv3IxStatePrefix)
-	if err := p.scanKeys(stPrefix, prefixEnd(stPrefix), func(k []byte) bool {
-		rest := strings.TrimPrefix(string(k), opv3IxStatePrefix)
-		if i := strings.IndexByte(rest, ':'); i > 0 {
-			c.ByState[state.V3(rest[:i])]++
-			c.Total++
-		}
-		return true
-	}); err != nil {
-		return err
-	}
-	defPrefix := []byte(opv3IxDefPrefix)
-	if err := p.scanKeys(defPrefix, prefixEnd(defPrefix), func(k []byte) bool {
-		if def, _, _, ok := parseIxDefKey(k); ok {
-			c.ByDef[def]++
-		}
-		return true
-	}); err != nil {
-		return err
-	}
-	b := p.db.NewBatch()
-	defer b.Close()
-	if err := p.stageOpCounts(b, c); err != nil {
-		return err
-	}
-	if err := p.runOpsV2BeforeCommitHook(); err != nil {
-		return err
-	}
-	return b.Commit(pebble.Sync)
 }

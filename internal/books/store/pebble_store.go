@@ -589,59 +589,6 @@ func newUnlinkedULID() (string, error) {
 	return id.String(), nil
 }
 
-// migrateImportPathKeys renames legacy library* keys and counters to import_path* equivalents.
-// Safe to run multiple times and before counter initialization.
-func (p *PebbleStore) migrateImportPathKeys() error {
-	iter, err := p.db.NewIter(&pebble.IterOptions{
-		LowerBound: []byte("library:"),
-		UpperBound: []byte("library;"),
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create iterator for legacy keys: %w", err)
-	}
-	defer iter.Close()
-
-	for iter.First(); iter.Valid(); iter.Next() {
-		oldKey := string(iter.Key())
-		newKey := strings.Replace(oldKey, "library:path:", "import_path:path:", 1)
-		if newKey == oldKey {
-			newKey = strings.Replace(oldKey, "library:", "import_path:", 1)
-		}
-		if newKey == oldKey {
-			continue
-		}
-
-		value := append([]byte(nil), iter.Value()...)
-		if err := p.db.Set([]byte(newKey), value, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to write migrated key %s: %w", newKey, err)
-		}
-		if err := p.db.Delete([]byte(oldKey), pebble.Sync); err != nil {
-			return fmt.Errorf("failed to delete legacy key %s: %w", oldKey, err)
-		}
-	}
-
-	if value, closer, err := p.db.Get([]byte("counter:library")); err == nil {
-		defer closer.Close()
-
-		if _, counterCloser, counterErr := p.db.Get([]byte("counter:import_path")); counterErr == nil {
-			counterCloser.Close()
-			_ = value // already migrated; keep existing value
-		} else if counterErr != pebble.ErrNotFound {
-			return fmt.Errorf("failed to read import path counter: %w", counterErr)
-		} else if err := p.db.Set([]byte("counter:import_path"), value, pebble.Sync); err != nil {
-			return fmt.Errorf("failed to migrate import path counter: %w", err)
-		}
-
-		if err := p.db.Delete([]byte("counter:library"), pebble.Sync); err != nil {
-			return fmt.Errorf("failed to remove legacy library counter: %w", err)
-		}
-	} else if err != nil && err != pebble.ErrNotFound {
-		return fmt.Errorf("failed to read legacy library counter: %w", err)
-	}
-
-	return nil
-}
-
 // Author operations
 
 // Author Alias operations

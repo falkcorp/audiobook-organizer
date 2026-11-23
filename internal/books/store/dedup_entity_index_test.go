@@ -7,15 +7,10 @@ package store
 
 import (
 	"encoding/json"
-	"fmt"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
-
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // legacyCandidate writes a candidate the way rows stored before 2026-06-22
@@ -57,37 +52,6 @@ func TestEntityIndex_MarkMergedIndexesALegacyCandidate(t *testing.T) {
 	got, err := s.ListCandidatesForEntityStrict("book", "bB", "merged")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-}
-
-// TestMigration064_BackfillsBothEntityIndexes: a legacy candidate no write
-// touched since, and a label stored before the label index, are both found
-// by entity after migration 64; a corrupt label is counted, not fatal.
-func TestMigration064_BackfillsBothEntityIndexes(t *testing.T) {
-	ps, err := NewPebbleStoreInMemory("db")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ps.Close() })
-	s := NewEmbeddingStore(ps.DB())
-	legacyCandidate(t, s, "bA", "bB", "dismissed")
-	require.NoError(t, s.UpsertLabeledExample(LabeledExample{CandidateID: 7, EntityAID: "bC", EntityBID: "bD", Label: "not_dup"}))
-	require.NoError(t, s.db.Delete(dedupLabelEntityKey("bC", 7), pebble.Sync))
-	require.NoError(t, s.db.Delete(dedupLabelEntityKey("bD", 7), pebble.Sync))
-	require.NoError(t, s.db.Set(dedupLabelKey(9), []byte("{corrupt"), pebble.Sync))
-	labels, err := s.ListLabeledExamplesForEntitiesStrict([]string{"bC"}, LabeledExampleFilter{})
-	require.NoError(t, err)
-	require.Empty(t, labels, "the legacy label is invisible by entity")
-
-	require.NoError(t, migration064Up(ps))
-
-	got, err := s.ListCandidatesForEntityStrict("book", "bA", "dismissed")
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	labels, err = s.ListLabeledExamplesForEntitiesStrict([]string{"bD"}, LabeledExampleFilter{Label: "not_dup"})
-	require.NoError(t, err)
-	require.Len(t, labels, 1)
-	cands, lbl, err := ps.BackfillDedupEntityIndexes()
-	require.NoError(t, err)
-	require.Equal(t, 1, cands.Indexed)
-	require.Equal(t, LabelIndexBackfill{Indexed: 1, Unreadable: 1}, lbl)
 }
 
 // TestLabelEntityIndex_ReadsOnlyTheBooksAsked: the per-book read finds a
@@ -139,63 +103,6 @@ func TestLabelEntityIndex_ReadsOnlyTheBooksAsked(t *testing.T) {
 	require.NoError(t, s.db.Set(dedupLabelEntityKey("bA", 3), nil, pebble.Sync))
 	_, err = s.ListLabeledExamplesForEntitiesStrict([]string{"bA"}, LabeledExampleFilter{})
 	require.Error(t, err, "a corrupt label indexed under the book may be a verdict on it")
-}
-
-// recordingLog captures Info and Warn lines.
-type recordingLog struct {
-	logger.Logger
-	mu          sync.Mutex
-	infos, warn []string
-}
-
-func (r *recordingLog) Info(msg string, args ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.infos = append(r.infos, fmt.Sprintf(msg, args...))
-}
-
-func (r *recordingLog) Warn(msg string, args ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.warn = append(r.warn, fmt.Sprintf(msg, args...))
-}
-
-// TestMigration064_LogsProgressAndWarnsOnUnreadable: a long backfill reports
-// progress every dedupBackfillProgressEvery batches, so boot is not silent,
-// and unreadable rows (which could not be indexed) are a Warn, not buried in
-// an Info line's counters.
-func TestMigration064_LogsProgressAndWarnsOnUnreadable(t *testing.T) {
-	ps, err := NewPebbleStoreInMemory("db")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ps.Close() })
-	s := NewEmbeddingStore(ps.DB())
-	b := s.db.NewBatch()
-	for i := 1; i <= labelBackfillBatch+1; i++ {
-		v, err := json.Marshal(LabeledExample{CandidateID: int64(i), EntityAID: "bA", EntityBID: fmt.Sprintf("b%d", i), Label: "not_dup"})
-		require.NoError(t, err)
-		require.NoError(t, b.Set(dedupLabelKey(int64(i)), v, nil))
-	}
-	require.NoError(t, b.Set(dedupLabelKey(int64(labelBackfillBatch+5)), []byte("{corrupt"), nil))
-	require.NoError(t, b.Commit(pebble.Sync))
-	_ = b.Close()
-
-	rec := &recordingLog{Logger: logger.New("test")}
-	prevLog, prevEvery := dedupBackfillLog, dedupBackfillProgressEvery
-	dedupBackfillLog, dedupBackfillProgressEvery = rec, 1
-	t.Cleanup(func() { dedupBackfillLog, dedupBackfillProgressEvery = prevLog, prevEvery })
-
-	require.NoError(t, migration064Up(ps))
-
-	var progress int
-	for _, l := range rec.infos {
-		if strings.Contains(l, "labels backfill in progress") {
-			progress++
-			require.Contains(t, l, fmt.Sprintf("%d indexed", labelBackfillBatch))
-		}
-	}
-	require.Equal(t, 1, progress, "one full batch, one progress line: %q", rec.infos)
-	require.Len(t, rec.warn, 1, "%q", rec.warn)
-	require.Contains(t, rec.warn[0], "1 labeled examples are unreadable")
 }
 
 // TestLabelEntityIndex_SkipsAStaleRowForTheOldBook: an index row left behind

@@ -24,7 +24,9 @@ import (
 
 // getCurrentVersion reads books' db_version row (HEAD's schema version); 0
 // when it is absent, an error when it does not decode.
-func getCurrentVersion(store migrationStore) (int, error) {
+func getCurrentVersion(store interface {
+	GetUserPreference(key string) (*UserPreference, error)
+}) (int, error) {
 	pref, err := store.GetUserPreference(dbVersionPreferenceKey)
 	if err != nil || pref == nil || pref.Value == nil {
 		return 0, err

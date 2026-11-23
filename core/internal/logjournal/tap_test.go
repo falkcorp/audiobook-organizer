@@ -293,7 +293,7 @@ func TestJournal_BatchAndRetention(t *testing.T) {
 	t.Run("storage_spec_has_no_migration_step_or_level", func(t *testing.T) {
 		sp := logjournal.StorageSpec()
 		if !sp.Keyspace || len(sp.Migrations) != 0 || sp.Level != 0 || len(sp.Claims) != 0 || len(sp.Serialized) != 0 ||
-			len(sp.Legacy) != 0 || sp.UpgradeFloor != nil || len(sp.Derived) != 0 {
+			sp.UpgradeFloor != nil || len(sp.Derived) != 0 {
 			t.Fatalf("StorageSpec = %+v, want a plain keyspace", sp)
 		}
 		if logjournal.Owner != "core/log" {

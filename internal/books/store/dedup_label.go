@@ -11,8 +11,6 @@ import (
 	"strconv"
 
 	"github.com/cockroachdb/pebble/v2"
-
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 )
 
 // dedupLabelPfx is the Pebble keyspace for labeled dedup examples.
@@ -448,84 +446,4 @@ func (s *EmbeddingStore) ListLabeledExamplesForEntitiesStrict(ids []string, f La
 		}
 	}
 	return out, nil
-}
-
-// LabelIndexBackfill reports BackfillLabelEntityIndex's pass.
-type LabelIndexBackfill struct {
-	Indexed, Unreadable int
-}
-
-// BackfillLabelEntityIndex writes the entity-index rows of every labeled
-// example (dedupLabelEntityPfx), for the labels stored before the index
-// existed. Idempotent. An example it cannot decode cannot be indexed and is
-// counted as Unreadable: the whole-keyspace strict read (a fixer's Plan)
-// still fails on it, so it is never silently dropped from a plan. Writes go
-// out in NoSync batches of labelBackfillBatch rows with a final Sync, so a
-// boot-time run over the whole keyspace does not fsync per row.
-func (s *EmbeddingStore) BackfillLabelEntityIndex() (LabelIndexBackfill, error) {
-	var res LabelIndexBackfill
-	if err := s.checkClosed(); err != nil {
-		return res, err
-	}
-	prefix := []byte(dedupLabelPfx)
-	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixUpperBound(prefix)})
-	if err != nil {
-		return res, fmt.Errorf("backfill label entity index scan: %w", err)
-	}
-	defer func() { _ = iter.Close() }()
-	b := s.db.NewBatch()
-	pending, batches := 0, 0
-	for iter.First(); iter.Valid(); iter.Next() {
-		var ex LabeledExample
-		if json.Unmarshal(iter.Value(), &ex) != nil {
-			res.Unreadable++
-			continue
-		}
-		if err := stageLabelEntityIndex(b, &ex, false); err != nil {
-			_ = b.Close()
-			return res, err
-		}
-		res.Indexed++
-		if pending++; pending >= labelBackfillBatch {
-			if err := b.Commit(pebble.NoSync); err != nil {
-				_ = b.Close()
-				return res, fmt.Errorf("backfill label entity index write: %w", err)
-			}
-			_ = b.Close()
-			b, pending = s.db.NewBatch(), 0
-			batches++
-			logDedupBackfillProgress("labels", batches, res.Indexed, res.Unreadable)
-		}
-	}
-	if err := iter.Error(); err != nil {
-		_ = b.Close()
-		return res, fmt.Errorf("backfill label entity index: %w", err)
-	}
-	err = b.Commit(pebble.Sync)
-	_ = b.Close()
-	if err != nil {
-		return res, fmt.Errorf("backfill label entity index write: %w", err)
-	}
-	return res, nil
-}
-
-// labelBackfillBatch is how many rows a backfill commits per batch.
-const labelBackfillBatch = 1000
-
-// dedupBackfillLog is where migration 64 (the dedup entity-index backfills)
-// reports. A var so a test can capture it.
-var dedupBackfillLog logger.Logger = logger.New("database.migration-064")
-
-// dedupBackfillProgressEvery is how many committed batches pass between two
-// progress lines: 50 batches is 50,000 rows, a few seconds of a boot that
-// would otherwise be silent for tens of seconds. A var so a test can lower it.
-var dedupBackfillProgressEvery = 50
-
-// logDedupBackfillProgress logs a backfill's running totals every
-// dedupBackfillProgressEvery committed batches.
-func logDedupBackfillProgress(what string, batches, indexed, unreadable int) {
-	if dedupBackfillProgressEvery <= 0 || batches%dedupBackfillProgressEvery != 0 {
-		return
-	}
-	dedupBackfillLog.Info("migration 64: %s backfill in progress: %d indexed, %d unreadable so far", what, indexed, unreadable)
 }

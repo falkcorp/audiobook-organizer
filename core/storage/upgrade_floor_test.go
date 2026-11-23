@@ -8,6 +8,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -56,12 +57,14 @@ func parentNames(t *testing.T, fs vfs.FS, path string) []string {
 	return names
 }
 
-// floorBuild is a build of one keyspace owner, "wayne", with steps 1..n. Each
-// step counts its runs in *runs and writes a key of its own, so a boot that
-// migrates a refused store is visible twice over.
-func floorBuild(n int, floor *UpgradeFloor, runs *atomic.Int32) []OwnerSpec {
+// floorBuild is a build of one keyspace owner, "wayne", registering steps
+// from..to: a build with a floor registers none at or below the floor's
+// Version, so its first step is the floor's Version+1. Each step counts its
+// runs in *runs and writes a key of its own, so a boot that migrates a refused
+// store is visible twice over.
+func floorBuild(from, to int, floor *UpgradeFloor, runs *atomic.Int32) []OwnerSpec {
 	var steps []Migration
-	for v := 1; v <= n; v++ {
+	for v := from; v <= to; v++ {
 		key := "cave/" + string(rune('a'+v-1))
 		steps = append(steps, Migration{Version: v, Name: key, Compat: Additive, Up: func(ctx context.Context, tx *MigrationTx) error {
 			runs.Add(1)
@@ -107,7 +110,7 @@ func TestUpgradeFloorRefusesBeforeAnyWrite(t *testing.T) {
 			var oldRuns, newRuns atomic.Int32
 			// The older build: step 1 applied (recorded by its fresh install),
 			// a non-empty store.
-			e := newEnv(t, floorBuild(1, nil, &oldRuns)...)
+			e := newEnv(t, floorBuild(1, 1, nil, &oldRuns)...)
 			if err := e.open().Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -117,8 +120,8 @@ func TestUpgradeFloorRefusesBeforeAnyWrite(t *testing.T) {
 				t.Fatal("the fixture store is empty, so the floor would be exempt")
 			}
 
-			// The newer build declares the floor and has steps 2 and 3 pending.
-			e.opts.Owners = floorBuild(3, c.floor, &newRuns)
+			// The newer build declares the floor and has two steps above it pending.
+			e.opts.Owners = floorBuild(c.floor.Version+1, c.floor.Version+2, c.floor, &newRuns)
 			db, err := e.tryOpen()
 			if err == nil {
 				_ = db.Close()
@@ -162,11 +165,11 @@ func TestUpgradeFloorRefusesBeforeAnyWrite(t *testing.T) {
 
 	t.Run("control: a floor the store satisfies boots and migrates", func(t *testing.T) {
 		var oldRuns, newRuns atomic.Int32
-		e := newEnv(t, floorBuild(1, nil, &oldRuns)...)
+		e := newEnv(t, floorBuild(1, 1, nil, &oldRuns)...)
 		if err := e.open().Close(); err != nil {
 			t.Fatal(err)
 		}
-		e.opts.Owners = floorBuild(3, &UpgradeFloor{Owner: "wayne", Version: 1, InstallFirst: tag}, &newRuns)
+		e.opts.Owners = floorBuild(2, 3, &UpgradeFloor{Owner: "wayne", Version: 1, InstallFirst: tag}, &newRuns)
 		db := e.open()
 		if got := db.AppliedVersion("wayne"); got != 3 || newRuns.Load() != 2 {
 			t.Errorf("wayne at %d after %d steps, want 3 after 2", got, newRuns.Load())
@@ -176,13 +179,107 @@ func TestUpgradeFloorRefusesBeforeAnyWrite(t *testing.T) {
 	t.Run("control: an empty store is exempt and boots twice", func(t *testing.T) {
 		var runs atomic.Int32
 		floor := &UpgradeFloor{Owner: "wayne", Version: 3, Requires: []StepRef{wayneM2}, InstallFirst: tag}
-		e := newEnv(t, floorBuild(3, floor, &runs)...)
+		e := newEnv(t, floorBuild(4, 5, floor, &runs)...)
 		if err := e.open().Close(); err != nil {
 			t.Fatalf("fresh install under a floor: %v", err)
 		}
 		db := e.open() // now a non-empty store: the floor is checked and passes
-		if got := db.AppliedVersion("wayne"); got != 3 {
-			t.Errorf("wayne at %d on the second boot, want 3", got)
+		if got := db.AppliedVersion("wayne"); got != 5 {
+			t.Errorf("wayne at %d on the second boot, want 5", got)
 		}
 	})
+}
+
+// TestFloorOwnersStepsStartAfterTheFloor (R3-02e; 05-storage §5S.3.5): an
+// owner that declares an UpgradeFloor registers its steps from the floor's
+// Version+1, and no earlier; without a floor they start at 1. A step numbered
+// at the floor (its code deleted, the version already applied by every store
+// that passes it) and a gap above it are registration errors, and a floor
+// owner that registers no step is valid and boots twice.
+func TestFloorOwnersStepsStartAfterTheFloor(t *testing.T) {
+	var runs atomic.Int32
+	floor := func(v int) *UpgradeFloor { return &UpgradeFloor{Owner: "wayne", Version: v, InstallFirst: "r2"} }
+	for name, c := range map[string]struct {
+		from, to int
+		floor    *UpgradeFloor
+		want     string // a substring of the registration error; "" = accepted
+	}{
+		"first step above the floor":  {4, 5, floor(3), ""},
+		"first step at the floor":     {3, 5, floor(3), "versions are contiguous; want 4"},
+		"first step below the floor":  {1, 5, floor(3), "versions are contiguous; want 4"},
+		"a gap above the floor":       {5, 6, floor(3), "versions are contiguous; want 4"},
+		"without a floor: from 1":     {1, 2, nil, ""},
+		"without a floor: not from 1": {2, 3, nil, "versions are contiguous; want 1"},
+		"a floor and no step":         {0, -1, floor(3), ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, floorBuild(c.from, c.to, c.floor, &runs)...)
+			db, err := e.tryOpen()
+			if c.want == "" {
+				if err != nil {
+					t.Fatalf("a valid declaration refused: %v", err)
+				}
+				_ = db.Close()
+				return
+			}
+			if err == nil {
+				_ = db.Close()
+				t.Fatal("an invalid step numbering was accepted")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, c.want)
+			}
+		})
+	}
+}
+
+// TestFreshInstallRecordsEveryVersionUpToTheFloor: on an empty store a floor
+// owner's one batch records versions 1..Version as applied (their steps are
+// not registered) and the registered steps above them, on the owner's native
+// bookkeeping as well as through a VersionSource; the second boot is a
+// non-empty store that passes the floor and runs nothing.
+func TestFreshInstallRecordsEveryVersionUpToTheFloor(t *testing.T) {
+	var runs atomic.Int32
+	floor := &UpgradeFloor{Owner: "wayne", Version: 3, InstallFirst: "r2"}
+	e := newEnv(t, floorBuild(4, 5, floor, &runs)...)
+	db := e.open()
+	if got := db.AppliedVersion("wayne"); got != 5 {
+		t.Fatalf("wayne at %d after a fresh install, want 5", got)
+	}
+	applied := db.boot.applied["wayne"]
+	for v := 1; v <= 5; v++ {
+		if _, ok := applied[v]; !ok {
+			t.Errorf("no applied record for version %d after a fresh install (have %v)", v, slices.Sorted(maps.Keys(applied)))
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if n := runs.Load(); n != 0 {
+		t.Errorf("a fresh install ran %d steps; it records them applied", n)
+	}
+	db = e.open()
+	if got := db.AppliedVersion("wayne"); got != 5 || runs.Load() != 0 {
+		t.Errorf("second boot: wayne at %d, %d steps run; want 5, 0", got, runs.Load())
+	}
+}
+
+// TestFloorOwnerWithoutStepsBootsTwice: an owner whose build registers no step
+// above its floor (the version is the floor's alone) records the floor on a
+// fresh install and passes it on the next boot.
+func TestFloorOwnerWithoutStepsBootsTwice(t *testing.T) {
+	var runs atomic.Int32
+	floor := &UpgradeFloor{Owner: "wayne", Version: 2, InstallFirst: "r2"}
+	e := newEnv(t, floorBuild(0, -1, floor, &runs)...)
+	e.opts.Owners[0].Spec.Migrations = nil
+	db := e.open()
+	if got := db.AppliedVersion("wayne"); got != 2 {
+		t.Fatalf("wayne at %d after a fresh install, want 2", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.open().AppliedVersion("wayne"); got != 2 {
+		t.Errorf("wayne at %d on the second boot, want 2", got)
+	}
 }

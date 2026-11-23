@@ -14,7 +14,6 @@ import (
 	"sort"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/cockroachdb/pebble/v2"
 	"github.com/stretchr/testify/require"
@@ -189,11 +188,10 @@ func TestLoadPlan_UndecodableSummaryNeedsARerun(t *testing.T) {
 	require.True(t, PlanNeedsRerun(err))
 }
 
-// TestLegacyPlanMigrationMatchesThePlanOp pins the def id migration 66 looks
-// for to the one the engine stores plans under, and that a plan result with
-// its inline rows stripped (what the migration leaves) is read as a legacy plan.
-func TestLegacyPlanMigrationMatchesThePlanOp(t *testing.T) {
-	require.Equal(t, PlanOpID, database.LegacyPlanOpDefID)
+// TestLoadPlanReadsAStrippedPlanAsLegacy: a plan result with its inline rows
+// stripped (what migration 66 left on every store at the upgrade floor) is
+// read as a legacy plan.
+func TestLoadPlanReadsAStrippedPlanAsLegacy(t *testing.T) {
 	s := newMemStore()
 	stripped := `{"fixer_id":"fx","total":1,"applicable":1,"skipped_by_kind":{}}`
 	s.ops["old"] = &database.OperationV2Row{ID: "old", DefID: PlanOpID, Status: "completed", ResultData: &stripped}
@@ -302,38 +300,6 @@ func TestPlanNeedsRerun(t *testing.T) {
 	for _, err := range []error{nil, ErrPlanNotComplete, ErrPlanNotFound, ErrPlanOtherFixer, ErrNoPlanRowStore, errors.New("boom")} {
 		require.False(t, PlanNeedsRerun(err), fmt.Sprint(err))
 	}
-}
-
-// TestStripLegacyPlanRowsLeavesCurrentPlans runs migration 66's strip over a
-// plan SavePlan really wrote, in a real Pebble store: the marker SavePlan puts
-// on the plan (PlanRowStoreV2) is not a legacy plan, so the strip writes
-// nothing and LoadPlan still reads the plan. database's own test cannot import
-// this package, so this is where the marker the strip must respect is real.
-func TestStripLegacyPlanRowsLeavesCurrentPlans(t *testing.T) {
-	st, err := database.NewPebbleStore(t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = st.Close() })
-	s := newMemStore()
-	res := planFor(t, s, &noBookIDsFixer{s: s, rows: variedRows(6)})
-	require.NoError(t, SavePlan(st, "op-plan", res))
-	require.Equal(t, PlanRowStoreV2, res.RowStore)
-	data, err := json.Marshal(res)
-	require.NoError(t, err)
-	// The plan's summary as the plan op stores it: inline rows are not part of
-	// the wire shape, and the row-store marker is.
-	require.NotContains(t, string(data), `"rows"`)
-	now := time.Now().UTC()
-	str := string(data)
-	require.NoError(t, st.InsertOperationV2(database.OperationV2Row{ID: "op-plan", DefID: PlanOpID, Status: "completed",
-		QueuedAt: now, CompletedAt: &now, ResultData: &str}))
-
-	rep, err := st.StripLegacyPlanRows()
-	require.NoError(t, err)
-	require.Equal(t, 1, rep.Plans)
-	require.Zero(t, rep.Stripped, "a plan in the current format has nothing to strip")
-	plan, err := LoadPlan(st, st, "op-plan", res.FixerID)
-	require.NoError(t, err, "the strip must not turn a current plan into a legacy one")
-	require.Equal(t, res.Total, plan.Total)
 }
 
 // TestSavePlan_FailureClearsRowsAndLeavesPlanUnmarked: a write that fails

@@ -50,10 +50,14 @@ func stagedWrites(t testing.TB, b *GatedBatch) []batchOp {
 // engine already holds kv, the way a store HEAD wrote can hold keys outside
 // every books claim (an unregistered family, a neighbour of a claimed
 // prefix): books can neither read nor write them under strict claims, and a
-// scan must not surface them.
+// scan must not surface them. The keys are written after one core boot, so
+// the store is past the upgrade floor.
 func openWithUnclaimedKeys(t *testing.T, kv map[string]string) *PebbleStore {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "unclaimed.pebble")
+	// A store holding data and no books version is below the upgrade floor
+	// and is refused, so the keys go into a store that already booted.
+	openAndClose(t, path)
 	for k, v := range kv {
 		rawSet(t, path, nil, k, v)
 	}

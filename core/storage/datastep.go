@@ -33,9 +33,7 @@ import (
 // Barrier must name one of the owner's registered versions (a SpecError at
 // Open otherwise), and a pending step whose Barrier version the store has
 // already applied fails the boot with ErrBarrierApplied: the version it was
-// to hold back ran before it. A
-// core owner's step also runs after the highest books legacy step, as a core
-// versioned step does. Ties fall to the owner order of §5S.3.5, then the
+// to hold back ran before it. Ties fall to the owner order of §5S.3.5, then the
 // owner's versioned steps before its data steps, data steps in the order
 // declared.
 type DataStep struct {

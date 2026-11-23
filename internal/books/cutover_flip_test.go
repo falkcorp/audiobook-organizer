@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
@@ -29,15 +28,6 @@ func flipOn() *booksModule {
 	return &booksModule{stateDir: "/srv/gotham/state", dbPath: "/srv/gotham/main.pebble"}
 }
 
-// flipOnAt is flipOn over a state directory and a database path that exist: the
-// crash matrix's fixtures, whose key file M2 reads and whose paths the level step
-// and the legacy key search name (flipOn's /srv/gotham paths exist nowhere).
-func flipOnAt(stateDir, dbPath string) *booksModule {
-	m := flipOn()
-	m.stateDir, m.dbPath = stateDir, dbPath
-	return m
-}
-
 // versionOf finds a versioned step by name.
 func versionOf(ms []storage.Migration, name string) (storage.Migration, bool) {
 	i := slices.IndexFunc(ms, func(m storage.Migration) bool { return m.Name == name })
@@ -47,54 +37,53 @@ func versionOf(ms []storage.Migration, name string) (storage.Migration, bool) {
 	return ms[i], true
 }
 
-// TestManifest_FlipNeedsADatabase: a books module no database was named for
+// TestManifest_LevelNeedsADatabase: a books module no database was named for
 // (Module() as the help listing builds it, or an offline open that never ran
-// Options) declares none of F3's cutover: no level step, no raised Level, no
-// Cutover, no Rewrite. A level must never rise without M2 behind it. (The
-// switch-off cells went with the switch: with a database named the flip is
-// always declared, TestManifest_FlipDeclaresM2M7M8.)
-func TestManifest_FlipNeedsADatabase(t *testing.T) {
+// Options) declares no level: no level step, no raised Level, no Cutover. A
+// level is declared only for a build that serves a store.
+func TestManifest_LevelNeedsADatabase(t *testing.T) {
 	withConfig(t, config.Config{})
 	identityOnly := Module().Manifest()
 	stateOnly := (&booksModule{stateDir: "/srv/gotham/state"}).Manifest()
 	for name, man := range map[string]module.Manifest{"identity only": identityOnly, "a state directory without a database": stateOnly} {
-		if man.Cutover != nil || man.Rewrite != nil || man.Storage.Level != 0 {
-			t.Errorf("%s: Cutover=%v Rewrite=%v Level=%d, want none declared", name, man.Cutover != nil, man.Rewrite, man.Storage.Level)
+		if man.Cutover != nil || man.Storage.Level != 0 {
+			t.Errorf("%s: Cutover=%v Level=%d, want none declared", name, man.Cutover != nil, man.Storage.Level)
 		}
-		if _, ok := versionOf(man.Storage.Migrations, cutover.BooksCutoverLevelStepID); ok {
-			t.Errorf("%s: declares %s", name, cutover.BooksCutoverLevelStepID)
+		if _, ok := versionOf(man.Storage.Migrations, booksLevelStepID); ok {
+			t.Errorf("%s: declares %s", name, booksLevelStepID)
 		}
 	}
 }
 
-// TestManifest_FlipDeclaresM2M7M8 (F3-07 d): over a database, the manifest carries
-// books.level-1 at the pinned version raising books to level 1 with Spec.Level
-// to match, exactly M2 behind it, and M8 after M2.
-func TestManifest_FlipDeclaresM2M7M8(t *testing.T) {
+// TestManifest_DeclaresTheLevelStep: over a database, the manifest carries
+// books.level-1 last, at the pinned version, raising books to level 1 with
+// Spec.Level to match; an empty Manifest.Cutover (the kernel registers core's
+// level owner for it and books has no data step of its own); no Rewrite; and
+// exactly the four drained secret rows' claims retired.
+func TestManifest_DeclaresTheLevelStep(t *testing.T) {
 	man := flipOn().Manifest()
-	lvl, ok := versionOf(man.Storage.Migrations, cutover.BooksCutoverLevelStepID)
+	lvl, ok := versionOf(man.Storage.Migrations, booksLevelStepID)
 	if !ok {
-		t.Fatalf("no %s in books' migrations", cutover.BooksCutoverLevelStepID)
+		t.Fatalf("no %s in books' migrations", booksLevelStepID)
 	}
-	if lvl.Version != booksLevelStepVersion || lvl.RaisesLevel != cutover.BooksCutoverLevel || lvl.Compat != storage.Breaking ||
-		man.Storage.Level != cutover.BooksCutoverLevel {
+	if lvl.Version != booksLevelStepVersion || lvl.RaisesLevel != booksLevel || lvl.Compat != storage.Breaking ||
+		man.Storage.Level != booksLevel {
 		t.Errorf("level step = %+v, Spec.Level %d; want version %d raising to %d Breaking, Level %d",
-			lvl, man.Storage.Level, booksLevelStepVersion, cutover.BooksCutoverLevel, cutover.BooksCutoverLevel)
+			lvl, man.Storage.Level, booksLevelStepVersion, booksLevel, booksLevel)
+	}
+	if lvl.Name != storage.LevelStepName(database.BooksOwner, booksLevel) {
+		t.Errorf("level step name %q is not storage.LevelStepName(books, %d)", lvl.Name, booksLevel)
 	}
 	if man.Cutover == nil {
-		t.Fatal("no Manifest.Cutover")
+		t.Fatal("no Manifest.Cutover: core's level owner would not be registered")
 	}
-	data := man.Cutover(module.Importers{})
-	if len(data) != 1 || data[0].ID != cutover.ConfigCutoverID || data[0].Owner != cutover.BooksOwner ||
-		!slices.Contains(data[0].After, cutover.BooksLevelStepRef(booksLevelStepVersion)) {
-		t.Errorf("Manifest.Cutover = %+v, want exactly M2 behind %s", data, cutover.BooksCutoverLevelStepID)
+	if data := man.Cutover(module.Importers{}); len(data) != 0 {
+		t.Errorf("Manifest.Cutover = %+v, want no data step", data)
 	}
-	if man.Rewrite == nil || man.Rewrite.ID != cutover.RewriteID || man.Rewrite.Owner != cutover.BooksOwner ||
-		!slices.Contains(man.Rewrite.After, storage.StepRef{Owner: cutover.BooksOwner, DataMigration: cutover.ConfigCutoverID}) {
-		t.Errorf("Manifest.Rewrite = %+v, want %s after %s", man.Rewrite, cutover.RewriteID, cutover.ConfigCutoverID)
+	if man.Rewrite != nil {
+		t.Errorf("Manifest.Rewrite = %+v, want none", man.Rewrite)
 	}
-	// M2 drains the four legacy secret rows, so exactly those claims retire; the
-	// blob stays read-write (M6 deletes it) and no other claim changes.
+	// The blob stays read-write and no other claim changes.
 	retired := map[string]bool{}
 	for i, c := range man.Storage.Claims {
 		if c.Mode == storage.ClaimRetired {
@@ -110,8 +99,8 @@ func TestManifest_FlipDeclaresM2M7M8(t *testing.T) {
 		t.Errorf("retired claims = %v, want exactly the four legacy secret rows %v", retired, wantRetired)
 	}
 	// The R1 steps are untouched and the level step comes after them.
-	if n := len(man.Storage.Migrations); man.Storage.Migrations[n-1].Name != cutover.BooksCutoverLevelStepID || n != len(database.BooksSpec(nil).Migrations)+1 {
-		t.Errorf("migrations = %d, last %q; want the R1 steps then %s", n, man.Storage.Migrations[n-1].Name, cutover.BooksCutoverLevelStepID)
+	if n := len(man.Storage.Migrations); man.Storage.Migrations[n-1].Name != booksLevelStepID || n != len(database.BooksSpec(nil).Migrations)+1 {
+		t.Errorf("migrations = %d, last %q; want the R1 steps then %s", n, man.Storage.Migrations[n-1].Name, booksLevelStepID)
 	}
 }
 
@@ -124,11 +113,11 @@ func nextBooksVersion() int {
 	return ms[len(ms)-1].Version + 1
 }
 
-// TestManifest_FlipPinsBooksNextVersion: the level step's pinned version is
+// TestManifest_LevelStepIsBooksNextVersion: the level step's pinned version is
 // books' next contiguous one. A versioned step added ahead of the level step
 // moves nextBooksVersion and fails here before it renumbers a step
 // that may already have run.
-func TestManifest_FlipPinsBooksNextVersion(t *testing.T) {
+func TestManifest_LevelStepIsBooksNextVersion(t *testing.T) {
 	if got := nextBooksVersion(); got != booksLevelStepVersion {
 		t.Fatalf("books' next contiguous version is %d but books.level-1 is pinned at %d", got, booksLevelStepVersion)
 	}
@@ -148,56 +137,6 @@ func TestBooksFlipBootsGateOn(t *testing.T) {
 	coretest.AssertModuleInert(t, h, ID)
 	h = h.Reboot(t, coretest.WithModules(mod), coretest.WithDisabled(ID))
 	coretest.AssertModuleInert(t, h, ID)
-}
-
-// TestFlipOptions_WireTheKernelsSeams: M2's inputs come from Options' paths and
-// the Importers the kernel binds at P4b: the legacy reader is books' own range
-// (never another owner's) and the key-regen switch is the bound value; with no
-// seam bound (an unbound Importers) the reader is nil, which M2 refuses as "not
-// open yet", and the switch is off.
-func TestFlipOptions_WireTheKernelsSeams(t *testing.T) {
-	m := flipOn()
-	var asked []storage.Owner
-	imp := module.Importers{
-		Legacy: func(o storage.Owner) storage.Reader {
-			asked = append(asked, o)
-			return nil
-		},
-		AllowKeyRegen: func() bool { return true },
-		OperatorSet: func(p coreconfig.Path) (string, bool) {
-			return "env", p == "core.auth.oidc.providers"
-		},
-	}
-	opts := m.flipOptions(imp)
-	if opts.LevelStepVersion != booksLevelStepVersion {
-		t.Errorf("LevelStepVersion = %d, want %d", opts.LevelStepVersion, booksLevelStepVersion)
-	}
-	c := opts.Config
-	if c.StateDir != m.stateDir || c.DatabasePath != m.dbPath || c.ConfigFile != "/srv/gotham/config.yaml" {
-		t.Errorf("paths = state %q db %q config %q, want Options' and config.yaml beside the database", c.StateDir, c.DatabasePath, c.ConfigFile)
-	}
-	if c.Legacy == nil || c.AllowKeyRegen == nil {
-		t.Fatal("Legacy or AllowKeyRegen is not wired")
-	}
-	_ = c.Legacy()
-	if !slices.Equal(asked, []storage.Owner{cutover.BooksOwner}) {
-		t.Errorf("Legacy asked for %v, want books' own range only", asked)
-	}
-	if !c.AllowKeyRegen() {
-		t.Error("AllowKeyRegen did not report the bound value")
-	}
-	if c.OperatorSet == nil {
-		t.Fatal("OperatorSet is not wired")
-	}
-	if _, set := c.OperatorSet("core.auth.oidc.providers"); !set {
-		t.Error("OperatorSet did not report the bound lock")
-	}
-	if _, set := c.OperatorSet("core.log.level"); set {
-		t.Error("OperatorSet reported a lock the bound func does not")
-	}
-	if un := m.flipOptions(module.Importers{}).Config; un.Legacy != nil || (un.AllowKeyRegen != nil && un.AllowKeyRegen()) || un.OperatorSet != nil {
-		t.Error("an unbound Importers produced a Legacy reader, a true AllowKeyRegen or an OperatorSet")
-	}
 }
 
 // oracleModule is a module with no storage and no settings: the smallest module
@@ -242,7 +181,7 @@ func TestFlipConfigNames_Lists(t *testing.T) {
 }
 
 // TestOfflineModule_PlansTheFlipOnlyOverADatabase: the module core's offline
-// commands plan from carries the flip's steps exactly when it was built over
+// commands plan from carries the level step exactly when it was built over
 // the database OfflineOptions names. Built the way the help listing builds it
 // (identity-only Options) or by Module() it plans none, so a dry run over it
 // would report a list serve does not run; built over OfflineOptions' paths it
@@ -266,8 +205,8 @@ func TestOfflineModule_PlansTheFlipOnlyOverADatabase(t *testing.T) {
 	}
 	for _, c := range cases {
 		man := c.mod.Manifest()
-		if got := man.Cutover != nil && man.Rewrite != nil; got != c.want {
-			t.Errorf("%s: declares cutover+rewrite = %t, want %t", c.name, got, c.want)
+		if got := man.Cutover != nil; got != c.want {
+			t.Errorf("%s: declares a cutover = %t, want %t", c.name, got, c.want)
 		}
 		if got := man.Storage.Level != 0; got != c.want {
 			t.Errorf("%s: storage level declared = %t, want %t", c.name, got, c.want)

@@ -15,20 +15,30 @@ import (
 	"strings"
 )
 
-// highestVersion is an owner's highest registered step version.
-func highestVersion(s Spec) int {
-	top := 0
-	for _, l := range s.Legacy {
-		top = max(top, l.Version)
+// stepBase is the version an owner's registered steps are numbered after:
+// its UpgradeFloor's Version, 0 without a floor. Steps 1..stepBase are not
+// registered and never run: a store that has not applied them is refused
+// before anything is read (§5S.4 step 3) and a fresh install records them
+// applied (freshInstall). The owner's first registered step is stepBase+1.
+func stepBase(s Spec) int {
+	if s.UpgradeFloor == nil {
+		return 0
 	}
+	return max(s.UpgradeFloor.Version, 0)
+}
+
+// highestVersion is an owner's highest registered step version, or the floor
+// below its steps when it registers none.
+func highestVersion(s Spec) int {
+	top := stepBase(s)
 	for _, m := range s.Migrations {
 		top = max(top, m.Version)
 	}
 	return top
 }
 
-// specProblems is §5S.3.5's registration rules for one owner: versions 1..n
-// contiguous (legacy steps first), a non-zero Compat, Breaking with
+// specProblems is §5S.3.5's registration rules for one owner: versions
+// contiguous from the floor's Version+1 (from 1 without a floor), a non-zero Compat, Breaking with
 // RaisesLevel (and Additive without), Seed only with Additive, and members
 // the owner can use.
 func specProblems(o *ownerInfo) []string {
@@ -37,16 +47,10 @@ func specProblems(o *ownerInfo) []string {
 	add := func(f string, a ...any) { probs = append(probs, fmt.Sprintf("%s: ", o.owner)+fmt.Sprintf(f, a...)) }
 	hasClaims := len(s.Claims) > 0
 	seen := map[int]bool{}
-	for i, l := range s.Legacy {
-		if l.Version != i+1 {
-			add("legacy step %d %q: legacy versions are 1..LegacyCap in order", l.Version, l.Name)
-		}
-		if l.Name == "" || l.Up == nil {
-			add("legacy step %d needs a Name and an Up", l.Version)
-		}
-		seen[l.Version] = true
+	if f := s.UpgradeFloor; f != nil && f.Version < 0 {
+		add("UpgradeFloor.Version %d is negative", f.Version)
 	}
-	next := len(s.Legacy) + 1
+	next := stepBase(s) + 1
 	for i, m := range s.Migrations {
 		if m.Version != next+i {
 			add("step %d %q: versions are contiguous; want %d", m.Version, m.Name, next+i)
@@ -85,11 +89,8 @@ func specProblems(o *ownerInfo) []string {
 	if s.MinVersionToServe < 0 || s.MinVersionToServe > highestVersion(s) {
 		add("MinVersionToServe %d is outside 0..%d", s.MinVersionToServe, highestVersion(s))
 	}
-	if len(s.Legacy) > 0 && s.VersionSource == nil {
-		add("legacy steps keep their bookkeeping through a VersionSource, and none is declared")
-	}
-	if (len(s.Legacy) > 0 || s.VersionSource != nil || s.LegacyGuard != nil) && !hasClaims {
-		add("Legacy, VersionSource and LegacyGuard need legacy claims")
+	if (s.VersionSource != nil || s.LegacyGuard != nil) && !hasClaims {
+		add("VersionSource and LegacyGuard need legacy claims")
 	}
 	if g := s.LegacyGuard; g != nil {
 		if g.StampKey == "" || g.MarkerKey == "" || g.SidecarSuffix == "" || g.Stage == nil || g.LegacyMaxFormat < 1 {
@@ -120,29 +121,25 @@ func specProblems(o *ownerInfo) []string {
 	return probs
 }
 
-// stepNode is one migration step of the DAG: a books legacy step, a
-// versioned step or a data migration (DataStep).
+// stepNode is one migration step of the DAG: a versioned step or a data
+// migration (DataStep).
 type stepNode struct {
-	ref    StepRef
-	owner  *ownerInfo
-	legacy *LegacyMigration
-	mig    *Migration
-	data   *DataStep
-	deps   []StepRef
+	ref   StepRef
+	owner *ownerInfo
+	mig   *Migration
+	data  *DataStep
+	deps  []StepRef
 }
 
 func (n *stepNode) name() string {
-	switch {
-	case n.legacy != nil:
-		return n.legacy.Name
-	case n.data != nil:
+	if n.data != nil {
 		return n.data.ID
 	}
 	return n.mig.Name
 }
 
 // order is the node's place among its owner's steps for the tie-break:
-// versioned and legacy steps by version, then data steps as declared.
+// versioned steps by version, then data steps as declared.
 func (n *stepNode) order() int {
 	if n.data != nil {
 		return math.MaxInt32 + n.data.order
@@ -151,20 +148,18 @@ func (n *stepNode) order() int {
 }
 
 // stepGraph builds every registered owner's step nodes with their edges: the
-// owner's previous version, every After, the implicit edge from every core
-// owner's steps to the highest legacy step (§5S.3.5 "Order"), and a data
-// step's edges (DataStep).
+// owner's previous version (none for its first step, whose predecessor is the
+// UpgradeFloor the boot has already enforced), every After, and a data step's
+// edges (DataStep).
+//
+// A core owner's steps once also ran after the highest books legacy step
+// (§5S.3.5 "Order"). That order is the floor's now: a non-empty store whose
+// owner is below its floor is refused at step 3, before any step is planned,
+// and a fresh install records every version up to the floor as applied, so by
+// the time a step is planned no step at or below any floor is pending.
 func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 	nodes := map[string]*stepNode{}
-	var legacyTops []StepRef
 	for _, o := range sortedInfos(owners) {
-		for i := range o.spec.Legacy {
-			l := &o.spec.Legacy[i]
-			nodes[StepRef{Owner: o.owner, Version: l.Version}.String()] = &stepNode{ref: StepRef{Owner: o.owner, Version: l.Version}, owner: o, legacy: l}
-		}
-		if n := len(o.spec.Legacy); n > 0 {
-			legacyTops = append(legacyTops, StepRef{Owner: o.owner, Version: o.spec.Legacy[n-1].Version})
-		}
 		for i := range o.spec.Migrations {
 			m := &o.spec.Migrations[i]
 			nodes[StepRef{Owner: o.owner, Version: m.Version}.String()] = &stepNode{ref: StepRef{Owner: o.owner, Version: m.Version}, owner: o, mig: m}
@@ -174,6 +169,7 @@ func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 		}
 	}
 	for _, n := range nodes {
+		base := stepBase(n.owner.spec)
 		if n.data != nil {
 			n.deps = append(n.deps, n.data.After...)
 			// After the owner's versioned steps below Barrier (all when 0):
@@ -182,11 +178,8 @@ func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 			if b := n.data.Barrier; b > 0 {
 				below = min(below, b-1)
 			}
-			if below > 0 {
+			if below > base {
 				n.deps = append(n.deps, StepRef{Owner: n.ref.Owner, Version: below})
-			}
-			if n.owner.core {
-				n.deps = append(n.deps, legacyTops...)
 			}
 			// The Barrier version, and so every later one, after this step.
 			if b := n.data.Barrier; b > 0 {
@@ -196,14 +189,11 @@ func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 			}
 			continue
 		}
-		if n.ref.Version > 1 {
+		if n.ref.Version > base+1 {
 			n.deps = append(n.deps, StepRef{Owner: n.ref.Owner, Version: n.ref.Version - 1})
 		}
 		if n.mig != nil {
 			n.deps = append(n.deps, n.mig.After...)
-		}
-		if n.owner.core {
-			n.deps = append(n.deps, legacyTops...)
 		}
 	}
 	return nodes
@@ -215,7 +205,7 @@ func stepGraph(owners map[Owner]*ownerInfo) map[string]*stepNode {
 func checkDAGShape(owners map[Owner]*ownerInfo) error {
 	var probs []string
 	for _, o := range sortedInfos(owners) {
-		if o.core && (len(o.spec.Migrations) > 0 || len(o.spec.Legacy) > 0 || len(o.data) > 0) && !slices.Contains(coreOrder(), coreSub(o.owner)) {
+		if o.core && (len(o.spec.Migrations) > 0 || len(o.data) > 0) && !slices.Contains(coreOrder(), coreSub(o.owner)) {
 			probs = append(probs, fmt.Sprintf("%s declares steps and is not in the kernel's core order (unordered owner)", o.owner))
 		}
 	}
@@ -442,10 +432,6 @@ func (db *DB) Migrate(ctx context.Context) error {
 			// plan, chunk and state records), so no region wraps it here: an
 			// outer region would win over the runner's (internal/bootseam).
 			err = n.data.Run(ctx, db)
-		case n.legacy != nil:
-			// A legacy step's Up writes through the owner's LegacyRange
-			// before its bookkeeping batch: the whole step is one row.
-			err = db.labelled(labelStepBatch, func() error { return db.runLegacy(ctx, n) })
 		default:
 			err = db.runStep(ctx, n)
 		}
@@ -458,23 +444,6 @@ func (db *DB) Migrate(ctx context.Context) error {
 		db.log.Info("storage: migration step applied", "step", n.ref.String(), "name", n.name())
 	}
 	return db.finish(ctx)
-}
-
-// runLegacy runs a books legacy step over the owner's own LegacyRange (not
-// atomic, §5S.3.5 "Atomicity"), then its bookkeeping through the owner's
-// VersionSource in its own batch.
-func (db *DB) runLegacy(ctx context.Context, n *stepNode) (err error) {
-	lr, _ := db.Legacy(n.owner.owner)
-	if err := n.legacy.Up(ctx, lr); err != nil {
-		return stepFailed(ctx, n.ref, err)
-	}
-	b := lr.NewBatch()
-	defer func() { err = errors.Join(err, b.Close()) }()
-	step := AppliedStep{Version: n.ref.Version, Name: n.legacy.Name, AppliedAt: db.clock().UTC(), Build: db.boot.opts.Build}
-	if err := n.owner.spec.VersionSource.Stage(ctx, lr, b, step); err != nil {
-		return err
-	}
-	return b.Commit(ctx, Sync)
 }
 
 // runStep runs one versioned step: Up stages into an indexed batch over the

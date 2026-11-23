@@ -218,12 +218,11 @@ func (m *booksModule) Manifest() module.Manifest {
 		// when the config boot is on (F3-07 b); a boot without it never
 		// reads them.
 		Settings: booksSettings(),
-		// F3's cutover, when the flip switch is on (cutover.go).
+		// Books' level and core's level owner, over a database (cutover.go).
 		Cutover: m.cutoverSteps(),
 		// The App's configuration surface: Deps.Config and the secrets the
 		// rename table maps (config_wire.go).
 		AppConfig: appConfigSpec(),
-		Rewrite:   m.rewriteStep(),
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}

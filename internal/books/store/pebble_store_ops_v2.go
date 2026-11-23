@@ -41,7 +41,6 @@ import (
 
 	"github.com/cockroachdb/pebble/v2"
 
-	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/state"
 )
 
@@ -592,96 +591,6 @@ func (p *PebbleStore) getExistingOpV2(id string) (OperationV2Row, error) {
 	return row, nil
 }
 
-// opsV2SweepLog is the logger of the hollow-operation sweep.
-var opsV2SweepLog = logger.New("database.opsv2-sweep")
-
-// SweepHollowOperationsV2 deletes every opv2:op: row whose stored value does
-// not decode to an operation with an id — the shells described on
-// getExistingOpV2 — together with the act/state keys that hang off the key's
-// id. It returns how many it removed and is safe to run repeatedly: a second
-// pass finds nothing. Migration 62 runs it once at boot; the writers above no
-// longer create such rows, so nothing should be found after that.
-func (p *PebbleStore) SweepHollowOperationsV2() (n int, err error) {
-	defer recoverPebbleClosed("SweepHollowOperationsV2", &err)
-	p.opsMu.Lock()
-	defer p.opsMu.Unlock()
-	prefix := []byte("opv2:op:")
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
-	if err != nil {
-		return 0, err
-	}
-	var hollow []string
-	for iter.First(); iter.Valid(); iter.Next() {
-		var row OperationV2Row
-		if err := json.Unmarshal(iter.Value(), &row); err == nil && row.ID != "" {
-			continue
-		}
-		hollow = append(hollow, strings.TrimPrefix(string(iter.Key()), string(prefix)))
-	}
-	if cerr := iter.Close(); cerr != nil {
-		return 0, cerr
-	}
-	if len(hollow) == 0 {
-		return 0, nil
-	}
-	// The row did not decode, so its CompletedAt (and therefore its done key)
-	// is unknown: find any done key naming a swept id by a key-only pass over
-	// the done index. Sweep runs once, from migration 62. The boot reconcile
-	// would also delete these keys as orphans, but only on the next boot;
-	// deleting them in the same batch keeps the index exact meanwhile.
-	hollowSet := make(map[string]struct{}, len(hollow))
-	for _, id := range hollow {
-		hollowSet[id] = struct{}{}
-	}
-	doneKeys, err := p.doneKeysForIDs(hollowSet)
-	if err != nil {
-		return 0, err
-	}
-	batch := p.db.NewBatch()
-	defer batch.Close()
-	for _, id := range hollow {
-		for _, key := range [][]byte{opv2OpKey(id), opv2ActKey(id), opv2StateKey(id), opv2OpenKey(id), opv2WaitKey(id)} {
-			if err := batch.Delete(key, nil); err != nil {
-				return 0, err
-			}
-		}
-		// A hollow row never had rows of its own, but a row set under its id
-		// (a plan whose summary write was lost) is unreachable once the row is
-		// gone, so it goes with it.
-		// An id a row set cannot be keyed by has no rows to remove (ReplaceOpRowsPrefix
-		// refuses it); skipping it keeps one such record from failing the sweep.
-		// stageOpRowsDelete checks the same thing again as defence in depth.
-		if verr := validOpRowsID(id); verr != nil {
-			opsV2SweepLog.Warn("hollow operation sweep: not deleting a row set for %q (nothing can be stored under it): %v", id, verr)
-			continue
-		}
-		if err := stageOpRowsDelete(batch, id); err != nil {
-			return 0, err
-		}
-	}
-	for _, key := range doneKeys {
-		if err := batch.Delete(key, nil); err != nil {
-			return 0, err
-		}
-	}
-	v3 := p.newOpsV3Stage(batch)
-	for _, id := range hollow {
-		if err := p.stageRunV3DeleteForV2(v3, id); err != nil {
-			return 0, err
-		}
-	}
-	if err := v3.flush(); err != nil {
-		return 0, err
-	}
-	if err := p.runOpsV2BeforeCommitHook(); err != nil {
-		return 0, err
-	}
-	if err := batch.Commit(pebble.Sync); err != nil {
-		return 0, err
-	}
-	return len(hollow), nil
-}
-
 // IncrementResumeCountV2 atomically increments resume_count for the given op.
 func (p *PebbleStore) IncrementResumeCountV2(id string) error {
 	p.opsMu.Lock()
@@ -972,31 +881,6 @@ func (p *PebbleStore) UpdateOperationV2Params(id string, params []byte) error {
 	prev := row
 	row.Params = string(params)
 	return p.commitOpV2Row(&prev, &row, nil)
-}
-
-// listOpV2IDsPage returns up to n opv2:op: row ids after the id `after` ("":
-// from the start), in key order, reading keys only. Migration 065 pages
-// through the keyspace with it, opening a fresh iterator per page so no
-// iterator is held across a batch commit.
-func (p *PebbleStore) listOpV2IDsPage(after string, n int) (ids []string, err error) {
-	defer recoverPebbleClosed("listOpV2IDsPage", &err)
-	prefix := []byte(opv2OpPrefix)
-	lower := prefix
-	if after != "" {
-		lower = append(opv2OpKey(after), 0)
-	}
-	iter, err := p.db.NewIter(&pebble.IterOptions{LowerBound: lower, UpperBound: prefixEnd(prefix)})
-	if err != nil {
-		return nil, err
-	}
-	for iter.First(); iter.Valid() && len(ids) < n; iter.Next() {
-		ids = append(ids, strings.TrimPrefix(string(iter.Key()), opv2OpPrefix))
-	}
-	iterErr := iter.Error()
-	if cerr := iter.Close(); cerr != nil && iterErr == nil {
-		iterErr = cerr
-	}
-	return ids, iterErr
 }
 
 // opv2RowExists reports whether an opv2:op: row is stored for id, without

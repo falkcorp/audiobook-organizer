@@ -41,10 +41,9 @@ func opv2RowKey(opID, rowID string) []byte   { return []byte(opv2RowPrefix + opI
 func opv2RowIxKey(opID, rowID string) []byte { return []byte(opv2RowIxPrefix + opID + ":" + rowID) }
 
 // opv2RowFamilyPrefixes are the key ranges of one operation's row set: the two
-// families above. ReplaceOpRowsPrefix clears its range of them before a write, stageOpRowsDelete
-// removes them in the hollow-operation sweep, and opv2RunScopedPrefixes appends
-// them to the other per-operation families, so a row family added here is
-// cleared, swept and deleted by all three.
+// families above. ReplaceOpRowsPrefix clears its range of them before a write
+// and opv2RunScopedPrefixes appends them to the other per-operation families,
+// so a row family added here is cleared and deleted by both.
 func opv2RowFamilyPrefixes(opID string) [][]byte {
 	return [][]byte{opv2RowRunPrefix(opID), opv2RowIxRunPrefix(opID)}
 }
@@ -60,30 +59,6 @@ func validOpRowsID(opID string) error {
 	}
 	if strings.Contains(opID, ":") {
 		return fmt.Errorf("opv2: operation id %q holds the key separator", opID)
-	}
-	return nil
-}
-
-// rangeDeleter is the one batch method stageOpRowsDelete needs.
-type rangeDeleter interface {
-	DeleteRange(start, end []byte, o *pebble.WriteOptions) error
-}
-
-// stageOpRowsDelete stages the removal of both row ranges (opv2:row: and
-// opv2:rowix:, opv2RowFamilyPrefixes) of one operation id into b. It is the
-// only range delete the hollow-operation sweep may make: the sweep's ids come
-// from the opv2:op: keys it walked, so the key-flow ratchet (opv2OpKeyAllowlist)
-// refuses a raw DeleteRange there and accepts this helper by name, which can
-// only ever build the row prefixes and so can never reach opv2:op:. An id a row
-// set cannot be keyed by (validOpRowsID) is an error and stages nothing.
-func stageOpRowsDelete(b rangeDeleter, opID string) error {
-	if err := validOpRowsID(opID); err != nil {
-		return err
-	}
-	for _, prefix := range opv2RowFamilyPrefixes(opID) {
-		if err := b.DeleteRange(prefix, prefixEnd(prefix), nil); err != nil {
-			return err
-		}
 	}
 	return nil
 }

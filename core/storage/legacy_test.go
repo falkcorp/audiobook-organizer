@@ -7,8 +7,6 @@ package storage
 
 import (
 	"context"
-	"fmt"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -112,57 +110,5 @@ func TestOrphanedClaimNeedsTakeover(t *testing.T) {
 	got, err := took.Get(ctx, []byte("joker:1"))
 	if err != nil || string(got) != "ha" {
 		t.Fatalf("joker:1 after the takeover = %q, %v; want ha", got, err)
-	}
-}
-
-// TestLegacyStepsRunBeforeCoreSteps (05-storage §5S.10, §5S.3.5 "Order",
-// R2-4, DATA2-2): on a store below an owner's last legacy step, every
-// pending legacy step runs, on the owner's own claims, before any core
-// owner's step; a module's own chain is not held behind them. ABO's
-// instance over books' steps 59..LegacyCap is
-// internal/database's TestLegacySteps59to66RunFirst.
-func TestLegacyStepsRunBeforeCoreSteps(t *testing.T) {
-	var ran []string
-	record := func(ref string) { ran = append(ran, ref) }
-	legacy := func(v int) LegacyMigration {
-		return LegacyMigration{Version: v, Name: fmt.Sprintf("l%d", v), Up: func(ctx context.Context, r LegacyRange) error {
-			record(fmt.Sprintf("gotham#%d", v))
-			return r.Set(ctx, fmt.Appendf(nil, "joker:legacy-%d", v), []byte("ha"))
-		}}
-	}
-	step := func(o Owner, v int) Migration {
-		return Migration{Version: v, Name: fmt.Sprintf("s%d", v), Compat: Additive, Up: func(context.Context, *MigrationTx) error {
-			record(StepRef{Owner: o, Version: v}.String())
-			return nil
-		}}
-	}
-	owners := []OwnerSpec{
-		{Owner: "core/tasks", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{step("core/tasks", 1)}}},
-		{Owner: "core/rbac", Enabled: true, Spec: Spec{Keyspace: true, Migrations: []Migration{step("core/rbac", 1)}}},
-		{Owner: "gotham", Enabled: true, Spec: Spec{Claims: gothamVSClaims(), VersionSource: &fakeVersionSource{},
-			Legacy: []LegacyMigration{legacy(1), legacy(2), legacy(3)}}},
-	}
-	e := newEnv(t, bare(owners)...)
-	if err := e.open().Close(); err != nil {
-		t.Fatal(err)
-	}
-	e.opts.Owners = owners
-	db := e.open()
-
-	firstCore := slices.IndexFunc(ran, func(s string) bool { return strings.HasPrefix(s, "core/") })
-	lastLegacy := -1
-	for i, s := range ran {
-		if strings.HasPrefix(s, "gotham#") {
-			lastLegacy = i
-		}
-	}
-	if lastLegacy != 2 || firstCore != 3 || len(ran) != 5 {
-		t.Fatalf("order = %v, want gotham#1..3 then the core steps", ran)
-	}
-	lr, _ := db.Legacy("gotham")
-	for v := 1; v <= 3; v++ {
-		if _, err := lr.Get(context.Background(), fmt.Appendf(nil, "joker:legacy-%d", v)); err != nil {
-			t.Fatalf("legacy step %d's write: %v", v, err)
-		}
 	}
 }

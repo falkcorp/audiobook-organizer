@@ -6,6 +6,7 @@
 package store
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -794,9 +795,9 @@ func TestLogReadThrough(t *testing.T) {
 	if err := p.AppendOpLogsV2(v2); err != nil {
 		t.Fatal(err)
 	}
-	// Pretend the run predates the façade, then migrate it.
+	// Pretend the run predates the façade, then project it from its opv2 row.
 	wipeOpv3(t, p)
-	if _, err := p.MigrateOpsV2ToV3(500, nil); err != nil {
+	if _, err := p.ReconcileOpsV3WithV2(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if r := mustRun(t, p, id); r.FromV2 == nil {
