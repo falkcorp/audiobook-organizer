@@ -551,8 +551,8 @@ func TestCancelCascade_AChildQueuedAfterTheCancelIsCanceledNotClaimed(t *testing
 }
 
 // TestCancelCascade_AChildOfADisabledModuleWaitsForItsModule: a child of a held
-// run is read-only (5T.3.11): the cascade leaves it as stored, and it ends
-// canceled, unstarted, when its module is enabled again.
+// run is read-only (5T.3.11): neither the cascade nor a boot sweep touches it,
+// and it ends canceled, unstarted, at the first boot with its module enabled.
 func TestCancelCascade_AChildOfADisabledModuleWaitsForItsModule(t *testing.T) {
 	ctx := context.Background()
 	started := make(chan tasks.RunID, 4)
@@ -592,8 +592,16 @@ func TestCancelCascade_AChildOfADisabledModuleWaitsForItsModule(t *testing.T) {
 	if err := held.x.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Boot 3: arkham enabled and unpaused: the child is canceled at dispatch, never started.
-	live := held.reboot(append([]tasks.Definition{patrol}, arkham()...), nil)
+	// Boot 3: arkham still disabled; the sweep sees a canceled parent and leaves the held child alone.
+	again := held.reboot([]tasks.Definition{patrol}, disabledArkham)
+	if r := again.get(ref.ID); r.State != tasks.StateQueued {
+		t.Fatalf("the held child is %s after a boot sweep, want queued and untouched", r.State)
+	}
+	if err := again.x.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Boot 4: arkham enabled and unpaused: the child is canceled, never started.
+	live := again.reboot(append([]tasks.Definition{patrol}, arkham()...), nil)
 	if err := live.x.Unpause(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -602,5 +610,55 @@ func TestCancelCascade_AChildOfADisabledModuleWaitsForItsModule(t *testing.T) {
 	}
 	if n := bodies.Load(); n != 0 {
 		t.Errorf("the child's body started %d time(s), want never", n)
+	}
+}
+
+// TestCancelCascade_OnlyACancelCascades: a parent the watchdog stopped, or that
+// timed out, leaves its child's lifecycle as it was: the cascade is the cancel's,
+// not every way a run ends. (The child here is not awaited, so the parent is
+// silent and the watchdog does strike it.)
+func TestCancelCascade_OnlyACancelCascades(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		edit  func(*tasks.Common)
+		cause error
+	}{
+		{"the watchdog", func(c *tasks.Common) { c.ProgressTimeout = time.Minute }, tasks.ErrCanceled},
+		{"the timeout", withTimeout(time.Minute), tasks.ErrTimedOut},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				started := make(chan tasks.RunID, 1)
+				defs := chainDefs("oc", 2, started, nil, nil)
+				defs[0] = taskDef(string(chainKind("oc", 0)), func(rc *tasks.RC, _ noParams) (string, error) {
+					if _, err := rc.Enqueue(chainKind("oc", 1), noParams{}); err != nil {
+						return "", err
+					}
+					<-rc.Context().Done()
+					return "", context.Cause(rc.Context())
+				}, func(cm *tasks.Common) {
+					cm.Effects = tasks.Writes(chainRes("oc", 0))
+					cm.Cancel = tasks.Cooperative(time.Second)
+					c.edit(cm)
+				})
+				h := newHarness(t, defs, func(o *Options) {
+					cascadeOpts(t, time.Second)(o)
+					o.Config.WatchdogInterval = 30 * time.Second
+				})
+				parent := h.start(string(chainKind("oc", 0)), tasks.StartRequest{})
+				child := <-started
+				time.Sleep(5 * time.Minute)
+				if r := h.get(parent); r.State == tasks.StateRunning {
+					t.Fatalf("parent still running after 5m: the fixture did not end it")
+				}
+				if r := h.get(child); r.State != tasks.StateRunning {
+					t.Errorf("child %s/%q after its parent ended by %s, want running: only a cancel cascades", r.State, r.Reason, c.name)
+				}
+				if err := h.x.CancelAs(context.Background(), child, tasks.Actor{UserID: "gordon"}); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(5 * time.Second)
+			})
+		})
 	}
 }
