@@ -1615,6 +1615,54 @@ func TestT6G4FSRegroupKind_LiveApplyStandsTheScanDown(t *testing.T) {
 	}
 }
 
+// TestT6G4FSRegroupKind_ALostStandDownAbortsAndSaysWhy: the run's hold fails its
+// first renewal, so the apply stops before it writes a group, and the error says
+// which failure it was: a lapsed lease (the scanner may already be running) or a
+// marker the store would not take (the lease is the run's, a crash would no longer
+// keep the scan parked). Both abort; the wording is the operator's only clue.
+func TestT6G4FSRegroupKind_ALostStandDownAbortsAndSaysWhy(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		renewErr error
+		want     string
+		notWant  string
+	}{
+		{"the lease lapsed", fmt.Errorf("%w: the lease on %s lapsed", tasks.ErrHoldLost, t6g4ScanKey),
+			"scan stand-down lease lapsed after 0 groups", "marker"},
+		{"the marker write failed", errors.New("pebble: disk full"),
+			"scan stand-down marker could not be written (pebble: disk full) after 0 groups", "lease lapsed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := regroupStore(t)
+			seedFragments(t, s, fsFragBase(t), "Knightfall", 3)
+			ops := New(fakeDeps{store: s}).deps.OpsStore()
+			deps := t6g4Deps{
+				Store:        headT6G4Store{OpsStore: ops, deps: fakeDeps{store: s}},
+				StandDownKey: t6g4ScanKey,
+				NewWriter:    func(tasks.Writer) t6g4Writer { return headT6G4Writer{store: ops} },
+			}
+			def := t6g4KindByName(t, t6g4KindsUnchecked(deps, nil), fsRegroupKind)
+			h, rc := newT6G4RC(fsRegroupKind, tasks.ModeLive, &t6g4RunWriter{})
+			h.failRenewals(c.renewErr)
+
+			_, err := runT6G4Kind(t, def, rc, "")
+
+			if err == nil {
+				t.Fatal("the apply succeeded with its stand-down lost")
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("the abort says %q, want it to contain %q", err, c.want)
+			}
+			if strings.Contains(err.Error(), c.notWant) {
+				t.Errorf("the abort says %q, which names the other failure (%q)", err, c.notWant)
+			}
+			if _, _, releases := h.standDownTally(); releases != 1 {
+				t.Errorf("the hold was released %d times, want once", releases)
+			}
+		})
+	}
+}
+
 // fsApplyPlan applies a plan on HEAD's loop runner, the way HEAD's shell does:
 // the group loop is registry.RunItems over the same reporter the apply reports
 // to. It is the one place the tests name that pairing.

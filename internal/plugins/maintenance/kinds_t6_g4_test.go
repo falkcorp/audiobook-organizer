@@ -493,15 +493,18 @@ type t6g4Host struct {
 	notes    []string // Progress.Note: the run's status line, in order
 	touches  int      // Progress.Tick: liveness stamps
 
-	// stood, renews and releases record the stand-down holds the run took (the
-	// hold is never lost).
+	// stood, renews and releases record the stand-down holds the run took. A hold
+	// is healthy until renewErr is set: every Renew after that returns it, as the
+	// executor's returns tasks.ErrHoldLost for a lapsed lease and the marker
+	// store's error for a marker that did not land.
 	stood    []tasks.Key
 	renews   int
 	releases int
+	renewErr error
 }
 
 // t6g4Hold is the stand-down hold t6g4Host hands out: it counts its Renew and
-// Release calls and is never lost.
+// Release calls, and its Renew fails with t6g4Host.renewErr once a test sets it.
 type t6g4Hold struct{ h *t6g4Host }
 
 func (k t6g4Hold) Release() {
@@ -512,9 +515,16 @@ func (k t6g4Hold) Release() {
 
 func (k t6g4Hold) Renew() error {
 	k.h.mu.Lock()
+	defer k.h.mu.Unlock()
 	k.h.renews++
-	k.h.mu.Unlock()
-	return nil
+	return k.h.renewErr
+}
+
+// failRenewals makes every later Renew of the holds this host hands out return err.
+func (h *t6g4Host) failRenewals(err error) {
+	h.mu.Lock()
+	h.renewErr = err
+	h.mu.Unlock()
 }
 
 // StandDown records the key the run parked.

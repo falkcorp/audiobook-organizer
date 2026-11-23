@@ -14,6 +14,7 @@ package maintenance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -75,7 +76,10 @@ type nativeScanStandDown struct {
 
 	mu   sync.Mutex
 	hold tasks.Hold
-	lost bool
+	// loss is why the last renewal failed (nil while the hold is healthy). The
+	// callers' Lost hook is a bool, so the reason is read back through
+	// ScanStandDownLoss to word the abort.
+	loss error
 }
 
 // AcquireScanStandDown takes the run's hold on the scan key. holderOpID is
@@ -89,12 +93,15 @@ func (n *nativeScanStandDown) AcquireScanStandDown(_ context.Context, _, reason 
 		return nil, fmt.Errorf("%s: the library scan did not stand down: %w", reason, err)
 	}
 	n.mu.Lock()
-	n.hold, n.lost = h, false
+	n.hold, n.loss = h, nil
 	n.mu.Unlock()
 	return h.Release, nil
 }
 
-// RenewScanStandDown extends the hold and reports whether it is still held.
+// RenewScanStandDown extends the hold and reports whether it is still held. A
+// renewal that fails ends the run's writes whichever way it failed (the lease
+// lapsed, or the marker that records it could not be written and a crash would
+// no longer keep the scan parked), and ScanStandDownLoss says which.
 func (n *nativeScanStandDown) RenewScanStandDown(string) bool {
 	n.mu.Lock()
 	h := n.hold
@@ -102,9 +109,9 @@ func (n *nativeScanStandDown) RenewScanStandDown(string) bool {
 	if h == nil {
 		return false
 	}
-	if h.Renew() != nil {
+	if err := h.Renew(); err != nil {
 		n.mu.Lock()
-		n.lost = true
+		n.loss = err
 		n.mu.Unlock()
 		return false
 	}
@@ -117,5 +124,31 @@ func (n *nativeScanStandDown) RenewScanStandDown(string) bool {
 func (n *nativeScanStandDown) ScanStandDownValid(string) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.hold != nil && !n.lost
+	return n.hold != nil && n.loss == nil
+}
+
+// ScanStandDownLoss is the error the last failed renewal returned, nil when no
+// renewal has failed.
+func (n *nativeScanStandDown) ScanStandDownLoss() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.loss
+}
+
+// scanStandDownLossReporter is what a ScanController that can say why its hold
+// is gone implements (nativeScanStandDown).
+type scanStandDownLossReporter interface{ ScanStandDownLoss() error }
+
+// scanStandDownLossText says what happened to a stand-down hold that
+// scanStandDownLostForApply found gone: the lease lapsed (the scanner may
+// already have resumed), or the lease is still the run's but its marker could not
+// be written. A controller that cannot say (the registry's) reports a lapse,
+// which is the only way it loses a hold.
+func scanStandDownLossText(scan ScanController) string {
+	if r, ok := scan.(scanStandDownLossReporter); ok {
+		if err := r.ScanStandDownLoss(); err != nil && !errors.Is(err, tasks.ErrHoldLost) {
+			return fmt.Sprintf("scan stand-down marker could not be written (%v)", err)
+		}
+	}
+	return "scan stand-down lease lapsed"
 }

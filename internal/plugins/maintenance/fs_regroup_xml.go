@@ -1172,7 +1172,7 @@ func t6g4ApplyFSRepairPlan(ctx context.Context, store fsRepairStore, scan ScanCo
 	case err != nil:
 		return res, fmt.Errorf("fs-regroup-xml apply: %w", err)
 	case res.StandDownLost:
-		return res, fmt.Errorf("fs-regroup-xml: scan stand-down lease lapsed after %d groups — aborted (re-run when the scan is idle)", res.Groups)
+		return res, fmt.Errorf("fs-regroup-xml: %s after %d groups — aborted (re-run when the scan is idle)", scanStandDownLossText(scan), res.Groups)
 	case res.Errors > 0:
 		return res, fmt.Errorf("%d errors during fs-regroup apply (see op log)", res.Errors)
 	}
