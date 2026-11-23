@@ -109,7 +109,7 @@ make install-rollback-helpers APPLY=1 REPLACE_CONF=1 DEPLOY_BIN=<bin> DEPLOY_DB=
   the production host's `state_dir` is the compiled default, `/var/lib/audiobook-organizer`: a pre-flip build
   refuses (fail-closed, "core's state directory ... is not ABO's ...") when that variable differs from its own state
   directory, so on any other `state_dir` a pre-flip binary refuses. The release fetch (`make rollback-restore
-  RELEASE=<tag>`) handles both generations on its own. See Known gap 5.
+  RELEASE=<tag>`) handles both generations on its own. See Known gap 4.
 
 **Check:** `ssh <server> cat /etc/audiobook-organizer/rollback.conf` shows the `export_dir =` line and the `ABO_`
 token in `offline_env`, and `make rollback-check` still lists the generations. `make export-install-secrets`
@@ -449,7 +449,7 @@ Still open:
    than typing `sudo`. The production host is on Path A and does not need it.
 3. **The measured R2 boot time.** R2-01c replaces the 4200 seconds in Step 4 with the measured number, and adds the
    Docker `start_period`.
-5. **The state-directory variable is static in `rollback.conf`.** `ABO_CORE_PATHS_STATE_DIR` alone works with a
+4. **The state-directory variable is static in `rollback.conf`.** `ABO_CORE_PATHS_STATE_DIR` alone works with a
    pre-flip binary only because the production host's `state_dir` is the compiled default,
    `/var/lib/audiobook-organizer`. On a host with a different `state_dir`, a rollback to a pre-flip binary refuses
    (fail-closed: "core's state directory ... is not ABO's ..."); it does not open the wrong directory. The release
