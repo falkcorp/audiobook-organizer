@@ -134,6 +134,11 @@ func TestRunOperationRunner_LeavesTheCleanStopMarker(t *testing.T) {
 func TestRunOperationRunner_StagedSwapRefusesTheOpen(t *testing.T) {
 	stateDir := t.TempDir()
 	dbPath := filepath.Join(t.TempDir(), "audiobooks.pebble")
+	// The seeding boot opens core.log.file under the state directory it
+	// resolves; with the variable unset that is the default (or the working
+	// directory's logs/ on a host where the default cannot be created), which
+	// a restricted user cannot write. Point it at the test's own directory.
+	t.Setenv(config.SecureStateDirEnv, stateDir)
 	seedStarted(t, dbPath)
 	stageSwap(t, stateDir, dbPath)
 
