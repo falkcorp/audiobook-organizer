@@ -62,6 +62,20 @@ type organizeServiceStore interface {
 // Compile-time proof that the production store satisfies it.
 var _ organizeServiceStore = (*database.PebbleStore)(nil)
 
+// RequireRelocatingCopyCreator is the production boot check: it fails, naming
+// organizer.RelocatingCopyCreator, the method and the store's dynamic type, when
+// store cannot create the single-book organize's copy together with its Deluge
+// follow-up. Books' module Register calls it with the store it hands NewServer,
+// so a wrapper that dropped the method would stop the boot instead of silently
+// losing every Deluge move. (Tests build servers over mocks and wrappers and do
+// not pass through it: the container wires the creator only when present.)
+func RequireRelocatingCopyCreator(store any) error {
+	if _, ok := store.(organizer.RelocatingCopyCreator); !ok {
+		return fmt.Errorf("audiobooks: the store %T does not implement organizer.RelocatingCopyCreator (CreateBookWithRelocation): the single-book organize copy could not stage its Deluge follow-up", store)
+	}
+	return nil
+}
+
 // NewOrganizeService creates a new organizer.Service and wires up
 // server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
 func NewOrganizeService(db organizeServiceStore) *OrganizeService {

@@ -81,6 +81,23 @@ func TestNewOrganizeService_WiresTheRelocatingCopyCreator(t *testing.T) {
 	require.Equal(t, []string{src.ID}, spy.originals)
 }
 
+// RequireRelocatingCopyCreator is books' boot check of the production store: the
+// real store passes; a store without CreateBookWithRelocation (a wrapper that
+// embeds database.Store, a generated mock) is refused, naming the interface.
+func TestRequireRelocatingCopyCreator(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	require.NoError(t, err)
+	ps.WaitForWarmup()
+	t.Cleanup(func() { _ = ps.Close() })
+	require.NoError(t, RequireRelocatingCopyCreator(ps))
+
+	type wrapped struct{ database.Store }
+	err = RequireRelocatingCopyCreator(wrapped{ps})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "organizer.RelocatingCopyCreator")
+	require.Contains(t, err.Error(), "wrapped")
+}
+
 // The container builds the organize service over whatever store the "store"
 // slot holds. A store with the method wires it (the copy stages its follow-up);
 // one without wires none, and the single-book copy refuses rather than creating a
