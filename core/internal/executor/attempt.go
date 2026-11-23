@@ -324,7 +324,7 @@ func (a *attempt) touch() {
 // at most once per markerRestage (a loop reporting every item does not take the
 // executor lock or write the marker per item; the lease is minutes). A lapse is
 // found and acted on by renewHolds (the run is canceled and its writer refuses),
-// so the error has no other use here.
+// so only the other failure, a marker write that did not land, is reported here.
 func (a *attempt) renewOnProgress() {
 	now := a.e.now().UnixNano()
 	last := a.lastRenew.Load()
@@ -334,7 +334,9 @@ func (a *attempt) renewOnProgress() {
 	if !a.lastRenew.CompareAndSwap(last, now) {
 		return
 	}
-	_ = a.e.renewHolds(a.ctx, a)
+	if err := a.e.renewHolds(a.ctx, a); err != nil && !errors.Is(err, tasks.ErrHoldLost) {
+		a.log.Warn("stand-down marker not re-staged on progress", "err", err)
+	}
 }
 
 // relayLiveness stamps the watchdog's input for await: a run blocked on a
