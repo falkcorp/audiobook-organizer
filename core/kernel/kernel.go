@@ -60,7 +60,6 @@ type Config struct {
 	ServiceName           string // "" = AppID
 	Version               string // the app's release version: the resource's service.version
 	ReservedAPINamespaces []string
-	LegacyAuthGinUntil    module.ID
 	// Logger replaces the log.Logging the kernel would build (tests).
 	Logger *slog.Logger
 	// LogOutput is where the kernel's log.Logging writes; nil = the stream of
@@ -658,12 +657,11 @@ func (k *Kernel) register(ctx context.Context) error {
 			Config: k.configAccess(e.man)}
 		k.applyIdentityDeps(&deps, e.man)
 		r := module.NewRegistrar(module.RegistrarConfig{
-			Context:       regCtx,
-			Deps:          deps,
-			HTTP:          k.router.ModuleGroup(string(id)),
-			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
-			Settings:      declaredSettings(e.man, k.settingHandles),
-			Compat:        k.compatFor(id),
+			Context:  regCtx,
+			Deps:     deps,
+			HTTP:     k.router.ModuleGroup(string(id)),
+			Settings: declaredSettings(e.man, k.settingHandles),
+			Compat:   k.compatFor(id),
 			// Err is read once, below: a call after Close (from a goroutine
 			// Register started, against 06 §6.4.1) would otherwise vanish.
 			AfterClose: func(p module.Problem) {
@@ -758,7 +756,7 @@ func (k *Kernel) consume() error {
 		}
 		// The admission Build applies to the mounts' manifests (05-http-api
 		// §8.2, SEC2-17): an OwnAuth route names a method this module
-		// registered. LegacyAuthGin is the Registrar's check (P6).
+		// registered. Legacy authentication mode is the Registrar's check (P6).
 		methods := make([]string, 0, len(e.rec.AuthMethods))
 		for _, spec := range e.rec.AuthMethods {
 			methods = append(methods, string(spec.Method))
@@ -879,7 +877,6 @@ func routerKinds() []struct {
 		{httpapi.ErrPrefixCollision, module.ProblemLegacyPrefixCollision},
 		{httpapi.ErrForeignScope, module.ProblemPermissionNamespace},
 		{httpapi.ErrUnknownScope, module.ProblemUndeclaredPermission},
-		{httpapi.ErrLegacyAuthGin, module.ProblemLegacyAuth},
 		{httpapi.ErrOwnAuthMethod, module.ProblemLegacyAuth},
 	}
 }

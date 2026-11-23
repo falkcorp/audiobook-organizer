@@ -372,7 +372,6 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		ServiceName:           opts.ServiceName,
 		Version:               opts.Version,
 		ReservedAPINamespaces: slices.Clone(opts.ReservedAPINamespaces),
-		LegacyAuthGinUntil:    opts.LegacyAuthGinUntil,
 		Logger:                opts.Logger,
 		Modules:               slices.Clone(mods),
 		UI:                    opts.UI,

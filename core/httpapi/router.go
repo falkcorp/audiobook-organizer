@@ -195,18 +195,17 @@ type LegacyAuth uint8
 
 const (
 	LegacyAuthCore LegacyAuth = iota + 1 // core stages 12-13 run for the mount
-	LegacyAuthGin                        // stages 12-13 off; only for app.Options.LegacyAuthGinUntil (R1)
 )
 
 // LegacyMount is an http.Handler mounted on a module's legacy prefixes
 // (05-http-api §8.2). Router.MountLegacy and Build (legacy.go) register its
 // manifest routes as ServeMux patterns under the route collision rule (§4.8),
-// apply the LegacyAuthGin/OwnAuth admissions and answer its Redirects.
+// apply the OwnAuth admissions and answer its Redirects.
 type LegacyMount struct {
 	Owner             string                     // "books"; set by module.Registrar
 	Handler           http.Handler               // *gin.Engine
 	Routes            iter.Seq[LegacyRoute]      // manifest: every gin route; each its own mux pattern or a member of one generalised pattern (§4.8)
-	Auth              LegacyAuth                 // LegacyAuthGin only while app.Options.LegacyAuthGinUntil names Owner (R1) | LegacyAuthCore
+	Auth              LegacyAuth                 // LegacyAuthCore
 	ServesSPA         bool                       // owns "/" and serves the SPA through gin NoRoute (§4.10)
 	DefaultCSP        func(*http.Request) string // stage 5 policy for this mount's responses, evaluated per response (FE2-1)
 	CSPReport         string                     // Reporting-Endpoints URL for DefaultCSP (ABO: "/api/v1/csp-report")

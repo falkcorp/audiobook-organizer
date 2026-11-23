@@ -29,13 +29,12 @@ import (
 // only until F4-08's boot wiring reads them); Lanes, ChangeSink, Health and
 // the rest arrive with their packages (06 §6.4.10).
 type Registrar struct {
-	id            ID
-	ctx           context.Context
-	deps          Deps
-	http          *httpapi.Group
-	legacyAuthGin bool
-	settings      map[config.Path]any
-	compat        func(auth.MethodSpec) auth.Compat
+	id       ID
+	ctx      context.Context
+	deps     Deps
+	http     *httpapi.Group
+	settings map[config.Path]any
+	compat   func(auth.MethodSpec) auth.Compat
 
 	mu         sync.Mutex // guards closed, problems and deps.AuthCompat against a late call from another goroutine
 	closed     bool
@@ -49,9 +48,6 @@ type RegistrarConfig struct {
 	Context context.Context // derived from app.New's ctx, cancelled when New returns
 	Deps    Deps            // Deps.Module is the module's ID
 	HTTP    *httpapi.Group  // the module's group, httpapi.Router.ModuleGroup(id)
-	// LegacyAuthGin is true for the one module app.Options.LegacyAuthGinUntil
-	// names: only its MountLegacy may use httpapi.LegacyAuthGin (SEC2-17).
-	LegacyAuthGin bool
 	// Settings holds one entry per section the module's Manifest.Settings
 	// declares, keyed by path: the live *config.Handle[T] the kernel
 	// registered at P3, or nil when no live handle exists (app.Describe, a
@@ -103,7 +99,7 @@ func NewRegistrar(c RegistrarConfig) *Registrar {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP, legacyAuthGin: c.LegacyAuthGin,
+	return &Registrar{id: c.Deps.Module, ctx: ctx, deps: c.Deps, http: c.HTTP,
 		settings: c.Settings, afterClose: c.AfterClose, compat: c.Compat}
 }
 
@@ -180,18 +176,13 @@ func (r *Registrar) HTTP() *httpapi.Group {
 // Manifest.LegacyPrefixes, behind core's perimeter stages (05-http-api §8.2).
 // m.Owner is set by the registrar. m.ServesSPA lets the mount own the "/"
 // SPA fallback; at most one mount per app may set it (ProblemSPAOwner, P7).
-// m.Auth = httpapi.LegacyAuthGin is accepted only for the module named by
-// app.Options.LegacyAuthGinUntil; any other module records ProblemLegacyAuth
-// (SEC2-17). The manifest half (Routes, OwnAuth) is R1-14's.
+// m.Auth must be httpapi.LegacyAuthCore; any other value records
+// ProblemLegacyAuth (SEC2-17). The manifest half (Routes, OwnAuth) is R1-14's.
 func (r *Registrar) MountLegacy(m httpapi.LegacyMount) {
 	r.record("MountLegacy", func() {
 		m.Owner = string(r.id)
-		if m.Auth != httpapi.LegacyAuthCore && m.Auth != httpapi.LegacyAuthGin {
-			r.problem(ProblemLegacyAuth, "MountLegacy with Auth %d: set httpapi.LegacyAuthCore (or LegacyAuthGin for the module app.Options.LegacyAuthGinUntil names)", m.Auth)
-			return
-		}
-		if m.Auth == httpapi.LegacyAuthGin && !r.legacyAuthGin {
-			r.problem(ProblemLegacyAuth, "MountLegacy with LegacyAuthGin: only the module app.Options.LegacyAuthGinUntil names may skip core authentication; use LegacyAuthCore")
+		if m.Auth != httpapi.LegacyAuthCore {
+			r.problem(ProblemLegacyAuth, "MountLegacy with Auth %d: set httpapi.LegacyAuthCore", m.Auth)
 			return
 		}
 		r.rec.Mounts = append(r.rec.Mounts, m)

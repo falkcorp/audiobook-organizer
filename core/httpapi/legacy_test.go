@@ -130,8 +130,7 @@ func manifestOf(routes ...LegacyRoute) func(func(LegacyRoute) bool) {
 }
 
 // gcpdRouter mounts h for owner "gcpd" (claims /api/v1/ and /ping) with the
-// manifest routes, as a LegacyAuthGin mount (which module may use it is the
-// Registrar's check, not the router's).
+// manifest routes as a LegacyAuthCore mount.
 func gcpdRouter(t *testing.T, h http.Handler, routes ...LegacyRoute) *Router {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
@@ -141,7 +140,7 @@ func gcpdRouter(t *testing.T, h http.Handler, routes ...LegacyRoute) *Router {
 		}
 	}
 	r.AllowAuthMethods("gcpd", "gcpd.signal")
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: h, Auth: LegacyAuthGin, TopSegments: []string{"ping"},
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: h, Auth: LegacyAuthCore, TopSegments: []string{"ping"},
 		Routes: manifestOf(routes...)}); err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +351,7 @@ func TestOutsideClaim_Refused(t *testing.T) {
 	if err := r.Claim("gcpd", "/api/v1/"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthCore,
 		Routes: manifestOf(gothamRoute(http.MethodGet, "/api/core/v1/auth/oidc/google/callback"))}); err != nil {
 		t.Fatal(err)
 	}
@@ -373,13 +372,13 @@ func TestBuild_CrossOwnerShadowRefused(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthCore,
 		Routes: manifestOf(gothamRoute(http.MethodGet, "/api/v1/cases/:id"))}); err != nil {
 		t.Fatal(err)
 	}
 	// Claims keep two mounts' routes apart, so the shadow is shown against a
 	// core infra route that registers no claim.
-	if err := r.MountLegacy(LegacyMount{Owner: "arkham", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: []string{"arkham"},
+	if err := r.MountLegacy(LegacyMount{Owner: "arkham", Handler: newFakeGin(), Auth: LegacyAuthCore, TopSegments: []string{"arkham"},
 		Routes: manifestOf(gothamRoute(http.MethodGet, "/arkham"))}); err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +481,7 @@ func TestLegacyRedirect_CoversOnlyUnclaimedPaths(t *testing.T) {
 		}
 		return strings.Replace(p, "/api/", "/api/v1/", 1), true
 	}
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthCore,
 		Routes:    manifestOf(gothamRoute(http.MethodGet, "/api/v1/cases")),
 		Redirects: []LegacyRedirect{{Prefix: "/api/", Location: loc}}}); err != nil {
 		t.Fatal(err)
@@ -583,7 +582,7 @@ func TestDispatch_SPASharedGetServesShell(t *testing.T) {
 	if err := r.Claim("gcpd", "/login"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthGin, ServesSPA: true, SPAShared: []string{"login"},
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthCore, ServesSPA: true, SPAShared: []string{"login"},
 		Routes: manifestOf(LegacyRoute{Method: http.MethodPost, GinPath: "/login", Perm: rbac.Public, Public: true})}); err != nil {
 		t.Fatal(err)
 	}
@@ -608,7 +607,7 @@ func fallbackRouter(t *testing.T, g http.Handler, shared []string, observe func(
 			t.Fatal(err)
 		}
 	}
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthGin, ServesSPA: true,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: g, Auth: LegacyAuthCore, ServesSPA: true,
 		TopSegments: []string{"files"}, SPAShared: shared, Routes: manifestOf(routes...)}); err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +685,7 @@ func TestMountLegacy_IteratorMayReadRouter(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: []string{"files"},
+		done <- r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthCore, TopSegments: []string{"files"},
 			Routes: func(yield func(LegacyRoute) bool) {
 				_ = r.NonSPASegments()
 				yield(gothamRoute(http.MethodGet, "/files/:id"))
@@ -712,7 +711,7 @@ func TestLegacyPlace_CoreOnlySegmentsRefused(t *testing.T) {
 		if err := r.Claim("gcpd", "/"+seg+"/"); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: []string{seg},
+		if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthCore, TopSegments: []string{seg},
 			Routes: manifestOf(gothamRoute(http.MethodGet, p))}); err != nil {
 			t.Fatal(err)
 		}
@@ -730,7 +729,7 @@ func TestLegacyPlace_CoreOnlySegmentsRefused(t *testing.T) {
 			if listed {
 				top = []string{seg}
 			}
-			if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthGin, TopSegments: top,
+			if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(), Auth: LegacyAuthCore, TopSegments: top,
 				Routes: manifestOf(gothamRoute(http.MethodGet, "/"+seg+"/x"))}); err != nil {
 				t.Fatal(err)
 			}

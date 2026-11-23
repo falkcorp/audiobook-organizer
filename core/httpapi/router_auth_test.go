@@ -334,7 +334,7 @@ func TestRouterAuth_AuditsEach403(t *testing.T) {
 }
 
 // TestRouterAuth_Legacy: a LegacyAuthCore mount's manifest routes meet stages
-// 12 and 13, an OwnAuth route meets neither, and a LegacyAuthGin mount's routes
+// 12 and 13, an OwnAuth route meets neither, and a LegacyAuthCore mount's routes
 // meet neither.
 func TestRouterAuth_Legacy(t *testing.T) {
 	build := func(t *testing.T, mode LegacyAuth) (http.Handler, *raFakeAuthn, *atomic.Int64) {
@@ -418,15 +418,6 @@ func TestRouterAuth_Legacy(t *testing.T) {
 		}
 		if handled.Load() != handledBefore {
 			t.Fatal("an unlisted path under a LegacyAuthCore claim reached the mount's handler")
-		}
-	})
-	t.Run("LegacyAuthGin", func(t *testing.T) {
-		h, a, _ := build(t, LegacyAuthGin)
-		if rec := serve(h, "/api/v1/cases", ""); rec.Code != http.StatusOK {
-			t.Fatalf("a LegacyAuthGin route authenticates in gin, not here: %d %s", rec.Code, rec.Body)
-		}
-		if a.calls.Load() != 0 {
-			t.Fatal("stage 12 ran on a LegacyAuthGin route")
 		}
 	})
 }

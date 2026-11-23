@@ -69,10 +69,10 @@ type routerAuth struct {
 // SetAuth wires stages 12 and 13 into the routes Build registers: native and
 // raw routes, Infra routes whose permission is not Public, and the routes of a
 // LegacyAuthCore mount that do not authenticate themselves (OwnAuth). A
-// LegacyAuthGin mount and the "/" owner are untouched. It also lets Build
-// accept the non-Public routes and LegacyAuthCore mounts it refuses without
-// it. It must be called before Build, once; it returns an error, and changes
-// nothing, for a nil Service, a second call or a call after Build.
+// mount's "/" SPA owner is untouched. It also lets Build accept the
+// non-Public routes and LegacyAuthCore mounts it refuses without it. It must
+// be called before Build, once; it returns an error, and changes nothing, for
+// a nil Service, a second call or a call after Build.
 func (r *Router) SetAuth(w AuthWiring) error {
 	if w.Service == nil {
 		return errors.Join(ErrAuthWiring, errors.New("a nil Service"))

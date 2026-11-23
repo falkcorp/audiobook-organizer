@@ -112,11 +112,6 @@ type Options struct {
 	Args []string
 	Env  []string
 
-	// LegacyAuthGinUntil names the one module whose LegacyMount may use
-	// httpapi.LegacyAuthGin (ABO: "books" in R1). R2's identity flip clears it
-	// and deletes the field. "" = no module may (SEC2-17).
-	LegacyAuthGinUntil module.ID
-
 	// Authenticators are the app's identity extensions (05-authn §3.3; ABO:
 	// internal/cfaccess), wired by the kernel with auth's extension
 	// registration. This compile-time list is the ONLY place a MethodSpec may

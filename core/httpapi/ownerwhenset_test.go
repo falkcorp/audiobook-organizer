@@ -200,7 +200,7 @@ func TestOwnerWhenSet_NeedsGuardsOwner(t *testing.T) {
 	if err := r.Claim("gcpd", "/api/v1/"); err != nil {
 		t.Fatal(err)
 	}
-	err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: http.NotFoundHandler(), Auth: LegacyAuthGin, Routes: manifestOf(
+	err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: http.NotFoundHandler(), Auth: LegacyAuthCore, Routes: manifestOf(
 		LegacyRoute{Method: http.MethodPost, GinPath: "/api/v1/evidence/restore", Perm: rbac.Need("core:users.view"),
 			Guards: Guards{Interactive: true}, OwnerWhenSet: true},
 	)})

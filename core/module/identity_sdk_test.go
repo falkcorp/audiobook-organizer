@@ -30,7 +30,7 @@ func fixtureTopic(name string) events.TopicSpec {
 // call order across calls, without checking anything (the bus does at P7), and
 // Close hands back copies.
 func TestRegistrar_RecordsTopicsAndSubscriptions(t *testing.T) {
-	r := newTestRegistrar(t, false)
+	r := newTestRegistrar(t)
 	lit := events.NewTopic[signalLit]("batcave.signal.lit.v1")
 	r.Topics(fixtureTopic("batcave.signal.lit.v1"))
 	r.Topics(fixtureTopic("batcave.signal.dimmed.v1"), fixtureTopic("arkham.cell.opened.v1"))
