@@ -192,9 +192,12 @@ func TestDeliver_PublisherCtxCancelDoesNotCancelDelivery(t *testing.T) {
 	must(t, r.svc.Publish(ctx, nil, signalNote("Penguin")))
 	cancel()
 	r.startRelay()
-	eventually(t, "the delivery", func() bool { return r.fake.Sent() == 1 })
-	if p := sawErr.Load(); p == nil || *p != nil {
-		t.Errorf("the channel's context was already done: %v", p)
+	// Wait on what SendFn recorded, not on Sent(): the fake records the call
+	// before it runs SendFn, so Sent()==1 can be observed while SendFn has not
+	// yet stored the context's state, and the check below read a nil pointer.
+	eventually(t, "the delivery to see its context", func() bool { return sawErr.Load() != nil })
+	if p := sawErr.Load(); *p != nil {
+		t.Errorf("the channel's context was already done: %v", *p)
 	}
 	stays(t, "no dead letter", 150*time.Millisecond, func() bool { return len(r.dead()) == 0 })
 }
