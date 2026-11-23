@@ -120,3 +120,24 @@ func (a *attempt) fixerFinishOnly(rc *tasks.RC, p any) (json.RawMessage, error) 
 	}
 	return json.Marshal(fixerResult{Applied: len(applied), Skipped: undone})
 }
+
+// reasonAsk is the reason a run returned to awaiting_decision is written with
+// (HEAD's interrupted_ask): the person chooses again.
+const reasonAsk = "resume_ask"
+
+// quiesceStop is the state a stand-down that stopped this attempt leaves the
+// run in. A plain run waits as interrupted_quiesced and is re-queued when the
+// hold is released. A finish-only run goes back to awaiting_decision with the
+// marker kept instead, so the person chooses again and nothing re-queues it
+// on its own (HEAD registry/batch_runner.go:283-286: Finish "is still skipped
+// when a shutdown or stand-down is stopping this very attempt: the run then
+// returns to awaiting_decision"). No path therefore meets a finish-only run in
+// interrupted_quiesced: not the hold's release (standdown.go), not the
+// attempt's own end, and not the resume sweep for a run stored that way
+// (resumeOne sends it to awaiting_decision too).
+func (a *attempt) quiesceStop() (tasks.RunState, string) {
+	if a.rec.FinishOnly {
+		return tasks.StateAwaitingDecision, reasonAsk
+	}
+	return tasks.StateInterruptedQuiesced, reasonQuiesce
+}

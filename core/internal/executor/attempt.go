@@ -630,7 +630,7 @@ func (a *attempt) outcome(err error) (tasks.RunState, string) {
 	case errors.Is(cause, tasks.ErrShutdown):
 		return tasks.StateInterrupted, reasonShutdown
 	case errors.Is(cause, tasks.ErrQuiesced):
-		return tasks.StateInterruptedQuiesced, reasonQuiesce
+		return a.quiesceStop()
 	default:
 		return tasks.StateFailed, reasonError
 	}
