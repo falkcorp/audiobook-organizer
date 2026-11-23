@@ -558,14 +558,41 @@ var (
 // whatever the handler then answers (these cells name consumers that need not exist).
 const letThrough = 0
 
+// stage13Authn is stage 12 for these cells: the principal a cell binds on the
+// request context is the one stage 13 judges. It authenticates nothing itself, so a
+// request with no principal reaches stage 13 as anonymous (401).
+type stage13Authn struct{}
+
+func (stage13Authn) Middleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
+
+func (stage13Authn) SessionCookie(auth.ClientInfo, string, time.Time) *http.Cookie {
+	return &http.Cookie{Name: "hello_session", Path: "/", MaxAge: -1}
+}
+
 // stage13Do serves one request to the real routes, built into a router over a
-// live outbox, as caller. It is the body of every stage-13 cell: Build refuses
-// non-Public routes until F4-08 brings the auth service, so no cell reaches it
-// before then, and a cell that is un-skipped before then fails here, on Build.
+// live outbox with stage 13 installed (httpapi.Router.SetAuth), as caller. It is
+// the body of every stage-13 cell. Stage 12 is stage13Authn: the cell's principal
+// is bound on the request, so what is under test is the route's own permission and
+// guards, not credential resolution.
 func stage13Do(t *testing.T, method, path string, c stage13Caller) *httptest.ResponseRecorder {
 	t.Helper()
 	e := newEnv(t)
+	cat, err := rbac.NewCatalog(rbac.CoreScopes()...)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
 	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: discardLogger()})
+	if err := r.SetAuth(httpapi.AuthWiring{
+		Service:       stage13Authn{},
+		OwnerRequired: func() bool { return true },
+		ResolveAtom:   func(string, bool) (rbac.Requirement, bool) { return rbac.Requirement{}, false },
+		Catalog:       cat,
+		Log:           discardLogger(),
+	}); err != nil {
+		t.Fatalf("SetAuth: %v", err)
+	}
 	Register(r.CoreGroup(), e.ob, e.cat, e.aud, WithLogger(discardLogger()))
 	h, err := r.Build()
 	if err != nil {
@@ -594,9 +621,7 @@ func wantStage13(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 // dead-letter writes answer 401 with no principal, 403 to a holder of
 // core:system.view alone, and let a holder of core:system.manage through; the
 // purge's own table (it also has the interactive guard) is
-// TestOutboxHTTP_PurgeNeedsInteractive. Route permission (stage 13) arrives at
-// F4-08, so each cell skips; F6-03, which mounts the package, un-skips them with
-// no other change (the bodies are written).
+// TestOutboxHTTP_PurgeNeedsInteractive. The cells run through stage 13 (stage13Do).
 func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 	for _, c := range []struct {
 		name, method, path string
@@ -606,7 +631,6 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 		{"discard", http.MethodDelete, "/outbox/dead/core.notify.deliver/1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			for _, cell := range []struct {
 				caller stage13Caller
 				want   int
@@ -625,10 +649,10 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 
 // TestOutboxHTTP_PurgeNeedsInteractive: the purge answers 401 with no principal,
 // 403 to a holder of core:system.view alone, 403 to a holder of
-// core:system.manage whose credential is not an interactive one (an API key, a
-// delegated session, the auth-off principal: Guards.Interactive), and lets an
-// interactive session holding core:system.manage through. Skipped until stage 13
-// (F4-08).
+// core:system.manage whose credential cannot change credentials (an API key, the
+// auth-off principal: Guards.Interactive), and lets a session or a delegated
+// session holding core:system.manage through (a delegated session may change
+// credentials; only Guards.Session would refuse it).
 func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 	const path = "/outbox/consumers/core.notify.deliver/backlog"
 	for _, cell := range []struct {
@@ -638,12 +662,14 @@ func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 		{noCaller, http.StatusUnauthorized},
 		{viewer, http.StatusForbidden},
 		{managerKey, http.StatusForbidden},
-		{managerABS, http.StatusForbidden},
+		// Guards.Interactive is HEAD's credGuard (auth.Principal.MayChangeCredentials), which
+		// admits a delegated session (the reset-password flow); only Guards.Session refuses it.
+		// The route table pins Interactive, so the delegated session is let through.
+		{managerABS, letThrough},
 		{managerOff, http.StatusForbidden},
 		{manager, letThrough},
 	} {
 		t.Run(cell.caller.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			wantStage13(t, stage13Do(t, http.MethodDelete, path, cell.caller), cell.want)
 		})
 	}
@@ -651,7 +677,7 @@ func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 
 // TestOutboxHTTP_ConsumersAndTopicsNeedSystemView: both read routes answer 401
 // with no principal, 403 to a caller holding neither scope, and let a holder of
-// core:system.view through. Skipped until stage 13 (F4-08).
+// core:system.view through.
 func TestOutboxHTTP_ConsumersAndTopicsNeedSystemView(t *testing.T) {
 	nothing := stage13Caller{name: "no scope", method: auth.MethodSession}
 	for _, c := range []struct{ name, path string }{
@@ -659,7 +685,6 @@ func TestOutboxHTTP_ConsumersAndTopicsNeedSystemView(t *testing.T) {
 		{"topics", "/events/topics"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			for _, cell := range []struct {
 				caller stage13Caller
 				want   int
