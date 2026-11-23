@@ -253,21 +253,34 @@ func (a *attempt) progress(done, total int, current string, setCurrent bool) {
 	if setCurrent {
 		a.pCurrent = current
 	}
-	due := now.Sub(a.pLast) >= a.e.config().ProgressInterval
-	if due {
-		a.pLast = now
-	}
+	due := a.tickDueLocked(now)
 	a.pmu.Unlock()
 	if due {
 		a.tick(a.ctx)
 	}
 }
 
-// Note sets the run's current label and appends a log line.
+// tickDueLocked reports whether a progress tick is due at now, and if so
+// restarts the throttle window. Progress and Note share it, so the two together
+// write at most one tick per ProgressInterval. a.pmu must be held.
+func (a *attempt) tickDueLocked(now time.Time) bool {
+	if now.Sub(a.pLast) < a.e.config().ProgressInterval {
+		return false
+	}
+	a.pLast = now
+	return true
+}
+
+// Note sets the run's current label and appends a log line. The new label is
+// published on run-changed by a tick that is due now, or else by the next tick
+// or the attempt's end, within the same throttle Progress uses: a run that only
+// calls Note (or calls Set and then Note, as ABO's items env does) therefore
+// shows its latest note, not the previous one.
 func (a *attempt) Note(msg string) {
 	a.Touch()
 	a.pmu.Lock()
 	a.pCurrent, a.pDirty = msg, true
+	due := a.tickDueLocked(a.e.now())
 	a.pmu.Unlock()
 	line := tasks.LogLine{At: a.e.now(), Level: "info", Message: msg}
 	if err := a.ledger(a.ctx, func(ctx context.Context, b *storage.Batch) error {
@@ -279,6 +292,9 @@ func (a *attempt) Note(msg string) {
 		return nil
 	}); err != nil && !errors.Is(err, tasks.ErrFenced) {
 		a.log.Warn("run log line not recorded", "err", err)
+	}
+	if due {
+		a.tick(a.ctx)
 	}
 }
 

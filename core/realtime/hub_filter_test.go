@@ -306,8 +306,15 @@ func TestRunView_CurrentRedactedWithoutUsersView(t *testing.T) {
 			if (got.Current != "") != tc.keepCurrent {
 				t.Errorf("Current = %q, kept = %v, want kept = %v", got.Current, got.Current != "", tc.keepCurrent)
 			}
+			// Message is the same text as Current, so the stream must blank or
+			// keep it exactly as it does Current: a kept Message without the
+			// scope is a leak.
+			if got.Message != rest.Current {
+				t.Errorf("stream Message = %q, want %q (the REST serializer's Current)", got.Message, rest.Current)
+			}
 			want := tasks.NewRunPayload(v)
 			got.Current, want.Current = "", ""
+			got.Message, want.Message = "", ""
 			if got != want {
 				t.Errorf("redaction changed more than Current: %+v vs %+v", got, want)
 			}
