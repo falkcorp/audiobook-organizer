@@ -99,23 +99,39 @@ make install-rollback-helpers APPLY=1 REPLACE_CONF=1 DEPLOY_BIN=<bin> DEPLOY_DB=
 
 - `REPLACE_CONF=1` is required. Without it the installer leaves a `rollback.conf` that differs from the one it
   renders alone (and says so), so `export_dir` and the new `offline_env` never land. The installer writes the whole
-  file from these arguments, so also pass `--checkpoint-dir` and `--service-group` if the current file has those
-  lines, or they are dropped. `DEPLOY_BIN` and `DEPLOY_DB` can be left out when `Makefile.local` sets them.
+  file from these arguments, so also pass `--checkpoint-dir <value>` and `--service-group <value>` if they have a
+  value in the current file. A line with an empty value can be left out (the production file has both, empty;
+  dropping them is harmless), and passing either flag bare fails. `DEPLOY_BIN` and `DEPLOY_DB` can be left out when
+  `Makefile.local` sets them.
 - The single quotes around `--offline-env`'s value are part of the line: make passes them to the shell, which hands
   the value over as one argument.
-- The state directory is named only as `ABO_CORE_PATHS_STATE_DIR`. That alone serves both binary generations only
-  because the production host's `state_dir` is the compiled default, `/var/lib/audiobook-organizer`: a pre-flip
-  binary ignores the name and falls back to that default. See Known gap 5.
+- The state directory is named only as `ABO_CORE_PATHS_STATE_DIR`. That works with a pre-flip binary only because
+  the production host's `state_dir` is the compiled default, `/var/lib/audiobook-organizer`: a pre-flip build
+  refuses (fail-closed, "core's state directory ... is not ABO's ...") when that variable differs from its own state
+  directory, so on any other `state_dir` a pre-flip binary refuses. The release fetch (`make rollback-restore
+  RELEASE=<tag>`) handles both generations on its own. See Known gap 5.
 
 **Check:** `ssh <server> cat /etc/audiobook-organizer/rollback.conf` shows the `export_dir =` line and the `ABO_`
 token in `offline_env`, and `make rollback-check` still lists the generations. `make export-install-secrets`
 is not the check: it ignores the offline environment, so it passes while Step 7 would fail.
 
-**Undo:** in a checkout of the previous commit, run the same `make install-rollback-helpers APPLY=1 REPLACE_CONF=1`
-line without `--export-dir` (and with the `offline_env` the host had before, which the flipped binary refuses, so
-restore and the release fetch break again), then `rmdir <export_dir>`. `REPLACE_CONF=1` is required here too: the
-previous bundle's `rollback_helper.py` refuses `export_dir` as an unknown setting, which would break every helper,
-`install-staged` and the restore included, until the file is replaced.
+**Undo:** in a checkout of the previous commit, run the same command with two changes: leave out `--export-dir`, and
+pass the host's previous `offline_env` explicitly:
+
+```bash
+make install-rollback-helpers APPLY=1 REPLACE_CONF=1 DEPLOY_BIN=<bin> DEPLOY_DB=<db> \
+  ROLLBACK_INSTALL_ARGS="<the same arguments as above, without --export-dir>
+    --offline-env 'HOME=<state_dir> ABK_STATE_DIR=<state_dir>'"
+```
+
+then `rmdir <export_dir>`. Both changes matter. The previous bundle's `rollback_helper.py` refuses every `ABO_*`
+token in `offline_env` ("is not HOME=, ABK_STATE_DIR= or ABK_*"), and its installer does not check the value, so the
+same line with the new `--offline-env` installs a `rollback.conf` that breaks every helper, `install-staged` and the
+restore included. With the ABK value the file is the one the host had before this reinstall, byte for byte. The
+sudoers drop-in loses the two export lines: the two export stubs stay on disk but are no longer granted.
+`REPLACE_CONF=1` is required here too, because the new `rollback.conf` differs from the one the old bundle renders.
+The cost of the undo: `ABK_STATE_DIR` is back, which the flipped binary refuses, so `make rollback-restore` and
+`make rollback-restore RELEASE=<tag>` fail again on the flipped host.
 
 ## Which path are you on?
 
@@ -433,11 +449,13 @@ Still open:
    than typing `sudo`. The production host is on Path A and does not need it.
 3. **The measured R2 boot time.** R2-01c replaces the 4200 seconds in Step 4 with the measured number, and adds the
    Docker `start_period`.
-5. **The state-directory variable is static in `rollback.conf`.** `ABO_CORE_PATHS_STATE_DIR` alone serves both binary
-   generations only because the production host's `state_dir` is the compiled default,
-   `/var/lib/audiobook-organizer`. On a host with a different `state_dir`, a rollback to a pre-flip binary would open
-   the wrong directory. The general fix is a helper that picks the variable name by binary generation; it is
-   scheduled after R2.
+5. **The state-directory variable is static in `rollback.conf`.** `ABO_CORE_PATHS_STATE_DIR` alone works with a
+   pre-flip binary only because the production host's `state_dir` is the compiled default,
+   `/var/lib/audiobook-organizer`. On a host with a different `state_dir`, a rollback to a pre-flip binary refuses
+   (fail-closed: "core's state directory ... is not ABO's ..."); it does not open the wrong directory. The release
+   fetch (`make rollback-restore RELEASE=<tag>`) already handles both generations: it retries once with
+   `ABK_STATE_DIR` on exactly that refusal. What remains is the static name in `rollback.conf`; the general fix is a
+   helper that picks the variable name by binary generation, scheduled after R2.
 
 ## Record
 
