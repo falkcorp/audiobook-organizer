@@ -35,15 +35,25 @@ type OrganizeStats = organizer.Stats
 // database.Store until 2026-08-19, and it could not have been narrowed sooner:
 // metafetch.NewService still took the union until the four-layer forwarding
 // chain beneath it was narrowed first.
+//
+// organizer.RelocatingCopyCreator is on it, and not on database.Store (which may
+// not grow): the one value in the container's "store" slot is a
+// *database.PebbleStore, which has the method, and the registry's Get panics at
+// boot, naming both types, if a store without it is ever put there.
 type organizeServiceStore interface {
 	organizer.Store
+	organizer.RelocatingCopyCreator
 	metafetch.Store
 }
+
+// Compile-time proof that the production store satisfies it.
+var _ organizeServiceStore = (*database.PebbleStore)(nil)
 
 // NewOrganizeService creates a new organizer.Service and wires up
 // server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
 func NewOrganizeService(db organizeServiceStore) *OrganizeService {
 	svc := organizer.NewService(db)
+	svc.SetRelocatingCopyCreator(db)
 
 	// Wire server-specific callbacks. iTunes callbacks are set later in
 	// Server.New() after itunesSvc is constructed (see server.go).
