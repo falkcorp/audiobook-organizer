@@ -57,7 +57,7 @@ var reachDischargedRows = map[string]bool{
 	"F4-07-HIDDEN-HANDLER-CHECKS": true, // TestReachRegisteredPath_HiddenHandlerChecks (B10e2)
 	"F4-07-OWNER-SET":             true, // TestReachRegisteredPath_OwnerSet (B10e1r)
 	"F4-07-ABS-REPLAY":            true, // TestReachRegisteredPath_AbsReplay (B10e3)
-	"F4-07-OWNER-ALLOW":           true, // TestReachRegisteredPath_OwnerAllow (B10e1r, held red until B10y)
+	"F4-07-OWNER-ALLOW":           true, // TestReachRegisteredPath_OwnerAllow (B10e1r, passing on the flip stack)
 }
 
 func TestReachObligations_TheTableIsStatedInTheSeamsAndEachRowIsOpenUntilItsDischargeLands(t *testing.T) {
