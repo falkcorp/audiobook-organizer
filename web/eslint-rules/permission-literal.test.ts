@@ -79,7 +79,7 @@ describe('permission-literal rule: what it lets through', () => {
 describe('permission-literal rule over web/src', () => {
   const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-  async function findings(ignores: string[]): Promise<string[]> {
+  async function findings(ignores: string[], noInlineConfig = false): Promise<string[]> {
     const eslint = new ESLint({
       cwd: webRoot,
       overrideConfigFile: true,
@@ -88,7 +88,7 @@ describe('permission-literal rule over web/src', () => {
           files: ['src/**/*.{ts,tsx}'],
           ignores,
           languageOptions: { parser: tseslint.parser, parserOptions: { ecmaFeatures: { jsx: true } } },
-          linterOptions: { noInlineConfig: true, reportUnusedDisableDirectives: 'off' },
+          linterOptions: { noInlineConfig, reportUnusedDisableDirectives: 'off' },
           rules: { [RULE]: ['error', ...permissionLiteralRestrictions] },
         },
       ] as never,
@@ -104,7 +104,13 @@ describe('permission-literal rule over web/src', () => {
     expect(await findings(['src/**/*.test.{ts,tsx}', 'src/generated/**'])).toEqual([]);
   }, 120_000);
 
-  it('would find the generated permissions file, so its exemption is the only one and is load-bearing', async () => {
+  it('would find the generated permissions file, so its directory exemption is load-bearing', async () => {
     expect(await findings(['src/**/*.test.{ts,tsx}'])).toEqual(['src/generated/permissions.ts']);
+  }, 120_000);
+
+  it('would find the books-route scope list without its narrow inline exception', async () => {
+    expect(await findings(['src/**/*.test.{ts,tsx}', 'src/generated/**'], true)).toEqual([
+      'src/utils/apiKeyScopes.ts',
+    ]);
   }, 120_000);
 });
