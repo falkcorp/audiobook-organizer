@@ -18,35 +18,39 @@
       "sha256": "a375dea80fd410e925da836240cf89ca64866d187581d7f41a6d3f842a439ae6"
     },
     {
-      "path": "db/audiobooks.pebble/000014.log",
-      "sha256": "da8ca8a325b3cbc0aec60c135c103bc7ad58429cf13abc4eb6955106ecddaed4"
+      "path": "db/audiobooks.pebble/000016.sst",
+      "sha256": "5db01c6e0bb14a30ff69867721b5347ae8960d11c060bd8c706fd1c23865a2f8"
     },
     {
-      "path": "db/audiobooks.pebble/000016.sst",
-      "sha256": "b3959f86e9cd4befa29be33332cd607d213dd2193ac063b2b10ebab0e5c46f92"
+      "path": "db/audiobooks.pebble/000018.sst",
+      "sha256": "5f15aded329482b868d9155b29d8f070a952a1cf4c3d73d2908ed3e6accb2cee"
+    },
+    {
+      "path": "db/audiobooks.pebble/000020.log",
+      "sha256": "1a6cbebc1b6aa601b4d8c12ee7ef19a7f6e35054f76d65fddb69b03956c0bef2"
     },
     {
       "path": "db/audiobooks.pebble/LOCK",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "path": "db/audiobooks.pebble/MANIFEST-000008",
-      "sha256": "10a0903e93a9e2d5d4370418761bf7a2999afec56485369a4c5f39c5c29d4094"
-    },
-    {
       "path": "db/audiobooks.pebble/MANIFEST-000013",
-      "sha256": "c5a58063ad4da7e632f25bb55b322f44c612f48892fba43734d396becf857a32"
+      "sha256": "d42f985d9458a223b08c5dec9c91b6038bf826952818a0b100965a9788ba21ad"
     },
     {
-      "path": "db/audiobooks.pebble/OPTIONS-000015",
-      "sha256": "ad59307d1540da25088ce7283695981ea4d1a0fb2bec10f9c4be1fce009487ab"
+      "path": "db/audiobooks.pebble/MANIFEST-000019",
+      "sha256": "b3f50915f117e8599cc61bbe4c9e2e89e56329fa498c5f45637364edb92b041c"
+    },
+    {
+      "path": "db/audiobooks.pebble/OPTIONS-000021",
+      "sha256": "364080126840e12ddef25b215a5db69bc1d6909772f7484637d7a81c967fbb35"
     },
     {
       "path": "db/audiobooks.pebble/marker.format-version.000012.024",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
-      "path": "db/audiobooks.pebble/marker.manifest.000003.MANIFEST-000013",
+      "path": "db/audiobooks.pebble/marker.manifest.000004.MANIFEST-000019",
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
     {
@@ -79,7 +83,7 @@
     },
     {
       "path": "state/secrets.keyring",
-      "sha256": "0f1c7575534dab17671f255ec1a9a93726439c20be714367410ac377ecb31158"
+      "sha256": "f8ace8732dc9d829bf2ee056b487fd13ceab1b86c08c2e33262d786d206efb6d"
     }
   ]
 }

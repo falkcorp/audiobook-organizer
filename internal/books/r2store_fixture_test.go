@@ -6,6 +6,7 @@
 package books
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,8 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/storage/keys"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // testdata/r2store is the store the R2 release leaves behind, frozen as files
@@ -366,4 +369,172 @@ func TestR2StoreFixtureIsAnR2Store(t *testing.T) {
 	}
 	_, err := os.Stat(r2StoreDB(dir) + ".storage-levels")
 	assert.NoError(t, err, "the fixture has no level sidecar")
+}
+
+// The scheduler clocks an R2 store holds (R3-02f). A store R2 leaves has been
+// served by the scheduler, so core/tasks holds one clock per scheduled kind
+// that ran, in the c/tasks/ keyspace. The generator writes them with the real
+// writer (tasks.NativeStores(ks).Clocks) and does not run M4, which R3-02e-1
+// deletes; the rows below are the clocks that M4 imports for the
+// TestCutover_NoCatchUpStorm scenario (HEAD on a window of 23:00-24:00 Gotham
+// run at 23:30 on Tuesday 2030-03-05, db_optimize on, the last weekly sweep
+// 160 hours before the cutover), so a test ported onto the fixture keeps that
+// scenario's assertions unchanged. The scenario's one kind with no clock,
+// books.maintenance.metadata-refresh, is absent here too: it was switched on at
+// the cutover's restart, and its absence is part of what that test checks.
+//
+// Every clock carries an empty ScheduleHash, as M4's importer stores it, so the
+// first boot's scheduler re-derives it from the settings. The instants are UTC.
+
+// r2StoreTasksOwner is core's tasks owner: the keyspace the clocks live in.
+const r2StoreTasksOwner storage.Owner = "core/tasks"
+
+// r2StoreUnclocked is the scheduled kind the storm scenario leaves without a
+// clock.
+const r2StoreUnclocked tasks.Kind = "books.maintenance.metadata-refresh"
+
+// r2StoreClockRow is one clock of the fixture.
+type r2StoreClockRow struct {
+	Kind  tasks.Kind
+	Clock tasks.Clock
+}
+
+// r2StoreLocal is the instant of a 2030 wall-clock time in Gotham (UTC-5, the
+// scenario's zone), as UTC.
+func r2StoreLocal(month time.Month, day, hour, minute int) time.Time {
+	return time.Date(2030, month, day, hour, minute, 0, 0, time.FixedZone("Gotham", -5*3600)).UTC()
+}
+
+// r2StoreClockRows are the clocks the fixture holds, in kind order.
+func r2StoreClockRows() []r2StoreClockRow {
+	noon := r2StoreLocal(time.March, 5, 12, 0)       // a daily kind's tick on Tuesday
+	sixHourly := r2StoreLocal(time.March, 5, 18, 0)  // the last tick of a six-hourly kind
+	windowRun := r2StoreLocal(time.March, 5, 23, 30) // the nightly window's run
+	due := func(k tasks.Kind, at time.Time) r2StoreClockRow {
+		return r2StoreClockRow{Kind: k, Clock: tasks.Clock{LastDue: at}}
+	}
+	return []r2StoreClockRow{
+		due("books.collections.refresh-relative-dynamic", windowRun),
+		due("books.library.scan", sixHourly),
+		// The full sweep: 168 hours before its due instant, Wednesday 08:00.
+		due("books.library.scan-full", r2StoreLocal(time.March, 6, 8, 0).Add(-168*time.Hour)),
+		due("books.maintenance.aux-store-compact", noon),
+		due("books.maintenance.cleanup-activity-log", noon),
+		due("books.maintenance.nightly-compact-activity-log", r2StoreLocal(time.March, 5, 1, 0)),
+		due("books.maintenance.prune-ai-journal", noon),
+		due("books.maintenance.purge-deleted", sixHourly),
+		due("books.maintenance.reports-prune", noon),
+		due("books.maintenance.tombstone-cleanup", noon),
+		due("books.maintenance.transcode-temp-cleanup", windowRun),
+		due("books.metadata.candidate-fetch", sixHourly),
+		due("books.metafetch.asin-backfill", sixHourly),
+		due("core.log.journal.prune", r2StoreLocal(time.March, 4, 12, 0)),
+		// core's own half of db_optimize: the same tick as aux-store-compact.
+		due("core.storage.compact", noon),
+		// The window's clock is the run's local midnight, and it has run.
+		{Kind: tasks.WindowKind("nightly"), Clock: tasks.Clock{
+			LastDue: r2StoreLocal(time.March, 5, 0, 0), LastRun: r2StoreLocal(time.March, 5, 0, 0),
+		}},
+	}
+}
+
+// r2StoreTasksPrefix is the c/tasks/ keyspace's prefix in the store: every
+// clock row, and nothing else of the fixture's, starts with it.
+const r2StoreTasksPrefix = "c/tasks/"
+
+// r2StoreTasksDB opens a scratch store, empty, under a temporary directory with
+// core/tasks as its only owner and the spec core registers for it (guard
+// families run/, debounce/, sched/ and idem/ Serialized). It is the handle a
+// closed R2 store's tasks keyspace is written or read through: the generator
+// writes the clocks there with the real writer, and the fixture test reads the
+// fixture with db.Admin().OpenReadOnly. The caller closes it.
+func r2StoreTasksDB(t *testing.T) (*storage.DB, string) {
+	t.Helper()
+	ctx := context.Background()
+	var serialized []string
+	for _, fam := range []string{"run", "debounce", "sched", "idem"} {
+		serialized = append(serialized, string(keys.Prefix(keys.Str(fam))))
+	}
+	path := filepath.Join(t.TempDir(), "tasks.pebble")
+	o, err := storage.Open(ctx, storage.OpenOptions{
+		Path: path, Build: "r2store-scratch", FreeSpaceMargin: 1,
+		Owners: []storage.OwnerSpec{{Owner: r2StoreTasksOwner, Spec: storage.Spec{Keyspace: true, Serialized: serialized}, Enabled: true}},
+	})
+	require.NoError(t, err)
+	db, err := o.Prepare(ctx)
+	if err == nil {
+		err = db.Migrate(ctx)
+	}
+	require.NoError(t, err)
+	return db, path
+}
+
+// TestR2StoreFixtureHoldsSchedulerClocks: the fixture holds the clocks of
+// r2StoreClockRows, exactly those, read through the real reader, and none for
+// the kind the storm scenario leaves unclocked.
+func TestR2StoreFixtureHoldsSchedulerClocks(t *testing.T) {
+	ctx := context.Background()
+	rows := r2StoreClockRows()
+	require.Len(t, rows, 16, "one clock per kind HEAD ran: 13 books kinds, core.storage.compact, core.log.journal.prune and the nightly window")
+
+	scheduled := map[tasks.Kind]bool{}
+	for _, k := range ScheduledKinds() {
+		scheduled[k] = true
+	}
+	for _, row := range rows {
+		if _, isCore := strings.CutPrefix(string(row.Kind), "core."); !isCore {
+			assert.True(t, scheduled[row.Kind], "%s is not a kind this build schedules", row.Kind)
+		}
+	}
+	require.True(t, scheduled[r2StoreUnclocked], "%s is no longer a scheduled kind, so its absence proves nothing", r2StoreUnclocked)
+
+	dir := copyR2Store(t)
+	var stored []string
+	for k := range r2StoreRows(t, r2StoreDB(dir)) {
+		if strings.HasPrefix(k, r2StoreTasksPrefix) {
+			stored = append(stored, k)
+		}
+	}
+	assert.Len(t, stored, len(rows), "the fixture holds rows under %s that are not clocks, or lacks a clock: %q", r2StoreTasksPrefix, stored)
+
+	db, _ := r2StoreTasksDB(t)
+	defer func() { require.NoError(t, db.Close()) }()
+	ro, err := db.Admin().OpenReadOnly(ctx, r2StoreDB(dir))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, ro.Close()) }()
+	ks, err := ro.Keyspace(r2StoreTasksOwner)
+	require.NoError(t, err)
+	clocks := tasks.NativeStores(ks).Clocks
+
+	got := map[tasks.Kind]tasks.Clock{}
+	for _, row := range rows {
+		c, ok, err := clocks.Get(ctx, row.Kind)
+		require.NoError(t, err, row.Kind)
+		if !assert.True(t, ok, "the fixture holds no clock for %s", row.Kind) {
+			continue
+		}
+		got[row.Kind] = c
+		assert.True(t, c.LastDue.Equal(row.Clock.LastDue), "%s LastDue = %s, want %s", row.Kind, c.LastDue, row.Clock.LastDue)
+		assert.True(t, c.LastRun.Equal(row.Clock.LastRun), "%s LastRun = %s, want %s", row.Kind, c.LastRun, row.Clock.LastRun)
+		assert.True(t, c.LastFire.IsZero() && c.GateClosedAt.IsZero() && c.Missed == 0 && c.ScheduleHash == "", "%s carries state the scenario's import leaves empty: %+v", row.Kind, c)
+	}
+
+	// The values the storm scenario's assertions name, spelled out here and not
+	// read back from the table.
+	gotham := time.FixedZone("Gotham", -5*3600)
+	if c, ok := got[tasks.WindowKind("nightly")]; ok {
+		assert.True(t, c.LastDue.Equal(time.Date(2030, 3, 5, 0, 0, 0, 0, gotham)), "window LastDue = %s, want 2030-03-05T00:00-05:00", c.LastDue)
+	}
+	if c, ok := got["books.library.scan-full"]; ok {
+		assert.True(t, c.LastDue.Equal(time.Date(2030, 3, 6, 8, 0, 0, 0, gotham).Add(-168*time.Hour)), "full sweep LastDue = %s, want 2030-03-06T08:00-05:00 minus 168h", c.LastDue)
+	}
+	compact, ok := got["core.storage.compact"]
+	aux, ok2 := got["books.maintenance.aux-store-compact"]
+	if ok && ok2 {
+		assert.True(t, compact.LastDue.Equal(aux.LastDue), "the db_optimize halves disagree: core %s, books %s", compact.LastDue, aux.LastDue)
+	}
+
+	_, has, err := clocks.Get(ctx, r2StoreUnclocked)
+	require.NoError(t, err)
+	assert.False(t, has, "the fixture holds a clock for %s, which the storm scenario leaves unclocked", r2StoreUnclocked)
 }
