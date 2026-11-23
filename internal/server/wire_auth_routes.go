@@ -85,7 +85,11 @@ func (s *Server) wireAuthRoutes(
 		// an API key or ABS token is refused; the delegated session of an accept
 		// passes.
 		s.credRoute(authProtected, http.MethodPost, "/phone-key/claim", s.handleClaimGuestKey)
-		s.credRoute(authProtected, http.MethodPost, "/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
+		// Deleted under core identity (routesDeletedAtTheFlip): core's POST
+		// /api/core/v1/users/{id}/temp-login mints the link.
+		if !s.deletedAtTheFlip(http.MethodPost, "/api/v1/auth/temp-tokens") {
+			s.credRoute(authProtected, http.MethodPost, "/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
+		}
 
 		// A key may manage its own user's keys (clamped to its own expiry);
 		// creating a key for ANOTHER user mints a credential for them and is

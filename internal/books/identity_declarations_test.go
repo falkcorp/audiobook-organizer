@@ -14,18 +14,10 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// Dark: with the identity predicate off books declares nothing to rbac, so a boot
-// without the flip is what it was. AuthRefresh is the one declaration that is not
-// gated, because the handle it asks for exists only on an identity boot.
-func TestManifest_IdentityDeclarationsAreDarkWhileThePredicateIsOff(t *testing.T) {
-	mf := (&booksModule{}).Manifest()
-	if len(mf.Permissions) != 0 || len(mf.Roles) != 0 || len(mf.ImportedRoleIDs) != 0 {
-		t.Fatalf("predicate off: permissions %d, roles %d, imported role IDs %v; want none", len(mf.Permissions), len(mf.Roles), mf.ImportedRoleIDs)
-	}
-}
-
+// The identity declarations: the scopes, books' one seed role and the imported
+// role IDs, declared because the predicate is on (for good since B10g; the
+// predicate-off half, which declared nothing, went with the selector).
 func TestManifest_IdentityDeclarationsFollowThePredicate(t *testing.T) {
-	defer SetIdentityFlipForTest(true)()
 	mf := (&booksModule{}).Manifest()
 	if len(mf.Permissions) == 0 || len(mf.Roles) != 1 || !slices.Equal(mf.ImportedRoleIDs, []rbac.RoleName{"fp-worker"}) {
 		t.Fatalf("predicate on: permissions %d, roles %d, imported role IDs %v", len(mf.Permissions), len(mf.Roles), mf.ImportedRoleIDs)

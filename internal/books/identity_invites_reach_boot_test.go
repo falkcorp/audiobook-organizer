@@ -102,7 +102,6 @@ func TestInvitesReachBoot_KeyListsAndDeletesButNeverCreates(t *testing.T) {
 // 401 until F4-08 ruling G5(a), which would end the SPA's session), the delete
 // 403 at its interactive guard.
 func TestInvitesReachBoot_AuthOffListsAndDeletesAsHEADDid(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, nil, nil, func(o *app.Options) { o.ConfigFlags["core.auth.mode"] = "disabled" }, nil)
 	cells := []struct {
 		name, method, path string

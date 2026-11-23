@@ -147,11 +147,12 @@ func adminManifestRequirement(method, fullPath string) (rbac.Requirement, bool) 
 // gate (the master-list group, admindebug's reads) and a per-route one take the same
 // path, and a route with no manifest row is refused with 403, never opened.
 //
-// After the bridge passes, HEAD's own RequireAdmin still runs (its role-name test
-// and its API-key scope test), so the gate is the conjunction of the two and can only
-// refuse more than HEAD, never less: whether a custom role that holds the
-// requirement's scopes but is not named "admin" should pass is the successor's
-// decision, not this adapter's. The auth-disabled principal is judged by its own
+// Since B10g the bridge's check is the whole gate: HEAD's RequireAdmin (its
+// role-name test and its API-key scope test) no longer runs after it, so a custom
+// role or a key holding exactly the route's requirement is admitted (owner ruling
+// 2026-11-22, B10rn STOP 1: an owner-approved widening, granted only by a holder of
+// the scope, TestReachRegisteredPath_RoleNameRowsScopeGateAdmits). The bridge's
+// check is the same requirement stage 13 already enforced. The auth-disabled principal is judged by its own
 // checker for a read-only route (HEAD's adminRole passed it) and refused with 403
 // for an always-authenticated one (HEAD's RequireAdmin answered 401 with auth off,
 // which would end a no-auth install's SPA session: F4-08 ruling G5(a);
@@ -159,7 +160,6 @@ func adminManifestRequirement(method, fullPath string) (rbac.Requirement, bool) 
 // AuthRequired and open it).
 func (s *Server) bridgedAdminGate(kind adminRouteKind) gin.HandlerFunc {
 	b := s.identity.Bridge
-	head := servermiddleware.RequireAdmin()
 	return func(c *gin.Context) {
 		req, ok := adminManifestRequirement(c.Request.Method, c.FullPath())
 		if !ok {
@@ -179,9 +179,8 @@ func (s *Server) bridgedAdminGate(kind adminRouteKind) gin.HandlerFunc {
 			}
 			return
 		}
-		if !b.CheckAdmin(c, req) {
-			return
+		if b.CheckAdmin(c, req) {
+			c.Next()
 		}
-		head(c)
 	}
 }

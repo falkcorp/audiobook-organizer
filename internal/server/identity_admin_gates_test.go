@@ -92,8 +92,13 @@ func (r adminGateRoute) scopesFor(extra ...rbac.Permission) []rbac.Permission {
 func opened(code int) bool { return code != http.StatusUnauthorized && code != http.StatusForbidden }
 
 // TestAdminGates_BridgeRefusals: under core identity every admin gate shape is
-// the conjunction of the manifest requirement through the bridge and HEAD's own
-// role-name test, so it refuses whatever either refuses.
+// the manifest requirement through the bridge, and since B10g nothing else: HEAD's
+// role-name test no longer runs behind it (owner ruling 2026-11-22, B10rn STOP 1,
+// an owner-approved widening granted only by a holder of the scope). Stage 13
+// enforces the same requirement in front of gin, and its route guards
+// (Guards.Interactive, Sensitive scopes) refuse what this gin-level fixture lets
+// through; the cutover package proves those cells end to end
+// (TestReachRegisteredPath_RoleNameRowsScopeGateAdmits).
 func TestAdminGates_BridgeRefusals(t *testing.T) {
 	w := newAdminGateWorld(t, true)
 	for _, rt := range adminGateRoutes {
@@ -110,10 +115,10 @@ func TestAdminGates_BridgeRefusals(t *testing.T) {
 			require.True(t, opened(serve(p, c)), "an admin-role user holding the requirement passes both tests")
 
 			p, c = adoptPrincipal(coreauth.MethodSession, w.bruce, rt.scopesFor()...)
-			require.Equal(t, http.StatusForbidden, serve(p, c), "scopes alone do not pass: HEAD's role-name test still runs")
+			require.True(t, opened(serve(p, c)), "a viewer-role user holding the requirement passes: the role-name test went with B10g")
 
-			p, c = adoptPrincipal(coreauth.MethodAPIKey, w.alfred, rt.scopesFor()...)
-			require.Equal(t, http.StatusForbidden, serve(p, c), "a key principal is refused as HEAD's key-scope test refuses it")
+			p, c = adoptPrincipal(coreauth.MethodSession, w.bruce, "test:users.manage")
+			require.Equal(t, http.StatusForbidden, serve(p, c), "a viewer-role user without the requirement is refused by the bridge")
 		})
 	}
 }

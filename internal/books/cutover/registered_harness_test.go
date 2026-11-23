@@ -606,7 +606,6 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 	// The one switch the flipped build has until B10g (an arch test forbids any
 	// non-test caller). It stays on for the app's whole life: it is read at
 	// Options, at Register and by the handlers.
-	t.Cleanup(books.SetIdentityFlipForTest(true))
 
 	var work string
 	var raws map[string]string

@@ -152,8 +152,11 @@ func legacyManifest(absEnabled bool) []httpapi.LegacyRoute {
 // §8.2), so a route added without a reviewed row fails boot.
 func (s *Server) LegacyManifest() ([]httpapi.LegacyRoute, error) {
 	m := legacyManifest(config.AppConfig.ABSAPIEnabled)
-	// Under core identity the rows core serves are core's, not the mount's.
-	m = slices.DeleteFunc(m, func(lr httpapi.LegacyRoute) bool { return s.servedByCore(lr.Method, lr.GinPath) })
+	// Under core identity the rows core serves are core's, not the mount's, and
+	// the rows the flip deleted are nobody's.
+	m = slices.DeleteFunc(m, func(lr httpapi.LegacyRoute) bool {
+		return s.servedByCore(lr.Method, lr.GinPath) || s.deletedAtTheFlip(lr.Method, lr.GinPath)
+	})
 	if err := checkLegacyManifest(s.router.Routes(), m); err != nil {
 		return nil, err
 	}
@@ -172,6 +175,31 @@ func (s *Server) servedByCore(method, ginPath string) bool {
 		return false
 	}
 	return slices.Contains(httpapi.CoreExactPatterns(), method+" "+muxPath(ginPath))
+}
+
+// routesDeletedAtTheFlip are HEAD's routes the identity flip deletes and core's
+// native routes replace (F4-08 spec step 3; 07 §7.4.3, the fragment link forms):
+// the temp-login mint, whose successor is POST /api/core/v1/users/{id}/temp-login,
+// and its consumer at the root, whose successor is POST
+// /api/core/v1/auth/temp-login/consume behind the SPA's /login/temp#token=. Under
+// core identity gin does not register them and the mount's manifest leaves them
+// out, so a request answers 404 (the "auth" segment never falls through to the
+// SPA). The rows stay in the static table while the pre-flip engine still serves
+// them; B10h deletes both with it.
+var routesDeletedAtTheFlip = []string{
+	"GET /auth/temp-login",
+	"POST /api/v1/auth/temp-tokens",
+}
+
+// RoutesDeletedAtTheFlip is routesDeletedAtTheFlip, "METHOD /gin/path", for the
+// tests outside this package that compare a mount with the static manifest.
+func RoutesDeletedAtTheFlip() []string { return slices.Clone(routesDeletedAtTheFlip) }
+
+// deletedAtTheFlip reports whether method and ginPath are a route the identity
+// flip deleted (routesDeletedAtTheFlip). Always false on a server that is not
+// under core identity: HEAD's own handler serves the path there.
+func (s *Server) deletedAtTheFlip(method, ginPath string) bool {
+	return s.identity != nil && slices.Contains(routesDeletedAtTheFlip, method+" "+ginPath)
 }
 
 // muxPath is a gin path in net/http ServeMux form: ":name" segments become "{name}".

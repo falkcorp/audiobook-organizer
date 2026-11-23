@@ -91,24 +91,17 @@ func (s *Server) credGuardMiddleware(guarded func(*gin.Context) bool) gin.Handle
 	// Under core identity (WithIdentity, F4-08 B7) the principal's method
 	// decides (coreauth.Principal.MayChangeCredentials), and books' EnableAuth is
 	// not read: the auth-disabled principal is refused, as core tightens HEAD's
-	// pass-through on purpose (SEC5-8). A conditional route still consults
-	// guarded only for a request whose method may not change credentials.
+	// pass-through on purpose (SEC5-8). A conditional route (credRouteWhen) has no
+	// gin guard under identity since B10g: its handler decides. POST
+	// /api/v1/auth/api-keys refuses a key that names another user itself
+	// (keyForAnotherUserMessage, B10rn STOP 2), and POST
+	// /api/v1/auth/api-keys/:id/rotate is the retired stub that answers 410 to
+	// every caller.
 	if s.identity != nil {
-		refuse := legacyauth.RequireCredentialChange()
-		if guarded == nil {
-			return refuse
+		if guarded != nil {
+			return func(c *gin.Context) { c.Next() }
 		}
-		return func(c *gin.Context) {
-			if p, ok := coreauth.PrincipalFrom(c.Request.Context()); ok && p.MayChangeCredentials() {
-				c.Next()
-				return
-			}
-			if !guarded(c) {
-				c.Next()
-				return
-			}
-			refuse(c)
-		}
+		return legacyauth.RequireCredentialChange()
 	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }

@@ -354,12 +354,14 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 			// an atom, and each carries the requirement above.
 			c := bootComposed(t, abs, nil, nil)
 			mounted := 0
+			mountedKeys := map[string]bool{}
 			for ri := range c.app.Routes() {
 				if ri.Kind != httpapi.RouteKindLegacy || ri.Owner != string(ID) {
 					continue
 				}
 				mounted++
 				key := ri.Method + " " + ri.Name
+				mountedKeys[key] = true
 				w, ok := want[key]
 				if !ok {
 					t.Errorf("the App mounted %s, which the manifest lacks", key)
@@ -372,8 +374,45 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 					t.Errorf("%s mounted with %s, want %s", key, ri.Perm, w)
 				}
 			}
-			if mounted != len(recorded) {
-				t.Errorf("the App mounted %d legacy routes, want the manifest's %d", mounted, len(recorded))
+			// Under core identity (on since B10g) core serves HEAD's exact OAuth
+			// paths on its fixed group (httpapi.CoreExactPatterns), so gin does not
+			// register them and the mount leaves them out: every manifest row the
+			// App did not mount is one of those or a route the flip deleted, and
+			// nothing else is missing.
+			coreExact := map[string]bool{}
+			for _, p := range httpapi.CoreExactPatterns() {
+				coreExact[p] = true
+			}
+			// The flip also deletes two routes outright (server.RoutesDeletedAtTheFlip:
+			// the temp-login mint and consumer), which nobody mounts.
+			deletedAt := map[string]bool{}
+			for _, k := range server.RoutesDeletedAtTheFlip() {
+				deletedAt[k] = true
+			}
+			byCore, deleted := 0, 0
+			for _, lr := range recorded {
+				key := lr.Method + " " + lr.GinPath
+				if mountedKeys[key] {
+					continue
+				}
+				if coreExact[lr.Method+" "+ginToMux(lr.GinPath)] {
+					byCore++
+					continue
+				}
+				if deletedAt[key] {
+					deleted++
+					continue
+				}
+				t.Errorf("the App did not mount %s, and core does not serve it", key)
+			}
+			if byCore == 0 {
+				t.Error("no manifest row is served by core: the identity flip's OAuth paths are back on gin")
+			}
+			if deleted != len(deletedAt) {
+				t.Errorf("%d of the %d routes the flip deletes are in the manifest and unmounted", deleted, len(deletedAt))
+			}
+			if mounted+byCore+deleted != len(recorded) {
+				t.Errorf("the App mounted %d legacy routes, core serves %d and the flip deleted %d, want the manifest's %d", mounted, byCore, deleted, len(recorded))
 			}
 			// 03 R6 over the whole booted router, the resolved requirements
 			// included.
@@ -548,4 +587,16 @@ func TestTelemetry_TracerFromEnv(t *testing.T) {
 func tempDir(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "batcave")
+}
+
+// ginToMux is a gin path in ServeMux form (":name" segments become "{name}"), the
+// form httpapi.CoreExactPatterns uses.
+func ginToMux(ginPath string) string {
+	segs := strings.Split(ginPath, "/")
+	for i, seg := range segs {
+		if name, ok := strings.CutPrefix(seg, ":"); ok {
+			segs[i] = "{" + name + "}"
+		}
+	}
+	return strings.Join(segs, "/")
 }

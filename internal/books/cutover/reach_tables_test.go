@@ -64,9 +64,10 @@ const reachOwnerGateText = "sign in through Cloudflare Access"
 // diff: each is a principal the route-level gate (users.manage) lets in and R0's
 // handler refuses, because the handler tests the admin role by name and that a
 // key may act as admin. They are the F4-08 obligation spelled out in
-// seams.d/F4-07.md: until the registered path proves the migrated handlers
-// (the merge actor check, SetUserEmail), these 11 cells are asserted by the
-// pin and by nothing that runs the handler.
+// seams.d/F4-07.md, discharged on the registered path: TestReachRegisteredPath_PinnedCells
+// (registered_handler_refusals_test.go) holds exactly these cells, as a set, at
+// R0's D under the flip, through the real handlers (F4-08 B lead 2026-11-22, B10f
+// row amended).
 var reachPinnedCells = []string{
 	"GET /api/v1/users/:id/footprint / authoff: R0 D, R2 A",
 	"GET /api/v1/users/:id/footprint / key:admin:users: R0 D, R2 A",
@@ -120,7 +121,14 @@ func TestReachHandlerAdminPin_SitsOnRoutesThatAskForUsersManage(t *testing.T) {
 // role-name checks of handlers/user.go (SetUserEmail, whose route's users.manage
 // "is not enough"). The oracle's route-level gate cannot see a handler, so the
 // check is pinned here from the spec; it is a claim about code that F4-08 or
-// the handler migration (04) writes, and unproven until then (seams.d/F4-07.md).
+// the handler migration (04) writes (seams.d/F4-07.md).
+//
+// The pin is permanent, not a stopgap the flip deletes: these routes' checks
+// (self-or-admin, the admin-acting key) are ones stage 13 cannot express, so
+// their authorization stays in the handlers, and the source guards
+// (reachHandlerAdminProblems) keep anyone from deleting those checks later. Since
+// the flip a standing pin is allowed only while it is discharged on the registered
+// path (reachPinDischarge; F4-08 B lead 2026-11-22, B10f row amended).
 var reachHandlerAdmin = map[string]string{
 	"GET /api/v1/users/:id/footprint": "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:68-70, called at :101) @v0.223.0",
 	"GET /api/v1/users/merges":        "05-rbac 4.6: mergeActor checks core:admin (user_merge.go:68-70, called at :194) @v0.223.0",

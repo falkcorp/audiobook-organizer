@@ -74,7 +74,6 @@ func newAccessAssertions() accessAssertions {
 // Register binds nothing of its own).
 func bootAccessOnly(t *testing.T, allowList string) *runningApp {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	t.Setenv(accessEnvKey, allowList)
 	// The owner is a key of the flipped config (modules.books.identity.owner_email),
 	// not the fixture's loaded config: set it where an operator does.

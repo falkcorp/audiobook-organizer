@@ -31,13 +31,12 @@ const (
 	gordon = "james.gordon@gcpd.example"
 )
 
-// TestIdentityOptions_ShapeUnderTheFlip: with the predicate on, Options hands core
-// the identity boot, the atom table, the account resolver, the Access extension
-// and the bootstrap token's name, and pins the session cookie; with it off, none
-// of them (HEAD's Options).
+// TestIdentityOptions_ShapeUnderTheFlip: Options hands core the identity boot,
+// the atom table, the account resolver, the Access extension and the bootstrap
+// token's name, and pins the session cookie. (The predicate-off half, HEAD's
+// Options, went with the selector at B10g: there is no off any more.)
 func TestIdentityOptions_ShapeUnderTheFlip(t *testing.T) {
 	t.Run("on", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		mod, o, _ := composedOptions(t, false, "", nil, nil)
 		require.True(t, o.IdentityBoot, "the identity boot is not asked for")
 		require.NotNil(t, o.ResolveAtom, "stage 13 has no atom table")
@@ -60,17 +59,6 @@ func TestIdentityOptions_ShapeUnderTheFlip(t *testing.T) {
 		require.True(t, ext.OwnerSet(), "an owner is configured but core's owner gate would be off")
 		config.Mutate(func(c *config.Config) { c.OwnerEmail = "" })
 		require.False(t, ext.OwnerSet())
-	})
-	t.Run("off", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(false))
-		mod, o, _ := composedOptions(t, false, "", nil, nil)
-		require.False(t, o.IdentityBoot)
-		require.Nil(t, o.ResolveAtom)
-		require.Nil(t, o.AccountResolver)
-		require.Empty(t, o.Authenticators)
-		require.Empty(t, o.Auth.BootstrapTokenFile)
-		require.NotContains(t, o.ConfigFlags, coreconfig.Path("core.auth.session.cookie_name"))
-		require.Nil(t, mod.idw)
 	})
 }
 
@@ -140,7 +128,6 @@ func TestIdentityWire_RefusesAnExplicitOwnerRequiredFalse(t *testing.T) {
 // TestIdentityBoot_RefusesOwnerRequiredFalse is the same refusal through a real
 // boot: Register returns it, the server is never built.
 func TestIdentityBoot_RefusesOwnerRequiredFalse(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	t.Setenv("ABO_CORE_AUTH_OWNER_REQUIRED", "false")
 	mod, opts, _ := composedOptions(t, false, "", func(c *config.Config) { c.EnableAuth = true; c.OwnerEmail = waynE }, nil)
 	err := bootFails(t, mod, opts)
@@ -201,7 +188,6 @@ func redeemBootstrap(t *testing.T, c *composed) (username, password string) {
 // writer does not replace it: the file's token redeems at core's route. Run, so
 // the server's start hook (which holds HEAD's writer) has run.
 func TestIdentityBoot_BootstrapTokenIsCoresAtTheRunbooksPath(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, func(c *config.Config) { c.EnableAuth = true }, nil, nil, nil)
 	user, pass := redeemBootstrap(t, r.composed)
 	require.NotEmpty(t, user)
@@ -229,7 +215,6 @@ func TestIdentityBoot_BootstrapTokenNameAndDirectoryArePinned(t *testing.T) {
 // unprefixed name, which the browser accepts and the session works; over HTTPS the
 // prefixed one. The pin on the name is the one HEAD's browsers hold.
 func TestIdentityBoot_PlainHTTPLANGetsAWorkingSession(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	c := runComposedWith(t, func(c *config.Config) { c.EnableAuth = true }, nil, nil, nil).composed
 	user, pass := redeemBootstrap(t, c)
 

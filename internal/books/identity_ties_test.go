@@ -89,7 +89,6 @@ func TestIdentityStoreReady_RefusesAStoreNotAtTheIdentityLevel(t *testing.T) {
 func TestIdentityFor_DepsMustAgreeWithThePredicate(t *testing.T) {
 	m := Module().(*booksModule)
 	t.Run("on, core handed nothing", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		w, err := newIdentityWiring(configOwnerEmail)
 		require.NoError(t, err)
 		m.idw = w
@@ -98,36 +97,15 @@ func TestIdentityFor_DepsMustAgreeWithThePredicate(t *testing.T) {
 		require.ErrorIs(t, err, errIdentityDeps)
 	})
 	t.Run("on, Options never ran", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		m.idw = nil
 		_, err := m.identityFor(module.Deps{})
 		require.Error(t, err)
 	})
-	t.Run("off, nothing handed", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(false))
-		id, err := m.identityFor(module.Deps{})
-		require.NoError(t, err)
-		require.Nil(t, id)
-	})
-}
-
-// TestIdentityBoot_PredicateOffOverIdentityHandlesRefuses: core boots the identity
-// flip (Options ran with the predicate on) and the predicate is off by Register:
-// the boot is refused rather than served under HEAD's middleware over tables M3
-// drained.
-func TestIdentityBoot_PredicateOffOverIdentityHandlesRefuses(t *testing.T) {
-	restore := SetIdentityFlipForTest(true)
-	mod, opts, _ := composedOptions(t, false, "", func(c *config.Config) { c.EnableAuth = true }, nil)
-	restore()
-	t.Cleanup(SetIdentityFlipForTest(false))
-	err := bootFails(t, mod, opts)
-	require.ErrorIs(t, err, errIdentityDepsWithoutFlip)
 }
 
 // TestIdentityBoot_RefusesACutoverThatCouldNotBeBuilt: a failure building M3 is a
 // recorded error and a refused boot, never a panic.
 func TestIdentityBoot_RefusesACutoverThatCouldNotBeBuilt(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	mod, opts, _ := composedOptions(t, false, "", func(c *config.Config) { c.EnableAuth = true }, nil)
 	boom := errors.New("Riddler scrambled the importers")
 	mod.cutoverErr.Store(&boom)
@@ -139,7 +117,6 @@ func TestIdentityBoot_RefusesACutoverThatCouldNotBeBuilt(t *testing.T) {
 // importers that cannot stage M3 returns no steps, records the error and does not
 // panic (Manifest.Cutover has no error return).
 func TestCutoverSteps_ABuilderFailureIsRecordedNotRaised(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	m := Module().(*booksModule)
 	m.dbPath = "fast-exit"
 	w, err := newIdentityWiring(configOwnerEmail)

@@ -139,7 +139,6 @@ type inviteBoot struct {
 
 func newInviteBoot(t *testing.T) *inviteBoot {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	smtp, port := startBootSMTP(t)
 	// Mail and the public origin are operator-only settings: their layer is the
 	// environment, under the canonical names the flip's rename map gives HEAD's.

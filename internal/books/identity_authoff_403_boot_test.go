@@ -111,7 +111,6 @@ func authOffSend(r *runningApp, method, path, body, addr string, headers map[str
 
 func bootAuthOff(t *testing.T) *runningApp {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	return runComposedWith(t, nil, nil, func(o *app.Options) { o.ConfigFlags["core.auth.mode"] = "disabled" }, nil)
 }
 

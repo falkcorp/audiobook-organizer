@@ -106,7 +106,6 @@ func sha256Challenge(verifier string) string {
 // it; nil leaves the verifier books bound from the config (the network one).
 func bootAccess(t *testing.T, fake *fakeAccessVerifier, edit func(*config.Config)) *runningApp {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	t.Setenv("ABS_OIDC_REDIRECT_URIS", "")
 	// Sign-in settings are operator-only: their layer is the environment, under
 	// the canonical names the flip's rename map gives HEAD's.

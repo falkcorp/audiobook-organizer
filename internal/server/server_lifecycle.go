@@ -2885,8 +2885,12 @@ func (s *Server) setupRoutes() error {
 
 	// Public temp-login consumer at the root so URLs are short and
 	// browser-friendly. Validates the token, deletes it (single-use),
-	// creates a 24h session, sets the cookie, redirects to the SPA.
-	s.router.GET("/auth/temp-login", s.consumeTempLoginToken)
+	// creates a 24h session, sets the cookie, redirects to the SPA. Deleted
+	// under core identity (routesDeletedAtTheFlip): the SPA's /login/temp#token=
+	// consumes the link through core's POST /api/core/v1/auth/temp-login/consume.
+	if !s.deletedAtTheFlip(http.MethodGet, "/auth/temp-login") {
+		s.router.GET("/auth/temp-login", s.consumeTempLoginToken)
+	}
 
 	// Redirect /api/* to /api/v1/* for v1 compatibility. The rule is
 	// legacyAPIRedirect, which books' legacy mount also carries as its

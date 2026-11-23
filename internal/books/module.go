@@ -14,8 +14,8 @@
 // In release R1 books wraps HEAD's server over the store core opens (R1-23,
 // 05-storage §5S.9.3): Register builds books' store on its LegacyRange, runs
 // HEAD's settings boot over it (boot.go), builds today's *server.Server and
-// mounts its gin engine with Registrar.MountLegacy (LegacyAuthGin,
-// ServesSPA); its repairs hook runs HEAD's open-time writers and closes the
+// mounts its gin engine with Registrar.MountLegacy (LegacyAuthCore since the
+// F4-08 switch, ServesSPA); its repairs hook runs HEAD's open-time writers and closes the
 // store last, and its server hook runs HEAD's start up to the listener and
 // HEAD's post-drain stop; the listener stack itself is HEAD's, handed to the
 // kernel through app.Options.R1Listen until R1-17 builds core's perimeter.
@@ -509,7 +509,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	csp, cspReport, buildID := srv.LegacyPerimeter()
 	mount := httpapi.LegacyMount{
 		Handler:     srv.LegacyHandler(),
-		Auth:        httpapi.LegacyAuthGin,
+		Auth:        httpapi.LegacyAuthCore,
 		ServesSPA:   true,
 		Routes:      slices.Values(routes),
 		Redirects:   srv.LegacyRedirects(),
@@ -522,14 +522,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		BasicGate:         server.LegacyBasicGate(),
 		BasicExemptAssets: server.LegacyBasicExemptAssets,
 	}
-	// The one place the mount's authentication can differ from the literal
-	// above: the identity predicate (identity_flip.go), off in production
-	// until B10g, so the shipped mount is the literal's LegacyAuthGin.
-	// reachMountAuth (internal/books/cutover) accepts exactly this statement,
-	// in exactly this shape, and fails closed on any other write to .Auth.
-	if identityOn() {
-		mount.Auth = httpapi.LegacyAuthCore
-	}
+	// The mount's authentication is the literal's, LegacyAuthCore, and nothing
+	// writes it after: reachMountAuth (internal/books/cutover) accepts the
+	// literal and fails closed on any other write to .Auth. identityTies still
+	// refuses a boot whose predicate, server and mount disagree (until B10h).
 	if err := identityTies(identityOn(), identity != nil, mount.Auth); err != nil {
 		return err
 	}

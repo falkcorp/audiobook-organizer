@@ -26,7 +26,6 @@ import (
 // settings boot) with the identity predicate on and sign-in required.
 func bootIdentity(t *testing.T, edit func(*config.Config)) *composed {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	return bootComposedWith(t, false, "", func(c *config.Config) {
 		c.EnableAuth = true
 		if edit != nil {
@@ -74,7 +73,6 @@ func authOffRemote(o *app.Options) {
 // raises none.
 func TestIdentityBoot_DegradedCarriesTheRegistryTokens(t *testing.T) {
 	t.Run("auth off and remote-reachable raises auth_disabled_remote", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		r := runComposedWith(t, nil, nil, authOffRemote, nil)
 		// The probe's first result lands shortly after Run (the registry, not
 		// the route, is polled: the route is rate limited). One request then
@@ -87,7 +85,6 @@ func TestIdentityBoot_DegradedCarriesTheRegistryTokens(t *testing.T) {
 		require.Contains(t, statusDegraded(t, r.composed), "auth_disabled_remote")
 	})
 	t.Run("auth off on loopback raises nothing", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		r := runComposedWith(t, nil, nil, func(o *app.Options) { o.ConfigFlags["core.auth.mode"] = "disabled" }, nil)
 		// The probes have run once Run returned (start step 2 reports them).
 		require.NotContains(t, statusDegraded(t, r.composed), "auth_disabled_remote")
@@ -102,19 +99,14 @@ func (fakePosture) CheckpointHealth() (storage.CheckpointHealth, error) {
 func (f fakePosture) HealthSnapshot() health.Snapshot { return f.snap }
 
 // TestPostureTokens_RegistryTokensOnlyUnderTheFlip: the registry's tokens join
-// the authenticated list only while the flip is on; off it, the list is HEAD's
-// (the checkpoint tokens alone).
+// the authenticated list under the flip, which is on for good since B10g (the
+// off half, HEAD's checkpoint-only list, went with the selector).
 func TestPostureTokens_RegistryTokensOnlyUnderTheFlip(t *testing.T) {
 	src := fakePosture{snap: health.Snapshot{Components: []health.ComponentState{
 		{ID: "core.auth", Result: health.Result{Status: health.StatusDegraded, Reason: "auth_disabled_remote"}},
 		{ID: "core.backup", Result: health.Result{Status: health.StatusUp}},
 	}}}
 	t.Run("on", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		require.Equal(t, []system.PostureToken{{Token: "auth_disabled_remote", Subject: "core.auth"}}, postureTokens(src, time.Now()))
-	})
-	t.Run("off", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(false))
-		require.Empty(t, postureTokens(src, time.Now()))
 	})
 }

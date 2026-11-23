@@ -168,7 +168,6 @@ func bootSameEmail(t *testing.T) *seBoot {
 	t.Helper()
 	ids := &seIDs{}
 	fx := newFlipFixture(t, func(s *database.PebbleStore) { seedSameEmail(t, s, ids) }, "")
-	t.Cleanup(SetIdentityFlipForTest(true))
 	t.Setenv("ABO_BOOKS_IDENTITY_OWNER_EMAIL", seBruce)
 	r := runComposedIn(t, fx.stateDir, func(cfg *config.Config) {
 		cfg.DatabasePath = fx.dbPath

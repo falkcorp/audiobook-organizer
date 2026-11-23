@@ -31,7 +31,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
-	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
@@ -251,12 +250,9 @@ func composedOptions(t *testing.T, abs bool, stateDir string, edit func(*config.
 
 	mod := Module().(*booksModule)
 	mod.beforeSettings = func(store *database.PebbleStore) {
-		// Under the identity flip the role rows are a retired claim (core owns
-		// the roles): HEAD's seed would be refused, correctly.
-		if !identityOn() {
-			_, _, err := auth.SeedRoles(store)
-			require.NoError(t, err)
-		}
+		// The role rows are a retired claim under the identity flip (core owns
+		// the roles), so HEAD's role seed is not run: it would be refused,
+		// correctly.
 		if pre != nil {
 			pre(store)
 		}
@@ -522,16 +518,30 @@ func TestServeComposition_HostileOTLPEnvNeverLogged(t *testing.T) {
 // TestLegacyMount_UnmatchedMethodMatchesGin against the composed App: books'
 // real mount (its claims, top segments and redirects, from Register) behind
 // the kernel's root handler. Every method a manifest path does not route
-// answers as HEAD's engine did: status, content type and body. OPTIONS is
+// answers as the engine does: status, content type and body. OPTIONS is
 // the known difference of a.Handler(): the perimeter shim in front of it in
 // production sends OPTIONS straight to the engine (perimeter_shim_test.go
 // pins that).
+//
+// Since B10g the engine runs under core identity, where gin authenticates
+// nobody itself: it reads the principal stage 12 binds, so the bare engine
+// answers every pair a gin route serves with its 401 (no principal), where
+// the App, with auth off, binds the auth-disabled principal and the handler
+// answers. Those pairs are not unmatched in gin (a param sibling such as
+// /audiobooks/:id routes GET /audiobooks/batch); their authorization is the
+// reach oracle's cell for the gin route that serves them, so here they are held
+// only to gin answering them (no core refusal, no 5xx). Two more cells per
+// surface are a known difference, refusal to refusal: HEAD on a GET row with
+// the Interactive guard, which the mux matches to the GET pattern, so stage 13
+// refuses with 403 interactive_required where gin answered 404.
 func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
+	ginNeedsPrincipal := `{"error":"authentication required","code":"UNAUTHORIZED","status":401}`
 	for _, abs := range []bool{false, true} {
 		t.Run("abs="+strconv.FormatBool(abs), func(t *testing.T) {
 			c := bootComposed(t, abs, nil, nil)
 			engine := c.srv.LegacyHandler()
 			routed := map[string]bool{}
+			interactiveGET := map[string]bool{}
 			var paths []string
 			for _, lr := range server.LegacyRoutes(abs) {
 				p := concretePath(lr.GinPath)
@@ -539,22 +549,41 @@ func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
 					paths = append(paths, p)
 				}
 				routed[lr.Method+" "+p] = true
+				if lr.Method == http.MethodGet && (lr.Guards.Interactive || lr.Guards.Session) {
+					interactiveGET[p] = true
+				}
 			}
 			methods := []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
-			n := 0
+			unmatched, siblings, headInteractive := 0, 0, 0
 			for _, p := range paths {
 				for _, m := range methods {
 					if routed[m+" "+p] {
 						continue
 					}
-					n++
 					g, k := probe(engine, m, p), probe(c.app.Handler(), m, p)
-					assert.Equal(t, g.Code, k.Code, "%s %s", m, p)
-					assert.Equal(t, g.Header().Get("Content-Type"), k.Header().Get("Content-Type"), "%s %s", m, p)
-					assert.Equal(t, g.Body.String(), k.Body.String(), "%s %s", m, p)
+					switch {
+					case g.Code == http.StatusUnauthorized && g.Body.String() == ginNeedsPrincipal:
+						// A gin route serves the pair and wants stage 12's principal.
+						siblings++
+						assert.Less(t, k.Code, 500, "%s %s: a gin route serves it, and the App answers %d %s", m, p, k.Code, k.Body.String())
+						assert.NotEqual(t, "application/problem+json", k.Header().Get("Content-Type"),
+							"%s %s: a gin route serves it, and core refused it before gin: %s", m, p, k.Body.String())
+					case m == http.MethodHead && interactiveGET[p] && g.Code == http.StatusNotFound &&
+						k.Code == http.StatusForbidden && strings.Contains(k.Body.String(), `"code":"interactive_required"`):
+						headInteractive++
+					default:
+						unmatched++
+						assert.Equal(t, g.Code, k.Code, "%s %s", m, p)
+						assert.Equal(t, g.Header().Get("Content-Type"), k.Header().Get("Content-Type"), "%s %s", m, p)
+						assert.Equal(t, g.Body.String(), k.Body.String(), "%s %s", m, p)
+					}
 				}
 			}
-			assert.Greater(t, n, 1000, "too few unrouted method/path pairs; the scan is broken")
+			t.Logf("unrouted method/path pairs: %d compared exactly, %d served by a gin param route, %d HEAD on an Interactive GET row",
+				unmatched, siblings, headInteractive)
+			assert.Greater(t, unmatched, 1000, "too few unrouted method/path pairs; the scan is broken")
+			assert.Positive(t, siblings, "no pair is served by a gin param route: the engine no longer reads stage 12's principal, or the scan is broken")
+			assert.Equal(t, len(interactiveGET), headInteractive, "every Interactive GET row's HEAD is refused by stage 13, and nothing else is")
 			for _, p := range []string{"/login", "/socket.io/", "/ping/riddler", "/metrics/riddler", "/library/riddler"} {
 				assert.Equal(t, probe(engine, http.MethodGet, p).Code, probe(c.app.Handler(), http.MethodGet, p).Code, "GET %s", p)
 			}
@@ -562,19 +591,6 @@ func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
 	}
 }
 
-// concretePath fills a gin path's parameters with a placeholder segment.
-func concretePath(gin string) string {
-	segs := strings.Split(gin, "/")
-	for i, s := range segs {
-		if strings.HasPrefix(s, ":") || strings.HasPrefix(s, "*") {
-			segs[i] = "riddler"
-		}
-	}
-	return strings.Join(segs, "/")
-}
-
-// probe sends one request with an already-cancelled context, so a handler
-// that does run returns at once.
 func probe(h http.Handler, method, path string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, path, nil)
 	ctx, cancel := context.WithCancel(req.Context())

@@ -45,18 +45,9 @@ func TestIdentityAuthOptions_AreHEADsAndOnlyUnderTheFlip(t *testing.T) {
 	require.Equal(t, 720*time.Hour, got.InviteSessionTTL, "HEAD's accept-invite session is 30 days (handlers/user.go:380)")
 
 	t.Run("on", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		_, o, _ := composedOptions(t, false, "", nil, nil)
 		require.Equal(t, got, o.Auth)
 		require.Equal(t, "audiobooks_pebble_", o.ArchivePrefix)
-	})
-	t.Run("off", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(false))
-		_, o, _ := composedOptions(t, false, "", nil, nil)
-		require.Empty(t, o.Auth.ImportedKeyPrefixes)
-		require.Empty(t, o.Auth.OIDCCallbackBase)
-		require.False(t, o.Auth.DefaultDisabledAllowRemote)
-		require.Zero(t, o.Auth.InviteSessionTTL)
 	})
 }
 
@@ -89,7 +80,6 @@ func TestArchivePrefix_IsWhatHEADsWriterNames(t *testing.T) {
 	opts, err := OfflineOptions(BootInputs{})
 	require.NoError(t, err)
 	require.Equal(t, archivePrefix, opts.ArchivePrefix, "an offline command would name a different journal than serve")
-	t.Cleanup(SetIdentityFlipForTest(true))
 	_, o, _ := composedOptions(t, false, "", nil, nil)
 	require.Equal(t, opts.ArchivePrefix, o.ArchivePrefix)
 }
@@ -161,7 +151,6 @@ func seedHEAD(t *testing.T, out *headKeys) func(*database.PebbleStore) {
 // and waits for ready. M3 imports the rows during the boot.
 func bootOverHEADStore(t *testing.T, fx *flipFixture) *runningApp {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	// o.Env below is the whole environment core's config reads, so the ABS
 	// settings (environment-authoritative, errABSFlagDrift) ride on the fixture.
 	fx.env = append(fx.env,
@@ -399,14 +388,12 @@ func TestIdentityBoot_AuthOffRemoteAdmitsAsHEADDid(t *testing.T) {
 		o.ConfigFlags["core.http.listen"] = "0.0.0.0:0"
 	}
 	t.Run("the default admits and health reports it", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		r := runComposedWith(t, nil, nil, remote, nil)
 		require.Eventually(t, func() bool {
 			return slices.Contains(statusDegradedOrNil(t, r.composed), "auth_disabled_remote")
 		}, 30*time.Second, 50*time.Millisecond, "an auth-off install a remote caller reaches did not report auth_disabled_remote")
 	})
 	t.Run("an operator's explicit false still refuses the boot", func(t *testing.T) {
-		t.Cleanup(SetIdentityFlipForTest(true))
 		mod, opts, _ := composedOptions(t, false, "", nil, nil)
 		remote(&opts)
 		opts.ConfigFlags["core.auth.disabled_allow_remote"] = "false"
@@ -444,7 +431,6 @@ func statusDegradedOrNil(t *testing.T, c *composed) []string {
 // backup directory under the prefix, so the journal and the archives an install
 // already holds share one name space and a restore finds both.
 func TestIdentityBoot_ArchivePrefixNamesTheJournal(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, func(c *config.Config) { c.EnableAuth = true }, nil, nil, nil)
 	dir := filepath.Join(filepath.Dir(config.Snapshot().DatabasePath), "backups")
 	require.FileExists(t, filepath.Join(dir, "audiobooks_pebble_revocations.journal"), "the journal does not carry HEAD's archive prefix")

@@ -140,7 +140,6 @@ func bootGuestKeyMailed(t *testing.T, wrap ...func(module.Module) module.Module)
 
 func bootGuestKeyWithMail(t *testing.T, mailHost, mailPort string, wrap ...func(module.Module) module.Module) (*runningApp, *cloudflareFake) {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	// The Cloudflare settings are operator-only: their layer is the environment.
 	t.Setenv("ABO_BOOKS_CFGUESTS_ACCOUNT_ID", claimAccountID)
 	t.Setenv("ABO_BOOKS_CFGUESTS_POLICY_API_TOKEN", "Fox-policy-token-0902")
@@ -290,6 +289,73 @@ func TestIdentityBoot_GuestClaimsThePhoneKeyOnceThroughCoresAccept(t *testing.T)
 	require.NotNil(t, row)
 	assert.Equal(t, database.GuestTokenActive, row.Status)
 	assert.NotEmpty(t, row.SecretHash)
+}
+
+// TestIdentityBoot_LiveServerClaimMatchesTheSPAContract (B10g checklist): the SPA's
+// claim call (web/src/services/phoneKeyClaim.ts, F4-08 B8) against B10s's real
+// endpoint over the running server's socket, read the way the SPA reads it: POST,
+// same origin, the session cookie, no body, Accept: application/json. Only a 200
+// is shown; its body carries phone_app (bare, or data.phone_app under the
+// RespondWithOK envelope) with status "issued" and both halves of the key and
+// their header names. Before an offer and after the one claim the answer is a
+// 404, which the SPA shows nothing for.
+func TestIdentityBoot_LiveServerClaimMatchesTheSPAContract(t *testing.T) {
+	r, _ := bootGuestKeyApp(t)
+	guest, guestID, _ := inviteAndAccept(t, r, "robin", "robin@wayne.example")
+	srv := r.mod.srv.Load()
+	require.NotNil(t, srv)
+	origin := "http://" + r.addr.String()
+	claim := func() (*http.Response, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/api/v1/auth/phone-key/claim", nil)
+		require.NoError(t, err)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Origin", origin)
+		req.AddCookie(guest)
+		res, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		b, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		return res, b
+	}
+
+	res, body := claim()
+	require.Equal(t, http.StatusNotFound, res.StatusCode, "before an offer: %s", body)
+
+	require.True(t, srv.OfferGuestKeyClaim(server.GuestKeyOffer{UserID: guestID, InviteID: "inv-batcave-live", BindEmailOnAccept: true, CreatorHeldAdmin: true}))
+	res, body = claim()
+	require.Equal(t, http.StatusOK, res.StatusCode, "%s", body)
+	assert.Contains(t, res.Header.Get("Content-Type"), "application/json")
+	assert.Contains(t, res.Header.Get("Cache-Control"), "no-store")
+	type phoneApp struct {
+		Status       string `json:"status"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		IDHeader     string `json:"id_header"`
+		SecretHeader string `json:"secret_header"`
+	}
+	var env struct {
+		PhoneApp *phoneApp `json:"phone_app"`
+		Data     *struct {
+			PhoneApp *phoneApp `json:"phone_app"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &env), "%s", body)
+	got := env.PhoneApp
+	if got == nil && env.Data != nil {
+		got = env.Data.PhoneApp
+	}
+	require.NotNil(t, got, "no phone_app at the top level or under data: the SPA shows nothing for %s", body)
+	assert.Equal(t, "issued", got.Status)
+	assert.Equal(t, claimClientID, got.ClientID)
+	assert.Equal(t, claimSecret, got.ClientSecret)
+	assert.NotEmpty(t, got.IDHeader, "the SPA names the client ID's header")
+	assert.NotEmpty(t, got.SecretHeader, "the SPA names the secret's header")
+
+	res, body = claim()
+	require.Equal(t, http.StatusNotFound, res.StatusCode, "a second claim: %s", body)
+	assert.NotContains(t, string(body), claimSecret)
 }
 
 // assertSecretNotStored scans every key and value of books' store for the secret

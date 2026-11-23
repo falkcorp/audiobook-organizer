@@ -45,9 +45,10 @@ func everyAtomScope() []rbac.Permission {
 }
 
 // TestAdminGates_APIKeys: under core identity an API key passes an admin gate
-// when it satisfies the route's manifest requirement AND holds every atom (HEAD's
-// APIKeyMayActAsAdmin), on top of HEAD's role-name test on its owner. It never
-// passes a credential-changing route.
+// when it satisfies the route's manifest requirement. Since B10g that is the whole
+// gin gate: HEAD's APIKeyMayActAsAdmin (the key holds every atom) and the role-name
+// test on its owner no longer run behind the bridge (owner ruling 2026-11-22, B10rn
+// STOP 1). It never passes a credential-changing route.
 func TestAdminGates_APIKeys(t *testing.T) {
 	w := newAdminGateWorld(t, true)
 	gates := []adminGateRoute{adminGateRoutes[0], adminGateRoutes[1], adminGateRoutes[3], adminGateRoutes[4], adminGateRoutes[5]}
@@ -61,16 +62,17 @@ func TestAdminGates_APIKeys(t *testing.T) {
 				p, c := adoptPrincipal(coreauth.MethodAPIKey, u, scopes...)
 				return identityServe(w.core.router, rt.request(), p, c).Code
 			}
-			full := append(everyAtomScope(), rt.scopes...)
-			require.True(t, opened(serve("alfred", full...)), "a key holding every atom and the requirement passes, as in HEAD")
-			require.Equal(t, http.StatusForbidden, serve("alfred", append([]rbac.Permission{"test:users.manage"}, rt.scopes...)...),
-				"a key that satisfies the requirement but lacks HEAD's admin scope is refused")
+			require.True(t, opened(serve("alfred", append(everyAtomScope(), rt.scopes...)...)), "a key holding every atom and the requirement passes, as in HEAD")
+			require.True(t, opened(serve("alfred", rt.scopesFor()...)),
+				"a key that satisfies the requirement passes without HEAD's every-atom test")
+			require.True(t, opened(serve("bruce", rt.scopesFor()...)),
+				"a viewer's key holding the requirement passes: no role-name test on the owner")
 			require.Equal(t, http.StatusForbidden, serve("alfred", everyAtomScope()...),
 				"a key holding every atom but not the route's requirement is refused")
-			require.Equal(t, http.StatusForbidden, serve("alfred", rt.scopes[:1]...),
-				"a key without the admin scope")
-			require.Equal(t, http.StatusForbidden, serve("bruce", full...),
-				"the owner's role-name test still runs for a key, as in HEAD")
+			if len(rt.scopes) > 1 {
+				require.Equal(t, http.StatusForbidden, serve("alfred", append([]rbac.Permission{"test:users.manage"}, rt.scopes[1:]...)...),
+					"a key holding part of an AllOf requirement is refused")
+			}
 		})
 	}
 

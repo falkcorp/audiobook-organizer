@@ -74,7 +74,6 @@ func TestGuestPolicyAcceptedList_FullBoot(t *testing.T) {
 	t.Setenv("ABO_BOOKS_CFGUESTS_ACCOUNT_ID", gpCFAccount)
 	t.Setenv("ABO_BOOKS_CFGUESTS_GUESTS_POLICY_ID", gpCFPolicy)
 	t.Setenv("ABO_BOOKS_CFGUESTS_POLICY_API_TOKEN", gpCFToken)
-	t.Cleanup(SetIdentityFlipForTest(true))
 	tap := &gpTap{}
 	r := runComposedWith(t, func(cfg *config.Config) { cfg.EnableAuth = true }, nil, nil, nil,
 		func(m module.Module) module.Module { return gpTapModule{Module: m, tap: tap} })
@@ -182,7 +181,6 @@ func TestGuestPolicyAcceptedList_FullBoot(t *testing.T) {
 // principal), so the accept row and the outcome row are written the way the
 // lifecycle writes them.
 func TestGuestPolicyAcceptedList_AuthOffListsAsHEADDid(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, nil, nil, func(o *app.Options) { o.ConfigFlags["core.auth.mode"] = "disabled" }, nil)
 	code, raw, body := acceptedList(t, r, "", nil, "127.0.0.31:41000")
 	require.Equal(t, http.StatusOK, code, body)

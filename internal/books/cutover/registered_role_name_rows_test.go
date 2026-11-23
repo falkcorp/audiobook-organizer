@@ -5,9 +5,9 @@
 
 package cutover_test
 
-// F4-08 B10rn: the two kinds of route internal/server's gin cross-check cannot call
-// weaker or stronger (legacy_manifest_gin_allowlist_test.go), run on the flipped
-// build.
+// F4-08 B10rn: the two kinds of route internal/server's gin cross-check could not
+// call weaker or stronger until B10g (its ROLE-NAME-GATE and CONDITIONAL-GUARD
+// allow-list entries, deleted with the gin gates at B10g), run on the flipped build.
 //
 //	TestReachRegisteredPath_RoleNameRowsScopeGateAdmits
 //	    the 19 ROLE-NAME-GATE rows, under the owner's ruling of 2026-11-22 (B10rn
@@ -22,14 +22,11 @@ package cutover_test
 //	    core:admin stubs), refused with interactive_required on the four
 //	    guest-service-token rows (Guards.Interactive), and not tried on the three
 //	    books:admin.debug rows (a Sensitive scope, which 05-rbac §4.4 says no key
-//	    satisfies; this test does not prove it). Gin's answer behind stage 13 is
-//	    reported, not asserted: until B10g the bridge still runs HEAD's role-name
-//	    test (bridgedAdminGate) and refuses the role with "admin role required",
-//	    and from B10g it admits it. One principal passes gin already: the admin's
-//	    core:admin key, which HEAD's own key test admits as an admin key whose
-//	    scopes cover every atom (legacyauth.KeyMayActAsAdmin), so it is not part of
-//	    the widening. B10g checklist: once gin is unmounted, this test still passes
-//	    unchanged, and the gin-refusal log lines disappear.
+//	    satisfies; this test does not prove it). Since B10g the admission is
+//	    asserted end to end: gin's bridge no longer runs HEAD's role-name test
+//	    (bridgedAdminGate), so every principal stage 13 admits must be admitted by
+//	    gin and the handler as well, and gin's "admin role required" behind stage 13
+//	    fails the cell by name (the gate is still mounted).
 //
 //	TestReachRegisteredPath_NonAdminCannotGrantAdminScopes
 //	    the other half of the ruling: a user who manages roles but holds none of
@@ -121,27 +118,28 @@ var rnKeyScopes = map[string][]string{
 	rnCoreAdmin:  {"core:admin"},
 }
 
-// The two refusals gin's RequireAdmin writes behind stage 13 until B10g
+// The two refusals gin's RequireAdmin wrote behind stage 13 until B10g
 // (internal/server/middleware/auth.go): the role-name test, and the test that an
-// admin's key holds every atom.
+// admin's key holds every atom. Since B10g neither may answer these rows.
 const (
 	rnNameRefusal = "admin role required"
 	rnKeyRefusal  = "admin role required: this API key's scopes do not include every permission"
 )
 
-// rnBehindStage13 checks what answered behind stage 13 for a principal stage 13
-// admitted: until B10g, gin's role-name refusal (want); from B10g, the handler
-// (anything but 401/403). Any other refusal fails. It returns which it saw.
-func rnBehindStage13(t *testing.T, p *Principal, res Result, want string) string {
+// rnAdmittedEndToEnd asserts that a principal stage 13 admitted is admitted by gin
+// and the handler too (B10g unmounted gin's role-name gate): the answer is no 401
+// or 403. gin's role-name refusal (want) behind stage 13 is named, since it means
+// the gate is still mounted under identity.
+func rnAdmittedEndToEnd(t *testing.T, p *Principal, res Result, want string) {
 	t.Helper()
 	switch {
 	case res.Verdict() == 'A':
-		return "admitted by gin and the handler"
+		return
 	case res.Status == http.StatusForbidden && rnMessage(res) == want:
-		return "refused by gin's role-name gate (until B10g)"
+		t.Errorf("%s: stage 13 admitted it and gin's role-name gate still refused it (%s): the gate is mounted under identity", p.Name, res.excerpt())
+	default:
+		t.Errorf("%s: stage 13 admitted it and something behind it refused it: %d %s", p.Name, res.Status, res.excerpt())
 	}
-	t.Errorf("%s: stage 13 admitted it and something other than gin's role-name gate refused it: %d %s", p.Name, res.Status, res.excerpt())
-	return ""
 }
 
 // rnCustomSession creates holder's role through core's role CRUD as the admin
@@ -258,7 +256,7 @@ func TestReachRegisteredPath_RoleNameRowsScopeGateAdmits(t *testing.T) {
 				t.Errorf("stage 13 refuses %s (%s %s): a custom role holding exactly %s is not admitted, against the owner's ruling (05-rbac §6.2)",
 					p.Name, res.Code, res.excerpt(), r.perm)
 			} else {
-				t.Logf("%s: stage 13 admits; behind it: %s", p.Name, rnBehindStage13(t, p, res, rnNameRefusal))
+				rnAdmittedEndToEnd(t, p, res, rnNameRefusal)
 			}
 
 			// An admin's key holding exactly the row's scopes: admitted by stage 13,
@@ -279,7 +277,7 @@ func TestReachRegisteredPath_RoleNameRowsScopeGateAdmits(t *testing.T) {
 			if res.Stage13 == Stage13Refused {
 				t.Errorf("stage 13 refuses %s (%s %s): an admin's key holding exactly %s is not admitted", k.Name, res.Code, res.excerpt(), r.perm)
 			} else {
-				t.Logf("%s: stage 13 admits; behind it: %s", k.Name, rnBehindStage13(t, k, res, rnKeyRefusal))
+				rnAdmittedEndToEnd(t, k, res, rnKeyRefusal)
 			}
 		})
 	}

@@ -23,10 +23,11 @@ import (
 // Under core identity every books gin route also has a manifest row, and core's
 // stage 13 enforces the row's requirement before the request reaches gin. The
 // chain gin then runs refuses a caller the row admits whenever the row asks
-// for less. Nothing sees that today: gin's own check still refuses, so every
-// verdict the cutover reach oracle probes is R0's. The row becomes the real
-// gate the day the gin check is unmounted or relaxed (the engine's gates are
-// replaced by the native ones, F4-08 B10g and after). checkLegacyManifest
+// for less, and a row that asks for less than gin did is a widening the moment
+// gin stops refusing. Since B10g books serves under core identity only and the
+// two gin checks that refused more than any row (the admin role by name, and
+// the conditional credential guard) no longer run there, so the row is the gate
+// and these tests hold it to every gate gin still carries. checkLegacyManifest
 // compares the two route sets only; these tests compare what each side
 // requires.
 //
@@ -36,18 +37,21 @@ import (
 //     exercises them (TestReachRegisteredPath_HiddenHandlerChecks).
 //   - Guards.Interactive and Guards.Owner are compared by presence (the chain has
 //     the gate, the row has the flag), not by what the guard does.
-//   - gin's admin gate is the admin role by name; a row is a scope. A custom
-//     role holding the row's scope passes the row and is refused by gin. That is
-//     the difference wire_admin_role.go's bridgedAdminGate documents as the
-//     successor's decision. It is not a mismatch crossCheck can name, so each
-//     such row is a ROLE-NAME-GATE entry in legacy_manifest_gin_allowlist_test.go
-//     with the harness cell that proves it, and the check fails on a row that has
-//     no entry and on an entry whose row is not of the class.
-//   - A credRouteWhen guard guards some requests only; the manifest has no way
-//     to say so and carries no guard. The same rule, class CONDITIONAL-GUARD.
+//   - gin's admin gate is modelled as it runs under core identity
+//     (wire_admin_role.go's bridgedAdminGate): the route's own manifest
+//     requirement, checked through the bridge. HEAD's role-name test behind it
+//     went with B10g (owner ruling 2026-11-22, B10rn STOP 1), so a row that
+//     carries one of the gate kind's scopes matches it; until B10g each such row
+//     was a ROLE-NAME-GATE allow-list entry.
+//   - A credRouteWhen guard is no gate under core identity since B10g: the
+//     route's handler decides (books' key-for-another-user refusal, B10rn STOP 2,
+//     TestReachRegisteredPath_KeyForAnotherUserIsRefusedByTheHandler; the rotate
+//     stub's 410 to every caller). Until B10g each was a CONDITIONAL-GUARD
+//     allow-list entry.
 //   - The recorder runs on the non-identity engine. Every gate constructor
-//     reports itself before its s.identity branch, so the gates are the same
-//     under WithIdentity; the only chain that differs is the two public invite
+//     reports itself before its s.identity branch, so the gates' places are the
+//     same under WithIdentity, and this check reads each kind as the identity
+//     branch builds it; the only chain that differs is the two public invite
 //     routes (wire_auth_routes.go), which carry no gate in either mode.
 //
 // The gin side is read from the real engine: every gate constructor reports
@@ -147,16 +151,6 @@ type finding struct {
 	kind, key, text string
 }
 
-// advisoryKinds are the findings that are neither weaker nor stronger: the
-// differences the code documents as the successor's decision (see the header).
-// They are not per-row failures; each must be an allow-list entry
-// (allowListProblems) or the run fails.
-var advisoryKinds = map[string]bool{"ROLE-NAME-GATE": true, "CONDITIONAL-GUARD": true}
-
-func failing(fs []finding) []finding {
-	return slices.DeleteFunc(slices.Clone(fs), func(f finding) bool { return advisoryKinds[f.kind] })
-}
-
 // crossCheck compares each manifest row with the gates of its gin route's chain.
 // It returns one finding per mismatch, its text
 //
@@ -168,8 +162,7 @@ func failing(fs []finding) []finding {
 //
 // when the row asks for something no gate of the chain enforces (the converse,
 // which also catches a recorder that lost a gate: a chain read short would
-// otherwise hide every weaker row behind it). The advisory kinds
-// (ROLE-NAME-GATE, CONDITIONAL-GUARD) mark differences the code documents.
+// otherwise hide every weaker row behind it).
 func crossCheck(rows []httpapi.LegacyRoute, chains map[string]server.RouteChain, table []books.Atom) []finding {
 	atoms := map[string]books.Atom{}
 	for _, a := range table {
@@ -240,14 +233,14 @@ func crossCheck(rows []httpapi.LegacyRoute, chains map[string]server.RouteChain,
 					covered[s] = true
 					hit = hit || have[s]
 				}
+				// Under identity the gate checks the row's own requirement, so a row
+				// that holds one of the kind's scopes is the gate.
 				if !hit {
 					weaker("%s (needs one of %s)", gateString(g), scopesString(want))
-				} else {
-					add("ROLE-NAME-GATE", lr, fmt.Sprintf("manifest %s vs gin %s: gin tests the admin role by name, the row is a scope", m, gateString(g)))
 				}
 			case "cred":
 				if g.Conditional {
-					add("CONDITIONAL-GUARD", lr, fmt.Sprintf("manifest %s vs gin %s: gin guards some requests only, the row carries no guard", m, gateString(g)))
+					// No gate under identity since B10g: the handler decides.
 					continue
 				}
 				credAlways = true
@@ -341,19 +334,9 @@ func TestLegacyManifest_NeverWeakerThanGinChain(t *testing.T) {
 			require.NotEmpty(t, rows)
 			findings := crossCheck(rows, chains, table)
 			byKey := map[string][]string{}
-			advisory := 0
 			for _, f := range findings {
-				if advisoryKinds[f.kind] {
-					advisory++
-					t.Log(f.text)
-					continue
-				}
 				byKey[f.key] = append(byKey[f.key], f.text)
 			}
-			t.Logf("%d rows, %d allow-listed differences (role-name admin gates and conditional credential guards)", len(rows), advisory)
-			t.Run("allow-lists", func(t *testing.T) {
-				assert.Empty(t, allowListProblems(crossCheckName(abs), findings, allowEntries()))
-			})
 			for _, lr := range rows {
 				key := lr.Method + " " + lr.GinPath
 				t.Run(strings.ReplaceAll(key, " ", "_"), func(t *testing.T) {
@@ -411,7 +394,7 @@ func TestCrossCheck_SyntheticMismatches(t *testing.T) {
 	}
 	kinds := func(fs []finding) []string {
 		var out []string
-		for _, f := range failing(fs) {
+		for _, f := range fs {
 			out = append(out, f.kind)
 		}
 		return out
@@ -450,7 +433,12 @@ func TestCrossCheck_SyntheticMismatches(t *testing.T) {
 		lr := row(rbac.AnyAuthenticated)
 		assert.Equal(t, []string{"MANIFEST-WEAKER"}, kinds(crossCheck([]httpapi.LegacyRoute{lr}, chain(auth, gate("cred", "")), table)))
 		lr.Guards.Interactive = true
-		assert.Empty(t, failing(crossCheck([]httpapi.LegacyRoute{lr}, chain(auth, gate("cred", "")), table)))
+		assert.Empty(t, crossCheck([]httpapi.LegacyRoute{lr}, chain(auth, gate("cred", "")), table))
+	})
+	t.Run("conditional credential guard is no gate under identity", func(t *testing.T) {
+		cond := gate("cred", "")
+		cond.Conditional = true
+		assert.Empty(t, crossCheck([]httpapi.LegacyRoute{row(rbac.AnyAuthenticated)}, chain(auth, cond), table))
 	})
 	t.Run("owner gate, row lacks Owner", func(t *testing.T) {
 		lr := row(rbac.AnyAuthenticated)

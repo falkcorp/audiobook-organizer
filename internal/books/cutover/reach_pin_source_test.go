@@ -522,21 +522,15 @@ const reachMountSource = "../module.go"
 // the name of the httpapi identifier in the one httpapi.LegacyMount literal.
 //
 // The mount is a variable (mount := httpapi.LegacyMount{...}; r.MountLegacy(mount)),
-// so the literal's Auth field is not the whole story: a later `mount.Auth =
-// httpapi.LegacyAuthCore` reaches the kernel and the guard that read only the
-// literal passed it as Gin (B10 finding 3). The guard therefore reads every
-// write to an Auth field in the file and accepts exactly ONE shape besides the
-// literal: the identity predicate's own,
-//
-//	if identityOn() { mount.Auth = httpapi.LegacyAuthCore }
-//
-// with no else, nothing else in the block and the condition the bare call, on
-// the variable the literal was assigned to. The predicate is off in production
-// until B10g (internal/arch's guard keeps its only writer a test), so that shape
-// does not change what the shipped binary mounts, and the name returned is the
-// literal's. Any other write to .Auth, a second LegacyMount literal, an unkeyed
-// one, a MountLegacy call that is not handed that variable, or two such calls,
-// is an error (fail closed).
+// so the literal's Auth field is not the whole story: a later `mount.Auth = ...`
+// reaches the kernel while the literal still reads what it read (B10 finding 3).
+// Until B10g the guard accepted one such write, the identity predicate's gated
+// `if identityOn() { mount.Auth = httpapi.LegacyAuthCore }`. B10g put
+// LegacyAuthCore in the literal and deleted that statement, so the literal is now
+// the whole answer: ANY write to an Auth field in the file (gated or not, of any
+// value), a second LegacyMount literal, an unkeyed one, a MountLegacy call that
+// is not handed the literal's variable, or two such calls, is an error (fail
+// closed).
 func reachMountAuth(src []byte) (string, error) {
 	f, err := parser.ParseFile(token.NewFileSet(), reachMountSource, src, 0)
 	if err != nil {
@@ -584,19 +578,13 @@ func reachMountAuth(src []byte) (string, error) {
 		}
 		return true
 	})
-	gated := 0
 	{
 		ast.Inspect(f, func(node ast.Node) bool {
 			switch x := node.(type) {
-			case *ast.IfStmt:
-				if reachGatedMountWrite(x, litVar) {
-					gated++
-					return false // accepted whole: its body is the one write
-				}
 			case *ast.AssignStmt:
 				for _, l := range x.Lhs {
 					if sel, ok := l.(*ast.SelectorExpr); ok && sel.Sel.Name == "Auth" {
-						problems = append(problems, "a write to an Auth field outside the literal and the identity predicate's one gated statement")
+						problems = append(problems, "a write to an Auth field outside the LegacyMount literal")
 					}
 				}
 			case *ast.UnaryExpr:
@@ -610,9 +598,6 @@ func reachMountAuth(src []byte) (string, error) {
 			}
 			return true
 		})
-	}
-	if gated > 1 {
-		problems = append(problems, fmt.Sprintf("%d identity-gated writes to .Auth, want at most 1", gated))
 	}
 	calls := 0
 	ast.Inspect(f, func(node ast.Node) bool {
@@ -662,55 +647,30 @@ func reachIsLegacyMount(lit *ast.CompositeLit) bool {
 	return ok && sel.Sel.Name == "LegacyMount"
 }
 
-// reachGatedMountWrite reports the one accepted rewrite: `if identityOn() {
-// <v>.Auth = httpapi.LegacyAuthCore }` on the variable v the literal is
-// assigned to, with no init, no else and nothing else in the block.
-func reachGatedMountWrite(x *ast.IfStmt, litVar string) bool {
-	if litVar == "" || x.Init != nil || x.Else != nil || len(x.Body.List) != 1 {
-		return false
-	}
-	call, ok := x.Cond.(*ast.CallExpr)
-	if !ok || len(call.Args) != 0 {
-		return false
-	}
-	if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "identityOn" {
-		return false
-	}
-	as, ok := x.Body.List[0].(*ast.AssignStmt)
-	if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
-		return false
-	}
-	lhs, ok := as.Lhs[0].(*ast.SelectorExpr)
-	if !ok || lhs.Sel.Name != "Auth" {
-		return false
-	}
-	if id, ok := lhs.X.(*ast.Ident); !ok || id.Name != litVar {
-		return false
-	}
-	rhs, ok := as.Rhs[0].(*ast.SelectorExpr)
-	return ok && rhs.Sel.Name == "LegacyAuthCore"
-}
-
-// reachFlipProblems is what the mount switch fails on, as text. While the pin
-// holds cells (pinned) or the oracle has no owner-set recording (ownerRecorded
-// false), books may mount only with LegacyAuthGin: the router is not the
-// authorization decision for the 11 pinned cells until the registered path
-// proves the handlers, and the oracle models no owner-assured deployment until
-// R0 has been recorded with an owner set. It also fails once per open obligation
-// (reachObligations with no valid discharge: what the oracle knows it does not
-// compare), so every row must be discharged at the flip. An unreadable or unfamiliar mount fails closed.
-func reachFlipProblems(src []byte, pinned int, ownerRecorded bool, obligations []reachFlipObligation) []string {
+// reachFlipProblems is what the mount switch fails on, as text. Since B10g books
+// mounts with LegacyAuthCore, the only value it accepts: it fails while the pin
+// holds cells (pinned) that the registered path has not discharged (pinWhy, the
+// reason reachPinDischarge gives, "" once it is discharged), because stage 13
+// admits the 11 pinned cells and only the handlers refuse them, and while the
+// oracle has no owner-set recording (ownerRecorded false), because the oracle
+// models an owner-assured deployment only once R0 has been recorded with an owner
+// set.
+// It also fails once per open obligation (reachObligations with no valid
+// discharge: what the oracle knows it does not compare), so every row stays
+// discharged. A mount back on LegacyAuthGin (the switch is one-way), an
+// unreadable mount or an unfamiliar value fails closed.
+func reachFlipProblems(src []byte, pinned int, pinWhy string, ownerRecorded bool, obligations []reachFlipObligation) []string {
 	auth, err := reachMountAuth(src)
 	if err != nil {
 		return []string{"the mount's Auth could not be read, so the flip to LegacyAuthCore cannot be ruled out: " + err.Error()}
 	}
 	switch auth {
 	case "LegacyAuthGin":
-		return nil
+		return []string{"books mounts with LegacyAuthGin: the F4-08 switch (B10g) is one-way, gin no longer authenticates the mount and core no longer offers a gin mode"}
 	case "LegacyAuthCore":
 		var out []string
-		if pinned > 0 {
-			out = append(out, fmt.Sprintf("books mounts with LegacyAuthCore while reachHandlerAdmin pins %d route(s): stage 13 would admit the %d pinned cells the handler refuses today. Prove the migrated handlers on the registered path, delete the pin, then flip (seams.d/F4-07.md, Obligations on F4-08)", pinned, len(reachPinnedCells)))
+		if pinned > 0 && pinWhy != "" {
+			out = append(out, fmt.Sprintf("books mounts with LegacyAuthCore while reachHandlerAdmin pins %d route(s) and the registered path does not discharge them (%s): stage 13 admits the %d pinned cells and only the handlers refuse them. The pin is the permanent record of those handler-held checks; it must stay discharged by %s (F4-08 B lead 2026-11-22, B10f row amended; seams.d/F4-07.md, Obligations on F4-08)", pinned, pinWhy, len(reachPinnedCells), reachPinDischargeTest))
 		}
 		if !ownerRecorded {
 			out = append(out, "books mounts with LegacyAuthCore and verdicts.json holds no owner_set recording: the oracle modelled only deployments with no owner set (05-authn 4.8 keeps the owner-set behaviour through core.auth.owner.required). Record R0 with owner_email set and model it before the flip")
@@ -723,18 +683,43 @@ func reachFlipProblems(src []byte, pinned int, ownerRecorded bool, obligations [
 	return []string{fmt.Sprintf("books mounts with Auth %s, which this guard does not know: it fails closed until the guard names it", auth)}
 }
 
-// The mount switch to LegacyAuthCore waits on the pin and on the owner-set
-// recording (the ruled fallback of round-2 MINOR-8). Reading module.go as source
-// means the guard fires in this package's own CI the moment the flip lands.
+// The mount is on LegacyAuthCore (B10g), which needs the pin gone, the owner-set
+// recording present (the ruled fallback of round-2 MINOR-8) and every obligation
+// discharged. Reading module.go as source means the guard fires in this package's
+// own CI the moment any of them comes back.
 func TestReachFlip_FailsWhileThePinOrTheOwnerlessModelStands(t *testing.T) {
 	src, err := os.ReadFile(reachMountSource)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, vd := reachLoad(t)
-	for _, p := range reachFlipProblems(src, len(reachHandlerAdmin), vd.OwnerSet != nil, reachOpenObligationsNow(t)) {
+	for _, p := range reachFlipProblems(src, len(reachHandlerAdmin), reachPinDischarge(t), vd.OwnerSet != nil, reachOpenObligationsNow(t)) {
 		t.Error(p)
 	}
+}
+
+// reachPinDischargeTest is the registered-path cell that discharges the pin: it
+// holds every cell of reachPinnedCells, and no other, at R0's D under the flip
+// (registered_handler_refusals_test.go, rhrPinnedCells).
+const reachPinDischargeTest = "TestReachRegisteredPath_PinnedCells"
+
+// reachPinDischarge says why the pin is not discharged on the registered path, or
+// "" when it is: the discharge cell exists in this package, asserts and cannot
+// skip. Its own assertions hold the cell set equal to reachPinnedCells (through
+// ReachPinnedCells) and each cell refused by the handler.
+func reachPinDischarge(t testing.TB) string {
+	t.Helper()
+	found, err := reachFindTest(".", reachPinDischargeTest)
+	switch {
+	case err != nil:
+		return err.Error()
+	case found == nil:
+		return reachPinDischargeTest + " is gone"
+	}
+	if why := reachTestAsserts(found.fn); why != "" {
+		return reachPinDischargeTest + " does not count: " + why
+	}
+	return ""
 }
 
 // ---- the guards, proven on in-memory mutants ----
@@ -870,13 +855,13 @@ func TestReachHandlerAdminPin_FailsWhenAHandlerIsRenamedOrAPinnedRouteHasNoFunct
 	}
 }
 
-func TestReachFlip_TheRealMountIsLegacyAuthGin(t *testing.T) {
+func TestReachFlip_TheRealMountIsLegacyAuthCore(t *testing.T) {
 	src, err := os.ReadFile(reachMountSource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if auth, err := reachMountAuth(src); err != nil || auth != "LegacyAuthGin" {
-		t.Fatalf("books mounts with %q (%v): the flip landed, and these tests were written for the mount before it", auth, err)
+	if auth, err := reachMountAuth(src); err != nil || auth != "LegacyAuthCore" {
+		t.Fatalf("books mounts with %q (%v), want LegacyAuthCore (the F4-08 switch)", auth, err)
 	}
 }
 
@@ -885,26 +870,31 @@ func TestReachFlip_FailsAtTheFlipWhileThePinOrTheOwnerlessModelStands(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	flipped := reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        httpapi.LegacyAuthCore,")
+	const coreLit = "Auth:        httpapi.LegacyAuthCore,"
+	flipped := src
+	gin := reachMutate(t, src, coreLit, "Auth:        httpapi.LegacyAuthGin,")
 	open := reachOpenObligationsNow(t)
 	for _, tc := range []struct {
 		name          string
 		src           []byte
 		pinned        int
+		pinWhy        string
 		ownerRecorded bool
 		obligations   []reachFlipObligation
 		want          int // problems
 	}{
-		{"unflipped: nothing to say", src, 3, false, open, 0},
-		{"flipped with the pin", flipped, 3, true, nil, 1},
-		{"flipped with no owner-set recording", flipped, 0, false, nil, 1},
-		{"flipped with both", flipped, 3, false, nil, 2},
-		{"flipped with neither and no open obligation: free to go", flipped, 0, true, nil, 0},
-		{"flipped with every open obligation", flipped, 0, true, open, len(open)},
-		{"an unreadable mount fails closed", []byte("package books\n"), 0, true, nil, 1},
-		{"an unfamiliar Auth fails closed", reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        authMode(),"), 0, true, nil, 1},
+		{"back on Gin fails closed, whatever else holds", gin, 0, "", true, nil, 1},
+		{"back on Gin with an undischarged pin and every obligation: still the one refusal", gin, 3, "gone", false, open, 1},
+		{"flipped with an undischarged pin", flipped, 3, "gone", true, nil, 1},
+		{"flipped with a discharged pin: free to go", flipped, 3, "", true, nil, 0},
+		{"flipped with no owner-set recording", flipped, 0, "", false, nil, 1},
+		{"flipped with both", flipped, 3, "gone", false, nil, 2},
+		{"flipped with neither and no open obligation: free to go", flipped, 0, "", true, nil, 0},
+		{"flipped with every open obligation", flipped, 0, "", true, open, len(open)},
+		{"an unreadable mount fails closed", []byte("package books\n"), 0, "", true, nil, 1},
+		{"an unfamiliar Auth fails closed", reachMutate(t, src, coreLit, "Auth:        authMode(),"), 0, "", true, nil, 1},
 	} {
-		if got := reachFlipProblems(tc.src, tc.pinned, tc.ownerRecorded, tc.obligations); len(got) != tc.want {
+		if got := reachFlipProblems(tc.src, tc.pinned, tc.pinWhy, tc.ownerRecorded, tc.obligations); len(got) != tc.want {
 			t.Errorf("%s: %d problem(s) %q, want %d", tc.name, len(got), got, tc.want)
 		}
 	}
@@ -919,7 +909,7 @@ func TestReachFlip_EachOpenObligationAloneBlocksTheFlip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	flipped := reachMutate(t, src, "Auth:        httpapi.LegacyAuthGin,", "Auth:        httpapi.LegacyAuthCore,")
+	flipped := src
 	open := reachOpenObligationsNow(t)
 	if want := len(reachObligations) - len(reachDischargedRows); len(open) != want {
 		t.Fatalf("%d of %d obligations are open, want %d: every row without a discharge blocks the flip and the %d discharged rows (reachDischargedRows) do not", len(open), len(reachObligations), want, len(reachDischargedRows))
@@ -930,7 +920,7 @@ func TestReachFlip_EachOpenObligationAloneBlocksTheFlip(t *testing.T) {
 		}
 	}
 	for _, o := range open {
-		got := reachFlipProblems(flipped, 0, true, []reachFlipObligation{o})
+		got := reachFlipProblems(flipped, 0, "", true, []reachFlipObligation{o})
 		if len(got) != 1 || !strings.Contains(got[0], o.name) {
 			t.Errorf("flipped with only %s open: %q", o.name, got)
 		}
@@ -1045,40 +1035,42 @@ func TestReachHandlerAdminPin_FailsWhenTheRefusalIsNotATopLevelStatement(t *test
 }
 
 // B10 finding 3: books' mount is a variable, so a rewrite of its Auth after the
-// literal reaches the kernel while the literal still reads LegacyAuthGin. The real
-// source (the literal plus the identity predicate's one gated statement) reads as
-// Gin; every other way to change what the mount hands the kernel is refused.
+// literal reaches the kernel while the literal still reads what it read. Since
+// B10g the literal (LegacyAuthCore) is the whole answer: every write to .Auth is
+// refused, the identity predicate's old gated statement and a write of the same
+// value included, and so is every other way to change what the mount hands the
+// kernel.
 func TestReachFlip_TheMountGuardRefusesEachWayToRewriteAuth(t *testing.T) {
 	src, err := os.ReadFile(reachMountSource)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const gated = "if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"
-	if bytes.Count(src, []byte(gated)) != 1 {
-		t.Fatalf("the premise changed: module.go no longer holds the one gated statement %q", gated)
+	const call = "r.MountLegacy(mount)"
+	if bytes.Count(src, []byte("mount.Auth =")) != 0 {
+		t.Fatalf("the premise changed: module.go writes mount.Auth after the literal")
 	}
-	if auth, err := reachMountAuth(src); err != nil || auth != "LegacyAuthGin" {
-		t.Fatalf("the real mount reads %q (%v), want LegacyAuthGin", auth, err)
+	if auth, err := reachMountAuth(src); err != nil || auth != "LegacyAuthCore" {
+		t.Fatalf("the real mount reads %q (%v), want LegacyAuthCore", auth, err)
 	}
+	before := func(stmt string) string { return stmt + "\n\t" + call }
 	for _, tc := range []struct {
 		name string
 		from string
 		to   string
 	}{
-		{"an unconditional rewrite to Core", gated, "mount.Auth = httpapi.LegacyAuthCore"},
-		{"a rewrite behind another condition", gated, "if os.Getenv(\"X\") != \"\" {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"a rewrite behind a constant true", gated, "if true {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"the predicate negated", gated, "if !identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"an else branch rewrites it too", gated, "if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t} else {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"a second statement in the gated block", gated, "if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t\tmount.ServesSPA = false\n\t}"},
-		{"the gated write names another value", gated, "if identityOn() {\n\t\tmount.Auth = authMode()\n\t}"},
-		{"the gated write goes to a different variable", gated, "if identityOn() {\n\t\tother.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"the gated write is a second gated write", gated, gated + "\n\tif identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"the gated write has an init", gated, "if ok := true; identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}"},
-		{"the address of Auth is taken", gated, gated + "\n\t_ = &mount.Auth"},
-		{"MountLegacy is handed another variable", "r.MountLegacy(mount)", "r.MountLegacy(other)"},
-		{"MountLegacy is handed a call", "r.MountLegacy(mount)", "r.MountLegacy(buildMount(mount))"},
-		{"MountLegacy is called twice", "r.MountLegacy(mount)", "r.MountLegacy(mount)\n\tr.MountLegacy(mount)"},
+		{"the old identity-gated rewrite", call, before("if identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthCore\n\t}")},
+		{"an unconditional rewrite to the same value", call, before("mount.Auth = httpapi.LegacyAuthCore")},
+		{"an unconditional rewrite back to Gin", call, before("mount.Auth = httpapi.LegacyAuthGin")},
+		{"a rewrite behind another condition", call, before("if os.Getenv(\"X\") != \"\" {\n\t\tmount.Auth = httpapi.LegacyAuthGin\n\t}")},
+		{"a rewrite behind a constant true", call, before("if true {\n\t\tmount.Auth = httpapi.LegacyAuthGin\n\t}")},
+		{"the predicate negated", call, before("if !identityOn() {\n\t\tmount.Auth = httpapi.LegacyAuthGin\n\t}")},
+		{"a rewrite to another value", call, before("mount.Auth = authMode()")},
+		{"a rewrite of a different variable", call, before("other.Auth = httpapi.LegacyAuthGin")},
+		{"the address of Auth is taken", call, before("_ = &mount.Auth")},
+		{"Auth is incremented", call, before("mount.Auth++")},
+		{"MountLegacy is handed another variable", call, "r.MountLegacy(other)"},
+		{"MountLegacy is handed a call", call, "r.MountLegacy(buildMount(mount))"},
+		{"MountLegacy is called twice", call, call + "\n\t" + call},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mutant := reachMutate(t, src, tc.from, tc.to)
@@ -1086,7 +1078,7 @@ func TestReachFlip_TheMountGuardRefusesEachWayToRewriteAuth(t *testing.T) {
 			if err == nil {
 				t.Fatalf("the guard read %q from a source that rewrites the mount's Auth (%s)", auth, tc.name)
 			}
-			if got := reachFlipProblems(mutant, 0, true, nil); len(got) != 1 || !strings.Contains(got[0], "could not be read") {
+			if got := reachFlipProblems(mutant, 0, "", true, nil); len(got) != 1 || !strings.Contains(got[0], "could not be read") {
 				t.Errorf("reachFlipProblems on the mutant: %q, want the fail-closed refusal", got)
 			}
 		})

@@ -1019,6 +1019,35 @@ func TestReachRegisteredPath_PinnedCells(t *testing.T) {
 	if got := len(rhrPinnedCells); got != 11 {
 		t.Fatalf("the table has %d cells, the obligation lists 11", got)
 	}
+	// This test discharges the reachHandlerAdmin pin at the flip gate
+	// (reachPinDischarge), so its cells must be the pin's cells exactly, as sets
+	// in both directions: a pinned cell no registered cell runs, or a registered
+	// cell the pin does not name, fails here (F4-08 B lead 2026-11-22, B10f row
+	// amended).
+	pinned := map[string]bool{}
+	for _, c := range cutover.ReachPinnedCells() {
+		i := strings.LastIndex(c, " / ")
+		if i < 0 {
+			t.Fatalf("pinned cell %q is not ROUTE / WHO: R0 ...", c)
+		}
+		j := strings.Index(c[i:], ": R0")
+		if j < 0 {
+			t.Fatalf("pinned cell %q is not ROUTE / WHO: R0 ...", c)
+		}
+		pinned[c[:i]+"|"+c[i+3:i+j]] = true
+	}
+	ours := map[string]bool{}
+	for _, c := range rhrPinnedCells {
+		ours[c.route+"|"+c.who] = true
+		if !pinned[c.route+"|"+c.who] {
+			t.Errorf("%s as %s: a registered cell the pin (reachPinnedCells) does not name", c.route, c.who)
+		}
+	}
+	for k := range pinned {
+		if !ours[k] {
+			t.Errorf("%s: pinned (reachPinnedCells) but no registered cell runs it", strings.Replace(k, "|", " as ", 1))
+		}
+	}
 	rec := rhrLoad(t)
 	for _, c := range rhrPinnedCells {
 		if got := rec.letter(t, c.route, c.who); got != 'D' {

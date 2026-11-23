@@ -121,27 +121,20 @@ func TestGinAdapters_CredGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("core identity: conditional", func(t *testing.T) {
+	// Since B10g a conditional guard (credRouteWhen) is no gate under core
+	// identity: the handler decides (POST /api/v1/auth/api-keys refuses a key that
+	// names another user itself, B10rn STOP 2; the rotate stub answers 410 to every
+	// caller), so guarded is never consulted and every method passes to it.
+	t.Run("core identity: conditional is the handler's", func(t *testing.T) {
 		w := newSiteWorld(t, true, true)
-		var asked int
-		guard := func(answer bool) gin.HandlerFunc {
-			asked = 0
-			return w.core.credGuardMiddleware(func(*gin.Context) bool { asked++; return answer })
+		asked := 0
+		mw := w.core.credGuardMiddleware(func(*gin.Context) bool { asked++; return true })
+		for _, m := range []coreauth.Method{coreauth.MethodSession, coreauth.MethodAPIKey, coreauth.MethodAuthDisabled, "ext:cfaccess"} {
+			p, c := adoptPrincipal(m, w.bruce, "test:x")
+			code, _ := w.adapterServe(true, mw, p, c)
+			require.Equal(t, http.StatusOK, code, string(m))
 		}
-		sess, sessC := adoptPrincipal(coreauth.MethodSession, w.bruce, "test:x")
-		key, keyC := adoptPrincipal(coreauth.MethodAPIKey, w.bruce, "test:x")
-
-		code, _ := w.adapterServe(true, guard(true), sess, sessC)
-		require.Equal(t, http.StatusOK, code, "an interactive method passes")
-		require.Zero(t, asked, "and guarded is not consulted for it")
-
-		code, _ = w.adapterServe(true, guard(true), key, keyC)
-		require.Equal(t, http.StatusForbidden, code, "a key when guarded reports true")
-		require.Equal(t, 1, asked)
-		code, _ = w.adapterServe(true, guard(false), key, keyC)
-		require.Equal(t, http.StatusOK, code, "a key when guarded reports false")
-		code, _ = w.adapterServe(true, guard(true), nil, nil)
-		require.Equal(t, http.StatusUnauthorized, code, "no principal when guarded reports true")
+		require.Zero(t, asked, "guarded was consulted under core identity")
 	})
 }
 

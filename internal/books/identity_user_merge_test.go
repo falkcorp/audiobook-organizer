@@ -108,7 +108,6 @@ type idMergeEnv struct {
 
 func newIDMergeEnv(t *testing.T) *idMergeEnv {
 	t.Helper()
-	t.Cleanup(SetIdentityFlipForTest(true))
 	bootGrants := usermerge.DefaultGrants
 	c := runComposedWith(t, func(cfg *config.Config) { cfg.EnableAuth = true }, nil, nil, nil).composed
 	h := c.app.Handler()

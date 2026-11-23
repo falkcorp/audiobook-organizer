@@ -475,7 +475,6 @@ func TestAPIKeyRoutes_OwnerSubset(t *testing.T) {
 // (05-rbac §4.11(a), 05-authn §4.11, the R2 release note) — HEAD answered 401,
 // 401 and 410 there. None of the seven codes ends the shell's session.
 func TestAPIKeyRoutes_AuthOff(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, nil, nil, nil, nil)
 	// G5(a): the handler's no-user refusal of the auth-disabled principal; HEAD
 	// answered {"error":"authentication required","code":"UNAUTHORIZED","status":401}.

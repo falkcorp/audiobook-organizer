@@ -55,7 +55,6 @@ func acBoot(t *testing.T, seed func(*database.PebbleStore, map[string]string)) *
 	gpInstallCF(t, cf)
 	ids := map[string]string{}
 	fx := newFlipFixture(t, func(s *database.PebbleStore) { acSeedHead(t, s, ids, seed) }, "")
-	t.Cleanup(SetIdentityFlipForTest(true))
 	tap := &gpTap{}
 	r := runComposedIn(t, fx.stateDir, func(cfg *config.Config) {
 		cfg.DatabasePath = fx.dbPath

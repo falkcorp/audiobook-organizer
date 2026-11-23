@@ -386,18 +386,17 @@ func ownerAccount(t *testing.T, h *Registered) (id string, roles []string) {
 // admitted. R0's allow side is unrecorded (its boot had no verifier), so both are
 // asserted here: 9 routes, 2 cells each, 18 in all.
 //
-// THIS TEST FAILS UNTIL B10y LANDS, ON PURPOSE. All 9 "owner holding the
-// requirement" cells answer 403 interactive_required today: every owner route
-// carries Guards.Interactive, and stage 13's Authorize answers that guard with
+// This is B10y's acceptance, and it passes since B10y landed. Every owner route
+// carries Guards.Interactive. Before B10y, stage 13 answered that guard with
 // p.Method.MayChangeCredentials(), a fixed allowlist (session and delegated
-// session) that never reads the extension's registered MethodSpec. The Access
-// owner's method is ext:cfaccess, so it is refused before the owner proof is looked
-// at, admin role and Access assertion both in place. HEAD's gate (OwnerProofWhyNot:
-// method cf_access, then the e-mail) admits that caller, so on an Access-only
-// install the owner would be locked out of backup restore, factory reset, user
-// merge and the guest-token routes. That is a B10g blocker, not a known difference:
-// B10y makes Interactive consult the registered MethodSpec, and this test is its
-// acceptance. The nine lacking-the-requirement cells pass now and must keep passing.
+// session) that never read the extension's registered MethodSpec, so the Access
+// owner (method ext:cfaccess) was refused with 403 interactive_required before the
+// owner proof was looked at. On an Access-only install that would have locked the
+// owner out of backup restore, factory reset, user merge and the guest-token routes,
+// which HEAD's gate (OwnerProofWhyNot: method cf_access, then the e-mail) let in.
+// B10y made Interactive consult the registered MethodSpec. All 18 cells must keep
+// passing: the 9 owner-holds-the-requirement cells admitted, the 9 lacking cells
+// refused.
 //
 // The owner is one account throughout. The Access sign-in of an address no account
 // holds creates a viewer under the default role, which holds none of the routes'

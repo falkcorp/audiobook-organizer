@@ -342,7 +342,7 @@ func manifestSteps(man module.Manifest) ([]cutoverStep, error) {
 	}
 	var data []datamigrate.DataMigration
 	if man.Cutover != nil {
-		for _, d := range man.Cutover(module.Importers{}) {
+		for _, d := range man.Cutover(shapeImporters()) {
 			if !d.Cutover {
 				return nil, fmt.Errorf("Manifest.Cutover returns %s, whose Cutover flag is unset: the count rule assumes a cutover step's contract (§5S.3.13)", d.ID)
 			}
@@ -2013,10 +2013,11 @@ func flipListEntries(t testing.TB, m *booksModule) []cutover.ListEntry {
 }
 
 // mustFlipSteps is the Flip the manifest registers, over importers that refuse
-// every call. ABO's flip options carry no identity switch, so it cannot fail.
+// every call (shapeImporters, which carry what M3's config needs since the
+// identity flip is on).
 func mustFlipSteps(t testing.TB, m *booksModule) cutover.Flip {
 	t.Helper()
-	f, err := m.flipSteps(module.Importers{})
+	f, err := m.flipSteps(shapeImporters())
 	if err != nil {
 		t.Fatalf("building the cutover list: %v", err)
 	}

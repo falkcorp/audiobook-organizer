@@ -188,7 +188,6 @@ func TestOwnerRoutesBoot_OwnerUnsetKeepsTheOrdinaryGuardsOwnerSetDemandsTheOwner
 // routes still refuse the auth-disabled principal at their credential guard
 // (core's SEC5-8 tightening of HEAD's no-op credGuard, kept for these rows).
 func TestOwnerRoutesBoot_AuthOffIsRefusedAsCoreRules(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	r := runComposedWith(t, nil, nil, func(o *app.Options) { o.ConfigFlags["core.auth.mode"] = "disabled" }, nil)
 	for i, c := range []struct{ method, path string }{
 		{http.MethodPost, ownerRestore}, {http.MethodPost, ownerMerge}, {http.MethodGet, ownerGuestKey},

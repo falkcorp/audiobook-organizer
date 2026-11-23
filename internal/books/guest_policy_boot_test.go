@@ -112,7 +112,6 @@ func gpBoot(t *testing.T) *gpEnv {
 	gpInstallCF(t, cf)
 	ids := map[string]string{}
 	fx := newFlipFixture(t, func(s *database.PebbleStore) { gpSeed(t, s, ids) }, "")
-	t.Cleanup(SetIdentityFlipForTest(true))
 	tap := &gpTap{}
 	r := runComposedIn(t, fx.stateDir, func(cfg *config.Config) {
 		cfg.DatabasePath = fx.dbPath
@@ -446,7 +445,6 @@ func TestGuestPolicyWire_NoHandleIsARefusalNeverASkip(t *testing.T) {
 // the rest of the identity handles: a guest's Cloudflare entry would otherwise
 // outlive their account with nothing to say so.
 func TestGuestPolicyBoot_RefusesWithoutALifecycleHandle(t *testing.T) {
-	t.Cleanup(SetIdentityFlipForTest(true))
 	mod, opts, _ := composedOptions(t, false, "", func(c *config.Config) { c.EnableAuth = true }, nil)
 	a, err := app.New(t.Context(), opts, gpNoLifecycle{mod})
 	require.Error(t, err, "app.New booted without a lifecycle handle")
@@ -471,7 +469,6 @@ func TestGuestPolicyIdentity_MergedAwayGuestLosesTheCloudflareEntry(t *testing.T
 	t.Setenv("ABO_BOOKS_CFGUESTS_ACCOUNT_ID", gpCFAccount)
 	t.Setenv("ABO_BOOKS_CFGUESTS_GUESTS_POLICY_ID", gpCFPolicy)
 	t.Setenv("ABO_BOOKS_CFGUESTS_POLICY_API_TOKEN", gpCFToken)
-	t.Cleanup(SetIdentityFlipForTest(true))
 	tap := &gpTap{}
 	r := runComposedWith(t, func(cfg *config.Config) { cfg.EnableAuth = true }, nil, nil, nil,
 		func(m module.Module) module.Module { return gpTapModule{Module: m, tap: tap} })

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -154,6 +155,40 @@ func TestAccountLifecycle_OneRegistrationDrivesBothConcerns(t *testing.T) {
 
 	adminPost(t, s.r, s.admin, "/api/core/v1/users/"+s.id+"/disable")
 	s.assertBothConcernsEnded(t, "user deactivated")
+}
+
+// TestAccountLifecycle_EveryEventHasARegisteredSubscriber (B10g checklist): every
+// event core's auth.Lifecycle reports has a subscriber in the lifecycle books
+// registered on the booted server, and a boot cell that drives that event through
+// core and asserts books acted on it. The fields are enumerated, so an event core
+// adds fails here until books decides what to do with it and names its cell.
+// The registration itself is proven as the cell above proves it: a second
+// registrant is refused, so books' Register is the one core holds.
+func TestAccountLifecycle_EveryEventHasARegisteredSubscriber(t *testing.T) {
+	drivers := map[string]func(*testing.T){
+		"InviteAccepted": TestAccountLifecycle_ProductionWiring_DisablingAGuestRevokesTheKeyAndTheCloudflareEntry,
+		"StatusChanged":  TestAccountLifecycle_OneRegistrationDrivesBothConcerns,
+		"EmailChanged":   TestAccountLifecycle_AddressChangeEndsTheEntryNotTheKey,
+		"UserDeleted":    TestAccountLifecycle_DeletingAGuestEndsBothConcerns,
+		"UserMergedAway": TestAccountLifecycle_MergedAwayGuestEndsBothConcerns,
+	}
+	tap := &gpTap{}
+	r, _, _ := bootGuestKeyMailed(t, func(m module.Module) module.Module { return gpTapModule{Module: m, tap: tap} })
+	tap.mu.Lock()
+	again := tap.again
+	tap.mu.Unlock()
+	require.ErrorIs(t, again, coreauth.ErrLifecycleRegistered, "books registered no lifecycle with core")
+	lc := reflect.ValueOf(r.srv.AccountLifecycle())
+	fields := map[string]bool{}
+	for i := range lc.NumField() {
+		name := lc.Type().Field(i).Name
+		fields[name] = true
+		assert.False(t, lc.Field(i).IsNil(), "core reports %s and books' registered lifecycle has no subscriber for it", name)
+		assert.NotNil(t, drivers[name], "core reports %s and no boot cell drives it through core", name)
+	}
+	for name := range drivers {
+		assert.True(t, fields[name], "the driver table names %s, which core's Lifecycle no longer has", name)
+	}
 }
 
 // Core's delete is the same on both halves: neither the key nor the entry
