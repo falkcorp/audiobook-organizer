@@ -1202,6 +1202,59 @@ export-install-secrets:
 	@[ -n "$$AORG_OH_DB" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
 	@python3 scripts/export_offhost.py
 
+## cutover-blockers-list: List the rows that block the cutover on DEPLOY_HOST (a root-owned rollback helper, no raw sudo; the service must already be stopped) and copy the list and the rows file into OFFHOST_DIR on this machine (R2 runbook Step 0, Path B; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
+#
+# The helper refuses unless the service unit is inactive; it never stops or
+# starts it. It runs `storage cutover-blockers list --out <scratch>` as the
+# service user and leaves two files in export_dir (mode 0600, the deploy user's):
+# aorg-cutover-blockers-<stamp>.txt (keys, steps, reasons: no values) and, when
+# something blocks, .json (the rows WITH their values, which can be credential
+# hashes). scripts/cutover_blockers_offhost.py copies them into $(OFFHOST_DIR)
+# (default ~/aorg-offhost/<UTC stamp>, mode 0700), checks size and sha256,
+# deletes the remote copies and prints the list. The owner's equivalent on the
+# server is deploy/owner/cutover-blockers-list.sh.
+cutover-blockers-list: export AORG_OH_WHAT = list
+cutover-blockers-list: export AORG_OH_HOST = $(DEPLOY_HOST)
+cutover-blockers-list: export AORG_OH_BIN = $(DEPLOY_BIN)
+cutover-blockers-list: export AORG_OH_DB = $(DEPLOY_DB)
+cutover-blockers-list: export AORG_OH_UNIT = $(DEPLOY_UNIT)
+cutover-blockers-list: export AORG_OH_GUARD = $(ROLLBACK_GUARD)
+cutover-blockers-list: export AORG_OH_DIR = $(OFFHOST_DIR)
+.PHONY: cutover-blockers-list
+cutover-blockers-list:
+	@[ -n "$$AORG_OH_HOST" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_BIN" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_DB" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@python3 scripts/cutover_blockers_offhost.py
+
+## cutover-blockers-apply: Apply ONE fix or delete from a local request file (REQUEST=<file>) to the store on DEPLOY_HOST through a root-owned rollback helper (no raw sudo; the service must already be stopped; R2 runbook Step 0, Path B; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB, REQUEST)
+#
+# REQUEST is a JSON file of yours (mode 0600): {"action":"fix","key":"<lowercase
+# hex>","value":"<base64>"} or {"action":"delete","key":"<lowercase hex>"}.
+# scripts/cutover_blockers_offhost.py checks it with the helper's own parser,
+# refuses if the host already holds a request, copies it to export_dir under the
+# fixed name, sets mode 0600 and checks size and sha256 there, runs the helper
+# (no arguments), copies the result file back and prints it. The helper deletes
+# the request after a success. `delete` cannot be undone except by
+# `make rollback-restore`. The owner's equivalent on the server is
+# deploy/owner/cutover-blockers-apply.sh.
+REQUEST ?=
+cutover-blockers-apply: export AORG_OH_WHAT = apply
+cutover-blockers-apply: export AORG_OH_HOST = $(DEPLOY_HOST)
+cutover-blockers-apply: export AORG_OH_BIN = $(DEPLOY_BIN)
+cutover-blockers-apply: export AORG_OH_DB = $(DEPLOY_DB)
+cutover-blockers-apply: export AORG_OH_UNIT = $(DEPLOY_UNIT)
+cutover-blockers-apply: export AORG_OH_GUARD = $(ROLLBACK_GUARD)
+cutover-blockers-apply: export AORG_OH_DIR = $(OFFHOST_DIR)
+cutover-blockers-apply: export AORG_OH_REQUEST = $(REQUEST)
+.PHONY: cutover-blockers-apply
+cutover-blockers-apply:
+	@[ -n "$$AORG_OH_HOST" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_BIN" ] || (echo "ERROR: DEPLOY_BIN is not set. Add it to Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_DB" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
+	@[ -n "$$AORG_OH_REQUEST" ] || (echo "ERROR: REQUEST is not set. Pass REQUEST=<your request file> (see the comment above this target)."; exit 1)
+	@python3 scripts/cutover_blockers_offhost.py
+
 ## install-rollback-helpers: The owner's one-time install of the rollback helper bundle ON THE DEPLOY HOST: dry run by default, APPLY=1 installs (needs DEPLOY_BIN, DEPLOY_DB; see ROLLBACK_INSTALL_ARGS)
 #
 # Run it on the deploy host, in a checkout of the commit being deployed. It

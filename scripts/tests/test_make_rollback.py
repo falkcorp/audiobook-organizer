@@ -295,6 +295,8 @@ class FakeHost:
             "install-staged",
             "export-keyring",
             "export-install-secrets",
+            "cutover-blockers-list",
+            "cutover-blockers-apply",
         ):
             text = (HELPERS / stub).read_text()
             assert lib_line in text, stub
