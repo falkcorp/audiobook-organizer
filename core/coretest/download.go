@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/download"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // The download adapter test kit (05-download §9): DownloadConformance, the one
@@ -326,8 +327,8 @@ func DownloadConformance(t *testing.T, factory DownloadFactory, fx DownloadFixtu
 			if it.Name != want.Name || it.Category != want.Category || it.RemotePath != want.SavePath || it.TotalSize != want.TotalSize {
 				t.Errorf("%s: name=%q category=%q remote=%q size=%d; want %+v", it.Ref.ID, it.Name, it.Category, it.RemotePath, it.TotalSize, want)
 			}
-			if it.LocalPath != "" {
-				t.Errorf("%s: an adapter must leave LocalPath to the Pool, got %q", it.Ref.ID, it.LocalPath)
+			if it.LocalPath != (library.Path{}) {
+				t.Errorf("%s: an adapter must leave LocalPath to the Pool, got %v", it.Ref.ID, it.LocalPath)
 			}
 		}
 	})
@@ -412,7 +413,7 @@ func DownloadConformance(t *testing.T, factory DownloadFactory, fx DownloadFixtu
 		}
 		for i, f := range got {
 			w := want.Files[i]
-			if f.Path != w.Path || f.Size != w.Size || f.Priority != w.Priority || f.Progress < 0 || f.Progress > 1 || f.LocalPath != "" {
+			if f.Path != w.Path || f.Size != w.Size || f.Priority != w.Priority || f.Progress < 0 || f.Progress > 1 || f.LocalPath != (library.Path{}) {
 				t.Errorf("file %d = %+v, want %+v", i, f, w)
 			}
 			if d := f.Progress - w.Progress; d > 1e-6 || d < -1e-6 {

@@ -61,6 +61,16 @@ func newPathMapper(mappings []Mapping, resolve func(abs string) (Path, error)) *
 	return pm
 }
 
+// NewPathMapper is an immutable PathMapper over mappings (the same mapper the
+// Manager builds at every Reload). resolve maps an absolute host path to the
+// Path of the most specific root containing it, for a remote path no mapping
+// covers; nil means such a path is ErrUnmapped. A module that holds mappings
+// of its own (a consumer's test, an offline tool) builds its mapper here
+// instead of re-implementing the matching rules.
+func NewPathMapper(mappings []Mapping, resolve func(abs string) (Path, error)) PathMapper {
+	return newPathMapper(mappings, resolve)
+}
+
 // isDriveSpec reports whether s begins with a drive letter and colon.
 func isDriveSpec(s string) bool {
 	return len(s) >= 2 && s[1] == ':' && (s[0]|0x20) >= 'a' && (s[0]|0x20) <= 'z'
@@ -286,7 +296,28 @@ func (pm *pathMapper) ToRemote(source string, p Path) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrUnmapped, p)
 	}
 	rest := strings.TrimPrefix(strings.TrimPrefix(p.Rel, best.m.Local.Rel), "/")
+	if err := plainRemoteSegments(*best, rest); err != nil {
+		return "", err
+	}
 	return joinRemote(*best, rest), nil
+}
+
+// plainRemoteSegments refuses a Path segment that is not one plain name in the
+// Remote's own syntax. A Path is POSIX-relative and byte-exact, so a name may
+// legally hold a backslash or a colon; appended to a Windows or UNC remote that
+// byte is a separator or a drive switch, and a name such as `x\..\y` would
+// leave the mapping's root on the client. The segments are refused (ErrUnmapped,
+// fail closed) rather than escaped: no client syntax has an escape for them.
+func plainRemoteSegments(e mapEntry, rest string) error {
+	if rest == "" || e.r.kind == kindPosix {
+		return nil // a POSIX remote (a file URL of one too) has no separator but '/'
+	}
+	for seg := range strings.SplitSeq(rest, "/") {
+		if strings.ContainsAny(seg, `\:`) {
+			return fmt.Errorf("%w: a path segment cannot be mapped to the client (a separator or drive switch in %q)", ErrUnmapped, seg)
+		}
+	}
+	return nil
 }
 
 // joinRemote appends rest to the mapping's Remote in the Remote's own style.
