@@ -1319,7 +1319,7 @@ func TestIntegrationHTTP_LimitsRoundTrip(t *testing.T) {
 	e := newEnv(t)
 	ctx := managerCtx()
 	limits := &IntegrationLimits{
-		RPS: 2.5, Burst: 4, MaxRetries: 3, Timeout: "3s", RetryAfterMax: "5m0s",
+		RPS: 2.5, Burst: 4, MaxRetries: 3, MaxConcurrent: 3, Timeout: "3s", RetryAfterMax: "5m0s",
 		Daily:   &IntegrationDaily{Total: 100, Background: 40, Zone: "America/New_York", Counters: []string{"query", "grab"}},
 		Breaker: &IntegrationBreaker{Threshold: 5, Cooldown: "30s", ProbeTimeout: "10s"},
 		Holds:   &IntegrationHoldPolicy{Durations: map[string]string{"auth": "6h0m0s", "quota": "4h0m0s"}, Max: "24h0m0s", Persist: true},
@@ -1343,6 +1343,8 @@ func TestIntegrationHTTP_LimitsRoundTrip(t *testing.T) {
 		"/rps":                       {RPS: -1},
 		"/burst":                     {Burst: -1},
 		"/max_retries":               {MaxRetries: maxRetries + 1},
+		"/max_concurrent":            {MaxConcurrent: -1},
+		"/max_concurrent (too big)":  {MaxConcurrent: maxConcurrent + 1},
 		"/daily":                     {Daily: &IntegrationDaily{Total: 1, Background: 2}},
 		"/daily/zone":                {Daily: &IntegrationDaily{Zone: "Mars/Olympus"}},
 		"/daily/counters":            {Daily: &IntegrationDaily{Counters: []string{""}}},

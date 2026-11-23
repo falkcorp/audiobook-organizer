@@ -231,6 +231,7 @@ type Limits struct {
 	MaxRetries    int
 	Timeout       time.Duration // per attempt, starting after the bucket wait (M2.6)
 	RetryAfterMax time.Duration // default 5m
+	MaxConcurrent int           // calls in flight to one instance, across callers; 0 = no bound (F7-09 D4)
 	Daily         *DailyLimits  // nil: no daily quota
 	Breaker       BreakerPolicy
 	Holds         HoldPolicy
@@ -873,8 +874,10 @@ a renamed `openai` row pairs with the operator key only when its `auth_ref` name
   in the step's report. Carrying one would make core refuse the whole endpoint. A `capability_models` entry for such a
   capability is dropped and reported with it, since nothing could select by it, and its model is quarantined under
   `setting:config_blob#ai_endpoints.<n>.capability_models.<key>` so the owner can recover it.
-- A metadata source's `rate_limit.max_concurrent` (HEAD's bound on searches in flight in a bulk fetch) has no
-  `Limits` field and is listed in the report.
+- A metadata source's `rate_limit.max_concurrent` (HEAD's bound on searches in flight in a bulk fetch) is carried by
+  `Limits.MaxConcurrent` (F7-09 D4), which the metadata `Chain` enforces (M3.3, M3.6). M6 still lists it as dropped until
+  the fold step maps it, and the books adapters set HEAD's default of 2 (`DefaultPerProviderFetchCap`) in their
+  `Meta.Limits` at the fold.
 
 The step's dry-run mode reports, per kind, the instances it would write, their IDs, the trust it would carry and
 every row it would quarantine (14 E1).
@@ -1256,7 +1259,7 @@ type Result[R any] struct {
 type ChainOptions[Q any] struct {
 	Instances   func() []integrations.Ref // ordered; default: enabled metadata instances whose adapter is Provider[Q,R], by Priority
 	Parallelism tasks.Parallelism         // required (R7 type); network-bound: e.g. tasks.Fixed(4, "provider rate limits")
-	PerProvider time.Duration             // per-provider deadline inside the call; default 20s
+	PerProvider time.Duration             // per-provider deadline inside the call; default 20s. With Limits.MaxConcurrent set it starts once the instance's slot is held: queueing for a slot is not the provider's time
 	Mode        ChainMode                 // FirstHit (stop at first provider with results, in priority order) | All
 	Cache       *Cache[Q]                 // optional
 }
@@ -1353,6 +1356,12 @@ keyed by `(provider Ref, Version, QuestionKey)`; a canceled leader does not canc
 the call themselves). Results from `Stream` are delivered in completion order; `Search` returns them in
 instance-priority order. Library-scale callers (bulk fetch) must run through `tasks.RunItems` with their
 own declared parallelism; the provider bucket, not the worker count, bounds the request rate.
+
+`Limits.MaxConcurrent` (the instance's, else its adapter's; read on every ask) bounds the searches in flight to one
+instance across every search of one `Chain`: the `Chain` keeps a FIFO gate per instance, the slot is taken around
+the provider's `Search` only (a cached answer takes none), `PerProvider` starts once the slot is held, and a caller
+whose context ends while queued leaves without taking one. A module builds one `Chain` per query type, so the
+bound is per instance. Zero is no bound.
 
 ### M3.7 Config keys
 
@@ -1634,3 +1643,4 @@ Advisor (`docs/plans/platform-core/reviews/spec-advisor-dispositions.md`):
 - Round 14 (2026-11-05): V23 (checked: no round-13 ruling is cited bare; the bare R4, R5, R7 and R8 left in the text are 03 §3.5's rules), V27 (M1.10 cites 05-rbac §7.1 for `core.integration.local_migrated`, staged in M6's chunk batch).
 - Round 16 (2026-11-05): plan-gap fixes G2 (M2.4: `core.integrations.release-holds`' full `TaskSpec`, `Effects` on `core/providerhttp`, `Resume: ResumeDrop`, `Timeout: 1m`, `Perms.Start`, `PriorityHigh`, no schedule, its params and result types, and `providerhttp.InterimHolds`' one method `ReleaseHolds` with the kind's `Run` signature; 05-tasks §5T.8.2 copies them), G14 (M1.3: the `/api/core/v1/integrations/...` routes land at F7 and replace the class-`i` part of ABO's `/api/v1/config` handlers and HEAD's test-connection handlers, which F7's PR deletes with the SPA switched).
 - Round 17 (2026-11-20): F7-09 slice T1. M1.10 signs `LocalOrigin` and `OperatorSecretOrigin` from the effective destinations (seams.d/F7-01 rows 17 and 22, as F7-08 ruled). When a lowered HEAD ID meets another entry's exact HEAD ID, the exact entry keeps it, and a renamed instance takes only its own carried credentials. A renamed source's unreadable secret is carried as an unreadable marker. Unknown and wildcard capability ticks and undeclared features are dropped and reported, and so is `rate_limit.max_concurrent` (seams.d/F7-08). Round 1 review of the slice: an exact entry keeps its ID only when written; an AI row renamed to `openai` with `auth_ref: openai_api_key` keeps HEAD's OpenAI key; a renamed source never gets `OperatorSecretOrigin` (a renamed `openai` row only with that `auth_ref`); a dropped `capability_models` model is quarantined.
+- Round 18 (2026-11-22): F7-09 slice D4. `Limits.MaxConcurrent` (persisted, on the wire as `max_concurrent`, merged by `providerhttp.MergeLimits`) bounds the calls in flight to one instance across every caller; zero is no bound, a negative instance value lifts the adapter's bound. It counts the kind's own unit of work, so the metadata `Chain` enforces it (a per-instance gate shared by all searches of one Chain; a cached answer takes no slot; `PerProvider` starts after the slot is held; a caller's cancellation leaves the queue without taking one), not providerhttp, whose gate sees one search's several requests as separate ones. This carries HEAD's `rate_limit.max_concurrent` (the #4806 m4 minor).
