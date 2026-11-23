@@ -146,6 +146,9 @@ func (e *executor) dispatchOnce(ctx context.Context) {
 			deferAs(c.rec, reason, by)
 			continue
 		}
+		if e.cancelOrphan(ctx, c.rec) {
+			continue // its parent was canceled (cascade.go): it ends canceled, never started
+		}
 		e.claim(ctx, c, ws)
 	}
 	e.publishWaits(waits)

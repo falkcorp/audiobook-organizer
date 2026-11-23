@@ -343,8 +343,8 @@ func TestBatchSweep_CancelStopsAfterTheCurrentChild(t *testing.T) {
 }
 
 // A cancel that arrives while the parent is blocked on a child ends the attempt
-// at once; the child stays recorded as in flight (a cancel is not cascaded) and no
-// further child starts.
+// at once; the child stays recorded as in flight (the sweep does not cancel it:
+// the executor's cascade does) and no further child starts.
 func TestBatchSweep_CancelWhileWaiting(t *testing.T) {
 	e := newSweepEnv()
 	ctx, cancel := context.WithCancelCause(t.Context())
