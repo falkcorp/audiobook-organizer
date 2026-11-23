@@ -283,10 +283,12 @@ type Options struct {
 	UIOptions ui.AppOptions
 
 	// Updater is the app's release source and binary name for core's updater
-	// (05-updater §5U.3): nil = no updater, no routes and no tasks. Only
-	// `updater fetch-release` reads it in this build (F8-02); F8-04 hands it
-	// to the kernel, which then registers the three core.updater.* tasks and
-	// mounts the four routes. The Options' Source names the repository and its
+	// (05-updater §5U.3): nil = no updater, no routes and no tasks.
+	// `updater fetch-release` reads it on every boot that sets it (F8-02). The
+	// kernel reads it only with IdentityBoot also set: then it declares
+	// core.update.found.v1, claims c/updater/, registers core.updater health and
+	// mounts the four routes (F8-04b); the three core.updater.* task kinds are
+	// not registered by it yet. The Options' Source names the repository and its
 	// AssetName the release asset, so core names no app.
 	Updater *updater.Options
 }

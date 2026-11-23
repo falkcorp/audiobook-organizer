@@ -1,0 +1,3 @@
+### Added
+
+- core/kernel: on the identity flip, a build that ships an updater (`app.Options.Updater`, set by `internal/books` under the flip) declares `core.update.found.v1`, claims the `c/updater/` storage owner, registers the `core.updater` health component and mounts `GET /api/core/v1/updater` and `POST /api/core/v1/updater/{check,apply,rollback}`. With the flip off, and on every offline command, none of it exists, so today's binary is unchanged. The updater runs with no providerhttp client and no notify service (their nil fallbacks) until F7-09. The three `core.updater.*` task kinds are not registered yet, so a start through the routes fails closed until they are.

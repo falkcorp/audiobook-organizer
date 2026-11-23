@@ -190,8 +190,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 
 // identityOptions adds the identity boot's inputs to ao (identityOn only): the
 // identity boot itself, stage 13's atom table, the Access extension and the
-// account resolver handle it holds, the bootstrap token's file name, and the
-// config pins (the session cookie's name). The declaration core would refuse a
+// account resolver handle it holds, the bootstrap token's file name, the
+// config pins (the session cookie's name) and the core updater's release
+// source. The declaration core would refuse a
 // piece of (a catalog that does not build, a seed role with nothing) fails here,
 // before anything opens, not at P2.
 func (m *booksModule) identityOptions(ao *app.Options) error {
@@ -206,6 +207,12 @@ func (m *booksModule) identityOptions(ao *app.Options) error {
 	ao.Authenticators = []coreauth.Extension{w.ext}
 	ao.Auth = identityAuthOptions()
 	ao.ConfigFlags = identityConfigFlags(ao.ConfigFlags)
+	// The core updater (F8-04b): the same release source and raw asset namer
+	// `updater fetch-release` uses, so the routes ask for an asset a release
+	// carries (owner ruling O-5). The kernel wires it only with the identity
+	// boot declared, which is this block's own condition.
+	coreUpdater := FetchOptions()
+	ao.Updater = &coreUpdater
 	return nil
 }
 
