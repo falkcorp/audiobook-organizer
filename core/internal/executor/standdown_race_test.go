@@ -8,6 +8,7 @@ package executor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -499,6 +500,45 @@ func TestHoldStandDown_ReadsItsClockUnderTheExecutorLock(t *testing.T) {
 			t.Fatal("standDown never read the clock")
 		case 2:
 			t.Fatal("standDown read its clock without holding the executor lock")
+		}
+	})
+}
+
+// A run whose stand-down hold lapsed never ends succeeded. After the lapse every
+// write is refused, but a body can swallow a refusal and return nil (a per-item
+// loop that counts a refused item and goes on), so the run's error alone cannot
+// tell a clean run from one whose last items were refused. HEAD ends such a run
+// failed (ScanStandDownHold.Finish joins ErrScanStandDownLost into the op's error
+// even when the run returned nil).
+func TestHoldLapse_ARunThatReturnsNilAfterTheLapseEndsFailed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var refused atomic.Bool
+		def := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+			if _, err := rc.StandDown("gotham.scan"); err != nil {
+				return "", err
+			}
+			<-rc.Context().Done() // silent past the lease; the reaper (a tick a second) cancels the run, and the body stops at once
+			called, err := write(rc, "gotham.compact")
+			refused.Store(err != nil && !called)
+			return "case closed", nil // the refusal is swallowed
+		})
+		h := newHarness(t, []tasks.Definition{def}, synctestConfig)
+		id := h.start("gotham.compact", tasks.StartRequest{})
+		time.Sleep(10 * time.Minute) // the lease, the reap and the attempt end all happen in fake time
+		synctest.Wait()
+		rec := h.get(id)
+
+		if !refused.Load() {
+			t.Fatal("the write after the lapse was not refused; the scenario did not happen")
+		}
+		if rec.State != tasks.StateFailed {
+			t.Fatalf("a run that lost its hold and returned nil ended %s, want failed", rec.State)
+		}
+		if rec.Reason != reasonError {
+			t.Errorf("reason = %q, want %q", rec.Reason, reasonError)
+		}
+		if !strings.Contains(rec.Error, "stand-down hold lapsed") {
+			t.Errorf("the failure does not name the lapse: %q (%+v)", rec.Error, rec)
 		}
 	})
 }

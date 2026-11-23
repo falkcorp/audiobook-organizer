@@ -682,6 +682,19 @@ func (a *attempt) finish(res json.RawMessage, err error) {
 		}
 	}
 	a.tick(ctx)
+	// A run whose stand-down hold lapsed never ends succeeded, whatever its body
+	// returned. After the lapse every write is refused, but a body may swallow a
+	// refusal and return nil (a per-item loop that counts a refused item and goes
+	// on), and a run whose lapse only hit its last items would then be recorded as
+	// done. HEAD ends such a run failed: ScanStandDownHold.Finish returns
+	// errors.Join(ErrScanStandDownLost, runErr) whenever the lease lapsed, which is
+	// an error even when runErr is nil (registry/scan_standdown_hold.go:220-226),
+	// and a refused write flagged on an item fails the run however the item
+	// returned (registry/batch_runner.go:885-888). The run keeps its writes; the
+	// error names the lapse, and outcome maps the cause to failed.
+	if (err == nil || errors.Is(err, tasks.ErrPreview)) && a.ctx.Err() != nil && errors.Is(context.Cause(a.ctx), tasks.ErrHoldLost) {
+		err = fmt.Errorf("executor: the run's stand-down hold lapsed before it finished, and any write it made after the lapse was refused: %w", tasks.ErrHoldLost)
+	}
 	state, reason := a.outcome(err)
 	yield := errors.Is(err, tasks.ErrContinueInPlace) && a.ctx.Err() == nil
 	if state == tasks.StateInterruptedQuiesced && !a.e.keyHeld(a.d.key) {
