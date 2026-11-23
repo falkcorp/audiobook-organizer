@@ -9,11 +9,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
@@ -34,16 +35,11 @@ type finishOnlyRig struct {
 	finishStarted            chan struct{}
 	finishErr                error
 	summary                  chan tasks.Summary
-	timeout                  time.Duration // a Timeout already past when the attempt starts, so a stop ends it before Finish
 }
 
 func (r *finishOnlyRig) def() tasks.Definition {
-	edits := []func(*tasks.Common){withResume(tasks.ResumeAsk)}
-	if r.timeout > 0 {
-		edits = append(edits, withTimeout(r.timeout))
-	}
 	s := tasks.BatchSpec[noParams, string, tasks.Summary]{
-		Common: common("gotham.archive", edits...),
+		Common: common("gotham.archive", withResume(tasks.ResumeAsk)),
 		// A Snapshot source freezes each chunk's keys before it runs, so the
 		// blocked chunk is in the ledger incomplete: Finish must not count it.
 		Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
@@ -184,23 +180,56 @@ func TestFinishOnly_FinishErrorEndsTheRunFailed(t *testing.T) {
 	}
 }
 
+// cancelOnChunks is a run store that cancels a run the first time the
+// finish-only attempt reads that run's chunk ledger (armed by the test): a
+// stop that arrives while the attempt is reading, before it calls Finish.
+type cancelOnChunks struct {
+	tasks.RunStore
+	cancel func(context.Context)
+	armed  atomic.Bool
+}
+
+func (c *cancelOnChunks) Chunks(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Chunk, error] {
+	if c.armed.CompareAndSwap(true, false) {
+		c.cancel(ctx)
+	}
+	return c.RunStore.Chunks(ctx, id)
+}
+
 // TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish (HEAD
-// batch_runner.go:283-288): when a stop is already ending the finish-only
-// attempt, Finish does not run: the run ends by that stop, and Finish runs
-// once, in the attempt that ends the run. Here the kind's Timeout has
-// already passed when the attempt starts.
+// batch_runner.go:283-288): when a stop ends the finish-only attempt before
+// it reaches Finish, Finish does not run and the run ends by that stop:
+// Finish runs once, in the attempt that ends the run. Here an operator
+// cancel lands while the attempt reads the ledger.
 func TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish(t *testing.T) {
-	second := &finishOnlyRig{timeout: time.Nanosecond}
+	second := &finishOnlyRig{}
 	h, id := interruptedArchive(t, nil, second)
+	if err := h.x.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	third := &finishOnlyRig{}
+	stores := h.stores
+	w := &cancelOnChunks{RunStore: stores.Runs}
+	w.cancel = func(ctx context.Context) {
+		if err := h.e.Cancel(ctx, id); err != nil {
+			t.Errorf("cancel: %v", err)
+		}
+	}
+	stores.Runs = w
+	h = onStores(t, h.fs, stores, h.ks, []tasks.Definition{third.def()}, func(o *Options) { o.NewBatch = h.ks.NewIndexedBatch }, false)
 	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
 		t.Fatal(err)
 	}
-	r := h.waitState(id, tasks.StateTimedOut, tasks.StateSucceeded, tasks.StateFailed)
-	if r.State != tasks.StateTimedOut {
-		t.Fatalf("run %s (%q), want timed_out by the stop that was already ending the attempt", r.State, r.Error)
+	w.armed.Store(true)
+	if err := h.x.Run(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if n := second.finishes.Load(); n != 0 {
-		t.Fatalf("Finish ran %d times under a stop that had already ended the attempt, want none", n)
+	r := h.waitState(id, tasks.StateCanceled, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateCanceled {
+		t.Fatalf("run %s (%q), want canceled by the stop that landed during the attempt", r.State, r.Error)
+	}
+	if n := third.finishes.Load(); n != 0 {
+		t.Fatalf("Finish ran %d times after a stop had ended the attempt, want none", n)
 	}
 }
 
@@ -241,67 +270,88 @@ func TestFinishOnly_RestartMidFinishStaysFinishOnly(t *testing.T) {
 		}
 	})
 	t.Run("a from-zero kind is not restarted from zero", func(t *testing.T) {
-		// Only ResumeAsk reaches awaiting_decision, so this puts the marker on
-		// a running ResumeFromZero run by hand: whatever the policy, a
+		// Only ResumeAsk reaches awaiting_decision, so the marker goes on a
+		// running ResumeFromZero run by hand: whatever the policy, a
 		// finish-only run's restart is finish-only, and a from-zero requeue
-		// would void the ledger Finish reads. Boot 2 is itself a from-zero
-		// requeue (it voids boot 1's chunks, then blocks before writing any of
-		// its own), so only a Finish that reads past the void line sees them.
-		fromZero := func(r *finishOnlyRig) tasks.Definition {
-			s := tasks.BatchSpec[noParams, string, tasks.Summary]{
-				Common: common("gotham.archive", withResume(tasks.ResumeFromZero)),
-				Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
-					r.sources.Add(1)
-					return tasks.Source[string]{Items: caseFiles, Key: func(s string) string { return s }}, nil
-				},
-				Item: func(ic *tasks.ItemRC, _ noParams, f string) error {
-					r.items.Add(1)
-					if f == r.block {
-						close(r.reach)
-						<-ic.Context().Done()
-						return ic.Context().Err()
-					}
-					return nil
-				},
-				Finish: func(_ *tasks.RC, _ noParams, s tasks.Summary) (tasks.Summary, error) {
-					r.finishes.Add(1)
-					if r.summary != nil {
-						r.summary <- s
-					}
-					return s, nil
-				},
-				Parallelism: tasks.Sequential("one file at a time"),
-				ChunkSize:   3,
-			}
-			return tasks.Batch(tasks.Kind("gotham.archive"), s)
+		// would void the ledger and reset the progress Finish reads.
+		finishOnlyFromZeroRestart(t, false, 10)
+	})
+	t.Run("after an earlier from-zero restart", func(t *testing.T) {
+		// The ledger boot 1 wrote is already voided for a full run by the
+		// from-zero requeue before it (its progress is reset too), so only a
+		// Finish that reads the ledger past the void line sees the 6 files.
+		finishOnlyFromZeroRestart(t, true, 0)
+	})
+}
+
+// finishOnlyFromZeroRestart marks a running ResumeFromZero Batch run finish-only,
+// restarts it, and checks the Finish that follows. With afterFromZeroRestart the
+// run was first restarted from zero without the marker.
+func finishOnlyFromZeroRestart(t *testing.T, afterFromZeroRestart bool, wantTotal int64) {
+	// Only ResumeAsk reaches awaiting_decision, so this puts the marker on
+	// a running ResumeFromZero run by hand: whatever the policy, a
+	// finish-only run's restart is finish-only, and a from-zero requeue
+	// would void the ledger Finish reads. Boot 2 is itself a from-zero
+	// requeue (it voids boot 1's chunks, then blocks before writing any of
+	// its own), so only a Finish that reads past the void line sees them.
+	fromZero := func(r *finishOnlyRig) tasks.Definition {
+		s := tasks.BatchSpec[noParams, string, tasks.Summary]{
+			Common: common("gotham.archive", withResume(tasks.ResumeFromZero)),
+			Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
+				r.sources.Add(1)
+				return tasks.Source[string]{Items: caseFiles, Key: func(s string) string { return s }}, nil
+			},
+			Item: func(ic *tasks.ItemRC, _ noParams, f string) error {
+				r.items.Add(1)
+				if f == r.block {
+					close(r.reach)
+					<-ic.Context().Done()
+					return ic.Context().Err()
+				}
+				return nil
+			},
+			Finish: func(_ *tasks.RC, _ noParams, s tasks.Summary) (tasks.Summary, error) {
+				r.finishes.Add(1)
+				if r.summary != nil {
+					r.summary <- s
+				}
+				return s, nil
+			},
+			Parallelism: tasks.Sequential("one file at a time"),
+			ChunkSize:   3,
 		}
-		first := &finishOnlyRig{block: "file-07", reach: make(chan struct{})}
-		h := newHarness(t, []tasks.Definition{fromZero(first)}, nil)
-		id := h.start("gotham.archive", tasks.StartRequest{})
-		<-first.reach
+		return tasks.Batch(tasks.Kind("gotham.archive"), s)
+	}
+	first := &finishOnlyRig{block: "file-07", reach: make(chan struct{})}
+	h := newHarness(t, []tasks.Definition{fromZero(first)}, nil)
+	id := h.start("gotham.archive", tasks.StartRequest{})
+	<-first.reach
+	if afterFromZeroRestart {
+		// Boot 2 is itself a from-zero requeue: it voids boot 1's chunks and
+		// resets the progress, then blocks before writing any of its own.
 		mid := &finishOnlyRig{block: "file-00", reach: make(chan struct{})}
 		h = h.crashBoot([]tasks.Definition{fromZero(mid)}, nil)
 		<-mid.reach
-		if _, err := h.e.move(context.Background(), id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
-			next := cur
-			next.FinishOnly = true
-			return next, tasks.RunEvent{Event: "test"}, nil
-		}, nil); err != nil {
-			t.Fatal(err)
-		}
-		second := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
-		next := h.crashBoot([]tasks.Definition{fromZero(second)}, nil)
-		r := next.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
-		if r.State != tasks.StateSucceeded {
-			t.Fatalf("restarted finish-only run: %s (%q)", r.State, r.Error)
-		}
-		if s := <-second.summary; s.Done != 6 || s.ChunksDone != 2 {
-			t.Fatalf("Finish saw %+v, want boot 1's 6 files in 2 chunks (the ledger a from-zero requeue voids is still what the finish reads)", s)
-		}
-		if n := second.sources.Load() + second.items.Load(); n != 0 {
-			t.Fatalf("the restarted finish-only run read the source or ran an item %d times, want none", n)
-		}
-	})
+	}
+	if _, err := h.e.move(context.Background(), id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+		next := cur
+		next.FinishOnly = true
+		return next, tasks.RunEvent{Event: "test"}, nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	second := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
+	next := h.crashBoot([]tasks.Definition{fromZero(second)}, nil)
+	r := next.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateSucceeded {
+		t.Fatalf("restarted finish-only run: %s (%q)", r.State, r.Error)
+	}
+	if s := <-second.summary; s.Done != 6 || s.ChunksDone != 2 || s.Total != wantTotal {
+		t.Fatalf("Finish saw %+v, want boot 1's 6 files in 2 chunks of a stored total of %d (the ledger and the progress a from-zero requeue voids are still what the finish reads)", s, wantTotal)
+	}
+	if n := second.sources.Load() + second.items.Load(); n != 0 {
+		t.Fatalf("the restarted finish-only run read the source or ran an item %d times, want none", n)
+	}
 }
 
 // TestFinishOnly_ResumeClearsTheMarker: Decide(resume) is a full attempt,
@@ -463,15 +513,11 @@ type finishFixer struct {
 	afterCalls atomic.Int64
 	afterRows  chan []string
 	afterErr   error
-	timeout    time.Duration // see finishOnlyRig.timeout
 }
 
 func (f *finishFixer) def() tasks.Definition {
 	return fixerDef(&f.log, func(s *tasks.FixerSpec[noParams, string]) {
 		s.Common.Resume = tasks.ResumeAsk
-		if f.timeout > 0 {
-			s.Common.Timeout = f.timeout
-		}
 		inner := s.Evaluate
 		s.Evaluate = func(ic *tasks.ItemRC, p noParams, c string) (tasks.Row, error) {
 			if f.blockPlan {
@@ -603,21 +649,45 @@ func TestFinishOnly_FixerAfterApplyGetsOnlyTheRowsThatStillStand(t *testing.T) {
 	}
 }
 
+// cancelOnStands is a ChangeSink that cancels the run the first time the
+// finish-only attempt asks whether a row's changes still stand.
+type cancelOnStands struct {
+	cancel func(context.Context, tasks.RunID)
+	once   sync.Once
+}
+
+func (c *cancelOnStands) Record(context.Context, tasks.RunID, []tasks.Change) error { return nil }
+
+func (c *cancelOnStands) Stands(ctx context.Context, id tasks.RunID, _ string) (bool, error) {
+	c.once.Do(func() { c.cancel(ctx, id) })
+	return true, nil
+}
+
 // TestFinishOnly_FixerAStopThatEndedTheAttemptSkipsAfterApply: as for a
-// Batch, a stop already ending the attempt (here a Timeout that has passed)
-// skips AfterApply.
+// Batch, a stop that ended the attempt (an operator cancel that lands while
+// the marks are checked) skips AfterApply.
 func TestFinishOnly_FixerAStopThatEndedTheAttemptSkipsAfterApply(t *testing.T) {
-	second := &finishFixer{timeout: time.Nanosecond}
-	h, id := interruptedApply(t, "penguin", second)
+	second := &finishFixer{}
+	sink := &cancelOnStands{}
+	var h *harness
+	sink.cancel = func(ctx context.Context, id tasks.RunID) {
+		if err := h.e.Cancel(ctx, id); err != nil {
+			t.Errorf("cancel: %v", err)
+		}
+	}
+	var id tasks.RunID
+	h, id = interruptedApply(t, "penguin", second, func(o *Options) {
+		o.ChangeSinks = map[string]tasks.ChangeSink{"arkham": sink}
+	})
 	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
 		t.Fatal(err)
 	}
-	r := h.waitState(id, tasks.StateTimedOut, tasks.StateSucceeded, tasks.StateFailed)
-	if r.State != tasks.StateTimedOut {
-		t.Fatalf("run %s (%q), want timed_out", r.State, r.Error)
+	r := h.waitState(id, tasks.StateCanceled, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateCanceled {
+		t.Fatalf("run %s (%q), want canceled", r.State, r.Error)
 	}
 	if n := second.afterCalls.Load(); n != 0 {
-		t.Fatalf("AfterApply ran %d times under a stop that had already ended the attempt, want none", n)
+		t.Fatalf("AfterApply ran %d times after a stop had ended the attempt, want none", n)
 	}
 }
 
