@@ -28,7 +28,6 @@ import (
 // An app that declared the identity flip (Config.IdentityBoot) and ships an
 // updater (Config.Updater, app.Options.Updater) gets, and no other app gets:
 //
-//   - the topic: coreTopics carries updaterTopicSpecs() (events.go);
 //   - the owner: storageOwners appends updaterOwnerSpec() (swap.go), a one-time
 //     claim-ledger write at P4b;
 //   - the component: wireUpdater registers core.updater on the health registry
@@ -37,12 +36,19 @@ import (
 //     are already registered by their own wiring (config_boot.go,
 //     identity_p4d.go), so calling it would fail as a duplicate;
 //   - the routes: mountUpdater(r.CoreGroup(), u, newUpdaterStarter(executor), log)
-//     at P7, once the executor exists and before P8 builds the router.
+//     at the end of P5, after mountIdentity and so under the auth stages. The
+//     executor is read when a request arrives (lateExecutor), because P7's
+//     tasks start rule has not run yet and may build none.
 //
-// updaterDeclared is the one predicate. With either half off nothing is
-// registered, so the running app, today's ABO among them, behaves as before:
-// Config.Updater alone is set on every offline command (updater fetch-release
-// reads it) and wires nothing.
+// The topic is the one piece that is not updater-only: coreTopics carries
+// updaterTopicSpecs(), so every identity boot declares core.update.found.v1 in
+// its catalog (a catalog entry, like the status and task topics). It has no
+// publisher unless the updater above is wired.
+//
+// updaterDeclared is the predicate for the other three. With either half off
+// nothing is registered, so the running app, today's ABO among them, behaves as
+// before: Config.Updater alone is set on every offline command (updater
+// fetch-release reads it) and wires nothing.
 //
 // Not wired here, and so not startable through the routes: the three
 // core.updater.* task kinds. Core registers none of its own kinds at this base

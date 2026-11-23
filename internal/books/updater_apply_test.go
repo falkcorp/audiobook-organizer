@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -79,7 +80,8 @@ func newApplyRig(t *testing.T) *applyRig {
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		switch {
-		case req.URL.Path == "/repos/falkcorp/audiobook-organizer/releases/tags/"+applyTag:
+		case req.URL.Path == "/repos/falkcorp/audiobook-organizer/releases/tags/"+applyTag,
+			req.URL.Path == "/repos/falkcorp/audiobook-organizer/releases/latest":
 			w.Header().Set("Content-Type", "application/json")
 			base := srv.URL + "/dl/"
 			_, _ = fmt.Fprintf(w, `{"tag_name":%q,"html_url":"https://example.invalid/r","body":"The Dark Knight Returns","published_at":"2026-11-01T00:00:00Z","assets":[`+
@@ -155,13 +157,23 @@ func TestApply_RawAssetNoBackup(t *testing.T) {
 }
 
 // TestApply_NilHTTPAndNotify (I10): the updater built with Deps.HTTP and
-// Deps.Notify nil, which is how the flip wires it until F7-09, applies a
-// release over the source's own client, asks the supervisor for exactly one
-// restart, and does not panic on either hook.
+// Deps.Notify nil, which is how the flip wires it until F7-09, checks (finds
+// the newer release over the source's own client), applies it, asks the
+// supervisor for exactly one restart, and does not panic on either hook. (The
+// check's found-notification branch, Notify nil with a store, is pinned in
+// core/updater's TestCheck_NotifiesOncePerVersionAcrossRestart, whose rigs
+// carry no Notify.)
 func TestApply_NilHTTPAndNotify(t *testing.T) {
 	r := newApplyRig(t)
-	if err := r.u.Apply(taskstest.NewFakeRun(t.Context(), coreupdater.KindApply).RC(), applyTag); err != nil {
-		t.Fatalf("Apply with no HTTP client and no notify service: %v", err)
+	st, err := r.u.Check(t.Context())
+	if err != nil {
+		t.Fatalf("Check with no HTTP client and no notify service: %v", err)
+	}
+	if !st.Available || st.Latest != strings.TrimPrefix(applyTag, "v") {
+		t.Fatalf("check = latest %q available %v, want %s available", st.Latest, st.Available, applyTag)
+	}
+	if err := r.u.Apply(taskstest.NewFakeRun(t.Context(), coreupdater.KindApply).RC(), ""); err != nil {
+		t.Fatalf("Apply of the release the check offered: %v", err)
 	}
 	r.rst.mu.Lock()
 	defer r.rst.mu.Unlock()
