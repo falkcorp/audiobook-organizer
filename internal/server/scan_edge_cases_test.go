@@ -154,7 +154,9 @@ func TestScanService_OrphanBooks_FileDeleted(t *testing.T) {
 
 	// Organize should skip books with missing files
 	config.AppConfig.AutoOrganize = false
-	svc := audiobookspkg.NewOrganizeService(env.Store)
+	pebble, ok := env.Store.(*database.PebbleStore)
+	require.True(t, ok, "the test env store is %T, want the production *PebbleStore", env.Store)
+	svc := audiobookspkg.NewOrganizeService(pebble)
 	err = svc.PerformOrganize(context.Background(), &OrganizeRequest{}, logger.New("test"))
 	require.NoError(t, err)
 
