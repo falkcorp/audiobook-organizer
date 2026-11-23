@@ -200,3 +200,11 @@ func TestBooksTaskLists_DefinitionsHaveNoProblems(t *testing.T) {
 		require.Empty(t, tasks.Problems(d), d.Kind())
 	}
 }
+
+// Several inputs missing are named in sorted order, the same way every call.
+func TestBooksTaskLists_MissingInputsAreNamedInSortedOrder(t *testing.T) {
+	for range 20 {
+		_, err := BooksTaskLists(BooksTaskInputs{})
+		require.ErrorContains(t, err, "missing input(s): [Candidates NewAudible Schedules Scoring Source]")
+	}
+}

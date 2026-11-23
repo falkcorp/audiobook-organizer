@@ -252,3 +252,21 @@ func TestBooksKindWriter_BackfillDeclaresExactlyItsWriteRows(t *testing.T) {
 	def := kindByName(t, booksInputs(&booksSpy{}), backfillKind)
 	require.Equal(t, refStrings(union), refStrings2(tasks.CommonOf(def).Effects.WriteSet()))
 }
+
+// A signature clear is a ModifyBook (backfill.go:789): its row is the whole
+// book-write row, books and the metadata_cache and indexes the write also
+// touches, not the books resource alone.
+func TestBooksKindRows_ClearBookSignatureIsTheBookWriteRow(t *testing.T) {
+	rows, err := booksKindRows()
+	require.NoError(t, err)
+	require.Equal(t, refStrings(rows["ModifyBook"]), refStrings(rows["ClearBookSignature"]))
+	require.Len(t, rows["ClearBookSignature"], 3)
+}
+
+// Several inputs missing are named in sorted order, the same way every call.
+func TestBooksTaskLists_MissingInputsAreNamedInSortedOrder(t *testing.T) {
+	for range 20 {
+		_, err := BooksTaskLists(BooksTaskInputs{})
+		require.ErrorContains(t, err, "missing input(s): [Plugin Schedules Source]")
+	}
+}
