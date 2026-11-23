@@ -184,11 +184,13 @@ func listsFixture(t *testing.T) taskListInputs {
 		Repairs: repairs.BooksTaskInputs{
 			// The real fixers, so every one of their permission atoms must
 			// resolve through books' own atom table.
-			Fixers:       (&maintenance.Plugin{}).Repairs().List(),
-			Guard:        store,
-			Stores:       store,
-			PlanRows:     listsPlanRows{},
-			BindStores:   func(ctx context.Context) context.Context { return ctx },
+			Fixers:   (&maintenance.Plugin{}).Repairs().List(),
+			Guard:    store,
+			Stores:   store,
+			PlanRows: listsPlanRows{},
+			BindStores: func(ctx context.Context) context.Context {
+				return repairs.WithStores[maintenance.FixerStores](ctx, listsFixerStores{})
+			},
 			StandDownKey: tasks.Key("books.library.scan"),
 		},
 	}
@@ -419,4 +421,18 @@ func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 			require.Contains(t, err.Error(), name)
 		})
 	}
+}
+
+// listsFixerStores is a real (non-nil) fixer-stores value for the fixture's
+// BindStores. No fixer runs here, so the embedded interface is never called.
+type listsFixerStores struct{ maintenance.FixerStores }
+
+// A BindStores that binds nothing is refused by name, not accepted because it is
+// non-nil.
+func TestF5_NoOpBindStoresRefusesByName(t *testing.T) {
+	in := listsFixture(t)
+	in.Repairs.BindStores = func(ctx context.Context) context.Context { return ctx }
+	defs, err := bookTaskLists(in)
+	require.ErrorContains(t, err, "Repairs.BindStores binds no maintenance.FixerStores")
+	require.Nil(t, defs)
 }

@@ -22,21 +22,84 @@ import (
 // the lists and the flip (F5-18 r12) is the one change that wires them into
 // Module(); until then a native kind must not be registered by a stray caller.
 //
-// This is a source scan, not a reachability argument. It parses every non-test Go
-// file in the repository and fails on any use of bookTaskLists, of the per-package
-// BooksTaskLists entry points or of BooksHeldTaskLists that is not the one
-// sanctioned call site: internal/books/tasklists.go calls the per-package entry
-// points, and nothing calls bookTaskLists at all. Declarations are not uses.
-// (make lint-deadcode-ratchet is the second proof: the same identifiers are in
-// its baseline, so a new caller also fails there.)
+// This is a source scan, not a reachability argument, and it is the only proof
+// of darkness: scripts/deadcode-ratchet.py is not a second one. The ratchet fails
+// a NEW unreachable id and only prints a notice when a baselined id becomes
+// reachable, so a caller wired in later passes it. (The A6 identifiers are in its
+// baseline only so the ratchet does not fail on code that is dark on purpose.)
+//
+// The scan parses every non-test Go file in the repository and fails on any use
+// of a dark name outside the files listed for it. Two kinds of name are dark:
+//
+//   - the entry points (bookTaskLists, BooksTaskLists, BooksHeldTaskLists), whose
+//     one sanctioned use is internal/books/tasklists.go calling the per-package
+//     BooksTaskLists, and nothing calls bookTaskLists at all;
+//   - the builders those entry points are made of (newBooksKindDeps, newT6G7Deps
+//     and writer.ForRun), whose only users are the A6 files that build the dark
+//     lists. A live path calling one directly would hand a run the books module's
+//     gated writer without going through the lists, so it trips here.
+//
+// Declarations are not uses.
+type darkName struct {
+	name string
+	// qualifier, when set, restricts the match to the selector qualifier.name
+	// (writer.ForRun), so an unrelated method of the same name is not a use.
+	qualifier string
+	// allowed are the files whose use is sanctioned, by path from the repo root.
+	allowed []string
+}
+
+var darkNames = []darkName{
+	{name: "bookTaskLists"},
+	{name: "BooksTaskLists", allowed: []string{"internal/books/tasklists.go"}},
+	{name: "BooksHeldTaskLists"},
+	{name: "newBooksKindDeps", allowed: []string{
+		"internal/plugins/acoustid/books_tasklists.go",
+		"internal/plugins/deluge/books_tasklists.go",
+		"internal/plugins/metafetch/books_tasklists.go",
+	}},
+	{name: "newT6G7Deps", allowed: []string{"internal/plugins/maintenance/books_tasklists.go"}},
+	{name: "ForRun", qualifier: "writer", allowed: []string{
+		"internal/plugins/acoustid/books_tasklists.go",
+		"internal/plugins/deluge/books_tasklists.go",
+		"internal/plugins/metafetch/books_tasklists.go",
+		"internal/plugins/maintenance/deps_gate.go",
+		"internal/scheduler/books_tasklists.go",
+	}},
+}
+
+// darkUse reports the dark name an identifier use is, or "" if it is none or the
+// file is sanctioned for it. sel is the selector the identifier is the right-hand
+// side of, nil for a bare identifier.
+func darkUse(rel string, id *ast.Ident, sel *ast.SelectorExpr) string {
+	for _, dn := range darkNames {
+		if id.Name != dn.name {
+			continue
+		}
+		if dn.qualifier != "" {
+			if sel == nil {
+				continue
+			}
+			if q, ok := sel.X.(*ast.Ident); !ok || q.Name != dn.qualifier {
+				continue
+			}
+		}
+		for _, a := range dn.allowed {
+			if rel == a {
+				return ""
+			}
+		}
+		if dn.qualifier != "" {
+			return dn.qualifier + "." + dn.name
+		}
+		return dn.name
+	}
+	return ""
+}
+
 func TestF5_BookTaskListsAreDark(t *testing.T) {
 	root := repoRoot(t)
 	const sanctioned = "internal/books/tasklists.go"
-	darkNames := map[string]bool{
-		"bookTaskLists":      true,
-		"BooksTaskLists":     true,
-		"BooksHeldTaskLists": true,
-	}
 
 	var uses []string
 	scanned := 0
@@ -65,15 +128,24 @@ func TestF5_BookTaskListsAreDark(t *testing.T) {
 				declared[fd.Name] = true
 			}
 		}
+		// A selector's Sel is visited as an Ident of its own: record which
+		// selector it belongs to so a qualified name (writer.ForRun) is judged
+		// by its qualifier, and visit it once.
+		selOf := map[*ast.Ident]*ast.SelectorExpr{}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if se, ok := n.(*ast.SelectorExpr); ok {
+				selOf[se.Sel] = se
+			}
+			return true
+		})
 		ast.Inspect(f, func(n ast.Node) bool {
 			id, ok := n.(*ast.Ident)
-			if !ok || declared[id] || !darkNames[id.Name] {
+			if !ok || declared[id] {
 				return true
 			}
-			if rel == sanctioned && id.Name == "BooksTaskLists" {
-				return true
+			if use := darkUse(rel, id, selOf[id]); use != "" {
+				uses = append(uses, rel+": "+use)
 			}
-			uses = append(uses, rel+": "+id.Name)
 			return true
 		})
 		return nil
