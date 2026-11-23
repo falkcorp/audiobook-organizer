@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
 
@@ -33,14 +34,21 @@ type finishOnlyRig struct {
 	finishStarted            chan struct{}
 	finishErr                error
 	summary                  chan tasks.Summary
+	timeout                  time.Duration // a Timeout already past when the attempt starts, so a stop ends it before Finish
 }
 
 func (r *finishOnlyRig) def() tasks.Definition {
+	edits := []func(*tasks.Common){withResume(tasks.ResumeAsk)}
+	if r.timeout > 0 {
+		edits = append(edits, withTimeout(r.timeout))
+	}
 	s := tasks.BatchSpec[noParams, string, tasks.Summary]{
-		Common: common("gotham.archive", withResume(tasks.ResumeAsk)),
+		Common: common("gotham.archive", edits...),
+		// A Snapshot source freezes each chunk's keys before it runs, so the
+		// blocked chunk is in the ledger incomplete: Finish must not count it.
 		Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
 			r.sources.Add(1)
-			return tasks.Source[string]{Items: caseFiles, Key: func(s string) string { return s }}, nil
+			return tasks.Source[string]{Items: caseFiles, Key: func(s string) string { return s }, Order: tasks.Snapshot}, nil
 		},
 		Item: func(ic *tasks.ItemRC, _ noParams, f string) error {
 			r.items.Add(1)
@@ -70,7 +78,7 @@ func (r *finishOnlyRig) def() tasks.Definition {
 }
 
 // interruptedArchive runs gotham.archive until file-07 blocks (chunks 0 and 1,
-// six files, are in the ledger), shuts the executor down, and reboots over
+// six files, are complete in the ledger and chunk 2 is frozen but not complete), shuts the executor down, and reboots over
 // the same store: the run is awaiting_decision. It returns the second boot.
 func interruptedArchive(t *testing.T, edit func(*Options), next *finishOnlyRig) (*harness, tasks.RunID) {
 	t.Helper()
@@ -108,8 +116,8 @@ func TestFinishOnly_BatchFinishRunsOverTheStoredLedger(t *testing.T) {
 	second := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
 	h, id := interruptedArchive(t, nil, second)
 	before := chunkNumbers(t, h, id)
-	if !slices.Equal(before, []int{0, 1}) {
-		t.Fatalf("ledger after the first boot: chunks %v, want [0 1]", before)
+	if !slices.Equal(before, []int{0, 1, 2}) {
+		t.Fatalf("ledger after the first boot: chunks %v, want [0 1 2] (2 frozen, not complete)", before)
 	}
 	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
 		t.Fatalf("decide finish: %v", err)
@@ -120,7 +128,7 @@ func TestFinishOnly_BatchFinishRunsOverTheStoredLedger(t *testing.T) {
 	}
 	s := <-second.summary
 	if s.Done != 6 || s.Failed != 0 || s.ChunksDone != 2 || s.ChunksTotal != 2 || s.Total != 10 {
-		t.Fatalf("Finish saw %+v, want 6 done, 2 chunks (of 2), total 10", s)
+		t.Fatalf("Finish saw %+v, want 6 done, 2 complete chunks (the frozen third not counted), total 10", s)
 	}
 	if n := second.sources.Load() + second.items.Load(); n != 0 {
 		t.Fatalf("the finish-only attempt read the source or ran an item %d times, want none", n)
@@ -176,6 +184,26 @@ func TestFinishOnly_FinishErrorEndsTheRunFailed(t *testing.T) {
 	}
 }
 
+// TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish (HEAD
+// batch_runner.go:283-288): when a stop is already ending the finish-only
+// attempt, Finish does not run: the run ends by that stop, and Finish runs
+// once, in the attempt that ends the run. Here the kind's Timeout has
+// already passed when the attempt starts.
+func TestFinishOnly_AStopThatEndedTheAttemptSkipsFinish(t *testing.T) {
+	second := &finishOnlyRig{timeout: time.Nanosecond}
+	h, id := interruptedArchive(t, nil, second)
+	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
+		t.Fatal(err)
+	}
+	r := h.waitState(id, tasks.StateTimedOut, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateTimedOut {
+		t.Fatalf("run %s (%q), want timed_out by the stop that was already ending the attempt", r.State, r.Error)
+	}
+	if n := second.finishes.Load(); n != 0 {
+		t.Fatalf("Finish ran %d times under a stop that had already ended the attempt, want none", n)
+	}
+}
+
 // TestFinishOnly_RestartMidFinishStaysFinishOnly: a restart while the
 // finish-only attempt is running resumes the run as finish-only, never as a
 // full run. Boot 2 is shut down inside Finish; boot 3's resume sweep
@@ -216,8 +244,9 @@ func TestFinishOnly_RestartMidFinishStaysFinishOnly(t *testing.T) {
 		// Only ResumeAsk reaches awaiting_decision, so this puts the marker on
 		// a running ResumeFromZero run by hand: whatever the policy, a
 		// finish-only run's restart is finish-only, and a from-zero requeue
-		// would void the ledger Finish reads.
-		first := &finishOnlyRig{block: "file-07", reach: make(chan struct{})}
+		// would void the ledger Finish reads. Boot 2 is itself a from-zero
+		// requeue (it voids boot 1's chunks, then blocks before writing any of
+		// its own), so only a Finish that reads past the void line sees them.
 		fromZero := func(r *finishOnlyRig) tasks.Definition {
 			s := tasks.BatchSpec[noParams, string, tasks.Summary]{
 				Common: common("gotham.archive", withResume(tasks.ResumeFromZero)),
@@ -246,9 +275,13 @@ func TestFinishOnly_RestartMidFinishStaysFinishOnly(t *testing.T) {
 			}
 			return tasks.Batch(tasks.Kind("gotham.archive"), s)
 		}
+		first := &finishOnlyRig{block: "file-07", reach: make(chan struct{})}
 		h := newHarness(t, []tasks.Definition{fromZero(first)}, nil)
 		id := h.start("gotham.archive", tasks.StartRequest{})
 		<-first.reach
+		mid := &finishOnlyRig{block: "file-00", reach: make(chan struct{})}
+		h = h.crashBoot([]tasks.Definition{fromZero(mid)}, nil)
+		<-mid.reach
 		if _, err := h.e.move(context.Background(), id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
 			next := cur
 			next.FinishOnly = true
@@ -263,7 +296,7 @@ func TestFinishOnly_RestartMidFinishStaysFinishOnly(t *testing.T) {
 			t.Fatalf("restarted finish-only run: %s (%q)", r.State, r.Error)
 		}
 		if s := <-second.summary; s.Done != 6 || s.ChunksDone != 2 {
-			t.Fatalf("Finish saw %+v, want the earlier attempt's 6 files in 2 chunks (not voided by a from-zero requeue)", s)
+			t.Fatalf("Finish saw %+v, want boot 1's 6 files in 2 chunks (the ledger a from-zero requeue voids is still what the finish reads)", s)
 		}
 		if n := second.sources.Load() + second.items.Load(); n != 0 {
 			t.Fatalf("the restarted finish-only run read the source or ran an item %d times, want none", n)
@@ -430,11 +463,15 @@ type finishFixer struct {
 	afterCalls atomic.Int64
 	afterRows  chan []string
 	afterErr   error
+	timeout    time.Duration // see finishOnlyRig.timeout
 }
 
 func (f *finishFixer) def() tasks.Definition {
 	return fixerDef(&f.log, func(s *tasks.FixerSpec[noParams, string]) {
 		s.Common.Resume = tasks.ResumeAsk
+		if f.timeout > 0 {
+			s.Common.Timeout = f.timeout
+		}
 		inner := s.Evaluate
 		s.Evaluate = func(ic *tasks.ItemRC, p noParams, c string) (tasks.Row, error) {
 			if f.blockPlan {
@@ -467,10 +504,16 @@ func (f *finishFixer) def() tasks.Definition {
 // apply run reach blockRow (the rows before it, in ID order, are applied and
 // marked), shuts the executor down and reboots over the same store with next:
 // the apply run is awaiting_decision.
-func interruptedApply(t *testing.T, blockRow string, next *finishFixer) (*harness, tasks.RunID) {
+func interruptedApply(t *testing.T, blockRow string, next *finishFixer, opts ...func(*Options)) (*harness, tasks.RunID) {
 	t.Helper()
+	edit := func(o *Options) {
+		withPrincipal(o)
+		for _, f := range opts {
+			f(o)
+		}
+	}
 	first := &finishFixer{blockRow: blockRow, reach: make(chan struct{})}
-	h := newHarness(t, []tasks.Definition{first.def()}, withPrincipal)
+	h := newHarness(t, []tasks.Definition{first.def()}, edit)
 	plan := h.plan()
 	if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
 		t.Fatal(err)
@@ -480,7 +523,7 @@ func interruptedApply(t *testing.T, blockRow string, next *finishFixer) (*harnes
 	if err := h.x.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	h = h.reboot([]tasks.Definition{next.def()}, withPrincipal)
+	h = h.reboot([]tasks.Definition{next.def()}, edit)
 	h.waitState(apply.ID, tasks.StateAwaitingDecision)
 	return h, apply.ID
 }
@@ -532,6 +575,49 @@ func TestFinishOnly_FixerWithNothingAppliedSkipsAfterApply(t *testing.T) {
 	}
 	if n := second.afterCalls.Load(); n != 0 {
 		t.Fatalf("AfterApply ran %d times over no applied row, want none", n)
+	}
+}
+
+// TestFinishOnly_FixerAfterApplyGetsOnlyTheRowsThatStillStand (the same
+// evidence rule as the apply path, fixer.go standing; HEAD's RowApplied): a
+// row whose changes the module's ChangeSink says were undone since is not an
+// applied row for AfterApply or the result.
+func TestFinishOnly_FixerAfterApplyGetsOnlyTheRowsThatStillStand(t *testing.T) {
+	second := &finishFixer{afterRows: make(chan []string, 2)}
+	sink := &standsSink{undone: map[string]bool{"joker": true}}
+	h, id := interruptedApply(t, "riddler", second, func(o *Options) {
+		o.ChangeSinks = map[string]tasks.ChangeSink{"arkham": sink}
+	})
+	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
+		t.Fatal(err)
+	}
+	r := h.waitState(id, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateSucceeded {
+		t.Fatalf("finish-only apply run: %s (%q)", r.State, r.Error)
+	}
+	if got := <-second.afterRows; !slices.Equal(got, []string{"penguin"}) {
+		t.Fatalf("AfterApply saw %v, want [penguin] (joker's changes were undone)", got)
+	}
+	if res := result(t, r); res.Applied != 1 || res.Skipped != 1 {
+		t.Fatalf("result %+v, want 1 applied and 1 skipped", res)
+	}
+}
+
+// TestFinishOnly_FixerAStopThatEndedTheAttemptSkipsAfterApply: as for a
+// Batch, a stop already ending the attempt (here a Timeout that has passed)
+// skips AfterApply.
+func TestFinishOnly_FixerAStopThatEndedTheAttemptSkipsAfterApply(t *testing.T) {
+	second := &finishFixer{timeout: time.Nanosecond}
+	h, id := interruptedApply(t, "penguin", second)
+	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
+		t.Fatal(err)
+	}
+	r := h.waitState(id, tasks.StateTimedOut, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateTimedOut {
+		t.Fatalf("run %s (%q), want timed_out", r.State, r.Error)
+	}
+	if n := second.afterCalls.Load(); n != 0 {
+		t.Fatalf("AfterApply ran %d times under a stop that had already ended the attempt, want none", n)
 	}
 }
 
