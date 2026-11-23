@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_children_test.go
-// version: 0.1.0
+// version: 0.1.1
 // guid: 2c8e61d7-4f0b-49a3-b5d9-7e13a0c4f862
-// last-edited: 2026-11-22
+// last-edited: 2026-11-23
 
 package maintenance
 
@@ -852,7 +852,7 @@ func TestBatchParent_MigrateRestartResumesAtTheCursor(t *testing.T) {
 	// The earlier attempt finished batches 0 and 1 (cursor b0199) and folded their
 	// results into its checkpoint.
 	if err := rc.Checkpoint(batchState[introMigrateResult]{
-		After: "bk-0199", Batches: 2, Steps: 4,
+		After: "bk-0199", DoneBatches: 2, Steps: 4,
 		Rollup: introMigrateResult{TotalBooks: 200, Counts: map[string]int{migrateWrote: 200}},
 	}); err != nil {
 		t.Fatal(err)
@@ -1120,7 +1120,7 @@ func TestBatchParent_ResumedFileIntroParentKeepsItsCountersAndStartedAt(t *testi
 	// already transcribed, started long before this attempt.
 	startedAt := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	if err := rc.Checkpoint(batchState[fileIntroResult]{
-		Batches: 1, Steps: 2,
+		DoneBatches: 1, Steps: 2,
 		Rollup: fileIntroResult{RunID: string(rc.RunID()), Stats: &database.FileIntroStats{
 			RunOpID: string(rc.RunID()), StartedAt: startedAt, UpdatedAt: startedAt,
 			Attempted: 7, OK: 7,

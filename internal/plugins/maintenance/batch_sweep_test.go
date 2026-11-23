@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_sweep_test.go
-// version: 0.1.0
+// version: 0.1.1
 // guid: 5a3f0c52-9b1e-4d7a-8c26-0e4d71b6a9f3
-// last-edited: 2026-11-22
+// last-edited: 2026-11-23
 
 package maintenance
 
@@ -267,7 +267,7 @@ func TestBatchSweep_RestartResumesAtTheCursor(t *testing.T) {
 		t.Fatalf("attempt 1 ended with %v, want the stop cause", err)
 	}
 	st := e.state(t)
-	if st.After != "b0099" || st.Batches != 1 || st.InFlight == nil || st.InFlight.RunID != "child-2" || st.InFlight.Last != "b0199" {
+	if st.After != "b0099" || st.DoneBatches != 1 || st.InFlight == nil || st.InFlight.RunID != "child-2" || st.InFlight.Last != "b0199" {
 		t.Fatalf("checkpoint after the stop: %+v (in flight %+v), want cursor b0099, 1 batch done, child-2 in flight to b0199", st, st.InFlight)
 	}
 

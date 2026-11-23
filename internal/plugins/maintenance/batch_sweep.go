@@ -1,7 +1,7 @@
 // file: internal/plugins/maintenance/batch_sweep.go
-// version: 0.1.0
+// version: 0.1.1
 // guid: ccc31c18-3bab-412d-afbf-cefd4d12e998
-// last-edited: 2026-11-22
+// last-edited: 2026-11-23
 
 package maintenance
 
@@ -245,9 +245,9 @@ type batchInFlight struct {
 type batchState[R any] struct {
 	// After is the last book of the last completed batch ("" before the first).
 	After string `json:"after"`
-	// Batches is how many batches have completed.
-	Batches  int            `json:"batches"`
-	InFlight *batchInFlight `json:"in_flight,omitempty"`
+	// DoneBatches is how many batches have completed.
+	DoneBatches int            `json:"batches"`
+	InFlight    *batchInFlight `json:"in_flight,omitempty"`
 	// Rollup is the per-batch results folded together.
 	Rollup R `json:"rollup"`
 	// Steps only ever grows (a child enqueued, a child done, a re-attach), so an
@@ -310,7 +310,7 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 	}
 	if ok {
 		st = restored
-		h.Log(slog.LevelInfo, "Resuming batch sweep", slog.String("after", st.After), slog.Int("batches_done", st.Batches))
+		h.Log(slog.LevelInfo, "Resuming batch sweep", slog.String("after", st.After), slog.Int("batches_done", st.DoneBatches))
 	}
 
 	ids := slices.Clone(plan.IDs)
@@ -323,7 +323,7 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 		}
 		return ids[i:]
 	}
-	totalBatches := func() int { return st.Batches + (len(pending())+size-1)/size }
+	totalBatches := func() int { return st.DoneBatches + (len(pending())+size-1)/size }
 
 	startSteps := st.Steps
 	save := func() error {
@@ -373,7 +373,7 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 		}
 		plan.Merge(&st.Rollup, child)
 		st.After = fl.Last
-		st.Batches++
+		st.DoneBatches++
 		st.InFlight = nil
 		st.Steps++
 		if err := save(); err != nil {
@@ -382,7 +382,7 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 		if plan.Flush != nil {
 			plan.Flush(st.Rollup, false)
 		}
-		report(fmt.Sprintf("Batch %d/%d done", st.Batches, totalBatches()))
+		report(fmt.Sprintf("Batch %d/%d done", st.DoneBatches, totalBatches()))
 		return false, nil
 	}
 
@@ -421,12 +421,12 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 			if err := save(); err != nil {
 				return finish(err)
 			}
-			h.Log(slog.LevelInfo, "Batch sweep yielding before the next batch: the attempt's deadline is near", slog.Int("batches_done", st.Batches))
+			h.Log(slog.LevelInfo, "Batch sweep yielding before the next batch: the attempt's deadline is near", slog.Int("batches_done", st.DoneBatches))
 			return finish(tasks.ErrContinueInPlace)
 		}
 		batchIDs := rest[:min(size, len(rest))]
 		books := plan.Books(batchIDs)
-		batch := st.Batches
+		batch := st.DoneBatches
 		runID, err := h.Enqueue(plan.Params(batch, books))
 		if err != nil {
 			return finish(fmt.Errorf("enqueue batch %d: %w", batch, err))
@@ -449,7 +449,7 @@ func runBatchSweep[R any](h batchHost, plan batchPlan[R]) (R, error) {
 	if plan.Flush != nil {
 		plan.Flush(st.Rollup, true)
 	}
-	h.Progress(max(st.Steps, 1), max(st.Steps, 1), fmt.Sprintf("Done — %d batches", st.Batches))
+	h.Progress(max(st.Steps, 1), max(st.Steps, 1), fmt.Sprintf("Done — %d batches", st.DoneBatches))
 	return finish(nil)
 }
 
