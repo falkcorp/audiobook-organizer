@@ -14,7 +14,6 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/usermerge"
@@ -142,11 +141,12 @@ type G7Inputs struct {
 	StandDownKey tasks.Key
 	// InvalidateSeriesCache drops the cached series list and counts.
 	InvalidateSeriesCache func()
-	// AgreedChapterTitle and ChapterProber are HEAD's tag and ffprobe reads. Nil
-	// means HEAD's: metadata.AgreedChapterTitle over the configured extensions,
-	// and versionprimary.FFprobeChapterCounter.
-	AgreedChapterTitle func(dir string) (agreed string, multi bool)
-	ChapterProber      func() (versionprimary.ChapterProber, error)
+	// SupportedExtensions supplies the live configured audio extensions without
+	// making this package read process-global config. AgreedChapterTitle and
+	// ChapterProber may override HEAD's tag and ffprobe reads for tests.
+	SupportedExtensions func() []string
+	AgreedChapterTitle  func(dir string) (agreed string, multi bool)
+	ChapterProber       func() (versionprimary.ChapterProber, error)
 }
 
 // errT6g7NoUserMerge is HEAD's refusal of a user-merge run on a store that has no
@@ -167,9 +167,9 @@ func newT6G7Deps(in G7Inputs) t6g7Deps {
 		AgreedChapterTitle:    in.AgreedChapterTitle,
 		ChapterProber:         in.ChapterProber,
 	}
-	if d.AgreedChapterTitle == nil {
+	if d.AgreedChapterTitle == nil && in.SupportedExtensions != nil {
 		d.AgreedChapterTitle = func(dir string) (string, bool) {
-			return metadata.AgreedChapterTitle(dir, config.Snapshot().SupportedExtensions)
+			return metadata.AgreedChapterTitle(dir, in.SupportedExtensions())
 		}
 	}
 	if d.ChapterProber == nil {
@@ -506,6 +506,4 @@ var (
 	_ t6g7Store   = (*booksT6G7Store)(nil)
 	_ t6g7Writer  = (*booksT6G7Writer)(nil)
 	_ G7UserMerge = (*usermerge.Service)(nil)
-	_ G7Reads     = database.Store(nil)
-	_ G7Writes    = database.Store(nil)
 )
