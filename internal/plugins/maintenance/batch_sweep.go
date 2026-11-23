@@ -64,9 +64,11 @@ import (
 //     HEAD's file-intro loop). The jobs are idempotent, so a later run does
 //     what is left; carrying on would only spend the other batches against
 //     whatever just failed.
-//   - Cancel stops the sweep after the current child. The kernel does not
-//     cascade a parent's cancel to its children, so the child in flight finishes
-//     (its result is not folded into the parent); no further child starts.
+//   - Cancel stops the sweep at once and no further child starts. The sweep
+//     does not cancel its child: the executor does, as part of cancelling the
+//     parent (core/internal/executor/cascade.go). The child's context ends and
+//     its writer refuses from then on, so it stops at its next write rather than
+//     running to its own timeout; its result is not folded into the parent.
 
 // batchSweepSize is the number of books in one child run (owner decision,
 // 2026-11-18).

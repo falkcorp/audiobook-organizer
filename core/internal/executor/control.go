@@ -222,11 +222,28 @@ func (e *executor) CancelAs(ctx context.Context, id tasks.RunID, by tasks.Actor)
 	return e.stop(ctx, id, by, reasonCancel, tasks.ErrCanceled)
 }
 
-// stop is cancel's core, shared with the watchdog (reason watchdog). The
-// in-process attempt is looked up inside the move, from the same fresh read
-// the CAS is staged against, so a run that goes live between Cancel's call
-// and its write is still stopped (attemptFor).
+// stop is cancel's core, shared with the watchdog (reason watchdog). A cancel
+// also reaches the run's descendants (cancelDescendants, F5-18 C6): a run that
+// is canceled takes the runs it enqueued with it, as HEAD's cancel stopped the
+// work the run had started. It does so after the run's own stop, never before:
+// a parent whose child is canceled first could see the child's canceled outcome
+// from rc.Await and enqueue the next one before its own context ends. A repeat
+// cancel of a run already stopping for any reason answers nil and still reaches
+// the descendants, so a cancel whose cascade failed can be sent again.
 func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, reason string, cause error) error {
+	if err := e.stopOne(ctx, id, by, reason, cause); err != nil {
+		return err
+	}
+	if reason != reasonCancel {
+		return nil
+	}
+	return e.cancelDescendants(ctx, id, by)
+}
+
+// stopOne is stop for one run: the in-process attempt is looked up inside the
+// move, from the same fresh read the CAS is staged against, so a run that goes
+// live between Cancel's call and its write is still stopped (attemptFor).
+func (e *executor) stopOne(ctx context.Context, id tasks.RunID, by tasks.Actor, reason string, cause error) error {
 	actor := &by
 	if by == (tasks.Actor{}) {
 		actor = nil

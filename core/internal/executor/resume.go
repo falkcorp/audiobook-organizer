@@ -69,9 +69,14 @@ func (e *executor) resumeSweep(ctx context.Context) error {
 		recs = append(recs, rec)
 	}
 	superseded := e.supersededQuiesced(recs)
+	// A run that hangs from a canceled run does not resume: it ends canceled,
+	// whatever state the restart found it in (cascade.go).
+	orphans := e.orphansAtBoot(ctx, recs)
 	for _, rec := range recs {
 		resume := e.resumeOne
-		if superseded[rec.ID] {
+		if parent, ok := orphans[rec.ID]; ok {
+			resume = func(ctx context.Context, rec tasks.RunRecord) error { return e.cancelAtBoot(ctx, rec, parent) }
+		} else if superseded[rec.ID] {
 			resume = func(ctx context.Context, rec tasks.RunRecord) error {
 				return e.toState(ctx, rec, tasks.StateInterruptedDropped, reasonSuperseded)
 			}
