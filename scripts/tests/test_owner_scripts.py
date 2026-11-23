@@ -1,0 +1,840 @@
+# file: scripts/tests/test_owner_scripts.py
+# version: 0.1.0
+# guid: 4f8b2d17-6a93-4c50-b1e8-d07a5c39e6f2
+# last-edited: 2026-11-22
+
+"""Tests for the owner's scripts in deploy/owner/ (R2 runbook: P6 and Step 0).
+
+Each script runs for real, as bash, in a sandbox: the host's rollback.conf, the
+rollback helpers (the real ones, laid out by test_make_rollback.FakeHost), a
+home directory, and a PATH whose first entries are small shims for the tools a
+Linux host has and this machine may not (`stat -c`, `sudo`, `systemctl`). The
+scripts hold fixed paths (/etc/..., /usr/local/libexec/...), so a test runs a
+copy with those constants rewritten to the sandbox; every rewrite is asserted to
+have matched exactly once, so a script that renames a constant fails here
+instead of being tested against the wrong path. Nothing touches a real host.
+Fixtures use Batman names only.
+
+Run with:
+    python3 -m unittest scripts.tests.test_owner_scripts -v
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_make_rollback import REPO_ROOT, FakeHost  # noqa: E402
+
+OWNER = REPO_ROOT / "deploy" / "owner"
+CONF_REAL = "/etc/audiobook-organizer/rollback.conf"
+LIBDIR_REAL = "/usr/local/libexec/audiobook-organizer/rollback"
+ROBIN = b"robin".hex()
+BATGIRL = b"batgirl".hex()
+SECRET = b"alfred-pennyworth-credential-hash"
+SECRET_B64 = base64.b64encode(SECRET).decode()
+REQUEST = "aorg-cutover-blockers-request.json"
+LIST_TEXT = f"users step=books reason=bad-hash keyhex={ROBIN}\n1 blocking row(s)."
+ROWS = json.dumps([{"key": ROBIN, "value": SECRET_B64}])
+SHA = "b" * 64
+STAMP = "20261122T010203Z"
+STUBS = (
+    "export-keyring",
+    "export-install-secrets",
+    "cutover-blockers-list",
+    "cutover-blockers-apply",
+)
+
+_PY = sys.executable
+_STAT = f"""#!{_PY}
+import os, sys
+a = [x for x in sys.argv[1:] if x != "--"]
+st = os.stat(a[-1])
+print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_size)).replace("%u", str(st.st_uid)))
+"""
+_SUDO = f"""#!{_PY}
+import os, sys
+a = sys.argv[1:]
+with open(os.environ["SHIM_LOG"], "a") as f:
+    f.write("sudo " + " ".join(a) + "\\n")
+if a[:1] == ["-n"]:
+    a = a[1:]
+if a == ["-l"]:
+    p = os.path.join(os.environ["SHIM_DIR"], "sudo-l")
+    sys.stdout.write(open(p).read() if os.path.exists(p) else "")
+    sys.exit(0)
+os.environ["SUDO_UID"], os.environ["SUDO_GID"] = str(os.getuid()), str(os.getgid())
+os.execv(a[0], a)
+"""
+_SYSTEMCTL = f"""#!{_PY}
+import os, sys
+a = sys.argv[1:]
+d = os.environ["SHIM_DIR"]
+if "ActiveState" in a:
+    p = os.path.join(d, "state")
+    if os.path.exists(p + ".fail"):
+        sys.exit(1)
+    print(open(p).read().strip() if os.path.exists(p) else "inactive")
+elif "DropInPaths" in a:
+    print("DropInPaths=/etc/systemd/system/audiobook-organizer.service.d/host.conf")
+sys.exit(0)
+"""
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def script_copy(dest: Path, name: str, **sub: str) -> Path:
+    """deploy/owner/<name> with fixed values rewritten for the sandbox; every
+    one must match exactly one line."""
+    text = (OWNER / name).read_text()
+    for key, value in sub.items():
+        pattern = re.compile(rf"^{key}=.*$", re.M)
+        found = pattern.findall(text)
+        if len(found) != 1:
+            raise AssertionError(f"{name}: {key}= appears {len(found)} times, not once")
+        text = pattern.sub(lambda _m, k=key, v=value: f'{k}="{v}"', text)
+    out = dest / name
+    out.write_text(text)
+    out.chmod(0o755)
+    return out
+
+
+class Sandbox:
+    """A home, a shim PATH and a copy of one script."""
+
+    def __init__(self, tc: unittest.TestCase) -> None:
+        self.tc = tc
+        self._tmp = tempfile.TemporaryDirectory()
+        tc.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name).resolve()
+        self.home = self.root / "home"
+        (self.home / "aorg-owner").mkdir(parents=True)
+        self.shims = self.root / "shims"
+        self.shims.mkdir()
+        self.log = self.root / "shim.log"
+        for name, body in (("stat", _STAT), ("sudo", _SUDO), ("systemctl", _SYSTEMCTL)):
+            p = self.shims / name
+            p.write_text(body)
+            p.chmod(0o755)
+        self.scripts = self.root / "scripts"
+        self.scripts.mkdir()
+
+    def set_state(self, state: str | None) -> None:
+        p = self.shims / "state"
+        Path(f"{p}.fail").unlink(missing_ok=True)
+        if state is None:
+            p.write_text("x")
+            Path(f"{p}.fail").write_text("")
+        else:
+            p.write_text(state + "\n")
+
+    def run(
+        self, script: Path, *args: str, extra: dict | None = None, timeout: int = 120
+    ) -> subprocess.CompletedProcess:
+        env = {
+            **(extra or {}),
+            "PATH": f"{self.shims}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(self.home),
+            "SHIM_DIR": str(self.shims),
+            "SHIM_LOG": str(self.log),
+            "LC_ALL": "C",
+            "GIT_CONFIG_GLOBAL": str(self.root / "gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+        }
+        return subprocess.run(
+            ["bash", str(script), *args], env=env, capture_output=True, text=True, timeout=timeout
+        )
+
+    def sudo_calls(self) -> list[str]:
+        if not self.log.exists():
+            return []
+        return [ln for ln in self.log.read_text().splitlines() if ln.startswith("sudo")]
+
+
+def text(p: subprocess.CompletedProcess) -> str:
+    return f"exit {p.returncode}\n--- stdout\n{p.stdout}\n--- stderr\n{p.stderr}"
+
+
+class BlockersBase(unittest.TestCase):
+    """The real helpers on a FakeHost, driven through the owner scripts."""
+
+    SCRIPT = ""
+
+    def setUp(self) -> None:
+        self.box = Sandbox(self)
+
+    def host(self, config=None, **blockers) -> FakeHost:
+        current = {"blockers_list": LIST_TEXT, "blockers_rows": ROWS, **blockers}
+        host = FakeHost(self, current=current, config=config)
+        self.fh = host
+        self.script = script_copy(
+            self.box.scripts, self.SCRIPT, CONF=str(host.config), LIBDIR=str(host.libexec)
+        )
+        self.blocks = self.box.home / "aorg-owner" / "blockers"
+        return host
+
+    def run_script(self, *args: str) -> subprocess.CompletedProcess:
+        return self.box.run(self.script, *args)
+
+    def exported(self) -> list[str]:
+        return sorted(p.name for p in self.fh.export.iterdir())
+
+    def delivered(self) -> list[Path]:
+        return sorted(self.blocks.glob("*/*")) if self.blocks.exists() else []
+
+    def app_calls(self) -> list[dict]:
+        return [
+            e
+            for e in self.fh.calls()
+            if e["kind"] == "app" and e["args"][:2] == ["storage", "cutover-blockers"]
+        ]
+
+    def fake_stub(self, name: str, body: str) -> None:
+        """Replace one helper stub with a script that prints/does body."""
+        p = self.fh.libexec / name
+        p.write_text(f"#!/bin/sh\n{body}\n")
+        p.chmod(0o755)
+
+
+class ListScript(BlockersBase):
+    SCRIPT = "cutover-blockers-list.sh"
+
+    def test_moves_both_files_checks_them_and_prints_the_list(self) -> None:
+        host = self.host()
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        files = self.delivered()
+        self.assertEqual(sorted(f.suffix for f in files), [".json", ".txt"])
+        for f in files:
+            self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f.name)
+        self.assertEqual(stat.S_IMODE(files[0].parent.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(self.blocks.stat().st_mode), 0o700)
+        by = {f.suffix: f for f in files}
+        self.assertTrue(by[".txt"].read_text().startswith(LIST_TEXT))
+        self.assertEqual(by[".json"].read_text(), ROWS)
+        self.assertEqual(self.exported(), [], "the copies in export_dir are deleted")
+        self.assertIn(LIST_TEXT, p.stdout)
+        self.assertNotIn(SECRET_B64, p.stdout, "a value is never printed")
+        self.assertEqual(self.box.sudo_calls(), [f"sudo -n {host.libexec}/cutover-blockers-list"])
+        self.assertEqual([c["args"][2] for c in self.app_calls()], ["list"])
+
+    def test_nothing_blocking_leaves_only_the_text(self) -> None:
+        self.host(blockers_rows="")
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertEqual([f.suffix for f in self.delivered()], [".txt"])
+        self.assertIn("No blocking rows", p.stdout)
+
+    def test_dry_run_runs_nothing_as_root(self) -> None:
+        self.host()
+        p = self.run_script("--dry-run")
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertEqual(self.box.sudo_calls(), [])
+        self.assertEqual(self.app_calls(), [])
+        self.assertEqual(self.delivered(), [])
+        self.assertIn("dry run only", p.stdout)
+
+    def test_refuses_unless_the_service_is_inactive(self) -> None:
+        self.host()
+        for state in ("active", "activating", "failed", "deactivating", None):
+            self.box.set_state(state)
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{state}\n{text(p)}")
+            self.assertIn("never stops or starts it", p.stderr, str(state))
+            self.assertEqual(self.box.sudo_calls(), [], str(state))
+        self.box.set_state("inactive")
+        self.assertEqual(self.run_script().returncode, 0)
+
+    def test_export_directory_problems_refuse_before_sudo(self) -> None:
+        host = self.host()
+        host.export.chmod(0o755)
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("not mode 0700", p.stderr)
+        host.export.chmod(0o700)
+        real = host.export.with_name("real-export")
+        host.export.rename(real)
+        os.symlink(real, host.export)
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("symlink", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_host_without_export_dir_or_stub_points_at_p6(self) -> None:
+        host = self.host(config={"export_dir": None})
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("r2-p6-reinstall.sh", p.stderr)
+        host = self.host()
+        (host.libexec / "cutover-blockers-list").unlink()
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not installed", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_helper_refusal_delivers_nothing(self) -> None:
+        self.host(blockers_exit=3)
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("Nothing was delivered", p.stderr)
+        self.assertEqual(self.delivered(), [])
+
+    def test_names_and_lines_the_helper_prints_are_held_to_a_grammar(self) -> None:
+        self.host()
+        bad = {
+            "traversal": f"EXPORTED ../../etc/passwd 5 {SHA}",
+            "a result name": f"EXPORTED aorg-cutover-blockers-result-{STAMP}.txt 5 {SHA}",
+            "metacharacters": f"EXPORTED aorg-cutover-blockers-{STAMP}.txt;id 5 {SHA}",
+            "nothing": "true",
+            "noise": f"hi\nEXPORTED aorg-cutover-blockers-{STAMP}.txt 5 {SHA}\nABSENT rows",
+            "rows neither": f"EXPORTED aorg-cutover-blockers-{STAMP}.txt 5 {SHA}",
+            "rows both": (
+                f"EXPORTED aorg-cutover-blockers-{STAMP}.txt 5 {SHA}\n"
+                f"EXPORTED aorg-cutover-blockers-{STAMP}.json 5 {SHA}\nABSENT rows"
+            ),
+            "the same list twice": (
+                f"EXPORTED aorg-cutover-blockers-{STAMP}.txt 5 {SHA}\n"
+                f"EXPORTED aorg-cutover-blockers-{STAMP}.txt 5 {SHA}\nABSENT rows"
+            ),
+        }
+        for label, out in bad.items():
+            body = "true" if out == "true" else f"cat <<'EOF'\n{out}\nEOF"
+            self.fake_stub("cutover-blockers-list", body)
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertEqual(self.delivered(), [], label)
+
+    def test_a_file_that_is_not_what_the_helper_reported_stays_put(self) -> None:
+        host = self.host()
+        name = f"aorg-cutover-blockers-{STAMP}.txt"
+        for label, data, reported in (
+            ("wrong size", b"abc", f"EXPORTED {name} 99 {sha(b'abc')}"),
+            ("wrong hash", b"abc", f"EXPORTED {name} 3 {SHA}"),
+        ):
+            (host.export / name).write_bytes(data)
+            self.fake_stub("cutover-blockers-list", f"cat <<'EOF'\n{reported}\nABSENT rows\nEOF")
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertIn("stay in", p.stderr, label)
+            self.assertEqual(self.exported(), [name], label)
+            self.assertEqual(self.delivered(), [], label)
+
+    def test_a_symlink_in_place_of_the_file_is_refused(self) -> None:
+        host = self.host()
+        name = f"aorg-cutover-blockers-{STAMP}.txt"
+        target = host.root / "elsewhere"
+        target.write_bytes(b"abc")
+        os.symlink(target, host.export / name)
+        self.fake_stub(
+            "cutover-blockers-list",
+            f"cat <<'EOF'\nEXPORTED {name} 3 {sha(b'abc')}\nABSENT rows\nEOF",
+        )
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertEqual(self.delivered(), [])
+        self.assertTrue(target.exists())
+
+    def test_arguments_other_than_dry_run_are_refused(self) -> None:
+        self.host()
+        for args in (["--run"], ["x"], ["--dry-run", "x"]):
+            p = self.run_script(*args)
+            self.assertEqual(p.returncode, 2, f"{args}\n{text(p)}")
+        self.assertEqual(self.box.sudo_calls(), [])
+
+
+class ApplyScript(BlockersBase):
+    SCRIPT = "cutover-blockers-apply.sh"
+
+    def request(self, doc=None, mode: int = 0o600) -> Path:
+        doc = doc if doc is not None else {"action": "fix", "key": ROBIN, "value": SECRET_B64}
+        p = self.box.root / "mine" / "request.json"
+        p.parent.mkdir(exist_ok=True)
+        p.unlink(missing_ok=True)
+        p.write_bytes(doc if isinstance(doc, bytes) else json.dumps(doc).encode())
+        p.chmod(mode)
+        return p
+
+    def test_fix_places_the_request_runs_the_helper_and_moves_the_result(self) -> None:
+        host = self.host()
+        req = self.request()
+        p = self.run_script(str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+        (call,) = self.app_calls()
+        self.assertEqual(call["args"][2:4], ["fix", f"hex:{ROBIN}"])
+        self.assertEqual(json.loads(call["from_text"]), [{"key": ROBIN, "value": SECRET_B64}])
+        (result,) = self.delivered()
+        self.assertRegex(result.name, r"^aorg-cutover-blockers-result-[0-9]{8}T[0-9]{6}Z\.txt$")
+        self.assertEqual(stat.S_IMODE(result.stat().st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(result.parent.stat().st_mode), 0o700)
+        self.assertIn(f"Fixed hex:{ROBIN}", result.read_text())
+        self.assertIn(f"Fixed hex:{ROBIN}", p.stdout)
+        self.assertNotIn(SECRET_B64, p.stdout)
+        self.assertEqual(self.exported(), [], "the request and the result are gone")
+        self.assertEqual(self.box.sudo_calls(), [f"sudo -n {host.libexec}/cutover-blockers-apply"])
+        self.assertTrue(req.exists(), "the owner's own request file is left alone")
+
+    def test_delete_runs_with_confirm_and_no_value(self) -> None:
+        self.host()
+        p = self.run_script(str(self.request({"action": "delete", "key": BATGIRL})))
+        self.assertEqual(p.returncode, 0, text(p))
+        (call,) = self.app_calls()
+        self.assertEqual(call["args"][2:3] + call["args"][-1:], ["delete", "--confirm"])
+        self.assertIn(f"hex:{BATGIRL}", call["args"])
+        self.assertNotIn("from_text", call)
+
+    def test_a_request_already_waiting_is_used_without_an_argument(self) -> None:
+        host = self.host()
+        (host.export / REQUEST).write_text(json.dumps({"action": "delete", "key": ROBIN}))
+        (host.export / REQUEST).chmod(0o600)
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertEqual(len(self.app_calls()), 1)
+        self.assertEqual(self.exported(), [])
+
+    def test_the_same_request_in_place_is_reused_a_different_one_never_replaced(self) -> None:
+        host = self.host()
+        req = self.request({"action": "delete", "key": ROBIN})
+        (host.export / REQUEST).write_bytes(req.read_bytes())
+        (host.export / REQUEST).chmod(0o600)
+        p = self.run_script(str(req))
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertIn("reusing", p.stdout)
+        # A different request waiting: nothing changes, nothing runs.
+        (host.export / REQUEST).write_text(json.dumps({"action": "delete", "key": BATGIRL}))
+        (host.export / REQUEST).chmod(0o600)
+        before = (host.export / REQUEST).read_bytes()
+        calls = len(self.box.sudo_calls())
+        p = self.run_script(str(req))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("a different request is already in", p.stderr)
+        self.assertEqual((host.export / REQUEST).read_bytes(), before)
+        self.assertEqual(len(self.box.sudo_calls()), calls)
+
+    def test_a_bad_request_file_refuses_before_anything_is_placed_or_run(self) -> None:
+        host = self.host()
+        link = self.box.root / "mine" / "link.json"
+        link.parent.mkdir(exist_ok=True)
+        os.symlink(self.request(), link)
+        big = self.box.root / "mine" / "big.json"
+        with open(big, "wb") as f:
+            f.truncate((16 << 20) + 1)
+        big.chmod(0o600)
+        empty = self.box.root / "mine" / "empty.json"
+        empty.write_bytes(b"")
+        empty.chmod(0o600)
+        for label, arg in {
+            "missing": str(self.box.root / "mine" / "nope.json"),
+            "group readable": str(self.request(mode=0o640)),
+            "other readable": str(self.request(mode=0o604)),
+            "symlink": str(link),
+            "oversize": str(big),
+            "empty": str(empty),
+            "a directory": str(self.box.root / "mine"),
+        }.items():
+            p = self.run_script(arg)
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertEqual(self.exported(), [], label)
+        self.assertEqual(self.box.sudo_calls(), [])
+        self.assertEqual(self.app_calls(), [])
+        self.assertTrue(host.export.exists())
+
+    def test_nothing_given_and_nothing_waiting_refuses(self) -> None:
+        self.host()
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("none waiting", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_dry_run_places_nothing_and_runs_nothing(self) -> None:
+        self.host()
+        p = self.run_script("--dry-run", str(self.request()))
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertEqual(self.exported(), [])
+        self.assertEqual(self.box.sudo_calls(), [])
+        self.assertEqual(self.app_calls(), [])
+        self.assertIn("dry run only", p.stdout)
+
+    def test_refuses_unless_the_service_is_inactive_and_places_nothing(self) -> None:
+        self.host()
+        req = self.request()
+        for state in ("active", "activating", "failed", None):
+            self.box.set_state(state)
+            p = self.run_script(str(req))
+            self.assertNotEqual(p.returncode, 0, f"{state}\n{text(p)}")
+            self.assertIn("never stops or starts it", p.stderr, str(state))
+            self.assertEqual(self.exported(), [], str(state))
+            self.assertEqual(self.box.sudo_calls(), [], str(state))
+
+    def test_a_failed_apply_says_it_may_have_applied_and_keeps_the_request(self) -> None:
+        self.host(blockers_exit=3)
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("MAY have been applied", p.stderr)
+        self.assertIn("cutover-blockers-list.sh", p.stderr)
+        self.assertEqual(REQUEST in self.exported(), True, "a failed apply keeps the request")
+
+    def test_a_request_the_helper_refuses_stays_and_runs_no_command(self) -> None:
+        self.host()
+        p = self.run_script(str(self.request({"action": "explode", "key": ROBIN})))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertEqual(self.app_calls(), [])
+        self.assertIn(REQUEST, self.exported())
+
+    def test_success_without_the_removal_line_is_a_failure(self) -> None:
+        host = self.host()
+        name = f"aorg-cutover-blockers-result-{STAMP}.txt"
+        body = b"Fixed it.\n"
+        (host.export / name).write_bytes(body)
+        self.fake_stub(
+            "cutover-blockers-apply", f"cat <<'EOF'\nEXPORTED {name} {len(body)} {sha(body)}\nEOF"
+        )
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("did not report removing the request", p.stderr)
+        self.assertEqual([f.name for f in self.delivered()], [name], "the result is still kept")
+
+    def test_a_result_that_is_not_what_was_reported_stays_put(self) -> None:
+        host = self.host()
+        name = f"aorg-cutover-blockers-result-{STAMP}.txt"
+        (host.export / name).write_bytes(b"abc")
+        self.fake_stub(
+            "cutover-blockers-apply",
+            f"cat <<'EOF'\nEXPORTED {name} 3 {SHA}\nREQUEST-REMOVED {REQUEST}\nEOF",
+        )
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn(name, self.exported())
+        self.assertEqual(self.delivered(), [])
+
+    def test_arguments(self) -> None:
+        self.host()
+        for args in (["--go"], ["a", "b"]):
+            self.assertEqual(self.run_script(*args).returncode, 2, str(args))
+        self.assertEqual(self.box.sudo_calls(), [])
+
+
+class P6Base(unittest.TestCase):
+    """r2-p6-reinstall.sh and r2-p6-undo.sh against a local repository whose
+    Makefile records what the installer was asked."""
+
+    SCRIPT = ""
+
+    BEFORE = (
+        "bin = {bin}\ndb = {db}\nstate_dir = {state}\nunit = audiobook-organizer.service\n"
+        "service_user = alfred\narchive_dir = {arch}\nstage_bin = {sbin}\n"
+        "stage_local_conf = {slc}\ncheckpoint_dir = \nservice_group = \n"
+    )
+
+    def setUp(self) -> None:
+        self.box = Sandbox(self)
+        r = self.box.root
+        self.state = r / "state"
+        self.state.mkdir()
+        self.conf = r / "rollback.conf"
+        self.after = r / "after.conf"
+        self.installlog = r / "install.log"
+        self.origin = r / "origin.git"
+        work = r / "work"
+        work.mkdir()
+        mk = (
+            "install-rollback-helpers:\n"
+            "\t@printf '%s\\n' \"APPLY=$(APPLY) REPLACE_CONF=$(REPLACE_CONF) UNIT=$(DEPLOY_UNIT) "
+            'BIN=$(DEPLOY_BIN) DB=$(DB_OR) ARGS=$(ROLLBACK_INSTALL_ARGS)" >> "$$INSTALL_LOG"\n'
+            '\t@if [ -n "$(APPLY)" ]; then cp "$$AFTER_CONF" "$$CONF_PATH"; fi\n'
+        )
+        mk = mk.replace("$(DB_OR)", "$(DEPLOY_DB)")
+        (work / "Makefile").write_text(mk)
+        git = ["git", "-C", str(work), "-c", "user.name=Alfred", "-c", "user.email=a@wayne.invalid"]
+        subprocess.run([*git[:3], "init", "-q", "-b", "main"], check=True)
+        subprocess.run([*git, "add", "Makefile"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "batcave"], check=True)
+        self.pin = subprocess.run(
+            [*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True
+        ).stdout.strip()
+        subprocess.run(["git", "clone", "-q", "--bare", str(work), str(self.origin)], check=True)
+        self.write_conf(
+            self.BEFORE.format(
+                bin=r / "bin",
+                db=r / "db",
+                state=self.state,
+                arch=r / "arch",
+                sbin=r / "stage",
+                slc=r / "stage.conf",
+            )
+            + self.PRE_EXTRA.format(state=self.state, export=self.export_dir)
+        )
+        self.script = script_copy(
+            self.box.scripts,
+            self.SCRIPT,
+            PIN=self.pin,
+            CONF=str(self.conf),
+            REPO=str(self.origin),
+        )
+
+    PRE_EXTRA = ""
+
+    @property
+    def export_dir(self) -> Path:
+        return self.box.home / "aorg-owner" / "export"
+
+    def write_conf(self, body: str) -> None:
+        self.conf.write_text(body)
+
+    def run_script(self, *args: str) -> subprocess.CompletedProcess:
+        self.box.shims.joinpath("sudo-l").touch()
+        extra = {
+            "INSTALL_LOG": str(self.installlog),
+            "AFTER_CONF": str(self.after),
+            "CONF_PATH": str(self.conf),
+        }
+        return self.box.run(self.script, *args, extra=extra)
+
+    def installs(self) -> list[str]:
+        return self.installlog.read_text().splitlines() if self.installlog.exists() else []
+
+    def grants(self, stubs) -> None:
+        lines = [f'    (root) NOPASSWD: {LIBDIR_REAL}/{s} ""' for s in stubs]
+        (self.box.shims / "sudo-l").write_text("\n".join(lines) + "\n")
+
+
+class ReinstallScript(P6Base):
+    SCRIPT = "r2-p6-reinstall.sh"
+
+    def after_conf(self, offline: str | None = None, export: bool = True) -> None:
+        body = self.conf.read_text()
+        body = re.sub(r"^offline_env.*\n", "", body, flags=re.M)
+        body = re.sub(r"^export_dir.*\n", "", body, flags=re.M)
+        body += f"offline_env = {offline or f'HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}'}\n"
+        if export:
+            body += f"export_dir = {self.export_dir}\n"
+        self.after.write_text(body)
+
+    def test_an_unpinned_copy_refuses(self) -> None:
+        text_ = (OWNER / self.SCRIPT).read_text()
+        self.assertEqual(text_.count('PIN="__PIN__"'), 1)
+        plain = self.box.scripts / "plain.sh"
+        plain.write_text(text_)
+        p = self.box.run(plain)
+        self.assertEqual(p.returncode, 1, text(p))
+        self.assertIn("no pinned commit", p.stderr)
+
+    def test_dry_run_shows_the_installer_dry_run_and_changes_nothing(self) -> None:
+        self.after_conf()
+        before = self.conf.read_text()
+        p = self.run_script("--dry-run")
+        self.assertEqual(p.returncode, 0, text(p))
+        (line,) = self.installs()
+        self.assertTrue(line.startswith("APPLY= REPLACE_CONF=1 "), line)
+        self.assertIn(
+            f"--offline-env 'HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}'", line
+        )
+        self.assertIn(f"--export-dir {self.export_dir}", line)
+        self.assertNotIn("ABK_STATE_DIR", line)
+        self.assertEqual(self.box.sudo_calls(), [])
+        self.assertEqual(self.conf.read_text(), before)
+        self.assertEqual(stat.S_IMODE(self.export_dir.stat().st_mode), 0o700)
+
+    def test_the_install_and_its_checks(self) -> None:
+        self.after_conf()
+        self.grants(STUBS)
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        dry, real = self.installs()
+        self.assertTrue(dry.startswith("APPLY= "))
+        self.assertTrue(real.startswith("APPLY=1 REPLACE_CONF=1 "), real)
+        self.assertIn("P6 is in place", p.stdout)
+        for s in STUBS:
+            self.assertIn(f"ok: sudoers grants {s} with no arguments", p.stdout)
+        # Run again: still fine.
+        self.assertEqual(self.run_script().returncode, 0)
+
+    def test_each_check_fails_the_run(self) -> None:
+        for label, setup in {
+            "no export_dir": lambda: (self.after_conf(export=False), self.grants(STUBS)),
+            "ABK left in offline_env": lambda: (
+                self.after_conf(offline=f"HOME={self.state} ABK_STATE_DIR={self.state}"),
+                self.grants(STUBS),
+            ),
+            "a stub not granted": lambda: (self.after_conf(), self.grants(STUBS[:3])),
+            "no stub granted": lambda: (self.after_conf(), self.grants(())),
+        }.items():
+            setup()
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertIn("send this output to the agents", p.stderr, label)
+
+    def test_a_commit_not_on_main_or_a_dirty_checkout_refuses(self) -> None:
+        self.after_conf()
+        self.grants(STUBS)
+        self.assertEqual(self.run_script("--dry-run").returncode, 0)
+        src = self.box.home / "aorg-owner" / "src"
+        (src / "Makefile").write_text("# edited\n")
+        p = self.run_script("--dry-run")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("local changes", p.stderr)
+        # A commit that is not on origin/main.
+        bogus = script_copy(
+            self.box.scripts, self.SCRIPT, PIN="0" * 40, CONF=str(self.conf), REPO=str(self.origin)
+        )
+        p = self.box.run(bogus, "--dry-run", extra={"INSTALL_LOG": str(self.installlog)})
+        self.assertNotEqual(p.returncode, 0, text(p))
+
+    def test_a_value_with_a_shell_character_is_refused(self) -> None:
+        self.after_conf()
+        self.write_conf(
+            self.conf.read_text().replace("stage_bin = ", "stage_bin = /x;touch pwned #")
+        )
+        p = self.run_script("--dry-run")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("character this script will not pass on", p.stderr)
+        self.assertEqual(self.installs(), [])
+
+    def test_a_symlinked_or_foreign_export_directory_refuses(self) -> None:
+        self.after_conf()
+        os.symlink(self.box.root, self.export_dir)
+        p = self.run_script("--dry-run")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("symlink", p.stderr)
+
+
+class UndoScript(P6Base):
+    SCRIPT = "r2-p6-undo.sh"
+    PRE_EXTRA = (
+        "offline_env = HOME={state} ABO_CORE_PATHS_STATE_DIR={state}\nexport_dir = {export}\n"
+    )
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.export_dir.mkdir(mode=0o700)
+        self.undone()
+
+    def undone(self, offline: str | None = None, export: bool = False) -> None:
+        body = re.sub(r"^(offline_env|export_dir).*\n", "", self.conf.read_text(), flags=re.M)
+        body += f"offline_env = {offline or f'HOME={self.state} ABK_STATE_DIR={self.state}'}\n"
+        if export:
+            body += f"export_dir = {self.export_dir}\n"
+        self.after.write_text(body)
+
+    def test_an_unpinned_copy_refuses(self) -> None:
+        text_ = (OWNER / self.SCRIPT).read_text()
+        self.assertEqual(text_.count('PIN="__PIN__"'), 1)
+        plain = self.box.scripts / "plain.sh"
+        plain.write_text(text_)
+        p = self.box.run(plain)
+        self.assertEqual(p.returncode, 1, text(p))
+        self.assertIn("no pinned commit", p.stderr)
+
+    def test_the_installer_is_asked_for_the_previous_environment_and_no_export_dir(self) -> None:
+        p = self.run_script("--dry-run")
+        self.assertEqual(p.returncode, 0, text(p))
+        (line,) = self.installs()
+        self.assertTrue(line.startswith("APPLY= REPLACE_CONF=1 "), line)
+        self.assertIn(f"--offline-env 'HOME={self.state} ABK_STATE_DIR={self.state}'", line)
+        self.assertNotIn("ABO_", line)
+        self.assertNotIn("--export-dir", line)
+        self.assertEqual(self.box.sudo_calls(), [])
+        self.assertTrue(self.export_dir.is_dir(), "a dry run removes nothing")
+
+    def test_the_undo_removes_an_empty_export_directory_and_checks(self) -> None:
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertFalse(self.export_dir.exists())
+        self.assertIn("rollback.conf has no export_dir", p.stdout)
+        self.assertIn("offline_env names ABK_STATE_DIR only", p.stdout)
+        for s in STUBS:
+            self.assertIn(f"sudoers no longer grants {s}", p.stdout)
+        self.assertEqual(len(self.installs()), 2)
+        # Again, with the directory already gone and the conf already undone.
+        self.undone()
+        self.conf.write_text(self.after.read_text())
+        self.assertEqual(self.run_script().returncode, 0)
+
+    def test_a_non_empty_export_directory_is_left_with_a_note(self) -> None:
+        (self.export_dir / "aorg-cutover-blockers-request.json").write_text("{}")
+        p = self.run_script()
+        self.assertEqual(p.returncode, 0, text(p))
+        self.assertTrue(self.export_dir.is_dir())
+        self.assertIn("is not empty", p.stdout)
+
+    def test_each_check_fails_the_run(self) -> None:
+        for label, setup in {
+            "export_dir still there": lambda: (self.undone(export=True), self.grants(())),
+            "ABO left in offline_env": lambda: (
+                self.undone(offline=f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}"),
+                self.grants(()),
+            ),
+            "a stub still granted": lambda: (self.undone(), self.grants(STUBS[:1])),
+        }.items():
+            setup()
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertIn("send this output to the agents", p.stderr, label)
+            self.conf.write_text(self.conf.read_text())
+            self.export_dir.mkdir(mode=0o700, exist_ok=True)
+
+
+class Hygiene(unittest.TestCase):
+    NAMES = (
+        "cutover-blockers-list.sh",
+        "cutover-blockers-apply.sh",
+        "r2-p6-reinstall.sh",
+        "r2-p6-undo.sh",
+    )
+
+    def test_every_script_is_executable_has_a_header_and_strict_mode(self) -> None:
+        for name in self.NAMES:
+            path = OWNER / name
+            text_ = path.read_text()
+            lines = text_.splitlines()
+            self.assertEqual(lines[0], "#!/usr/bin/env bash", name)
+            self.assertTrue(lines[1].startswith(f"# file: deploy/owner/{name}"), name)
+            self.assertRegex(lines[2], r"^# version: \d+\.\d+\.\d+$", name)
+            self.assertRegex(lines[3], r"^# guid: [0-9a-f-]{36}$", name)
+            self.assertIn("set -euo pipefail", text_, name)
+            self.assertTrue(os.access(path, os.X_OK), name)
+            self.assertNotIn("sudo -S", text_, name)
+            self.assertIn("--dry-run", text_, name)
+
+    def test_the_scripts_call_only_the_granted_stubs_with_no_arguments(self) -> None:
+        for name in ("cutover-blockers-list.sh", "cutover-blockers-apply.sh"):
+            text_ = (OWNER / name).read_text()
+            calls = re.findall(r'sudo -n "[^"]*"[^\n]*', text_)
+            for c in calls:
+                self.assertRegex(c, r'^sudo -n "\$LIBDIR/\$STUB"\)? ?(\|\| RC=\$\?)?$', c)
+            self.assertEqual(len(calls), 1, name)
+
+    def test_the_reinstall_script_is_the_leads_draft_but_for_its_header(self) -> None:
+        draft = (
+            REPO_ROOT / ".claude" / "notes" / "pc-tools" / "owner-scripts" / "r2-p6-reinstall.sh"
+        )
+        if not draft.exists():
+            self.skipTest("the lead's draft is not in this checkout")
+        a = (OWNER / "r2-p6-reinstall.sh").read_text().splitlines()
+        b = draft.read_text().splitlines()
+        self.assertEqual(a[0], b[0])
+        self.assertEqual(a[2:], b[2:])
+
+    @unittest.skipUnless(shutil.which("shellcheck"), "shellcheck is not installed")
+    def test_shellcheck_is_clean(self) -> None:
+        for name in self.NAMES:
+            p = subprocess.run(
+                ["shellcheck", str(OWNER / name)], capture_output=True, text=True, check=False
+            )
+            self.assertEqual(p.returncode, 0, f"{name}\n{p.stdout}")
+
+
+if __name__ == "__main__":
+    unittest.main()
