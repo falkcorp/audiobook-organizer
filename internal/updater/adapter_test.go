@@ -11,15 +11,10 @@ package updater
 
 import (
 	"bytes"
-	"context"
 	json "encoding/json/v2"
 	"errors"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -84,66 +79,6 @@ func TestUpdateInfo_JSONShape(t *testing.T) {
 	}
 	if back.CurrentVersion != info.CurrentVersion || back.LatestVersion != info.LatestVersion || !back.PublishedAt.Equal(info.PublishedAt) {
 		t.Errorf("round trip = %+v", back)
-	}
-}
-
-// TestABOUpdaterSourceMatchesHEAD pins what this app tells core's updater
-// about itself: the repository the lookups go to, the request headers, the
-// asset the stable channel downloads and the commit the develop channel reads.
-// These were constants of internal/updater/updater.go before the move.
-func TestABOUpdaterSourceMatchesHEAD(t *testing.T) {
-	var mu sync.Mutex
-	var seen []*http.Request
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		seen = append(seen, r.Clone(context.Background()))
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/releases/latest"):
-			_, _ = w.Write([]byte(`{"tag_name":"v0.224.0","html_url":"https://example.invalid/r","body":"Year One","published_at":"2026-11-01T00:00:00Z","assets":[` +
-				`{"name":"audiobook-organizer-` + runtime.GOOS + `-` + runtime.GOARCH + `","browser_download_url":"https://example.invalid/a","size":7}]}`))
-		case strings.HasSuffix(r.URL.Path, "/commits/main"):
-			_, _ = w.Write([]byte(`{"sha":"f00dfacecafe0123","html_url":"https://example.invalid/c","commit":{"message":"The Killing Joke\n\nbody","author":{"date":"2026-11-02T00:00:00Z"}}}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	u := NewUpdater("v0.223.0", WithAPIBaseForTest(srv.URL), WithHTTPClientForTest(srv.Client()), WithStateDir(t.TempDir()))
-	info, err := u.CheckForUpdate("stable")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.LatestVersion != "0.224.0" || !info.UpdateAvailable || info.ReleaseURL != "https://example.invalid/r" ||
-		info.ReleaseNotes != "Year One" || !info.PublishedAt.Equal(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("stable info = %+v", info)
-	}
-	dev, err := u.CheckForUpdate("develop")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dev.LatestVersion != "f00dfac" || dev.ReleaseNotes != "The Killing Joke" || !dev.UpdateAvailable || dev.Channel != "develop" {
-		t.Errorf("develop info = %+v", dev)
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	want := []string{"/repos/falkcorp/audiobook-organizer/releases/latest", "/repos/falkcorp/audiobook-organizer/commits/main"}
-	if len(seen) != len(want) {
-		t.Fatalf("requests = %d, want %d", len(seen), len(want))
-	}
-	for i, r := range seen {
-		if r.URL.Path != want[i] {
-			t.Errorf("request %d path = %q, want %q", i, r.URL.Path, want[i])
-		}
-		if got := r.Header.Get("User-Agent"); got != "audiobook-organizer/v0.223.0" {
-			t.Errorf("request %d User-Agent = %q", i, got)
-		}
-		if got := r.Header.Get("Accept"); got != "application/vnd.github.v3+json" {
-			t.Errorf("request %d Accept = %q", i, got)
-		}
 	}
 }
 

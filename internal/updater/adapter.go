@@ -9,9 +9,11 @@
 // the gin-facing type (UpdateInfo, CheckForUpdate, PrepareApply,
 // DownloadAndReplace, RestartSelf), the develop channel (a commit cannot be
 // applied, so core has no such channel), the scheduler and the container
-// registration. It also names the repository and the asset: NewSource is the
-// release source core's updater is built with, so no repository is named in
-// core.
+// registration. NewSource is the release source the gin path's core updater is
+// built with. The options the kernel's updater is wired with, and the asset
+// `updater fetch-release` asks for, are internal/books' (CoreOptions,
+// FetchOptions, ReleasedAsset): they moved there (F8-04b 8b-4) so deleting this
+// package's gin half does not take them along.
 //
 // The gin /api/v1/update/* handlers answer as they did before the move. Core's
 // own updater (tasks, routes, the self-test) is not wired here: F8-04 does that
@@ -83,53 +85,23 @@ var errDevelopApply = errors.New("develop channel binary downloads require CI-pu
 // IsLocalBuild reports whether version carries a git describe suffix.
 func IsLocalBuild(version string) bool { return coreupdater.IsLocalBuild(version) }
 
-// CoreOptions is the core updater's Options for this app on the gin path: the
+// coreOptions is the core updater's Options for this app on the gin path: the
 // source, the binary name and the app ID its self-test holds a downloaded
 // binary to, and HEAD's asset name "audiobook-organizer-<goos>-<goarch>"
 // (core's RawBinary default). That name is what the live /api/v1/update/apply
-// asks for, as it did before the move; no release publishes it (see
-// ReleasedAsset), which is why FetchOptions, not this, is what the offline
-// fetch gets.
-func CoreOptions() coreupdater.Options {
+// asks for, as it did before the move; no release publishes it. The options
+// the core updater is wired with (internal/books.CoreOptions, FetchOptions)
+// are internal/books' own: this package cannot import it (books imports the
+// server, which imports this package), so the gin path keeps this copy until
+// F8-04 deletes it with the handlers, and internal/books'
+// TestReleaseNamesMatchTheGinPath holds the two sets of names equal.
+func coreOptions() coreupdater.Options {
 	return coreupdater.Options{AppID: AppID, BinaryName: BinaryName, Source: NewSource(), DefaultMode: coreupdater.ModeCheck}
 }
 
-// FetchOptions is the core updater's Options for `updater fetch-release`
-// (app.Options.Updater): CoreOptions with the asset name releases really
-// publish. The gin apply keeps CoreOptions' HEAD name until F8-04 replaces it
-// with the core apply task, which inherits this choice (todo.d, F8-04).
-func FetchOptions() coreupdater.Options {
-	o := CoreOptions()
-	o.AssetName = ReleasedAsset
-	return o
-}
-
-// ReleasedAsset is the raw-binary asset of a published release for goos and
-// goarch, as .goreleaser.yml names it: "{{ .ProjectName }}_{{ title .Os }}_"
-// then x86_64 for amd64, i386 for 386 and the architecture as it is
-// otherwise, such as audiobook-organizer_Linux_x86_64. TestReleasedAssetMatchesGoreleaser
-// holds it to the file. (The Arm suffix goreleaser adds for goarm is not
-// built: the matrix is linux and darwin on amd64 and arm64.)
-func ReleasedAsset(_ coreupdater.Release, goos, goarch string) string {
-	arch := goarch
-	switch goarch {
-	case "amd64":
-		arch = "x86_64"
-	case "386":
-		arch = "i386"
-	}
-	osName := goos
-	if osName != "" {
-		osName = strings.ToUpper(osName[:1]) + osName[1:]
-	}
-	return BinaryName + "_" + osName + "_" + arch
-}
-
-// NewSource is the release source the core updater is built with for this
-// app: GitHub releases of falkcorp/audiobook-organizer. The asset looked for in
-// a release is the Options' AssetName (CoreOptions, FetchOptions). F8-04
-// passes it as coreupdater.Options.Source when it wires the core updater into
-// main.
+// NewSource is the release source the gin path's core updater is built with:
+// GitHub releases of falkcorp/audiobook-organizer. internal/books names the same
+// repository for the core updater it wires (releaseSource).
 func NewSource(opts ...github.Option) coreupdater.Source { return github.New(Owner, Repo, opts...) }
 
 // UpdateInfo holds the result of an update check.
@@ -244,7 +216,7 @@ func NewUpdater(currentVersion string, opts ...Option) *Updater {
 		// Check-only mode: this adapter never schedules an apply.
 		coreupdater.WithSettings(func() coreupdater.Settings { return coreupdater.DefaultSettings(coreupdater.ModeCheck) }),
 	}, u.coreOpts...)
-	copts := CoreOptions()
+	copts := coreOptions()
 	copts.Source = u.rec
 	// internal/logger hands out the process logger (the slog guard allows no
 	// direct slog.Default()); the handler on top escapes what a release's tag

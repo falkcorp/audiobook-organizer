@@ -333,7 +333,12 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		if err := k.buildIdentityServices(ctx); err != nil {
 			return err
 		}
-		return k.mountIdentity(ctx)
+		if err := k.mountIdentity(ctx); err != nil {
+			return err
+		}
+		// After mountIdentity: the updater's routes take the auth stages like
+		// every other core route (identity_mount.go "The order is the point").
+		return k.wireUpdater()
 	}
 	return nil
 }

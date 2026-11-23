@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/falkcorp/mediacore/events"
@@ -72,11 +73,14 @@ func newKernelEvents(p *metrics.Provider, l *slog.Logger, queueSize int, closeDr
 // F4-08 (identityTopicSpecs); the backup and integration-health topics with
 // their owning rows. The status topic is health's (F8-03, 05-health §5H.3.3);
 // the three core.task.* specs are tasks' (F6-03 E6a), declared here with no
-// publisher until the executor publishes them (F5-18); the rest do not exist
-// yet. Nothing declares any of them until F4-08 wires declareCore.
+// publisher until the executor publishes them (F5-18); core.update.found.v1 is
+// the updater's (F8-04b, updaterTopicSpecs), declared on every identity boot
+// like the status and task topics, whether or not the app ships an updater; the
+// rest do not exist yet. Nothing declares any of them until F4-08 wires
+// declareCore, so a boot that did not declare the identity flip has none.
 func coreTopics() []events.TopicSpec {
-	return append([]events.TopicSpec{health.StatusTopicSpec(), tasks.RunChangedTopicSpec(), tasks.LogAppendedTopicSpec(), tasks.FinishedTopicSpec()},
-		identityTopicSpecs()...)
+	return slices.Concat([]events.TopicSpec{health.StatusTopicSpec(), tasks.RunChangedTopicSpec(), tasks.LogAppendedTopicSpec(), tasks.FinishedTopicSpec()},
+		identityTopicSpecs(), updaterTopicSpecs())
 }
 
 // declareCore declares core's topics; a refusal is a core problem (Module "").

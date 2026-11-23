@@ -111,6 +111,10 @@ const (
 	componentBackup    health.ComponentID = "core.backup"
 )
 
+// titleUpdater is core.updater's title, shared by registerCoreComponents and
+// the updater's own registration (wireUpdater).
+const titleUpdater = "Updater"
+
 // The Reasons the probes below report (fixed tokens, [a-z0-9_]{1,40}).
 const (
 	reasonDeadLetters     = "dead_letters"
@@ -151,7 +155,7 @@ func registerCoreComponents(reg *health.Registry, src coreComponentSources) (map
 		{componentOutbox, "Event outbox", src.Outbox, false},
 		{componentEvents, "Event bus", src.Events, false},
 		{componentMetrics, "Metrics", src.Metrics, false},
-		{componentUpdater, "Updater", src.Updater, false},
+		{componentUpdater, titleUpdater, src.Updater, false},
 		{componentBackup, "Backup and restore", src.Backup, true},
 	}
 	out := make(map[health.ComponentID]health.Reporter, len(rows))

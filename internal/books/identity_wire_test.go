@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/module"
+	coreupdater "github.com/falkcorp/mediacore/updater"
 )
 
 // The fixtures are Batman's: Wayne's e-mail is the owner, Gordon is the other
@@ -49,6 +50,15 @@ func TestIdentityOptions_ShapeUnderTheFlip(t *testing.T) {
 		require.Equal(t, ".bootstrap-token", o.Auth.BootstrapTokenFile)
 		require.Equal(t, "session_id", o.ConfigFlags["core.auth.session.cookie_name"])
 
+		// The core updater (F8-04b): FetchOptions' source and raw asset namer,
+		// which the kernel wires only because IdentityBoot is also set.
+		require.NotNil(t, o.Updater, "the flip hands core no updater")
+		require.Equal(t, AppID, o.Updater.AppID)
+		require.Equal(t, releaseBinary, o.Updater.BinaryName)
+		require.NotNil(t, o.Updater.AssetName)
+		require.Equal(t, ReleasedAsset(coreupdater.Release{}, "linux", "amd64"), o.Updater.AssetName(coreupdater.Release{}, "linux", "amd64"),
+			"the asset namer is not goreleaser's (owner ruling O-5)")
+
 		// Core derives core.auth.owner.required from this extension's OwnerSet,
 		// so the extension Options hands core must read the configured owner,
 		// the same value the bridge reads (a fake wired in only here would leave
@@ -71,6 +81,7 @@ func TestIdentityOptions_ShapeUnderTheFlip(t *testing.T) {
 		require.Empty(t, o.Auth.BootstrapTokenFile)
 		require.NotContains(t, o.ConfigFlags, coreconfig.Path("core.auth.session.cookie_name"))
 		require.Nil(t, mod.idw)
+		require.Nil(t, o.Updater, "a flip-off serve hands core an updater: the kernel would see one")
 	})
 }
 

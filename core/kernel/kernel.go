@@ -47,6 +47,7 @@ import (
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
+	"github.com/falkcorp/mediacore/updater"
 	"github.com/falkcorp/mediacore/version"
 
 	"go.opentelemetry.io/otel/metric"
@@ -194,6 +195,14 @@ type Config struct {
 	// the app boots as it did before F4-08. Temporary, as the F3 config gate
 	// was: B10 deletes it with the flip that makes identity unconditional.
 	IdentityBoot bool
+	// Updater is app.Options.Updater: the app's release source, binary name and
+	// asset namer for core's updater. The kernel wires the updater (c/updater/
+	// owner, core.updater health component, the four routes) only for an app
+	// that also declared IdentityBoot, whose routes need the auth service
+	// (updaterDeclared); an app with either one off, and every offline command,
+	// wires none of it. core.update.found.v1 is declared by every identity boot
+	// (coreTopics), updater or not. nil = no updater.
+	Updater *updater.Options
 	// ResolveAtom is the app's atom table for stage 13: it resolves the
 	// rbac.LegacyAtom and rbac.LegacyCheck requirements of its legacy-mounted
 	// routes (httpapi.Stage13Options.ResolveAtom). nil refuses every such
