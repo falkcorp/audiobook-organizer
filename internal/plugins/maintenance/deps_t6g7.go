@@ -29,6 +29,40 @@ import (
 // over the run's tasks.Writer stamped with the method's whole row, and the plain
 // dependencies the shells need.
 
+// G7BookReads is the group's reads of books, their files and paths.
+type G7BookReads interface {
+	BookAtPathIndexBuilt() (bool, error)
+	BookFilesAtPath(string) ([]database.BookFile, error)
+	GetBookByID(string) (*database.Book, error)
+	GetBookFileByID(string, string) (*database.BookFile, error)
+	GetBookFiles(string) ([]database.BookFile, error)
+	GetBooksByVersionGroup(string) ([]database.Book, error)
+	ListSoftDeletedBooks(int, int, *time.Time) ([]database.Book, error)
+	LiveBookIDsAtPath(string) ([]string, error)
+}
+
+// G7CatalogReads is the group's whole-library reads of books, files, authors and series.
+type G7CatalogReads interface {
+	CountPrimaryBooks() (int, error)
+	GetAllAuthors() ([]database.Author, error)
+	GetAllBookFilesCore() ([]database.BookFileCore, error)
+	GetAllBooksCore(int, int) ([]database.BookCore, error)
+	GetAllBooksCoreComplete(int, int) ([]database.BookCore, error)
+	GetAllSeries() ([]database.Series, error)
+	GetAllSeriesBookCounts() (map[int]int, error)
+}
+
+// G7AuxReads is the group's reads of single series, chapters, field states, preferences and operations.
+type G7AuxReads interface {
+	GetAllPreferencesForUser(string) ([]database.UserPreferenceKV, error)
+	GetChaptersForBook(string) ([]database.Chapter, error)
+	GetMetadataFieldStates(string) ([]database.MetadataFieldState, error)
+	GetSeriesByID(int) (*database.Series, error)
+	GetSeriesByName(string, *int) (*database.Series, error)
+	GetUserPreference(string) (*database.UserPreference, error)
+	ListActiveOperationsV2() ([]database.OperationV2Row, error)
+}
+
 // G7Reads is the library store's reads the group's cores make that every store
 // carries (database.Store satisfies it; the books module passes it as is). Four
 // more reads are optional capabilities, resolved from the same value through its
@@ -37,29 +71,31 @@ import (
 // GetAllSeriesBookRefCounts (SeriesBookRefStore), GetSeriesBookRefCount
 // (SeriesBookRefCounter) and GetBooksBySeriesIDsAllVersions
 // (SeriesMembershipStore). A store without one refuses at the call.
+//
+// Split into the 3 interfaces above on 2026-11-22. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type G7Reads interface {
-	BookAtPathIndexBuilt() (bool, error)
-	BookFilesAtPath(string) ([]database.BookFile, error)
-	CountPrimaryBooks() (int, error)
-	GetAllAuthors() ([]database.Author, error)
-	GetAllBookFilesCore() ([]database.BookFileCore, error)
-	GetAllBooksCore(int, int) ([]database.BookCore, error)
-	GetAllBooksCoreComplete(int, int) ([]database.BookCore, error)
-	GetAllPreferencesForUser(string) ([]database.UserPreferenceKV, error)
-	GetAllSeries() ([]database.Series, error)
-	GetAllSeriesBookCounts() (map[int]int, error)
-	GetBookByID(string) (*database.Book, error)
-	GetBookFileByID(string, string) (*database.BookFile, error)
-	GetBookFiles(string) ([]database.BookFile, error)
-	GetBooksByVersionGroup(string) ([]database.Book, error)
-	GetChaptersForBook(string) ([]database.Chapter, error)
-	GetMetadataFieldStates(string) ([]database.MetadataFieldState, error)
-	GetSeriesByID(int) (*database.Series, error)
-	GetSeriesByName(string, *int) (*database.Series, error)
-	GetUserPreference(string) (*database.UserPreference, error)
-	ListActiveOperationsV2() ([]database.OperationV2Row, error)
-	ListSoftDeletedBooks(int, int, *time.Time) ([]database.Book, error)
-	LiveBookIDsAtPath(string) ([]string, error)
+	G7BookReads
+	G7CatalogReads
+	G7AuxReads
+}
+
+// G7BookWrites is the group's writes of books, their files and series.
+type G7BookWrites interface {
+	BatchUpsertBookFiles([]*database.BookFile) error
+	CreateSeries(string, *int) (*database.Series, error)
+	ModifyBook(string, func(*database.Book) error) (*database.Book, error)
+	ModifyBookFile(string, string, func(*database.BookFile) error) (*database.BookFile, error)
+	UpdateBookFiles(context.Context, []*database.BookFile, func(int, bool)) (int, error)
+}
+
+// G7RecordWrites is the group's writes of change records and user preferences.
+type G7RecordWrites interface {
+	CreateOperationChange(*database.OperationChange) error
+	RecordMetadataChange(*database.MetadataChangeRecord) error
+	RecordPathChange(*database.BookPathChange) error
+	SetUserPreferenceForUser(string, string, string) error
 }
 
 // G7Writes is the library store's writes the group's cores make that every store
@@ -67,16 +103,13 @@ type G7Reads interface {
 // store. Two more are optional capabilities resolved from the same value:
 // DeleteSeriesIfUnreferenced (SeriesUnreferencedDeleter) and
 // RebuildReviewStatusIndex (ReviewStatusIndexRepairer).
+//
+// Split into the 2 interfaces above on 2026-11-22. This name is retained as
+// their composition so the method set is byte-identical and no consumer moves; the
+// type checker proves it.
 type G7Writes interface {
-	BatchUpsertBookFiles([]*database.BookFile) error
-	CreateOperationChange(*database.OperationChange) error
-	CreateSeries(string, *int) (*database.Series, error)
-	ModifyBook(string, func(*database.Book) error) (*database.Book, error)
-	ModifyBookFile(string, string, func(*database.BookFile) error) (*database.BookFile, error)
-	RecordMetadataChange(*database.MetadataChangeRecord) error
-	RecordPathChange(*database.BookPathChange) error
-	SetUserPreferenceForUser(string, string, string) error
-	UpdateBookFiles(context.Context, []*database.BookFile, func(int, bool)) (int, error)
+	G7BookWrites
+	G7RecordWrites
 }
 
 // G7UserMerge is the user-merge service (*usermerge.Service): the reads of a
