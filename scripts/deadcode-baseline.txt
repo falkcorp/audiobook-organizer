@@ -1972,6 +1972,7 @@ internal/plugins/maintenance.nativeCBLedger.others
 internal/plugins/maintenance.nativeScanNotWhile
 internal/plugins/maintenance.nativeScanStandDown.AcquireScanStandDown
 internal/plugins/maintenance.nativeScanStandDown.RenewScanStandDown
+internal/plugins/maintenance.nativeScanStandDown.ScanStandDownLoss
 internal/plugins/maintenance.nativeScanStandDown.ScanStandDownValid
 internal/plugins/maintenance.newBooksGate
 internal/plugins/maintenance.newJobsDeps
