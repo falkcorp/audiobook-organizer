@@ -32,6 +32,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -479,6 +480,14 @@ func (m *booksModule) Register(r *module.Registrar) error {
 			// The guest policy's keep rule reads the same key the admission policy
 			// does, with the same semantics (identityPolicyFrom).
 			server.WithAccessAllowList(func() (string, error) { return cfaccessAllowedEmails(deps.Config) }))
+	}
+	// The one store the server is built over is database.NewBooksStore's concrete
+	// *PebbleStore, handed to NewServer unwrapped (no cache, metrics or tx wrapper
+	// sits between them). The single-book organize copy needs its
+	// CreateBookWithRelocation, which database.Store does not carry, so a store
+	// that lost it stops the boot here rather than every Deluge move silently.
+	if err := audiobooks.RequireRelocatingCopyCreator(store); err != nil {
+		return err
 	}
 	srv := server.NewServer(store, srvOpts...)
 	// Stored before any check can fail, so Release tears it down when New
