@@ -6,6 +6,7 @@
 package organizer
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -53,6 +54,7 @@ func TestCreateOrganizedVersion_OnlyTheFollowTorrentsVariantStagesTheRelocation(
 			t.Cleanup(func() { _ = ps.Close() })
 			spy := &createSpy{PebbleStore: ps}
 			svc := NewService(spy)
+			svc.SetRelocatingCopyCreator(spy)
 
 			gid := "vg-batcave"
 			imported := "imported"
@@ -82,5 +84,30 @@ func TestCreateOrganizedVersion_OnlyTheFollowTorrentsVariantStagesTheRelocation(
 				t.Errorf("CreateBookWithRelocation originals = %v, want %v", spy.relocating, tc.wantRelocate)
 			}
 		})
+	}
+}
+
+// A Service nobody gave a RelocatingCopyCreator refuses the single-book organize
+// copy instead of creating one that moves no torrent, and writes no row.
+func TestCreateOrganizedVersionFollowTorrents_RefusesWithoutACreator(t *testing.T) {
+	ps, err := database.NewPebbleStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPebbleStore: %v", err)
+	}
+	ps.WaitForWarmup()
+	t.Cleanup(func() { _ = ps.Close() })
+	svc := NewService(ps)
+	imported := "imported"
+	src, err := ps.CreateBook(&database.Book{ID: "robin-original", Title: "Dark Victory", FilePath: filepath.Join(t.TempDir(), "dark-victory.m4b"), LibraryState: &imported})
+	if err != nil {
+		t.Fatal(err)
+	}
+	landing := &Landing{Path: filepath.Join(t.TempDir(), "organized-dark-victory.m4b")}
+	if _, err := svc.CreateOrganizedVersionFollowTorrents(src, landing, "", &noopLogger{}); !errors.Is(err, ErrRelocatingCopyCreatorNotWired) {
+		t.Fatalf("err = %v, want ErrRelocatingCopyCreatorNotWired", err)
+	}
+	all, err := ps.GetAllBooksCore(100, 0)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("books after the refusal = %d, %v; want only the original", len(all), err)
 	}
 }
