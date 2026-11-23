@@ -1506,6 +1506,10 @@ type R1Listener struct {
 	tls       bool
 	cfg       ServerConfig
 	afterDone chan struct{} // closed when afterListen has run (Serve starts it)
+	// onShutdown runs ListenOptions.OnShutdown once, however many paths ask: the
+	// stdlib server's own RegisterOnShutdown hook and Shutdown's explicit call
+	// ahead of HTTP/3. nil when the options carry no hook.
+	onShutdown func()
 }
 
 // R1Listen returns books' app.Options.R1Listen for cfg (HEAD's --http3-port,
@@ -1601,11 +1605,22 @@ func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.
 		IdleTimeout:       cfg.IdleTimeout,
 		MaxHeaderBytes:    1 << 20, // 1MB
 	}
-	// o.OnShutdown runs when Shutdown begins: the realtime hub's Close, which
-	// ends the open /api/core/v1/events streams with closed{shutdown} so the
-	// drain is not held open by them (httpapi.ListenOptions.OnShutdown).
-	for _, f := range o.OnShutdown {
-		s.httpServer.RegisterOnShutdown(f)
+	// o.OnShutdown is the realtime hub's Close, which ends the open
+	// /api/core/v1/events streams with closed{shutdown} so the drain is not held
+	// open by them (httpapi.ListenOptions.OnShutdown). R1Listener.Shutdown runs
+	// it BEFORE it closes HTTP/3, so an HTTP/3 client receives the frame; the
+	// stdlib server's hook covers a Shutdown that reaches it first, and the Once
+	// makes the second call a wait on the first.
+	if len(o.OnShutdown) > 0 {
+		hooks := slices.Clone(o.OnShutdown)
+		l.onShutdown = sync.OnceFunc(func() {
+			var wg sync.WaitGroup
+			for _, f := range hooks {
+				wg.Go(f)
+			}
+			wg.Wait()
+		})
+		s.httpServer.RegisterOnShutdown(l.onShutdown)
 	}
 	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 		ln, err := s.bindMainListener()
@@ -1755,13 +1770,25 @@ func (l *R1Listener) Shutdown(ctx context.Context) error {
 	// afterListen after this point would race the whole stop.
 	s.life.afterGate.seal(ctx)
 	s.beforeDrain()
+	// The shutdown hooks first (the hub's closed{shutdown} frame), then HTTP/3:
+	// a QUIC server closed before them drops the frame on its way to the
+	// client. HTTP/3 then drains gracefully (GOAWAY, then the requests in
+	// flight) beside the main server, both bounded by ctx.
+	if l.onShutdown != nil {
+		l.onShutdown()
+	}
 	lifecycleLog.Info("Stopping HTTP servers...")
+	var h3Done chan error
 	if s.http3Server != nil {
-		if err := s.http3Server.Close(); err != nil {
-			lifecycleLog.Warn("HTTP/3 server close error: %v", err)
-		}
+		h3Done = make(chan error, 1)
+		go func() { h3Done <- s.http3Server.Shutdown(ctx) }()
 	}
 	err := s.httpServer.Shutdown(ctx)
+	if h3Done != nil {
+		if herr := <-h3Done; herr != nil {
+			lifecycleLog.Warn("HTTP/3 server shutdown error: %v", herr)
+		}
+	}
 	if s.httpRedirectServer != nil {
 		if rerr := s.httpRedirectServer.Shutdown(ctx); rerr != nil {
 			lifecycleLog.Warn("HTTP->HTTPS redirect server forced shutdown: %v", rerr)
