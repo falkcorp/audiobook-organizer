@@ -30,6 +30,18 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// mustAcquire is an acquire that fails the test rather than wait forever.
+func mustAcquire(t *testing.T, g *gate, limit int) func() {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	rel, err := g.acquire(ctx, limit)
+	if err != nil {
+		t.Fatalf("acquire at limit %d: %v", limit, err)
+	}
+	return rel
+}
+
 // acquireAsync starts an acquire and returns a channel that gets its release.
 func acquireAsync(g *gate, limit int) <-chan func() {
 	ch := make(chan func(), 1)
@@ -125,10 +137,7 @@ func TestGate_LimitChangesApplyOnTheNextAcquire(t *testing.T) {
 	hold, _ := g.acquire(context.Background(), 1)
 	w := acquireAsync(g, 1)
 	waitFor(t, "waiter to queue", func() bool { _, n := g.snapshot(); return n == 1 })
-	other, err := g.acquire(context.Background(), 3)
-	if err != nil {
-		t.Fatal(err)
-	}
+	other := mustAcquire(t, g, 3)
 	select {
 	case rel := <-w:
 		rel()
@@ -142,11 +151,7 @@ func TestGate_LimitChangesApplyOnTheNextAcquire(t *testing.T) {
 	hold, _ = g.acquire(context.Background(), 1)
 	w1, w2 := acquireAsync(g, 1), acquireAsync(g, 1)
 	waitFor(t, "two waiters to queue", func() bool { _, n := g.snapshot(); return n == 2 })
-	rel, err := g.acquire(context.Background(), 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rel()
+	mustAcquire(t, g, 0)()
 	for _, c := range []<-chan func(){w1, w2} {
 		select {
 		case r := <-c:
