@@ -36,11 +36,21 @@ type finishOnlyRig struct {
 	finishStarted            chan struct{}
 	finishErr                error
 	summary                  chan tasks.Summary
+	yields                   bool // the kind may be quiesced by a stand-down
+}
+
+// resume is the kind's resume policy: ask, except that a kind that yields to
+// stand-downs must continue (a registration rule).
+func (r *finishOnlyRig) resume() tasks.ResumePolicy {
+	if r.yields {
+		return tasks.ResumeContinue
+	}
+	return tasks.ResumeAsk
 }
 
 func (r *finishOnlyRig) def() tasks.Definition {
 	s := tasks.BatchSpec[noParams, string, tasks.Summary]{
-		Common: common("gotham.archive", withResume(tasks.ResumeAsk)),
+		Common: common("gotham.archive", withResume(r.resume()), func(c *tasks.Common) { c.Yields = r.yields }),
 		// A Snapshot source freezes each chunk's keys before it runs, so the
 		// blocked chunk is in the ledger incomplete: Finish must not count it.
 		Source: func(*tasks.RC, noParams) (tasks.Source[string], error) {
@@ -432,6 +442,107 @@ func finishOnlyFromZeroRestart(t *testing.T, afterFromZeroRestart bool, wantTota
 	}
 	if n := second.sources.Load() + second.items.Load(); n != 0 {
 		t.Fatalf("the finish-only run read the source or ran an item %d times, want none", n)
+	}
+}
+
+// TestFinishOnly_StandDownDuringFinishReturnsToAwaitingDecision (HEAD
+// registry/batch_runner.go:283-286): a stand-down that stops a finish-only
+// attempt (here while Finish is running) sends the run back to
+// awaiting_decision with the marker kept, never to interrupted_quiesced. When
+// the hold is released the run is still waiting for the person: nothing
+// re-queued it and no attempt started.
+func TestFinishOnly_StandDownDuringFinishReturnsToAwaitingDecision(t *testing.T) {
+	// A kind that yields to stand-downs must continue on a restart, so the
+	// run reaches awaiting_decision under an ask-policy boot and the boot
+	// under test then runs the same kind as a yielding, continuing one (an
+	// awaiting_decision run is left alone by the resume sweep).
+	h, id := interruptedArchive(t, nil, &finishOnlyRig{})
+	if err := h.x.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := &finishOnlyRig{finishBlocks: true, finishStarted: make(chan struct{}), yields: true}
+	holding := make(chan struct{}, 1)
+	release := make(chan struct{})
+	holder := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+		hold, err := rc.StandDown("gotham.archive")
+		if err != nil {
+			return "", err
+		}
+		holding <- struct{}{}
+		select {
+		case <-release:
+			hold.Release()
+			return "released", nil
+		case <-rc.Context().Done():
+			return "", context.Cause(rc.Context())
+		}
+	}, withResume(tasks.ResumeDrop), func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "store")) })
+	h = h.reboot([]tasks.Definition{second.def(), holder}, nil)
+	h.waitState(id, tasks.StateAwaitingDecision)
+	if err := h.e.DecideAs(context.Background(), id, tasks.DecideFinish, gordon); err != nil {
+		t.Fatal(err)
+	}
+	<-second.finishStarted
+	attempt := h.get(id).Attempt
+	h.start("gotham.compact", tasks.StartRequest{})
+	<-holding
+	r := h.waitState(id, tasks.StateAwaitingDecision, tasks.StateInterruptedQuiesced, tasks.StateSucceeded, tasks.StateFailed)
+	if r.State != tasks.StateAwaitingDecision || r.Reason != "resume_ask" || !r.FinishOnly {
+		t.Fatalf("a stand-down during Finish left the run %s (reason %q, finish-only %v), want awaiting_decision, resume_ask, marker kept", r.State, r.Reason, r.FinishOnly)
+	}
+	close(release) // the holder releases the hold: the release loop re-queues what it quiesced
+	h.stays(id, tasks.StateAwaitingDecision, 300*time.Millisecond)
+	after := h.get(id)
+	if after.Attempt != attempt || !after.FinishOnly {
+		t.Fatalf("after the hold was released the run is attempt %d (was %d), finish-only %v: an attempt started", after.Attempt, attempt, after.FinishOnly)
+	}
+	if n := second.finishes.Load(); n != 1 {
+		t.Fatalf("Finish ran %d times, want only the attempt the stand-down stopped", n)
+	}
+	// The person's choice still works.
+	if err := h.e.DecideAs(context.Background(), id, tasks.DecideDrop, gordon); err != nil {
+		t.Fatalf("decide drop after the stand-down: %v", err)
+	}
+	h.waitState(id, tasks.StateInterruptedDropped)
+}
+
+// TestFinishOnly_ResumeSweepSendsAQuiescedRunToAwaitingDecision: a finish-only
+// run stored in interrupted_quiesced, or stopping with reason quiesce (a store
+// written before the stand-down stop went to awaiting_decision), is not
+// re-queued by the boot sweep either: it goes to awaiting_decision with the
+// marker kept.
+func TestFinishOnly_ResumeSweepSendsAQuiescedRunToAwaitingDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state tasks.RunState
+	}{
+		{"interrupted_quiesced", tasks.StateInterruptedQuiesced},
+		{"stopping quiesce", tasks.StateStopping},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := &finishOnlyRig{summary: make(chan tasks.Summary, 2)}
+			fs := vfs.NewCrashableMem()
+			stores, ks := bootStores(t, fs)
+			seed := onStores(t, fs, stores, ks, []tasks.Definition{rig.def()}, nil, false)
+			id := seed.start("gotham.archive", tasks.StartRequest{})
+			if _, err := seed.e.move(context.Background(), id, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
+				next := cur
+				next.State, next.Reason, next.FinishOnly = tc.state, reasonQuiesce, true
+				next.Attempt, next.FenceEpoch = 1, 1
+				return next, tasks.RunEvent{Event: "test"}, nil
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+			h := seed.crashBoot([]tasks.Definition{rig.def()}, nil)
+			r := h.waitState(id, tasks.StateAwaitingDecision, tasks.StateQueued, tasks.StateRunning, tasks.StateSucceeded, tasks.StateFailed)
+			if r.State != tasks.StateAwaitingDecision || r.Reason != "resume_ask" || !r.FinishOnly {
+				t.Fatalf("the sweep left the run %s (reason %q, finish-only %v), want awaiting_decision, resume_ask, marker kept", r.State, r.Reason, r.FinishOnly)
+			}
+			h.stays(id, tasks.StateAwaitingDecision, 200*time.Millisecond)
+			if n := rig.sources.Load() + rig.items.Load() + rig.finishes.Load(); n != 0 {
+				t.Fatalf("the sweep ran work (%d)", n)
+			}
+		})
 	}
 }
 

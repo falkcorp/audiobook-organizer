@@ -161,6 +161,11 @@ func (e *executor) resumeOne(ctx context.Context, rec tasks.RunRecord) error {
 	case tasks.StateQueued, tasks.StateWaitingDeps, tasks.StateAwaitingDecision:
 		return nil // the dispatcher (or a decision) takes it from here
 	case tasks.StateInterruptedQuiesced:
+		if rec.FinishOnly {
+			// Never quiesced (finish.go quiesceStop); a run stored this way
+			// goes where a stand-down stop of it goes now.
+			return e.toState(ctx, rec, tasks.StateAwaitingDecision, reasonAsk)
+		}
 		e.mu.Lock()
 		keep := e.bootQuiet[rec.ID]
 		e.mu.Unlock()
@@ -181,6 +186,9 @@ func (e *executor) resumeOne(ctx context.Context, rec tasks.RunRecord) error {
 			return err
 		}
 		if rec.Reason == reasonQuiesce {
+			if rec.FinishOnly {
+				return e.toState(ctx, rec, tasks.StateAwaitingDecision, reasonAsk)
+			}
 			e.mu.Lock()
 			keep := e.bootQuiet[rec.ID]
 			e.mu.Unlock()
@@ -204,7 +212,7 @@ func (e *executor) resumeOne(ctx context.Context, rec tasks.RunRecord) error {
 		// re-queued here, and never from zero, which would void the ledger
 		// Finish reads. The ledger, the marks and the stored total are not
 		// touched.
-		return e.toState(ctx, rec, tasks.StateAwaitingDecision, "resume_ask")
+		return e.toState(ctx, rec, tasks.StateAwaitingDecision, reasonAsk)
 	}
 	switch d.c.Resume {
 	case tasks.ResumeContinue:
