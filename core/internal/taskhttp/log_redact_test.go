@@ -39,6 +39,9 @@ func TestGetLog_RedactsLikeTheStream(t *testing.T) {
 				t.Fatalf("lines = %+v", body.Lines)
 			}
 			l := body.Lines[0]
+			if l.RunID != "run-1" {
+				t.Errorf("line names run %q, want the path's run-1 (redacted or not)", l.RunID)
+			}
 			if c.full && (l.Message != "Selina Kyle signed in" || l.Fields["user"] != "selina") {
 				t.Errorf("a holder of core:users.view saw %+v", l)
 			}

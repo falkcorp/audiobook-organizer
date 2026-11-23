@@ -1084,26 +1084,64 @@ func TestPublisher_SameRunCollectorsSerialiseThroughTheGate(t *testing.T) {
 	}
 }
 
-// TestExecutor_RunChangedCarriesTheProgressMessage: a progress note shows up as
-// the message of a run-changed payload (the ops bell's op.updated.message), and
-// the terminal view keeps the last one.
-func TestExecutor_RunChangedCarriesTheProgressMessage(t *testing.T) {
+// midRun starts a run of body on a fresh tape, waits until an emission of the
+// run satisfies seen while the body is still blocked (so the emission is a
+// progress tick, not the terminal view), then releases the body.
+func midRun(t *testing.T, kind string, body func(rc *tasks.RC, release <-chan struct{}) error, seen func(tasks.RunPayload) bool) {
+	t.Helper()
+	release := make(chan struct{})
 	p := &tape{}
 	h := tapeHarness(t, p, []tasks.Definition{
-		taskDef("gotham.signal", func(rc *tasks.RC, _ noParams) (string, error) {
-			rc.Progress().Note("Lighting the Bat-Signal")
-			return "lit", nil
-		}, readOnly("gotham.signal")),
+		taskDef(kind, func(rc *tasks.RC, _ noParams) (string, error) {
+			return "done", body(rc, release)
+		}, readOnly(kind)),
 	}, nil, false)
-	id := h.start("gotham.signal", tasks.StartRequest{})
-	h.waitState(id, tasks.StateSucceeded)
-	h.drained()
-	got := p.of(emitRunChanged, id)
-	if len(got) == 0 {
-		t.Fatal("no run-changed emission")
-	}
-	last := got[len(got)-1].view
-	if last.Message != "Lighting the Bat-Signal" {
-		t.Errorf("terminal run-changed message = %q, want the last progress note", last.Message)
-	}
+	id := h.start(kind, tasks.StartRequest{})
+	defer func() { h.waitState(id, tasks.StateSucceeded); h.drained() }()
+	defer close(release)
+	eventually(t, "a mid-run run-changed carrying the expected message", func() bool {
+		for _, em := range p.of(emitRunChanged, id) {
+			if em.view.State == "running" && seen(em.view) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// TestExecutor_RunChangedCarriesTheProgressMessage: a progress note shows up as
+// the message of a run-changed payload (the ops bell's op.updated.message) while
+// the run is still running, not only in the terminal view.
+func TestExecutor_RunChangedCarriesTheProgressMessage(t *testing.T) {
+	midRun(t, "gotham.signal", func(rc *tasks.RC, release <-chan struct{}) error {
+		rc.Progress().Note("Lighting the Bat-Signal")
+		<-release
+		return nil
+	}, func(v tasks.RunPayload) bool { return v.Message == "Lighting the Bat-Signal" && v.Current == v.Message })
+}
+
+// TestExecutor_NoteAfterSetPublishesTheNote: Set ticks with the old label, and
+// the Note that follows (ABO's items env does Set then Note) must reach the
+// stream, not leave the previous message standing until the terminal view.
+func TestExecutor_NoteAfterSetPublishesTheNote(t *testing.T) {
+	midRun(t, "gotham.cipher", func(rc *tasks.RC, release <-chan struct{}) error {
+		rc.Progress().Set(1, tasks.Known(3))
+		rc.Progress().Note("Riddler cipher cracked")
+		<-release
+		return nil
+	}, func(v tasks.RunPayload) bool { return v.Message == "Riddler cipher cracked" && v.Done == 1 })
+}
+
+// TestExecutor_ItemLabelReachesTheMessage: an item loop with a Label option
+// publishes the item's label as the run's message while the loop is running.
+func TestExecutor_ItemLabelReachesTheMessage(t *testing.T) {
+	midRun(t, "gotham.alleys", func(rc *tasks.RC, release <-chan struct{}) error {
+		_, err := tasks.RunItems(rc, tasks.Sequential("one alley at a time"), count(2), func(ic *tasks.ItemRC, i int) error {
+			if i == 1 {
+				<-release
+			}
+			return nil
+		}, tasks.ItemsOptions[int]{Label: func(i int) string { return fmt.Sprintf("Crime Alley %d", i) }})
+		return err
+	}, func(v tasks.RunPayload) bool { return strings.HasPrefix(v.Message, "Crime Alley ") })
 }

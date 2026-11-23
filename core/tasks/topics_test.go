@@ -102,12 +102,27 @@ func TestTaskTopics_VisibleFailsClosed(t *testing.T) {
 // (a RunPayload for run-changed and finished, a LogAppended for log-appended).
 func TestTaskTopics_SchemaCarriesThePayload(t *testing.T) {
 	for name, field := range map[string]string{
-		"core.task.run-changed.v1":  "message",
+		"core.task.run-changed.v1":  "current",
 		"core.task.finished.v1":     "reason",
 		"core.task.log-appended.v1": "message",
 	} {
 		var sc struct {
 			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		for _, extra := range map[string][]string{
+			"core.task.run-changed.v1":  {"message"},
+			"core.task.finished.v1":     {"message"},
+			"core.task.log-appended.v1": {"run_id"},
+		}[name] {
+			var sc2 struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			}
+			if err := json.Unmarshal(taskSpecs()[name].Schema, &sc2); err != nil {
+				t.Fatalf("%s: Schema is not JSON: %v", name, err)
+			}
+			if _, ok := sc2.Properties[extra]; !ok {
+				t.Errorf("%s: Schema has no %q property: %s", name, extra, taskSpecs()[name].Schema)
+			}
 		}
 		if err := json.Unmarshal(taskSpecs()[name].Schema, &sc); err != nil {
 			t.Fatalf("%s: Schema is not JSON: %v", name, err)
@@ -210,7 +225,7 @@ func TestTaskTopics_LogLineWithoutFieldsDelivered(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = bus.Close(context.Background()) })
 	events.Publish(bus.Scope("core"), context.Background(), tasks.LogAppendedTopic(), "run-robin-1",
-		tasks.NewLogAppended("run-nightwing-1", tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit"}))
+		tasks.NewLogAppended("run-robin-1", tasks.LogLine{At: time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Level: "info", Message: "Bat-Signal lit"}))
 	select {
 	case e := <-got:
 		var m map[string]json.RawMessage
@@ -219,6 +234,9 @@ func TestTaskTopics_LogLineWithoutFieldsDelivered(t *testing.T) {
 		}
 		if _, ok := m["fields"]; ok {
 			t.Errorf("payload has a fields key: %s", e.Payload)
+		}
+		if string(m["run_id"]) != `"`+e.Key+`"` {
+			t.Errorf("payload run_id %s does not match the envelope key %q", m["run_id"], e.Key)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a line with no Fields was dropped")
