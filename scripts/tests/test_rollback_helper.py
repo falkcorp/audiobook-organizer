@@ -92,6 +92,11 @@ if "ActiveState" in sys.argv:
         print(open({state!r}).read().strip())
     except FileNotFoundError:
         print("inactive")
+if "Environment" in sys.argv:
+    try:
+        print(open({state!r} + ".export-env").read().strip())
+    except FileNotFoundError:
+        print("")
 if "FragmentPath" in sys.argv:
     if os.path.exists({state!r} + ".show-fails"):
         sys.exit(1)
@@ -3490,6 +3495,7 @@ KEYRING = b"batcave keyring export v1\n" + bytes(range(32))
 KEY = b"alfred-encryption-key-0123456789abcdef"
 CONFIG_YAML = b"core:\n  paths:\n    state_dir: /var/lib/batcave\n"
 STAMP = "20261122T010203Z"
+THIS_CALL = "bat-call-0001"
 
 # A fake binary: `secrets export-keyring --db D --out F` writes KEYRING to F,
 # mode 0600 (BIN_MODE), after logging its argv and environment.
@@ -3546,8 +3552,18 @@ class Export(unittest.TestCase):
             "        env[k] = v\n"
             f'cmd = [{str(self.patched)!r} if c.endswith("rollback_helper.py") else c for c in cmd]\n'
             f"mode = open({str(self.mode_file)!r}).read().strip() if os.path.exists({str(self.mode_file)!r}) else 'normal'\n"
+            f"envfile = {str(h.root / 'transient-state.export-env')!r}\n"
+            'if mode != "race":\n'
+            '    open(envfile, "w").write(" ".join(o[len("--setenv="):] for o in opts if o.startswith("--setenv=")))\n'
+            'if mode == "race":\n'
+            "    sys.exit(1)\n"
             'if mode == "fail":\n'
+            "    os.remove(envfile)\n"
             "    sys.exit(7)\n"
+            'if mode == "big-hang":\n'
+            '    sys.stdout.buffer.write(b"A" * (2 << 20))\n'
+            "    sys.stdout.buffer.flush()\n"
+            "    time.sleep(5)\n"
             'if mode == "hang":\n'
             "    time.sleep(5)\n"
             'if mode == "closed-hang":\n'
@@ -3556,6 +3572,7 @@ class Export(unittest.TestCase):
             'if mode == "raw":\n'
             f"    sys.stdout.buffer.write(open({str(self.raw_file)!r}, 'rb').read())\n"
             "    sys.stdout.buffer.flush()\n"
+            "    os.remove(envfile)\n"
             "    sys.exit(0)\n"
             "p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE)\n"
             "data = p.stdout\n"
@@ -3568,10 +3585,12 @@ class Export(unittest.TestCase):
             'if mode == "zero": data = b"AORGEXPORT1 0 " + hashlib.sha256(b"").hexdigest().encode() + b"\\n"\n'
             "sys.stdout.buffer.write(data)\n"
             "sys.stdout.buffer.flush()\n"
+            "os.remove(envfile)\n"
             "sys.exit(p.returncode)\n"
         )
         h.mod.TOOLS["systemd-run"] = h.tool("systemd-run", body)
         h.mod._export_stamp = lambda: STAMP
+        h.mod._export_token = lambda: THIS_CALL
         patch = unittest.mock.patch.dict(os.environ, {"TMPDIR": str(self.tmp)})
         patch.start()
         self.addCleanup(patch.stop)
@@ -3655,6 +3674,7 @@ class Export(unittest.TestCase):
                 "--property=RuntimeMaxSec=60",
                 f"--setenv=HOME={h.state}",
                 f"--setenv=ABO_CORE_PATHS_STATE_DIR={h.state}",
+                f"--setenv=AORG_EXPORT_TOKEN={THIS_CALL}",
             ],
         )
         self.assertEqual(
@@ -4004,14 +4024,25 @@ class Export(unittest.TestCase):
         self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
 
     def test_an_oversized_export_is_stopped_by_the_helper(self):
-        self.mode_file.write_text("big")
+        self.mode_file.write_text("big-hang")
         self.refused("export-keyring", contains="wrote more than")
         self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
 
-    def test_a_failing_export_unit_is_stopped_by_the_helper(self):
+    def test_a_unit_that_already_ended_is_not_stopped(self):
+        # The unit failed and was collected: nothing of ours is left to stop.
         self.mode_file.write_text("fail")
         self.refused("export-keyring", contains="exited 7")
-        self.assertEqual(self.stops(), [["stop", "audiobook-organizer-rollback-export"]])
+        self.assertEqual(self.stops(), [])
+
+    def test_a_systemd_run_that_lost_the_race_for_the_unit_never_stops_the_other_callers_unit(self):
+        # Another caller's export unit holds the name; this call's systemd-run
+        # fails at once. That unit is not ours (its environment lacks our token).
+        envfile = self.h.root / "transient-state.export-env"
+        envfile.write_text("HOME=/x AORG_EXPORT_TOKEN=somebody-elses-call")
+        self.mode_file.write_text("race")
+        self.refused("export-keyring", contains="exited 1")
+        self.assertEqual(self.stops(), [])
+        self.assertEqual(envfile.read_text(), "HOME=/x AORG_EXPORT_TOKEN=somebody-elses-call")
 
     def test_a_good_export_stops_nothing(self):
         self.assertEqual(self.h.run("export-keyring")[0], 0)

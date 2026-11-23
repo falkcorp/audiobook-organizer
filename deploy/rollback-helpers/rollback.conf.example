@@ -22,9 +22,10 @@ archive_dir = /path/to/archives
 checkpoint_dir =
 # The environment storage restore-offline, fetch-release and export-keyring run
 # with. The flipped binary refuses ABK_STATE_DIR in every offline command, so the
-# state directory is ABO_CORE_PATHS_STATE_DIR only (a pre-flip binary ignores it
-# and uses its compiled default, which is this path on a default install). The
-# helpers refuse a conf that sets both.
+# state directory is ABO_CORE_PATHS_STATE_DIR only. That works with a pre-flip
+# binary only when state_dir is the compiled default (this path): a pre-flip
+# build refuses, fail-closed, when the variable differs from its own state
+# directory. The helpers refuse a conf that sets both names.
 offline_env = HOME=/var/lib/audiobook-organizer ABO_CORE_PATHS_STATE_DIR=/var/lib/audiobook-organizer
 # The unit's Group=, if not service_user. install-staged unit refuses a unit
 # whose User= or Group= differ from these.

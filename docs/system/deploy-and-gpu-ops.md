@@ -807,6 +807,9 @@ writes it:
   seconds later. On a timeout, an oversized output or any other failure the helper
   itself runs `systemctl stop` on the export unit (as root, inside the helper;
   there is no sudoers line for it), so a hung export can never block the next one.
+  It stops the unit only when the unit's environment carries a token this call
+  put there, so a call whose `systemd-run` lost a race for the unit name never
+  stops the other caller's export.
 - The helper opens `export_dir` itself with no symlink in any component and
   checks that the directory is owned by the user who ran `sudo` (`SUDO_UID`,
   which the caller cannot set) with mode 0700. Every later step is relative to that
@@ -839,7 +842,9 @@ directory only that user can enter. The sudoers lines have no argument list and
 no wildcard.
 
 After upgrading the bundle, reinstall it (`make install-rollback-helpers
-APPLY=1`) with `--export-dir <export_dir>` in `ROLLBACK_INSTALL_ARGS`, so the
+APPLY=1 REPLACE_CONF=1`: without `REPLACE_CONF=1` the installer leaves a
+differing `rollback.conf` alone, so the new settings never land) with
+`--export-dir <export_dir>` in `ROLLBACK_INSTALL_ARGS`, so the
 new stubs, the sudoers lines and the `export_dir` setting exist; until then the
 make targets stop at "no export_dir" or at sudo's refusal. `offline_env` accepts
 `ABO_*` names, and the installer's default is now `HOME=<state_dir>
@@ -848,9 +853,13 @@ at boot and in every offline command (the restore, `fetch-release`,
 `export-keyring`), so a `rollback.conf` that still names it breaks all three until
 it is reinstalled (`REPLACE_CONF=1`, because the installer leaves a differing
 file alone). `rollback.conf` that sets `ABK_STATE_DIR` together with an `ABO_`
-state directory is refused by every helper. ABO-only also serves a pre-flip
+state directory is refused by every helper. ABO-only works with a pre-flip
 binary only when `state_dir` is the compiled default
-(`/var/lib/audiobook-organizer`); a generation-aware setting is not built yet.
+(`/var/lib/audiobook-organizer`): on any other `state_dir` a pre-flip binary
+refuses (fail-closed, "core's state directory ... is not ABO's ..."). The
+release fetch of `make rollback-restore RELEASE=<tag>` handles both generations:
+on exactly that refusal it retries once with `ABK_STATE_DIR` and no ABO name. A
+generation-aware `rollback.conf` setting is not built yet.
 The exact reinstall command is precondition P6 in
 `docs/system/r2-cutover-runbook.md`.
 
