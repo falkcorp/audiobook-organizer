@@ -40,7 +40,8 @@ empty database without scanning real files.
 Example:
   audiobook-organizer seed --count 50 --authors 5 --series 8
 
-Each book gets a fake file path under ROOT_DIR/seed/<author>/<title>.<format>
+Each book gets a fake file path under <library root>/seed/<author>/<title>.<format>,
+where the library root is --dir, else the library root setting (ABO_CORE_LIBRARY_ROOTS)
 — no actual files are written, only DB rows.`,
 	RunE: runSeed,
 }
@@ -94,7 +95,7 @@ func seedOpenHint(err error) error {
 
 func runSeed(cmd *cobra.Command, _ []string) error {
 	if config.AppConfig.RootDir == "" {
-		return fmt.Errorf("root directory not specified — pass --dir or set ROOT_DIR")
+		return fmt.Errorf("library root not specified — pass --dir, set the library root in Settings, or set ABO_CORE_LIBRARY_ROOTS")
 	}
 	if seedCount <= 0 {
 		return fmt.Errorf("--count must be > 0")
