@@ -33,7 +33,13 @@ interface AuthContextValue {
   refresh: () => Promise<void>;
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>;
   logout: () => Promise<void>;
-  setupAdmin: (payload: { username: string; password: string; email?: string }) => Promise<void>;
+  setupAdmin: (payload: {
+    username: string;
+    password: string;
+    email?: string;
+    /** Required by core when the request is not from the host itself. */
+    bootstrap_token?: string;
+  }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -128,7 +134,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setupAdmin = useCallback(
-    async (payload: { username: string; password: string; email?: string }) => {
+    async (payload: { username: string; password: string; email?: string; bootstrap_token?: string }) => {
       await api.setupAdmin(payload);
       setBootstrapReady(false);
       setRequiresAuth(true);

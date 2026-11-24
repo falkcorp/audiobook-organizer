@@ -358,7 +358,7 @@ func TestRestoreHooks_ReceivePreSwapStoreAndRestoreSeq(t *testing.T) {
 		t.Errorf("the pre-swap store's audit record was copied forward %d times, want once", len(got))
 	}
 	applied := find("core.restore.apply")
-	if len(applied) != 1 || applied[0].Target.ID != strconv.FormatUint(res.RestoreLine, 10) {
-		t.Errorf("core.restore.apply records = %+v, want one for restore line %d", applied, res.RestoreLine)
+	if len(applied) != 1 || applied[0].Target.ID != "restore:restore-1:seq:"+strconv.FormatUint(res.RestoreLine, 10) {
+		t.Errorf("core.restore.apply records = %+v, want one for restore line %d, keyed on the intent ID and the line", applied, res.RestoreLine)
 	}
 }

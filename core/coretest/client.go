@@ -15,9 +15,12 @@ import (
 )
 
 // Client sends requests straight to a harness's App.Handler(), in process: no
-// listener and no network.
+// listener and no network. A Client from Harness.As carries the interactive
+// session cookie core auth issued for its user, added to every request; one
+// from Harness.Anonymous carries no credential.
 type Client struct {
 	handler http.Handler
+	cookie  *http.Cookie // nil for Anonymous
 }
 
 // Do runs req through the App's handler and returns the recorded response.
@@ -25,9 +28,13 @@ type Client struct {
 // http.NewRequest lacks what a server fills in; Do serves a copy with the
 // fields httptest.NewRequest sets when they are empty: RemoteAddr
 // (192.0.2.1:1234, the RFC 5737 documentation address), Host (example.com)
-// and RequestURI. req itself is not modified.
+// and RequestURI. req itself is not modified; the Client's session cookie, if
+// it has one, is added to the copy.
 func (c *Client) Do(req *http.Request) *http.Response {
 	req = req.Clone(req.Context())
+	if c.cookie != nil {
+		req.AddCookie(c.cookie)
+	}
 	if req.RemoteAddr == "" {
 		req.RemoteAddr = "192.0.2.1:1234"
 	}

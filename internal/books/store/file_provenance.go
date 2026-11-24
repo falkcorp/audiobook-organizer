@@ -246,7 +246,7 @@ type ChainReport struct {
 // describes when something happened in the world, and callers legitimately
 // append out of order (a pre-write observation recorded after the fact, an
 // orphan adopted into the middle of a chain). Linking by timestamp would fork
-// the chain on every such write and report honest code as tampering, so the
+// the chain on every such write and report legitimate writes as tampering, so the
 // link follows Seq and this function sorts by Seq before walking. Callers can
 // pass GetFileHistory's output directly — it is in time order, and gets
 // re-sorted here.

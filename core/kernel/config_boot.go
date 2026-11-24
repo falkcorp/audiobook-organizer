@@ -56,20 +56,26 @@ const disabledByConfig = "config"
 //   - core.modules.<id>.enabled from the boot view decides which modules are
 //     enabled, so P3 registers the sections of the modules that run.
 //
-// An app that declares no storage and compiles in no path keeps
+// An app with no store (Config.WantsStore) that compiles in no path keeps
 // Config.StoragePath and StateDir as they are: with no store there is nothing
 // to swap and no keyring to keep, and the config store is the operator layers
 // and the boot record.
 func (k *Kernel) bootCoreConfig(ctx context.Context) error {
-	cb, err := bootConfig(ctx, k.configInput(ctx))
+	return k.bootCoreConfigOver(ctx, k.configInput(ctx))
+}
+
+// bootCoreConfigOver is bootCoreConfig over an input the caller adjusted
+// (offline_users.go sets SkipBootRecord).
+func (k *Kernel) bootCoreConfigOver(ctx context.Context, in configInput) error {
+	cb, err := bootConfig(ctx, in)
 	if err != nil {
 		return err
 	}
 	k.cfgBoot = cb
-	// A store is opened when a module declares storage or the app compiled in
+	// A store is opened when the app wants one (Config.WantsStore) or compiled in
 	// a path (Config.StoragePath); either way it keeps its state, the keyring
 	// first, in the directory step 0 chose.
-	if k.declaresStorage() || k.cfg.StoragePath != "" {
+	if k.cfg.WantsStore() || k.cfg.StoragePath != "" {
 		path, stateDir, err := k.storagePaths(cb.dbPath, cb.stateDir)
 		if err != nil {
 			return err
@@ -140,7 +146,7 @@ func ResolveStorage(ctx context.Context, c Config, owner string) (dbPath, stateD
 	if err := k.catalog(false); err != nil {
 		return "", "", err
 	}
-	if !k.declaresStorage() {
+	if !k.cfg.WantsStore() {
 		return c.StoragePath, c.StateDir, nil
 	}
 	in := k.configInput(ctx)
@@ -210,17 +216,6 @@ func refuseNonOwner(ctx context.Context, dir, what string) error {
 		return fmt.Errorf("kernel: %s: the state directory %s does not exist yet and would be created under %s: %w", what, dir, probe, err)
 	}
 	return err
-}
-
-// declaresStorage reports whether any module of the app declares storage,
-// enabled or not (the rule app.storagePath and storageWanted apply).
-func (k *Kernel) declaresStorage() bool {
-	for _, e := range k.entries {
-		if DeclaresStorage(e.man) {
-			return true
-		}
-	}
-	return false
 }
 
 // gatedStoragePath is the store's path under the config boot: core.storage.path

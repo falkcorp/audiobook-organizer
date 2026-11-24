@@ -18,10 +18,11 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import * as api from '../../services/api';
+import { BOOKS_PERMISSIONS } from '../../generated/permissions';
 import { useHasPermission } from '../../hooks/useLibraryPermission';
 
 /** The server route behind op starts (POST /operations/v2) asks for this. */
-export const THROTTLE_RESET_PERMISSION = 'scan.trigger';
+export const THROTTLE_RESET_PERMISSION = BOOKS_PERMISSIONS.SCAN;
 
 /** Holds last minutes to hours, so a slow poll is enough (the ask was ~4h). */
 export const THROTTLE_POLL_MS = 4 * 60 * 60 * 1000;

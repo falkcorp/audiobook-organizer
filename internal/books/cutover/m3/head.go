@@ -112,6 +112,13 @@ type headUser struct {
 	Version          int       `json:"version"`
 	CredentialEpoch  int64     `json:"credential_epoch,omitempty"`
 	EmailSource      string    `json:"email_source,omitempty"`
+	// MergedIntoUserID and MergedAt are the admin user merge's marker
+	// (store.User): the account this one was folded into, and when. The merge
+	// locks the account first and stamps these last; HEAD's ReactivateUser
+	// refuses an account that has one, so the import carries them
+	// (auth.User.MergedInto, MergedAt) and core's enable path refuses too.
+	MergedIntoUserID string     `json:"merged_into_user_id,omitempty"`
+	MergedAt         *time.Time `json:"merged_at,omitempty"`
 }
 
 // headRole is store.Role.
@@ -140,6 +147,11 @@ type headKey struct {
 	UseCount   int64      `json:"use_count"`
 	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
+
+	// Description is store.APIKey.Description (json "description", no
+	// omitempty): the text the owner typed at creation, which HEAD never limited
+	// and never lets anyone edit. mapKey normalizes it for core.
+	Description string `json:"description"`
 }
 
 // headIdentity is store.OAuthIdentity.
@@ -159,6 +171,12 @@ type headInviteGrant struct {
 	UserID      string    `json:"user_id"`
 	InviteToken string    `json:"invite_token,omitempty"`
 	GrantedAt   time.Time `json:"granted_at"`
+	// CFAdded is HEAD's note that the accept-time sync itself put the address
+	// on the Cloudflare guest policy. Core's allow-list is by address alone and
+	// has no such field, so the step carries a true one into books' own
+	// guestpolicy: row (guestPolicyRow), or a disable, delete or merge of the
+	// guest after the flip would leave the entry that HEAD removes.
+	CFAdded bool `json:"cf_added,omitempty"`
 }
 
 // ---- decoding ----

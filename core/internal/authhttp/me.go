@@ -194,6 +194,9 @@ func (k KeyCreate) validate() error {
 	if k.ExpiresAt != nil && k.ExpiresAt.IsZero() {
 		fields = append(fields, httpapi.Field("/body/expires_at", "invalid", "an RFC 3339 instant in the future"))
 	}
+	if err := auth.CheckKeyDescription(k.Description); err != nil {
+		fields = append(fields, httpapi.Field("/body/description", "invalid", err.Error()))
+	}
 	if len(fields) > 0 {
 		return httpapi.Invalid(fields...)
 	}
@@ -214,7 +217,7 @@ func (k KeyCreate) keySpec(owner auth.UserID) (auth.KeySpec, error) {
 	if err := k.validate(); err != nil {
 		return auth.KeySpec{}, err
 	}
-	spec := auth.KeySpec{Owner: owner, Name: k.Name}
+	spec := auth.KeySpec{Owner: owner, Name: k.Name, Description: k.Description}
 	for _, s := range k.Scopes {
 		spec.Scopes = append(spec.Scopes, rbac.Permission(s))
 	}

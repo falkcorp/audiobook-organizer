@@ -61,9 +61,10 @@ type Route struct {
 
 // Guards are identity requirements beyond the permission.
 type Guards struct {
-	Interactive bool // refuse API keys, ABS tokens and auth-disabled (HEAD's credGuard, auth.Method.MayChangeCredentials)
+	Interactive bool // refuse API keys, ABS tokens and auth-disabled (HEAD's credGuard, auth.Principal.MayChangeCredentials)
 	// Session refuses every method but the user's own interactive sign-in
-	// (auth.Method.Interactive: MethodSession), so a delegated session
+	// (auth.Principal.Interactive: MethodSession or an extension registered
+	// Interactive), so a delegated session
 	// (temp-login, invite) is refused too, where Interactive admits it. It is
 	// for routes whose spec closes them to delegated sessions, such as the
 	// diagnostics bundle download (05-health §5H.5, SEC2-13). Answered 403

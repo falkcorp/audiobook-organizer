@@ -429,7 +429,7 @@ func seedStage2() error {
 		return err
 	}
 	if err := r.MountLegacy(httpapi.LegacyMount{
-		Owner: "books", Handler: engine, Auth: httpapi.LegacyAuthGin, TopSegments: []string{"contract"},
+		Owner: "books", Handler: engine, Auth: httpapi.LegacyAuthCore, TopSegments: []string{"contract"},
 		Routes: slices.Values([]httpapi.LegacyRoute{{Method: http.MethodGet, GinPath: "/contract", Perm: rbac.AnyAuthenticated}}),
 	}); err != nil {
 		return err

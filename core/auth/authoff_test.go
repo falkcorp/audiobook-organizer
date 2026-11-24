@@ -8,6 +8,7 @@ package auth_test
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -70,7 +71,7 @@ func TestAuthDisabled_AuthRequiredScopesStill401(t *testing.T) {
 	if got.checker == nil || got.checker.Has("gotham:patrol") != true {
 		t.Fatal("the rbac checker was not bound")
 	}
-	if got.actor.Method != string(auth.MethodAuthDisabled) || got.actor.ClientAddr != "192.0.2.10" || got.actor.UserID != "" {
+	if got.actor.Method != string(auth.MethodAuthDisabled) || got.actor.ClientAddr != "192.0.2.10" || got.actor.UserID != "auth_disabled" || got.actor.Username != "" {
 		t.Fatalf("audit actor = %+v", got.actor)
 	}
 }
@@ -197,5 +198,24 @@ func TestAuthRequired_BindsNoSyntheticPrincipal(t *testing.T) {
 	}
 	if f.svc.Posture().Disabled {
 		t.Fatal("posture changed after New")
+	}
+}
+
+// TestAuthDisabled_AuditActorNamesTheMethodNotThePresentedUser: the audit actor
+// of an auth-off request is UserID "auth_disabled" (F4-05 seam: the config
+// committer refuses an actor with none), and a presented key's owner never
+// becomes the actor, which would attribute the write to someone who did not
+// make it.
+func TestAuthDisabled_AuditActorNamesTheMethodNotThePresentedUser(t *testing.T) {
+	f, svc := offFx(t)
+	dick := f.user("dick-grayson", "gotham.detective")
+	raw, _ := f.mint(f.session(dick), dick.ID, "gotham:patrol")
+	for name, r := range map[string]*http.Request{
+		"no credential": request("", ""), "a valid key": request(raw, ""), "a cookie": request("", "mcs_garbage"),
+	} {
+		_, got := serve(t, svc, r)
+		if got.actor.UserID != "auth_disabled" || got.actor.Username != "" || got.actor.CredentialID != "" {
+			t.Errorf("%s: audit actor = %+v", name, got.actor)
+		}
 	}
 }

@@ -9,8 +9,9 @@
 // (/api/core/v1) over audit.Reader, and both need core:audit.view.
 //
 // The audit log holds user names, client addresses and credential ids, so the
-// routes refuse the auth-disabled principal with 401 authentication_required
-// (05-authn §4.11) and show a caller who does not hold core:users.manage only
+// routes refuse the auth-disabled principal with 403 interactive_required
+// (05-authn §4.11, F4-08 ruling G5(a): a 401 would end a no-auth install's SPA
+// session) and show a caller who does not hold core:users.manage only
 // the records whose action core classifies as safe for every audit viewer
 // (audit.VisibilityOf); a credential or identity action, and an action core
 // does not classify, are withheld. Exporting is itself audited: the route records
@@ -105,7 +106,7 @@ func Register(g *httpapi.Group, deps Deps) {
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/audit", Name: "listAudit", Perm: perm, Tags: tags,
 		Summary: "Query the audit log, newest first",
-		Doc:     "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage, who also alone sees actor.credential_id and actor.client_addr. A caller without core:users.manage has withheld records read and dropped by the query, at most 10,000 per request: a page may then be short or empty with a next_cursor, and the client follows cursors until there is none. The auth-disabled principal is refused with 401.",
+		Doc:     "Filters: since and until (RFC 3339), actor (a user id), action (a prefix such as core.auth.), outcome (success, failure, denied, error) and target (module, module/kind or module/kind/id). The cursor continues a query with the same filters. A record whose action is about an identity or a credential (core.auth.*, core.user.*, core.apikey.*, core.session.*, core.invite.*, core.templogin.*, core.identity.*, core.bootstrap.*, core.permission.deny and the like), and a record whose action core does not classify (a module's own), is left out unless the caller holds core:users.manage, who also alone sees actor.credential_id and actor.client_addr. A caller without core:users.manage has withheld records read and dropped by the query, at most 10,000 per request: a page may then be short or empty with a next_cursor, and the client follows cursors until there is none. The auth-disabled principal is refused with 403 interactive_required.",
 	}, a.list)
 	httpapi.HandleRaw(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/audit/export", Name: "exportAudit", Perm: perm, Tags: tags, RateClass: httpapi.RateExpensive,

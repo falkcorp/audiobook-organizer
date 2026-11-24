@@ -152,7 +152,7 @@ describe('user menu equivalence: edit profile', () => {
     apiMock.updateMe.mockRejectedValue(new Error('Email already taken'));
     const dialog = openProfile();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    expect(await within(dialog).findByText('Error: Email already taken')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Email already taken')).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(auth.refresh).not.toHaveBeenCalled();
   });
@@ -242,7 +242,7 @@ describe('user menu equivalence: change password', () => {
     const dialog = openPassword();
     fill(dialog, 'nope', 'long-enough-1', 'long-enough-1');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    expect(await within(dialog).findByText('Error: Current password is wrong')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Current password is wrong')).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 

@@ -1,7 +1,7 @@
 // file: core/internal/authstore/store.go
-// version: 1.1.2
+// version: 1.2.0
 // guid: a7b06243-983e-42c3-9979-3aacdb3d3374
-// last-edited: 2026-11-12
+// last-edited: 2026-11-21
 
 // Package authstore is core's one implementation of auth.Store and
 // auth.Importer (05-authn §3.4, §11 "Native store"): every identity record in
@@ -30,6 +30,7 @@
 //	session/id/<publicID>                  -> sha256 hex
 //	session/u/<user>/<publicID>            -> sha256 hex
 //	onetime/<kind>/<sha256 hex>            OneTimeToken + token hash
+//	restore_epoch_run                      the restore run whose epoch bump last committed (one row)
 //
 // A record row and an index row of one family differ in segment count, which
 // is how a scan tells them apart. No raw credential is ever stored: the store
@@ -80,6 +81,8 @@ const (
 	segSession  = "session"
 	segID       = "id"
 	segOneTime  = "onetime"
+	// segRestoreEpoch is the whole key of the single restore-run marker row.
+	segRestoreEpoch = "restore_epoch_run"
 )
 
 // Stored forms. Each embeds the core type and adds what the store alone
@@ -102,6 +105,12 @@ type sessionRecord struct {
 type oneTimeRecord struct {
 	auth.OneTimeToken
 	Hash string `json:"hash"`
+}
+
+type restoreEpochRecord struct {
+	RunKey         string `json:"run_key"`
+	Bumped         int    `json:"bumped"`
+	SignInsDeleted int    `json:"sign_ins_deleted"`
 }
 
 type allowRecord struct {
@@ -176,6 +185,7 @@ func apiKeyHashKey(h string) []byte {
 func identityKey(p, sub string) []byte {
 	return keys.Join(keys.Str(segIdentity), keys.Str(p), keys.Str(sub))
 }
+func restoreEpochKey() []byte     { return keys.Join(keys.Str(segRestoreEpoch)) }
 func allowKey(fold string) []byte { return keys.Join(keys.Str(segAllow), keys.Str(fold)) }
 func sessionKey(h string) []byte {
 	return keys.Join(keys.Str(segSession), keys.Str(segHash), keys.Str(h))
@@ -209,7 +219,7 @@ func keyDesc(key []byte) string {
 	family := "unrecognised"
 	if segs, err := keys.Split(key); err == nil && len(segs) > 0 {
 		switch top := string(segs[0]); top {
-		case segUser, segKey, segIdentity, segAllow, segSession, segOneTime:
+		case segUser, segKey, segIdentity, segAllow, segSession, segOneTime, segRestoreEpoch:
 			family = top
 			if len(segs) > 2 {
 				switch sub := string(segs[1]); sub {
@@ -875,6 +885,43 @@ func (s *Store) RevokeSignInsBefore(b *storage.Batch, t time.Time) (int, error) 
 	return n, nil
 }
 
+// RestoreEpochRun reads the restore-run marker (auth.RestoreEpochStore).
+func (s *Store) RestoreEpochRun(ctx context.Context) (auth.RestoreEpochRun, bool, error) {
+	raw, err := s.get(ctx, restoreEpochKey())
+	if errors.Is(err, auth.ErrNotFound) {
+		return auth.RestoreEpochRun{}, false, nil
+	}
+	if err != nil {
+		return auth.RestoreEpochRun{}, false, err
+	}
+	rec, err := codec.JSON[restoreEpochRecord](1).Decode(raw)
+	if err != nil {
+		return auth.RestoreEpochRun{}, false, fmt.Errorf("%w: %s: %w", auth.ErrUndecodableRecord, keyDesc(restoreEpochKey()), err)
+	}
+	return auth.RestoreEpochRun{RunKey: rec.RunKey, Bumped: rec.Bumped, SignInsDeleted: rec.SignInsDeleted}, true, nil
+}
+
+// StageRestoreEpochRun stages r as the marker, expecting the committed bytes
+// it read (auth.RestoreEpochStore).
+func (s *Store) StageRestoreEpochRun(b *storage.Batch, r auth.RestoreEpochRun) error {
+	if err := needBatch(b, "StageRestoreEpochRun"); err != nil {
+		return err
+	}
+	if r.RunKey == "" {
+		return fmt.Errorf("%w: a restore-run marker needs a run key", auth.ErrBadInput)
+	}
+	key := restoreEpochKey()
+	cur, err := s.committed(key)
+	if err != nil {
+		return err
+	}
+	raw, err := codec.JSON[restoreEpochRecord](1).Encode(restoreEpochRecord{RunKey: r.RunKey, Bumped: r.Bumped, SignInsDeleted: r.SignInsDeleted})
+	if err != nil {
+		return fmt.Errorf("authstore: encode restore-run marker: %w", err)
+	}
+	return s.set(b, key, cur, raw)
+}
+
 // ---------------------------------------------------------------------------
 // API keys.
 
@@ -1354,6 +1401,38 @@ func (s *Store) DeleteOneTime(b *storage.Batch, kind auth.OneTimeKind, id string
 	return fmt.Errorf("%w: one-time token %s/%s", auth.ErrNotFound, kind, id)
 }
 
+// PutOneTime stages t over the token of t.Kind whose public ID is t.ID: the
+// stored secret hash is kept, the rest is t's, and the write expects the bytes
+// it read, so a concurrent take or rewrite conflicts the commit.
+func (s *Store) PutOneTime(b *storage.Batch, t *auth.OneTimeToken) error {
+	if err := needBatch(b, "PutOneTime"); err != nil {
+		return err
+	}
+	if t == nil {
+		return fmt.Errorf("%w: nil one-time token", auth.ErrBadInput)
+	}
+	if _, ok := kindPrefix(t.Kind); !ok || t.ID == "" {
+		return fmt.Errorf("%w: one-time token %s/%s", auth.ErrNotFound, t.Kind, t.ID)
+	}
+	prefix := keys.Prefix(keys.Str(segOneTime), keys.Str(string(t.Kind)))
+	for kv, err := range s.ks.ScanPrefix(context.Background(), prefix) {
+		if err != nil {
+			return fmt.Errorf("%w: scan one-time tokens: %w", auth.ErrStoreUnavailable, err)
+		}
+		rec, err := decodeOneTime(kv.Value)
+		if err != nil || rec.ID != t.ID {
+			continue
+		}
+		kv = kv.Clone()
+		raw, err := codec.JSON[oneTimeRecord](1).Encode(oneTimeRecord{OneTimeToken: *t, Hash: rec.Hash})
+		if err != nil {
+			return fmt.Errorf("authstore: encode one-time token: %w", err)
+		}
+		return s.set(b, kv.Key, kv.Value, raw)
+	}
+	return fmt.Errorf("%w: one-time token %s/%s", auth.ErrNotFound, t.Kind, t.ID)
+}
+
 // ---------------------------------------------------------------------------
 // External identities and the invite allow-list.
 
@@ -1517,42 +1596,96 @@ func (s *Store) InviteAllowed(ctx context.Context, email string) (bool, error) {
 // ---------------------------------------------------------------------------
 // Merge.
 
-// StageMerge rewrites the owner of every record of plan from plan.Source to
-// plan.Target. Each row's write is derived from the bytes the plan read
-// (row.Seen) and carries Expect(key, row.Seen), so a record changed since the
-// plan was built fails the commit with storage.ErrConflict (DATA10-9). An
-// identity row's ID is "<provider>/<subject>"; an allow-list row (no owner)
-// is only expected unchanged.
-func (s *Store) StageMerge(b *storage.Batch, plan auth.UserMergePlan) error {
+// MergeRows reads the records a merge of source moves: every API key and
+// linked sign-in it owns, and the allow-list row of its e-mail address when
+// one exists, each with the stored bytes (the Expect value StageMerge
+// checks). Keys come first, then identities, then the allow-list row, each in
+// key order. Only the API-key and identity rows are re-owned; the allow-list
+// row has no owner and is pinned unchanged.
+func (s *Store) MergeRows(ctx context.Context, source auth.UserID) ([]auth.MergeRow, error) {
+	if source == "" {
+		return nil, fmt.Errorf("%w: a merge needs a source user", auth.ErrBadInput)
+	}
+	u, err := s.GetUser(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	var rows []auth.MergeRow
+	for k, err := range s.ScanAPIKeys(ctx, source) {
+		if err != nil {
+			return nil, err
+		}
+		raw, err := s.get(ctx, apiKeyKey(k.ID))
+		if errors.Is(err, auth.ErrNotFound) {
+			continue // deleted since the index row was read
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, auth.MergeRow{Kind: auth.MergeAPIKey, ID: k.ID, Seen: raw})
+	}
+	for id, err := range s.ScanIdentities(ctx, source) {
+		if err != nil {
+			return nil, err
+		}
+		raw, err := s.get(ctx, identityKey(id.Provider, id.Subject))
+		if errors.Is(err, auth.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, auth.MergeRow{Kind: auth.MergeIdentity, ID: id.Provider + "/" + id.Subject, Seen: raw})
+	}
+	if fold := auth.NormalizeEmail(u.Email); fold != "" {
+		raw, err := s.get(ctx, allowKey(fold))
+		switch {
+		case errors.Is(err, auth.ErrNotFound):
+		case err != nil:
+			return nil, err
+		default:
+			rows = append(rows, auth.MergeRow{Kind: auth.MergeInviteAllow, ID: fold, Seen: raw})
+		}
+	}
+	return rows, nil
+}
+
+// StageMerge rewrites the owner of every row from source to target. Each
+// row's write is derived from the bytes the plan read (row.Seen) and carries
+// Expect(key, row.Seen), so a record changed since MergeRows read it fails the
+// commit with storage.ErrConflict (DATA10-9). An identity row's ID is
+// "<provider>/<subject>"; an allow-list row (no owner) is only expected
+// unchanged.
+func (s *Store) StageMerge(b *storage.Batch, source, target auth.UserID, rows []auth.MergeRow) error {
 	if err := needBatch(b, "StageMerge"); err != nil {
 		return err
 	}
-	if plan.Source == "" || plan.Target == "" || plan.Source == plan.Target {
+	if source == "" || target == "" || source == target {
 		return fmt.Errorf("%w: a merge needs two distinct users", auth.ErrBadInput)
 	}
-	if err := s.ownerPresent(b, plan.Target); err != nil {
+	if err := s.ownerPresent(b, target); err != nil {
 		return fmt.Errorf("%w: %w", auth.ErrBadInput, err)
 	}
-	for _, row := range plan.Rows {
-		if err := s.mergeRow(b, plan, row); err != nil {
+	for _, row := range rows {
+		if err := s.mergeRow(b, source, target, row); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.MergeRow) error {
+func (s *Store) mergeRow(b *storage.Batch, source, target auth.UserID, row auth.MergeRow) error {
 	switch row.Kind {
 	case auth.MergeAPIKey:
 		rec, err := decodeKey(row.ID, row.Seen)
 		if err != nil {
 			return err
 		}
-		if rec.Owner != plan.Source {
+		if rec.Owner != source {
 			return fmt.Errorf("%w: apikey %s is not the source user's", auth.ErrBadInput, row.ID)
 		}
 		next := *rec
-		next.Owner = plan.Target
+		next.Owner = target
 		next.Version++
 		raw, err := codec.JSON[keyRecord](1).Encode(next)
 		if err != nil {
@@ -1561,10 +1694,10 @@ func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.Mer
 		if err := s.set(b, apiKeyKey(row.ID), row.Seen, raw); err != nil {
 			return err
 		}
-		if err := s.delCommitted(b, apiKeyUserKey(plan.Source, row.ID)); err != nil {
+		if err := s.delCommitted(b, apiKeyUserKey(source, row.ID)); err != nil {
 			return err
 		}
-		return s.set(b, apiKeyUserKey(plan.Target, row.ID), nil, []byte{})
+		return s.set(b, apiKeyUserKey(target, row.ID), nil, []byte{})
 	case auth.MergeIdentity:
 		provider, subject, ok := strings.Cut(row.ID, "/")
 		if !ok || provider == "" || subject == "" {
@@ -1574,11 +1707,11 @@ func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.Mer
 		if err != nil {
 			return err
 		}
-		if id.UserID != plan.Source || id.Provider != provider || id.Subject != subject {
+		if id.UserID != source || id.Provider != provider || id.Subject != subject {
 			return fmt.Errorf("%w: identity %s is not the source user's", auth.ErrBadInput, row.ID)
 		}
 		next := *id
-		next.UserID = plan.Target
+		next.UserID = target
 		raw, err := codec.JSON[auth.ExternalIdentity](1).Encode(next)
 		if err != nil {
 			return fmt.Errorf("authstore: encode identity: %w", err)
@@ -1586,10 +1719,10 @@ func (s *Store) mergeRow(b *storage.Batch, plan auth.UserMergePlan, row auth.Mer
 		if err := s.set(b, identityKey(provider, subject), row.Seen, raw); err != nil {
 			return err
 		}
-		if err := s.delCommitted(b, identityUserKey(plan.Source, provider, subject)); err != nil {
+		if err := s.delCommitted(b, identityUserKey(source, provider, subject)); err != nil {
 			return err
 		}
-		return s.set(b, identityUserKey(plan.Target, provider, subject), nil, []byte{})
+		return s.set(b, identityUserKey(target, provider, subject), nil, []byte{})
 	case auth.MergeInviteAllow:
 		b.Bind(s.ks)
 		return b.Expect(s.ks, allowKey(auth.NormalizeEmail(row.ID)), row.Seen)

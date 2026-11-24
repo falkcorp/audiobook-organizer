@@ -59,7 +59,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	}
 	authH.SetGuestAccessRevoker(s.revokeGuestAccess)
 	// Per-guest service token: revoked on deactivation, not on an email change.
-	userH.SetGuestTokenRevoker(s.revokeGuestServiceTokenAsync)
+	userH.SetGuestTokenRevoker(s.RevokeGuestKeyForAccount)
 
 	s.wireAuthRoutes(api, authMiddleware, authH, apiKeyH, oauthH, userH)
 
@@ -755,8 +755,9 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 
 	// Admin debug API: one-off field fixes of book / book_file rows with a
 	// preview, an audit row and an undo. The reads sit behind adminRole (open
-	// with authentication off); Register puts RequireAdmin on the writes
-	// itself, so they answer 401 in that mode (wire_admin_role.go).
+	// with authentication off); the writes sit behind the
+	// always-authenticated gate, so they answer 401 in that mode
+	// (wire_admin_role.go).
 	// Typed-nil guard as above: a nil *activity.Service boxed into the
 	// interface would pass the handler's nil check (apply refuses with 503
 	// when there is no audit log).
@@ -764,7 +765,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 	if s.activityService != nil {
 		adminDebugActivity = s.activityService
 	}
-	for _, rt := range admindebug.New(s.storeForWiring(), adminDebugActivity).Register(protected, s.adminRole()) {
+	for _, rt := range admindebug.New(s.storeForWiring(), adminDebugActivity).Register(protected, s.adminRole(), s.adminGate(adminRouteAlwaysAuthenticated)) {
 		kind := adminRouteReadOnly
 		if rt.Writes {
 			kind = adminRouteAlwaysAuthenticated

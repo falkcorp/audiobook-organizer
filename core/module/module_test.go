@@ -50,15 +50,15 @@ func TestIDValid(t *testing.T) {
 	}
 }
 
-func newTestRegistrar(t *testing.T, legacyGin bool) *Registrar {
+func newTestRegistrar(t *testing.T) *Registrar {
 	t.Helper()
 	router := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
 	return NewRegistrar(RegistrarConfig{Context: t.Context(), Deps: Deps{Module: "batcave"},
-		HTTP: router.ModuleGroup("batcave"), LegacyAuthGin: legacyGin})
+		HTTP: router.ModuleGroup("batcave")})
 }
 
 func TestRegistrar_RecordsAndCloses(t *testing.T) {
-	r := newTestRegistrar(t, false)
+	r := newTestRegistrar(t)
 	start := func(context.Context) error { return nil }
 	r.Hook(Hook{Name: "batcave.signal", Start: start})
 	r.Worker(Worker{Name: "patrol", Run: func(ctx context.Context) error { <-ctx.Done(); return nil }, Policy: DegradeOnExit})
@@ -121,9 +121,8 @@ func TestRegistrar_Refusals(t *testing.T) {
 		"auth method owner":        {func(r *Registrar) { r.AuthMethod(auth.MethodSpec{Method: "batcave.cowl", OwnerVerifier: true}) }, ErrAuthMethod},
 		"auth method foreign name": {func(r *Registrar) { r.AuthMethod(auth.MethodSpec{Method: "arkham.cowl"}) }, ErrAuthMethod},
 		"auth method bare id":      {func(r *Registrar) { r.AuthMethod(auth.MethodSpec{Method: "batcave."}) }, ErrAuthMethod},
-		"legacy gin not allowed":   {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Auth: httpapi.LegacyAuthGin}) }, ErrLegacyAuth},
 		"legacy auth unset":        {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler()}) }, ErrLegacyAuth},
-		"legacy auth unknown":      {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Auth: httpapi.LegacyAuthGin + 1}) }, ErrLegacyAuth},
+		"legacy auth unknown":      {func(r *Registrar) { r.MountLegacy(httpapi.LegacyMount{Auth: httpapi.LegacyAuthCore + 1}) }, ErrLegacyAuth},
 		"worker zero policy":       {func(r *Registrar) { r.Worker(Worker{Name: "patrol", Run: func(context.Context) error { return nil }}) }, ErrWorkerPolicy},
 		"worker without run":       {func(r *Registrar) { r.Worker(Worker{Name: "patrol", Policy: StopAppOnExit}) }, ErrInvalidRegistration},
 		"hook outside namespace":   {func(r *Registrar) { r.Hook(Hook{Name: "arkham.cells"}) }, ErrInvalidRegistration},
@@ -136,18 +135,12 @@ func TestRegistrar_Refusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			r := newTestRegistrar(t, false)
+			r := newTestRegistrar(t)
 			tc.call(r)
 			if err := r.Err(); !errors.Is(err, tc.want) {
 				t.Fatalf("Err = %v, want %v", err, tc.want)
 			}
 		})
-	}
-	// The one module LegacyAuthGinUntil names may use LegacyAuthGin.
-	r := newTestRegistrar(t, true)
-	r.MountLegacy(httpapi.LegacyMount{Auth: httpapi.LegacyAuthGin})
-	if err := r.Err(); err != nil {
-		t.Fatalf("LegacyAuthGin for the named module: %v", err)
 	}
 }
 

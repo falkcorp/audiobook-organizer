@@ -45,7 +45,7 @@ func aggCallerInnerStoreFrameForTest() string {
 // goroutine stack never ends at a package boundary, so the "every frame in the
 // budget is database" fallback is effectively unreachable. The realistic
 // degenerate case in production is a bare `go store.UpdateBookFile(...)`, which
-// reports "runtime.goexit:0" — an honest bucket meaning "no in-repo caller on
+// reports "runtime.goexit:0" — an accurate bucket meaning "no in-repo caller on
 // the stack" rather than a filtered-away blank.
 func TestAggregateCallerWalksPastDatabaseIntoTheRuntime(t *testing.T) {
 	got := aggregateCaller()

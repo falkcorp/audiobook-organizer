@@ -119,7 +119,7 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		}
 		// P4d (06 §6.5.1): the config store reads its DB layer once.
 		if k.cfgBoot != nil {
-			if err := k.phase(phaseP4d, func() error { return k.attachCoreConfig(ctx) }); err != nil {
+			if err := k.phase(phaseP4d, func() error { return k.p4d(ctx) }); err != nil {
 				return nil, err
 			}
 		}
@@ -130,6 +130,11 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 	// and records no phase, so the phase label set stays 06 §6.9's.
 	if !describe {
 		if err := k.runBootSteps(ctx, fakeMigrationSteps()); err != nil {
+			return nil, err
+		}
+	}
+	if f := k.cfg.beforeP5; f != nil && !describe {
+		if err := f(k); err != nil {
 			return nil, err
 		}
 	}
@@ -167,6 +172,11 @@ func boot(ctx context.Context, c Config, describe bool) (_ *Kernel, err error) {
 		}
 		if describe {
 			return nil
+		}
+		if k.identityBootDeclared() {
+			if err := k.identityConsume(ctx); err != nil {
+				return err
+			}
 		}
 		return k.buildTasks(ctx)
 	}); err != nil {
@@ -314,14 +324,41 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 	}
 	k.router = httpapi.NewRouter(httpapi.Options{
 		ServerName: serviceName,
-		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.cfg.AppID + "_session"},
+		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.openAPICookieName()},
 	}, httpapi.Deps{Log: k.coreLog("http"), Metrics: httpScope, MeterProvider: p.MeterProvider(),
 		TracerProvider: p.TracerProvider(), Propagator: p.Propagator(), Redactor: k.redactor})
 	// Core's group claims /api/core/ now, before any module registers, so a
 	// module's legacy prefix over it collides at P7 (05-http-api §4.9). Core
 	// routes join it as their packages land.
 	k.router.CoreGroup()
+	// The identity boot's services (identity_p5.go), after the Provider and the
+	// router they hang on. Describe opens no store and builds none.
+	if k.identityBootDeclared() {
+		if describe {
+			return k.describeIdentity()
+		}
+		if err := k.buildIdentityServices(ctx); err != nil {
+			return err
+		}
+		return k.mountIdentity(ctx)
+	}
 	return nil
+}
+
+// openAPICookieName is the session cookie the OpenAPI documents' sessionCookie
+// scheme names. An app that declared the identity boot has the name auth sets
+// the cookie under (core.auth.session.cookie_name, read through the same
+// reader auth's Settings come from, so the document and the Set-Cookie cannot
+// drift); every other boot, and Describe, which opens no config store and so
+// cannot see an operator-set name, has the <AppID>_session default the scheme
+// always carried.
+func (k *Kernel) openAPICookieName() string {
+	if k.ident != nil && k.ident.settings != nil {
+		if name := k.ident.settings().SessionCookie; name != "" {
+			return name
+		}
+	}
+	return k.cfg.AppID + "_session"
 }
 
 // buildLogging builds the App's log.Logging from core.log, or adopts
@@ -555,6 +592,9 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		cctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
 		defer cancel()
 		var errs []error
+		// The account resolver refuses first: a sign-in that starts from here
+		// is refused, not resolved against stores that are closing.
+		k.unbindAccountResolver()
 		// Whatever Run (or coretest) started stops first, scheduler before
 		// executor before the audit writer (06 §6.5.2), while storage is open;
 		// a no-op for a boot that started none, or when Run's stop order
@@ -565,6 +605,11 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		if err := k.stopCoreServices(cctx, atLeastFloor(deadline)); err != nil {
 			errs = append(errs, err)
 		}
+		// The events bus drains after the executor and before the journal and
+		// the store its handlers read; a no-op when Run's stop already did.
+		if err := k.closeEvents(cctx, deadline); err != nil {
+			errs = append(errs, err)
+		}
 		if k.provider != nil {
 			if err := k.provider.Shutdown(cctx); err != nil {
 				errs = append(errs, fmt.Errorf("kernel: metrics shutdown: %w", err))
@@ -572,6 +617,10 @@ func (k *Kernel) closeCore(ctx context.Context, deadline time.Time) error {
 		}
 		if k.store != nil {
 			k.awaitLateStops(cctx)
+		}
+		// The journal component's last anchor reads the store.
+		if err := k.closeIdentity(cctx); err != nil {
+			errs = append(errs, err)
 		}
 		if err := k.closeStorage(); err != nil {
 			errs = append(errs, err)

@@ -4,6 +4,8 @@
 // last-edited: 2026-11-19
 
 import { expect, Page } from '@playwright/test';
+import { BOOKS_PERMISSIONS } from '../../../src/generated/permissions';
+import { coreAuthMockInstalled } from './mockCoreAuth';
 
 // Re-export setup mode helpers for convenience
 export {
@@ -481,12 +483,16 @@ export async function setupMockApiRoutes(
   });
 
   // Set up route-based interception for ALL API calls
-  // This persists across page navigations
-  await page.route('**/api/v1/**', async (route) => {
+  // This persists across page navigations. Core's identity routes live under
+  // /api/core/v1 (F4-08 B8), so the pattern covers both prefixes.
+  await page.route(/\/api\/(core\/)?v1\//, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const pathname = url.pathname;
     const method = request.method();
+    if (pathname.startsWith('/api/core/') && coreAuthMockInstalled.has(page)) {
+      return route.fallback();
+    }
     console.log(`[Mock API] ${method} ${pathname}`);
 
     /**
@@ -542,24 +548,43 @@ export async function setupMockApiRoutes(
       return route.fulfill(jsonResponse({ status: 'ok' }));
     }
 
-    // Auth endpoints
-    if (pathname === '/api/v1/auth/status' && method === 'GET') {
-      // api.getAuthStatus reads `body.data`; without the envelope AuthContext
-      // throws ("Cannot read properties of undefined") and never initializes.
-      const status = {
-        has_users: mockState.auth.has_users,
-        auth_enabled: mockState.auth.auth_enabled,
-        requires_auth: mockState.auth.requires_auth,
-        bootstrap_ready: mockState.auth.bootstrap_ready,
-      };
-      return route.fulfill(jsonResponse({ ...status, data: status }));
+    // Auth endpoints: core's native identity routes (F4-08 B8), bare bodies, Problem errors.
+    const coreProblem = (status: number, code: string, detail: string) => ({
+      status,
+      contentType: 'application/problem+json',
+      body: JSON.stringify({ type: 'about:blank', title: detail, status, code, detail }),
+    });
+    const coreUser = (u: MockAuthUser) => ({
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      roles: u.roles,
+      status: u.status,
+      created_at: u.created_at,
+      updated_at: u.created_at,
+      email_verified: false,
+      has_password: true,
+      password_reset_required: false,
+      sign_in_restricted: false,
+    });
+
+    if (pathname === '/api/core/v1/auth/status' && method === 'GET') {
+      return route.fulfill(
+        jsonResponse({
+          has_users: mockState.auth.has_users,
+          auth_disabled: !mockState.auth.requires_auth,
+          setup_required: mockState.auth.bootstrap_ready,
+        })
+      );
     }
 
-    if (pathname === '/api/v1/auth/setup' && method === 'POST') {
+    if (pathname === '/api/core/v1/auth/providers' && method === 'GET') {
+      return route.fulfill(jsonResponse({ providers: [] }));
+    }
+
+    if (pathname === '/api/core/v1/auth/setup' && method === 'POST') {
       if (mockState.auth.has_users) {
-        return route.fulfill(
-          jsonResponse({ error: 'initial setup already completed' }, 409)
-        );
+        return route.fulfill(coreProblem(403, 'setup_closed', 'initial setup already completed'));
       }
 
       const body =
@@ -572,10 +597,7 @@ export async function setupMockApiRoutes(
       const password = body.password || '';
       if (!username || password.length < 8) {
         return route.fulfill(
-          jsonResponse(
-            { error: 'username and password (min 8 chars) are required' },
-            400
-          )
+          coreProblem(400, 'bad_request', 'username and password (min 8 chars) are required')
         );
       }
 
@@ -594,15 +616,10 @@ export async function setupMockApiRoutes(
       mockState.auth.requires_auth = true;
       mockState.auth.bootstrap_ready = false;
 
-      return route.fulfill(
-        jsonResponse({
-          message: 'admin user created',
-          user: mockState.auth.currentUser,
-        }, 201)
-      );
+      return route.fulfill(jsonResponse(coreUser(mockState.auth.currentUser), 201));
     }
 
-    if (pathname === '/api/v1/auth/login' && method === 'POST') {
+    if (pathname === '/api/core/v1/auth/login' && method === 'POST') {
       const body =
         (request.postDataJSON() as { username?: string; password?: string }) ||
         {};
@@ -610,7 +627,7 @@ export async function setupMockApiRoutes(
       const password = body.password || '';
       if (!username || !password) {
         return route.fulfill(
-          jsonResponse({ error: 'username and password are required' }, 400)
+          coreProblem(400, 'bad_request', 'username and password are required')
         );
       }
       if (
@@ -618,7 +635,7 @@ export async function setupMockApiRoutes(
         password !== mockState.auth.login_password
       ) {
         return route.fulfill(
-          jsonResponse({ error: 'invalid credentials' }, 401)
+          coreProblem(401, 'invalid_credentials', 'invalid credentials')
         );
       }
 
@@ -656,24 +673,30 @@ export async function setupMockApiRoutes(
       mockState.auth.bootstrap_ready = false;
 
       return route.fulfill(
-        jsonResponse({
-          user: mockState.auth.currentUser,
-          session,
-        })
+        jsonResponse({ public_id: sessionId, expires_at: session.expires_at })
       );
     }
 
-    if (pathname === '/api/v1/auth/me' && method === 'GET') {
-      if (!mockState.auth.requires_auth || mockState.auth.currentUser) {
-        return route.fulfill(jsonResponse({ user: mockState.auth.currentUser }));
+    if (pathname === '/api/core/v1/me' && method === 'GET') {
+      if (mockState.auth.currentUser) {
+        // A signed-in admin holds every books scope (the list /me reports). Core's /me always
+        // names a user: with nobody signed in it answers 401, never a null user.
+        return route.fulfill(
+          jsonResponse({
+            user: coreUser(mockState.auth.currentUser),
+            permissions: Object.values(BOOKS_PERMISSIONS),
+            method: 'session',
+            owner_verified: false,
+          })
+        );
       }
-      return route.fulfill(jsonResponse({ error: 'not authenticated' }, 401));
+      return route.fulfill(coreProblem(401, 'authentication_required', 'sign in'));
     }
 
-    if (pathname === '/api/v1/auth/logout' && method === 'POST') {
+    if (pathname === '/api/core/v1/auth/logout' && method === 'POST') {
       mockState.auth.currentUser = null;
       mockState.auth.sessions = [];
-      return route.fulfill(jsonResponse({ message: 'logged out' }));
+      return route.fulfill({ status: 204 });
     }
 
     if (pathname === '/api/v1/auth/sessions' && method === 'GET') {

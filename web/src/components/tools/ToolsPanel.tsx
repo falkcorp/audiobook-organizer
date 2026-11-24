@@ -15,6 +15,7 @@ import {
   Stack,
 } from '@mui/material';
 import { getTools, installTool, ToolStatus } from '../../services/api';
+import { useSignInRequiredForAction } from '../../hooks/useSignInRequiredForAction';
 
 interface ToolsPanelProps {
   mode: 'wizard' | 'settings';
@@ -30,6 +31,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
   const [tools, setTools] = useState<ToolStatus[]>([]);
   const [installing, setInstalling] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const gate = useSignInRequiredForAction();
 
   useEffect(() => {
     getTools()
@@ -44,7 +46,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
       const updated = await getTools();
       setTools(updated);
     } catch (e: unknown) {
-      setError((e as Error).message);
+      if (!gate.refuse(e)) setError((e as Error).message);
     } finally {
       setInstalling((prev) => ({ ...prev, [name]: false }));
     }
@@ -54,6 +56,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
 
   return (
     <Stack spacing={2}>
+      {gate.notice}
       {tools.map((tool) => (
         <Card key={tool.name} variant="outlined">
           <CardContent>
@@ -100,7 +103,7 @@ export function ToolsPanel({ mode: _mode }: ToolsPanelProps) {
                 size="small"
                 variant="contained"
                 onClick={() => handleInstall(tool.name)}
-                disabled={installing[tool.name]}
+                disabled={installing[tool.name] || gate.blocked}
                 startIcon={installing[tool.name] ? <CircularProgress size={14} /> : undefined}
                 sx={{ mt: 1 }}
               >

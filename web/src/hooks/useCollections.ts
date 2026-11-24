@@ -5,6 +5,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { BOOKS_PERMISSIONS } from '../generated/permissions';
 import { isAbortError } from '../utils/apiFetch';
 import {
   type Collection,
@@ -21,7 +22,7 @@ import {
   updateCollection,
 } from '../services/collectionApi';
 
-export const COLLECTIONS_MANAGE_PERMISSION = 'collections.manage';
+export const COLLECTIONS_MANAGE_PERMISSION = BOOKS_PERMISSIONS.COLLECTIONS_MANAGE;
 
 /**
  * Whether the caller may write collections. Advisory (every route enforces its

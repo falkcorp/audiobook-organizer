@@ -49,11 +49,10 @@ const booksLevelStepVersion = database.LegacyCap + 3
 // (cutover.Flip.Spec). Without it those opens refuse a flipped store as written
 // by a newer build.
 func StandaloneSpec(base storage.Spec) storage.Spec {
-	// Only the level step and the claims are applied (Flip.Spec reads nothing
+	// Only the level steps and the claims are applied (Flip.Spec reads nothing
 	// else): the data steps need M2's inputs, which a standalone open has none
-	// of and never runs.
-	level := cutover.BooksLevelStep(booksLevelStepVersion, cutover.BooksCutoverLevel)
-	return cutover.Flip{Level: level}.Spec(base)
+	// of and never runs, so this is the shape alone (cutover.NewFlipShape).
+	return cutover.NewFlipShape(flipShapeOptions()).Spec(base)
 }
 
 // StandaloneOptions is o with the flip's storage declarations added for an open
@@ -93,7 +92,7 @@ func (m *booksModule) declaresFlip() bool { return m.dbPath != "" }
 func (m *booksModule) storageSpec() storage.Spec {
 	spec := database.BooksSpec(m.beforeMigration)
 	if m.declaresFlip() {
-		spec = m.flipSteps(module.Importers{}).Spec(spec)
+		spec = cutover.NewFlipShape(flipShapeOptions()).Spec(spec)
 	}
 	return spec
 }
@@ -105,7 +104,23 @@ func (m *booksModule) cutoverSteps() func(module.Importers) []datamigrate.DataMi
 	if !m.declaresFlip() {
 		return nil
 	}
-	return func(imp module.Importers) []datamigrate.DataMigration { return m.flipSteps(imp).Data }
+	return func(imp module.Importers) []datamigrate.DataMigration {
+		f, err := m.flipSteps(imp)
+		if err != nil {
+			// Manifest.Cutover has no error return. The only error NewFlip has is
+			// IdentityStep's, and the identity config's own (m3Config: importers
+			// that cannot stage the step), which need FlipOptions.Identity: set only
+			// while identityOn. An error there is not a panic (a boot must refuse,
+			// not crash a Describe or an offline plan): it is recorded, the list is
+			// empty, and Register refuses the boot with it (cutoverErr). Options has
+			// already built and checked the declaration, so what reaches here is the
+			// importers the kernel handed, which are its own late forwarders and
+			// always carry the reads M3 needs; a failure is a wiring fault.
+			m.cutoverErr.Store(&err)
+			return nil
+		}
+		return f.Data
+	}
 }
 
 // rewriteStep is Manifest.Rewrite (M8): nil unless the flip is declared.
@@ -113,15 +128,51 @@ func (m *booksModule) rewriteStep() *storage.RewriteStep {
 	if !m.declaresFlip() {
 		return nil
 	}
-	r := m.flipSteps(module.Importers{}).Rewrite
+	r := cutover.NewFlipShape(flipShapeOptions()).Rewrite
 	return &r
 }
 
-// flipSteps is F3's list over imp: the one value the manifest registers and the
-// cutover-list cell validates. Zero importers are for the parts that carry no
-// importer (the level step, M8).
-func (m *booksModule) flipSteps(imp module.Importers) cutover.Flip {
-	return cutover.NewFlip(imp.Config, imp.Secrets, m.flipOptions(imp))
+// flipSteps is the cutover list over imp: the one value the manifest registers
+// and the cutover-list cell validates. The parts that carry no importer (the
+// level steps, M8) come from the same value's pure shape, flipShapeOptions, so the
+// manifest can build them with zero importers.
+func (m *booksModule) flipSteps(imp module.Importers) (cutover.Flip, error) {
+	fo := m.flipOptions(imp)
+	if fo.Identity != nil {
+		d, err := m.identityDecl()
+		if err != nil {
+			return cutover.Flip{}, err
+		}
+		cfg, err := d.m3Config(imp)
+		if err != nil {
+			return cutover.Flip{}, err
+		}
+		fo.Identity.Config = cfg
+	}
+	return cutover.NewFlip(imp.Config, imp.Secrets, fo)
+}
+
+// identityDecl is the identity declaration: the one Options built and checked, or
+// a fresh one for a module that never went through Options (Describe, the offline
+// plan).
+func (m *booksModule) identityDecl() (*identityDecl, error) {
+	if m.idw != nil {
+		return m.idw.decl, nil
+	}
+	return buildIdentityDecl()
+}
+
+// flipShapeOptions is the part of flipOptions the shape reads: the level step's
+// version and the identity switch. Identity is nil while identityOn is false (it
+// is, until B10g), so the list is F3's flip alone (books.level-1, M2, M8). With
+// it on the shape adds books.level-2 and the retired identity claims; M3's own
+// config is the manifest's (identityFlipOptions), which the shape does not read.
+func flipShapeOptions() cutover.FlipOptions {
+	fo := cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion}
+	if identityOn() {
+		fo.Identity = &cutover.IdentityFlipOptions{}
+	}
+	return fo
 }
 
 // flipOptions are M2's inputs: HEAD's state directory, database path and
@@ -141,5 +192,7 @@ func (m *booksModule) flipOptions(imp module.Importers) cutover.FlipOptions {
 	if imp.OperatorSet != nil {
 		opts.OperatorSet = func(p string) (string, bool) { return imp.OperatorSet(coreconfig.Path(p)) }
 	}
-	return cutover.FlipOptions{LevelStepVersion: booksLevelStepVersion, Config: opts}
+	fo := flipShapeOptions()
+	fo.Config = opts
+	return fo
 }

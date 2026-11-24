@@ -33,6 +33,13 @@ const (
 	OutcomeIndex     = "index-dropped"     // an idx: row, derived data core rebuilds in its own form
 	OutcomeRewritten = "journal-rewritten" // a merge journal with its invite tokens hashed
 	OutcomeReported  = "reported"          // something the step names in its log: an unknown atom, an odd status
+	// OutcomeGuestPolicyCarried counts the guestpolicy: rows staged for HEAD
+	// grants whose sync had added the address to the Cloudflare guest policy.
+	OutcomeGuestPolicyCarried = "guest-policy-carried"
+	// OutcomeInviteAcceptCarried counts the acceptedinvite: rows staged for HEAD
+	// invites used inside AcceptedInviteWindow: the accepts HEAD's Users page still
+	// listed on the day of the flip.
+	OutcomeInviteAcceptCarried = "invite-accept-carried"
 )
 
 // How the step runs (05-authn §11; 05-storage §5S.3.13).
@@ -77,10 +84,18 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		return m.stepIdentity(ctx, kv, w)
 	case strings.HasPrefix(key, prefixInviteAllow):
 		return m.stepInviteAllow(ctx, kv, w)
-	case strings.HasPrefix(key, prefixInvite), strings.HasPrefix(key, prefixSession), key == bootstrapHashKey, key == bootstrapExpiresKey:
-		// Deleted by rule (ownership table rows 4a, 6 and 8): an open invite is
-		// re-sent, a web user signs in once, and core auth mints its own
-		// bootstrap token.
+	case strings.HasPrefix(key, prefixInvite):
+		// Deleted by rule (ownership table row 4a): an open invite is re-sent. An
+		// invite that was USED inside the window first leaves books' accepted-invite
+		// row (inviteaccept.go), the one thing of it HEAD's Users page still shows.
+		if err := m.carryInviteAccept(w, key, kv.Value); err != nil {
+			return err
+		}
+		w.Count(OutcomeDeleted)
+		return w.Delete(kv.Key)
+	case strings.HasPrefix(key, prefixSession), key == bootstrapHashKey, key == bootstrapExpiresKey:
+		// Deleted by rule (ownership table rows 6 and 8): a web user signs in once,
+		// and core auth mints its own bootstrap token.
 		w.Count(OutcomeDeleted)
 		return w.Delete(kv.Key)
 	case strings.HasPrefix(key, prefixUser), strings.HasPrefix(key, prefixRole):
@@ -114,11 +129,15 @@ func (m *Migration) begin(ctx context.Context, w *datamigrate.StepWriter) error 
 	m.chunkRoles = map[rbac.RoleName][]rbac.Permission{}
 	m.chunkNames = map[string]string{}
 	m.chunkPulled = map[string]struct{}{}
+	m.chunkSystem = systemUsers{}
 	outcomes, err := m.pullRoles(ctx, w)
 	if err != nil {
 		return err
 	}
 	if err := m.pullUsers(ctx, w, outcomes); err != nil {
+		return err
+	}
+	if err := m.pullSystemOwned(ctx, w); err != nil {
 		return err
 	}
 	if err := m.rewriteOutside(ctx, w); err != nil {
@@ -285,12 +304,15 @@ func containsRole(rs []rbac.RoleName, r rbac.RoleName) bool {
 // ---- users ----
 
 // pullUsers imports every user row of HEAD, deleting each row with its import.
+// The system user (systemuser.go) imports under core's ID for it; the rows that
+// make it ambiguous are blockers, decided before any user is staged.
 func (m *Migration) pullUsers(ctx context.Context, w *datamigrate.StepWriter, outcomes map[string]roleVerdict) error {
 	rows, err := m.scan(ctx, prefixUser)
 	if err != nil {
 		return err
 	}
 	b := w.Batch()
+	var entries []userEntry
 	for _, kv := range rows {
 		key := string(kv.Key)
 		m.chunkPulled[key] = struct{}{}
@@ -298,8 +320,18 @@ func (m *Migration) pullUsers(ctx context.Context, w *datamigrate.StepWriter, ou
 		if derr != nil {
 			return m.blocked(key, prefixUser, "the row does not decode: "+derr.Error(), fixHint)
 		}
+		entries = append(entries, userEntry{key: key, h: h})
+	}
+	m.chunkSystem = classifySystem(entries)
+	for _, e := range entries {
+		if reason, bad := m.chunkSystem.refusals[e.key]; bad {
+			return m.blocked(e.key, prefixUser, reason, fixHint)
+		}
+	}
+	for _, e := range entries {
+		key, h := e.key, e.h
 		roles, dropped := roleList(h.Roles, outcomes, m.seeds)
-		u, hash, reported := mapUser(h, roles)
+		u, hash, reported := m.chunkSystem.mapUser(h, roles)
 		fold := auth.FoldUsername(u.Username)
 		if other, dup := m.chunkNames[fold]; dup && fold != "" {
 			return m.blocked(key, prefixUser, "the importer rejects the row: the username is held by user "+other, fixHint)
@@ -307,7 +339,7 @@ func (m *Migration) pullUsers(ctx context.Context, w *datamigrate.StepWriter, ou
 		if err := m.cfg.Auth.ImportUser(b, &u, hash); err != nil {
 			return m.refused(err, key, prefixUser)
 		}
-		if err := w.Delete(kv.Key); err != nil {
+		if err := w.Delete([]byte(key)); err != nil {
 			return err
 		}
 		w.Count(OutcomeImported)
@@ -320,6 +352,51 @@ func (m *Migration) pullUsers(ctx context.Context, w *datamigrate.StepWriter, ou
 		if dropped > 0 {
 			w.Count(OutcomeReported)
 			m.log.Warn("m3: role list entries naming a quarantined or undefined role were dropped", "step", m.cfg.StepID, "user", h.ID, "dropped", dropped)
+		}
+	}
+	return nil
+}
+
+// pullSystemOwned imports, in the chunk that imports the system user, every key
+// and OAuth identity that names its HEAD ID, owned by the native ID. A later
+// chunk could not tell: the HEAD row is gone once this chunk commits, and the ID
+// it carried is the only thing that says the row belongs to it. HEAD cannot
+// authenticate such a key either (the owner's status is not active), so there
+// are few or none; each is still imported, never left naming a user that no
+// longer exists.
+func (m *Migration) pullSystemOwned(ctx context.Context, w *datamigrate.StepWriter) error {
+	from := m.chunkSystem.from
+	if from == "" || from == string(auth.SystemUserID) {
+		return nil
+	}
+	keys, err := m.scan(ctx, prefixKey)
+	if err != nil {
+		return err
+	}
+	for _, kv := range keys {
+		key := string(kv.Key)
+		h, derr := decodeKey(key, kv.Value)
+		if derr != nil || h.UserID != from {
+			continue // a row that does not decode is the step's to block, in order
+		}
+		m.chunkPulled[key] = struct{}{}
+		if err := m.importKey(ctx, kv, w, h, auth.SystemUserID); err != nil {
+			return err
+		}
+	}
+	idents, err := m.scan(ctx, prefixIdentity)
+	if err != nil {
+		return err
+	}
+	for _, kv := range idents {
+		key := string(kv.Key)
+		h, derr := decodeIdentity(key, kv.Value)
+		if derr != nil || h.UserID != from {
+			continue
+		}
+		m.chunkPulled[key] = struct{}{}
+		if err := m.importIdentity(ctx, kv, w, h, auth.SystemUserID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -362,22 +439,31 @@ func (m *Migration) roleLookup(ctx context.Context, name rbac.RoleName) ([]rbac.
 
 func (m *Migration) stepKey(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	key := string(kv.Key)
+	if _, ok := m.chunkPulled[key]; ok {
+		return nil // pullSystemOwned imported it with the system user
+	}
 	h, derr := decodeKey(key, kv.Value)
 	if derr != nil {
 		return m.blocked(key, prefixKey, "the row does not decode: "+derr.Error(), fixHint)
 	}
-	roles, ok, err := m.ownerRoles(ctx, auth.UserID(h.UserID))
+	return m.importKey(ctx, kv, w, h, auth.UserID(h.UserID))
+}
+
+// importKey imports key row kv, decoded as h, owned by owner.
+func (m *Migration) importKey(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter, h *headKey, owner auth.UserID) error {
+	key := string(kv.Key)
+	roles, ok, err := m.ownerRoles(ctx, owner)
 	switch {
 	case err != nil:
 		return err
 	case !ok:
 		return m.blocked(key, prefixKey, "the key's owner is not stored", fixHint)
 	}
-	owner, err := m.ownerPerms(ctx, roles, m.roleLookup)
+	ownerSet, err := m.ownerPerms(ctx, roles, m.roleLookup)
 	if err != nil {
 		return err
 	}
-	scopes, unknown, err := m.keyScopes(h.Scopes, owner)
+	scopes, unknown, err := m.scoper.Scopes(h.Scopes, ownerSet)
 	if err != nil {
 		return m.blocked(key, prefixKey, "the key's scopes are refused by the catalog", fixHint)
 	}
@@ -385,6 +471,7 @@ func (m *Migration) stepKey(ctx context.Context, kv storage.KV, w *datamigrate.S
 	if err != nil {
 		return m.blocked(key, prefixKey, err.Error(), fixHint)
 	}
+	k.Owner = owner
 	notes.unknown = unknown
 	if err := m.cfg.Auth.ImportAPIKey(w.Batch(), &k, hash); err != nil {
 		return m.refused(err, key, prefixKey)
@@ -407,6 +494,11 @@ func (m *Migration) reportKey(w *datamigrate.StepWriter, id string, n keyNotes) 
 		w.Count(OutcomeReported)
 		m.log.Warn("m3: a key names atoms outside the atom table; they grant nothing", "step", m.cfg.StepID, "key", id, "atoms", boundedAtoms(n.unknown))
 	}
+	if len(n.description) > 0 {
+		// The description is never in the line: it can hold anything.
+		w.Count(OutcomeReported)
+		m.log.Warn("m3: a key's description was normalized to fit core's rule", "step", m.cfg.StepID, "key", id, "changes", strings.Join(n.description, "; "))
+	}
 	if n.stamped {
 		m.log.Info("m3: a key with no expiry got the one-shot expiry stamp", "step", m.cfg.StepID, "key", id)
 	}
@@ -414,17 +506,28 @@ func (m *Migration) reportKey(w *datamigrate.StepWriter, id string, n keyNotes) 
 
 func (m *Migration) stepIdentity(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	key := string(kv.Key)
+	if _, ok := m.chunkPulled[key]; ok {
+		return nil // pullSystemOwned imported it with the system user
+	}
 	h, derr := decodeIdentity(key, kv.Value)
 	if derr != nil {
 		return m.blocked(key, prefixIdentity, "the row does not decode: "+derr.Error(), fixHint)
 	}
-	switch _, ok, err := m.ownerRoles(ctx, auth.UserID(h.UserID)); {
+	return m.importIdentity(ctx, kv, w, h, auth.UserID(h.UserID))
+}
+
+// importIdentity imports identity row kv, decoded as h, linked to owner.
+func (m *Migration) importIdentity(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter, h *headIdentity, owner auth.UserID) error {
+	key := string(kv.Key)
+	switch _, ok, err := m.ownerRoles(ctx, owner); {
 	case err != nil:
 		return err
 	case !ok:
 		return m.blocked(key, prefixIdentity, "the identity's user is not stored", fixHint)
 	}
-	if err := m.cfg.Auth.ImportIdentity(w.Batch(), mapIdentity(h)); err != nil {
+	id := mapIdentity(h)
+	id.UserID = owner
+	if err := m.cfg.Auth.ImportIdentity(w.Batch(), id); err != nil {
 		return m.refused(err, key, prefixIdentity)
 	}
 	if err := w.Delete(kv.Key); err != nil {
@@ -439,15 +542,20 @@ func (m *Migration) stepIdentity(ctx context.Context, kv storage.KV, w *datamigr
 // allow-list is not an identity.
 func (m *Migration) stepInviteAllow(ctx context.Context, kv storage.KV, w *datamigrate.StepWriter) error {
 	key := string(kv.Key)
-	if _, derr := decodeInviteGrant(kv.Value); derr != nil {
+	grant, derr := decodeInviteGrant(kv.Value)
+	if derr != nil {
 		m.log.Warn("m3: an invite allow-list row does not decode and is quarantined", "step", m.cfg.StepID, "reason", derr.Error())
 		return w.Quarantine(kv.Key, kv.Value, "the allow-list row does not decode: "+derr.Error())
 	}
-	switch err := m.cfg.Auth.ImportInviteAllow(w.Batch(), strings.TrimPrefix(key, prefixInviteAllow)); {
+	email := strings.TrimPrefix(key, prefixInviteAllow)
+	switch err := m.cfg.Auth.ImportInviteAllow(w.Batch(), email); {
 	case errors.Is(err, auth.ErrImportRejected):
 		m.log.Warn("m3: an invite allow-list row is refused by the importer and quarantined", "step", m.cfg.StepID)
 		return w.Quarantine(kv.Key, kv.Value, "the importer rejects the allow-list row")
 	case err != nil:
+		return err
+	}
+	if err := m.carryGuestPolicy(w, email, grant); err != nil {
 		return err
 	}
 	if err := w.Delete(kv.Key); err != nil {

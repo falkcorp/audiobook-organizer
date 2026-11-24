@@ -12,11 +12,12 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
-	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/updater"
@@ -24,8 +25,9 @@ import (
 
 // Options configure one process (06 §6.4.5). Zero values are valid defaults
 // unless noted. These are the R1 fields that need no storage (06 §6.4.10)
-// and F3's config lists, plus the shell's UI and UIOptions (F9-01); a field
-// whose package lands later (Authenticators, Auth, Adapters,
+// and F3's config lists, plus the shell's UI and UIOptions (F9-01) and the
+// identity flip's Authenticators and Auth (recorded here, read by no boot
+// phase until F4-08's wiring); a field whose package lands later (Adapters,
 // InterimBackends) arrives with it.
 type Options struct {
 	AppID string // app identifier, [a-z][a-z0-9]{1,15} (03 §3.6), e.g. "abo"
@@ -47,8 +49,11 @@ type Options struct {
 	// them (03 §3.6). Unprefixed top-level segments come from
 	// Manifest.LegacyPrefixes instead (FE2-11).
 	ReservedAPINamespaces []string
-	DisplayName           string // e.g. "Audiobook Organizer"
-	Version               string // the app's release version (the resource's service.version)
+	// DisplayName is the app's human name, e.g. "Audiobook Organizer". The
+	// kernel reports it as the app's name in GET /api/core/v1/modules; read
+	// only by an identity boot (IdentityBoot).
+	DisplayName string
+	Version     string // the app's release version (the resource's service.version)
 
 	// EnvPrefix is the prefix of every env name (05-config §1.3,
 	// [A-Z][A-Z0-9]{1,15}); default strings.ToUpper(AppID) (ABO: "ABO").
@@ -106,10 +111,67 @@ type Options struct {
 	Args []string
 	Env  []string
 
-	// LegacyAuthGinUntil names the one module whose LegacyMount may use
-	// httpapi.LegacyAuthGin (ABO: "books" in R1). R2's identity flip clears it
-	// and deletes the field. "" = no module may (SEC2-17).
-	LegacyAuthGinUntil module.ID
+	// Authenticators are the app's identity extensions (05-authn §3.3; ABO:
+	// internal/cfaccess), wired by the kernel with auth's extension
+	// registration. This compile-time list is the ONLY place a MethodSpec may
+	// be Interactive or set MayChangeCredentials, and the only place an
+	// OwnerVerifier may come from; modules register their methods with
+	// Registrar.AuthMethod, which refuses all three (SEC2-16). nil = none.
+	// Not read until F4-08's boot wiring.
+	Authenticators []auth.Extension // {Authenticator, Spec auth.MethodSpec, Order}
+
+	// AccountResolver is the late handle of the OIDC account resolver, for an
+	// identity extension that resolves a verified claim to a local user (ABO:
+	// internal/cfaccess). The app builds it with oidc.NewLateResolver, gives
+	// the same handle to the extension it puts in Authenticators and to this
+	// field. Read only by an identity boot (IdentityBoot): P5 builds the
+	// resolver over core's identity stores with the auth service as its
+	// account lock, so a sign-in creates and links accounts under the one
+	// e-mail lock auth's own creators hold, and binds it; close unbinds it.
+	// Until it is bound the handle refuses every claim
+	// (oidc.ErrResolverUnbound), so an extension that holds it admits nobody
+	// before the boot or on a boot that never declared IdentityBoot. nil
+	// builds no resolver (hello and new apps).
+	AccountResolver *oidc.LateResolver
+
+	// Auth is the app's compile-time auth configuration (05-authn §3.2
+	// auth.Options): accepted API-key prefixes and the defaults of the app's
+	// auth keys. ABO sets ImportedKeyPrefixes ["abk_"], because existing abk_
+	// keys survive R2's identity step and keep verifying by their SHA-256 hash
+	// beside new mck_ keys (D12 (b)), DefaultDisabledAllowRemote true (SEC4-8:
+	// every Docker install listens on a non-loopback address, so auth-off
+	// installs would otherwise refuse to boot from R2) and OIDCCallbackBase
+	// "/api/v1/auth/oauth", HEAD's callback path, which core serves from F4
+	// (05-authn §4.13). The zero value is what hello and new apps pass. Not
+	// read until F4-08's boot wiring.
+	Auth auth.Options
+
+	// IdentityBoot declares the identity flip (F4-08): boot builds rbac and
+	// auth over core's own identity stores, serves audit, opens the events bus
+	// and runs P4d steps 2-4 (the revocation re-apply, the restore hooks,
+	// auth.BootWrites). It is the one signal, and nothing else stands in for
+	// it: Auth's zero value is what hello and new apps pass, and ABO sets Auth
+	// (and Authenticators) before the flip, so neither field says "the app
+	// wants core identity". false, the default, boots exactly as before the
+	// flip. Temporary like the F3 config gate it follows: B10 (the ABO switch)
+	// makes identity unconditional and deletes the field.
+	IdentityBoot bool
+
+	// ResolveAtom is the app's atom table for stage 13: it resolves the
+	// rbac.LegacyAtom and rbac.LegacyCheck requirements of the routes it
+	// mounts through a legacy mount (ABO: books.AtomTable().Route, and its
+	// .ReadSide for the read-side entries). It is kernel.Config.ResolveAtom,
+	// read only by an identity boot (IdentityBoot); nil, the default, makes
+	// stage 13 refuse every such requirement, so an app that mounts no legacy
+	// atom route sets nothing.
+	ResolveAtom httpapi.AtomResolver
+
+	// ArchivePrefix is the prefix of the app's backup archive names and of the
+	// revocation journal's file name and header (05-backup §5B.3.6 row "Where":
+	// <backup dir>/<prefix>revocations.journal), so two apps sharing a backup
+	// directory never share a journal. "" is <AppID>_. ABO sets
+	// "audiobooks_pebble_", the prefix its archives have always had (B10).
+	ArchivePrefix string
 
 	// Logger overrides the default slog handler construction (tests); nil =
 	// from config (05-logging §4).

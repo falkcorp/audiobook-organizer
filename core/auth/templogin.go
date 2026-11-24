@@ -279,7 +279,7 @@ func (s *Service) ConsumeTempLogin(ctx context.Context, token, newPassword strin
 			// above: guard the row, and the retry re-runs every check on it.
 			return err
 		}
-		rec, issued, err := s.stageSession(b, u, OriginTempLogin, false, client, now)
+		rec, issued, err := s.stageSession(b, u, OriginTempLogin, lifeSession, client, now)
 		if err != nil {
 			return err
 		}

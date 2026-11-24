@@ -1,7 +1,7 @@
 // file: internal/server/server_maintenance_deps.go
-// version: 1.77.0
+// version: 1.77.1
 // guid: b4c5d6e7-f8a9-0123-7890-345678901234
-// last-edited: 2026-11-17
+// last-edited: 2026-11-21
 
 // This file implements the maintenance.ServerDeps interface on *Server, giving
 // the maintenance plugin access to server internals without creating an import
@@ -142,6 +142,15 @@ func (s *Server) UserMerge() *usermerge.Service {
 					logger.New("usermerge").Warn("recording the user-merge audit entry failed: %v", err)
 				}
 			}))
+		}
+		// Merges are permanent once the account store is core's (A9): the
+		// wiring says so, here, where the service is built.
+		opts = append(opts, usermerge.WithIdentityFlipped(func() bool { return s.identity != nil }))
+		// The merge and the footprint run on core's handles when the server was
+		// given them; without them they stay unavailable under identity
+		// (usermerge.CheckAvailable).
+		if id := s.identity; id != nil && id.Admin != nil && id.Users != nil && id.Refresh != nil {
+			opts = append(opts, usermerge.WithCoreIdentity(usermerge.CoreIdentity{Admin: id.Admin, Users: id.Users, Refresh: id.Refresh}))
 		}
 		svc, err := usermerge.New(s.store, opts...)
 		if err != nil {

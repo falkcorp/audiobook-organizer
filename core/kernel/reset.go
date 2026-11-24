@@ -117,12 +117,19 @@ func StageResetOffline(ctx context.Context, c Config, requestedBy string, req st
 	if err := refuseHeldStore(bootseam.FS(ctx), c.StoragePath); err != nil {
 		return storage.ResetStaged{}, err
 	}
-	if f := c.BeforeSwap; f != nil {
-		if err := f(c.StoragePath); err != nil {
+	return k.commitReset(ctx, sw, requestedBy, req, plan, installID)
+}
+
+// commitReset is step 7 of staging, shared by the offline command and the
+// running service's route: Config.BeforeSwap, then the Swapper's StageReset
+// with the plan and the live install ID. Nothing is staged when it refuses.
+func (k *Kernel) commitReset(ctx context.Context, sw *restoreswap.Swapper, requestedBy string, req storage.ResetRequest, plan storage.ResetPlan, installID string) (storage.ResetStaged, error) {
+	if f := k.cfg.BeforeSwap; f != nil {
+		if err := f(k.cfg.StoragePath); err != nil {
 			return storage.ResetStaged{}, fmt.Errorf("kernel: before the reset is staged: %w", err)
 		}
 	}
-	in, err := sw.StageReset(ctx, restoreswap.ResetSpec{DBPath: c.StoragePath, Reset: req.Kind,
+	in, err := sw.StageReset(ctx, restoreswap.ResetSpec{DBPath: k.cfg.StoragePath, Reset: req.Kind,
 		DeleteLibraryFiles: req.DeleteLibraryFiles, Plan: plan, InstallID: installID, RequestedBy: requestedBy})
 	if err != nil {
 		return storage.ResetStaged{}, fmt.Errorf("kernel: stage the %s reset: %w", req.Kind, err)
@@ -166,14 +173,26 @@ func (k *Kernel) planReset(ctx context.Context, hook *entry, req storage.ResetRe
 			}
 		}
 	}
+	plan, err := hookPlan(pctx, hook, req)
+	if err != nil {
+		return "", storage.ResetPlan{}, err
+	}
+	return installID, plan, nil
+}
+
+// hookPlan is step 4 of staging, shared by both stagers: the declaring
+// module's Plan for a ResetFactory, with whatever the caller put on pctx (the
+// reset's kept paths, module.ResetPlanKept, always; the offline command's
+// read-only storage). A ResetStore, and an app with no hook, plan nothing.
+func hookPlan(pctx context.Context, hook *entry, req storage.ResetRequest) (storage.ResetPlan, error) {
 	if hook == nil || req.Kind != restorejournal.ResetFactory {
-		return installID, storage.ResetPlan{}, nil
+		return storage.ResetPlan{}, nil
 	}
 	plan, err := hook.man.ResetHook.Plan(pctx, req)
 	if err != nil {
-		return "", storage.ResetPlan{}, fmt.Errorf("kernel: module %s refused the reset: %w", hook.man.ID, err)
+		return storage.ResetPlan{}, fmt.Errorf("kernel: module %s refused the reset: %w", hook.man.ID, err)
 	}
-	return installID, plan, nil
+	return plan, nil
 }
 
 // checkResetPlan is step 5 of StageResetOffline: the library wipe is

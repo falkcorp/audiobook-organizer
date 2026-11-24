@@ -217,7 +217,7 @@ func TestListCandidatesSearchControls(t *testing.T) {
 // the ID half. The clause guarding candidateMatchesSearch originally tested
 // only f.Search, so a caller that set SearchEntityIDs WITHOUT a needle -- the
 // natural shape for "restrict to this resolved set" -- got the entire
-// unfiltered library back under a 200 and an honest-looking total. That is the
+// unfiltered library back under a 200 and a plausible-looking total. That is the
 // fail-open direction, and no test could see it while every caller set both.
 func TestListCandidatesSearchEntityIDsAloneStillFilters(t *testing.T) {
 	forEachReadPath(t, func(t *testing.T, store *EmbeddingStore) {

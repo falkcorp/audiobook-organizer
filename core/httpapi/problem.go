@@ -136,7 +136,6 @@ var (
 	ErrRouteShape       = errors.New("httpapi: route method, name, path or rate class is malformed")
 	ErrJSONName         = errors.New("httpapi: JSON property name is not snake_case")
 	ErrLegacyManifest   = errors.New("httpapi: legacy route missing from or inconsistent with the manifest")
-	ErrLegacyAuthGin    = errors.New("httpapi: LegacyAuthGin mount not named by app.Options.LegacyAuthGinUntil")
 	ErrOwnAuthMethod    = errors.New("httpapi: OwnAuth route names no auth method registered by its module")
 	ErrNoAuthService    = errors.New("httpapi: non-Public native route registered before auth/rbac exist")
 	ErrPublicNotAllowed = errors.New("httpapi: module native route uses rbac.Public but is not in its Manifest.PublicRoutes")

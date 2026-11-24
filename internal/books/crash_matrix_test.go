@@ -288,6 +288,8 @@ func aboUnreachedLabels() map[string]string {
 		noBadBootRecord   = "no ABO fixture holds an unparsable config boot record to set aside; hello's boot-record-unparsable fixture breaks the quarantine"
 	)
 	out := crashmatrix.JournalUnreachedLabels()
+	// The identity boot's writers (F4-08 B3): ABO declares the flip at B10.
+	maps.Copy(out, crashmatrix.IdentityUnreachedLabels())
 	maps.Copy(out, map[string]string{
 		"config.statedir.mkdir":        noStateDirFixture,
 		"config.bootrecord.quarantine": noBadBootRecord,
@@ -460,7 +462,7 @@ func (a aboFlipModule) Manifest() module.Manifest {
 		DefaultEnabled: true, Settings: b.Settings, Cutover: b.Cutover,
 		// database.BooksSpec(nil) carries no observer: books' own beforeMigration
 		// discards the HNSW marker on the real disk, which the kit forbids.
-		Storage:   a.m.flipSteps(module.Importers{}).Spec(database.BooksSpec(nil)),
+		Storage:   cutover.NewFlipShape(flipShapeOptions()).Spec(database.BooksSpec(nil)),
 		AppConfig: &module.AppConfigSpec{Secrets: func(secrets.Name) bool { return true }}}
 	if !a.noRewrite {
 		man.Rewrite = b.Rewrite
@@ -745,9 +747,11 @@ func aboFlipFinalViolations(fsys vfs.FS, f crashmatrix.Fixture, st, base *aboFli
 	if _, ok := st.kv[aboFlipConfigRowKey()]; !ok {
 		out = append(out, aboFlipConfigKey+" was not staged")
 	}
-	for _, owner := range []string{"core", "books"} {
-		if st.stamps[owner] != cutover.BooksCutoverLevel || st.levels[owner] != st.stamps[owner] {
-			out = append(out, fmt.Sprintf("%s: stamp %d, .storage-levels %d, want both %d", owner, st.stamps[owner], st.levels[owner], cutover.BooksCutoverLevel))
+	// Core's half of M7 raises core to level 1; books' level steps raise books to
+	// BooksIdentityLevel, since the identity flip is on (B10g).
+	for owner, want := range map[string]int{"core": cutover.BooksCutoverLevel, "books": cutover.BooksIdentityLevel} {
+		if st.stamps[owner] != want || st.levels[owner] != st.stamps[owner] {
+			out = append(out, fmt.Sprintf("%s: stamp %d, .storage-levels %d, want both %d", owner, st.stamps[owner], st.levels[owner], want))
 		}
 	}
 	if _, ok := st.kv["preference:storage_migration"]; ok {
@@ -902,12 +906,18 @@ func aboFlipCells() []aboFlipCell {
 			return st.stamps["books"] == 0 && st.levels["books"] == 1 && st.format == 2
 		})})
 	// M2: its plan, its one chunk (the four rows drained, the blob rewritten,
-	// one batch) and its state records.
+	// one batch) and its state records. books.level-2 runs before M2 on a store
+	// that meets both flips at once (cutover.NewFlipShape), so books is already
+	// stamped at BooksIdentityLevel when M2 starts.
 	cells = append(cells,
 		aboFlipCell{"m2-plan", "storage.dm.plan", 0,
-			before("M2 not yet run", func(st *aboFlipState, _ bool) bool { return legacyRows(st) && st.stamps["books"] == 1 })},
+			before("M2 not yet run", func(st *aboFlipState, _ bool) bool {
+				return legacyRows(st) && st.stamps["books"] == cutover.BooksIdentityLevel
+			})},
 		aboFlipCell{"m2-chunk", "storage.dm.chunk", 0,
-			before("M2's chunk not yet applied", func(st *aboFlipState, _ bool) bool { return legacyRows(st) && st.stamps["books"] == 1 })},
+			before("M2's chunk not yet applied", func(st *aboFlipState, _ bool) bool {
+				return legacyRows(st) && st.stamps["books"] == cutover.BooksIdentityLevel
+			})},
 		aboFlipCell{"m2-state-0", "storage.dm.state", 0,
 			before("M2's chunk applied, its record not", func(st *aboFlipState, _ bool) bool { return !legacyRows(st) })},
 		aboFlipCell{"m2-state-1", "storage.dm.state", 1,

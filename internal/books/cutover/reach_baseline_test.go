@@ -14,11 +14,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
 
@@ -109,17 +111,14 @@ var reachABSOnlyButGated = []string{
 }
 
 // reachDelegatedNewerThanR0 are routes R2 delegates to the ABS handler's own token
-// check that R0's router at the pinned tag does not have, so there is no recorded
-// answer to compare with.
-var reachDelegatedNewerThanR0 = []string{
-	"GET /api/authors/:id/image",
-	"GET /api/libraries/:libraryId/stats",
-	"HEAD /api/authors/:id/image",
-	"POST /api/items/batch/get",
-}
+// check that R0's router at the pinned commit does not have, so there is no
+// recorded answer to compare with. None since F4-08 moved R0 to main at
+// f6698f9bf: the four Lissen routes it held (author image GET and HEAD, library
+// stats, items batch get; de84ff2c8) are R0 abs_only routes now.
+var reachDelegatedNewerThanR0 = []string{}
 
 // reachDelegatedProblems is what the delegated-set pin fails on, as text.
-func reachDelegatedProblems(vd *reachR0Doc, res reachDiffResult) []string {
+func reachDelegatedProblems(vd *reachR0Doc, delegated []string) []string {
 	var out []string
 	r0 := map[string]bool{}
 	absOnly := map[string]bool{}
@@ -158,7 +157,7 @@ func reachDelegatedProblems(vd *reachR0Doc, res reachDiffResult) []string {
 		want[k] = true
 	}
 	got := map[string]bool{}
-	for _, k := range res.delegated {
+	for _, k := range delegated {
 		got[k] = true
 	}
 	for k := range got {
@@ -184,10 +183,8 @@ func reachDelegatedProblems(vd *reachR0Doc, res reachDiffResult) []string {
 // otherwise leave the oracle without a word, because a delegated route is
 // counted and not compared.
 func TestReachBaseline_DelegatedSetIsR0sABSOnlyRoutesWithTheListedExceptions(t *testing.T) {
-	pd, vd := reachLoad(t)
-	atoms := idAtoms()
-	res, _ := reachCompare(t, pd, vd, atoms, atoms)
-	for _, p := range reachDelegatedProblems(vd, res) {
+	_, vd := reachLoad(t)
+	for _, p := range reachDelegatedProblems(vd, reachDelegatedRoutes(reachManifest())) {
 		t.Error(p)
 	}
 }
@@ -226,25 +223,57 @@ func TestReachBaseline_UniformNotFoundRoutesAreOpenOrDelegated(t *testing.T) {
 	}
 }
 
+// reachRouteSets compares the manifest's routes with R0's: the routes only one
+// side has and the routes both have and stage 13 judges (neither delegated nor
+// one-sided).
+func reachRouteSets(vd *reachR0Doc, manifest []httpapi.LegacyRoute) (r0Only, r2Only []string, judged, delegated int) {
+	inManifest := map[string]bool{}
+	deleg := map[string]bool{}
+	for _, lr := range manifest {
+		k := lr.Method + " " + lr.GinPath
+		inManifest[k] = true
+		if reachDelegated(lr) {
+			deleg[k] = true
+		}
+	}
+	inR0 := map[string]bool{}
+	for _, r := range vd.Routes {
+		k := r.key()
+		inR0[k] = true
+		switch {
+		case deleg[k]:
+		case !inManifest[k]:
+			r0Only = append(r0Only, k)
+		default:
+			judged++
+		}
+	}
+	for k := range inManifest {
+		if !inR0[k] && !deleg[k] {
+			r2Only = append(r2Only, k)
+		}
+	}
+	sort.Strings(r0Only)
+	sort.Strings(r2Only)
+	return r0Only, r2Only, judged, len(deleg)
+}
+
 // reachCountProblems is what the size pin fails on, as text.
-func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
+func reachCountProblems(vd *reachR0Doc, manifest []httpapi.LegacyRoute) []string {
+	r0Only, r2Only, judged, delegated := reachRouteSets(vd, manifest)
 	got := map[string]int{
-		"R0 routes recorded":                     vd.RouteCount,
-		"manifest routes compared":               res.routesCompared,
-		"routes delegated to the ABS handler":    len(res.delegated),
-		"routes only R0 has":                     len(res.r0Only),
-		"routes only R2 has":                     len(res.r2Only),
-		"cells compared (task pseudo-routes in)": res.compared,
-		"cells that differ":                      len(res.cells),
+		"R0 routes recorded":                  vd.RouteCount,
+		"manifest routes R0 also has, judged": judged,
+		"routes delegated to the ABS handler": delegated,
+		"routes only R0 has":                  len(r0Only),
+		"routes only R2 has":                  len(r2Only),
 	}
 	want := map[string]int{
-		"R0 routes recorded":                     572,
-		"manifest routes compared":               504,
-		"routes delegated to the ABS handler":    68,
-		"routes only R0 has":                     4,
-		"routes only R2 has":                     1,
-		"cells compared (task pseudo-routes in)": 27108,
-		"cells that differ":                      221,
+		"R0 routes recorded":                  574,
+		"manifest routes R0 also has, judged": 505,
+		"routes delegated to the ABS handler": 68,
+		"routes only R0 has":                  1,
+		"routes only R2 has":                  1,
 	}
 	var keys []string
 	for k := range want {
@@ -260,16 +289,27 @@ func reachCountProblems(vd *reachR0Doc, res reachDiffResult) []string {
 	return diff
 }
 
-// The oracle's own size: R0's routes, the manifest routes it compared, the ones
-// it left out and the ones only one side has. A route added to the manifest, or
-// dropped, fails here and in the pinned one-sided list, so it cannot enter
-// without someone deciding what it permits.
+// The route sets' own size: R0's routes, the manifest routes both sides have, the
+// ones delegated and the ones only one side has. A route added to the manifest, or
+// dropped, fails here and in the pinned one-sided list, so it cannot enter without
+// someone deciding what it permits. The cell counts are pinned where the cells are
+// sent (registered_reach_eval_test.go).
 func TestReachOracle_RouteAndCellCountsArePinned(t *testing.T) {
-	pd, vd := reachLoad(t)
-	atoms := idAtoms()
-	res, _ := reachCompare(t, pd, vd, atoms, atoms)
-	if diff := reachCountProblems(vd, res); len(diff) > 0 {
-		t.Errorf("the oracle changed size; every route added or dropped needs a permission decision in the manifest and a place in the pinned lists, then these counts move with it:\n  %s", strings.Join(diff, "\n  "))
+	_, vd := reachLoad(t)
+	if diff := reachCountProblems(vd, reachManifest()); len(diff) > 0 {
+		t.Errorf("the route sets changed size; every route added or dropped needs a permission decision in the manifest and a place in the pinned lists, then these counts move with it:\n  %s", strings.Join(diff, "\n  "))
+	}
+}
+
+// The routes only one side has are pinned exactly, with the reason for each.
+func TestReachOracle_RoutesOnOneSideAreExactlyThesePinned(t *testing.T) {
+	_, vd := reachLoad(t)
+	r0Only, r2Only, _, _ := reachRouteSets(vd, reachManifest())
+	if !slices.Equal(r0Only, reachWantR0Only) {
+		t.Errorf("routes only R0 has:\n got %q\nwant %q", r0Only, reachWantR0Only)
+	}
+	if !slices.Equal(r2Only, reachWantR2Only) {
+		t.Errorf("routes only R2 has:\n got %q\nwant %q", r2Only, reachWantR2Only)
 	}
 }
 

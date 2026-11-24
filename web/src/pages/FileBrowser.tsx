@@ -10,6 +10,7 @@ import { Box, Button, Typography, Alert, Stack } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
 import { ServerFileBrowser } from '../components/common/ServerFileBrowser';
 import * as api from '../services/api';
+import { useSignInRequiredForAction } from '../hooks/useSignInRequiredForAction';
 
 export function FileBrowser() {
   const navigate = useNavigate();
@@ -54,6 +55,7 @@ export function FileBrowser() {
   }, []);
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const gate = useSignInRequiredForAction();
 
   const handleAddImportPath = async () => {
     if (!selectedPath) return;
@@ -64,8 +66,10 @@ export function FileBrowser() {
       setNotice('Import path added successfully.');
       navigate('/settings');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to add import path';
-      setNotice(message);
+      if (!gate.refuse(error)) {
+        const message = error instanceof Error ? error.message : 'Failed to add import path';
+        setNotice(message);
+      }
     } finally {
       setAdding(false);
     }
@@ -87,11 +91,12 @@ export function FileBrowser() {
           variant="contained"
           startIcon={<AddIcon />}
           onClick={handleAddImportPath}
-          disabled={!selectedPath || adding}
+          disabled={!selectedPath || adding || gate.blocked}
         >
           {adding ? 'Adding...' : 'Add as Import Path'}
         </Button>
       </Stack>
+      {gate.notice && <Box sx={{ mb: 2 }}>{gate.notice}</Box>}
       {notice && (
         <Alert severity="info" sx={{ mb: 2 }}>
           {notice}

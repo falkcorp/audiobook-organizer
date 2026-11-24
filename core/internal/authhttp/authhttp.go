@@ -33,7 +33,9 @@
 //   - A sign-in, a link consumption or a lookup answers the same whether the
 //     account exists or not.
 //   - The auth-disabled principal has no user: every route that lists or reads
-//     credential metadata answers 401 authentication_required for it.
+//     credential metadata answers 403 interactive_required for it (a 401
+//     authentication_required would end a no-auth install's SPA session, F4-08
+//     ruling G5(a)).
 //
 // The package is dark until F4-08 mounts it: nothing imports it before then. It
 // is layer L6 (03 R4, internal/<capability>http) and imported only by kernel.

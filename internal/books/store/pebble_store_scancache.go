@@ -579,7 +579,7 @@ func (p *PebbleStore) GetBookPathHistory(bookID string) ([]BookPathChange, error
 // and make it re-read on every scan forever -- the exact failure being fixed for
 // multi-file books, reintroduced on the other side.
 //
-// The row it writes is the same honest row ensureSingleFileBookFile writes: this
+// The row it writes is the same correct row ensureSingleFileBookFile writes: this
 // book has exactly this one file. It deliberately does NOT go through
 // createBookFilesForBookWithAudio, which would also normalize Book.FilePath to the
 // containing directory -- right for a multi-file book, wrong here, and not a side

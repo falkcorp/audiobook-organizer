@@ -265,7 +265,13 @@ func (k *Kernel) lockSwapForP0a(ctx context.Context) (storage.ExclusiveSwapLock,
 // "Offline open" rule 1): a staged or in-flight swap of any kind refuses,
 // with its token, kind and ID; a slot that cannot be read refuses too.
 func (k *Kernel) refuseBusySlot(ctx context.Context) error {
-	st, err := restorejournal.ReadSlot(bootseam.FS(ctx), k.cfg.StateDir)
+	return refuseBusySlotOf(bootseam.FS(ctx), k.cfg.StateDir)
+}
+
+// refuseBusySlotOf is refuseBusySlot over a filesystem and state directory,
+// which the running service's reset (reset_online.go) takes from its boot.
+func refuseBusySlotOf(fs vfs.FS, stateDir string) error {
+	st, err := restorejournal.ReadSlot(fs, stateDir)
 	if err != nil {
 		return fmt.Errorf("kernel: the swap slot cannot be read: %w", err)
 	}

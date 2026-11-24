@@ -13,7 +13,6 @@ import (
 	"maps"
 	"math"
 	"slices"
-	"strconv"
 
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/entity"
@@ -38,32 +37,32 @@ const (
 type RestoreDeps struct {
 	Store *Store // the live (just restored) audit store
 	// RestoreSeq is the seq of the revocation journal's restore line this run
-	// belongs to (0 when the journal could not take one). Unless RunKey is set it
-	// is the idempotency key of the records the hook appends, and 0 is never a
-	// key: two restores that both had no line must not share one.
+	// belongs to (0 when the journal could not take one). It is only reported (the
+	// log and the stage record's detail): a seq repeats after a journal reset or a
+	// host loss, so it never tells one restore from another.
 	RestoreSeq uint64
-	// RunKey identifies this run when there is no restore line: a value that is
-	// the same for every re-run of one restore (hooks re-run after a crash) and
-	// differs between restores. The kernel records one durably with the run
-	// (journal.EnsureHookRun). When set it is the idempotency key and RestoreSeq
-	// is only reported; the hook fails before writing anything when both are
-	// unset.
+	// RunKey identifies this restore run: the same for every re-run of one restore
+	// (the hooks run again after a crash) and different between restores, which is
+	// what makes the records the hook appends idempotent. It is required, and it
+	// must come from the live host, never from anything a restored store or an
+	// archive can carry: a forged match makes the hook skip writing a restore's
+	// records, a gap in the audit trail. The kernel passes its hookRunKey:
+	// "restore:<intent ID>:seq:<N>" for a restore boot, else the run ID kept in the
+	// state directory (journal.EnsureHookRun). The hook fails before writing
+	// anything when it is empty.
 	RunKey string
 	Log    *slog.Logger // nil discards
 }
 
 // restoreTargetID is the id of the core.restore target the run's records are
-// keyed on: the run key when there is one, else the restore line's seq. A run
-// with neither has nothing to tell it from another, and deduplicating on a zero
-// seq would silently drop the records of every restore after the first.
+// keyed on: the run key, and only that. A run with none has nothing the live host
+// vouches for to tell it from another, and a seq would silently drop the records
+// of every restore that repeats one.
 func (d RestoreDeps) restoreTargetID() (string, error) {
-	switch {
-	case d.RunKey != "":
-		return d.RunKey, nil
-	case d.RestoreSeq != 0:
-		return strconv.FormatUint(d.RestoreSeq, 10), nil
+	if d.RunKey == "" {
+		return "", errors.New("audit: restore hook: no run key to tell this restore from another")
 	}
-	return "", errors.New("audit: restore hook: no restore line and no run key to tell this restore from another")
+	return d.RunKey, nil
 }
 
 // RestoreHook returns audit's journal.RestoreHook (run third, after auth and

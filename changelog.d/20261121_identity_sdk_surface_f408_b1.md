@@ -1,0 +1,4 @@
+### Added
+
+- The module SDK gains the declaration surface of the identity flip, recorded and read by nothing yet: a manifest can list `Permissions`, `Roles` and `ImportedRoleIDs`; a module's `Register` can call `Registrar.Topics` and `Registrar.Subscribe`; a module's dependencies gain `Auth`, `AuthAdmin`, `AuthCompat`, `Audit` and `Events`; a cutover step's importers gain `Auth`, `Roles` and `Audit`; and `app.Options` gains `Authenticators` and `Auth`. The kernel leaves the new handles nil and wires them in a later change, so no app behaves differently. `auth.Identities`, the read-only identity view behind `Deps.Auth`, is declared, and `*auth.Service` implements it.
+- Boot now refuses two manifests that list the same `ImportedRoleIDs` entry, and an entry that names a core seed role (`admin`, `editor`, `viewer`), with an `ImportedRole` problem, before any store is opened.

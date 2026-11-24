@@ -15,7 +15,8 @@ import { Folder as FolderIcon } from '@mui/icons-material';
 import { useBooksSetup } from './booksSetupContext';
 
 export function ImportFoldersStep() {
-  const { importFolders, handleOpenImportBrowser, handleRemoveImportFolder } = useBooksSetup();
+  const { importFolders, handleOpenImportBrowser, handleRemoveImportFolder, signInGate } =
+    useBooksSetup();
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
@@ -31,6 +32,8 @@ export function ImportFoldersStep() {
         Import folders are watched locations where the scanner looks for new audiobooks.
         Files found here will be scanned and organized into your library path.
       </Typography>
+
+      {signInGate.notice && <Box sx={{ mb: 2 }}>{signInGate.notice}</Box>}
 
       <Box sx={{ mb: 2 }}>
         <Button

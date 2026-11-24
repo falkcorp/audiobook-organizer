@@ -43,17 +43,22 @@ func wantErr(t *testing.T, what string, err, want error) {
 	}
 }
 
-// signedIn opens a real session for u and returns its principal, carrying
-// the session's public ID as a request presenting it would.
+// signedIn opens a real session for u and returns the principal stage 12
+// binds for a request presenting it: the real path (the middleware), so the
+// principal carries what auth sealed and its credential is the session's
+// public ID. A principal a test assembles through PrincipalFor and edits is one
+// Refresh refuses.
 func (f *fx) signedIn(u *auth.User) *auth.Principal {
 	f.t.Helper()
 	sess, err := f.svc.IssueSession(context.Background(), u, auth.OriginPassword, false, from("192.0.2.10"))
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	p := f.session(u)
-	p.CredentialID = sess.PublicID
-	return p
+	_, got := serve(f.t, f.svc, request("", sess.Token))
+	if got.p == nil {
+		f.t.Fatalf("the session of %s bound no principal (refusal %+v)", u.ID, got.fail)
+	}
+	return got.p
 }
 
 func (f *fx) sessionEpoch(publicID string) int64 {

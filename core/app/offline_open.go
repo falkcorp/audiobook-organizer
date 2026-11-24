@@ -63,7 +63,7 @@ func offlineConfig(ctx context.Context, opts Options, mods []module.Module, owne
 	if c.StoragePath, c.StateDir, err = kernel.ResolveStorage(ctx, c, owner); err != nil {
 		return kernel.Config{}, err
 	}
-	if declaresStorage(mods) {
+	if c.WantsStore() {
 		if c.StorageClaimsShadow, err = claimsShadow(opts); err != nil {
 			return kernel.Config{}, err
 		}

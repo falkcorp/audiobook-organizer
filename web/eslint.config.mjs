@@ -8,6 +8,7 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
+import { permissionLiteralRestrictions } from './eslint-rules/permission-literal.mjs';
 
 export default tseslint.config(
   {
@@ -93,6 +94,24 @@ export default tseslint.config(
           message: 'Use apiFetch from utils/apiFetch (or a services/* function) instead of raw fetch.',
         })),
       ],
+    },
+  },
+  {
+    // 07 section 7.18 (FE-11, FE2-17): no string literal in a permission
+    // position (a usePermission/useAction/hasPermission argument, a permission
+    // or *_PERMISSION property or constant, an API-key scope list) unless it
+    // comes from manifest.permissions or the generated client. The selectors
+    // and their fixtures live in eslint-rules/permission-literal.mjs.
+    //
+    // Every file under src/ is held to the rule. The one place a permission string
+    // may be spelled is src/generated/permissions.ts, which cmd/permsgen writes from
+    // internal/books/atoms.go (make generate-permissions; make ci fails when it is
+    // stale), so it is the generated client's side of the line, not a hand-written
+    // literal.
+    files: ['src/**/*.{ts,tsx}'],
+    ignores: ['src/**/*.test.{ts,tsx}', 'src/generated/**'],
+    rules: {
+      'no-restricted-syntax': ['error', ...permissionLiteralRestrictions],
     },
   },
   {

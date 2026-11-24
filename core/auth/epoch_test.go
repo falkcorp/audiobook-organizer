@@ -158,8 +158,10 @@ func TestUserMerge_TargetMustBeActive(t *testing.T) {
 	jason := f.user("jason-todd", "gotham.detective")
 	dick := f.user("dick-grayson", "gotham.detective")
 	f.edit(dick, func(u *auth.User) { u.Status = auth.StatusDisabled })
-	err := f.stageMerge(f.signedIn(bruce), auth.UserMergePlan{Source: jason.ID, Target: dick.ID})
+	err := f.stageMerge(f.signedIn(bruce), f.rawPlan(jason.ID, dick.ID))
 	wantErr(t, "a disabled target", err, auth.ErrInactiveUser)
+	_, _, err = f.svc.PlanUserMerge(auth.WithPrincipal(context.Background(), f.signedIn(bruce)), jason.ID, dick.ID)
+	wantErr(t, "a disabled target, previewed", err, auth.ErrInactiveUser)
 	if got := f.reload(jason.ID); got.Status != auth.StatusActive {
 		t.Fatalf("the source was disabled by a refused merge: %s", got.Status)
 	}

@@ -30,15 +30,21 @@ import (
 // F8-01 invariant I6; F8-04 owns the test and extends it to the migrated
 // store and the corpus' per-family counts).
 
-// legacyMarkers is the journal boundary Create reads and advances. This test
-// lists and stages archives and never creates one, so nothing may call it: a
-// call is a test failure, not a quiet zero.
+// legacyMarkers is the journal boundary. StageRestore reads it for the live
+// store's journal head, which the intent carries as OutgoingSeq into the
+// staged record (05-backup §5B.3.4 step 8), so Read answers a fixed head the
+// test then finds on the intent. Only Create advances it, and this test lists
+// and stages archives and never creates one, so Advance is a test failure, not
+// a quiet zero.
 type legacyMarkers struct{}
+
+// legacyJournalHead is the live journal head legacyMarkers reports.
+const legacyJournalHead = 41
 
 var errMarkersUnused = errors.New("legacy restore test: Create was reached, which this test does not exercise")
 
 func (legacyMarkers) Read(context.Context) (corebackup.Boundaries, error) {
-	return corebackup.Boundaries{}, errMarkersUnused
+	return corebackup.Boundaries{JournalSeq: legacyJournalHead}, nil
 }
 
 func (legacyMarkers) Advance(context.Context) (journal.ServedBoot, error) {
@@ -68,10 +74,15 @@ func (legacyKeys) KeyIDsReferenced(context.Context, storage.Reader) ([]string, e
 }
 
 // slotStager creates the intent in the one swap slot, as the kernel's swapper
-// does for the staged restore (restorejournal.CreateIntent is its write).
-type slotStager struct{ stateDir string }
+// does for the staged restore (restorejournal.CreateIntent is its write), and
+// keeps the last intent it staged in staged, for the test to read back.
+type slotStager struct {
+	stateDir string
+	staged   *restorejournal.Intent
+}
 
 func (s slotStager) Stage(_ context.Context, in restorejournal.Intent) error {
+	*s.staged = in
 	return restorejournal.CreateIntent(s.stateDir, in)
 }
 
@@ -116,13 +127,14 @@ func stageWithCore(t *testing.T, work, archive string) string {
 	m := archiveName.FindStringSubmatch(filepath.Base(archive))
 	require.NotNil(t, m, "archive name %q", filepath.Base(archive))
 	stateDir := filepath.Join(work, "state")
+	var staged restorejournal.Intent
 	build, err := app.BinaryID(app.Options{Version: telemetry.Version()})
 	require.NoError(t, err)
 	owners := []storage.OwnerSpec{{Owner: database.BooksOwner, Enabled: true, Spec: database.BooksSpec(nil)}}
 	svc, err := corebackup.New(corebackup.Options{
 		AppID: AppID, AppVersion: telemetry.Version(), CoreVersion: "test", BuildID: build,
 		Prefix: m[1], Dir: filepath.Dir(archive), StateDir: stateDir, DBPath: storeDB(work),
-		Owners: owners, Keyring: legacyKeys{}, Markers: legacyMarkers{}, Stager: slotStager{stateDir},
+		Owners: owners, Keyring: legacyKeys{}, Markers: legacyMarkers{}, Stager: slotStager{stateDir: stateDir, staged: &staged},
 		Settings:  legacySettings,
 		Inspector: &corebackup.StorageInspector{Base: storage.OpenOptions{Owners: owners, Build: build}},
 	})
@@ -150,6 +162,8 @@ func stageWithCore(t *testing.T, work, archive string) string {
 	require.NoError(t, err)
 	require.True(t, st.Busy(), "nothing staged in the one slot")
 	require.NotNil(t, st.Pending)
+	require.Equal(t, st.Pending.ID, staged.ID, "the slot holds the intent the stager was handed")
+	require.Equal(t, uint64(legacyJournalHead), staged.OutgoingSeq, "the staged intent carries the live journal head")
 	return st.Pending.ID
 }
 

@@ -86,9 +86,10 @@ type reachObligation struct {
 const reachAuthOffName = "authoff"
 
 // reachCoreOwnerRoutes are the owner routes core's own router carries, which no
-// manifest holds. POST /api/core/v1/system/factory-reset is the successor of the
-// R0-only reset pair (05-rbac 6.2); TestReachObligations_TheCoreOwnerRouteIsStillCores
-// holds the claim to core's source.
+// manifest holds. POST /api/core/v1/system/factory-reset is core's staged reset
+// (05-rbac 6.2), a deliberate addition versus R0 (main at f6698f9bf runs the reset
+// only offline) whose letters are ruled (registered_owner_test.go ownerR2Only);
+// TestReachObligations_TheCoreOwnerRouteIsStillCores holds the claim to core's source.
 var reachCoreOwnerRoutes = []string{"POST /api/core/v1/system/factory-reset"}
 
 const reachCoreOwnerSource = "../../../core/internal/storagehttp/routes.go"
@@ -154,7 +155,6 @@ var reachDischarges []reachDischarge
 // reachObligationInput is what the bars and the discharge lookup read.
 type reachObligationInput struct {
 	vd       *reachR0Doc
-	res      reachDiffResult
 	manifest []httpapi.LegacyRoute
 	// assured is the owner model's predicate (reachOwnerAssured), the same
 	// function reachOwnerSetProblems judges the recording with.
@@ -178,7 +178,7 @@ func reachSorted(set map[string]bool) []string {
 // Public-gated abs_only routes are compared by the oracle and are not in it.
 func reachBarABSReplay(in reachObligationInput) []string {
 	deleg := map[string]bool{}
-	for _, k := range in.res.delegated {
+	for _, k := range reachDelegatedRoutes(in.manifest) {
 		deleg[k] = true
 	}
 	set := map[string]bool{}
@@ -193,38 +193,62 @@ func reachBarABSReplay(in reachObligationInput) []string {
 	return reachSorted(set)
 }
 
+// reachDelegated is a route the flip hands to the ABS handler's own token check:
+// stage 13 never judges it, so the oracle cannot compare it (OwnAuth, or a
+// Delegated requirement).
+func reachDelegated(lr httpapi.LegacyRoute) bool {
+	return lr.OwnAuth || lr.Perm.Kind() == rbac.KindDelegated
+}
+
+// reachDelegatedRoutes are the manifest's delegated routes, sorted.
+func reachDelegatedRoutes(manifest []httpapi.LegacyRoute) []string {
+	set := map[string]bool{}
+	for _, lr := range manifest {
+		if reachDelegated(lr) {
+			set[lr.Method+" "+lr.GinPath] = true
+		}
+	}
+	return reachSorted(set)
+}
+
 // reachBarHandlerRefusals: the auth-off cells the router admits and R0's handler
-// refused, on routes that are not Public. Read from the diff itself, so renaming
-// or moving the rows that claim them changes nothing; the cells go only when the
-// routes are deleted or tightened so R2 stops differing. A Public route (login,
-// refresh) answers the probe's dummy credentials the same way for everyone: that
-// is a recorder limit, not a handler's refusal of the auth-off principal.
+// refused, on routes that are not Public. They are the cells of
+// reachHandlerRefusalCells that the manifest still carries: the table was read
+// from the evaluator's own diff (its auth-off cells that went R0 D to R2 A on a
+// route that is not Public) before the evaluator was removed, and the registered
+// path holds them again (registered_reach_eval_test.go's auth-off boot, and
+// B10e2's HandlerRefusals cells). Renaming or moving the rows that claim them
+// changes nothing; the cells go when the routes are deleted from the manifest. A
+// Public route (login, refresh) answers the probe's dummy credentials the same way
+// for everyone: that is a recorder limit, not a handler's refusal of the auth-off
+// principal.
 func reachBarHandlerRefusals(in reachObligationInput) []string {
 	public := map[string]bool{}
+	inManifest := map[string]bool{}
 	for _, lr := range in.manifest {
+		k := lr.Method + " " + lr.GinPath
+		inManifest[k] = true
 		if lr.Public || lr.Perm.Kind() == rbac.KindPublic {
-			public[lr.Method+" "+lr.GinPath] = true
+			public[k] = true
 		}
 	}
 	set := map[string]bool{}
-	for _, c := range in.res.cells {
-		if c.principal == reachAuthOffName && c.r0 == 'D' && c.r2 == 'A' && !public[c.route] {
-			set[c.route+"|"+c.principal] = true
+	for _, route := range reachHandlerRefusalCells {
+		if inManifest[route] && !public[route] {
+			set[route+"|"+reachAuthOffName] = true
 		}
 	}
 	return reachSorted(set)
 }
 
 // reachOwnerRoutes are the routes whose reach the owner decides: the manifest's
-// Guards.Owner routes, read from the evaluation the cells came from, and core's
-// own owner routes.
+// Guards.Owner routes (not the delegated ones, which stage 13 never judges), and
+// core's own owner routes.
 func reachOwnerRoutes(in reachObligationInput) []string {
 	set := map[string]bool{}
-	if in.res.r2 != nil {
-		for k, owner := range in.res.r2.ownerGuard {
-			if owner {
-				set[k] = true
-			}
+	for _, lr := range in.manifest {
+		if lr.Guards.Owner && !reachDelegated(lr) {
+			set[lr.Method+" "+lr.GinPath] = true
 		}
 	}
 	for _, k := range reachCoreOwnerRoutes {
@@ -608,19 +632,17 @@ func reachObligationProblems(in reachObligationInput, table []reachObligation, s
 
 // reachObligationInputFrom builds the input the oracle judges: the one owner
 // predicate, this package's registrations, the real finder.
-func reachObligationInputFrom(vd *reachR0Doc, res reachDiffResult) reachObligationInput {
+func reachObligationInputFrom(vd *reachR0Doc) reachObligationInput {
 	return reachObligationInput{
-		vd: vd, res: res, manifest: reachManifest(),
+		vd: vd, manifest: reachManifest(),
 		assured: reachOwnerAssured, discharges: reachDischarges, find: reachFindTest,
 	}
 }
 
 func reachObligationInputOf(t testing.TB) reachObligationInput {
 	t.Helper()
-	pd, vd := reachLoad(t)
-	atoms := idAtoms()
-	res, _, _ := reachRun(t, pd, vd, atoms, atoms)
-	return reachObligationInputFrom(vd, res)
+	_, vd := reachLoad(t)
+	return reachObligationInputFrom(vd)
 }
 
 func reachObligationProblemsNow(t testing.TB) []string {

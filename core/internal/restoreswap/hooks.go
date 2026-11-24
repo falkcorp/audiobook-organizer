@@ -37,6 +37,41 @@ func afterOpened(step string) bool {
 	return false
 }
 
+// noteBoundary marks the `opened` record that carries a restore's journal
+// boundary (Record.Seq).
+const noteBoundary = "boundary"
+
+// Boundary journals the journal boundary of restore id (what the restored store
+// had seen of the revocation journal, 05-backup 5B.3.6 "Coverage at restore") as
+// a second `opened` record, before step 2 moves the store's journal_head: the
+// boundary is min(the source's seq, that head), so a boot resumed after a crash
+// in step 2 cannot recompute it from a head the first boot moved. It is
+// idempotent (the first boundary wins) and refuses a journal past opened.
+func (s *Swapper) Boundary(ctx context.Context, id string, seq uint64) error {
+	recs, err := s.Journal(id)
+	if err != nil {
+		return err
+	}
+	if _, ok := BoundaryOf(recs); ok {
+		return nil
+	}
+	if last := lastStep(recs); last != StepOpened {
+		return fmt.Errorf("restoreswap: restore journal %s is at %q, not opened: no boundary may be journaled", id, last)
+	}
+	return s.appendRec(ctx, id, restorejournal.Record{Step: StepOpened, Seq: seq, Note: noteBoundary})
+}
+
+// BoundaryOf is the boundary a restore journal's records carry, if one was
+// journaled.
+func BoundaryOf(recs []restorejournal.Record) (uint64, bool) {
+	for _, r := range recs {
+		if r.Step == StepOpened && r.Note == noteBoundary {
+			return r.Seq, true
+		}
+	}
+	return 0, false
+}
+
 // RestoreLine journals that P4d step 2 appended the restore line (seq) for
 // restore id: opened --> restore_line. The record's Note is the line's seq, for
 // the reader of the journal; the line itself is found in the revocation

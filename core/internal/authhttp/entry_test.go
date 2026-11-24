@@ -292,7 +292,8 @@ func TestInviteLink_FragmentEndToEnd(t *testing.T) {
 	bruce := e.user("bruce", "brucebruce", rbac.RoleAdmin)
 	a := e.api()
 	h := publicHandler(t, a, httpapi.LimitOptions{})
-	created, err := guard(specInviteNew(), a.createInvite)(context.Background(), in(e.session(bruce), inviteCreateReq{Body: InviteCreate{Username: "dick", Email: "dick@example.test", Role: string(roleDetective)}}))
+	admin := e.session(bruce)
+	created, err := guard(specInviteNew(), a.createInvite)(auth.WithPrincipal(context.Background(), admin), in(admin, inviteCreateReq{Body: InviteCreate{Username: "dick", Email: "dick@example.test", Role: string(roleDetective)}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +340,8 @@ func TestInviteAcceptRechecksCanAssign(t *testing.T) {
 	gordon := e.user("gordon", "gordongordon", roleCommissioner)
 	a := e.api()
 	h := publicHandler(t, a, httpapi.LimitOptions{})
-	created, err := guard(specInviteNew(), a.createInvite)(context.Background(), in(e.session(gordon), inviteCreateReq{Body: InviteCreate{Username: "dick", Role: string(roleDetective)}}))
+	manager := e.session(gordon)
+	created, err := guard(specInviteNew(), a.createInvite)(auth.WithPrincipal(context.Background(), manager), in(manager, inviteCreateReq{Body: InviteCreate{Username: "dick", Role: string(roleDetective)}}))
 	if err != nil {
 		t.Fatal(err)
 	}

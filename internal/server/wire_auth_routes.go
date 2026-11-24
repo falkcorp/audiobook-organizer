@@ -34,15 +34,31 @@ func (s *Server) wireAuthRoutes(
 		authGroup.GET("/status", authH.GetStatus)
 		authGroup.POST("/setup", authH.SetupInitialAdmin)
 		authGroup.POST("/login", s.loginCeilingMiddleware(nil, respondWebLoginError), authH.Login)
-		authGroup.POST("/accept-invite", inviteLimits.middleware(inviteTokenFromBody), s.handleAcceptInvite)
-		authGroup.GET("/invite/:token", inviteLimits.middleware(inviteTokenFromParam), userH.PublicInvite)
+		if s.identity != nil {
+			// Under core identity an invite is core's record: accepting and looking
+			// one up are core's routes (POST /auth/invites/accept and /lookup), and
+			// these two would read and write books' own, now unused, invite store.
+			// They answer 410 and read no token, so they need no limiter.
+			replacement := "core's invitation routes (POST /auth/invites/lookup and POST /auth/invites/accept)"
+			authGroup.POST("/accept-invite", gone(replacement))
+			authGroup.GET("/invite/:token", gone(replacement))
+		} else {
+			authGroup.POST("/accept-invite", inviteLimits.middleware(inviteTokenFromBody), s.handleAcceptInvite)
+			authGroup.GET("/invite/:token", inviteLimits.middleware(inviteTokenFromParam), userH.PublicInvite)
+		}
 		authGroup.POST("/bootstrap", s.handleBootstrap)
 		// OAuth2 / OIDC SSO — public: /start redirects to the IdP, /callback completes
 		// the handshake and starts a session. Both are no-ops for unconfigured providers.
 		if oauthH != nil {
 			authGroup.GET("/oauth-providers", oauthH.Providers)
-			authGroup.GET("/oauth/:provider/start", oauthH.Start)
-			authGroup.GET("/oauth/:provider/callback", oauthH.Callback)
+			// Under core identity core serves these two exact paths on its fixed
+			// group (app.Options.Auth.OIDCCallbackBase), so gin does not.
+			if !s.servedByCore(http.MethodGet, "/api/v1/auth/oauth/:provider/start") {
+				authGroup.GET("/oauth/:provider/start", oauthH.Start)
+			}
+			if !s.servedByCore(http.MethodGet, "/api/v1/auth/oauth/:provider/callback") {
+				authGroup.GET("/oauth/:provider/callback", oauthH.Callback)
+			}
 		}
 	}
 
@@ -63,7 +79,17 @@ func (s *Server) wireAuthRoutes(
 		authProtected.GET("/sessions", authH.ListMySessions)
 		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)
 		s.credRoute(authProtected, http.MethodPut, "/me/password", authH.ChangePassword)
-		s.credRoute(authProtected, http.MethodPost, "/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
+		// The guest's one-time phone-app key under core identity: the page calls it
+		// right after core's accept with the session the accept gave it
+		// (guest_key_claim.go). A credRoute because it hands out a credential, so
+		// an API key or ABS token is refused; the delegated session of an accept
+		// passes.
+		s.credRoute(authProtected, http.MethodPost, "/phone-key/claim", s.handleClaimGuestKey)
+		// Deleted under core identity (routesDeletedAtTheFlip): core's POST
+		// /api/core/v1/users/{id}/temp-login mints the link.
+		if !s.deletedAtTheFlip(http.MethodPost, "/api/v1/auth/temp-tokens") {
+			s.credRoute(authProtected, http.MethodPost, "/temp-tokens", s.perm(permTempLoginMint()), s.createTempLoginToken)
+		}
 
 		// A key may manage its own user's keys (clamped to its own expiry);
 		// creating a key for ANOTHER user mints a credential for them and is

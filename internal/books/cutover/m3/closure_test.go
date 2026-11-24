@@ -56,7 +56,7 @@ func impliesMigration(t testing.TB) *Migration {
 // each, and nothing that merely implies it.
 func TestClosure(t *testing.T) {
 	m := impliesMigration(t)
-	got := m.closure([]rbac.Permission{"books:manage"})
+	got := m.scoper.closure([]rbac.Permission{"books:manage"})
 	for _, want := range []rbac.Permission{"books:manage", "books:edit", "books:view"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("closure(books:manage) = %v, missing %s", got, want)
@@ -65,10 +65,10 @@ func TestClosure(t *testing.T) {
 	if len(got) != 3 {
 		t.Errorf("closure(books:manage) = %v, want exactly the three scopes once each", got)
 	}
-	if got := m.closure([]rbac.Permission{"books:view"}); !slices.Equal(got, []rbac.Permission{"books:view"}) {
+	if got := m.scoper.closure([]rbac.Permission{"books:view"}); !slices.Equal(got, []rbac.Permission{"books:view"}) {
 		t.Errorf("closure(books:view) = %v: a scope does not hold what implies it", got)
 	}
-	if got := m.closure([]rbac.Permission{"books:manage", "books:edit"}); len(got) != 3 {
+	if got := m.scoper.closure([]rbac.Permission{"books:manage", "books:edit"}); len(got) != 3 {
 		t.Errorf("closure(manage, edit) = %v, want the shared scopes once", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestKeyScopes_ImpliedScopesCountAsHeld(t *testing.T) {
 			append([]string{"books:view"}, ambient...)},
 		{"view implies nothing above it", []string{"library.edit"}, []rbac.Permission{"books:view"}, ambient},
 	} {
-		got, _, err := m.keyScopes(c.atoms, c.owner)
+		got, _, err := m.scoper.Scopes(c.atoms, c.owner)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}

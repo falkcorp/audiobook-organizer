@@ -39,6 +39,17 @@ func TestCheckImportUser(t *testing.T) {
 		{"unknown status", func(u *auth.User) { u.Status = "suspended" }, "", "status"},
 		{"plain-text hash", func(*auth.User) {}, "hunter2", "argon2id or bcrypt"},
 		{"oauth marker as hash", func(*auth.User) {}, "oauth", "argon2id or bcrypt"},
+		{"merged away and disabled", func(u *auth.User) {
+			u.Status, u.MergedInto = auth.StatusDisabled, "01DICK"
+		}, "", ""},
+		{"merged away but active", func(u *auth.User) { u.MergedInto = "01DICK" }, "", "not disabled"},
+		{"merged away but pending", func(u *auth.User) {
+			u.Status, u.MergedInto = auth.StatusPending, "01DICK"
+		}, "", "not disabled"},
+		{"merged into itself", func(u *auth.User) {
+			u.Status, u.MergedInto = auth.StatusDisabled, u.ID
+		}, "", "merged into itself"},
+		{"merged into itself and active", func(u *auth.User) { u.MergedInto = u.ID }, "", "merged into itself"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			u := ok()

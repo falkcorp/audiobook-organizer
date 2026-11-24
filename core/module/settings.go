@@ -12,7 +12,10 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -143,13 +146,16 @@ func defaultsHandle[T any](s config.Section[T]) *config.Handle[T] {
 // Importers are core's importers (03 §3.3 "Store interfaces and importers"),
 // each bound by the kernel to its subsystem's keyspace and staging into the
 // CALLER's batch (06 §6.4.2). A field exists from the R2 flip that lands its
-// importer; the config flip (F3) lands Config and Secrets.
+// importer; the config flip (F3) lands Config and Secrets, the identity flip
+// (F4) Auth, Roles and Audit.
 //
 // The values a Cutover func receives are bound late: the kernel builds the
 // migration list at P2, the importers' stores open at P4b, so each is a
 // forwarding value that refuses (ErrImporterNotBound) until the kernel binds
 // it at the start of P4b, and a migration that runs before then fails
-// instead of writing anywhere.
+// instead of writing anywhere. Auth, Roles and Audit are the exception until
+// F4-08's boot wiring (B3) binds them: the kernel leaves them nil, and no
+// step reads them yet.
 type Importers struct {
 	Config  config.Importer  // F3
 	Secrets secrets.Importer // F3; encrypts with the keyring in the state directory
@@ -177,6 +183,22 @@ type Importers struct {
 	// provider list). False until bound, and false on a boot whose config
 	// store is not wired. Never nil as a func. Added and removed with Legacy.
 	OperatorSet func(p config.Path) (by string, set bool)
+
+	// Auth and Roles are core's identity and role importers (F4; 05-authn,
+	// 05-rbac): books' identity step (M3) stages users, API keys, external
+	// identities, invite allow-list entries and custom roles through them,
+	// every ID kept. The kernel binds them to the same store instances it
+	// builds the auth and rbac services over, so a role imported at P4b is
+	// in the role cache Freeze loads.
+	Auth  auth.Importer
+	Roles rbac.Importer
+
+	// Audit is the audit logger M3 stages core.role.create (imported) records
+	// with, through RecordIn into each chunk's batch (F4-06's m3.Config.Audit),
+	// the same instance the kernel's services write to. The spec's Importers
+	// lists no audit field: this one is coined by F4-08, because audit has no
+	// importer of its own.
+	Audit audit.Logger
 }
 
 // ErrImporterNotBound is what a late-bound importer returns before the

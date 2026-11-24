@@ -14,10 +14,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/bootseam"
+	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -94,6 +96,7 @@ const (
 // (restoreswap.Swapper's RestoreLine, HooksDone, MarkerWritten and
 // HooksApplied).
 type restoreJournal interface {
+	Boundary(ctx context.Context, id string, seq uint64) error
 	RestoreLine(ctx context.Context, id string, seq uint64) error
 	HooksDone(ctx context.Context, id string) error
 	MarkerWritten(ctx context.Context, id string) error
@@ -143,7 +146,7 @@ type reapplyApply struct {
 	// and one commit for all of them leaves no point at which the head is up and
 	// an admin the journal proved demoted is not yet restricted. A user a later
 	// line deleted is skipped.
-	RestrictLastAdmins func(ctx context.Context, userIDs []string) error
+	RestrictLastAdmins func(ctx context.Context, userIDs []string, runKey string) error
 	// FailClosed is auth's restore fallback with no coverage and no pre-swap
 	// store (auth.PostRestore): every key needs_confirmation, every credential
 	// epoch bumped, every session deleted.
@@ -185,7 +188,23 @@ type reapplyInput struct {
 	QueueBatch func() *storage.Batch
 	Clock      func() time.Time
 	Log        *slog.Logger
+	// FS is the filesystem of the journal's files: the journal, backup.location.json
+	// and the set-aside's rename. nil is the real one; the identity boot passes
+	// journalfs.From(ctx), so the crash-matrix kit sees these writes under their
+	// labels (docs/agent-tasks/platform-core/seams.d/F4-08-PB.md).
+	FS journal.FS
 }
+
+// fs is FS, or the real filesystem.
+func (in reapplyInput) fs() journal.FS {
+	if in.FS != nil {
+		return in.FS
+	}
+	return journal.OSFS()
+}
+
+// fsOpt is the option that runs a journal free function over FS.
+func (in reapplyInput) fsOpt() journal.FSOption { return journal.WithFS(in.FS) }
 
 func (in reapplyInput) now() time.Time {
 	if in.Clock != nil {
@@ -265,6 +284,45 @@ type reapplyResult struct {
 	// durable yet says the store was replaced; step 3 commits it once the hooks
 	// have completed. Zero when none is held.
 	Held journal.Head
+	// HostRun is the ID of the restore hook run this boot owes when it is no
+	// restore boot (a replaced store, with or without a journaled restore line, or
+	// the hooks an earlier boot's line still owes): minted here, before the
+	// restriction of any kept admin, so the lines of that restriction and every
+	// hook key on one live-host ID (journal.EnsureHookRun). Empty on a restore
+	// boot, which keys on its intent's ID, and on a boot that owes no hooks.
+	HostRun string
+}
+
+// owesHooksWithoutRestore reports whether this boot runs the restore hooks
+// although it is no restore boot: the external restore lines whose hooks are owed,
+// or a replaced store whose line the journal could not take. It is the same
+// condition as runRestoreHooks' for a boot with no restore of its own.
+func (r reapplyResult) owesHooksWithoutRestore() bool {
+	return len(r.Owed) > 0 || (r.Class == classReplaced && r.RestoreLine == 0)
+}
+
+// hostRunBinding is what the run ID of a run with no restore intent is minted
+// for (journal.EnsureHookRun): the same on every attempt of the run, and changed
+// by anything that finishes it. With external restore lines owed it is those
+// lines, by seq and MAC: a line is appended once and never changes, and the hooks
+// completing mark it done, so a finished run's lines are no longer owed. With none
+// it is the location file's content marker, which only the markers at the end of
+// the hooks rewrite (a replaced store whose line could not be journaled writes
+// neither before them): a run that finished since the file was written finds the
+// marker moved.
+func hostRunBinding(res reapplyResult, loc journal.Location, haveLoc bool) string {
+	if len(res.Owed) > 0 {
+		parts := make([]string, 0, len(res.Owed))
+		for _, l := range res.Owed {
+			parts = append(parts, fmt.Sprintf("%d/%s", l.Seq, l.MAC))
+		}
+		slices.Sort(parts)
+		return "owed:" + strings.Join(parts, ",")
+	}
+	if !haveLoc {
+		return "noline:nofile"
+	}
+	return fmt.Sprintf("noline:%d/%s", loc.ServedBoot.N, loc.ServedBoot.Nonce)
 }
 
 // reapplyRevocations is P4d step 2.
@@ -278,7 +336,7 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	// commit (§5B.3.6 row "Head in the store").
 	in.Journal.SetFrozen(restoring)
 
-	loc, haveLoc, locErr := journal.ReadLocation(in.StateDir)
+	loc, haveLoc, locErr := journal.ReadLocation(in.StateDir, in.fsOpt())
 	if locErr != nil {
 		// A missing file is "no marker" (row "Where"); one that exists and
 		// cannot be read or decoded is not: it may have held the evidence that
@@ -331,11 +389,26 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 
 	untrusted := in.untrusted(chain, headBefore, &res)
 
+	// A restore boot's boundary is settled before any head moves.
+	if restoring {
+		if err := in.settleBoundary(ctx, &res); err != nil {
+			return res, err
+		}
+	}
 	// The lines this boot owes the journal come before any head moves: what
 	// the verdict that the store was replaced is made durable by.
 	pend, err := in.writeBookkeeping(ctx, chain, aborted, bindErr == nil, &res)
 	if err != nil {
 		return res, err
+	}
+	// The hooks this boot owes without a restore of its own run under one ID, minted
+	// now: the restriction of a kept admin below journals under it, and a crash and
+	// the boot after it find the same ID again.
+	if !restoring && res.owesHooksWithoutRestore() {
+		binding := hostRunBinding(res, loc, haveLoc)
+		if res.HostRun, err = journal.EnsureHookRun(in.StateDir, binding, in.now(), in.fsOpt()); err != nil {
+			return res, fmt.Errorf("kernel: record the restore hooks' run ID: %w", err)
+		}
 	}
 	// A verdict nothing durable records holds the head back until the hooks ran.
 	hold := !restoring && res.Class == classReplaced && res.RestoreLine == 0
@@ -377,7 +450,7 @@ func reapplyRevocations(ctx context.Context, in reapplyInput) (res reapplyResult
 	if plan.Pending != nil && plan.Pending.Head().Seq > after.Seq {
 		after = plan.Pending.Head()
 	}
-	if err := in.restrictKept(ctx, &owe, plan, after); err != nil {
+	if err := in.restrictKept(ctx, &owe, plan, after, in.restrictKey(&res)); err != nil {
 		return res, err
 	}
 	if hold && after.Seq > headBefore.Seq {
@@ -436,7 +509,7 @@ func (in reapplyInput) settleLocation(loc journal.Location, describes bool, res 
 	case in.Restore != nil && !in.Restore.Owed:
 		return recorded
 	}
-	if err := journal.MoveFile(recorded, in.JournalPath, in.Keys); err != nil {
+	if err := journal.MoveFile(recorded, in.JournalPath, in.Keys, in.fsOpt()); err != nil {
 		in.log().Error("kernel: the revocation journal was not moved to the new backup directory", "from", recorded, "to", in.JournalPath, "err", err)
 		in.Journal.NoteBroken(err)
 		return recorded
@@ -451,7 +524,7 @@ func (in reapplyInput) settleLocation(loc journal.Location, describes bool, res 
 // it the way it does on a chain that does not verify, and never continues as
 // if the journal were empty.
 func (in reapplyInput) readChain(path string, head journal.Head) *journal.Chain {
-	c, err := journal.ReadFile(path, in.Keys)
+	c, err := journal.ReadFile(path, in.Keys, in.fsOpt())
 	switch {
 	case err == nil:
 		return c
@@ -476,40 +549,47 @@ func (in reapplyInput) setAside(ctx context.Context, path string, head journal.H
 	// Only a regular file is renamed: a link planted at the journal's name is not
 	// the journal, and moving it would take whatever it points at out of the
 	// share's reach.
-	if fi, err := os.Lstat(path); err != nil {
+	fsys := in.fs()
+	if fi, err := fsys.Lstat(path); err != nil {
 		return false, fmt.Errorf("kernel: set the other install's journal aside: %w", err)
 	} else if !fi.Mode().IsRegular() {
 		return false, fmt.Errorf("kernel: set the other install's journal aside: %w: %s", journal.ErrNotRegular, path)
 	}
 	aside := path + ".other-install-" + in.now().Format("20060102T150405Z")
 	for n := 2; ; n++ {
-		if _, err := os.Lstat(aside); errors.Is(err, os.ErrNotExist) {
+		if _, err := fsys.Lstat(aside); errors.Is(err, os.ErrNotExist) {
 			break
 		}
 		aside = fmt.Sprintf("%s.other-install-%s-%d", path, in.now().Format("20060102T150405Z"), n)
 	}
-	if err := os.Rename(path, aside); err != nil {
+	if err := renameLabelled(fsys, LabelJournalAside, path, aside); err != nil {
 		return false, fmt.Errorf("kernel: set the other install's journal aside: %w", err)
 	}
-	if err := syncDirOf(path); err != nil {
+	if err := syncDirLabelled(fsys, LabelJournalAsideSync, filepath.Dir(path)); err != nil {
 		return false, err
 	}
 	// The app is the component's, the one source of the expected app: Bind
 	// refuses a header that names another (journal.ErrOtherApp), so the journal
 	// started here and the one Bind opens next cannot disagree.
 	hdr := journal.Header{InstallID: in.Install, App: in.Journal.App(), StartedAt: in.now()}
-	if err := journal.CreateBased(path, in.Keys, hdr, head); err != nil {
+	if err := journal.CreateBased(path, in.Keys, hdr, head, in.fsOpt()); err != nil {
 		return false, fmt.Errorf("kernel: start the new journal: %w", err)
 	}
 	return true, nil
 }
 
-func syncDirOf(path string) error {
-	d, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	return errors.Join(d.Sync(), d.Close())
+// renameLabelled is fsys.Rename inside the crash-matrix region label.
+func renameLabelled(fsys journal.FS, label, from, to string) error {
+	exit := fsys.Region(label)
+	defer exit()
+	return fsys.Rename(from, to)
+}
+
+// syncDirLabelled is fsys.SyncDir inside the crash-matrix region label.
+func syncDirLabelled(fsys journal.FS, label, dir string) error {
+	exit := fsys.Region(label)
+	defer exit()
+	return fsys.SyncDir(dir)
 }
 
 // untrusted decides whether the chain cannot be re-applied from, and records in
@@ -939,6 +1019,22 @@ func (k *keptAdmins) keep(users []string) {
 	}
 }
 
+// restrictKey keys the lines the restriction of the kept admins journals to this
+// restore, by its ID, or, for a run that is no restore boot but owes hooks (a
+// replaced store), by the run's ID (reapplyResult.HostRun); a boot that owes no
+// hooks has neither, and its lines are unkeyed, as they were. A boot resumed after
+// a crash between those lines and the commit that restricts the users is the same
+// restore, so it finds them and appends none again (auth.RestoreDeps.RunKey).
+func (in reapplyInput) restrictKey(res *reapplyResult) string {
+	switch {
+	case in.Restore != nil && in.Restore.ID != "":
+		return "restore:" + in.Restore.ID
+	case in.Restore == nil && res.HostRun != "":
+		return res.HostRun
+	}
+	return ""
+}
+
 // restrictKept restricts the admins the drain and the tail kept, once the whole
 // tail has been applied, and then completes what waited for them: the queue
 // entries of the drained lines that kept one and the head a chunk withheld. A
@@ -949,9 +1045,9 @@ func (k *keptAdmins) keep(users []string) {
 // The head is committed here whether or not the restriction's own append moved it:
 // a journal that cannot take the line records a gap and leaves the head where it
 // is, and the commit never moves it back.
-func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head) error {
+func (in reapplyInput) restrictKept(ctx context.Context, owe *keptAdmins, p tailPlan, after journal.Head, runKey string) error {
 	if len(owe.Users) > 0 {
-		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users) }); err != nil {
+		if err := bootseam.Labelled(bootseam.From(ctx), labelReapplyRestrictKept, func() error { return in.Apply.RestrictLastAdmins(ctx, owe.Users, runKey) }); err != nil {
 			return fmt.Errorf("kernel: restrict the last admins %v: %w", owe.Users, err)
 		}
 	}
@@ -1233,12 +1329,35 @@ func (in reapplyInput) unhookedExternal(ctx context.Context, chain *journal.Chai
 	return out, nil
 }
 
+// settleBoundary decides this restore's boundary, min(the source's seq, the
+// swapped-in store's journal_head), and for a walking boot makes it durable in
+// the restore journal before the re-apply moves that head: the boot a crash in
+// the re-apply leaves is resumed with the boundary the first boot decided, never
+// one recomputed from the head the first boot moved (the restore line a resumed
+// boot appends would name another boundary than the one a fault-free boot's does).
+func (in reapplyInput) settleBoundary(ctx context.Context, res *reapplyResult) error {
+	rb := in.Restore
+	if rb.Steps != nil {
+		if seq, ok := restoreswap.BoundaryOf(rb.Records); ok {
+			res.RestoreBoundary = seq
+			return nil
+		}
+	}
+	res.RestoreBoundary = min(rb.SourceSeq, res.HeadBefore.Seq)
+	if rb.Steps == nil {
+		return nil
+	}
+	if err := rb.Steps.Boundary(ctx, rb.ID, res.RestoreBoundary); err != nil {
+		return fmt.Errorf("kernel: journal the restore's boundary: %w", err)
+	}
+	return nil
+}
+
 // restoreLine finds this restore's line in the journal (by the restore
 // journal's ID, so a crash between the append and the `restore_line` journal
 // record never appends a second) or appends it, then journals restore_line.
 func (in reapplyInput) restoreLine(ctx context.Context, chain *journal.Chain, aborted map[uint64]bool, res *reapplyResult) error {
 	rb := in.Restore
-	res.RestoreBoundary = min(rb.SourceSeq, res.HeadBefore.Seq)
 	for _, l := range chain.Lines {
 		if info, ok := l.RestoreInfo(); ok && info.RestoreID == rb.ID && !aborted[l.Seq] {
 			res.RestoreLine, res.RestoreBoundary = l.Seq, info.Boundary
@@ -1283,7 +1402,7 @@ func restoreKindLabel(k journal.RestoreKind) string {
 
 // writeMarkers is the end of step 2 on a plain boot.
 func (in reapplyInput) writeMarkers(ctx context.Context, res *reapplyResult) error {
-	return writeStoreMarkers(ctx, in.Journal, res.Path, in.Identity, res.Moved, in.log())
+	return writeStoreMarkers(ctx, in.Journal, in.fs(), res.Path, in.Identity, res.Moved, in.log())
 }
 
 // writeStoreMarkers writes c/backup/served_boot and then backup.location.json
@@ -1291,7 +1410,7 @@ func (in reapplyInput) writeMarkers(ctx context.Context, res *reapplyResult) err
 // step 2 on a plain boot, step h on a restore boot, after the hooks); then it
 // removes the old journal file of a move, now that the record points at the new
 // one.
-func writeStoreMarkers(ctx context.Context, comp *journal.Component, path string, id storage.StoreIdentity, moved string, log *slog.Logger) error {
+func writeStoreMarkers(ctx context.Context, comp *journal.Component, fsys journal.FS, path string, id storage.StoreIdentity, moved string, log *slog.Logger) error {
 	exit := bootseam.Region(ctx, labelReapplyServedBoot)
 	pair, err := comp.AdvanceServedBoot(ctx)
 	exit()
@@ -1303,7 +1422,7 @@ func writeStoreMarkers(ctx context.Context, comp *journal.Component, path string
 		return fmt.Errorf("kernel: write %s: %w", journal.LocationFile, err)
 	}
 	if moved != "" {
-		if err := os.Remove(moved); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := journal.RemoveMoved(moved, journal.WithFS(fsys)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			log.Warn("kernel: the old revocation journal could not be removed after the move", "path", moved, "err", err)
 		}
 	}

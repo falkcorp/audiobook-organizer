@@ -3,244 +3,243 @@
 // guid: 26b39541-b8d3-4fc8-b131-190f15f5a5ab
 // last-edited: 2026-10-21
 
+// The Users page on core's native identity routes (F4-08 B8): the list, disable and enable,
+// the merged-away marker and the one-time reset link; invitations (list, revoke, resend, create),
+// set email and the sign-ins drawer stay on books routes (F4-08 B10sq).
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../test/renderWithProviders';
+import { coreJson, coreProblem, stubCoreFetch, type CoreHandler } from '../test/coreFetch';
 import { loginPageResponse } from '../test/loginRedirect';
 import Users from './Users';
 
-// The server wraps every success as { data: ... } (httputil.SuccessResponse) and
-// every failure as { error, code, status }; the helpers below use those shapes.
-const envelope = (data: unknown) => jsonResponse({ data });
-
-const jsonResponse = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  });
-
 const activeUser = {
   id: 'u1',
-  username: 'test-user',
-  role_id: 'editor',
+  username: 'bruce.wayne',
+  email: '',
+  roles: ['editor'],
   status: 'active',
   created_at: '2026-01-01T00:00:00Z',
 };
+
+const page = (items: unknown[]) => coreJson({ items, total: items.length });
+
+function serve(
+  users: unknown[],
+  extra: Record<string, CoreHandler | Response | (() => Response)> = {},
+  invites: unknown[] = []
+) {
+  return stubCoreFetch({
+    'GET /users': () => page(users),
+    // Books' list: the pending invites and the mail settings in one answer. A test that needs other
+    // settings overrides this key (booksInvites below keeps the pending list it was given).
+    'GET /api/v1/users/invites': () => coreJson({ data: { invites, count: invites.length } }),
+    'GET /roles': page([{ name: 'admin' }, { name: 'editor' }, { name: 'viewer' }]),
+    ...extra,
+  });
+}
+
+const listLoads = (calls: { method: string; path: string }[]) =>
+  calls.filter((c) => c.method === 'GET' && c.path.startsWith('/users?')).length;
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('Users', () => {
+  it('renders the accounts core lists', async () => {
+    serve([activeUser]);
+    renderWithProviders(<Users />);
+    expect(await screen.findByText('bruce.wayne')).toBeInTheDocument();
+  });
+
+  it('fills the Created column from the account created_at (G6)', async () => {
+    serve([activeUser]);
+    renderWithProviders(<Users />);
+    await screen.findByText('bruce.wayne');
+    expect(screen.getByText(new Date('2026-01-01T00:00:00Z').toLocaleDateString())).toBeInTheDocument();
+  });
+
+  it('renders every page of the account list, not just the first 1000 (rows 9 and 14)', async () => {
+    const people = Array.from({ length: 1001 }, (_, i) => ({
+      ...activeUser,
+      id: `u${i}`,
+      username: `user.${String(i).padStart(4, '0')}`,
+    }));
+    const { calls } = serve([], {
+      'GET /users': (call) => {
+        const q = new URL(call.path, 'http://x').searchParams;
+        const offset = Number(q.get('offset') ?? 0);
+        const limit = Number(q.get('limit') ?? 50);
+        const items = people.slice(offset, offset + limit);
+        return coreJson({ items, count: items.length, limit, offset, total: people.length });
+      },
+    });
+    renderWithProviders(<Users />);
+    expect(await screen.findByText('user.0000')).toBeInTheDocument();
+    expect(await screen.findByText('user.1000')).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'GET' && c.path.startsWith('/users?')).map((c) => c.path)).toEqual([
+      '/users?limit=1000&offset=0',
+      '/users?limit=1000&offset=1000',
+    ]);
+  });
+
+  it('shows the problem core answered with, not an empty list, when the list fails', async () => {
+    serve([], { 'GET /users': coreProblem(500, 'internal', 'the store is unavailable') });
+    renderWithProviders(<Users />);
+    expect(await screen.findByText('the store is unavailable')).toBeInTheDocument();
+  });
+
   it('shows an error, not an empty list, when the session has expired on load', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => loginPageResponse())
     );
     renderWithProviders(<Users />);
-    expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
+    // The extension panels bounce too and show their own alerts; the page's own names whichever of its
+    // two list calls (core's accounts, books' invites) was refused first: both are bounced here.
+    expect(
+      (await screen.findAllByText(/session expired\):.*\/api\/(core\/v1\/users\?limit=1000|v1\/users\/invites)/i)).length
+    ).toBeGreaterThan(0);
   });
 
-  it('surfaces a failed deactivate instead of silently reloading', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/deactivate'))
-        return jsonResponse({ error: 'cannot deactivate last admin', status: 409 }, 409);
-      if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-      return envelope({ users: [activeUser], count: 1 });
+  it('shows an expired-session error when a disable is answered with a login page', async () => {
+    serve([activeUser], { 'POST /users/u1/disable': () => loginPageResponse() });
+    const user = userEvent.setup();
+    renderWithProviders(<Users />);
+    await screen.findByText('bruce.wayne');
+    await user.click(screen.getByRole('button', { name: /deactivate/i }));
+    expect(await screen.findByText(/session expired\):.*\/users\/u1\/disable/i)).toBeInTheDocument();
+  });
+
+  it('surfaces a refused disable instead of silently reloading', async () => {
+    const { calls } = serve([activeUser], {
+      'POST /users/u1/disable': coreProblem(409, 'last_admin', 'cannot disable the last admin'),
     });
-    vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
     renderWithProviders(<Users />);
-
-    await screen.findByText('test-user');
+    await screen.findByText('bruce.wayne');
     await user.click(screen.getByRole('button', { name: /deactivate/i }));
-
-    expect(await screen.findByText('cannot deactivate last admin')).toBeInTheDocument();
-    // No reload after the failed write: one /users fetch from the initial load only.
-    const userListCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/users'));
-    expect(userListCalls).toHaveLength(1);
+    expect(await screen.findByText('cannot disable the last admin')).toBeInTheDocument();
+    expect(listLoads(calls)).toBe(1);
   });
 
-  it('shows an expired-session error when deactivate is answered with a login page', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        if (url.endsWith('/deactivate')) return loginPageResponse();
-        if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-        return envelope({ users: [activeUser], count: 1 });
-      })
-    );
+  it('reloads the list after a successful disable', async () => {
+    const { calls } = serve([activeUser], {
+      'POST /users/u1/disable': () => coreJson(activeUser),
+    });
     const user = userEvent.setup();
     renderWithProviders(<Users />);
-
-    await screen.findByText('test-user');
+    await screen.findByText('bruce.wayne');
     await user.click(screen.getByRole('button', { name: /deactivate/i }));
-
-    expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
+    await waitFor(() => expect(listLoads(calls)).toBe(2));
+    // The extension panels (books' merges and phone keys) have no stub here and may show their own
+    // alerts; the page's own failure messages must be absent.
+    expect(screen.queryByText(/failed to (deactivate|load users)/i)).not.toBeInTheDocument();
   });
 
-  it('surfaces a failed reactivate', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        if (url.endsWith('/reactivate')) return jsonResponse({}, 500);
-        if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-        return envelope({ users: [{ ...activeUser, status: 'locked' }], count: 1 });
-      })
-    );
+  it('enables a disabled account', async () => {
+    const { calls } = serve([{ ...activeUser, status: 'disabled' }], {
+      'POST /users/u1/enable': () => coreJson(activeUser),
+    });
     const user = userEvent.setup();
     renderWithProviders(<Users />);
-
-    await screen.findByText('test-user');
+    await screen.findByText('bruce.wayne');
     await user.click(screen.getByRole('button', { name: /reactivate/i }));
-
-    await waitFor(() =>
-      expect(screen.getByText('Failed to reactivate user (HTTP 500)')).toBeInTheDocument()
-    );
+    await waitFor(() => expect(calls.some((c) => c.path === '/users/u1/enable')).toBe(true));
   });
 
-  it('renders users from the real { data: { users } } envelope', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) =>
-        url.endsWith('/users/invites')
-          ? envelope({ invites: [], count: 0 })
-          : envelope({ users: [activeUser], count: 1 })
-      )
-    );
-    renderWithProviders(<Users />);
-    expect(await screen.findByText('test-user')).toBeInTheDocument();
-  });
-
-  it('shows an error when the user list answers with a server error', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) =>
-        url.endsWith('/users/invites')
-          ? envelope({ invites: [], count: 0 })
-          : jsonResponse({ error: 'boom', status: 500 }, 500)
-      )
-    );
-    renderWithProviders(<Users />);
-    expect(await screen.findByText('Failed to load users')).toBeInTheDocument();
-  });
-
-  it('reloads the list after a successful deactivate', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url.endsWith('/deactivate')) return envelope({ status: 'ok' });
-      if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-      return envelope({ users: [activeUser], count: 1 });
+  it('surfaces a failed enable', async () => {
+    serve([{ ...activeUser, status: 'disabled' }], {
+      'POST /users/u1/enable': coreProblem(500, 'internal', 'the store is unavailable'),
     });
-    vi.stubGlobal('fetch', fetchMock);
     const user = userEvent.setup();
     renderWithProviders(<Users />);
-
-    await screen.findByText('test-user');
-    await user.click(screen.getByRole('button', { name: /deactivate/i }));
-
-    await waitFor(() => {
-      const listCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/users'));
-      expect(listCalls).toHaveLength(2);
-    });
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await screen.findByText('bruce.wayne');
+    await user.click(screen.getByRole('button', { name: /reactivate/i }));
+    expect(await screen.findByText('the store is unavailable')).toBeInTheDocument();
   });
 
-  it('says why invitation email is unavailable', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        if (url.endsWith('/users/invites'))
-          return envelope({
-            invites: [],
-            count: 0,
-            mail_configured: false,
-            mail_unavailable_reason: "the server's public address is not set (PUBLIC_BASE_URL)",
-          });
-        return envelope({ users: [activeUser], count: 1 });
-      })
-    );
-    const user = userEvent.setup();
+  it('shows a merged-away account as merged and offers no Enable for it', async () => {
+    const { calls } = serve([
+      { ...activeUser, status: 'disabled', merged_into_user_id: 'u2' },
+      { ...activeUser, id: 'u2', username: 'harvey.dent', status: 'disabled' },
+    ]);
     renderWithProviders(<Users />);
-    await screen.findByText('test-user');
-    await user.click(screen.getByRole('button', { name: /create invite/i }));
-    expect(await screen.findByText(/PUBLIC_BASE_URL/)).toBeInTheDocument();
-    expect(screen.getByRole('checkbox')).toBeDisabled();
+    await screen.findByText('bruce.wayne');
+    expect(screen.getByText('merged')).toBeInTheDocument();
+    // Only the account that was not merged away can be enabled.
+    expect(screen.getAllByRole('button', { name: /reactivate/i })).toHaveLength(1);
+    expect(calls.some((c) => c.path.endsWith('/enable'))).toBe(false);
+  });
+
+  it('copies the one-time reset link as an absolute URL and says it is shown once', async () => {
+    serve([activeUser], {
+      'POST /users/u1/reset-password': () => coreJson({ link: '/login/temp#token=mcl_reset_0001' }),
+    });
+    const user = userEvent.setup();
+    // userEvent.setup installs its own clipboard; spy on it after that.
+    const write = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    renderWithProviders(<Users />);
+    await screen.findByText('bruce.wayne');
+    await user.click(screen.getByRole('button', { name: /reset password/i }));
+    const expected = `${window.location.origin}/login/temp#token=mcl_reset_0001`;
+    await waitFor(() => expect(write).toHaveBeenCalledWith(expected));
+    expect(await screen.findByText(/shown once/i)).toBeInTheDocument();
   });
 
   describe('set email', () => {
-    const withEmail = { ...activeUser, email: 'old@example.com' };
+    const withEmail = { ...activeUser, email: 'old@example.test' };
+    const books = (h: CoreHandler) => ({ 'PUT /api/v1/users/u1/email': h });
 
-    it('PUTs the address and reloads with a notice', async () => {
-      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.endsWith('/users/u1/email')) {
-          expect(init?.method).toBe('PUT');
-          expect(JSON.parse(String(init?.body))).toEqual({ email: 'new@example.com' });
-          return envelope({ user: { ...withEmail, email: 'new@example.com' } });
-        }
-        if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-        return envelope({ users: [withEmail], count: 1 });
-      });
-      vi.stubGlobal('fetch', fetchMock);
+    it('PUTs the address to books and reloads with a notice', async () => {
+      const { calls } = serve(
+        [withEmail],
+        books(() => coreJson({ data: { user: { ...withEmail, email: 'new@example.test' } } }))
+      );
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-
-      await screen.findByText('test-user');
-      await user.click(screen.getByRole('button', { name: /set email for test-user/i }));
+      await screen.findByText('bruce.wayne');
+      await user.click(screen.getByRole('button', { name: /set email for bruce.wayne/i }));
       const field = screen.getByLabelText(/^email/i);
       await user.clear(field);
-      await user.type(field, 'new@example.com');
+      await user.type(field, 'new@example.test');
       await user.click(screen.getByRole('button', { name: /^save$/i }));
-
-      expect(await screen.findByText(/set to new@example.com/i)).toBeInTheDocument();
-      const userListCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/users'));
-      expect(userListCalls).toHaveLength(2);
+      expect(await screen.findByText(/set to new@example.test/i)).toBeInTheDocument();
+      const put = calls.find((c) => c.method === 'PUT');
+      expect(put?.body).toEqual({ email: 'new@example.test' });
+      expect(listLoads(calls)).toBe(2);
     });
 
     it('clears the address with an empty string', async () => {
-      const bodies: unknown[] = [];
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string, init?: RequestInit) => {
-          if (url.endsWith('/users/u1/email')) {
-            bodies.push(JSON.parse(String(init?.body)));
-            return envelope({ user: { ...withEmail, email: '' } });
-          }
-          if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-          return envelope({ users: [withEmail], count: 1 });
-        })
-      );
+      const { calls } = serve([withEmail], books(() => coreJson({ data: {} })));
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-
-      await screen.findByText('test-user');
-      await user.click(screen.getByRole('button', { name: /set email for test-user/i }));
+      await screen.findByText('bruce.wayne');
+      await user.click(screen.getByRole('button', { name: /set email for bruce.wayne/i }));
       await user.click(screen.getByRole('button', { name: /clear email/i }));
-
       expect(await screen.findByText(/cleared/i)).toBeInTheDocument();
-      expect(bodies).toEqual([{ email: '' }]);
+      expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({ email: '' });
     });
 
     it('keeps the dialog open and shows the server refusal', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string) => {
-          if (url.endsWith('/users/u1/email'))
-            return jsonResponse(
-              { error: "setting another user's email needs the admin role", status: 403 },
-              403
-            );
-          if (url.endsWith('/users/invites')) return envelope({ invites: [], count: 0 });
-          return envelope({ users: [withEmail], count: 1 });
-        })
+      serve(
+        [withEmail],
+        books(
+          () =>
+            new Response(JSON.stringify({ error: "setting another user's email needs the admin role" }), {
+              status: 403,
+              headers: { 'Content-Type': 'application/json' },
+            })
+        )
       );
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-
-      await screen.findByText('test-user');
-      await user.click(screen.getByRole('button', { name: /set email for test-user/i }));
+      await screen.findByText('bruce.wayne');
+      await user.click(screen.getByRole('button', { name: /set email for bruce.wayne/i }));
       await user.click(screen.getByRole('button', { name: /^save$/i }));
-
       expect(await screen.findByText(/needs the admin role/i)).toBeInTheDocument();
       expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
@@ -248,257 +247,206 @@ describe('Users', () => {
 
   describe('invitations', () => {
     const pending = {
-      id: 'f'.repeat(32),
-      token: 'b'.repeat(64),
+      id: 'inv-1',
       username: 'pending-guest',
-      email: 'pending@example.com',
+      email: 'pending@example.test',
       role_id: 'viewer',
-      expires_at: '2026-10-22T12:00:00Z',
+      created_by_user_id: 'u1',
+      created_at: '2026-11-20T12:00:00Z',
+      expires_at: '2026-11-27T12:00:00Z',
     };
 
-    describe('guest access not configured', () => {
-      const stub = (configured: boolean) =>
-        vi.stubGlobal(
-          'fetch',
-          vi.fn(async (url: string) => {
-            if (url.endsWith('/users/invites'))
-              return envelope({
-                invites: [pending],
-                count: 1,
-                mail_configured: true,
-                guest_policy_sync_configured: configured,
-              });
-            return envelope({ users: [activeUser], count: 1 });
-          })
-        );
+    const booksInvites = (extra: object = {}, invites: unknown[] = []) => ({
+      'GET /api/v1/users/invites': () =>
+        coreJson({
+          data: { invites, mail_configured: true, guest_policy_sync_configured: true, ...extra },
+        }),
+    });
 
-      it('warns in the pending list and the create dialog when guest policy sync is off', async () => {
-        stub(false);
-        const user = userEvent.setup();
-        renderWithProviders(<Users />);
-        await screen.findByText('pending-guest');
-        expect(screen.getAllByText(/Cloudflare guest access is not configured/)).toHaveLength(1);
-        await user.click(screen.getByRole('button', { name: /create invite/i }));
-        await waitFor(() =>
-          expect(screen.getAllByText(/Cloudflare guest access is not configured/)).toHaveLength(2)
-        );
-        expect(screen.getAllByText(/CF_GUESTS_POLICY_ID/).length).toBeGreaterThan(0);
-      });
+    it('lists the pending invitations from the books route with no link column, even when books sends a token', async () => {
+      const { calls } = serve([activeUser], booksInvites({}, [{ ...pending, token: 'gotham-link-one' }]));
+      renderWithProviders(<Users />);
+      expect(await screen.findByText('pending-guest')).toBeInTheDocument();
+      expect(screen.getByText('viewer')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /copy invitation link/i })).not.toBeInTheDocument();
+      expect(document.body.textContent).not.toContain('gotham-link-one');
+      expect(calls.some((c) => c.method === 'GET' && c.path === '/api/v1/users/invites')).toBe(true);
+      expect(calls.some((c) => c.path.startsWith('/users/invites'))).toBe(false);
+    });
 
-      it('shows no warning when guest policy sync is configured', async () => {
-        stub(true);
-        const user = userEvent.setup();
-        renderWithProviders(<Users />);
-        await screen.findByText('pending-guest');
-        await user.click(screen.getByRole('button', { name: /create invite/i }));
-        await screen.findByLabelText(/username/i);
-        expect(
-          screen.queryByText(/Cloudflare guest access is not configured/)
-        ).not.toBeInTheDocument();
+    it('shows when the invitation email went out, and Not sent until it has', async () => {
+      serve(
+        [activeUser],
+        booksInvites({}, [
+          { ...pending, email_sent_at: '2026-11-20T12:30:00Z' },
+          { ...pending, id: 'inv-2', username: 'unsent-guest', email: '' },
+        ])
+      );
+      renderWithProviders(<Users />);
+      await screen.findByText('pending-guest');
+      expect(screen.getByText(`Sent ${new Date('2026-11-20T12:30:00Z').toLocaleString()}`)).toBeInTheDocument();
+      expect(screen.getAllByText('Not sent')).toHaveLength(1);
+    });
+
+    it('creates an invite on books (which sends the email) and shows the fragment link', async () => {
+      const { calls } = serve([activeUser], {
+        ...booksInvites(),
+        'POST /api/v1/users/invite': () =>
+          coreJson({ data: { token: 'mcl_invite_0001', email_sent: false } }, 201),
       });
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+      await screen.findByText('bruce.wayne');
+      await user.click(screen.getByRole('button', { name: /create invite/i }));
+      await user.type(screen.getByLabelText(/^username/i), 'pending-guest');
+      await user.click(screen.getByRole('button', { name: /^create invite$/i }));
+      expect(
+        await screen.findByText(`${window.location.origin}/invite#token=mcl_invite_0001`)
+      ).toBeInTheDocument();
+      const post = calls.find((c) => c.method === 'POST' && c.path.endsWith('/users/invite'));
+      expect(post?.body).toMatchObject({ username: 'pending-guest', role_id: 'editor', send_email: false });
+    });
+
+    it('says why invitation email is unavailable and disables the send checkbox', async () => {
+      serve([activeUser], {
+        ...booksInvites({
+          mail_configured: false,
+          mail_unavailable_reason: "the server's public address is not set (PUBLIC_BASE_URL)",
+        }),
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+      await screen.findByText('bruce.wayne');
+      await user.click(screen.getByRole('button', { name: /create invite/i }));
+      expect(await screen.findByText(/PUBLIC_BASE_URL/)).toBeInTheDocument();
+      expect(screen.getByRole('checkbox')).toBeDisabled();
     });
 
     it('creates an emailed invite with the email and send flag, and shows the result', async () => {
-      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.endsWith('/users/invite')) {
-          expect(JSON.parse(String(init?.body))).toEqual({
-            username: 'newguest',
-            role_id: 'editor',
-            email: 'new@example.com',
-            send_email: true,
-          });
-          return jsonResponse({ data: { token: 'c'.repeat(64), email_sent: true } }, 201);
-        }
-        if (url.endsWith('/users/invites'))
-          return envelope({ invites: [], count: 0, mail_configured: true });
-        return envelope({ users: [activeUser], count: 1 });
+      const { calls } = serve([activeUser], {
+        ...booksInvites(),
+        'POST /api/v1/users/invite': () =>
+          coreJson({ data: { token: 'mcl_invite_0002', email_sent: true } }, 201),
       });
-      vi.stubGlobal('fetch', fetchMock);
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-      await screen.findByText('test-user');
+      await screen.findByText('bruce.wayne');
       await user.click(screen.getByRole('button', { name: /create invite/i }));
-      await user.type(screen.getByLabelText(/username/i), 'newguest');
-      await user.type(screen.getByLabelText(/^email/i), 'new@example.com');
+      await user.type(screen.getByLabelText(/^username/i), 'newguest');
+      await user.type(screen.getByLabelText(/^email/i), 'new@example.test');
       await user.click(screen.getAllByRole('button', { name: /create invite/i }).at(-1)!);
-      expect(await screen.findByText(/invitation emailed to new@example.com/i)).toBeInTheDocument();
-      expect(screen.getByText(new RegExp(`/invite/${'c'.repeat(64)}`))).toBeInTheDocument();
+      expect(await screen.findByText(/invitation emailed to new@example.test/i)).toBeInTheDocument();
+      const post = calls.find((c) => c.method === 'POST' && c.path.endsWith('/users/invite'));
+      expect(post?.body).toEqual({
+        username: 'newguest',
+        role_id: 'editor',
+        email: 'new@example.test',
+        send_email: true,
+      });
     });
 
     it('falls back to the link and shows why when the email was not sent', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string) => {
-          if (url.endsWith('/users/invite'))
-            return jsonResponse(
-              {
-                data: {
-                  token: 'd'.repeat(64),
-                  email_sent: false,
-                  email_error: 'sending failed: 550',
-                },
-              },
-              201
-            );
-          if (url.endsWith('/users/invites'))
-            return envelope({ invites: [], count: 0, mail_configured: true });
-          return envelope({ users: [activeUser], count: 1 });
-        })
-      );
+      serve([activeUser], {
+        ...booksInvites(),
+        'POST /api/v1/users/invite': () =>
+          coreJson({ data: { token: 'mcl_invite_0003', email_sent: false, email_error: 'sending failed: 550' } }, 201),
+      });
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-      await screen.findByText('test-user');
+      await screen.findByText('bruce.wayne');
       await user.click(screen.getByRole('button', { name: /create invite/i }));
-      await user.type(screen.getByLabelText(/username/i), 'g');
-      await user.type(screen.getByLabelText(/^email/i), 'g@example.com');
+      await user.type(screen.getByLabelText(/^username/i), 'g');
+      await user.type(screen.getByLabelText(/^email/i), 'g@example.test');
       await user.click(screen.getAllByRole('button', { name: /create invite/i }).at(-1)!);
-      expect(
-        await screen.findByText(/the email was not sent: sending failed: 550/i)
-      ).toBeInTheDocument();
+      expect(await screen.findByText(/the email was not sent: sending failed: 550/i)).toBeInTheDocument();
       expect(screen.getByText(/send this link to g yourself/i)).toBeInTheDocument();
+      expect(screen.getByText(`${window.location.origin}/invite#token=mcl_invite_0003`)).toBeInTheDocument();
     });
 
-    it('disables the send checkbox when email is not configured and sends send_email=false', async () => {
-      const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-        if (url.endsWith('/users/invite')) {
-          expect(JSON.parse(String(init?.body)).send_email).toBe(false);
-          return jsonResponse({ data: { token: 'e'.repeat(64), email_sent: false } }, 201);
-        }
-        if (url.endsWith('/users/invites'))
-          return envelope({ invites: [], count: 0, mail_configured: false });
-        return envelope({ users: [activeUser], count: 1 });
-      });
-      vi.stubGlobal('fetch', fetchMock);
+    it('warns in the pending list and the create dialog when guest policy sync is off, and not when it is on', async () => {
+      serve([activeUser], booksInvites({ guest_policy_sync_configured: false }, [pending]));
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-      await screen.findByText('test-user');
+      await screen.findByText('pending-guest');
+      await waitFor(() =>
+        expect(screen.getAllByText(/Cloudflare guest access is not configured/)).toHaveLength(1)
+      );
       await user.click(screen.getByRole('button', { name: /create invite/i }));
-      expect(screen.getByRole('checkbox', { name: /email is not configured/i })).toBeDisabled();
-      await user.type(screen.getByLabelText(/username/i), 'g');
-      await user.type(screen.getByLabelText(/^email/i), 'g@example.com');
-      await user.click(screen.getAllByRole('button', { name: /create invite/i }).at(-1)!);
-      await screen.findByText(/send this link to g yourself/i);
+      await waitFor(() =>
+        expect(screen.getAllByText(/Cloudflare guest access is not configured/)).toHaveLength(2)
+      );
+      expect(screen.getAllByText(/CF_GUESTS_POLICY_ID/).length).toBeGreaterThan(0);
     });
 
-    it('resends a pending invitation and reports a rate limit', async () => {
-      let resends = 0;
-      const urls: string[] = [];
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string) => {
-          urls.push(url);
-          if (url.endsWith('/resend')) {
-            resends++;
-            return resends === 1
-              ? envelope({ email_sent: true })
-              : jsonResponse(
-                  {
-                    error:
-                      'this invitation was emailed less than a minute ago; wait a minute and try again',
-                    status: 429,
-                  },
-                  429
-                );
-          }
-          if (url.endsWith('/users/invites'))
-            return envelope({ invites: [pending], count: 1, mail_configured: true });
-          return envelope({ users: [activeUser], count: 1 });
-        })
-      );
+    it('shows no guest-access warning when guest policy sync is configured', async () => {
+      serve([activeUser], booksInvites({ guest_policy_sync_configured: true }, [pending]));
       const user = userEvent.setup();
       renderWithProviders(<Users />);
-      const resend = await screen.findByRole('button', {
-        name: /resend invitation email to pending@example.com/i,
-      });
-      await user.click(resend);
-      expect(
-        await screen.findByText(/invitation emailed again to pending@example.com/i)
-      ).toBeInTheDocument();
-      await user.click(
-        screen.getByRole('button', { name: /resend invitation email to pending@example.com/i })
-      );
-      expect(await screen.findByText(/less than a minute ago/i)).toBeInTheDocument();
-      // Resend names the invite by its id, never its token.
-      const resendURLs = urls.filter((u) => u.endsWith('/resend'));
-      expect(resendURLs[0]).toContain(`/users/invites/${pending.id}/resend`);
-      expect(resendURLs.join(' ')).not.toContain(pending.token);
+      await screen.findByText('pending-guest');
+      await user.click(screen.getByRole('button', { name: /create invite/i }));
+      await screen.findByLabelText(/^username/i);
+      expect(screen.queryByText(/Cloudflare guest access is not configured/)).not.toBeInTheDocument();
     });
 
-    it('shows "Hidden" instead of a copy button when the server withholds the token', async () => {
-      const { token: _withheld, ...noToken } = pending;
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string) => {
-          if (url.endsWith('/users/invites'))
-            return envelope({ invites: [noToken], count: 1, mail_configured: true });
-          return envelope({ users: [activeUser], count: 1 });
-        })
-      );
+    it('resends a pending invitation through books', async () => {
+      const { calls } = serve([activeUser], {
+        ...booksInvites({}, [pending]),
+        'POST /api/v1/users/invites/inv-1/resend': () => coreJson({ data: {} }),
+      });
+      const user = userEvent.setup();
       renderWithProviders(<Users />);
-      expect(await screen.findByText('Hidden')).toBeInTheDocument();
-      expect(
-        screen.queryByRole('button', { name: /copy invitation link for pending-guest/i })
-      ).not.toBeInTheDocument();
-      // Resend still works from the id.
-      expect(
-        screen.getByRole('button', { name: /resend invitation email to pending@example.com/i })
-      ).toBeInTheDocument();
+      await user.click(await screen.findByRole('button', { name: /resend invitation email to pending@example.test/i }));
+      expect(await screen.findByText(/emailed again to pending@example.test/i)).toBeInTheDocument();
+      expect(calls.some((c) => c.path.endsWith('/invites/inv-1/resend'))).toBe(true);
     });
 
     it('shows accepted invites with their Cloudflare outcome', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: string) => {
-          if (url.endsWith('/users/invites'))
-            return envelope({
-              invites: [],
-              count: 0,
-              accepted: [
-                {
-                  username: 'ok-guest',
-                  email: 'ok@example.com',
-                  accepted_at: '2026-10-19T12:00:00Z',
-                  email_binding: 'bound',
-                  sso_grant: 'granted',
-                  guest_policy_status: 'added',
-                },
-                {
-                  username: 'failed-guest',
-                  email: 'failed@example.com',
-                  accepted_at: '2026-10-19T12:00:00Z',
-                  email_binding: 'bound',
-                  sso_grant: 'granted',
-                  guest_policy_status: 'failed',
-                  guest_policy_detail: 'HTTP 403',
-                },
-                {
-                  username: 'revoked-guest',
-                  email: 'revoked@example.com',
-                  accepted_at: '2026-10-19T12:00:00Z',
-                  email_binding: 'bound',
-                  sso_grant: 'granted',
-                  guest_policy_status: 'removed',
-                },
-                {
-                  username: 'manual-guest',
-                  email: 'manual@example.com',
-                  accepted_at: '2026-10-19T12:00:00Z',
-                  email_binding: 'not_emailed',
-                  guest_policy_status: 'skipped',
-                },
-              ],
-            });
-          return envelope({ users: [activeUser], count: 1 });
+      serve(
+        [activeUser],
+        booksInvites({
+          accepted: [
+            {
+              username: 'alfred.pennyworth',
+              email: 'alfred@example.test',
+              accepted_at: '2026-11-20T12:00:00Z',
+              guest_policy_status: 'added',
+            },
+          ],
         })
       );
       renderWithProviders(<Users />);
-      expect(await screen.findByText('Added to Cloudflare guest policy')).toBeInTheDocument();
-      expect(screen.getByText('Cloudflare update failed: add manually')).toBeInTheDocument();
-      expect(screen.getByText('Email not verified: not granted')).toBeInTheDocument();
-      expect(
-        screen.getByText('Access revoked during the update: removed from Cloudflare')
-      ).toBeInTheDocument();
-      expect(screen.getByText(/manual@example.com \(not verified/i)).toBeInTheDocument();
+      expect(await screen.findByText('alfred.pennyworth')).toBeInTheDocument();
+      expect(screen.getByText(/added to cloudflare guest policy/i)).toBeInTheDocument();
+    });
+
+    it('revokes a pending invitation on the books route and reloads', async () => {
+      const { calls } = serve([activeUser], {
+        ...booksInvites({}, [pending]),
+        'DELETE /api/v1/users/invites/inv-1': () => coreJson({ data: { deleted: 'inv-1' } }),
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+      await user.click(await screen.findByRole('button', { name: /revoke invitation for pending-guest/i }));
+      expect(await screen.findByText(/invitation for pending-guest revoked/i)).toBeInTheDocument();
+      expect(calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/users/invites/inv-1')).toBe(true);
+      expect(calls.some((c) => c.path.startsWith('/users/invites'))).toBe(false);
+      expect(calls.filter((c) => c.method === 'GET' && c.path === '/api/v1/users/invites')).toHaveLength(2);
+    });
+
+    it('shows books' + "'" + ' refusal of a revoke instead of a revoked notice', async () => {
+      serve([activeUser], {
+        ...booksInvites({}, [pending]),
+        'DELETE /api/v1/users/invites/inv-1': () =>
+          new Response(JSON.stringify({ error: 'invite not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<Users />);
+      await user.click(await screen.findByRole('button', { name: /revoke invitation for pending-guest/i }));
+      expect(await screen.findByText('invite not found')).toBeInTheDocument();
+      expect(screen.queryByText(/revoked/i)).not.toBeInTheDocument();
     });
   });
 });

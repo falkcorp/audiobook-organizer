@@ -40,6 +40,7 @@ import { VersionManagement } from '../audiobooks/VersionManagement';
 import AddToPlaylistDialog from '../audiobooks/AddToPlaylistDialog';
 import { ServerFileBrowser } from '../common/ServerFileBrowser';
 import type { PurgeRunController } from '../../hooks/usePurgeRun';
+import type { SignInRequiredGate } from '../../hooks/useSignInRequiredForAction';
 import { PurgeSoftDeletedDialog } from './PurgeSoftDeletedDialog';
 import { MergeKeeperPicker } from './MergeKeeperPicker';
 import type { Audiobook } from '../../types';
@@ -215,6 +216,8 @@ interface LibraryDialogsProps {
   newImportPath: string;
   setNewImportPath: (path: string) => void;
   handleAddImportPath: () => void;
+  /** SEC5-8: under auth-off core refuses the add; the dialog shows the notice and disables Add Path. */
+  addPathGate?: SignInRequiredGate;
   handleServerBrowserSelect: (path: string, isDir: boolean) => void;
 
   // Import paths list
@@ -346,6 +349,7 @@ export const LibraryDialogs = ({
   newImportPath,
   setNewImportPath,
   handleAddImportPath,
+  addPathGate,
   handleServerBrowserSelect,
   importPaths,
   importPathsExpanded,
@@ -1049,6 +1053,7 @@ export const LibraryDialogs = ({
     >
       <DialogTitle>Add Import Folder (Watch Location)</DialogTitle>
       <DialogContent>
+        {addPathGate?.notice && <Box sx={{ mb: 2 }}>{addPathGate.notice}</Box>}
         <Alert severity="info" sx={{ mb: 2 }}>
           <strong>Import folders</strong> are watch locations where the scanner looks for new
           audiobooks. Files discovered here will be copied and organized into your main library path
@@ -1105,7 +1110,11 @@ export const LibraryDialogs = ({
         >
           Cancel
         </Button>
-        <Button onClick={handleAddImportPath} variant="contained" disabled={!newImportPath.trim()}>
+        <Button
+          onClick={handleAddImportPath}
+          variant="contained"
+          disabled={!newImportPath.trim() || Boolean(addPathGate?.blocked)}
+        >
           Add Path
         </Button>
       </DialogActions>

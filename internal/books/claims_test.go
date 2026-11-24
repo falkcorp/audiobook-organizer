@@ -6,6 +6,8 @@
 package books
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +16,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m3"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // TestBooksWritesEveryFamily (05-storage §5S.10, §5S.3.4; COR5-1): on ABO's
@@ -25,7 +29,10 @@ import (
 // scan's import-root statistics, with no write refused: no family books
 // writes is outside its claims. A family left unclaimed would fail here with
 // storage.ErrOutsideKeyspace, and the fix is to claim it, never to widen a
-// claim over a foreign range.
+// claim over a foreign range. The identity families M3 drains are retired
+// claims under the flip (on since B10g): a write there is refused with the
+// claim's mode, which is what retiring them is for, and the test holds that
+// too.
 func TestBooksWritesEveryFamily(t *testing.T) {
 	c := bootComposed(t, false, nil, nil)
 	db := c.store.DB()
@@ -36,10 +43,20 @@ func TestBooksWritesEveryFamily(t *testing.T) {
 			exactKey[cl.Key] = true
 		}
 	}
-	written := 0
+	retired := map[string]bool{}
+	for _, p := range m3.SourcePrefixes() {
+		retired[p] = true
+	}
+	written, refused := 0, 0
 	for _, f := range database.KeyFamilies() {
 		if f.Prefix == "c/" || f.Prefix == "m/" {
 			continue // core's reserved roots, never books'
+		}
+		if retired[f.Prefix] {
+			assert.ErrorIs(t, db.Set([]byte(f.Prefix+"batman-probe"), []byte("{}"), pebble.Sync), storage.ErrClaimMode,
+				"family %q: M3 drained it, so the flip retires its claim and a write must be refused", f.Prefix)
+			refused++
+			continue
 		}
 		key := f.Prefix + "batman-probe"
 		if exactKey[f.Prefix] {
@@ -60,6 +77,11 @@ func TestBooksWritesEveryFamily(t *testing.T) {
 		} else {
 			require.NoError(t, db.Delete([]byte(key), pebble.Sync), "family %q: delete of %q refused", f.Prefix, key)
 		}
+	}
+	assert.Positive(t, refused, "no registered family is retired: the identity flip's claims are gone")
+	for p := range retired {
+		assert.True(t, slices.ContainsFunc(database.KeyFamilies(), func(f database.KeyFamily) bool { return strings.HasPrefix(p, f.Prefix) }),
+			"M3 drains %q, which no registered key family covers", p)
 	}
 	assert.Greater(t, written, 200, "the family registry is far smaller than 05-storage §5S.9.1's table: the test proves little")
 

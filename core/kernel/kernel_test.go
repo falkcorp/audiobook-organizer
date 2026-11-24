@@ -295,7 +295,7 @@ func TestValidation_ProblemKinds(t *testing.T) {
 			return nil
 		})}, nil},
 		{module.ProblemLegacyAuth, nil, []module.Module{mod("batcave", func(r *module.Registrar) error {
-			r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthGin})
+			r.MountLegacy(httpapi.LegacyMount{Handler: stand, Auth: httpapi.LegacyAuthCore + 1})
 			return nil
 		})}, nil},
 		{module.ProblemSPASegmentCollision, nil, []module.Module{mod("batcave", func(r *module.Registrar) error {
@@ -382,24 +382,6 @@ func TestModuleAuthMethod_CannotBeInteractive(t *testing.T) {
 		r.AuthMethod(auth.MethodSpec{Method: "batcave.signal"})
 		return nil
 	})))
-}
-
-func TestLegacyAuthGinOnlyNamedModule(t *testing.T) {
-	mount := func(r *module.Registrar) error {
-		r.MountLegacy(httpapi.LegacyMount{Handler: http.NotFoundHandler(), Auth: httpapi.LegacyAuthGin})
-		return nil
-	}
-	c := testConfig(t, mod("batcave", mount), mod("arkham", mount))
-	c.LegacyAuthGinUntil = "batcave"
-	_, err := newK(t, c)
-	got := problems(t, err)
-	if len(got) != 1 || got[0].Module != "arkham" || got[0].Kind != module.ProblemLegacyAuth {
-		t.Fatalf("problems = %v, want one ProblemLegacyAuth for arkham", got)
-	}
-	// The OwnAuth half needs auth (R2's identity flip).
-	c = testConfig(t, mod("batcave", mount))
-	c.LegacyAuthGinUntil = "batcave"
-	mustNew(t, c)
 }
 
 func TestReservedIDsIncludeLegacyTopSegments(t *testing.T) {
