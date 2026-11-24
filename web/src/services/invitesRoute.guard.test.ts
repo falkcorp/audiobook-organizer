@@ -31,9 +31,9 @@ const ALLOWED: readonly string[] = [];
 //    (create).
 // 3. A test stub key for the same two calls (the method, a space, then the path without the prefix).
 const NATIVE = [
-  new RegExp('\\.(GET|DELETE)\\(\\s*' + Q + '[^\'"`]*' + INVITES.replace(/\//g, '\\/')),
-  new RegExp('(?<!\\.POST\\(\\s*' + Q + ')' + CORE.replace(/\//g, '\\/') + INVITES.replace(/\//g, '\\/')),
-  new RegExp(Q + '(GET|DELETE) ' + INVITES.replace(/\//g, '\\/')),
+  new RegExp('\\.(GET|DELETE)\\(\\s*' + Q + '[^\'"`]*' + INVITES),
+  new RegExp('(?<!\\.POST\\(\\s*' + Q + ')' + CORE + INVITES),
+  new RegExp(Q + '(GET|DELETE) ' + INVITES),
 ];
 
 function walk(dir: string): string[] {

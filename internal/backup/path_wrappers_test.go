@@ -5,7 +5,19 @@
 
 package backup
 
-import "path/filepath"
+import (
+	"context"
+	"path/filepath"
+)
+
+func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
+	return extractArchiveRecording(archivePath, targetPath, snapshotDirs, nil)
+}
+
+func extractStore(ctx context.Context, archivePath, storeDir string) (string, bool, error) {
+	x, err := extractStoreRecording(ctx, archivePath, storeDir)
+	return x.sum, x.verified, err
+}
 
 // extractBackup extracts the archive at backupPath into targetPath, every
 // entry confined to it: the archive mechanics the round-trip tests check.

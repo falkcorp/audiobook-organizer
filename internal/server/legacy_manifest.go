@@ -191,10 +191,6 @@ var routesDeletedAtTheFlip = []string{
 	"POST /api/v1/auth/temp-tokens",
 }
 
-// RoutesDeletedAtTheFlip is routesDeletedAtTheFlip, "METHOD /gin/path", for the
-// tests outside this package that compare a mount with the static manifest.
-func RoutesDeletedAtTheFlip() []string { return slices.Clone(routesDeletedAtTheFlip) }
-
 // deletedAtTheFlip reports whether method and ginPath are a route the identity
 // flip deleted (routesDeletedAtTheFlip). Always false on a server that is not
 // under core identity: HEAD's own handler serves the path there.

@@ -189,7 +189,11 @@ class RealTreeTests(unittest.TestCase):
             # core's go.mod is copied before the (retried) module download that needs it
             self.assertLess(
                 lines.index("COPY core/go.mod core/go.sum ./core/"),
-                next(i for i, ln in enumerate(lines) if ln.startswith("RUN ") and "go mod download" in ln),
+                next(
+                    i
+                    for i, ln in enumerate(lines)
+                    if ln.startswith("RUN ") and "go mod download" in ln
+                ),
                 name,
             )
 

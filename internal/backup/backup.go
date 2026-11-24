@@ -1045,7 +1045,7 @@ func landsIn(p string, keep []keepOutDir) (string, bool, error) {
 	}
 }
 
-// extractArchive opens archivePath and extracts it into targetPath, every
+// extractArchiveRecording opens archivePath and extracts it into targetPath, every
 // entry confined to it (library.Join, then checkWithin). ExtractStore runs
 // it into a new, private directory once its scan (scanArchive) passed; the
 // round-trip tests run it directly. It can fail after writing some files.
@@ -1065,11 +1065,8 @@ func landsIn(p string, keep []keepOutDir) (string, bool, error) {
 // destination: each entry is written to a new file and renamed into place
 // (writeEntry), so a hard link there leaves the file it names as it was
 // (SF1).
-func extractArchive(archivePath, targetPath string, snapshotDirs []string) error {
-	return extractArchiveRecording(archivePath, targetPath, snapshotDirs, nil)
-}
-
-// extractArchiveRecording is extractArchive that also records each regular
+//
+// It also records each regular
 // file's size and SHA-256 in ledger as the file is written, and the codec the
 // archive was read with (nil: record nothing).
 func extractArchiveRecording(archivePath, targetPath string, snapshotDirs []string, ledger *entryLedger) error {
