@@ -96,8 +96,8 @@ func (h *APIKeyHandler) createUnderIdentity(c *gin.Context, id *legacyauth.Ident
 	// clamp to on HEAD and was refused: it still is.
 	method := auth.MethodFromContext(ctx)
 	// A key never mints for another user (F4-08 B10rn, STOP 2 ruling, option 2).
-	// The route's credRouteWhen refuses it first today; this refusal is the
-	// handler's own, so it holds when that guard is gone, and does not rest on
+	// Since B10g the conditional credRouteWhen guard passes through under core
+	// identity, so this handler refusal is the live gate. It does not rest on
 	// core's refusal or on the clamp below.
 	if method == auth.MethodAPIKey && target != string(p.User.ID) {
 		httputil.RespondWithForbidden(c, keyForAnotherUserMessage)
