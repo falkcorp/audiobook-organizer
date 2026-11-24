@@ -18,7 +18,8 @@ import {
   Typography,
 } from '@mui/material';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { JsonSchema, KeyStateView, SettingsPatchBody, SettingsPatchResult, ShellClient, ShellProblem } from '../api/interim';
+import type { ShellClient } from '../api/client';
+import type { JsonSchema, KeyStateView, SettingsPatchBody, SettingsPatchResult, ShellProblem } from '../api/settingsInterim';
 import { ApiCallError, errorMessage, isAbortError, problemMessage, unwrap } from '../api/problems';
 import { formatError, jsonEqual, keyLabel, parseList, parseNumber, sectionKeys, widgetFor } from './keyState';
 

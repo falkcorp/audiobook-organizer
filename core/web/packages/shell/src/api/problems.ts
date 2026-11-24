@@ -8,7 +8,7 @@
 // every caller shows the message (07 §7.9.1, the four-states rule).
 
 import { isAbortError } from '@mediacore/api-client';
-import type { ShellProblem } from './interim';
+import type { ShellProblem } from './settingsInterim';
 
 /** A non-2xx answer, carrying the decoded Problem (api-client decodes every error body into one). */
 export class ApiCallError extends Error {

@@ -5,7 +5,8 @@
 
 import { DataState } from '@mediacore/ui-kit';
 import { useEffect, useState } from 'react';
-import type { KeyStateView, SettingsSchemaDoc, ShellClient } from '../api/interim';
+import type { ShellClient } from '../api/client';
+import type { KeyStateView, SettingsSchemaDoc } from '../api/settingsInterim';
 import { errorMessage, isAbortError, unwrap } from '../api/problems';
 import { SchemaForm } from './SchemaForm';
 

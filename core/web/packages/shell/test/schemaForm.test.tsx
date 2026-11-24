@@ -6,7 +6,8 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createShellClient, type KeyStateView, type SettingsPatchResult, type SettingsViewBody } from '../src/api/interim';
+import { createShellClient } from '../src/api/client';
+import type { KeyStateView, SettingsPatchResult, SettingsViewBody } from '../src/api/settingsInterim';
 import { SchemaForm, SettingsSection } from '../src/settings';
 
 const API = '/api/core/v1';

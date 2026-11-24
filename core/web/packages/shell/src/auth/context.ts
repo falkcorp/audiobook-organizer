@@ -4,7 +4,7 @@
 // last-edited: 2026-11-20
 
 import { createContext } from 'react';
-import type { ShellClient } from '../api/interim';
+import type { ShellClient } from '../api/client';
 import type { AuthState } from '../contracts';
 import type { ModuleUI } from '../types';
 

@@ -7,13 +7,15 @@ import { DataState } from '@mediacore/ui-kit';
 import { Alert, Button, Stack, TextField, Typography } from '@mui/material';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
-import type { InvitePreviewBody } from '../api/interim';
+import type { components } from '@mediacore/api-client';
 import { errorMessage, isAbortError, unwrap } from '../api/problems';
 import { AuthCard } from './AuthCard';
 import { useFragmentToken } from './fragmentToken';
 import { useAuth, useAuthClient } from './hooks';
 
-type Lookup = { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; invite: InvitePreviewBody };
+type InvitePreview = components['schemas']['core.InvitePreview'];
+
+type Lookup = { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; invite: InvitePreview };
 
 /**
  * /invite#token=...: shows what the invite creates (POST /auth/invites/lookup,

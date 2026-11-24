@@ -9,7 +9,8 @@ import userEvent from '@testing-library/user-event';
 import { type ReactNode } from 'react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createShellClient, shellOperations, type ShellClient } from '../src/api/interim';
+import { coreOperations } from '@mediacore/api-client';
+import { createShellClient, type ShellClient } from '../src/api/client';
 import {
   AuthProvider,
   InvitePage,
@@ -574,8 +575,7 @@ describe('the shell operation table', () => {
   });
 
   it('lists every route once', () => {
-    const keys = shellOperations.map((o) => `${o.method} ${o.path}`);
+    const keys = coreOperations.map((o) => `${o.method} ${o.path}`);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(keys).toHaveLength(13);
   });
 });

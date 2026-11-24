@@ -5,7 +5,7 @@
 
 import { isAuthRedirectError } from '@mediacore/api-client';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { onShellUnauthorized, type ShellClient } from '../api/interim';
+import { onShellUnauthorized, type ShellClient } from '../api/client';
 import { ApiCallError, errorMessage, isAbortError, unwrap } from '../api/problems';
 import type { AuthState, AuthUser } from '../contracts';
 import type { Permission } from '../types';
