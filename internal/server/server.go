@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/cache"
+	"github.com/falkcorp/audiobook-organizer/internal/cfaccess"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/decisions"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -49,6 +50,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	operationshandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/operations"
 	systemhandlers "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/falkcorp/audiobook-organizer/internal/tools"
 	coreauth "github.com/falkcorp/mediacore/auth"
 	diagflight "github.com/falkcorp/mediacore/health"
@@ -179,7 +181,15 @@ type narratorEntry struct {
 
 // Server represents the HTTP server
 type Server struct {
-	store database.Store
+	// identity is non-nil only on a server built to run under core identity
+	// (WithIdentity); every adopted auth site reads it, or the request's bound
+	// copy, and takes HEAD's path when it is nil.
+	identity *legacyauth.Identity
+	// accessVerifier is WithAccessVerifier's value (identityThrottleKey).
+	accessVerifier cfaccess.CFAssertionVerifier
+	// accessAllowList is WithAccessAllowList's value (keepGuestPolicyEmail).
+	accessAllowList func() (string, error)
+	store           database.Store
 	// credRoutes records every route registered through credRoute /
 	// credRouteWhen ("METHOD /full/path"), for credential_routes_test.go.
 	credRoutes map[string]credRouteKind
@@ -469,6 +479,9 @@ type Server struct {
 	// guestTokens: the per-guest Cloudflare service token clients and test
 	// overrides (guest_service_tokens.go).
 	guestTokens guestTokenState
+	// guestKeyClaims holds the unclaimed phone-app key entitlements of accepted
+	// invitations (guest_key_claim.go).
+	guestKeyClaims guestKeyClaims
 	// mailSenderOverride replaces the SMTP sender (tests only).
 	mailSenderOverride imail.Sender
 	// opsV3Closing is closed when Shutdown begins (closeOpsV3Streams), before
@@ -789,8 +802,49 @@ var activityStoreOverrideForTest database.ActivityStorer
 type ServerOption func(*serverOptions)
 
 type serverOptions struct {
-	log    *slog.Logger
-	extend func(step string)
+	log      *slog.Logger
+	extend   func(step string)
+	identity *legacyauth.Identity
+	// accessVerifier checks the Cloudflare Access assertion a request carries,
+	// for the failure throttle's visitor bucket under core identity.
+	accessVerifier cfaccess.CFAssertionVerifier
+	// accessAllowList reads the Cloudflare Access allow-list under core identity.
+	accessAllowList func() (string, error)
+}
+
+// WithAccessAllowList is the read of the Cloudflare Access allow-list
+// (modules.books.cfaccess.allowed_emails) of a server under core identity
+// (WithIdentity). Under identity that key, not the OIDC provider projection
+// config.Snapshot().OAuthAllowedEmails, is what admits a person, so the guest
+// policy's keep rule (keepGuestPolicyEmail) reads it here. An error means the
+// list is unreadable and the rule keeps the entry. It has no effect without
+// WithIdentity, and a server under identity built without it keeps every entry
+// it cannot rule out.
+func WithAccessAllowList(read func() (string, error)) ServerOption {
+	return func(o *serverOptions) { o.accessAllowList = read }
+}
+
+// WithAccessVerifier is the verifier of the Cloudflare Access assertion the
+// visitor bucket of a server under core identity (WithIdentity) believes: a
+// request from this host that carries an assertion it accepts is keyed on the
+// CF-Connecting-IP it names, not on the connector's address. Books passes the
+// handle the Access extension also holds, so the throttle and the sign-in agree
+// on what is verified. Without it (nil) no assertion is believed and the bucket
+// is the peer's: a shared bucket for tunnel visitors, never a skipped one. It
+// has no effect without WithIdentity.
+func WithAccessVerifier(v cfaccess.CFAssertionVerifier) ServerOption {
+	return func(o *serverOptions) { o.accessVerifier = v }
+}
+
+// WithIdentity builds the server to run under core identity
+// (httpapi.LegacyAuthCore, F4-08 B7): the gin auth chain and every adopted
+// in-handler check go through id's bridge, and no decision reads books' own
+// user store or EnableAuth. Without the option (and with nil) the server is
+// HEAD's, byte for byte: books mounts it with httpapi.LegacyAuthGin and the
+// flip's last commit (B10) passes the option together with LegacyAuthCore.
+// An incomplete Identity is a wiring fault and NewServer refuses it.
+func WithIdentity(id *legacyauth.Identity) ServerOption {
+	return func(o *serverOptions) { o.identity = id }
 }
 
 // WithLogger is the logger the operations registry (and through it every op
@@ -818,10 +872,20 @@ func WithStartExtender(f func(step string)) ServerOption {
 	return func(o *serverOptions) { o.extend = f }
 }
 
+// errNewServerNilStore is NewServer's refusal of a nil store: a programming
+// error, since every caller holds a concrete store.
+var errNewServerNilStore = errors.New("NewServer: nil store: callers must provide a concrete database.Store")
+
 // NewServer builds the server over store. It takes options rather than a
 // second constructor so that database.Store, the wide type, is named by one
 // signature (TestStoreReferenceCount) and cmd's newServer seam stays one type.
-func NewServer(store database.Store, opts ...ServerOption) *Server {
+//
+// It never exits the process. A refusal (an incomplete identity wiring, a nil
+// store, a service container that does not build, an ABS surface the store
+// cannot serve) comes back as an error naming the cause, and the server it had
+// begun to build is released first (ReleaseUnstarted), so the caller's own
+// teardown finds nothing half-built. The server is nil with an error.
+func NewServer(store database.Store, opts ...ServerOption) (*Server, error) {
 	var so serverOptions
 	for _, o := range opts {
 		o(&so)
@@ -878,6 +942,15 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// so a response this engine writes is told apart from one core's router
 	// writes itself.
 	router.Use(perimeterSeen())
+	// Under core identity (WithIdentity) the request is marked before any
+	// route-level middleware or handler runs, so every adopted site sees the
+	// mode; without it nothing is bound and HEAD's chain decides.
+	if so.identity != nil {
+		if err := so.identity.Validate(); err != nil {
+			return nil, fmt.Errorf("NewServer: identity wiring is incomplete: %w", err)
+		}
+		router.Use(so.identity.Bind())
+	}
 	if basicGateHookForTest != nil {
 		router.Use(basicGateHookForTest)
 	}
@@ -891,8 +964,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// registry (05-metrics §6, R1-15).
 
 	if store == nil {
-		slog.Error("NewServer called with nil store — this is a programming error; callers must provide a concrete database.Store")
-		os.Exit(1)
+		return nil, errNewServerNilStore
 	}
 	// The store is handed to everything below as it is: the service registry
 	// (Override("store", ...)), the services constructed inline, the scanner,
@@ -915,6 +987,9 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		stopped:                make(chan struct{}),
 		streamsClosing:         make(chan struct{}),
 		router:                 router,
+		identity:               so.identity,
+		accessVerifier:         so.accessVerifier,
+		accessAllowList:        so.accessAllowList,
 		audiobookUpdateService: NewAudiobookUpdateService(store),
 		authorSeriesService:    audiobookspkg.NewAuthorSeriesService(store),
 		importService:          importer.NewImportService(store),
@@ -933,6 +1008,14 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		// wireServerFromContainer populates the fields.
 		diagnosticsService: diagnostics.NewService(store, nil, config.AppConfig.ITunes.LibraryReadPath),
 		changelogService:   activity.NewChangelogService(store),
+	}
+	// fail is every refusal below this point: the half-built server is torn
+	// down the way a built-but-never-started one is (bgCtx cancelled and its
+	// goroutines waited for, the search observer and the authority provider
+	// detached), and the cause goes back to the caller.
+	fail := func(err error) (*Server, error) {
+		server.ReleaseUnstarted()
+		return nil, err
 	}
 	// Observe the store's writes BEFORE anything can write: the observer feeds
 	// the search result cache and, once Start opens the index and creates the
@@ -979,8 +1062,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// gave the registry.
 	opRegistry, err := opsregistry.NewService(store, log, opHub)
 	if err != nil {
-		lifecycleLog.Error("ops registry: %v", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: ops registry: %w", err))
 	}
 	// The state directory is the one the kernel was given (books.Options
 	// checked core's against EnsureSecureStateDir's): the updater reads the
@@ -1001,12 +1083,10 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		regContainer.Override(serviceregistry.KeyActivityStore, activityStoreOverrideForTest)
 	}
 	if err := regContainer.Resolve(); err != nil {
-		slog.Error("serviceregistry resolve", "err", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: serviceregistry resolve: %w", err))
 	}
 	if err := regContainer.Build(regCtx); err != nil {
-		slog.Error("serviceregistry build", "err", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: serviceregistry build: %w", err))
 	}
 
 	// Load the HNSW snapshot BEFORE PostInit so dedup.Engine.PostInit can detect
@@ -1026,21 +1106,19 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	}
 
 	if err := regContainer.PostInit(regCtx); err != nil {
-		slog.Error("serviceregistry postinit", "err", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: serviceregistry postinit: %w", err))
 	}
 	wireServerFromContainer(server, regContainer)
 	// The operations registry resolves its ops v3 run state from the store it
 	// was built with, through any decorator's Unwrap chain. If that
 	// lookup misses on a Pebble-backed server, every v3 path (stopping runs,
 	// the boot sweep, requeue successors) silently degrades to "no record".
-	// Refuse to construct such a server instead. NewServer has no error
-	// return, and the operation-runner child (cmd/child_mode.go) builds its
-	// server here without ever calling Start, so a Start-time gate such as
-	// opRegistrationGate would miss it: exit, as for a nil store above.
+	// Refuse to construct such a server instead. The operation-runner child
+	// (cmd/child_mode.go) builds its server here without ever calling Start,
+	// so a Start-time gate such as opRegistrationGate would miss it: return
+	// the error, as for a nil store above.
 	if err := opRegistryRunStateGate(database.AsPebbleStore(store), server.opRegistry); err != nil {
-		lifecycleLog.Error("NewServer: %v", err)
-		os.Exit(1)
+		return fail(fmt.Errorf("NewServer: %w", err))
 	}
 	server.initSearchResultCache()
 	server.container = regContainer
@@ -1387,13 +1465,15 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 	// metadata_fetch.catalog_stage is on, which ships off.
 	wireCatalogStage(server.metadataFetchService, store)
 
-	server.setupRoutes()
+	if err := server.setupRoutes(); err != nil {
+		return fail(fmt.Errorf("NewServer: routes: %w", err))
+	}
 
 	// Initialize plugins after routes are set up so plugins can register
 	// their own sub-routes under /api/v1/plugins/{id}/.
 	server.initPlugins(bgCtx)
 
-	return server
+	return server, nil
 }
 
 // drainEmbedQueue is the EmbedQueue DrainFn: ensures Ollama is running,

@@ -8,10 +8,8 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
-	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"testing"
 
 	"github.com/falkcorp/mediacore/auth"
@@ -69,31 +67,14 @@ func s13AuthOff(cat *rbac.Catalog) *auth.Principal {
 	return &auth.Principal{Method: auth.MethodAuthDisabled, Perms: authz.AuthDisabled(cat)}
 }
 
-// s13Atoms is the test's own copy of books' atom table (05-rbac §6.1): each
-// HEAD atom and the native scopes whose AllOf is its route requirement. The
-// atoms are string literals on purpose, and every atom a legacy manifest route
-// names is here. playlists.create gates no route (zero route requirement).
-func s13Atoms() map[string][]rbac.Permission {
-	return map[string][]rbac.Permission{
-		"library.view":          {"books:view", "core:tasks.view"},
-		"library.edit_metadata": {"books:edit"},
-		"library.delete":        {"books:delete"},
-		"library.organize":      {"books:organize"},
-		"scan.trigger":          {"books:scan"},
-		"integrations.manage":   {"core:integrations.manage", "books:integrations.manage"},
-		"users.manage":          {"core:users.manage", "core:roles.view"},
-		"settings.manage": {"core:settings.manage", "books:settings.manage", "core:tasks.manage", "core:system.view",
-			"core:system.manage", "core:library.manage", "core:library.browse", "core:integrations.manage"},
-		"collections.manage": {"books:collections.manage"},
-		"requests.create":    {"books:request"},
-		"requests.approve":   {"books:request.approve"},
-		"fingerprint.worker": {"books:fingerprint.worker"},
-	}
-}
-
 // s13Resolver resolves s13Atoms; users.manage has the read-side entry
-// core:users.view, and playlists.create resolves to the zero requirement as
-// books' table does.
+// core:users.view. s13ZeroAtom resolves to the zero requirement, the answer of
+// a table row with no route requirement: books' table has none now
+// (playlists.create carries AllOf its scope, F4-08 B10y), but stage 13 must
+// still refuse one if a resolver gives it.
+// s13ZeroAtom is an atom whose table row has a zero route requirement.
+const s13ZeroAtom = "batcave.sealed"
+
 func s13Resolver(atom string, readSide bool) (rbac.Requirement, bool) {
 	if readSide {
 		if atom == "users.manage" {
@@ -101,7 +82,7 @@ func s13Resolver(atom string, readSide bool) (rbac.Requirement, bool) {
 		}
 		return rbac.Requirement{}, false
 	}
-	if atom == "playlists.create" {
+	if atom == s13ZeroAtom {
 		return rbac.Requirement{}, true
 	}
 	scopes, ok := s13Atoms()[atom]
@@ -222,8 +203,8 @@ func TestStage13_Decision(t *testing.T) {
 		{"a Sensitive scope refused to a key is interactive_required", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin)}, opts, s13Want{403, "interactive_required", "", false}},
 		{"without a catalog it is permission_denied", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13Key(cat, []rbac.Permission{rbac.CoreAdmin}, rbac.CoreAdmin)}, noCatalog, s13Want{403, "permission_denied", "core:roles.manage", false}},
 		{"a Sensitive scope an interactive session lacks is permission_denied", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: robin}, opts, s13Want{403, "permission_denied", "core:roles.manage", false}},
-		{"auth-disabled refused an AuthRequired requirement is 401", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
-		{"auth-disabled refused a Sensitive requirement is 401", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
+		{"auth-disabled refused an AuthRequired requirement is 403 interactive_required (never the session-ending 401, G5(a))", AuthzRequest{Perm: rbac.Need(rbac.CoreAdmin), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
+		{"auth-disabled refused a Sensitive requirement is 403 interactive_required (G5(a))", AuthzRequest{Perm: rbac.Need("core:roles.manage"), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
 		{"auth-disabled admitted a plain scope", AuthzRequest{Perm: rbac.Need("books:edit"), Principal: s13AuthOff(cat)}, opts, s13Want{}},
 
 		// 5. Legacy kinds, resolved before Satisfies.
@@ -231,7 +212,7 @@ func TestStage13_Decision(t *testing.T) {
 		{"legacy atom resolved and refused", AuthzRequest{Perm: rbac.LegacyAtom("library.edit_metadata"), Principal: robin}, opts, s13Want{403, "permission_denied", "books:edit", false}},
 		{"legacy atom with no resolver refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: admin}, noResolver, s13Want{403, "permission_denied", "", false}},
 		{"unknown legacy atom refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom("joker.laugh"), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
-		{"an atom with no route requirement refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom("playlists.create"), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
+		{"an atom with no route requirement refuses an admin", AuthzRequest{Perm: rbac.LegacyAtom(s13ZeroAtom), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
 		{"a resolver answering Public is refused", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: robin}, answering(rbac.Public), s13Want{403, "permission_denied", "", false}},
 		{"a resolver answering AnyAuthenticated is refused", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: robin}, answering(rbac.AnyAuthenticated), s13Want{403, "permission_denied", "", false}},
 		{"a resolver answering a legacy kind is refused", AuthzRequest{Perm: rbac.LegacyAtom("library.view"), Principal: admin}, answering(rbac.LegacyAtom("library.view")), s13Want{403, "permission_denied", "", false}},
@@ -240,103 +221,11 @@ func TestStage13_Decision(t *testing.T) {
 		{"legacy check write side refuses the read-side scope", AuthzRequest{Perm: rbac.LegacyCheck("users.manage", false), Principal: s13Session(cat, "core:users.view")}, opts, s13Want{403, "permission_denied", "core:users.manage", false}},
 		{"legacy check read side unknown for an atom is refused", AuthzRequest{Perm: rbac.LegacyCheck("library.view", true), Principal: admin}, opts, s13Want{403, "permission_denied", "", false}},
 		{"auth-disabled keeps HEAD's s.perm reach on settings.manage", AuthzRequest{Perm: rbac.LegacyAtom("settings.manage"), Principal: s13AuthOff(cat)}, opts, s13Want{}},
-		{"auth-disabled is refused a legacy check it would satisfy", AuthzRequest{Perm: rbac.LegacyCheck("library.view", false), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
-		{"auth-disabled is refused an unresolvable atom with 401", AuthzRequest{Perm: rbac.LegacyAtom("joker.laugh"), Principal: s13AuthOff(cat)}, opts, s13Want{401, "authentication_required", "", false}},
+		{"auth-disabled is refused a legacy check it would satisfy", AuthzRequest{Perm: rbac.LegacyCheck("library.view", false), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
+		{"auth-disabled is refused an unresolvable atom with 403 interactive_required (G5(a))", AuthzRequest{Perm: rbac.LegacyAtom("joker.laugh"), Principal: s13AuthOff(cat)}, opts, s13Want{403, "interactive_required", "", false}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { s13Check(t, Authorize(c.req, c.opts), c.want) })
-	}
-}
-
-// TestStage13_LegacyAtomRandomRolesMatchTheSuccessor is the custom-role half
-// of the reach oracle over random native roles (05-http-api 8.1, SEC4-2): for
-// every legacy atom of the table and random role patterns (sessions, keys,
-// delegated sessions, confined keys, partial settings.manage roles,
-// wildcards, admin, auth off), stage 13 admits a LegacyAtom route exactly when
-// the atom's native successor, AllOf its table scopes, admits the principal.
-// Both outcomes must occur for every atom, so neither side is vacuous.
-func TestStage13_LegacyAtomRandomRolesMatchTheSuccessor(t *testing.T) {
-	cat := s13Catalog(t)
-	atoms := s13Atoms()
-	names := make([]string, 0, len(atoms))
-	for a := range atoms {
-		names = append(names, a)
-	}
-	slices.Sort(names)
-	var concrete []rbac.Permission
-	for spec := range cat.All() {
-		concrete = append(concrete, spec.Name)
-	}
-	slices.Sort(concrete)
-	wild := []rbac.Permission{"books:*", "core:*", "core:system.*", "core:tasks.*", "books:request.*"}
-	settings := atoms["settings.manage"]
-	rng := rand.New(rand.NewPCG(13, 2026))
-	pick := func(pool []rbac.Permission, n int) []rbac.Permission {
-		out := make([]rbac.Permission, 0, n)
-		for range n {
-			out = append(out, pool[rng.IntN(len(pool))])
-		}
-		return out
-	}
-	roles := func() []rbac.Permission {
-		switch rng.IntN(10) {
-		case 0: // a custom role holding all but one of settings.manage's scopes
-			drop := rng.IntN(len(settings))
-			return append(slices.Clone(settings[:drop]), settings[drop+1:]...)
-		case 1:
-			return append(pick(concrete, rng.IntN(4)), rbac.CoreAdmin)
-		case 2:
-			return append(pick(concrete, rng.IntN(6)), pick(wild, 1+rng.IntN(2))...)
-		case 3: // a whole atom's scopes, sometimes plus noise
-			return append(slices.Clone(atoms[names[rng.IntN(len(names))]]), pick(concrete, rng.IntN(3))...)
-		default:
-			return pick(concrete, rng.IntN(12))
-		}
-	}
-	opts := AuthzOptions{OwnerRequired: true, ResolveAtom: s13Resolver, Catalog: cat}
-	admits, denies := map[string]int{}, map[string]int{}
-	const rounds = 600
-	for i := range rounds {
-		var p *auth.Principal
-		switch rng.IntN(6) {
-		case 0:
-			p = s13Key(cat, roles(), pick(concrete, 1+rng.IntN(8))...)
-		case 1:
-			p = s13Delegated(cat, roles()...)
-		case 2:
-			p = s13Key(cat, roles(), "books:fingerprint.worker")
-		case 3:
-			if rng.IntN(4) == 0 {
-				p = s13AuthOff(cat)
-				break
-			}
-			fallthrough
-		default:
-			p = s13Session(cat, roles()...)
-		}
-		for _, atom := range names {
-			got := Authorize(AuthzRequest{Perm: rbac.LegacyAtom(atom), Principal: p}, opts).Admitted()
-			successor := p.Perms.Satisfies(rbac.AllOf(atoms[atom]...))
-			if got && !successor {
-				t.Fatalf("round %d: %s admitted %s (perms %v), which its successor refuses", i, atom, p.Method, p.Perms.Concrete())
-			}
-			if !got && successor {
-				t.Fatalf("round %d: %s refused %s (perms %v), which its successor admits", i, atom, p.Method, p.Perms.Concrete())
-			}
-			if got {
-				admits[atom]++
-			} else {
-				denies[atom]++
-			}
-		}
-	}
-	for _, atom := range names {
-		if admits[atom] == 0 || denies[atom] == 0 {
-			t.Errorf("%s: %d admits, %d denies over %d rounds; both must occur", atom, admits[atom], denies[atom], rounds)
-		}
-	}
-	if len(names) < 12 {
-		t.Fatalf("the table names %d atoms, want every route atom", len(names))
 	}
 }
 
@@ -496,7 +385,7 @@ func TestStage13_RefusesWhatItCannotResolveWhateverTheChecker(t *testing.T) {
 		{"nil resolver", rbac.LegacyAtom("library.view"), AuthzOptions{OwnerRequired: true}},
 		{"nil resolver, legacy check", rbac.LegacyCheck("users.manage", true), AuthzOptions{OwnerRequired: true}},
 		{"unknown atom", rbac.LegacyAtom("joker.laugh"), opts},
-		{"no route requirement", rbac.LegacyAtom("playlists.create"), opts},
+		{"no route requirement", rbac.LegacyAtom(s13ZeroAtom), opts},
 		{"resolver says not ok but answers", rbac.LegacyAtom("library.view"), AuthzOptions{OwnerRequired: true, ResolveAtom: func(string, bool) (rbac.Requirement, bool) { return rbac.Need("books:view"), false }}},
 		{"Delegated", rbac.Delegated("abs"), opts},
 		{"zero", rbac.Requirement{}, opts},

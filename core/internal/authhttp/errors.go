@@ -85,6 +85,8 @@ func (a *api) fail(ctx context.Context, s spec, p *auth.Principal, target string
 		return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "you may not do this"}
 	case errors.Is(err, auth.ErrLastAdmin):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "last_admin", Detail: "this would leave no active administrator"}
+	case errors.Is(err, auth.ErrMergedAway):
+		return &httpapi.Error{Status: http.StatusConflict, Code: "merged_away", Detail: "this account was merged into another and stays disabled"}
 	case errors.Is(err, auth.ErrKeyRevoked):
 		return &httpapi.Error{Status: http.StatusConflict, Code: "key_revoked", Detail: "a revoked key stays revoked"}
 	case errors.Is(err, auth.ErrEmailInUse):
@@ -188,10 +190,6 @@ func oidcRedirectCode(err error) string {
 // codeOAuthFailed is oidcRedirectCode's answer for an error nobody classified:
 // the callback answers it as a server error instead of a redirect.
 const codeOAuthFailed = "oauth_failed"
-
-func errUnauthenticated() *httpapi.Error {
-	return &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "sign in to use this route"}
-}
 
 func errInteractive() *httpapi.Error {
 	return &httpapi.Error{Status: http.StatusForbidden, Code: "interactive_required", Detail: "this route needs an interactive sign-in, not an API key"}

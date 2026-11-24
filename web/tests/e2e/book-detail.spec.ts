@@ -190,17 +190,12 @@ const setupRoutes = async (page: import('@playwright/test').Page) => {
 
         // Auth — the app checks these on boot; without a mock they hit the
         // real backend, which 401s and bounces the page to the Login screen.
-        if (url.includes('/api/v1/auth/status')) {
+        if (url.includes('/api/core/v1/auth/status')) {
           return Promise.resolve(
-            jsonResponse({
-              auth_enabled: true,
-              has_users: false,
-              requires_auth: false,
-              bootstrap_ready: true,
-            })
+            jsonResponse({ has_users: false, auth_disabled: true, setup_required: false })
           );
         }
-        if (url.includes('/api/v1/auth/me')) {
+        if (url.includes('/api/core/v1/me')) {
           return Promise.resolve(jsonResponse({ user: null }));
         }
 

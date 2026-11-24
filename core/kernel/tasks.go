@@ -324,6 +324,10 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 		Config:      cfg.store,
 		Audit:       k.audit,
 		Log:         k.coreLog("taskhttp"),
+		// nil (the default rule: an interactive session only) unless the app
+		// declared identity, then the kernel's, which also admits a key whose
+		// own scopes name the requirement.
+		VerifiedMethod: k.verifiedMethod(),
 	})
 	if err != nil {
 		return fmt.Errorf("kernel: tasks: routes: %w", err)

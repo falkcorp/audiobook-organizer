@@ -86,20 +86,21 @@ async function mockCollectionsApi(page: Page, permissions: string[]) {
   });
 
   // Registered after setupMockApi, so these win over its catch-all.
-  await page.route('**/api/v1/auth/me', (route) =>
+  await page.route('**/api/core/v1/me', (route) =>
     route.fulfill(
       json({
-        data: {
-          user: {
-            id: 'u1',
-            username: 'tester',
-            email: 'tester@example.test',
-            roles: ['viewer'],
-            status: 'active',
-            created_at: STAMP,
-            permissions,
-          },
+        user: {
+          id: 'u1',
+          username: 'tester',
+          email: 'tester@example.test',
+          roles: ['viewer'],
+          status: 'active',
+          created_at: STAMP,
+          updated_at: STAMP,
         },
+        permissions,
+        method: 'session',
+        owner_verified: false,
       })
     )
   );
@@ -157,7 +158,7 @@ async function mockCollectionsApi(page: Page, permissions: string[]) {
 
 test.describe('Collections page', () => {
   test('lists collections and opens one with its members', async ({ page }) => {
-    await mockCollectionsApi(page, ['library.view', 'collections.manage']);
+    await mockCollectionsApi(page, ['books:view', 'books:collections.manage']);
     await page.goto(paths.collections);
 
     await expect(page.getByText('Test Static Collection')).toBeVisible();
@@ -171,7 +172,7 @@ test.describe('Collections page', () => {
   });
 
   test('clicking a count lands on the member view', async ({ page }) => {
-    await mockCollectionsApi(page, ['library.view', 'collections.manage']);
+    await mockCollectionsApi(page, ['books:view', 'books:collections.manage']);
     await page.goto(paths.collections);
 
     await page.getByRole('button', { name: /the 1 books in Test Dynamic Collection/ }).click();
@@ -180,7 +181,7 @@ test.describe('Collections page', () => {
   });
 
   test('creates a static collection and lists it, with the exact payload', async ({ page }) => {
-    const { posted } = await mockCollectionsApi(page, ['library.view', 'collections.manage']);
+    const { posted } = await mockCollectionsApi(page, ['books:view', 'books:collections.manage']);
     await page.goto(paths.collections);
 
     await page.getByRole('button', { name: /New Collection/ }).click();
@@ -197,7 +198,7 @@ test.describe('Collections page', () => {
   });
 
   test('creates a dynamic collection and shows its preview', async ({ page }) => {
-    const { posted } = await mockCollectionsApi(page, ['library.view', 'collections.manage']);
+    const { posted } = await mockCollectionsApi(page, ['books:view', 'books:collections.manage']);
     await page.goto(paths.collections);
 
     await page.getByRole('button', { name: /New Collection/ }).click();
@@ -227,7 +228,7 @@ test.describe('Collections page', () => {
   test('a user without collections.manage sees the lists but no New or Delete', async ({
     page,
   }) => {
-    await mockCollectionsApi(page, ['library.view']);
+    await mockCollectionsApi(page, ['books:view']);
     await page.goto(paths.collections);
 
     await expect(page.getByText('Test Static Collection')).toBeVisible();

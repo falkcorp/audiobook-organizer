@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/audiobook-organizer/internal/updater"
 	"github.com/falkcorp/mediacore/app"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -46,6 +47,17 @@ const (
 	metricNamespace = "audiobook_organizer"
 	serviceName     = "audiobook-organizer"
 	displayName     = "Audiobook Organizer"
+
+	// archivePrefix is Options.ArchivePrefix: the prefix HEAD's backup writer gives
+	// every archive it names, "audiobooks_<database type>_<YYYYMMDD_HHMMSS><ext>"
+	// (internal/backup/backup.go CreateBackup, with the database type "pebble" the
+	// only one a core-storage boot opens), and so the prefix core's backup
+	// catalogue lists and prunes by and its revocation journal's file name and
+	// header carry (<backup dir>/<prefix>revocations.journal). Core's default is
+	// "<AppID>_", which would leave every archive an install already holds
+	// unrecognised by restore and retention. Serve and the offline commands read
+	// the one value, so a journal one writes is the file the other finds.
+	archivePrefix = "audiobooks_pebble_"
 )
 
 // ServeInputs are the values of serve books needs.
@@ -88,8 +100,6 @@ type ServeInputs struct {
 //   - R1Listen: HEAD's listener stack behind the perimeter shim
 //     (internal/server R1Listener);
 //   - Telemetry: HEAD's OTLP tracing and metric push and its environment;
-//   - LegacyAuthGinUntil: books, whose gin mount keeps HEAD's authentication
-//     until the identity flip;
 //   - ReservedAPINamespaces: the ABS protocol's /api/<seg> names;
 //   - LogOutput, R1Log and StateDir: the log pipeline's stream, its level
 //     (log_level, --log-level) and its file under the state directory
@@ -145,7 +155,7 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// agrees with it when the default could not be created and the state sits
 	// beside a store named by a flag.
 	o := bootOptions(in.Boot)
-	return app.Options{
+	ao := app.Options{
 		RetiredConfigNames:    o.RetiredConfigNames,
 		ConfigEnvBindings:     o.ConfigEnvBindings,
 		ConfigPassthrough:     o.ConfigPassthrough,
@@ -157,7 +167,6 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		DisplayName:           displayName,
 		Version:               m.version,
 		ReservedAPINamespaces: reservedAPINamespaces(),
-		LegacyAuthGinUntil:    ID,
 		CoreDefaults:          coreDefaults,
 		R1Listen:              m.r1Listen,
 		Telemetry:             telemetryFromConfig(in.Telemetry),
@@ -167,7 +176,35 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		StateDir:              m.stateDir,
 		StorageStateFiles:     StateFiles(m.stateDir, dbPath),
 		FromRelease:           in.FromRelease,
-	}, nil
+		ArchivePrefix:         archivePrefix,
+	}
+	if identityOn() {
+		if err := m.identityOptions(&ao); err != nil {
+			return app.Options{}, err
+		}
+	}
+	return ao, nil
+}
+
+// identityOptions adds the identity boot's inputs to ao (identityOn only): the
+// identity boot itself, stage 13's atom table, the Access extension and the
+// account resolver handle it holds, the bootstrap token's file name, and the
+// config pins (the session cookie's name). The declaration core would refuse a
+// piece of (a catalog that does not build, a seed role with nothing) fails here,
+// before anything opens, not at P2.
+func (m *booksModule) identityOptions(ao *app.Options) error {
+	w, err := newIdentityWiring(configOwnerEmail)
+	if err != nil {
+		return err
+	}
+	m.idw = w
+	ao.IdentityBoot = true
+	ao.ResolveAtom = atomsForStage13()
+	ao.AccountResolver = w.resolver
+	ao.Authenticators = []coreauth.Extension{w.ext}
+	ao.Auth = identityAuthOptions()
+	ao.ConfigFlags = identityConfigFlags(ao.ConfigFlags)
+	return nil
 }
 
 // OfflineOptions is ABO's app.Options for core's offline commands
@@ -198,6 +235,7 @@ func OfflineOptions(boot BootInputs) (app.Options, error) {
 		ConfigFlags:        o.ConfigFlags,
 		CoreDefaults:       coreDefaults,
 		AppID:              AppID,
+		ArchivePrefix:      archivePrefix,
 		// serve's Version: the binary ID a staged swap records hashes it, so
 		// a reset or restore staged offline must carry the one the serve
 		// boot computes, or its P0a rejects the intent as another binary's.
@@ -426,16 +464,22 @@ func Attach(mod module.Module, a *app.App) error {
 	if srv == nil {
 		return nil
 	}
+	if identityOn() {
+		var admin migrationReader // an interface holding a nil *storage.Admin would read as non-nil
+		if sa := a.StorageAdmin(); sa != nil {
+			admin = sa
+		}
+		if err := identityStoreReady(context.Background(), srv.UnderCoreIdentity(), admin); err != nil {
+			return err
+		}
+	}
 	p := a.Metrics()
 	if err := srv.AttachMetrics(p.Registerer(), p.Gatherer(), p.Handler()); err != nil {
 		return fmt.Errorf("books: attach the served registry: %w", err)
 	}
 	tapActivity(a, srv.ActivityLogWriter())
 	srv.SetConfigAtoms(atomsWithScope)
-	srv.SetPostureTokens(func() []system.PostureToken {
-		h, err := a.CheckpointHealth()
-		return checkpointPosture(h, err, time.Now())
-	})
+	srv.SetPostureTokens(func() []system.PostureToken { return postureTokens(a, time.Now()) })
 	// POST /backup/restore stages through the swap (R1-25). The binary ID is
 	// the one the kernel computed from the same Options.Version, so the next
 	// boot's P0a accepts the intent as this binary's.

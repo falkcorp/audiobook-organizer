@@ -19,7 +19,7 @@ import { ToolsPanel } from '../../../components/tools/ToolsPanel';
 import { useBooksSetup } from './booksSetupContext';
 
 export function ToolsStep({ onNext }: { onNext: () => void }) {
-  const { toolInstallChoice, setToolInstallChoice } = useBooksSetup();
+  const { toolInstallChoice, setToolInstallChoice, signInGate } = useBooksSetup();
   const skip = () => {
     setToolInstallChoice('skip');
     onNext();
@@ -39,6 +39,8 @@ export function ToolsStep({ onNext }: { onNext: () => void }) {
         These tools power local AI deduplication and audio fingerprint matching. Recommended
         installs everything automatically.
       </Typography>
+
+      {signInGate.notice && <Box sx={{ mb: 2 }}>{signInGate.notice}</Box>}
 
       <FormControl component="fieldset" sx={{ mb: 2 }}>
         <RadioGroup

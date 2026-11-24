@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -66,6 +67,7 @@ func (s *Service) UpdateProfile(ctx context.Context, actor *Principal, in Profil
 		name = strings.TrimSpace(*in.DisplayName)
 	}
 	email := ""
+	unlock := func() {} // releases the e-mail lock, once, before the callbacks run
 	if in.Email != nil {
 		email = strings.TrimSpace(*in.Email)
 		if email == "" {
@@ -76,11 +78,13 @@ func (s *Service) UpdateProfile(ctx context.Context, actor *Principal, in Profil
 		}
 		// Held across the check and the commit, never across a network call.
 		s.emailMu.Lock()
-		defer s.emailMu.Unlock()
+		var once sync.Once
+		unlock = func() { once.Do(s.emailMu.Unlock) }
+		defer unlock()
 	}
 	now := s.now().UTC()
 	var out *User
-	err = s.commitRetrying(ctx, func(b *storage.Batch) error {
+	post, err := s.commitQueueingN(ctx, conflictRetries, func(b *storage.Batch, inv *invalidations) error {
 		cur, err := s.d.Store.GetUser(ctx, self)
 		if err != nil {
 			return err
@@ -115,8 +119,16 @@ func (s *Service) UpdateProfile(ctx context.Context, actor *Principal, in Profil
 			return err
 		}
 		out = &up
+		if !SameEmail(cur.Email, up.Email) {
+			s.queueEmailChanged(inv, EmailChanged{UserID: self, From: cur.Email, To: up.Email})
+		}
 		return nil
 	})
+	// The lifecycle callbacks run with the e-mail lock released: one that
+	// reaches LockEmails, CreateUser or another profile write must not wait
+	// on this call.
+	unlock()
+	post.run(ctx)
 	if err != nil {
 		return nil, err
 	}

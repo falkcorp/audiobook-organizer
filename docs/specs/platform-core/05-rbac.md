@@ -777,8 +777,16 @@ would rewrite every user row that names it and the worker setup docs.
   that is neither `AuthRequired` nor `Sensitive`, **`admin=false`, no implication from
   `core:admin`**, non-interactive (05-authn §4.11, SEC-2). `core:admin`, `core:system.manage`,
   `core:backup.restore`, `core:audit.view` and `books:admin.debug` are `AuthRequired`, so every route behind them —
-  store wipes, debug edits, credential surfaces — answers 401 with auth disabled, exactly today's
-  always-authenticated class (`wire_admin_role.go:28-38`). Read-only admin introspection stays
+  store wipes, debug edits, credential surfaces — is refused with auth disabled, exactly today's
+  always-authenticated class (`wire_admin_role.go:28-38`). **The refusal is 403 `interactive_required`
+  ("turn authentication on to use this route"), never 401 (ruling G5(a), F4-08 B10sr):** the SPA shell
+  treats a 401 whose problem code is `authentication_required`, `expired`, `revoked`, `inactive_user`
+  or `invalid_credential` as "signed out" (`core/web/packages/api-client/src/client.ts:26`), and a
+  no-auth install has no sign-in to go to. One helper, `httpapi.UserRequired(p)`, is the rule for
+  every core site that refuses a principal for having no user: 403 `interactive_required` for the
+  auth-disabled principal, 401 `authentication_required` for a nil principal (auth on, no credential).
+  Books' gin routes answer the same refusal 403 `FORBIDDEN` (`legacyauth.RespondNoUser`). Only the
+  status and code move: every request refused before is still refused. Read-only admin introspection stays
   reachable because it maps to non-`AuthRequired` admin-only scopes (§6.2), matching today's
   `adminRole` pass-through.
 - **Books' gin routes with auth disabled (COR5-4, SEC5-9).** Books' `s.perm(atom)` routes and its tasks
@@ -788,7 +796,7 @@ would rewrite every user row that names it and the worker setup docs.
   when the auth-disabled checker evaluates an `AllOf` requirement, it drops the `AuthRequired` members
   and requires the rest; a requirement every one of whose scopes is `AuthRequired` (a `Need` or `AllOf`
   of `core:admin`, `core:system.manage`, `core:backup.restore`, `core:audit.view` or
-  `books:admin.debug`) is still refused with 401. So `settings.manage`'s requirement, `AllOf` its eight
+  `books:admin.debug`) is still refused, with 403 `interactive_required` (ruling G5(a)). So `settings.manage`'s requirement, `AllOf` its eight
   scopes with `core:system.manage` among them (§6.1, XFILE-5), passes with auth off on its seven others, and
   settings stay usable; every real principal still needs the full `AllOf`. Only `authz.AuthDisabled`
   applies the rule (`TestAuthOff_SettingsManageKeepsReach`, §12). Books' in-handler atom checks keep
@@ -810,6 +818,7 @@ would rewrite every user row that names it and the worker setup docs.
     (`core:backup.restore`), both `AuthRequired`, where HEAD's `s.perm` opened them;
   - (d) the credential-metadata and audit routes (05-authn §4.11, §4.13; §7.6): the auth-disabled
     principal has no user and `core:audit.view` is `AuthRequired` (SEC-3).
+  All four refuse with 403 `interactive_required`, not 401 (ruling G5(a), above).
 - Zero users: anonymous; only `Public` routes (05-authn §4.2). Today's `HoldsPermission` first-run
   bypass (`internal/server/middleware/auth.go:498-504`) is removed.
 
@@ -927,16 +936,26 @@ through `core:admin` and the `settings.manage` row; see §14 item 7),
 | `fp-worker` | books module seed role with ID `fp-worker` (admitted by books' `Manifest.ImportedRoleIDs`, §4.9), `books:fingerprint.worker` only — no `core:self` |
 
 The 20 `RequireAdmin` routes keep today's two kinds (`wire_admin_role.go:19-57`, decision table in
-`docs/decisions/2026-10-30-admin-routes-auth-off.md`), so both the role reach and the auth-off reach
-stay identical:
+`docs/decisions/2026-10-30-admin-routes-auth-off.md`), so the auth-off reach stays identical. The role reach does
+not: each route is gated by the permission below and nothing else (§4.6: no role-name test), and a custom role can
+hold that permission (§4.7: an actor who holds a scope may put it in a role, `core:admin` included). Such a role
+reaches the route, where HEAD's `RequireAdmin` admitted only the `admin` role. A key holding the permission reaches it
+too, except on the four guest-service-token routes, which carry `Guards.Interactive` and refuse every key, and the three
+`books:admin.debug` routes, whose permission is Sensitive and satisfied by no key (§4.4). This widening was approved by
+the owner on 2026-11-22 (F4-08 B10rn). Only an actor who already holds the permission can grant it (§4.7 rule 1). A
+holder who can also manage roles or users can pass it on, so every chain of grants starts at an admin, and a role holding
+`core:admin` can grant every permission. No seeded or migrated principal changes reach: M3
+writes none of these permissions to anything but `admin` (§6.1). During the identity flip, until the gin gate is
+unmounted, the bridge still runs HEAD's role-name test after the permission, so the widening takes effect when it is
+unmounted (09 §9.2.6):
 
 | Today's kind | Routes (all under `/api/v1` at HEAD) | Native permission | With auth off |
 |---|---|---|---|
 | read-only (`adminRole`) | `GET /cache/stats/keys` | `books:admin.view` | open (not `AuthRequired`) |
 | read-only (`adminRole`) | the four `GET /admin/debug/*` | `books:admin.view` | open |
-| read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, books:admin.view)` | open |
+| read-only (`adminRole`) + `users.manage` | master-list routes | `AllOf(core:users.manage, core:roles.view, books:admin.view)` | open |
 | always-authenticated | `PATCH /admin/debug/books/:id`, `PATCH /admin/debug/book-files/:id`, `POST /admin/debug/edits/:edit_id/undo` | `books:admin.debug` | 401 |
-| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/reset` and `POST /system/factory-reset` | deleted in release R1, whose only reset is the offline `storage reset` (A-17); from F4 the one native route `POST /api/core/v1/system/factory-reset` replaces both, with `core:admin` + `Guards.Interactive` + `Guards.Owner` (§4.10); only `admin` holds `core:admin`, so the reach equals HEAD's `RequireAdmin` | 401 |
+| always-authenticated (and owner-guarded at HEAD, 05-authn §4.8) | `POST /system/reset` and `POST /system/factory-reset` | deleted in release R1, whose only reset is the offline `storage reset` (A-17); from F4 the one native route `POST /api/core/v1/system/factory-reset` replaces both, with `core:admin` + `Guards.Interactive` + `Guards.Owner` (§4.10); `admin` and any custom role holding `core:admin` reach it (the widening above) | 401 |
 | always-authenticated | retired 410 stubs `/maintenance/wipe`, `/cache/invalidate`, `/admin/recompact-digests` | `core:admin` (stub keeps auth-first ordering) | 401 |
 | always-authenticated | guest service tokens list, plan, revoke | `core:admin` | 401 |
 
@@ -1097,12 +1116,12 @@ is normative; other files use these names.
 | `core.auth.*` | login success **sync**; failure/throttle **async** | `login` (success/failure; `Reason` `throttled` when the throttle refused), `logout`, `setup` |
 | `core.bootstrap.*`, `core.identity.*`, `core.templogin.*`, `core.invite.*` | sync | `bootstrap.redeem`; `identity.link`, `identity.unlink`, `identity.displace` (email displacement); `templogin.mint`, `templogin.consume`; `invite.create`, `invite.accept` |
 | `core.session.*`, `core.apikey.*` | sync (in batch) | `session.revoke` (05-authn §4.3); `apikey.create`, `apikey.revoke`, `apikey.set_status`, `apikey.require_confirmation` (05-authn §4.4, §4.14) |
-| `core.user.*` | sync (in batch) | `create`, `disable`, `enable`, `delete`, `reset_password`, `set_roles` |
+| `core.user.*` | sync (in batch) | `create`, `disable`, `enable`, `delete`, `reset_password`, `set_roles`, `unmerge` (undo of an admin user merge: the source account returns; F4-08 B10p) |
 | `core.role.*` | sync (in batch) | `create`, `update`, `delete`, `update_seed`, `accept_seed`, `review_admin` (§7.1); `reset` with seed-role editing (§3.6) |
 | `core.permission.deny` | async, coalesced | every 403 from httpapi stage 13, from `rbac.Require` (including books' `s.perm` adapter), every 403 `dominance_required` and every 403 `cross_origin_rejected` (until R2's identity flip, the access log's `security_event`, 05-http-api §4.2) |
 | `core.task.*` | sync | `approve`, `reject`, `cancel` (by another actor) |
 | `core.settings.*` | sync (in batch) | `update`: section + changed key names (values of secret fields never); from F3, through the store F2 lands (§3) |
-| `core.storage.*` | sync (in batch) | `cutover_step` (one per cutover step, with its read, imported, quarantined and deleted counts, staged in the step's last chunk; 05-storage §5S.3.13), `quarantine_purge` (`<app> storage quarantine purge`: step, count, sensitive count; never a value), `cutover_blocker_fix` and `cutover_blocker_delete` (`<app> storage cutover-blockers fix` / `delete`: step, key, action, IDs, reason; never a value), `checkpoint_deleted` (the checkpoint sweeper or `storage prune-checkpoints`: name, reason) (IMPL-3; 05-storage §5S.3.12, §5S.3.13) |
+| `core.storage.*` | sync (in batch) | `cutover_step` (one per cutover step, with its read, imported, quarantined and deleted counts, staged in the step's last chunk; 05-storage §5S.3.13), `quarantine_purge` (`<app> storage quarantine purge`: step, count, sensitive count; never a value), `cutover_blocker_fix` and `cutover_blocker_delete` (`<app> storage cutover-blockers fix` / `delete`: step, key, action, IDs, reason; never a value), `checkpoint_deleted` (the checkpoint sweeper or `storage prune-checkpoints`: name, reason) (IMPL-3; 05-storage §5S.3.12, §5S.3.13) and `journal_queue_clear` (`<app> storage journal-queue clear <seq> --confirm`, Actor.Method `offline`: seq, the entry's state and kind; never a value; F4-08 Q6a, 05-backup §5B.3.6) |
 | `core.oidc_provider.*` | sync (in batch) | `create`, `update`, `delete` (issuer, `link_existing_by_email`) |
 | `core.integration.*` | sync (in batch) | `create`, `update`, `change_url` (secrets cleared, SEC-15), `write_secret`, `delete`, `test`, `local_migrated` (M6 only: instance, stored origin; staged in M6's chunk batch; 05-metadata M1.10) |
 | `core.secret.*` | sync | `rotate` |
@@ -1349,9 +1368,9 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestSensitive_EvaluatedBeforeAdmin` | bootstrap-style `["core:admin"]` API key: `Has(core:roles.manage)` false; interactive admin session: true (SEC-23) |
 | `TestAuthDisabled_CheckerHasNoAdmin` | `authz.AuthDisabled` holds no `AuthRequired`/`Sensitive` scope, `admin=false`, `Has(core:system.manage)` and `Has(core:audit.view)` false (SEC-2, SEC-3) |
 | `TestCoreCatalog_FixedFromF2` | (IMPL-4) a kernel with no optional core subsystem wired declares every `core:*` scope this file names, with its class and flags; every scope §6.1's table and the seed roles write is in it |
-| `TestAuthOff_AdminRouteKindsUnchanged` | the §6.2 table: read-only kinds open, always-authenticated kinds 401 with auth off |
+| `TestAuthOff_AdminRouteKindsUnchanged` | the §6.2 table: read-only kinds open, always-authenticated kinds refused with auth off (403 `FORBIDDEN` on books' gin routes, 403 `interactive_required` on core's; HEAD's 401 moved by ruling G5(a)) |
 | `TestAuthOff_BooksGatesAndInHandlerDenial` | (ABO) auth off: a books `s.perm("library.view")` route and a started books task declaring `scan.trigger` → allowed; an in-handler atom site → denied, except the HEAD bypass sites (§4.11, COR5-4, SEC5-9) |
-| `TestAuthOff_SettingsManageKeepsReach` | (ABO) auth off: a books `s.perm("settings.manage")` route and a books task declaring it → allowed (the `AuthRequired` `core:system.manage` dropped from the `AllOf`); a requirement made only of `AuthRequired` scopes (logs, backup create, the audit query) → 401; a real principal holding seven of the eight scopes → 403; no core route opens for the auth-disabled principal by the rule (§4.11) |
+| `TestAuthOff_SettingsManageKeepsReach` | (ABO) auth off: a books `s.perm("settings.manage")` route and a books task declaring it → allowed (the `AuthRequired` `core:system.manage` dropped from the `AllOf`); a requirement made only of `AuthRequired` scopes (logs, backup create, the audit query) → 403 `interactive_required` (G5(a)); a real principal holding seven of the eight scopes → 403; no core route opens for the auth-disabled principal by the rule (§4.11) |
 | `TestFactoryResetCoreRouteRecordsHookArgs` | the intent staged through `POST /api/core/v1/system/factory-reset` carries `kind` and `hook_args`, written through the kernel's `Stager` from one `storage.ResetRequest` (§6.2, COR8-2, R9-6) |
 | `TestFactoryResetNativeRouteKeepsLibraryFilesByDefault` | without `delete_library_files` the intent keeps every library file and a dangerous `RootDir` is not refused; with it but without, or with a stale, `library_root`/`library_file_count` → 422 `library_files_confirm_required` carrying the current root and count, and no intent is staged (no `restore/pending.json`); with matching values 200 naming the root and count, and the hook deletes only under that root; `kind: store` with the flag → 422; a missing or wrong `confirm` → 422, nothing staged (resolutions A-17, R9-6; SEC9-4) |
 | `TestConfining_WorkerKeyRefusedOnPlaylists` | `books:fingerprint.worker` key → 403 on the playlist routes and every `AnyAuthenticated` route (regression for `middleware/auth.go:289`), 200 on the worker routes |
@@ -1363,7 +1382,7 @@ Names are shown under core's default metric namespace `mediacore`; an app passes
 | `TestSeed_NoNonConfiningScopeOnConfinedRole` | no seed merge gives a role holding a `Confining` scope a non-`Confining` one; `fp-worker` stays `Confined()`; `editor`/`viewer` hold `core:metrics.read` (SEC3-13) |
 | `TestAtomTable_Golden` | (ABO) the 13 rows and the every-atom row of §6.1: native scopes and route requirement per atom; every requirement is `AllOf` all of its row's native scopes (a single-scope row's is that scope), no single-scope requirement is `AuthRequired`, `playlists.create` has none; every scope the table writes is in the core catalog of §5 step 3 or books' manifest; the in-handler site list matches the mount (XFILE-5, IMPL-4, XFILE-12) |
 | `TestIdentityCutover_RolesAndKeyScopes` | (ABO, over the R0-written fixture of 05-authn §10 and its overlay) the four seed rows are gone and P7 recreated them natively; an out-of-band role row is imported (one holding every atom without `core:admin`) as `custom.<slug>` with its atoms' scopes and the users that held it hold the new name; an unknown atom grants nothing and is reported (SEC4-13); every imported key's scopes are its effective set (an empty list → the owner's role set; an admin owner's every-atom or empty-list key → §6.1's every-atom row, `core:admin` plus every other row's scopes; a non-admin's every-atom key → the intersection, no `core:admin`) plus the ambient scopes iff not `Confined()`; no key or role has an empty list; no atom string is left in any role or key record (§6.3) |
-| `TestIdentityCutover_ReachOracle` | (ABO, PC-10-06) on the R0-written fixture with its hand-built overlay (09 §9.3), against the **R0 binary** as baseline (HEAD plus the six early fixes, 05-authn §11.1; SEC-13): for every route of the HEAD router dump (572 at `748fd787a`), every core route (the auth-disabled principal included, SEC-3) and every books task, and every principal kind — a session of each seed role, keys scoped `["library.view"]`, `["settings.manage"]`, `["users.manage"]`, `["fingerprint.worker"]`, every atom and an empty list, owned by an admin, an editor, a viewer and an `fp-worker` user, an editor-owned every-atom key (SEC-12), a key whose atoms lie outside its owner's roles, a custom role holding every atom, and the auth-disabled principal — the allow or deny after the cutover equals R0's, mapped to each route's successor. Expected differences, each asserted as such: §4.11's auth-off tightenings (a)–(d), the credential-metadata and audit routes' 401 for the auth-disabled principal among them; §6.2's tightened `settings.manage` system routes; the `core:system.status` readiness reach of `editor` and `viewer`; dominance and `CanAssign` on `core:users.manage`; the deleted HEAD reset routes (§6.2); the authenticated-only routes for a key whose atoms lie outside its owner's roles when those roles hold no ambient scope (an `fp-worker` user's keys scoped `["library.view"]`, `["settings.manage"]`, `["users.manage"]`; §6.3); and the debug edit routes for an admin's every-atom or empty-list key (`books:admin.debug` is `Sensitive`, §6.2). Viewer sessions and every key whose compiled checker holds a non-`Confining` scope keep their playlist writes (SEC-4). No principal loses an allow outside these: an every-atom or empty-list key of an admin still approves every run it approved on R0 (§6.3) |
+| `TestIdentityCutover_ReachOracle` | (ABO, PC-10-06) on the R0-written fixture with its hand-built overlay (09 §9.3), against the **R0 binary** as baseline (HEAD plus the six early fixes, 05-authn §11.1; SEC-13): for every route of the HEAD router dump (572 at `748fd787a`), every core route (the auth-disabled principal included, SEC-3) and every books task, and every principal kind — a session of each seed role, keys scoped `["library.view"]`, `["settings.manage"]`, `["users.manage"]`, `["fingerprint.worker"]`, every atom and an empty list, owned by an admin, an editor, a viewer and an `fp-worker` user, an editor-owned every-atom key (SEC-12), a key whose atoms lie outside its owner's roles, a custom role holding every atom, and the auth-disabled principal — the allow or deny after the cutover equals R0's, mapped to each route's successor. Expected differences, each asserted as such: §4.11's auth-off tightenings (a)–(d), the credential-metadata and audit routes' refusal of the auth-disabled principal (403 `interactive_required`, G5(a)) among them; §6.2's tightened `settings.manage` system routes; the `core:system.status` readiness reach of `editor` and `viewer`; dominance and `CanAssign` on `core:users.manage`; the deleted HEAD reset routes (§6.2); the authenticated-only routes for a key whose atoms lie outside its owner's roles when those roles hold no ambient scope (an `fp-worker` user's keys scoped `["library.view"]`, `["settings.manage"]`, `["users.manage"]`; §6.3); and the debug edit routes for an admin's every-atom or empty-list key (`books:admin.debug` is `Sensitive`, §6.2). Viewer sessions and every key whose compiled checker holds a non-`Confining` scope keep their playlist writes (SEC-4). No principal loses an allow outside these: an every-atom or empty-list key of an admin still approves every run it approved on R0 (§6.3) |
 | `TestUnknownAtom_ReportedNotGranted` | an imported role or key naming an atom outside §6.1: the atom grants nothing, health and the dry-run report name the record, the step continues (SEC4-13) |
 | `TestNativeStore_RoundTrip` / `rbactest.StoreSuite` | the native store passes `StoreSuite` (SIMP4-3, R4-1) |
 | `TestImporter_RejectsBrokenRole` | `ImportRole` with an unknown scope, a non-`custom.` name or a seed name → `ErrImportRejected`, nothing staged |

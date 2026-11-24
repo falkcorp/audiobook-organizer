@@ -18,6 +18,7 @@ import { appTheme } from '../theme';
 import { Login } from './Login';
 import { useAuth } from '../contexts/AuthContext';
 import { loginPageWithJsonBody } from '../test/loginRedirect';
+import { coreJson, stubCoreFetch } from '../test/coreFetch';
 
 vi.mock('../contexts/AuthContext', () => ({
   useAuth: vi.fn(),
@@ -102,25 +103,19 @@ describe('Login oauth-providers load (runs before a session exists)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows SSO buttons when the providers endpoint answers with JSON', async () => {
+  it('shows SSO buttons for the providers core lists', async () => {
     mockUseAuth.mockReturnValue(unauthenticated());
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(
-        async () =>
-          new Response(JSON.stringify({ data: { providers: ['github'] } }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-      )
-    );
+    const { calls } = stubCoreFetch({
+      'GET /auth/providers': coreJson({ providers: [{ id: 'github', kind: 'oidc' }] }),
+    });
     renderLogin('/library');
     expect(await screen.findByRole('button', { name: /sign in with github/i })).toBeInTheDocument();
+    expect(calls[0].path).toBe('/auth/providers');
   });
 
   it('shows no SSO buttons, and does not throw, when a login page (even one whose body parses) comes back', async () => {
     mockUseAuth.mockReturnValue(unauthenticated());
-    const fetchMock = vi.fn(async () => loginPageWithJsonBody({ data: { providers: ['github'] } }));
+    const fetchMock = vi.fn(async () => loginPageWithJsonBody({ providers: [{ id: 'github', kind: 'oidc' }] }));
     vi.stubGlobal('fetch', fetchMock);
     renderLogin('/library');
 

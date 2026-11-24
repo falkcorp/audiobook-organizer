@@ -51,22 +51,8 @@ import {
   expiryAfterDays,
   formatKeyExpiry,
 } from '../../utils/apiKeyExpiry';
-
-const ALL_SCOPES = [
-  'library.view',
-  'library.edit_metadata',
-  'library.delete',
-  'library.organize',
-  'scan.trigger',
-  'integrations.manage',
-  'users.manage',
-  'settings.manage',
-  'playlists.create',
-  'requests.create',
-  'requests.approve',
-  // Remote fingerprint worker API only; give a worker key this scope alone.
-  'fingerprint.worker',
-];
+import { API_KEY_DESCRIPTION_MAX_CHARS } from '../../utils/apiKeyDescription';
+import { API_KEY_ATOM_SCOPES } from '../../utils/apiKeyScopes';
 
 function relativeTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -156,7 +142,9 @@ export function APIKeysTab() {
     try {
       const resp = await api.createAPIKey({
         name: newName,
-        description: newDesc,
+        // One line, trimmed; blank sends none. Core refuses a line break or a
+        // control character and a text over API_KEY_DESCRIPTION_MAX_CHARS.
+        ...(newDesc.trim() ? { description: newDesc.trim() } : {}),
         scopes: newScopes,
         expires_in_days: expiryDays,
       });
@@ -465,17 +453,17 @@ export function APIKeysTab() {
             <TextField
               label="Description"
               fullWidth
-              multiline
-              rows={2}
               value={newDesc}
               onChange={(e) => setNewDesc(e.target.value)}
+              helperText="Optional. Shown when you hover the key's name."
+              slotProps={{ htmlInput: { maxLength: API_KEY_DESCRIPTION_MAX_CHARS } }}
             />
             <Box>
               <Typography variant="body2" gutterBottom>
                 Scopes
               </Typography>
               <FormGroup>
-                {ALL_SCOPES.map((s) => (
+                {API_KEY_ATOM_SCOPES.map((s) => (
                   <FormControlLabel
                     key={s}
                     control={

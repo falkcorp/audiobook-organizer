@@ -33,6 +33,22 @@ func legacyIDOf(name string) ArchiveID {
 	return ArchiveID(LegacyIDPrefix + stem)
 }
 
+// LegacyArchiveID is the ID a legacy-abo/0 archive file has in a restore
+// intent's archive_id and in the catalogue: its file name's stem after
+// LegacyIDPrefix, or, when that stem is not an ID the catalogue could address
+// (a dot or a space in it), the first 16 hex digits of the archive's SHA-256
+// sha256 after it. name is the file's base name.
+func LegacyArchiveID(name, sha256 string) ArchiveID {
+	id := legacyIDOf(name)
+	if ValidArchiveID(string(id)) {
+		return id
+	}
+	if len(sha256) > 16 {
+		sha256 = sha256[:16]
+	}
+	return ArchiveID(LegacyIDPrefix + sha256)
+}
+
 // dbPrefix is where a mediacore-backup/1 archive keeps the store directory.
 const dbPrefix = "db"
 
@@ -222,11 +238,5 @@ func extractLegacyStore(ctx context.Context, archive, storeDir string, lim backu
 		}
 		return "", fmt.Errorf("backup: extract store: %w", err)
 	}
-	id := legacyIDOf(filepath.Base(archive))
-	if !ValidArchiveID(string(id)) {
-		// A name with a dot or a space is not an ID the catalogue could address;
-		// the digest names the archive instead.
-		id = ArchiveID(LegacyIDPrefix + info.SHA256[:16])
-	}
-	return string(id), nil
+	return string(LegacyArchiveID(filepath.Base(archive), info.SHA256)), nil
 }

@@ -65,10 +65,14 @@ type fakeMarkers struct {
 	sb          journal.ServedBoot
 	advances    []journal.ServedBoot
 	failAdvance error
+	failRead    error
 }
 
 func (m *fakeMarkers) Read(context.Context) (backup.Boundaries, error) {
 	m.log.add("markers.read")
+	if m.failRead != nil {
+		return backup.Boundaries{}, m.failRead
+	}
 	sb := m.sb
 	return backup.Boundaries{JournalSeq: m.head, AuditHighWater: m.audit, ServedBoot: &sb}, nil
 }

@@ -33,7 +33,7 @@ type seen struct {
 	actor   audit.Actor
 }
 
-func serve(t *testing.T, svc *auth.Service, r *http.Request) (*httptest.ResponseRecorder, seen) {
+func serve(t testing.TB, svc *auth.Service, r *http.Request) (*httptest.ResponseRecorder, seen) {
 	t.Helper()
 	var got seen
 	h := svc.Middleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

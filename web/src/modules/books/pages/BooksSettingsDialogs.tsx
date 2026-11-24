@@ -56,6 +56,7 @@ export function BooksSettingsDialogs() {
     restoreVerify,
     scanErrorTarget,
     selectedPath,
+    signInGate,
     setAddFolderDialogOpen,
     setCancelScanTarget,
     setDeleteBackupTarget,
@@ -118,6 +119,7 @@ export function BooksSettingsDialogs() {
       >
         <DialogTitle>Add Import Path (Watch Location)</DialogTitle>
         <DialogContent>
+          {signInGate.notice && <Box sx={{ mb: 2 }}>{signInGate.notice}</Box>}
           <Alert severity="info" sx={{ mb: 2 }}>
             <strong>Import paths</strong> are separate from your main library. They are watched for
             new audiobook files that will be scanned, organized, and moved to your library path.
@@ -176,7 +178,7 @@ export function BooksSettingsDialogs() {
           <Button
             onClick={handleAddImportFolder}
             variant="contained"
-            disabled={!newFolderPath.trim()}
+            disabled={!newFolderPath.trim() || signInGate.blocked}
           >
             Add Path
           </Button>
@@ -231,6 +233,7 @@ export function BooksSettingsDialogs() {
       <Dialog open={restoreDialogOpen} onClose={() => setRestoreDialogOpen(false)}>
         <DialogTitle>Restore Backup</DialogTitle>
         <DialogContent>
+          {signInGate.notice && <Box sx={{ mb: 2 }}>{signInGate.notice}</Box>}
           <Alert severity="warning" sx={{ mb: 2 }}>
             The server restarts to replace the current database with the selected backup. The
             current database is moved aside, not deleted.
@@ -252,7 +255,8 @@ export function BooksSettingsDialogs() {
           <Button onClick={() => setRestoreDialogOpen(false)} disabled={restoreInProgress}>
             Cancel
           </Button>
-          <Button variant="contained" onClick={handleConfirmRestore} disabled={restoreInProgress}>
+          <Button variant="contained" onClick={handleConfirmRestore}
+            disabled={restoreInProgress || signInGate.blocked}>
             {restoreInProgress ? 'Restoring...' : 'Restore'}
           </Button>
         </DialogActions>

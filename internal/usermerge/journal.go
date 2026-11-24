@@ -38,6 +38,10 @@ type Journal struct {
 	Retirement database.UserRetirement `json:"retirement"`
 	// AbsorbedStatusBefore is the status undo puts the absorbed account back to.
 	AbsorbedStatusBefore string `json:"absorbed_status_before"`
+	// Core records the auth half of an identity-era merge (CoreJournal); nil on
+	// a journal written before the identity flip, which is how the two eras
+	// are told apart.
+	Core *CoreJournal `json:"core,omitempty"`
 
 	Ops []database.UserMergeOp `json:"ops"`
 	// Cursor: Ops[:Cursor] are written. Retired: RetireMergedUser ran. Sweeps:
@@ -77,10 +81,13 @@ type JournalSummary struct {
 	ConflictTotal int                    `json:"conflict_total"`
 	Warnings      []string               `json:"warnings,omitempty"`
 	Error         string                 `json:"error,omitempty"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	AppliedAt     *time.Time             `json:"applied_at,omitempty"`
-	UndoneAt      *time.Time             `json:"undone_at,omitempty"`
+	// SweepPending is an applied identity-era merge whose straggler sweep did
+	// not finish: Resume finishes it, and Undo is refused until then.
+	SweepPending bool       `json:"sweep_pending,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	AppliedAt    *time.Time `json:"applied_at,omitempty"`
+	UndoneAt     *time.Time `json:"undone_at,omitempty"`
 }
 
 // Summary returns j without its ops.
@@ -89,7 +96,7 @@ func (j *Journal) Summary() JournalSummary {
 		ActorID: j.ActorID, Ops: len(j.Ops), Cursor: j.Cursor, Retired: j.Retired, Sweeps: j.Sweeps,
 		UndoConflicts: j.UndoConflicts, Counts: j.Counts, ConflictTotal: j.ConflictTotal,
 		Warnings: j.Warnings, Error: j.Error, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt,
-		AppliedAt: j.AppliedAt, UndoneAt: j.UndoneAt}
+		SweepPending: j.Core != nil && j.Core.SweepPending, AppliedAt: j.AppliedAt, UndoneAt: j.UndoneAt}
 }
 
 func journalKey(id string) string { return database.UserMergeJournalPrefix + id }

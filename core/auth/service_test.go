@@ -55,6 +55,9 @@ type fx struct {
 	// loginSleep, when set, replaces the sign-in delays of every service
 	// rebuild builds.
 	loginSleep func(time.Duration)
+	// inviteSessionTTL is auth.Options.InviteSessionTTL of every service
+	// rebuild builds; set it, then rebuild.
+	inviteSessionTTL time.Duration
 
 	mu       sync.Mutex
 	now      time.Time
@@ -105,14 +108,22 @@ func newFx(t testing.TB) *fx { return newFxRoleStore(t, nil) }
 // through wrap (nil: as is), so a test can hand rbac a store that lacks an
 // optional interface of the native one.
 func newFxRoleStore(t testing.TB, wrap func(rbac.Store) rbac.Store) *fx {
+	f, _ := newFxOwners(t, wrap)
+	return f
+}
+
+// newFxOwners is newFxRoleStore over a store that also hosts the extra owners
+// (a module with legacy claims, say), and returns the open store so a test can
+// take their handles.
+func newFxOwners(t testing.TB, wrap func(rbac.Store) rbac.Store, extra ...storage.OwnerSpec) (*fx, *storage.DB) {
 	t.Helper()
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
 		Path: filepath.Join(t.TempDir(), "main.pebble"),
-		Owners: []storage.OwnerSpec{
+		Owners: append([]storage.OwnerSpec{
 			{Owner: authstore.Owner, Spec: authstore.StorageSpec(), Enabled: true},
 			{Owner: rbacstore.Owner, Spec: rbacstore.StorageSpec(), Enabled: true},
-		},
+		}, extra...),
 		Build:           "coretest+fixture",
 		FreeSpaceMargin: 1,
 		FS:              storage.FSOf(vfs.NewMem()),
@@ -184,14 +195,14 @@ func newFxRoleStore(t testing.TB, wrap func(rbac.Store) rbac.Store) *fx {
 		t.Fatalf("CreateRole: %v", err)
 	}
 	f.rebuild()
-	return f
+	return f, db
 }
 
 // rebuild builds f.svc anew over the same store, as a restart would: the
 // fixture stores users behind the service, and HasUsers is a flag New sets.
 func (f *fx) rebuild() {
 	f.t.Helper()
-	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}}, auth.Deps{
+	svc, err := auth.New(context.Background(), auth.Options{ImportedKeyPrefixes: []string{"abk_"}, InviteSessionTTL: f.inviteSessionTTL}, auth.Deps{
 		Store: f.st, NewBatch: f.st.NewBatch, RBAC: f.rb, Audit: f.audit, Revocations: f.jrnl, Clock: f.clock,
 		Hasher: f.hasher, Settings: f.liveSettings, OnInvalidated: f.inval.callback(),
 	})

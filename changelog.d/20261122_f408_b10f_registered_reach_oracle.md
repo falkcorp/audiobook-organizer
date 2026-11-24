@@ -1,0 +1,3 @@
+### Changed
+
+- Tests: the reach oracle now sends R0's recording to the booted flipped build and compares each stage 13 answer with the recorded verdict, instead of evaluating requirements with a test-local copy of core's checker. Known differences are named tables with exact cell counts. The hand evaluator, its golden list, its mutation suite and its unit tests are deleted; the data tables the flip obligations and the B10 cells read (owner sets, the 11 handler-admin cells, the handler-refusal routes) moved to `reach_tables_test.go`, and the six obligation bars are derived from the manifest and the recording alone.

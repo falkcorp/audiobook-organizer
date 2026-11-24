@@ -30,6 +30,30 @@ import type {
   RowsPage as RepairRowsPage,
 } from '../types/generated/repairs';
 
+import { ApiError } from './apiError';
+import * as coreIdentity from './coreIdentity';
+
+export { ApiError };
+
+// Identity calls live in coreIdentity (core's /api/core/v1 routes); they are
+// re-exported here so importers of api.* did not change. API keys are NOT among
+// them: a key is made and managed through the books route below
+// (/api/v1/auth/api-keys), so it carries the books ambient scopes (core:self,
+// books:reading, ...) that a key minted on core's native routes never gets.
+export const {
+  getAuthStatus,
+  setupAdmin,
+  login,
+  logout,
+  getMe,
+  updateMe,
+  changePassword,
+  listAuthProviders,
+  oidcStartPath,
+  listAdminUsers,
+  createTempLoginToken,
+} = coreIdentity;
+
 const API_BASE = '/api/v1';
 
 // ---------------------------------------------------------------------------
@@ -90,21 +114,6 @@ function wrapTrigger<T extends { id?: string; operation_id?: string }>(
   fn: () => Promise<T>
 ): Promise<T> {
   return withOptimisticOperation(opName, fn, (r) => r?.id ?? r?.operation_id ?? null);
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly data?: unknown;
-  /** The response's Retry-After (a count of seconds), in ms; unset when absent or not a count. */
-  readonly retryAfterMs?: number;
-
-  constructor(message: string, status: number, data?: unknown, retryAfterMs?: number) {
-    super(message);
-    this.name = 'ApiError';
-    this.status = status;
-    this.data = data;
-    this.retryAfterMs = retryAfterMs;
-  }
 }
 
 export interface DeleteBookResponse {
@@ -3483,76 +3492,9 @@ export async function validateOpenAIKey(apiKey: string): Promise<ValidateOpenAIK
   return data.data ?? data;
 }
 
-// Auth
-export async function getAuthStatus(): Promise<AuthStatus> {
-  const response = await apiFetch(`${API_BASE}/auth/status`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch auth status');
-  }
-  const body = await response.json();
-  return body.data;
-}
-
-export async function setupAdmin(payload: {
-  username: string;
-  password: string;
-  email?: string;
-}): Promise<{ message: string; user: AuthUser }> {
-  const response = await apiFetch(`${API_BASE}/auth/setup`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to create admin account');
-  }
-  const body = await response.json();
-  const data = body.data;
-  return data?.user ? { ...data, user: normalizeAuthUser(data.user) } : data;
-}
-
-export async function login(payload: {
-  username: string;
-  password: string;
-  remember_me?: boolean;
-}): Promise<{ user: AuthUser; session: AuthSession }> {
-  const response = await apiFetch(`${API_BASE}/auth/login`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to login');
-  }
-  const body = await response.json();
-  const data = body.data;
-  return data?.user ? { ...data, user: normalizeAuthUser(data.user) } : data;
-}
-
 export interface TempLoginTokenResponse {
-  token: string;
+  /** The absolute one-time link (`/login/temp#token=...`); shown once. */
   login_url: string;
-  expires_at: string;
-  user: { id: string; username: string };
-  session_ttl_hours: number;
-}
-
-export async function createTempLoginToken(userID: string): Promise<TempLoginTokenResponse> {
-  const response = await apiFetch(`${API_BASE}/auth/temp-tokens`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userID }),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to mint temp-login token');
-  }
-  const body = await response.json();
-  return body.data ?? body;
 }
 
 export interface AdminUserSummary {
@@ -3561,16 +3503,10 @@ export interface AdminUserSummary {
   email: string;
   status: string;
   roles: string[];
-}
-
-export async function listAdminUsers(): Promise<AdminUserSummary[]> {
-  const response = await apiFetch(`${API_BASE}/users`, { credentials: 'include' });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to list users');
-  }
-  const body = await response.json();
-  const data = body.data ?? body;
-  return data.users ?? data.items ?? data ?? [];
+  /** When the account was created (core's User.created_at). */
+  created_at?: string;
+  /** Set when the account was merged into another; the server refuses to enable it (409 merged_away). */
+  merged_into_user_id?: string;
 }
 
 // --- Admin account merge (merge one account into another) ---
@@ -3612,6 +3548,26 @@ export interface UserFootprint {
 export type UserMergeOwnerHolder =
   'none' | 'survivor' | 'absorbed' | 'both' | 'no_owner_configured' | '';
 
+/**
+ * Core's masked summary of the auth half of a merge. Present only when the
+ * server runs under core identity (core owns sign-ins and API keys); absent
+ * otherwise. It carries ids, provider names and counts, never a credential.
+ */
+export interface UserMergeCoreSummary {
+  /** Roles the surviving account gains. */
+  roles_transferred: string[];
+  /** True when the surviving account is an admin after the merge. */
+  target_holds_admin: boolean;
+  /** An outcome code for the e-mail address, not an address. */
+  email: string;
+  /** Ids of the API keys that move. The server can send null for none. */
+  api_key_ids: string[] | null;
+  /** Providers of the sign-ins that move, one entry per sign-in. The server can send null for none. */
+  identity_providers: string[] | null;
+  /** Access allow-list rows that move. */
+  allow_list_rows: number;
+}
+
 export interface UserMergePlan {
   survivor_id: string;
   absorbed_id: string;
@@ -3621,8 +3577,13 @@ export interface UserMergePlan {
   conflicts: Array<{ family: string; key: string; outcome: string }>;
   conflict_total: number;
   ops: number;
+  /** Empty under core identity: core owns sign-ins, so books has none to list. See `core`. */
   survivor_identities: UserMergeIdentity[];
+  /** Empty under core identity; see `survivor_identities`. */
   absorbed_identities: UserMergeIdentity[];
+  /** Core's summary of the auth half. Present only under core identity; the page reads sign-ins, keys and allow-list rows from it instead of the two identity lists. */
+  core?: UserMergeCoreSummary;
+  /** Under core identity the holder is never checked: the wire value is the empty string. */
   owner_identity_holder: UserMergeOwnerHolder;
   owner_identity_on_absorbed: boolean;
   /** True when apply needs the acknowledgement: the account being merged away holds the owner's sign-in, or the plan cannot tell. */
@@ -3647,6 +3608,11 @@ export interface UserMergeJournal {
   conflict_total: number;
   warnings?: string[];
   error?: string;
+  /**
+   * An applied merge (core identity) whose straggler sweep did not finish: it
+   * is resumed to finish the sweep, and cannot be undone until then.
+   */
+  sweep_pending?: boolean;
   created_at: string;
   updated_at: string;
   applied_at?: string;
@@ -3734,56 +3700,6 @@ export async function undoUserMerge(journalId: string): Promise<{ operation_id: 
     { method: 'POST', credentials: 'include' }
   );
   return userMergeJSON<{ operation_id: string }>(response, 'Failed to undo the merge');
-}
-
-export async function getMe(): Promise<AuthUser> {
-  const response = await apiFetch(`${API_BASE}/auth/me`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to fetch current user');
-  }
-  const data = await response.json();
-  return normalizeAuthUser(data.data?.user ?? data.user);
-}
-
-export async function updateMe(payload: { email: string }): Promise<AuthUser> {
-  const response = await apiFetch(`${API_BASE}/auth/me`, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to update profile');
-  }
-  const body = await response.json();
-  return normalizeAuthUser(body.data?.user ?? body.user);
-}
-
-export async function changePassword(payload: {
-  current_password: string;
-  new_password: string;
-}): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/auth/me/password`, {
-    method: 'PUT',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to change password');
-  }
-}
-
-export async function logout(): Promise<void> {
-  const response = await apiFetch(`${API_BASE}/auth/logout`, {
-    method: 'POST',
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw await buildApiError(response, 'Failed to logout');
-  }
 }
 
 // Version Management
@@ -7696,7 +7612,6 @@ export interface APIKey {
   id: string;
   user_id: string;
   name: string;
-  description: string;
   scopes: string[];
   status: 'active' | 'inactive' | 'revoked';
   created_at: string;
@@ -7710,10 +7625,13 @@ export interface APIKey {
   days_since_last_use: number | null;
   never_used: boolean;
   username?: string;
+  /** What the owner typed to tell this key from their others; absent when there is none. */
+  description?: string;
 }
 
 export interface CreateAPIKeyRequest {
   name: string;
+  /** Optional: at most 1024 characters, one line (core refuses a control character). */
   description?: string;
   scopes?: string[];
   // The expiry: expires_in_days (1 to 1096; 0 is the default) or expires_at
@@ -7734,6 +7652,12 @@ export interface CreateAPIKeyResponse {
   /** Set when the server shortened the requested expiry (e.g. to the calling key's). */
   note?: string;
 }
+
+// Every API-key call goes to the books route, under identity as well as before
+// it: that route mints a key through the one shared scope rule, so the key holds
+// the ambient scopes an audiobook client needs to sync progress. Core's native
+// key routes do not add them (F4-08 B10sk); src/services/apiKeysRoute.guard.test.ts
+// fails if a call to one comes back.
 
 export async function createAPIKey(body: CreateAPIKeyRequest): Promise<CreateAPIKeyResponse> {
   const response = await apiFetch(`${API_BASE}/auth/api-keys`, {

@@ -32,6 +32,7 @@ const (
 	maxPermissions      = 512
 	maxPermissionLen    = 128
 	maxNameLen          = 128
+	maxIDLen            = 128 // a user ID in a path: longer is no account's
 )
 
 // RbacRole is one role as the routes answer (05-rbac §3.3). Permissions is the
@@ -163,6 +164,11 @@ func (r *patchReq) Validate() error {
 		fs = append(fs, permFields(*b.Permissions)...)
 	}
 	return invalid(fs)
+}
+
+// userReq is a route that names an account in its path.
+type userReq struct {
+	ID string `path:"id"`
 }
 
 // versionReq is a write that names the role and the version it saw: DELETE

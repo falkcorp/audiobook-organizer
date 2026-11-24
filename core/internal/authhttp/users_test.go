@@ -8,6 +8,7 @@ package authhttp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // A commissioner (core:users.manage, below admin) may not mint a temp-login or
@@ -211,4 +214,45 @@ func TestUserSessions_ListAndRevokeNeedDominanceAndMembership(t *testing.T) {
 	}
 	_, err = call(specUserSessions(), a.userSessions, gordon, userSessionsReq{ID: "u-nobody"})
 	wantErr(t, err, http.StatusNotFound, "not_found")
+}
+
+// A merged-away account (User.MergedInto) cannot be enabled: POST
+// /users/{id}/enable answers 409 merged_away and writes nothing, while an
+// unmarked disabled account is enabled. The read shows the marker.
+func TestUsers_EnableRefusesMergedAwayAccountAndReadShowsMarker(t *testing.T) {
+	f := newKeysFx(t)
+	a, e := f.a, f.e
+	bruce := e.session(f.bruce)
+	dis := a.setStatus(specDisable(), auth.StatusDisabled)
+	ena := a.setStatus(specEnable(), auth.StatusActive)
+	for _, id := range []auth.UserID{f.dick.ID, f.selina.ID} {
+		if _, err := call(specDisable(), dis, bruce, userReq{ID: string(id)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	merged := e.reload(f.selina.ID)
+	merged.MergedInto, merged.MergedAt, merged.Version = f.dick.ID, e.clock(), merged.Version+1
+	e.commit(func(b *storage.Batch) error { return e.st.PutUser(b, merged) })
+
+	_, err := call(specEnable(), ena, bruce, userReq{ID: string(f.selina.ID)})
+	wantErr(t, err, http.StatusConflict, "merged_away")
+	// The answer says the account stays disabled and offers no way back: a
+	// merge is permanent once core holds the accounts (F4-08 B10l).
+	var he *httpapi.Error
+	if !errors.As(err, &he) || he.Detail != "this account was merged into another and stays disabled" {
+		t.Fatalf("merged_away detail = %+v, want the stays-disabled text with no advice to undo", err)
+	}
+	if strings.Contains(strings.ToLower(he.Detail), "undo") {
+		t.Fatalf("merged_away detail advises undo: %q", he.Detail)
+	}
+	if got := e.reload(f.selina.ID); got.Status != auth.StatusDisabled || got.Version != merged.Version {
+		t.Fatalf("a refused enable wrote: %+v", got)
+	}
+	u, err := call(specUser(), a.user, bruce, userReq{ID: string(f.selina.ID)})
+	if err != nil || u.MergedIntoUserID != string(f.dick.ID) || u.MergedAt.IsZero() || u.Status != "disabled" {
+		t.Fatalf("read of a merged-away user: %+v %v", u, err)
+	}
+	if got, err := call(specEnable(), ena, bruce, userReq{ID: string(f.dick.ID)}); err != nil || got.Status != "active" || got.MergedIntoUserID != "" {
+		t.Fatalf("an unmarked disabled user: %+v %v", got, err)
+	}
 }

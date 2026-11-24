@@ -52,7 +52,18 @@ type User struct {
 	// clears it; set on a last admin a restore had to keep (05-rbac §7.1,
 	// §4.14, SEC4-12).
 	SignInRestricted bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Version          int64
+	// MergedInto is the user this account was merged into by an admin user
+	// merge (Admin.StageUserMerge), "" for every other account; MergedAt is
+	// when. A merged-away account stays disabled for good: SetStatus refuses to
+	// enable it (ErrMergedAway), because enabling would put a second live
+	// account back on sign-ins and data that now belong to MergedInto. The
+	// marker is written by the merge's own batch and by the HEAD import (a
+	// merged-away HEAD row keeps it). Both fields are omitted from the stored
+	// record while unset, so a record of an unmerged account is byte-for-byte
+	// what it was before they existed.
+	MergedInto UserID    `json:"MergedInto,omitempty"`
+	MergedAt   time.Time `json:"MergedAt,omitzero"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	Version    int64
 }

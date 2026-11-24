@@ -9,9 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -327,34 +327,6 @@ func TestRoutesHavePermissions_RejectsFixtures(t *testing.T) {
 	})
 }
 
-// TestAssertPermission_Hello: the "Authentication at R1" check found no
-// principal seam the router authorises from (route.go only binds the
-// principal into In; Build refuses every non-Public native route), so As and
-// AssertPermission fail the test with the identity-flip message, and WithUser
-// only records the principal.
-func TestAssertPermission_Hello(t *testing.T) {
-	const want = "needs core authentication, which lands at R2's identity flip"
-	rec := runRecording(t, func(tb testing.TB) {
-		h := New(tb, WithModules(hello.New()), WithUser("alfred", "hello:read"))
-		if got := h.users["alfred"]; !slices.Equal(got, []rbac.Permission{"hello:read"}) {
-			t.Errorf("WithUser recorded %v, want [hello:read]", got)
-		}
-		h.As("alfred")
-		t.Error("As returned instead of failing the test")
-	})
-	if !rec.contains("coretest: As " + want) {
-		t.Errorf("As did not fail with the identity-flip message:\n%s", rec.text())
-	}
-
-	h := New(t, WithModules(hello.New()))
-	rec = runRecording(t, func(tb testing.TB) {
-		AssertPermission(tb, h, http.MethodGet, "/api/hello/v1/greeting", "hello:read")
-	})
-	if !rec.contains("coretest: AssertPermission " + want) {
-		t.Errorf("AssertPermission did not fail with the identity-flip message:\n%s", rec.text())
-	}
-}
-
 // TestBoot_Refusals: Boot returns, never fails the test for, a boot error;
 // the options it cannot honour at R1 are refused, not ignored.
 func TestBoot_Refusals(t *testing.T) {
@@ -569,8 +541,26 @@ func TestHarness_StorageInMemory(t *testing.T) {
 	if status := h.Anonymous().GetJSON(t, "/api/hello/v1/greeting?name=Selina", &g); status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)
 	}
-	if _, err := os.Stat(filepath.Join(h.stateDir, "storage")); !os.IsNotExist(err) {
-		t.Fatalf("the harness left a store on disk under its state directory: %v", err)
+	// The identity boot's revocation journal is a plain file under storage/
+	// backups/ (the journal's own FS, not Pebble's), so the original check, that
+	// storage/ does not exist, no longer holds. What must hold is that nothing
+	// else is there: no store directory under any name, no Pebble file.
+	var found []string
+	root := filepath.Join(h.stateDir, "storage")
+	err := filepath.WalkDir(root, func(p string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if rel, _ := filepath.Rel(root, p); rel != "." {
+			found = append(found, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	if want := []string{"backups", "backups/coretest_revocations.journal"}; !slices.Equal(found, want) {
+		t.Fatalf("the state directory's storage/ holds %v, want only the revocation journal %v: the harness left a store on disk", found, want)
 	}
 }
 

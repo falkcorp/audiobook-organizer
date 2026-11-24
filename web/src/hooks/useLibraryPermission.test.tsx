@@ -72,7 +72,7 @@ describe('holdsPermission', () => {
   });
 
   it('reads the signed-in user permission list, and a missing list means none', () => {
-    const auth = signedIn(['library.edit_metadata', LIBRARY_DELETE_PERMISSION]);
+    const auth = signedIn(['books:edit', LIBRARY_DELETE_PERMISSION]);
     expect(holdsPermission(auth, LIBRARY_DELETE_PERMISSION)).toBe(true);
     expect(holdsPermission(auth, LIBRARY_ORGANIZE_PERMISSION)).toBe(false);
     expect(holdsPermission(signedIn(undefined), LIBRARY_DELETE_PERMISSION)).toBe(false);

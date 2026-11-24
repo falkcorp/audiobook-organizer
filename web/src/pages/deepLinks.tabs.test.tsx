@@ -21,13 +21,15 @@ vi.mock('../services/collectionApi', async (orig) => ({
   createCollection: vi.fn(),
   deleteCollection: vi.fn(),
 }));
-vi.mock('../contexts/AuthContext', () => ({
-  useAuth: () => ({
+// FileBrowser reads the optional auth through useSignInRequiredForAction (B10ab), so both hooks are mocked.
+vi.mock('../contexts/AuthContext', () => {
+  const auth = () => ({
     initialized: true,
     authEnabled: true,
-    user: { id: 'u1', permissions: ['library.view', 'collections.manage'] },
-  }),
-}));
+    user: { id: 'u1', permissions: ['books:view', 'books:collections.manage'] },
+  });
+  return { useAuth: auth, useOptionalAuth: auth };
+});
 vi.mock('../components/AIJobsPanel', () => ({ AIJobsPanel: () => null }));
 vi.mock('../components/CacheStatsPanel', () => ({ CacheStatsPanel: () => null }));
 vi.mock('../components/common/ServerFileBrowser', () => ({

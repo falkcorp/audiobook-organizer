@@ -7,6 +7,8 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"time"
@@ -92,6 +94,12 @@ type KeySpec struct {
 	// ErrBadInput (a caller that must refuse "both fields present" even when
 	// one is zero checks presence itself, as authhttp does).
 	ExpiresAt time.Time
+
+	// Description is optional text telling this key from the owner's others
+	// (CheckKeyDescription is the rule). It is stored as given and never
+	// changes after the key is made.
+	Description string
+
 	// Purpose and Module are deferred-build members (§3.5).
 }
 
@@ -157,6 +165,13 @@ type APIKey struct {
 	Imported   bool
 	HashPrefix string
 	Version    int64
+
+	// Description is the key's optional description (KeySpec.Description,
+	// HEAD's api key description on an import). It is omitted from the stored
+	// record while empty, so the record of a key without one is byte-for-byte
+	// what it was before the field existed and an older record decodes
+	// unchanged. Set at creation; no write changes it.
+	Description string `json:"Description,omitempty"`
 }
 
 // OneTimeKind is the family of a one-time token (§3.4).
@@ -195,6 +210,16 @@ type OneTimeToken struct {
 	// stored with a credential epoch bump in the session's own batch, and
 	// clears PasswordResetRequired. A plain temp-login takes no password.
 	Reset bool
+	// BindEmailOnAccept marks an invite whose address was mailed to that
+	// address by an admin (Admin.MarkInviteEmailDelivered), so that holding the
+	// token proves control of the inbox: accepting it binds the address to the
+	// new account VERIFIED (source "invite") when its creator still holds
+	// core:admin (inviteBindsEmail). It is HEAD's "emailed to this address"
+	// fact (database.inviteEmailDelivered) and is set nowhere else: never at
+	// issue, never by an accept. Omitted from the stored record while unset, so
+	// a record of an unflagged invite is byte-for-byte what it was before the
+	// field existed.
+	BindEmailOnAccept bool `json:"BindEmailOnAccept,omitempty"`
 	// ClearsRestriction marks a reset link an owner-verified actor minted:
 	// consuming it clears SignInRestricted (§4.14). It is set only with
 	// Reset; a token carrying it without Reset is refused.
@@ -212,18 +237,100 @@ type ExternalIdentity struct {
 	CreatedAt time.Time
 }
 
-// UserMergePlan is the auth half of an admin user merge; books builds it from
-// its preview (internal/usermerge stays in ABO).
+// UserMergePlan is the auth half of an admin user merge, built by
+// Admin.PlanUserMerge and handed back to Admin.StageUserMerge. It is opaque:
+// core reads the records the merge moves (API keys, linked sign-ins, the
+// allow-list row of the source's address) and keeps them inside the plan, so a
+// credential hash never reaches the module that asked for the preview, which
+// sees only MergeSummary. The zero value is no plan and is refused. A plan
+// pins both users' versions and the rows it read, so StageUserMerge refuses
+// (ErrMergeConflict) when either user or any row changed since the preview:
+// the roles, the e-mail and the records that land are the ones previewed.
 type UserMergePlan struct {
-	Source, Target UserID
-	Rows           []MergeRow
+	source, target UserID
+	srcVersion     int64
+	tgtVersion     int64
+	rows           []MergeRow
+	// receipt is what an unmerge needs of the rows (MergeReceipt); it holds
+	// sign-in subjects, so it is read through Receipt and never printed.
+	receipt MergeReceipt
 }
 
-// MergeRow is one record of a merge plan (§3.1).
+// Source is the user the merge folds away.
+func (p UserMergePlan) Source() UserID { return p.source }
+
+// Target is the user the merge folds the source into.
+func (p UserMergePlan) Target() UserID { return p.target }
+
+// Format prints a plan as its two ids and how many records it holds, for every
+// verb: the rows hold the stored bytes of credential records (a key's stored
+// form, a sign-in's subject), which %v, %+v, %#v and a log line must not show.
+func (p UserMergePlan) Format(f fmt.State, _ rune) {
+	// A short write has nowhere to be reported: fmt's Formatter contract
+	// returns nothing (secrets.writeRedacted does the same).
+	if _, err := fmt.Fprintf(f, "auth.UserMergePlan{%s into %s, %d records}", p.source, p.target, len(p.rows)); err != nil {
+		return
+	}
+}
+
+// LogValue is the same redaction for slog.
+func (p UserMergePlan) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("source", string(p.source)), slog.String("target", string(p.target)), slog.Int("records", len(p.rows)))
+}
+
+var _ slog.LogValuer = UserMergePlan{}
+
+// MergeSummary is what a merge preview may show an admin: counts, ids and
+// outcome codes, never a credential hash, a key secret or a token.
+type MergeSummary struct {
+	Source UserID
+	Target UserID
+	// RolesTransferred are the source's roles the target does not hold and the
+	// merge gives it (the actor must be able to assign each, or the whole
+	// merge is refused).
+	RolesTransferred []rbac.RoleName
+	// TargetHoldsAdmin is whether the target is an active core:admin holder
+	// before the merge (HEAD's plan refuses a survivor that is not one).
+	TargetHoldsAdmin bool
+	// Email is what happens to the two accounts' addresses.
+	Email MergeEmailOutcome
+	// APIKeys are the ids (never a secret or a hash) of the source's keys that
+	// move to the target; IdentityProviders is the provider of each linked
+	// sign-in that moves; AllowListRows is 1 when the allow-list row of the
+	// source's address is pinned.
+	APIKeys           []string
+	IdentityProviders []string
+	AllowListRows     int
+}
+
+// MergeEmailOutcome says what a merge does with the accounts' addresses. The
+// source's address is always cleared; the codes are HEAD's rule
+// (internal/usermerge planAccounts).
+type MergeEmailOutcome string
+
+const (
+	// MergeEmailNone: neither account has an address.
+	MergeEmailNone MergeEmailOutcome = "none"
+	// MergeEmailKept: the target keeps its own address; the source's, if any,
+	// is dropped unverified or is the same address unverified on the source.
+	MergeEmailKept MergeEmailOutcome = "kept"
+	// MergeEmailMoved: the target had no address and takes the source's, with
+	// the verification the source had.
+	MergeEmailMoved MergeEmailOutcome = "moved"
+	// MergeEmailVerifiedTransferred: both held the same address and only the
+	// source had it verified; the target now holds it verified.
+	MergeEmailVerifiedTransferred MergeEmailOutcome = "verified_transferred"
+	// MergeEmailReleasedVerified: the source's different, verified address is
+	// released and nobody holds it afterwards.
+	MergeEmailReleasedVerified MergeEmailOutcome = "released_verified"
+)
+
+// MergeRow is one record a merge moves (a Store implementation's concern; a
+// module never holds one).
 type MergeRow struct {
 	Kind string // "apikey", "identity", "inviteallow"; invites are deleted, never re-owned (DATA4-9)
 	ID   string
-	Seen []byte // the stored bytes the preview read (the Expect value)
+	Seen []byte // the stored bytes the plan read (the Expect value)
 }
 
 // Merge row kinds.
@@ -403,4 +510,8 @@ type InviteView struct {
 	CreatedBy UserID
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// BindEmailOnAccept is the invite's flag (OneTimeToken.BindEmailOnAccept):
+	// its address was mailed by an admin, so accepting it may bind the address
+	// verified. A fact, not a secret: it names no token.
+	BindEmailOnAccept bool
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -191,6 +192,16 @@ func (k *Kernel) stopSweeper(deadline time.Time) error {
 		return nil
 	}
 	return k.store.sweeper.stop(deadline)
+}
+
+// HealthSnapshot is the health registry's state now: every component with its
+// current Result (05-health section 5H.3.1). The zero Snapshot for a
+// kernel that built no registry. A copy: it never aliases the registry.
+func (k *Kernel) HealthSnapshot() health.Snapshot {
+	if k.healthReg == nil {
+		return health.Snapshot{}
+	}
+	return k.healthReg.Snapshot()
 }
 
 // CheckpointHealth is what health reports about the store's checkpoints

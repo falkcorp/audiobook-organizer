@@ -1,0 +1,3 @@
+### Changed
+
+- Identity flip groundwork (F4-08 B6a, tests only): the check that no custom role can reach a legacy route its replacement permissions refuse now carries the name the flip guard looks for, `TestLegacyStage13_RandomRolesAdmitOnlyWhatTheSuccessorAdmits`, in `core/httpapi`. It runs 600 seeded rounds of random roles over all 12 route atoms and fails if stage 13 admits anything the successor refuses. A new test in `internal/books` holds its copy of the atom table to `books.AtomTable`, so the two cannot drift. The `F4-07-RANDOM-ROLES` obligation is discharged; five obligations still block the flip. No behaviour change.

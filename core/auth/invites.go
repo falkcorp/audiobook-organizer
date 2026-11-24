@@ -13,6 +13,7 @@ import (
 	"iter"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -32,9 +33,15 @@ import (
 // disable or sign-out-everywhere of the creator kills every invite it made
 // (§4.12). Accepting re-runs rbac.CanAssign for the creator over the role
 // (SEC3-2), so an invite whose creator was demoted, disabled or deleted
-// yields nothing. The invitee's e-mail is stored unverified and grants no
-// SSO admission: unlike HEAD, an invite never binds an address, so no
-// uniqueness check guards it.
+// yields nothing.
+//
+// The invitee's e-mail is stored unverified and grants no SSO admission,
+// except for an invite an admin mailed to that address
+// (Admin.MarkInviteEmailDelivered sets BindEmailOnAccept): accepting that one
+// binds the address VERIFIED, HEAD's rule for an emailed invite from an admin
+// creator (database.ConsumeInvite), see inviteBindsEmail. Creating any invite
+// that names an address another account holds verified is refused, as at HEAD
+// (database.CreateInvite, ErrInviteEmailTaken).
 const (
 	actionInviteCreate = "core.invite.create"
 	actionInviteAccept = "core.invite.accept"
@@ -48,7 +55,7 @@ func inviteLink(token string) string { return "/invite#token=" + token }
 func inviteView(t *OneTimeToken) InviteView {
 	return InviteView{
 		ID: t.ID, Username: t.Username, Email: t.Email, Role: t.Role, CreatedBy: t.CreatedBy,
-		CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt,
+		CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt, BindEmailOnAccept: t.BindEmailOnAccept,
 	}
 }
 
@@ -71,11 +78,24 @@ func inviteEmail(raw string) (string, error) {
 // CreateInvite creates an invite (§4.13): core:users.manage through an
 // interactive method and CanAssign over its role (05-rbac §4.7 rule 2). The
 // username is trimmed and must be free: no user holds it and no open invite
-// names it (ErrUserExists), both under FoldUsername. The TTL is in.TTL, or
-// core.auth.invite.ttl when zero. It returns the fragment link, which holds
-// the token and is the only place the token appears, and the invite's view;
-// the audit record names the invite's public ID.
+// names it (ErrUserExists), both under FoldUsername. An address another
+// account holds verified is refused (ErrEmailInUse), HEAD's rule at create
+// (database.CreateInvite refuses any invite whose address a verified holder
+// has, mailed or not). The TTL is in.TTL, or core.auth.invite.ttl when zero.
+// It returns the fragment link, which holds the token and is the only place
+// the token appears, and the invite's view; the audit record names the
+// invite's public ID. The invite is never flagged: only
+// Admin.MarkInviteEmailDelivered sets BindEmailOnAccept.
+//
+// actor must be the principal bound on ctx (WithPrincipal), and the decision
+// is made on the ctx principal's own permissions, not on actor's
+// (ctxActor): the method is also auth.Admin's, so a module that holds the
+// handle can name no one but the request's caller.
 func (s *Service) CreateInvite(ctx context.Context, actor *Principal, in InviteSpec) (string, InviteView, error) {
+	actor, err := s.ctxActor(ctx, actor)
+	if err != nil {
+		return "", InviteView{}, err
+	}
 	if err := s.mayManageUsers(actor, "create an invite"); err != nil {
 		return "", InviteView{}, err
 	}
@@ -95,6 +115,9 @@ func (s *Service) CreateInvite(ctx context.Context, actor *Principal, in InviteS
 	}
 	if err := s.d.RBAC.CanAssign(actor.Perms, []rbac.RoleName{role}); err != nil {
 		return "", InviteView{}, fmt.Errorf("%w: %w", ErrScopeEscalation, err)
+	}
+	if err := s.inviteEmailFree(ctx, email); err != nil {
+		return "", InviteView{}, err
 	}
 	ttl := in.TTL
 	if ttl == 0 {
@@ -132,6 +155,24 @@ func (s *Service) CreateInvite(ctx context.Context, actor *Principal, in InviteS
 		return "", InviteView{}, err
 	}
 	return inviteLink(token), view, nil
+}
+
+// inviteEmailFree refuses an invite for email when another account holds the
+// address verified (ErrEmailInUse; "" names none). It is advisory at create:
+// the accept re-checks under the e-mail lock, in its own batch, and a holder
+// that appears between the two refuses the accept, as at HEAD.
+func (s *Service) inviteEmailFree(ctx context.Context, email string) error {
+	if email == "" {
+		return nil
+	}
+	taken, err := s.emailVerifiedElsewhere(ctx, email)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return fmt.Errorf("%w: another account holds that address verified", ErrEmailInUse)
+	}
+	return nil
 }
 
 // usernameFree refuses name when a user holds it or an open (unexpired)
@@ -187,8 +228,15 @@ func (s *Service) Invites(ctx context.Context) iter.Seq2[InviteView, error] {
 
 // DeleteInvite deletes the invite with public ID id (§4.13): core:users.manage
 // through an interactive method; ErrNotFound when there is none. CoreActions
-// names no invite deletion, so it is not audited (seams.d/F4-02.md).
+// names no invite deletion, so it is not audited (seams.d/F4-02.md). actor is
+// held to the same rule as CreateInvite's (ctxActor). It is core's native
+// DELETE route's; a module deletes through Admin.AdminDeleteInvite, whose rule
+// is the legacy surface's (mayAdministerInvites).
 func (s *Service) DeleteInvite(ctx context.Context, actor *Principal, id string) error {
+	actor, err := s.ctxActor(ctx, actor)
+	if err != nil {
+		return err
+	}
 	if err := s.mayManageUsers(actor, "delete an invite"); err != nil {
 		return err
 	}
@@ -238,7 +286,9 @@ func (s *Service) openInvite(ctx context.Context, token string, client ClientInf
 // AcceptInvite spends an invite and creates its account (§4.13): the
 // username and role the creator chose, the e-mail unverified, in.Password
 // (at least core.auth.password.min_length) as its password, and a delegated
-// session (OriginInvite, core.auth.session.remember_ttl) in the same batch.
+// session (OriginInvite) in the same batch. The session lives
+// Options.InviteSessionTTL when the app set one, else
+// core.auth.session.remember_ttl.
 // The throttle applies as in LookupInvite; a malformed request, a short
 // password and a busy hasher leave the invite unspent.
 //
@@ -249,7 +299,8 @@ func (s *Service) openInvite(ctx context.Context, token string, client ClientInf
 // denied); or the username taken since it was created (wrapping
 // ErrUserExists).
 func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User, *IssuedSession, error) {
-	if _, err := s.openInvite(ctx, in.Token, in.Client); err != nil {
+	peek, err := s.openInvite(ctx, in.Token, in.Client)
+	if err != nil {
 		return nil, nil, err
 	}
 	if in.Password == "" {
@@ -267,10 +318,23 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 	if err != nil {
 		return nil, nil, err
 	}
+	unlock := func() {} // releases the e-mail lock, once, before the callbacks run
+	if peek.Email != "" {
+		// Taken for every invite that names an address, not only a flagged
+		// one: the flag can be set (MarkInviteEmailDelivered) between this
+		// read and the take below, and the bind it then asks for must run
+		// under the lock. The address is immutable; the flag is not.
+		// Held across the displacement's reads and the commit, as every
+		// writer of an address does (UpdateProfile, CreateUser).
+		s.emailMu.Lock()
+		var once sync.Once
+		unlock = func() { once.Do(s.emailMu.Unlock) }
+		defer unlock()
+	}
 	var user *User
 	var out *IssuedSession
 	var refusal error
-	err = s.commitRetryingN(ctx, claimRetries, func(b *storage.Batch) error {
+	post, err := s.commitQueueingN(ctx, claimRetries, func(b *storage.Batch, inv *invalidations) error {
 		refusal = nil
 		t, err := s.d.Store.TakeOneTime(b, OneTimeInvite, Token(in.Token)) // parsed by openInvite
 		if errors.Is(err, ErrNotFound) {
@@ -321,6 +385,21 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 			ID: UserID(id), Username: t.Username, Email: t.Email, HasPassword: true,
 			Roles: []rbac.RoleName{t.Role}, Status: StatusActive, CreatedAt: now, UpdatedAt: now, Version: 1,
 		}
+		creatorAdmin := checker.Has(rbac.CoreAdmin)
+		var displaced []UserID
+		binds := t.Email != "" && inviteBindsEmail(t, creatorAdmin)
+		if binds {
+			// HEAD's refusal of an address a verified holder has leaves the
+			// invite unspent (planInviteAcceptLocked fails before any write):
+			// returning here commits nothing, the take included.
+			if displaced, err = s.displaceUnverifiedHolders(ctx, b, t.Email, u.ID); err != nil {
+				return fmt.Errorf("%w: %w", ErrInviteInvalid, err)
+			}
+			// Held verified from the first write: the invite was mailed to the
+			// address, so its holder controls the inbox (HEAD's source
+			// "invite").
+			u.EmailVerified = true
+		}
 		if err := s.d.Store.SetPassword(b, u, hash); err != nil {
 			if !errors.Is(err, ErrUserExists) {
 				return err
@@ -331,20 +410,39 @@ func (s *Service) AcceptInvite(ctx context.Context, in AcceptInviteInput) (*User
 			// conflicts and the retry finds it spent.
 			return refuse(fmt.Errorf("%w: %w", ErrInviteInvalid, err))
 		}
-		rec, issued, err := s.stageSession(b, u, OriginInvite, true, in.Client, now)
+		rec, issued, err := s.stageSession(b, u, OriginInvite, lifeInvite, in.Client, now)
 		if err != nil {
 			return err
 		}
 		user, out = u, issued
-		return s.d.Audit.RecordIn(ctx, b, audit.Event{
+		details := map[string]any{"invite": t.ID, "role": string(t.Role), "created_by": string(t.CreatedBy)}
+		if binds {
+			details["email_bound"], details["email_source"] = true, "invite"
+		}
+		if len(displaced) > 0 {
+			details["displaced_user_ids"] = displaced
+		}
+		if err := s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionInviteAccept, Outcome: audit.Success, Target: ref(refKindUser, id),
 			Actor: audit.Actor{
 				UserID: id, Username: u.Username, Method: string(MethodSessionDelegated), CredentialID: rec.PublicID,
 				ClientAddr: addrString(in.Client.Addr), UserAgent: in.Client.UserAgent,
 			},
-			Details: map[string]any{"invite": t.ID, "role": string(t.Role), "created_by": string(t.CreatedBy)},
+			Details: details,
+		}); err != nil {
+			return err
+		}
+		inv.after(func(ctx context.Context) { s.warnDisplaced(ctx, t.ID, u.ID, displaced) })
+		s.queueInviteAccepted(inv, InviteAccepted{
+			InviteID: t.ID, UserID: u.ID, Username: u.Username, AcceptedAt: u.CreatedAt, CreatedBy: t.CreatedBy, Email: t.Email,
+			CreatorHeldAdmin: creatorAdmin, BindEmailOnAccept: t.BindEmailOnAccept, DisplacedUserIDs: displaced,
 		})
+		return nil
 	})
+	// The lifecycle callbacks run with the e-mail lock released (see
+	// UpdateProfile).
+	unlock()
+	post.run(ctx)
 	if err != nil {
 		return nil, nil, err
 	}

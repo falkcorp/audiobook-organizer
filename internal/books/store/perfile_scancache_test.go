@@ -459,7 +459,7 @@ func TestBackfillCreatesTheMissingSingleFileRow(t *testing.T) {
 		t.Errorf("FilePath = %q, want %q", got.FilePath, realFile)
 	}
 	if got.OriginalFilename != "solo.m4b" || got.Format != "m4b" || got.TrackNumber != 1 {
-		t.Errorf("row is not the same honest row ensureSingleFileBookFile writes: %+v", got)
+		t.Errorf("row is not the same correct row ensureSingleFileBookFile writes: %+v", got)
 	}
 	if got.FileSize != 16 {
 		t.Errorf("FileSize = %d, want 16 (measured by stat, not copied)", got.FileSize)
@@ -500,7 +500,7 @@ func TestBackfillRefusesToInventRowsItCannotJustify(t *testing.T) {
 			"a directory book with no rows is a different problem; one row pointing at the " +
 				"folder would feed the cache a directory inode's size"},
 		{"a path that does not exist", filepath.Join(dir, "gone.m4b"),
-			"we do not know what the file is, so there is nothing honest to write"},
+			"we do not know what the file is, so there is nothing correct to write"},
 	}
 
 	for _, tc := range cases {

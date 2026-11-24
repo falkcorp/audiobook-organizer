@@ -220,7 +220,7 @@ type Patch struct {
 // context, so config never imports auth.
 type Actor struct {
 	Subject     string
-	Interactive bool                   // auth.Method.MayChangeCredentials()
+	Interactive bool                   // auth.Principal.MayChangeCredentials()
 	Owner       bool                   // owner proof verified
 	Can         func(perm string) bool // rbac check; ProtectAdmin asks Can("core:admin")
 }

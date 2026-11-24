@@ -313,6 +313,7 @@ var layerOf = map[string]int{
 	"cmd/itl-check":                      6, // family: entry
 	"cmd/itl-diff":                       6, // family: entry
 	"cmd/mtls-bridge":                    6, // family: entry
+	"cmd/permsgen":                       6, // family: entry
 	"cmd/pid-census":                     6, // family: entry
 	"cmd/verify-suite":                   6, // family: entry
 	"internal/books":                     6, // entry: ABO's composition root, imported only by . and cmd (03 §3.5.1 item 1)

@@ -720,7 +720,7 @@ func TestApply_RacingAWriterOfTheSurvivorsListeningState(t *testing.T) {
 
 func TestFootprint(t *testing.T) {
 	f := newFixture(t)
-	fp, err := f.svc.Footprint(f.b.ID)
+	fp, err := f.svc.Footprint(context.Background(), f.b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -731,7 +731,7 @@ func TestFootprint(t *testing.T) {
 	if len(fp.Identities) != 1 || !fp.Identities[0].OwnerEmail || fp.Identities[0].Provider != "google" {
 		t.Errorf("identities = %+v", fp.Identities)
 	}
-	if _, err := f.svc.Footprint("nobody"); err == nil {
+	if _, err := f.svc.Footprint(context.Background(), "nobody"); err == nil {
 		t.Error("footprint of a missing user returned no error")
 	}
 }

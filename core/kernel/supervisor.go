@@ -225,8 +225,19 @@ func (k *Kernel) Run(ctx context.Context) error {
 		started = append(started, k.awaitLateStart(ctx, late, deadline)...)
 		return errors.Join(err, k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
 	}
-	// (3) Module workers. Steps (3a) and (4) arrive with health and events.
+	// (3) Module workers. Step (3a) arrives with health.
 	ws := k.startWorkers(ctx)
+	// (4) The events bus opens: no handler ran before the hooks and workers it
+	// may call had started (05-events COR-8). Only an app that declared the
+	// identity flip has one.
+	if err := k.openEvents(); err != nil {
+		budget, berr := k.shutdownBudget()
+		if berr != nil {
+			k.log.WarnContext(ctx, "kernel: the start rollback uses the default shutdown budget", "budget", budget, "err", berr)
+		}
+		deadline := time.Now().Add(budget)
+		return errors.Join(err, k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
+	}
 	// (5) The task executor and (6) the scheduler, only when the start rule
 	// held at P7 (tasks.go); then step (7)'s first member, the audit writer,
 	// before any listener can queue a record for it (F2-16).
@@ -267,7 +278,7 @@ func (k *Kernel) Run(ctx context.Context) error {
 	}
 	if err != nil {
 		deadline := time.Now().Add(budget)
-		return errors.Join(err, k.stopCoreServices(ctx, deadline), k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
+		return errors.Join(err, k.stopCoreServices(ctx, deadline), k.closeEvents(ctx, deadline), k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline),
 			k.closeCore(ctx, deadline))
 	}
 	served := make(chan error, 1)
@@ -351,6 +362,9 @@ func (k *Kernel) stop(ctx context.Context, deadline time.Time, srv Server, serve
 	// into the still-open store: the reverse of steps (5) to (7), before the
 	// workers and hooks that started earlier (06 §6.5.2; 05-tasks 5T.4 step 4).
 	errs = append(errs, k.stopCoreServices(ctx, deadline))
+	// Bus.Close: after the executor drained, before the workers and hooks stop
+	// (05-events COR-8).
+	errs = append(errs, k.closeEvents(ctx, deadline))
 	errs = append(errs, k.stopWorkers(ctx, ws, deadline), k.stopHooks(ctx, started, deadline), k.closeCore(ctx, deadline))
 	return errors.Join(errs...)
 }

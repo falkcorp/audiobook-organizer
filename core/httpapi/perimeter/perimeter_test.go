@@ -128,7 +128,7 @@ func newFixture(t *testing.T, opts ...fixtureOpt) *fixture {
 		{Method: http.MethodGet, GinPath: "/api/v1/events", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateExempt},
 	}
 	if err := r.MountLegacy(httpapi.LegacyMount{
-		Owner: "gcpd", Handler: gotham{}, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
+		Owner: "gcpd", Handler: gotham{}, Auth: httpapi.LegacyAuthCore, ServesSPA: true,
 		DefaultCSP: func(*http.Request) string { return legacyCSP }, CSPReport: "/api/v1/csp-report",
 		BuildID: buildID,
 		Routes: func(yield func(httpapi.LegacyRoute) bool) {

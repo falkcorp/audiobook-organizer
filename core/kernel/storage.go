@@ -14,6 +14,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/falkcorp/mediacore/backup/journal"
 	"github.com/falkcorp/mediacore/internal/restoreswap"
 	"github.com/falkcorp/mediacore/metrics"
 	"github.com/falkcorp/mediacore/module"
@@ -55,16 +56,33 @@ type kernelStore struct {
 }
 
 // DeclaresStorage reports whether m declares any storage: a keyspace, legacy
-// claims, migrations or any other member of storage.Spec. Package app
-// resolves core.storage.path only when a module of the app declares storage.
+// claims, migrations or any other member of storage.Spec. It answers "does
+// this MODULE declare storage" (its owner, its keyspace, its handles); "does
+// this APP have a store" is Config.WantsStore, which also counts the identity
+// boot.
 func DeclaresStorage(m module.Manifest) bool { return !reflect.ValueOf(m.Storage).IsZero() }
+
+// WantsStore reports whether the app c describes has a store: a module of it
+// declares storage (enabled or not), or it declared the identity boot
+// (Config.IdentityBoot), whose users, roles, sessions and revocation journal
+// live in core's store even when no module owns a keyspace. It is the one
+// answer to "does this app have a store" at every site that asks: P0's path
+// and state directory resolution, the offline commands' resolution, and
+// package app's claims mode and state-file table. Sites that mean "this
+// module declares storage" (a module's owner spec, its handles) use
+// DeclaresStorage instead and are not changed by the identity boot.
+func (c Config) WantsStore() bool {
+	return c.IdentityBoot || slices.ContainsFunc(c.Modules, func(m module.Module) bool {
+		return m != nil && DeclaresStorage(m.Manifest())
+	})
+}
 
 // storageWanted gates P2 to P4: Config.StoragePath set, and not Describe,
 // which never opens the store. P0 sets the path for every app whose modules
-// declare storage (core.storage.path, the app's compiled path, or
-// <state dir>/storage/main.pebble), so an app with a module that declares
-// storage always has one by here; an app with none and no compiled path opens
-// no store.
+// have a store (Config.WantsStore: a module declares storage, or the identity
+// boot is declared; core.storage.path, the app's compiled path, or
+// <state dir>/storage/main.pebble), so such an app always has one by here; an
+// app with none and no compiled path opens no store.
 func (k *Kernel) storageWanted(describe bool) bool {
 	return !describe && k.cfg.StoragePath != ""
 }
@@ -121,6 +139,7 @@ func (k *Kernel) storageOptions(ctx context.Context) (storage.OpenOptions, error
 		StateFiles:   slices.Clone(k.cfg.StorageStateFiles),
 		FromRelease:  k.cfg.FromRelease,
 		ClaimsShadow: k.cfg.StorageClaimsShadow,
+		JournalHead:  journalHeadSeq,
 	}, nil
 }
 
@@ -247,6 +266,14 @@ func (k *Kernel) migrateStorage(ctx context.Context) error {
 	// (06 §6.5.1 P4b; config_boot.go).
 	if k.cfgBoot != nil {
 		if err := k.bindCoreStores(ctx); err != nil {
+			return err
+		}
+	}
+	// The identity stores, and with them Importers.Auth, Roles and Audit, bind
+	// here too, from the same instances the P5 services are built over; an app
+	// that did not declare the identity boot builds none of it.
+	if k.identityBootDeclared() {
+		if err := k.buildIdentityStores(ctx); err != nil {
 			return err
 		}
 	}
@@ -412,4 +439,12 @@ func (k *Kernel) closeStorage() error {
 		return errors.Join(serr, fmt.Errorf("kernel: storage close: %w", err))
 	}
 	return serr
+}
+
+// journalHeadSeq is storage.OpenOptions.JournalHead: the committed head seq of
+// the revocation journal the pre-migration checkpoint records as its
+// journal_seq (F4-08 B10k).
+func journalHeadSeq(ctx context.Context, ks storage.Keyspace) (uint64, error) {
+	h, err := journal.ReadHead(ctx, ks)
+	return h.Seq, err
 }

@@ -4,11 +4,12 @@
 // last-edited: 2026-10-26
 
 import { useOptionalAuth } from '../contexts/AuthContext';
+import { BOOKS_PERMISSIONS } from '../generated/permissions';
 
 /** Moving books to the trash (the server asks for it on every route that does). */
-export const LIBRARY_DELETE_PERMISSION = 'library.delete';
+export const LIBRARY_DELETE_PERMISSION = BOOKS_PERMISSIONS.DELETE;
 /** Taking books out of the trash. */
-export const LIBRARY_ORGANIZE_PERMISSION = 'library.organize';
+export const LIBRARY_ORGANIZE_PERMISSION = BOOKS_PERMISSIONS.ORGANIZE;
 
 /** The slice of the auth context a permission decision reads. */
 export interface PermissionAuth {

@@ -86,7 +86,7 @@ const (
 // nothing:
 //
 //   - a bare `go store.UpdateBookFile(...)` reports "runtime.goexit:0", an
-//     honest bucket meaning "no in-repo caller was on the stack";
+//     accurate bucket meaning "no in-repo caller was on the stack";
 //   - an in-package test reports a "testing." frame.
 //
 // The "database-internal" return is therefore a backstop that requires more than

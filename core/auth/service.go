@@ -105,6 +105,23 @@ type Options struct {
 	// OIDCCallbackBase is the path prefix of the OIDC/OAuth callback (§3.2,
 	// §4.13); empty for hello and new apps.
 	OIDCCallbackBase string
+	// BootstrapTokenFile is the bootstrap token file's name directly under
+	// the app's state directory (§4.6). "" is BootstrapTokenFile
+	// ("bootstrap-token"), core's own name, which hello and new apps keep.
+	// An app whose operators already read the token from another name sets
+	// it (ABO: ".bootstrap-token", the path its sudoers rule names), so an
+	// upgrade breaks no tooling that reads it. It must be a plain file name
+	// (New refuses a path, "." or "..") and not ReadOnlyKeyFile.
+	BootstrapTokenFile string
+	// InviteSessionTTL is how long the session an accepted invite opens
+	// lives (§4.13). Zero, which hello and new apps keep, gives it
+	// core.auth.session.remember_ttl, as a remember-me sign-in. An app that
+	// already gave invited users a longer first session sets it (ABO: 720h,
+	// HEAD's 30 days), so the flip does not narrow it. It is a compile-time
+	// value with no operator key: remember_ttl's default stays the same for
+	// every app, and an operator who lowers remember_ttl does not shorten
+	// invite sessions. It must not be negative (New refuses it).
+	InviteSessionTTL time.Duration
 }
 
 // Settings are the live core.auth.* values the service reads on each call
@@ -312,6 +329,10 @@ type Service struct {
 	// then create one, and the store indexes usernames only.
 	setupMu sync.Mutex
 
+	// lifecycle is the one registered Lifecycle (RegisterLifecycle); nil
+	// until then.
+	lifecycle atomic.Pointer[Lifecycle]
+
 	extensions []Extension
 	// methods are the registered extension and compat methods; compat
 	// methods join at P7 (RegisterCompat), while requests are not yet served
@@ -381,6 +402,12 @@ func New(ctx context.Context, opts Options, d Deps) (*Service, error) {
 	if err := checkImportedPrefixes(opts.ImportedKeyPrefixes); err != nil {
 		return nil, err
 	}
+	if err := checkBootstrapTokenFile(opts.BootstrapTokenFile); err != nil {
+		return nil, err
+	}
+	if opts.InviteSessionTTL < 0 {
+		return nil, fmt.Errorf("%w: Options.InviteSessionTTL %v is negative", ErrBadInput, opts.InviteSessionTTL)
+	}
 	s.opts.ImportedKeyPrefixes = slices.Clone(opts.ImportedKeyPrefixes)
 	s.methods = map[Method]MethodSpec{}
 	for _, e := range d.Extensions {
@@ -427,14 +454,21 @@ func (s *Service) settings() Settings {
 
 // interactive reports whether m is an interactive method: core's own
 // classification (Method.Interactive), or what its registration declared.
-func (s *Service) interactive(m Method) bool {
-	if m.Interactive() {
-		return true
-	}
+func (s *Service) interactive(m Method) bool { return s.classify(m).interactive }
+
+// classify is m's classification: core's own for core's methods, else what
+// m's registered MethodSpec declared. A method nobody registered is neither
+// interactive nor allowed to change credentials (fail closed).
+func (s *Service) classify(m Method) methodClass {
+	c := methodClass{method: m, interactive: m.Interactive(), mayChangeCredentials: m.MayChangeCredentials()}
 	s.methodsMu.RLock()
 	spec, ok := s.methods[m]
 	s.methodsMu.RUnlock()
-	return ok && spec.Interactive
+	if ok {
+		c.interactive = c.interactive || spec.Interactive
+		c.mayChangeCredentials = c.mayChangeCredentials || spec.MayChangeCredentials
+	}
+	return c
 }
 
 // knownMethod reports whether m is a method the service builds principals
@@ -558,8 +592,38 @@ func (s *Service) commitInvalidating(ctx context.Context, stage func(b *storage.
 	return s.commitInvalidatingN(ctx, conflictRetries, stage)
 }
 
-// commitInvalidatingN is commitInvalidating over attempts tries.
+// commitInvalidatingN is commitInvalidating over attempts tries. The
+// lifecycle callbacks the committed attempt queued (Lifecycle) run when it
+// returns, the batch closed and no lock of the caller's released yet: a
+// caller that holds a lock a callback may need uses commitQueueingN and
+// runs them itself after releasing it.
 func (s *Service) commitInvalidatingN(ctx context.Context, attempts int, stage func(b *storage.Batch, inv *invalidations) error) error {
+	post, err := s.commitQueueingN(ctx, attempts, stage)
+	post.run(ctx)
+	return err
+}
+
+// afterCommit is the lifecycle callbacks of the one attempt that committed.
+type afterCommit []func(ctx context.Context)
+
+// run calls every queued callback, in the order the write queued them. It is
+// a no-op on nil: a write that never committed queued nothing that stands.
+func (a afterCommit) run(ctx context.Context) {
+	for _, fn := range a {
+		fn(ctx)
+	}
+}
+
+// commitQueueingN is commitInvalidatingN that hands back the lifecycle
+// callbacks the committed attempt queued instead of running them, so the
+// caller runs them (afterCommit.run) once it holds no lock a callback might
+// take: UpdateProfile holds the account e-mail lock across its commit, and a
+// callback that reached LockEmails, CreateUser or another profile write would
+// wait on it forever. The slice is empty unless a commit succeeded: an
+// attempt that conflicted, was refused or failed queued nothing that stands,
+// and a retry starts from an empty list.
+func (s *Service) commitQueueingN(ctx context.Context, attempts int, stage func(b *storage.Batch, inv *invalidations) error) (afterCommit, error) {
+	var committed afterCommit
 	err := storage.RetryOnConflict(ctx, attempts, func(ctx context.Context) (err error) {
 		b := s.d.NewBatch()
 		defer func() {
@@ -576,12 +640,13 @@ func (s *Service) commitInvalidatingN(ctx context.Context, attempts int, stage f
 		}
 		// Published here, on the commit's own success: the deferred Close
 		// can still turn the attempt's result into an error, but the
-		// revocation is durable by now.
+		// revocation is durable by now, and so are the callbacks' facts.
 		s.publishInvalidations(ctx, inv)
+		committed = inv.post
 		return nil
 	})
 	if errors.Is(err, storage.ErrConflict) {
-		return fmt.Errorf("%w: %w", ErrContended, err)
+		return committed, fmt.Errorf("%w: %w", ErrContended, err)
 	}
-	return err
+	return committed, err
 }

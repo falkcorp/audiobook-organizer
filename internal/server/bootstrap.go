@@ -303,6 +303,18 @@ type bootstrapRequest struct {
 // handleBootstrap exchanges a one-time bootstrap token for a full-privilege API key.
 // Wired to a public (unauthenticated) route.
 func (s *Server) handleBootstrap(c *gin.Context) {
+	// Under core identity the bootstrap token is core's (POST
+	// /api/core/v1/auth/bootstrap redeems it). This route refuses first, before
+	// the limiter, the body, the settings or any account is touched: books'
+	// own hash and expiry settings can outlive a HEAD boot, and honouring a
+	// stale one would spend a token, find or create an admin and fail at
+	// CreateAPIKey, or (for an expired one) remove core's token file, which
+	// carries the same name. The body is the one an unmatched token has always
+	// had.
+	if s.identity != nil {
+		httputil.RespondWithUnauthorized(c, "invalid bootstrap token")
+		return
+	}
 	// Behind the Cloudflare tunnel c.ClientIP() is a connector's address (the
 	// connectors are LAN hosts shared by every visitor), which would put every
 	// caller in one bucket and let one attacker lock the owner out of

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -80,9 +81,11 @@ func (d AuthzDecision) Admitted() bool { return d.Refusal == nil }
 //     invalid Bearer or API key is 401 on Public routes too (05-authn §4.3).
 //  2. Public (with no Guards): admitted.
 //  3. No principal: 401 authentication_required.
-//  4. Guards: Interactive needs Method.MayChangeCredentials (403
-//     interactive_required). Session needs Method.Interactive, the user's own
-//     sign-in and not a delegated session (403 interactive_required). Owner
+//  4. Guards: Interactive needs Principal.MayChangeCredentials (403
+//     interactive_required). Session needs Principal.Interactive, the user's
+//     own sign-in and not a delegated session (403 interactive_required).
+//     Both are the principal's, which carry the registered MethodSpec of an
+//     identity extension (Cloudflare Access), never Method's core-only list. Owner
 //     needs AssuranceOwner (403 owner_required) while OwnerRequired, else
 //     Interactive plus core:admin (05-authn §4.8).
 //  5. Perm through the principal's checker (confinement and Sensitive are the
@@ -90,9 +93,11 @@ func (d AuthzDecision) Admitted() bool { return d.Refusal == nil }
 //     opts.ResolveAtom first: 403 permission_denied naming the missing scope,
 //     403 interactive_required when that scope is Sensitive and the method is
 //     not interactive (05-rbac §8). The auth-disabled principal is answered
-//     401 authentication_required instead (05-rbac §4.11, 05-authn §4.11),
-//     and is refused every LegacyCheck requirement (HEAD's in-handler
-//     auth.Can denies it, 05-rbac §4.11).
+//     403 interactive_required (AuthOffRefusal) instead, not the 401
+//     05-rbac §4.11 and 05-authn §4.11 name: a 401 authentication_required
+//     ends the SPA's session, and a no-auth install has none to end (F4-08
+//     ruling G5(a), 2026-11-22). It is refused every LegacyCheck requirement
+//     (HEAD's in-handler auth.Can denies it, 05-rbac §4.11).
 //
 // Every input it cannot prove admits is refused: a nil checker, a zero,
 // Delegated or unresolvable requirement, an unknown atom, a resolver that
@@ -114,10 +119,10 @@ func Authorize(req AuthzRequest, opts AuthzOptions) AuthzDecision {
 	if p == nil {
 		return refuse(errAuthRequired())
 	}
-	if req.Guards.Interactive && !p.Method.MayChangeCredentials() {
+	if req.Guards.Interactive && !p.MayChangeCredentials() {
 		return refuse(errInteractiveRequired())
 	}
-	if req.Guards.Session && !p.Method.Interactive() {
+	if req.Guards.Session && !p.Interactive() {
 		return refuse(errSessionRequired())
 	}
 	if req.Guards.Owner {
@@ -139,7 +144,7 @@ func ownerRefusal(p *auth.Principal, required bool) *Error {
 		}
 		return nil
 	}
-	if !p.Method.MayChangeCredentials() {
+	if !p.MayChangeCredentials() {
 		return errInteractiveRequired()
 	}
 	if p.Perms == nil || !p.Perms.Has(rbac.CoreAdmin) || !p.Perms.Satisfies(rbac.Need(rbac.CoreAdmin)) {
@@ -160,7 +165,7 @@ func permRefusal(p *auth.Principal, perm rbac.Requirement, opts AuthzOptions) *E
 		return nil
 	}
 	if authOff {
-		return errAuthRequired()
+		return AuthOffRefusal()
 	}
 	if !ok {
 		return &Error{Status: http.StatusForbidden, Code: "permission_denied", Detail: "the route's permission cannot be resolved"}
@@ -169,7 +174,7 @@ func permRefusal(p *auth.Principal, perm rbac.Requirement, opts AuthzOptions) *E
 	if !named {
 		return &Error{Status: http.StatusForbidden, Code: "permission_denied"}
 	}
-	if opts.Catalog != nil && !p.Method.Interactive() {
+	if opts.Catalog != nil && !p.Interactive() {
 		if spec, found := opts.Catalog.Lookup(missing); found && spec.Sensitive {
 			return errInteractiveRequired()
 		}
@@ -282,6 +287,17 @@ type Stage13Options struct {
 	ClearCookie func(r *http.Request) *http.Cookie
 	// Log receives a refusal's write failure; nil is allowed.
 	Log *slog.Logger
+	// Audit records each 403 this stage writes as core.permission.deny
+	// (05-rbac §8: recorded where the 403 is written; the store coalesces
+	// identical denials). nil records nothing. A 401 is no denial of a
+	// credential's reach and is not recorded here.
+	Audit audit.Logger
+	// Route is "METHOD /pattern", the route the denial names.
+	Route string
+	// ownerWhenSet is the route's LegacyRoute.OwnerWhenSet, set by authWrap
+	// only; unexported so no caller of Stage13 can drop a native route's
+	// owner leg.
+	ownerWhenSet bool
 }
 
 // ErrStage13Options is Stage13's refusal of options it cannot run with.
@@ -292,14 +308,14 @@ var ErrStage13Options = errors.New("httpapi: stage 13 options incomplete")
 // Authorize with the route's perm and guards, clears the session cookie when
 // the decision asks, and answers a refusal as a problem without calling next.
 //
-// Not wired yet. B4 (F4-08's flip) must: add it after stage 12 on every route
-// stage 12 runs on (native, Infra routes whose perm is not Public, legacy
-// manifest routes of a LegacyAuthCore mount) and never on an OwnAuth legacy
-// route, whose Delegated requirement Authorize refuses; pass books' atom table
-// as ResolveAtom, the catalog, auth's owner-required derivation and a
-// ClearCookie over auth.Service.SessionCookie; audit each refusal
-// (core.permission.deny, coalesced, 05-rbac §7.1) where it is written; and
-// relax checkMount/ErrNoAuthService only when auth exists.
+// Router.SetAuth wires it (auth.go): after stage 12 on every route stage 12
+// runs on (native, Infra routes whose perm is not Public, legacy manifest
+// routes of a LegacyAuthCore mount) and never on an OwnAuth legacy route,
+// whose Delegated requirement Authorize refuses, with books' atom table as
+// ResolveAtom, the catalog, auth's owner-required derivation, a ClearCookie
+// over auth.Service.SessionCookie, and each 403 audited as
+// core.permission.deny (the store coalesces, 05-rbac §7.1). The same
+// predicate relaxes checkMount/ErrNoAuthService.
 func Stage13(perm rbac.Requirement, guards Guards, o Stage13Options) (func(http.Handler) http.Handler, error) {
 	return stage13(perm, guards, o, stage12Outcome)
 }
@@ -323,9 +339,28 @@ func stage13(perm rbac.Requirement, guards Guards, o Stage13Options, outcome fun
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			req := AuthzRequest{Perm: perm, Guards: guards}
-			req.Failure, req.Principal = outcome(r)
 			ownerRequired := o.OwnerRequired == nil || o.OwnerRequired()
+			g := guards
+			if o.ownerWhenSet && !ownerRequired {
+				// Deliberate HEAD parity, not a missing check (F4-08 ruling
+				// (ii), 2026-11-22): on a legacy owner route with owner_email
+				// unset, HEAD's ownerGateWhenOwnerSet passed through and the
+				// route's own perm applied (settings.manage on backup restore,
+				// users.manage on the merges), so no core:admin is asked here
+				// (origin/main internal/server/owner_routes.go:18-33). The
+				// credential guard (Guards.Interactive) and Perm still run.
+				// Only LegacyRoute.OwnerWhenSet sets this; a core-native
+				// owner route cannot, and keeps §4.8's core:admin. Proof:
+				// core TestOwnerWhenSet_* (ownerwhenset_test.go) and books
+				// TestOwnerRoutesBoot_* (identity_owner_routes_boot_test.go):
+				// owner unset, a custom-all/settings.manage session is
+				// admitted, a key is 403 interactive_required, auth-off is
+				// refused; owner set, only the owner (403 owner_required for
+				// everyone else, admin included).
+				g.Owner = false
+			}
+			req := AuthzRequest{Perm: perm, Guards: g}
+			req.Failure, req.Principal = outcome(r)
 			d := Authorize(req, AuthzOptions{OwnerRequired: ownerRequired, ResolveAtom: o.ResolveAtom, Catalog: o.Catalog})
 			if d.ClearCookie {
 				if ck := o.ClearCookie(r); ck != nil {
@@ -333,6 +368,12 @@ func stage13(perm rbac.Requirement, guards Guards, o Stage13Options, outcome fun
 				}
 			}
 			if d.Refusal != nil {
+				if o.Audit != nil && d.Refusal.Status == http.StatusForbidden {
+					o.Audit.Emit(r.Context(), audit.Event{
+						Action: "core.permission.deny", Outcome: audit.Denied, Permission: string(d.Refusal.required),
+						Route: o.Route, Reason: d.Refusal.Code,
+					})
+				}
 				WriteError(w, r, d.Refusal, o.Log)
 				return
 			}

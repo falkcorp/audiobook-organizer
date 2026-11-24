@@ -69,6 +69,9 @@ var (
 	// ErrSetupClosed: setup once a user exists, or without the bootstrap
 	// token from a non-local caller (§4.6 items 3-4).
 	ErrSetupClosed = errors.New("auth: setup is not available")
+	// ErrMergedAway: enabling an account that an admin user merge folded into
+	// another account (User.MergedInto). It stays disabled (409 merged_away).
+	ErrMergedAway = errors.New("auth: this account was merged into another and stays disabled")
 	// ErrInviteInvalid: an invite that is unknown, spent, expired, or whose
 	// creator may no longer assign its role (SEC3-2).
 	ErrInviteInvalid = errors.New("auth: invite invalid")
@@ -97,3 +100,37 @@ var ErrUndecodableRecord = errors.New("auth: stored identity record cannot be de
 // ErrImportRejected: an Importer refused a record that breaks a Store
 // invariant (§3.4).
 var ErrImportRejected = errors.New("auth: imported record breaks an identity store invariant")
+
+// ErrMergeRefused is what a MergeRefusal matches: a merge core refused for a
+// reason of its own, not for a missing right or a changed record. Callers read
+// the reason with errors.As(&*MergeRefusal).
+var ErrMergeRefused = errors.New("auth: merge refused")
+
+// The reasons of a MergeRefusal (Code).
+const (
+	// RefusedAlreadyMerged: the source was merged into another account before.
+	RefusedAlreadyMerged = "already_merged"
+	// RefusedNoSignIn: after the merge the target would have no way to sign in
+	// (no password and no linked sign-in, counting the ones the merge moves).
+	RefusedNoSignIn = "no_sign_in"
+	// RefusedEmailLinkable: the merge would give a target that is not an admin
+	// and has no password a verified address it did not hold verified before,
+	// which an OIDC sign-in with that address would then auto-link to the
+	// target (oidc.Resolver.linkByEmail links only such a holder). HEAD cannot
+	// reach this, its plan requires an admin survivor; core refuses it rather
+	// than make an address linkable that was not.
+	RefusedEmailLinkable = "email_linkable"
+)
+
+// MergeRefusal is the refusal of a merge for a reason that is not one of the
+// package's sentinels: Code is one of the Refused* constants and Detail a
+// sentence with no secret in it. It matches ErrMergeRefused.
+type MergeRefusal struct {
+	Code   string
+	Detail string
+}
+
+func (e *MergeRefusal) Error() string { return "auth: merge refused (" + e.Code + "): " + e.Detail }
+
+// Is reports whether target is ErrMergeRefused.
+func (e *MergeRefusal) Is(target error) bool { return target == ErrMergeRefused }

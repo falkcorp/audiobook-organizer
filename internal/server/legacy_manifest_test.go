@@ -27,6 +27,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 )
@@ -201,7 +202,7 @@ func assertAdminKind(t *testing.T, srv *Server, key string, perm rbac.Requiremen
 		// (05-rbac §6.1); an admin row that carries it again is refused here
 		// (F4-07 F-2 moved GET /cache/stats/keys to books:admin.view).
 		assert.Equal(t, adminRouteReadOnly, kind, "%s", key)
-	case "all(core:users.manage,books:admin.view)":
+	case "all(core:users.manage,core:roles.view,books:admin.view)":
 		// The master-list group wires adminRole directly (read-only kind)
 		// with s.perm(users.manage) behind it.
 		assert.False(t, recorded, "%s: master-list routes are not adminRoute registrations", key)
@@ -348,7 +349,7 @@ func mountBooksWith(t *testing.T, srv *Server, deps httpapi.Deps) (*httpapi.Rout
 	r.AllowAuthMethods("books", absAuthMethod)
 	csp, report, build := srv.LegacyPerimeter()
 	require.NoError(t, r.MountLegacy(httpapi.LegacyMount{
-		Owner: "books", Handler: srv.router, Auth: httpapi.LegacyAuthGin, ServesSPA: true,
+		Owner: "books", Handler: srv.router, Auth: httpapi.LegacyAuthCore, ServesSPA: true,
 		Routes:      slices.Values(manifest),
 		Redirects:   srv.LegacyRedirects(),
 		TopSegments: LegacyTopSegments(),
@@ -401,11 +402,11 @@ func TestLegacyManifest_RegistersAsMuxPatterns(t *testing.T) {
 				_, ok := served[gr.Method+" "+gr.Path]
 				assert.True(t, ok, "gin route %s %s is not served by a mux pattern", gr.Method, gr.Path)
 			}
-			want := 494
+			want := 495
 			if abs {
-				want = 573
+				want = 574
 			}
-			assert.Equal(t, want, n, "gin routes besides GET / (495 and 574 with it)")
+			assert.Equal(t, want, n, "gin routes besides GET / (496 and 575 with it)")
 			assert.Len(t, served, n)
 
 			gen, kept := generalised(abs)
@@ -827,4 +828,14 @@ func TestLegacyManifest_DriftFailsBoot(t *testing.T) {
 	assert.Contains(t, err.Error(), "POST /")
 	withHead := append(slices.Clone(walk), gin.RouteInfo{Method: http.MethodHead, Path: "/"})
 	require.NoError(t, checkLegacyManifest(withHead, m))
+}
+
+// TestAbsAuthMethod_MatchesTheLegacyauthMapping (F4-08 B10b1): legacyauth
+// spells books' compat method for itself (it never imports books), and maps
+// it to HEAD's abs/api_key. If books renames its method this fails, rather
+// than every ABS principal becoming unmapped (401) at the flip.
+func TestAbsAuthMethod_MatchesTheLegacyauthMapping(t *testing.T) {
+	if absAuthMethod != string(legacyauth.MethodBooksABS) {
+		t.Errorf("absAuthMethod = %q, legacyauth maps %q", absAuthMethod, legacyauth.MethodBooksABS)
+	}
 }

@@ -77,6 +77,16 @@ type OpenOptions struct {
 	Clock           func() time.Time // nil = time.Now
 	FS              FS               // the filesystem the store opens on; zero = the OS's (tests: MemFS)
 
+	// JournalHead reads the revocation journal's committed head seq from the
+	// "backup" owner's keyspace (c/backup/journal_head): the seq the
+	// pre-migration checkpoint records as journal_seq, the boundary a restore of
+	// that checkpoint re-applies the journal after (05-backup §5B.3.6 "Coverage
+	// at restore"; F4-08 B10k). The kernel binds it over journal.ReadHead, which
+	// storage cannot import. Nil, or a build with no "backup" keyspace, records
+	// 0: no boundary, so such a restore re-applies the whole journal (the safe
+	// side).
+	JournalHead func(ctx context.Context, backup Keyspace) (uint64, error)
+
 	// DataSteps are the build's BootBlocking data migrations as DAG nodes
 	// (DataStep; 05-storage §5S.3.6): ordered among the versioned steps,
 	// counted in the checkpoint decision, recorded done by a fresh install,

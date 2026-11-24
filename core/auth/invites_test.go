@@ -26,7 +26,7 @@ import (
 // invite creates an invite through actor and returns its token.
 func (f *fx) invite(actor *auth.Principal, spec auth.InviteSpec) (string, auth.InviteView) {
 	f.t.Helper()
-	link, view, err := f.svc.CreateInvite(context.Background(), actor, spec)
+	link, view, err := f.svc.CreateInvite(auth.WithPrincipal(context.Background(), actor), actor, spec)
 	if err != nil {
 		f.t.Fatalf("CreateInvite %+v: %v", spec, err)
 	}
@@ -114,7 +114,7 @@ func TestInvite_CreateRules(t *testing.T) {
 	f.user("Tim-Drake", "gotham.detective")
 	_, gk := f.mint(f.session(gordon), gordon.ID, "core:users.manage", "gotham:patrol")
 	create := func(actor *auth.Principal, spec auth.InviteSpec) error {
-		_, _, err := f.svc.CreateInvite(ctx, actor, spec)
+		_, _, err := f.svc.CreateInvite(auth.WithPrincipal(ctx, actor), actor, spec)
 		return err
 	}
 	manager := f.session(gordon)
@@ -151,13 +151,15 @@ func TestInvite_DeleteLookupAndThrottle(t *testing.T) {
 	steph := f.user("stephanie-brown", "gotham.detective")
 	manager := f.session(gordon)
 	tok, v := f.invite(manager, detectiveInvite("harper-row"))
-	wantErr(t, "a peer deletes", f.svc.DeleteInvite(ctx, f.session(steph), v.ID), auth.ErrDenied)
-	if err := f.svc.DeleteInvite(ctx, manager, v.ID); err != nil {
+	peer := f.session(steph)
+	wantErr(t, "a peer deletes", f.svc.DeleteInvite(auth.WithPrincipal(ctx, peer), peer, v.ID), auth.ErrDenied)
+	mctx := auth.WithPrincipal(ctx, manager)
+	if err := f.svc.DeleteInvite(mctx, manager, v.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.svc.LookupInvite(ctx, tok, from("192.0.2.52"))
 	wantErr(t, "a deleted invite", err, auth.ErrInviteInvalid)
-	wantErr(t, "a second delete", f.svc.DeleteInvite(ctx, manager, v.ID), auth.ErrNotFound)
+	wantErr(t, "a second delete", f.svc.DeleteInvite(mctx, manager, v.ID), auth.ErrNotFound)
 
 	tok, _ = f.invite(manager, detectiveInvite("duke-thomas"))
 	_, _, err = f.accept(tok, "short")

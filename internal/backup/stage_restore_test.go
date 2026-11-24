@@ -7,15 +7,19 @@ package backup
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/pebble/v2/vfs"
+	corebackup "github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
 
@@ -190,7 +194,13 @@ func TestStageRestore(t *testing.T) {
 		want := restorejournal.Intent{
 			ID: got.ID, Kind: restorejournal.KindArchive, DBPath: f.db,
 			Targets:       []restorejournal.Target{{From: staged, To: f.db}},
-			StagedByBuild: "batcomputer-r1", RequestedBy: "user:alfred", InstallID: "wayne-install", ArchiveID: f.info.Checksum,
+			StagedByBuild: "batcomputer-r1", RequestedBy: "user:alfred", InstallID: "wayne-install",
+			// The intent names the staging directory and core's legacy manifest
+			// beside the store (F4-08 B10g), the one a boot under core identity
+			// reads, and the archive by core's legacy ID; the manifest is checked
+			// below.
+			ArchiveID: string(corebackup.LegacyArchiveID(f.info.Filename, f.info.Checksum)),
+			Staging:   filepath.Dir(staged), ManifestSHA256: in.ManifestSHA256,
 			RequestedAt: time.Date(2026, time.November, 8, 12, 0, 0, 0, time.UTC),
 			ExpiresAt:   time.Date(2026, time.November, 9, 12, 0, 0, 0, time.UTC),
 		}
@@ -200,6 +210,39 @@ func TestStageRestore(t *testing.T) {
 		for name, body := range map[string]string{"CURRENT": "MANIFEST-000001\n", "000001.sst": "the long halloween"} {
 			if b, err := os.ReadFile(filepath.Join(staged, name)); err != nil || string(b) != body {
 				t.Fatalf("staged store's %s = %q, %v", name, b, err)
+			}
+		}
+		// The manifest core reads: legacy, listing each staged file with its size
+		// and the SHA-256 taken as it was written, beside the store and not in it,
+		// and accepted by step b's re-check, size-only and full re-hash.
+		m, entries, legacy, err := corebackup.ReadStagedManifest(in)
+		if err != nil || m != nil || !legacy {
+			t.Fatalf("ReadStagedManifest = %+v, legacy %v, %v; want a legacy manifest", m, legacy, err)
+		}
+		wantEntries := []corebackup.Entry{
+			{Path: "db/000001.sst", Size: int64(len("the long halloween")), SHA256: sha256Hex("the long halloween"), Class: corebackup.SystemOfRecord},
+			{Path: "db/CURRENT", Size: int64(len("MANIFEST-000001\n")), SHA256: sha256Hex("MANIFEST-000001\n"), Class: corebackup.SystemOfRecord},
+		}
+		if !reflect.DeepEqual(entries, wantEntries) {
+			t.Fatalf("manifest entries\n got %+v\nwant %+v", entries, wantEntries)
+		}
+		if _, err := os.Lstat(filepath.Join(staged, "legacy-manifest.json")); err == nil {
+			t.Fatal("the manifest was written inside the store directory, which the swap moves onto the live path")
+		}
+		var lm struct {
+			Archive string `json:"archive_sha256"`
+			Codec   string `json:"codec"`
+		}
+		rawManifest, err := os.ReadFile(filepath.Join(in.Staging, "legacy-manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(rawManifest, &lm); err != nil || lm.Archive != f.info.Checksum || lm.Codec != "gzip" {
+			t.Fatalf("manifest archive %q codec %q (%v), want the archive's SHA-256 %s and gzip", lm.Archive, lm.Codec, err, f.info.Checksum)
+		}
+		for _, rehash := range []func() bool{nil, func() bool { return true }} {
+			if err := corebackup.Recheck(rehash)(ctx, in); err != nil {
+				t.Fatalf("Recheck (rehash %v) refuses the staged restore: %v", rehash != nil, err)
 			}
 		}
 		if len(f.verified) != 1 || f.verified[0] != staged {
@@ -238,6 +281,29 @@ func TestStageRestore(t *testing.T) {
 		o.Verify, o.Probe = false, nil
 		if got, err := StageRestore(ctx, o); err != nil || got.Verified {
 			t.Fatalf("no verification asked, no sidecar = %+v, %v; want it staged unverified", got, err)
+		}
+		// With no digest read from a sidecar, the manifest records the one the
+		// extraction's scan took over the archive's bytes: the archive's own.
+		raw, err := os.ReadFile(restorejournal.PendingPath(f.state))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var in restorejournal.Intent
+		if err := json.Unmarshal(raw, &in); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, legacy, err := corebackup.ReadStagedManifest(in); err != nil || !legacy {
+			t.Fatalf("unverified stage: ReadStagedManifest legacy %v, %v", legacy, err)
+		}
+		rawManifest, err := os.ReadFile(filepath.Join(in.Staging, "legacy-manifest.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lm struct {
+			Archive string `json:"archive_sha256"`
+		}
+		if err := json.Unmarshal(rawManifest, &lm); err != nil || lm.Archive != f.info.Checksum {
+			t.Fatalf("unverified stage records archive digest %q (%v), want the scan's %s", lm.Archive, err, f.info.Checksum)
 		}
 	})
 
@@ -345,6 +411,8 @@ func TestStageRestore(t *testing.T) {
 		})
 	}
 }
+
+func sha256Hex(s string) string { h := sha256.Sum256([]byte(s)); return hex.EncodeToString(h[:]) }
 
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()

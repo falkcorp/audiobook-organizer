@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { Route, Routes } from 'react-router';
 import { renderWithProviders } from '../test/renderWithProviders';
+import { BOOKS_PERMISSIONS } from '../generated/permissions';
 
 vi.mock('../services/collectionApi', async (orig) => ({
   ...(await orig<typeof import('../services/collectionApi')>()),
@@ -68,7 +69,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  asUser(['library.view', 'collections.manage']);
+  asUser([BOOKS_PERMISSIONS.VIEW, BOOKS_PERMISSIONS.COLLECTIONS_MANAGE]);
   m.listCollections.mockResolvedValue({ collections: [staticCol, dynamicCol], count: 2 });
   m.createCollection.mockResolvedValue(staticCol);
   m.deleteCollection.mockResolvedValue();
@@ -168,9 +169,9 @@ describe('Collections list', () => {
   });
 });
 
-describe('without collections.manage', () => {
+describe('without books:collections.manage', () => {
   it('shows the reads and no write control', async () => {
-    asUser(['library.view']);
+    asUser([BOOKS_PERMISSIONS.VIEW]);
     renderPage();
     expect(await screen.findByText('Test Static')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /New Collection/ })).toBeNull();

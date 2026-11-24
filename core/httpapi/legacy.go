@@ -75,14 +75,13 @@ func (r *Router) AllowAuthMethods(owner string, methods ...string) {
 }
 
 // MountLegacy records a legacy mount (05-http-api §8.2) and returns the
-// errors it can see at once: a missing Owner or Handler, an Auth that is
-// neither LegacyAuthCore nor LegacyAuthGin, a malformed Redirects entry, and
+// errors it can see at once: a missing Owner or Handler, an Auth other than
+// LegacyAuthCore, a malformed Redirects entry, and
 // a second owner of "/" (FE-1). Routes is read here, once, before r.mu is
 // taken, so an iterator that reads router state cannot deadlock. Every manifest
 // rule (the pattern translation, the claims, the OwnAuth admission, the
 // collision rule) is checked by Build, so the order of the kernel's P7 calls
-// does not matter. Which module may use LegacyAuthGin is the Registrar's
-// check (ProblemLegacyAuth, SEC2-17), made before the mount reaches here.
+// does not matter.
 func (r *Router) MountLegacy(m LegacyMount) error {
 	var routes []LegacyRoute
 	if m.Routes != nil {
@@ -99,8 +98,8 @@ func (r *Router) MountLegacy(m LegacyMount) error {
 	if m.Owner == "" || m.Handler == nil {
 		errs = append(errs, fmt.Errorf("%w: legacy mount needs an Owner and a Handler", ErrLegacyManifest))
 	}
-	if m.Auth != LegacyAuthCore && m.Auth != LegacyAuthGin {
-		errs = append(errs, fmt.Errorf("%w: %s: legacy mount Auth %d is neither LegacyAuthCore nor LegacyAuthGin", ErrLegacyManifest, m.Owner, m.Auth))
+	if m.Auth != LegacyAuthCore {
+		errs = append(errs, fmt.Errorf("%w: %s: legacy mount Auth %d is not LegacyAuthCore", ErrLegacyManifest, m.Owner, m.Auth))
 	}
 	for _, rd := range m.Redirects {
 		if rd.Location == nil || !strings.HasPrefix(rd.Prefix, "/") || !strings.HasSuffix(rd.Prefix, "/") || !isClean(rd.Prefix) {
@@ -501,7 +500,14 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 		// Stage 8's facts ride on the registered handler (basicGateRoutes):
 		// a pattern dropped by the dedup above or by a refusal is never
 		// registered, so it carries no facts.
-		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, m.Handler, spec), facts: legacyGateFacts(reg, m)}
+		mh := m.Handler
+		if r.auth != nil && m.Auth == LegacyAuthCore && !first.OwnAuth {
+			// The members share Perm, Guards and OwnAuth (sameRequirements),
+			// so the first speaks for all. An OwnAuth route authenticates
+			// itself and never meets stages 12 and 13.
+			mh = r.authWrap(first.Perm, first.Guards, first.OwnerWhenSet, first.Method+" "+reg.pat.path(), mh)
+		}
+		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, mh, spec), facts: legacyGateFacts(reg, m)}
 		if err := register(mux, reg.pat.String(), h); err != nil {
 			errs = append(errs, err)
 		}
@@ -572,10 +578,10 @@ func (r *Router) nativeNodes() []*node {
 // service.
 func (r *Router) checkMount(m LegacyMount, routes []LegacyRoute) []error {
 	var errs []error
-	if m.Auth == LegacyAuthCore {
+	if m.Auth == LegacyAuthCore && r.auth == nil {
 		// Stage 13 enforces a LegacyAuthCore mount's Perm and Guards; until
-		// the auth service exists (R2) nothing could, so the mount is refused
-		// exactly as a non-Public native route is (fail closed).
+		// SetAuth wires it nothing could, so the mount is refused exactly as
+		// a non-Public native route is (fail closed).
 		n := 0
 		for _, lr := range routes {
 			if lr.Perm.Kind() != rbac.KindPublic {
@@ -632,6 +638,9 @@ func (r *Router) checkLegacyPerm(owner, what string, lr LegacyRoute) []error {
 	var errs []error
 	if lr.Public != (req.Kind() == rbac.KindPublic) {
 		errs = append(errs, fmt.Errorf("%w: %s: Public is %t but the requirement is %s", ErrLegacyManifest, what, lr.Public, req))
+	}
+	if lr.OwnerWhenSet && !lr.Guards.Owner {
+		errs = append(errs, fmt.Errorf("%w: %s: OwnerWhenSet on a route without Guards.Owner", ErrLegacyManifest, what))
 	}
 	switch {
 	case lr.OwnAuth && lr.AuthMethod == "":
@@ -898,7 +907,7 @@ func sameRequirements(a, b LegacyRoute) string {
 	switch {
 	case a.Perm.String() != b.Perm.String():
 		return "Perm"
-	case a.Guards != b.Guards:
+	case a.Guards != b.Guards || a.OwnerWhenSet != b.OwnerWhenSet:
 		return "Guards"
 	case a.Public != b.Public:
 		return "Public"

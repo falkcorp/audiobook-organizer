@@ -106,7 +106,7 @@ func gcpdBasicRouterBuilt(t *testing.T, assets func(string) bool) (*Router, http
 	}
 	r.AllowAuthMethods("gcpd", "gcpd.signal")
 	routes := gcpdBasicRoutes()
-	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthGin,
+	if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin(ginRoutesOf(routes)...), Auth: LegacyAuthCore,
 		ServesSPA: true, TopSegments: []string{"ping", "status"}, SPAShared: []string{"login"},
 		BasicExemptAssets: assets, Routes: manifestOf(routes...)}); err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestBasicGate_HEADExemptRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		cases := gothamRoute(http.MethodGet, "/api/v1/cases/:id")
-		if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin("GET /api/v1/cases/:id"), Auth: LegacyAuthGin,
+		if err := r.MountLegacy(LegacyMount{Owner: "gcpd", Handler: newFakeGin("GET /api/v1/cases/:id"), Auth: LegacyAuthCore,
 			BasicExemptAssets: headBasicAssets, Routes: manifestOf(cases)}); err != nil {
 			t.Fatal(err)
 		}

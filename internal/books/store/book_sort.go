@@ -23,7 +23,7 @@
 //
 // So the ordering rule lives here once, expressed the way the indexes express
 // it, and every path calls it. A comment cannot keep two implementations
-// honest; having one implementation can.
+// in agreement; having one implementation can.
 
 package store
 

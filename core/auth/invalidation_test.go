@@ -303,14 +303,13 @@ func TestInvalidation_MergeAfterCommit(t *testing.T) {
 	f := newFx(t)
 	bruce := f.user("bruce-wayne", rbac.RoleAdmin)
 	jason := f.user("jason-todd", "gotham.detective")
-	dick := f.user("dick-grayson", "gotham.detective")
+	dick := f.signable(f.user("dick-grayson", "gotham.detective"))
 	ctx := auth.WithPrincipal(context.Background(), f.signedIn(bruce))
-	plan := auth.UserMergePlan{Source: jason.ID, Target: dick.ID}
 	f.inval.take()
 
 	t.Run("not committed", func(t *testing.T) {
 		b := f.st.NewBatch()
-		after, err := f.svc.StageUserMerge(ctx, b, plan)
+		after, err := f.svc.StageUserMerge(ctx, b, f.planMerge(f.signedIn(bruce), jason.ID, dick.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -321,7 +320,7 @@ func TestInvalidation_MergeAfterCommit(t *testing.T) {
 	t.Run("commit conflicted", func(t *testing.T) {
 		b := f.st.NewBatch()
 		defer func() { _ = b.Close() }()
-		after, err := f.svc.StageUserMerge(ctx, b, plan)
+		after, err := f.svc.StageUserMerge(ctx, b, f.planMerge(f.signedIn(bruce), jason.ID, dick.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -333,7 +332,7 @@ func TestInvalidation_MergeAfterCommit(t *testing.T) {
 		wantEvents(t, "a merge whose commit failed", f.inval.take())
 	})
 	t.Run("committed", func(t *testing.T) {
-		if err := f.stageMerge(f.signedIn(bruce), plan); err != nil {
+		if err := f.stageMerge(f.signedIn(bruce), f.planMerge(f.signedIn(bruce), jason.ID, dick.ID)); err != nil {
 			t.Fatal(err)
 		}
 		wantEvents(t, "a committed merge", f.inval.take(), invEvent{string(jason.ID), "", string(journal.UserDisabled)})
@@ -344,7 +343,7 @@ func TestInvalidation_MergeAfterCommit(t *testing.T) {
 	t.Run("not committed, epoch moved by another write", func(t *testing.T) {
 		steph := f.user("stephanie-brown", "gotham.detective")
 		b := f.st.NewBatch()
-		after, err := f.svc.StageUserMerge(ctx, b, auth.UserMergePlan{Source: steph.ID, Target: dick.ID})
+		after, err := f.svc.StageUserMerge(ctx, b, f.planMerge(f.signedIn(bruce), steph.ID, dick.ID))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,7 +364,7 @@ func TestInvalidation_MergeAfterCommit(t *testing.T) {
 	t.Run("disabled source, not committed", func(t *testing.T) {
 		cass := f.edit(f.user("cassandra-cain", "gotham.detective"), func(u *auth.User) { u.Status = auth.StatusDisabled })
 		b := f.st.NewBatch()
-		after, err := f.svc.StageUserMerge(ctx, b, auth.UserMergePlan{Source: cass.ID, Target: dick.ID})
+		after, err := f.svc.StageUserMerge(ctx, b, f.planMerge(f.signedIn(bruce), cass.ID, dick.ID))
 		if err != nil {
 			t.Fatalf("staging a merge of a disabled source: %v", err)
 		}

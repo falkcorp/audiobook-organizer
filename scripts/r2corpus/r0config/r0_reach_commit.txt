@@ -1,0 +1,11 @@
+# file: scripts/r2corpus/r0config/r0_reach_commit.txt
+# version: 0.1.0
+# guid: 4e1b8d27-9c65-4a30-b7f2-0d5a3c9e6b18
+# last-edited: 2026-11-22
+#
+# The commit R0's reach baseline (internal/books/rbacreach) is recorded from: main
+# after the F3-07 merge, built by scripts/r2corpus/build_r0_reach.py. The one line
+# that is neither blank nor a comment is the full SHA. Moving it means re-recording
+# (record_r0_reach.py --regenerate, see its docstring), dumping the routes again
+# (dump_r0_routes.py) and reconciling every pin that reads the baseline.
+f6698f9bf0b6dd974c281876c3aa342d7d51c57c

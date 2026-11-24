@@ -58,7 +58,7 @@ beforeEach(() => {
   vi.mocked(useAuth).mockReturnValue({
     initialized: true,
     authEnabled: true,
-    user: { id: 'u1', permissions: ['library.view'] },
+    user: { id: 'u1', permissions: ['books:view'] },
   } as never);
   vi.mocked(api.getCollection).mockResolvedValue(col);
   vi.mocked(getBooksByIds).mockImplementation(

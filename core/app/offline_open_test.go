@@ -241,7 +241,7 @@ func TestOfflineCommandsList(t *testing.T) {
 	if !slices.Equal(names, []string{"storage prune-checkpoints", "storage restore-offline", "storage reset",
 		"secrets export-keyring", "secrets rotate-derive", "secrets set-install-id", "config check",
 		"storage migrate", "storage quarantine list", "storage quarantine export", "storage quarantine purge",
-		"storage cutover-blockers", "updater fetch-release"}) {
+		"storage cutover-blockers", "updater fetch-release", "users reset-password", "storage journal-queue"}) {
 		t.Fatalf("commands %v", names)
 	}
 	served(t, opts, keeper)

@@ -38,7 +38,11 @@ type Checkpoint struct {
 	CompletedAt *time.Time
 	DeleteAfter *time.Time
 	HooksOwed   bool // the record carries hooks_owed (DATA-7)
-	StateFiles  []CheckpointStateFile
+	// JournalSeq is the revocation journal head seq the checkpoint's store had
+	// seen when it was taken: a restore of it gets that seq as its boundary
+	// (05-backup §5B.3.6 "Coverage at restore").
+	JournalSeq uint64
+	StateFiles []CheckpointStateFile
 }
 
 // CheckpointStateFile is one state file a checkpoint copied (05-config
@@ -81,7 +85,7 @@ func checkpointOf(dir, name string, r checkpointRecord) Checkpoint {
 	c := Checkpoint{
 		Name: name, Dir: filepath.Join(dir, name), InstallID: r.InstallID, Epoch: r.Epoch, Status: r.Status,
 		TakenAt: r.TakenAt, ReadyAt: r.ReadyAt, CompletedAt: r.CompletedAt, DeleteAfter: r.DeleteAfter,
-		HooksOwed: len(r.HooksOwed) > 0 && string(r.HooksOwed) != "null",
+		HooksOwed: len(r.HooksOwed) > 0 && string(r.HooksOwed) != "null", JournalSeq: r.JournalSeq,
 	}
 	for _, f := range r.StateFiles {
 		c.StateFiles = append(c.StateFiles, CheckpointStateFile(f))
@@ -162,6 +166,21 @@ func (c *Checkpoints) LatestFrom(pointer string) (cp Checkpoint, ok bool, err er
 		return Checkpoint{}, false, fmt.Errorf("%w: %s (pointer %s)", ErrCheckpointGone, p.Name, pointer)
 	}
 	return checkpointOf(c.a.cpDir, p.Name, recs[i].rec), true, nil
+}
+
+// Named is the checkpoint called name, whatever its status (a restore of it
+// marks it consumed, and its record stays until the sweeper's first pass).
+// ok is false when no record has that name.
+func (c *Checkpoints) Named(name string) (cp Checkpoint, ok bool, err error) {
+	recs, err := readRecords(c.a.fs, c.a.cpDir, c.a.log)
+	if err != nil {
+		return Checkpoint{}, false, err
+	}
+	i := slices.IndexFunc(recs, func(r namedRecord) bool { return r.name == name })
+	if i < 0 {
+		return Checkpoint{}, false, nil
+	}
+	return checkpointOf(c.a.cpDir, name, recs[i].rec), true, nil
 }
 
 // Consume is machine 3's open, served or completed --> consumed (§5S.3.16):

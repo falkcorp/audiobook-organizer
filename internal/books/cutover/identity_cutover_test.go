@@ -51,8 +51,23 @@ func TestIdentityCutover_FixtureFromR0(t *testing.T) {
 				}
 			}
 			// IDs kept.
-			if got, want := mapKeys(snap.Users), legacyIDs(before, "u:"); !slices.Equal(got, want) {
-				t.Errorf("users %v, want HEAD's %v", got, want)
+			// ...except HEAD's _system row, which imports under core's ID for it
+			// (m3/systemuser.go): its ULID is not an ID any HEAD writer attributes to.
+			wantUsers := slices.Clone(legacyIDs(before, "u:"))
+			for i, id := range wantUsers {
+				if id == uSystem {
+					wantUsers[i] = string(auth.SystemUserID)
+				}
+			}
+			slices.Sort(wantUsers)
+			if got := mapKeys(snap.Users); !slices.Equal(got, wantUsers) {
+				t.Errorf("users %v, want HEAD's with %s as _system: %v", got, uSystem, wantUsers)
+			}
+			if _, kept := snap.Users[uSystem]; kept {
+				t.Errorf("the system user is also stored under its HEAD ULID %s", uSystem)
+			}
+			if u := snap.Users[string(auth.SystemUserID)].User; u.Status != auth.StatusSystem || u.Username != "_system" {
+				t.Errorf("the system user is {%q %q}, want status system named _system", u.Status, u.Username)
 			}
 			if got, want := mapKeys(snap.Keys), legacyIDs(before, "apikey:"); !slices.Equal(got, want) {
 				t.Errorf("keys %v, want HEAD's %v", got, want)
@@ -214,7 +229,7 @@ func TestIdentityCutover_OverlayCells(t *testing.T) {
 		if u := snap.Users[uBarbara]; !u.User.HasPassword || !strings.HasPrefix(u.Hash, "$argon2id$") || u.User.PasswordResetRequired {
 			t.Errorf("barbara.gordon: has password %v, hash prefix ok %v, reset required %v", u.User.HasPassword, strings.HasPrefix(u.Hash, "$argon2id$"), u.User.PasswordResetRequired)
 		}
-		if u := snap.Users[uSystem]; u.User.HasPassword || u.Hash != "" || u.User.PasswordResetRequired {
+		if u := snap.Users[string(auth.SystemUserID)]; u.User.HasPassword || u.Hash != "" || u.User.PasswordResetRequired {
 			t.Errorf("_system: has password %v, hash %q, reset required %v", u.User.HasPassword, u.Hash, u.User.PasswordResetRequired)
 		}
 		if u := snap.Users["01M731PC0GT903F98P9WA7P2EP"].User; !u.EmailVerified || u.Email != "alfred@wayne-manor.invalid" {

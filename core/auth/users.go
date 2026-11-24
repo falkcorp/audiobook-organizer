@@ -216,10 +216,10 @@ func (s *Service) CreateUser(ctx context.Context, actor *Principal, in NewUser) 
 	return u, nil
 }
 
-// emailVerifiedElsewhere reports whether an account other than except holds
-// email verified. An undecodable record cannot be ruled out, so it counts as
+// emailVerifiedElsewhere reports whether an account other than those in except
+// holds email verified. An undecodable record cannot be ruled out, so it counts as
 // one (HEAD's ErrUserEmailTaken rule).
-func (s *Service) emailVerifiedElsewhere(ctx context.Context, email string, except UserID) (bool, error) {
+func (s *Service) emailVerifiedElsewhere(ctx context.Context, email string, except ...UserID) (bool, error) {
 	for u, err := range s.d.Store.ScanUsers(ctx) {
 		if errors.Is(err, ErrUndecodableRecord) {
 			return true, nil
@@ -227,7 +227,7 @@ func (s *Service) emailVerifiedElsewhere(ctx context.Context, email string, exce
 		if err != nil {
 			return false, fmt.Errorf("%w: %w", ErrStoreUnavailable, err)
 		}
-		if u.ID != except && u.EmailVerified && SameEmail(u.Email, email) {
+		if !slices.Contains(except, u.ID) && u.EmailVerified && SameEmail(u.Email, email) {
 			return true, nil
 		}
 	}
@@ -391,7 +391,9 @@ func (s *Service) restampOwnSession(ctx context.Context, b *storage.Batch, actor
 // and an invite is refused for as long as its creator is disabled and for
 // good once the re-enable's own bump has moved the epoch past it. Disabling
 // the last active core:admin holder is refused (ErrLastAdmin). Setting the
-// status a user already has writes nothing. A disable's audit record carries
+// status a user already has writes nothing. Enabling an account an admin user
+// merge folded into another (User.MergedInto) is refused (ErrMergedAway), for
+// every caller of this method: the merged-away account stays disabled. A disable's audit record carries
 // links_deleted, how many links it deleted, as a merge and
 // sign-out-everywhere do.
 func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st UserStatus) error {
@@ -415,6 +417,9 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 		}
 		if err := s.dominates(actor, u); err != nil {
 			return err
+		}
+		if st == StatusActive && u.MergedInto != "" {
+			return fmt.Errorf("%w: %s was merged into %s", ErrMergedAway, u.ID, u.MergedInto)
 		}
 		if u.Status == st {
 			return nil
@@ -451,7 +456,11 @@ func (s *Service) SetStatus(ctx context.Context, actor *Principal, id UserID, st
 			s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserEnabled, Subject: subject, Epoch: up.CredentialEpoch})
 		}
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.CredentialEpochBumped, Subject: subject, Epoch: up.CredentialEpoch})
-		return s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject, Details: details})
+		if err := s.d.Audit.RecordIn(ctx, b, audit.Event{Action: action, Outcome: audit.Success, Target: subject, Details: details}); err != nil {
+			return err
+		}
+		s.queueStatusChanged(inv, StatusChanged{UserID: id, Email: u.Email, From: u.Status, To: st})
+		return nil
 	})
 }
 
@@ -494,6 +503,7 @@ func (s *Service) DeleteUser(ctx context.Context, actor *Principal, id UserID) e
 		subject := ref(refKindUser, string(id))
 		s.journalLine(ctx, b, journal.Revocation{Kind: journal.UserDeleted, Subject: subject})
 		inv.user(id, journal.UserDeleted)
+		s.queueUserDeleted(inv, UserDeleted{UserID: id, Email: u.Email})
 		return s.d.Audit.RecordIn(ctx, b, audit.Event{
 			Action: actionUserDelete, Outcome: audit.Success, Target: subject,
 			Details: map[string]any{"username": u.Username},

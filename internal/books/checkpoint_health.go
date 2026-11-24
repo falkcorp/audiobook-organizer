@@ -10,6 +10,7 @@ import (
 	"time"
 
 	system "github.com/falkcorp/audiobook-organizer/internal/server/handlers/system"
+	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -48,6 +49,27 @@ func checkpointPosture(h storage.CheckpointHealth, err error, now time.Time) []s
 	}
 	if more := h.LooseTotal - len(h.Loose); more > 0 {
 		out = append(out, system.PostureToken{Token: system.DegradedStorageCheckpointMode, Subject: fmt.Sprintf("%d more paths not listed", more)})
+	}
+	return out
+}
+
+// postureSource is what the posture tokens are read from: the App's checkpoint
+// health and its health registry's snapshot.
+type postureSource interface {
+	CheckpointHealth() (storage.CheckpointHealth, error)
+	HealthSnapshot() health.Snapshot
+}
+
+// postureTokens is GET /system/status's authenticated posture list: the
+// storage_checkpoint_* tokens (always) and, under the identity flip, the health
+// registry's own (core.auth's auth_disabled_remote, core.backup's restore and
+// journal tokens). Off the flip it is HEAD's list: the registry's other components
+// would otherwise add tokens an unflipped install never reported.
+func postureTokens(src postureSource, now time.Time) []system.PostureToken {
+	h, err := src.CheckpointHealth()
+	out := checkpointPosture(h, err, now)
+	if identityOn() {
+		out = append(out, system.SnapshotPostureTokens(src.HealthSnapshot())...)
 	}
 	return out
 }

@@ -1,7 +1,7 @@
 // file: core/auth/authtest/storesuite.go
-// version: 1.1.1
+// version: 1.2.0
 // guid: 8cf164e8-2a54-46de-8eed-b0912673891b
-// last-edited: 2026-11-12
+// last-edited: 2026-11-21
 
 // Package authtest is the conformance kit of auth.Store and auth.Importer
 // (05-authn §3.4, §10 TestNativeStore_RoundTrip): StoreSuite runs every case
@@ -72,6 +72,7 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"TouchSessionLosesToDelete", touchSessionRace},
 		{"RestampSession", restampSession},
 		{"RevokeSignInsBefore", revokeSignIns},
+		{"RestoreEpochRunRoundTrip", restoreEpochRun},
 		{"APIKeyRoundTrip", apiKeyRoundTrip},
 		{"APIKeyRefusesEmptyOrWildcardScopes", apiKeyScopes},
 		{"APIKeyNeedsStoredOwner", apiKeyOwner},
@@ -83,8 +84,10 @@ func StoreSuite(t *testing.T, h Harness) {
 		{"OneTimeConcurrentTakesOneWins", oneTimeConcurrent},
 		{"OneTimeLookupDoesNotSpend", oneTimeLookup},
 		{"OneTimeDeleteByID", oneTimeDelete},
+		{"OneTimePutKeepsTokenAndConflictsATake", oneTimePut},
 		{"IdentityRoundTrip", identityRoundTrip},
 		{"IdentityRelinkMovesIndex", identityRelink},
+		{"MergeRowsReadsWhatAMergeMoves", mergeRows},
 		{"StageMergeMovesRecords", stageMerge},
 		{"StageMergeStaleRowConflicts", stageMergeStale},
 		{"ImportUserKeepsHashAndEpoch", importUser},
@@ -231,12 +234,22 @@ func userRoundTrip(t *testing.T, fx Fixture) {
 	_, err = fx.Store.UserByUsername(bg(), "joker")
 	errIs(t, "UserByUsername(absent)", err, auth.ErrNotFound)
 	putUser(t, fx, user("01JALFRED", "alfred", 1))
+	// The merged-into marker survives a write and a read.
+	marked := user("01JJASON", "jason", 1)
+	marked.Status, marked.MergedInto, marked.MergedAt = auth.StatusDisabled, "01JBRUCE", stamp()
+	putUser(t, fx, marked)
+	if got := getUser(t, fx, marked.ID); !reflect.DeepEqual(got, marked) {
+		t.Fatalf("GetUser(merged-away) = %+v, want %+v", got, marked)
+	}
+	if got := getUser(t, fx, "01JALFRED"); got.MergedInto != "" || !got.MergedAt.IsZero() {
+		t.Fatalf("an unmerged user reads back a marker: %+v", got)
+	}
 	var ids []auth.UserID
 	for u, err := range fx.Store.ScanUsers(bg()) {
 		must(t, "ScanUsers", err)
 		ids = append(ids, u.ID)
 	}
-	if want := []auth.UserID{"01JALFRED", "01JBRUCE"}; !slices.Equal(ids, want) {
+	if want := []auth.UserID{"01JALFRED", "01JBRUCE", "01JJASON"}; !slices.Equal(ids, want) {
 		t.Fatalf("ScanUsers = %v, want %v in ID order (the username index is not a user)", ids, want)
 	}
 }
@@ -567,6 +580,40 @@ func revokeSignIns(t *testing.T, fx Fixture) {
 	errIs(t, "every session after a zero t", err, auth.ErrNotFound)
 }
 
+// restoreEpochRun: the marker is absent until a run stages it, reads back what
+// was staged, is replaced by the next run's, refuses an empty key, and is not
+// swept by the sign-in deletion that commits beside it (PostRestore step 3).
+func restoreEpochRun(t *testing.T, fx Fixture) {
+	_, ok, err := fx.Store.RestoreEpochRun(bg())
+	must(t, "RestoreEpochRun on an empty store", err)
+	if ok {
+		t.Fatal("RestoreEpochRun reports a marker on an empty store")
+	}
+	first := auth.RestoreEpochRun{RunKey: "seq:11", Bumped: 3, SignInsDeleted: 2}
+	must(t, "StageRestoreEpochRun", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageRestoreEpochRun(b, first) }))
+	got, ok, err := fx.Store.RestoreEpochRun(bg())
+	must(t, "RestoreEpochRun", err)
+	if !ok || got != first {
+		t.Fatalf("RestoreEpochRun = %+v ok=%v, want %+v", got, ok, first)
+	}
+	must(t, "RevokeSignInsBefore beside the marker", commit(t, fx, func(b *storage.Batch) error {
+		_, err := fx.Store.RevokeSignInsBefore(b, time.Time{})
+		return err
+	}))
+	if _, ok, err := fx.Store.RestoreEpochRun(bg()); err != nil || !ok {
+		t.Fatalf("the sign-in deletion removed the marker: ok=%v err=%v", ok, err)
+	}
+	second := auth.RestoreEpochRun{RunKey: "run:r-bane", Bumped: 1}
+	must(t, "StageRestoreEpochRun again", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageRestoreEpochRun(b, second) }))
+	if got, ok, err := fx.Store.RestoreEpochRun(bg()); err != nil || !ok || got != second {
+		t.Fatalf("RestoreEpochRun = %+v ok=%v err=%v, want the later run's %+v", got, ok, err, second)
+	}
+	err = commit(t, fx, func(b *storage.Batch) error {
+		return fx.Store.StageRestoreEpochRun(b, auth.RestoreEpochRun{Bumped: 1})
+	})
+	errIs(t, "StageRestoreEpochRun with no key", err, auth.ErrBadInput)
+}
+
 // ---------------------------------------------------------------------------
 // API keys.
 
@@ -865,6 +912,39 @@ func oneTimeDelete(t *testing.T, fx Fixture) {
 	errIs(t, "DeleteOneTime(absent)", err, auth.ErrNotFound)
 }
 
+// oneTimePut: a rewrite by public ID keeps the token usable under its own
+// secret and carries the new fields; a rewrite staged before a take conflicts
+// the take's commit and one staged after it conflicts its own, so a rewrite
+// can never bring back a spent token; an absent ID is ErrNotFound.
+func oneTimePut(t *testing.T, fx Fixture) {
+	tok := oneTime(auth.OneTimeInvite)
+	raw := issueOneTime(t, fx, tok)
+	up := *tok
+	up.BindEmailOnAccept = true
+	must(t, "PutOneTime", commit(t, fx, func(b *storage.Batch) error { return fx.Store.PutOneTime(b, &up) }))
+	got, err := fx.Store.LookupOneTime(bg(), auth.OneTimeInvite, raw)
+	must(t, "LookupOneTime after the rewrite", err)
+	if !got.BindEmailOnAccept || got.ID != tok.ID || got.Email != tok.Email {
+		t.Fatalf("after PutOneTime: %+v", got)
+	}
+	absent := up
+	absent.ID = "no-such-invite"
+	errIs(t, "PutOneTime(absent)", commit(t, fx, func(b *storage.Batch) error { return fx.Store.PutOneTime(b, &absent) }), auth.ErrNotFound)
+
+	bPut, bTake := fx.NewBatch(), fx.NewBatch()
+	defer closeBatch(t, bPut)
+	defer closeBatch(t, bTake)
+	again := up
+	again.Username = "robin-again"
+	must(t, "stage rewrite", fx.Store.PutOneTime(bPut, &again))
+	_, err = fx.Store.TakeOneTime(bTake, auth.OneTimeInvite, raw)
+	must(t, "stage take", err)
+	must(t, "commit take", bTake.Commit(bg(), storage.Sync))
+	errIs(t, "commit of a rewrite staged before a take", bPut.Commit(bg(), storage.Sync), storage.ErrConflict)
+	_, err = fx.Store.LookupOneTime(bg(), auth.OneTimeInvite, raw)
+	errIs(t, "the spent token stays spent", err, auth.ErrNotFound)
+}
+
 // ---------------------------------------------------------------------------
 // Identities.
 
@@ -933,13 +1013,45 @@ func mergeFixture(t *testing.T, fx Fixture) (keyID string) {
 	return k.ID
 }
 
-func stageMerge(t *testing.T, fx Fixture) {
+// mergeRows: MergeRows returns the source's API keys, linked sign-ins and the
+// allow-list row of its address, each with the stored bytes, and nothing of
+// another user's; a user with none gets none.
+func mergeRows(t *testing.T, fx Fixture) {
 	keyID := mergeFixture(t, fx)
-	plan := auth.UserMergePlan{Source: "01JDICK", Target: "01JNIGHTWING", Rows: []auth.MergeRow{
+	must(t, "ImportInviteAllow", importOne(t, fx, func(b *storage.Batch) error {
+		return fx.Importer.ImportInviteAllow(b, "dick@gotham.example")
+	}))
+	other := key("01JNIGHTWING", "gotham:patrol")
+	issueKey(t, fx, other)
+	rows, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows", err)
+	want := []auth.MergeRow{
 		{Kind: auth.MergeAPIKey, ID: keyID, Seen: fx.Raw(t, auth.MergeAPIKey, keyID)},
 		{Kind: auth.MergeIdentity, ID: "wayne-sso/sub-1939", Seen: fx.Raw(t, auth.MergeIdentity, "wayne-sso/sub-1939")},
-	}}
-	must(t, "StageMerge", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageMerge(b, plan) }))
+		{Kind: auth.MergeInviteAllow, ID: "dick@gotham.example", Seen: fx.Raw(t, auth.MergeInviteAllow, "dick@gotham.example")},
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Fatalf("MergeRows = %+v, want %+v", rows, want)
+	}
+	again, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows(again)", err)
+	if !reflect.DeepEqual(again, rows) {
+		t.Fatalf("two reads of unchanged records differ: %+v then %+v", rows, again)
+	}
+	none, err := fx.Store.MergeRows(bg(), "01JNIGHTWING")
+	must(t, "MergeRows(no records)", err)
+	if len(none) != 1 || none[0].Kind != auth.MergeAPIKey || none[0].ID != other.ID {
+		t.Fatalf("MergeRows of the target = %+v, want only its own key", none)
+	}
+	_, err = fx.Store.MergeRows(bg(), "01JJOKER")
+	errIs(t, "MergeRows(absent user)", err, auth.ErrNotFound)
+}
+
+func stageMerge(t *testing.T, fx Fixture) {
+	keyID := mergeFixture(t, fx)
+	rows, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows", err)
+	must(t, "StageMerge", commit(t, fx, func(b *storage.Batch) error { return fx.Store.StageMerge(b, "01JDICK", "01JNIGHTWING", rows) }))
 	k, err := fx.Store.APIKeyByID(bg(), keyID)
 	must(t, "APIKeyByID", err)
 	if k.Owner != "01JNIGHTWING" {
@@ -954,18 +1066,18 @@ func stageMerge(t *testing.T, fx Fixture) {
 		t.Fatalf("merged identity user = %s", id.UserID)
 	}
 	err = commit(t, fx, func(b *storage.Batch) error {
-		return fx.Store.StageMerge(b, auth.UserMergePlan{Source: "01JDICK", Target: "01JDICK"})
+		return fx.Store.StageMerge(b, "01JDICK", "01JDICK", nil)
 	})
 	errIs(t, "StageMerge(source = target)", err, auth.ErrBadInput)
 }
 
 func stageMergeStale(t *testing.T, fx Fixture) {
 	keyID := mergeFixture(t, fx)
-	seen := fx.Raw(t, auth.MergeAPIKey, keyID)
-	plan := auth.UserMergePlan{Source: "01JDICK", Target: "01JNIGHTWING", Rows: []auth.MergeRow{{Kind: auth.MergeAPIKey, ID: keyID, Seen: seen}}}
+	rows, err := fx.Store.MergeRows(bg(), "01JDICK")
+	must(t, "MergeRows", err)
 	b := fx.NewBatch()
 	defer closeBatch(t, b)
-	must(t, "StageMerge", fx.Store.StageMerge(b, plan))
+	must(t, "StageMerge", fx.Store.StageMerge(b, "01JDICK", "01JNIGHTWING", rows))
 	revoke(t, fx, keyID) // the key changes after the preview read it
 	errIs(t, "merge of a changed key", b.Commit(bg(), storage.Sync), storage.ErrConflict)
 	k, err := fx.Store.APIKeyByID(bg(), keyID)
@@ -1040,7 +1152,8 @@ func importKey(t *testing.T, fx Fixture) {
 	putUser(t, fx, user("01JLUCIUS", "lucius", 1))
 	const raw = "abk_wayne-enterprises-applied-sciences-0001"
 	k := &auth.APIKey{ID: "01JKEY1", Owner: "01JLUCIUS", Name: "cowl", Scopes: []rbac.Permission{"gotham:patrol"},
-		Status: auth.KeyActive, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour), UseCount: 41}
+		Status: auth.KeyActive, CreatedAt: stamp(), ExpiresAt: stamp().Add(time.Hour), UseCount: 41,
+		Description: "grappling hook, spare"}
 	must(t, "ImportAPIKey", importOne(t, fx, func(b *storage.Batch) error {
 		return fx.Importer.ImportAPIKey(b, k, auth.HashCredential(raw))
 	}))
@@ -1048,6 +1161,9 @@ func importKey(t *testing.T, fx Fixture) {
 	must(t, "APIKeyByToken(imported abk_)", err)
 	if got.ID != "01JKEY1" || !got.Imported || got.UseCount != 41 || got.HashPrefix != auth.HashHex(raw)[:8] {
 		t.Fatalf("imported key = %+v", got)
+	}
+	if got.Description != "grappling hook, spare" {
+		t.Fatalf("imported key's description = %q, want the one the record carried", got.Description)
 	}
 }
 
@@ -1079,6 +1195,10 @@ func importKeyRejects(t *testing.T, fx Fixture) {
 		"unknown status": func(k *auth.APIKey) { k.Status = "lost" },
 		"no expiry":      func(k *auth.APIKey) { k.ExpiresAt = time.Time{} },
 		"no owner":       func(k *auth.APIKey) { k.Owner = "01JGHOST" },
+		"long description": func(k *auth.APIKey) {
+			k.Description = strings.Repeat("a", auth.MaxKeyDescriptionRunes+1)
+		},
+		"description with a line break": func(k *auth.APIKey) { k.Description = "grapnel\nspare" },
 	}
 	for name, mutate := range cases {
 		k := base()
