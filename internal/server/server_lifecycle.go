@@ -2107,8 +2107,12 @@ func (s *Server) seedRolesAndTokens() {
 	} else if created > 0 || updated > 0 {
 		slog.Info("seed roles created, updated", "created", created, "updated", updated)
 	}
-	if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
-		slog.Warn("seed system user", "err", err)
+	// Core boot has already seeded its system user. The legacy user claim is
+	// retired under core identity, so this startup path must not write to it.
+	if s.identity == nil {
+		if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
+			slog.Warn("seed system user", "err", err)
+		}
 	}
 
 	// Every API key expires since 2026-10-07. Keys created before that with
