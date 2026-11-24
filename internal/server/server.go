@@ -995,7 +995,7 @@ func NewServer(store database.Store, opts ...ServerOption) *Server {
 		os.Exit(1)
 	}
 
-	domain.completeFromRegistry(store, &config.AppConfig, regContainer)
+	domain.completeFromRegistry(store, regContainer)
 
 	// Load the HNSW snapshot BEFORE PostInit so dedup.Engine.PostInit can detect
 	// the populated store and skip HydrateChromem. Loading after PostInit caused a

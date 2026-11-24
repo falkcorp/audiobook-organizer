@@ -80,7 +80,8 @@ func newDomainServices(store database.Store, trace func(step string)) *domainSer
 }
 
 // completeFromRegistry runs stage 2 against the built container c.
-func (d *domainServices) completeFromRegistry(store database.Store, cfg *config.Config, c *serviceregistry.Container) {
+func (d *domainServices) completeFromRegistry(store database.Store, c *serviceregistry.Container) {
+	cfg := serviceregistry.Get[*config.Config](c, "config")
 	d.quarantine = quarantine.NewQuarantineService(store, cfg, plugin.GetEventBus(c))
 	d.record("quarantine")
 
