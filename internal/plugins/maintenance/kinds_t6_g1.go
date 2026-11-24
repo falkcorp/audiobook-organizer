@@ -148,9 +148,11 @@ func (p *Plugin) t6g1HeadHold(rep sdk.Reporter) func(ctx context.Context, reason
 	}
 }
 
-// t6g1NativeHold is the native hold: rc.StandDown. A lost lease fences the
-// run's writer, which fails the next write with tasks.ErrFenced, and cancels
-// the run's context; the check below reports the cause.
+// t6g1NativeHold is the native hold: rc.StandDown. When the lease lapses (the
+// executor's reaper or a renewal finds it expired) the executor cancels the
+// run's context with cause tasks.ErrHoldLost and the run's writer refuses its
+// next write (tasks.ErrFenced wrapping tasks.ErrHoldLost); the check below
+// reports the cause.
 func t6g1NativeHold(rc *tasks.RC, env t6g1Env, items t6g1ItemsFunc, key tasks.Key) func(ctx context.Context, reason string) (t6g1Held, error) {
 	return func(ctx context.Context, reason string) (t6g1Held, error) {
 		if key == "" {
@@ -550,7 +552,9 @@ func (t6g1NoFetcher) FetchByTitle(context.Context, string) (*int, error) {
 	return nil, fmt.Errorf("metadata fetch service not wired")
 }
 
-// t6g1NativeStandDown takes the run's stand-down for a native live apply.
+// t6g1NativeStandDown takes the run's stand-down for a native live apply. Lost
+// is always false: a lapse ends the run through the canceled context and the
+// writer's refusal (see t6g1NativeHold), not through this check.
 func t6g1NativeStandDown(rc *tasks.RC, key tasks.Key) func(ctx context.Context, reason string) (t6g1Hold, error) {
 	return func(_ context.Context, reason string) (t6g1Hold, error) {
 		if key == "" {

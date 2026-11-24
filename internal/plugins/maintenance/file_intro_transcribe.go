@@ -92,6 +92,19 @@ var fileIntroBusyOps = map[string]bool{
 	"metadata.batch-apply-cached": true,
 }
 
+// fileIntroNativeNotWhile is fileIntroBusyOps as the native kinds the rename map
+// gives them (books.<id>), plus the full sweep's kind, which shares the scan's
+// body and key (05-tasks 5T.8.2 rename map rule 4). Literals, not a map lookup:
+// this package may not import the cutover tree; TestFileIntroNotWhile_MatchesTheBusyOps
+// holds the two together, so an op added to fileIntroBusyOps fails it until the
+// kind is added here.
+func fileIntroNativeNotWhile() []tasks.Kind {
+	return []tasks.Kind{
+		"books.library.scan", "books.library.scan-full", "books.library.import",
+		"books.library.folder-auto-scan", "books.metadata.batch-apply-cached",
+	}
+}
+
 type fileIntroParams struct {
 	// OnlyMissing (default true) leaves files that already carry a result
 	// alone and never overwrites one. False re-transcribes every eligible
@@ -502,7 +515,7 @@ func (p *Plugin) runFileIntroTranscribe(ctx context.Context, rawParams json.RawM
 func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Definition {
 	return tasks.Task(fileIntroKind, tasks.TaskSpec[fileIntroNativeParams, fileIntroResult]{
 		Title: "Transcribe file intros",
-		Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run refuses to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced. A live run writes nothing itself: it starts one child run per 100 books, one at a time, and each child holds only its own books and files (plus the metadata cache and identity index).",
+		Help:  "Transcribes the first 90 seconds of every present audio file, not just each book's first, and stores the result on the file's own record (keyed by the file's hash, so identical files are transcribed once and a rescan keeps the result). The server does no audio decoding: each file's path goes to the whisper worker, which reads and cuts the clip itself. A book's first file is handled first, and its result fills the book's transcript only when that is empty; an existing book transcript is never overwritten. Resumable: a file is done once its stored marker matches its hash, so a restart or a repeat run does only what is left. The run waits to start while a library scan or a bulk metadata apply is running, and holds its writes until one has finished. A preview only counts the work and estimates the time. Param clear_run_id=<op id> removes what that run wrote (preview first for the count); it returns files to untranscribed and cannot restore a transcript a forced re-run (only_missing=false) replaced. A live run writes nothing itself: it starts one child run per 100 books, one at a time, and each child holds only its own books and files (plus the metadata cache and identity index).",
 		// The Effects are the first native cut's, unchanged: the executor starts a
 		// kind with no declared writes in Live when the mode is omitted (core/
 		// internal/executor/start.go:149-152) where a writer kind starts in Preview.
@@ -525,8 +538,11 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 		ConcurrencyKey:  tasks.Key("books." + fileIntroOpID),
 		Timeout:         tasks.MaxTimeout,
 		ProgressTimeout: 30 * time.Minute,
-		Schedule:        sched,
-		Ready:           []tasks.ReadySignal{t6g4SignalMemDB},
+		// Every attempt, a continued one included, waits at dispatch while a scan or
+		// bulk apply runs (fileIntroNativeNotWhile).
+		NotWhile: fileIntroNativeNotWhile(),
+		Schedule: sched,
+		Ready:    []tasks.ReadySignal{t6g4SignalMemDB},
 		Run: func(rc *tasks.RC, in fileIntroNativeParams) (fileIntroResult, error) {
 			if err := t6g4RefuseModeKeys(rc.Kind(), in.t6g4ModeKeys); err != nil {
 				return fileIntroResult{}, err
@@ -615,27 +631,18 @@ func (p *Plugin) runFileIntroTranscribeCore(ctx context.Context, params fileIntr
 	// A live run refuses to start while a scan or bulk apply is running (see
 	// fileIntroWaitWhileBusy for why); the preview above never reaches here.
 	//
-	// A RESUMED attempt waits for the scan instead (review N17). It is
-	// re-queued at once after a yield, and a yield is often caused by a scan:
-	// the scan-busy give-up leaves a batch undone because a scan was running at
-	// the margin, so the next attempt very likely starts while it still is.
-	// Refusing then would end the run failed and lose the yield (HEAD, which
-	// never resumes, keeps the refusal for a fresh start). The wait is bounded by
-	// ctx only: it cannot yield again, because a yield needs this attempt to have
-	// completed a batch (the executor's progress proof), so a scan that outlasts
-	// a whole attempt ends the run timed_out, as a batch 0 parked in a wait does.
-	//
-	// A batch child waits the same way, for the same reason: it starts mid-sweep,
-	// possibly right after a scan did, and the parent refused a busy library once,
-	// at the start of the run (fileIntroBatchParent).
-	if resumed || params.batch != nil {
+	// Native parents wait at dispatch, including on resume. A child may be
+	// enqueued just as a legacy scan starts, so it still waits on that queue.
+	if params.batch != nil {
 		if err := waitWhileScanBusy(ctx, fileIntroOpID, queue, func(def string) {
 			env.Progress(base, base+1, mark+"paused — "+def+" is running; resumes when it finishes")
 		}); err != nil {
 			return res, err
 		}
-	} else if err := fileIntroRefuseIfBusy(queue); err != nil {
-		return res, err
+	} else if !resumed {
+		if err := fileIntroRefuseIfBusy(queue); err != nil {
+			return res, err
+		}
 	}
 
 	runID := env.OpID

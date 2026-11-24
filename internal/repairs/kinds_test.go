@@ -1036,6 +1036,9 @@ type recordedHold struct{ released atomic.Int64 }
 
 func (h *recordedHold) Release() { h.released.Add(1) }
 
+// Renew succeeds: this hold is never lost.
+func (h *recordedHold) Renew() error { return nil }
+
 func TestRepairsKinds_ApplyHoldsTheScanStandDown(t *testing.T) {
 	s := newMemStore()
 	seed(s)

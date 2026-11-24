@@ -278,8 +278,10 @@ func t6g7NativeEnv(rc *tasks.RC) t6g7Env {
 }
 
 // t6g7NativeStandDown is the native stand-down: rc.StandDown over key. An empty
-// key refuses, so a live apply never runs without the interlock. The kernel
-// fences the run's writer if the lease is lost, so Lost is always false.
+// key refuses, so a live apply never runs without the interlock. When the lease
+// lapses the executor cancels the run's context with cause tasks.ErrHoldLost and
+// the run's writer refuses its next write, so Lost is always false and a lapse
+// ends the run through those, not through this check.
 func t6g7NativeStandDown(rc *tasks.RC, key tasks.Key) func(ctx context.Context, reason string) (t6g7Hold, error) {
 	return func(_ context.Context, reason string) (t6g7Hold, error) {
 		if key == "" {

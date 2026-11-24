@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/config"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/secrets"
@@ -384,7 +385,7 @@ func coreSectionsWith(d CoreDefaults) []any {
 			MinCheckpointInterval: dur(30 * time.Second),
 			MaxYields:             1000,
 			ZombieCap:             4,
-			StanddownLease:        dur(2 * time.Minute),
+			StanddownLease:        dur(executor.DefaultStandDownLease),
 			SchedulePoll:          dur(time.Minute),
 			Timezone:              "",
 			IdempotencyTTL:        dur(168 * time.Hour),

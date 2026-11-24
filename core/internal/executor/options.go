@@ -23,6 +23,12 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 )
 
+// DefaultStandDownLease is the stand-down hold's lease when core.tasks.standdown_lease
+// is not set: how long a hold lives without a renewal (5m, as HEAD's). It is the one
+// value the executor's own default and the kernel's core.tasks section default both
+// use, so the section's default can never differ from what a bare Config gets.
+const DefaultStandDownLease = 5 * time.Minute
+
 // Config carries the core.tasks.* values of 05-tasks §5T.10 that the
 // executor reads. A zero field takes the key's default. The kernel fills it
 // from core config at F5 (F3-01 owns the section); until then hello and
@@ -37,7 +43,7 @@ type Config struct {
 	MinCheckpointInterval time.Duration                 // core.tasks.min_checkpoint_interval (30s); hot
 	MaxYields             int                           // core.tasks.max_yields (1000); hot
 	ZombieCap             int                           // core.tasks.zombie_cap (4 per module); hot
-	StandDownLease        time.Duration                 // core.tasks.standdown_lease (2m); hot
+	StandDownLease        time.Duration                 // core.tasks.standdown_lease (DefaultStandDownLease); hot
 	IdempotencyTTL        time.Duration                 // core.tasks.idempotency_ttl (7d); hot
 	ModuleMaxConcurrent   map[string]int                // modules.<id>.tasks.max_concurrent (0 = unlimited); hot
 
@@ -71,7 +77,7 @@ func (c Config) withDefaults() Config {
 	def(&c.MinCheckpointInterval, 30*time.Second)
 	defInt(&c.MaxYields, 1000)
 	defInt(&c.ZombieCap, 4)
-	def(&c.StandDownLease, 2*time.Minute)
+	def(&c.StandDownLease, DefaultStandDownLease)
 	def(&c.IdempotencyTTL, 7*24*time.Hour)
 	def(&c.DispatchTick, 100*time.Millisecond)
 	def(&c.WatchdogInterval, 30*time.Second)

@@ -8,6 +8,7 @@ package maintenance
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -391,9 +393,19 @@ func (*t6g6GateWriter) Do(context.Context, tasks.Write, func(context.Context) ([
 func (*t6g6GateWriter) MarkRowApplied(context.Context, string)           {}
 func (*t6g6GateWriter) RowApplied(context.Context, string) (bool, error) { return false, nil }
 
-type t6g6TestHold struct{ released *bool }
+type t6g6TestHold struct {
+	released *bool
+	renew    func() error // nil: the hold is never lost
+}
 
 func (h t6g6TestHold) Release() { *h.released = true }
+
+func (h t6g6TestHold) Renew() error {
+	if h.renew == nil {
+		return nil
+	}
+	return h.renew()
+}
 
 // t6g6Host is a taskstest.FakeRun with the mode and writer a test chooses
 // (FakeRun is pinned to ModeLive with no writer, and refuses a stand-down).
@@ -405,6 +417,13 @@ type t6g6Host struct {
 	mu         sync.Mutex
 	standDowns []tasks.Key
 	released   bool
+	// renews counts the hold's Renew calls; lapseAfter, when set (> 0 after
+	// lapseWhen is called), makes Renew fail with tasks.ErrHoldLost once that
+	// many calls have succeeded. touches counts the run's liveness stamps.
+	renews     int
+	lapsing    bool
+	lapseAfter int
+	touches    atomic.Int64
 	// caps are the worker counts the run's item loops declared (CapWorkers is
 	// handed the declared count before every loop).
 	caps []int
@@ -431,7 +450,36 @@ func (h *t6g6Host) StandDown(k tasks.Key) (tasks.Hold, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.standDowns = append(h.standDowns, k)
-	return t6g6TestHold{released: &h.released}, nil
+	return t6g6TestHold{released: &h.released, renew: h.renewHold}, nil
+}
+
+// Touch counts the liveness stamp (FakeRun drops it).
+func (h *t6g6Host) Touch() { h.touches.Add(1) }
+
+// renewHold is the test hold's lease: it counts every renewal and, once
+// lapseWhen armed it, refuses after the given number of successful ones the way
+// a real hold refuses once its lease had lapsed.
+func (h *t6g6Host) renewHold() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.renews++
+	if h.lapsing && h.renews > h.lapseAfter {
+		return fmt.Errorf("%w: the lease lapsed", tasks.ErrHoldLost)
+	}
+	return nil
+}
+
+// lapseWhen arms the hold to lapse after n successful renewals.
+func (h *t6g6Host) lapseWhen(n int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.lapsing, h.lapseAfter = true, n
+}
+
+func (h *t6g6Host) renewCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.renews
 }
 
 // runT6G6Kind runs d's own Run, the function the executor would call.

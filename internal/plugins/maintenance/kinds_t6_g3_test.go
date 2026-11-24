@@ -537,6 +537,9 @@ type t6g3Hold struct{}
 
 func (t6g3Hold) Release() {}
 
+// Renew succeeds: this hold is never lost.
+func (t6g3Hold) Renew() error { return nil }
+
 // StandDown hands out a hold that is never lost, which is what a credits
 // backfill apply needs to get past its scan stand-down.
 func (h *t6g3Host) StandDown(k tasks.Key) (tasks.Hold, error) {

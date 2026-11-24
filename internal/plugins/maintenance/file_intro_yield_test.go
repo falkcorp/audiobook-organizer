@@ -68,12 +68,14 @@ type yieldProgress struct {
 	mu   sync.Mutex
 	done []int
 	tot  []int
+	msgs []string
 }
 
-func (p *yieldProgress) set(done, total int, _ string) {
+func (p *yieldProgress) set(done, total int, msg string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.done, p.tot = append(p.done, done), append(p.tot, total)
+	p.msgs = append(p.msgs, msg)
 }
 
 func (p *yieldProgress) last() (int, int) {
