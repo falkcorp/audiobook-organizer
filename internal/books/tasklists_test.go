@@ -329,6 +329,12 @@ func TestF5_EveryKindTakesTheHook(t *testing.T) {
 		if strings.HasPrefix(string(d.Kind()), "books.repairs.") {
 			continue
 		}
+		// Batch children are started only by their parent, never on a schedule.
+		switch d.Kind() {
+		case "books.maintenance.extract-wav-clips.batch", "books.maintenance.transcribe-file-intros.batch", "books.maintenance.intro-migrate-single-file.batch":
+			require.Nil(t, tasks.CommonOf(d).Schedule, "%s must remain parent-started", d.Kind())
+			continue
+		}
 		if tasks.CommonOf(d).Schedule == nil {
 			unscheduled = append(unscheduled, string(d.Kind()))
 		}
