@@ -62,15 +62,6 @@ func ExtractStore(ctx context.Context, archivePath, storeDir string) (string, er
 	return x.sum, err
 }
 
-// extractStore is ExtractStore, also reporting whether the archive was
-// checked against its sidecar. It reads the sidecar once, so a caller that
-// requires verification (StageRestore) learns what the extraction checked
-// rather than reading the sidecar again after it.
-func extractStore(ctx context.Context, archivePath, storeDir string) (string, bool, error) {
-	x, err := extractStoreRecording(ctx, archivePath, storeDir)
-	return x.sum, x.verified, err
-}
-
 // extractedStore is what an extraction into a store directory reports.
 type extractedStore struct {
 	// sum is the archive's SHA-256, the scan's digest over its bytes.

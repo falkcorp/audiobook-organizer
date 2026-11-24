@@ -511,12 +511,11 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
 
       const response = await api.updateConfig(updates);
 
-      let nextSettings = settings;
       // The response is the server's view after the write: typed secrets are
       // stored and must leave the form, and each source's credential status
       // comes from it, not from what was typed.
       setOpenaiKeyStatus(response.secret_status?.openai_api_key);
-      nextSettings = {
+      const nextSettings = {
         ...settings,
         openaiApiKey: '',
         metadataSources: uiSourcesFromConfig(response.metadata_sources),

@@ -26,7 +26,7 @@ const ALLOWED: readonly string[] = [];
 // segment; or core's two key-route shapes by themselves (the caller's own, and a
 // user's), which a base-URL constant would hide from the first pattern.
 const NATIVE = [
-  new RegExp(CORE.replace(/\//g, '\\/') + '[^\\s\'"`]*' + KEYS),
+  new RegExp(CORE + '[^\\s\'"`]*' + KEYS),
   new RegExp('/me/' + KEYS),
   new RegExp('/users/(\\{[a-z]+\\}|\\$\\{[^}]+\\}|[^/\\s\'"`]+)/' + KEYS),
 ];

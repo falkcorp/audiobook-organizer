@@ -383,11 +383,10 @@ func TestManifest_SPermRoutesCarryAtomRequirement(t *testing.T) {
 			for _, p := range httpapi.CoreExactPatterns() {
 				coreExact[p] = true
 			}
-			// The flip also deletes two routes outright (server.RoutesDeletedAtTheFlip:
-			// the temp-login mint and consumer), which nobody mounts.
-			deletedAt := map[string]bool{}
-			for _, k := range server.RoutesDeletedAtTheFlip() {
-				deletedAt[k] = true
+			// Pin the two deleted routes independently of the server's route filter.
+			deletedAt := map[string]bool{
+				"GET /auth/temp-login":          true,
+				"POST /api/v1/auth/temp-tokens": true,
 			}
 			byCore, deleted := 0, 0
 			for _, lr := range recorded {
