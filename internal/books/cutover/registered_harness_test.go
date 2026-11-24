@@ -643,9 +643,9 @@ func bootRegistered(t *testing.T, cfg registeredConfig) *Registered {
 		ABSAuthModes:  cmp.Or(cfg.ABSModes, "jwt"),
 		ABSJWTSecret:  "synthetic-registered-harness-secret-0123456789abcdef",
 	}
-	origCfg := config.AppConfig
-	config.AppConfig = c
-	t.Cleanup(func() { config.AppConfig = origCfg })
+	origCfg := config.Snapshot()
+	config.ReplaceForTest(c)
+	t.Cleanup(func() { config.ReplaceForTest(origCfg) })
 
 	setenv := func(k, v string) { t.Setenv(k, v) }
 	setenv("ABO_BOOKS_ABS_API_ENABLED", "true")
