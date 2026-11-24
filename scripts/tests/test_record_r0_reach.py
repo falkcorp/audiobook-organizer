@@ -1526,7 +1526,7 @@ class MainBuildTest(unittest.TestCase):
     def test_the_build_settings_are_read_from_go_version_m(self):
         out = "\n".join(
             [
-                "bin: go1.27.3",
+                "bin: devel",
                 "\tpath\tgithub.com/example/abo",
                 "\tbuild\t-tags=embed_frontend",
                 "\tbuild\tvcs.revision=abc",

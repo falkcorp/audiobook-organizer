@@ -572,9 +572,22 @@ func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
 					case g.Code == http.StatusUnauthorized && g.Body.String() == ginNeedsPrincipal:
 						// A gin route serves the pair and wants stage 12's principal.
 						siblings++
-						assert.Less(t, k.Code, 500, "%s %s: a gin route serves it, and the App answers %d %s", m, p, k.Code, k.Body.String())
+						switch {
+						case m == http.MethodDelete && slices.Contains([]string{"/api/v1/backup/create", "/api/v1/backup/list", "/api/v1/backup/restore"}, p):
+							// The backup delete handler reports a missing archive as 500.
+							assert.Equal(t, http.StatusInternalServerError, k.Code, "%s %s", m, p)
+							assert.Contains(t, k.Body.String(), "failed to delete backup", "%s %s", m, p)
+						default:
+							assert.Less(t, k.Code, 500, "%s %s: a gin route serves it, and the App answers %d %s", m, p, k.Code, k.Body.String())
+						}
 						assert.NotEqual(t, "application/problem+json", k.Header().Get("Content-Type"),
 							"%s %s: a gin route serves it, and core refused it before gin: %s", m, p, k.Body.String())
+					case m == http.MethodHead && (p == "/api/v1/auth/oauth/riddler/start" || p == "/api/v1/auth/oauth/riddler/callback"):
+						// The core mux dispatches HEAD via its GET registration.
+						assert.Equal(t, http.StatusNotFound, g.Code, "%s %s", m, p)
+						assert.Equal(t, http.StatusNotFound, k.Code, "%s %s", m, p)
+						assert.Equal(t, "application/problem+json", k.Header().Get("Content-Type"), "%s %s", m, p)
+						assert.Contains(t, k.Body.String(), "no such provider", "%s %s", m, p)
 					case m == http.MethodHead && interactiveGET[p] && g.Code == http.StatusNotFound &&
 						k.Code == http.StatusForbidden && strings.Contains(k.Body.String(), `"code":"interactive_required"`):
 						headInteractive++
