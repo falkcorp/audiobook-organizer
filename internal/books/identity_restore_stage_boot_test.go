@@ -7,12 +7,13 @@ package books
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/cockroachdb/pebble/v2/vfs"
 	"github.com/falkcorp/audiobook-organizer/internal/backup"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -73,8 +74,9 @@ func TestIdentityBoot_ABooksStagedRestoreServesTheRestoredStore(t *testing.T) {
 // stagedIntent is the intent the swap slot holds.
 func stagedIntent(t *testing.T, state string) restorejournal.Intent {
 	t.Helper()
-	st, err := restorejournal.ReadSlot(vfs.Default, state)
+	raw, err := os.ReadFile(restorejournal.PendingPath(state))
 	require.NoError(t, err)
-	require.NotNil(t, st.Pending, "no intent in the slot")
-	return *st.Pending
+	var intent restorejournal.Intent
+	require.NoError(t, json.Unmarshal(raw, &intent))
+	return intent
 }

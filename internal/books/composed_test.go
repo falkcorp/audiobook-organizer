@@ -545,7 +545,13 @@ func TestComposedApp_UnmatchedMethodMatchesGin(t *testing.T) {
 			interactiveGET := map[string]bool{}
 			var paths []string
 			for _, lr := range server.LegacyRoutes(abs) {
-				p := concretePath(lr.GinPath)
+				segs := strings.Split(lr.GinPath, "/")
+				for i, segment := range segs {
+					if strings.HasPrefix(segment, ":") || strings.HasPrefix(segment, "*") {
+						segs[i] = "riddler"
+					}
+				}
+				p := strings.Join(segs, "/")
 				if !slices.Contains(paths, p) {
 					paths = append(paths, p)
 				}
