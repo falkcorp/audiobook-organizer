@@ -76,11 +76,9 @@ type BooksTaskInputs struct {
 	// Runs is the tasks run store (the kernel's NativeStores.Runs): the native
 	// credits backfill keeps its class lists, ledger and judgements in it.
 	Runs CreditsRunStore
-	// Ops is the ops store group 4 reads and writes through; G4Host and Scan
-	// serve it. Scan nil is HEAD's degraded caller (no scanner to stand down).
+	// Ops and G4Host serve group 4, which uses the shared StandDownKey.
 	Ops    OpsStore
 	G4Host G4BootHost
-	Scan   ScanController
 	// AuxStores compacts books' separate AI-scan and OpenLibrary stores.
 	AuxStores StoreOptimizer
 	// G7 serves group 7 (the repair, report and user-merge kinds). Its RootDir
@@ -159,7 +157,7 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	out = append(out, p.t6g2Kinds(newT6G2Deps(in.G2Source, in.G2Host, in.RootDir), in.Schedules)...)
 	out = append(out, p.t6g3Kinds(newT6G3Deps(in.G3Source, in.G3Host, in.GuardTags, in.StandDownKey, in.Runs), in.Schedules)...)
 
-	g4, err := t6g4Kinds(newT6G4Deps(in.Ops, in.G4Host, in.Scan), in.Schedules)
+	g4, err := t6g4Kinds(newT6G4Deps(in.Ops, in.G4Host, in.StandDownKey), in.Schedules)
 	if err != nil {
 		return nil, fmt.Errorf("maintenance group 4: %w", err)
 	}
