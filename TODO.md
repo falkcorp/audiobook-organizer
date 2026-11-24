@@ -1,5 +1,5 @@
 <!-- file: TODO.md -->
-<!-- version: 10.78.60 -->
+<!-- version: 10.78.61 -->
 <!-- version: 10.78.57 -->
 <!-- version: 10.78.56 -->
 <!-- version: 10.78.49 -->
@@ -14,7 +14,7 @@
 <!-- version: 10.78.25 -->
 <!-- version: 10.78.22 -->
 <!-- guid: 8e7d5d79-394f-4c91-9c7c-fc4a3a4e84d2 -->
-<!-- last-edited: 2026-11-23 -->
+<!-- last-edited: 2026-11-24 -->
 
 # Project TODO — live items only
 
@@ -26,6 +26,10 @@ file in `todo.d/` rather than editing this section by hand — see
 into one of the curated sections below, is a normal direct edit.
 
 <!-- todo-insert-here -->
+
+- [ ] **TODO-F5-18H-O37-V1-JOBS-PER-BATCH** Give `backfill-file-hashes`, `recompute-book-aggregates` and `scan-composer-tags` (`internal/maintenance/jobs`) the per-batch child pattern of `internal/plugins/maintenance/batch_sweep.go` (F5-18h, O37 sibling row). F5-18h converted the three native whole-library file kinds (`extract-wav-clips`, `intro-migrate-single-file`, `transcribe-file-intros`) to a parent that declares no row writes plus a per-100-books child whose `Common.Subjects` name only that batch's book and book_file refs. These three jobs could not take the same shape in that slice: they are v1 `maintenance.Job` registrations (`ID()`, `Run(ctx, store, reporter, dryRun)`, `Policy()`) with no native `tasks.Definition`, and `backfill-file-hashes` alone is a 1,200-line body with its own resume cursor and aggregate-recompute pass. The per-batch pattern needs a native kind to hang a parent and child off, so each needs its native conversion first (a group-4-style shell over a shared core), then the batch split: scope the core to a batch (an unexported `batch` field, never decoded), a child kind whose Effects are the narrowest set it writes, and a parent that enqueues one child at a time and rolls the results up. `recompute-book-aggregates` and `backfill-file-hashes` write the aggregate fields of `books`, so their child Subjects name the batch's `book` refs only, and `scan-composer-tags` also writes audio tags on disk, so its child needs the whole-kind `books/files` ref the wav child holds. Owner call on batch size (100 was decided for the three native kinds on 2026-11-18).
+
+- [ ] **TODO-F5-18H-TWO-PASS-TIER** Give the transcribe-file-intros batch parent a two-pass tier so the hash grouping and the ordinal-0-first ordering are library-wide again (`internal/plugins/maintenance/batch_sweep.go`, `batch_children.go`, `selectFileIntroWork` in `file_intro_transcribe.go`). Owner-accepted for now (2026-11-22); to be done after the flip. What is lost until it lands: `selectFileIntroWork` groups the selected files by hash (one transcription per group, the group's other files copy it) and sorts the groups so every group holding a book's ordinal-0 file runs before any other file, across the whole library. The per-batch parent selects the whole library once, then hands each child its 100 books' files, and a child works through its own batch only. So (1) a hash group whose files sit in different batches is split at the batch edge: in a default run (only_missing=true) the later batch finds the earlier batch's stored result by hash and reuses it, but a forced run (only_missing=false) has no done-marker, so it transcribes the group once per batch it spans; (2) the ordinal-0-first ordering holds inside a batch, not across batches, so a book's opening is no longer guaranteed to run before every other book's sibling files. Every file still gets its result either way; the cost is repeated whisper work in forced runs and a different order of work. The fix: a first read-only pass in the parent builds the library-wide groups and tiers (no transcription) and checkpoints the plan as a book-to-representative map, then the children run from that plan, so a batch transcribes only the representatives it owns and a group's other files copy the stored result in a later pass once the representative's batch is done.
 
 - [ ] **Decide whether `DELETE /api/v1/health` should keep answering 401 under the Basic gate.** F3-07 moved the gate to core's stage 8; HEAD's gin gate exempted `/api/v1/health` for every method, stage 8 exempts only the manifest's `GET /api/v1/health` route, so another method on that path is gated. The 401 is the safer answer and the owner accepted it; this is open only if a monitor sends another method.
 
