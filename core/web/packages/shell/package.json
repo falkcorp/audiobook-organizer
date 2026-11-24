@@ -40,7 +40,7 @@
   "dependencies": {
     "@mediacore/api-client": "0.1.0",
     "@mediacore/ui-kit": "0.1.0",
-    "zustand": "^5.0.16"
+    "zustand": "^5.1.0"
   },
   "peerDependencies": {
     "@emotion/react": "^11.11.1",
