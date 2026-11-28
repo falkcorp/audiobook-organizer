@@ -6,7 +6,9 @@
 package books
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -31,10 +33,15 @@ func TestIdentityBoot_LegacyAccountRoutesRefuseOnAMigratedStore(t *testing.T) {
 	admin := loginAs(t, r, "lucius.fox", fpPass)
 	viewer := loginAs(t, r, "alfred.pennyworth", fpPass)
 
-	refused := func(t *testing.T, method, path string, body any, ck *http.Cookie) {
+	// refused pins a route's exact refusal and that the HANDLER answered (a
+	// JSON body): an unregistered route or method would answer gin's plain-text
+	// 404, which must not pass as a refusal.
+	refused := func(t *testing.T, method, path string, body any, ck *http.Cookie, want int) {
 		t.Helper()
 		rec := doJSON(t, h, method, path, body, ck)
-		require.GreaterOrEqual(t, rec.Code, 400, "%s %s must refuse on a migrated store: %d %s", method, path, rec.Code, rec.Body.String())
+		require.Equal(t, want, rec.Code, "%s %s on a migrated store: %s", method, path, rec.Body.String())
+		require.True(t, json.Valid(rec.Body.Bytes()) && strings.HasPrefix(strings.TrimSpace(rec.Body.String()), "{"),
+			"%s %s: the registered handler answers, not an unregistered route: %q", method, path, rec.Body.String())
 	}
 
 	// HEAD's password sign-in finds no books user: the real password is refused
@@ -45,13 +52,13 @@ func TestIdentityBoot_LegacyAccountRoutesRefuseOnAMigratedStore(t *testing.T) {
 		require.Empty(t, c.Value, "HEAD's login sets no session: %v", c)
 	}
 
-	refused(t, http.MethodPatch, "/api/v1/auth/me", map[string]string{"email": "oracle@example.test"}, viewer)
-	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"current_password": fpPass, "new_password": "a-different-batarang-77"}, viewer)
-	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"user_id": seed.target, "new_password": "a-different-batarang-77"}, admin)
-	refused(t, http.MethodDelete, "/api/v1/auth/sessions/0123456789abcdef", nil, viewer)
-	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/reset-password", nil, admin)
-	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/deactivate", nil, admin)
-	refused(t, http.MethodPost, "/api/v1/users/"+seed.viewer+"/reactivate", nil, admin)
+	refused(t, http.MethodPatch, "/api/v1/auth/me", map[string]string{"email": "oracle@example.test"}, viewer, http.StatusNotFound)
+	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"current_password": fpPass, "new_password": "a-different-batarang-77"}, viewer, http.StatusNotFound)
+	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"user_id": seed.target, "new_password": "a-different-batarang-77"}, admin, http.StatusNotFound)
+	refused(t, http.MethodDelete, "/api/v1/auth/sessions/0123456789abcdef", nil, viewer, http.StatusNotFound)
+	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/reset-password", nil, admin, http.StatusNotFound)
+	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/deactivate", nil, admin, http.StatusNotFound)
+	refused(t, http.MethodPost, "/api/v1/users/"+seed.viewer+"/reactivate", nil, admin, http.StatusNotFound)
 
 	// The sessions list reads books' drained session rows: it lists nothing, so it
 	// discloses no session of anyone.

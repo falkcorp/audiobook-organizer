@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 	"testing"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
 
 // The F3-07 probe, `diagnostics user-state` (F4-08 fix-forward sweep).
@@ -286,4 +288,90 @@ func TestUserState_BooksFileModeIsChecked(t *testing.T) {
 		t.Fatalf("runUserState = %v, want books_file_mode", err)
 	}
 	noIDsIn(t, out.String()+err.Error())
+}
+
+// captureProcessOutput runs fn with the process's stdout and stderr redirected,
+// and returns what each received: what an operator's shell sees.
+func captureProcessOutput(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	read := func(f **os.File) (func() string, func()) {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		orig := *f
+		*f = w
+		done := make(chan string)
+		go func() {
+			b, _ := io.ReadAll(r)
+			done <- string(b)
+		}()
+		return func() string { _ = w.Close(); *f = orig; return <-done }, func() { *f = orig }
+	}
+	outDone, outRestore := read(&os.Stdout)
+	errDone, errRestore := read(&os.Stderr)
+	defer outRestore()
+	defer errRestore()
+	fn()
+	return outDone(), errDone()
+}
+
+// The probe as an operator runs it, through the root command with --db after
+// the subcommand (the lead's command line): stdout is exactly the one
+// USERSTATE line, nothing on either stream names an id, and a refusal is an
+// error, which main turns into a non-zero exit.
+func TestUserState_RunsAsTheCommand(t *testing.T) {
+	dbPath := userStateFixture(t)
+	cfg := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfg, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origCfgFile, origDB, origConfig := cfgFile, databasePath, config.Snapshot()
+	t.Cleanup(func() {
+		rootCmd.SetArgs(nil)
+		config.SetForTest(func(c *config.Config) { cfgFile, databasePath, *c = origCfgFile, origDB, origConfig })
+	})
+
+	var err error
+	stdout, stderr := captureProcessOutput(t, func() {
+		rootCmd.SetArgs([]string{"diagnostics", "user-state", "--config", cfg, "--db", dbPath})
+		err = rootCmd.Execute()
+	})
+	if err != nil {
+		t.Fatalf("diagnostics user-state = %v\nstdout %q\nstderr %q", err, stdout, stderr)
+	}
+	m := parseUserState(t, stdout)
+	if m["books_with_progress"] != 2.0 || m["users_strict_err"] != "" {
+		t.Errorf("the command's line = %q", stdout)
+	}
+	noIDsIn(t, stdout+stderr)
+
+	// The same command on a store the cutover has not run on refuses.
+	unmigrated := filepath.Join(t.TempDir(), "head", "books.pebble")
+	if err := os.MkdirAll(filepath.Dir(unmigrated), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ABO_CORE_STORAGE_PATH", unmigrated)
+	s, err := database.OpenStandalone(unmigrated, database.StandaloneOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetUserBookState(&database.UserBookState{UserID: "u-head-bruce", BookID: usListedProgressBook, Status: "in_progress", ProgressPct: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr = captureProcessOutput(t, func() {
+		rootCmd.SetArgs([]string{"diagnostics", "user-state", "--config", cfg, "--db", unmigrated})
+		err = rootCmd.Execute()
+	})
+	var refusal errUserState
+	if !errors.As(err, &refusal) || refusal.class != "unmigrated" {
+		t.Fatalf("on an unmigrated store = %v, want the unmigrated refusal\nstdout %q\nstderr %q", err, stdout, stderr)
+	}
+	if parseUserState(t, stdout)["users_strict_err"] != "unmigrated" {
+		t.Errorf("the refusal's line = %q", stdout)
+	}
+	noIDsIn(t, stdout+stderr+err.Error())
 }
