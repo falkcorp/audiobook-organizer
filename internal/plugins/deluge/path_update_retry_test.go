@@ -27,7 +27,7 @@ type scriptedMover struct {
 	calls  map[string]int
 }
 
-func (m *scriptedMover) MoveStorage(ids []string, _ string) error {
+func (m *scriptedMover) MoveStorage(_ context.Context, ids []string, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.calls == nil {
@@ -133,4 +133,36 @@ func TestPathUpdateRetry(t *testing.T) {
 		require.Less(t, time.Since(start), time.Second)
 		require.NoError(t, ctxSleep(context.Background(), time.Millisecond))
 	})
+}
+
+// ctxMover blocks in MoveStorage until the ctx it was given is done (or the
+// guard elapses), like a Deluge Web UI that never answers.
+type ctxMover struct{ guard time.Duration }
+
+func (m ctxMover) MoveStorage(ctx context.Context, _ []string, _ string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(m.guard):
+		return errors.New("MoveStorage was not handed the run's context")
+	}
+}
+
+// The run's ctx reaches the Deluge call: a hung call ends with the run's
+// deadline instead of outliving it by the client's own timeout.
+func TestPathUpdateRetry_TheRunsContextReachesMoveStorage(t *testing.T) {
+	f := newPUFixture()
+	f.versions = f.versions[:1]
+	env := pathUpdateEnv{
+		kindEnv: headEnv(&parityReporter{}, true),
+		Cfg:     &config.Config{DelugeMoveEnabled: true},
+		Store:   f.store(),
+		Mover:   ctxMover{guard: 5 * time.Second},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := pathUpdateCore(ctx, pathUpdateCoreParams{BookID: f.book.ID}, env)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(start), 3*time.Second)
 }
