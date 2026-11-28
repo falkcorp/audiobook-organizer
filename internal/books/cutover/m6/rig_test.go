@@ -426,6 +426,10 @@ type rig struct {
 	effective map[string]map[string]string
 	// effectiveErr makes Effective fail.
 	effectiveErr error
+	// effectiveFn, when set, is the step's Effective in place of the effective
+	// map and effectiveErr: the test hands it the production builder over the
+	// operator values it models (m6.EffectiveFromPassthrough).
+	effectiveFn func(ctx context.Context, ref integrations.Ref) (map[string]string, error)
 	// aiParsingOff makes EnableAIParsing answer false (HEAD's enable_ai_parsing
 	// off), and aiParsingErr makes it fail.
 	aiParsingOff bool
@@ -553,7 +557,10 @@ func (r *rig) aiParsing(context.Context) (bool, error) {
 }
 
 // overlay is Config.Effective: the operator's URLs the test set for ref.
-func (r *rig) overlay(_ context.Context, ref integrations.Ref) (map[string]string, error) {
+func (r *rig) overlay(ctx context.Context, ref integrations.Ref) (map[string]string, error) {
+	if r.effectiveFn != nil {
+		return r.effectiveFn(ctx, ref)
+	}
 	if r.effectiveErr != nil {
 		return nil, r.effectiveErr
 	}
