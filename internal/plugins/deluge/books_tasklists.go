@@ -55,6 +55,9 @@ type BooksTaskInputs struct {
 	Config *config.Config
 	// Schedules is books' schedule hook.
 	Schedules func(tasks.Kind) *tasks.Schedule
+	// RelocationConsumer is KindDeps.RelocationConsumer: true exactly when the
+	// books manifest lists the relocation consumer.
+	RelocationConsumer bool
 }
 
 // BooksTaskLists returns every Deluge kind with its schedule, over the books
@@ -107,6 +110,8 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 		},
 		Cache:  in.Cache,
 		Config: in.Config,
+
+		RelocationConsumer: in.RelocationConsumer,
 	}
 	// A nil *Client stays an untyped-nil interface: the cores read "is Deluge
 	// configured" as Client == nil, so a typed nil would claim it is.

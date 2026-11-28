@@ -19,6 +19,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/tagger"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -69,9 +70,7 @@ func kindCommon(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.C
 		Perms: tasks.Permissions{Start: rbac.AllOf(settingsManageScopes...)},
 		Ready: []tasks.ReadySignal{signalMemDB}, // HEAD's NoWarmupWait is false for all four
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 
@@ -192,6 +191,12 @@ type KindDeps struct {
 	Cache protectedCache
 	// Config is the live configuration (HEAD read config.AppConfig).
 	Config *config.Config
+	// RelocationConsumer says the owner declares the relocation consumer
+	// (RelocationConsumer, listed in the manifest's OutboxConsumers) for this
+	// boot. Only then does path-update carry Permissions.SystemStart: the flag
+	// answers that declaration, and a flag with none is an unused grant the
+	// kernel refuses at boot.
+	RelocationConsumer bool
 
 	// LinkHash, LinkNow and LinkRoundFiles are deluge.link-backfill's test
 	// seams (Plugin.linkHash, linkNow, linkRoundFiles at HEAD); unset, the
@@ -333,10 +338,10 @@ func (p *Plugin) centralizeNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	})
 }
 
-// outboxSystemStartReason is the reviewed reason path-update sets
-// Permissions.OutboxSystemStart: the relocation consumer's start is the books
+// systemStartReason is the reviewed reason path-update sets
+// Permissions.SystemStart: the relocation consumer's start is the books
 // system acting on a staged message its own committed write produced.
-const outboxSystemStartReason = "started by the books module's own relocation consumer from a committed books.book.relocated.v1 message; the books system actor cannot hold the settings.manage expansion (core:system.manage is AuthRequired), and a person's start keeps it"
+const systemStartReason = "started by the books module's own relocation consumer from a committed books.book.relocated.v1 message; the books system actor cannot hold the settings.manage expansion (core:system.manage is AuthRequired), and a person's start keeps it"
 
 // pathUpdateNative is the native deluge.path-update kind. Preview is HEAD's dry
 // run (dry_run defaulted to true there, and a native run that names no mode
@@ -371,8 +376,12 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// core:system.manage, a scope no module system actor can hold. The relocation
 	// consumer starts it with the books system actor, so without this reason every
 	// follow-up of a committed relocation would be refused and dead-letter. Hand
-	// starts keep Start as it is (core/tasks Permissions.OutboxSystemStart).
-	c.Perms.OutboxSystemStart = outboxSystemStartReason
+	// starts keep Start as it is (core/tasks Permissions.SystemStart). The reason
+	// is set only when the consumer is declared (KindDeps.RelocationConsumer):
+	// the kernel refuses a flag with no declaration at boot.
+	if d.RelocationConsumer {
+		c.Perms.SystemStart = systemStartReason
+	}
 	return tasks.Task(pathUpdateKind, tasks.TaskSpec[json.RawMessage, pathUpdateResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (pathUpdateResult, error) {

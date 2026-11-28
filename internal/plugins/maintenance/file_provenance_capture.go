@@ -19,6 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/pathutil"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -167,7 +168,7 @@ func (p *Plugin) fileProvenanceCaptureKind(deps t6g4Deps, sched *tasks.Schedule)
 		// The events are the file-history chain of a book_file (orphans until the
 		// file is imported). Declared as t6g4ResProvenance.
 		Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          taskkit.Scheduled(tasks.Permissions{Start: t6g4StartRequirement()}, sched),
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-capture"),

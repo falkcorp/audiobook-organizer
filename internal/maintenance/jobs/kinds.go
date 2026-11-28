@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -282,9 +283,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 	if pol.ConcurrencyKey != "" {
 		c.ConcurrencyKey = tasks.Key("books." + pol.ConcurrencyKey)
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	shell := kindShell{kind: kind, job: job, deps: deps, liveOnly: !AdvertisedDryRunDefault(job), derivesApply: declaresApplyKey(job)}
 	return tasks.Task(kind, tasks.TaskSpec[json.RawMessage, json.RawMessage]{Common: c, Run: shell.run}), nil
 }

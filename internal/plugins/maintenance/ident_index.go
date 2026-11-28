@@ -14,6 +14,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
@@ -136,7 +137,7 @@ func (p *Plugin) identIndexKind(deps t6g4Deps, sched *tasks.Schedule) tasks.Defi
 			"book or metadata cache rows.",
 		// HEAD declares books; the rebuild writes ident: index rows (indexes).
 		Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResIndexes)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          taskkit.Scheduled(tasks.Permissions{Start: t6g4StartRequirement()}, sched),
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.ident-index"),

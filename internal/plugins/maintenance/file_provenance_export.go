@@ -17,6 +17,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
@@ -243,7 +244,7 @@ func (p *Plugin) fileProvenanceExportKind(deps t6g4Deps, sched *tasks.Schedule) 
 		// Appends the ledger to a JSONL file on disk (files) and moves the export
 		// cursor in the provenance keyspace, declared as t6g4ResProvenance.
 		Effects:        tasks.Writes(t6g4Res(t6g4ResProvenance, ops.ResFiles)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          taskkit.Scheduled(tasks.Permissions{Start: t6g4StartRequirement()}, sched),
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.file-provenance-export"),

@@ -18,6 +18,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -98,9 +99,7 @@ func (m t6g2Meta) common(sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	if m.Key != "" {
 		c.ConcurrencyKey = tasks.Key("books." + m.Key)
 	}
-	if sched != nil {
-		c.Schedule = sched(m.Kind)
-	}
+	taskkit.SetSchedule(&c, m.Kind, sched)
 	return c
 }
 

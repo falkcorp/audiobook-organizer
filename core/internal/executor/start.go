@@ -32,11 +32,13 @@ const systemMethod = "system"
 type starter struct {
 	who    rbac.Checker
 	parent *def
-	// outbox is set by StartIn alone, for the start an outbox consumer stages in
-	// the relay's batch (Trigger Outbox). It is never read from a request of
-	// Client.Start, where the caller states the trigger itself: it is what lets
-	// a kind's Perms.OutboxSystemStart apply (moduleReach).
-	outbox bool
+	// origin is set by a minted handle alone (origin.go), never from a request:
+	// it is what lets a kind's Perms.SystemStart apply (admitsSystemStart).
+	origin startOrigin
+	// parentOrigin and parentRun are the recorded origin and the ID of the run
+	// whose body makes an rc.Enqueue (parent is that run's definition).
+	parentOrigin string
+	parentRun    tasks.RunID
 }
 
 // startMode is how a start resolves an unset mode.
@@ -75,12 +77,18 @@ func (e *executor) Start(ctx context.Context, kind tasks.Kind, req tasks.StartRe
 // actor of the module that owns kind, and Mode must be set (5T.3.10,
 // 5T.3.12; COR2-5).
 func (e *executor) StartIn(ctx context.Context, b *storage.Batch, kind tasks.Kind, req tasks.StartRequest) (tasks.RunRef, error) {
+	return e.startIn(ctx, b, kind, req, startOrigin{})
+}
+
+// startIn is StartIn for o, the origin a minted handle stamps (origin.go); the
+// plain StartIn passes none, so its start is judged on Perms.Start alone.
+func (e *executor) startIn(ctx context.Context, b *storage.Batch, kind tasks.Kind, req tasks.StartRequest, o startOrigin) (tasks.RunRef, error) {
 	if b == nil {
 		return tasks.RunRef{}, errors.New("executor: StartIn needs a batch")
 	}
 	req.Actor = tasks.Actor{AuthMethod: systemMethod, System: kind.Module()}
 	req.IdempotencyKey = "" // the relay's same-batch cursor commit is its guarantee (SIMP3-8)
-	prep, err := e.prepare(ctx, kind, req, starter{outbox: req.Trigger == tasks.TriggerOutbox}, modeRequired)
+	prep, err := e.prepare(ctx, kind, req, starter{origin: o}, modeRequired)
 	if err != nil {
 		return tasks.RunRef{}, err
 	}
@@ -128,6 +136,8 @@ type prepared struct {
 	// per batch, instead of afresh for this start (StartIn: a bulk start
 	// stages many starts into one batch, fold_view.go).
 	batchFold bool
+	// origin is the RunRecord.Origin the start stages (starter.recordOrigin).
+	origin string
 }
 
 // prepare validates a start before anything is staged: the kind, held,
@@ -197,7 +207,7 @@ func (e *executor) prepare(ctx context.Context, kind tasks.Kind, req tasks.Start
 	if prio == 0 {
 		prio = tasks.PriorityNormal
 	}
-	return prepared{d: d, req: req, mode: mode, params: params, prio: prio}, nil
+	return prepared{d: d, req: req, mode: mode, params: params, prio: prio, origin: s.recordOrigin(req.Actor)}, nil
 }
 
 // permitPriority refuses a priority past PrioritySystem on any kind and
@@ -227,17 +237,19 @@ func permitPriority(d *def, p tasks.Priority) error {
 // and a child whose Perms.Start needs core:admin or an AuthRequired scope
 // is started directly, never enqueued.
 //
-// One exception to "the system actor must hold Perms.Start": the start an
-// outbox consumer stages (s.outbox) of a kind whose Perms.OutboxSystemStart is
-// set, by the module that owns the kind (moduleReach). No other start takes it.
+// One exception to "the system actor must hold Perms.Start": a start whose
+// origin the executor itself established, of a kind that carries
+// Perms.SystemStart, by the module that owns the kind (admitsSystemStart). No
+// other start takes it, and a person's or an API key's start of a flagged kind
+// is judged on Perms.Start alone.
 func (e *executor) permitStart(d *def, actor tasks.Actor, s starter) error {
 	if p := s.parent; p != nil {
-		if err := e.moduleReach(p.module, d, false); err != nil {
+		if err := e.moduleReach(p.module, d, s.admitsSystemStart(d, actor)); err != nil {
 			return fmt.Errorf("%w (enqueued by %s)", err, p.kind)
 		}
 	}
 	if actor.AuthMethod == systemMethod && actor.System != "" {
-		return e.moduleReach(actor.System, d, s.outbox)
+		return e.moduleReach(actor.System, d, s.admitsSystemStart(d, actor))
 	}
 	if s.who != nil && !s.who.Satisfies(d.c.Perms.Start) {
 		return fmt.Errorf("%w: start %s", ErrNotPermitted, d.kind)
@@ -279,40 +291,21 @@ func (e *executor) permitWindow(d *def, s starter) error {
 
 // moduleReach is SEC2-15's start rule for module: d is one of its own
 // kinds or listed in its manifest's TaskStarts, and its system actor's
-// checker holds d's start requirement. outbox says the start is one an outbox
-// consumer stages: then a kind that declares Perms.OutboxSystemStart is
-// startable by its OWNER module's system actor without that actor holding Start
-// (a TaskStarts listing of another module's kind never takes the exception).
-func (e *executor) moduleReach(module string, d *def, outbox bool) error {
+// checker holds d's start requirement. exempt says the start's origin lets d's
+// Perms.SystemStart apply (starter.admitsSystemStart): the requirement is then
+// not asked of the actor. It never lifts the kind gate, so a listed foreign
+// kind never takes it.
+func (e *executor) moduleReach(module string, d *def, exempt bool) error {
 	if d.module != module && !slices.Contains(e.starts[module], d.kind) {
 		return fmt.Errorf("%w: module %s may not start %s (not its kind, not in TaskStarts)", ErrNotPermitted, module, d.kind)
 	}
-	if e.systemChecker(module).Satisfies(d.c.Perms.Start) {
+	if exempt && d.module == module {
 		return nil
 	}
-	if outbox && d.module == module && d.c.Perms.OutboxSystemStart != "" {
-		return nil
+	if !e.systemChecker(module).Satisfies(d.c.Perms.Start) {
+		return fmt.Errorf("%w: module %s's system actor does not hold %s's start requirement", ErrNotPermitted, module, d.kind)
 	}
-	return fmt.Errorf("%w: module %s's system actor does not hold %s's start requirement", ErrNotPermitted, module, d.kind)
-}
-
-// CheckOutboxStart reports whether module's system actor may start kind from an
-// outbox consumer's relay batch, the question the kernel asks at P7 of every
-// registered ConsumeIntoTask: nil when StartIn would pass the start rule, else
-// the refusal StartIn would return (wrapping ErrUnknownKind for an
-// unregistered kind, ErrNotPermitted for a refused start). x not built by this
-// package is an error, never a pass.
-func CheckOutboxStart(x tasks.Executor, module string, kind tasks.Kind) error {
-	e, ok := x.(*executor)
-	if !ok {
-		return fmt.Errorf("executor: %T is not this package's executor: cannot check the outbox start of %s", x, kind)
-	}
-	d, ok := e.defs[kind]
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrUnknownKind, kind)
-	}
-	actor := tasks.Actor{AuthMethod: systemMethod, System: module}
-	return e.permitStart(d, actor, starter{outbox: true})
+	return nil
 }
 
 // systemPerms is the union of the start requirements of module's own kinds and
@@ -512,7 +505,7 @@ func (e *executor) stageStart(ctx context.Context, b *storage.Batch, p prepared)
 	rec := tasks.RunRecord{
 		ID: id, Kind: kind, Mode: p.mode, State: tasks.StateQueued, Actor: p.req.Actor,
 		Trigger: p.req.Trigger, Parent: p.req.Parent, PlanRef: p.req.PlanRef, Created: e.now(),
-		Priority: p.prio, Params: p.params,
+		Priority: p.prio, Params: p.params, Origin: p.origin,
 	}
 	if rec.Trigger == "" {
 		rec.Trigger = tasks.TriggerManual

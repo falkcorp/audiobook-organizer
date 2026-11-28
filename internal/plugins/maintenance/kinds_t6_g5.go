@@ -27,6 +27,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/rbac"
@@ -594,9 +595,7 @@ func t6g5Common(def sdk.OperationDef, kind tasks.Kind, effects tasks.Effects, sc
 	if def.ConcurrencyKey != "" {
 		c.ConcurrencyKey = tasks.Key(t6g5KindPrefix + def.ConcurrencyKey)
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 

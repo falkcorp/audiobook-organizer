@@ -60,6 +60,7 @@ func taskInputsFrom(deps module.Deps, srv *server.Server) (taskListInputs, error
 		Scheduler:   si.Scheduler,
 		Repairs:     si.Repairs,
 	}
+	in.Deluge.RelocationConsumer = relocationConsumerListed()
 	in.Maintenance.Runs = deps.TaskRows
 	in.Maintenance.StandDownKey = scanStandDownKey
 	in.Scheduler.StandDownKey = scanStandDownKey
@@ -67,3 +68,12 @@ func taskInputsFrom(deps module.Deps, srv *server.Server) (taskListInputs, error
 	in.Repairs.StandDownKey = scanStandDownKey
 	return in, nil
 }
+
+// relocationConsumerListed reports whether the books manifest lists the
+// relocation consumer (deluge.RelocationConsumer) in OutboxConsumers. It is the
+// one predicate that decides it and that path-update's Permissions.SystemStart
+// follows, so the flag exists exactly when the consumer that needs it does. The
+// manifest lists none on this branch (the events flip, F6-03, does), so it is
+// false and path-update carries no flag; the flip replaces this body with its
+// predicate (identity and tasks flip) and lists the consumer from the same call.
+func relocationConsumerListed() bool { return false }

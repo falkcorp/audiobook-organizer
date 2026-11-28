@@ -22,6 +22,7 @@ import (
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/reconcile"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
 
@@ -297,9 +298,7 @@ func t6g6Common(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.C
 		Perms: tasks.Permissions{Start: t6g6StartRequirement()},
 		Ready: []tasks.ReadySignal{t6g6SignalMemDB},
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 

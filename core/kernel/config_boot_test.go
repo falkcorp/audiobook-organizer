@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/internal/configstore"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
@@ -1057,6 +1058,10 @@ func TestScheduleKeys_ModuleKeysDeclared(t *testing.T) {
 	gothamWith := func(key string) testModule {
 		return gotham([]tasks.Kind{patrolKind}, withKey(key)).with(func(m *module.Manifest) {
 			m.Settings = []module.SettingsSection{module.Settings(rooftopSection)}
+			// The scheduled kind's Start scope is declared, so gotham's system
+			// actor holds it: P7 runs the executor's start rule for every
+			// scheduled kind and refuses one its owner could never start.
+			m.Permissions = []rbac.PermissionSpec{{Name: "gotham:patrol", Title: "Patrol"}}
 		})
 	}
 	boot := func(t *testing.T, key string) (*Kernel, error) {

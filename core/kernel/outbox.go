@@ -34,12 +34,15 @@ import (
 //     the events bus froze its catalog (the outbox reads the Durable entries):
 //     newKernelOutbox; the core.outbox health component is registered from
 //     outboxHealthCheck();
-//   - P7: declareConsumers with every manifest's OutboxConsumers (enabled or
+//   - P7: outboxTaskTargets returns ko.ob.TaskConsumers() and true (system_start.go
+//     checks each target's flag and start rule); declareConsumers with every manifest's OutboxConsumers (enabled or
 //     not), then register for core and each enabled module's handlers, then
 //     freeze; each step returns module problems, so a bad registration fails
 //     boot with the rest of P7's problems;
 //   - building Deps: writer(id) is the module's staging handle (Deps.Outbox);
-//   - Run, once the executor exists: ko.ob.BindRuns(executor) (staging needs no
+//   - Run, once the executor exists: ko.ob.BindRuns(executor.OutboxRuns(x)) (the
+//     handle that carries the outbox origin, never the raw executor: only a start
+//     through it can take a kind's Permissions.SystemStart; staging needs no
 //     executor; the relay and the consumers that start runs do), the executor
 //     registers ko.ob.RelayDefinition() (no wrapper here: tasklint's
 //     unregistered-kind rule reads a wrapper nobody calls as an orphan kind),

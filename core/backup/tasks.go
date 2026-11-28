@@ -99,7 +99,7 @@ func CreateTask(s *Svc) tasks.Definition {
 	}
 	return tasks.Task(KindCreate, tasks.TaskSpec[CreateParams, CreateResult]{
 		Title: "Back up", Help: "Writes a verified archive of the database, the config file and the modules' own data into the backup directory, then applies retention.",
-		Effects: tasks.Writes(Resource()), Perms: manageBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 12 * time.Hour,
+		Effects: tasks.Writes(Resource()), Perms: scheduledBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 12 * time.Hour,
 		Schedule: tasks.ScheduleFromConfig(ScheduleCreateKey).Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
 		Run: run,
 	})
@@ -117,7 +117,7 @@ func VerifyTask(s *Svc) tasks.Definition {
 	}
 	return tasks.Task(KindVerify, tasks.TaskSpec[Empty, VerifyTaskResult]{
 		Title: "Verify backups", Help: "Re-verifies the newest archives, opens the newest one, and re-signs archives made under a derivation key that is being retired.",
-		Effects: tasks.Writes(Resource()), Perms: manageBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
+		Effects: tasks.Writes(Resource()), Perms: scheduledBackups(), Resume: tasks.ResumeDrop, ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
 		Schedule: tasks.ScheduleFromConfig(ScheduleVerifyKey).Live(),
 		Run:      run,
 	})
@@ -176,6 +176,19 @@ const stageRouteReason = "a restore needs the restore route's interactive owner 
 // with.
 func manageBackups() tasks.Permissions {
 	return tasks.Permissions{Start: rbac.Need("core:system.manage")}
+}
+
+// scheduledStartReason is the reviewed reason core.backup.create and
+// core.backup.verify carry (tasks.Permissions.SystemStart): the scheduler's tick
+// starts them as core's system actor, which cannot hold core:system.manage
+// (AuthRequired). A person's or an API key's start still needs it.
+const scheduledStartReason = "started by the scheduler's tick as core's system actor, which cannot hold core:system.manage (AuthRequired); a person's or an API key's start keeps it"
+
+// scheduledBackups is manageBackups for the two kinds the scheduler starts.
+func scheduledBackups() tasks.Permissions {
+	p := manageBackups()
+	p.SystemStart = scheduledStartReason
+	return p
 }
 
 func (s *Svc) taskCreate(rc *tasks.RC, p CreateParams) (CreateResult, error) {

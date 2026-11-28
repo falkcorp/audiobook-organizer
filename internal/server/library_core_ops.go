@@ -27,6 +27,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/organizer"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	logging "github.com/falkcorp/mediacore/log"
@@ -353,9 +354,7 @@ func (s *Server) libraryScanFullNative(deps t7Deps, sched func(tasks.Kind) *task
 	c.Help = "Scan the whole library root and every import path, re-hashing every file: the periodic full sweep. Never runs beside a regular library scan."
 	c.Resume = t7Resume(opsregistry.ResumeRestart, true)
 	c.Effects = libraryScanEffects()
-	if sched != nil {
-		c.Schedule = sched(libraryScanFullKind)
-	}
+	taskkit.SetSchedule(&c, libraryScanFullKind, sched)
 	return tasks.Task(libraryScanFullKind, tasks.TaskSpec[json.RawMessage, map[string]any]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (map[string]any, error) {

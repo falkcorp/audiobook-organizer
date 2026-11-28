@@ -18,6 +18,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
@@ -195,7 +196,7 @@ func (p *Plugin) introMigrateSingleFileKind(deps t6g4Deps, sched *tasks.Schedule
 		// metadata_cache, indexes) happen in the children, see introMigrateBatchKind.
 		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 		Subjects: batchParentHolds,
-		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:    taskkit.Scheduled(tasks.Permissions{Start: t6g4StartRequirement()}, sched),
 		// ResumeContinue (HEAD is ResumeRestart with no checkpoint): the parent's
 		// cursor, the child in flight and the rolled-up counts are checkpointed
 		// (batch_sweep.go), so a restart resumes at the cursor, and the kernel only

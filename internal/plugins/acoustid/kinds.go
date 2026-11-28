@@ -15,6 +15,7 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -77,9 +78,7 @@ func kindCommon(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule, noWarmu
 	if !noWarmup {
 		c.Ready = []tasks.ReadySignal{signalMemDB}
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 

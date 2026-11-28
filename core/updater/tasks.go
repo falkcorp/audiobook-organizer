@@ -139,12 +139,18 @@ func CheckTask(u *Updater) tasks.Definition {
 	}
 	return tasks.Task(KindCheck, tasks.TaskSpec[Empty, StatusView]{
 		Title: "Check for updates", Help: "Asks the release source for the newest release and records whether it is newer than the running build. It never installs anything.",
-		Effects: tasks.Writes(resourceUpdater()), Perms: tasks.Permissions{Start: rbac.Need("core:system.manage")}, Resume: tasks.ResumeDrop,
+		Effects: tasks.Writes(resourceUpdater()), Perms: tasks.Permissions{Start: rbac.Need("core:system.manage"), SystemStart: checkStartReason}, Resume: tasks.ResumeDrop,
 		Priority: tasks.PrioritySystem, Timeout: 5 * time.Minute,
 		Schedule: sched.Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
 		Run: run,
 	})
 }
+
+// checkStartReason is the reviewed reason core.updater.check carries
+// (tasks.Permissions.SystemStart): the scheduler's tick starts it as core's
+// system actor, which cannot hold core:system.manage (AuthRequired). A person's
+// or an API key's start still needs it.
+const checkStartReason = "started by the scheduler's tick as core's system actor, which cannot hold core:system.manage (AuthRequired); a person's or an API key's start keeps it"
 
 // ownerRouteReason is why apply and rollback are not startable through the
 // generic task API: their routes (core/internal/updaterhttp) require an

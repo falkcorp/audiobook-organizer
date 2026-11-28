@@ -21,6 +21,7 @@ import (
 	pathutil "github.com/falkcorp/audiobook-organizer/internal/pathutil"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/sweep"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/internal/transcode"
 	"github.com/falkcorp/audiobook-organizer/internal/versions"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -810,9 +811,7 @@ func t6g3Common(def sdk.OperationDef, kind tasks.Kind, effects tasks.Effects, sc
 	if def.ConcurrencyKey != "" {
 		c.ConcurrencyKey = tasks.Key(t6g3KindPrefix + def.ConcurrencyKey)
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 

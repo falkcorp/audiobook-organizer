@@ -32,25 +32,32 @@ type Permissions struct {
 	// definitions listing reports can_start false for such a kind.
 	OwnerRouteOnly string
 
-	// OutboxSystemStart is a reviewed reason the OWNER module's system actor may
-	// start this kind from one of the owner's own outbox consumers
-	// (outbox.ConsumeIntoTask) although that actor cannot hold Start. A module
-	// system actor never holds core:admin or an AuthRequired scope (SEC2-15,
-	// COR3-10), so a kind whose Start asks for one (core:system.manage, as the
-	// settings.manage expansion does) could otherwise never be started from the
-	// outbox: every message would be refused (ErrNotPermitted is not permanent)
-	// and dead-letter after the retry budget.
+	// SystemStart is a reviewed reason the OWNER module's system actor may start
+	// this kind, past Start, when the executor itself began the start on the
+	// system's behalf. A module system actor never holds core:admin or an
+	// AuthRequired scope (SEC2-15, COR3-10), so a kind whose Start asks for one
+	// (core:system.manage, as the settings.manage expansion does) could otherwise
+	// never be started by the scheduler, by its owner's outbox consumer or by a
+	// run of the system's own: the start would be refused ErrNotPermitted, a
+	// scheduled fire would never run and an outbox message would dead-letter.
 	//
-	// It is not a Start requirement and no person gains anything from it: the
-	// rule is the system acting on a message that is already committed, not a
-	// user acting. Only the start staged by the outbox's relay batch
-	// (Executor.StartIn with Trigger Outbox) honours it, and only for the module
-	// that owns the kind. Client.Start, the HTTP route, rc.Enqueue, a schedule,
-	// a window and a TaskStarts entry of another module all keep checking Start
-	// as before. The kernel refuses at boot (P7) a ConsumeIntoTask whose kind its
-	// owner's system actor cannot start under this rule, so the failure is the
-	// boot's, never a dead letter. Empty = not granted.
-	OutboxSystemStart string
+	// It is not a Start requirement and no person gains anything from it: a person
+	// or an API key that starts the kind is judged on Start alone, flag or not.
+	// The exemption applies to a start only when ALL of these hold:
+	//
+	//   - the kind carries this reason;
+	//   - the actor is the system actor of the module that owns the kind;
+	//   - the start's origin is one the executor established itself, which no
+	//     StartRequest field, option, header or context value can claim: the
+	//     scheduler's tick (a kind that declares a Schedule), the relay's dispatch
+	//     of one of the owner's outbox consumers, or an rc.Enqueue made by a
+	//     running run of the SAME module that was itself started from one of those
+	//     origins (a child of a person's run keeps the person's authority).
+	//
+	// The kernel checks at boot (P7) that the flag and these origins agree: a kind
+	// that has one of them and no flag is refused, and so is a flag with none of
+	// them. Empty = not granted.
+	SystemStart string
 }
 
 // Approval says a Live run needs a person's recorded decision first.

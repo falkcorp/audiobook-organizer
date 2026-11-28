@@ -342,7 +342,7 @@ func (a *attempt) Enqueue(kind tasks.Kind, params any, opts ...tasks.StartOption
 		}
 	}
 	var ref tasks.RunRef
-	err = a.e.startLocked(a.ctx, kind, req, starter{parent: a.d}, modeRequired, func(p prepared) error {
+	err = a.e.startLocked(a.ctx, kind, req, starter{parent: a.d, parentRun: a.id, parentOrigin: a.rec.Origin}, modeRequired, func(p prepared) error {
 		return a.e.write(a.ctx, func(ctx context.Context, b *storage.Batch) error {
 			var err error
 			ref, err = a.e.stageStart(ctx, b, p)

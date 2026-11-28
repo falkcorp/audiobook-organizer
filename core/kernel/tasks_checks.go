@@ -125,6 +125,7 @@ func (k *Kernel) taskProblems() []module.Problem {
 	}
 	probs = append(probs, k.laneProblems()...)
 	probs = append(probs, k.taskStartProblems()...)
+	probs = append(probs, systemStartDeclProblems(k.taskDefinitions(), k.outboxTaskTargets())...)
 	// ValidateSchedules judges the registered definitions' schedules over the
 	// declared keys, so with no definition there is nothing to judge and the
 	// config store is not built (Kernel.coreConfig). With one, a module kind's

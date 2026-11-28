@@ -398,13 +398,24 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 	if err != nil {
 		return fmt.Errorf("kernel: tasks: executor: %w", err)
 	}
+	if probs := systemStartRuleProblems(x, defs, k.outboxTaskTargets()); len(probs) > 0 {
+		return joined(probs)
+	}
+	// The scheduler starts through the handle that carries the schedule origin
+	// (executor.ScheduleStager), the one thing that lets a scheduled kind's
+	// Permissions.SystemStart apply; every other holder of the executor starts
+	// with no origin.
+	starter, err := executor.ScheduleStager(x)
+	if err != nil {
+		return fmt.Errorf("kernel: tasks: scheduler starter: %w", err)
+	}
 	loc, err := cfg.location()
 	if err != nil {
 		return err
 	}
 	s, err := scheduler.New(scheduler.Options{
 		Stores:      kt.stores,
-		Starter:     x,
+		Starter:     starter,
 		NewBatch:    kt.st.NewBatch,
 		Definitions: defs,
 		Config:      schedulerConfig{c: cfg},

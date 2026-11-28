@@ -24,6 +24,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/authormerge"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 )
 
 // Native books Task kinds for T6 group 1 of the maintenance plugin (F5-06,
@@ -391,9 +392,7 @@ func t6g1Common(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.C
 		Perms: tasks.Permissions{Start: t6g1StartRequirement()},
 		Ready: []tasks.ReadySignal{t6g1SignalMemDB},
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 

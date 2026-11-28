@@ -398,6 +398,34 @@ func registeredByTheRealModule(t *testing.T) {
 	require.Empty(t, puc.Perms.StartableByViewers, "no viewer starts a torrent move")
 	require.Empty(t, puc.Perms.OwnerRouteOnly, "the generic start route runs it (HEAD's op start route did)")
 
+	// Permissions.SystemStart (core/tasks): path-update is started by the
+	// relocation consumer's outbox dispatch as the books system actor, which
+	// cannot hold the settings.manage expansion (core:system.manage is
+	// AuthRequired), so it carries the reviewed reason exactly when the manifest
+	// lists that consumer (relocationConsumerListed, the one predicate). The kernel
+	// refuses a flag with no declaration at boot, so on a branch whose manifest
+	// lists none the kind carries none. Its Start is untouched above: a person's
+	// start keeps the whole atom either way.
+	consumerListed := relocationConsumerListed()
+	require.Equal(t, consumerListed, puc.Perms.SystemStart != "",
+		"path-update carries SystemStart exactly when the relocation consumer is listed (listed=%v)", consumerListed)
+
+	// The set of kinds that carry SystemStart is derived from the declarations,
+	// not listed: every kind with a Schedule (the scheduler's tick starts it) and
+	// the kind a ConsumeIntoTask consumer of books declares. A flag on any other
+	// kind is an unused grant, and a scheduled kind without it could never be
+	// started by the scheduler once its Start asks for core:system.manage.
+	consumerTargets := map[tasks.Kind]bool{}
+	if consumerListed {
+		consumerTargets["books.deluge.path-update"] = true
+	}
+	for k, d := range reg {
+		c := tasks.CommonOf(d)
+		scheduled := c.Schedule != nil
+		require.Equal(t, scheduled || consumerTargets[k], c.Perms.SystemStart != "",
+			"%s: SystemStart is set exactly for a scheduled kind or a declared consumer's target (scheduled=%v target=%v)", k, scheduled, consumerTargets[k])
+	}
+
 	hook := NewSchedules(ScheduleDeps{})
 	for _, k := range ScheduledKinds() {
 		d, ok := reg[k]

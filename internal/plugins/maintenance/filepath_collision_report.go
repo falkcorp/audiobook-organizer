@@ -17,6 +17,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -173,7 +174,7 @@ func (p *Plugin) filePathCollisionReportKind(deps t6g4Deps, sched *tasks.Schedul
 			"before trusting Book.FilePath as an identity signal (e.g. as a repoint source). " +
 			"REPORT-ONLY: takes no action and modifies nothing.",
 		Effects:        tasks.ReadOnly(),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          taskkit.Scheduled(tasks.Permissions{Start: t6g4StartRequirement()}, sched),
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.filepath-collision-report"),

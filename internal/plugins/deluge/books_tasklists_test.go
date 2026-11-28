@@ -143,11 +143,13 @@ func TestBooksKindDeps_ClientNilnessIsPreserved(t *testing.T) {
 }
 
 // Every field of KindDeps the builder owns is set (Client is optional by
-// design; the link seams default in production).
+// design; the link seams default in production; RelocationConsumer is false
+// until the owner lists the consumer, and TestBooksTaskLists_PathUpdateSystemStart
+// FollowsTheConsumer pins that it is copied).
 func TestBooksKindDeps_EveryFieldIsSet(t *testing.T) {
 	d := booksDeps(t, booksInputs(&booksSpy{}))
 	v := reflect.ValueOf(d)
-	optional := map[string]bool{"Client": true, "LinkHash": true, "LinkNow": true, "LinkRoundFiles": true}
+	optional := map[string]bool{"Client": true, "LinkHash": true, "LinkNow": true, "LinkRoundFiles": true, "RelocationConsumer": true}
 	for i := 0; i < v.NumField(); i++ {
 		name := v.Type().Field(i).Name
 		if !optional[name] {
@@ -192,5 +194,30 @@ func TestBooksTaskLists_MissingInputsAreNamedInSortedOrder(t *testing.T) {
 	for range 20 {
 		_, err := BooksTaskLists(BooksTaskInputs{})
 		require.ErrorContains(t, err, "missing input(s): [Cache Config Schedules Source]")
+	}
+}
+
+// TestBooksTaskLists_PathUpdateSystemStartFollowsTheConsumer: path-update carries
+// Permissions.SystemStart exactly when the owner declares the relocation consumer
+// (BooksTaskInputs.RelocationConsumer), and no other Deluge kind carries it unless
+// it is scheduled. The flag with no consumer is an unused grant the kernel
+// refuses at boot, so it must not be set unconditionally.
+func TestBooksTaskLists_PathUpdateSystemStartFollowsTheConsumer(t *testing.T) {
+	for _, declared := range []bool{false, true} {
+		in := booksInputs(&booksSpy{})
+		in.RelocationConsumer = declared
+		defs, err := BooksTaskLists(in)
+		require.NoError(t, err)
+		seen := false
+		for _, d := range defs {
+			got := tasks.CommonOf(d).Perms.SystemStart != ""
+			if d.Kind() == pathUpdateKind {
+				seen = true
+				require.Equal(t, declared, got, "path-update SystemStart with RelocationConsumer=%v", declared)
+				continue
+			}
+			require.False(t, got, "%s is unscheduled here and carries SystemStart with no declaration", d.Kind())
+		}
+		require.True(t, seen, "path-update is not in the Deluge list")
 	}
 }

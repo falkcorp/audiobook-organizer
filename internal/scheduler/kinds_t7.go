@@ -20,6 +20,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -386,9 +387,7 @@ func t7Common(head opsregistry.OperationDef, sched func(tasks.Kind) *tasks.Sched
 	if !head.NoWarmupWait {
 		c.Ready = []tasks.ReadySignal{t7SignalMemDB}
 	}
-	if sched != nil {
-		c.Schedule = sched(kind)
-	}
+	taskkit.SetSchedule(&c, kind, sched)
 	return c
 }
 

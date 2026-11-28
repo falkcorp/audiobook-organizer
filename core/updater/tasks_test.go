@@ -349,3 +349,32 @@ func TestTasks_ApplyAndRollbackAreOwnerRouteOnly(t *testing.T) {
 		t.Errorf("check is owner-route-only (%q); its route has no gate beyond its permission", got)
 	}
 }
+
+// TestScheduledKindsCarrySystemStart: the schedule and the SystemStart flag agree
+// on every updater definition. The scheduler starts core.updater.check as core's
+// system actor, which cannot hold core:system.manage (AuthRequired), so it
+// carries the reviewed reason; apply and rollback have no Schedule and carry
+// none. Start is untouched: a person's or an API key's start of check still needs
+// core:system.manage.
+func TestScheduledKindsCarrySystemStart(t *testing.T) {
+	cases := []struct {
+		def       tasks.Definition
+		scheduled bool
+	}{
+		{CheckTask(nil), true},
+		{ApplyTask(nil), false},
+		{RollbackTask(nil), false},
+	}
+	for _, tc := range cases {
+		c := tasks.CommonOf(tc.def)
+		if got := c.Schedule != nil; got != tc.scheduled {
+			t.Errorf("%s: Schedule declared = %v, want %v", tc.def.Kind(), got, tc.scheduled)
+		}
+		if got := c.Perms.SystemStart != ""; got != tc.scheduled {
+			t.Errorf("%s: SystemStart set = %v, want %v (the flag and the schedule agree)", tc.def.Kind(), got, tc.scheduled)
+		}
+	}
+	if got := tasks.CommonOf(CheckTask(nil)).Perms.Start.Permissions(); len(got) != 1 || got[0] != "core:system.manage" {
+		t.Errorf("check Start = %v, want core:system.manage unchanged", got)
+	}
+}

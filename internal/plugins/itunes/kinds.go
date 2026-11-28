@@ -11,6 +11,8 @@ import (
 
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
+
+	"github.com/falkcorp/audiobook-organizer/internal/taskkit"
 )
 
 // Native books Task kind for the iTunes plugin (F5-05, 05-tasks 5T.8.2 group
@@ -100,9 +102,7 @@ func (p *Plugin) positionSyncNative(_ KindDeps, sched func(tasks.Kind) *tasks.Sc
 		ConcurrencyKey: tasks.Key(kindPrefix + "itunes.position-sync"),
 		Timeout:        30 * time.Minute,
 	}
-	if sched != nil {
-		c.Schedule = sched(positionSyncKind)
-	}
+	taskkit.SetSchedule(&c, positionSyncKind, sched)
 	return tasks.Task(positionSyncKind, tasks.TaskSpec[json.RawMessage, struct{}]{
 		Common: c,
 		Run: func(_ *tasks.RC, _ json.RawMessage) (struct{}, error) {

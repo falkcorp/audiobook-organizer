@@ -51,6 +51,18 @@ type RunRecord struct {
 	// field existed decodes with it false.
 	FinishOnly bool
 	Seq        RunSeqs // per-run numbering of events, intents and log lines (DATA-19)
+	// Origin records which executor-established origin staged the run, for audit
+	// and for a child's start rule: "schedule", "outbox" or "child:<parent run>"
+	// (empty: a person's, an API key's or a module client's start, or a run
+	// written before the field existed). The executor alone sets it, inside the
+	// start's own batch; no StartRequest field reaches it. It is stored with the
+	// rest of the record (codec.JSON, version 1) and decodes empty on an older row.
+	// An importer or ReplaceRows can write a row's Origin, so the executor never
+	// reads it as a grant by itself: a child of the run takes the SystemStart
+	// exemption only when the run's Origin is a system origin AND the run's actor
+	// is the system actor of the kind's own module AND the kind carries the flag
+	// (permitStart). Origin is a record and one input to that rule, not authority.
+	Origin string
 }
 
 // RunSeqs is a run's per-page sequence counters.
