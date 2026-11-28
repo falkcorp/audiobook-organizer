@@ -2062,6 +2062,27 @@ const buildSystemStatus = (
   ...(overrides || {}),
 });
 
+/**
+ * Auth state for a signed-in admin on a server with authentication ON. Core reports requires_auth
+ * and auth_enabled as one fact (auth_disabled), and the default mock state is "auth off": the SPA
+ * disables the SEC5-8 actions that core refuses an auth-disabled caller (add import path, restore a
+ * backup, ...), as the real server does. A spec that drives one of those actions signs in with this.
+ */
+export const signedInAdminAuth = (): MockAuthState => ({
+  auth_enabled: true,
+  has_users: true,
+  requires_auth: true,
+  bootstrap_ready: false,
+  currentUser: {
+    id: 'user-admin',
+    username: 'admin',
+    email: 'admin@example.test',
+    roles: ['admin'],
+    status: 'active',
+    created_at: '2026-11-27T00:00:00Z',
+  },
+});
+
 const buildAuthState = (
   overrides?: MockAuthState
 ): ResolvedMockAuthState => {
