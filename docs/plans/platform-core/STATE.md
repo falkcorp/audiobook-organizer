@@ -71,6 +71,26 @@ S2 adopted (no flip-upgrade test; M8 registered once as `books.rewrite`, kept la
 freeze is the repository variable `RELEASE_FREEZE`, toggled by the owner in OWNER-02, OWNER-03, before F3-08 and in
 OWNER-05; R2-02 removed). Recorded in spec 02 §2.6 and OWNER-01.
 
+## Status (2026-11-27)
+
+This section supersedes the "ON HOLD" line of the 2026-11-16 direction below: the owner lifted the flip hold on
+2026-11-19, and flips merge and deploy once they are at 0 blocker and 0 major with a passing prod-copy rehearsal.
+
+- **Merged: 117 of 135 plan tasks.** 18 remain: F4-08 (merged, not deployed), F5-18, F6-03, F7-09, F8-04a, F8-04b,
+  R2-01, OWNER-05, F9-02, F9-03, F9-04, F9-05, R3-01, R3-02, R3-03, R3-04, R3-05, OWNER-06.
+- **Flips live in production: 1 of 8** (F3-07, settings and secrets, since 2026-11-22).
+- **F4-08, the sign-in flip, is on main as #5061 but must not be deployed yet.** It was merged with 19 failing checks
+  and before a passing rehearsal. The prod-copy rehearsal of that commit fails, so it is not deployed. The fixes are
+  collected on one branch that must be green by itself and rehearsed at its exact commit before any deploy.
+  Pre-release `v0.232.1-rc.93` was cut from the unfixed commit and is marked "do not install".
+- **Order from here:** F4-08 fixes and deploy; F5-18; then F6-03 with F8-04a, and F7-09 with F8-04b, each pair
+  rehearsed together and deployed once; R2-01 and OWNER-05; then R3 and the web shell. R3 and F9 work is prepared on
+  branches now and merges after OWNER-05.
+- **Dates:** the 2026-11-30 target is not reachable for the whole plan. Projection: R2 on 2026-12-02 or 12-03, R3 on
+  2026-12-04 or 12-05.
+- **Guard:** an unrehearsed flip PR carries the `hold-rehearsal` label. A required check for it is filed as
+  FLIP-HOLD-CHECK.
+
 ## Direction (2026-11-16)
 
 The owner's answers of 2026-11-16 change how the rest of the plan is worked. They are recorded in plan §(n) item 13
