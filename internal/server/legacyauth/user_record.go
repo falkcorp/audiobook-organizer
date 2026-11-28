@@ -8,6 +8,7 @@ package legacyauth
 import (
 	"context"
 	"errors"
+	"iter"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	coreauth "github.com/falkcorp/mediacore/auth"
@@ -44,8 +45,16 @@ func LegacyUserFromCore(u *coreauth.User) database.User {
 }
 
 // ErrNoUserDirectory is UserDirectory's refusal when it was given no
-// Identities to read.
+// account lister to read.
 var ErrNoUserDirectory = errors.New("legacyauth: no core identities to list the accounts from")
+
+// AccountLister is the one read UserDirectory makes of core: its account
+// list. coreauth.Identities is one (the serve path, core's auth service), and
+// the offline open is another (app.Offline.Users), so a diagnostic run with
+// the service stopped lists the accounts through the same mapping.
+type AccountLister interface {
+	Users(ctx context.Context, f coreauth.UserFilter) iter.Seq2[*coreauth.User, error]
+}
 
 // UserDirectory is the store's account list under core identity
 // (database.PebbleStore.SetUserDirectory): every account core holds, every
@@ -53,7 +62,7 @@ var ErrNoUserDirectory = errors.New("legacyauth: no core identities to list the 
 // each in HEAD's words (LegacyUserFromCore). Any read error fails the whole
 // list: a list that silently left an account out would read, to a "keep the
 // book if anyone has state on it" gate, as that account having no state.
-func UserDirectory(ids coreauth.Identities) database.UserDirectory {
+func UserDirectory(ids AccountLister) database.UserDirectory {
 	return func() ([]database.User, error) {
 		if ids == nil {
 			return nil, ErrNoUserDirectory
