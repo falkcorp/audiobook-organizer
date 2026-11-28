@@ -6,9 +6,8 @@
 package books
 
 import (
-	"encoding/json"
+	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,15 +32,16 @@ func TestIdentityBoot_LegacyAccountRoutesRefuseOnAMigratedStore(t *testing.T) {
 	admin := loginAs(t, r, "lucius.fox", fpPass)
 	viewer := loginAs(t, r, "alfred.pennyworth", fpPass)
 
-	// refused pins a route's exact refusal and that the HANDLER answered (a
-	// JSON body): an unregistered route or method would answer gin's plain-text
-	// 404, which must not pass as a refusal.
-	refused := func(t *testing.T, method, path string, body any, ck *http.Cookie, want int) {
+	// refused pins a route's exact refusal and that the HANDLER answered: the
+	// body is the one only HEAD's handler writes (httputil.RespondWithNotFound,
+	// naming the row it looked up and could not find). An unregistered route or
+	// method, gin's or core's not-found, answers another body and fails here.
+	refused := func(t *testing.T, method, path string, body any, ck *http.Cookie, kind, id string) {
 		t.Helper()
 		rec := doJSON(t, h, method, path, body, ck)
-		require.Equal(t, want, rec.Code, "%s %s on a migrated store: %s", method, path, rec.Body.String())
-		require.True(t, json.Valid(rec.Body.Bytes()) && strings.HasPrefix(strings.TrimSpace(rec.Body.String()), "{"),
-			"%s %s: the registered handler answers, not an unregistered route: %q", method, path, rec.Body.String())
+		require.Equal(t, http.StatusNotFound, rec.Code, "%s %s on a migrated store: %s", method, path, rec.Body.String())
+		want := fmt.Sprintf(`{"error":%q,"code":"NOT_FOUND","status":404}`, kind+" not found: "+id)
+		require.JSONEq(t, want, rec.Body.String(), "%s %s: the registered handler's own refusal", method, path)
 	}
 
 	// HEAD's password sign-in finds no books user: the real password is refused
@@ -52,13 +52,13 @@ func TestIdentityBoot_LegacyAccountRoutesRefuseOnAMigratedStore(t *testing.T) {
 		require.Empty(t, c.Value, "HEAD's login sets no session: %v", c)
 	}
 
-	refused(t, http.MethodPatch, "/api/v1/auth/me", map[string]string{"email": "oracle@example.test"}, viewer, http.StatusNotFound)
-	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"current_password": fpPass, "new_password": "a-different-batarang-77"}, viewer, http.StatusNotFound)
-	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"user_id": seed.target, "new_password": "a-different-batarang-77"}, admin, http.StatusNotFound)
-	refused(t, http.MethodDelete, "/api/v1/auth/sessions/0123456789abcdef", nil, viewer, http.StatusNotFound)
-	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/reset-password", nil, admin, http.StatusNotFound)
-	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/deactivate", nil, admin, http.StatusNotFound)
-	refused(t, http.MethodPost, "/api/v1/users/"+seed.viewer+"/reactivate", nil, admin, http.StatusNotFound)
+	refused(t, http.MethodPatch, "/api/v1/auth/me", map[string]string{"email": "oracle@example.test"}, viewer, "user", seed.viewer)
+	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"current_password": fpPass, "new_password": "a-different-batarang-77"}, viewer, "user", seed.viewer)
+	refused(t, http.MethodPut, "/api/v1/auth/me/password", map[string]string{"user_id": seed.target, "new_password": "a-different-batarang-77"}, admin, "user", seed.target)
+	refused(t, http.MethodDelete, "/api/v1/auth/sessions/0123456789abcdef", nil, viewer, "session", "0123456789abcdef")
+	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/reset-password", nil, admin, "user", seed.target)
+	refused(t, http.MethodPost, "/api/v1/users/"+seed.target+"/deactivate", nil, admin, "user", seed.target)
+	refused(t, http.MethodPost, "/api/v1/users/"+seed.viewer+"/reactivate", nil, admin, "user", seed.viewer)
 
 	// The sessions list reads books' drained session rows: it lists nothing, so it
 	// discloses no session of anyone.
