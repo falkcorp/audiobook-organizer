@@ -6,6 +6,7 @@
 package executor
 
 import (
+	"runtime"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -229,6 +230,129 @@ func TestExecutor_TheAttemptsEndCancelsItsPendingFlush(t *testing.T) {
 		if !closed || pending {
 			t.Fatalf("after the attempt ended: closed=%v, flush still pending=%v", closed, pending)
 		}
+		h.drained()
+	})
+}
+
+// TestExecutor_AClosedAttemptArmsNoFlush: once the attempt has ended, an
+// in-window Note from a goroutine the body left behind does not arm a trailing
+// flush. The terminal row refuses the write anyway, so this reads the attempt
+// itself: it pins armFlushLocked's pClosed check, which is what keeps a stray
+// flush off a row that is NOT terminal (a yielded run is queued again under
+// the same attempt id and fence, and would take the write).
+func TestExecutor_AClosedAttemptArmsNoFlush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate, late, ended := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		p := &tape{}
+		h := tapeHarness(t, p, []tasks.Definition{
+			taskDef("gotham.closed", func(rc *tasks.RC, _ noParams) (string, error) {
+				rc.Progress().Set(1, tasks.Known(2)) // due: takes the window
+				go func() {
+					<-late
+					rc.Progress().Note("Mr. Freeze thaws") // in-window, after the end
+					close(ended)
+				}()
+				<-gate
+				return "done", nil
+			}, readOnly("gotham.closed")),
+		}, realIntervalConfig, false)
+		id := h.start("gotham.closed", tasks.StartRequest{})
+		synctest.Wait()
+		h.e.mu.Lock()
+		a := h.e.running[id]
+		h.e.mu.Unlock()
+		if a == nil {
+			t.Fatal("the run is not live")
+		}
+		close(gate)
+		h.waitState(id, tasks.StateSucceeded)
+		synctest.Wait()
+		close(late)
+		<-ended
+		a.pmu.Lock()
+		closed, pending := a.pClosed, a.pTimer != nil
+		a.pmu.Unlock()
+		if !closed {
+			t.Fatal("the attempt ended but is not closed to flushes")
+		}
+		if pending {
+			t.Fatal("an in-window Note after the attempt ended armed a trailing flush")
+		}
+		h.drained()
+	})
+}
+
+// TestExecutor_GoexitStillClosesTheFlush: a body that ends its goroutine with
+// runtime.Goexit never reaches finish, so run's deferred stopFlush is what
+// closes the attempt: the flush its in-window Note armed does not fire.
+func TestExecutor_GoexitStillClosesTheFlush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := &tape{}
+		h := tapeHarness(t, p, []tasks.Definition{
+			taskDef("gotham.goexit", func(rc *tasks.RC, _ noParams) (string, error) {
+				rc.Progress().Set(1, tasks.Known(2))
+				rc.Progress().Note("Joker exits stage left") // in-window: arms the flush
+				runtime.Goexit()
+				return "", nil
+			}, readOnly("gotham.goexit")),
+		}, realIntervalConfig, false)
+		id := h.start("gotham.goexit", tasks.StartRequest{})
+		synctest.Wait()
+		before := len(progressWrites(p, id))
+		advance(2 * time.Second) // past the window: a live timer would fire now
+		if after := progressWrites(p, id); len(after) != before {
+			t.Fatalf("a flush wrote after the attempt goroutine exited: %d writes before the window end, %d after (last %+v)", before, len(after), after[len(after)-1])
+		}
+	})
+}
+
+// TestExecutor_ALateFlushDefersToTheWindowsWrite: a trailing flush whose timer
+// fired while it waited on the writer, after a due update had already taken
+// the window, writes nothing then and re-arms for the window's end, so the
+// window keeps one throttled write. The interleaving is staged on the attempt
+// directly: pLast set to now is "a due update took the window".
+func TestExecutor_ALateFlushDefersToTheWindowsWrite(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		p := &tape{}
+		h := tapeHarness(t, p, []tasks.Definition{
+			taskDef("gotham.late", func(rc *tasks.RC, _ noParams) (string, error) {
+				rc.Progress().Set(1, tasks.Known(3))
+				<-gate
+				return "done", nil
+			}, readOnly("gotham.late")),
+		}, realIntervalConfig, false)
+		id := h.start("gotham.late", tasks.StartRequest{})
+		synctest.Wait()
+		h.e.mu.Lock()
+		a := h.e.running[id]
+		h.e.mu.Unlock()
+		if a == nil {
+			t.Fatal("the run is not live")
+		}
+		advance(1500 * time.Millisecond)
+		a.pmu.Lock()
+		a.pLast = h.e.now() // a due update took this window
+		a.pDirty = true     // and an in-window one dirtied it again
+		a.pmu.Unlock()
+		before := len(progressWrites(p, id))
+		a.flushTrailing()
+		synctest.Wait()
+		a.pmu.Lock()
+		rearmed := a.pTimer != nil
+		a.pmu.Unlock()
+		if got := len(progressWrites(p, id)); got != before {
+			t.Fatalf("a late flush wrote inside a window another write had taken: %d writes, want %d", got, before)
+		}
+		if !rearmed {
+			t.Fatal("the late flush did not re-arm for the window's end: the dirty state would be lost")
+		}
+		advance(time.Second)
+		if got := len(progressWrites(p, id)); got != before+1 {
+			t.Fatalf("at the window's end: %d writes, want %d (the deferred flush)", got, before+1)
+		}
+		close(gate)
+		h.waitState(id, tasks.StateSucceeded)
 		h.drained()
 	})
 }

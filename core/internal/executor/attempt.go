@@ -296,6 +296,8 @@ func (a *attempt) setProgress(done int64, total tasks.Total, current string, set
 // tickDueLocked reports whether a progress tick is due at now, and if so
 // restarts the throttle window. Progress, Note and the trailing flush share
 // the window, so together they write at most one tick per ProgressInterval.
+// A checkpoint flush (flushLedger) also writes the progress row with the
+// ledger, outside this window, as it did before the throttle shared it.
 // a.pmu must be held.
 func (a *attempt) tickDueLocked(now time.Time) bool {
 	if now.Sub(a.pLast) < a.e.config().ProgressInterval {
@@ -329,16 +331,27 @@ func (a *attempt) flushTrailing() {
 		a.pmu.Unlock()
 		return
 	}
-	a.pLast = a.e.now() // the flush is this window's write
+	// The timer may have waited on wmu while a due update took this window's
+	// write and restarted it: writing now would be a second write in the
+	// window. Re-arm for the rest of it instead; the dirty state goes out then.
+	now := a.e.now()
+	if now.Sub(a.pLast) < a.e.config().ProgressInterval {
+		a.armFlushLocked(now)
+		a.pmu.Unlock()
+		return
+	}
+	a.pLast = now // the flush is this window's write
 	a.pmu.Unlock()
 	a.tickLocked(a.e.bgCtx)
 }
 
 // stopFlush closes the attempt to further flushes and cancels a pending one.
-// finish calls it before anything else, and every attempt ends in finish (a
-// yield or a stop is a finish; a fenced attempt's finish returns right after
-// it), so one call site covers the attempt's whole end. run does not repeat it:
-// a second call there could never change what the first did.
+// finish calls it before anything else (a yield or a stop is a finish; a
+// fenced attempt's finish returns right after it), and run defers it as well:
+// a body that calls runtime.Goexit never reaches finish, and the deferred call
+// is what closes that attempt. An abandoned body that never returns reaches
+// neither; abandon fences the attempt, so armFlushLocked and tickLocked refuse
+// and a pending timer fires once and writes nothing. It is idempotent.
 func (a *attempt) stopFlush() {
 	a.pmu.Lock()
 	a.pClosed = true
@@ -351,8 +364,9 @@ func (a *attempt) stopFlush() {
 
 // Note sets the run's status line and appends a log line. A due tick publishes
 // the new line at once; one inside the throttle window is published by the
-// trailing flush at the end of the window (at most one progress write per
-// ProgressInterval across Progress and Note). A run that only calls Note
+// trailing flush at the end of the window (at most one throttled progress
+// write per ProgressInterval across Progress and Note; a checkpoint flush
+// writes the row with the ledger besides). A run that only calls Note
 // therefore writes a progress row up to once per interval, which it did not
 // before; a Set followed by a Note publishes the position first and the note
 // at the window's end, so a caller that sets both should use Update.
@@ -662,6 +676,7 @@ func (a *attempt) strike(ctx context.Context, kind, detail string) {
 // would leave an uncooperative body to do all its work after the cancel.
 func (a *attempt) run(withBody bool) {
 	defer a.e.attemptExited(a)
+	defer a.stopFlush() // also on runtime.Goexit, which skips finish (see stopFlush)
 	if !withBody {
 		a.finish(nil, context.Cause(a.ctx))
 		return
