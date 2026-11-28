@@ -38,10 +38,12 @@ import (
 const ProblemMergeTooLarge = "merge_too_large"
 
 // MergeBatchCap is the largest estimated batch, in bytes, an identity merge
-// stages. PROVISIONAL: it is a guess at what one core batch should carry, not a
-// measurement. A measurement of real per-user footprints is pending; until it
-// lands this is the one number to change.
-const MergeBatchCap int64 = 64 << 20
+// stages (apply, preview and undo all compare against it through
+// Service.mergeBatchCap). PROVISIONAL: the owner set it to 256 MiB on
+// 2026-11-27 after the F4-08 prod-copy rehearsal measured a real per-user
+// footprint of 127.65 MB, twice the earlier 64 MiB guess. It is still the one
+// number to change if a larger footprint is measured.
+const MergeBatchCap int64 = 256 << 20
 
 // ErrMergeTooLarge: the merge's estimated batch is over MergeBatchCap. Nothing
 // was staged or written.

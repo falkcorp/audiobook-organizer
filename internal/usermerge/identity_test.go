@@ -507,10 +507,10 @@ func TestMergeIdentityPlan_EveryCoreRefusalIsAPlanRefusalWithItsCode(t *testing.
 func TestMergeIdentity_TooLargeAnswersBeforeAnythingIsStagedOrWritten(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
-	if MergeBatchCap != 64<<20 {
+	if MergeBatchCap != 256<<20 {
 		t.Fatalf("MergeBatchCap = %d", MergeBatchCap)
 	}
-	f.svc.batchCap = 1 // lowered through the test hook: no 64 MiB fixture
+	f.svc.batchCap = 1 // lowered through the test hook: no 256 MiB fixture
 	before := f.snapshot()
 	if _, err := f.svc.BuildPlan(f.ctx(), f.planReq()); !errors.Is(err, ErrMergeTooLarge) {
 		t.Errorf("BuildPlan = %v, want ErrMergeTooLarge", err)
