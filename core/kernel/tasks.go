@@ -37,9 +37,6 @@ const phaseP4c = "P4c"
 // (crashmatrix.Rows: P7, "tasks").
 const labelDefUpsert = "tasks.def.upsert"
 
-// defSnapshotVersion is the version of a definition snapshot's value.
-const defSnapshotVersion = 1
-
 // taskOwnerSpec is the storage claim of core's task keyspace c/tasks/
 // (05-tasks 5T.6.1): the run, debounce, schedule and idempotency guard
 // families are Serialized. Like auditOwnerSpec it is appended to
@@ -196,18 +193,12 @@ func (k *Kernel) buildTasks(ctx context.Context) error {
 }
 
 // snapshotOf is a definition's stored snapshot, def/<kind> (5T.3.11): what a
-// disabled module's runs can be described by without its code. The kind is
+// disabled module's runs can be described by without its code, and the View
+// rule the executor applies to runs of a kind that has no live definition
+// (executor.EncodeDefSnapshot says how it is encoded and read). The kind is
 // the key only, never in the value, because Importer.RenameKind moves the
 // snapshot as bytes (taskstore.DefKey).
-func snapshotOf(d tasks.Definition) ([]byte, error) {
-	c := tasks.CommonOf(d)
-	return json.Marshal(struct {
-		V     int    `json:"v"`
-		Shape string `json:"shape"`
-		Title string `json:"title"`
-		Help  string `json:"help,omitempty"`
-	}{V: defSnapshotVersion, Shape: d.Shape().String(), Title: c.Title, Help: c.Help})
-}
+func snapshotOf(d tasks.Definition) ([]byte, error) { return executor.EncodeDefSnapshot(d) }
 
 // upsertDefinitions writes def/<kind> for each registered definition, one
 // batch per registration, only when the stored snapshot differs: a boot over

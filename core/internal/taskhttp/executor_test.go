@@ -73,9 +73,16 @@ func nightlyDef() tasks.Definition {
 }
 
 // realRig is a Server over a real executor.
-func realRig(t *testing.T) *rig {
+func realRig(t *testing.T) *rig { return realRigSeeded(t, nil) }
+
+// realRigSeeded is realRig over stores seed has filled before the executor
+// opens them (runs imported, definition snapshots written).
+func realRigSeeded(t *testing.T, seed func(t *testing.T, ks storage.Keyspace)) *rig {
 	t.Helper()
 	stores, ks := bootStores(t)
+	if seed != nil {
+		seed(t, ks)
+	}
 	specs := rbac.CoreScopes()
 	for _, p := range []rbac.Permission{scopeRun, scopeSee, scopeApprove} {
 		specs = append(specs, rbac.PermissionSpec{Name: p, Title: string(p), Description: "Fixture scope " + string(p)})

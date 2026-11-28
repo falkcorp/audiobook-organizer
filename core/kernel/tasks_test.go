@@ -8,6 +8,7 @@ package kernel
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -284,6 +285,56 @@ func TestKernelTasks_SnapshotWrittenOncePerChange(t *testing.T) {
 	}
 }
 
+// TestKernelTasks_SnapshotRecordsTheViewRule (F5-18 R3): the snapshot is
+// version 2 and records the definition's View rule as the executor reads it
+// for runs of a kind this build no longer registers, an unrestricted kind
+// with an explicit "default" record rather than an absent field, and a
+// version-1 snapshot (an older build's, which predates View) is rewritten on
+// the next boot.
+func TestKernelTasks_SnapshotRecordsTheViewRule(t *testing.T) {
+	restricted := patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) { s.Perms.View = rbac.Need("gotham:signal") })
+	for _, c := range []struct {
+		name     string
+		def      tasks.Definition
+		wantView string
+	}{
+		{"unrestricted", patrol(), `{"kind":"default"}`},
+		{"restricted", restricted, `{"kind":"all_of","perms":["gotham:signal"]}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, c.def))
+			k := mustNew(t, cfg)
+			key := taskstore.DefKey(string(patrolKind))
+			raw, found, err := k.tasks.st.Get(t.Context(), key)
+			if err != nil || !found {
+				t.Fatalf("snapshot: %q, %v, %v", raw, found, err)
+			}
+			var v struct {
+				V    int             `json:"v"`
+				View json.RawMessage `json:"view"`
+			}
+			if err := json.Unmarshal(raw, &v); err != nil {
+				t.Fatalf("snapshot %s: %v", raw, err)
+			}
+			if v.V != 2 || string(v.View) != c.wantView {
+				t.Fatalf("snapshot %s: v=%d view=%s, want v=2 view=%s", raw, v.V, v.View, c.wantView)
+			}
+			// The v1 row an older build wrote has no View: the next boot
+			// replaces it (the snapshot is compared by bytes).
+			old := []byte(`{"v":1,"shape":"task","title":"Patrol Gotham"}`)
+			if err := k.commitTaskBatch(t.Context(), func(b *storage.Batch) error { return k.tasks.st.Set(b, key, old) }); err != nil {
+				t.Fatal(err)
+			}
+			if err := k.upsertDefinitions(t.Context(), k.tasks.defs); err != nil {
+				t.Fatal(err)
+			}
+			if got, _, _ := k.tasks.st.Get(t.Context(), key); !bytes.Equal(got, raw) {
+				t.Fatalf("snapshot after the upgrade boot = %s, want %s", got, raw)
+			}
+		})
+	}
+}
+
 // TestKernelTasks_StoppedBeforeWorkers (06 §6.5.2; 05-tasks 5T.4 step 4): at
 // shutdown the scheduler stops and the executor drains before the module
 // workers are cancelled, the reverse of the start order (the tasks start
@@ -370,6 +421,18 @@ func TestKernelTasks_StartsWhenRunsAreHeld(t *testing.T) {
 		t.Errorf("%d definitions registered by a disabled module", len(k.tasks.defs))
 	}
 	if err := k.StartTasks(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The disabled module's kind has a snapshot from the boot that had it
+	// enabled; a kind with none is hidden from every caller (F5-18 R3), and
+	// the seed writes runs only.
+	snap, err := snapshotOf(patrol())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.commitTaskBatch(t.Context(), func(b *storage.Batch) error {
+		return k.tasks.st.Set(b, taskstore.DefKey(string(patrolKind)), snap)
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var got []tasks.RunView

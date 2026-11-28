@@ -33,24 +33,6 @@ func (e *executor) caller(ctx context.Context) (tasks.Actor, rbac.Checker) {
 	return a, who
 }
 
-// mayView applies a definition's View requirement (omitted: core:tasks.view).
-// A module's own client (ModuleClient) outside a request reads every run of
-// its own module's kinds: the module owns them, and its system actor holds
-// core:tasks.view for no kind. A kind of another module goes through the
-// checker like any caller's.
-func (e *executor) mayView(who rbac.Checker, kind tasks.Kind) bool {
-	if who == nil {
-		return true
-	}
-	if mc, ok := who.(moduleChecker); ok && kind.Module() == mc.module {
-		return true
-	}
-	if d := e.defs[kind]; d != nil && !d.c.Perms.View.IsZero() {
-		return who.Satisfies(d.c.Perms.View)
-	}
-	return who.Has(scopeTasksView)
-}
-
 // Get implements tasks.Client.Get; a run the caller may not view is not
 // found (closed).
 func (e *executor) Get(ctx context.Context, id tasks.RunID) (tasks.RunView, error) {
@@ -59,25 +41,27 @@ func (e *executor) Get(ctx context.Context, id tasks.RunID) (tasks.RunView, erro
 		return tasks.RunView{}, err
 	}
 	_, who := e.caller(ctx)
-	if !e.mayView(who, rec.Kind) {
+	v := e.viewer(ctx, who)
+	if !v.may(rec.Kind) {
 		return tasks.RunView{}, fmt.Errorf("%w: %s", tasks.ErrRunNotFound, id)
 	}
-	return e.viewAs(who, rec), nil
+	return e.viewAs(v, rec), nil
 }
 
 // Runs implements tasks.Client.Runs, omitting runs the caller may not view.
 func (e *executor) Runs(ctx context.Context, q tasks.RunQuery) iter.Seq2[tasks.RunView, error] {
 	_, who := e.caller(ctx)
+	v := e.viewer(ctx, who) // one rule per kind for the whole iteration
 	return func(yield func(tasks.RunView, error) bool) {
 		for rec, err := range e.runs.List(ctx, q) {
 			if err != nil {
 				e.ins.undecodable("run")
 				continue // hidden (5T.5)
 			}
-			if !e.mayView(who, rec.Kind) {
+			if !v.may(rec.Kind) {
 				continue
 			}
-			if !yield(e.viewAs(who, rec), nil) {
+			if !yield(e.viewAs(v, rec), nil) {
 				return
 			}
 		}
