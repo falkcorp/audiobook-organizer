@@ -169,7 +169,7 @@ func newArms(t *testing.T) *arms {
 	})
 
 	orgSvc := organizer.NewService(store)
-	orgSvc.SetRelocatingCopyCreator(store) // what audiobooks.NewOrganizeService does
+	orgSvc.SetRelocatingCopyCreator(store) // what the audiobooks KeyOrganize ServiceDef does
 	h := handlers.NewOrganizeHandler(store, organizer.NewPreviewService(store), orgSvc, nil, false)
 	return &arms{store: store, out: ob.Writer("books"), outKS: outKS, h: h, moves: newMovesStub(t), root: root}
 }

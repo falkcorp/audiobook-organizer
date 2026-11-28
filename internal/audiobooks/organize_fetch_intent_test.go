@@ -19,7 +19,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/serviceregistry"
 )
 
-// The fetch-first callback NewOrganizeService wires into the organizer is an
+// The fetch-first callback newOrganizeService wires into the organizer is an
 // unattended caller of metafetch's FetchMetadataForBook: a retired book (in the
 // trash, or merged into another) is refused before any provider is searched,
 // and comes back as the organizer's own skip sentinel (its package cannot
@@ -40,7 +40,7 @@ func TestNewOrganizeService_FetchFirstCallbackIsUnattended(t *testing.T) {
 			created, err := store.CreateBook(book)
 			require.NoError(t, err)
 
-			svc := NewOrganizeService(store)
+			svc := newOrganizeService(store, store)
 			resp, err := svc.FetchMetadataForBook(context.Background(), created.ID)
 			require.ErrorIs(t, err, organizer.ErrFetchSkippedRetired)
 			require.ErrorIs(t, err, metafetch.ErrBookRetired)
@@ -49,7 +49,7 @@ func TestNewOrganizeService_FetchFirstCallbackIsUnattended(t *testing.T) {
 	}
 }
 
-// relocationSpy records the copy NewOrganizeService's service creates through
+// relocationSpy records the copy the organize service creates through
 // the relocating writer, over a real store.
 type relocationSpy struct {
 	*database.PebbleStore
@@ -61,10 +61,10 @@ func (s *relocationSpy) CreateBookWithRelocation(b *database.Book, originalID st
 	return s.PebbleStore.CreateBookWithRelocation(b, originalID)
 }
 
-// NewOrganizeService hands its store to the organizer as the writer of the
+// newOrganizeService hands its creator to the organizer as the writer of the
 // single-book organize's copy (F6-03): without that wiring the copy is refused
 // (ErrRelocatingCopyCreatorNotWired) and no torrent follow-up could be staged.
-func TestNewOrganizeService_WiresTheRelocatingCopyCreator(t *testing.T) {
+func TestNewOrganizeServiceWiresTheRelocatingCopyCreator(t *testing.T) {
 	ps, err := database.NewPebbleStore(t.TempDir())
 	require.NoError(t, err)
 	ps.WaitForWarmup()
@@ -74,7 +74,7 @@ func TestNewOrganizeService_WiresTheRelocatingCopyCreator(t *testing.T) {
 	src, err := ps.CreateBook(&database.Book{Title: "Year One", FilePath: filepath.Join(t.TempDir(), "year-one.m4b"), LibraryState: &imported})
 	require.NoError(t, err)
 
-	svc := NewOrganizeService(spy)
+	svc := newOrganizeService(spy, spy)
 	copyBook, err := svc.CreateOrganizedVersionFollowTorrents(src, &organizer.Landing{Path: filepath.Join(t.TempDir(), "organized-year-one.m4b")}, "", logger.New("test"))
 	require.NoError(t, err)
 	require.NotNil(t, copyBook)

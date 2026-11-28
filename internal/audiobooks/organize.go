@@ -47,8 +47,7 @@ type organizeServiceBase interface {
 
 // organizeServiceStore is organizeServiceBase plus organizer.RelocatingCopyCreator,
 // which is on it and not on database.Store (which may not grow:
-// TestStoreFlattenedWidth). A direct caller of NewOrganizeService must hand in a
-// store that has the method, and the compiler checks it. The production store
+// TestStoreFlattenedWidth). The production store
 // is books' *database.PebbleStore (database.NewBooksStore returns the concrete
 // type, so the assertion below is the proof); a container built over a store
 // without it (a test's wrapper or mock) wires no creator, and the single-book
@@ -96,14 +95,12 @@ func RequireRelocationOutbox(store any) error {
 	return nil
 }
 
-// NewOrganizeService creates a new organizer.Service and wires up
-// server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
-func NewOrganizeService(db organizeServiceStore) *OrganizeService {
-	return newOrganizeService(db, db)
-}
-
-// newOrganizeService is NewOrganizeService over a store whose creator may be
-// nil (the container's case: see organizeServiceBase).
+// newOrganizeService creates a new organizer.Service and wires up
+// server-specific callbacks (isProtectedPath, iTunes discovery, etc.). It is
+// called only by the KeyOrganize ServiceDef in register.go. creator is the writer
+// of the single-book organize copy's row; it may be nil (a store without
+// CreateBookWithRelocation, see organizeServiceBase), in which case that copy
+// refuses with organizer.ErrRelocatingCopyCreatorNotWired.
 func newOrganizeService(db organizeServiceBase, creator organizer.RelocatingCopyCreator) *OrganizeService {
 	svc := organizer.NewService(db)
 	if creator != nil {

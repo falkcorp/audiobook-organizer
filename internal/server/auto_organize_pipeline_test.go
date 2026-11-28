@@ -13,7 +13,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -135,7 +134,7 @@ func TestAutoOrganizeHandsWorkToTheRealPipeline(t *testing.T) {
 	// temp dir lands on, which would make this test's behaviour machine-specific.
 	config.SetForTest(func(c *config.Config) { c.OrganizationStrategy = "copy" })
 
-	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: newOrganizeServiceForTest(t, store)}
 	srv.autoOrganizeScannedBooks(context.Background(),
 		[]scanner.Book{{FilePath: bookPath}}, logger.New("test"))
 

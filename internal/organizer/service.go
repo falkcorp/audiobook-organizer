@@ -66,8 +66,8 @@ type OrganizerBookWriter interface {
 // the new row's own batch (database.PebbleStore.CreateBookWithRelocation). It is
 // its own interface, not part of Store, because Store is what every organize
 // caller hands in and database.Store may not grow (TestStoreFlattenedWidth):
-// only the single-book organize request needs it, and audiobooks.NewOrganizeService
-// requires it of its store and hands it to Service.SetRelocatingCopyCreator.
+// only the single-book organize request needs it, and the audiobooks KeyOrganize
+// ServiceDef hands it to Service.SetRelocatingCopyCreator when its store has it.
 type RelocatingCopyCreator interface {
 	CreateBookWithRelocation(book *database.Book, originalID string) (*database.Book, error)
 	// RelocationOutboxInstalled reports whether CreateBookWithRelocation stages
@@ -276,8 +276,8 @@ func NewService(db Store) *Service {
 }
 
 // SetRelocatingCopyCreator wires the writer CreateOrganizedVersionFollowTorrents
-// uses for the copy's row. audiobooks.NewOrganizeService sets it, from a store
-// type that requires the method, so the production wiring cannot omit it.
+// uses for the copy's row. the audiobooks KeyOrganize ServiceDef sets it, from the
+// store when the store has the method (the production *database.PebbleStore does).
 func (orgSvc *Service) SetRelocatingCopyCreator(c RelocatingCopyCreator) { orgSvc.relocatingCopies = c }
 
 // ErrRelocatingCopyCreatorNotWired is what CreateOrganizedVersionFollowTorrents

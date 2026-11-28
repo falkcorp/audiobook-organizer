@@ -13,7 +13,6 @@ import (
 	"sync"
 	"testing"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -21,7 +20,7 @@ import (
 
 func TestOrganizeService_FilterBooksNeedingOrganization(t *testing.T) {
 	mockDB := &database.MockStore{}
-	os := audiobookspkg.NewOrganizeService(mockDB)
+	os := newOrganizeServiceForTest(t, mockDB)
 
 	books := []database.Book{
 		{ID: "1", Title: "Book 1", FilePath: "/import/book1.m4b"},
@@ -47,7 +46,7 @@ func TestOrganizeService_PerformOrganize_NoBooksToOrganize(t *testing.T) {
 			return []database.BookCore{}, nil
 		},
 	}
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 
 	ctx := context.Background()
 	testLog := logger.New("test")
@@ -158,7 +157,7 @@ func TestOrganizeService_PerformOrganize_WithBooks(t *testing.T) {
 		},
 	}
 
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	ctx := context.Background()
 	testLog := logger.New("test")
 	req := &OrganizeRequest{}

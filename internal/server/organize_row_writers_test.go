@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -158,7 +157,7 @@ func TestAutoOrganizeScannedBooksWritesBookFileRows(t *testing.T) {
 	store := rowWritersStore(t)
 	f := newRowWritersFixture(t, store)
 
-	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: newOrganizeServiceForTest(t, store)}
 	srv.autoOrganizeScannedBooks(context.Background(),
 		[]scanner.Book{{FilePath: f.srcDir}}, logger.New("test"))
 
@@ -176,7 +175,7 @@ func TestOrganizeAfterWriteBackWritesBookFileRows(t *testing.T) {
 	store := rowWritersStore(t)
 	f := newRowWritersFixture(t, store)
 
-	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store), metadataFetchService: lockedMetafetch(store)}
+	srv := &Server{store: store, organizeService: newOrganizeServiceForTest(t, store), metadataFetchService: lockedMetafetch(store)}
 	srv.organizeService.VersionGroupLocker = writeBackPathLocks.lock
 	events := traceWriteBackLocks(t)
 	moved, err := srv.organizeAfterWriteBack(f.book.ID, "op-batch-save", logger.New("test"))
@@ -337,7 +336,7 @@ func TestOrganizeRollsBackCreatedCopiesWhenRowWriteFails(t *testing.T) {
 	f := newRowWritersFixture(t, base)
 
 	failing := &failingBatchStore{PebbleStore: base}
-	srv := &Server{store: base, organizeService: audiobookspkg.NewOrganizeService(failing), metadataFetchService: lockedMetafetch(base)}
+	srv := &Server{store: base, organizeService: newOrganizeServiceForTest(t, failing), metadataFetchService: lockedMetafetch(base)}
 
 	moved, err := srv.organizeAfterWriteBack(f.book.ID, "op-rollback", logger.New("test"))
 	require.Error(t, err, "a failed row write must fail the organize, not be swallowed")
@@ -448,7 +447,7 @@ func TestFolderAutoScanOpDelegatesToTheOrganizeHook(t *testing.T) {
 	config.SetForTest(func(c *config.Config) { c.SupportedExtensions = []string{".m4b"} })
 
 	reg := opsregistry.New(store, slog.New(slog.DiscardHandler), 1, nil)
-	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: newOrganizeServiceForTest(t, store)}
 	require.NoError(t, srv.RegisterFolderAutoScanOp(reg))
 	def, ok := reg.Def("library.folder-auto-scan")
 	require.True(t, ok)
@@ -536,7 +535,7 @@ func TestPerformScanOrganizeRecordsChangesUnderRunContextOpID(t *testing.T) {
 		c.SupportedExtensions = []string{".m4b"}
 	})
 
-	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: newOrganizeServiceForTest(t, store)}
 	svc := scanner.NewScanService(store)
 	svc.AutoOrganizeFn = srv.autoOrganizeScannedBooks
 
@@ -559,7 +558,7 @@ func TestAutoOrganizeScannedBooksRecordsChangesUnderScanOp(t *testing.T) {
 	f := newRowWritersFixture(t, store)
 
 	const scanOp = "op-library-scan-under-test"
-	srv := &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}
+	srv := &Server{store: store, organizeService: newOrganizeServiceForTest(t, store)}
 	srv.autoOrganizeScannedBooks(maintenanceplugin.WithOpID(context.Background(), scanOp),
 		[]scanner.Book{{FilePath: f.srcDir}}, logger.New("test"))
 

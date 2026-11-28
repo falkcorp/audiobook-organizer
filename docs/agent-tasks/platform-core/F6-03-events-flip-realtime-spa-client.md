@@ -80,8 +80,9 @@ tell the coordinator.
    - declare `BookRelocatedTopicSpec()` through F4-08's `Registrar.Topics`
    - add the outbox owner to the storage owners
    - list `books.deluge.book-relocated` in `Manifest.OutboxConsumers` and register it through `Registrar.OutboxHandler`
-   - delete `NotifyDelugeAfterOrganize` (one caller, `internal/server/handlers/organize.go:428`, plus the re-export at
-     `internal/server/deluge_integration.go:43-48`) and the `handleBookRelocated` placeholder
+   - delete the `handleBookRelocated` placeholder; `NotifyDelugeAfterOrganize` (one caller,
+     `internal/server/handlers/organize.go:428`, plus the re-export at `internal/server/deluge_integration.go:43-48`)
+     STAYS as the switch-off fallback and goes with the F5-18 tasks-switch commit
    - write `TestRelocationFollowUpDurable`, pinning `Live()` (m5)
    - queued minors: m1 (`ResumeFromZero` plus a retryable `MoveStorage`), m2 (unused `from_path`/`to_path` in the payload),
      m4 (O(N^2) `stageFold` decodes). m2 and m4 are slice G1, after #4798 merges; m1 and m5 belong to the flip.
@@ -243,8 +244,8 @@ F4-08's module SDK has `Registrar.Topics`, `Registrar.Subscribe` and `Deps.Event
    `BookRelocatedTopicSpec()` through `Registrar.Topics`, the outbox storage owner, the consumer
    `books.deluge.book-relocated` in `Manifest.OutboxConsumers` registered through `Registrar.OutboxHandler`
    (`outbox.ConsumeIntoTask` with `Live()` onto `books.deluge.path-update` or its 05-download successor), m1
-   (`ResumeFromZero`, retryable `MoveStorage`) and m5 (the `Live()` pin); it deletes `NotifyDelugeAfterOrganize` and the
-   `handleBookRelocated` placeholder, so the relocation follow-up becomes durable for the first time. The version-swap and
+   (`ResumeFromZero`, retryable `MoveStorage`) and m5 (the `Live()` pin); it deletes the `handleBookRelocated` placeholder
+   (`NotifyDelugeAfterOrganize` stays as the switch-off fallback and goes with the F5-18 tasks-switch commit), so the relocation follow-up becomes durable for the first time. The version-swap and
    import moves stay in-process (Deluge-moves ruling).
 4. **Delete** hub A, `/api/events` and its gin route and compression exclusion, and `internal/realtime` (04 key: F6 move
    `internal/realtime` → `mediacore/realtime`); delete `internal/itunes/service`'s `Realtime *realtime.EventHub` field (it is never set, blocker 5) with the layering entries it justified.
@@ -271,7 +272,7 @@ routes F6-04 built), §5E.13 (table and "Order" item (3)); 05-logging §5 (live 
 |---|---|
 | wiring (this PR owns them in W36) | `main.go`, `internal/books/module.go`, `core/kernel/boot.go`, `core/kernel/kernel.go`, `core/module/manifest.go`, `core/module/registrar.go`, `core/module/deps.go` |
 | generated | `core/openapi/core.json`, `core/web/packages/api-client/src/generated/` |
-| relocation follow-up (the 14-producer table is deleted: #4798 stages in the store's single funnel, blocker 2) | `internal/books/store/book_relocated_outbox.go`, `internal/books/store/pebble_store.go` (the `SetRelocationOutbox` call site; m2 and m4 are slice G1), `internal/plugins/deluge/relocation_consumer.go`, `internal/plugins/deluge/kinds.go`, `internal/plugins/deluge/path_update.go` (the `handleBookRelocated` placeholder), `internal/server/handlers/organize.go` and `internal/server/deluge_integration.go` (delete the in-process organize move and `NotifyDelugeAfterOrganize`). No producer file is edited |
+| relocation follow-up (the 14-producer table is deleted: #4798 stages in the store's single funnel, blocker 2) | `internal/books/store/book_relocated_outbox.go`, `internal/books/store/pebble_store.go` (the `SetRelocationOutbox` call site; m2 and m4 are slice G1), `internal/plugins/deluge/relocation_consumer.go`, `internal/plugins/deluge/kinds.go`, `internal/plugins/deluge/path_update.go` (the `handleBookRelocated` placeholder), `internal/server/handlers/organize.go` and `internal/server/deluge_integration.go` (the in-process organize move and `NotifyDelugeAfterOrganize` stay as the switch-off fallback until the F5-18 tasks-switch commit). No producer file is edited |
 | hub A and its callers | `internal/realtime/` (deleted), `internal/server/` (including `server_lifecycle.go:2711-2712`, `legacy_manifest.go:294`, `handlers/system/{interfaces,handler}.go`, `wire_handlers.go`, the `system.EventStreamer` mock and `.mockery.yaml:240`, and `toplevel_auth_chain.go` plus its test if F8-04a has landed), `internal/itunes/service/` (delete the unset `Realtime` field) |
 | SPA | `web/src/services/coreEvents/**` (E1 preconditions, E2 adapters), `web/src/services/eventSourceManager.ts` and its test (deleted), `web/src/App.tsx`, `web/src/components/layout/TopBar.tsx`, `web/src/pages/Library.tsx`, `web/src/hooks/useBackupHandlers.ts` (the shutdown contract), `web/src/services/api.ts` (delete `openOperationsSSE`), `web/src/stores/useOperationsStore.ts` and its test (onto `coreEvents`), `web/src/test/appApiMock.ts`, `web/src/App.health.test.tsx`, the Activity page and the system-log view, `web/src/` |
 | e2e | `web/tests/e2e/utils/mockCoreEvents.ts` (new, E3), `web/tests/e2e/utils/test-helpers.ts`, `web/tests/e2e/utils/setup-modes.ts`, `web/tests/e2e/error-handling.spec.ts` and the other 12 e2e files that reference `EventSource` (54 references in 15 files at `f18ad2686`) |
@@ -333,7 +334,8 @@ grep -rnE 'OutboxConsumers +\[\]|\) OutboxHandler\(' core/module/ | wc -l       
    mapping of blocker 4 (delete `scan.auto_triggered`, `system.status` and the dead `operation.*` listeners).
 4. The durable relocation wiring only (#4798 staged it): `SetRelocationOutbox` before the store takes writes, the outbox
    storage owner, the consumer in `Manifest.OutboxConsumers` through `Registrar.OutboxHandler` with `Live()`, m1 and m5;
-   delete `NotifyDelugeAfterOrganize`, its re-export and `handleBookRelocated`. Keep the version-swap and import moves
+   delete `handleBookRelocated` (`NotifyDelugeAfterOrganize` and its re-export stay as the switch-off fallback until the
+   F5-18 tasks-switch commit). Keep the version-swap and import moves
    (Deluge-moves ruling).
 5. Delete hub A, `internal/realtime`, `/api/events` (the route at `server_lifecycle.go:2820`, the `:2712` exclusion, the
    manifest row `legacy_manifest.go:294`, `EventStreamer` with its mock and `.mockery.yaml` entry, `HandleEvents`, and

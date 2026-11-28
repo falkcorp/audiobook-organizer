@@ -16,7 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metafetch"
@@ -72,7 +71,7 @@ func newOrgWiringFixture(t *testing.T) *orgWiringFixture {
 	}
 	srv := &Server{
 		store:                store,
-		organizeService:      audiobookspkg.NewOrganizeService(store),
+		organizeService:      newOrganizeServiceForTest(t, store),
 		metadataFetchService: metafetch.NewService(store),
 	}
 	return &orgWiringFixture{srv: srv, store: store, root: root, itunes: itunes, author: author.ID}

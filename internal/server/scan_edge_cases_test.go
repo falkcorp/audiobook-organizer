@@ -13,7 +13,6 @@ import (
 	"strings"
 	"testing"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -156,7 +155,7 @@ func TestScanService_OrphanBooks_FileDeleted(t *testing.T) {
 	config.SetForTest(func(c *config.Config) { c.AutoOrganize = false })
 	pebble, ok := env.Store.(*database.PebbleStore)
 	require.True(t, ok, "the test env store is %T, want the production *PebbleStore", env.Store)
-	svc := audiobookspkg.NewOrganizeService(pebble)
+	svc := newOrganizeServiceForTest(t, pebble)
 	err = svc.PerformOrganize(context.Background(), &OrganizeRequest{}, logger.New("test"))
 	require.NoError(t, err)
 

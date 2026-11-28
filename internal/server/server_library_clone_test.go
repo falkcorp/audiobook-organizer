@@ -16,7 +16,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
@@ -74,7 +73,7 @@ func cloneFixture(t *testing.T, nFiles int) (*Server, *database.PebbleStore, *da
 	}
 	files, err := store.GetBookFiles(book.ID)
 	require.NoError(t, err)
-	return &Server{store: store, organizeService: audiobookspkg.NewOrganizeService(store)}, store, book, files, root
+	return &Server{store: store, organizeService: newOrganizeServiceForTest(t, store)}, store, book, files, root
 }
 
 func TestCloneBookIntoLibrary(t *testing.T) {
