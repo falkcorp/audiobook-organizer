@@ -362,7 +362,11 @@ func midM3States(t *testing.T, f crashmatrix.Fixture, before midM3Records) []mid
 	require.NotEqual(t, storage.DataMigrationDone, rec.State)
 	now := midM3RecordsOf(t, st.kv)
 	require.Empty(t, now.users, "the failed boot left u: rows: the state is not between later families")
-	require.Empty(t, now.keys, "the failed boot left apikey: rows: the state is not between later families")
+	// Whether every apikey: row went with its import is the cells' question
+	// (each record in one place), not this builder's: only that the step got
+	// past the keys and stopped before oauthid: and sess: is checked here.
+	_, nativeKeys, _, _ := coreRecordsOf(st.kv)
+	require.Equal(t, len(before.keys), nativeKeys, "the failed boot did not import every key: the state is not between later families")
 	require.Len(t, now.idents, len(before.idents), "the failed boot drained the oauthid: family")
 	require.Equal(t, before.sessions, now.sessions, "the failed boot drained the sess: family")
 	t.Logf("the step failure at the first oauthid: row left the failed-between-families state: M3 %s", rec.State)
