@@ -83,7 +83,17 @@ func (s *Server) wireAuthRoutes(
 		// Email is an identity: oauth.ResolveUser links an SSO login to the
 		// user whose email it verifies.
 		s.credRoute(authProtected, http.MethodPatch, "/me", authH.UpdateMe)
-		authProtected.POST("/logout", authH.Logout)
+		if s.identity != nil {
+			// Under core identity the session is core's: HEAD's Logout revoked a
+			// books session from the family M3 drained, cleared the cookie and
+			// answered 200 "logged out" while core's session stayed valid. The
+			// route answers 410 instead, changes no state and clears no cookie,
+			// and names core's logout, which ends the session (the SPA already
+			// calls it). Never a "logged out" that left the session live.
+			authProtected.POST("/logout", gone("POST /api/core/v1/auth/logout"))
+		} else {
+			authProtected.POST("/logout", authH.Logout)
+		}
 		// The sessions list returns revoke handles, never session IDs (the ID is the bearer token; 05-authn §11.1 item 1); DELETE /sessions/:id takes a handle.
 		authProtected.GET("/sessions", authH.ListMySessions)
 		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)

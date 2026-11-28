@@ -248,6 +248,38 @@ func (h *Registered) probeOnce(p *Principal, method, path string, body any, ri *
 	return res, nil
 }
 
+// coreLogoutRoute is core's logout, which ends the caller's own session.
+const coreLogoutRoute = "/api/core/v1/auth/logout"
+
+// coreLogout is the session killer after HEAD's logout route was probed as p, a
+// session principal. HEAD's route answers 410 under core identity and changes no
+// state, so p's session must still answer its canary as before; core's logout
+// then ends it, and the canary must answer 401 (a principal core's logout
+// refuses is left as it is). Either way it fails is recorded in
+// pass.logoutLeftSession. The caller signs p in again.
+func (h *Registered) coreLogout(p *Principal, canaryBefore int, pass *oraclePass) {
+	h.t.Helper()
+	if got := h.canaryFor(p); got != canaryBefore {
+		pass.logoutLeftSession = append(pass.logoutLeftSession,
+			fmt.Sprintf("%s: HEAD's logout route changed the session: canary %d before, %d after", p.Name, canaryBefore, got))
+	}
+	res, err := h.probeOnce(p, http.MethodPost, coreLogoutRoute, nil, nil)
+	if err == nil && (res.Status == http.StatusUnauthorized || res.Status == http.StatusForbidden) {
+		// Core's logout refuses this principal (the fp-worker sessions hold
+		// only the worker grants), so nothing ends its session here; the
+		// caller signs it in again either way.
+		return
+	}
+	if err != nil || res.Status >= 300 {
+		pass.logoutLeftSession = append(pass.logoutLeftSession, fmt.Sprintf("%s: core's logout answered %d (%v)", p.Name, res.Status, err))
+		return
+	}
+	if got := h.canaryFor(p); got != http.StatusUnauthorized {
+		pass.logoutLeftSession = append(pass.logoutLeftSession,
+			fmt.Sprintf("%s: core's logout left the session live: canary answers %d", p.Name, got))
+	}
+}
+
 // ---- one principal's pass ----
 
 // oracleCell is one answered probe.
@@ -311,6 +343,10 @@ type oraclePass struct {
 	canary map[string]int
 	// canaryDrift lists principals whose canary changed over their pass.
 	canaryDrift []string
+	// logoutLeftSession lists session principals whose session HEAD's logout
+	// route ended (it answers 410 under core identity and must change nothing),
+	// or whose session core's logout, sent right after it, did not end.
+	logoutLeftSession []string
 }
 
 // frontedBy is whether stage 13 stands in front of ri: an anonymous request to it is
@@ -395,6 +431,7 @@ func (h *Registered) runOracle(r0 r0Recording) *oraclePass {
 			}
 			pass.cells[key][p.Name] = cellOf(res.Verdict(), res)
 			if key == "POST "+logoutPath && p.cookie != nil {
+				h.coreLogout(p, before, pass)
 				p.peer = h.nextPeer()
 				p.cookie = h.login(p, passwordFor(p.User))
 			}
@@ -1070,6 +1107,9 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 		}
 		if len(pass.canaryDrift) > 0 {
 			t.Errorf("a credential changed over its pass, so its D cells prove nothing: %v", pass.canaryDrift)
+		}
+		if len(pass.logoutLeftSession) > 0 {
+			t.Errorf("logout: %v", pass.logoutLeftSession)
 		}
 		for name, got := range pass.canary {
 			rec := pass.recorded[name]
