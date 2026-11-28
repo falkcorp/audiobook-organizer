@@ -50,7 +50,7 @@ func patrol(mutate ...func(*tasks.TaskSpec[struct{}, struct{}])) tasks.Definitio
 	s := tasks.TaskSpec[struct{}, struct{}]{
 		Title:   "Patrol Gotham",
 		Effects: tasks.ReadOnly(),
-		Perms:   tasks.Permissions{Start: rbac.Need("gotham:patrol")},
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:patrol"), Manage: rbac.Need("gotham:manage")},
 		Resume:  tasks.ResumeFromZero,
 		Run:     func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 	}
@@ -404,7 +404,7 @@ func TestKernelTasks_LedgerMissingKindRefused(t *testing.T) {
 // kind two manifests list (ProblemDuplicateTaskKind).
 func TestKernelTasks_ForeignKindRefused(t *testing.T) {
 	joker := tasks.Task("joker.laugh", tasks.TaskSpec[struct{}, struct{}]{
-		Title: "Laugh", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol")}, Resume: tasks.ResumeFromZero,
+		Title: "Laugh", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol"), Manage: rbac.Need("gotham:manage")}, Resume: tasks.ResumeFromZero,
 		Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 	})
 	t.Run("registered", func(t *testing.T) {
@@ -455,6 +455,18 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 		{"Start under another module's scope", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
 			s.Perms.Start = rbac.Need("joker:laugh")
 		}), module.ProblemPermissionNamespace},
+		{"Manage under another module's scope", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.Need("joker:manage")
+		}), module.ProblemPermissionNamespace},
+		{"Manage beside another module's scope", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.AllOf("gotham:manage", "joker:manage")
+		}), module.ProblemPermissionNamespace},
+		{"no Manage", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.Requirement{}
+		}), module.ProblemInvalidRegistration},
+		{"Manage nobody lacks", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
+			s.Perms.Manage = rbac.AnyAuthenticated
+		}), module.ProblemInvalidRegistration},
 		{"an undeclared resource kind read", patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) {
 			s.Effects = tasks.ReadOnly(tasks.Res("gotham", "signal"))
 		}), module.ProblemInvalidRegistration},
@@ -484,6 +496,12 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 		c, _ := taskConfig(t, m)
 		mustNew(t, c)
 	})
+	t.Run("Manage under its own module's or core's scopes accepted", func(t *testing.T) {
+		for _, manage := range []rbac.Requirement{rbac.Need("gotham:manage"), rbac.Need("core:tasks.manage"), rbac.AllOf("gotham:manage", "core:tasks.manage")} {
+			c, _ := taskConfig(t, gotham([]tasks.Kind{patrolKind}, patrol(func(s *tasks.TaskSpec[struct{}, struct{}]) { s.Perms.Manage = manage })))
+			mustNew(t, c)
+		}
+	})
 	t.Run("kinds with no store open", func(t *testing.T) {
 		cfg := testConfig(t, gotham([]tasks.Kind{patrolKind}, patrol()))
 		if _, err := newK(t, cfg); err == nil || !strings.Contains(err.Error(), "no store is open") {
@@ -497,7 +515,7 @@ func TestKernelTasks_RegistrationRules(t *testing.T) {
 // no parallelism is refused at P7, wrapping tasks.ErrNoParallelism.
 func TestBatch_ZeroParallelismRefusedAtRegister(t *testing.T) {
 	batch := tasks.Batch(patrolKind, tasks.BatchSpec[struct{}, string, struct{}]{
-		Title: "Patrol the rooftops", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol")}, Resume: tasks.ResumeFromZero,
+		Title: "Patrol the rooftops", Effects: tasks.ReadOnly(), Perms: tasks.Permissions{Start: rbac.Need("gotham:patrol"), Manage: rbac.Need("gotham:manage")}, Resume: tasks.ResumeFromZero,
 		Source: func(*tasks.RC, struct{}) (tasks.Source[string], error) {
 			return tasks.Source[string]{}, errors.New("not reached")
 		},

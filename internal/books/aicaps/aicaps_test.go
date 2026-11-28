@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/aidispatch"
 	"github.com/falkcorp/audiobook-organizer/internal/books/aicaps"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/audit"
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
@@ -234,7 +235,7 @@ func TestJobTypes_ApplyKindIsTheRoutersOwn(t *testing.T) {
 			t.Errorf("%s: capability %s is not in the catalog", typ, row.Capability)
 			continue
 		}
-		def := ai.BatchApplyTask(c, noop, tasks.Writes(tasks.Res("books", "authors")))
+		def := ai.BatchApplyTask(c, noop, tasks.Writes(tasks.Res("books", "authors")), taskmanage.Requirement())
 		if string(def.Kind()) != row.ApplyKind {
 			t.Errorf("%s: apply kind %q, the router mints %q", typ, row.ApplyKind, def.Kind())
 		}

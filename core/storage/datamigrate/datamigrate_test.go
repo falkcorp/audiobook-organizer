@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/datamigrate"
 	"github.com/falkcorp/mediacore/tasks"
@@ -105,7 +106,7 @@ func TestModeAndStates(t *testing.T) {
 func TestDerivedBuildTask(t *testing.T) {
 	reads := []entity.Ref{{Module: "gotham", Kind: "case"}}
 	d := datamigrate.DerivedBuildTask("gotham", "hnsw", datamigrate.DerivedBuildSpec{
-		Title: "Rebuild the Batcomputer's case index", Reads: reads, PermStart: "gotham:index.rebuild",
+		Title: "Rebuild the Batcomputer's case index", Reads: reads, PermStart: "gotham:index.rebuild", Manage: rbac.Need("gotham:index.admin"),
 		Run: func(*tasks.RC) error { return nil },
 	})
 	if p := tasks.Problems(d); len(p) != 0 {
@@ -118,7 +119,14 @@ func TestDerivedBuildTask(t *testing.T) {
 	if c.Resume != tasks.ResumeFromZero || c.Timeout != 24*time.Hour || !c.Effects.IsReadOnly() || c.Perms.Start.IsZero() {
 		t.Fatalf("common = %+v", c)
 	}
-	d = datamigrate.DerivedBuildTask("gotham", "hnsw", datamigrate.DerivedBuildSpec{Title: "t", PermStart: "gotham:x", Timeout: time.Hour,
+	if got := c.Perms.Manage.String(); got != "gotham:index.admin" {
+		t.Fatalf("Perms.Manage = %s, want the spec's Manage, never a default", got)
+	}
+	noManage := datamigrate.DerivedBuildTask("gotham", "hnsw", datamigrate.DerivedBuildSpec{Title: "t", PermStart: "gotham:x", Run: func(*tasks.RC) error { return nil }})
+	if p := tasks.Problems(noManage); len(p) != 1 || !strings.Contains(p[0].Error(), "gotham.derived.hnsw.build") || !strings.Contains(p[0].Error(), "Perms.Manage") {
+		t.Fatalf("a spec with no Manage: problems = %v, want exactly one naming the kind and Perms.Manage", p)
+	}
+	d = datamigrate.DerivedBuildTask("gotham", "hnsw", datamigrate.DerivedBuildSpec{Title: "t", PermStart: "gotham:x", Manage: rbac.Need("gotham:x.admin"), Timeout: time.Hour,
 		Run: func(*tasks.RC) error { return nil }})
 	if tasks.CommonOf(d).Timeout != time.Hour {
 		t.Fatal("an explicit Timeout was replaced")

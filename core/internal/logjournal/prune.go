@@ -93,7 +93,7 @@ func PruneDefinition(store log.JournalStore, settings func() Settings, now func(
 		Title:    "Prune the system log journal",
 		Help:     "Deletes system log records older than the journal's retention in days. A retention of 0 keeps every record.",
 		Effects:  tasks.Writes(tasks.Res("core", "log")),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeFromZero,
 		Priority: tasks.PriorityLow,
 		Timeout:  PruneTimeout,

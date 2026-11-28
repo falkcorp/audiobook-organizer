@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/health"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // Definition is opaque; build it with Task, Batch or Fixer.
@@ -301,6 +302,22 @@ func Fixer[P, C any](kind Kind, s FixerSpec[P, C]) Definition {
 	return d
 }
 
+// manageProblem is what is wrong with a Permissions.Manage, or "" for a scoped
+// requirement. Only AllOf and AnyOf (rbac.Need included) name scopes; the zero
+// value, Public, AnyAuthenticated, Delegated and the legacy atoms would either
+// be refused by every checker or, for the first two, satisfied by anyone, which
+// would turn the AND with Cancel or Approve into that operation's only gate.
+func manageProblem(r rbac.Requirement) string {
+	switch r.Kind() {
+	case rbac.KindAllOf, rbac.KindAnyOf:
+		return ""
+	case rbac.KindInvalid:
+		return "Perms.Manage is required (the scopes that may cancel, discard, decide or approve this kind's runs, ANDed with the operation's own)"
+	default:
+		return "Perms.Manage must name scopes (rbac.AllOf, rbac.AnyOf or rbac.Need), not " + r.String()
+	}
+}
+
 func (s *spec) parallelismProblems() {
 	if err := s.par.Validate(); err != nil {
 		s.problems = append(s.problems, fmt.Errorf("tasks: %s: Parallelism %s: %w", s.kind, s.par, err))
@@ -325,6 +342,9 @@ func newSpec(kind Kind, shape Shape, c Common) *spec {
 	}
 	if c.Perms.Start.IsZero() {
 		d.problem("Perms.Start is required")
+	}
+	if p := manageProblem(c.Perms.Manage); p != "" {
+		d.problem("%s", p)
 	}
 	if !c.Resume.valid() {
 		d.problem("Resume is required (ResumeContinue, ResumeFromZero, ResumeDrop or ResumeAsk), got %d", c.Resume)

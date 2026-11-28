@@ -139,7 +139,7 @@ func CheckTask(u *Updater) tasks.Definition {
 	}
 	return tasks.Task(KindCheck, tasks.TaskSpec[Empty, StatusView]{
 		Title: "Check for updates", Help: "Asks the release source for the newest release and records whether it is newer than the running build. It never installs anything.",
-		Effects: tasks.Writes(resourceUpdater()), Perms: tasks.Permissions{Start: rbac.Need("core:system.manage")}, Resume: tasks.ResumeDrop,
+		Effects: tasks.Writes(resourceUpdater()), Perms: tasks.Permissions{Start: rbac.Need("core:system.manage"), Manage: rbac.Need("core:tasks.manage")}, Resume: tasks.ResumeDrop,
 		Priority: tasks.PrioritySystem, Timeout: 5 * time.Minute,
 		Schedule: sched.Live(), Dedupe: tasks.DedupePolicy{AnyParams: true},
 		Run: run,
@@ -164,7 +164,7 @@ func ApplyTask(u *Updater) tasks.Definition {
 	}
 	return tasks.Task(KindApply, tasks.TaskSpec[ApplyParams, Empty]{
 		Title: "Install an update", Help: "Downloads a release, checks it runs, replaces the running binary keeping the old one, and restarts. Only an admin starts it.",
-		Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin"), OwnerRouteOnly: ownerRouteReason}, Resume: tasks.ResumeDrop,
+		Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin"), Manage: rbac.Need("core:tasks.manage"), OwnerRouteOnly: ownerRouteReason}, Resume: tasks.ResumeDrop,
 		ConcurrencyKey: taskKey, Cancel: tasks.Cooperative(30 * time.Second), Priority: tasks.PrioritySystem, Timeout: 30 * time.Minute,
 		Run: run,
 	})
@@ -181,7 +181,7 @@ func RollbackTask(u *Updater) tasks.Definition {
 	}
 	return tasks.Task(KindRollback, tasks.TaskSpec[Empty, Empty]{
 		Title: "Roll back an update", Help: "Puts the previous binary back after checking that it can still read the data, then restarts.",
-		Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin"), OwnerRouteOnly: ownerRouteReason}, Resume: tasks.ResumeDrop,
+		Effects: tasks.Writes(resourceBinary()), Perms: tasks.Permissions{Start: rbac.Need("core:admin"), Manage: rbac.Need("core:tasks.manage"), OwnerRouteOnly: ownerRouteReason}, Resume: tasks.ResumeDrop,
 		ConcurrencyKey: taskKey, Cancel: tasks.Cooperative(30 * time.Second), Priority: tasks.PrioritySystem, Timeout: 10 * time.Minute,
 		Run: run,
 	})

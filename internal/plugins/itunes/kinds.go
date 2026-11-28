@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -92,7 +93,7 @@ func (p *Plugin) positionSyncNative(_ KindDeps, sched func(tasks.Kind) *tasks.Sc
 	c := tasks.Common{
 		Title:          positionSyncTitle,
 		Help:           positionSyncHelp,
-		Perms:          tasks.Permissions{Start: kindStartRequirement()},
+		Perms:          tasks.Permissions{Start: kindStartRequirement(), Manage: taskmanage.Requirement()},
 		Ready:          []tasks.ReadySignal{signalMemDB},
 		Effects:        tasks.ReadOnly(),
 		Resume:         tasks.ResumeFromZero, // HEAD ResumeRequeue (rule R5)

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -66,7 +67,7 @@ var integrationsManageScopes = []rbac.Permission{
 // Perms when the requirement is not settings.manage.
 func kindCommon(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	c := tasks.Common{
-		Perms: tasks.Permissions{Start: rbac.AllOf(settingsManageScopes...)},
+		Perms: tasks.Permissions{Start: rbac.AllOf(settingsManageScopes...), Manage: taskmanage.Requirement()},
 		Ready: []tasks.ReadySignal{signalMemDB}, // HEAD's NoWarmupWait is false for all four
 	}
 	if sched != nil {
@@ -402,7 +403,7 @@ func (p *Plugin) linkBackfillNative(d KindDeps, sched func(tasks.Kind) *tasks.Sc
 	// HEAD has no fence and already performs these writes; this declares them.
 	c.Effects = tasks.Writes(res(ops.ResBookFiles, ops.ResBooks, ops.ResIndexes, ops.ResMetadataCache)...)
 	// R6: HEAD's Permissions [auth.PermIntegrationsManage] through the atom table.
-	c.Perms = tasks.Permissions{Start: rbac.AllOf(integrationsManageScopes...)}
+	c.Perms = tasks.Permissions{Start: rbac.AllOf(integrationsManageScopes...), Manage: taskmanage.Requirement()}
 	// HEAD Restart: FromZero. The body keeps no checkpoint; a linked row is
 	// skipped as already_linked, so a re-run is idempotent.
 	c.Resume = tasks.ResumeFromZero

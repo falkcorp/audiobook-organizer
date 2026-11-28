@@ -69,7 +69,7 @@ func PruneTask(root *os.Root, retention func() time.Duration, now func() time.Ti
 		Title:    "Prune diagnostics bundles",
 		Help:     "Deletes diagnostics bundles, and partial bundles a stopped export left behind, once they are older than the diagnostics retention (a partial is kept at least as long as an export may run).",
 		Effects:  tasks.Writes(tasks.Res("core", "diagnostics")),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeFromZero,
 		Priority: tasks.PriorityLow,
 		Timeout:  PruneTimeout,

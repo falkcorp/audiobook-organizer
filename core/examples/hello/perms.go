@@ -7,7 +7,7 @@ package hello
 
 import "github.com/falkcorp/mediacore/rbac"
 
-// PermAdmin is hello's maintenance scope, the Perms.Start of hello.count (06
+// PermAdmin is hello's maintenance scope, the Perms.Start and Perms.Manage of hello.count (06
 // §6.12.1, §6.12.3). It is declared apart from hello.go because the whole
 // permission set (PermRead, PermSettings and Manifest.Permissions) lands with
 // the row that lands module.Manifest.Permissions; that row moves this

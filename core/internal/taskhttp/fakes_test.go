@@ -37,7 +37,12 @@ const (
 	scopeRun     = rbac.Permission("batcave:run")
 	scopeSee     = rbac.Permission("batcave:view")
 	scopeApprove = rbac.Permission("arkham:approve")
-	scopeUsers   = rbac.Permission("core:users.view")
+	// scopeBatcaveManage and scopeArkhamManage are the fixture kinds' Perms.Manage
+	// (owner ruling 2026-11-22): held next to the operation's own scope to cancel,
+	// discard, decide or approve a run.
+	scopeBatcaveManage = rbac.Permission("batcave:manage")
+	scopeArkhamManage  = rbac.Permission("arkham:manage")
+	scopeUsers         = rbac.Permission("core:users.view")
 
 	sweepKey = "core.batcave.schedules.sweep"
 )
@@ -461,15 +466,15 @@ func defs() []tasks.Definition {
 	return []tasks.Definition{
 		tasks.Task(kindSweep, tasks.TaskSpec[struct{}, struct{}]{
 			Title: "Sweep the Batcave", Help: "Dusts every trophy case.", Effects: tasks.Writes(tasks.Res("batcave", "cases")),
-			Perms: tasks.Permissions{Start: rbac.Need(scopeRun)}, Resume: tasks.ResumeContinue,
+			Perms: tasks.Permissions{Start: rbac.Need(scopeRun), Manage: rbac.Need(scopeBatcaveManage)}, Resume: tasks.ResumeContinue,
 			Schedule: tasks.ScheduleFromConfig(sweepKey).Live(), Run: noop}),
 		tasks.Task(kindScan, tasks.TaskSpec[struct{}, struct{}]{
 			Title: "Scan Gotham", Effects: tasks.ReadOnly(tasks.Res("batcave", "signal")),
-			Perms:  tasks.Permissions{Start: rbac.Need(scopeRun), View: rbac.Need(scopeSee)},
+			Perms:  tasks.Permissions{Start: rbac.Need(scopeRun), Manage: rbac.Need(scopeBatcaveManage), View: rbac.Need(scopeSee)},
 			Resume: tasks.ResumeContinue, Run: noop}),
 		tasks.Task(kindRelocate, tasks.TaskSpec[struct{}, struct{}]{
 			Title: "Relocate inmates", Effects: tasks.Writes(tasks.Res("arkham", "cells")),
-			Perms:    tasks.Permissions{Start: rbac.Need(scopeRun), Approve: rbac.Need(scopeApprove)},
+			Perms:    tasks.Permissions{Start: rbac.Need(scopeRun), Manage: rbac.Need(scopeArkhamManage), Approve: rbac.Need(scopeApprove)},
 			Approval: &tasks.Approval{PlanRequired: true}, Resume: tasks.ResumeAsk, Run: noop}),
 	}
 }

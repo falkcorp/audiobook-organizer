@@ -298,15 +298,15 @@ func TestIdentityMount_VerifiedMethodIsInstalled(t *testing.T) {
 		r.Tasks(tasks.Task(reviewKind, tasks.TaskSpec[struct{}, struct{}]{
 			Title:   "Review the signal log",
 			Effects: tasks.ReadOnly(),
-			Perms:   tasks.Permissions{Start: rbac.Need("alfred:signal"), Approve: rbac.Need("alfred:approve")},
+			Perms:   tasks.Permissions{Start: rbac.Need("alfred:signal"), Approve: rbac.Need("alfred:approve"), Manage: rbac.Need("alfred:manage")},
 			Resume:  tasks.ResumeFromZero,
 			Run:     func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 		}))
 		return r.Err()
 	}, seedStep(1, "cave")).with(func(m *module.Manifest) {
 		m.TaskLedger = []tasks.Kind{reviewKind}
-		m.Permissions = []rbac.PermissionSpec{{Name: "alfred:signal", Title: "Signal"}, {Name: "alfred:approve", Title: "Approve"}}
-		m.Roles = []rbac.RoleSeed{{Name: "reviewer", Title: "Reviewer", Permissions: []rbac.Permission{"alfred:signal", "alfred:approve"}}}
+		m.Permissions = []rbac.PermissionSpec{{Name: "alfred:signal", Title: "Signal"}, {Name: "alfred:approve", Title: "Approve"}, {Name: "alfred:manage", Title: "Manage"}}
+		m.Roles = []rbac.RoleSeed{{Name: "reviewer", Title: "Reviewer", Permissions: []rbac.Permission{"alfred:signal", "alfred:approve", "alfred:manage"}}}
 		m.ImportedRoleIDs = []rbac.RoleName{"reviewer"}
 	})}
 	k := h.mustBoot(c)

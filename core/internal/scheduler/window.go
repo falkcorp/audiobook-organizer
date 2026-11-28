@@ -293,7 +293,7 @@ func WindowDefinition(name string, run func(rc *tasks.RC) error) tasks.Definitio
 		Title:    "Maintenance window " + name,
 		Help:     "Runs the kinds scheduled into this window, in their order, once per opening.",
 		Effects:  tasks.ReadOnly(),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PrioritySystem,
 		Timeout:  12 * time.Hour,

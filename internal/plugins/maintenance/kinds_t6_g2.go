@@ -17,6 +17,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/walkresume"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -88,7 +89,7 @@ func (m t6g2Meta) common(sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 		Title:           m.Title,
 		Help:            m.Help,
 		Effects:         m.Effects,
-		Perms:           tasks.Permissions{Start: t6g2StartRequirement()},
+		Perms:           tasks.Permissions{Start: t6g2StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:          m.Resume,
 		Priority:        m.Priority,
 		Timeout:         m.Timeout,

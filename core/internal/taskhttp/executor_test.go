@@ -69,7 +69,7 @@ func bootStores(t *testing.T) (tasks.Stores, storage.Keyspace) {
 func nightlyDef() tasks.Definition {
 	return tasks.Task(kindNightly, tasks.TaskSpec[struct{}, struct{}]{
 		Title: "Nightly Batcave window", Effects: tasks.ReadOnly(tasks.Res("core", "window")),
-		Perms: tasks.Permissions{Start: rbac.Need(scopeManage)}, Priority: tasks.PrioritySystem, Resume: tasks.ResumeContinue, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }})
+		Perms: tasks.Permissions{Start: rbac.Need(scopeManage), Manage: rbac.Need(scopeManage)}, Priority: tasks.PrioritySystem, Resume: tasks.ResumeContinue, Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }})
 }
 
 // realRig is a Server over a real executor.
@@ -183,5 +183,56 @@ func TestExecutor_ViewGateThroughHTTP(t *testing.T) {
 	}
 	if got := get(scopeSee); got != http.StatusOK {
 		t.Fatalf("a viewer = %d, want 200", got)
+	}
+}
+
+// TestExecutor_DiscardThroughHTTP: the executor's Manage-AND-Cancel rule reaches
+// the route (owner ruling 2026-11-22). The run's own actor, the start scope
+// alone, core:tasks.manage and the kind's manage scope alone are each answered
+// 403 tasks.actor_not_permitted and leave the run; holding the kind's Start
+// (its Cancel, omitted) and its Manage deletes it.
+func TestExecutor_DiscardThroughHTTP(t *testing.T) {
+	g := realRig(t)
+	rec := g.do(req{method: "POST", path: "/definitions/" + string(kindSweep) + "/runs", as: session("lucius", scopeRun)})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("start = %d\n%s", rec.Code, rec.Body.String())
+	}
+	var v runDTO
+	decode(t, rec, &v)
+	run := "/runs/" + v.ID
+	getAs := func(as ...rbac.Permission) *httptest.ResponseRecorder {
+		return g.do(req{method: "GET", path: run, as: session("lucius", append(as, scopeView)...)})
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		var cur runDTO
+		decodeAsync(t, getAs(), &cur)
+		if string(cur.State) == string(tasks.StateSucceeded) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s is %s, want succeeded", v.ID, cur.State)
+		}
+	}
+	discard := func(as ...rbac.Permission) *httptest.ResponseRecorder {
+		return g.do(req{method: "DELETE", path: run, as: session("lucius", as...)})
+	}
+	for name, as := range map[string][]rbac.Permission{
+		"the start scope alone (the run's own actor)": {scopeRun},
+		"core:tasks.manage alone":                     {scopeManage},
+		"core:tasks.manage and the start scope":       {scopeRun, scopeManage},
+		"the kind's manage scope alone":               {scopeBatcaveManage},
+		"the manage scope and core:tasks.manage":      {scopeBatcaveManage, scopeManage},
+		"another kind's manage scope and the start":   {scopeRun, scopeArkhamManage},
+	} {
+		wantProblem(t, discard(as...), 403, "tasks.actor_not_permitted")
+		if got := getAs().Code; got != http.StatusOK {
+			t.Fatalf("%s: a refused discard left the run %d", name, got)
+		}
+	}
+	if rec := discard(scopeRun, scopeBatcaveManage); rec.Code != http.StatusNoContent {
+		t.Fatalf("start and manage = %d, want 204\n%s", rec.Code, rec.Body.String())
+	}
+	if got := getAs().Code; got != http.StatusNotFound {
+		t.Fatalf("the discarded run = %d, want 404", got)
 	}
 }

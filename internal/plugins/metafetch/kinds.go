@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -59,7 +60,7 @@ func kindStartRequirement() rbac.Requirement {
 // so Ready is the memdb signal (rule R5).
 func kindCommon(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	c := tasks.Common{
-		Perms: tasks.Permissions{Start: kindStartRequirement()},
+		Perms: tasks.Permissions{Start: kindStartRequirement(), Manage: taskmanage.Requirement()},
 		Ready: []tasks.ReadySignal{signalMemDB},
 	}
 	if sched != nil {

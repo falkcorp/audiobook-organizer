@@ -62,7 +62,7 @@ func ReleaseHoldsTask(b InterimHolds) tasks.Definition {
 		Title:    "Release provider holds",
 		Help:     "Lists every active provider hold and, in a Live run, releases each. Quota counters and breaker state are left as they are.",
 		Effects:  tasks.Writes(tasks.Res("core", "providerhttp")),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:integrations.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:integrations.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeDrop,
 		Timeout:  ReleaseHoldsTimeout,
 		Priority: tasks.PriorityHigh,

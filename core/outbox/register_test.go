@@ -212,7 +212,7 @@ func wayneKind(rs *responder) tasks.Definition {
 	return tasks.Task("wayne.vault.guard", tasks.TaskSpec[respondParams, string]{
 		Title:   "Guard the vault",
 		Effects: tasks.Writes(tasks.Res("wayne", "vault")),
-		Perms:   tasks.Permissions{Start: rbac.Need("wayne:run")},
+		Perms:   tasks.Permissions{Start: rbac.Need("wayne:run"), Manage: rbac.Need("wayne:manage")},
 		Resume:  tasks.ResumeFromZero,
 		Run:     func(_ *tasks.RC, p respondParams) (string, error) { rs.add(p); return "guarded", nil },
 	})

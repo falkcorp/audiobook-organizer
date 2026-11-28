@@ -13,6 +13,7 @@ import (
 
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/entity"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 )
 
@@ -21,8 +22,8 @@ import (
 // is blank unless the caller holds core:users.view; a start, a replay, a
 // cancel, an approve and a decide answer with the same view.
 func TestRunView_RedactedOnRESTRoutes(t *testing.T) {
-	plain := session("alfred", scopeView, scopeRun, scopeApprove, scopeManage)
-	named := session("alfred", scopeView, scopeRun, scopeApprove, scopeManage, scopeUsers)
+	plain := session("alfred", scopeView, scopeRun, scopeApprove, scopeManage, scopeBatcaveManage, scopeArkhamManage)
+	named := session("alfred", scopeView, scopeRun, scopeApprove, scopeManage, scopeBatcaveManage, scopeArkhamManage, scopeUsers)
 
 	seed := func(g *rig) {
 		g.client.add(view("run-1", kindSweep, tasks.StateRunning, "alfred"))
@@ -281,8 +282,31 @@ func TestDefinitions(t *testing.T) {
 	for _, d := range b.Definitions {
 		got[d.Kind] = d
 	}
-	if len(got) != 3 || !got["batcave.scan"].ReadOnly || !got["arkham.relocate"].CanApprove || got["batcave.scan"].CanStart {
+	// can_approve is Approve AND Manage (owner ruling 2026-11-22): the approve
+	// scope alone does not admit an approve, so it does not light the button.
+	if len(got) != 3 || !got["batcave.scan"].ReadOnly || got["arkham.relocate"].CanApprove || got["batcave.scan"].CanStart {
 		t.Fatalf("full listing = %v", got)
+	}
+	for name, perms := range map[string][]rbac.Permission{
+		"manage alone":                 {scopeView, scopeArkhamManage},
+		"approve and the wrong manage": {scopeView, scopeApprove, scopeBatcaveManage},
+	} {
+		rec = g.do(req{method: "GET", path: "/definitions", as: session("vicki", perms...)})
+		decode(t, rec, &b)
+		for _, d := range b.Definitions {
+			if d.Kind == "arkham.relocate" && d.CanApprove {
+				t.Fatalf("%s: can_approve is true", name)
+			}
+		}
+	}
+	rec = g.do(req{method: "GET", path: "/definitions", as: session("vicki", scopeView, scopeApprove, scopeArkhamManage)})
+	decode(t, rec, &b)
+	got = map[string]definitionDTO{}
+	for _, d := range b.Definitions {
+		got[d.Kind] = d
+	}
+	if !got["arkham.relocate"].CanApprove {
+		t.Fatalf("approve and manage: can_approve false, want true: %v", got)
 	}
 
 	var one definitionDTO

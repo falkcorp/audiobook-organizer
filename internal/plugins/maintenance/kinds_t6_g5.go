@@ -19,6 +19,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/fileops"
 	"github.com/falkcorp/audiobook-organizer/internal/itunes"
@@ -582,7 +583,7 @@ func t6g5Common(def sdk.OperationDef, kind tasks.Kind, effects tasks.Effects, sc
 		Title:           def.DisplayName,
 		Help:            def.Description,
 		Effects:         effects,
-		Perms:           tasks.Permissions{Start: t6g5StartRequirement(def)},
+		Perms:           tasks.Permissions{Start: t6g5StartRequirement(def), Manage: taskmanage.Requirement()},
 		Resume:          t6g5Resume(def.ResumePolicy),
 		Priority:        t6g5Priority(def.DefaultPriority),
 		Timeout:         def.Timeout,

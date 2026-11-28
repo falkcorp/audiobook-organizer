@@ -12,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/tasks"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -117,7 +118,7 @@ func (p *Plugin) extractWAVBatchKind(deps t6g4Deps) tasks.Definition {
 		// run before) and metadata_cache and indexes (the aggregate recompute's
 		// ModifyBook writes them, see batchCacheRefs).
 		Subjects:        batchSubjects(func(p extractWAVBatchParams) batchScope { return p.batchScope }, append(batchCacheRefs(), tasks.Res("books", string(ops.ResFiles)))...),
-		Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:           tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:          tasks.ResumeFromZero,
 		Priority:        tasks.PriorityLow,
 		ConcurrencyKey:  tasks.Key("books.maintenance.extract-wav-clips.batch"),
@@ -206,7 +207,7 @@ func (p *Plugin) introMigrateBatchKind(deps t6g4Deps) tasks.Definition {
 		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 		// The batch's rows, and metadata_cache and indexes whole-kind (batchCacheRefs).
 		Subjects:        batchSubjects(func(p introMigrateBatchParams) batchScope { return p.batchScope }, batchCacheRefs()...),
-		Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:           tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:          tasks.ResumeFromZero,
 		Priority:        tasks.PriorityLow,
 		ConcurrencyKey:  tasks.Key("books.maintenance.intro-migrate-single-file.batch"),
@@ -431,7 +432,7 @@ func (p *Plugin) fileIntroBatchKind(deps t6g4Deps) tasks.Definition {
 		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 		// The batch's rows, and metadata_cache and indexes whole-kind (batchCacheRefs).
 		Subjects:        batchSubjects(func(p fileIntroBatchParams) batchScope { return p.batchScope }, batchCacheRefs()...),
-		Perms:           tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:           tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:          tasks.ResumeFromZero,
 		Priority:        tasks.PriorityLow,
 		ConcurrencyKey:  tasks.Key("books." + fileIntroOpID + ".batch"),

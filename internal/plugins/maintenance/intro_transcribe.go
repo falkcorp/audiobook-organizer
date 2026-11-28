@@ -29,6 +29,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai/resultjournal"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -303,7 +304,7 @@ func (p *Plugin) introTranscribeNativeKind(deps t6g4Deps, sched *tasks.Schedule)
 		// stats:transcribe key) has no pkg/ops resource and is written outside the
 		// gated writer on purpose: see t6g4StatsSink.
 		Effects: tasks.Writes(t6g4Res(t6g4IntroTranscribeWrites...)...),
-		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:   tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 		// internal/arch: only_missing re-selects every book still without a transcript), so the 05-tasks mapping is
 		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).

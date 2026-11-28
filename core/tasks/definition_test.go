@@ -20,7 +20,7 @@ func validCommon() tasks.Common {
 		Title:   "Review the case files",
 		Help:    "Reads every open case. Read-only.",
 		Effects: tasks.ReadOnly(tasks.Res("gotham", "cases")),
-		Perms:   tasks.Permissions{Start: rbac.Need("gotham:cases.view")},
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:cases.view"), Manage: rbac.Need("gotham:cases.admin")},
 		Resume:  tasks.ResumeFromZero,
 	}
 }
@@ -381,6 +381,13 @@ func TestConstructors_CommonRules(t *testing.T) {
 		"ref_without_kind":   {func(c *tasks.Common) { c.Effects = tasks.ReadOnly(tasks.Res("gotham", "")) }, "needs a module and a kind"},
 		"deletes_read_only":  {func(c *tasks.Common) { c.Effects = tasks.ReadOnly().AlsoDeletes(tasks.Res("gotham", "cases")) }, "AlsoDeletes on a ReadOnly"},
 		"perms_start_absent": {func(c *tasks.Common) { c.Perms = tasks.Permissions{} }, "Perms.Start"},
+		// Perms.Manage (owner ruling 2026-11-22) is required of every kind and
+		// names scopes: a kind that states none, or one that anyone satisfies,
+		// would leave cancel, discard, decide and approve to their own scope
+		// alone. The problem names the kind.
+		"manage_absent":            {func(c *tasks.Common) { c.Perms.Manage = rbac.Requirement{} }, "tasks: gotham.cases.review: Perms.Manage is required"},
+		"manage_public":            {func(c *tasks.Common) { c.Perms.Manage = rbac.Public }, "Perms.Manage must name scopes"},
+		"manage_any_authenticated": {func(c *tasks.Common) { c.Perms.Manage = rbac.AnyAuthenticated }, "Perms.Manage must name scopes"},
 	} {
 		if got := run(c.mut); !strings.Contains(got, c.want) {
 			t.Errorf("%s: problem %q missing from %q", name, c.want, got)
@@ -392,6 +399,7 @@ func TestConstructors_CommonRules(t *testing.T) {
 		}
 	}
 	ok(func(c *tasks.Common) { c.Resume = tasks.ResumeContinue; c.Yields = true })
+	ok(func(c *tasks.Common) { c.Perms.Manage = rbac.AnyOf("gotham:cases.admin", "gotham:cases.owner") })
 	ok(func(c *tasks.Common) { c.Timeout = tasks.MaxTimeout; c.ConcurrencyKey = "core.storage.exclusive" })
 	ok(func(c *tasks.Common) { c.Cancel = tasks.Uninterruptible("one atomic rename", time.Minute) })
 	ok(func(c *tasks.Common) { c.Debounce = &tasks.Debounce{}; c.Lanes = []tasks.LaneID{"books.audio-decode"} })

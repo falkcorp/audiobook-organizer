@@ -96,9 +96,10 @@ func sameActor(p *auth.Principal, v tasks.RunView) bool {
 	return p.User != nil && v.Actor.UserID != "" && v.Actor.UserID == string(p.User.ID)
 }
 
-// cancelRun: POST /runs/{id}/cancel. The permission (the run's actor, the
-// definition's Perms.Cancel or core:tasks.manage) is the executor's; this
-// handler adds the audit record when the caller is not the run's actor.
+// cancelRun: POST /runs/{id}/cancel. The permission (the definition's
+// Perms.Manage AND its Perms.Cancel, omitted Perms.Start; not the run's own
+// actor and not core:tasks.manage alone) is the executor's; this handler adds
+// the audit record when the caller is not the run's actor.
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
 	id := runID(r)
 	// The view may be refused (a run the caller may cancel but not view): the
@@ -144,7 +145,8 @@ func (s *Server) respondRun(w http.ResponseWriter, r *http.Request, p *auth.Prin
 	s.writeJSON(w, http.StatusOK, runView(p, v))
 }
 
-// discardRun: DELETE /runs/{id} (Client.Discard: the cancel permission rule;
+// discardRun: DELETE /runs/{id} (Client.Discard: the cancel permission rule,
+// Manage AND Cancel;
 // 409 tasks.run_active while the run is live).
 func (s *Server) discardRun(w http.ResponseWriter, r *http.Request, _ *auth.Principal) {
 	if err := s.d.Client.Discard(r.Context(), runID(r)); err != nil {
@@ -154,14 +156,22 @@ func (s *Server) discardRun(w http.ResponseWriter, r *http.Request, _ *auth.Prin
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// verifiedGate applies approve's and decide's two rules in front of the
-// executor: the caller satisfies the definition's requirement (need, when
-// the definition is known) and the credential is a verified method (SEC-24).
-// It answers false, having written the refusal and queued its denial record.
-func (s *Server) verifiedGate(w http.ResponseWriter, r *http.Request, p *auth.Principal, action string, id tasks.RunID, need rbac.Requirement) bool {
+// verifiedGate applies approve's and decide's rules in front of the executor:
+// the caller satisfies the definition's requirement (need, when the definition
+// is known) AND its Perms.Manage (manage, owner ruling 2026-11-22; the executor
+// applies the same AND through mayControl, this early refusal is so the denial
+// names the scope that is missing), and the credential is a verified method
+// (SEC-24, judged against need alone). It answers false, having written the
+// refusal and queued its denial record.
+func (s *Server) verifiedGate(w http.ResponseWriter, r *http.Request, p *auth.Principal, action string, id tasks.RunID, need, manage rbac.Requirement) bool {
 	if !need.IsZero() && !p.Perms.Satisfies(need) {
 		s.deny(r, p, action, id, need, "permission_denied")
 		s.write(w, r, forbidden(need))
+		return false
+	}
+	if !manage.IsZero() && !p.Perms.Satisfies(manage) {
+		s.deny(r, p, action, id, manage, "permission_denied")
+		s.write(w, r, forbidden(manage))
 		return false
 	}
 	if !s.verify(p, need) {
@@ -181,7 +191,7 @@ type approveBody struct {
 }
 
 // approveRun: POST /runs/{id}/approve {rows, reject, reason}. Needs the
-// definition's Perms.Approve and a verified method.
+// definition's Perms.Manage AND Perms.Approve, and a verified method.
 func (s *Server) approveRun(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
 	raw, bad := readBody(w, r)
 	if bad != nil {
@@ -212,11 +222,12 @@ func (s *Server) approveRun(w http.ResponseWriter, r *http.Request, p *auth.Prin
 	}
 	// A run whose definition is not loaded (held, retired) is still behind
 	// the verified-method rule; the executor then answers 409 held or 404.
-	var need rbac.Requirement
+	var need, manage rbac.Requirement
 	if def := s.defs[v.Kind]; def != nil {
-		need = tasks.CommonOf(def).Perms.Approve
+		perms := tasks.CommonOf(def).Perms
+		need, manage = perms.Approve, perms.Manage
 	}
-	if !s.verifiedGate(w, r, p, action, v.ID, need) {
+	if !s.verifiedGate(w, r, p, action, v.ID, need, manage) {
 		return
 	}
 	req := tasks.ApproveRequest{Rows: b.Rows, Reject: b.Reject, Reason: b.Reason}
@@ -240,8 +251,8 @@ type decideBody struct {
 }
 
 // decideRun: POST /runs/{id}/decide {"decision": "resume"|"finish"|"drop"}
-// for a run awaiting a decision. Needs the definition's Perms.Approve, else
-// Perms.Start, and a verified method. resume and finish record
+// for a run awaiting a decision. Needs the definition's Perms.Manage AND its
+// Perms.Approve (else Perms.Start), and a verified method. resume and finish record
 // core.task.approve, drop records core.task.reject.
 func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, p *auth.Principal) {
 	raw, bad := readBody(w, r)
@@ -272,15 +283,15 @@ func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		s.fail(w, r, err)
 		return
 	}
-	var need rbac.Requirement
+	var need, manage rbac.Requirement
 	if def := s.defs[v.Kind]; def != nil {
 		c := tasks.CommonOf(def)
-		need = c.Perms.Approve
+		need, manage = c.Perms.Approve, c.Perms.Manage
 		if need.IsZero() {
 			need = c.Perms.Start
 		}
 	}
-	if !s.verifiedGate(w, r, p, action, v.ID, need) {
+	if !s.verifiedGate(w, r, p, action, v.ID, need, manage) {
 		return
 	}
 	if err := s.d.Client.Decide(r.Context(), v.ID, d); err != nil {

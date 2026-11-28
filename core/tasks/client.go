@@ -24,9 +24,9 @@ type Client interface { //nolint:interfacebloat // spec-mandated SDK interface (
 	Runs(ctx context.Context, q RunQuery) iter.Seq2[RunView, error]
 	// Cancel, Decide, Pause and Unpause act as the actor the kernel stamps from
 	// ctx, as Start does (below), and apply the native route's permission rule to
-	// that actor (the table below: Cancel = the run's actor or Perms.Cancel;
-	// Decide = Approve/Start + verified method; Pause/Unpause =
-	// core:tasks.manage).
+	// that actor (the table below: Cancel = Perms.Manage AND Perms.Cancel, with no
+	// run's-own-actor arm; Decide = Perms.Manage AND Approve/Start + verified
+	// method; Pause/Unpause = core:tasks.manage; owner ruling 2026-11-22).
 	Cancel(ctx context.Context, id RunID) error
 	Decide(ctx context.Context, id RunID, d Decision) error // Resume | Finish | Drop
 	Pause(ctx context.Context, reason string) error

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -72,7 +73,7 @@ func kindStartRequirement() rbac.Requirement {
 // per-definition fields (Title, Help, Effects, Resume, Priority, Timeout...).
 // noWarmup is HEAD's NoWarmupWait: true leaves Ready nil (rule R5).
 func kindCommon(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule, noWarmup bool) tasks.Common {
-	c := tasks.Common{Perms: tasks.Permissions{Start: kindStartRequirement()}}
+	c := tasks.Common{Perms: tasks.Permissions{Start: kindStartRequirement(), Manage: taskmanage.Requirement()}}
 	if !noWarmup {
 		c.Ready = []tasks.ReadySignal{signalMemDB}
 	}

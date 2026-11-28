@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -79,7 +80,7 @@ func (p *Plugin) integrityCheckKind(deps t6g4Deps, sched *tasks.Schedule) tasks.
 		Title:    "File integrity check",
 		Help:     "Flags book_file rows where file_hash differs from original_file_hash with no AO tag-write on record (post_metadata_hash empty) — a candidate for external modification or bit-rot. Report-only; takes no action.",
 		Effects:  tasks.ReadOnly(),
-		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:   tasks.ResumeDrop,
 		Priority: tasks.PriorityNormal,
 		// HEAD's ConcurrencyKey is its own ID: "books." + that ID.

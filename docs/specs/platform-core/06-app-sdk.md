@@ -2198,7 +2198,7 @@ core/examples/hello/
 never enters `./...` (MOD-10, owned by 03/13). Every Go block below compiles against the owning files
 as written: 05-rbac §3.1–§3.3 (`Permission`, `PermissionSpec`, `RoleViewer`, `Need`), 05-http-api
 §3.1–§3.3 (`Handle`, `Route`, `In`, `Invalid(fields ...FieldError)`), 05-tasks 5T.3.1–5T.3.7
-(`Task`, `TaskSpec`, `Common`, `Permissions{Start rbac.Requirement}`, `RunItems`, `ItemsOptions`),
+(`Task`, `TaskSpec`, `Common`, `Permissions{Start, Manage rbac.Requirement}`, `RunItems`, `ItemsOptions`),
 05-storage §5S.3.1, §5S.3.4–§5S.3.5 (`Spec`, `Keyspace`, `KV`, `Migration` with `Seed`, `MigrationTx`) and
 05-config §1.3 (`Define`, `Docs`, `Handle`). `TestSpecGoBlocksCompile` (§6.10) keeps it that way.
 
@@ -2434,7 +2434,7 @@ func countTask(s *service) tasks.Definition {
 			Title:   "Count recorded names",
 			Help:    "Sums the per-name counters. Read-only.",
 			Effects: tasks.ReadOnly(tasks.Res(string(ID), "name")),
-			Perms:   tasks.Permissions{Start: rbac.Need(PermAdmin)},
+			Perms:   tasks.Permissions{Start: rbac.Need(PermAdmin), Manage: rbac.Need(PermAdmin)},
 			Resume:  tasks.ResumeFromZero,
 		},
 		Run: func(rc *tasks.RC, _ CountParams) (CountResult, error) {

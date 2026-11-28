@@ -8,6 +8,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"log/slog"
 	"testing"
 
@@ -208,6 +209,7 @@ func TestT7ServerKinds_MatchHEADDefs(t *testing.T) {
 		require.Equal(t, head.Description, c.Help, "%s help", r.id)
 		require.Equal(t, min(head.Timeout, tasks.MaxTimeout), c.Timeout, "%s timeout", r.id)
 		require.Equal(t, head.ProgressTimeout, c.ProgressTimeout, "%s progress timeout", r.id)
+		require.Equal(t, taskmanage.Requirement(), c.Perms.Manage, "%s Manage is the books task-manage requirement", r.id)
 		wantKey := tasks.Key("")
 		if head.ConcurrencyKey != "" {
 			wantKey = tasks.Key("books." + head.ConcurrencyKey)

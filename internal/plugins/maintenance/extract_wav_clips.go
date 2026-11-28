@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/filehash"
 	"github.com/falkcorp/audiobook-organizer/internal/serverdecode"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -126,7 +127,7 @@ func (p *Plugin) extractWAVClipsKind(deps t6g4Deps, sched *tasks.Schedule) tasks
 		// in the children, see extractWAVBatchKind.
 		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFiles)...),
 		Subjects: batchParentHolds,
-		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		// ResumeContinue (HEAD is ResumeRestart with no checkpoint): the parent's
 		// cursor, the child in flight and the rolled-up tallies are checkpointed
 		// (batch_sweep.go), so a restart resumes at the cursor, and the kernel

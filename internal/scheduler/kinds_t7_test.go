@@ -174,6 +174,9 @@ func TestT7SchedulerKinds_MatchHEADDefs(t *testing.T) {
 		require.Equal(t, rbac.AllOf("core:settings.manage", "books:settings.manage", "core:tasks.manage",
 			"core:system.view", "core:system.manage", "core:library.manage", "core:library.browse",
 			"core:integrations.manage"), c.Perms.Start, "%s start requirement", r.id)
+		// Manage is the same eight scopes: the owner's 2026-11-22 ruling gives
+		// run control the settings.manage-equivalent rule HEAD's route held.
+		require.Equal(t, c.Perms.Start, c.Perms.Manage, "%s Manage requirement", r.id)
 
 		// A write set exactly when the body writes (R7); HEAD declares none, so
 		// this is the "Writes found" row.

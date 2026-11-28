@@ -234,7 +234,7 @@ func TestFixer_ApplyPartitionBy(t *testing.T) {
 		}
 	})}, withPrincipal)
 	plan := h.plan()
-	if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
+	if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun, scopeArkManage), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 	h.waitState(h.onlyApplyRun(plan).ID, tasks.StateSucceeded)
@@ -293,7 +293,7 @@ func TestFixer_ResumedApplyReportsStandingRows(t *testing.T) {
 			}
 			h := newHarness(t, []tasks.Definition{fixerDef(log, edit(true))}, withSink)
 			plan := h.plan()
-			if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
+			if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun, scopeArkManage), plan, tasks.ApproveRequest{Rows: inmates}); err != nil {
 				t.Fatalf("approve: %v", err)
 			}
 			apply := h.onlyApplyRun(plan).ID

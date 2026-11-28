@@ -58,6 +58,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/chaptershape"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	itunesservice "github.com/falkcorp/audiobook-organizer/internal/itunes/service"
@@ -329,7 +330,7 @@ func (p *Plugin) fsRegroupXMLKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 		// change and stages the ident: rows (metadata_cache, indexes: the shared
 		// ModifyBook row, kinds_resources.go).
 		Effects:        tasks.Writes(t6g4Res(ops.ResBooks, ops.ResBookFiles, ops.ResExternalIDs, ops.ResOperations, ops.ResMetadataCache, ops.ResIndexes)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.fs-regroup-xml"),

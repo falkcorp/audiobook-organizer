@@ -70,7 +70,7 @@ func TransferRecoverTask(m Manager) tasks.Definition {
 		Title:    "Recover interrupted file transfers",
 		Help:     "Completes or rolls back every file transfer and quarantine step a crash interrupted, from its last durable journal step.",
 		Effects:  tasks.Writes(tasks.Res("core", "library")),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:library.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:library.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeFromZero,
 		Timeout:  TransferRecoverTimeout,
 		Schedule: tasks.ScheduleFromConfig(TransferRecoverScheduleKey).OnStart().Live(),

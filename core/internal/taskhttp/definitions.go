@@ -53,7 +53,7 @@ func definitionView(p *auth.Principal, def tasks.Definition) definitionDTO {
 	d := definitionDTO{
 		Kind: string(def.Kind()), Module: def.Kind().Module(), Title: c.Title, Help: c.Help, Shape: def.Shape().String(),
 		ReadOnly: c.Effects.IsReadOnly(), CanStart: p.Perms.Satisfies(c.Perms.Start) && c.Perms.OwnerRouteOnly == "",
-		CanApprove: !c.Perms.Approve.IsZero() && p.Perms.Satisfies(c.Perms.Approve),
+		CanApprove: !c.Perms.Approve.IsZero() && p.Perms.Satisfies(c.Perms.Approve) && !c.Perms.Manage.IsZero() && p.Perms.Satisfies(c.Perms.Manage),
 	}
 	if c.Schedule != nil {
 		d.ScheduleKey = c.Schedule.ConfigKey()

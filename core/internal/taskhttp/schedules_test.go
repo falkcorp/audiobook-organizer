@@ -38,7 +38,7 @@ func TestSchedules_List(t *testing.T) {
 	g = newRig(t, func(d *Deps) {
 		d.Definitions = append(d.Definitions, tasks.Task(tasks.Kind("batcave.secret"), tasks.TaskSpec[struct{}, struct{}]{
 			Title: "Sweep the cave's secrets", Effects: tasks.Writes(tasks.Res("batcave", "vault")),
-			Perms:    tasks.Permissions{Start: rbacNeed(scopeRun), View: rbacNeed(scopeSee)},
+			Perms:    tasks.Permissions{Start: rbacNeed(scopeRun), Manage: rbacNeed(scopeBatcaveManage), View: rbacNeed(scopeSee)},
 			Resume:   tasks.ResumeContinue,
 			Schedule: tasks.ScheduleFromConfig("core.batcave.schedules.secret").Live(), Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }}))
 	})

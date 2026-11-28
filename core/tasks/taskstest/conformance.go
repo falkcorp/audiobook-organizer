@@ -30,7 +30,7 @@ const (
 //
 //   - no_constructor_problems: tasks.Problems reports nothing;
 //   - kind_parses: the kind matches the Kind grammar;
-//   - required_common: Title, a declared Effects, Perms.Start and a Resume
+//   - required_common: Title, a declared Effects, Perms.Start, Perms.Manage and a Resume
 //     policy are set (A2: the zero ResumePolicy is refused);
 //   - parallelism_declared (Batch, Fixer): the Parallelism validates (N8, A1);
 //   - fixer_approval (Fixer): Approval is set with PlanRequired and Effects are Writes;
@@ -116,6 +116,9 @@ func checkDefinition(tt tester, d tasks.Definition) {
 		}
 		if c.Perms.Start.IsZero() {
 			tt.Errorf("Perms.Start is not set")
+		}
+		if c.Perms.Manage.IsZero() {
+			tt.Errorf("Perms.Manage is not set")
 		}
 		if c.Resume < tasks.ResumeContinue || c.Resume > tasks.ResumeAsk {
 			tt.Errorf("Resume is %s; a policy is required", c.Resume)

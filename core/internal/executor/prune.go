@@ -84,7 +84,7 @@ func PruneDefinition(runs RunPruner, retention func() time.Duration, now func() 
 		Title:    "Prune old task history",
 		Help:     "Deletes finished task runs, and everything each one recorded, once they are older than the history retention. Running and waiting runs are never touched.",
 		Effects:  tasks.Writes(tasks.Res("core", "tasks")),
-		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
+		Perms:    tasks.Permissions{Start: rbac.Need("core:tasks.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:   tasks.ResumeFromZero,
 		Priority: tasks.PriorityLow,
 		Timeout:  PruneTimeout,

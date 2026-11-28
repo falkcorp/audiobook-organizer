@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"log/slog"
 	"slices"
 	"sort"
@@ -204,6 +205,7 @@ func TestDedupKinds_MatchHEADDefs(t *testing.T) {
 			require.Equal(t, r.NotWhile, c.NotWhile)
 			require.Equal(t, rbac.KindAllOf, c.Perms.Start.Kind(), "every dedup definition is settings.manage")
 			require.Equal(t, rbac.Requirement(kindStartRequirement()), c.Perms.Start)
+			require.Equal(t, taskmanage.Requirement(), c.Perms.Manage, "every dedup definition is managed under the books task-manage requirement")
 			require.Empty(t, c.Perms.StartableByViewers)
 			require.Nil(t, c.Schedule, "sched is nil in the test; no conversion declares a schedule itself")
 

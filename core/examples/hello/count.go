@@ -26,7 +26,7 @@ func countTask(s *service) tasks.Definition {
 		Title:   "Count recorded names",
 		Help:    "Sums the per-name counters. Read-only.",
 		Effects: tasks.ReadOnly(tasks.Res(string(ID), "name")),
-		Perms:   tasks.Permissions{Start: rbac.Need(PermAdmin)},
+		Perms:   tasks.Permissions{Start: rbac.Need(PermAdmin), Manage: rbac.Need(PermAdmin)},
 		Resume:  tasks.ResumeFromZero,
 		Run: func(rc *tasks.RC, _ CountParams) (CountResult, error) {
 			var kvs []storage.KV

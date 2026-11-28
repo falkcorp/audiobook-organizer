@@ -94,6 +94,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/bookfileaudio"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/mediainfo"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
@@ -926,7 +927,7 @@ func (p *Plugin) durationBackfillKind(deps t6g4Deps, sched *tasks.Schedule) task
 		// row, declared whole whatever the closure sets (THE RULE,
 		// kinds_resources.go).
 		Effects:        tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books." + durationBackfillOpID),

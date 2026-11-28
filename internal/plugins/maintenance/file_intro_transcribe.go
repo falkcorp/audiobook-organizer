@@ -21,6 +21,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/transcribe"
@@ -514,7 +515,7 @@ func (p *Plugin) fileIntroTranscribeKind(deps t6g4Deps, sched *tasks.Schedule) t
 		// parent (see t6g4StatsSink).
 		Effects:  tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes)...),
 		Subjects: batchParentHolds,
-		Perms:    tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:    tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:   tasks.ResumeContinue,
 		Priority: tasks.PriorityLow,
 		// HEAD's 30 days is above tasks.MaxTimeout. A timeout is terminal, so the

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -191,7 +192,7 @@ func (k *repairKind) common() tasks.Common {
 		// HEAD gates starting, approving and READING the plan rows with the
 		// same permission set (opaccess), so View is the requirement too, not
 		// the default task viewer.
-		c.Perms = tasks.Permissions{Start: req, Approve: req, View: req}
+		c.Perms = tasks.Permissions{Start: req, Approve: req, View: req, Manage: taskmanage.Requirement()}
 	}
 	return c
 }

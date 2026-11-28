@@ -45,14 +45,22 @@ func TestApprove_RequiresVerifiedMethodAndPermission(t *testing.T) {
 		status   int
 		code     string
 		approved bool
+		requires rbac.Permission // the scope the refusal names, when set
 	}{
-		{name: "interactive session holding the scope", as: session("lucius", scopeApprove), status: 200, approved: true},
+		{name: "interactive session holding the scope", as: session("lucius", scopeApprove, scopeArkhamManage), status: 200, approved: true},
 		{name: "interactive session without the scope", as: session("lucius", scopeSee), status: 403, code: "permission_denied"},
-		{name: "api key holding the scope", as: who("lucius", auth.MethodAPIKey, scopeApprove), status: 403, code: "tasks.verified_method_required"},
-		{name: "delegated session holding the scope", as: who("lucius", auth.MethodSessionDelegated, scopeApprove), status: 403, code: "tasks.verified_method_required"},
-		{name: "auth-disabled principal holding the scope", as: who("lucius", auth.MethodAuthDisabled, scopeApprove), status: 403, code: "tasks.verified_method_required"},
-		{name: "api key accepted by the kernel's widened rule", as: who("lucius", auth.MethodAPIKey, scopeApprove), verified: func(*auth.Principal, rbac.Requirement) bool { return true }, status: 200, approved: true},
-		{name: "session refused by a stricter rule", as: session("lucius", scopeApprove), verified: func(*auth.Principal, rbac.Requirement) bool { return false }, status: 403, code: "tasks.verified_method_required"},
+		// Perms.Manage is ANDed with Perms.Approve (owner ruling 2026-11-22): either
+		// alone is refused, before the credential's method is looked at.
+		{name: "approve scope without Manage", as: session("lucius", scopeApprove), status: 403, code: "permission_denied", requires: scopeArkhamManage},
+		{name: "approve scope with another kind's Manage", as: session("lucius", scopeApprove, scopeBatcaveManage), status: 403, code: "permission_denied", requires: scopeArkhamManage},
+		{name: "Manage without the approve scope", as: session("lucius", scopeArkhamManage), status: 403, code: "permission_denied", requires: scopeApprove},
+		{name: "core:tasks.manage and the approve scope without Manage", as: session("lucius", scopeApprove, scopeManage), status: 403, code: "permission_denied", requires: scopeArkhamManage},
+		{name: "api key holding Manage without the approve scope", as: who("lucius", auth.MethodAPIKey, scopeArkhamManage), status: 403, code: "permission_denied", requires: scopeApprove},
+		{name: "api key holding the scope", as: who("lucius", auth.MethodAPIKey, scopeApprove, scopeArkhamManage), status: 403, code: "tasks.verified_method_required"},
+		{name: "delegated session holding the scope", as: who("lucius", auth.MethodSessionDelegated, scopeApprove, scopeArkhamManage), status: 403, code: "tasks.verified_method_required"},
+		{name: "auth-disabled principal holding the scope", as: who("lucius", auth.MethodAuthDisabled, scopeApprove, scopeArkhamManage), status: 403, code: "tasks.verified_method_required"},
+		{name: "api key accepted by the kernel's widened rule", as: who("lucius", auth.MethodAPIKey, scopeApprove, scopeArkhamManage), verified: func(*auth.Principal, rbac.Requirement) bool { return true }, status: 200, approved: true},
+		{name: "session refused by a stricter rule", as: session("lucius", scopeApprove, scopeArkhamManage), verified: func(*auth.Principal, rbac.Requirement) bool { return false }, status: 403, code: "tasks.verified_method_required"},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {
@@ -61,6 +69,9 @@ func TestApprove_RequiresVerifiedMethodAndPermission(t *testing.T) {
 			rec := g.do(approveReq("run-plan", `{"rows": ["cell-7", "cell-9"], "reason": "Gordon signed off"}`, c.as))
 			if c.code != "" {
 				wantProblem(t, rec, c.status, c.code)
+				if c.requires != "" && !strings.Contains(rec.Body.String(), `"required_permission":"`+string(c.requires)+`"`) {
+					t.Fatalf("refusal does not name %s: %s", c.requires, rec.Body.String())
+				}
 			} else if rec.Code != c.status {
 				t.Fatalf("= %d, want %d\n%s", rec.Code, c.status, rec.Body.String())
 			}
@@ -95,7 +106,7 @@ func TestApprove_RequiresVerifiedMethodAndPermission(t *testing.T) {
 // TestApprove_RejectAndBody: a rejection records core.task.reject and names no rows;
 // bodies the route refuses reach neither the executor nor the audit log.
 func TestApprove_RejectAndBody(t *testing.T) {
-	as := session("lucius", scopeApprove)
+	as := session("lucius", scopeApprove, scopeArkhamManage)
 	t.Run("reject records core.task.reject", func(t *testing.T) {
 		g := newRig(t)
 		planRun(g, "run-plan")
@@ -170,9 +181,9 @@ func TestApprove_RejectAndBody(t *testing.T) {
 	t.Run("definition not loaded still needs a verified method", func(t *testing.T) {
 		g := newRig(t)
 		g.client.add(view("run-ghost", tasks.Kind("gotham.retired"), tasks.StateSucceeded, "bruce"))
-		wantProblem(t, g.do(approveReq("run-ghost", `{}`, who("lucius", auth.MethodAPIKey, scopeApprove))), 403, "tasks.verified_method_required")
+		wantProblem(t, g.do(approveReq("run-ghost", `{}`, who("lucius", auth.MethodAPIKey, scopeApprove, scopeArkhamManage))), 403, "tasks.verified_method_required")
 		g.appr.err = executor.ErrHeld
-		wantProblem(t, g.do(approveReq("run-ghost", `{}`, session("lucius", scopeApprove))), 409, "tasks.held")
+		wantProblem(t, g.do(approveReq("run-ghost", `{}`, session("lucius", scopeApprove, scopeArkhamManage))), 409, "tasks.held")
 	})
 }
 
@@ -191,7 +202,7 @@ func TestDecide(t *testing.T) {
 		} {
 			g := newRig(t)
 			g.client.add(view("run-sweep", kindSweep, tasks.StateAwaitingDecision, "bruce"))
-			rec := g.do(decideReq("run-sweep", c.word, session("lucius", scopeRun)))
+			rec := g.do(decideReq("run-sweep", c.word, session("lucius", scopeRun, scopeBatcaveManage)))
 			if rec.Code != 200 {
 				t.Fatalf("%s = %d\n%s", c.word, rec.Code, rec.Body.String())
 			}
@@ -207,18 +218,50 @@ func TestDecide(t *testing.T) {
 		g := newRig(t)
 		planRun(g, "run-plan")
 		// relocate: Start batcave:run alone is not enough, Approve arkham:approve is.
-		wantProblem(t, g.do(decideReq("run-plan", "resume", session("lucius", scopeRun))), 403, "permission_denied")
-		if rec := g.do(decideReq("run-plan", "resume", session("lucius", scopeApprove))); rec.Code != 200 {
+		wantProblem(t, g.do(decideReq("run-plan", "resume", session("lucius", scopeRun, scopeArkhamManage))), 403, "permission_denied")
+		if rec := g.do(decideReq("run-plan", "resume", session("lucius", scopeApprove, scopeArkhamManage))); rec.Code != 200 {
 			t.Fatalf("approver = %d\n%s", rec.Code, rec.Body.String())
 		}
 		g.client.add(view("run-sweep", kindSweep, tasks.StateAwaitingDecision, "bruce"))
 		wantProblem(t, g.do(decideReq("run-sweep", "resume", session("vicki", scopeSee))), 403, "permission_denied")
 	})
+	t.Run("needs the kind's Manage as well as its Approve or Start", func(t *testing.T) {
+		// Owner ruling 2026-11-22: either alone is refused, before the executor is
+		// reached and before the credential's method is looked at.
+		for _, c := range []struct {
+			name, id string
+			as       *auth.Principal
+			requires rbac.Permission
+		}{
+			{"Approve without Manage", "run-plan", session("lucius", scopeApprove), scopeArkhamManage},
+			{"Approve beside core:tasks.manage", "run-plan", session("lucius", scopeApprove, scopeManage), scopeArkhamManage},
+			{"Approve beside another kind's Manage", "run-plan", session("lucius", scopeApprove, scopeBatcaveManage), scopeArkhamManage},
+			{"Manage without Approve", "run-plan", session("lucius", scopeArkhamManage), scopeApprove},
+			{"Start without Manage (no Approve on the kind)", "run-sweep", session("lucius", scopeRun), scopeBatcaveManage},
+			{"Manage without Start (no Approve on the kind)", "run-sweep", session("lucius", scopeBatcaveManage), scopeRun},
+			{"an api key holding Manage alone", "run-sweep", who("lucius", auth.MethodAPIKey, scopeBatcaveManage), scopeRun},
+		} {
+			g := newRig(t)
+			planRun(g, "run-plan")
+			g.client.add(view("run-sweep", kindSweep, tasks.StateAwaitingDecision, "bruce"))
+			rec := g.do(decideReq(c.id, "resume", c.as))
+			wantProblem(t, rec, 403, "permission_denied")
+			if !strings.Contains(rec.Body.String(), `"required_permission":"`+string(c.requires)+`"`) {
+				t.Fatalf("%s: refusal does not name %s: %s", c.name, c.requires, rec.Body.String())
+			}
+			if len(g.client.decides) != 0 {
+				t.Fatalf("%s: a refused decision reached the executor: %+v", c.name, g.client.decides)
+			}
+			if len(g.aud.recorded) != 0 {
+				t.Fatalf("%s: a refused decision was recorded as a success: %+v", c.name, g.aud.recorded)
+			}
+		}
+	})
 	t.Run("verified method and body", func(t *testing.T) {
 		g := newRig(t)
 		g.client.add(view("run-sweep", kindSweep, tasks.StateAwaitingDecision, "bruce"))
-		wantProblem(t, g.do(decideReq("run-sweep", "resume", who("lucius", auth.MethodAPIKey, scopeRun))), 403, "tasks.verified_method_required")
-		wantProblem(t, g.do(decideReq("run-sweep", "maybe", session("lucius", scopeRun))), 422, "validation_failed")
+		wantProblem(t, g.do(decideReq("run-sweep", "resume", who("lucius", auth.MethodAPIKey, scopeRun, scopeBatcaveManage))), 403, "tasks.verified_method_required")
+		wantProblem(t, g.do(decideReq("run-sweep", "maybe", session("lucius", scopeRun, scopeBatcaveManage))), 422, "validation_failed")
 		wantProblem(t, g.do(req{method: "POST", path: "/runs/run-sweep/decide", body: `{"decision":"resume","by":"bane"}`, as: session("lucius", scopeRun)}), 400, "bad_request")
 		if len(g.client.decides) != 0 {
 			t.Fatalf("refused decisions reached the executor: %+v", g.client.decides)
@@ -228,7 +271,7 @@ func TestDecide(t *testing.T) {
 		g := newRig(t)
 		g.client.add(view("run-sweep", kindSweep, tasks.StateRunning, "bruce"))
 		g.client.failWith("Decide", executor.ErrNotAwaitingDecision)
-		wantProblem(t, g.do(decideReq("run-sweep", "resume", session("lucius", scopeRun))), 409, "tasks.not_awaiting_decision")
+		wantProblem(t, g.do(decideReq("run-sweep", "resume", session("lucius", scopeRun, scopeBatcaveManage))), 409, "tasks.not_awaiting_decision")
 		if len(g.aud.recorded) != 0 {
 			t.Fatal("a refused decision was recorded as a success")
 		}
@@ -237,7 +280,7 @@ func TestDecide(t *testing.T) {
 		g := newRig(t)
 		g.client.add(view("run-sweep", kindSweep, tasks.StateAwaitingDecision, "bruce"))
 		g.client.failWith("Decide", executor.ErrNotFinishable)
-		wantProblem(t, g.do(decideReq("run-sweep", "finish", session("lucius", scopeRun))), 409, "tasks.not_finishable")
+		wantProblem(t, g.do(decideReq("run-sweep", "finish", session("lucius", scopeRun, scopeBatcaveManage))), 409, "tasks.not_finishable")
 		if len(g.aud.recorded) != 0 {
 			t.Fatal("a refused finish was recorded as a success")
 		}
@@ -253,7 +296,7 @@ func TestCancel(t *testing.T) {
 	t.Run("own run is not recorded", func(t *testing.T) {
 		g := newRig(t)
 		g.client.add(view("run-1", kindSweep, tasks.StateRunning, "lucius"))
-		if rec := g.do(cancel("run-1", session("lucius", scopeRun))); rec.Code != 200 {
+		if rec := g.do(cancel("run-1", session("lucius", scopeRun, scopeBatcaveManage))); rec.Code != 200 {
 			t.Fatalf("= %d\n%s", rec.Code, rec.Body.String())
 		}
 		if len(g.client.cancels) != 1 || len(g.aud.recorded) != 0 {
@@ -326,7 +369,7 @@ func TestCancel(t *testing.T) {
 // definition is held (its module is not loaded) refuses every mutation with
 // 409 tasks.held, and the refusal is never recorded as a success.
 func TestHeld_MutationsRefused409(t *testing.T) {
-	as := session("lucius", scopeRun, scopeApprove, scopeManage)
+	as := session("lucius", scopeRun, scopeApprove, scopeManage, scopeArkhamManage)
 	mutations := []struct {
 		name string
 		r    req

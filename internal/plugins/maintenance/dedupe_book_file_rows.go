@@ -18,6 +18,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/library"
@@ -359,7 +360,7 @@ func (p *Plugin) dedupeBookFileRowsKind(deps t6g4Deps, sched *tasks.Schedule) ta
 		// The file-row methods it calls recompute the books aggregate, so the row also carries
 		// the rest of the ModifyBook row: metadata_cache, indexes (THE RULE, internal/maintenance/resources).
 		Effects: tasks.Writes(t6g4Res(ops.ResBookFiles, ops.ResBooks, ops.ResMetadataCache, ops.ResIndexes, ops.ResFingerprintIndex, ops.ResOperations, ops.ResFiles)...),
-		Perms:   tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:   tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		// HEAD is ResumeRestart with no checkpoint (a restartWithoutCheckpoint entry in
 		// internal/arch: a removed duplicate row no longer matches the selection), so the 05-tasks mapping is
 		// ResumeFromZero, not Continue (a resumed run re-enters Run from the top).
