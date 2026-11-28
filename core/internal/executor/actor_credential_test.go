@@ -31,14 +31,15 @@ func TestActorRecord_CredentialIDIsStoredWhole(t *testing.T) {
 }
 
 // TestActorCredential_NotPartOfWhoTheActorIs: a same-actor rule is about the
-// person, so a different session or key id does not make two actors different.
-// A new sign-in still lets the starter cancel its own run, and SameActorOnly
-// still folds a start made through another credential; another user is
-// still refused on both.
+// person and method, so a different key id does not make two actors different.
+// The starter may still cancel its own run through another of its keys, a
+// SameActorOnly start made through another key still folds (into a running run
+// and into a queued one, which are two code paths), and another user is still
+// refused on all of them. An actor with only a credential id names no one.
 func TestActorCredential_NotPartOfWhoTheActorIs(t *testing.T) {
-	bruce := tasks.Actor{UserID: "bruce", AuthMethod: "session", CredentialID: "sess-one"}
-	bruceAgain := tasks.Actor{UserID: "bruce", AuthMethod: "session", CredentialID: "sess-two"}
-	selina := tasks.Actor{UserID: "selina", AuthMethod: "session", CredentialID: "sess-one"}
+	bruce := tasks.Actor{UserID: "bruce", AuthMethod: "token", CredentialID: "key-batphone"}
+	bruceAgain := tasks.Actor{UserID: "bruce", AuthMethod: "token", CredentialID: "key-batmobile"}
+	selina := tasks.Actor{UserID: "selina", AuthMethod: "token", CredentialID: "key-batphone"}
 
 	started := make(chan tasks.RunID, 4)
 	def := taskDef("gotham.stakeout", blockUntilCtx(started), func(c *tasks.Common) { c.Dedupe = tasks.DedupePolicy{SameActorOnly: true} })
@@ -46,25 +47,92 @@ func TestActorCredential_NotPartOfWhoTheActorIs(t *testing.T) {
 	id := h.start("gotham.stakeout", tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, "narrows"), Actor: bruce})
 	<-started
 	rec := h.waitState(id, tasks.StateRunning)
-
-	ref, err := h.x.Start(t.Context(), "gotham.stakeout", tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, "narrows"), Actor: bruceAgain})
-	if err != nil || ref.ID != id || !ref.Existing {
-		t.Errorf("SameActorOnly start through another credential = %+v, %v; want folded into %s", ref, err, id)
+	start := func(c string, by tasks.Actor) tasks.RunRef {
+		t.Helper()
+		ref, err := h.x.Start(t.Context(), "gotham.stakeout", tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, c), Actor: by})
+		if err != nil {
+			t.Fatalf("start %s: %v", c, err)
+		}
+		return ref
 	}
-	ref, err = h.x.Start(t.Context(), "gotham.stakeout", tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, "narrows"), Actor: selina})
-	if err != nil || ref.ID == id || ref.Existing {
-		t.Errorf("SameActorOnly start by another user = %+v, %v; want a new run", ref, err)
+
+	// Into the RUNNING run (start.go's running-fold path).
+	if ref := start("narrows", bruceAgain); ref.ID != id || !ref.Existing {
+		t.Errorf("SameActorOnly start through another key while it runs = %+v; want folded into %s", ref, id)
+	}
+	if ref := start("narrows", selina); ref.ID == id || ref.Existing {
+		t.Errorf("SameActorOnly start by another user while it runs = %+v; want a new run", ref)
+	}
+
+	// Into a QUEUED run (start.go's queued-fold path): other params queue behind
+	// the running run, started through one key and folded through another.
+	queued := start("docks", bruce)
+	if queued.ID == id || queued.Existing {
+		t.Fatalf("a start with other params = %+v; want a new queued run", queued)
+	}
+	if ref := start("docks", bruceAgain); ref.ID != queued.ID || !ref.Existing {
+		t.Errorf("SameActorOnly start through another key into a queued run = %+v; want folded into %s", ref, queued.ID)
+	}
+	if ref := start("docks", selina); ref.ID == queued.ID || ref.Existing {
+		t.Errorf("SameActorOnly start by another user into a queued run = %+v; want a new run", ref)
 	}
 
 	nobody := grants{}
 	if !h.e.mayCancel(rec, bruceAgain, nobody) {
-		t.Error("the starter, signed in again, may not cancel its own run")
+		t.Error("the starter, through another key, may not cancel its own run")
 	}
 	if h.e.mayCancel(rec, selina, nobody) {
 		t.Error("another user may cancel a run it did not start")
 	}
 	if h.e.mayCancel(rec, tasks.Actor{}, nobody) {
 		t.Error("no identity may cancel the run")
+	}
+	// A credential id alone is no identity: a record with an empty actor is not
+	// its starter's.
+	if h.e.mayCancel(tasks.RunRecord{}, tasks.Actor{CredentialID: "key-batphone"}, nobody) {
+		t.Error("an actor with only a credential id may cancel a run whose actor is empty")
+	}
+}
+
+// TestRunView_CarriesNoCredentialID: the stored record keeps the key id, the
+// run's OWN rc.Actor() has it (the diagnostics export resolves its viewer from
+// it), and no read model does: Client.Get, Runs and Timeline return an Actor
+// without it, so a module cannot learn which key started another run.
+func TestRunView_CarriesNoCredentialID(t *testing.T) {
+	by := tasks.Actor{UserID: "bruce", AuthMethod: "token", CredentialID: "key-batphone"}
+	own := make(chan tasks.Actor, 1)
+	h := newHarness(t, []tasks.Definition{taskDef("gotham.stakeout", func(rc *tasks.RC, _ noParams) (string, error) {
+		own <- rc.Actor()
+		return "case closed", nil
+	})}, nil)
+	id := h.start("gotham.stakeout", tasks.StartRequest{Mode: tasks.ModeRequestLive, Params: mustParams(t, "docks"), Actor: by})
+	if got := <-own; got != by {
+		t.Errorf("rc.Actor() = %+v, want the run's own actor %+v", got, by)
+	}
+	if got := h.waitState(id, tasks.StateSucceeded).Actor; got != by {
+		t.Fatalf("stored actor = %+v, want %+v", got, by)
+	}
+	want := tasks.Actor{UserID: "bruce", AuthMethod: "token"}
+	got, err := h.x.Get(t.Context(), id)
+	if err != nil || got.Actor != want {
+		t.Errorf("Get actor = %+v, %v; want %+v", got.Actor, err, want)
+	}
+	n := 0
+	for v, err := range h.x.Runs(t.Context(), tasks.RunQuery{Kinds: []tasks.Kind{"gotham.stakeout"}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		n++
+		if v.Actor != want {
+			t.Errorf("Runs actor = %+v, want %+v", v.Actor, want)
+		}
+	}
+	if n != 1 {
+		t.Errorf("Runs returned %d runs, want 1", n)
+	}
+	tl, err := h.x.Timeline(t.Context(), tasks.TimelineQuery{Kinds: []tasks.Kind{"gotham.stakeout"}})
+	if err != nil || len(tl) != 1 || tl[0].Actor != want {
+		t.Errorf("Timeline = %+v, %v; want one run with actor %+v", tl, err, want)
 	}
 }
 

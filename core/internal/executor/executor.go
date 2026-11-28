@@ -260,6 +260,11 @@ func (e *executor) view(r tasks.RunRecord) tasks.RunView {
 // viewWith is view plus the run's wait record, for viewAs.
 func (e *executor) viewWith(r tasks.RunRecord) (tasks.RunView, wait) {
 	v := r.RunView
+	// The credential id stays in the stored record and on the run's OWN
+	// rc.Actor() (diagnostics resolves it there); no read model carries it, so a
+	// module reading Client.Get, Runs or Timeline cannot learn which key started
+	// another run.
+	v.Actor.CredentialID = ""
 	v.Held = e.held(r.Kind)
 	var w wait
 	if r.State == tasks.StateQueued {

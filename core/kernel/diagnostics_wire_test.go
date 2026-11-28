@@ -110,7 +110,7 @@ func TestDiagnosticsViewerFor_InteractiveOnlyForSession(t *testing.T) {
 	comp := newDWCompiler(t)
 	keyScopes := []rbac.Permission{"core:system.manage", "core:backup.restore"}
 	vf := diagnosticsViewerFor(dwUsers{"bruce": dwUser("bruce", auth.StatusActive, "admin")},
-		&dwKeys{keys: []*auth.APIKey{dwKey("key-batphone", "bruce", keyScopes...)}}, comp)
+		&dwKeys{keys: []*auth.APIKey{dwKey("key-batphone", "bruce", keyScopes...)}}, comp, dwNonKey())
 	for _, c := range []struct {
 		method      string
 		credential  string
@@ -122,6 +122,8 @@ func TestDiagnosticsViewerFor_InteractiveOnlyForSession(t *testing.T) {
 		{"session_delegated", "", false},
 		{"auth_disabled", "", false},
 		{"system", "", false},
+		{"ext:cfaccess", "", false}, // registered Interactive, compiled non-interactive as at HEAD (F2)
+		{"books.abs", "", false},    // a compat principal built over no key
 	} {
 		t.Run("method="+c.method+"/credential="+c.credential, func(t *testing.T) {
 			comp.seen = nil
@@ -159,7 +161,7 @@ func TestDiagnosticsViewerFor_LiveRolesAndRefusals(t *testing.T) {
 		"selina":  dwUser("selina", auth.StatusPending, "admin"),
 		"_system": dwUser("_system", auth.StatusSystem, "admin"),
 	}
-	vf := diagnosticsViewerFor(users, &dwKeys{}, newDWCompiler(t))
+	vf := diagnosticsViewerFor(users, &dwKeys{}, newDWCompiler(t), dwNonKey())
 	session := func(id string) tasks.Actor { return tasks.Actor{UserID: id, AuthMethod: "session"} }
 
 	v, err := vf(t.Context(), session("alfred"))
@@ -182,10 +184,20 @@ func TestDiagnosticsViewerFor_LiveRolesAndRefusals(t *testing.T) {
 			t.Errorf("%s: err = %v, want errNoDiagnosticsViewer", name, err)
 		}
 	}
-	if diagnosticsViewerFor(nil, &dwKeys{}, newDWCompiler(t)) != nil || diagnosticsViewerFor(users, nil, newDWCompiler(t)) != nil ||
-		diagnosticsViewerFor(users, &dwKeys{}, nil) != nil {
+	if diagnosticsViewerFor(nil, &dwKeys{}, newDWCompiler(t), dwNonKey()) != nil || diagnosticsViewerFor(users, nil, newDWCompiler(t), dwNonKey()) != nil ||
+		diagnosticsViewerFor(users, &dwKeys{}, nil, dwNonKey()) != nil || diagnosticsViewerFor(users, &dwKeys{}, newDWCompiler(t), nil) != nil {
 		t.Error("a nil collaborator did not yield a nil ViewerFor (diagnostics.New must refuse it)")
 	}
+}
+
+// dwNonKey is nonKeyMethods over what the fixtures register: the identity
+// extension ext:cfaccess (which sets Spec.Interactive, as the real one does)
+// and the compat methods books.abs and books.batcomputer.
+func dwNonKey() func(string) bool {
+	return nonKeyMethods(
+		[]auth.Extension{{Spec: auth.MethodSpec{Method: "ext:cfaccess", Interactive: true}}},
+		[]auth.MethodSpec{{Method: "books.abs"}, {Method: "books.batcomputer"}},
+	)
 }
 
 // dwStarter records the one start.

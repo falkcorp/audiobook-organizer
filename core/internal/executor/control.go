@@ -185,19 +185,28 @@ func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 	return e.CancelAs(ctx, id, actor)
 }
 
+// withoutCredential is a with its CredentialID blanked: the actor as a
+// same-actor rule sees it.
+func withoutCredential(a tasks.Actor) tasks.Actor {
+	a.CredentialID = ""
+	return a
+}
+
 // sameActor is whether a and b are the same person acting the same way: every
-// field but CredentialID. A credential changes under one person (a new sign-in
-// is a new session, a rotated key is a new key), and the rules that ask
-// whether the actor is the same (the starter may cancel its own run, a
-// same-actor fold) are about the person, so they must not start refusing
-// because the credential's id differs.
+// field but CredentialID. The credential under one person changes (a rotated
+// key is a new key with a new id, and two keys of one user are two
+// credentials), and the rules that ask whether the actor is the same (the
+// starter may cancel its own run, a same-actor fold) are about the person and
+// method, so they must not start refusing because the credential's id differs.
+// That is HEAD's behaviour: its actor never carried one.
 func sameActor(a, b tasks.Actor) bool {
-	a.CredentialID, b.CredentialID = "", ""
-	return a == b
+	return withoutCredential(a) == withoutCredential(b)
 }
 
 func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Checker) bool {
-	if actor != (tasks.Actor{}) && sameActor(actor, rec.Actor) {
+	// An actor with nothing but a credential id names no one: blank it before
+	// the empty-actor check, or it would equal a record's empty actor.
+	if withoutCredential(actor) != (tasks.Actor{}) && sameActor(actor, rec.Actor) {
 		return true
 	}
 	if who.Has(scopeTasksManage) {

@@ -93,8 +93,9 @@ const (
 // the key's scopes looks the key up by it, so a key revoked or narrowed after
 // the run started ends or narrows the run. It is empty for a session, a
 // system actor, the auth-disabled principal and a principal built over no key,
-// and on a run stored before the field existed. It is not part of the wire
-// form (ActorPayload) and is not part of who the actor is: two actors that
+// and on a run stored before the field existed. It reaches only the run's own
+// rc.Actor() and the stored record: RunView (Client.Get, Runs, Timeline) and
+// the wire form (ActorPayload) leave it out. It is not part of who the actor is: two actors that
 // differ only in it are the same person acting through different credentials.
 type Actor struct {
 	UserID       string

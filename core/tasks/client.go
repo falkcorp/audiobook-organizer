@@ -121,7 +121,8 @@ var ErrModeUnset = errors.New("tasks: start mode not stated")
 // RunView is the read model of one run: what Client.Get/Runs return. GET
 // /runs[/{id}], core.task.run-changed.v1 and core.task.finished.v1 serialise
 // it through RunPayload, its wire form (topics.go); RunView itself carries no
-// JSON tags.
+// JSON tags. Its Actor never carries CredentialID: the executor blanks it in
+// every read model, so a module cannot learn which key started another run.
 type RunView struct {
 	ID       RunID
 	Kind     Kind

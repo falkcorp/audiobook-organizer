@@ -68,18 +68,46 @@ var errNoDiagnosticsViewer = errors.New("kernel: diagnostics run has no active p
 // actorOf spells core's api_key method this way).
 const tokenMethod = "token"
 
-// nonKeyMethod reports whether method is one that is known never to be
-// key-bound: the methods whose actor carries no CredentialID on purpose.
-// "system" is the executor's own actor (a schedule, the relay, a module's
-// start); the others are core's session, delegated-session and auth-disabled
-// methods. Any other method name with no CredentialID is not known to be
-// anything, and ViewerFor refuses it.
-func nonKeyMethod(method string) bool {
-	switch method {
-	case string(auth.MethodSession), string(auth.MethodSessionDelegated), string(auth.MethodAuthDisabled), "system":
-		return true
+// nonKeyMethods is the set of method names that are never key-bound, as a
+// membership test: the executor's own "system" actor, core's session,
+// session_delegated and auth_disabled methods, and every method registered
+// with auth, which is each identity extension's "ext:<name>" (exts, from the
+// configured authenticators) and each enabled module's compat methods
+// ("<module>.<name>", compat, from the modules' recorded AuthMethods).
+//
+// A principal is key-bound only when resolveKey built it over a key, which
+// stamps its CredentialID whatever method name it arrives under
+// (auth/middleware.go resolveKey, callers middleware.go and compat.go). So the
+// set says only that a method with NO credential id is not a key one that lost
+// its id: an ext principal never carries a key at all, and a compat principal
+// built over no key (an ABS JWT session) carries none. Membership never
+// exempts a principal that has a CredentialID: ViewerFor decides on the id
+// first.
+//
+// Membership is an exact match on the whole name, never a prefix: "ext:" and
+// "ext:cfaccess-x" are not in a set that holds "ext:cfaccess". An empty method
+// name in a spec is skipped, so "" is never a member.
+func nonKeyMethods(exts []auth.Extension, compat []auth.MethodSpec) func(method string) bool {
+	set := map[string]struct{}{
+		string(auth.MethodSession):          {},
+		string(auth.MethodSessionDelegated): {},
+		string(auth.MethodAuthDisabled):     {},
+		"system":                            {},
 	}
-	return false
+	for _, e := range exts {
+		if e.Spec.Method != "" {
+			set[string(e.Spec.Method)] = struct{}{}
+		}
+	}
+	for _, c := range compat {
+		if c.Method != "" {
+			set[string(c.Method)] = struct{}{}
+		}
+	}
+	return func(method string) bool {
+		_, ok := set[method]
+		return ok
+	}
 }
 
 // diagnosticsViewerFor is diagnostics.Config.ViewerFor (F8-03 obligation 4).
@@ -94,25 +122,28 @@ func nonKeyMethod(method string) bool {
 //     refuses the run; a live one narrows the viewer to the user's current
 //     roles within the key's CURRENT scopes, compiled non-interactive, so a key
 //     narrowed or revoked after the run started narrows or ends the run.
-//   - No CredentialID and a known non-key method (session, session_delegated,
-//     auth_disabled, system): the user's current roles, interactive only for
-//     "session" (auth.Method.Interactive). There is no liveness check: a run
-//     keeps going after its starter signs out.
-//   - No CredentialID and "token", or any method not listed above: refused. A
-//     token actor with no id is a run stamped before the id existed or an actor
-//     assembled by hand, and there is no way to tell which key's scopes apply;
-//     a method nobody classified may be a key-bound one this function cannot
-//     recognise.
+//   - No CredentialID and a method in nonKey (session, session_delegated,
+//     auth_disabled, system, and every registered ext:* and compat method): the
+//     user's current roles, interactive ONLY for "session" and never because a
+//     method's own spec says so (ext:cfaccess registers Interactive, and HEAD
+//     compiled it non-interactive; see auth.Method.Interactive). There is no
+//     liveness check: a run keeps going after its starter signs out.
+//   - No CredentialID and "token", or any method outside nonKey (an
+//     unregistered name, a prefix of a registered one, the empty method):
+//     refused. A token actor with no id is a run stamped before the id existed
+//     or an actor assembled by hand, and there is no way to tell which key's
+//     scopes apply; a method nobody registered may be a key-bound one this
+//     function cannot recognise.
 //
 // So an administrator's API key never reaches a Sensitive scope
 // (core:backup.restore and the rest) that only the live interactive checker
 // admits. The start route's request-time snapshot (ExportParams.Perms) narrows
 // what this returns, and never widens it.
 //
-// A nil users, keys or rbac yields a nil function, which diagnostics.New
-// refuses, so boot fails closed.
-func diagnosticsViewerFor(users diagnosticsUsers, keys diagnosticsKeys, rb checkerCompiler) func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
-	if users == nil || keys == nil || rb == nil {
+// A nil users, keys, rbac or nonKey yields a nil function, which
+// diagnostics.New refuses, so boot fails closed.
+func diagnosticsViewerFor(users diagnosticsUsers, keys diagnosticsKeys, rb checkerCompiler, nonKey func(method string) bool) func(context.Context, tasks.Actor) (diagnostics.Viewer, error) {
+	if users == nil || keys == nil || rb == nil || nonKey == nil {
 		return nil
 	}
 	return func(ctx context.Context, actor tasks.Actor) (diagnostics.Viewer, error) {
@@ -136,10 +167,13 @@ func diagnosticsViewerFor(users diagnosticsUsers, keys diagnosticsKeys, rb check
 			in.Scopes = scopes // non-interactive: a key is never an interactive credential
 		case actor.AuthMethod == tokenMethod:
 			return diagnostics.Viewer{}, fmt.Errorf("%w: no credential id", errNoDiagnosticsViewer)
-		case nonKeyMethod(actor.AuthMethod):
-			in.Interactive = auth.Method(actor.AuthMethod).Interactive()
+		case nonKey(actor.AuthMethod):
+			// Only a core session is interactive. A registered method's own
+			// Spec.Interactive is never read here: ext:cfaccess sets it, and HEAD
+			// compiled that method non-interactive.
+			in.Interactive = actor.AuthMethod == string(auth.MethodSession)
 		default:
-			return diagnostics.Viewer{}, fmt.Errorf("%w: unrecognised method with no credential id", errNoDiagnosticsViewer)
+			return diagnostics.Viewer{}, fmt.Errorf("%w: method not registered and no credential id", errNoDiagnosticsViewer)
 		}
 		c := rb.Compile(in)
 		if c == nil {
