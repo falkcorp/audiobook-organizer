@@ -63,11 +63,12 @@ func errHoldChanged(cause error) error {
 // never calls Registry.Health and sends nothing to the remote, whatever the
 // instance's state.
 //
-// The permission is checked here as well as by the router (guardManage): a
+// The permission is checked here as well as by the router (guardPerm, with the
+// requirement the route declares): a
 // release lifts a protection the remote asked for, and the route has no
 // Registry write behind it to re-check the permission.
 func (a *api) releaseHold(ctx context.Context, in *httpapi.In[instanceReq]) (httpapi.NoContent, error) {
-	if err := a.guardManage(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return httpapi.NoContent{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -98,7 +99,7 @@ func (a *api) releaseHold(ctx context.Context, in *httpapi.In[instanceReq]) (htt
 
 // holdView is the hold the health view carries. Detail is left out: it is a
 // redacted excerpt of the remote's answer, and an instance's health is read
-// with core:integrations.read, which must not make the route a way to read
+// with core:integrations.manage, which must not make the route a way to read
 // remote text (SEC-15).
 func holdView(h *integrations.Hold) *IntegrationHold {
 	if h == nil {

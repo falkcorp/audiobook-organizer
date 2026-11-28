@@ -37,10 +37,34 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// permRead is the permission the read routes declare (05-rbac §7.1). The
-// manage routes declare integrations.ManagePerm, the Registry's own constant;
-// manage implies read in the catalog.
+// permRead is the permission the adapters list declares (05-rbac §7.1), the one
+// route that asks it. The instance routes ask the instance requirement
+// (rbac.OperatorRequirement) and the health and test routes a floor of
+// integrations.ManagePerm, the Registry's own constant; the catalog lets manage
+// imply read, so every route's caller satisfies read as well.
 const permRead rbac.Permission = "core:integrations.read"
+
+// instancePerm is the requirement of every instance route (list, get, create,
+// update, delete, release hold) and of those handlers' own backstop
+// (api.guardPerm): rbac.OperatorRequirement, the seven core scopes HEAD's
+// settings.manage atom grants. HEAD's integrations.manage atom maps to
+// core:integrations.manage and books:integrations.manage only, and at HEAD such
+// a principal never reached an instance's config (PUT /config needs
+// settings.manage), so the single scope core:integrations.manage is wider than
+// HEAD and a settings.manage holder is the reach. It is the one shared
+// definition (core/rbac/operator.go), not a copy of the scope list. Register
+// and the handlers both call this, so the route's Perm and the backstop cannot
+// drift apart.
+func instancePerm() rbac.Requirement { return rbac.OperatorRequirement() }
+
+// floorPerm is the Perm of the health and the two test routes. It is a floor,
+// not the rule: one route serves every kind and a route has one Perm, while the
+// rule differs per kind (probeReach). The floor is the Registry's own write
+// scope, which is what Registry.Test asks through writerOf; a caller below it
+// gets the router's 403, and a caller at or above it reaches the handler, which
+// answers the per-kind rule (a 404 for a kind core does not serve, a backstop 403
+// naming the instance requirement for the rest).
+func floorPerm() rbac.Requirement { return rbac.Need(integrations.ManagePerm) }
 
 // maxBody bounds a body: an instance's settings are a handful of fields, and
 // a secret is capped at maxSecretBytes by validation, so a request has no
@@ -68,9 +92,25 @@ type api struct {
 // batch that commits the change.
 func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, auditLog audit.Logger) {
 	a := &api{reg: reg, holds: holds, audit: auditLog, base: g.Base()}
+	// instance is every instance route's requirement, for every kind: the seven
+	// scopes of HEAD's settings.manage atom, not the wider core:integrations.manage
+	// alone. The health and test routes mount the floor and answer a per-kind
+	// rule in the handler (probeReach, kindreach.go).
+	mount(g, a, routePerms{read: rbac.Need(permRead), instance: instancePerm(), floor: floorPerm()})
+}
+
+// routePerms are the Perm each class of route is mounted with. Register passes
+// the requirements the handlers' backstop (api.guardPerm) checks, except floor,
+// which the health and test routes mount below their per-kind rule; a test
+// passes a weaker one to prove the backstop holds without the router.
+type routePerms struct {
+	read, instance, floor rbac.Requirement
+}
+
+// mount registers the routes on g with the given Perms.
+func mount(g *httpapi.Group, a *api, p routePerms) {
 	tags := []string{"integrations"}
-	read := rbac.Need(permRead)
-	manage := rbac.Need(integrations.ManagePerm)
+	read, instance, floor := p.read, p.instance, p.floor
 
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/integrations/adapters", Name: "listIntegrationAdapters", Perm: read, Tags: tags,
@@ -78,40 +118,41 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 		Doc:     "Optional ?kind= narrows the list to one kind. The schema marks secret fields x-mediacore-secret.",
 	}, a.listAdapters)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances", Name: "listIntegrationInstances", Perm: read, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances", Name: "listIntegrationInstances", Perm: instance, Tags: tags,
 		Summary: "List a kind's instances",
 		Doc:     "Secret fields are never returned; secrets_set says which hold a value.",
 	}, a.listInstances)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPost, Path: "/integrations/{kind}/instances", Name: "createIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodPost, Path: "/integrations/{kind}/instances", Name: "createIntegrationInstance", Perm: instance, Tags: tags,
 		MaxBody: maxBody, Summary: "Create an instance",
 		Doc: "Secret values go in secrets and are write-only. A body naming an existing instance is 409.",
 	}, a.createInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}", Name: "getIntegrationInstance", Perm: read, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}", Name: "getIntegrationInstance", Perm: instance, Tags: tags,
 		Summary: "Read an instance",
 	}, a.getInstance)
-	httpapi.Handle(g, updateRoute(manage, tags), a.updateInstance)
+	httpapi.Handle(g, updateRoute(instance, tags), a.updateInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}", Name: "deleteIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}", Name: "deleteIntegrationInstance", Perm: instance, Tags: tags,
 		Summary: "Delete an instance and its secrets",
 	}, a.deleteInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPost, Path: "/integrations/{kind}/test", Name: "testIntegration", Perm: manage, Tags: tags,
+		Method: http.MethodPost, Path: "/integrations/{kind}/test", Name: "testIntegration", Perm: floor, Tags: tags,
 		MaxBody: maxBody, RateClass: httpapi.RateExpensive, Summary: "Test an unsaved configuration",
-		Doc: "No stored instance is involved: only the body's secrets are sent. The answer is ok, class and status, never remote text.",
+		Doc: "No stored instance is involved: only the body's secrets are sent. The answer is ok, class and status, never remote text. Per kind: " + docFor(probeTest),
 	}, a.testNew)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPost, Path: "/integrations/{kind}/instances/{id}/test", Name: "testIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodPost, Path: "/integrations/{kind}/instances/{id}/test", Name: "testIntegrationInstance", Perm: floor, Tags: tags,
 		MaxBody: maxBody, RateClass: httpapi.RateExpensive, Summary: "Test an unsaved body for a stored instance",
-		Doc: "A secret the body omits is filled from the stored one only while no destination origin changes.",
+		Doc: "A secret the body omits is filled from the stored one only while no destination origin changes. Per kind: " + docFor(probeTest),
 	}, a.testInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}/health", Name: "getIntegrationInstanceHealth", Perm: read, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}/health", Name: "getIntegrationInstanceHealth", Perm: floor, Tags: tags,
 		RateClass: httpapi.RateExpensive, Summary: "Probe an instance and report its health",
+		Doc: "Per kind: " + docFor(probeHealth),
 	}, a.getHealth)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: manage, Tags: tags,
+		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: instance, Tags: tags,
 		Summary: "Release the instance's active hold",
 		Doc:     "204 whether a hold was released or none was active, so the call is idempotent; 409 hold_changed when a different hold took its place between the read and the release (read the health again and retry); 404 for an instance that does not exist. Sends nothing to the remote.",
 	}, a.releaseHold)
@@ -120,9 +161,9 @@ func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, 
 // updateRoute is PUT's route. It is strict (not Lenient): an unknown key is a
 // 400, and the read-only keys of a GET answer are members of
 // IntegrationInstanceReplace; it is a function so a test can pin that.
-func updateRoute(manage rbac.Requirement, tags []string) httpapi.Route {
+func updateRoute(perm rbac.Requirement, tags []string) httpapi.Route {
 	return httpapi.Route{
-		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodPut, Path: "/integrations/{kind}/instances/{id}", Name: "updateIntegrationInstance", Perm: perm, Tags: tags,
 		MaxBody: maxBody, Summary: "Replace an instance's editable fields",
 		Doc: "The body carries the stored version and every editable field (name, enabled, priority, local, limits; {} limits inherit), so a GET answer edited and sent back is a valid body: the read-only keys it carries (kind, origin, secrets_set, locked, stored, updated) are accepted and ignored, and any other unknown key is a 400. A secret the body omits keeps its stored value while no destination moves; settings.<field> = null clears it.",
 	}
@@ -286,7 +327,7 @@ func (a *api) listAdapters(_ context.Context, in *httpapi.In[listAdaptersReq]) (
 }
 
 func (a *api) listInstances(_ context.Context, in *httpapi.In[listInstancesReq]) (httpapi.Page[IntegrationInstance], error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return httpapi.Page[IntegrationInstance]{}, err
 	}
 	kind, err := kindRef(in.Req.Kind)
@@ -302,7 +343,7 @@ func (a *api) listInstances(_ context.Context, in *httpapi.In[listInstancesReq])
 }
 
 func (a *api) getInstance(_ context.Context, in *httpapi.In[instanceReq]) (IntegrationInstance, error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return IntegrationInstance{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -318,7 +359,7 @@ func (a *api) getInstance(_ context.Context, in *httpapi.In[instanceReq]) (Integ
 
 func (a *api) createInstance(ctx context.Context, in *httpapi.In[createReq]) (httpapi.Created[IntegrationInstance], error) {
 	var zero httpapi.Created[IntegrationInstance]
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return zero, err
 	}
 	kind, err := kindRef(in.Req.Kind)
@@ -341,7 +382,7 @@ func (a *api) createInstance(ctx context.Context, in *httpapi.In[createReq]) (ht
 func (a *api) updateInstance(ctx context.Context, in *httpapi.In[updateReq]) (IntegrationInstance, error) {
 	// The permission comes before the existence check below, so a caller
 	// without it learns nothing about which instances exist.
-	if err := a.guardManage(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return IntegrationInstance{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -393,7 +434,7 @@ func withheldOmitted(cur integrations.InstanceConfig, fi *fieldInfo, settings ma
 }
 
 func (a *api) deleteInstance(ctx context.Context, in *httpapi.In[instanceReq]) (httpapi.NoContent, error) {
-	if err := a.guard(in.Principal); err != nil {
+	if err := a.guardPerm(in.Principal, instancePerm()); err != nil {
 		return httpapi.NoContent{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -407,7 +448,7 @@ func (a *api) deleteInstance(ctx context.Context, in *httpapi.In[instanceReq]) (
 }
 
 func (a *api) getHealth(ctx context.Context, in *httpapi.In[instanceReq]) (IntegrationHealth, error) {
-	if err := a.guard(in.Principal); err != nil {
+	if _, err := a.guardProbe(probeHealth, in.Principal, in.Req.Kind); err != nil {
 		return IntegrationHealth{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -422,10 +463,7 @@ func (a *api) getHealth(ctx context.Context, in *httpapi.In[instanceReq]) (Integ
 }
 
 func (a *api) testNew(ctx context.Context, in *httpapi.In[testNewReq]) (IntegrationTestResult, error) {
-	if err := a.guard(in.Principal); err != nil {
-		return IntegrationTestResult{}, err
-	}
-	kind, err := kindRef(in.Req.Kind)
+	kind, err := a.guardProbe(probeTest, in.Principal, in.Req.Kind)
 	if err != nil {
 		return IntegrationTestResult{}, err
 	}
@@ -436,7 +474,7 @@ func (a *api) testNew(ctx context.Context, in *httpapi.In[testNewReq]) (Integrat
 
 func (a *api) testInstance(ctx context.Context, in *httpapi.In[testInstanceReq]) (IntegrationTestResult, error) {
 	// The permission comes before the existence check below (see updateInstance).
-	if err := a.guardManage(in.Principal); err != nil {
+	if _, err := a.guardProbe(probeTest, in.Principal, in.Req.Kind); err != nil {
 		return IntegrationTestResult{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)

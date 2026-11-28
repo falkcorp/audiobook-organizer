@@ -720,8 +720,8 @@ const (
 // URL rule (urlUnsafe); any of them flags a string.
 //
 // The Registry refuses userinfo when a URL-typed field is written, but an
-// operator-layer value is not a Put, and the settings answer is read with
-// core:integrations.read.
+// operator-layer value is not a Put, and the instance answer is read by a holder
+// of core:integrations.manage and core:settings.manage.
 type screener struct {
 	left             int
 	text, parse, url bool
