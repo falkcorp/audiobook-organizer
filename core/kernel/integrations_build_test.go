@@ -153,6 +153,33 @@ func (r *integRig) setLibrary(f func(*librarySettings)) {
 	f(&r.library)
 }
 
+// effectiveLibrary is the core.library section as the config store holds it
+// when no operator has set a key: the declared defaults. It is what the flip's
+// Library reader returns, so the rig does not hand library a zero struct (which
+// marshals to explicit zeros and turns off its free-space floor).
+func effectiveLibrary(t testing.TB) librarySettings {
+	t.Helper()
+	st, err := config.NewStore(config.Options{AppID: "gotham", Environ: []string{}, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close(context.Background()) })
+	handles, err := config.RegisterSections(st.Registry(), coreSections()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range handles {
+		if lh, ok := h.(*config.Handle[librarySettings]); ok {
+			return *lh.Get()
+		}
+	}
+	t.Fatal("coreSections() has no core.library section")
+	return librarySettings{}
+}
+
 // newIntegRig boots the rig. edit adjusts the inputs before they are returned.
 func newIntegRig(t *testing.T, edit func(*integrationsInputs)) (*integRig, integrationsInputs) {
 	t.Helper()
@@ -165,7 +192,8 @@ func newIntegRig(t *testing.T, edit func(*integrationsInputs)) (*integRig, integ
 	}
 	t.Cleanup(func() { _ = prov.Shutdown(ctx) })
 
-	r := &integRig{t: t, db: db, prov: prov, logs: &syncBuf{}, signal: &integrationstest.Fake{}, health: &healthEvents{}}
+	r := &integRig{t: t, db: db, prov: prov, logs: &syncBuf{}, signal: &integrationstest.Fake{}, health: &healthEvents{},
+		library: effectiveLibrary(t)}
 
 	bus, err := events.NewBus(events.BusOptions{})
 	if err != nil {

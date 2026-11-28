@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"slices"
@@ -328,7 +329,138 @@ func TestBuildIntegrations_LibraryEntryErrorIsNotABootFailure(t *testing.T) {
 	if s.library == nil {
 		t.Fatal("no library Manager")
 	}
-	if !strings.Contains(r.logs.String(), "library roots loaded with errors") {
+	var line string
+	for l := range strings.SplitSeq(r.logs.String(), "\n") {
+		if strings.Contains(l, "library roots loaded with errors") {
+			line = l
+		}
+	}
+	if line == "" {
 		t.Fatalf("the decode error was not reported:\n%s", r.logs.String())
+	}
+	// A skipped entry can change where a download maps, so it is an error, not
+	// a warning.
+	if !strings.Contains(line, "level=ERROR") {
+		t.Fatalf("the decode error was not logged at ERROR: %s", line)
+	}
+}
+
+// libraryLookup is what library reads for key from the rig's Library reader.
+func libraryLookup(t *testing.T, get func() librarySettings, key string) string {
+	t.Helper()
+	ks, ok := (librarySource{get: get}).Lookup(config.Path(key))
+	if !ok {
+		t.Fatalf("library reads no value for %s", key)
+	}
+	return string(ks.Effective)
+}
+
+// TestLibrarySource_DefaultSectionReachesLibrary: the section the rig (and the
+// flip) hands over is the effective one, so library reads its defaults for the
+// free-space floor, 10 percent and 5 GiB, not the zeros a zero struct marshals.
+func TestLibrarySource_DefaultSectionReachesLibrary(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	if got := libraryLookup(t, in.Library, "core.library.free_space.warn_percent"); got != "10" {
+		t.Errorf("free_space.warn_percent = %s, want the default 10", got)
+	}
+	if got, want := libraryLookup(t, in.Library, "core.library.free_space.default_min_bytes"), "5368709120"; got != want {
+		t.Errorf("free_space.default_min_bytes = %s, want the default 5 GiB (%s)", got, want)
+	}
+	if got := libraryLookup(t, in.Library, "core.library.transfer.workers"); got != "4" {
+		t.Errorf("transfer.workers = %s, want the default 4", got)
+	}
+	r.build(in) // and the build accepts it
+}
+
+// TestBuildIntegrations_ZeroLibrarySectionIsRefused: a Library reader that
+// returns the zero section would disable library's free-space floor (library
+// accepts the explicit zeros), so the build refuses it, naming the section and
+// closing what it already built. A section whose lists are empty but not nil is
+// still unset; a nil reader reads nothing and is fine.
+func TestBuildIntegrations_ZeroLibrarySectionIsRefused(t *testing.T) {
+	for name, zero := range map[string]librarySettings{
+		"zero":          {},
+		"empty lists":   {Roots: []json.RawMessage{}, Mappings: []json.RawMessage{}, ProtectedPaths: []string{}},
+		"empty and nil": {Roots: []json.RawMessage{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, in := newIntegRig(t, func(in *integrationsInputs) { in.Library = func() librarySettings { return zero } })
+			s, err := buildIntegrations(context.Background(), in)
+			if err == nil {
+				_ = s.close(context.Background())
+				t.Fatal("a zero core.library section built")
+			}
+			if !errors.Is(err, errLibraryZeroSection) || !strings.Contains(err.Error(), "core.library") {
+				t.Fatalf("the refusal does not name the section: %v", err)
+			}
+			if got, want := r.logs.parts("part closed"), []string{"ai", "integrations", "providerhttp"}; !slices.Equal(got, want) {
+				t.Fatalf("closed %v, want %v", got, want)
+			}
+		})
+	}
+	t.Run("nil reader", func(t *testing.T) {
+		r, in := newIntegRig(t, func(in *integrationsInputs) { in.Library = nil })
+		if s := r.build(in); s.library == nil {
+			t.Fatal("no library Manager")
+		}
+	})
+}
+
+// TestBuildIntegrations_ExplicitLibraryZeroLeafStands: an operator's explicit 0
+// on one leaf, with the rest of the section populated, is a choice and reaches
+// library as 0; the build does not strip it or refuse it.
+func TestBuildIntegrations_ExplicitLibraryZeroLeafStands(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	r.setLibrary(func(v *librarySettings) { v.FreeSpace.WarnPercent = 0 })
+	if got := libraryLookup(t, in.Library, "core.library.free_space.warn_percent"); got != "0" {
+		t.Fatalf("warn_percent = %s, want the operator's 0", got)
+	}
+	if got := libraryLookup(t, in.Library, "core.library.free_space.default_min_bytes"); got != "5368709120" {
+		t.Fatalf("an untouched leaf = %s, want its default", got)
+	}
+	if s := r.build(in); s.library == nil {
+		t.Fatal("a section with one explicit zero leaf was refused")
+	}
+}
+
+// libraryProbe is a Manager the build could be handed: Close is on it, Reload
+// is not, so the build must refuse it and must not leak it.
+type libraryProbe struct {
+	library.Manager
+	closed   int
+	closeErr error
+}
+
+func (p *libraryProbe) Close() error { p.closed++; return p.closeErr }
+
+// bareProbe has neither Close nor Reload.
+type bareProbe struct{ library.Manager }
+
+// TestLibraryHandles: library.New returns the Manager interface and Close and
+// Reload live on the concrete manager. A Manager missing either is refused, and
+// one that can be closed is closed on the way out (its close error joined).
+func TestLibraryHandles(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	live := r.build(in).library
+	if c, rl, err := libraryHandles(live); err != nil || c == nil || rl == nil {
+		t.Fatalf("the real Manager = %v, %v, %v", c, rl, err)
+	}
+
+	p := &libraryProbe{}
+	if _, _, err := libraryHandles(p); err == nil {
+		t.Fatal("a Manager with no Reload was accepted")
+	}
+	if p.closed != 1 {
+		t.Fatalf("the refused Manager was closed %d times, want once", p.closed)
+	}
+
+	boom := errors.New("riddler's lock is jammed")
+	p = &libraryProbe{closeErr: boom}
+	if _, _, err := libraryHandles(p); err == nil || !errors.Is(err, boom) {
+		t.Fatalf("a close failure on the refused Manager is lost: %v", err)
+	}
+
+	if _, _, err := libraryHandles(bareProbe{}); err == nil {
+		t.Fatal("a Manager with neither handle was accepted")
 	}
 }

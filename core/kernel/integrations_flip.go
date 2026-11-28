@@ -119,8 +119,15 @@ func integrationHealthTopicSpec() events.TopicSpec {
 }
 
 // integrationsInputs are what the flip hands buildIntegrations. Every reader
-// is called when its value is needed, so a hot reload takes effect; a nil
-// reader reads the section's zero value, which every constructor defaults.
+// is called when its value is needed, so a hot reload takes effect. A nil
+// reader reads nothing, which every constructor defaults. A reader that is set
+// must return the effective section, the config store's values with the
+// declared defaults applied, never a zero struct: librarySource marshals the
+// section, so a zero Library carries explicit zeros that library accepts as
+// choices (free_space.warn_percent and default_min_bytes of 0 turn its
+// free-space floor off, where the defaults are 10 percent and 5 GiB).
+// buildLibrary refuses an all-zero Library section; a single leaf an operator
+// set to 0 beside a populated section is kept.
 type integrationsInputs struct {
 	AppID string // app.Options.AppID: the "app" of a webhook body
 
