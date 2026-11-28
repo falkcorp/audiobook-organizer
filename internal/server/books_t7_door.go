@@ -1,5 +1,5 @@
 // file: internal/server/books_t7_door.go
-// version: 1.0.1
+// version: 1.1.0
 // guid: 3a7f6c52-1d0e-4b9b-8e4c-6f21b7d0a9e5
 // last-edited: 2026-11-28
 
@@ -185,13 +185,15 @@ func (s *Server) BooksT7Kinds(standDownKey tasks.Key, sched func(tasks.Kind) *ta
 }
 
 // BooksT7Stubs is the adapter methods that still refuse, as "Store.<name>" and
-// "Writer.<name>", sorted. It calls every method of both views once with zero
-// arguments and counts a method a stub when it returns an ErrKindNotBuilt or
-// enters a stub body; a method that does anything else, including one that
-// cannot run on this Server, is not. The tasks-flip gate in internal/books
-// fails while it is not empty.
-func (s *Server) BooksT7Stubs() []string {
-	deps := s.booksT7Deps("")
+// "Writer.<name>", sorted. It is a package function, not a method of a live
+// Server, on purpose: it calls every method of both views once with zero
+// arguments, and once a group builds a body that call must land on a Server with
+// nothing behind it (a nil store, so a built method panics and is recovered and
+// counted as built), never on one that would run RunPurge or MergeAuthors for
+// real. A method counts as a stub when it returns an ErrKindNotBuilt or enters a
+// stub body. The tasks-flip gate in internal/books fails while it is not empty.
+func BooksT7Stubs() []string {
+	deps := (&Server{}).booksT7Deps("")
 	var out []string
 	for _, v := range []struct {
 		side string

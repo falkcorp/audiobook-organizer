@@ -1,5 +1,5 @@
 // file: internal/server/books_t7_adapter_test.go
-// version: 1.1.0
+// version: 1.2.0
 // guid: 6e0f2d84-3b7a-4c19-a5d8-92c4e1b7f630
 // last-edited: 2026-11-28
 
@@ -404,7 +404,7 @@ func TestBooksT7Tables_NameRealThings(t *testing.T) {
 // still refuses"); give a method a body without setting the table ("is not
 // built but no longer refuses").
 func TestBooksT7Stubs_AgreeWithBuilt(t *testing.T) {
-	stubs := (&Server{}).BooksT7Stubs()
+	stubs := BooksT7Stubs()
 	isStub := func(side, name string) bool { return slices.Contains(stubs, side+"."+name) }
 	storeT, writerT := reflect.TypeFor[t7Store](), reflect.TypeFor[t7Writer]()
 	for _, v := range []struct {

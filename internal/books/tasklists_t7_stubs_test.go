@@ -1,5 +1,5 @@
 // file: internal/books/tasklists_t7_stubs_test.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 5c2e9a17-84d3-4f60-b1a8-0e7d3c64f952
 // last-edited: 2026-11-28
 
@@ -25,6 +25,6 @@ func TestF5_NoT7AdapterStubRemains(t *testing.T) {
 	if !tasksFlipOn() {
 		t.Skip("the tasks flip is off: the t7 adapter may still hold stubs; this test bites when the switch commit turns it on")
 	}
-	stubs := (&server.Server{}).BooksT7Stubs()
+	stubs := server.BooksT7Stubs()
 	require.Empty(t, stubs, "the tasks flip is on and %d method(s) of the t7 host adapter still refuse", len(stubs))
 }
