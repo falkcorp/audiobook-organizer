@@ -311,18 +311,17 @@ func TestIntegrationHTTP_WritesNeedIntegrationsManage(t *testing.T) {
 	const stored, moved = "http://192.0.2.20/", "http://192.0.2.78/"
 	for _, r := range []s13Route{
 		{name: "create", method: http.MethodPost, path: "/integrations/notify/instances", perm: integrations.ManagePerm, holders: holders,
-			body: func() any { return signalBody(annexID, "http://192.0.2.21/", "alfred-9") },
+			// No secret in the body: writing one also needs an interactive
+			// core:admin (TestIntegrationHTTP_SecretWriteNeedsInteractiveAdmin),
+			// which a holder of manage alone does not have.
+			body: func() any { return signalBody(annexID, "http://192.0.2.21/", "") },
 			success: func(t *testing.T, e *s13Env, res s13Result) {
-				wantOK(t, e, res, http.StatusCreated, "core.integration.create", "core.integration.write_secret")
+				wantOK(t, e, res, http.StatusCreated, "core.integration.create")
 				if loc, want := res.rec.Header().Get("Location"), "/api/core/v1/integrations/notify/instances/"+annexID; loc != want {
 					t.Errorf("Location = %q, want %q", loc, want)
 				}
-				if got := s13Decode[IntegrationInstance](t, res); got.ID != annexID || got.Version != 1 || !got.Stored || !got.SecretsSet["password"] {
-					t.Errorf("created = %+v, want stored gcpd-annex v1 with its password marked set", got)
-				}
-				assertNoLeak(t, "the created instance", res.rec.Body.String(), "alfred-9")
-				if got := e.secretValue(t, kindNotify, annexID, "password"); got != "alfred-9" {
-					t.Errorf("the stored secret = %q, want the one the body carried", got)
+				if got := s13Decode[IntegrationInstance](t, res); got.ID != annexID || got.Version != 1 || !got.Stored || got.SecretsSet["password"] {
+					t.Errorf("created = %+v, want stored gcpd-annex v1 with no password set", got)
 				}
 			}},
 		{name: "update", method: http.MethodPut, path: "/integrations/notify/instances/gcpd-roof", perm: integrations.ManagePerm, holders: holders,
@@ -392,6 +391,53 @@ func TestIntegrationHTTP_WritesNeedIntegrationsManage(t *testing.T) {
 	} {
 		t.Run(r.name, r.run)
 	}
+}
+
+// TestIntegrationHTTP_SecretWriteNeedsInteractiveAdmin: a create that carries
+// a secret value passes stage 13 for a holder of core:integrations.manage, but
+// the registry refuses it (403 permission_denied, naming core:admin) unless
+// the interactive principal also holds core:admin, as HEAD's settings write
+// refused every secret key to a non-admin. The refusal leaves everything as
+// it was; the admin's create stores the secret and records write_secret.
+func TestIntegrationHTTP_SecretWriteNeedsInteractiveAdmin(t *testing.T) {
+	adminHolder := s13Caller{name: "manage and admin", scopes: []rbac.Permission{integrations.ManagePerm, rbac.CoreAdmin}}
+	const path = "/integrations/notify/instances"
+	body := func() any { return signalBody(annexID, "http://192.0.2.21/", "alfred-9") }
+
+	t.Run("manage without admin", func(t *testing.T) {
+		e := newS13Env(t)
+		res := e.serve(t, http.MethodPost, path, body(), manageHolder)
+		if res.rec.Code != http.StatusForbidden {
+			t.Fatalf("status = %d (%s), want 403", res.rec.Code, res.rec.Body.String())
+		}
+		var prob struct {
+			Code   string `json:"code"`
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(res.rec.Body.Bytes(), &prob); err != nil {
+			t.Fatalf("problem body %q: %v", res.rec.Body.String(), err)
+		}
+		if prob.Code != "permission_denied" || !strings.Contains(prob.Detail, "core:admin") {
+			t.Errorf("problem = %+v, want permission_denied naming core:admin", prob)
+		}
+		if len(res.denials) != 0 {
+			t.Errorf("stage 13 denied a holder of manage: %+v", res.denials)
+		}
+		assertNoLeak(t, "the refusal", res.rec.Body.String(), "alfred-9")
+		e.wantUntouched(t)
+	})
+	t.Run("manage and admin", func(t *testing.T) {
+		e := newS13Env(t)
+		res := e.serve(t, http.MethodPost, path, body(), adminHolder)
+		wantOK(t, e, res, http.StatusCreated, "core.integration.create", "core.integration.write_secret")
+		if got := s13Decode[IntegrationInstance](t, res); got.ID != annexID || !got.SecretsSet["password"] {
+			t.Errorf("created = %+v, want gcpd-annex with its password marked set", got)
+		}
+		assertNoLeak(t, "the created instance", res.rec.Body.String(), "alfred-9")
+		if got := e.secretValue(t, kindNotify, annexID, "password"); got != "alfred-9" {
+			t.Errorf("the stored secret = %q, want the one the body carried", got)
+		}
+	})
 }
 
 // ---- I1: no stored secret to a new origin ---------------------------------
