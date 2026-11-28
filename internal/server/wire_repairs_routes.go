@@ -318,8 +318,9 @@ func (s *Server) opActorPermissions(ctx context.Context, row *database.Operation
 // the job with a message the user sees: a job narrowed to nothing would finish
 // "successfully" with an empty result, which reads as data that is not there.
 var (
-	errNoExportActor = errors.New("this operation was started without a signed-in account, so there is no account " +
-		"to build it for; sign in and start it again")
+	errNoExportActor = errors.New("this operation was started without an account, so there is no account to build " +
+		"it for; a diagnostics export is built for the signed-in account that starts it, and cannot be started " +
+		"while core authentication is disabled")
 	errExportActorNotStanding = errors.New("the account that started this operation is not active, or no longer " +
 		"exists; start it again from an active account")
 )
@@ -334,7 +335,10 @@ var (
 // interactive, so a Sensitive scope (05-rbac §4.4) is never held through this
 // path: the job is narrowed by it, never widened.
 //
-// An op with no actor is errNoExportActor; an actor core does not hold, holds
+// An op with no actor is errNoExportActor (the diagnostics export start refuses
+// such a request before it queues, diagnosticsStartCheck; what still reaches
+// here is a start by a route that does not refuse it, such as the generic start
+// routes with core's auth disabled); an actor core does not hold, holds
 // as not active, or refuses a principal for is errExportActorNotStanding; a
 // read failure is returned as it is. The map is empty whenever err is set.
 func (s *Server) opActorPermissionsCore(ctx context.Context, row *database.OperationV2Row) (map[auth.Permission]bool, error) {
