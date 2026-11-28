@@ -80,3 +80,19 @@ func noteUnmappedMethods(w outcomeCounter, logger *slog.Logger, runID string, me
 		logger.Warn("m4: an actor's auth method is not in the mapping and was kept verbatim", "run", runID, "method", method)
 	}
 }
+
+// DiagnosticsExportKind is the kind HEAD's diagnostics.export operation
+// becomes (kindrename's T4 table, pinned against it by
+// TestDiagnosticsExportKindIsTheRenameTarget).
+const DiagnosticsExportKind tasks.Kind = "core.diagnostics.export"
+
+// ExportRestartReason is the reason an unfinished diagnostics export carries
+// once imported canceled, and OutcomeExportCanceled counts them. A queued,
+// running, paused, interrupted or awaiting-decision export is not resumed: its
+// snapshot is stale, and HEAD's rows carry no key id, so under the credential
+// identity design an export an API key started would fail closed anyway.
+// Turning it terminal says so and keeps it from ever running.
+const (
+	ExportRestartReason   = "imported; restart the export"
+	OutcomeExportCanceled = "diagnostics-export-canceled"
+)

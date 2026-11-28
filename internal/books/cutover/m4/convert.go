@@ -131,6 +131,9 @@ type converted struct {
 	// unmapped is the auth method of each imported actor (the run's and its
 	// trail's) that NormalizeAuthMethod does not list, kept verbatim.
 	unmapped []string
+	// exportCutShort: the run is a diagnostics export that had not finished and
+	// was imported canceled (ExportRestartReason).
+	exportCutShort bool
 }
 
 // convert builds the importer's record and data for a run, or the reason the
@@ -164,6 +167,13 @@ func convert(rr *runRows) (*converted, string) {
 	if !ok {
 		return nil, reasonState
 	}
+	// A diagnostics export that had not finished is history, not work to resume:
+	// its snapshot would be a stale one, and HEAD's rows carry no key id to run
+	// it as. See ExportRestartReason.
+	cutShort := rt.Kind == DiagnosticsExportKind && !st.Terminal()
+	if cutShort {
+		st, why = tasks.StateCanceled, ExportRestartReason
+	}
 	if row.QueuedAt == nil || row.QueuedAt.IsZero() {
 		return nil, reasonCreated
 	}
@@ -172,7 +182,7 @@ func convert(rr *runRows) (*converted, string) {
 		return nil, reasonPriority
 	}
 
-	out := &converted{}
+	out := &converted{exportCutShort: cutShort}
 	rec := &out.rec
 	rec.ID, rec.Kind, rec.State, rec.Reason = tasks.RunID(row.ID), rt.Kind, st, why
 	rec.Mode = rt.Mode
@@ -221,6 +231,9 @@ func convert(rr *runRows) (*converted, string) {
 
 	if st.Terminal() {
 		fin := finished(&row, &prog, out.lastEvent())
+		if fin.IsZero() && cutShort {
+			fin = lastActivity(&row, &prog, out.lastEvent())
+		}
 		if fin.IsZero() {
 			return nil, reasonFinished
 		}
@@ -247,6 +260,22 @@ func finished(row *runRow, prog *progRow, lastEvent time.Time) time.Time {
 		return *prog.LastProgressAt
 	}
 	return time.Time{}
+}
+
+// lastActivity is when a run HEAD never finished last did anything: the latest
+// of its trail, its progress, its start and its creation, all HEAD's own times
+// (the same rule convertV1 gives an operation that never finished).
+func lastActivity(row *runRow, prog *progRow, lastEvent time.Time) time.Time {
+	fin := lastEvent
+	later := func(t *time.Time) {
+		if t != nil && t.After(fin) {
+			fin = *t
+		}
+	}
+	later(prog.LastProgressAt)
+	later(row.StartedAt)
+	later(row.QueuedAt)
+	return fin
 }
 
 func priority(p int) (tasks.Priority, bool) {
