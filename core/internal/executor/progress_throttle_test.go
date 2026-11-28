@@ -189,3 +189,46 @@ func TestExecutor_NoFlushAfterTheAttemptEnds(t *testing.T) {
 		h.drained()
 	})
 }
+
+// TestExecutor_TheAttemptsEndCancelsItsPendingFlush: a trailing flush armed
+// when the body returns is cancelled by the attempt's end, not left to fire
+// on a finished run. The timer is invisible on the wire (the store refuses a
+// progress write for a terminal run), so the cell reads the attempt itself.
+func TestExecutor_TheAttemptsEndCancelsItsPendingFlush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		p := &tape{}
+		h := tapeHarness(t, p, []tasks.Definition{
+			taskDef("gotham.pending", func(rc *tasks.RC, _ noParams) (string, error) {
+				rc.Progress().Set(1, tasks.Known(2))
+				rc.Progress().Note("Riddler cipher solved") // in-window: arms the flush
+				<-gate
+				return "done", nil
+			}, readOnly("gotham.pending")),
+		}, realIntervalConfig, false)
+		id := h.start("gotham.pending", tasks.StartRequest{})
+		synctest.Wait()
+		h.e.mu.Lock()
+		a := h.e.running[id]
+		h.e.mu.Unlock()
+		if a == nil {
+			t.Fatal("the run is not live")
+		}
+		a.pmu.Lock()
+		armed := a.pTimer != nil
+		a.pmu.Unlock()
+		if !armed {
+			t.Fatal("the in-window Note did not arm a trailing flush: the cell proves nothing")
+		}
+		close(gate)
+		h.waitState(id, tasks.StateSucceeded)
+		synctest.Wait()
+		a.pmu.Lock()
+		closed, pending := a.pClosed, a.pTimer != nil
+		a.pmu.Unlock()
+		if !closed || pending {
+			t.Fatalf("after the attempt ended: closed=%v, flush still pending=%v", closed, pending)
+		}
+		h.drained()
+	})
+}
