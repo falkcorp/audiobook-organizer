@@ -120,13 +120,57 @@ func TestDiagnosticsExportStart_EveryRouteRefusesWithoutAnAccountUnderCoreIdenti
 		})
 	}
 
-	user, userC := adoptPrincipal(coreauth.MethodSession, w.bruce, "test:settings.manage", "test:scan.trigger")
-	for _, route := range exportStartRoutes() {
-		t.Run("signed in/"+route.name, func(t *testing.T) {
-			rec := identityServe(w.core.router, route.req(finished), user, userC)
-			require.Equal(t, http.StatusAccepted, rec.Code, "a signed-in account's start was refused: "+rec.Body.String())
-		})
+	// An account is an account however it signed in: a session and an API key
+	// both stamp the actor the precondition judges.
+	for _, method := range []struct {
+		name string
+		m    coreauth.Method
+	}{{"session", coreauth.MethodSession}, {"api key", coreauth.MethodAPIKey}} {
+		user, userC := adoptPrincipal(method.m, w.bruce, "test:settings.manage", "test:scan.trigger")
+		for _, route := range exportStartRoutes() {
+			t.Run("signed in via "+method.name+"/"+route.name, func(t *testing.T) {
+				rec := identityServe(w.core.router, route.req(finished), user, userC)
+				require.Equal(t, http.StatusAccepted, rec.Code, "a signed-in account's start was refused: "+rec.Body.String())
+			})
+		}
 	}
+}
+
+// TestDiagnosticsExportStart_RetryInPlaceOfAnInterruptedExportAsksToo: the export
+// is ResumeDrop, so a restart leaves its rows interrupted_dropped, and retrying
+// one re-queues the same row through RetryInterrupted, which never reaches
+// EnqueueOp. It is a start by whoever retries it, so with core's auth disabled it
+// is refused 409 with the row left exactly as it was (status, actor, retry count);
+// a signed-in account's retry is accepted and re-queues the row in place.
+func TestDiagnosticsExportStart_RetryInPlaceOfAnInterruptedExportAsksToo(t *testing.T) {
+	w := newSiteWorld(t, false, true, "settings.manage", "scan.trigger")
+	require.NotNil(t, w.core.opRegistry)
+	w.core.opRegistry.Start(context.Background())
+	t.Cleanup(func() { _ = w.core.opRegistry.Shutdown(context.Background()) })
+
+	const id = "01JBATMANINTERRUPTED00000A"
+	firstActor := w.bruce.ID
+	require.NoError(t, w.store.InsertOperationV2(database.OperationV2Row{
+		ID: id, DefID: handlers.DiagnosticsExportDefID, Plugin: "diagnostics", Status: "interrupted_dropped",
+		Params: exportParams, QueuedAt: time.Now().UTC(), ActorUserID: &firstActor,
+	}))
+	retry := func() *http.Request { return jsonPost("/api/v1/operations/v2/"+id+"/retry", ``) }
+
+	off, offC := adoptPrincipal(coreauth.MethodAuthDisabled, nil, "test:settings.manage", "test:scan.trigger")
+	rec := identityServe(w.core.router, retry(), off, offC)
+	require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), "core authentication is disabled")
+	row, err := w.store.GetOperationV2(id)
+	require.NoError(t, err)
+	require.NotNil(t, row)
+	assert.Equal(t, "interrupted_dropped", row.Status, "a refused retry re-queued the row")
+	assert.Zero(t, row.ManualRetryCount, "a refused retry was recorded")
+	require.NotNil(t, row.ActorUserID)
+	assert.Equal(t, firstActor, *row.ActorUserID)
+
+	user, userC := adoptPrincipal(coreauth.MethodSession, w.bruce, "test:settings.manage", "test:scan.trigger")
+	rec = identityServe(w.core.router, retry(), user, userC)
+	require.Equal(t, http.StatusAccepted, rec.Code, "a signed-in account's retry was refused: "+rec.Body.String())
 }
 
 // TestDiagnosticsExportStartPrecondition_NamesWhyItRefuses: the precondition

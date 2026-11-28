@@ -508,16 +508,22 @@ func (_c *MockOperationsRegistry_GetCurrentItem_Call) RunAndReturn(run func(opID
 }
 
 // RetryInterrupted provides a mock function for the type MockOperationsRegistry
-func (_mock *MockOperationsRegistry) RetryInterrupted(ctx context.Context, opID string, actor string) error {
-	ret := _mock.Called(ctx, opID, actor)
+func (_mock *MockOperationsRegistry) RetryInterrupted(ctx context.Context, opID string, actor string, opts ...registry.EnqueueOption) error {
+	var tmpRet mock.Arguments
+	if len(opts) > 0 {
+		tmpRet = _mock.Called(ctx, opID, actor, opts)
+	} else {
+		tmpRet = _mock.Called(ctx, opID, actor)
+	}
+	ret := tmpRet
 
 	if len(ret) == 0 {
 		panic("no return value specified for RetryInterrupted")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, opID, actor)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, ...registry.EnqueueOption) error); ok {
+		r0 = returnFunc(ctx, opID, actor, opts...)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -533,11 +539,13 @@ type MockOperationsRegistry_RetryInterrupted_Call struct {
 //   - ctx context.Context
 //   - opID string
 //   - actor string
-func (_e *MockOperationsRegistry_Expecter) RetryInterrupted(ctx any, opID any, actor any) *MockOperationsRegistry_RetryInterrupted_Call {
-	return &MockOperationsRegistry_RetryInterrupted_Call{Call: _e.mock.On("RetryInterrupted", ctx, opID, actor)}
+//   - opts ...registry.EnqueueOption
+func (_e *MockOperationsRegistry_Expecter) RetryInterrupted(ctx any, opID any, actor any, opts ...any) *MockOperationsRegistry_RetryInterrupted_Call {
+	return &MockOperationsRegistry_RetryInterrupted_Call{Call: _e.mock.On("RetryInterrupted",
+		append([]any{ctx, opID, actor}, opts...)...)}
 }
 
-func (_c *MockOperationsRegistry_RetryInterrupted_Call) Run(run func(ctx context.Context, opID string, actor string)) *MockOperationsRegistry_RetryInterrupted_Call {
+func (_c *MockOperationsRegistry_RetryInterrupted_Call) Run(run func(ctx context.Context, opID string, actor string, opts ...registry.EnqueueOption)) *MockOperationsRegistry_RetryInterrupted_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -551,10 +559,17 @@ func (_c *MockOperationsRegistry_RetryInterrupted_Call) Run(run func(ctx context
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 []registry.EnqueueOption
+		var variadicArgs []registry.EnqueueOption
+		if len(args) > 3 {
+			variadicArgs = args[3].([]registry.EnqueueOption)
+		}
+		arg3 = variadicArgs
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3...,
 		)
 	})
 	return _c
@@ -565,7 +580,7 @@ func (_c *MockOperationsRegistry_RetryInterrupted_Call) Return(err error) *MockO
 	return _c
 }
 
-func (_c *MockOperationsRegistry_RetryInterrupted_Call) RunAndReturn(run func(ctx context.Context, opID string, actor string) error) *MockOperationsRegistry_RetryInterrupted_Call {
+func (_c *MockOperationsRegistry_RetryInterrupted_Call) RunAndReturn(run func(ctx context.Context, opID string, actor string, opts ...registry.EnqueueOption) error) *MockOperationsRegistry_RetryInterrupted_Call {
 	_c.Call.Return(run)
 	return _c
 }
