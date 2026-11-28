@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +52,35 @@ type alfredProbe struct {
 	ran  chan struct{}
 }
 
+// patrolOutboxReason is the fixture patrol's Perms.OutboxSystemStart.
+const patrolOutboxReason = "the patrol follows a message alfred's own committed write staged"
+
+// alfredPatrolDef is alfred's task kind, shaped like books.deluge.path-update: its
+// Start is an AllOf over the settings.manage expansion, which includes
+// core:system.manage. That scope is AuthRequired, so no module's system actor
+// can ever hold it and a start by alfred's system actor (what an outbox
+// consumer's run is) is refused unless the definition says the outbox may
+// (outboxReason, Perms.OutboxSystemStart; empty here is the unreachable shape
+// B1 of #5016 shipped with). The list is the expansion minus its view-class
+// scope, which the kernel's SEC-9 check refuses on any Start. A fixture that gave the kind a Start alfred's actor
+// can hold, as an earlier one did with core:settings.manage alone, passes
+// without the rule and proves nothing about it.
+func alfredPatrolDef(ran chan<- struct{}, outboxReason string) tasks.Definition {
+	return tasks.Task(alfredPatrol, tasks.TaskSpec[struct{}, struct{}]{
+		Title:   "Patrol the Batcave",
+		Effects: tasks.ReadOnly(),
+		Perms: tasks.Permissions{
+			Start: rbac.AllOf("core:settings.manage", "core:tasks.manage", "core:system.manage"),
+			View:  rbac.Need("alfred:signal"), OutboxSystemStart: outboxReason,
+		},
+		Resume: tasks.ResumeFromZero,
+		Run: func(*tasks.RC, struct{}) (struct{}, error) {
+			ran <- struct{}{}
+			return struct{}{}, nil
+		},
+	})
+}
+
 // flipHost is an identity-boot host whose "alfred" module declares a durable
 // topic, one outbox consumer that starts a patrol run, and the task kind it
 // starts. A second module "arkham", disabled, lists a consumer of its own.
@@ -60,18 +90,7 @@ func flipHost(t *testing.T, mutate ...func(*Config)) (*swapHost, Config, *alfred
 	c := h.envConfig(nil)
 	c.IdentityBoot = true
 	p := &alfredProbe{ran: make(chan struct{}, 4)}
-	patrol := tasks.Task(alfredPatrol, tasks.TaskSpec[struct{}, struct{}]{
-		Title:   "Patrol the Batcave",
-		Effects: tasks.ReadOnly(),
-		// A core scope, as the Deluge kinds use: the executor's catalog is
-		// core-only, so a system actor holds nothing for a module-scope Start.
-		Perms:  tasks.Permissions{Start: rbac.Need("core:settings.manage"), View: rbac.Need("alfred:signal")},
-		Resume: tasks.ResumeFromZero,
-		Run: func(*tasks.RC, struct{}) (struct{}, error) {
-			p.ran <- struct{}{}
-			return struct{}{}, nil
-		},
-	})
+	patrol := alfredPatrolDef(p.ran, patrolOutboxReason)
 	c.Modules = []module.Module{
 		storageMod("alfred", func(r *module.Registrar) error {
 			p.deps = r.Deps()
@@ -341,6 +360,62 @@ func TestEventsFlip_StagedMessageStartsTheConsumersTask(t *testing.T) {
 	case <-p.ran:
 	case <-time.After(30 * time.Second):
 		t.Fatal("a staged message never started the consumer's task: the relay, the nudger or BindRuns is not live")
+	}
+}
+
+// alfredWith is flipHost's alfred module with its task registration decided by
+// the test: tasksFor returns the definitions Registrar.Tasks records (none:
+// the consumer's kind is never registered).
+func alfredWith(tasksFor func(ran chan<- struct{}) []tasks.Definition) func(*Config) {
+	return func(c *Config) {
+		ran := make(chan struct{}, 4)
+		c.Modules = []module.Module{storageMod("alfred", func(r *module.Registrar) error {
+			r.Topics(alertTopic().Spec(events.TopicSpec{Permission: rbac.Need("alfred:signal")}, 4))
+			if defs := tasksFor(ran); len(defs) > 0 {
+				r.Tasks(defs...)
+			}
+			r.OutboxHandler(outbox.ConsumeIntoTask(alertTopic(), alertConsumer, alfredPatrol,
+				func(outbox.Message[alertRaised]) (any, error) { return struct{}{}, nil }, outbox.Live()))
+			return r.Err()
+		}, seedStep(1, "cave")).with(func(m *module.Manifest) {
+			m.Permissions = []rbac.PermissionSpec{{Name: "alfred:signal", Title: "Signal"}}
+			m.TaskLedger = []tasks.Kind{alfredPatrol}
+			m.OutboxConsumers = []string{alertConsumer}
+		})}
+	}
+}
+
+// B1 of #5016: a ConsumeIntoTask whose kind its owner's system actor may not
+// start fails the boot (P7), naming the consumer and the kind, and never boots
+// into a relay that retries every message and dead-letters it. The kind here
+// starts under the settings.manage expansion with no OutboxSystemStart, the
+// shape books.deluge.path-update had.
+func TestEventsFlip_OutboxKindTheOwnerCannotStartFailsBoot(t *testing.T) {
+	h, c, _ := flipHost(t, alfredWith(func(ran chan<- struct{}) []tasks.Definition {
+		return []tasks.Definition{alfredPatrolDef(ran, "")}
+	}))
+	_, err := h.boot(c)
+	if err == nil {
+		t.Fatal("boot succeeded: a consumer whose every message the executor refuses (ErrNotPermitted, retried, dead-lettered) was accepted")
+	}
+	if !hasKind(err, module.ProblemInvalidRegistration) {
+		t.Errorf("boot = %v, want ProblemInvalidRegistration", err)
+	}
+	for _, want := range []string{alertConsumer, string(alfredPatrol), "dead-letter"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("boot error %q does not name %q", err, want)
+		}
+	}
+}
+
+// The same check refuses a consumer whose kind no module registered: the build
+// that wires books' relocation consumer before F5-18 registers path-update
+// through Registrar.Tasks does not boot (hard merge precondition P2 of #5016).
+func TestEventsFlip_OutboxKindNobodyRegisteredFailsBoot(t *testing.T) {
+	h, c, _ := flipHost(t, alfredWith(func(chan<- struct{}) []tasks.Definition { return nil }))
+	_, err := h.boot(c)
+	if err == nil || !strings.Contains(err.Error(), alertConsumer) || !strings.Contains(err.Error(), string(alfredPatrol)) {
+		t.Fatalf("boot = %v, want a refusal naming %s and %s", err, alertConsumer, alfredPatrol)
 	}
 }
 

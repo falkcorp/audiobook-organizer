@@ -392,6 +392,9 @@ func (k *Kernel) constructTasks(ctx context.Context, defs []tasks.Definition) er
 	if err != nil {
 		return fmt.Errorf("kernel: tasks: executor: %w", err)
 	}
+	if probs := k.outboxStartProblems(x); len(probs) > 0 {
+		return joined(probs)
+	}
 	loc, err := cfg.location()
 	if err != nil {
 		return err
