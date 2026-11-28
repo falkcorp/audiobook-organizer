@@ -4,7 +4,7 @@
 // last-edited: 2026-09-25
 
 import { test, expect } from '@playwright/test';
-import { setupMockApi } from './utils/test-helpers';
+import { setupMockApi, signedInAdminAuth } from './utils/test-helpers';
 import { paths } from './utils/paths';
 
 test.describe('Import paths workflows', () => {
@@ -24,7 +24,9 @@ test.describe('Import paths workflows', () => {
     let nextId = 1;
 
     // Set up base mock routes (config, audiobooks, etc.)
-    await setupMockApi(page);
+    // Signed in: adding an import path is refused under auth-off (SEC5-8), so the
+    // Add Path button is disabled for an anonymous caller.
+    await setupMockApi(page, { auth: signedInAdminAuth() });
 
     // Override import-paths with test-specific stateful mock
     await page.route('**/api/v1/import-paths', (route) => {

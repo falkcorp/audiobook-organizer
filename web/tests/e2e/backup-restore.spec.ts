@@ -4,7 +4,7 @@
 // last-edited: 2026-11-09
 
 import { test, expect, type Page } from '@playwright/test';
-import { setupPhase2Interactive } from './utils/test-helpers';
+import { setupPhase2Interactive, signedInAdminAuth } from './utils/test-helpers';
 import { paths } from './utils/paths';
 
 const backups = [
@@ -28,7 +28,12 @@ const openBackupSettings = async (
 ) => {
   // Phase 2 setup: Reset and skip welcome wizard with mocked APIs (must be before page.goto)
   // This also mocks EventSource to prevent SSE connections
-  await setupPhase2Interactive(page, undefined, { backups: backupsToUse, failures });
+  // Restore is one of the actions core refuses under auth-off, so the page runs signed in.
+  await setupPhase2Interactive(page, undefined, {
+    backups: backupsToUse,
+    failures,
+    auth: signedInAdminAuth(),
+  });
   // Now navigate to settings
   await page.goto(paths.settings);
   await page.waitForLoadState('domcontentloaded');

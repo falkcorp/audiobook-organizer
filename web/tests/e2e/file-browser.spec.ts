@@ -6,6 +6,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import {
   setupMockApi,
+  signedInAdminAuth,
 } from './utils/test-helpers';
 import { paths } from './utils/paths';
 
@@ -221,7 +222,8 @@ test.describe('File Browser', () => {
 
   test('selects folder as import path', async ({ page }) => {
     // Arrange
-    await setupMockApi(page, { filesystem, importPaths: [] });
+    // Signed in: adding an import path is refused under auth-off (SEC5-8).
+    await setupMockApi(page, { filesystem, importPaths: [], auth: signedInAdminAuth() });
     await page.goto(paths.settings);
     await page.waitForLoadState('networkidle');
 
