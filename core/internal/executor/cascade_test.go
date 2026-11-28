@@ -893,3 +893,130 @@ func TestCancelCascade_ARestartAfterAWatchdogStopResumesTheChild(t *testing.T) {
 		t.Errorf("child %s/%q after the restart, want running", r.State, r.Reason)
 	}
 }
+
+// archiveUnderAParent boots a parent (gotham.watch, which blocks until its context
+// ends) and a gotham.archive child started under it, blocks the child's item,
+// shuts the executor down and reboots over the same store: the parent runs again
+// and the child is awaiting_decision, as F5-18 F1's rig leaves a batch run. next
+// is the second boot's archive kind.
+func archiveUnderAParent(t *testing.T, next *finishOnlyRig) (h *harness, parent, child tasks.RunID) {
+	t.Helper()
+	opts := func(o *Options) { o.Catalog = catalogWith(t, "gotham:run") }
+	watch := func() tasks.Definition {
+		return taskDef("gotham.watch", blockUntilCtx(nil), func(c *tasks.Common) {
+			c.Effects = tasks.Writes(tasks.Res("gotham", "watch"))
+			c.Cancel = tasks.Cooperative(time.Second)
+		})
+	}
+	first := &finishOnlyRig{block: "file-07", reach: make(chan struct{})}
+	h = newHarness(t, []tasks.Definition{watch(), first.def()}, opts)
+	parent = h.start("gotham.watch", tasks.StartRequest{})
+	ref, err := h.x.Start(context.Background(), "gotham.archive", tasks.StartRequest{
+		Mode: tasks.ModeRequestLive, Parent: parent, Trigger: tasks.TriggerParent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-first.reach
+	if err := h.x.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h = h.reboot([]tasks.Definition{watch(), next.def()}, opts)
+	h.waitState(ref.ID, tasks.StateAwaitingDecision)
+	h.waitState(parent, tasks.StateRunning)
+	return h, parent, ref.ID
+}
+
+// TestCancelCascade_ComposesWithFinishOnlyRuns (F5-18 C6 with F5-18 F1): a batch
+// child a person has not decided about (awaiting_decision, finish-only marker set
+// or not) and one whose Decide(finish) is running its Finish both end canceled
+// when the parent is canceled, and the Finish does not run to its end.
+func TestCancelCascade_ComposesWithFinishOnlyRuns(t *testing.T) {
+	t.Run("awaiting a decision", func(t *testing.T) {
+		next := &finishOnlyRig{}
+		h, parent, child := archiveUnderAParent(t, next)
+		if err := h.x.CancelAs(context.Background(), parent, tasks.Actor{UserID: "gordon"}); err != nil {
+			t.Fatal(err)
+		}
+		if r := h.waitState(child, tasks.StateCanceled); r.Reason != reasonCancel || r.Finished.IsZero() {
+			t.Errorf("child %s/%q finished %v, want canceled/cancel and finished", r.State, r.Reason, r.Finished)
+		}
+		if n := next.sources.Load() + next.items.Load() + next.finishes.Load(); n != 0 {
+			t.Errorf("the canceled child ran work (%d source reads, items or finishes)", n)
+		}
+	})
+	t.Run("running its finish", func(t *testing.T) {
+		next := &finishOnlyRig{finishBlocks: true, finishStarted: make(chan struct{})}
+		h, parent, child := archiveUnderAParent(t, next)
+		if err := h.e.DecideAs(context.Background(), child, tasks.DecideFinish, gordon); err != nil {
+			t.Fatal(err)
+		}
+		<-next.finishStarted
+		if err := h.x.CancelAs(context.Background(), parent, tasks.Actor{UserID: "gordon"}); err != nil {
+			t.Fatal(err)
+		}
+		if r := h.waitState(child, tasks.StateCanceled); r.Reason != reasonCancel || r.Finished.IsZero() {
+			t.Errorf("child %s/%q finished %v, want canceled/cancel and finished (not awaiting_decision: a cancel is final)", r.State, r.Reason, r.Finished)
+		}
+	})
+}
+
+// TestCancelCascade_ACanceledChildReleasesItsStandDown (F5-18 C6 with the
+// stand-down holds, 5T.3.7): a child that holds a stand-down on gotham.scan,
+// with a scan quiesced under it, is canceled by its parent's cancel; its hold
+// is released with it, so the quiesced scan is re-queued and finishes, and no
+// stand-down marker outlives the child.
+func TestCancelCascade_ACanceledChildReleasesItsStandDown(t *testing.T) {
+	scanStarts := make(chan tasks.RunID, 4)
+	holding := make(chan struct{}, 1)
+	var scans atomic.Int64
+	scan := taskDef("gotham.scan", func(rc *tasks.RC, _ noParams) (string, error) {
+		if scans.Add(1) == 1 {
+			return blockUntilCtx(scanStarts)(rc, noParams{})
+		}
+		return "scanned", nil
+	}, func(c *tasks.Common) { c.Yields = true })
+	compact := taskDef("gotham.compact", func(rc *tasks.RC, _ noParams) (string, error) {
+		if _, err := rc.StandDown("gotham.scan"); err != nil {
+			return "", err
+		}
+		holding <- struct{}{}
+		<-rc.Context().Done()
+		return "", context.Cause(rc.Context())
+	}, func(c *tasks.Common) { c.Effects = tasks.Writes(tasks.Res("gotham", "store")) })
+	watch := taskDef("gotham.watch", func(rc *tasks.RC, _ noParams) (string, error) {
+		ref, err := rc.Enqueue("gotham.compact", noParams{})
+		if err != nil {
+			return "", err
+		}
+		if _, err := rc.Await(ref); err != nil {
+			return "", err
+		}
+		return "", context.Cause(rc.Context())
+	}, func(c *tasks.Common) {
+		c.Effects = tasks.Writes(tasks.Res("gotham", "watch"))
+		c.Cancel = tasks.Cooperative(time.Second)
+	})
+	h := newHarness(t, []tasks.Definition{scan, compact, watch}, cascadeOpts(t, 10*time.Millisecond))
+	s := h.start("gotham.scan", tasks.StartRequest{})
+	<-scanStarts
+	parent := h.start("gotham.watch", tasks.StartRequest{})
+	<-holding
+	h.waitState(s, tasks.StateInterruptedQuiesced)
+	child := h.childOf(parent)
+
+	if err := h.x.CancelAs(context.Background(), parent, tasks.Actor{UserID: "gordon"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := h.waitState(child, tasks.StateCanceled); r.Reason != reasonCancel {
+		t.Errorf("child %s/%q, want canceled/cancel", r.State, r.Reason)
+	}
+	if r := h.waitState(s, tasks.StateSucceeded); r.Attempt != 2 {
+		t.Errorf("the quiesced scan ended %s on attempt %d, want succeeded on attempt 2", r.State, r.Attempt)
+	}
+	for m, err := range h.stores.StandDown.List(context.Background()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Errorf("stand-down marker %s outlived its canceled holder", m.Key)
+	}
+}
