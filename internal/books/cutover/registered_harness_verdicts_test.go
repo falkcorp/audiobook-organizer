@@ -141,8 +141,13 @@ var verdictRows = []verdictRow{
 		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
 	{Method: "POST", Route: "/api/v1/admin/debug/edits/:edit_id/undo", Class: classKnown, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
+	{Method: "GET", Route: "/api/v1/auth/invite/:token", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 404)"},
+	{Method: "POST", Route: "/api/v1/auth/accept-invite", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 400)"},
+	{Method: "POST", Route: "/api/v1/auth/setup", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 400)"},
+	{Method: "POST", Route: "/api/v1/auth/logout", Class: classKnown, Principals: append(slices.Clone(logoutAnswers200), Authoff), Why: goneUnderIdentityWhy + " (R0: 200)"},
 	{Method: "POST", Route: "/api/v1/auth/api-keys/:id/rotate", Class: classKnown, Principals: registeredRetiredRotate.rows[0].who,
 		Why: "retired stub: 410 to every caller once the credential guard is gone (approved reach contract 11-22; R0's 403 was HEAD's credential guard in front of the 410; nothing is minted); the oracle's registeredRetiredRotate holds the same 35 cells"},
+	{Method: "POST", Route: "/api/v1/update/apply", Class: classKnown, Principals: []string{"session:admin"}, Why: updateApplyStateWhy},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
@@ -179,6 +184,15 @@ type recordedRoute struct {
 	Path      string `json:"path"`
 	ProbePath string `json:"probe_path"`
 	Verdict   string `json:"verdict"`
+	Status    []int  `json:"status"`
+}
+
+// differsFromR0 reports whether an answer is not R0's for principal i of r: its
+// letter is not the recorded one, or its status is in another class (StatusClass)
+// than the recorded status. The class is what sees a route that moved from 200 to
+// 410 with the letter A twice.
+func (r recordedRoute) differsFromR0(i int, res Result) bool {
+	return res.Verdict() != r.Verdict[i] || StatusClass(r.Status[i]) != res.Class()
 }
 
 // recordedVerdicts reads R0's recorded routes and the principal order of their
@@ -211,19 +225,20 @@ func recordedRequest(r recordedRoute, p *Principal) (path string, body any) {
 }
 
 // bootAsRecorded boots the registered path over the corpus as R0 recorded it: the
-// stored settings blob has deluge_discovery_enabled on, as the oracle's boots do
-// (seedDelugeDiscovery). With it off, GET /deluge/discover and its import answer 403
+// stored settings blob has deluge_discovery_enabled and fingerprint_remote_workers_enabled
+// on, as the oracle's boots do (seedRecordedFlags). With discovery off, GET /deluge/discover and its import answer 403
 // "deluge discovery is disabled" to every principal from inside the handler, so a
 // cell would compare a setting, not reach.
 func bootAsRecorded(t *testing.T, authOff bool) *Registered {
 	t.Helper()
-	return bootRegistered(t, registeredConfig{AuthOff: authOff, Seed: seedDelugeDiscovery})
+	recordedEnvironment(t)
+	return bootRegistered(t, registeredConfig{AuthOff: authOff, Seed: seedRecordedFlags})
 }
 
 // sweepCells runs every recorded route as every principal of the boot that has a
-// recorded name (a core key under its twin's) and calls cell with the answer and R0's
-// letter. The session-ending routes go last: logging out is what they do.
-func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell func(r recordedRoute, p *Principal, res Result, r0 byte)) {
+// recorded name (a core key under its twin's) and calls cell with the answer and
+// whether it differs from R0's (differsFromR0). The session-ending routes go last: logging out is what they do.
+func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell func(r recordedRoute, p *Principal, res Result, differs bool)) {
 	t.Helper()
 	principals, routes := recordedVerdicts(t)
 	ends := func(path string) bool {
@@ -249,19 +264,19 @@ func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell fu
 					}
 					t.Fatalf("%s %s as %s: %v", r.Method, r.Path, p.Name, err)
 				}
-				cell(r, p, res, r.Verdict[i])
+				cell(r, p, res, r.differsFromR0(i, res))
 			}
 		}
 	}
 }
 
-// sweepMismatches lists the cells of a boot whose verdict is not R0's, keyed
+// sweepMismatches lists the cells of a boot whose verdict or status class is not R0's, keyed
 // "METHOD route|principal" with a core key under its own name.
 func sweepMismatches(t *testing.T, h *Registered, only func(*Principal) bool) map[string]Result {
 	t.Helper()
 	got := map[string]Result{}
-	sweepCells(t, h, only, func(r recordedRoute, p *Principal, res Result, r0 byte) {
-		if res.Verdict() != r0 {
+	sweepCells(t, h, only, func(r recordedRoute, p *Principal, res Result, differs bool) {
+		if differs {
 			got[r.Method+" "+r.Path+"|"+p.Name] = res
 		}
 	})
