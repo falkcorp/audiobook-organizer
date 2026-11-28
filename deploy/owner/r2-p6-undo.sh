@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# file: deploy/owner/r2-p6-undo.sh (copied to ~/aorg-owner/ on the server)
+# file: deploy/owner/r2-p6-undo.sh
 # version: 0.1.0
 # guid: 9c4e7b12-0a85-4d36-b7f9-5e1d3a8c6f20
 # last-edited: 2026-11-22

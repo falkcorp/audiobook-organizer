@@ -24,12 +24,12 @@ Placeholders, used everywhere below:
 
 **Two rules hold for the whole page.**
 
-1. **No raw `sudo`, and nothing to type.** Every privileged step goes through a `make` target that calls the
-   root-owned rollback helpers (`deploy-release`, `rollback`, `rollback-restore`, `rollback-check`,
-   `install-rollback-helpers`), or, for the steps the owner does on the server, through one script the agents have
-   put in `~/aorg-owner/` (source: `deploy/owner/`). You run `bash ~/aorg-owner/<script>.sh` and nothing else; every
-   script has a `--dry-run` the agents run first. If a step seems to need `sudo` and no target or script exists for
-   it, stop: that is a gap, and the [gaps list](#known-gaps) names each one.
+1. **No raw `sudo`.** Every privileged step goes through a `make` target that calls the root-owned rollback helpers
+   (`deploy-release`, `rollback`, `rollback-restore`, `rollback-check`, `install-rollback-helpers`). If a step seems
+   to need `sudo` and no target exists for it, stop: that is a gap, and the [gaps list](#known-gaps) names each one.
+   The two steps you do on the server yourself, [P6](#p6-reinstall-the-rollback-helpers-owner-before-the-prod-copy-rehearsal) and Step 0 on Path B, have nothing to type: the agents put
+   one script per step in `~/aorg-owner/` (source: `deploy/owner/`), run it with `--dry-run` first, and you run
+   `bash ~/aorg-owner/<script>.sh`.
 2. **Fixing forward is the default.** Going back after R2 has run throws away writes and brings back revoked
    credentials (see [Roll back](#roll-back)). Roll back only when R2 cannot be fixed in place.
 
@@ -118,7 +118,7 @@ handles both generations on its own. See Known gap 4.
 prints a line starting `MISSING:` or `WRONG:`, ends with `FAILED:` and exits non-zero: send that output to the
 agents.
 
-- `ok: rollback.conf has export_dir = ~/aorg-owner/export`
+- `ok: rollback.conf has export_dir = <home>/aorg-owner/export` (the script prints your home directory expanded)
 - `ok: offline_env names ABO_CORE_PATHS_STATE_DIR only`
 - one `ok: sudoers grants <helper> with no arguments` for each of `export-keyring`, `export-install-secrets`,
   `cutover-blockers-list` and `cutover-blockers-apply`
@@ -200,8 +200,7 @@ one script each.
 1. **Stop the service.** The helpers never stop or start it, and the scripts below refuse unless the unit is
    `inactive`. **There is no tracked step for stopping only the service yet** ([gap 2](#known-gaps)): the sudoers
    drop-in already grants `systemctl stop` of the unit, but no `make` target or owner script wraps it. Ask the
-   agents for the stop step and do not type `systemctl` yourself. The service is down from here until a later step
-   restarts it (Step 4's deploy restarts the unit), so do Step 0 right before Step 4.
+   agents for the stop step and do not type `systemctl` yourself.
 2. **List.** You run:
 
    ```bash
@@ -244,9 +243,8 @@ and Step 2's dry run reports 0 blocking rows and no merge in progress.
 
 **Undo:** a merge you finished can be undone from the Users page while you are still on the pre-freeze release. A
 `fix` can be put back by applying a `fix` of the old value, which the `.json` from the list before it still holds:
-keep that file until Step 4 has succeeded. **A `delete` cannot be undone except by `make rollback-restore`** (which
-goes back to the Step 1 archive's state): that is why Step 1's archive comes first on Path B, and why the agents
-confirm each `delete` with you before they write its request.
+keep that file until Step 4 has succeeded. **A `delete` cannot be undone except by `make rollback-restore`**: that is
+why the agents confirm each `delete` with you before they write its request.
 
 ### Step 1: archive, off host
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# file: deploy/owner/cutover-blockers-apply.sh (copied to ~/aorg-owner/ on the server)
+# file: deploy/owner/cutover-blockers-apply.sh
 # version: 0.1.0
 # guid: e5b02a68-91c3-4d7f-a8e4-16f7d3c92b50
 # last-edited: 2026-11-22
