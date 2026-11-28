@@ -198,6 +198,13 @@ type Config struct {
 	// routes (httpapi.Stage13Options.ResolveAtom). nil refuses every such
 	// requirement. Read only when IdentityBoot is true. app.Options.ResolveAtom.
 	ResolveAtom httpapi.AtomResolver
+	// RouteCoRequirements is app.Options.RouteCoRequirements: core route name
+	// -> a requirement the router ANDs onto that route's own
+	// (httpapi.Options.CoRequirements). Boot is refused, by Router.Build, for an
+	// entry it cannot prove narrows. nil or empty changes nothing. Read by an
+	// identity boot (and Describe, which builds the same router): without auth
+	// wiring a non-empty map is refused.
+	RouteCoRequirements map[string]rbac.Requirement
 	// DisplayName is the app's human name (app.Options.DisplayName), reported
 	// by GET /api/core/v1/modules. Read only when IdentityBoot is true.
 	DisplayName string

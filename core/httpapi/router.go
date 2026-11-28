@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/netip"
 	"slices"
@@ -98,6 +99,16 @@ type Options struct {
 	// app.Options.ServiceName (06 §6.4.5), the value it also passes as
 	// metrics.Options.ServiceName (ABO: "audiobook-organizer"; default: AppID).
 	ServerName string
+	// CoRequirements maps the Name of a core route to a requirement the router
+	// ANDs onto the route's own: the effective requirement is AllOf(the route's
+	// own permissions plus the co-requirement's). It is how an app narrows a
+	// core route to its own scopes, which core's R6 forbids a core route to name
+	// (app.Options.RouteCoRequirements). Build refuses an entry that names no
+	// core route, is not AllOf or Need, names Public, AnyAuthenticated,
+	// core:admin or a core-namespace scope, or names a scope the catalog SetAuth
+	// was given does not declare (ErrCoRequirement*). nil or empty changes
+	// nothing. Read at Build; SetPerimeter ignores it.
+	CoRequirements map[string]rbac.Requirement
 }
 
 // TrustedPeer is a prefix or a single address that may carry an IPv6 zone
@@ -177,6 +188,12 @@ type RouteInfo struct {
 	Kind       RouteKind // Native, Raw, Legacy, Infra, SPA (Facade: deferred-build, §3.6)
 	OwnAuth    bool      // legacy route authenticated by its own (ABS) authenticator (§8.2)
 	AuthMethod string    // the auth method an OwnAuth route names (§8.2)
+	// CoPerm is the app-declared co-requirement (Options.CoRequirements) that
+	// Routes ANDs into Perm: Perm is then AllOf(the route's own permissions plus
+	// CoPerm's), the requirement stage 13 judges and OpenAPI documents. The zero
+	// Requirement when the route has none, and always zero in the RouteInfo
+	// Handle recorded and R6's checkPerm judges.
+	CoPerm rbac.Requirement
 }
 
 // SPAOptions is what the kernel passes with the shell handler at P8 (06
@@ -260,6 +277,7 @@ func NewRouter(opts Options, deps Deps) *Router {
 	if opts.CoreGroupBase == "" {
 		opts.CoreGroupBase = "/api/core/v1"
 	}
+	opts.CoRequirements = maps.Clone(opts.CoRequirements)
 	return &Router{opts: opts, deps: deps, groups: map[string]*Group{}, public: map[string]map[string]bool{}}
 }
 
@@ -635,7 +653,11 @@ func (r *Router) Routes() iter.Seq[RouteInfo] {
 		r.mu.Lock()
 		infos := make([]RouteInfo, 0, len(r.routes)+len(r.legacy.infos)+1)
 		for _, e := range r.routes {
-			infos = append(infos, e.info)
+			ri := e.info
+			if !e.co.IsZero() {
+				ri.Perm, ri.CoPerm = e.perm(), e.co
+			}
+			infos = append(infos, ri)
 		}
 		infos = append(infos, r.legacy.infos...)
 		if _, owner := r.rootOwner(); owner != "" {
@@ -671,6 +693,7 @@ func (r *Router) Build() (http.Handler, error) {
 	errs := slices.Clone(r.errs)
 	errs = append(errs, r.checkCoreFixed()...)
 	errs = append(errs, r.checkClaims()...)
+	errs = append(errs, r.applyCoRequirements()...)
 	mux := http.NewServeMux()
 	seen := map[string]string{}
 	names := map[string]bool{}
@@ -880,7 +903,7 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 func (r *Router) wrapRoute(e *routeEntry) http.Handler {
 	h := e.handler
 	if r.authRuns(e) {
-		h = r.authWrap(e.info.Perm, e.info.Guards, false, routeLabel(e.info), h)
+		h = r.authWrap(e.perm(), e.info.Guards, false, routeLabel(e.info), h)
 	}
 	return r.chain.Route(httpmw.RouteSpec{
 		Pattern: e.info.Pattern,

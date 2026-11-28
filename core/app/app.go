@@ -380,6 +380,7 @@ func kernelConfig(opts Options, mods []module.Module) (kernel.Config, error) {
 		ExtendStart:           opts.R1ExtendStart,
 		IdentityBoot:          opts.IdentityBoot,
 		ResolveAtom:           opts.ResolveAtom,
+		RouteCoRequirements:   maps.Clone(opts.RouteCoRequirements),
 		DisplayName:           opts.DisplayName,
 		ArchivePrefix:         opts.ArchivePrefix,
 		AuthOptions:           opts.Auth,

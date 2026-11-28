@@ -168,6 +168,10 @@ type routeEntry struct {
 	route   Route
 	handler http.Handler
 	errs    []error // registration errors found at Handle time
+	// co is the app's co-requirement for this route (Options.CoRequirements),
+	// set by each Build and kept apart from info.Perm so checkPerm (R6) keeps
+	// judging the route's own requirement; perm() is the two ANDed.
+	co rbac.Requirement
 
 	// native routes only
 	binding   *binding

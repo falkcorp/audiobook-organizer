@@ -52,7 +52,7 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 			Summary:       e.route.Summary,
 			Description:   e.route.Doc,
 			Tags:          e.route.Tags,
-			Permission:    e.info.Perm.String(),
+			Permission:    e.perm().String(),
 			Public:        e.info.Perm.Kind() == rbac.KindPublic,
 			Guards:        guardNames(e.info.Guards),
 			SuccessStatus: e.status,

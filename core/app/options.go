@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/metrics"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/ui"
 	"github.com/falkcorp/mediacore/updater"
@@ -165,6 +166,19 @@ type Options struct {
 	// stage 13 refuse every such requirement, so an app that mounts no legacy
 	// atom route sets nothing.
 	ResolveAtom httpapi.AtomResolver
+
+	// RouteCoRequirements maps the Name of a core route to a requirement the
+	// router ANDs onto the route's own: the effective requirement is
+	// AllOf(the route's own permissions plus the co-requirement's), so it can
+	// only narrow access, never widen or replace it. It is how an app asks of a
+	// core route a scope of its own namespace, which core's R6 does not let a
+	// core route name (ABO: books:integrations.manage on the integrations manage
+	// routes, 05-rbac §6.1). Boot is refused, with an httpapi.ErrCoRequirement*
+	// error, for an entry that names no core route, is not AllOf or Need, names
+	// Public, AnyAuthenticated, core:admin or a core-namespace scope, or names a
+	// scope the rbac catalog has not registered. Read by an identity boot
+	// (IdentityBoot) and by Describe; nil, the default, changes nothing.
+	RouteCoRequirements map[string]rbac.Requirement
 
 	// ArchivePrefix is the prefix of the app's backup archive names and of the
 	// revocation journal's file name and header (05-backup §5B.3.6 row "Where":
