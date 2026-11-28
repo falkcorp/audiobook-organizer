@@ -25,6 +25,7 @@ import (
 func gatedMountRouter(t *testing.T, gate *BasicGateOptions) http.Handler {
 	t.Helper()
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	for _, p := range []string{"GET /livez", "GET /readyz", "GET /metrics"} {
 		r.Infra(p, rbac.Public, ok)
@@ -123,6 +124,7 @@ func TestBuild_BasicGateNeverLogsTheCredentials(t *testing.T) {
 	var buf bytes.Buffer
 	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	r := NewRouter(Options{}, Deps{Log: lg})
+	wireSignedIn(t, r)
 	routes := gcpdBasicRoutes()
 	for _, c := range []string{"/api/", "/ping", "/status", "/login"} {
 		if err := r.Claim("gcpd", c); err != nil {
@@ -192,6 +194,7 @@ func TestBuild_BasicGateInputsAreChecked(t *testing.T) {
 func TestBuild_BasicGateRefusalOfARedirectedPathCarriesTheMountsPolicy(t *testing.T) {
 	const csp = "default-src 'self'; img-src 'self' data:"
 	r := NewRouter(Options{}, Deps{})
+	wireSignedIn(t, r)
 	routes := gcpdBasicRoutes()
 	for _, c := range []string{"/api/health", "/api/v1/", "/api/v2/", "/ping", "/status", "/login"} {
 		if err := r.Claim("gcpd", c); err != nil {

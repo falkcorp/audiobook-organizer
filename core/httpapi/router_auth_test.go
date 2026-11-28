@@ -32,6 +32,9 @@ import (
 type raFakeAuthn struct {
 	cat   *rbac.Catalog
 	calls atomic.Int64
+	// defaultAs is the principal bound when the request names none; empty
+	// leaves such a request anonymous. wireSignedIn sets it.
+	defaultAs string
 }
 
 func (f *raFakeAuthn) principal(name string) *auth.Principal {
@@ -56,7 +59,11 @@ func (f *raFakeAuthn) Middleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			f.calls.Add(1)
-			if p := f.principal(r.Header.Get("X-Test-As")); p != nil {
+			as := r.Header.Get("X-Test-As")
+			if as == "" {
+				as = f.defaultAs
+			}
+			if p := f.principal(as); p != nil {
 				r = r.WithContext(auth.WithPrincipal(r.Context(), p))
 			}
 			next.ServeHTTP(w, r)

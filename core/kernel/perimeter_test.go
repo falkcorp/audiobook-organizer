@@ -115,7 +115,7 @@ func TestPerimeter_RateLimitSwitchEndToEnd(t *testing.T) {
 					Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("Gordon")) }),
 					Auth:    httpapi.LegacyAuthCore,
 					Routes: func(yield func(httpapi.LegacyRoute) bool) {
-						yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateDefault})
+						yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.Public, Public: true, RateClass: httpapi.RateDefault})
 					},
 				})
 				return nil
@@ -169,7 +169,7 @@ func echoClientMount() testModule {
 			}),
 			Auth: httpapi.LegacyAuthCore,
 			Routes: func(yield func(httpapi.LegacyRoute) bool) {
-				yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateExempt})
+				yield(httpapi.LegacyRoute{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.Public, Public: true, RateClass: httpapi.RateExempt})
 			},
 		})
 		return nil
