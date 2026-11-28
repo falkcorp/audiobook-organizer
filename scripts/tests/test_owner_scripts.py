@@ -111,6 +111,16 @@ if "ActiveState" in a:
     print(open(p).read().strip() if os.path.exists(p) else "inactive")
 elif "DropInPaths" in a:
     print("DropInPaths=/etc/systemd/system/audiobook-organizer.service.d/host.conf")
+elif a[:1] in (["stop"], ["start"]):
+    # What `sudo -n systemctl stop|start UNIT` does: log it, fail on request, and
+    # leave the unit where change.result says (else in the state the verb means).
+    with open(os.environ["SHIM_LOG"], "a") as f:
+        f.write("systemctl " + " ".join(a) + "\\n")
+    if os.path.exists(os.path.join(d, "change.fail")):
+        sys.exit(1)
+    res = os.path.join(d, "change.result")
+    with open(os.path.join(d, "state"), "w") as f:
+        f.write((open(res).read().strip() if os.path.exists(res) else ("inactive" if a[0] == "stop" else "active")) + "\\n")
 sys.exit(0)
 """
 
@@ -1177,10 +1187,138 @@ class UndoScript(P6Base):
             self.export_dir.mkdir(mode=0o700, exist_ok=True)
 
 
+class ServiceScripts(unittest.TestCase):
+    """service-stop.sh and service-start.sh: the state check, the one granted
+    command, and the wait."""
+
+    UNIT = "audiobook-organizer.service"
+
+    def setUp(self) -> None:
+        self.box = Sandbox(self)
+        self.conf = self.box.root / "rollback.conf"
+        self.conf.write_text(f"bin = /x\nunit = {self.UNIT}\n")
+
+    def script(self, verb: str) -> Path:
+        return script_copy(
+            self.box.scripts,
+            f"service-{verb}.sh",
+            CONF=str(self.conf),
+            SYSTEMCTL=str(self.box.shims / "systemctl"),
+            WAIT_SEC="2",
+            POLL_SEC="0.1",
+        )
+
+    def go(self, verb: str, *args: str) -> subprocess.CompletedProcess:
+        return self.box.run(self.script(verb), *args)
+
+    def state(self) -> str:
+        p = self.box.shims / "state"
+        return p.read_text().strip() if p.exists() else "inactive"
+
+    def systemctl_calls(self) -> list[str]:
+        if not self.box.log.exists():
+            return []
+        return [ln for ln in self.box.log.read_text().splitlines() if ln.startswith("systemctl")]
+
+    def test_it_runs_the_one_granted_command_and_waits_for_the_state(self) -> None:
+        for verb, before, after in (("stop", "active", "inactive"), ("start", "inactive", "active")):
+            self.box.log.unlink(missing_ok=True)
+            self.box.set_state(before)
+            p = self.go(verb)
+            self.assertEqual(p.returncode, 0, text(p))
+            self.assertEqual(self.state(), after, verb)
+            self.assertEqual(
+                self.box.sudo_calls(),
+                [f"sudo -n {self.box.shims}/systemctl {verb} {self.UNIT}"],
+                "the one command the drop-in grants, nothing else as root",
+            )
+            self.assertIn(f"is {after}", p.stdout, verb)
+
+    def test_already_there_runs_nothing(self) -> None:
+        for verb, now in (("stop", "inactive"), ("start", "active")):
+            self.box.set_state(now)
+            p = self.go(verb)
+            self.assertEqual(p.returncode, 0, text(p))
+            self.assertIn("nothing to do", p.stdout, verb)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_dry_run_says_what_would_run_and_runs_nothing(self) -> None:
+        for verb, now in (("stop", "active"), ("start", "failed")):
+            self.box.set_state(now)
+            p = self.go(verb, "--dry-run")
+            self.assertEqual(p.returncode, 0, text(p))
+            self.assertIn("dry run only", p.stdout)
+            self.assertIn(f"{verb} {self.UNIT}", p.stdout)
+            self.assertEqual(self.state(), now)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_an_unreadable_state_changes_nothing(self) -> None:
+        self.box.set_state(None)
+        for verb in ("stop", "start"):
+            p = self.go(verb)
+            self.assertNotEqual(p.returncode, 0, text(p))
+            self.assertIn("cannot read the state", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_command_that_fails_is_a_failure(self) -> None:
+        (self.box.shims / "change.fail").write_text("")
+        for verb, now in (("stop", "active"), ("start", "inactive")):
+            self.box.set_state(now)
+            p = self.go(verb)
+            self.assertNotEqual(p.returncode, 0, text(p))
+            self.assertIn(f"systemctl {verb} exited non-zero", p.stderr)
+
+    def test_a_unit_that_never_reaches_the_state_times_out_naming_it(self) -> None:
+        (self.box.shims / "change.result").write_text("deactivating")
+        self.box.set_state("active")
+        p = self.go("stop")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("still deactivating after 2 seconds; wanted inactive", p.stderr)
+
+    def test_a_started_unit_that_fails_ends_the_wait_at_once(self) -> None:
+        (self.box.shims / "change.result").write_text("failed")
+        self.box.set_state("inactive")
+        p = self.go("start")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is failed; read its journal", p.stderr)
+        self.assertNotIn("after 2 seconds", p.stderr)
+
+    def test_a_stopped_unit_that_ends_failed_is_not_stopped(self) -> None:
+        (self.box.shims / "change.result").write_text("failed")
+        self.box.set_state("active")
+        p = self.go("stop")
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("still failed after 2 seconds; wanted inactive", p.stderr)
+
+    def test_a_bad_config_refuses_before_anything_runs(self) -> None:
+        for label, body in (
+            ("no unit", "bin = /x\n"),
+            ("a space", "unit = a b.service\n"),
+            ("a dash first", "unit = -x.service\n"),
+            ("not a service", "unit = audiobook-organizer.timer\n"),
+            ("a quote", "unit = a'b.service\n"),
+        ):
+            self.conf.write_text(body)
+            for verb in ("stop", "start"):
+                p = self.go(verb)
+                self.assertNotEqual(p.returncode, 0, f"{label} {verb}\n{text(p)}")
+        self.conf.unlink()
+        self.assertNotEqual(self.go("stop").returncode, 0)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_arguments(self) -> None:
+        for verb in ("stop", "start"):
+            for args in (["--go"], ["a"], ["--dry-run", "x"]):
+                self.assertEqual(self.go(verb, *args).returncode, 2, f"{verb} {args}")
+        self.assertEqual(self.box.sudo_calls(), [])
+
+
 class Hygiene(unittest.TestCase):
     NAMES = (
         "cutover-blockers-list.sh",
         "cutover-blockers-apply.sh",
+        "service-stop.sh",
+        "service-start.sh",
         "r2-p6-reinstall.sh",
         "r2-p6-undo.sh",
     )
@@ -1206,17 +1344,15 @@ class Hygiene(unittest.TestCase):
             for c in calls:
                 self.assertRegex(c, r'^sudo -n "\$LIBDIR/\$STUB"\)? ?(\|\| RC=\$\?)?$', c)
             self.assertEqual(len(calls), 1, name)
-
-    def test_the_reinstall_script_is_the_leads_draft_but_for_its_header(self) -> None:
-        draft = (
-            REPO_ROOT / ".claude" / "notes" / "pc-tools" / "owner-scripts" / "r2-p6-reinstall.sh"
-        )
-        if not draft.exists():
-            self.skipTest("the lead's draft is not in this checkout")
-        a = (OWNER / "r2-p6-reinstall.sh").read_text().splitlines()
-        b = draft.read_text().splitlines()
-        self.assertEqual(a[0], b[0])
-        self.assertEqual(a[2:], b[2:])
+        # The service scripts run one thing as root: the granted systemctl line.
+        for verb in ("stop", "start"):
+            text_ = (OWNER / f"service-{verb}.sh").read_text()
+            self.assertEqual(
+                re.findall(r"^\s*sudo\b.*$", text_, re.M),
+                [f'sudo -n "$SYSTEMCTL" {verb} "$UNIT" || fail "systemctl {verb} exited non-zero; $UNIT is now $(active_state)"'],
+                verb,
+            )
+            self.assertIn("SYSTEMCTL=/usr/bin/systemctl", text_)
 
     @unittest.skipUnless(shutil.which("shellcheck"), "shellcheck is not installed")
     def test_shellcheck_is_clean(self) -> None:

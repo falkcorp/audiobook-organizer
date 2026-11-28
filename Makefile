@@ -1202,6 +1202,27 @@ export-install-secrets:
 	@[ -n "$$AORG_OH_DB" ] || (echo "ERROR: DEPLOY_DB is not set. Set it to the main Pebble store path on DEPLOY_HOST (the --db / DATABASE_PATH value) in Makefile.local or export it."; exit 1)
 	@python3 scripts/export_offhost.py
 
+## service-stop: Stop ONLY the service on DEPLOY_HOST and wait until it is inactive (no raw sudo; R2 runbook Step 0; requires DEPLOY_HOST; DRY_RUN=1 looks and changes nothing)
+## service-start: Start ONLY the service on DEPLOY_HOST and wait until it is active (same sudoers lines, no new one; DRY_RUN=1 looks and changes nothing)
+#
+# The deploy user's sudoers drop-in already grants `systemctl stop|start <unit>`
+# for exactly DEPLOY_UNIT. scripts/service_control_offhost.py checks the state
+# first (already there: nothing to do), runs that one command, then waits until
+# the unit is `inactive` (stop) or `active` (start; `failed` ends the wait). The
+# owner's equivalents on the server are deploy/owner/service-stop.sh and
+# service-start.sh.
+DRY_RUN ?=
+service-stop service-start: export AORG_OH_HOST = $(DEPLOY_HOST)
+service-stop service-start: export AORG_OH_UNIT = $(DEPLOY_UNIT)
+service-stop service-start: export AORG_OH_GUARD = $(ROLLBACK_GUARD)
+service-stop service-start: export AORG_OH_DRY = $(DRY_RUN)
+service-stop: export AORG_OH_WHAT = stop
+service-start: export AORG_OH_WHAT = start
+.PHONY: service-stop service-start
+service-stop service-start:
+	@[ -n "$$AORG_OH_HOST" ] || (echo "ERROR: DEPLOY_HOST is not set. Add it to Makefile.local or export it."; exit 1)
+	@python3 scripts/service_control_offhost.py
+
 ## cutover-blockers-list: List the rows that block the cutover on DEPLOY_HOST (a root-owned rollback helper, no raw sudo; the service must already be stopped) and copy the list and the rows file into OFFHOST_DIR on this machine (R2 runbook Step 0, Path B; requires DEPLOY_HOST, DEPLOY_BIN, DEPLOY_DB)
 #
 # The helper refuses unless the service unit is inactive; it never stops or
