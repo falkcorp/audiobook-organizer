@@ -75,10 +75,14 @@ func newRowsFixture(t *testing.T) *rowsFixture {
 	rows := []tasks.Row{
 		{ID: "plan:gordon", State: f.wantState},
 		{ID: "plan:alfred", State: json.RawMessage(`{"book":"the-long-halloween"}`)},
-		{ID: "not-a-plan-row", State: json.RawMessage(`{"book":"never"}`)},
 	}
 	if err := runs.ReplaceRows(t.Context(), f.plan, "plan:", 2, func(i int) (tasks.Row, error) { return rows[i], nil }); err != nil {
 		t.Fatalf("plan rows: %v", err)
+	}
+	if err := runs.ReplaceRows(t.Context(), f.plan, "zz:", 1, func(int) (tasks.Row, error) {
+		return tasks.Row{ID: "zz:batgirl", State: json.RawMessage(`{"book":"never"}`)}, nil
+	}); err != nil {
+		t.Fatalf("non-plan row: %v", err)
 	}
 	if err := runs.ReplaceRows(t.Context(), f.signalRun, "sig:", 1, func(int) (tasks.Row, error) { return tasks.Row{ID: "sig:oracle", State: json.RawMessage(`{}`)}, nil }); err != nil {
 		t.Fatalf("robin rows: %v", err)
@@ -90,6 +94,17 @@ func newRowsFixture(t *testing.T) *rowsFixture {
 		f.robinRowsBefore++
 	}
 	return f
+}
+
+// firstError is the first error seq yields, or nil when it yields none: a
+// refusal that lets records through is no refusal.
+func firstError[T any](seq func(yield func(T, error) bool)) error {
+	var out error
+	seq(func(_ T, err error) bool {
+		out = err
+		return err == nil
+	})
+	return out
 }
 
 func yieldedIDs(t *testing.T, seq func(yield func(tasks.RunRecord, error) bool)) []tasks.RunID {
@@ -128,20 +143,14 @@ func TestModuleTaskRows_RefusesAnotherModulesRuns(t *testing.T) {
 	tr := f.gotham.TaskRows
 	ctx := t.Context()
 
-	for _, err := range tr.List(ctx, tasks.RunQuery{Kinds: []tasks.Kind{signalKind}}) {
-		if !errors.Is(err, module.ErrTaskRowsForeign) {
-			t.Fatalf("List of robin's kind = %v, want ErrTaskRowsForeign", err)
-		}
+	if err := firstError(tr.List(ctx, tasks.RunQuery{Kinds: []tasks.Kind{signalKind}})); !errors.Is(err, module.ErrTaskRowsForeign) {
+		t.Fatalf("List of robin's kind = %v, want ErrTaskRowsForeign", err)
 	}
-	for _, err := range tr.List(ctx, tasks.RunQuery{Kinds: []tasks.Kind{patrolKind, signalKind}}) {
-		if !errors.Is(err, module.ErrTaskRowsForeign) {
-			t.Fatalf("List of an own and a foreign kind = %v, want ErrTaskRowsForeign", err)
-		}
+	if err := firstError(tr.List(ctx, tasks.RunQuery{Kinds: []tasks.Kind{patrolKind, signalKind}})); !errors.Is(err, module.ErrTaskRowsForeign) {
+		t.Fatalf("List of an own and a foreign kind = %v, want ErrTaskRowsForeign", err)
 	}
-	for _, err := range tr.Rows(ctx, f.signalRun) {
-		if !errors.Is(err, module.ErrTaskRowsForeign) {
-			t.Fatalf("Rows of robin's run = %v, want ErrTaskRowsForeign", err)
-		}
+	if err := firstError(tr.Rows(ctx, f.signalRun)); !errors.Is(err, module.ErrTaskRowsForeign) {
+		t.Fatalf("Rows of robin's run = %v, want ErrTaskRowsForeign", err)
 	}
 	if err := tr.ReplaceRows(ctx, f.signalRun, "sig:", 0, nil); !errors.Is(err, module.ErrTaskRowsForeign) {
 		t.Fatalf("ReplaceRows of robin's run = %v, want ErrTaskRowsForeign", err)
@@ -191,8 +200,8 @@ func TestModuleTaskRows_PlannedRowReadsTheApplyRunsPlan(t *testing.T) {
 		t.Fatalf("PlannedRow(joker) = found %v, %v; want not found", found, err)
 	}
 	// A row stored outside the plan prefix is not the plan's.
-	if _, found, err := tr.PlannedRow(ctx, f.apply, "not-a-plan-row"); err != nil || found {
-		t.Fatalf("PlannedRow(not-a-plan-row) = found %v, %v; want not found", found, err)
+	if _, found, err := tr.PlannedRow(ctx, f.apply, "zz:batgirl"); err != nil || found {
+		t.Fatalf("PlannedRow(zz:batgirl) = found %v, %v; want not found", found, err)
 	}
 	// An apply run that names no plan reads nothing, and says why.
 	if _, _, err := tr.PlannedRow(ctx, f.patrolRun, "gordon"); err == nil {
@@ -213,9 +222,7 @@ func TestModuleTaskRows_NotBoundWithoutAnEngine(t *testing.T) {
 	if _, err := deps.TaskRows.PlanOf(t.Context(), "r1"); !errors.Is(err, module.ErrTaskRowsNotBound) {
 		t.Fatalf("PlanOf = %v, want ErrTaskRowsNotBound", err)
 	}
-	for _, err := range deps.TaskRows.List(t.Context(), tasks.RunQuery{}) {
-		if !errors.Is(err, module.ErrTaskRowsNotBound) {
-			t.Fatalf("List = %v, want ErrTaskRowsNotBound", err)
-		}
+	if err := firstError(deps.TaskRows.List(t.Context(), tasks.RunQuery{})); !errors.Is(err, module.ErrTaskRowsNotBound) {
+		t.Fatalf("List = %v, want ErrTaskRowsNotBound", err)
 	}
 }
