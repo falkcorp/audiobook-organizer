@@ -80,15 +80,14 @@ func TestMetadataCredentials_M2ThenM6_EverySourceKeepsItsCredential(t *testing.T
 				}
 				return
 			}
-			// The declared field is bound to a stored secret that holds the credential
-			// (the fold copies it to the declared name, which the rig's HEAD secret
-			// rows may also hold: either way the value HEAD sent is what is bound).
+			// The declared field is bound to a stored secret that holds exactly the
+			// credential the blob held (the fold copies it to the declared name).
 			name, bound := refs[tc.field]
 			if !bound {
 				t.Fatalf("%s's declared %s is not bound: %v", tc.id, tc.field, refs)
 			}
-			if got, found := storedSecret(r, s, secrets.Name(name)); !found || got == "" {
-				t.Errorf("the bound secret %s is not in the store (found %v)", name, found)
+			if got, found := storedSecret(r, s, secrets.Name(name)); !found || got != tc.secret {
+				t.Errorf("the bound secret %s does not hold the blob's credential (found %v)", name, found)
 			}
 			if row["secrets_origin"] == nil || row["secrets_origin"] == "" {
 				t.Error("the bound secret has no secrets_origin")
