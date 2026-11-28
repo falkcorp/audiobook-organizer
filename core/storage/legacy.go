@@ -29,6 +29,22 @@ type LegacyRange struct {
 
 func (LegacyRange) handle() {}
 
+// ClaimMode is the mode of the owner's claim key resolves to (longest match),
+// and false when key resolves to no claim of this handle's owner. It reads no
+// data: it answers from the claim set the store was opened with, so a module
+// can ask whether a family it owned is retired (drained by a cutover step, its
+// reads empty for good) before it reads that family as live data.
+func (r LegacyRange) ClaimMode(key []byte) (ClaimMode, bool) {
+	if r.db == nil {
+		return ClaimInvalid, false
+	}
+	iv, ok := r.db.claims.resolve(key)
+	if !ok || iv.owner != r.owner {
+		return ClaimInvalid, false
+	}
+	return iv.mode, true
+}
+
 // Get reads one absolute key of the owner's claims.
 func (r LegacyRange) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return r.scope().get(ctx, key)

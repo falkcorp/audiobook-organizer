@@ -5,6 +5,8 @@
 
 package books
 
+import "errors"
+
 // ABO's identity flip (F4-08 B10) is ONE decision, identityOn, and everything
 // the flip changes in this package reads it: the manifest (the books.level-2
 // step, M3 in the cutover list, the retired identity claims), books.Options
@@ -31,3 +33,19 @@ package books
 // identityOn reports whether this build runs ABO under core identity: always,
 // since B10g.
 func identityOn() bool { return true }
+
+// errStoreNotMarked is Register's refusal of a store that is not marked as
+// under core identity while the flip is on.
+var errStoreNotMarked = errors.New("books: the identity flip is on but the store's spec does not retire the u: family, so its account list would read the drained rows; refusing to serve")
+
+// refuseUnmarkedStore is Register's check that a store built while the identity
+// flip is on marked itself as under core identity (its spec retires u:, the
+// flip's; store/user_directory.go). An unmarked store would answer its account
+// list from the drained u: family, "no users", and every merge and delete gate
+// would read that as "nobody has state".
+func refuseUnmarkedStore(flipOn bool, s interface{ UserDirectoryRequired() bool }) error {
+	if flipOn && !s.UserDirectoryRequired() {
+		return errStoreNotMarked
+	}
+	return nil
+}

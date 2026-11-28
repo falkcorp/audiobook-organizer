@@ -383,14 +383,17 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		return fmt.Errorf("books: %w", err)
 	}
 	// Under core identity the accounts are core's and M3 drained u:, so the
-	// store's account list must never answer from that family: marked here,
-	// before anything reads through the store, it refuses (ErrNoUserDirectory)
-	// until the directory over core's Identities is installed below. Every
-	// per-user fan-out (a merge carrying progress, a "keep the book if anyone
-	// has state" gate before a hard delete) lists users through it, and an
-	// empty list there deletes progress (store/user_directory.go).
-	if identityOn() {
-		store.RequireUserDirectory()
+	// store's account list must never answer from that family. The store
+	// marks itself in its constructor when its spec retires u: (the identity
+	// flip's), and refuses (ErrNoUserDirectory) until the directory over
+	// core's Identities is installed below. Every per-user fan-out (a merge
+	// carrying progress, a "keep the book if anyone has state" gate before a
+	// hard delete) lists users through it, and an empty list there deletes
+	// progress (store/user_directory.go). A flip that is on over a store that
+	// did not mark itself would read the drained family as "no users", so the
+	// boot stops instead.
+	if err := refuseUnmarkedStore(identityOn(), store); err != nil {
+		return errors.Join(err, store.Close())
 	}
 	// The HNSW clean-stop marker beside the store, before anything writes
 	// through it; the server's snapshot import asks the store for it. Here,

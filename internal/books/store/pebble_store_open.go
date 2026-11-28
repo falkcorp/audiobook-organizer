@@ -469,6 +469,15 @@ func newCoreStore(r storage.LegacyRange, closeStore func() error, warm warmMode,
 		closingCancel()
 		return nil, err
 	}
+	// A store whose u: family is retired (the identity flip's spec, M3's
+	// Source) is under core identity: its account list must never answer from
+	// that drained family, so it refuses (ErrNoUserDirectory) until a directory
+	// over core's accounts is installed. Marked here, in the one constructor
+	// every opener goes through (the served store, the offline and standalone
+	// openers, a migration step's store), before anything can read through it.
+	if mode, ok := r.ClaimMode([]byte(userKeyPrefix)); ok && mode == storage.ClaimRetired {
+		store.RequireUserDirectory()
+	}
 	store.seedWorksGeneration()
 	store.bootExtend = extend
 	err := store.seedJournalClock()

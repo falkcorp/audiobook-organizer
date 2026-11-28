@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // The account list under core identity (user_directory.go): never the drained
@@ -53,4 +55,41 @@ func TestUserDirectory_UnderCoreIdentityListsTheDirectoryNeverTheDrainedFamily(t
 	p.SetUserDirectory(nil)
 	_, err = p.ListUsers()
 	require.ErrorIs(t, err, ErrNoUserDirectory, "a nil directory keeps the store refusing")
+}
+
+// retireUsers is a standalone spec transform that retires the u: claim, as the
+// identity flip's spec does (cutover.Flip.Spec over m3.SourcePrefixes).
+func retireUsers(s storage.Spec) storage.Spec {
+	s.Claims = append([]storage.Claim(nil), s.Claims...)
+	for i := range s.Claims {
+		if s.Claims[i].Prefix == userKeyPrefix {
+			s.Claims[i].Mode = storage.ClaimRetired
+		}
+	}
+	return s
+}
+
+// The store marks itself in its constructor when its spec retires u:, so the
+// window between an open and the install of core's directory (Register's, or an
+// offline caller's) answers ErrNoUserDirectory, never the drained family as "no
+// users". A spec that keeps u: read-write (HEAD's, every pre-flip test) leaves
+// the store unmarked.
+func TestUserDirectory_ARetiredUserClaimMarksTheStoreAtConstruction(t *testing.T) {
+	retired, err := OpenStandalone(t.TempDir()+"/retired.pebble", StandaloneOptions{FS: storage.MemFS(), Spec: retireUsers})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = retired.Close() })
+	require.True(t, retired.UserDirectoryRequired(), "a store whose u: claim is retired is under core identity from construction")
+	for name, list := range map[string]func() ([]User, error){"ListUsers": retired.ListUsers, "ListUsersStrict": retired.ListUsersStrict} {
+		users, err := list()
+		require.ErrorIs(t, err, ErrNoUserDirectory, "%s: opened and no directory installed yet is an error, never an empty list", name)
+		require.Nil(t, users, name)
+	}
+
+	head, err := OpenStandalone(t.TempDir()+"/head.pebble", StandaloneOptions{FS: storage.MemFS()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = head.Close() })
+	require.False(t, head.UserDirectoryRequired(), "a read-write u: claim is HEAD's account list")
+	users, err := head.ListUsers()
+	require.NoError(t, err)
+	require.Empty(t, users)
 }
