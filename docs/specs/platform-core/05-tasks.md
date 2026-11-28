@@ -655,6 +655,12 @@ type Permissions struct {
 	// apply and rollback kinds (05-updater 5U.10); taskhttp answers 403
 	// tasks.owner_route_only after the Start check and lists can_start false.
 	OwnerRouteOnly string
+
+	// OutboxSystemStart is a reviewed reason the OWNER module's system actor may
+	// start this kind from one of the owner's own outbox consumers
+	// (outbox.ConsumeIntoTask), although that actor cannot hold Start. Empty =
+	// not granted. Added by F6-03 (B1); see "Outbox-triggered starts" below.
+	OutboxSystemStart string
 }
 
 type Approval struct {
@@ -696,6 +702,26 @@ actor); a schedule edit is a write of its config key and is recorded as `core.se
    D8), and `outbox.Tx.StartRun` refuses an unset `StartRequest.Mode` ([05-events](05-events.md)
    5E.4, COR2-5). The rule-2 default never applies to `Trigger: Outbox`. The relay's own nudge start
    is `ModeLive` (5E.5.3).
+
+**Outbox-triggered starts (`Perms.OutboxSystemStart`, F6-03 B1).** A module's system actor never holds
+`core:admin` or an `AuthRequired` scope (SEC2-15), so a kind whose `Perms.Start` names one (a converted ABO
+kind's `Start` is the native requirement of HEAD's `settings.manage` atom, which includes
+`core:system.manage`) can never be started by the system actor an outbox consumer runs as. The state-change
+follow-up that is the point of `ConsumeIntoTask` would then be a dead letter on every message. The rule:
+
+1. `Perms.OutboxSystemStart` is a reviewed reason, empty by default. Set, it lets the **owner module's own
+   system actor** start the kind through `Executor.StartIn` with `Trigger: Outbox`, and nothing else: the
+   kind's `Start` is not widened for any person, key or other module.
+2. `Client.Start`, the HTTP route (`POST /definitions/{kind}/runs`), `rc.Enqueue`, a schedule, a window and
+   another module's `TaskStarts` entry never honour it; they keep checking `Perms.Start` as before. `Client.Start`
+   does not trust a caller-supplied `Trigger`: the outbox trigger is set by `StartIn`'s own path only.
+3. The kernel refuses at boot (P7, after the executor is built) a `ConsumeIntoTask` whose kind its owner's
+   system actor cannot start under this rule: an unregistered kind, or a kind with neither a satisfiable `Start`
+   nor `OutboxSystemStart`. The failure is the boot's, never a dead letter
+   (`TestEventsFlip_OutboxKindTheOwnerCannotStartFailsBoot`, `TestEventsFlip_OutboxKindNobodyRegisteredFailsBoot`).
+4. Only `Perms.Start` is relaxed. The run's recorded actor is the owner module's system actor
+   (`{AuthMethod: "system", System: <module>}`), its trigger is `Outbox`, and the Live-mode and approval rules
+   apply unchanged.
 
 **Stand-down** (generalises the `library.scan` special case, `dispatcher.go:155-161`): a def that
 declares `Common.Yields = true` (meaning: it is `ResumeContinue` and safe to quiesce) can be stood
