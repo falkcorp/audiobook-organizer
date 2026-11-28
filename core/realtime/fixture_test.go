@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,6 +144,9 @@ type env struct {
 	rb  *rbac.Service
 	svc *auth.Service
 	now time.Time
+	// skew moves auth's and the store's clock forward (advance), so a test can
+	// reach a credential's own end without sleeping to it.
+	skew atomic.Int64
 
 	bus *events.Bus
 	hub *realtime.Hub
@@ -151,8 +155,16 @@ type env struct {
 	ark events.Scope
 }
 
-// newAuth boots auth and rbac with the Batcave scopes; it opens no bus.
-func newAuth(t testing.TB) *env {
+// clock is e.now plus what advance has added; auth, the store and the hub's
+// Revalidate all read it, from several goroutines.
+func (e *env) clock() time.Time { return e.now.Add(time.Duration(e.skew.Load())) }
+
+// advance moves the clock forward by d.
+func (e *env) advance(d time.Duration) { e.skew.Add(int64(d)) }
+
+// newAuth boots auth and rbac with the Batcave scopes; it opens no bus. exts
+// are identity extensions the service registers (stage 12 runs them).
+func newAuth(t testing.TB, exts ...auth.Extension) *env {
 	t.Helper()
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
@@ -180,7 +192,7 @@ func newAuth(t testing.TB) *env {
 	e := &env{t: t, now: time.Date(2026, 11, 11, 9, 0, 0, 0, time.UTC)}
 	aks, _ := db.Keyspace(authstore.Owner)
 	rks, _ := db.Keyspace(rbacstore.Owner)
-	if e.st, err = authstore.New(aks, authstore.Options{Now: func() time.Time { return e.now }}); err != nil {
+	if e.st, err = authstore.New(aks, authstore.Options{Now: e.clock}); err != nil {
 		t.Fatal(err)
 	}
 	rst, err := rbacstore.New(rks, rbacstore.Options{})
@@ -226,7 +238,7 @@ func newAuth(t testing.TB) *env {
 	}
 	if e.svc, err = auth.New(ctx, auth.Options{}, auth.Deps{
 		Store: e.st, NewBatch: e.st.NewBatch, RBAC: e.rb, Audit: sink{}, Revocations: revJournal{},
-		Clock:  func() time.Time { return e.now },
+		Clock: e.clock, Extensions: exts,
 		Hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost}),
 	}); err != nil {
 		t.Fatal(err)
@@ -350,9 +362,9 @@ type hubOptions struct {
 }
 
 // newEnv boots auth, a bus and a hub wired as the kernel will wire them.
-func newEnv(t testing.TB, ho hubOptions) *env {
+func newEnv(t testing.TB, ho hubOptions, exts ...auth.Extension) *env {
 	t.Helper()
-	e := newAuth(t)
+	e := newAuth(t, exts...)
 	e.wire(ho)
 	return e
 }
