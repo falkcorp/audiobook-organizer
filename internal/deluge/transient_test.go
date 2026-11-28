@@ -7,6 +7,7 @@ package deluge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"net/http/httptest"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -62,6 +64,35 @@ func TestIsTransient(t *testing.T) {
 		srv.Close()
 		require.True(t, IsTransient(call(c)))
 	})
+	t.Run("an undecodable 4xx body is permanent", func(t *testing.T) {
+		err := call(serve(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, "<html>not found</html>")
+		}))
+		require.Error(t, err)
+		require.False(t, IsTransient(err), "a 4xx is the server answering: the same call gets the same page")
+	})
+	// The error a real http.Client returns when the dial's lookup fails is a
+	// *url.Error wrapping a *net.OpError wrapping the *net.DNSError, so the
+	// DNS verdict has to win over the OpError rule.
+	dialFails := func(dns *net.DNSError) error {
+		c, err := New("http://deluge.gotham.example:8112", "arkham")
+		require.NoError(t, err)
+		c.client.Transport = &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: dns}
+		}}
+		e := call(c)
+		require.Error(t, e)
+		var op *net.OpError
+		require.ErrorAs(t, e, &op, "the fixture must have the shape a real dial failure has")
+		return e
+	}
+	t.Run("an NXDOMAIN from a failed dial is permanent", func(t *testing.T) {
+		require.False(t, IsTransient(dialFails(&net.DNSError{Err: "no such host", Name: "deluge.gotham.example", IsNotFound: true})))
+	})
+	t.Run("a DNS timeout from a failed dial is transient", func(t *testing.T) {
+		require.True(t, IsTransient(dialFails(&net.DNSError{Err: "i/o timeout", Name: "deluge.gotham.example", IsTimeout: true})))
+	})
 	t.Run("a bad URL scheme is permanent although url.Error is a net.Error", func(t *testing.T) {
 		c, err := New("gopher://gotham", "arkham")
 		require.NoError(t, err)
@@ -83,6 +114,7 @@ func TestIsTransient(t *testing.T) {
 		require.False(t, IsTransient(fmt.Errorf("wrap: %w", ErrTorrentNotFound)))
 		require.True(t, IsTransient(context.DeadlineExceeded))
 		require.True(t, IsTransient(fmt.Errorf("read response: %w", io.ErrUnexpectedEOF)))
+		require.True(t, IsTransient(fmt.Errorf("deluge rpc core.move_storage: %w", io.EOF)), "a bare EOF is a connection the server dropped")
 		require.True(t, IsTransient(&net.OpError{Op: "read", Err: syscall.ECONNRESET}))
 		// A caller that stopped the call is not a failing server, even when the
 		// dial it stopped is a *net.OpError.
@@ -91,4 +123,43 @@ func TestIsTransient(t *testing.T) {
 		require.True(t, IsTransient(&net.DNSError{IsTemporary: true}))
 		require.False(t, IsTransient(&net.DNSError{IsNotFound: true}))
 	})
+}
+
+// MoveStorageContext hands its ctx to the login and to the move call: a Web UI
+// that never answers ends with the caller's deadline, not the client's
+// five-minute timeout. Each cell hangs one of the two requests.
+func TestMoveStorageContext_EndsWithTheCallersDeadline(t *testing.T) {
+	for _, hang := range []string{"auth.login", "core.move_storage"} {
+		t.Run("a hung "+hang, func(t *testing.T) {
+			release := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					Method string `json:"method"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&req)
+				if req.Method != hang {
+					_, _ = io.WriteString(w, `{"id":1,"result":true,"error":null}`)
+					return
+				}
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			}))
+			t.Cleanup(func() { close(release); srv.Close() })
+			c, err := New(srv.URL, "arkham")
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- c.MoveStorageContext(ctx, []string{"a"}, "/gotham") }()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+			case <-time.After(5 * time.Second):
+				t.Fatal("MoveStorageContext outlived the caller's deadline")
+			}
+		})
+	}
 }
