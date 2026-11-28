@@ -44,10 +44,12 @@ var opsV2Log = logger.New("handlers.operations_v2")
 // the third decision, is on OperationsRegistry beside Cancel.) Split out so
 // OperationsRegistry stays within the interface-width limit.
 type OperationsDecisions interface {
-	// RetryInterrupted re-queues an interrupted run in place (same id). Errors:
-	// opsregistry.ErrOpNotFound (404), opsregistry.ErrOpActive and
-	// opsregistry.ErrOpNotRetryable (409).
-	RetryInterrupted(ctx context.Context, opID, actor string) error
+	// RetryInterrupted re-queues an interrupted run in place (same id). opts
+	// are the retrying request's, judged by the definition's start
+	// precondition. Errors: opsregistry.ErrOpNotFound (404),
+	// opsregistry.ErrOpActive and opsregistry.ErrOpNotRetryable (409), and an
+	// opsregistry.StartRefusedError (409 with its reason).
+	RetryInterrupted(ctx context.Context, opID, actor string, opts ...opsregistry.EnqueueOption) error
 	// FinishWithoutResuming is the third decision on an interrupted_ask run,
 	// next to RetryInterrupted and Discard: run the def's Finish over the rows
 	// already applied, without leasing any more work. Errors:
@@ -931,7 +933,7 @@ func (h *OperationsV2Handler) retryInterruptedInPlace(c *gin.Context, row *datab
 	if u, ok := auth.UserFromContext(c.Request.Context()); ok && u.Username != "" {
 		actor = u.Username
 	}
-	err := h.registry.RetryInterrupted(c.Request.Context(), row.ID, actor)
+	err := h.registry.RetryInterrupted(c.Request.Context(), row.ID, actor, servermiddleware.ActorOptions(c)...)
 	switch {
 	case err == nil:
 	case errors.Is(err, opsregistry.ErrOpNotFound):
@@ -941,7 +943,9 @@ func (h *OperationsV2Handler) retryInterruptedInPlace(c *gin.Context, row *datab
 		httputil.RespondWithConflict(c, err.Error())
 		return
 	default:
-		httputil.InternalError(c, "retry failed", err)
+		// A start the definition refuses is a 409 with its reason, as on every
+		// start route; anything else is an internal error.
+		servermiddleware.RespondEnqueueError(c, "retry failed", err)
 		return
 	}
 	slog.Info("retry: re-queued interrupted operation in place",

@@ -12,10 +12,12 @@ import (
 )
 
 // diagnosticsStartPrecondition is the diagnostics export definition's start
-// precondition (OperationDef.StartPrecondition), asked by EnqueueOp for every
-// start of the export, whichever route it arrives by: POST /diagnostics/export,
-// POST /operations/v2, a retry of a finished export, POST /api/v3/ops/runs and
-// POST /api/v3/ops/defs/:id/runs.
+// precondition (OperationDef.StartPrecondition), asked for every start of the
+// export, whichever route it arrives by: by EnqueueOp for POST /diagnostics/export,
+// POST /operations/v2, the retry of a finished export, POST /api/v3/ops/runs and
+// POST /api/v3/ops/defs/:id/runs, and by RetryInterrupted for the in-place retry
+// of an interrupted one (the export is ResumeDrop, so a restart leaves its rows
+// interrupted_dropped, and retrying one is a start by whoever retries it).
 //
 // Under core identity an export is built for an account: the job runs after its
 // request is gone, narrowed to what the account that queued it may read
