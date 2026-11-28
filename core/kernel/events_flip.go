@@ -204,15 +204,36 @@ func (k *Kernel) outboxConsume() []module.Problem {
 func (k *Kernel) freezeOutbox() []module.Problem { return k.events.flip.outbox.freeze() }
 
 // eventsTaskDefinitions are the core task kinds of the flip: the outbox relay.
-// registerCoreKinds registers them with core's own kinds when the flip is
-// built, even with the tasks switch (app.Options.TasksBoot) off, so
+// registerCoreKinds registers them with core's own kinds at the end of P6, and
 // registering the relay is what makes the start rule hold (tasks.go
-// tasksNeeded) for an app that declared the identity flip.
+// tasksNeeded), so it is what builds core's executor, and the executor owns the
+// task instruments (the audiobook_organizer.ops.* families) that HEAD's own
+// operations recorder owns until the tasks switch retires it. The relay is
+// therefore registered only where the executor may exist: with the tasks switch
+// (app.Options.TasksBoot) on, or when an enabled module registered an outbox
+// handler, which cannot deliver without the relay and is a module that chose to
+// run on the executor. An app on the identity flip with the switch off and no
+// handler (ABO before F5-18's switch) builds no executor, so its recorder and
+// core's never collide on a Prometheus family (F6-03 on the F5-18 head).
 func (k *Kernel) eventsTaskDefinitions() []tasks.Definition {
 	if k.events == nil || k.events.flip == nil {
 		return nil
 	}
+	if !k.tasksFlipOn() && !k.anyOutboxHandler() {
+		return nil
+	}
 	return []tasks.Definition{k.events.flip.outbox.ob.RelayDefinition()}
+}
+
+// anyOutboxHandler reports whether an enabled module recorded an outbox
+// handler. It reads the recordings P6 made, before P7 registers them.
+func (k *Kernel) anyOutboxHandler() bool {
+	for _, e := range k.entries {
+		if e.enabled && len(e.rec.OutboxHandlers) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // eventsPublisher is executor.Options.Events: the bus the executor publishes
