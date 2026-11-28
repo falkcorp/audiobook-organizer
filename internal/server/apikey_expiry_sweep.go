@@ -51,7 +51,10 @@ const (
 // drained and their claim retired, so every tick would list nothing, or fail on
 // the retired claim, and warn about nothing. It returns at once, as
 // stampNeverExpiringAPIKeys and logLegacyBcryptPasswordCount are not run
-// (seedRolesAndTokens). Core owns key expiry warnings.
+// (seedRolesAndTokens). Core has no equivalent warning yet, so under identity
+// nothing logs that a key is about to expire (todo.d CORE-APIKEY-EXPIRY-WARN: a
+// core-side warn-only sweep). The warning is advisory; enforcement is core's,
+// and a key with no expiry is refused, so nothing is widened by its absence.
 func (s *Server) warnExpiringAPIKeys() {
 	if s.identity != nil {
 		return
