@@ -254,9 +254,15 @@ _APP_TEMPLATE = """#!/usr/bin/env python3
 import json, os, sys
 IDENT = json.loads({ident!r})
 args = sys.argv[1:]
+_rec = {{"kind": "app", "name": IDENT["name"], "path": sys.argv[0], "args": args,
+        "env": {{k: os.environ.get(k, "") for k in ("HOME", "ABK_STATE_DIR", "ABO_CORE_PATHS_STATE_DIR")}}}}
+if "--from" in args:
+    # storage cutover-blockers fix: what the --from file held, and its mode.
+    _p = args[args.index("--from") + 1]
+    _rec["from_text"] = open(_p, encoding="utf-8").read()
+    _rec["from_mode"] = oct(os.stat(_p).st_mode & 0o777)
 with open(IDENT["log"], "a", encoding="utf-8") as f:
-    f.write(json.dumps({{"kind": "app", "name": IDENT["name"], "path": sys.argv[0], "args": args,
-                        "env": {{k: os.environ.get(k, "") for k in ("HOME", "ABK_STATE_DIR", "ABO_CORE_PATHS_STATE_DIR")}}}}) + "\\n")
+    f.write(json.dumps(_rec) + "\\n")
 def unknown(flag):
     sys.stderr.write("Error: unknown flag: " + flag + "\\n")
     sys.exit(1)
@@ -321,6 +327,30 @@ if args[:2] == ["secrets", "export-keyring"]:
     os.write(fd, IDENT.get("keyring", "batcave keyring export").encode())
     os.close(fd)
     print("Wrote the keyring to " + rest["--out"])
+    sys.exit(0)
+if args[:2] == ["storage", "cutover-blockers"]:
+    # `storage cutover-blockers list [--out F] | fix KEY --from F | delete KEY --confirm`
+    # (offline): answers from IDENT["blockers_list"] and IDENT["blockers_rows"] (a JSON
+    # text; absent: nothing blocks), or fails with IDENT["blockers_exit"].
+    if IDENT.get("blockers_exit"):
+        sys.stderr.write("Error: storage cutover-blockers: the cutover has started\\n")
+        sys.exit(IDENT["blockers_exit"])
+    verb = args[2]
+    if verb == "list":
+        if not IDENT.get("blockers_rows"):
+            print("No blocking rows: the cutover preflight is clean.")
+            sys.exit(0)
+        print(IDENT["blockers_list"])
+        if "--out" in args:
+            out = args[args.index("--out") + 1]
+            fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.write(fd, IDENT["blockers_rows"].encode())
+            os.close(fd)
+            print("Wrote the rows with their values to " + out + " (mode 0600).")
+    elif verb == "fix":
+        print("Fixed " + args[3] + " (step books, record 7).")
+    elif verb == "delete":
+        print("Deleted " + args[3] + " (step books, record 8; 2 id(s): a, b).")
     sys.exit(0)
 if args[:2] == ["updater", "fetch-release"]:
     # generation "flipped" refuses the retired ABK_STATE_DIR; "preflip" refuses an

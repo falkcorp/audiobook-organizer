@@ -295,6 +295,8 @@ class FakeHost:
             "install-staged",
             "export-keyring",
             "export-install-secrets",
+            "cutover-blockers-list",
+            "cutover-blockers-apply",
         ):
             text = (HELPERS / stub).read_text()
             assert lib_line in text, stub
@@ -2243,7 +2245,7 @@ class ExportTargets(unittest.TestCase):
             [ln for ln in text.splitlines() if "export-" in ln],
             [
                 f'    {guard.HELPER_DIR}/export-keyring "", \\',
-                f'    {guard.HELPER_DIR}/export-install-secrets ""',
+                f'    {guard.HELPER_DIR}/export-install-secrets "", \\',
             ],
         )
 

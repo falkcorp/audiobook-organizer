@@ -159,14 +159,43 @@ Operations (the stub name, then the subcommand):
                      aorg-<what>-<UTC stamp>[.yaml]. Each prints one line
                      `EXPORTED <name> <bytes> <sha256>` (the hash of what it
                      wrote). It refuses while the restore unit or its own runs.
+  cutover-blockers-  no arguments each, as root (R2 runbook Step 0, Path B).
+  list               Both refuse unless the service unit is exactly inactive
+  cutover-blockers-  (they never stop or start it) and while the restore or
+  apply              export unit runs, and run the current binary's `storage
+                     cutover-blockers` as service_user in the export unit.
+                     list: `list --out <scratch in PrivateTmp>`; delivers what
+                     it printed and the --out JSON (none when nothing blocks)
+                     to export_dir as aorg-cutover-blockers-<stamp>.txt/.json
+                     (the export rules: O_EXCL|O_NOFOLLOW, 0600, fchown to
+                     SUDO_UID first, all-or-nothing). apply: reads the one
+                     fixed-name request aorg-cutover-blockers-request.json from
+                     export_dir (opened relative to the checked dirfd: regular,
+                     one link, SUDO_UID's, mode 0600, at most 16 MiB), parses it
+                     strictly (BLOCKERS_FIELDS: action fix|delete, key as
+                     lowercase hex, for fix a base64 value), hands it to the
+                     worker on stdin (never as a path) and runs `fix hex:<key>
+                     --from <scratch rows file>` or `delete hex:<key> --confirm`
+                     (the helper adds --confirm). The command's output is
+                     delivered as aorg-cutover-blockers-result-<stamp>.txt and,
+                     on success, the request is removed (same inode only). The
+                     unit's stdout is a sequence of `AORGBLOCKERS1 <part>
+                     <length> <sha256>` frames. A failed apply cannot say
+                     nothing changed: it says to list, and keeps the request.
 
 Exit 0 done; 1 refused or failed (the message says which step); 2 bad
-arguments. Standard library only. Tests: scripts/tests/test_rollback_helper.py.
+arguments; 4 cutover-blockers-apply refused before its unit started (nothing ran,
+nothing changed; one NOT-RUN line on stdout). Every such refusal exits 4, the
+wrong-arity one too (usage, which exits 2 for every other op, cutover-blockers-list
+included); a failure after the unit started exits 1 and keeps the request. Standard
+library only. Tests: scripts/tests/test_rollback_helper.py.
 Install: docs/system/deploy-and-gpu-ops.md ("Rollback helpers").
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import fcntl
 import hashlib
@@ -180,7 +209,9 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
+from typing import IO
 
 CONFIG = "/etc/audiobook-organizer/rollback.conf"
 LIBDIR = "/usr/local/libexec/audiobook-organizer/rollback"
@@ -226,6 +257,43 @@ EXPORT_NAMES = {
     "key": ("aorg-encryption-key", ""),
     "config": ("aorg-config", ".yaml"),
 }
+# The cutover-blockers ops (R2 runbook Step 0, Path B). They run in the same
+# transient unit as the exports (so an export, a restore and these exclude each
+# other, and the per-call token and stop logic carry over), but the unit reads
+# a store, so it gets longer than an export before systemd kills it.
+BLOCKERS_RUNTIME_SEC = 600
+BLOCKERS_DEADLINE_SEC = BLOCKERS_RUNTIME_SEC + 30
+# The command's own cap on a --from file (core/app/offline_cutover_blockers.go
+# cutoverBlockersMaxFile), also the cap on the request file and on each part of
+# the unit's output.
+BLOCKERS_PART_LIMIT = 16 << 20
+BLOCKERS_REQUEST = "aorg-cutover-blockers-request.json"
+# cutover-blockers-apply, refused before its unit started: this line on stdout
+# and this exit status mean nothing ran and nothing changed.
+BLOCKERS_NOT_RUN = "NOT-RUN"
+BLOCKERS_NOT_RUN_EXIT = 4
+BLOCKERS_KEY_HEX_MAX = 2048
+# The unit's stdout for a blockers op is a sequence of parts, one frame each:
+# `AORGBLOCKERS1 <part> <length> <sha256>\n` and the bytes. A list run is
+# `list` (what the command printed), then `rows` (its --out file) unless there
+# are no blocking rows; an apply run is `result` (what the command printed).
+BLOCKERS_MAGIC = "AORGBLOCKERS1"
+BLOCKERS_FRAME = re.compile(rb"AORGBLOCKERS1 (list|rows|result) ([0-9]{1,8}) ([0-9a-f]{64})\n")
+BLOCKERS_SEQUENCES = {
+    "list": (("list",), ("list", "rows")),
+    "apply": (("result",),),
+}
+BLOCKERS_READ_CAP = 2 * (BLOCKERS_PART_LIMIT + 256) + 1
+# part -> (file name prefix, suffix) of the file left in export_dir.
+BLOCKERS_NAMES = {
+    "list": ("aorg-cutover-blockers", ".txt"),
+    "rows": ("aorg-cutover-blockers", ".json"),
+    "result": ("aorg-cutover-blockers-result", ".txt"),
+}
+_BLOCKERS_KEY = re.compile(rf"(?:[0-9a-f]{{2}}){{1,{BLOCKERS_KEY_HEX_MAX // 2}}}")
+_BLOCKERS_FIELDS = {"action", "key", "value"}
+# What `list` prints when nothing blocks (core/app/offline_cutover_blockers.go).
+BLOCKERS_NONE = "No blocking rows"
 # stub file name -> subcommand. Each stub is `exec /usr/bin/python3 -I
 # LIBDIR/rollback_helper.py <subcommand> "$@"`.
 STUBS = {
@@ -237,6 +305,8 @@ STUBS = {
     "pprof": "pprof",
     "export-keyring": "export-keyring",
     "export-install-secrets": "export-install-secrets",
+    "cutover-blockers-list": "cutover-blockers-list",
+    "cutover-blockers-apply": "cutover-blockers-apply",
 }
 
 _NAME = re.compile(r"[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}")
@@ -2385,17 +2455,17 @@ def _export_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
 
 
-def _export_dir_fd(cfg: dict[str, str]) -> int:
+def _export_dir_fd(cfg: dict[str, str], outcome: str = "nothing was exported") -> int:
     """export_dir, opened with no symlink in any component and checked: a
     directory owned by the deploy user (SUDO_UID) and mode 0700. Every later
     step is relative to this fd, so a rename or a swap of the path after this
-    point changes nothing."""
+    point changes nothing. outcome ends each refusal (what did not happen)."""
     d = cfg.get("export_dir", "")
     if not d:
         raise RefusedError(
             f"export_dir is not set in {CONFIG}. Set it (install_helpers --export-dir, or edit "
             "the file as root) to a directory the deploy user owns, created as that user with "
-            "`mkdir -m 700`; nothing was exported"
+            f"`mkdir -m 700`; {outcome}"
         )
     try:
         fd = _open_no_symlinks(d, directory=True)
@@ -2403,7 +2473,7 @@ def _export_dir_fd(cfg: dict[str, str]) -> int:
         raise RefusedError(
             f"cannot open the export directory {d}: {e.strerror} (a symlink in any component of "
             f"the path is refused). Create it as the deploy user: mkdir -m 700 {d}; "
-            "nothing was exported"
+            f"{outcome}"
         ) from e
     st = os.fstat(fd)
     uid = _deploy_uid()
@@ -2414,24 +2484,38 @@ def _export_dir_fd(cfg: dict[str, str]) -> int:
         problem = f"has mode {stat.S_IMODE(st.st_mode):04o}, not 0700"
     if problem:
         os.close(fd)
-        raise RefusedError(f"the export directory {d} {problem}; nothing was exported")
+        raise RefusedError(f"the export directory {d} {problem}; {outcome}")
     return fd
 
 
-def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
-    """Run _export-worker KIND as the service user in the export unit and
-    return the file it framed on stdout; None when the worker reports the file
-    absent (EXPORT_ABSENT). Refuses, delivering nothing, on any other failure
-    or on stdout that is not exactly one frame."""
+def _export_require_idle(what: str) -> None:
+    """Refuse unless neither the restore unit nor the export unit is running
+    (an in-flight one, or a state that cannot be read); a failed one is reset
+    so the fixed unit name can be used again. what names the caller's own
+    work, for the message."""
     for unit in (TRANSIENT_UNIT, EXPORT_UNIT):
         state = _transient_state(unit)
         if state not in ("inactive", "failed"):
             raise RefusedError(
                 f"{unit}.service is {state or 'in a state that cannot be read'}: a restore or an "
                 f"export may still be running (systemctl status {unit}). Nothing was started."
+                if what == "export"
+                else f"{unit}.service is {state or 'in a state that cannot be read'}: a restore, "
+                f"an export or a cutover-blockers run may still be running (systemctl status "
+                f"{unit}). Nothing was started."
             )
     if _transient_state(EXPORT_UNIT) == "failed":
         subprocess.run([TOOLS["systemctl"], "reset-failed", EXPORT_UNIT], check=False)  # noqa: S603
+
+
+def _export_spawn(
+    cfg: dict[str, str], worker: list[str], runtime_sec: int, stdin: bytes | None = None
+) -> tuple[subprocess.Popen[bytes], str, threading.Thread | None]:
+    """Start `rollback_helper.py WORKER...` as the service user in the export
+    unit, its stdout a pipe to this process. Returns (process, the call's
+    token, the thread feeding stdin or None). stdin None: the unit's stdin is
+    /dev/null; else it is a pipe the thread fills with those bytes and closes,
+    so the request travels to the worker and no path does."""
     argv = [
         TOOLS["systemd-run"],
         "--pipe",
@@ -2442,7 +2526,7 @@ def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
         "--service-type=exec",
         f"--uid={cfg['service_user']}",
         "--property=PrivateTmp=yes",
-        f"--property=RuntimeMaxSec={EXPORT_RUNTIME_SEC}",
+        f"--property=RuntimeMaxSec={runtime_sec}",
     ]
     argv += [f"--setenv={tok}" for tok in cfg.get("offline_env", "").split()]
     # A token only this call knows, in the unit's environment: _export_stop
@@ -2450,10 +2534,44 @@ def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
     # a race for the unit name never stops the other caller's unit.
     token = _export_token()
     argv.append(f"--setenv={EXPORT_TOKEN_VAR}={token}")
-    argv += ["--", TOOLS["python3"], "-I", os.path.abspath(__file__), "_export-worker", kind]
+    argv += ["--", TOOLS["python3"], "-I", os.path.abspath(__file__), *worker]
     proc = subprocess.Popen(  # noqa: S603 (fixed argv built above)
-        argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE
+        argv,
+        stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        bufsize=0,
     )
+    feeder = None
+    if stdin is not None:
+        assert proc.stdin is not None
+        feeder = threading.Thread(target=_feed_stdin, args=(proc.stdin, stdin), daemon=True)
+        feeder.start()
+    return proc, token, feeder
+
+
+def _feed_stdin(pipe: IO[bytes], data: bytes) -> None:
+    """Write data to the unit's stdin and close it. The pipe is unbuffered, so
+    closing it never waits on a lock a blocked write holds; a unit that is
+    stopped (or never reads) ends the write with EPIPE, which is ignored here
+    and judged by the unit's own result."""
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[pipe.write(view) :]
+    except (OSError, ValueError):
+        pass
+    finally:
+        with contextlib.suppress(OSError, ValueError):
+            pipe.close()
+
+
+def _export_collect(cfg: dict[str, str], kind: str) -> bytes | None:
+    """Run _export-worker KIND as the service user in the export unit and
+    return the file it framed on stdout; None when the worker reports the file
+    absent (EXPORT_ABSENT). Refuses, delivering nothing, on any other failure
+    or on stdout that is not exactly one frame."""
+    _export_require_idle("export")
+    proc, token, _ = _export_spawn(cfg, ["_export-worker", kind], EXPORT_RUNTIME_SEC)
     assert proc.stdout is not None
     try:
         return _export_result(proc, kind)
@@ -2559,13 +2677,19 @@ def _export_frame(kind: str, raw: bytes) -> bytes:
     return body
 
 
-def _export_deliver(dfd: int, kind: str, data: bytes, stamp: str) -> tuple[str, str]:
+def _export_deliver(
+    dfd: int,
+    kind: str,
+    data: bytes,
+    stamp: str,
+    names: dict[str, tuple[str, str]] = EXPORT_NAMES,
+) -> tuple[str, str]:
     """Write data into the export directory under its fixed name, as the deploy
     user's file: created O_EXCL|O_NOFOLLOW relative to dfd (so a planted name,
     symlink or not, is refused and nothing it points at is touched), mode
     0600, owned by SUDO_UID before any byte is written. Returns (name, sha256
     of the bytes written)."""
-    prefix, suffix = EXPORT_NAMES[kind]
+    prefix, suffix = names[kind]
     name = f"{prefix}-{stamp}{suffix}"
     try:
         fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
@@ -2626,25 +2750,25 @@ def op_export_install_secrets(args: list[str]) -> int:
     return _export(load_config(), ("key", "config"))
 
 
-def _own_file(path: str, what: str) -> bytes:
+def _own_file(path: str, what: str, limit: int = EXPORT_LIMIT) -> bytes:
     """Read the service user's own regular file: no symlink in any component,
-    one link, owned by this user, under EXPORT_LIMIT bytes."""
+    one link, owned by this user, non-empty, at most limit bytes."""
     try:
         fd = _open_no_symlinks(path)
     except OSError as e:
         raise RefusedError(f"cannot open {what} {path}: {e.strerror}") from e
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_size > EXPORT_LIMIT or st.st_size == 0:
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit or st.st_size == 0:
             raise RefusedError(
-                f"{what} {path} is not a non-empty regular file of at most {EXPORT_LIMIT} bytes"
+                f"{what} {path} is not a non-empty regular file of at most {limit} bytes"
             )
         if st.st_nlink != 1 or st.st_uid != os.geteuid():
             raise RefusedError(
                 f"{what} {path} has {st.st_nlink} links and uid {st.st_uid}; it must have one link "
                 f"and belong to the service user (uid {os.geteuid()})"
             )
-        return _read_all(fd, EXPORT_LIMIT + 1)
+        return _read_all(fd, limit + 1)
     finally:
         os.close(fd)
 
@@ -2719,6 +2843,412 @@ def op_export_worker(args: list[str]) -> int:
     return 0
 
 
+# --- the cutover-blockers ops (R2 runbook Step 0, Path B) ---------------------
+#
+# cutover-blockers-list and cutover-blockers-apply, no arguments each. The
+# service must already be stopped (this helper never stops or starts it): the
+# command opens the store offline. The command runs as the service user in the
+# export unit (so the token, stop and exclusion logic above carry over); this
+# process, as root, checks the service, reads the one request file, hands the
+# parsed request to the worker on stdin, and delivers what comes back into
+# export_dir the way the exports are delivered.
+
+
+def _blockers_require_stopped(cfg: dict[str, str]) -> None:
+    """Refuse unless the service unit is exactly `inactive`. Anything else
+    (active, activating, failed, an unreadable state) refuses: the store must
+    not be open under a running service, and a failed unit may be restarting."""
+    unit = cfg["unit"]
+    state = _transient_state(unit.removesuffix(".service"))
+    if state != "inactive":
+        raise RefusedError(
+            f"{unit} is {state or 'in a state that cannot be read'}, not inactive: the "
+            "cutover-blockers commands open the store offline, so the service must be stopped "
+            "first (this helper never stops or starts it). Nothing was run."
+        )
+
+
+def _blockers_no_dups(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    out: dict[str, object] = {}
+    for k, v in pairs:
+        if k in out:
+            raise ValueError(f"the field {k!r} appears twice")
+        out[k] = v
+    return out
+
+
+def _blockers_parse_request(raw: bytes) -> dict[str, str]:
+    """The request file's content, strictly: one JSON object, no duplicate or
+    unknown field, `action` fix or delete, `key` lowercase hex (no `hex:`
+    prefix, even length, 1..BLOCKERS_KEY_HEX_MAX/2 bytes), and for fix a
+    `value` in base64 (RFC 4648 with padding, no stray character) that is not
+    empty; a delete takes no value. Returns {"action", "key"[, "value"]} with
+    the value re-encoded canonically. Never puts a value in a message."""
+    try:
+        doc = json.loads(raw.decode("utf-8"), object_pairs_hook=_blockers_no_dups)
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:
+        # str(e) of a json error names a position, never the content; a
+        # duplicate field's message names the field only.
+        raise RefusedError(f"the request is not one strict JSON object ({e})") from e
+    if not isinstance(doc, dict):
+        raise RefusedError("the request is not a JSON object")
+    unknown = sorted(set(doc) - _BLOCKERS_FIELDS)
+    if unknown:
+        raise RefusedError(f"the request has unknown field(s) {', '.join(map(repr, unknown))}")
+    action = doc.get("action")
+    if action not in ("fix", "delete"):
+        raise RefusedError('the request\'s action must be exactly "fix" or "delete"')
+    key = doc.get("key")
+    if not isinstance(key, str) or not _BLOCKERS_KEY.fullmatch(key):
+        raise RefusedError(
+            "the request's key must be lowercase hex of the key's bytes (no hex: prefix, no "
+            f"raw bytes), an even number of digits, 1 to {BLOCKERS_KEY_HEX_MAX // 2} bytes"
+        )
+    out = {"action": action, "key": key}
+    if action == "delete":
+        if "value" in doc:
+            raise RefusedError("a delete request takes no value")
+        return out
+    value = doc.get("value")
+    if not isinstance(value, str):
+        raise RefusedError("a fix request needs its value, base64 text, not empty")
+    if len(value) > BLOCKERS_PART_LIMIT - 8192:
+        raise RefusedError(
+            f"the fix value is over {BLOCKERS_PART_LIMIT - 8192} base64 characters, more than the "
+            f"command's {BLOCKERS_PART_LIMIT}-byte --from file can hold"
+        )
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise RefusedError("the fix value is not valid base64") from e
+    if not decoded:
+        raise RefusedError("a fix request needs its value, base64 text, not empty")
+    out["value"] = base64.b64encode(decoded).decode("ascii")
+    return out
+
+
+def _blockers_read_request(dfd: int, where: str) -> tuple[bytes, tuple[int, int]]:
+    """The fixed-name request file, opened by name relative to the checked
+    export_dir fd (never by a path): a regular file, one link, owned by the
+    deploy user, mode exactly 0600, 1..BLOCKERS_PART_LIMIT bytes. Returns its
+    bytes and (st_dev, st_ino), for the removal after a successful apply."""
+    try:
+        fd = os.open(BLOCKERS_REQUEST, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+    except OSError as e:
+        raise RefusedError(
+            f"cannot open the request {where}/{BLOCKERS_REQUEST}: {e.strerror} (a symlink is "
+            "refused). Put your request there first; nothing was run"
+        ) from e
+    try:
+        st = os.fstat(fd)
+        uid = _deploy_uid()
+        problem = ""
+        if not stat.S_ISREG(st.st_mode):
+            problem = "is not a regular file"
+        elif st.st_nlink != 1:
+            problem = f"has {st.st_nlink} hard links; it must have exactly one"
+        elif st.st_uid != uid:
+            problem = f"is owned by uid {st.st_uid}, not by the deploy user (uid {uid})"
+        elif stat.S_IMODE(st.st_mode) != 0o600:
+            problem = f"has mode {stat.S_IMODE(st.st_mode):04o}, not 0600"
+        elif st.st_size == 0 or st.st_size > BLOCKERS_PART_LIMIT:
+            problem = f"is {st.st_size} bytes; it must be 1 to {BLOCKERS_PART_LIMIT}"
+        if problem:
+            raise RefusedError(f"the request {where}/{BLOCKERS_REQUEST} {problem}; nothing was run")
+        data = _read_all(fd, BLOCKERS_PART_LIMIT + 1)
+        if len(data) > BLOCKERS_PART_LIMIT:
+            raise RefusedError(
+                f"the request {where}/{BLOCKERS_REQUEST} grew past {BLOCKERS_PART_LIMIT} bytes "
+                "while it was read; nothing was run"
+            )
+        return data, (st.st_dev, st.st_ino)
+    finally:
+        os.close(fd)
+
+
+def _blockers_frames(op: str, raw: bytes) -> dict[str, bytes]:
+    """The parts inside the unit's stdout for op: BLOCKERS_FRAME headers and
+    bodies back to back, nothing before, between or after, in an order
+    BLOCKERS_SEQUENCES allows. Each body is 1..BLOCKERS_PART_LIMIT bytes whose
+    sha256 is the one its header states. Each check refuses with its own
+    message."""
+    where = f"the cutover-blockers unit for {op}"
+    parts: dict[str, bytes] = {}
+    pos = 0
+    while pos < len(raw):
+        m = BLOCKERS_FRAME.match(raw, pos)
+        if m is None:
+            raise RefusedError(
+                f"{where} did not put a frame header where one belongs (something else wrote there)"
+            )
+        part, n = m.group(1).decode(), int(m.group(2))
+        start = m.end()
+        if n == 0:
+            raise RefusedError(f"{where} framed an empty {part} part")
+        if n > BLOCKERS_PART_LIMIT:
+            raise RefusedError(
+                f"{where} framed {n} bytes for {part}, over the {BLOCKERS_PART_LIMIT} limit"
+            )
+        if len(raw) - start < n:
+            raise RefusedError(
+                f"{where} framed {n} bytes for {part} but only {len(raw) - start} followed (cut "
+                "short)"
+            )
+        body = raw[start : start + n]
+        if hashlib.sha256(body).hexdigest() != m.group(3).decode():
+            raise RefusedError(f"{where} framed {part} bytes whose sha256 is not the one it stated")
+        if part in parts:
+            raise RefusedError(f"{where} framed {part} twice")
+        parts[part] = body
+        pos = start + n
+    if tuple(parts) not in BLOCKERS_SEQUENCES[op]:
+        raise RefusedError(
+            f"{where} framed {', '.join(parts) or 'nothing'}; it must frame "
+            + " or ".join("+".join(seq) for seq in BLOCKERS_SEQUENCES[op])
+            + ", in that order"
+        )
+    return parts
+
+
+def _blockers_collect(
+    cfg: dict[str, str], op: str, stdin: bytes | None, after: str
+) -> dict[str, bytes]:
+    """Run _blockers-worker OP as the service user in the export unit (stdin
+    the request, for apply) and return its parts. Every refusal from the moment
+    the unit starts ends with after: what the caller cannot promise any more."""
+    proc, token, feeder = _export_spawn(cfg, ["_blockers-worker", op], BLOCKERS_RUNTIME_SEC, stdin)
+    assert proc.stdout is not None
+    deadline = time.monotonic() + BLOCKERS_DEADLINE_SEC
+    try:
+        try:
+            raw = _read_all(proc.stdout.fileno(), BLOCKERS_READ_CAP, deadline)
+        except TimeoutError:
+            raise RefusedError(
+                f"the cutover-blockers unit for {op} did not finish within "
+                f"{BLOCKERS_DEADLINE_SEC} seconds; it was stopped. {after}"
+            ) from None
+        if len(raw) >= BLOCKERS_READ_CAP:
+            raise RefusedError(
+                f"the cutover-blockers unit for {op} wrote more than {BLOCKERS_READ_CAP} bytes. "
+                f"{after}"
+            )
+        try:
+            rc = proc.wait(timeout=max(deadline - time.monotonic(), 0.01))
+        except subprocess.TimeoutExpired:
+            raise RefusedError(
+                f"the cutover-blockers unit for {op} did not exit within "
+                f"{BLOCKERS_DEADLINE_SEC} seconds; it was stopped. {after}"
+            ) from None
+        if rc != 0:
+            raise RefusedError(f"the cutover-blockers unit for {op} exited {rc}. {after}")
+        try:
+            return _blockers_frames(op, raw)
+        except RefusedError as e:
+            raise RefusedError(f"{e}. {after}") from e
+    except BaseException:
+        _export_stop(proc, token)
+        raise
+    finally:
+        proc.stdout.close()
+        if feeder is not None:
+            feeder.join(timeout=5)
+
+
+def op_blockers_list(args: list[str]) -> int:
+    _arity(args, 0, "cutover-blockers-list (no arguments)")
+    cfg = load_config()
+    dfd = _export_dir_fd(cfg, "nothing was run")
+    done: list[str] = []
+    try:
+        _blockers_require_stopped(cfg)
+        _export_require_idle("blockers")
+        # One unit run makes both artefacts, so the printed list and the --out
+        # file are of the same instant; both are read before either is written.
+        parts = _blockers_collect(cfg, "list", None, "Nothing was delivered.")
+        stamp = _export_stamp()
+        lines = []
+        for part in ("list", "rows"):
+            if part not in parts:
+                lines.append(f"ABSENT {part}")
+                continue
+            name, sha = _export_deliver(dfd, part, parts[part], stamp, BLOCKERS_NAMES)
+            done.append(name)
+            lines.append(f"EXPORTED {name} {len(parts[part])} {sha}")
+    except BaseException:
+        for name in done:
+            with contextlib.suppress(OSError):
+                os.unlink(name, dir_fd=dfd)
+        raise
+    finally:
+        os.close(dfd)
+    print("\n".join(lines))
+    return 0
+
+
+def op_blockers_apply(args: list[str]) -> int:
+    """Apply the one request in export_dir. A refusal before the unit is
+    started prints BLOCKERS_NOT_RUN on stdout and exits BLOCKERS_NOT_RUN_EXIT:
+    nothing ran and nothing changed, so a wrapper may remove the request it
+    placed. Every other failure may have changed the store (see `after`)."""
+    state = {"started": False}
+    try:
+        return _blockers_apply(args, state)
+    except RefusedError as e:
+        if state["started"]:
+            raise
+        print(BLOCKERS_NOT_RUN, flush=True)
+        raise RefusedError(str(e), BLOCKERS_NOT_RUN_EXIT) from e
+
+
+def _blockers_apply(args: list[str], state: dict[str, bool]) -> int:
+    _arity(args, 0, "cutover-blockers-apply (no arguments)")
+    cfg = load_config()
+    dfd = _export_dir_fd(cfg, "nothing was run")
+    try:
+        where = cfg["export_dir"]
+        _blockers_require_stopped(cfg)
+        _export_require_idle("blockers")
+        raw, ident = _blockers_read_request(dfd, where)
+        request = _blockers_parse_request(raw)
+        # From here the store may change, so a failure cannot say "nothing
+        # changed": it says to look, and the request is left where it is.
+        after = (
+            "The unit started, so the change MAY have been applied: list the blockers to see. "
+            f"The request {where}/{BLOCKERS_REQUEST} was left in place; delete it yourself once "
+            "you are done with it (a fix request holds a value)."
+        )
+        stdin = json.dumps(request, separators=(",", ":")).encode("ascii")
+        state["started"] = True
+        parts = _blockers_collect(cfg, "apply", stdin, after)
+        lines = []
+        problem = ""
+        try:
+            name, sha = _export_deliver(
+                dfd, "result", parts["result"], _export_stamp(), BLOCKERS_NAMES
+            )
+            lines.append(f"EXPORTED {name} {len(parts['result'])} {sha}")
+        except RefusedError as e:
+            problem = (
+                f"the apply succeeded but its result could not be written ({e}); the command's "
+                "output follows on stderr"
+            )
+            sys.stderr.write(parts["result"].decode("utf-8", "replace"))
+        # The apply succeeded: the request goes whatever became of the result,
+        # only if the name still is the file that was read.
+        try:
+            now = os.stat(BLOCKERS_REQUEST, dir_fd=dfd, follow_symlinks=False)
+            if (now.st_dev, now.st_ino) != ident:
+                raise OSError("it is no longer the file that was read")
+            os.unlink(BLOCKERS_REQUEST, dir_fd=dfd)
+            lines.append(f"REQUEST-REMOVED {BLOCKERS_REQUEST}")
+        except OSError as e:
+            problem += (
+                f"{' ' if problem else ''}The apply succeeded, but the request "
+                f"{where}/{BLOCKERS_REQUEST} was not removed ({e}); look at it and delete it "
+                "yourself."
+            )
+    finally:
+        os.close(dfd)
+    print("\n".join(lines))
+    if problem:
+        raise RefusedError(problem)
+    return 0
+
+
+def _blockers_run(
+    cfg: dict[str, str], verb: str, key: list[str], flags: list[str], scratch: str
+) -> bytes:
+    """Run `bin storage cutover-blockers VERB [KEY] --db DB FLAGS` as this (the
+    service) user: stdin closed, its stderr our stderr, its stdout returned. The
+    key comes before every flag, where the command wants it. It never prints a
+    value. A non-zero exit refuses, its stdout forwarded to stderr first."""
+    argv = [cfg["bin"], "storage", "cutover-blockers", verb, *key, "--db", cfg["db"], *flags]
+    r = subprocess.run(  # noqa: S603 (argv built from fixed words and validated fields)
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,
+        cwd=scratch,
+        check=False,
+    )
+    if r.returncode != 0:
+        sys.stderr.buffer.write(r.stdout)
+        raise RefusedError(f"`storage cutover-blockers {verb}` exited {r.returncode}")
+    return r.stdout
+
+
+def _worker_blockers_list(cfg: dict[str, str]) -> dict[str, bytes]:
+    scratch = os.path.realpath(tempfile.mkdtemp(prefix="aorg-blockers-"))
+    try:
+        out = f"{scratch}/rows.json"
+        text = _blockers_run(cfg, "list", [], ["--out", out], scratch)
+        try:
+            os.lstat(out)
+        except FileNotFoundError:
+            # The command writes no --out file when there is nothing blocking,
+            # and says so in a fixed sentence; an absent file with a list
+            # that does not say so is a command that failed quietly.
+            if BLOCKERS_NONE.encode() not in text:
+                raise RefusedError(
+                    "the command printed a list but wrote no --out file, and did not say there "
+                    "are no blocking rows"
+                ) from None
+            return {"list": text}
+        except OSError as e:
+            raise RefusedError(f"cannot inspect {out}: {e.strerror}") from e
+        rows = _own_file(out, "the --out file", BLOCKERS_PART_LIMIT)
+        if len(rows) > BLOCKERS_PART_LIMIT:
+            raise RefusedError(f"the --out file is over {BLOCKERS_PART_LIMIT} bytes")
+        if stat.S_IMODE(os.stat(out).st_mode) & 0o077:
+            raise RefusedError("the --out file is readable by group or others")
+        return {"list": text, "rows": rows}
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _worker_blockers_apply(cfg: dict[str, str]) -> dict[str, bytes]:
+    raw = _read_all(0, BLOCKERS_PART_LIMIT + 4096 + 1)
+    if len(raw) > BLOCKERS_PART_LIMIT + 4096:
+        raise RefusedError("the request on stdin is too large")
+    req = _blockers_parse_request(raw)
+    scratch = os.path.realpath(tempfile.mkdtemp(prefix="aorg-blockers-"))
+    try:
+        key = [f"hex:{req['key']}"]
+        if req["action"] == "delete":
+            return {"result": _blockers_run(cfg, "delete", key, ["--confirm"], scratch)}
+        path = f"{scratch}/request-rows.json"
+        rows = json.dumps([{"key": req["key"], "value": req["value"]}])
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            view = memoryview(rows.encode("ascii"))
+            while view:
+                view = view[os.write(fd, view) :]
+        finally:
+            os.close(fd)
+        return {"result": _blockers_run(cfg, "fix", key, ["--from", path], scratch)}
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def op_blockers_worker(args: list[str]) -> int:
+    """Run in the export unit as the service user (never through sudo): write
+    the op's parts on stdout, each as BLOCKERS_FRAME and its bytes, and nothing
+    else there."""
+    _arity(args, 1, "_blockers-worker list|apply")
+    if args[0] not in BLOCKERS_SEQUENCES:
+        raise RefusedError("usage: _blockers-worker list|apply", 2)
+    cfg = load_config()
+    parts = _worker_blockers_list(cfg) if args[0] == "list" else _worker_blockers_apply(cfg)
+    out = sys.stdout.buffer
+    for part, data in parts.items():
+        out.write(
+            f"{BLOCKERS_MAGIC} {part} {len(data)} {hashlib.sha256(data).hexdigest()}\n".encode()
+            + data
+        )
+    out.flush()
+    return 0
+
+
 OPS = {
     "probe": op_probe,
     "record": op_record,
@@ -2729,6 +3259,9 @@ OPS = {
     "export-keyring": op_export_keyring,
     "export-install-secrets": op_export_install_secrets,
     "_export-worker": op_export_worker,
+    "cutover-blockers-list": op_blockers_list,
+    "cutover-blockers-apply": op_blockers_apply,
+    "_blockers-worker": op_blockers_worker,
     "_into-worker": op_into_worker,
     "_report": op_report,
 }

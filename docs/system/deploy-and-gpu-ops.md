@@ -488,6 +488,8 @@ root-owned config:
 | `pprof` | root | `on` or `off` | writes or removes the fixed drop-in `pprof.conf` (`Environment=ABK_PPROF_ADDR=localhost:6060`), `daemon-reload` |
 | `export-keyring` | root, the export as the service user | none | `secrets export-keyring` of the live install, left in `export_dir` for the deploy user ([below](#the-export-helpers)) |
 | `export-install-secrets` | root, the reads as the service user | none | the install's `.encryption_key` and `config.yaml`, left in `export_dir` for the deploy user ([below](#the-export-helpers)) |
+| `cutover-blockers-list` | root, the command as the service user | none | `storage cutover-blockers list --out <scratch>` with the service stopped; the printed list and the rows file, left in `export_dir` for the deploy user ([below](#the-cutover-blockers-helpers)) |
+| `cutover-blockers-apply` | root, the command as the service user | none | one `fix` or `delete` from the request file `export_dir` holds, with the service stopped; the printed result left in `export_dir` ([below](#the-cutover-blockers-helpers)) |
 
 `install-staged` never installs uploaded text as a unit file. systemd reads
 unit files and drop-ins as root, so a file the deploy user can shape is a way
@@ -799,7 +801,9 @@ deploy ALL=(root) NOPASSWD: /usr/bin/systemctl stop audiobook-organizer.service,
     /usr/local/libexec/audiobook-organizer/rollback/install-staged, \
     /usr/local/libexec/audiobook-organizer/rollback/pprof, \
     /usr/local/libexec/audiobook-organizer/rollback/export-keyring "", \
-    /usr/local/libexec/audiobook-organizer/rollback/export-install-secrets ""
+    /usr/local/libexec/audiobook-organizer/rollback/export-install-secrets "", \
+    /usr/local/libexec/audiobook-organizer/rollback/cutover-blockers-list "", \
+    /usr/local/libexec/audiobook-organizer/rollback/cutover-blockers-apply ""
 deploy ALL=(audiobook) NOPASSWD: /usr/bin/cat /path/to/audiobooks.pebble.storage-levels, \
     /usr/bin/cat /path/to/audiobooks.pebble.storage-format, \
     /usr/bin/cat /path/to/audiobooks.pebble.migration-checkpoint, \
@@ -909,6 +913,86 @@ on exactly that refusal it retries once with `ABK_STATE_DIR` and no ABO name. A
 generation-aware `rollback.conf` setting is not built yet.
 The exact reinstall command is precondition P6 in
 `docs/system/r2-cutover-runbook.md`.
+
+
+### The cutover-blockers helpers
+
+`cutover-blockers-list` and `cutover-blockers-apply` run the R2 runbook's Step 0
+(Path B) offline command, `storage cutover-blockers`, with no raw `sudo`. Both
+take no arguments and are granted with `""`; both read `export_dir`, `bin`, `db`,
+`unit` and `offline_env` from `rollback.conf`, and refuse to run unless
+`export_dir` is set.
+
+**The service must already be stopped.** The command opens the live store, so each
+helper refuses unless the service unit is `inactive` (`failed`, `activating`, an
+unreadable state and anything else are refused), and refuses while the restore
+unit or an export unit is running. **Neither helper ever stops or starts the
+service.** Stopping and starting it are separate, tracked steps that use the
+`systemctl stop|start <unit>` lines the sudoers drop-in already grants (no new
+line): `make service-stop` and `make service-start`
+(`scripts/service_control_offhost.py`), and the owner's
+`deploy/owner/service-stop.sh` and `service-start.sh`. Each looks at the unit's
+state first (already there: nothing to do), runs that one command, and waits until
+the unit is `inactive` (stop) or `active` (start; `failed` ends the wait), for as long as
+the unit's own `TimeoutStopUSec` or `TimeoutStartUSec` plus 60 s (read from systemd, not a
+fixed number; `infinity` and `0`, which systemd reads as no timeout, count as 900 s). Both take
+a dry run (`DRY_RUN=1`, `--dry-run`). R2 runbook, Step 0.
+
+- `cutover-blockers-list` runs `storage cutover-blockers list --db <db> --out
+  <scratch>` as the service user in a transient unit
+  (`audiobook-organizer-rollback-export`, `systemd-run --pipe`, `PrivateTmp`, the
+  `offline_env` variables, `RuntimeMaxSec=600`), with the scratch file inside the
+  unit's private `/tmp`. The worker returns the printed list and, when the
+  command wrote a rows file, that file (rows with their values: credential hashes
+  can be among them) on its stdout as frames, `AORGBLOCKERS1 <list|rows|result>
+  <length> <sha256>` and the bytes, parts back to back, never on the restore log.
+  Root checks the frame (the parts and their order, the lengths, every hash, no
+  trailing byte) before it writes anything, then creates
+  `aorg-cutover-blockers-<UTC stamp>.txt` and, when something blocks,
+  `aorg-cutover-blockers-<UTC stamp>.json` in `export_dir` exactly as the export
+  helpers do (`O_EXCL|O_NOFOLLOW`, mode 0600, `fchown` to the user who ran `sudo`
+  before any byte is written, all or nothing). When nothing blocks the command
+  writes no rows file, and the helper accepts that only when the command printed
+  its "No blocking rows" sentence.
+- `cutover-blockers-apply` reads the one request file
+  `aorg-cutover-blockers-request.json` from `export_dir`: opened relative to the
+  directory's file descriptor, a regular file of the deploy user (`SUDO_UID`) with
+  one link, no symlink, mode 0600, 1 byte to 16 MiB. The request is one JSON
+  object: `{"action":"fix","key":"<lowercase hex>","value":"<base64>"}` or
+  `{"action":"delete","key":"<lowercase hex>"}`; any other field, a duplicate
+  field, a key that is not lowercase hex pairs, a fix without a value or a delete
+  with one is refused before anything runs. The parsed request reaches the worker
+  on its stdin (never in an argument), which runs `storage cutover-blockers fix
+  hex:<key> --from <scratch file>` (the value written there as the command's own
+  `[{"key","value"}]` file, mode 0600) or `delete hex:<key> --confirm`. What the
+  command printed is returned as one `result` part and written to
+  `aorg-cutover-blockers-result-<UTC stamp>.txt`. When the command succeeded, root
+  deletes the request (the same file, re-checked by inode first) and prints
+  `REQUEST-REMOVED aorg-cutover-blockers-request.json`. When it failed, the request
+  stays and the message says so: a failed apply cannot promise nothing changed.
+
+`delete` removes the row and the rows that go with it and **has no tracked undo
+before the R2 cutover (Step 4).** The restore point is a web-app backup taken before
+Step 0 and copied off the host; `make rollback-restore ROLLBACK_ARCHIVE=<archive>`
+restores its data but also installs `.prev` and needs `.prev`'s storage levels to equal
+the archive's, so it may be refused (R2 runbook, Known gap 5).
+
+A refusal before the helper's unit started (a request that does not parse, a service
+that is not inactive, a bad `export_dir`) prints one `NOT-RUN` line on stdout and exits
+4: nothing ran and nothing changed, so a wrapper may remove the request it placed (the
+owner script and the Mac recipe do, by inode). Every other failure exits 1 and the
+request stays, because the command may have changed the store. `list` never prints
+`NOT-RUN`.
+
+The Mac-side targets are `make cutover-blockers-list`
+and `make cutover-blockers-apply REQUEST=<file>` (`scripts/cutover_blockers_offhost.py`,
+which holds every name the host prints to the same fixed grammar as the export
+targets). The owner's way, on the server, is `deploy/owner/cutover-blockers-list.sh`
+and `deploy/owner/cutover-blockers-apply.sh`, copied to `~/aorg-owner/`.
+
+Like the export helpers this widens nothing: the deploy user can already run any
+binary as the service user, and the helpers only add a fixed command line, a fixed
+place for the files, and the stopped-service refusal.
 
 ### The service environment is part of a rollback
 

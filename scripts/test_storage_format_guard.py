@@ -596,6 +596,25 @@ class Sudoers(unittest.TestCase):
             sum(1 for ln in text.splitlines() if "export-" in ln), 2, "exactly the two new lines"
         )
 
+    def test_the_cutover_blockers_helpers_are_granted_with_no_arguments_and_nothing_else(self):
+        text = guard.sudoers(opts(), "deploy")
+        h = guard.HELPER_DIR
+        for stub in ("cutover-blockers-list", "cutover-blockers-apply"):
+            self.assertIn(f'{h}/{stub} ""', text)
+            self.assertEqual(text.count(f"{h}/{stub}"), 1)
+            self.assertNotIn(f"{h}/{stub},", text.replace(f'{h}/{stub} ""', ""))
+        c = guard.commands(opts())
+        self.assertEqual(c["cutover_blockers_list"], f"sudo -n {h}/cutover-blockers-list")
+        self.assertEqual(c["cutover_blockers_apply"], f"sudo -n {h}/cutover-blockers-apply")
+        self.assertEqual(
+            sum(1 for ln in text.splitlines() if "cutover-blockers" in ln),
+            2,
+            "exactly the two new lines",
+        )
+        self.assertNotIn("*", text)
+        self.assertNotIn("worker", text, "the worker op is never a stub and never granted")
+        self.assertNotIn("_blockers", text)
+
     def test_parse_vector_and_sidecar(self):
         self.assertEqual(guard.parse_vector('{"core":0,"books":2}'), {"core": 0, "books": 2})
         self.assertEqual(guard.parse_sidecar("books 2\ncore 0\n")[0], {"books": 2, "core": 0})
