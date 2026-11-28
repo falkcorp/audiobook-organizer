@@ -100,6 +100,12 @@ func (s *Server) opsV3Authz() opsv3.Authz {
 		if held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p)); bridged {
 			return held
 		}
+		// A context the identity's Bind did not mark, on a server under core
+		// identity, holds nothing: HEAD's first-run bypass below counts books'
+		// user rows, which M3 drains, so it would hold on every migrated install.
+		if s.identity != nil {
+			return false
+		}
 		if !config.AppConfig.EnableAuth {
 			return true
 		}

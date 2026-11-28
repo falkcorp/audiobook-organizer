@@ -27,7 +27,9 @@ import (
 func exportFiles(t *testing.T, f *repairsOpAccessFixture, opID string) (opsJSON, logsJSON string) {
 	t.Helper()
 	svc := diagnostics.NewService(f.srv.storeForWiring(), nil, "")
-	zipPath, err := svc.GenerateExport(context.Background(), "general", "test", f.srv.diagnosticsExportOptionsFor(f.srv.opActorHolds(opID)), nil)
+	holds, err := f.srv.opActorHolds(context.Background(), opID)
+	require.NoError(t, err)
+	zipPath, err := svc.GenerateExport(context.Background(), "general", "test", f.srv.diagnosticsExportOptionsFor(holds), nil)
 	require.NoError(t, err)
 	defer os.Remove(zipPath)
 	r, err := zip.OpenReader(zipPath)

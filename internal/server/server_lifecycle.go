@@ -314,10 +314,14 @@ func (s *Server) configAtomsFor(perm string) []string {
 }
 
 // configFirstRun reports the first-run window: no user exists and setup is not
-// complete. A store that cannot count users is not the window.
+// complete. A store that cannot count users is not the window. Under core
+// identity there is no window: core's bootstrap creates the first account and
+// the setup wizard writes as that signed-in admin (configCanBridged grants
+// FirstRunPerm to nobody), and HEAD's count reads books' user rows, which M3
+// drains, so it would open the window on every migrated install.
 func (s *Server) configFirstRun() bool {
 	store := s.storeForWiring()
-	if store == nil || config.Snapshot().SetupComplete {
+	if s.identity != nil || store == nil || config.Snapshot().SetupComplete {
 		return false
 	}
 	n, err := store.CountUsers()
@@ -2123,13 +2127,22 @@ func (s *Server) seedRolesAndTokens() {
 	// Every API key expires since 2026-10-07. Keys created before that with
 	// no expiry are listed and given one (now + 30 days), once; see
 	// stampNeverExpiringAPIKeys. Non-fatal: a failure retries next start.
-	if _, err := stampNeverExpiringAPIKeys(s.storeForWiring(), time.Now()); err != nil {
-		slog.Error("api key expiry stamp failed; will retry next start", "err", err)
+	//
+	// Under core identity neither runs: keys and passwords are core's records
+	// (M3 imported every key with its expiry and every password hash), books'
+	// k: and u: rows are drained and their claims retired, so the stamp would
+	// write into a retired claim and the count would report 0 forever.
+	if s.identity == nil {
+		if _, err := stampNeverExpiringAPIKeys(s.storeForWiring(), time.Now()); err != nil {
+			slog.Error("api key expiry stamp failed; will retry next start", "err", err)
+		}
 	}
 	logBootstrapKeyTTLConfig()
 	// How many legacy bcrypt passwords remain (a count, no names), so the owner
 	// can see when bcrypt verification can be dropped.
-	logLegacyBcryptPasswordCount(s.storeForWiring())
+	if s.identity == nil {
+		logLegacyBcryptPasswordCount(s.storeForWiring())
+	}
 
 	// Initialize the one-time bootstrap token and startup read-only key.
 	//
@@ -2160,11 +2173,17 @@ func (s *Server) seedRolesAndTokens() {
 				slog.Info("Failed to init bootstrap token", "err", err)
 			}
 		}
-		if s.life.startConfig.writeStartupReadOnlyKey {
+		// Under core identity the startup read-only key is core's too: M6 renames
+		// write_startup_readonly_key to core.auth.bootstrap.readonly_key.enabled
+		// and auth.BootWrites mints it (label auth.readonly_key). HEAD's writer
+		// would add a books k: row, a claim M3 retires, so the write would be
+		// refused on every start.
+		if s.identity == nil && s.life.startConfig.writeStartupReadOnlyKey {
 			if err := InitStartupReadOnlyKey(s.storeForWiring(), dataDir); err != nil {
 				slog.Info("Failed to init startup read-only key", "err", err)
 			}
 		}
+		slog.Info("start-up credentials settled")
 	}
 }
 
