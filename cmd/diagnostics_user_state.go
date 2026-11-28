@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -107,6 +108,9 @@ type userStateSample struct {
 	HasProgress  int `json:"has_progress"`
 	HasCarryable int `json:"has_carryable"`
 	Errors       int `json:"errors"`
+	// ErrorClass is the first failed read's class (userStateClass), never its
+	// text; empty when no read failed.
+	ErrorClass string `json:"error_class,omitempty"`
 }
 
 // errUserState is the command's refusal: the class only, never the text.
@@ -261,7 +265,13 @@ func runUserState(ctx context.Context, booksFile string, stdout io.Writer) error
 		rep.UsersStrictErr = userStateClass(err)
 		return fail(rep.UsersStrictErr)
 	}
-	defer func() { _ = closeStore() }()
+	defer func() {
+		// The report is already written by then; a close failure is logged as
+		// a class (stderr), never its text, and does not change the answer.
+		if cerr := closeStore(); cerr != nil {
+			slog.Warn("diagnostics user-state: closing the store failed", "class", userStateClass(cerr))
+		}
+	}()
 
 	strict, err := store.ListUsersStrict()
 	if err != nil {
@@ -300,9 +310,10 @@ func runUserState(ctx context.Context, booksFile string, stdout io.Writer) error
 	rep.BooksWithUnlistedState = intp(unlisted)
 
 	if sampleIDs != nil {
-		p, c, e, _ := countUserState(ctx, store, probe, sampleIDs)
+		p, c, e, sampleErr := countUserState(ctx, store, probe, sampleIDs)
 		rep.Sample = &userStateSample{Asked: len(sampleIDs), HasProgress: p, HasCarryable: c, Errors: e}
 		if e > 0 {
+			rep.Sample.ErrorClass = userStateClass(sampleErr)
 			return fail("sample_errors")
 		}
 	}
@@ -332,7 +343,13 @@ func readSampleBooks(path string) ([]string, string) {
 	if err != nil {
 		return nil, "books_file_unreadable"
 	}
-	defer f.Close()
+	defer func() {
+		// Read-only: everything read was read; the failure is logged as a
+		// class, never the path or the error's text.
+		if cerr := f.Close(); cerr != nil {
+			slog.Warn("diagnostics user-state: closing the books file failed", "class", userStateClass(cerr))
+		}
+	}()
 	seen := map[string]bool{}
 	ids := []string{}
 	sc := bufio.NewScanner(f)
@@ -428,6 +445,15 @@ func countUserState(ctx context.Context, store userStateStore, probe *merge.User
 			return nil
 		})
 	}
-	_ = g.Wait()
+	// Every worker returns nil and reports through e and first, so Wait has
+	// nothing to say today; if it ever does, it is a failure, never a skip.
+	if werr := g.Wait(); werr != nil {
+		if first == nil {
+			first = werr
+		}
+		if e.Load() == 0 {
+			e.Add(1)
+		}
+	}
 	return int(p.Load()), int(c.Load()), int(e.Load()), first
 }

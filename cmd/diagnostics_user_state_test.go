@@ -480,3 +480,50 @@ type plainErrStore struct {
 }
 
 func (s plainErrStore) ListUsersStrict() ([]database.User, error) { return nil, s.err }
+
+// sampleErrStore fails every state read of one book with an error whose text
+// names a key.
+type sampleErrStore struct {
+	*database.PebbleStore
+	book string
+}
+
+func (s sampleErrStore) GetUserBookState(userID, bookID string) (*database.UserBookState, error) {
+	if bookID == s.book {
+		return nil, fmt.Errorf("%w: %s", database.ErrUndecodableUserRows, usSecretKeyInStrictEr)
+	}
+	return s.PebbleStore.GetUserBookState(userID, bookID)
+}
+
+// A failed sample read is counted, its first failure is reported as a bare
+// class on the sample and as the exit class, and its text appears nowhere.
+func TestUserState_ASampleReadErrorIsAClassOnTheSample(t *testing.T) {
+	userStateFixture(t)
+	booksFile := filepath.Join(t.TempDir(), "books.txt")
+	if err := os.WriteFile(booksFile, []byte(usListedProgressBook+"\n"+usSampleMissingBook+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orig := userStateOpen
+	t.Cleanup(func() { userStateOpen = orig })
+	userStateOpen = func(ctx context.Context) (userStateStore, func() error, error) {
+		st, closeFn, err := orig(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return sampleErrStore{st.(*database.PebbleStore), usSampleMissingBook}, closeFn, nil
+	}
+	var out bytes.Buffer
+	err := runUserState(context.Background(), booksFile, &out)
+	if err == nil || !strings.HasSuffix(err.Error(), "sample_errors") {
+		t.Fatalf("runUserState = %v, want the sample_errors exit; out %q", err, out.String())
+	}
+	m := parseUserState(t, out.String())
+	sample, ok := m["sample"].(map[string]any)
+	if !ok {
+		t.Fatalf("sample = %v", m["sample"])
+	}
+	if sample["errors"] != 1.0 || sample["error_class"] != "undecodable" {
+		t.Errorf("sample = %v, want errors 1 and error_class undecodable", sample)
+	}
+	noIDsIn(t, out.String()+err.Error())
+}
