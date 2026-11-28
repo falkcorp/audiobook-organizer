@@ -72,6 +72,13 @@ print(a[1].replace("%a", oct(st.st_mode & 0o7777)[2:]).replace("%s", str(st.st_s
 _INSTALL = f"""#!{_PY}
 import os, subprocess, sys
 r = subprocess.run(["/usr/bin/install", *sys.argv[1:]]).returncode
+corrupt = os.environ.get("SHIM_INSTALL_CORRUPT")
+if corrupt and r == 0 and corrupt in sys.argv[-1]:
+    # Same size, different bytes: only a hash check can notice.
+    data = bytearray(open(sys.argv[-1], "rb").read())
+    data[0] ^= 1
+    with open(sys.argv[-1], "wb") as f:
+        f.write(data)
 race = os.environ.get("SHIM_RACE_FILE")
 if race and r == 0:
     with open(race, "w") as f:
@@ -223,6 +230,16 @@ class BlockersBase(unittest.TestCase):
             if e["kind"] == "app" and e["args"][:2] == ["storage", "cutover-blockers"]
         ]
 
+    def printed(self, name: str, data: bytes = b"batman\n") -> str:
+        """Make the file in export_dir and return the EXPORTED line that is true of it."""
+        path = self.fh.export / name
+        path.write_bytes(data)
+        path.chmod(0o600)
+        return f"EXPORTED {name} {len(data)} {sha(data)}"
+
+    def stub_prints(self, name: str, *lines: str) -> None:
+        self.fake_stub(name, "cat <<'EOF'\n" + "\n".join(lines) + "\nEOF")
+
     def fake_stub(self, name: str, body: str) -> None:
         """Replace one helper stub with a script that prints/does body."""
         p = self.fh.libexec / name
@@ -337,6 +354,79 @@ class ListScript(BlockersBase):
             p = self.run_script()
             self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
             self.assertEqual(self.delivered(), [], label)
+
+    def test_a_lie_about_files_that_do_exist_is_refused_for_its_own_reason(self) -> None:
+        # Every file named below exists with the size and hash printed for it, so
+        # only the script's reading of the helper's lines can refuse them.
+        self.host()
+        txt = f"aorg-cutover-blockers-{STAMP}.txt"
+        js = f"aorg-cutover-blockers-{STAMP}.json"
+        res = f"aorg-cutover-blockers-result-{STAMP}.txt"
+        for label, lines, why in (
+            ("a result name as the list", lambda: [self.printed(res), "ABSENT rows"], "accept"),
+            (
+                "a list name with a suffix",
+                lambda: [self.printed(txt + ".bak"), "ABSENT rows"],
+                "accept",
+            ),
+            (
+                "a rows name with a suffix",
+                lambda: [self.printed(txt), self.printed(js + ".bak")],
+                "accept",
+            ),
+            ("a result name as the rows", lambda: [self.printed(txt), self.printed(res)], "accept"),
+            (
+                "the list twice",
+                lambda: [self.printed(txt), self.printed(txt), "ABSENT rows"],
+                "accept",
+            ),
+            (
+                "a line it does not know",
+                lambda: [self.printed(txt), "ABSENT rows", "hello"],
+                "does not recognise",
+            ),
+            (
+                "ABSENT twice",
+                lambda: [self.printed(txt), "ABSENT rows", "ABSENT rows"],
+                "does not recognise",
+            ),
+            ("rows with no list", lambda: [self.printed(js)], "did not report the list"),
+            ("nothing at all", lambda: [], "did not report the list"),
+            (
+                "rows both present and absent",
+                lambda: [self.printed(txt), self.printed(js), "ABSENT rows"],
+                "both present and absent",
+            ),
+            ("rows neither present nor absent", lambda: [self.printed(txt)], "neither present"),
+        ):
+            self.stub_prints("cutover-blockers-list", *lines())
+            p = self.run_script()
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{text(p)}")
+            self.assertIn(why, p.stderr, label)
+            self.assertEqual(self.delivered(), [], label)
+        self.assertIn(txt, self.exported(), "the files stay where they were")
+
+    def test_a_helper_that_exits_non_zero_after_printing_a_good_list_delivers_nothing(
+        self,
+    ) -> None:
+        host = self.host()
+        real = host.libexec / "cutover-blockers-list"
+        shutil.copy2(real, real.with_name("cutover-blockers-list.real"))
+        self.fake_stub(
+            "cutover-blockers-list", '"$(dirname "$0")/cutover-blockers-list.real"; exit 3'
+        )
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("the helper exited 3", p.stderr)
+        self.assertEqual(self.delivered(), [])
+        self.assertEqual(len(self.exported()), 2, "the helper's files stay")
+
+    def test_a_copy_that_is_not_the_file_is_refused_and_the_sources_stay(self) -> None:
+        self.host()
+        p = self.run_script(extra={"SHIM_INSTALL_CORRUPT": "aorg-cutover-blockers-"})
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("does not match", p.stderr)
+        self.assertEqual(len(self.exported()), 2, "the sources stay in export_dir")
 
     def test_a_file_that_is_not_what_the_helper_reported_stays_put(self) -> None:
         host = self.host()
@@ -503,6 +593,100 @@ class ApplyScript(BlockersBase):
         self.assertIn("is not owned by", p.stderr)
         self.assertEqual(self.exported(), [])
         self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_host_problems_refuse_before_anything_is_placed_or_run(self) -> None:
+        host = self.host()
+        req = self.request()
+
+        def refused(why: str, **kw) -> None:
+            p = self.run_script(str(req), **kw)
+            self.assertNotEqual(p.returncode, 0, f"{why}\n{text(p)}")
+            self.assertIn(why, p.stderr)
+            self.assertEqual(self.box.sudo_calls(), [], why)
+            self.assertEqual(self.app_calls(), [], why)
+
+        host.export.chmod(0o755)
+        refused("is not mode 0700")
+        host.export.chmod(0o700)
+        refused("is not owned by", extra={"SHIM_FAKE_UID_FOR": str(host.export)})
+        stub = host.libexec / "cutover-blockers-apply"
+        kept = stub.read_bytes()
+        stub.unlink()
+        refused("is not installed")
+        stub.write_bytes(kept)
+        stub.chmod(0o755)
+        real = host.export.with_name("real-export")
+        host.export.rename(real)
+        os.symlink(real, host.export)
+        refused("symlink")
+        self.assertEqual(sorted(p.name for p in real.iterdir()), [], "nothing was placed")
+
+    def test_a_request_that_is_a_symlink_is_refused(self) -> None:
+        self.host()
+        req = self.request()
+        link = req.with_name("link.json")
+        os.symlink(req, link)
+        p = self.run_script(str(link))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("a symlink is refused", p.stderr)
+        self.assertEqual(self.exported(), [])
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_waiting_copy_of_the_request_that_is_not_0600_is_refused_by_the_script(self) -> None:
+        host = self.host()
+        req = self.request()
+        waiting = host.export / REQUEST
+        waiting.write_bytes(req.read_bytes())
+        waiting.chmod(0o644)
+        p = self.run_script(str(req))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("must be mode 0600", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [], "refused here, not left to the helper")
+
+    def test_a_placed_request_that_is_not_the_file_given_is_refused_before_the_helper(self) -> None:
+        self.host()
+        p = self.run_script(str(self.request()), extra={"SHIM_INSTALL_CORRUPT": ".request."})
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not the file you gave", p.stderr)
+        self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_result_copy_that_is_not_the_file_is_refused_and_the_source_stays(self) -> None:
+        host = self.host()
+        p = self.run_script(
+            str(self.request()), extra={"SHIM_INSTALL_CORRUPT": "aorg-cutover-blockers-result-"}
+        )
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("does not match", p.stderr)
+        self.assertEqual(len(list(host.export.glob("aorg-cutover-blockers-result-*"))), 1)
+
+    def test_a_success_without_a_result_it_accepts_is_a_failure(self) -> None:
+        host = self.host()
+        real = host.libexec / "cutover-blockers-apply"
+        shutil.copy2(real, real.with_name("cutover-blockers-apply.real"))
+        evil = f"aorg-cutover-blockers-result-{STAMP}.txt.bak"
+        line = self.printed(evil)
+        self.fake_stub(
+            "cutover-blockers-apply",
+            f'"$(dirname "$0")/cutover-blockers-apply.real" >/dev/null\ncat <<\'EOF\'\n{line}\n'
+            f"REQUEST-REMOVED {REQUEST}\nEOF",
+        )
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("reported no result", p.stderr)
+        self.assertEqual(self.delivered(), [])
+
+    def test_a_request_that_is_still_there_after_a_reported_removal_is_a_failure(self) -> None:
+        host = self.host()
+        real = host.libexec / "cutover-blockers-apply"
+        shutil.copy2(real, real.with_name("cutover-blockers-apply.real"))
+        self.fake_stub(
+            "cutover-blockers-apply",
+            f'"$(dirname "$0")/cutover-blockers-apply.real"; rc=$?\n'
+            f"printf '{{}}' > '{host.export}/{REQUEST}'\nexit $rc",
+        )
+        p = self.run_script(str(self.request()))
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is still there", p.stderr)
 
     def test_a_waiting_request_that_is_not_yours_or_not_0600_is_refused(self) -> None:
         host = self.host()
@@ -753,6 +937,15 @@ class ReinstallScript(P6Base):
                 self.after_conf(offline=f"HOME={self.state} ABK_STATE_DIR={self.state}"),
                 self.grants(STUBS),
             ),
+            "ABO and ABK both in offline_env": lambda: (
+                self.after_conf(
+                    offline=(
+                        f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state} "
+                        f"ABK_STATE_DIR={self.state}"
+                    )
+                ),
+                self.grants(STUBS),
+            ),
             "a stub not granted": lambda: (self.after_conf(), self.grants(STUBS[:3])),
             "no stub granted": lambda: (self.after_conf(), self.grants(())),
         }.items():
@@ -785,6 +978,19 @@ class ReinstallScript(P6Base):
         p = self.run_script("--dry-run")
         self.assertNotEqual(p.returncode, 0, text(p))
         self.assertIn("character this script will not pass on", p.stderr)
+        self.assertEqual(self.installs(), [])
+
+    def test_an_export_directory_that_cannot_be_made_0700_refuses(self) -> None:
+        self.after_conf()
+        self.grants(STUBS)
+        self.export_dir.mkdir(mode=0o755)
+        self.export_dir.chmod(0o755)
+        chmod = self.box.shims / "chmod"
+        chmod.write_text("#!/bin/sh\nexit 0\n")  # a chmod that changes nothing
+        chmod.chmod(0o755)
+        p = self.run_script()
+        self.assertNotEqual(p.returncode, 0, text(p))
+        self.assertIn("is not mode 0700", p.stderr)
         self.assertEqual(self.installs(), [])
 
     def test_a_symlinked_or_foreign_export_directory_refuses(self) -> None:
@@ -859,6 +1065,15 @@ class UndoScript(P6Base):
             "export_dir still there": lambda: (self.undone(export=True), self.grants(())),
             "ABO left in offline_env": lambda: (
                 self.undone(offline=f"HOME={self.state} ABO_CORE_PATHS_STATE_DIR={self.state}"),
+                self.grants(()),
+            ),
+            "ABK and ABO both in offline_env": lambda: (
+                self.undone(
+                    offline=(
+                        f"HOME={self.state} ABK_STATE_DIR={self.state} "
+                        f"ABO_CORE_PATHS_STATE_DIR={self.state}"
+                    )
+                ),
                 self.grants(()),
             ),
             "a stub still granted": lambda: (self.undone(), self.grants(STUBS[:1])),

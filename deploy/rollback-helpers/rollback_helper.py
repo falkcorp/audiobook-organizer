@@ -2902,7 +2902,7 @@ def _blockers_parse_request(raw: bytes) -> dict[str, str]:
             raise RefusedError("a delete request takes no value")
         return out
     value = doc.get("value")
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
         raise RefusedError("a fix request needs its value, base64 text, not empty")
     if len(value) > BLOCKERS_PART_LIMIT - 8192:
         raise RefusedError(

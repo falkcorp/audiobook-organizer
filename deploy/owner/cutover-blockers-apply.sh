@@ -178,6 +178,7 @@ if [ "$RC" -ne 0 ]; then
   echo "Run cutover-blockers-list.sh to see what is left before you try again." >&2
   exit 1
 fi
+[ -n "$RESULT_NAME" ] || fail "the helper succeeded but reported no result file this script accepts; look in $EXPORT_DIR"
 [ "$REMOVED" -eq 1 ] || fail "the helper succeeded but did not report removing the request; look in $EXPORT_DIR"
 [ ! -e "$IN_PLACE" ] || fail "the helper reported removing the request but $IN_PLACE is still there"
 say "done: applied; the request was removed from $EXPORT_DIR. Delete your own copy of the request file (it holds the value), then run cutover-blockers-list.sh to see what is left."

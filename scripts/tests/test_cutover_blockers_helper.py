@@ -96,6 +96,9 @@ mm = os.fstat(0).st_mode
 with open(@@STDIN_KIND@@, "w") as f:
     f.write("fifo" if _stat.S_ISFIFO(mm) else "chr" if _stat.S_ISCHR(mm) else "other")
 open(envfile, "w").write(" ".join(o[len("--setenv="):] for o in opts if o.startswith("--setenv=")))
+stdin_data = sys.stdin.buffer.read()
+with open(@@STDIN_DATA@@, "wb") as f:
+    f.write(stdin_data)
 if mode == "fail":
     os.remove(envfile)
     sys.exit(7)
@@ -106,7 +109,7 @@ if mode == "raw":
     sys.stdout.buffer.flush()
     os.remove(envfile)
     sys.exit(0)
-p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE)
+p = subprocess.run(cmd, env=env, stdout=subprocess.PIPE, input=stdin_data)
 sys.stdout.buffer.write(p.stdout)
 sys.stdout.buffer.flush()
 os.remove(envfile)
@@ -162,6 +165,10 @@ if mode == "swap-request":
     fd = os.open(req, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.write(fd, b"{}")
     os.close(fd)
+if mode == "symlink-request":
+    req = @@REQUEST@@
+    os.rename(req, req + ".orig")
+    os.symlink(req + ".orig", req)
 if mode == "plant-result":
     fd = os.open(@@PLANT@@, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(fd)
@@ -199,6 +206,7 @@ class Blockers(unittest.TestCase):
         self.run_mode = h.root / "fake-run-mode"
         self.raw_file = h.root / "fake-run-raw"
         self.stdin_kind = h.root / "stdin-kind"
+        self.stdin_data = h.root / "stdin-data"
         self.request = self.export / REQUEST
         h.bin.write_text(
             render(
@@ -229,6 +237,7 @@ class Blockers(unittest.TestCase):
                 mode=str(self.run_mode),
                 envfile=str(self.sdir / "export-env"),
                 stdin_kind=str(self.stdin_kind),
+                stdin_data=str(self.stdin_data),
                 raw=str(self.raw_file),
             ),
         )
@@ -889,6 +898,45 @@ class Blockers(unittest.TestCase):
         self.assertIn(f"aorg-cutover-blockers-result-{STAMP}.txt", self.exported())
         self.assertIn("EXPORTED", out)
         self.assertNotIn("REQUEST-REMOVED", out)
+
+    def test_a_symlink_swapped_in_for_the_request_is_not_followed_to_remove_it(self):
+        # The original file is moved aside and a link to it takes its name: the
+        # link points at the very inode that was read, so only an lstat-style
+        # check can tell that the name is no longer that file.
+        self.fix_request()
+        self.mode(bin_="symlink-request")
+        code, out, err = self.h.run("cutover-blockers-apply")
+        self.assertEqual(code, 1)
+        self.assertIn("was not removed", err)
+        self.assertTrue(self.request.is_symlink(), "the link is left for the owner to see")
+        self.assertNotIn("REQUEST-REMOVED", out)
+
+    def test_the_unit_gets_the_request_in_canonical_form_not_as_written(self):
+        value = SECRET_B64
+        self.put_request(
+            f'{{ "value" : "{value}",\n  "key": "{ROBIN}", "action": "fix" }}'.encode()
+        )
+        self.ok("cutover-blockers-apply")
+        want = json.dumps({"action": "fix", "key": ROBIN, "value": value}, separators=(",", ":"))
+        self.assertEqual(self.stdin_data.read_bytes(), want.encode())
+
+    def test_a_request_that_grows_past_the_limit_while_it_is_read_refuses(self):
+        self.fix_request()
+        limit = self.h.mod.BLOCKERS_PART_LIMIT
+        real = self.h.mod._read_all
+        # Only the request read is told it grew (the config is read the same way).
+        self.h.mod._read_all = lambda fd, cap: (
+            b" " * (limit + 1) if cap == limit + 1 else real(fd, cap)
+        )
+        self.refused("cutover-blockers-apply", contains="grew past")
+        self.assertEqual(self.systemd_runs(), [])
+
+    def test_the_apply_worker_refuses_a_request_on_stdin_over_the_cap(self):
+        limit = self.h.mod.BLOCKERS_PART_LIMIT
+        p = self.worker("apply", stdin=b" " * (limit + 4096 + 1))
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn(b"the request on stdin is too large", p.stderr)
+        self.assertEqual(self.bin_calls(), [])
 
     def test_a_result_that_cannot_be_written_still_removes_the_request_and_says_so(self):
         self.fix_request()

@@ -114,6 +114,32 @@ class Parse(unittest.TestCase):
             ("a result name for a list", f"EXPORTED {res} 5 {SHA}", ("list",), ("rows",)),
             ("a list name for an apply", f"EXPORTED {txt} 5 {SHA}", ("result",), ()),
             ("a name with a suffix", f"EXPORTED {txt}.extra 5 {SHA}", ("list",), ("rows",)),
+            # The same mistakes with the other parts complete, so a refusal here
+            # can only come from the check named (not from a missing part).
+            (
+                "a name with a suffix, rows reported absent",
+                f"EXPORTED {txt}.extra 5 {SHA}\nABSENT rows",
+                ("list",),
+                ("rows",),
+            ),
+            (
+                "a required part reported both present and absent",
+                f"EXPORTED {txt} 1 {SHA}\nABSENT list\nABSENT rows",
+                ("list",),
+                ("rows",),
+            ),
+            (
+                "a result file nobody asked for in a list",
+                f"EXPORTED {txt} 1 {SHA}\nEXPORTED {res} 1 {SHA}\nABSENT rows",
+                ("list",),
+                ("rows",),
+            ),
+            (
+                "a list file nobody asked for in an apply",
+                f"EXPORTED {res} 1 {SHA}\nEXPORTED {txt} 1 {SHA}",
+                ("result",),
+                (),
+            ),
             ("uppercase hash", f"EXPORTED {txt} 1 {'A' * 64}", ("list",), ("rows",)),
             ("trailing text", f"EXPORTED {txt} 1 {SHA} extra", ("list",), ("rows",)),
             (
@@ -353,6 +379,22 @@ class Targets(unittest.TestCase):
             self.assertEqual(len(self.remote_files(host)), 2, label)
             self.assertIn("KEPT", out(p), label)
 
+    def test_a_bad_second_copy_leaves_no_part_file_of_the_first(self) -> None:
+        host = self.host(
+            rules=[
+                {
+                    "match": r"^scp .*aorg-cutover-blockers-.*\.json ",
+                    "responses": [{"exit": 1, "stderr": "scp: connection lost\n"}],
+                }
+            ]
+        )
+        p = host.make("cutover-blockers-list", OFFHOST_DIR=str(host.dest))
+        self.assertNotEqual(p.returncode, 0, out(p))
+        self.assertEqual(
+            list(host.dest.iterdir()), [], "the list's .part file is removed with the rest"
+        )
+        self.assertEqual(len(self.remote_files(host)), 2, "the remote files are KEPT")
+
     def test_names_the_host_prints_are_held_to_a_grammar(self) -> None:
         for label, stdout in (
             ("traversal", f"EXPORTED ../../etc/passwd 5 {SHA}\n"),
@@ -489,7 +531,9 @@ class Targets(unittest.TestCase):
         req = self.request(host)
         p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
         self.assertNotEqual(p.returncode, 0, out(p))
-        self.assertIn("MAY have been applied", out(p))
+        # The recipe's own sentence (the helper's stderr also says "MAY have been applied").
+        self.assertIn("the apply helper exited 1", out(p))
+        self.assertNotIn("the list helper exited", out(p))
         self.assertIn(REQUEST, out(p))
         self.assertEqual(self.remote_files(host), [REQUEST], "a failed apply keeps the request")
         self.assertEqual(list(host.dest.glob("*")) if host.dest.exists() else [], [])
@@ -502,6 +546,33 @@ class Targets(unittest.TestCase):
         self.assertIn("scp of the request failed", out(p))
         self.assertEqual(self.sudos(host), [])
         self.assertEqual(self.blocker_calls(host), [])
+
+    def test_an_upload_that_is_not_what_was_sent_is_refused_on_each_of_mode_size_and_sha(
+        self,
+    ) -> None:
+        data = json.dumps({"action": "fix", "key": ROBIN, "value": SECRET_B64}).encode()
+        right = hashlib.sha256(data).hexdigest()
+        for label, mode, size, sha in (
+            ("mode", "644", len(data), right),
+            ("size", "600", len(data) + 1, right),
+            ("sha256", "600", len(data), "0" * 64),
+        ):
+            forged = f"{mode} {size} {os.getuid()}\n{sha}  {REQUEST}\n"
+            host = self.host(
+                rules=[{"match": r"^chmod -- 600 ", "responses": [{"stdout": forged}]}]
+            )
+            req = self.request(host)
+            self.assertEqual(req.read_bytes(), data)
+            p = host.make("cutover-blockers-apply", OFFHOST_DIR=str(host.dest), REQUEST=str(req))
+            self.assertNotEqual(p.returncode, 0, f"{label}\n{out(p)}")
+            self.assertIn("is not the file that was sent", out(p), label)
+            self.assertEqual(self.sudos(host), [], f"{label}: the helper must not run")
+
+    def test_the_helper_gets_longer_than_its_own_deadline(self) -> None:
+        import inspect
+
+        self.assertGreater(cbo.OP_TIMEOUT, cbo.load_helper().BLOCKERS_DEADLINE_SEC)
+        self.assertIn("timeout=OP_TIMEOUT", inspect.getsource(cbo.main))
 
     def test_the_sudo_lines_it_runs_are_exactly_the_two_granted_ones(self) -> None:
         o = guard.Opts(
