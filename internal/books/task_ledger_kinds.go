@@ -17,7 +17,6 @@ var taskLedgerKinds = []tasks.Kind{
 	"books.acoustid.lookup-online",
 	"books.acoustid.lsh-backfill",
 	"books.acoustid.reset-all",
-	"books.acoustid.scan",
 	"books.acoustid.window-backfill",
 	"books.deluge.centralize",
 	"books.deluge.link-backfill",

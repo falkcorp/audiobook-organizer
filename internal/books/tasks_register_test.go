@@ -87,6 +87,21 @@ func TestTasksRegister_OptionsTasksBootFollowsThePredicate(t *testing.T) {
 	assert.True(t, on.TasksBoot, "TasksBoot is off with the predicate on")
 }
 
+// The three late-owner core kinds' backends ride the predicate too: named with
+// it on (the kernel registers a kind only when its backend is non-nil), none
+// with it off, so the predicate-off boot registers none of them.
+func TestTasksRegister_OptionsInterimBackendsFollowThePredicate(t *testing.T) {
+	_, off, _ := composedOptions(t, false, "", nil, nil)
+	assert.Nil(t, off.InterimBackends.Holds, "release-holds has a backend with the predicate off")
+	assert.Nil(t, off.InterimBackends.Poll, "batch-poll has a backend with the predicate off")
+	assert.Nil(t, off.InterimBackends.Export, "export has a backend with the predicate off")
+	t.Cleanup(SetTasksFlipForTest(true))
+	_, on, _ := composedOptions(t, false, "", nil, nil)
+	assert.NotNil(t, on.InterimBackends.Holds, "release-holds has no backend with the predicate on")
+	assert.NotNil(t, on.InterimBackends.Poll, "batch-poll has no backend with the predicate on")
+	assert.NotNil(t, on.InterimBackends.Export, "export has no backend with the predicate on")
+}
+
 type fakeWarmup struct{ ready, done bool }
 
 func (f *fakeWarmup) WarmupStatus() (bool, bool, int64) { return f.ready, f.done, 0 }

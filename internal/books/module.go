@@ -487,6 +487,14 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// Stored before any check can fail, so Release tears it down when New
 	// then refuses.
 	m.srv.Store(srv)
+	if tasksFlipOn() {
+		// The task definitions, over the server just built: the services their
+		// inputs read exist from NewServer on, and Register is still P6, so the
+		// kernel checks the kinds against Manifest.TaskLedger at P7.
+		if err := registerTaskLists(r, srv); err != nil {
+			return err
+		}
+	}
 	if identity != nil {
 		if err := registerAccountLifecycle(deps, srv); err != nil {
 			return err

@@ -18,6 +18,7 @@ import (
 	"github.com/falkcorp/mediacore/tasks"
 
 	"github.com/falkcorp/audiobook-organizer/internal/activity"
+	"github.com/falkcorp/audiobook-organizer/internal/server"
 )
 
 // memdbComponent is the readiness component the kinds that read the memdb wait
@@ -263,6 +264,30 @@ func registerTaskFlip(r *module.Registrar, m *booksModule) {
 	r.Health(memdbCheck(probe))
 	r.Hook(memdbWatch(probe, r.Deps().Health, memdbPollInterval))
 	r.LogOtherUserData(otherUserLogData)
+}
+
+// registerTaskLists registers every task definition bookTaskLists builds, over
+// the built server. It runs in Register once the server exists (the inputs are
+// the server's services) and before Register returns, which is P6: the kinds are
+// recorded then and checked against Manifest.TaskLedger at P7. The lists are
+// built here and never in Manifest, which is pure and runs before the store
+// opens; taskLedgerForManifest is the list of kinds those lists carry, checked
+// equal by TestTasksRegister_LedgerEqualsTheListsKinds.
+//
+// An error is a boot error: a list that cannot be built (a required input the
+// server did not have) registers nothing, and a half-registered module never
+// starts.
+func registerTaskLists(r *module.Registrar, srv *server.Server) error {
+	in, err := taskInputsFrom(r.Deps(), srv)
+	if err != nil {
+		return err
+	}
+	defs, err := bookTaskLists(in)
+	if err != nil {
+		return err
+	}
+	r.Tasks(defs...)
+	return nil
 }
 
 // taskLedgerForManifest is Manifest.TaskLedger: every kind the task lists

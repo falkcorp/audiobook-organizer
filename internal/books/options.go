@@ -181,6 +181,14 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 	// The kernel's tasks switch rides books' one predicate, so core's kinds and
 	// books' registrations cannot be on apart (tasks_flip.go).
 	ao.TasksBoot = tasksFlipOn()
+	if tasksFlipOn() {
+		// The three late-owner core kinds run over HEAD's own bodies until F7 and
+		// F8 own them. The server does not exist when Options runs: the backends
+		// resolve it when a run starts. With the predicate off no backend is
+		// named and the kernel registers none of the three kinds.
+		ib := server.NewInterimBackends(m.srv.Load)
+		ao.InterimBackends = app.InterimBackends{Holds: ib.Holds, Poll: ib.Poll, Export: ib.Export}
+	}
 	if identityOn() {
 		if err := m.identityOptions(&ao); err != nil {
 			return app.Options{}, err

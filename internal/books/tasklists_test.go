@@ -8,12 +8,16 @@ package books
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"iter"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
@@ -224,6 +228,9 @@ var notYetBuilt = map[tasks.Kind]string{
 	"books.library.size-refresh":                 "server t7",
 	"books.metadata.candidate-fetch":             "server t7",
 	"books.reconcile.scan":                       "server t7",
+	// acoustid.scan is built by the acoustid list and withheld by bookTaskLists
+	// (withheldKinds), not scheduled: HEAD runs it from the UI only.
+	"books.acoustid.scan": "A6d gated dedup engine (F5-04 seam)",
 	// the dedup plugin's KindDeps builder.
 	"books.dedup.label-refinement": "dedup plugin",
 	"books.dedup.llm-review":       "dedup plugin",
@@ -276,6 +283,13 @@ func TestF5_ScheduleKeysAreUniquePerKind(t *testing.T) {
 }
 
 func TestF5_ScheduledKindsRegistered(t *testing.T) {
+	// The real-module subtest runs this test again in a child process (a boot with
+	// the predicate on needs the process's ops recorder untouched, and the lists
+	// fixture below makes it). The child runs the subtest alone.
+	if os.Getenv(freshProcessEnv) != "" {
+		t.Run("real module", registeredByTheRealModule)
+		return
+	}
 	in := listsFixture(t)
 	defs, err := bookTaskLists(in)
 	require.NoError(t, err)
@@ -296,7 +310,12 @@ func TestF5_ScheduledKindsRegistered(t *testing.T) {
 	}
 	for k, owner := range notYetBuilt {
 		require.NotContains(t, byKind, k, "%s is built now: drop it from notYetBuilt (was waiting on %s)", k, owner)
-		require.True(t, scheduled[k], "notYetBuilt names %s, which is not a scheduled kind", k)
+		_, withheld := withheldKinds()[k]
+		require.True(t, scheduled[k] || withheld, "notYetBuilt names %s, which is neither a scheduled kind nor withheld by bookTaskLists", k)
+	}
+	for k, why := range withheldKinds() {
+		require.Contains(t, notYetBuilt, k, "bookTaskLists withholds %s (%s) and notYetBuilt does not say so", k, why)
+		require.NotContains(t, byKind, k, "%s is withheld and still in the lists", k)
 	}
 
 	// The hook the lists were built with is the one books ships.
@@ -310,6 +329,88 @@ func TestF5_ScheduledKindsRegistered(t *testing.T) {
 		require.NotNil(t, got, "%s is scheduled but its definition has no schedule", k)
 		require.Equal(t, sigOf(hook(k)), sigOf(got), "%s carries another kind's schedule", k)
 	}
+
+	// The same holds for what the real module registers: the lists reach
+	// Registrar.Tasks from Register with the predicate on, every scheduled kind
+	// the lists carry is registered with its schedule, and the schedule's live
+	// gates answer from the booted server, not from absent hooks.
+	t.Run("real module", registeredByTheRealModule)
+}
+
+// registeredByTheRealModule is TestF5_ScheduledKindsRegistered's real-module
+// subtest: it boots the composition with the predicate on, in a child process.
+func registeredByTheRealModule(t *testing.T) {
+	if parent, _ := inFreshProcess(t); parent {
+		return
+	}
+	t.Cleanup(SetTasksFlipForTest(true))
+	var rec module.Registrations
+	c := bootComposedWith(t, false, "", nil, nil, nil, func(m module.Module) module.Module {
+		return registrationTap{Module: m, rec: &rec}
+	})
+
+	reg := map[tasks.Kind]tasks.Definition{}
+	for _, d := range rec.Tasks {
+		require.NotContains(t, reg, d.Kind(), "kind %s registered twice", d.Kind())
+		reg[d.Kind()] = d
+		require.Empty(t, tasks.Problems(d), d.Kind())
+	}
+	require.NotEmpty(t, reg, "Register recorded no task definition with the predicate on")
+	for k := range reg {
+		require.Contains(t, taskLedger(), k, "%s is registered but not in the manifest ledger", k)
+	}
+	for _, k := range taskLedger() {
+		require.Contains(t, reg, k, "%s is in the manifest ledger but Register did not register it", k)
+	}
+
+	hook := NewSchedules(ScheduleDeps{})
+	for _, k := range ScheduledKinds() {
+		d, ok := reg[k]
+		if !ok {
+			require.Contains(t, notYetBuilt, k, "scheduled kind %s is neither registered nor in notYetBuilt", k)
+			continue
+		}
+		got := tasks.CommonOf(d).Schedule
+		require.NotNil(t, got, "%s is scheduled but registered without its schedule", k)
+		want := hook(k)
+		require.Equal(t, want.ConfigKey(), got.ConfigKey(), "%s registered with another kind's schedule", k)
+		require.Equal(t, want.Interval(), got.Interval(), k)
+		require.Equal(t, want.IsLive(), got.IsLive(), k)
+	}
+	for k := range notYetBuilt {
+		require.NotContains(t, reg, k, "%s is registered: drop it from notYetBuilt", k)
+	}
+
+	// The presence gates read the server's services through ScheduleDeps. A
+	// hook left nil reads as the service being absent and closes the
+	// schedule for good, which is what these kinds would do if the wiring
+	// dropped it.
+	hooks := c.srv.ScheduleHooks()
+	require.True(t, hooks.HasActivitySvc(), "the booted server has no activity service: the check below proves nothing")
+	require.True(t, hooks.HasMetadataFetchSvc(), "the booted server has no metadata fetch service: the check below proves nothing")
+	for k, present := range map[tasks.Kind]bool{
+		"books.maintenance.cleanup-activity-log": hooks.HasActivitySvc(),
+		"books.scheduler.metadata-upgrade":       hooks.HasMetadataFetchSvc(),
+	} {
+		got := tasks.CommonOf(reg[k]).Schedule
+		require.NotNil(t, got, k)
+		require.Equal(t, present, got.IntervalEnabled(), "%s: its schedule gate does not follow the server's service", k)
+		require.Equal(t, present, got.WindowOpen(), "%s: its window gate does not follow the server's service", k)
+	}
+}
+
+// registrationTap is a module whose Register also reads back what it recorded,
+// through the idempotent Registrar.Close. A module that calls Close inside
+// Register loses nothing (core/module/registrar.go).
+type registrationTap struct {
+	module.Module
+	rec *module.Registrations
+}
+
+func (m registrationTap) Register(r *module.Registrar) error {
+	err := m.Module.Register(r)
+	*m.rec = r.Close()
+	return err
 }
 
 // The hook reaches every list. A kind outside ScheduledKinds never shows a
@@ -361,7 +462,7 @@ func TestF5_EveryBuiltListIsCarried(t *testing.T) {
 		"metafetch":         "books.metafetch.asin-backfill",
 		"deluge":            "books.deluge.centralize",
 		"itunes":            "books.itunes.position-sync",
-		"acoustid":          "books.acoustid.scan",
+		"acoustid":          "books.acoustid.reset-all",
 		"scheduler":         "books.scheduler.metadata-upgrade",
 		"repairs":           "books.repairs.folder-books",
 		"maintenance g7":    "books.maintenance.reports-prune",
@@ -443,4 +544,33 @@ func TestF5_NoOpBindStoresRefusesByName(t *testing.T) {
 	defs, err := bookTaskLists(in)
 	require.ErrorContains(t, err, "Repairs.BindStores binds no maintenance.FixerStores")
 	require.Nil(t, defs)
+}
+
+// TestF5_NoHEADScheduledKindIsNotYetBuilt is the flip's own gate on notYetBuilt:
+// every kind in it is one HEAD runs today (a schedule, or an operation the UI
+// starts) that the native lists do not carry yet, so the native registration
+// cannot be the one production runs while any is left. It is skipped while the
+// predicate is off, which is every build before the F5-18 switch commit; that
+// commit turns tasksFlipOn on for good (it edits the function, it does not delete
+// it), and from then on this test fails until the table is empty. It does not
+// call SetTasksFlipForTest, which that commit deletes, and it does not set the
+// predicate: it reads the shipped value.
+func TestF5_NoHEADScheduledKindIsNotYetBuilt(t *testing.T) {
+	if !tasksFlipOn() {
+		t.Skip("the tasks flip is off: notYetBuilt may still hold kinds; this test bites when the switch commit turns it on")
+	}
+	scheduled := map[tasks.Kind]bool{}
+	for _, k := range ScheduledKinds() {
+		scheduled[k] = true
+	}
+	var left []string
+	for k, owner := range notYetBuilt {
+		kind := "operation HEAD runs on request"
+		if scheduled[k] {
+			kind = "HEAD schedules it"
+		}
+		left = append(left, fmt.Sprintf("%s (%s; waits on %s)", k, kind, owner))
+	}
+	slices.Sort(left)
+	require.Empty(t, left, "the tasks flip is on and %d kind(s) HEAD runs today are not registered", len(left))
 }

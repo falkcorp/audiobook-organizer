@@ -98,7 +98,7 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	if err != nil {
 		return nil, fmt.Errorf("books task lists: %w", err)
 	}
-	out = append(out, l...)
+	out = append(out, withoutWithheld(l)...)
 
 	sc := in.Scheduler
 	sc.Schedules = in.Schedules
@@ -125,6 +125,34 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	out = append(out, l...)
 
 	return out, nil
+}
+
+// withheldKinds are kinds a plugin's list builds that bookTaskLists leaves out
+// on purpose, each with the reason, because registering them now would give a
+// kind that refuses every run. They are not in the manifest ledger either
+// (Manifest.TaskLedger is the kinds bookTaskLists returns). A fresh map per call.
+//
+//   - books.acoustid.scan: the scan runs the dedup engine, and the engine writes
+//     its candidates through its own stores. Building one needs the wide
+//     database.Store and would bypass the writer gate (the F5-04 seam), so the
+//     kind waits for A6d's gated dedup engine; acoustid.BooksTaskInputs.NewEngine
+//     is that hook.
+func withheldKinds() map[tasks.Kind]string {
+	return map[tasks.Kind]string{
+		"books.acoustid.scan": "needs A6d's gated dedup engine (F5-04 seam)",
+	}
+}
+
+// withoutWithheld is defs less the kinds withheldKinds names.
+func withoutWithheld(defs []tasks.Definition) []tasks.Definition {
+	withheld := withheldKinds()
+	out := make([]tasks.Definition, 0, len(defs))
+	for _, d := range defs {
+		if _, skip := withheld[d.Kind()]; !skip {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // atomScopes resolves a HEAD permission atom to the native scopes books' atom

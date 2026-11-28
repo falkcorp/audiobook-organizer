@@ -18,9 +18,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The book task lists are dark: nothing that runs in ABO reaches them. A6 builds
-// the lists and the flip (F5-18 r12) is the one change that wires them into
-// Module(); until then a native kind must not be registered by a stray caller.
+// The book task lists are reachable from one place: registerTaskLists, which
+// Register calls only with tasksFlipOn (F5-18 commit 2). A6 built the lists, and
+// no other caller may reach them or the builders they are made of, so a native
+// kind cannot be registered by a stray one, or with the predicate off.
 //
 // This is a source scan, not a reachability argument, and it is the only proof
 // of darkness: scripts/deadcode-ratchet.py is not a second one. The ratchet fails
@@ -32,8 +33,9 @@ import (
 // of a dark name outside the files listed for it. Two kinds of name are dark:
 //
 //   - the entry points (bookTaskLists, BooksTaskLists, BooksHeldTaskLists), whose
-//     one sanctioned use is internal/books/tasklists.go calling the per-package
-//     BooksTaskLists, and nothing calls bookTaskLists at all;
+//     sanctioned uses are internal/books/tasklists.go calling the per-package
+//     BooksTaskLists and internal/books/tasks_register.go (registerTaskLists)
+//     calling bookTaskLists;
 //   - the builders those entry points are made of (newBooksKindDeps, newT6G7Deps
 //     and writer.ForRun), whose only users are the A6 files that build the dark
 //     lists. A live path calling one directly would hand a run the books module's
@@ -50,7 +52,7 @@ type darkName struct {
 }
 
 var darkNames = []darkName{
-	{name: "bookTaskLists"},
+	{name: "bookTaskLists", allowed: []string{"internal/books/tasks_register.go"}},
 	{name: "BooksTaskLists", allowed: []string{"internal/books/tasklists.go"}},
 	{name: "BooksHeldTaskLists"},
 	{name: "newBooksKindDeps", allowed: []string{
@@ -160,6 +162,11 @@ func TestF5_BookTaskListsAreDark(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(src), "maintenance.BooksTaskLists(")
 	require.Contains(t, string(src), "func bookTaskLists(")
+
+	// So does the one caller the scan allows, behind the predicate.
+	reg, err := os.ReadFile(filepath.Join(root, "internal/books/tasks_register.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(reg), "bookTaskLists(in)")
 }
 
 // repoRoot is the module root, found from the test's working directory (a
