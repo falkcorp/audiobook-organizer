@@ -26,21 +26,40 @@ import (
 type kindFixture struct {
 	kind    integrations.Kind
 	adapter integrations.AdapterID
-	// served is whether core answers health and test for the kind.
-	served bool
-	// legacyHealth and legacyTest name the legacy route a not-served kind's 404 points
-	// at ("" for a kind with none).
-	legacyHealth, legacyTest string
+	// health and test are what core answers for each probe of the kind.
+	health, test probeWant
 }
+
+// probeWant is the table's row for one kind and probe: served, or the 404 and the
+// legacy route it names ("" for a kind with none) and what core waits for.
+type probeWant struct {
+	served        bool
+	legacy, until string
+}
+
+func (k kindFixture) want(p probe) probeWant {
+	if p == probeTest {
+		return k.test
+	}
+	return k.health
+}
+
+var (
+	servedWant  = probeWant{served: true}
+	delugeUntil = "the per-kind co-requirement lands"
+)
 
 func kindFixtures() []kindFixture {
 	return []kindFixture{
-		{kind: integrations.KindAI, adapter: sage, served: true},
+		{kind: integrations.KindAI, adapter: sage, health: servedWant, test: servedWant},
 		{kind: integrations.KindDownload, adapter: seeder,
-			legacyHealth: "GET /api/v1/deluge/status", legacyTest: "POST /api/v1/deluge/test-connection"},
+			health: probeWant{legacy: "GET /api/v1/deluge/status", until: delugeUntil},
+			test:   probeWant{legacy: "POST /api/v1/deluge/test-connection", until: delugeUntil}},
 		{kind: integrations.KindIndexer, adapter: finder},
-		{kind: integrations.KindMetadata, adapter: oracle, served: true},
-		{kind: integrations.KindNotify, adapter: batsignal, served: true},
+		{kind: integrations.KindMetadata, adapter: oracle,
+			health: probeWant{legacy: "GET /api/v1/metadata/providers/throttles", until: "a core route can express library.view (books:view)"},
+			test:   servedWant},
+		{kind: integrations.KindNotify, adapter: batsignal, health: servedWant, test: servedWant},
 	}
 }
 
@@ -90,18 +109,15 @@ func TestKindReach_EveryKindIsDecided(t *testing.T) {
 			if !r.known {
 				t.Errorf("probeReach(%s, %d) has no case: decide it in the per-kind table", kind, p)
 			}
-			if r.served != fx.served {
-				t.Errorf("probeReach(%s, %d).served = %v, want %v", kind, p, r.served, fx.served)
+			w := fx.want(p)
+			if r.served != w.served {
+				t.Errorf("probeReach(%s, %d).served = %v, want %v", kind, p, r.served, w.served)
 			}
 			if r.served && r.req.String() != instancePerm().String() {
 				t.Errorf("probeReach(%s, %d) asks %s, want the instance requirement %s", kind, p, r.req, instancePerm())
 			}
-			wantLegacy := fx.legacyHealth
-			if p == probeTest {
-				wantLegacy = fx.legacyTest
-			}
-			if r.legacy != wantLegacy {
-				t.Errorf("probeReach(%s, %d).legacy = %q, want %q", kind, p, r.legacy, wantLegacy)
+			if r.legacy != w.legacy || r.until != w.until {
+				t.Errorf("probeReach(%s, %d) names legacy %q until %q, want %q until %q", kind, p, r.legacy, r.until, w.legacy, w.until)
 			}
 		}
 	}
@@ -117,27 +133,23 @@ func TestKindReach_EveryKindIsDecided(t *testing.T) {
 type probeCall struct {
 	name, method, path string
 	body               func() any
-	legacy             func(kindFixture) string
 	probe              probe
 }
 
 func probeCalls(k kindFixture) []probeCall {
 	id := instanceOf(k)
 	return []probeCall{
-		{name: "health", method: http.MethodGet, path: k.base() + "/instances/" + id + "/health", probe: probeHealth,
-			legacy: func(k kindFixture) string { return k.legacyHealth }},
+		{name: "health", method: http.MethodGet, path: k.base() + "/instances/" + id + "/health", probe: probeHealth},
 		{name: "test of an instance", method: http.MethodPost, path: k.base() + "/instances/" + id + "/test", probe: probeTest,
-			body:   func() any { return k.body("") },
-			legacy: func(k kindFixture) string { return k.legacyTest }},
+			body: func() any { return k.body("") }},
 		{name: "test of an unsaved body", method: http.MethodPost, path: k.base() + "/test", probe: probeTest,
-			body:   func() any { return k.body("") },
-			legacy: func(k kindFixture) string { return k.legacyTest }},
+			body: func() any { return k.body("") }},
 	}
 }
 
 // TestReach_HealthAndTestPerKind runs the health and the two test routes of every
-// kind as the principals that reach the handler (the floor holders). For ai,
-// metadata and notify the settings atom (as a session and as an API key) and
+// kind as the principals that reach the handler (the floor holders). For ai and
+// notify, and for metadata's test, the settings atom (as a session and as an API key) and
 // core:admin reach it and the integrations atom is refused by the backstop; for
 // download and indexer every one of them gets the 404 (download's names the
 // legacy route that serves it), core:admin included. A caller below the floor is
@@ -153,7 +165,7 @@ func TestReach_HealthAndTestPerKind(t *testing.T) {
 				for _, c := range atFloor {
 					rec := reachDo(t, reachRouter(t, e, c, nil), call.method, call.path, call.body)
 					switch {
-					case !k.served:
+					case !k.want(call.probe).served:
 						if rec.Code != http.StatusNotFound {
 							t.Errorf("as %s = %d %s, want 404: core does not serve %s %s", c.name, rec.Code, rec.Body.String(), k.kind, call.name)
 							continue
@@ -162,9 +174,9 @@ func TestReach_HealthAndTestPerKind(t *testing.T) {
 						if p.Code != "not_found" {
 							t.Errorf("as %s: code %q, want not_found", c.name, p.Code)
 						}
-						if legacy := call.legacy(k); legacy != "" {
-							if !strings.Contains(p.Detail, legacy) || !strings.Contains(p.Detail, "until the per-kind co-requirement lands") {
-								t.Errorf("as %s: detail %q does not name %q and the co-requirement", c.name, p.Detail, legacy)
+						if w := k.want(call.probe); w.legacy != "" {
+							if !strings.Contains(p.Detail, w.legacy) || !strings.Contains(p.Detail, "until "+w.until) {
+								t.Errorf("as %s: detail %q does not name %q until %q", c.name, p.Detail, w.legacy, w.until)
 							}
 						} else if strings.Contains(p.Detail, "legacy route") {
 							t.Errorf("as %s: detail %q names a legacy route the kind does not have", c.name, p.Detail)
@@ -297,9 +309,13 @@ func TestReach_RouteDocsNameThePerKindRule(t *testing.T) {
 	wantHealth := "ai asks " + operator +
 		"; download is not served here (404), use GET /api/v1/deluge/status" +
 		"; indexer is not served (404)" +
+		"; metadata is not served here (404), use GET /api/v1/metadata/providers/throttles" +
+		"; notify asks " + operator + "."
+	wantTest := "ai asks " + operator +
+		"; download is not served here (404), use POST /api/v1/deluge/test-connection" +
+		"; indexer is not served (404)" +
 		"; metadata asks " + operator +
 		"; notify asks " + operator + "."
-	wantTest := strings.ReplaceAll(wantHealth, "GET /api/v1/deluge/status", "POST /api/v1/deluge/test-connection")
 	if got := docFor(probeHealth); got != wantHealth {
 		t.Errorf("docFor(health) = %q, want %q", got, wantHealth)
 	}

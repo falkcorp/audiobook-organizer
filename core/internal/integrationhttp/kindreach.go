@@ -52,18 +52,28 @@ type reach struct {
 	// req is the requirement a caller must satisfy, when served.
 	req rbac.Requirement
 	// legacy names the legacy route that serves this kind's probe until core
-	// does, "" when the kind has none.
-	legacy string
+	// does, "" when the kind has none; until says what core is waiting for.
+	legacy, until string
 }
+
+const (
+	untilCoRequirement = "the per-kind co-requirement lands"
+	untilBooksView     = "a core route can express library.view (books:view)"
+)
 
 // probeReach is the per-kind rule of the health and test routes.
 //
-//   - ai, metadata, notify: the instance requirement (the seven scopes of HEAD's
-//     settings.manage atom). HEAD's ai, metadata and notify probes were
+//   - ai, notify (health and test) and metadata (test): the instance requirement
+//     (the seven scopes of HEAD's settings.manage atom). HEAD's probes were
 //     settings.manage (GET /ai/endpoints/status, POST /metadata-sources/test,
 //     GET /plugins/:id/health); the notify test has no HEAD route and asks the
 //     same, so the integrations atom, which HEAD never gave a notify route, does
 //     not gain one.
+//   - metadata health: not served. Its payload carries the provider hold, which
+//     HEAD reads at GET /metadata/providers/throttles behind library.view
+//     ({books:view, core:tasks.view}); a settings-atom key is refused there, and
+//     core cannot express books:view yet, so serving it would widen. The legacy
+//     route stays alive.
 //   - download: not served. HEAD's /deluge/status and /deluge/test-connection ask
 //     the integrations.manage atom (core and books scopes), which core cannot
 //     express per kind until the W6 per-kind co-requirement lands; the legacy
@@ -71,14 +81,19 @@ type reach struct {
 //   - indexer: not served. HEAD has no indexer surface and no ruling gives one.
 func probeReach(k integrations.Kind, p probe) reach {
 	switch k {
-	case integrations.KindAI, integrations.KindMetadata, integrations.KindNotify:
+	case integrations.KindAI, integrations.KindNotify:
+		return reach{known: true, served: true, req: instancePerm()}
+	case integrations.KindMetadata:
+		if p == probeHealth {
+			return reach{known: true, legacy: "GET /api/v1/metadata/providers/throttles", until: untilBooksView}
+		}
 		return reach{known: true, served: true, req: instancePerm()}
 	case integrations.KindDownload:
 		legacy := "GET /api/v1/deluge/status"
 		if p == probeTest {
 			legacy = "POST /api/v1/deluge/test-connection"
 		}
-		return reach{known: true, legacy: legacy}
+		return reach{known: true, legacy: legacy, until: untilCoRequirement}
 	case integrations.KindIndexer:
 		return reach{known: true}
 	}
@@ -89,7 +104,7 @@ func probeReach(k integrations.Kind, p probe) reach {
 func errNotServed(k integrations.Kind, r reach) error {
 	detail := "core does not serve this for kind " + string(k) + " yet"
 	if r.legacy != "" {
-		detail = "this is served by the legacy route " + r.legacy + " until the per-kind co-requirement lands"
+		detail = "this is served by the legacy route " + r.legacy + " until " + r.until
 	}
 	return &httpapi.Error{Status: http.StatusNotFound, Code: "not_found", Detail: detail}
 }
