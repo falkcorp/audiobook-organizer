@@ -38,10 +38,13 @@ import (
 const ProblemMergeTooLarge = "merge_too_large"
 
 // MergeBatchCap is the largest estimated batch, in bytes, an identity merge
-// stages. PROVISIONAL: it is a guess at what one core batch should carry, not a
-// measurement. A measurement of real per-user footprints is pending; until it
-// lands this is the one number to change.
-const MergeBatchCap int64 = 64 << 20
+// stages. Sized from a measurement: the largest per-user footprint in the merge
+// families on a production snapshot (rehearsal run 20261122T081249Z, read-only)
+// is 24.62 MiB, one user and all of it pref: rows; the rule is at least 4x
+// headroom over the largest account, so 128 MiB (5.2x). It stays under core's
+// default storage batch ceiling (core.storage.max_batch_bytes, 256 MiB). This is
+// the one number to change when a larger account appears.
+const MergeBatchCap int64 = 128 << 20
 
 // ErrMergeTooLarge: the merge's estimated batch is over MergeBatchCap. Nothing
 // was staged or written.
