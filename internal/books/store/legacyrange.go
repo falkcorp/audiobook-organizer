@@ -70,6 +70,7 @@ import (
 type storageAdmin interface {
 	Checkpoint(ctx context.Context, dir string) error
 	Compact(ctx context.Context, start, end []byte) error
+	DataMigrationDone(ctx context.Context, id string) (bool, error)
 	CompactionStats() storage.CompactionStats
 	EngineSample() (storage.EngineSample, error)
 	EstimateDiskUsage(start, end []byte) (uint64, error)
@@ -78,6 +79,25 @@ type storageAdmin interface {
 }
 
 var _ storageAdmin = (*storage.Admin)(nil)
+
+// DataMigrationDone reports whether the data migration id has committed in
+// core's storage (storage.Admin.DataMigrationDone): books' identity cutover
+// (cutover.IdentityCutoverID) is the one a caller outside the boot asks about,
+// the op-runner child, which has to know whether the store's user, role, session
+// and API-key records are core's. It fails with errStorageAdminUnset on a store
+// that was not given core's admin surface (the raw engine, or before the app has
+// handed it over), so a caller that cannot learn the answer is told so rather
+// than given a guess.
+func (p *PebbleStore) DataMigrationDone(ctx context.Context, id string) (bool, error) {
+	if p.db == nil || p.db.lr == nil {
+		return false, errStorageAdminUnset
+	}
+	a, err := p.db.lr.adminOf()
+	if err != nil {
+		return false, err
+	}
+	return a.DataMigrationDone(ctx, id)
+}
 
 // errStorageAdminUnset is returned by a store-wide administration call on the
 // core backend before the opener handed over core's admin surface.
