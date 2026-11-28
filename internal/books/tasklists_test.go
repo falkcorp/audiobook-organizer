@@ -20,11 +20,13 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/applygate"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	dedupengine "github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	svcmetafetch "github.com/falkcorp/audiobook-organizer/internal/metafetch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/metafetch"
@@ -177,6 +179,9 @@ func listsFixture(t *testing.T) taskListInputs {
 	store, err := database.NewPebbleStore(filepath.Join(t.TempDir(), "db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
+	// The lists are built, never run: a zero engine is never called.
+	emb := database.NewEmbeddingStore(store.DB())
+	eng := &dedupengine.Engine{}
 	return taskListInputs{
 		Schedules: NewSchedules(ScheduleDeps{}),
 		Maintenance: maintenance.BooksTaskInputs{
@@ -225,6 +230,13 @@ func listsFixture(t *testing.T) taskListInputs {
 			Plugin: &acoustid.Plugin{},
 			Source: store,
 		},
+		Dedup: dedup.BooksTaskInputs{
+			Source:     store,
+			Indexes:    store,
+			Embeddings: emb,
+			NewEngine:  func(tasks.Writer) dedup.WriteEngine { return eng },
+			Engine:     eng,
+		},
 		Scheduler: scheduler.BooksTaskInputs{
 			Upgrader:     listsUpgrader{},
 			StandDownKey: tasks.Key("books.library.scan"),
@@ -271,9 +283,6 @@ var notYetBuilt = map[tasks.Kind]string{
 	"books.library.size-refresh":                 "server t7",
 	"books.metadata.candidate-fetch":             "server t7",
 	"books.reconcile.scan":                       "server t7",
-	// the dedup plugin's KindDeps builder.
-	"books.dedup.label-refinement": "dedup plugin",
-	"books.dedup.llm-review":       "dedup plugin",
 	// the two kinds below are group 6 (held for TODO-F5-11-HOLD-RENEW;
 	// orphan-book-files-cleanup is one of its 14).
 	"books.maintenance.orphan-book-files-cleanup":    "maintenance g6 (held, TODO-F5-11-HOLD-RENEW)",
@@ -474,6 +483,11 @@ func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 		"G7.Writes":                  func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
 		"G7.InvalidateSeriesCache":   func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
 		"G7.SupportedExtensions":     func(in *taskListInputs) { in.Maintenance.G7.SupportedExtensions = nil },
+		"Dedup.Source":               func(in *taskListInputs) { in.Dedup.Source = nil },
+		"Dedup.Indexes":              func(in *taskListInputs) { in.Dedup.Indexes = nil },
+		"Dedup.Embeddings":           func(in *taskListInputs) { in.Dedup.Embeddings = nil },
+		"Dedup.NewEngine":            func(in *taskListInputs) { in.Dedup.NewEngine = nil },
+		"Dedup.Engine":               func(in *taskListInputs) { in.Dedup.Engine = nil },
 		"Schedules":                  func(in *taskListInputs) { in.Schedules = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -481,6 +495,11 @@ func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 			mutate(&in)
 			_, err := bookTaskLists(in)
 			require.Error(t, err)
+			if field, ok := strings.CutPrefix(name, "Dedup."); ok {
+				// the dedup package names its own inputs, in its own error
+				require.Contains(t, err.Error(), "dedup: BooksTaskLists: missing input(s): ["+field+"]")
+				return
+			}
 			require.Contains(t, err.Error(), name)
 		})
 	}

@@ -116,9 +116,12 @@ func (p *Plugin) buildCandidateStatusIndexNative(d IndexKindDeps, sched func(tas
 	c.Title = "Build candidate status secondary index"
 	c.Help = buildCandidateStatusIndexHelp
 	// Writes found: EmbeddingStore.WriteCandidateStatusIndexRow sets dedup:s:
-	// rows and SetCandidateStatusIndexBuilt sets setting:<flag>, both in the
-	// embedding store's keyspace (embeddings). The scan reads candidates there too.
-	c.Effects = tasks.Writes(res(ops.ResEmbeddings)...)
+	// rows (embeddings; embedding_store.go:1022) and SetCandidateStatusIndexBuilt
+	// sets the setting:<flag> row (settings; embedding_store.go:994-1004, called
+	// at build_candidate_index.go:197), which is the same shared-DB row a settings
+	// read answers. The scan reads candidates there too. Settings was missing from
+	// the declaration (F5-18 A6d); HEAD has always written it.
+	c.Effects = tasks.Writes(res(ops.ResEmbeddings, ops.ResSettings)...)
 	// HEAD Requeue: FromZero. The body reads no checkpoint; the rows are idempotent.
 	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityLow

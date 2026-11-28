@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
@@ -33,6 +34,7 @@ type taskListInputs struct {
 	Deluge      deluge.BooksTaskInputs
 	ITunes      itunes.BooksTaskInputs
 	Acoustid    acoustid.BooksTaskInputs
+	Dedup       dedup.BooksTaskInputs
 	Scheduler   scheduler.BooksTaskInputs
 	Repairs     repairs.BooksTaskInputs
 }
@@ -45,11 +47,6 @@ type taskListInputs struct {
 // Not built yet (F5-18 A6 carries them, each its own slice of work, named in
 // notYetBuilt in tasklists_test.go with the kinds it will bring):
 //
-//   - TODO-F5-18-A6-MAINT-G15: maintenance groups 1 and 5 deps builders
-//     (t6g1Deps, t6g5Deps; #5003 has merged, so Inputs.Runs
-//     is the store their run-plan reads can take)
-//     and their entries in maintenance.BooksTaskLists.
-//   - TODO-F5-18-A6-DEDUP: the dedup plugin's KindDeps builder (five groups).
 //   - TODO-F5-18-A6-SERVER-T7: internal/server's t7Deps builder, in a new file.
 //
 // Left out on purpose: the 14 group-6 maintenance kinds. They hold a
@@ -95,6 +92,14 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	ac := in.Acoustid
 	ac.Schedules = in.Schedules
 	l, err = acoustid.BooksTaskLists(ac)
+	if err != nil {
+		return nil, fmt.Errorf("books task lists: %w", err)
+	}
+	out = append(out, l...)
+
+	dd := in.Dedup
+	dd.Schedules = in.Schedules
+	l, err = dedup.BooksTaskLists(dd)
 	if err != nil {
 		return nil, fmt.Errorf("books task lists: %w", err)
 	}
