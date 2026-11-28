@@ -178,7 +178,7 @@ class ServiceTargets(unittest.TestCase):
         p = host.make("service-start", DRY_RUN="1")
         self.assertEqual(p.returncode, 0, out(p))
         self.assertIn("so it may take up to 7260 s", p.stdout)
-        self.assertIn(f"wait up to {scm.MAX_WAIT_SEC} s for", p.stdout)
+        self.assertIn("wait up to 3600 s for", p.stdout)
 
     def test_a_timeout_that_cannot_be_read_changes_nothing(self) -> None:
         for target, prop in (
@@ -200,8 +200,8 @@ class ServiceTargets(unittest.TestCase):
         host.h["env"].pop("AORG_OH_WAIT_SEC")
         p = host.make("service-start", DRY_RUN="1")
         self.assertEqual(p.returncode, 0, out(p))
-        self.assertIn(f"is infinity, so {scm.FALLBACK_SEC} s", p.stdout)
-        self.assertIn(f"wait up to {scm.FALLBACK_SEC + scm.MARGIN_SEC} s", p.stdout)
+        self.assertIn("is infinity, so 900 s", p.stdout)
+        self.assertIn("wait up to 960 s", p.stdout)
 
     def test_the_commands_are_the_guards_stop_and_start_keys(self) -> None:
         o = guard.Opts(host="h", db="", bin="", unit=UNIT)
@@ -260,8 +260,8 @@ class TimespanAndLimits(unittest.TestCase):
 
     def test_the_command_is_given_the_units_timeout_plus_the_margin(self) -> None:
         for what, states, shown, want in (
-            ("start", ["inactive", "active"], "5min", 300 + scm.MARGIN_SEC),
-            ("stop", ["active", "inactive"], "40s", 40 + scm.MARGIN_SEC),
+            ("start", ["inactive", "active"], "5min", 360),
+            ("stop", ["active", "inactive"], "40s", 100),
         ):
             rc, calls = self.run_main(what, states, start=shown)
             self.assertEqual(rc, 0, what)

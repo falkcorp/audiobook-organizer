@@ -1639,7 +1639,10 @@ class ServiceScripts(unittest.TestCase):
             ("stop", "active", "1min", 120),
             ("start", "inactive", "1min 30s", 150),
             ("start", "inactive", "250ms", 61),
+            ("stop", "active", "250ms", 61),
+            ("stop", "active", "1min 30s", 150),
             ("start", "inactive", "2h", 3600),
+            ("stop", "active", "2h", 3600),
         ):
             self.box.set_state(now)
             p = self.derived(verb, shown, "--dry-run")
@@ -1650,11 +1653,15 @@ class ServiceScripts(unittest.TestCase):
         self.assertEqual(self.box.sudo_calls(), [])
 
     def test_an_infinite_timeout_uses_the_fallback(self) -> None:
-        self.box.set_state("inactive")
-        p = self.derived("start", "infinity", "--dry-run")
-        self.assertEqual(p.returncode, 0, text(p))
-        self.assertIn("TimeoutStartUSec is infinity, so 900 s", p.stdout)
-        self.assertIn("wait up to 960 s", p.stdout)
+        for verb, now, prop in (
+            ("start", "inactive", "TimeoutStartUSec"),
+            ("stop", "active", "TimeoutStopUSec"),
+        ):
+            self.box.set_state(now)
+            p = self.derived(verb, "infinity", "--dry-run")
+            self.assertEqual(p.returncode, 0, text(p))
+            self.assertIn(f"{prop} is infinity, so 900 s", p.stdout)
+            self.assertIn("wait up to 960 s", p.stdout)
 
     def test_a_timeout_that_cannot_be_read_changes_nothing(self) -> None:
         for verb, now, shown in (
@@ -1669,11 +1676,28 @@ class ServiceScripts(unittest.TestCase):
             self.assertIn("cannot read Timeout", p.stderr)
             self.assertEqual(self.state(), now)
         (self.box.shims / "timeout.fail").write_text("")
-        self.box.set_state("active")
-        p = self.derived("stop", "1min")
-        self.assertNotEqual(p.returncode, 0, text(p))
-        self.assertIn("cannot read TimeoutStopUSec", p.stderr)
+        for verb, now, prop in (
+            ("stop", "active", "TimeoutStopUSec"),
+            ("start", "inactive", "TimeoutStartUSec"),
+        ):
+            self.box.set_state(now)
+            p = self.derived(verb, "1min")
+            self.assertNotEqual(p.returncode, 0, text(p))
+            self.assertIn(f"cannot read {prop}", p.stderr)
         self.assertEqual(self.box.sudo_calls(), [])
+
+    def test_a_fixed_wait_replaces_the_derived_one_for_both_verbs(self) -> None:
+        for verb, now, stuck, wanted in (
+            ("stop", "active", "deactivating", "inactive"),
+            ("start", "inactive", "activating", "active"),
+        ):
+            (self.box.shims / "change.result").write_text(stuck)
+            self.box.set_state(now)
+            # 5min would be 360 s; the fixed 2 s is what it waits.
+            (self.box.shims / f"timeout.{verb}").write_text("5min\n")
+            p = self.go(verb)
+            self.assertNotEqual(p.returncode, 0, f"{verb}\n{text(p)}")
+            self.assertIn(f"still {stuck} after 2 seconds; wanted {wanted}", p.stderr, verb)
 
     def test_a_real_run_waits_as_long_as_the_derived_wait_says(self) -> None:
         (self.box.shims / "change.result").write_text("activating")
