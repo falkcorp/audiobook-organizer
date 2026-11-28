@@ -357,8 +357,13 @@ grep -c 'internal/auth$' tools/cmd/sdkguard/internal-deps.txt                   
   scoped `["books:fingerprint.worker"]`, an `fp-worker` user's key and an `fp-worker` session get 403 on
   `/api/core/v1/me`, own sessions, `/metrics` and a reading-state route, and 200 on the worker routes.
 - Deferred cells finished here: `TestIdentityCutover_WorkerKeyStaysConfined` (live routes),
-  `TestCutoverRefusedWhileMergeInProgress` (undo → 409 `merge_permanent`), `TestCutoverRefusedByOlderBuilds` (the mid-M3
-  cell), `TestIdentityCutover_ReachOracle` on the registered path, `TestMetricsScrape_MigratedReach`,
+  `TestCutoverRefusedWhileMergeInProgress` (undo → 409 `merge_permanent`), the mid-M3 cell (not in
+  `TestCutoverRefusedByOlderBuilds`, whose corpus boots run M3 to completion or fail before it and never stop
+  inside it: its own file, `internal/books/midm3_test.go`, over a HEAD store killed between M3's chunks and
+  failed between its families: `TestMidM3_KillLeavesEachRecordInOnePlace`,
+  `TestMidM3_OlderBuildRefusesBeforeAnyWrite`, `TestMidM3_ThisBuildResumesEveryRecordOnce`,
+  `TestMidM3_HalfStoreIsNeverServed`; run by `boot-crash-matrix-abo`), `TestIdentityCutover_ReachOracle` on the
+  registered path, `TestMetricsScrape_MigratedReach`,
   `TestCompat_ABSLoginHonoursRestrictions`, `TestBootWrites_RunInP4d`, `TestConfining_WorkerKeyRefusedOnPlaylists`,
   `TestAuthOff_BooksGatesAndInHandlerDenial`, `TestAuthOff_SettingsManageKeepsReach`, the core half of
   `TestUserMerge_ScopedAdminKeyRefused`.
