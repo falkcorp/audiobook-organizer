@@ -315,6 +315,13 @@ func TestStartIndex_StopRightAfterStart(t *testing.T) {
 		if err := stopIndex(context.Background(), r); err != nil {
 			t.Fatal(err)
 		}
+		// stopIndex waits for the goroutine too: a Stop that beat the goroutine's
+		// first step returns before it has run at all.
+		select {
+		case <-r.done:
+		default:
+			t.Fatal("stopIndex returned while the reconciler goroutine was still to run")
+		}
 		_ = e.Close()
 		if len(h.recs) != 0 {
 			t.Fatalf("a stop racing the start logged %+v", h.recs)
