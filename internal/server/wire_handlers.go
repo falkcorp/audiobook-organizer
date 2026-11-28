@@ -531,7 +531,7 @@ func (s *Server) wireHandlers(api *gin.RouterGroup, authMiddleware gin.HandlerFu
 		s.embeddingStore,
 		s.aiScanStore,
 		opReg,
-	).WithDownloadCheck(s.diagnosticsDownloadCheck()).WithStartCheck(s.diagnosticsStartCheck()).WithOpAccess(s.repairsOpAccess())
+	).WithDownloadCheck(s.diagnosticsDownloadCheck()).WithOpAccess(s.repairsOpAccess())
 	// Runtime flight recorder snapshots (list + download). Guard typed-nil
 	// boxing so a Server built without NewServer lists nothing.
 	var traceStore handlers.TraceStore

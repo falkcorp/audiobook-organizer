@@ -335,10 +335,11 @@ var (
 // interactive, so a Sensitive scope (05-rbac §4.4) is never held through this
 // path: the job is narrowed by it, never widened.
 //
-// An op with no actor is errNoExportActor (the diagnostics export start refuses
-// such a request before it queues, diagnosticsStartCheck; what still reaches
-// here is a start by a route that does not refuse it, such as the generic start
-// routes with core's auth disabled); an actor core does not hold, holds
+// An op with no actor is errNoExportActor (every start of the export refuses
+// such a request before it queues, through the definition's start precondition,
+// diagnosticsStartPrecondition, so what reaches here is a row queued before that
+// refusal existed or one written by a path that does not go through EnqueueOp);
+// an actor core does not hold, holds
 // as not active, or refuses a principal for is errExportActorNotStanding; a
 // read failure is returned as it is. The map is empty whenever err is set.
 func (s *Server) opActorPermissionsCore(ctx context.Context, row *database.OperationV2Row) (map[auth.Permission]bool, error) {

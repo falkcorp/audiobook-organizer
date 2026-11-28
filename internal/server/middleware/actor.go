@@ -6,11 +6,13 @@
 package middleware
 
 import (
+	"errors"
 	"slices"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
+	"github.com/falkcorp/audiobook-organizer/internal/httputil"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 )
 
@@ -57,4 +59,19 @@ func ActorOptions(c *gin.Context) []opsregistry.EnqueueOption {
 	slices.Sort(perms)
 	opts = append(opts, opsregistry.WithActorPermissions(perms))
 	return opts
+}
+
+// RespondEnqueueError answers a failed EnqueueOp the way every route that starts
+// an operation must: a start the definition refuses (its StartPrecondition,
+// opsregistry.StartRefusedError) is a 409 carrying the reason, and anything else
+// is an internal error under internalMsg. One mapping for every start route, so
+// a refusal the registry makes reads the same on the generic start, its retry,
+// the v3 run routes and a definition's own route.
+func RespondEnqueueError(c *gin.Context, internalMsg string, err error) {
+	var refused *opsregistry.StartRefusedError
+	if errors.As(err, &refused) {
+		httputil.RespondWithConflict(c, refused.Reason)
+		return
+	}
+	httputil.InternalError(c, internalMsg, err)
 }

@@ -734,7 +734,7 @@ func (h *OperationsV2Handler) TriggerOperationV2(c *gin.Context) {
 
 	opID, err := h.registry.EnqueueOp(c.Request.Context(), body.DefID, body.Params, servermiddleware.ActorOptions(c)...)
 	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
+		servermiddleware.RespondEnqueueError(c, "enqueue failed", err)
 		return
 	}
 
@@ -903,7 +903,7 @@ func (h *OperationsV2Handler) RetryOperationV2(c *gin.Context) {
 
 	newID, err := h.registry.EnqueueOp(c.Request.Context(), row.DefID, params, servermiddleware.ActorOptions(c)...)
 	if err != nil {
-		httputil.InternalError(c, "enqueue failed", err)
+		servermiddleware.RespondEnqueueError(c, "enqueue failed", err)
 		return
 	}
 
