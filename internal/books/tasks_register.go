@@ -8,6 +8,7 @@ package books
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -149,26 +150,97 @@ func memdbWatch(probe func(context.Context) health.Result, rep health.Reporters,
 }
 
 // otherUserLogData is the predicate Registrar.LogOtherUserData takes: it says
-// whether a journal record names another user's data, by HEAD's one rule for a
-// log line (activity.NamesOthersUserLog on the record's subsystem and message),
-// applied also to every attribute as a "key=value" pair and as bare text, so a
-// user id logged as an attribute (the journal flattens attributes, so a line
-// the message does not name can carry one) is caught the way the same id in a
-// message is. viewer is not consulted: HEAD hides these lines from every
-// reader without users.manage, the viewer's own included, and core only calls
-// the predicate to decide that. It is pure and, like the rule, errs towards
-// true.
+// whether a journal record names another user's data. It hides the line (core
+// shows it to no reader without users.manage, the viewer's own included, which
+// is what HEAD does; viewer is not consulted) when any of HEAD's rules would
+// have removed or altered something of it:
+//
+//   - the subsystem or message (activity.NamesOthersUserLog);
+//   - an attribute whose key names a user and whose value is not a count or a
+//     flag, at any depth through groups (activity.NamesUserAttr, the one key
+//     rule WithoutUserAttrs applies too), so user_id=42 and an opaque owner are
+//     caught though neither value looks like user text;
+//   - an attribute whose value, flattened to "key=value" text, names a user.
+//
+// This is stricter than HEAD, on purpose: HEAD serves the line and redacts the
+// attribute, and core's contract is a yes or no for the whole line, so the line
+// goes. It is pure and, like the rules, errs towards true (an attribute value
+// it cannot read as a Go value is judged by its text).
 func otherUserLogData(rec corelog.Record, _ string) bool {
 	if activity.NamesOthersUserLog(rec.Subsystem, rec.Message) {
 		return true
 	}
-	for _, a := range rec.Attrs {
-		v := a.Value.Resolve().String()
-		if activity.NamesUserText(a.Key+"="+v) || activity.NamesOthersUserLog("", v) {
+	return attrsNameUser(rec.Attrs)
+}
+
+// attrsNameUser is otherUserLogData's attribute half.
+func attrsNameUser(attrs []slog.Attr) bool {
+	for _, a := range attrs {
+		v := a.Value.Resolve()
+		if v.Kind() == slog.KindGroup {
+			// An empty key inlines the group's attributes into the line; a named
+			// group is a map under its key, which the key rule reads whole.
+			if a.Key == "" {
+				if attrsNameUser(v.Group()) {
+					return true
+				}
+				continue
+			}
+			if activity.NamesUserAttr(a.Key, groupValue(v.Group())) {
+				return true
+			}
+			continue
+		}
+		if activity.NamesUserAttr(a.Key, attrGoValue(v)) || activity.NamesUserText(a.Key+"="+v.String()) {
 			return true
 		}
 	}
 	return false
+}
+
+// groupValue is a slog group as the map json.Unmarshal would have made of it.
+func groupValue(attrs []slog.Attr) map[string]any {
+	m := make(map[string]any, len(attrs))
+	for _, a := range attrs {
+		v := a.Value.Resolve()
+		if v.Kind() == slog.KindGroup {
+			if a.Key == "" {
+				for k, e := range groupValue(v.Group()) {
+					m[k] = e
+				}
+				continue
+			}
+			m[a.Key] = groupValue(v.Group())
+			continue
+		}
+		m[a.Key] = attrGoValue(v)
+	}
+	return m
+}
+
+// attrGoValue is a resolved, non-group slog value as a Go value the key rule
+// reads: numbers and booleans as such (a count stays a count), a map or list as
+// the any form NamesUserAttr walks, and anything else as its text, so an error
+// or a struct is judged by what it prints.
+func attrGoValue(v slog.Value) any {
+	switch v.Kind() {
+	case slog.KindString:
+		return v.String()
+	case slog.KindInt64:
+		return v.Int64()
+	case slog.KindUint64:
+		return v.Uint64()
+	case slog.KindFloat64:
+		return v.Float64()
+	case slog.KindBool:
+		return v.Bool()
+	case slog.KindAny:
+		switch t := v.Any().(type) {
+		case map[string]any, []any:
+			return t
+		}
+	}
+	return v.String()
 }
 
 // registerTaskFlip is Register's part of the tasks flip, run only with

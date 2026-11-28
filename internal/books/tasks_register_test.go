@@ -7,10 +7,12 @@ package books
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/mediacore/health"
 	corelog "github.com/falkcorp/mediacore/log"
 	"github.com/falkcorp/mediacore/module"
@@ -247,6 +250,60 @@ func (l *lockedWarmup) WarmupStatus() (bool, bool, int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.f.ready, l.f.done, 0
+}
+
+// parityRow is one log record fed both to HEAD's WithoutUserAttrs, as the JSON
+// attributes its line stores, and to the predicate, as the slog attributes core
+// hands it. The two are written apart on purpose, so the predicate's conversion
+// of slog values is checked against HEAD's reading of the JSON, not against
+// itself.
+type parityRow struct {
+	name  string
+	raw   string
+	attrs []slog.Attr
+	hide  bool // the predicate's answer
+}
+
+// The predicate hides the line whenever HEAD's WithoutUserAttrs would have
+// removed or altered anything of it (the parity cell), and shows it when HEAD
+// serves it whole.
+func TestTasksRegister_LogOtherUserDataParityWithWithoutUserAttrs(t *testing.T) {
+	rows := []parityRow{
+		{"numeric user id", `{"user_id":42}`, []slog.Attr{slog.Int("user_id", 42)}, true},
+		{"opaque owner", `{"owner":"x9f3k2"}`, []slog.Attr{slog.String("owner", "x9f3k2")}, true},
+		{"user_count stays", `{"user_count":3}`, []slog.Attr{slog.Int("user_count", 3)}, false},
+		{"owner_only flag stays", `{"owner_only":true}`, []slog.Attr{slog.Bool("owner_only", true)}, false},
+		{"account fails closed", `{"account":7}`, []slog.Attr{slog.Int("account", 7)}, true},
+		{"user key in a neutral group", `{"request":{"user_id":17}}`,
+			[]slog.Attr{slog.Group("request", slog.Int("user_id", 17))}, true},
+		{"user key two groups down", `{"request":{"inner":{"login":"alfred"}}}`,
+			[]slog.Attr{slog.Group("request", slog.Group("inner", slog.String("login", "alfred")))}, true},
+		{"actor group holding a user id", `{"actor":{"user_id":17}}`,
+			[]slog.Attr{slog.Group("actor", slog.Int("user_id", 17))}, true},
+		{"inlined group", `{"user_id":17}`,
+			[]slog.Attr{{Key: "", Value: slog.GroupValue(slog.Int("user_id", 17))}}, true},
+		{"count inside a group stays", `{"request":{"user_count":2}}`,
+			[]slog.Attr{slog.Group("request", slog.Int("user_count", 2))}, false},
+		{"clean attributes", `{"book_id":"b-1939","title":"Year One"}`,
+			[]slog.Attr{slog.String("book_id", "b-1939"), slog.String("title", "Year One")}, false},
+		{"clean group", `{"batch":{"size":3}}`,
+			[]slog.Attr{slog.Group("batch", slog.Int("size", 3))}, false},
+	}
+	for _, r := range rows {
+		t.Run(r.name, func(t *testing.T) {
+			var before, after any
+			require.NoError(t, json.Unmarshal([]byte(r.raw), &before))
+			require.NoError(t, json.Unmarshal([]byte(activity.WithoutUserAttrs(r.raw)), &after))
+			headAlters := !reflect.DeepEqual(before, after)
+
+			rec := corelog.Record{Subsystem: "books", Message: "task step done", Attrs: r.attrs}
+			got := otherUserLogData(rec, "")
+			assert.Equal(t, r.hide, got, "the predicate's answer")
+			if headAlters {
+				assert.True(t, got, "HEAD removes something of this line, so the predicate must hide it")
+			}
+		})
+	}
 }
 
 // registerTaskFlip records the memdb check and the other-user predicate, and

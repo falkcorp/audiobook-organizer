@@ -8,6 +8,7 @@ package activity
 import (
 	"encoding/json"
 	"maps"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -300,6 +301,31 @@ func countOrFlag(k string, v any) bool {
 	return false
 }
 
+// dropsUserAttr reports whether the map entry (k, v) is left out of a log
+// line's attributes for a caller without users.manage: its key names a user
+// (userAttrKey) and its value is not a count or a flag about users (countOrFlag).
+// It is the one key rule: withoutUserAttrValue drops by it and NamesUserAttr
+// answers by it, so the two cannot differ.
+func dropsUserAttr(k string, v any) bool {
+	return userAttrKey(k) && !countOrFlag(k, v)
+}
+
+// NamesUserAttr reports whether the log attribute (key, v) carries a user's own
+// data, which is to say whether WithoutUserAttrs would remove or alter anything
+// of it: its key names a user and its value is not a count or a flag
+// (dropsUserAttr), or v is text that names a user (NamesOthersUserLog), or v is
+// a map or list (Go values as json.Unmarshal builds them: map[string]any and
+// []any) holding such an entry or text at any depth. A caller that decides
+// whether to show a line at all, not just which attributes of it, uses this so
+// it hides at least what WithoutUserAttrs would have redacted.
+func NamesUserAttr(key string, v any) bool {
+	if dropsUserAttr(key, v) {
+		return true
+	}
+	cleaned, keep := withoutUserAttrValue(v)
+	return !keep || !reflect.DeepEqual(cleaned, v)
+}
+
 // withoutUserAttrValue returns v with every attribute that names a user left
 // out of the maps it holds, and keep=false when v itself is text that names a
 // user (NamesUserText).
@@ -310,7 +336,7 @@ func withoutUserAttrValue(v any) (out any, keep bool) {
 	case map[string]any:
 		m := make(map[string]any, len(t))
 		for k, e := range t {
-			if userAttrKey(k) && !countOrFlag(k, e) {
+			if dropsUserAttr(k, e) {
 				continue
 			}
 			if cleaned, ok := withoutUserAttrValue(e); ok {
