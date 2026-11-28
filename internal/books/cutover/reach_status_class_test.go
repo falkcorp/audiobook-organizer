@@ -211,13 +211,18 @@ func TestRecordedPrincipalsAreTheRecording(t *testing.T) {
 func TestRecordedEnvironment_RestoresTheGlobalsItChanges(t *testing.T) {
 	wantPath, hadPath := os.LookupEnv("PATH")
 	transport := http.DefaultTransport
-	prev := fingerprint.ResolvedFpcalcPath()
-	fingerprint.SetResolvedFpcalcPath("/opt/gotham/fpcalc")
+	// resolved reads the global through the setter, which returns what it replaced.
+	resolved := func() string {
+		v := fingerprint.SetResolvedFpcalcPath("")
+		fingerprint.SetResolvedFpcalcPath(v)
+		return v
+	}
+	prev := fingerprint.SetResolvedFpcalcPath("/opt/gotham/fpcalc")
 	t.Cleanup(func() { fingerprint.SetResolvedFpcalcPath(prev) })
 
 	t.Run("boot", func(t *testing.T) {
 		recordedEnvironment(t)
-		if got := fingerprint.ResolvedFpcalcPath(); got != "" {
+		if got := resolved(); got != "" {
 			t.Errorf("inside, the resolved fpcalc path is %q, want it cleared", got)
 		}
 		if http.DefaultTransport == transport {
@@ -231,7 +236,7 @@ func TestRecordedEnvironment_RestoresTheGlobalsItChanges(t *testing.T) {
 		t.Cleanup(func() { http.DefaultTransport = outer })
 	})
 
-	if got := fingerprint.ResolvedFpcalcPath(); got != "/opt/gotham/fpcalc" {
+	if got := resolved(); got != "/opt/gotham/fpcalc" {
 		t.Errorf("after, the resolved fpcalc path is %q, want the one before", got)
 	}
 	if http.DefaultTransport != transport {
