@@ -13,6 +13,8 @@ import (
 	"slices"
 	"sync"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -23,8 +25,13 @@ import (
 // parent: the child in flight kept writing until its own timeout. The cascade is
 // the executor's, not an RC call, so it also covers a parent that never calls
 // anything, and it reaches only the runs whose Parent is the canceled run, or
-// the Parent of one of those: no caller can name another run, because nothing
-// here takes a run id from a caller.
+// the Parent of one of those. The cascade takes no run id from its caller, but a
+// run's Parent is not proof that the parent enqueued it: rc.Enqueue refuses a
+// Parent other than the enqueuing run, yet Client.Start takes a caller-supplied
+// Parent (and, with it, whichever Actor the caller may start as). What keeps a
+// caller from hanging a run under someone else's run, to be ended with it, is the
+// actor check in reachCovers: a descendant is reached only when it carries the
+// canceled run's own Actor.
 //
 // Three places keep it true:
 //
@@ -55,6 +62,12 @@ import (
 // for: the live walk skips it and the runs beneath it, and the guard and the boot
 // pass leave it alone, as before any cascade existed. They never fall back to
 // "allowed".
+//
+// A live cancel's cascade is limited to the stored verdict narrowed by that
+// caller's own (narrowReach): the first cancel stores its caller's verdict, and a
+// repeat or racing cancel by someone with less authority ends no more than that
+// caller could, while one with more is bounded by what the first stored. The guard
+// and the boot pass have no caller, so they apply the stored verdict as it is.
 
 // reachCovers reports whether a stored verdict lets the cascade end c.
 func reachCovers(r *tasks.CancelReach, c tasks.RunRecord) bool {
@@ -81,67 +94,94 @@ func parentCancelCause(parent tasks.RunID) error {
 	return fmt.Errorf("%w: its parent run %s was canceled", tasks.ErrCanceled, parent)
 }
 
+// cascadeWorkers bounds the goroutines stopping the runs of one level of the
+// cascade (the repo's concurrency rule: a bounded pool for per-run store work, not
+// a plain loop over a tree that may be a whole batch's children).
+const cascadeWorkers = 8
+
 // cancelDescendants stops every unfinished run under root that the canceling
-// caller may cancel, breadth first: one read of the unfinished runs (the state
-// index, bounded by the live backlog, not the history) builds the
-// parent-to-children map, then each child is stopped with stopOne, sequentially,
-// so the cascade spawns no goroutines and walks each run once. A child that went
-// terminal meanwhile is not an error. A child of a disabled module is left
-// untouched (read-only while held, 5T.3.11): the dispatch guard and the boot pass
-// end it when its module is enabled again. A failure to stop one child does not
-// skip the others; the errors are joined, the caller's cancel reports them, and a
-// repeat cancel retries (stop).
+// caller may cancel, breadth first, one level at a time. For each level it reads
+// the unfinished runs afresh (the state index, bounded by the live backlog, not the
+// history) and takes those whose Parent is a run of the level, after every run of
+// the level has been stopped: a child that a run enqueued before its own stop
+// committed is therefore seen, where a single read taken before the walk began
+// would miss it and leave it running until the next restart (the dispatch guard
+// ends one that is enqueued later, queued, but not one that already runs). The
+// runs of a level are stopped by a pool of at most cascadeWorkers goroutines.
+// Within a level the ids are distinct and each belongs to one parent, and the
+// coordinator marks them seen before any worker starts, so no two workers touch
+// the same run; the move that stops a run is a compare-and-swap in any case. A
+// child that went terminal meanwhile is not an error. A child of a disabled module
+// is left untouched (read-only while held, 5T.3.11), whether the caller could have
+// canceled it or not, and is not reported as skipped: the dispatch guard and the
+// boot pass end it when its module is enabled again, if the verdict covers it. A
+// failure to stop one child does not skip the others; the errors are joined, the
+// caller's cancel reports them, and a repeat cancel retries (stop).
 //
-// reach is the verdict stored with the cancel (see above). A descendant it does
-// not cover, which is one the caller may not cancel by the very rule a direct
-// cancel of that run applies (mayCancel: the run's own actor, core:tasks.manage,
-// the kind's Perms.Cancel), is skipped: it keeps running, as it did before any
-// cascade existed, and the runs beneath it are not walked, because the caller
-// could not have reached them through it. Each skip is written to the parent's
-// run log and handed to the cancel's CancelReport (the HTTP route records it in
-// the core.task.cancel audit record). The cancel still succeeds for the run and
-// every descendant the caller may cancel.
-func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by tasks.Actor, reach *tasks.CancelReach) error {
-	kids := map[tasks.RunID][]tasks.RunRecord{}
-	for rec, err := range e.runs.Unfinished(ctx) {
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			e.ins.undecodable("run")
-			continue // hidden (5T.5)
-		}
-		if rec.Parent != "" {
-			kids[rec.Parent] = append(kids[rec.Parent], rec)
-		}
-	}
-	var errs []error
-	var skipped []skippedRun
+// limit is what the walk may end (the stored verdict narrowed by the caller's, see
+// stop); stamp is the verdict stored with the cancel, which every run the walk ends
+// carries a copy of, so the guard and the boot pass judge a child that appears
+// beneath it by the cancel's authority, not by the repeat's. A descendant limit does
+// not cover, which is one the caller may not cancel by the very rule a direct cancel
+// of that run applies (mayCancel: the run's own actor, core:tasks.manage, the kind's
+// Perms.Cancel), is skipped: it keeps running, as it did before any cascade existed,
+// and the runs beneath it are not walked, because the caller could not have reached
+// them through it. The skips are handed to the cancel's CancelReport (the HTTP route
+// records them in the core.task.cancel audit record) and counted in the parent's run
+// log. The cancel still succeeds for the run and every descendant the caller may
+// cancel.
+func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by tasks.Actor, limit, stamp *tasks.CancelReach) error {
+	var (
+		mu      sync.Mutex // guards errs, which the workers add to (skipped is the coordinator's alone)
+		errs    []error
+		skipped []skippedRun
+	)
 	seen := map[tasks.RunID]bool{root: true}
-	for queue := []tasks.RunID{root}; len(queue) > 0; queue = queue[1:] {
-		parent := queue[0]
-		for _, c := range kids[parent] {
+	level := []tasks.RunID{root} // runs whose own stop has committed: their children are read next
+	for len(level) > 0 {
+		kids, err := e.childrenOf(ctx, level)
+		if err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		var (
+			g    errgroup.Group
+			next []tasks.RunID
+		)
+		g.SetLimit(cascadeWorkers)
+		for _, k := range kids {
+			c, parent := k.rec, k.parent
 			if seen[c.ID] {
 				continue
 			}
 			seen[c.ID] = true
-			if !reachCovers(reach, c) {
+			covered := reachCovers(limit, c)
+			if e.held(c.Kind) {
+				if covered {
+					next = append(next, c.ID)
+				}
+				continue // left for its module, never a skip
+			}
+			if !covered {
 				skipped = append(skipped, skippedRun{parent: parent, id: c.ID, kind: c.Kind})
 				continue // not queued: its own descendants are out of reach too
 			}
-			queue = append(queue, c.ID)
-			if e.held(c.Kind) {
-				continue
-			}
-			err := e.stopOne(ctx, c.ID, by, reach, reasonCancel, parentCancelCause(parent))
-			if err != nil && !errors.Is(err, tasks.ErrRunNotFound) {
-				errs = append(errs, fmt.Errorf("executor: cancel %s, a child of %s: %w", c.ID, parent, err))
-				continue
-			}
-			if err == nil {
-				e.log.Info("child run canceled with its parent", "run", string(c.ID), "kind", string(c.Kind), "parent", string(parent))
-			}
+			next = append(next, c.ID)
+			g.Go(func() error {
+				err := e.stopOne(ctx, c.ID, by, stamp, reasonCancel, parentCancelCause(parent))
+				if err != nil && !errors.Is(err, tasks.ErrRunNotFound) {
+					mu.Lock()
+					errs = append(errs, fmt.Errorf("executor: cancel %s, a child of %s: %w", c.ID, parent, err))
+					mu.Unlock()
+					return nil
+				}
+				if err == nil {
+					e.log.Info("child run canceled with its parent", "run", string(c.ID), "kind", string(c.Kind), "parent", string(parent))
+				}
+				return nil
+			})
 		}
+		_ = g.Wait() // every job returns nil: its error is in errs
+		level = next
 	}
 	if len(skipped) > 0 {
 		if err := e.recordSkips(ctx, root, skipped); err != nil {
@@ -149,6 +189,35 @@ func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by t
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// kid is an unfinished run and the run it hangs from.
+type kid struct {
+	parent tasks.RunID
+	rec    tasks.RunRecord
+}
+
+// childrenOf reads the unfinished runs now and returns those whose Parent is one of
+// parents, in the store's order. An undecodable record is hidden (5T.5) and counted.
+func (e *executor) childrenOf(ctx context.Context, parents []tasks.RunID) ([]kid, error) {
+	want := make(map[tasks.RunID]bool, len(parents))
+	for _, p := range parents {
+		want[p] = true
+	}
+	var out []kid
+	for rec, err := range e.runs.Unfinished(ctx) {
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			e.ins.undecodable("run")
+			continue // hidden (5T.5)
+		}
+		if want[rec.Parent] {
+			out = append(out, kid{parent: rec.Parent, rec: rec})
+		}
+	}
+	return out, nil
 }
 
 // skippedRun is a descendant a cancel left running because its caller may not
@@ -159,52 +228,59 @@ type skippedRun struct {
 	kind   tasks.Kind
 }
 
-// recordSkips writes one log line per skipped run to the canceled run's log,
-// naming the skipped run's id and kind, and hands the ids to the cancel's
-// CancelReport. The lines take the top of the attempt's log page (below
-// stageNotifyFailed's), where the attempt's own lines, which count up from 1,
-// cannot collide with them. The report is filled first, so an audit record never
-// misses a skip because the log write failed.
+// recordSkips hands the skipped runs' ids to the cancel's CancelReport (the HTTP
+// route names them in its audit record) and writes one line to the canceled run's
+// log saying how many runs the cancel left running, and ids to slog. The log line
+// names no run: the run's log is readable by whoever may view the canceled run's
+// kind, which is not whoever may view the skipped run's, so a child's id or kind
+// there would show a run its reader cannot see (the way RunView blanks BlockedBy).
+// The line takes the top of the attempt's log page (below stageNotifyFailed's),
+// where the attempt's own lines, which count up from 1, cannot collide with it. A
+// repeat cancel writes the same sequence again, so the log carries the latest
+// count, not one line per request. The report is filled first, so a log write that
+// fails does not lose a skip from the audit record.
 func (e *executor) recordSkips(ctx context.Context, root tasks.RunID, skipped []skippedRun) error {
 	if rep, ok := ctx.Value(cancelReportKey{}).(*CancelReport); ok {
 		for _, s := range skipped {
 			rep.add(s.id)
 		}
 	}
+	for _, s := range skipped {
+		e.log.Warn("cancel did not reach a descendant its caller may not cancel", "run", string(s.id), "kind", string(s.kind), "parent", string(s.parent), "root", string(root))
+	}
 	rec, err := e.runs.Get(ctx, root)
 	if err != nil {
 		return fmt.Errorf("executor: record the runs the cancel of %s left running: %w", root, err)
 	}
-	now := e.now()
+	line := tasks.LogLine{At: e.now(), Level: "warn", Message: fmt.Sprintf(
+		"the cancel did not reach %d descendant run(s): the caller may not cancel them, so they keep running", len(skipped))}
+	seq := uint64(rec.Attempt)<<32 | (math.MaxUint32 - 1)
 	err = e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
-		for i, s := range skipped {
-			line := tasks.LogLine{At: now, Level: "warn", Message: fmt.Sprintf(
-				"the cancel did not reach run %s (%s): the caller may not cancel it, so it keeps running", s.id, s.kind)}
-			seq := uint64(rec.Attempt)<<32 | (math.MaxUint32 - 1 - uint64(i))
-			if err := e.runs.AppendLog(ctx, b, root, seq, line); err != nil {
-				return err
-			}
-			e.emitLog(ctx, root, line, seq)
+		if err := e.runs.AppendLog(ctx, b, root, seq, line); err != nil {
+			return err
 		}
+		e.emitLog(ctx, root, line, seq)
 		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("executor: record the runs the cancel of %s left running: %w", root, err)
 	}
-	for _, s := range skipped {
-		e.log.Warn("cancel did not reach a descendant its caller may not cancel", "run", string(s.id), "kind", string(s.kind), "parent", string(s.parent), "root", string(root))
-	}
 	return nil
 }
 
-// CancelReport collects what one cancel's cascade left running: the descendants
-// its caller may not cancel. A caller that wants the list (the HTTP route, for the
+// CancelReport collects what one cancel did beyond answering nil or an error: the
+// descendants its caller may not cancel (Skipped), and whether it committed any
+// stop at all (Acted). A caller that wants them (the HTTP route, for the
 // core.task.cancel audit record) puts one on the context it passes to
-// tasks.Client.Cancel with WithCancelReport and reads it after Cancel returns;
-// tasks.Client's signature has no room for it.
+// tasks.Client.Cancel with WithCancelReport and reads it after Cancel returns,
+// whatever Cancel returned: an error that comes after the run's own stop committed
+// (a child that could not be stopped, a repeat cancel's "not found" while it
+// finished a cascade) still leaves an action to audit. tasks.Client's signature
+// has no room for either.
 type CancelReport struct {
 	mu      sync.Mutex
 	skipped []tasks.RunID
+	acted   bool
 }
 
 type cancelReportKey struct{}
@@ -218,7 +294,17 @@ func WithCancelReport(ctx context.Context) (context.Context, *CancelReport) {
 func (r *CancelReport) add(id tasks.RunID) {
 	r.mu.Lock()
 	r.skipped = append(r.skipped, id)
+	r.acted = true
 	r.mu.Unlock()
+}
+
+// reportActed marks the context's CancelReport (if any): a cancel move committed.
+func reportActed(ctx context.Context) {
+	if r, ok := ctx.Value(cancelReportKey{}).(*CancelReport); ok {
+		r.mu.Lock()
+		r.acted = true
+		r.mu.Unlock()
+	}
 }
 
 // Skipped is the descendants the cancel left running because its caller may not
@@ -228,6 +314,15 @@ func (r *CancelReport) Skipped() []tasks.RunID {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]tasks.RunID(nil), r.skipped...)
+}
+
+// Acted reports whether this cancel changed anything: it stopped the run or a
+// descendant, or it left a descendant running that its caller may not cancel. A
+// repeat cancel that finds the run already ended and nothing to do reports false.
+func (r *CancelReport) Acted() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.acted
 }
 
 // cancelOrphan is the dispatcher's guard before a claim: a queued run whose

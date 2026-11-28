@@ -185,14 +185,25 @@ func (e *executor) Cancel(ctx context.Context, id tasks.RunID) error {
 	return e.cancel(ctx, id, actor, who)
 }
 
-func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Checker) bool {
-	if actor != (tasks.Actor{}) && actor == rec.Actor {
+// cancelsAnyKind is the kind-independent half of the rule for canceling a run:
+// the caller is the run's own actor (the whole Actor, so a session and an API key
+// of the same user are two actors), or holds core:tasks.manage. reachOf calls the
+// same helper to decide whether a caller's verdict is All, so the two cannot
+// disagree about who these arms admit. When these arms go (the access-model
+// review, #5077 M1, retires "the run's own actor may cancel it" and the manage
+// override), the All path of reachOf goes with them and every verdict is the
+// per-kind one.
+func cancelsAnyKind(runActor, caller tasks.Actor, who rbac.Checker) bool {
+	if caller != (tasks.Actor{}) && caller == runActor {
 		return true
 	}
-	if who.Has(scopeTasksManage) {
-		return true
-	}
-	d := e.defs[rec.Kind]
+	return who.Has(scopeTasksManage)
+}
+
+// mayCancelKind is the kind-dependent half: the kind's Perms.Cancel (omitted:
+// Perms.Start). A kind with no definition here (its module is disabled) is out.
+func (e *executor) mayCancelKind(kind tasks.Kind, who rbac.Checker) bool {
+	d := e.defs[kind]
 	if d == nil {
 		return false
 	}
@@ -201,6 +212,10 @@ func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Ch
 		req = d.c.Perms.Start
 	}
 	return who.Satisfies(req)
+}
+
+func (e *executor) mayCancel(rec tasks.RunRecord, actor tasks.Actor, who rbac.Checker) bool {
+	return cancelsAnyKind(rec.Actor, actor, who) || e.mayCancelKind(rec.Kind, who)
 }
 
 // CancelAs cancels a run (5T.3.6). A run that is not executing in this
@@ -230,23 +245,29 @@ func (e *executor) cancel(ctx context.Context, id tasks.RunID, by tasks.Actor, w
 	return e.stop(ctx, id, by, e.reachOf(rec, by, who), reasonCancel, tasks.ErrCanceled)
 }
 
-// reachOf is the verdict a cancel records on the run it cancels: which kinds of
-// descendant its caller may cancel, by the rule a direct cancel of such a run
-// applies (mayCancel), evaluated once per registered kind against the canceled
-// run's own actor (the actor every descendant inherits). A kernel-internal cancel
-// (who nil) is limited by no checker and records All. The verdict is stored with
-// the cancel, not recomputed later, because the dispatch guard and the boot pass
-// have no caller to ask.
+// reachOf is the verdict a cancel records on the run it cancels, and the limit of
+// that cancel's own cascade: which kinds of descendant its caller may cancel, by
+// the rule a direct cancel of such a run applies (mayCancel). The kind-independent
+// arms (cancelsAnyKind, judged against the canceled run's own actor, the actor
+// every descendant inherits) admit every kind, held ones included, and give All; a
+// kernel-internal cancel (who nil) is limited by no checker and records All too.
+// Otherwise the kind-dependent arm is evaluated once per registered kind. A kind of
+// a disabled module has no definition to read its Perms.Cancel from, so a caller
+// with no kind-independent arm never covers it (fail closed): the dispatch guard
+// and the boot pass leave such a child alone when the module comes back.
+//
+// The verdict is stored with the cancel, not recomputed later, because the
+// dispatch guard and the boot pass have no caller to ask. A live repeat of the
+// cancel does not inherit it: its cascade is the stored verdict narrowed by the
+// repeat caller's own (narrowReach).
 func (e *executor) reachOf(rec tasks.RunRecord, by tasks.Actor, who rbac.Checker) *tasks.CancelReach {
 	r := &tasks.CancelReach{Actor: rec.Actor}
-	if who == nil {
+	if who == nil || cancelsAnyKind(rec.Actor, by, who) {
 		r.All = true
 		return r
 	}
 	for k := range e.defs {
-		probe := tasks.RunRecord{}
-		probe.Kind, probe.Actor = k, rec.Actor
-		if e.mayCancel(probe, by, who) {
+		if e.mayCancelKind(k, who) {
 			r.Kinds = append(r.Kinds, k)
 		}
 	}
@@ -254,12 +275,27 @@ func (e *executor) reachOf(rec tasks.RunRecord, by tasks.Actor, who rbac.Checker
 	return r
 }
 
-// stop is cancel's core, shared with the watchdog (reason watchdog). A cancel
-// also reaches the run's descendants (cancelDescendants, F5-18 C6): a run that
-// is canceled takes the runs it enqueued with it, as HEAD's cancel stopped the
-// work the run had started. It does so after the run's own stop, never before:
-// a parent whose child is canceled first could see the child's canceled outcome
-// from rc.Await and enqueue the next one before its own context ends.
+// stop is cancel's core, shared with the watchdog (reason watchdog) and the
+// dispatch guard. reach is the verdict of the caller of this stop: stopOne stores
+// it on the run when the stop is the run's first cancel, and it narrows a repeat
+// cancel's cascade (below). A cancel also reaches the run's descendants
+// (cancelDescendants, F5-18 C6): a run that is canceled takes the runs it enqueued
+// with it, as HEAD's cancel stopped the work the run had started. It does so after
+// the run's own stop, never before: a parent whose child is canceled first could
+// see the child's canceled outcome from rc.Await and enqueue the next one before
+// its own context ends.
+//
+// Only a cancel cascades, and only a cancel stores a verdict (the watchdog and the
+// timeout pass none), so the stored verdict is the record that a run was stopped
+// by a cancel: a cancel call that finds the run already stopping for the watchdog
+// or its timeout answers nil and ends nothing beneath it, as the watchdog's own
+// stop would not.
+//
+// The cascade is limited to the stored verdict narrowed by this caller's (narrowReach),
+// never to the stored verdict alone: a repeat of the cancel (a second request while
+// the first is still stopping the run, or one that finishes a cascade that failed)
+// may end only what both the original canceler and this caller could cancel. It
+// must not lend the first caller's authority to the second.
 //
 // The cascade runs on a context detached from the caller's (WithoutCancel): the
 // run's own stop has committed by then, so a caller that gave up (a request that
@@ -285,20 +321,37 @@ func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, rea
 		}
 		return gerr
 	}
+	if rec.CancelReach == nil {
+		return err // never stopped by a cancel (the watchdog, a timeout), or a record from before the verdict: nothing to cascade
+	}
 	if err != nil && !canceledByCancel(rec) {
 		return err
 	}
-	// The cascade is limited by the verdict stored with the cancel, so a repeat
-	// that finishes it, or the guard and the boot pass later, judge the same set.
-	// A run with none (a record from before the field) falls back to the caller's
-	// own, which this call just computed.
-	if rec.CancelReach != nil {
-		reach = rec.CancelReach
-	}
-	if cerr := e.cancelDescendants(ctx, id, by, reach); cerr != nil {
+	if cerr := e.cancelDescendants(ctx, id, by, narrowReach(rec.CancelReach, reach), rec.CancelReach); cerr != nil {
 		return cerr
 	}
 	return err
+}
+
+// narrowReach is the verdict both a and b give: the kinds in both, for the actor
+// they share. All narrows to the other; a missing verdict, or two for different
+// actors, gives none (fail closed).
+func narrowReach(a, b *tasks.CancelReach) *tasks.CancelReach {
+	switch {
+	case a == nil || b == nil || a.Actor != b.Actor:
+		return nil
+	case a.All:
+		return b
+	case b.All:
+		return a
+	}
+	out := &tasks.CancelReach{Actor: a.Actor}
+	for _, k := range a.Kinds {
+		if _, ok := slices.BinarySearch(b.Kinds, k); ok {
+			out.Kinds = append(out.Kinds, k)
+		}
+	}
+	return out
 }
 
 // stopOne is stop for one run: the in-process attempt is looked up inside the
@@ -339,6 +392,9 @@ func (e *executor) stopOne(ctx context.Context, id tasks.RunID, by tasks.Actor, 
 	}, nil)
 	if errors.Is(err, errAlreadyStopping) {
 		return nil
+	}
+	if err == nil {
+		reportActed(ctx)
 	}
 	if err != nil || target == nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -1042,10 +1043,27 @@ type reachRig struct {
 	vaultStopped, cellStops *atomic.Bool
 }
 
-func newReachRig(t *testing.T) *reachRig {
+func newReachRig(t *testing.T, edits ...func(*Options)) *reachRig {
+	t.Helper()
+	return newReachRigWith(t, false, edits...)
+}
+
+// newReachRigHeld is newReachRig with a parent that ignores its context until
+// the test ends (and a grace of an hour), so a cancel leaves it stopping, not
+// ended: the state a second cancel finds while the first is still at work.
+func newReachRigHeld(t *testing.T, edits ...func(*Options)) *reachRig {
+	t.Helper()
+	return newReachRigWith(t, true, edits...)
+}
+
+func newReachRigWith(t *testing.T, hold bool, edits ...func(*Options)) *reachRig {
 	t.Helper()
 	started := make(chan tasks.RunID, 8)
 	r := &reachRig{vaultStopped: new(atomic.Bool), cellStops: new(atomic.Bool)}
+	release := make(chan struct{})
+	if hold {
+		t.Cleanup(func() { close(release) }) // runs before the harness's shutdown: cleanups are LIFO
+	}
 	leaf := func(kind string, stopped *atomic.Bool, edit func(*tasks.Common)) tasks.Definition {
 		return taskDef(kind, func(rc *tasks.RC, _ noParams) (string, error) {
 			started <- rc.RunID()
@@ -1069,11 +1087,18 @@ func newReachRig(t *testing.T) *reachRig {
 			}
 		}
 		started <- rc.RunID()
-		<-rc.Context().Done()
+		if hold {
+			<-release
+		} else {
+			<-rc.Context().Done()
+		}
 		return "", context.Cause(rc.Context())
 	}, func(c *tasks.Common) {
 		c.Effects = tasks.Writes(tasks.Res("gotham", "watch"))
 		c.Cancel = tasks.Cooperative(time.Second)
+		if hold {
+			c.Cancel = tasks.Cooperative(time.Hour)
+		}
 	})
 	vault := taskDef("gotham.vault", func(rc *tasks.RC, _ noParams) (string, error) {
 		if _, err := rc.Enqueue("gotham.cell", noParams{}); err != nil {
@@ -1093,6 +1118,9 @@ func newReachRig(t *testing.T) *reachRig {
 		cascadeOpts(t, 10*time.Millisecond)(o)
 		o.Catalog = catalogWith(t, scopeGothamRun, scopeVault)
 		withPrincipal(o)
+		for _, e := range edits {
+			e(o)
+		}
 	})
 	ref, err := r.h.x.Start(asUser("gordon", scopeGothamRun), "gotham.watch", tasks.StartRequest{Mode: tasks.ModeRequestLive})
 	if err != nil {
@@ -1139,7 +1167,10 @@ func (r *reachRig) logLines(id tasks.RunID) []string {
 // own but cannot reach through the vault. The skip is in the parent's log and in
 // the cancel's report.
 func TestCancelCascade_ASkippedChildKeepsRunning(t *testing.T) {
-	r := newReachRig(t)
+	var slogOut syncBuf
+	r := newReachRig(t, func(o *Options) {
+		o.Logger = slog.New(slog.NewTextHandler(&slogOut, nil))
+	})
 	ctx, rep := WithCancelReport(asUser("harley", scopeGothamRun))
 	if err := r.h.x.Cancel(ctx, r.parent); err != nil {
 		t.Fatalf("a cancel that skipped a run must still succeed: %v", err)
@@ -1158,17 +1189,25 @@ func TestCancelCascade_ASkippedChildKeepsRunning(t *testing.T) {
 	if got := rep.Skipped(); len(got) != 1 || got[0] != r.vault {
 		t.Errorf("report names %v, want exactly the vault %s (the cell is beneath it, not reached)", got, r.vault)
 	}
-	var named bool
+	if out := slogOut.String(); !strings.Contains(out, "cancel did not reach a descendant") || !strings.Contains(out, string(r.vault)) {
+		t.Errorf("the skipped vault %s is not named in the server log:\n%s", r.vault, out)
+	}
+	// The parent's run log is readable by whoever may view the parent's kind, who
+	// may not be allowed to see the vault: the line counts the skipped runs and
+	// names none of them (the ids are in the report, the audit record and slog).
+	var counted bool
 	for _, l := range r.logLines(r.parent) {
-		if strings.Contains(l, string(r.vault)) && strings.Contains(l, "gotham.vault") {
-			named = true
+		for _, secret := range []string{string(r.vault), "gotham.vault", string(r.cell), "gotham.cell", string(r.yard)} {
+			if strings.Contains(l, secret) {
+				t.Errorf("the parent's log names %q: %q", secret, l)
+			}
 		}
-		if strings.Contains(l, string(r.cell)) {
-			t.Errorf("the log names the cell, which was never reached: %q", l)
+		if strings.Contains(l, "did not reach 1 descendant run(s)") {
+			counted = true
 		}
 	}
-	if !named {
-		t.Errorf("the parent's log does not name the skipped run %s and its kind: %q", r.vault, r.logLines(r.parent))
+	if !counted {
+		t.Errorf("the parent's log does not say how many runs the cancel left running: %q", r.logLines(r.parent))
 	}
 }
 

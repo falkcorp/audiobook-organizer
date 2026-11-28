@@ -91,10 +91,15 @@ func routePattern(r *http.Request) string {
 	return p
 }
 
-// sameActor reports whether a run was started by the caller: the same
-// signed-in user.
+// sameActor reports whether a run was started by the caller, by the rule the
+// executor's cancel permission applies (mayCancel's first arm): the caller's whole
+// stamped Actor, user and credential class, equals the run's. The same user over
+// an API key after a session start is another actor to the executor (it gets no
+// owner's reach over the run's descendants), so it is another actor here too, and
+// its cancel is audited.
 func sameActor(p *auth.Principal, v tasks.RunView) bool {
-	return p.User != nil && v.Actor.UserID != "" && v.Actor.UserID == string(p.User.ID)
+	a := actorOf(p)
+	return a != (tasks.Actor{}) && a == v.Actor
 }
 
 // cancelRun: POST /runs/{id}/cancel. The permission (the run's actor, the
@@ -112,16 +117,22 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 	}
 	// A cancel also takes down the runs the run enqueued, but only those the
 	// caller may cancel (F5-18 C6). The ones it left running are listed by the
-	// report and named in the audit record. A caller that skipped a run is never
-	// the run's own actor (children inherit it, and the actor may cancel any run
-	// it owns), so the record below is already written for it.
+	// report and named in the audit record, whoever the caller is: a run the
+	// caller may not cancel can hang from a run it owns (a child that carries
+	// another actor), so skipping one is not limited to a stranger's cancel.
 	ctx, report := executor.WithCancelReport(r.Context())
-	if err := s.d.Client.Cancel(ctx, id); err != nil {
-		s.fail(w, r, err)
+	cancelErr := s.d.Client.Cancel(ctx, id)
+	// The error is the executor's answer, but the action may have been taken
+	// before it: the run's own stop committed and a later step failed (a child
+	// that could not be stopped, a repeat cancel finishing a cascade). A cancel
+	// that changed nothing has nothing to audit and fails as before; one that
+	// changed something is audited first and then fails.
+	if cancelErr != nil && !report.Acted() {
+		s.fail(w, r, cancelErr)
 		return
 	}
 	skipped := report.Skipped()
-	if viewErr != nil || !sameActor(p, before) {
+	if viewErr != nil || !sameActor(p, before) || len(skipped) > 0 {
 		details := map[string]any{}
 		if len(skipped) > 0 {
 			ids := make([]string, len(skipped))
@@ -143,6 +154,10 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request, p *auth.Princ
 		if !s.record(w, r, p, actionCancel, id, details) {
 			return
 		}
+	}
+	if cancelErr != nil {
+		s.fail(w, r, cancelErr)
+		return
 	}
 	s.respondRun(w, r, p, id)
 }
