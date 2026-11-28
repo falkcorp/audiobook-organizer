@@ -507,6 +507,7 @@ core/internal/updaterhttp.malformed
 core/internal/updaterhttp.mapPrepare
 core/internal/updaterhttp.unavailable
 core/kernel.CutoverPreflight
+core/kernel.DerivedLabels
 core/kernel.ExitCode
 core/kernel.Kernel.applyLogSettings
 core/kernel.Kernel.bootLogSettings
@@ -523,6 +524,7 @@ core/kernel.backupReasonRank
 core/kernel.beginHealthShutdown
 core/kernel.bootConfig
 core/kernel.buildIdentity
+core/kernel.buildIndexEngine
 core/kernel.classifyStore
 core/kernel.combineBackup
 core/kernel.configBoot.HealthTokens
@@ -538,6 +540,9 @@ core/kernel.configOwnerSpec
 core/kernel.coreOutboxConsumers
 core/kernel.coreTopics
 core/kernel.declareAndFreeze
+core/kernel.derivedBuildKind
+core/kernel.derivedLog
+core/kernel.derivedProblems
 core/kernel.diagnosticsEnqueuer.EnqueueExport
 core/kernel.diagnosticsRoutePatterns
 core/kernel.diagnosticsRuns.Run
@@ -553,6 +558,9 @@ core/kernel.identityMetrics
 core/kernel.identityRoutes.deps
 core/kernel.identityRoutes.missing
 core/kernel.identityTopicSpecs
+core/kernel.indexOpenerFor
+core/kernel.indexOptions
+core/kernel.indexOwnerSpec
 core/kernel.journalShowsReplaced
 core/kernel.journalTokens
 core/kernel.keptAdmins.keep
@@ -575,6 +583,8 @@ core/kernel.kernelRealtime.closeOnShutdown
 core/kernel.kernelRealtime.run
 core/kernel.kernelRealtime.subscriptions
 core/kernel.logHandle
+core/kernel.logIndexRebuild
+core/kernel.markDerivedBuilt
 core/kernel.metricsGate
 core/kernel.mountIdentityRoutes
 core/kernel.mountMetrics
@@ -644,6 +654,8 @@ core/kernel.restoreKindLabel
 core/kernel.restoreTokens
 core/kernel.restoreUsers.ScanUsers
 core/kernel.restoreUsers.StageRoles
+core/kernel.runDerived
+core/kernel.runDerivedOne
 core/kernel.runP4dSteps
 core/kernel.runRestoreHooks
 core/kernel.secretsHealth
@@ -653,8 +665,11 @@ core/kernel.servedOlder
 core/kernel.sessionCookieName
 core/kernel.stampRestore.Append
 core/kernel.startHealthLoops
+core/kernel.startIndex
+core/kernel.stopIndex
 core/kernel.syncDirOf
 core/kernel.tasksProbe
+core/kernel.unbuiltBlocking
 core/kernel.updaterDeps
 core/kernel.updaterHealthSource
 core/kernel.updaterOptions
