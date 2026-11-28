@@ -30,21 +30,9 @@ import (
 var cfgFile string
 var rootDir string
 var databasePath string
-var databaseType string
 var playlistDir string
 var logLevel string
 var metadataInspectFile string
-
-// removedSQLiteFlag is the CLI flag TASK-020 (#3268) deleted. It is still
-// registered — hidden, deprecated, and bound to nothing — so that an off-repo
-// systemd unit, script or alias that passes it keeps starting instead of dying
-// on cobra's "unknown flag". See its registration in init.
-const removedSQLiteFlag = "enable-sqlite3-i-know-the-risks"
-
-// removedSQLiteFlagMessage completes pflag's
-// "Flag --enable-sqlite3-i-know-the-risks has been deprecated, <message>".
-const removedSQLiteFlagMessage = "it was removed and does nothing: SQLite is no longer selectable and " +
-	"PebbleDB is the only database backend; remove it from your command line"
 
 var (
 	scanDirectory          = scanner.ScanDirectory // func(context.Context, string, logger.Logger) ([]Book, error)
@@ -319,26 +307,8 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "operator config file (YAML, nested by key path); there is no default, and a $HOME/.audiobook-organizer.yaml is not read")
 	rootCmd.PersistentFlags().StringVar(&rootDir, "dir", "", "root directory containing audiobooks")
 	rootCmd.PersistentFlags().StringVar(&databasePath, "db", "audiobooks.pebble", "path to database (default: audiobooks.pebble for PebbleDB)")
-	rootCmd.PersistentFlags().StringVar(&databaseType, "db-type", "pebble", "database type: pebble (default) or sqlite")
 	rootCmd.PersistentFlags().StringVar(&playlistDir, "playlists", "playlists", "directory to store generated playlists")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level: debug, info, warn, error")
-
-	// The removed --enable-sqlite3-i-know-the-risks flag: accepted, ignored,
-	// and warned about, never an error. Passing it makes pflag print
-	// "Flag --enable-sqlite3-i-know-the-risks has been deprecated, <message>"
-	// and cobra flushes that line to stderr once the parse succeeds. Both
-	// deploy units route stderr to the journal (StandardError=journal) and the
-	// launchd plists to their .err file, so that one line is the warning;
-	// there is deliberately no second slog line.
-	//
-	// It is bound to nothing: no variable and no config layer.
-	rootCmd.PersistentFlags().Bool(removedSQLiteFlag, false, "removed; ignored (PebbleDB is the only database backend)")
-	if err := rootCmd.PersistentFlags().MarkDeprecated(removedSQLiteFlag, removedSQLiteFlagMessage); err != nil {
-		panic(err)
-	}
-	if err := rootCmd.PersistentFlags().MarkHidden(removedSQLiteFlag); err != nil {
-		panic(err)
-	}
 
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(playlistCmd)

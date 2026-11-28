@@ -69,7 +69,7 @@ func ValidateDatabaseType(dbType string) error {
 	case "pebble", "":
 		return nil
 	case "sqlite", "sqlite3":
-		return fmt.Errorf("database_type %q is not supported: SQLite3 support has been removed and PebbleDB is the only database backend; set database_type to \"pebble\" (or drop --db-type %s) and point database_path at a PebbleDB directory", dbType, dbType)
+		return fmt.Errorf("database_type %q is not supported: SQLite3 support has been removed and PebbleDB is the only database backend; set database_type to \"pebble\" and point database_path at a PebbleDB directory", dbType)
 	default:
 		return fmt.Errorf("unsupported database type: %s (only 'pebble' is supported)", dbType)
 	}

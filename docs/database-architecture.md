@@ -83,15 +83,13 @@ touching persistence. **Caveat:** The document's entity-ID convention (ULID stri
 # Automatically uses PebbleDB
 ./audiobook-organizer scan --dir /audiobooks
 
-# Explicitly specify PebbleDB
-./audiobook-organizer scan --dir /audiobooks --db-type pebble --db audiobooks.pebble
+# Explicitly name the store path
+./audiobook-organizer scan --dir /audiobooks --db audiobooks.pebble
 ```
 
-The SQLite3 backend has been removed. `--db-type sqlite` is rejected at startup.
-The old `--enable-sqlite3-i-know-the-risks` flag is deprecated and does nothing:
-it is still accepted so existing command lines keep starting, is hidden from
-`--help`, and prints a deprecation warning to stderr (the journal, under the
-systemd unit) when passed. Remove it from your command line.
+The SQLite3 backend has been removed, and so have the `--db-type` and
+`--enable-sqlite3-i-know-the-risks` flags that once selected it: both fail as
+unknown flags. Remove them from any unit, script or alias that still passes them.
 
 ### Configuration File
 
@@ -240,7 +238,7 @@ PebbleDB:
 ```bash
 CGO_ENABLED=1 go build  # Enable CGO (requires C compiler)
 # OR
-./audiobook-organizer --db-type pebble  # Use PebbleDB
+./audiobook-organizer serve  # PebbleDB is the only backend; nothing to select
 ```
 
 ## References

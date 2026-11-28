@@ -23,7 +23,6 @@ func rootLikeFlags() *pflag.FlagSet {
 	fs := pflag.NewFlagSet("root", pflag.ContinueOnError)
 	fs.String("config", "", "")
 	fs.String("db", "audiobooks.pebble", "")
-	fs.String("db-type", "pebble", "")
 	fs.String("log-level", "info", "")
 	return fs
 }
@@ -57,20 +56,6 @@ func TestBootInputs_OnlyChangedFlagsAndDBIsAbsolute(t *testing.T) {
 	in, err = bootInputs(fs)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"core.log.level": "debug"}, stringMap(in.Flags))
-}
-
-// No backend but Pebble exists: an explicitly chosen other one is refused as
-// HEAD refused it (this replaces the books-package sqlite refusal case).
-func TestBootInputs_NonPebbleDBTypeIsRefused(t *testing.T) {
-	fs := rootLikeFlags()
-	require.NoError(t, fs.Parse([]string{"--db-type", "sqlite"}))
-	_, err := bootInputs(fs)
-	require.Error(t, err)
-
-	fs = rootLikeFlags()
-	require.NoError(t, fs.Parse([]string{"--db-type", "pebble"}))
-	_, err = bootInputs(fs)
-	require.NoError(t, err)
 }
 
 // The op-runner child follows the parent's resolved store exactly, whatever the

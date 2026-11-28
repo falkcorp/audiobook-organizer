@@ -243,7 +243,6 @@ default does nothing.
 | `--config` | Operator YAML file (see above) | none |
 | `--dir` | Root directory for the one-shot commands (not a config key) | empty |
 | `--db` | Database path; sets `core.storage.path` when passed, made absolute | `audiobooks.pebble` |
-| `--db-type` | Only `pebble` is accepted | `pebble` |
 | `--playlists` | Playlist output directory for the one-shot commands (not a config key) | `playlists` |
 | `--log-level` | Log level (`debug`, `info`, `warn`, `error`); sets `core.log.level` when passed | `info` |
 
