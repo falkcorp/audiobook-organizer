@@ -34,7 +34,11 @@
 # under --dry-run too, unless every one of those files has the same hash in the PIN
 # checkout (the helper and the stubs from deploy/rollback-helpers/, the unit template
 # from deploy/): the helper alone is not enough, because commits with a byte-identical
-# helper carry different unit templates. After the install it diffs rollback.conf
+# helper carry different unit templates. It also refuses a saved list that does not end
+# in a newline or that does not name exactly the files the bundle at PIN installs (a cut
+# short list would leave files unchecked). After the install it re-hashes every file the
+# list names in the helper directory and fails on any difference ("installed files do
+# not match"), then diffs rollback.conf
 # against the saved copy and the `sudo -n -l` listing against the saved one, and fails
 # on any difference; it also fails when `sudo -n -l` prints nothing or no restore-offline
 # line (an empty listing proves nothing). On success the save is renamed to
@@ -51,6 +55,7 @@ PIN="__PIN__"   # the main commit whose bundle was installed on the host when P6
 SRC="$HOME/aorg-owner/src"
 SAVED="$HOME/aorg-owner/p6-before"
 CONF=/etc/audiobook-organizer/rollback.conf
+LIBDIR=/usr/local/libexec/audiobook-organizer/rollback   # where the installer puts the helper bundle
 UNIT_NAME=audiobook-organizer.service
 TEMPLATE=audiobook-organizer.service   # the unit template the bundle installs, from deploy/
 REPO=https://github.com/falkcorp/audiobook-organizer.git
@@ -89,12 +94,16 @@ grep -q '  rollback_helper\.py$' "$SAVED/libdir.sha256" || fail "$SAVED/libdir.s
 grep -q "/usr/local/libexec/audiobook-organizer/rollback/restore-offline" "$SAVED/sudo-l.txt" \
   || fail "$SAVED/sudo-l.txt has no restore-offline line, so the saved listing is empty or incomplete and the check after the undo would prove nothing"
 mismatch=0
-while read -r want name; do
+listed=
+# `|| [ -n "$want" ]`: read fails on a last line with no newline but has still filled
+# the variables; without the test that line would silently go unchecked.
+while read -r want name || [ -n "$want" ]; do
   case "$name" in
     "" | */* | .*) fail "$SAVED/libdir.sha256 has a name this script will not use: '$name'" ;;
     "$TEMPLATE") rel="deploy/$name" ;;
     *) rel="deploy/rollback-helpers/$name" ;;
   esac
+  listed+="$name"$'\n'
   if [ ! -f "$SRC/$rel" ] || [ -L "$SRC/$rel" ]; then
     echo "    NOT IN $PIN: $rel (installed before P6 as $name)"; mismatch=1; continue
   fi
@@ -106,6 +115,23 @@ while read -r want name; do
   fi
 done < "$SAVED/libdir.sha256"
 [ "$mismatch" -eq 0 ] || fail "the files in $PIN are not the bundle installed before P6 (see above). PIN must be the commit whose bundle was installed when P6 ran. Nothing was changed."
+# The loop above only checks the lines it was given, so a manifest that is cut short or
+# has lost whole lines would leave files unchecked. r2-p6-reinstall.sh ends every line
+# with a newline and lists every file of the helper directory, which at PIN is the helper,
+# the stubs rollback_helper.py names, and the unit template (install_helpers.py and
+# rollback.conf.example are in deploy/rollback-helpers/ but are not installed). Both
+# must hold, or the list is not the one P6 saved.
+[ -z "$(tail -c 1 "$SAVED/libdir.sha256")" ] \
+  || fail "$SAVED/libdir.sha256 does not end in a newline, so it was cut short and its last line cannot be trusted. Nothing was changed."
+expected=$( { git -C "$SRC" ls-tree "$PIN:deploy/rollback-helpers" \
+    | awk -F'\t' '$1 ~ / blob / && $2 != "install_helpers.py" && $2 != "rollback.conf.example" { print $2 }'
+  echo "$TEMPLATE"; } | LC_ALL=C sort)
+listed=$(printf '%s' "$listed" | LC_ALL=C sort)
+if [ "$listed" != "$expected" ]; then
+  echo "    the saved list names $(printf '%s\n' "$listed" | grep -c .) files; the bundle at $PIN installs $(printf '%s\n' "$expected" | grep -c .)"
+  diff -u <(printf '%s\n' "$expected") <(printf '%s\n' "$listed") || true
+  fail "the saved list ($SAVED/libdir.sha256) does not name the files of the bundle at $PIN (the - side above is what $PIN installs, the + side what was saved): it is cut short or not the list P6 saved. Nothing was changed."
+fi
 echo "    ok: every file in this checkout's bundle is the one P6 replaced"
 
 # 2. The host's values, read from the installed rollback.conf (the P6 one).
@@ -154,6 +180,19 @@ if [ -n "$EXPORT_DIR" ] && [ -d "$EXPORT_DIR" ] && [ ! -L "$EXPORT_DIR" ]; then
   fi
 fi
 bad=0
+# What the install wrote must be what the save says was there: the same files, byte for byte.
+installed_bad=0
+while read -r want name || [ -n "$want" ]; do
+  got=$(sha256sum -- "$LIBDIR/$name" 2>/dev/null | cut -d' ' -f1) || got=
+  if [ "$got" = "$want" ]; then
+    echo "    ok: installed $name is the one saved before P6"
+  else
+    echo "    WRONG: installed $LIBDIR/$name has sha256 ${got:-<unreadable or missing>}; the one saved before P6 had $want"; installed_bad=1
+  fi
+done < "$SAVED/libdir.sha256"
+if [ "$installed_bad" -ne 0 ]; then
+  echo "    WRONG: the installed files do not match the bundle that was there before P6 (see above)"; bad=1
+fi
 if grep -q "^export_dir" "$CONF"; then
   echo "    STILL THERE: export_dir in $CONF"; bad=1
 else

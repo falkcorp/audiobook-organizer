@@ -144,7 +144,8 @@ deploy). The installer renders the bundle of the checkout it runs from, so the p
 from the commit it came from. The script does not trust the pin: it refuses, before any `sudo` and under `--dry-run`
 too, unless **every file** P6 hashed has the same sha256 in its checkout (the helper and the stubs under
 `deploy/rollback-helpers/`, the unit template `deploy/audiobook-organizer.service`), and it names each file it
-checked. The helper alone is not enough: the helper is byte-identical across commits whose unit template differs
+checked. It also refuses a saved list that does not end in a newline or that does not name exactly the files the
+bundle at the PIN installs (a list cut short would leave a file unchecked). The helper alone is not enough: the helper is byte-identical across commits whose unit template differs
 (`1f5a8d1a7` carries a template with retired environment names that the flipped binary refuses at boot, and its
 helper is the same as at `d547462ff` and `fca0a6729`). **The PIN range verified for this is
 `d547462ff..fca0a6729`**; a PIN outside it is refused unless every file matches. Then it re-runs the installer with
@@ -152,7 +153,8 @@ helper is the same as at `d547462ff` and `fca0a6729`). **The PIN range verified 
 `ABO_*` names and refuses only `ABK_STATE_DIR` together with an `ABO_` state directory), leaves out `--export-dir`,
 reads the host's other values from `rollback.conf` the way P6 does, and uses `REPLACE_CONF=1` (the new
 `rollback.conf` differs from the one the old bundle renders). Afterwards it removes `~/aorg-owner/export` if it is
-empty (it says so and leaves it when it is not) and checks: `rollback.conf` has no `export_dir`, `offline_env` names
+empty (it says so and leaves it when it is not) and checks: every installed file has the sha256 P6 saved (a
+difference prints `the installed files do not match` and fails the run), `rollback.conf` has no `export_dir`, `offline_env` names
 `ABK_STATE_DIR` and no `ABO_` token, `rollback.conf` is identical to the copy P6 saved, `sudo -n -l` no longer
 grants the four helpers (their stubs stay on disk, ungranted), and the whole `sudo -n -l` listing is identical to
 the one P6 saved (a difference is printed and fails the run). An empty `sudo -n -l` listing, or one without the

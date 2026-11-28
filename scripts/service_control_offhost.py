@@ -88,10 +88,11 @@ def seconds(name: str, default: float) -> float:
 
 
 def timespan_seconds(text: str) -> float | None:
-    """systemd's printed timespan as seconds; None for `infinity`; ValueError for
-    anything else it cannot read."""
+    """systemd's printed timespan as seconds; None for `infinity` and for a timespan
+    of zero (systemd reads 0 as "no timeout", the same as infinity: its Timeout*Sec
+    settings turn 0 into infinity); ValueError for anything else it cannot read."""
     text = text.strip()
-    if text == "infinity":
+    if text in ("infinity", "0"):  # systemd prints a bare 0 for a zero timeout
         return None
     parts = text.split()
     total = 0.0
@@ -102,7 +103,7 @@ def timespan_seconds(text: str) -> float | None:
         total += float(m.group(1)) * _SPAN_UNITS[m.group(2)]
     if not parts:
         raise ValueError("an empty timespan")
-    return total
+    return total or None
 
 
 def command_limit(guard, o, what: str) -> tuple[float, str]:
@@ -115,7 +116,9 @@ def command_limit(guard, o, what: str) -> tuple[float, str]:
         raise ValueError(f"cannot read {prop} of {o.unit} on {o.host}")
     span = timespan_seconds(m.group(1))
     if span is None:
-        return float(FALLBACK_SEC), f"{prop} is infinity, so {FALLBACK_SEC} s"
+        shown = m.group(1).strip()
+        is_ = "infinity" if shown == "infinity" else f"{shown}, which systemd reads as no timeout"
+        return float(FALLBACK_SEC), f"{prop} is {is_}, so {FALLBACK_SEC} s"
     return span, f"{prop} {m.group(1).strip()}"
 
 

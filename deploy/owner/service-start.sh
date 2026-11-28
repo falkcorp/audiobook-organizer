@@ -15,9 +15,10 @@
 #   - otherwise runs the ONE command the deploy user's sudoers drop-in already
 #     grants, `sudo -n /usr/bin/systemctl start <unit>` (no password, no new
 #     sudoers line), and waits until the unit is active. How long comes from the
-#     unit, not from a constant: its TimeoutStartUSec (300 s for the start of this
-#     service, which is Type=notify) plus MARGIN_SEC. `infinity` is read as
-#     FALLBACK_SEC. WAIT_SEC, when set, replaces that wait.
+#     unit, not from a constant: its TimeoutStartUSec (300 s for this service, which is Type=notify)
+#     plus MARGIN_SEC. `infinity` and a timeout of zero are both read as FALLBACK_SEC:
+#     systemd reads 0 as "no timeout", the same as infinity. WAIT_SEC, when set,
+#     replaces that wait.
 #     A unit that ends up `failed` ends the wait at once.
 #   --dry-run   look at the state and say what would run; run nothing.
 #
@@ -55,7 +56,9 @@ case "$UNIT" in
 esac
 case "$UNIT" in *.service) ;; *) fail "unit '$UNIT' is not a .service unit" ;; esac
 # systemd prints a timespan ("5min", "1min 30s", "250ms"); this gives whole seconds,
-# rounded up, nothing for "infinity", and a non-zero status for anything else.
+# rounded up, nothing for "infinity" or for a timespan of zero (systemd reads 0 as
+# "no timeout", the same as infinity: its Timeout*Sec settings turn 0 into infinity),
+# and a non-zero status for anything else.
 span_seconds() {
   awk -v t="$1" 'BEGIN {
     if (t == "infinity") exit 0
@@ -75,9 +78,11 @@ span_seconds() {
       else if (u == "w") f = 604800
       else if (u == "month") f = 2629800
       else if (u == "y") f = 31557600
+      else if (p[i] == "0") f = 1   # systemd prints a bare 0 for a zero timeout
       else exit 1
       total += num * f
     }
+    if (total == 0) exit 0
     printf "%d\n", (total == int(total)) ? total : int(total) + 1
   }'
 }
@@ -95,7 +100,11 @@ raw=$(systemctl show -p "$PROP" --value "$UNIT" 2>/dev/null) || fail "cannot rea
 LIMIT=$(span_seconds "$raw") || fail "cannot read $PROP '$raw' of $UNIT; nothing was changed"
 if [ -z "$LIMIT" ]; then
   LIMIT=$FALLBACK_SEC
-  HOW="$PROP is infinity, so $FALLBACK_SEC s"
+  if [ "$raw" = infinity ]; then
+    HOW="$PROP is infinity, so $FALLBACK_SEC s"
+  else
+    HOW="$PROP is $raw, which systemd reads as no timeout, so $FALLBACK_SEC s"
+  fi
 else
   HOW="$PROP $raw"
 fi
