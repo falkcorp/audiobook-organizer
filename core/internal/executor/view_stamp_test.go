@@ -75,6 +75,39 @@ func TestStampView_ImportedKindIsReadUnderTheStampedRule(t *testing.T) {
 	}
 }
 
+// TestStampView_UnrestrictedKindStillNeedsTheTaskViewFloor: the unrestricted
+// stamp (what M4 records for a non-Repairs kind) is core's default View, which
+// is core:tasks.view (library.view carries it, books' atom table), not "anyone"
+// and not "any signed-in caller". A principal with other scopes but not that
+// one gets not-found, as at HEAD, where library.view was the route floor. Killed
+// by the default arm answering true. (That M4 records the default, not Public
+// or AnyAuthenticated, is books' cell: TestImportedKindView_OtherKindsTakeTheDefault.)
+func TestStampView_UnrestrictedKindStillNeedsTheTaskViewFloor(t *testing.T) {
+	const kind = tasks.Kind("books.retired.batcave")
+	noFloor := asUser("selina", scopeSettings)
+	for _, c := range []struct {
+		name  string
+		stamp tasks.KindView
+		want  bool
+	}{
+		{"default", tasks.KindView{}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := reachHarness(t, nil)
+			if err := stampView(t, h, kind, c.stamp); err != nil {
+				t.Fatal(err)
+			}
+			importRuns(t, h, []tasks.RunRecord{doneRun("floor-1", kind, tasks.StateSucceeded)})
+			if _, err := h.x.Get(noFloor, "floor-1"); (err == nil) != c.want {
+				t.Errorf("a caller without core:tasks.view: Get = %v, want visible=%v", err, c.want)
+			}
+			if _, err := h.x.Get(viewerCtx(), "floor-1"); err != nil {
+				t.Errorf("a caller holding core:tasks.view: Get = %v, want visible", err)
+			}
+		})
+	}
+}
+
 // TestStampView_RefusesARequirementTheSnapshotCannotCarry: a requirement the
 // snapshot would record as "nobody" is an error, not a silent close.
 func TestStampView_RefusesARequirementTheSnapshotCannotCarry(t *testing.T) {
