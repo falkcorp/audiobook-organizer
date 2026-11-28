@@ -27,7 +27,7 @@ var wireRunKeys = []string{
 }
 
 // wireLogKeys are the keys of one log line on the wire.
-var wireLogKeys = []string{"at", "fields", "level", "message"}
+var wireLogKeys = []string{"at", "fields", "level", "message", "run_id"}
 
 func keysOf(m map[string]any) []string {
 	out := make([]string, 0, len(m))
@@ -84,7 +84,7 @@ func TestRunRedaction_SameOnStreamAndREST(t *testing.T) {
 			delete(rest, "blocked_by") // REST only: see wireRunKeys
 			want := slices.Clone(wireRunKeys)
 			if c.full {
-				want = append(want, "current")
+				want = append(want, "current", "message")
 				slices.Sort(want)
 			}
 			for name, got := range map[string]map[string]any{"REST": rest, "stream": stream} {
@@ -106,7 +106,7 @@ func TestRunRedaction_SameOnStreamAndREST(t *testing.T) {
 			if len(body.Lines) != 1 {
 				t.Fatalf("log lines = %v", body.Lines)
 			}
-			lraw, err := json.Marshal(tasks.NewLogAppended(g.client.logLines[0]))
+			lraw, err := json.Marshal(tasks.NewLogAppended("run-1", g.client.logLines[0]))
 			if err != nil {
 				t.Fatal(err)
 			}
