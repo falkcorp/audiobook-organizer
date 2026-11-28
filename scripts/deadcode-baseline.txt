@@ -695,6 +695,7 @@ core/kernel.kernelRealtime.run
 core/kernel.kernelRealtime.subscriptions
 core/kernel.lazyCatalog.All
 core/kernel.lazyCatalog.Lookup
+core/kernel.libraryHandles
 core/kernel.librarySource.Lookup
 core/kernel.liveMapper.Mappings
 core/kernel.liveMapper.ToLocal
@@ -780,6 +781,7 @@ core/kernel.runRestoreHooks
 core/kernel.secretsHealth
 core/kernel.secretsMetrics
 core/kernel.secretsOwnerSpec
+core/kernel.sectionIsZero
 core/kernel.servedOlder
 core/kernel.sessionCookieName
 core/kernel.stampRestore.Append
@@ -796,6 +798,7 @@ core/kernel.updaterStarter.StartRollback
 core/kernel.updaterStarter.start
 core/kernel.updaterTopicSpecs
 core/kernel.userIDs
+core/kernel.valueIsZero
 core/kernel.verifiedMethodRule
 core/kernel.withJournalCounters
 core/kernel.writeStoreMarkers
