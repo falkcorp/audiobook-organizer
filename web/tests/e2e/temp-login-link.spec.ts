@@ -18,6 +18,7 @@
 import { test, expect } from '@playwright/test';
 import { installCoreAuthMock } from './utils/mockCoreAuth';
 import { setupPhase2Interactive } from './utils/setup-modes';
+import { legacyTempLoginLinkPath, tempLoginLinkPath } from './utils/paths';
 
 const TOKEN = 'mcl_zatanna-zatara-temp-login-0001';
 const USERNAME = 'bruce.wayne';
@@ -29,7 +30,7 @@ test.describe('Temp-login link (fragment form)', () => {
       auth: { has_users: true, requires_auth: true, bootstrap_ready: false },
     });
 
-    await page.goto(`/login/temp#token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(tempLoginLinkPath(TOKEN), { waitUntil: 'domcontentloaded' });
 
     // Signed in: the header shows the user chip (as auth-flow.spec.ts asserts).
     await expect(page.getByRole('button', { name: USERNAME })).toBeVisible();
@@ -63,7 +64,7 @@ test.describe('Temp-login link (fragment form)', () => {
     });
 
     const stale = 'mcl_harvey-dent-spent-link-0002';
-    await page.goto(`/login/temp#token=${stale}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(tempLoginLinkPath(stale), { waitUntil: 'domcontentloaded' });
 
     await expect.poll(() => page.evaluate(() => window.location.hash)).toBe('');
     expect(mock.signedInAs()).toBeNull();
@@ -82,7 +83,7 @@ test.describe('Temp-login link (fragment form)', () => {
 
     // HEAD's GET /auth/temp-login?token= route is deleted (no 302, no window):
     // a link minted that way signs nobody in.
-    await page.goto(`/auth/temp-login?token=${TOKEN}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(legacyTempLoginLinkPath(TOKEN), { waitUntil: 'domcontentloaded' });
     expect(mock.signedInAs()).toBeNull();
     expect(mock.requests.some((r) => r.url.endsWith('/auth/temp-login/consume'))).toBe(false);
   });
