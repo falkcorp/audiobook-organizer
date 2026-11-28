@@ -158,6 +158,7 @@ type limitsJSON struct {
 	MaxRetries    int           `json:"max_retries,omitzero"`
 	Timeout       time.Duration `json:"timeout,omitzero"`
 	RetryAfterMax time.Duration `json:"retry_after_max,omitzero"`
+	MaxConcurrent int           `json:"max_concurrent,omitzero"`
 	Daily         *dailyJSON    `json:"daily,omitempty"`
 	Breaker       BreakerPolicy `json:"breaker,omitzero"`
 	Holds         holdsJSON     `json:"holds,omitzero"`
@@ -186,7 +187,7 @@ func toLimitsJSON(l *Limits) *limitsJSON {
 	}
 	out := &limitsJSON{
 		RPS: l.RPS, Burst: l.Burst, MaxRetries: l.MaxRetries, Timeout: l.Timeout,
-		RetryAfterMax: l.RetryAfterMax, Breaker: l.Breaker,
+		RetryAfterMax: l.RetryAfterMax, MaxConcurrent: l.MaxConcurrent, Breaker: l.Breaker,
 		Holds: holdsJSON{Max: l.Holds.Max, Persist: l.Holds.Persist},
 	}
 	if l.Daily != nil {
@@ -213,7 +214,7 @@ func fromLimitsJSON(j *limitsJSON) (*Limits, error) {
 	}
 	l := &Limits{
 		RPS: j.RPS, Burst: j.Burst, MaxRetries: j.MaxRetries, Timeout: j.Timeout,
-		RetryAfterMax: j.RetryAfterMax, Breaker: j.Breaker,
+		RetryAfterMax: j.RetryAfterMax, MaxConcurrent: j.MaxConcurrent, Breaker: j.Breaker,
 		Holds: HoldPolicy{Max: j.Holds.Max, Persist: j.Holds.Persist},
 	}
 	if j.Daily != nil {

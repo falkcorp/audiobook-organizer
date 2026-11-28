@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
 	"github.com/falkcorp/mediacore/internal/instancestore"
 	"github.com/falkcorp/mediacore/internal/statefs"
+	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -264,17 +265,26 @@ func item(id download.ItemID, name, savePath, native string, progress float64) c
 		Files: []download.File{{Path: name + "/part1.m4b", Size: 900, Progress: progress, Priority: 1}}}
 }
 
-// mapper is a PathMapper over fixed mappings per instance.
-func mapper(rows map[integrations.InstanceID][]download.Mapping) download.PathMapper {
-	return download.NewMapper(func(source string) []download.Mapping {
-		for id, m := range rows {
-			if download.Source(id) == source {
-				return m
-			}
+// mapper is the library's PathMapper over fixed mappings per instance: the
+// same mapper the Manager builds, with each row's Source set to the instance's.
+func mapper(rows map[integrations.InstanceID][]library.Mapping) library.PathMapper {
+	var all []library.Mapping
+	for id, ms := range rows {
+		for _, m := range ms {
+			m.Source = download.Source(id)
+			all = append(all, m)
 		}
-		return nil
-	})
+	}
+	return library.NewPathMapper(all, nil)
 }
+
+// lmap is the Mapping of remote onto the library root's rel (rel "" is the root).
+func lmap(remote, root, rel string) library.Mapping {
+	return library.Mapping{Remote: remote, Local: library.Path{Root: library.RootID(root), Rel: rel}}
+}
+
+// lpath is the library.Path of root and rel.
+func lpath(root, rel string) library.Path { return library.Path{Root: library.RootID(root), Rel: rel} }
 
 // newPool is a Pool over h with opts defaulted to h's clock.
 func (h *harness) newPool(o download.PoolOptions) *download.Pool {

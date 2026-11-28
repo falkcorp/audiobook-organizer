@@ -86,7 +86,7 @@ func Batcave() integrations.StoredInstance {
 				"password": secrets.RefTo("integrations.notify.batcave.password"),
 			},
 			Limits: &integrations.Limits{
-				RPS: 2, Burst: 4, Timeout: 3 * time.Second,
+				RPS: 2, Burst: 4, Timeout: 3 * time.Second, MaxConcurrent: 3,
 				Daily:   &integrations.DailyLimits{Total: 100, Background: 40, Zone: time.UTC, Counters: []string{"requests"}},
 				Breaker: integrations.BreakerPolicy{Threshold: 5, Cooldown: 30 * time.Second},
 				Holds:   integrations.HoldPolicy{Durations: map[integrations.Class]time.Duration{integrations.ClassAuth: 6 * time.Hour}, Persist: true},

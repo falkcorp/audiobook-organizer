@@ -15,6 +15,7 @@ import (
 
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/download"
+	"github.com/falkcorp/mediacore/library"
 )
 
 // torrentsJSON is a core.get_torrents_status answer holding the given
@@ -102,8 +103,8 @@ func TestItem_FieldMapping(t *testing.T) {
 		t.Errorf("identity fields: %+v", it)
 	case it.Progress != 1, it.TotalSize != 1000, it.RemainingSize != 0, it.Ratio != 1.75:
 		t.Errorf("numbers: %+v", it)
-	case it.RemotePath != "/dl/books", it.LocalPath != "":
-		t.Errorf("paths: remote=%q local=%q (the Pool fills local)", it.RemotePath, it.LocalPath)
+	case it.RemotePath != "/dl/books", it.LocalPath != (library.Path{}):
+		t.Errorf("paths: remote=%q local=%v (the Pool fills local)", it.RemotePath, it.LocalPath)
 	case !it.SeedGoalMet:
 		t.Error("a finished seeding torrent meets its seed goal")
 	case it.ETA != 90*time.Second:

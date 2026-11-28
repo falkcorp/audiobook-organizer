@@ -61,6 +61,7 @@ type IntegrationLimits struct {
 	MaxRetries    int                    `json:"max_retries,omitempty"`
 	Timeout       string                 `json:"timeout,omitempty"`
 	RetryAfterMax string                 `json:"retry_after_max,omitempty"`
+	MaxConcurrent int                    `json:"max_concurrent,omitempty"`
 	Daily         *IntegrationDaily      `json:"daily,omitempty"`
 	Breaker       *IntegrationBreaker    `json:"breaker,omitempty"`
 	Holds         *IntegrationHoldPolicy `json:"holds,omitempty"`
@@ -246,6 +247,7 @@ const (
 	maxRPS            = 10_000
 	maxBurst          = 100_000
 	maxRetries        = 100
+	maxConcurrent     = 1_000
 	maxQuota          = 1_000_000_000
 	maxLimitDuration  = 7 * 24 * time.Hour
 	maxHealthMessage  = 256
@@ -405,7 +407,7 @@ func parseLimits(l *IntegrationLimits, at string) (*integrations.Limits, []httpa
 		return d
 	}
 	out := &integrations.Limits{
-		Burst: l.Burst, MaxRetries: l.MaxRetries,
+		Burst: l.Burst, MaxRetries: l.MaxRetries, MaxConcurrent: l.MaxConcurrent,
 		Timeout: dur("/timeout", l.Timeout), RetryAfterMax: dur("/retry_after_max", l.RetryAfterMax),
 	}
 	if math.IsNaN(l.RPS) || l.RPS < 0 || l.RPS > maxRPS {
@@ -417,6 +419,9 @@ func parseLimits(l *IntegrationLimits, at string) (*integrations.Limits, []httpa
 	}
 	if l.MaxRetries < 0 || l.MaxRetries > maxRetries {
 		bad("/max_retries", "out_of_range", "must be between 0 and 100")
+	}
+	if l.MaxConcurrent < 0 || l.MaxConcurrent > maxConcurrent {
+		bad("/max_concurrent", "out_of_range", "must be between 0 and 1000")
 	}
 	if d := l.Daily; d != nil {
 		daily := &integrations.DailyLimits{Total: d.Total, Background: d.Background}
@@ -495,7 +500,7 @@ func limitsView(l integrations.Limits) *IntegrationLimits {
 		return nil
 	}
 	out := &IntegrationLimits{
-		RPS: l.RPS, Burst: l.Burst, MaxRetries: l.MaxRetries,
+		RPS: l.RPS, Burst: l.Burst, MaxRetries: l.MaxRetries, MaxConcurrent: l.MaxConcurrent,
 		Timeout: durString(l.Timeout), RetryAfterMax: durString(l.RetryAfterMax),
 	}
 	if d := l.Daily; d != nil {

@@ -144,6 +144,9 @@ func MergeLimits(base integrations.Limits, over *integrations.Limits) integratio
 	if o.RetryAfterMax != 0 {
 		base.RetryAfterMax = o.RetryAfterMax
 	}
+	if o.MaxConcurrent != 0 {
+		base.MaxConcurrent = o.MaxConcurrent
+	}
 	if o.Daily != nil {
 		base.Daily = o.Daily
 	}

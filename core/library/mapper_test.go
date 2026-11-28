@@ -312,3 +312,89 @@ func TestPathMapperMappingsCopy(t *testing.T) {
 		t.Fatal("unknown source should have no mappings")
 	}
 }
+
+// A Path segment is bytes, not syntax: appended to a Windows, UNC or drive-URL
+// remote, a backslash or a colon in it would be a separator or a drive switch
+// and let one segment leave the mapping's root on the client. ToRemote refuses
+// such a segment (fail closed, ErrUnmapped) instead of emitting a path the
+// client would read differently from the library.
+func TestPathMapperToRemoteRefusesInjectedSyntax(t *testing.T) {
+	m := mapOf(
+		Mapping{Source: mapSrc, Remote: `D:\Wayne`, Local: Path{Root: "win"}},
+		Mapping{Source: mapSrc, Remote: "C:/Cave", Local: Path{Root: "fwd"}},
+		Mapping{Source: mapSrc, Remote: `\\arkham\share`, Local: Path{Root: "unc"}},
+		Mapping{Source: mapSrc, Remote: "file:///D:/Wayne%20Audio", Local: Path{Root: "furl"}},
+		Mapping{Source: mapSrc, Remote: "/dl", Local: Path{Root: "posix"}},
+		Mapping{Source: mapSrc, Remote: "file:///dl/Batcave", Local: Path{Root: "furlposix"}},
+	)
+	for _, tc := range []struct {
+		name string
+		p    Path
+	}{
+		{"windows: backslash traversal in one name", Path{Root: "win", Rel: `a\..\..\secret`}},
+		{"windows: a trailing backslash dot-dot", Path{Root: "win", Rel: `Hush\..`}},
+		{"windows: backslash separator", Path{Root: "win", Rel: `Hush\a.m4b`}},
+		{"windows: drive switch", Path{Root: "win", Rel: "E:"}},
+		{"windows: colon in a name", Path{Root: "win", Rel: "Hush:Year One"}},
+		{"windows: bad segment after a good one", Path{Root: "win", Rel: `ok/a\b`}},
+		{"forward-slash drive remote: backslash", Path{Root: "fwd", Rel: `a\..\x`}},
+		{"unc: backslash", Path{Root: "unc", Rel: `a\..\x`}},
+		{"unc: drive switch", Path{Root: "unc", Rel: "C:"}},
+		{"drive file URL: backslash", Path{Root: "furl", Rel: `a\..\..\secret`}},
+		{"drive file URL: drive switch", Path{Root: "furl", Rel: "C:"}},
+	} {
+		got, err := m.ToRemote(mapSrc, tc.p)
+		if !errors.Is(err, ErrUnmapped) || got != "" {
+			t.Errorf("%s: ToRemote(%v) = %q, %v; want ErrUnmapped", tc.name, tc.p, got, err)
+		}
+	}
+	// What stays legal: a POSIX client (a file URL of one too) takes a
+	// backslash or a colon in a name, and a Windows client takes dots and
+	// spaces inside a name.
+	for _, tc := range []struct {
+		p    Path
+		want string
+	}{
+		{Path{Root: "posix", Rel: `Hush\Year:One`}, `/dl/Hush\Year:One`},
+		{Path{Root: "furlposix", Rel: "Robin #1"}, "file:///dl/Batcave/Robin%20%231"},
+		{Path{Root: "win", Rel: "Hush. Year One/a..b.m4b"}, `D:\Wayne\Hush. Year One\a..b.m4b`},
+		{Path{Root: "win"}, `D:\Wayne`},
+	} {
+		got, err := m.ToRemote(mapSrc, tc.p)
+		if err != nil || got != tc.want {
+			t.Errorf("ToRemote(%v) = %q, %v; want %q", tc.p, got, err, tc.want)
+		}
+	}
+}
+
+// NewPathMapper is the Manager's mapper over caller-held mappings.
+func TestNewPathMapper(t *testing.T) {
+	m := NewPathMapper([]Mapping{
+		{Source: mapSrc, Remote: "/dl", Local: Path{Root: "books", Rel: "incoming"}},
+		{Source: "other", Remote: "/dl", Local: Path{Root: "wrong"}},
+	}, nil)
+	got, err := m.ToLocal(mapSrc, "/dl/Hush/a.m4b")
+	if err != nil || got != (Path{Root: "books", Rel: "incoming/Hush/a.m4b"}) {
+		t.Errorf("ToLocal = %v, %v", got, err)
+	}
+	if back, err := m.ToRemote(mapSrc, got); err != nil || back != "/dl/Hush/a.m4b" {
+		t.Errorf("ToRemote = %q, %v", back, err)
+	}
+	// With no resolve, a path no mapping covers is unmapped, absolute or not.
+	if _, err := m.ToLocal(mapSrc, "/srv/elsewhere/x"); !errors.Is(err, ErrUnmapped) {
+		t.Errorf("uncovered path: %v", err)
+	}
+	// A resolve function turns an absolute host path under a root into its Path.
+	r := NewPathMapper(nil, func(abs string) (Path, error) {
+		if abs == "/srv/books/Hush" {
+			return Path{Root: "books", Rel: "Hush"}, nil
+		}
+		return Path{}, ErrUnmapped
+	})
+	if got, err := r.ToLocal(mapSrc, "/srv/books/Hush"); err != nil || got != (Path{Root: "books", Rel: "Hush"}) {
+		t.Errorf("resolve fallback = %v, %v", got, err)
+	}
+	if _, err := r.ToLocal(mapSrc, "/srv/other"); !errors.Is(err, ErrUnmapped) {
+		t.Errorf("resolve miss: %v", err)
+	}
+}
