@@ -1248,8 +1248,10 @@ internal/books/roots.newReader
 internal/books/roots.scanKey
 internal/books/roots.snapshot
 internal/books/roots.statName
+internal/books/searchindex.Analyzers
 internal/books/searchindex.Catalog
 internal/books/searchindex.DerivedIndexes
+internal/books/searchindex.Dispose
 internal/books/searchindex.Document
 internal/books/searchindex.Fields
 internal/books/searchindex.HNSWHooks
@@ -1264,6 +1266,7 @@ internal/books/searchindex.convert
 internal/books/searchindex.convertAll
 internal/books/searchindex.convertBoolean
 internal/books/searchindex.convertLeaf
+internal/books/searchindex.convertLeafUnweighted
 internal/books/searchindex.dateRange
 internal/books/searchindex.docFromBookDocument
 internal/books/searchindex.document
@@ -1279,6 +1282,7 @@ internal/books/searchindex.numericRange
 internal/books/searchindex.or
 internal/books/searchindex.rebuild
 internal/books/searchindex.termsString
+internal/books/searchindex.weighted
 internal/books/searchindex/searchindextest.FakeSource.GetAllBooksFullFrom
 internal/books/searchindex/searchindextest.FakeSource.GetAuthorsByIDs
 internal/books/searchindex/searchindextest.FakeSource.GetBookByID
