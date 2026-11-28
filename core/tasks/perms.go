@@ -31,6 +31,26 @@ type Permissions struct {
 	// would enqueue the kind without them. Empty = startable through both. The
 	// definitions listing reports can_start false for such a kind.
 	OwnerRouteOnly string
+
+	// OutboxSystemStart is a reviewed reason the OWNER module's system actor may
+	// start this kind from one of the owner's own outbox consumers
+	// (outbox.ConsumeIntoTask) although that actor cannot hold Start. A module
+	// system actor never holds core:admin or an AuthRequired scope (SEC2-15,
+	// COR3-10), so a kind whose Start asks for one (core:system.manage, as the
+	// settings.manage expansion does) could otherwise never be started from the
+	// outbox: every message would be refused (ErrNotPermitted is not permanent)
+	// and dead-letter after the retry budget.
+	//
+	// It is not a Start requirement and no person gains anything from it: the
+	// rule is the system acting on a message that is already committed, not a
+	// user acting. Only the start staged by the outbox's relay batch
+	// (Executor.StartIn with Trigger Outbox) honours it, and only for the module
+	// that owns the kind. Client.Start, the HTTP route, rc.Enqueue, a schedule,
+	// a window and a TaskStarts entry of another module all keep checking Start
+	// as before. The kernel refuses at boot (P7) a ConsumeIntoTask whose kind its
+	// owner's system actor cannot start under this rule, so the failure is the
+	// boot's, never a dead letter. Empty = not granted.
+	OutboxSystemStart string
 }
 
 // Approval says a Live run needs a person's recorded decision first.
