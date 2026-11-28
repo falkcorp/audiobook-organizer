@@ -333,6 +333,11 @@ func (p *Plugin) centralizeNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	})
 }
 
+// outboxSystemStartReason is the reviewed reason path-update sets
+// Permissions.OutboxSystemStart: the relocation consumer's start is the books
+// system acting on a staged message its own committed write produced.
+const outboxSystemStartReason = "started by the books module's own relocation consumer from a committed books.book.relocated.v1 message; the books system actor cannot hold the settings.manage expansion (core:system.manage is AuthRequired), and a person's start keeps it"
+
 // pathUpdateNative is the native deluge.path-update kind. Preview is HEAD's dry
 // run (dry_run defaulted to true there, and a native run that names no mode
 // resolves to Preview for a writer kind, so the default carries over).
@@ -369,6 +374,12 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 		return params.BookID, err
 	}}
 	c.Timeout = 1 * time.Minute
+	// A person starts this kind under settings.manage, whose expansion includes
+	// core:system.manage, a scope no module system actor can hold. The relocation
+	// consumer starts it with the books system actor, so without this reason every
+	// follow-up of a committed relocation would be refused and dead-letter. Hand
+	// starts keep Start as it is (core/tasks Permissions.OutboxSystemStart).
+	c.Perms.OutboxSystemStart = outboxSystemStartReason
 	return tasks.Task(pathUpdateKind, tasks.TaskSpec[json.RawMessage, pathUpdateResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (pathUpdateResult, error) {

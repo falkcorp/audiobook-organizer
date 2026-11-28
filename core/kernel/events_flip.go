@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/mediacore/events"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/eventhttp"
+	"github.com/falkcorp/mediacore/internal/executor"
 	"github.com/falkcorp/mediacore/internal/logjournal"
 	"github.com/falkcorp/mediacore/internal/outboxhttp"
 	"github.com/falkcorp/mediacore/log"
@@ -232,6 +233,30 @@ func (k *Kernel) bindOutboxRuns(x tasks.Executor) {
 		return
 	}
 	k.events.flip.outbox.ob.BindRuns(x)
+}
+
+// outboxStartProblems is P7's check of every registered ConsumeIntoTask: its
+// kind is a registered definition that the consumer's owner module's system
+// actor may start from the outbox (executor.CheckOutboxStart: the same rule
+// Executor.StartIn applies, Perms.OutboxSystemStart included). Without it the
+// failure would come at the first message, as ErrNotPermitted or ErrUnknownKind,
+// neither permanent, and the message would be retried and then dead-lettered:
+// a path-update follow-up the books write already committed would be lost. A
+// consumer whose kind no enabled module registered fails the same way, so a
+// build that wires the consumer before its kind (the module's Registrar.Tasks)
+// does not boot.
+func (k *Kernel) outboxStartProblems(x tasks.Executor) []module.Problem {
+	if k.events == nil || k.events.flip == nil {
+		return nil
+	}
+	var probs []module.Problem
+	for _, c := range k.events.flip.outbox.ob.TaskConsumers() {
+		if err := executor.CheckOutboxStart(x, c.Owner, c.Kind); err != nil {
+			probs = append(probs, module.NewProblem(module.ID(c.Owner), module.ProblemInvalidRegistration,
+				fmt.Errorf("outbox consumer %s starts %s, which its owner's system actor may not start from the outbox (its messages would dead-letter): %w", c.Name, c.Kind, err)))
+		}
+	}
+	return probs
 }
 
 // startOutboxNudger starts the goroutine that starts the relay when a Stage
