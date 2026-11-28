@@ -49,6 +49,7 @@ move	prefix	idx:sidx:dirty:	18	M6: the search dirty set, deleted
 move	prefix	idx:user:	1	M3: user indexes
 move	prefix	setting:scheduled_task_last_tick.	9	M4: task clocks
 rewrite	exact	setting:system:migration:apikey_expiry_stamp_v1_done	16	M3 reads and deletes HEAD's one-shot key-expiry flag
+rewrite	prefix	acceptedinvite:	19	M3 writes an accept row for each HEAD invite used inside the accepted-invite window
 rewrite	prefix	act:audit:	15	M4: kind-rename map over stored def IDs
 rewrite	prefix	act:batch:	15	M4: kind-rename map over stored def IDs
 rewrite	prefix	act:change:	15	M4: kind-rename map over stored def IDs
@@ -57,5 +58,6 @@ rewrite	prefix	act:digest:	15	M4: kind-rename map over stored def IDs
 rewrite	prefix	act:info:	15	M4: kind-rename map over stored def IDs
 rewrite	prefix	act:system:	15	M4: kind-rename map over stored def IDs
 rewrite	prefix	act:typ:	15	M4: kind-rename map over stored def IDs
+rewrite	prefix	guestpolicy:	19	M3 writes a guest-policy row for each allow-list grant HEAD's sync added to the policy
 rewrite	prefix	rootscan:	19	M6 writes the new books family (registered by F7)
 rewrite	prefix	usermerge:journal:	19	M3 rewrites each kept journal once, invite tokens hashed

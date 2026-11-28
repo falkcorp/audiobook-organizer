@@ -571,3 +571,41 @@ func checkSystemUserRemap(t *testing.T, c corpus, r *cutoverResult) {
 	require.NoError(t, err)
 	require.False(t, under, "core holds a user under the system row's HEAD ID %s too", sys.ID)
 }
+
+// testM3WritesSelftest proves the byte check excludes the books families M3
+// fills beside its Source (shared_families.golden's rewrite entries for them)
+// and only those: a store that gains one such row stays byte-identical with
+// the generated list, and the same store fails by name when the family's entry
+// is missing from it.
+func testM3WritesSelftest(t *testing.T) {
+	shared := loadSharedFamilies(t)
+	fi := newFamilyIndex()
+	scan := func(shared []sharedEntry, rows map[string]string) *storeScan {
+		spec := scanSpec{shared: shared, keepRows: true}
+		s := newStoreScan(spec)
+		for _, k := range sortedKeys(rows) {
+			s.add(fi, spec, []byte(k), []byte(rows[k]))
+		}
+		return s
+	}
+	base := map[string]string{"preference:db_version": `{"id":1,"key":"db_version","value":"{\"version\":66}"}`}
+	for fam, key := range map[string]string{
+		"acceptedinvite:": "acceptedinvite:01ARKHAM000000000000INVITE",
+		"guestpolicy:":    "guestpolicy:oracle@example.test",
+	} {
+		after := map[string]string{key: `{"user_id":"01ARKHAM000000000000BARBARA"}`}
+		for k, v := range base {
+			after[k] = v
+		}
+		t.Run(fam+"listed", func(t *testing.T) {
+			require.True(t, slices.ContainsFunc(shared, func(e sharedEntry) bool { return e.Class == "rewrite" && e.Value == fam }),
+				"shared_families.golden has no rewrite entry for %s", fam)
+			require.Empty(t, byteProblems(scan(shared, base), scan(shared, after)))
+		})
+		t.Run(fam+"unlisted", func(t *testing.T) {
+			without := slices.DeleteFunc(slices.Clone(shared), func(e sharedEntry) bool { return e.Value == fam })
+			got := byteProblems(scan(without, base), scan(without, after))
+			require.Equal(t, []string{"family " + fam + ": 1 keys appeared"}, got)
+		})
+	}
+}

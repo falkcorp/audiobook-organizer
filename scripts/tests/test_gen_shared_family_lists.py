@@ -54,6 +54,8 @@ var keyFamilies = []KeyFamily{
 	{"act:system:", "activity"},
 	{"act:typ:", "activity"},
 	{"usermerge:journal:", "merge journals"},
+	{"acceptedinvite:", "accepted invites"},
+	{"guestpolicy:", "guest-policy entries"},
 }
 """
 
