@@ -28,6 +28,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai"
 	"github.com/falkcorp/mediacore/integrations/integrationstest"
+	"github.com/falkcorp/mediacore/integrations/notify"
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/library"
 	"github.com/falkcorp/mediacore/metrics"
@@ -577,4 +578,65 @@ func TestIntegrationsHealth_PublishesOnMoveOnly(t *testing.T) {
 	if strings.Contains(string(raw), "192.0.2.9") || strings.Contains(string(raw), "joker") {
 		t.Fatalf("the payload carries the probe's message: %s", raw)
 	}
+}
+
+// TestDepsFor: a module's Deps take every integrations service, a library
+// Scope with the module as its owner, and a notify publisher bound to the
+// module (it refuses another module's topic). An empty module ID has no Scope
+// and no publishable topic, and says so in the log instead of failing.
+func TestDepsFor(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	s := r.build(in)
+
+	d := s.depsFor("gotham")
+	if d.HTTP != s.providerhttp || d.Integrations != s.registry || d.Downloads != s.downloads || d.AI != s.ai {
+		t.Fatalf("depsFor did not hand out the built services: %+v", d)
+	}
+	if d.Library == nil || d.Library.Owner() != "gotham" {
+		t.Fatalf("library scope = %v, want one owned by gotham", d.Library)
+	}
+	err := d.Notify.Publish(context.Background(), nil, notify.Notification{Topic: "arkham.inmate.escaped.v1"})
+	if !errors.Is(err, notify.ErrForeignTopic) {
+		t.Fatalf("a gotham publisher published an arkham topic: %v", err)
+	}
+	other := s.depsFor("arkham")
+	if o := other.Library.Owner(); o != "arkham" {
+		t.Fatalf("second module's scope owner = %q", o)
+	}
+	err = other.Notify.Publish(context.Background(), nil, notify.Notification{Topic: "gotham.signal.raised.v1"})
+	if !errors.Is(err, notify.ErrForeignTopic) {
+		t.Fatalf("an arkham publisher published a gotham topic: %v", err)
+	}
+
+	empty := s.depsFor("")
+	if empty.Library != nil {
+		t.Fatalf("an empty module ID got a library scope: %v", empty.Library)
+	}
+	if empty.HTTP == nil || empty.Notify == nil {
+		t.Fatalf("an empty module ID lost its other services: %+v", empty)
+	}
+	if !strings.Contains(r.logs.String(), "no library scope for module") {
+		t.Fatal("the missing scope was not logged")
+	}
+}
+
+// TestFreezeAI: the AI catalog takes capabilities until freezeAI and none
+// after it.
+func TestFreezeAI(t *testing.T) {
+	r, in := newIntegRig(t, nil)
+	s := r.build(in)
+	spec := func(id string) ai.CapabilitySpec {
+		return ai.CapabilitySpec{
+			ID: id, Kind: ai.KindText, Description: "Names the villain a riddle points at.",
+			DataSent: "The riddle text, nothing else.", TypicalRequest: "A few lines of riddle text.",
+		}
+	}
+	if _, err := s.ai.RegisterCapability("gotham", spec("gotham.riddle")); err != nil {
+		t.Fatalf("before the freeze: %v", err)
+	}
+	s.freezeAI()
+	if _, err := s.ai.RegisterCapability("gotham", spec("gotham.clue")); !errors.Is(err, ai.ErrCatalogFrozen) {
+		t.Fatalf("after the freeze = %v, want ErrCatalogFrozen", err)
+	}
+	s.freezeAI() // idempotent
 }
