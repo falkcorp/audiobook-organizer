@@ -55,6 +55,7 @@ func NewSpec(src Source, opts Options) index.Spec {
 		Name:           Name,
 		MappingVersion: MappingVersion,
 		Fields:         Fields(),
+		Analyzers:      Analyzers(),
 		Rebuild: func(ctx context.Context, w index.RebuildWriter) error {
 			return rebuild(ctx, src, w, opts)
 		},

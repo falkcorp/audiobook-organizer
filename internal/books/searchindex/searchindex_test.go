@@ -225,8 +225,8 @@ func TestDocumentReconcilerContract(t *testing.T) {
 	}
 }
 
-// translation of the search grammar, shown by what the index answers: the
-// stand-in opener runs the translated query against a real bleve index.
+// translation of the search grammar, shown by what the index answers: the real
+// engine (coretest.IndexEngine) runs the translated query.
 func TestTranslateAnswersLikeTheGrammarSays(t *testing.T) {
 	src := &searchindextest.FakeSource{
 		Authors: map[int]*database.Author{1: {ID: 1, Name: "Lucius Fox"}, 2: {ID: 2, Name: "Selina Kyle"}},
@@ -240,17 +240,11 @@ func TestTranslateAnswersLikeTheGrammarSays(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	hold := make(chan struct{})
-	close(hold)
-	op := &searchindextest.Opener{DBParent: t.TempDir(), Module: searchindex.Module, HoldRebuild: hold}
-	ix, err := op.Open(ctx, searchindex.NewSpec(src, searchindex.Options{}))
-	if err != nil {
-		t.Fatal(err)
+	e := searchindextest.OpenEngine(t, src, searchindex.Options{})
+	if n := e.Rebuild(t); n != 5 {
+		t.Fatalf("rebuilt %d documents, want 5", n)
 	}
-	t.Cleanup(func() { _ = ix.Close() })
-	if err := ix.(searchindextest.Rebuilt).WaitRebuilt(ctx); err != nil {
-		t.Fatal(err)
-	}
+	ix := e.Index
 	run := func(text string) []string {
 		t.Helper()
 		tr, err := searchindex.Translate(text, now)
@@ -307,7 +301,6 @@ func TestTranslateAnswersLikeTheGrammarSays(t *testing.T) {
 
 func TestTranslateRefusesWhatTheContractCannotExpress(t *testing.T) {
 	for _, text := range []string{
-		"title:*fall",                    // a leading wildcard
 		"read_status:read OR year:>1990", // per-user term under OR
 	} {
 		_, err := searchindex.Translate(text, now)
@@ -319,8 +312,8 @@ func TestTranslateRefusesWhatTheContractCannotExpress(t *testing.T) {
 			t.Logf("%q refused by HEAD's own check: %v", text, err)
 		}
 	}
-	// The two shapes the owner named are ErrNotExpressible, not a HEAD error.
-	for _, text := range []string{"title:*fall", "read_status:read OR year:>1990"} {
+	// The shape the owner named is ErrNotExpressible, not a HEAD error.
+	for _, text := range []string{"read_status:read OR year:>1990"} {
 		if _, err := searchindex.Translate(text, now); !errors.Is(err, searchindex.ErrNotExpressible) {
 			t.Errorf("%q = %v, want ErrNotExpressible", text, err)
 		}

@@ -3,6 +3,10 @@
 // guid: 95fc3dbc-2737-4132-846a-e98c87df8f70
 // last-edited: 2026-11-20
 
+// Package searchindextest is test support for internal/books/searchindex: a
+// fixed-library Source, the recorded R0 answer oracle, the harness that opens
+// books' index on core's real engine (coretest.IndexEngine) including the
+// restart simulation, and the native half of TestBooksIndexRebuiltAtCutover.
 package searchindextest
 
 import (
@@ -17,10 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/pebble/v2/vfs"
+	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/index"
-	"github.com/falkcorp/mediacore/storage/index/indextest"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 
@@ -188,66 +191,168 @@ func (o Oracle) Source() *FakeSource {
 	return &FakeSource{Books: o.Books, Authors: o.Authors, Series: o.Series}
 }
 
+// OwnerSpec is the books owner as a test store boots it: a keyspace and the four
+// derived indexes books declares (books, memdb, hnsw, chromem), so the engine
+// can open searchindex's "books" index through coretest.IndexEngine.
+func OwnerSpec() storage.OwnerSpec {
+	return storage.OwnerSpec{
+		Owner:   storage.Owner(searchindex.Module),
+		Enabled: true,
+		Spec:    storage.Spec{Keyspace: true, Derived: searchindex.DerivedIndexes()},
+	}
+}
+
+// Engine is core's real index engine over a booted test store, with books'
+// search index opened on it.
+type Engine struct {
+	Store  *coretest.Store
+	Engine *coretest.IndexEngine
+	Index  index.Index
+}
+
+// OpenEngine boots a store with OwnerSpec and coretest.IndexOwner, builds the
+// real engine over it (nothing runs in the background) and opens books' index
+// from src. The index is Rebuilding until the caller runs Engine.Rebuild.
+// engineOpts sets the engine's own options (the zero value is production's):
+// a test of index.ErrTooBroad lowers MaxTermSearchers.
+func OpenEngine(t testing.TB, src searchindex.Source, opts searchindex.Options, engineOpts ...coretest.IndexEngineOptions) *Engine {
+	t.Helper()
+	var eo coretest.IndexEngineOptions
+	if len(engineOpts) > 0 {
+		eo = engineOpts[0]
+	}
+	st := coretest.NewStore(t, OwnerSpec(), coretest.IndexOwner())
+	x := coretest.NewIndexEngine(t, st, eo)
+	return &Engine{Store: st, Engine: x, Index: open(t, x, src, opts)}
+}
+
+func open(t testing.TB, x *coretest.IndexEngine, src searchindex.Source, opts searchindex.Options) index.Index {
+	t.Helper()
+	ix, err := x.Opener(searchindex.Module).Open(t.Context(), searchindex.NewSpec(src, opts))
+	if err != nil {
+		t.Fatalf("open the books index: %v", err)
+	}
+	return ix
+}
+
+// Rebuild runs the full rebuild the kernel queues for a fresh index and returns
+// the number of documents it indexed.
+func (e *Engine) Rebuild(t testing.TB) int64 {
+	t.Helper()
+	n, err := e.Engine.Rebuild(t.Context(), searchindex.Module, searchindex.Name)
+	if err != nil {
+		t.Fatalf("rebuild the books index: %v", err)
+	}
+	return n
+}
+
+// Restart simulates a process restart over the same files: the engine closes,
+// the store reboots with the same owners, and a new engine opens the same
+// directory and the books index again from src. The old Index is closed.
+func (e *Engine) Restart(t testing.TB, src searchindex.Source, opts searchindex.Options) {
+	t.Helper()
+	dir := e.Engine.Dir()
+	if err := e.Engine.Close(); err != nil {
+		t.Fatalf("close the engine before the restart: %v", err)
+	}
+	e.Store.Reboot(OwnerSpec(), coretest.IndexOwner())
+	e.Engine = coretest.NewIndexEngine(t, e.Store, coretest.IndexEngineOptions{Dir: dir})
+	e.Index = open(t, e.Engine, src, opts)
+}
+
+// Search runs q and returns the matching IDs in the engine's order, with the
+// total.
+func Search(t testing.TB, ix index.Index, q index.Query, sortBy ...string) ([]string, uint64) {
+	t.Helper()
+	res, err := ix.Search(t.Context(), q, index.Page{Size: 1000, SortBy: sortBy})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	ids := make([]string, 0, len(res.Hits))
+	for _, h := range res.Hits {
+		ids = append(ids, h.ID)
+	}
+	return ids, res.Total
+}
+
 // RunBooksIndexRebuiltAtCutover is the native half of the spec test (05-search):
 // the first boot of the R2 build finds no index of the new engine, builds books'
 // at <db parent>/index/books/books.bleve while search is degraded, and then
 // answers every recorded R0 query with the book set the HEAD build answered.
+// It runs on core's real engine (coretest.IndexEngine), and then again after a
+// restart over the same files, which must find the index Ready with nothing to
+// rebuild.
 //
 // Degraded meanwhile means what the contract says for Rebuilding: the index does
 // not yet cover the library, so a miss is not "no such document" and the caller
-// serves its fallback. The harness holds the rebuild open and checks exactly
-// that, then releases it.
+// serves its fallback. The harness checks exactly that (Rebuilding, queued for a
+// rebuild, holding nothing), then runs the rebuild.
 //
-// It is exported with no caller (F7-09 wires it at the fold). Queries whose text
+// It has no caller outside tests (F7-09 wires it at the fold). Queries whose text
 // is a regular expression are the filter layer's, not the index's (HEAD's
 // querygrammar applies them in Go after the index answers); the harness skips
 // those by name and counts them.
 func RunBooksIndexRebuiltAtCutover(t *testing.T, o Oracle, regex func(text string) bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
-	// A booted store the way the kernel boots one; the index lives beside it.
-	fx := indextest.Open(t, storage.FSOf(vfs.NewMem()), filepath.Join(t.TempDir(), "db"))
-	dbParent := filepath.Dir(fx.Path)
+	opts := searchindex.Options{Workers: 4, PageSize: 5, ChunkSize: 2}
+	e := OpenEngine(t, o.Source(), opts)
 
-	hold := make(chan struct{})
-	op := &Opener{DBParent: dbParent, Module: searchindex.Module, HoldRebuild: hold}
-	spec := searchindex.NewSpec(o.Source(), searchindex.Options{Workers: 4, PageSize: 5, ChunkSize: 2})
-	ix, err := op.Open(ctx, spec)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := ix.Close(); err != nil {
-			t.Errorf("close the opened index: %v", err)
-		}
-	})
-
-	want := IndexDir(dbParent, searchindex.Module, searchindex.Name)
+	want := e.Engine.Path(searchindex.Module, searchindex.Name)
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("the index is not at %s: %v", want, err)
 	}
-
-	// Degraded meanwhile: not Ready, and holding nothing of the library.
-	if st := ix.State(); st != index.Rebuilding {
-		t.Fatalf("state while the rebuild runs = %v, want rebuilding", st)
+	if want != filepath.Join(e.Engine.Dir(), "books", "books.bleve") {
+		t.Fatalf("the index is at %s, want <index dir>/books/books.bleve", want)
 	}
-	if n, err := ix.Count(ctx, searchindex.MatchAllQuery()); err != nil || n != 0 {
+
+	// Degraded meanwhile: Rebuilding, queued for a rebuild, and holding nothing
+	// of the library.
+	if st := e.Index.State(); st != index.Rebuilding {
+		t.Fatalf("state while the rebuild is pending = %v, want rebuilding", st)
+	}
+	if got := e.Engine.PendingRebuilds(); !slices.Equal(got, []string{"books/books"}) {
+		t.Fatalf("pending rebuilds = %v, want [books/books]", got)
+	}
+	if n, err := e.Index.Count(ctx, searchindex.MatchAllQuery()); err != nil || n != 0 {
 		t.Fatalf("a rebuilding index holds %d documents (err %v); it must not look complete", n, err)
 	}
 
-	close(hold)
-	if err := ix.(Rebuilt).WaitRebuilt(ctx); err != nil {
-		t.Fatalf("rebuild: %v", err)
+	if n := e.Rebuild(t); int(n) != len(o.Books) {
+		t.Fatalf("the rebuild indexed %d documents, want %d", n, len(o.Books))
 	}
-	if st := ix.State(); st != index.Ready {
+	if err := e.Engine.Reconcile(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if st := e.Index.State(); st != index.Ready {
 		t.Fatalf("state after the rebuild = %v, want ready", st)
 	}
-	if n, err := ix.Count(ctx, searchindex.MatchAllQuery()); err != nil || int(n) != len(o.Books) {
+	if n, err := e.Index.Count(ctx, searchindex.MatchAllQuery()); err != nil || int(n) != len(o.Books) {
 		t.Fatalf("documents after the rebuild = %d (err %v), want %d", n, err, len(o.Books))
 	}
+	skipped := answersMatch(t, e.Index, o, regex)
+	if skipped == len(o.Queries) {
+		t.Fatal("every recorded query was skipped")
+	}
 
+	t.Run("after a restart", func(t *testing.T) {
+		e.Restart(t, o.Source(), opts)
+		if st := e.Index.State(); st != index.Ready {
+			t.Fatalf("state after the restart = %v, want ready (the files were intact)", st)
+		}
+		if got := e.Engine.PendingRebuilds(); len(got) != 0 {
+			t.Fatalf("pending rebuilds after the restart = %v, want none", got)
+		}
+		answersMatch(t, e.Index, o, regex)
+	})
+}
+
+// answersMatch checks every recorded query against ix and returns how many it
+// skipped as the filter layer's.
+func answersMatch(t *testing.T, ix index.Index, o Oracle, regex func(text string) bool) int {
+	t.Helper()
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	skipped := 0
 	for _, q := range o.Queries {
@@ -267,21 +372,12 @@ func RunBooksIndexRebuiltAtCutover(t *testing.T, o Oracle, regex func(text strin
 			if tr.MatchAll {
 				iq = searchindex.MatchAllQuery()
 			}
-			res, err := ix.Search(ctx, iq, index.Page{Size: 1000, SortBy: []string{"_id"}})
-			if err != nil {
-				t.Fatalf("search: %v", err)
-			}
-			got := make([]string, 0, len(res.Hits))
-			for _, h := range res.Hits {
-				got = append(got, h.ID)
-			}
+			got, total := Search(t, ix, iq, "_id")
 			slices.Sort(got)
-			if !slices.Equal(got, q.Want) || int(res.Total) != len(q.Want) {
-				t.Errorf("got %d %v, want %d %v", res.Total, got, len(q.Want), q.Want)
+			if !slices.Equal(got, q.Want) || int(total) != len(q.Want) {
+				t.Errorf("got %d %v, want %d %v", total, got, len(q.Want), q.Want)
 			}
 		})
 	}
-	if skipped == len(o.Queries) {
-		t.Fatal("every recorded query was skipped")
-	}
+	return skipped
 }
