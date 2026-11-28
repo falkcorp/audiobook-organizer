@@ -63,8 +63,14 @@ const progressEvery = 5000
 // row names resolves to a native user. A reference to a user that does not
 // (a blocker the owner deleted) is counted in OrphanedRefs per referencing
 // family and never fails the step (DATA-2).
+//
+// Its counts are this boot's Source rows (Migration.read, imported,
+// quarantined; M5's rule): Read is every Source row the step handled, Written
+// the rows imported, Quarantined the rows quarantined, and what is left of Read
+// is the rows deleted by rule. A boot that resumed reports only what it
+// stepped; one that resumed after the last chunk committed reports zeros.
 func (m *Migration) Verify(ctx context.Context, r storage.Reader) (datamigrate.VerifyReport, error) {
-	var rep datamigrate.VerifyReport
+	rep := datamigrate.VerifyReport{Read: m.read.Load(), Written: m.imported.Load(), Quarantined: m.quarantined.Load()}
 	for _, p := range identityPrefixes {
 		startprogress.Report(ctx)
 		for _, err := range r.Scan(ctx, storage.ScanOptions{Start: []byte(p), End: prefixEnd(p), KeysOnly: true, Limit: 1}) {

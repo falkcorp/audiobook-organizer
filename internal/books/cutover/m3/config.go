@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
@@ -115,6 +116,17 @@ type Migration struct {
 	// only the chunk that pulls the user rows sees it, and it pulls every key and
 	// identity that names the row forward with it.
 	chunkSystem systemUsers
+
+	// read, imported and quarantined are this boot's counts of Source rows,
+	// the counts Verify reports (05-storage §5S.3.13; M5's rule: a boot that
+	// resumed reports only the rows it stepped). read is every Source row the
+	// step handled, pulled forward or stepped; a row deleted by rule (a session,
+	// an invite, a seed role, an idx: row, a bootstrap row) is read and neither
+	// imported nor quarantined. A row outside Source (a merge journal, HEAD's
+	// expiry flag) is never counted. Counted at the row's outcome (sourceRow,
+	// quarantine); a chunk that fails fails the boot, so no count outlives an
+	// uncommitted chunk into a report.
+	read, imported, quarantined atomic.Int64
 }
 
 // New validates cfg and builds M3. It never writes.
