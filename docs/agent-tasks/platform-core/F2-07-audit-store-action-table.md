@@ -120,7 +120,7 @@ core.templogin.mint core.templogin.consume
 core.invite.create core.invite.accept
 core.session.revoke
 core.apikey.create core.apikey.revoke core.apikey.set_status core.apikey.require_confirmation
-core.user.create core.user.disable core.user.enable core.user.delete core.user.reset_password core.user.set_roles
+core.user.create core.user.disable core.user.enable core.user.delete core.user.reset_password core.user.set_roles core.user.unmerge
 core.role.create core.role.update core.role.delete core.role.update_seed core.role.accept_seed core.role.review_admin
 core.permission.deny
 core.task.approve core.task.reject core.task.cancel

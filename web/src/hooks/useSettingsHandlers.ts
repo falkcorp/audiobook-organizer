@@ -11,6 +11,7 @@ import type { SettingsState } from '../modules/books/pages/settingsState';
 import { sourcesPayload, uiSourcesFromConfig } from '../utils/metadataSources';
 import { useImportFolderHandlers } from './useImportFolderHandlers';
 import { useBackupHandlers } from './useBackupHandlers';
+import { useSignInRequiredForAction, type SignInRequiredGate } from './useSignInRequiredForAction';
 import { useMetadataSourceHandlers } from './useMetadataSourceHandlers';
 import { sanitizeSettingsImportWithReport } from '../utils/sanitizeSettingsImport';
 
@@ -136,6 +137,8 @@ export interface UseSettingsHandlersParams {
 // ---------------------------------------------------------------------------
 
 export interface UseSettingsHandlersReturn {
+  /** SEC5-8 gate shared by the import-path add and backup-restore dialogs. */
+  signInGate: SignInRequiredGate;
   normalizeExtension: (value: string) => string;
   isValidOpenAIKey: (value: string) => boolean;
   handleChange: (field: string, value: string | boolean | number | string[]) => void;
@@ -369,6 +372,9 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
   // Import folder management
   // -------------------------------------------------------------------------
 
+  // One SEC5-8 gate for the import-path add and the backup restore dialogs.
+  const signInGate = useSignInRequiredForAction();
+
   // ── Import folder management (extracted to useImportFolderHandlers) ──────
   const importFolderHandlers = useImportFolderHandlers({
     setImportFolders,
@@ -382,6 +388,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     cancelScanTarget,
     scanStatuses,
     newFolderPath,
+    refuse: signInGate.refuse,
   });
 
   // ── Backup management (extracted to useBackupHandlers) ───────────────────
@@ -399,6 +406,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     restoreTarget,
     restoreVerify,
     deleteBackupTarget,
+    refuse: signInGate.refuse,
   });
 
   // ── Metadata source management (extracted to useMetadataSourceHandlers) ──
@@ -503,12 +511,11 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
 
       const response = await api.updateConfig(updates);
 
-      let nextSettings = settings;
       // The response is the server's view after the write: typed secrets are
       // stored and must leave the form, and each source's credential status
       // comes from it, not from what was typed.
       setOpenaiKeyStatus(response.secret_status?.openai_api_key);
-      nextSettings = {
+      const nextSettings = {
         ...settings,
         openaiApiKey: '',
         metadataSources: uiSourcesFromConfig(response.metadata_sources),
@@ -811,6 +818,7 @@ export function useSettingsHandlers(params: UseSettingsHandlersParams): UseSetti
     handleBrowserSelect,
     handleBrowserConfirm,
     handleBrowserCancel,
+    signInGate,
     ...importFolderHandlers,
     ...backupHandlers,
     ...metadataSourceHandlers,

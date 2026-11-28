@@ -17,6 +17,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	maintjobs "github.com/falkcorp/audiobook-organizer/internal/maintenance/jobs"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -64,14 +65,22 @@ func (s *Server) runMaintenanceJob(c *gin.Context) {
 
 	// Enforce per-job access control. Jobs that implement PermissionAware use
 	// their own permission; all others default to settings.manage.
-	if config.AppConfig.EnableAuth {
-		required := auth.Permission(auth.PermSettingsManage)
-		if pa, ok := job.(maintenance.PermissionAware); ok && pa.Permission() != "" {
-			required = auth.Permission(pa.Permission())
+	//
+	// Under core identity (F4-08 B7) auth off is the auth-disabled principal
+	// rather than books' EnableAuth, and the permission is judged through the
+	// principal stage 12 bound.
+	required := auth.Permission(auth.PermSettingsManage)
+	if pa, ok := job.(maintenance.PermissionAware); ok && pa.Permission() != "" {
+		required = auth.Permission(pa.Permission())
+	}
+	held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(required))
+	if bridged || config.AppConfig.EnableAuth {
+		if !bridged {
+			held = auth.Can(c.Request.Context(), required)
 		}
-		if !auth.Can(c.Request.Context(), required) {
+		if !held {
 			if _, hasUser := auth.UserFromContext(c.Request.Context()); !hasUser {
-				httputil.RespondWithUnauthorized(c, "authentication required")
+				legacyauth.RespondNoUser(c, "authentication required")
 			} else {
 				httputil.RespondWithForbidden(c, "permission denied: "+string(required))
 			}

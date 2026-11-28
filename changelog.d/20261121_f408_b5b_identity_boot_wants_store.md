@@ -1,0 +1,4 @@
+### Fixed
+
+- An app that declares the identity boot now has a store even when no module declares storage: P0 resolves the store path and state directory, and the claims mode and state-file table are read, through one predicate (`kernel.Config.WantsStore`) that the app, the offline commands and the kernel all ask. Before, such an app failed at P5 with "needs the stores". An app that does not declare the identity boot, which includes Audiobook Organizer until the flip, resolves and boots exactly as before.
+- The coretest harness always boots the identity boot, so `WithUser`, `As` and `AssertPermission` work in a harness of zero modules; the condition and its "needs the identity boot" failures are gone.

@@ -61,6 +61,9 @@ type fakeStore struct {
 	// extendWrites counts ExtendABSSession calls that actually wrote, so tests can
 	// assert the once-a-day throttle.
 	extendWrites int
+	// userReads counts GetUserByID and GetUserByUsername calls, so a test can
+	// tell that a path under core identity never read books' user rows.
+	userReads int
 }
 
 func newFakeStore() *fakeStore {
@@ -95,12 +98,14 @@ func (f *fakeStore) CountUsers() (int, error) {
 func (f *fakeStore) GetUserByID(id string) (*database.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.userReads++
 	return f.users[id], nil
 }
 
 func (f *fakeStore) GetUserByUsername(u string) (*database.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.userReads++
 	return f.byUsername[strings.ToLower(u)], nil
 }
 

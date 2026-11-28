@@ -228,6 +228,8 @@ func bootOnce(t *testing.T, stateDir string, edit func(*config.Config), opt func
 	if opt != nil {
 		opt(&opts)
 	}
+	// No listen port: this boot never Runs, so nothing binds (proven with
+	// 127.0.0.1:8484 held). withLoopbackListen belongs to boots that Run.
 	if prep != nil {
 		prep()
 	}

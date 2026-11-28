@@ -233,6 +233,20 @@ func TestPostRestore_ReEnableOpensOnlyADisabledUser(t *testing.T) {
 			t.Fatalf("a deleted user after a later enable: GetUser = %v, want ErrNotFound", err)
 		}
 	})
+	t.Run("merged away", func(t *testing.T) {
+		// A merged-away account stays disabled for good (SetStatus refuses to
+		// enable it); the pre-swap store holds it active so that only the
+		// replay's own rule, not the pre-swap clamp, can keep it closed.
+		live, prev, id := restorePair(t, auth.StatusDisabled, auth.StatusActive)
+		for _, f := range []*fx{live, prev} {
+			f.edit(f.reload(id), func(u *auth.User) { u.MergedInto, u.MergedAt = "u-jim-gordon", f.clock() })
+		}
+		counts := live.mustPostRestore(covered(enabledLine(id, 9, 6, at(2))), prev.st)
+		got := live.reload(id)
+		if got.Status != auth.StatusDisabled || got.MergedInto != "u-jim-gordon" || counts[auth.CountUsersEnabled] != 0 {
+			t.Fatalf("a merged-away user after an enable line: status %q marker %q, counts %v", got.Status, got.MergedInto, counts)
+		}
+	})
 	t.Run("pending", func(t *testing.T) {
 		live, prev, id := restorePair(t, auth.StatusPending, auth.StatusPending)
 		counts := live.mustPostRestore(covered(enabledLine(id, 9, 6, at(2))), prev.st)

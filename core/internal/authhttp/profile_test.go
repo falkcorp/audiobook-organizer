@@ -72,7 +72,8 @@ func TestUpdateMe_RealService(t *testing.T) {
 	}
 }
 
-// The route refuses the auth-disabled principal with 401 and a key with 403
+// The route refuses the auth-disabled principal with 403 interactive_required
+// (F4-08 ruling G5(a)) and a key with 403
 // before the writer runs, and the real writer refuses both again if a route
 // is mounted bare.
 func TestUpdateMe_RefusesWhatTheWriterRefuses(t *testing.T) {
@@ -82,7 +83,7 @@ func TestUpdateMe_RefusesWhatTheWriterRefuses(t *testing.T) {
 	x := "Robin"
 	in := ProfilePatch{DisplayName: &x}
 	_, err := call(specMeEd(), a.updateMe, e.authOff(), updateMeReq{Body: in})
-	wantErr(t, err, http.StatusUnauthorized, "authentication_required")
+	wantAuthOffRefusal(t, err)
 	_, err = a.Profiles.UpdateProfile(context.Background(), e.authOff(), ProfileUpdate{DisplayName: &x})
 	wantErr(t, mapFail(a, err), http.StatusForbidden, "permission_denied")
 	kp := e.principal(bruce, auth.MethodAPIKey, "core:self")

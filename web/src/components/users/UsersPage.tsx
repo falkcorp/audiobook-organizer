@@ -6,18 +6,18 @@
 // F9-04 slice 4: the shell half of the Users page (07 §7.11): the accounts table, invitations and
 // the sign-ins drawer, with slots for the modules' row actions and panels. It imports no books code.
 
-import { useCallback, useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { apiFetch } from '../../utils/apiFetch';
 import { describeRequestError, responseErrorMessage, unwrapData } from '../../utils/apiResponse';
+import { createPasswordResetLink, disableUser, enableUser, listAdminUsers } from '../../services/coreIdentity';
+import { deleteInvite, listInvites, type PendingInviteRow } from '../../services/booksInvites';
+import { emailBindingLabel, guestPolicyLabel, inviteLink, type AcceptedInvite } from './usersInvites';
 import { UserFootprintDrawer } from './UserFootprintDrawer';
 import type { UsersPageExtensions } from './usersExtensions';
-import {
-  emailBindingLabel,
-  guestPolicyLabel,
-  inviteLink,
-  type AcceptedInvite,
-} from './usersInvites';
+import { errorText } from './userAccountParts';
+import { SignInRequiredNotice } from '../common/SignInRequiredNotice';
+import { apiErrorFromResponse, isSignInRequiredRefusal } from '../../utils/signInRequired';
 import {
   Box,
   Button,
@@ -48,37 +48,12 @@ import {
   VpnKey as ResetIcon,
   ContentCopy as CopyIcon,
   Email as EmailIcon,
+  Delete as RevokeInviteIcon,
   AlternateEmail as SetEmailIcon,
   Fingerprint as FootprintIcon,
 } from '@mui/icons-material';
 
 const API_BASE = '/api/v1';
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  roles: string[];
-  status: string;
-  created_at: string;
-  /** Set once an admin merged this account into another. */
-  merged_into_user_id?: string;
-}
-
-interface Invite {
-  /** Non-secret handle; revoke and resend take this. */
-  id: string;
-  /**
-   * The bearer secret that accepts the invite. The server leaves it out for
-   * an API key and, for an invite with an email, for anyone but an admin.
-   */
-  token?: string;
-  username: string;
-  email?: string;
-  role_id: string;
-  expires_at: string;
-  email_sent_at?: string;
-}
 
 interface InviteSettings {
   mailConfigured: boolean;
@@ -87,47 +62,45 @@ interface InviteSettings {
   guestPolicySyncConfigured: boolean;
 }
 
-interface InvitesBody {
-  invites?: Invite[];
-  accepted?: AcceptedInvite[];
-  mail_configured?: boolean;
-  mail_unavailable_reason?: string;
-  guest_policy_sync_configured?: boolean;
-}
-
-function InviteLinkCell({
-  token,
-  username,
-  copied,
-  onCopy,
-}: {
-  token: string;
+interface User {
+  id: string;
   username: string;
-  copied: boolean;
-  onCopy: (token: string) => void;
-}) {
-  return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <Typography variant="caption" noWrap sx={{ fontFamily: 'monospace', maxWidth: 200 }}>
-        {token.slice(0, 16)}...
-      </Typography>
-      <Tooltip title={copied ? 'Copied!' : 'Copy invitation link'}>
-        <IconButton
-          size="small"
-          aria-label={`Copy invitation link for ${username}`}
-          onClick={() => onCopy(token)}
-        >
-          <CopyIcon fontSize="small" />
-        </IconButton>
-      </Tooltip>
-    </Box>
-  );
+  email: string;
+  roles: string[];
+  /** `active` or `disabled` (core's words); `merged_into_user_id` marks a merged-away account. */
+  status: string;
+  created_at?: string;
+  /** Set once an admin merged this account into another. */
+  merged_into_user_id?: string;
 }
 
-export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) {
+/**
+ * `authDisabled` is the host's reading of the server's auth setting (books: AuthContext.authEnabled
+ * === false; the shell: /auth/status auth_disabled). Under it core refuses invite create and resend,
+ * deactivate, reactivate and reset-password for the auth-disabled principal (SEC5-8). The page says
+ * "Turn on sign-in to do this" and:
+ *   - hides deactivate, reactivate and reset-password (nothing the page can do makes them work);
+ *   - keeps invite create and resend visible but disabled, so the message sits next to the controls
+ *     the admin came for;
+ *   - leaves the invite list and revoke live: they answer under auth-off (books routes, see
+ *     services/booksInvites.ts).
+ * A refusal that arrives anyway (the auth setting was unknown) only disables.
+ */
+export function UsersPage({
+  extensions,
+  authDisabled = false,
+}: {
+  extensions?: UsersPageExtensions;
+  authDisabled?: boolean;
+}) {
+  // Set when a call came back refused anyway (the auth setting was unknown to the page).
+  const [signInRefused, setSignInRefused] = useState(false);
+  const signInBlocked = authDisabled || signInRefused;
   const [users, setUsers] = useState<User[]>([]);
-  const [invites, setInvites] = useState<Invite[]>([]);
+  const [invites, setInvites] = useState<PendingInviteRow[]>([]);
   const [accepted, setAccepted] = useState<AcceptedInvite[]>([]);
+  // Books owns invitation e-mail (send, resend), the guest-access flags and the pending list itself
+  // (it answers under auth-off, where core's native list does not): one books call fills all three.
   const [settings, setSettings] = useState<InviteSettings>({
     mailConfigured: false,
     mailUnavailableReason: '',
@@ -136,7 +109,6 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
   const [notice, setNotice] = useState('');
   const [inviteOpen, setInviteOpen] = useState(false);
   const [error, setError] = useState('');
-  const [copiedToken, setCopiedToken] = useState('');
   const [emailUser, setEmailUser] = useState<User | null>(null);
   // The user whose sign-ins-and-data drawer is open lives in the address bar
   // (`?footprint=<userId>`), so the drawer can be linked to. The id, not the
@@ -163,30 +135,20 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
   const [extensionsRefresh, setExtensionsRefresh] = useState(0);
   const footprintUser = footprintId ? (users.find((u) => String(u.id) === footprintId) ?? null) : null;
 
-  // Ref for token reset timeout
-  const copiedTokenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const load = useCallback(async () => {
     try {
-      const [uResp, iResp] = await Promise.all([
-        apiFetch(`${API_BASE}/users`),
-        apiFetch(`${API_BASE}/users/invites`),
-      ]);
-      if (!uResp.ok) throw new Error(await responseErrorMessage(uResp));
-      if (!iResp.ok) throw new Error(await responseErrorMessage(iResp));
-      const uBody = unwrapData<{ users?: User[] }>(await uResp.json());
-      const iBody = unwrapData<InvitesBody>(await iResp.json());
-      setUsers(uBody.users || []);
-      setInvites(iBody.invites || []);
-      setAccepted(iBody.accepted || []);
+      const [u, list] = await Promise.all([listAdminUsers(), listInvites()]);
+      setUsers(u);
+      setInvites(list.invites);
+      setAccepted(list.accepted);
       setSettings({
-        mailConfigured: !!iBody.mail_configured,
-        mailUnavailableReason: iBody.mail_unavailable_reason || '',
-        guestPolicySyncConfigured: !!iBody.guest_policy_sync_configured,
+        mailConfigured: list.mailConfigured,
+        mailUnavailableReason: list.mailUnavailableReason,
+        guestPolicySyncConfigured: list.guestPolicySyncConfigured,
       });
       setError('');
     } catch (err) {
-      setError(describeRequestError(err, 'Failed to load users'));
+      setError(errorText(err, 'Failed to load users'));
     }
   }, []);
 
@@ -195,39 +157,39 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
   }, [load]);
 
   // Runs a user-management write and surfaces any failure in the page alert.
-  // A failed or login-redirected call must never look like a success, so the
-  // list is only reloaded when the write actually went through.
+  // A failed call must never look like a success, so the list is only reloaded
+  // when the write actually went through.
   const runUserAction = useCallback(
-    async (path: string, failureMessage: string): Promise<Response | null> => {
+    async <T,>(action: () => Promise<T>, failureMessage: string): Promise<T | null> => {
       setError('');
       try {
-        const resp = await apiFetch(`${API_BASE}${path}`, { method: 'POST' });
-        if (!resp.ok) {
-          const reason = await responseErrorMessage(resp);
-          setError(reason.startsWith('HTTP ') ? `${failureMessage} (${reason})` : reason);
+        return await action();
+      } catch (err) {
+        if (isSignInRequiredRefusal(err, authDisabled)) {
+          setSignInRefused(true);
           return null;
         }
-        return resp;
-      } catch (err) {
-        setError(describeRequestError(err, failureMessage));
+        setError(errorText(err, failureMessage));
         return null;
       }
     },
-    []
+    [authDisabled]
   );
 
-  const handleDeactivate = useCallback(
+  const handleDisable = useCallback(
     async (id: string) => {
-      if (await runUserAction(`/users/${id}/deactivate`, 'Failed to deactivate user')) {
+      if ((await runUserAction(() => disableUser(id).then(() => true), 'Failed to deactivate user')) !== null) {
         load();
       }
     },
     [load, runUserAction]
   );
 
-  const handleReactivate = useCallback(
+  // The server answers 409 `merged_away` for a merged-away account; the page does not offer
+  // the action for one, so that answer only reaches a stale row, and shows as the page error.
+  const handleEnable = useCallback(
     async (id: string) => {
-      if (await runUserAction(`/users/${id}/reactivate`, 'Failed to reactivate user')) {
+      if ((await runUserAction(() => enableUser(id).then(() => true), 'Failed to reactivate user')) !== null) {
         load();
       }
     },
@@ -235,33 +197,30 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
   );
 
   const handleResetPassword = useCallback(
-    async (id: string) => {
-      const resp = await runUserAction(`/users/${id}/reset-password`, 'Failed to reset password');
-      if (!resp) return;
-      const data = await resp.json().catch(() => null);
-      // The endpoint returns { token, login_url }. Copy the URL — it is what the
-      // user actually clicks. The bare token is kept as a fallback for a server
-      // that predates login_url, and because login_url is relative when
-      // EXTERNAL_URL is unset (the admin then prepends the address themselves).
-      const payload = unwrapData<{ login_url?: string; token?: string } | null>(data);
-      const copyable = payload?.login_url || payload?.token;
-      if (copyable) {
-        setCopiedToken(copyable);
-        navigator.clipboard.writeText(copyable).catch(() => {});
-      }
+    async (user: User) => {
+      setNotice('');
+      const link = await runUserAction(() => createPasswordResetLink(user.id), 'Failed to reset password');
+      if (!link) return;
+      // The link is shown once: core does not keep the token, so it cannot be listed again.
+      navigator.clipboard.writeText(link).catch(() => {});
+      setNotice(`Password-reset link for ${user.username} (copied; it is shown once and works once): ${link}`);
       load();
     },
     [load, runUserAction]
   );
 
   const handleResend = useCallback(
-    async (inv: Invite) => {
+    async (inv: PendingInviteRow) => {
       setNotice('');
+      // Books' route: core has no mailer.
       if (
-        await runUserAction(
-          `/users/invites/${encodeURIComponent(inv.id)}/resend`,
-          'Failed to resend invitation'
-        )
+        await runUserAction(async () => {
+          const resp = await apiFetch(`${API_BASE}/users/invites/${encodeURIComponent(inv.id)}/resend`, {
+            method: 'POST',
+          });
+          if (!resp.ok) throw await apiErrorFromResponse(resp, `HTTP ${resp.status}`);
+          return true;
+        }, 'Failed to resend invitation')
       ) {
         setNotice(`Invitation emailed again to ${inv.email}.`);
         load();
@@ -270,31 +229,32 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
     [load, runUserAction]
   );
 
-  const handleCopyToken = useCallback((token: string) => {
-    navigator.clipboard.writeText(inviteLink(token)).catch(() => {});
-    setCopiedToken(token);
-    if (copiedTokenTimeoutRef.current) clearTimeout(copiedTokenTimeoutRef.current);
-    copiedTokenTimeoutRef.current = setTimeout(() => setCopiedToken(''), 3000);
-  }, []);
-
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (copiedTokenTimeoutRef.current) {
-        clearTimeout(copiedTokenTimeoutRef.current);
+  const handleRevokeInvite = useCallback(
+    async (inv: PendingInviteRow) => {
+      setNotice('');
+      if ((await runUserAction(() => deleteInvite(inv.id).then(() => true), 'Failed to revoke invitation')) !== null) {
+        setNotice(`Invitation for ${inv.username} revoked.`);
+        load();
       }
-    };
-  }, []);
+    },
+    [load, runUserAction]
+  );
 
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
         <Typography variant="h4">Users</Typography>
-        <Button variant="contained" startIcon={<InviteIcon />} onClick={() => setInviteOpen(true)}>
+        <Button
+          variant="contained"
+          startIcon={<InviteIcon />}
+          onClick={() => setInviteOpen(true)}
+          disabled={signInBlocked}
+        >
           Create Invite
         </Button>
       </Box>
 
+      {signInBlocked && <SignInRequiredNotice sx={{ mb: 2 }} />}
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
@@ -329,30 +289,38 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                   ))}
                 </TableCell>
                 <TableCell>
-                  <Chip
-                    label={u.status}
-                    size="small"
-                    color={
-                      u.status === 'active'
-                        ? 'success'
-                        : u.status === 'locked'
-                          ? 'error'
-                          : 'default'
-                    }
-                  />
+                  {u.merged_into_user_id ? (
+                    <Tooltip title="This account was merged into another and cannot be enabled">
+                      <Chip label="merged" size="small" />
+                    </Tooltip>
+                  ) : (
+                    <Chip
+                      label={u.status}
+                      size="small"
+                      color={
+                        u.status === 'active'
+                          ? 'success'
+                          : u.status === 'disabled'
+                            ? 'error'
+                            : 'default'
+                      }
+                    />
+                  )}
                 </TableCell>
-                <TableCell>{new Date(u.created_at).toLocaleDateString()}</TableCell>
+                <TableCell>
+                  {u.created_at ? new Date(u.created_at).toLocaleDateString() : ''}
+                </TableCell>
                 <TableCell align="right">
-                  {u.status === 'active' && u.username !== '_system' && (
+                  {!authDisabled && u.status === 'active' && u.username !== '_system' && (
                     <Tooltip title="Deactivate">
-                      <IconButton size="small" onClick={() => handleDeactivate(u.id)}>
+                      <IconButton size="small" disabled={signInBlocked} onClick={() => handleDisable(u.id)}>
                         <BlockIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
                   )}
-                  {u.status === 'locked' && !u.merged_into_user_id && (
+                  {!authDisabled && u.status === 'disabled' && !u.merged_into_user_id && (
                     <Tooltip title="Reactivate">
-                      <IconButton size="small" onClick={() => handleReactivate(u.id)}>
+                      <IconButton size="small" disabled={signInBlocked} onClick={() => handleEnable(u.id)}>
                         <ActiveIcon fontSize="small" color="success" />
                       </IconButton>
                     </Tooltip>
@@ -391,9 +359,9 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                       </IconButton>
                     </Tooltip>
                   )}
-                  {u.username !== '_system' && (
+                  {!authDisabled && u.username !== '_system' && (
                     <Tooltip title="Reset Password">
-                      <IconButton size="small" onClick={() => handleResetPassword(u.id)}>
+                      <IconButton size="small" disabled={signInBlocked} onClick={() => handleResetPassword(u)}>
                         <ResetIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
@@ -424,7 +392,7 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                   <TableCell>Role</TableCell>
                   <TableCell>Expires</TableCell>
                   <TableCell>Invitation email</TableCell>
-                  <TableCell>Link</TableCell>
+                  <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -446,6 +414,7 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                             <IconButton
                               size="small"
                               aria-label={`Resend invitation email to ${inv.email}`}
+                              disabled={signInBlocked}
                               onClick={() => handleResend(inv)}
                             >
                               <EmailIcon fontSize="small" />
@@ -454,21 +423,16 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
                         )}
                       </Box>
                     </TableCell>
-                    <TableCell>
-                      {inv.token ? (
-                        <InviteLinkCell
-                          token={inv.token}
-                          username={inv.username}
-                          copied={copiedToken === inv.token}
-                          onCopy={handleCopyToken}
-                        />
-                      ) : (
-                        <Tooltip title="Only an admin signed in to the web interface can copy the link of an emailed invitation; resend the email instead">
-                          <Typography variant="body2" color="text.secondary">
-                            Hidden
-                          </Typography>
-                        </Tooltip>
-                      )}
+                    <TableCell align="right">
+                      <Tooltip title="Revoke invitation">
+                        <IconButton
+                          size="small"
+                          aria-label={`Revoke invitation for ${inv.username}`}
+                          onClick={() => handleRevokeInvite(inv)}
+                        >
+                          <RevokeInviteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -539,6 +503,8 @@ export function UsersPage({ extensions }: { extensions?: UsersPageExtensions }) 
         guestPolicySyncConfigured={settings.guestPolicySyncConfigured}
         onClose={() => setInviteOpen(false)}
         onCreated={load}
+        authDisabled={authDisabled}
+        onRefused={() => setSignInRefused(true)}
       />
       {emailUser && (
         <SetEmailDialog
@@ -657,6 +623,8 @@ function CreateInviteDialog({
   guestPolicySyncConfigured,
   onClose,
   onCreated,
+  authDisabled,
+  onRefused,
 }: {
   open: boolean;
   mailConfigured: boolean;
@@ -664,6 +632,9 @@ function CreateInviteDialog({
   guestPolicySyncConfigured: boolean;
   onClose: () => void;
   onCreated: () => void;
+  authDisabled: boolean;
+  /** The create came back refused for want of sign-in (SEC5-8); the page now shows the notice. */
+  onRefused: () => void;
 }) {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -692,6 +663,8 @@ function CreateInviteDialog({
   const handleCreate = async () => {
     setError('');
     try {
+      // Books' route (e-mail delivery lives there; core's create has none). Kept until the books
+      // wrapper over core's invite create exists (lead hold-point, F4-08 B8).
       const resp = await apiFetch(`${API_BASE}/users/invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -703,13 +676,17 @@ function CreateInviteDialog({
         }),
       });
       if (!resp.ok) {
-        const reason = await responseErrorMessage(resp);
-        throw new Error(reason.startsWith('HTTP ') ? 'Failed to create invite' : reason);
+        throw await apiErrorFromResponse(resp, 'Failed to create invite');
       }
       const body = unwrapData<CreateInviteResult>(await resp.json());
       setResult(body);
       onCreated();
     } catch (err: unknown) {
+      if (isSignInRequiredRefusal(err, authDisabled)) {
+        onRefused();
+        handleClose();
+        return;
+      }
       setError(describeRequestError(err, (err as Error).message));
     }
   };

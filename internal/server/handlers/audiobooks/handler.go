@@ -72,6 +72,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/search"
 	"github.com/falkcorp/audiobook-organizer/internal/searchcache"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 	"github.com/falkcorp/audiobook-organizer/internal/versionprimary"
 	"github.com/falkcorp/mediacore/library"
@@ -982,6 +983,13 @@ type trashListItem struct {
 func trashProgressViewer(c *gin.Context) (viewerID string, seeAll bool) {
 	if u, ok := servermiddleware.CurrentUser(c); ok && u != nil {
 		viewerID = u.ID
+	}
+	// Under core identity (F4-08 B7) the atom's own table entry decides, not its
+	// read-side successor (core:users.view, 05-rbac §6.1): the successor may be
+	// held by a principal that never held users.manage, which would show other
+	// users' names and progress to someone HEAD hid them from.
+	if held, bridged := legacyauth.Held(c.Request.Context(), string(auth.PermUsersManage)); bridged {
+		return viewerID, held
 	}
 	return viewerID, auth.Can(c.Request.Context(), auth.PermUsersManage)
 }

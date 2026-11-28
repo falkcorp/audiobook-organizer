@@ -113,6 +113,8 @@ func bootAt(t *testing.T, work string, opt func(*app.Options), wrap ...func(modu
 	// These boots read the store, they do not need the globals.
 	opts.ProcessDefaults = false
 	opt(&opts)
+	// No listen port: this boot never Runs, so nothing binds (proven with
+	// 127.0.0.1:8484 held). withLoopbackListen belongs to boots that Run.
 	var m module.Module = mod
 	for _, w := range wrap {
 		m = w(m)

@@ -22,6 +22,8 @@ export interface UseBackupHandlersParams {
   restoreTarget: api.BackupInfo | null;
   restoreVerify: boolean;
   deleteBackupTarget: api.BackupInfo | null;
+  /** The SEC5-8 gate's refuse(): true when a failure was the auth-off refusal (shown as the notice in the dialog). */
+  refuse?: (err: unknown) => boolean;
 }
 
 export interface UseBackupHandlersReturn {
@@ -72,6 +74,7 @@ export function useBackupHandlers(
     restoreTarget,
     restoreVerify,
     deleteBackupTarget,
+    refuse,
   } = params;
 
   const loadBackups = async () => {
@@ -137,6 +140,7 @@ export function useBackupHandlers(
       });
       setRestoreDialogOpen(false);
     } catch (error) {
+      if (refuse?.(error)) return;
       console.error('Failed to restore backup:', error);
       setBackupNotice({
         severity: 'error',

@@ -1,7 +1,7 @@
 // file: internal/server/wire_repairs_routes.go
-// version: 1.18.2
+// version: 1.18.3
 // guid: 4a9c1e62-3f75-4d08-b8a6-5e2d7c0b9f13
-// last-edited: 2026-11-09
+// last-edited: 2026-11-21
 
 package server
 
@@ -13,6 +13,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -21,6 +23,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
 	repairshandler "github.com/falkcorp/audiobook-organizer/internal/server/handlers/repairs"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -76,6 +79,22 @@ func (s *Server) permCheck() func(*gin.Context, auth.Permission) bool {
 // a refusal itself (the Repairs lane, which lists a fixer the caller may not
 // use without its last runs, and refuses a read with its own 403).
 func (s *Server) permHolds() repairshandler.PermissionCheck {
+	head := s.permHoldsHead()
+	return func(c *gin.Context, p auth.Permission) bool {
+		// Under core identity (F4-08 B7) auth off is the auth-disabled
+		// principal, not books' EnableAuth, and the atom is judged through the
+		// principal stage 12 bound; there is no first-run bypass.
+		if held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p)); bridged {
+			return held
+		}
+		return head(c, p)
+	}
+}
+
+// permHoldsHead is permHolds under HEAD's own chain (LegacyAuthGin): books'
+// EnableAuth read once when the server wires it, and HoldsPermission's
+// first-run bypass.
+func (s *Server) permHoldsHead() repairshandler.PermissionCheck {
 	if !config.AppConfig.EnableAuth {
 		return func(*gin.Context, auth.Permission) bool { return true }
 	}
@@ -96,11 +115,19 @@ func (s *Server) permHolds() repairshandler.PermissionCheck {
 // permHolds does.
 func (s *Server) permHoldsLive() repairshandler.PermissionCheck {
 	connected := s.permHolds()
-	if !config.Snapshot().EnableAuth {
-		return connected
-	}
+	authOn := config.Snapshot().EnableAuth
 	store := s.storeForWiring()
 	return func(c *gin.Context, p auth.Permission) bool {
+		// Under core identity (F4-08 B7) the recheck is core's: the principal is
+		// re-resolved (Identity.Refresh), so a disabled, removed or demoted
+		// account stops holding what it lost, as HEAD's recheck below did
+		// against books' store, which is no longer the account record.
+		if held, bridged := legacyauth.HeldLive(c.Request.Context(), string(p)); bridged {
+			return held
+		}
+		if !authOn {
+			return connected(c, p)
+		}
 		// The account count is read only for a request with no user on it (a
 		// first run): an authenticated request has users by definition, and the
 		// count walks the whole user keyspace.
@@ -135,6 +162,26 @@ const liveRecheckTTL = 5 * time.Second
 // included: the stream ends and the client reconnects, which re-authenticates
 // it. Auth disabled, and a first run with no accounts yet, stand.
 func (s *Server) sessionStillStands() func(c *gin.Context) bool {
+	// Under core identity (F4-08 B10b2) the question goes to core: the
+	// principal stage 12 bound is re-resolved (Identity.Refresh), which fails
+	// when its user is disabled or removed, its session or key is gone or
+	// expired, its credential epoch moved, or an extension's token ended, and
+	// answers for the auth-disabled principal too, so books' EnableAuth is not
+	// read. Books' store is no longer the account record there, so HEAD's reads
+	// below would answer about rows M3 deletes. It fails closed: no principal
+	// is not a first run (HEAD's no-accounts bypass reads books' user count),
+	// it is a request core did not authenticate. Identity is the wiring's
+	// (WithIdentity), never the request's.
+	if id := s.identity; id != nil {
+		return func(c *gin.Context) bool {
+			p, ok := coreauth.PrincipalFrom(c.Request.Context())
+			if !ok || p == nil || id.Refresh == nil {
+				return false
+			}
+			np, err := id.Refresh(c.Request.Context(), p)
+			return err == nil && np != nil
+		}
+	}
 	if !config.Snapshot().EnableAuth {
 		return func(*gin.Context) bool { return true }
 	}

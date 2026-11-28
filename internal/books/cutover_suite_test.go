@@ -342,7 +342,7 @@ func manifestSteps(man module.Manifest) ([]cutoverStep, error) {
 	}
 	var data []datamigrate.DataMigration
 	if man.Cutover != nil {
-		for _, d := range man.Cutover(module.Importers{}) {
+		for _, d := range man.Cutover(shapeImporters()) {
 			if !d.Cutover {
 				return nil, fmt.Errorf("Manifest.Cutover returns %s, whose Cutover flag is unset: the count rule assumes a cutover step's contract (§5S.3.13)", d.ID)
 			}
@@ -2001,14 +2001,27 @@ func cutoverSuiteCleanup() {
 // half (core's level steps, from kernel.CoreOwners over the build's modules)
 // then books' (Flip.Entries over the very Flip the manifest registers). The cell
 // below validates this, so the check cannot drift from what ships.
-func flipListEntries(m *booksModule) []cutover.ListEntry {
+func flipListEntries(t testing.TB, m *booksModule) []cutover.ListEntry {
+	t.Helper()
 	var core []cutover.ListEntry
 	for _, o := range kernel.CoreOwners(m) {
 		for _, s := range o.Spec.Migrations {
 			core = append(core, cutover.LevelEntry(o.Owner, s))
 		}
 	}
-	return m.flipSteps(module.Importers{}).Entries(core...)
+	return mustFlipSteps(t, m).Entries(core...)
+}
+
+// mustFlipSteps is the Flip the manifest registers, over importers that refuse
+// every call (shapeImporters, which carry what M3's config needs since the
+// identity flip is on).
+func mustFlipSteps(t testing.TB, m *booksModule) cutover.Flip {
+	t.Helper()
+	f, err := m.flipSteps(shapeImporters())
+	if err != nil {
+		t.Fatalf("building the cutover list: %v", err)
+	}
+	return f
 }
 
 // TestCutoverList_BooksFlipIsValid is the cutover-list cell (F3-07 d; F3-04's
@@ -2023,7 +2036,7 @@ func TestCutoverList_BooksFlipIsValid(t *testing.T) {
 	list := cutover.CutoverList{
 		Target:       storage.Levels{"books": man.Storage.Level, "core": kernel.CoreCutoverLevel},
 		FirstVersion: storage.Levels{"books": nextBooksVersion(), "core": 1},
-		Entries:      flipListEntries(m),
+		Entries:      flipListEntries(t, m),
 	}
 	if err := cutover.ValidateCutoverList(list); err != nil {
 		t.Fatalf("the books manifest's cutover list is invalid: %v", err)
@@ -2039,7 +2052,7 @@ func TestCutoverList_BooksFlipIsValid(t *testing.T) {
 	})
 	t.Run("a list without core's half is reported", func(t *testing.T) {
 		noCore := list
-		noCore.Entries = m.flipSteps(module.Importers{}).Entries()
+		noCore.Entries = mustFlipSteps(t, m).Entries()
 		if err := cutover.ValidateCutoverList(noCore); err == nil {
 			t.Fatal("a list with no core level step passed although core is raised to 1")
 		}

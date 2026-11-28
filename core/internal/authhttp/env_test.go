@@ -454,6 +454,25 @@ func wantErr(t testing.TB, err error, status int, code string) {
 	}
 }
 
+// sessionEndingCodes is a copy of the problem codes whose 401 ends the SPA's
+// session: core/web/packages/api-client/src/client.ts:26 SESSION_ENDING_CODES.
+var sessionEndingCodes = map[string]bool{
+	"authentication_required": true, "expired": true, "revoked": true,
+	"inactive_user": true, "invalid_credential": true,
+}
+
+// wantAuthOffRefusal is the refusal of the auth-disabled principal (F4-08
+// ruling G5(a)): 403 interactive_required, which is no 401 and no code of the
+// session-ending set, so a no-auth install's SPA is not signed out by it.
+func wantAuthOffRefusal(t testing.TB, err error) {
+	t.Helper()
+	wantErr(t, err, http.StatusForbidden, "interactive_required")
+	var he *httpapi.Error
+	if errors.As(err, &he) && (he.Status == http.StatusUnauthorized || sessionEndingCodes[he.Code]) {
+		t.Fatalf("%d %s ends the session", he.Status, he.Code)
+	}
+}
+
 func cookieNamed(w *httptest.ResponseRecorder, name string) *http.Cookie {
 	for _, c := range w.Result().Cookies() {
 		if c.Name == name {

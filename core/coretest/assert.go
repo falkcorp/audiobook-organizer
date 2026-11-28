@@ -15,15 +15,43 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// AssertPermission checks that path answers 403 for a user lacking perm and
-// does not answer 401/403 for a user holding exactly perm (R6 per route).
-// Core authentication lands at R2's identity flip (F4-08 fills this body);
-// until then it fails the test, because R1's router authorises no native
-// route from a principal (every non-Public native route is refused at Build).
+// AssertPermission checks R6 for one route: path answers 403 to a user
+// lacking perm and neither 401 nor 403 to a user holding exactly perm.
+//
+// Both users are ephemeral, seeded in the harness through core auth like
+// WithUser's: the lacking user is an authenticated, active user with no role
+// at all, and the holding user's one role holds perm and nothing else. Each
+// signs in interactively, so a route that carries an Interactive guard is
+// judged on its permission and not refused for the credential's kind. A 401
+// from the lacking user is a failure, not a pass: it means the credential did
+// not authenticate, so the 403 the check wants was never tested. method and
+// path are sent as given, with no body; a route whose handler needs input
+// answers 4xx other than 401 and 403 to the holding user, which passes.
 func AssertPermission(t testing.TB, h *Harness, method, path string, perm rbac.Permission) {
 	t.Helper()
-	t.Fatalf("coretest: AssertPermission needs core authentication, which lands at R2's identity flip (%s %s, %s)",
-		method, path, perm)
+	lacking := h.ephemeral(t, lackingName)
+	holding := h.ephemeral(t, holdingName(perm), perm)
+	status := func(c *Client) int {
+		req, err := http.NewRequestWithContext(t.Context(), method, path, nil)
+		if err != nil {
+			t.Fatalf("coretest: AssertPermission: %s %s: %v", method, path, err)
+			return 0
+		}
+		resp := c.Do(req)
+		_ = resp.Body.Close() // an in-memory recording
+		return resp.StatusCode
+	}
+	switch got := status(lacking); got {
+	case http.StatusForbidden:
+	case http.StatusUnauthorized:
+		t.Errorf("coretest: AssertPermission: %s %s answered 401 to a signed-in user lacking %s, want 403 (the credential did not authenticate)", method, path, perm)
+	default:
+		t.Errorf("coretest: AssertPermission: %s %s answered %d to a user lacking %s, want 403", method, path, got, perm)
+	}
+	switch got := status(holding); got {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		t.Errorf("coretest: AssertPermission: %s %s answered %d to a user holding exactly %s, want neither 401 nor 403", method, path, got, perm)
+	}
 }
 
 // AssertRoutesHavePermissions walks the built router (R6, archtest twin): it

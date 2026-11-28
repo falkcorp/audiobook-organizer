@@ -2107,8 +2107,12 @@ func (s *Server) seedRolesAndTokens() {
 	} else if created > 0 || updated > 0 {
 		slog.Info("seed roles created, updated", "created", created, "updated", updated)
 	}
-	if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
-		slog.Warn("seed system user", "err", err)
+	// Core boot has already seeded its system user. The legacy user claim is
+	// retired under core identity, so this startup path must not write to it.
+	if s.identity == nil {
+		if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
+			slog.Warn("seed system user", "err", err)
+		}
 	}
 
 	// Every API key expires since 2026-10-07. Keys created before that with
@@ -2140,8 +2144,16 @@ func (s *Server) seedRolesAndTokens() {
 		slog.Error("Failed to create the state directory; no bootstrap token will be written",
 			"dir", dataDir, "err", err)
 	} else {
-		if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
-			slog.Info("Failed to init bootstrap token", "err", err)
+		// Under core identity the token is core's: auth.BootWrites writes
+		// <state dir>/.bootstrap-token (Options.Auth.BootstrapTokenFile) and core
+		// verifies the redemption against its own record. HEAD's writer would
+		// replace that file on every start with a token only the retired
+		// /auth/bootstrap handler could redeem, so a second writer under the same
+		// name leaves the operator holding a token nothing accepts.
+		if s.identity == nil {
+			if err := InitBootstrapToken(s.storeForWiring(), dataDir); err != nil {
+				slog.Info("Failed to init bootstrap token", "err", err)
+			}
 		}
 		if s.life.startConfig.writeStartupReadOnlyKey {
 			if err := InitStartupReadOnlyKey(s.storeForWiring(), dataDir); err != nil {
@@ -2699,10 +2711,37 @@ func allSet(keys []string, settingTrue func(key string) bool) bool {
 }
 
 func (s *Server) perm(p auth.Permission) gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gatePerm, Atom: string(p)})
+	}
+	// Under core identity (WithIdentity, F4-08 B7) the atom's table entry
+	// decides, through the principal stage 12 bound. Books' EnableAuth is not
+	// read: core's mode is what makes a request anonymous, and the
+	// auth-disabled principal is judged by its own checker.
+	if s.identity != nil {
+		return s.identity.Bridge.RequirePerm(string(p))
+	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
 	return servermiddleware.RequirePermission(s.storeForWiring(), p)
+}
+
+// requireAuth is HEAD's RequireAuth on a gin route, or its adapter under core
+// identity (F4-08 B7): the bridge authenticates nothing itself, it hands HEAD's
+// handlers the user stage 12 resolved. With auth disabled and no identity it is
+// a pass-through, as it was.
+func (s *Server) requireAuth() gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateAuth})
+	}
+	if s.identity != nil {
+		return s.identity.Bridge.Authenticate(servermiddleware.BindCurrentUser)
+	}
+	if !config.AppConfig.EnableAuth {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return servermiddleware.RequireAuth(s.storeForWiring())
 }
 
 // versionedAPIPrefix matches the paths reserved for versioned APIs,
@@ -2750,7 +2789,11 @@ func (s *Server) itunesSvcGuard(fn gin.HandlerFunc) gin.HandlerFunc {
 	}
 }
 
-func (s *Server) setupRoutes() {
+// setupRoutes registers every route on s.router. It returns the error of the
+// one registration that can refuse the boot, the Audiobookshelf surface
+// (wireABSRoutes), and stops at it: NewServer then fails with it and releases
+// the server, so a router left half-registered is never served.
+func (s *Server) setupRoutes() error {
 	// The legacy mount's post-match check (05-http-api §4.8, SEC2-22) runs
 	// before every route-level middleware and handler: gin binds a route's
 	// chain when the route is registered, so it is installed before any route
@@ -2792,10 +2835,7 @@ func (s *Server) setupRoutes() {
 	// is demanded: the payload is aggregate counters and Go runtime stats with
 	// no per-book or per-user labels, so gating it further would add operator
 	// friction without protecting anything more.
-	metricsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
-	if config.AppConfig.EnableAuth {
-		metricsAuth = servermiddleware.RequireAuth(s.storeForWiring())
-	}
+	metricsAuth := s.requireAuth()
 	s.router.GET("/metrics", buildTopLevelAuthChain(cfMW, metricsAuth,
 		gin.WrapH(s.MetricsHandler()))...)
 
@@ -2828,10 +2868,7 @@ func (s *Server) setupRoutes() {
 	// identity arrives only in that header — so EventSource 401'd in a reconnect
 	// loop and the UI showed a permanent "Connection lost" banner while every
 	// /api/v1 call succeeded.
-	eventsAuth := gin.HandlerFunc(func(c *gin.Context) { c.Next() })
-	if config.AppConfig.EnableAuth {
-		eventsAuth = servermiddleware.RequireAuth(s.storeForWiring())
-	}
+	eventsAuth := s.requireAuth()
 	// endStreamsOnShutdown first: the stream ends when the stop closes the
 	// event streams, before the listener drains (R1-15).
 	s.router.GET("/api/events", append([]gin.HandlerFunc{s.endStreamsOnShutdown()},
@@ -2839,8 +2876,12 @@ func (s *Server) setupRoutes() {
 
 	// Public temp-login consumer at the root so URLs are short and
 	// browser-friendly. Validates the token, deletes it (single-use),
-	// creates a 24h session, sets the cookie, redirects to the SPA.
-	s.router.GET("/auth/temp-login", s.consumeTempLoginToken)
+	// creates a 24h session, sets the cookie, redirects to the SPA. Deleted
+	// under core identity (routesDeletedAtTheFlip): the SPA's /login/temp#token=
+	// consumes the link through core's POST /api/core/v1/auth/temp-login/consume.
+	if !s.deletedAtTheFlip(http.MethodGet, "/auth/temp-login") {
+		s.router.GET("/auth/temp-login", s.consumeTempLoginToken)
+	}
 
 	// Redirect /api/* to /api/v1/* for v1 compatibility. The rule is
 	// legacyAPIRedirect, which books' legacy mount also carries as its
@@ -2868,12 +2909,8 @@ func (s *Server) setupRoutes() {
 	if apiGroupHookForTest != nil {
 		bodyLimitMiddleware = chainHandlers(apiGroupHookForTest, bodyLimitMiddleware)
 	}
-	authMiddleware := gin.HandlerFunc(func(c *gin.Context) {
-		c.Next()
-	})
-	if config.AppConfig.EnableAuth {
-		authMiddleware = servermiddleware.RequireAuth(s.storeForWiring())
-	} else {
+	authMiddleware := s.requireAuth()
+	if s.identity == nil && !config.AppConfig.EnableAuth {
 		slog.Warn("authentication is disabled (enable_authfalse) — do not expose this server to untrusted networks")
 	}
 	if !config.AppConfig.EnableRateLimit && config.AppConfig.APIRateLimitPerMinute > 0 {
@@ -2888,7 +2925,9 @@ func (s *Server) setupRoutes() {
 	// fail-open Cloudflare-Access behaviour applied to /api/v1 below, where an
 	// unverifiable assertion falls through to RequireAuth. Feature-flagged off by
 	// default; registers nothing unless ABS_API_ENABLED is set. See wire_abs_routes.go.
-	s.wireABSRoutes()
+	if err := s.wireABSRoutes(); err != nil {
+		return err
+	}
 
 	// API routes (auth + request-size limits; the rate limit is core's). The Cloudflare Access
 	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is
@@ -3172,6 +3211,7 @@ func (s *Server) setupRoutes() {
 	// cfRecoveryMW (nil without Cloudflare Access) runs on the SPA page fallback:
 	// the one place browser page navigations are served. See cf_recovery.go.
 	s.setupStaticFiles(cfRecoveryMW)
+	return nil
 }
 
 func isStaleOperationStatus(status string) bool {

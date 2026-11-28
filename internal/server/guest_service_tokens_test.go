@@ -420,7 +420,7 @@ func TestGuestToken_DeactivationRevokesTheGuestsOwnTokenOnly(t *testing.T) {
 		t.Fatalf("revoke audit entries = %d", len(got))
 	}
 	// Deactivating again changes nothing.
-	f.srv.revokeGuestServiceTokenAsync(a.ID, "again")
+	f.srv.RevokeGuestKeyForAccount(a.ID, "again")
 	f.srv.bgWG.Wait()
 	if len(f.api.revoked) != 1 {
 		t.Fatalf("a second revoke called Cloudflare again: %v", f.api.revoked)

@@ -26,6 +26,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -378,6 +379,17 @@ type Options struct {
 	// Nil, or an empty answer, keys on c.ClientIP() as before. It decides only the
 	// throttle bucket: audit events and sessions still record c.ClientIP().
 	ThrottleKey func(*gin.Context) string
+	// IdentityThrottleKey is ThrottleKey's replacement on a server that runs
+	// under core identity (F4-08 B10b1): the bucket for the failure throttle
+	// (POST /login, POST /auth/refresh) and for hop 1's per-credential rate
+	// limiter. The gin binder that ThrottleKey's loginThrottleKey reads (its
+	// CFAccessVerified marker) does not run there, so the wiring builds this
+	// from cfaccess.ClientAddrTrust.ClientBucket and core's stage 0 address
+	// (httpapi.ClientAddrFrom). It is read only on a request bound to a
+	// legacyauth.Identity; an unbound request keeps ThrottleKey, so the gin copy
+	// stays authoritative until it is deleted (B10h). Nil, or an empty answer,
+	// falls back to ThrottleKey and then to c.ClientIP(), never to no bucket.
+	IdentityThrottleKey func(*http.Request) string
 	// Throttle is the failed-login throttle. The server passes the one it also
 	// gives the web login, so both share their per-account and per-source
 	// counters. Nil builds a private one.
@@ -399,6 +411,9 @@ type Handler struct {
 	throttle *coreauth.Throttle
 	// throttleKeyFn is Options.ThrottleKey; read through throttleKey.
 	throttleKeyFn func(*gin.Context) string
+	// identityThrottleKeyFn is Options.IdentityThrottleKey; read through
+	// clientBucket.
+	identityThrottleKeyFn func(*http.Request) string
 
 	library     LibraryStore
 	identity    IdentityStore
@@ -600,6 +615,7 @@ func New(o Options) (*Handler, error) {
 		userData:                o.UserData,
 		throttle:                throttle,
 		throttleKeyFn:           o.ThrottleKey,
+		identityThrottleKeyFn:   o.IdentityThrottleKey,
 		library:                 o.Library,
 		identity:                o.Identity,
 		chapters:                o.Chapters,

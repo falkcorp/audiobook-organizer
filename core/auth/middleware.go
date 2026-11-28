@@ -172,14 +172,24 @@ func (s *Service) Middleware() func(http.Handler) http.Handler {
 // bind binds p into ctx for every later stage.
 func (s *Service) bind(ctx context.Context, p *Principal, c ClientInfo) context.Context {
 	p.ClientAddr = c.Addr
+	if p.seal.set {
+		p.sealIdentity() // core's own edit, before any holder sees p
+	}
 	ctx = WithPrincipal(ctx, p)
 	ctx = s.d.RBAC.Bind(ctx, p.Perms)
 	a := audit.Actor{
 		Method: string(p.Method), CredentialID: p.CredentialID,
 		ClientAddr: addrString(c.Addr), UserAgent: c.UserAgent,
 	}
-	if p.User != nil {
+	switch {
+	case p.User != nil:
 		a.UserID, a.Username = string(p.User.ID), p.User.Username
+	case p.Method == MethodAuthDisabled:
+		// The auth-off principal has no user, and an audited write needs an
+		// actor with one (core's config committer refuses a commit without
+		// it): it is named for its method, which no real user ID can be (IDs
+		// are issued by the service).
+		a.UserID = string(MethodAuthDisabled)
 	}
 	return audit.WithActor(ctx, a)
 }
@@ -206,6 +216,16 @@ func (s *Service) client(r *http.Request) ClientInfo {
 	if s.d.Client != nil {
 		return s.d.Client(r)
 	}
+	return DirectClient(r)
+}
+
+// DirectClient is the connection as auth sees it with no resolver wired: the
+// TCP peer is the client, the request is HTTPS only when the connection is TLS,
+// and any forwarding header marks it Forwarded (so ClientInfo.Local refuses
+// it). It is the floor of strictness: a resolver passed as Deps.Client must
+// never report Local() for a request this reports not Local(); the kernel's
+// resolver test holds httpapi's to that by comparing against this function.
+func DirectClient(r *http.Request) ClientInfo {
 	c := ClientInfo{UserAgent: r.UserAgent(), HTTPS: r.TLS != nil, Forwarded: forwarded(r)}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -390,6 +410,7 @@ func (s *Service) resolveKey(ctx context.Context, raw string, c ClientInfo, m Me
 	if m != MethodAPIKey {
 		p.keyID = k.ID
 	}
+	p.sealIdentity()
 	s.touch(ctx, "k:"+k.ID, now, func(b *storage.Batch) error { return s.d.Store.TouchAPIKey(b, k.ID, now, c.Addr) })
 	return p, nil, nil
 }
@@ -439,6 +460,7 @@ func (s *Service) authenticateSession(r *http.Request, c ClientInfo) (*Principal
 		return fail(failureCode(err))
 	}
 	p.CredentialID, p.AuthTime = rec.PublicID, rec.CreatedAt
+	p.sealIdentity()
 	if s.coalesce("s:"+rec.PublicID, now) {
 		s.stageTouch(ctx, func(b *storage.Batch) error { return s.d.Store.TouchSession(b, rec.PublicID, now) })
 	}
@@ -499,6 +521,7 @@ func (s *Service) extensionStage(e Extension) func(*http.Request, ClientInfo) (*
 		if a.Owner && e.Spec.OwnerVerifier {
 			p.Assurance |= AssuranceOwner
 		}
+		p.sealIdentity()
 		return p, nil, nil
 	}
 }

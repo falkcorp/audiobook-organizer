@@ -15,8 +15,8 @@ import {
   Typography,
   Alert,
 } from '@mui/material';
-import { apiFetch, isAuthRedirectError } from '../utils/apiFetch';
-const API_BASE = '/api/v1';
+import { setupAdmin } from '../services/coreIdentity';
+import { setupErrorMessage } from '../utils/setupErrorMessage';
 
 export default function Setup() {
   const navigate = useNavigate();
@@ -24,6 +24,7 @@ export default function Setup() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [email, setEmail] = useState('');
+  const [bootstrapToken, setBootstrapToken] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -42,23 +43,10 @@ export default function Setup() {
 
     setLoading(true);
     try {
-      const resp = await apiFetch(`${API_BASE}/auth/setup`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, email }),
-      });
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({}));
-        throw Object.assign(new Error(body.error || 'Setup failed'), { response: { data: body } });
-      }
+      await setupAdmin({ username, password, email, bootstrap_token: bootstrapToken });
       navigate('/');
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error;
-      setError(
-        isAuthRedirectError(err)
-          ? 'The server requires a login before setup can run. Sign in and try again.'
-          : msg || 'Setup failed'
-      );
+      setError(setupErrorMessage(err, 'Setup failed'));
     } finally {
       setLoading(false);
     }
@@ -132,6 +120,17 @@ export default function Setup() {
                   spellCheck: false,
                 },
               }}
+            />
+            <TextField
+              fullWidth
+              label="Bootstrap token (only when setting up from another machine)"
+              value={bootstrapToken}
+              onChange={(e) => setBootstrapToken(e.target.value)}
+              margin="normal"
+              name="bootstrap_token"
+              id="bootstrap_token"
+              type="password"
+              autoComplete="off"
             />
             <TextField
               fullWidth

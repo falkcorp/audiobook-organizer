@@ -75,13 +75,13 @@ type specGroup struct {
 // and why. A package whose every compile error names a core identifier that
 // does not exist yet (an undefined core name, a missing field or method of a
 // core type) waits for those identifiers in the same way, listed one by one
-// (waitForCore). Since core/tasks landed (F2-01) every package of 06 compiles
-// against existing packages, and hello waits only for identifiers later rows
-// add (the Manifest and Registrar members; ui.Bundle landed with F9-01), so the
-// 06 subtest skips with that list, and the control snapshots below prove the
-// harness compiles, boots, catches a compile error, catches a refusal and plans
-// both kinds of skip. A package joins the build on its own the day its last
-// missing core package and identifier land.
+// (waitForCore). Since F4-08 B1 landed module.Manifest.Permissions nothing of
+// 06's hello waits, so the 06 subtest pins the waiting set empty and builds and
+// boots every package (the boot needs coretest's identity boot, F4-08 B5, for
+// hello's permissioned route). The control snapshots below prove the harness
+// compiles, boots, catches a compile error, catches a refusal and plans both
+// kinds of skip, so a later row that adds a name to 06 before core has it can
+// be waited for again.
 func TestSpecGoBlocksCompile(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -107,28 +107,16 @@ func TestSpecGoBlocksCompile(t *testing.T) {
 		for _, dir := range slices.Sorted(maps.Keys(waiting)) {
 			t.Logf("core/%s waits: %s", dir, waiting[dir])
 		}
-		// The waiting set is pinned, identifier by identifier, so the skip
-		// below cannot hide a block that waits for a new reason (a typo in an
-		// import or a name, a package or member the spec renamed). A row that
-		// lands one of these identifiers shrinks the list here, in the same
-		// PR; the row that lands the last one deletes the entry and the
-		// blocks build.
-		// Sorted; each line names the row that lands the identifier. The
-		// one with no owning row is tracked in TODO.md (todo.d fragment
-		// filed with F2-01); F3-07 landed module.Setting, module.Settings,
-		// module.SettingsSection and module.Manifest.Settings.
-		helloMissing := []string{
-			"module.Manifest.Permissions", // no owning row yet
-		}
-		wantWaiting := map[string]string{
-			"examples/hello":           "missing in core: " + strings.Join(helloMissing, ", "),
-			"examples/hello/cmd/hello": "imports core/examples/hello, which waits too",
-		}
-		if !maps.Equal(waiting, wantWaiting) {
-			t.Fatalf("06's hello blocks wait for %v, want %v", waiting, wantWaiting)
+		// Nothing waits any more: every identifier 06's hello blocks name
+		// exists in core (module.Manifest.Permissions landed with F4-08 B1), so
+		// the waiting set is pinned empty. A block that waits again, for a
+		// renamed package or a member the spec added before core has it, fails
+		// here instead of being skipped.
+		if len(waiting) != 0 {
+			t.Fatalf("06's hello blocks wait for %v, want nothing", waiting)
 		}
 		if len(build) == 0 {
-			t.Skipf("no package of 06's hello blocks compiles at this release: each waits for a core package or identifier (logged above)")
+			t.Fatalf("no package of 06's hello blocks was planned for the build, and none waits: the snapshot is empty")
 		}
 		if err := buildSpec(t, root, build); err != nil {
 			t.Fatal(err)

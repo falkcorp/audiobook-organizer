@@ -27,7 +27,8 @@ func TestFastExitModule_PrintsTheFlipLevel(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &levels); err != nil {
 		t.Fatalf("output %q: %v", out.String(), err)
 	}
-	if levels[string(ID)] != cutover.BooksCutoverLevel {
-		t.Errorf("printed %s level %d, want the cutover level %d (output %s)", ID, levels[string(ID)], cutover.BooksCutoverLevel, out.String())
+	// The identity flip is on (B10g), so books' level is the identity level.
+	if levels[string(ID)] != cutover.BooksIdentityLevel {
+		t.Errorf("printed %s level %d, want the identity level %d (output %s)", ID, levels[string(ID)], cutover.BooksIdentityLevel, out.String())
 	}
 }

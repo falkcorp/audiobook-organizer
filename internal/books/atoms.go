@@ -35,8 +35,12 @@ type Atom struct {
 	// order 05-rbac §6.1 lists them.
 	Scopes []rbac.Permission
 	// Route is the route requirement: AllOf every one of Scopes (XFILE-5,
-	// 05-http-api §8.3), the atom's full HEAD reach. Zero for an atom no route
-	// enforces (playlists.create).
+	// 05-http-api §8.3), the atom's full HEAD reach. Never zero, not even for
+	// an atom no HEAD route enforces (playlists.create, which HEAD checked
+	// only in handlers and through "every atom" tests): the in-handler bridge
+	// resolves atoms through this field, and a zero one made the atom
+	// unholdable, which failed every all-atoms check (APIKeyMayActAsAdmin,
+	// the Repairs unknown-fixer scope) for every caller (F4-08 B10y).
 	Route rbac.Requirement
 	// ReadSide is the in-handler read-side entry: the requirement of an
 	// in-handler site that only shows user-identifying text (COR2-2,
@@ -54,8 +58,10 @@ func atomRow(name string, scopes ...rbac.Permission) Atom {
 func AtomTable() []Atom {
 	usersManage := atomRow("users.manage", "core:users.manage", "core:roles.view")
 	usersManage.ReadSide = rbac.Need("core:users.view")
+	// HEAD gates no route with playlists.create (raw/09 §1.3: 0 routes); its
+	// Route gates nothing at stage 13 for that reason, and is what the
+	// in-handler checks and HEAD's all-atoms tests resolve it to.
 	playlists := atomRow("playlists.create", "books:playlists.create")
-	playlists.Route = rbac.Requirement{} // HEAD gates no route with it (raw/09 §1.3: 0 routes)
 	return []Atom{
 		atomRow("library.view", "books:view", "core:tasks.view"),
 		atomRow("library.edit_metadata", "books:edit"),
@@ -106,9 +112,9 @@ func routeRequirement(table []Atom, r rbac.Requirement) (rbac.Requirement, bool)
 // recorded from an s.perm(atom) chain carries the atom table's route
 // requirement in place of rbac.LegacyAtom(atom), and every other route is
 // unchanged (05-http-api §8.1 R1, §8.3; COR6-1). The manifest is final from
-// R1 and stage 13 enforces it from F4, so a route whose atom the table lacks,
-// or whose atom no route may enforce (playlists.create), is an error, one per
-// route, rather than a route mounted with nothing to enforce. routes is not
+// R1 and stage 13 enforces it from F4, so a route whose atom the table lacks
+// is an error, one per route, rather than a route mounted with nothing to
+// enforce. routes is not
 // modified.
 func resolveRoutes(routes []httpapi.LegacyRoute) ([]httpapi.LegacyRoute, error) {
 	table := AtomTable()

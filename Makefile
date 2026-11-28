@@ -649,6 +649,15 @@ generate-ops:
 ops-check:
 	@go run ./tools/cmd/opsgen -check
 
+## generate-permissions: Regenerate web/src/generated/permissions.ts from internal/books/atoms.go
+.PHONY: generate-permissions permissions-check
+generate-permissions:
+	@go run ./cmd/permsgen
+
+## permissions-check: Fail if web/src/generated/permissions.ts is stale (run make generate-permissions)
+permissions-check:
+	@go run ./cmd/permsgen -check
+
 ## tygo-install: Build the pinned tygo into GOBIN from tools/tygo/go.mod (a nested
 ## module, like staticcheck/mockery/deadcode: a dev-time generator that must not
 ## put its dependencies in the root go.mod).
@@ -920,7 +929,7 @@ coverage-check-short:
 	echo "✅ Coverage $$coverage% meets floor $$floor%"
 
 ## ci: Fast CI check (short tests — prop tests skipped; use test-nightly for full suite)
-ci: mocks-check staticcheck tasklint sdkguard ops-check types-check bench-check pprof-check fmt-check tidy-check vet-darwin vet-integration genproto-exclude-root module-skew embed-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
+ci: mocks-check staticcheck tasklint sdkguard ops-check permissions-check types-check bench-check pprof-check fmt-check tidy-check vet-darwin vet-integration genproto-exclude-root module-skew embed-check test-all-short coverage-check-short lint-errcheck-ratchet lint-deadcode-ratchet
 	@echo "✅ All CI checks passed!"
 
 ## ci-remote: Same gates as `make ci`, sharded across the CI_NODES runner pool

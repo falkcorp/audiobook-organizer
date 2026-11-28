@@ -55,6 +55,7 @@ type Router struct {
 	sealed bool        // set when Build starts: a registration after it could never be served
 	built  bool        // set when Build succeeds, cleared when it starts: the gate's facts below are its own
 	legacy legacyState // legacy.go: manifests, admissions and built infos (R1-14)
+	auth   *routerAuth // auth.go: stages 12 and 13, nil until SetAuth
 
 	// gateMux and gateAssets are stage 8's route facts, recorded by the last
 	// successful Build (basicGateRoutes): the ServeMux that build serves,
@@ -194,18 +195,17 @@ type LegacyAuth uint8
 
 const (
 	LegacyAuthCore LegacyAuth = iota + 1 // core stages 12-13 run for the mount
-	LegacyAuthGin                        // stages 12-13 off; only for app.Options.LegacyAuthGinUntil (R1)
 )
 
 // LegacyMount is an http.Handler mounted on a module's legacy prefixes
 // (05-http-api §8.2). Router.MountLegacy and Build (legacy.go) register its
 // manifest routes as ServeMux patterns under the route collision rule (§4.8),
-// apply the LegacyAuthGin/OwnAuth admissions and answer its Redirects.
+// apply the OwnAuth admissions and answer its Redirects.
 type LegacyMount struct {
 	Owner             string                     // "books"; set by module.Registrar
 	Handler           http.Handler               // *gin.Engine
 	Routes            iter.Seq[LegacyRoute]      // manifest: every gin route; each its own mux pattern or a member of one generalised pattern (§4.8)
-	Auth              LegacyAuth                 // LegacyAuthGin only while app.Options.LegacyAuthGinUntil names Owner (R1) | LegacyAuthCore
+	Auth              LegacyAuth                 // LegacyAuthCore
 	ServesSPA         bool                       // owns "/" and serves the SPA through gin NoRoute (§4.10)
 	DefaultCSP        func(*http.Request) string // stage 5 policy for this mount's responses, evaluated per response (FE2-1)
 	CSPReport         string                     // Reporting-Endpoints URL for DefaultCSP (ABO: "/api/v1/csp-report")
@@ -231,6 +231,25 @@ type LegacyRoute struct {
 	AuthMethod      string    // required iff OwnAuth (SEC2-17)
 	RateClass       RateClass // RateDefault iff the gin chain includes the API rate limiter today, else RateExempt
 	NoCompress      bool      // stage 9 skips it (COR3-6)
+	// OwnerWhenSet is HEAD's ownerGateWhenOwnerSet on a Guards.Owner route
+	// (F4-08 B10y): the owner is demanded only while core.auth.owner.required
+	// holds, as before; while it does not, the route has no owner leg at all
+	// and its Guards.Interactive and Perm decide, as HEAD's gate passed
+	// through with owner_email unset. Without it a Guards.Owner route takes
+	// 05-authn §4.8's fallback (MayChangeCredentials and core:admin). It
+	// exists only here, never on Guards or Route, so a core-native route
+	// cannot opt out of §4.8; it needs Guards.Owner (ErrLegacyManifest).
+	//
+	// Deliberate HEAD parity (F4-08 ruling (ii), 2026-11-22): on a legacy
+	// owner route with owner_email unset, HEAD's ownerGateWhenOwnerSet passed
+	// through and the route's own perm applied (settings.manage on backup
+	// restore), so the route asks no core:admin then (origin/main
+	// internal/server/owner_routes.go:18-33). Proof cells: core
+	// TestOwnerWhenSet_* and books TestOwnerRoutesBoot_*: owner unset, a
+	// custom-all/settings.manage session is admitted, a key is 403
+	// interactive_required, auth-off is refused; owner set, only the owner
+	// (403 owner_required for everyone else, admin included).
+	OwnerWhenSet bool
 }
 
 // claim is one subtree (trailing "/") or exact path an owner occupies.
@@ -859,12 +878,16 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 // request. /metrics is never compressed (stage 9: promhttp gzips itself).
 // r.mu is held.
 func (r *Router) wrapRoute(e *routeEntry) http.Handler {
+	h := e.handler
+	if r.authRuns(e) {
+		h = r.authWrap(e.info.Perm, e.info.Guards, false, routeLabel(e.info), h)
+	}
 	return r.chain.Route(httpmw.RouteSpec{
 		Pattern: e.info.Pattern,
 		Policy:  &httpmw.Policy{Owner: e.info.Owner, NoCompress: e.info.Kind == RouteKindInfra && e.info.Pattern == "/metrics"},
 		Class:   rateClassName(e.info.RateClass),
 		MaxBody: e.route.MaxBody,
-	}, e.handler)
+	}, h)
 }
 
 // checkClaims reports every pair of overlapping claims of two owners; r.mu
@@ -912,7 +935,9 @@ func (r *Router) checkPerm(e *routeEntry) []error {
 	default:
 		errs = append(errs, fmt.Errorf("%w: %s: requirement %s is for legacy routes only", ErrForeignScope, what, req))
 	}
-	errs = append(errs, fmt.Errorf("%w: %s requires %s", ErrNoAuthService, what, req))
+	if r.auth == nil {
+		errs = append(errs, fmt.Errorf("%w: %s requires %s", ErrNoAuthService, what, req))
+	}
 	return errs
 }
 

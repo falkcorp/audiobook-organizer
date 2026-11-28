@@ -6,8 +6,11 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"time"
+
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // Test-only views of a Service's sign-in protections for the external test
@@ -33,3 +36,24 @@ func (s *Service) OwnerSatisfied(p *Principal) bool { return s.ownerSatisfied(p)
 // ClientOf is the ClientInfo the service builds for r when no resolver is
 // wired (Service.client).
 func (s *Service) ClientOf(r *http.Request) ClientInfo { return s.client(r) }
+
+// NewMergePlanForTest is a UserMergePlan a test assembles by hand, for the
+// refusals a real PlanUserMerge would stop before it could return a plan (the
+// plan is opaque to every other package).
+func NewMergePlanForTest(source, target UserID, srcVersion, tgtVersion int64, rows ...MergeRow) UserMergePlan {
+	return UserMergePlan{source: source, target: target, srcVersion: srcVersion, tgtVersion: tgtVersion, rows: rows}
+}
+
+// DisplaceUnverifiedHolders is Service.displaceUnverifiedHolders: no accept
+// binds an address yet (inviteBindsEmail), so the helper B10t's binding calls
+// is exercised directly over a batch the test commits.
+func (s *Service) DisplaceUnverifiedHolders(ctx context.Context, b *storage.Batch, email string, newUser UserID) ([]UserID, error) {
+	return s.displaceUnverifiedHolders(ctx, b, email, newUser)
+}
+
+// NewUnmergePlanForTest is a UserUnmergePlan a test assembles by hand over the
+// users' versions, for the refusals a real PlanUserUnmerge would stop before it
+// could return a plan.
+func NewUnmergePlanForTest(rec UnmergeRecord, srcVersion, tgtVersion int64, rows ...MergeRow) UserUnmergePlan {
+	return UserUnmergePlan{rec: rec, srcVersion: srcVersion, tgtVersion: tgtVersion, rows: rows}
+}

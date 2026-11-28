@@ -17,6 +17,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opsv3"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 )
 
@@ -93,6 +94,12 @@ func (s *Server) opsV3Authz() opsv3.Authz {
 		return fr
 	}
 	holds := func(c *gin.Context, p auth.Permission) bool {
+		// Under core identity (F4-08 B7): auth off is the auth-disabled
+		// principal, the atom is judged through the principal stage 12 bound,
+		// and no first-run bypass applies (it read books' own user count).
+		if held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p)); bridged {
+			return held
+		}
 		if !config.AppConfig.EnableAuth {
 			return true
 		}

@@ -35,6 +35,8 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/audit"
+	"github.com/falkcorp/mediacore/auth"
+	"github.com/falkcorp/mediacore/auth/oidc"
 	"github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/health"
 	"github.com/falkcorp/mediacore/httpapi"
@@ -58,7 +60,6 @@ type Config struct {
 	ServiceName           string // "" = AppID
 	Version               string // the app's release version: the resource's service.version
 	ReservedAPINamespaces []string
-	LegacyAuthGinUntil    module.ID
 	// Logger replaces the log.Logging the kernel would build (tests).
 	Logger *slog.Logger
 	// LogOutput is where the kernel's log.Logging writes; nil = the stream of
@@ -186,6 +187,45 @@ type Config struct {
 	// CoreDefaults are the app's compiled defaults of the core keys whose
 	// default is the app's to name (app.Options.CoreDefaults).
 	CoreDefaults CoreDefaults
+	// IdentityBoot is app.Options.IdentityBoot: the app declares the identity
+	// flip, so boot builds rbac, auth, audit serving and the events bus and runs
+	// P4d steps 2-4 (identity_boot.go). false, the default, builds none of it:
+	// the app boots as it did before F4-08. Temporary, as the F3 config gate
+	// was: B10 deletes it with the flip that makes identity unconditional.
+	IdentityBoot bool
+	// ResolveAtom is the app's atom table for stage 13: it resolves the
+	// rbac.LegacyAtom and rbac.LegacyCheck requirements of its legacy-mounted
+	// routes (httpapi.Stage13Options.ResolveAtom). nil refuses every such
+	// requirement. Read only when IdentityBoot is true. app.Options.ResolveAtom.
+	ResolveAtom httpapi.AtomResolver
+	// DisplayName is the app's human name (app.Options.DisplayName), reported
+	// by GET /api/core/v1/modules. Read only when IdentityBoot is true.
+	DisplayName string
+	// ArchivePrefix is app.Options.ArchivePrefix: the prefix of the app's
+	// backup archives and of its revocation journal's file name and header
+	// (<prefix>revocations.journal). "" is <AppID>_.
+	ArchivePrefix string
+	// AuthOptions and Authenticators are app.Options.Auth and
+	// app.Options.Authenticators, read only by the identity boot (P5 builds the
+	// auth service with them; P7 hands it each enabled module's Registrar.
+	// AuthMethod specs).
+	AuthOptions    auth.Options
+	Authenticators []auth.Extension
+
+	// AccountResolver is app.Options.AccountResolver: the late handle of the
+	// OIDC account resolver. Read only by the identity boot: P5 builds an
+	// oidc.Resolver over the identity stores and the auth service (its
+	// AccountLock is that service, so a sign-in takes the one e-mail lock every
+	// account creator holds), binds it here, and closeCore unbinds it. nil
+	// builds no resolver.
+	AccountResolver *oidc.LateResolver
+
+	// beforeP5 is called once with the kernel after P4d and before P5, the
+	// last point at which Importers still reach an rbac catalog that is not
+	// frozen (P5 builds and freezes it). Unexported: only this package's
+	// tests set it, to exercise what a Cutover step sees at P4b through a real
+	// boot. nil, the production value, does nothing.
+	beforeP5 func(k *Kernel) error
 }
 
 // Telemetry mirrors app.Telemetry field for field, so app converts one into
@@ -249,6 +289,9 @@ type Kernel struct {
 	handler   http.Handler
 
 	store *kernelStore // P2 on; nil when no store was opened (storage.go)
+	// docs is modulehttp's view of the built OpenAPI documents (identity boot
+	// only; identity_mount.go), filled after Router.Build.
+	docs *documents
 
 	// The F2 foundation's boot products (F2-16). Each is built where the
 	// phases of 06 §6.5.1 put it, and each is nil until then: rbacCat at P5
@@ -287,6 +330,12 @@ type Kernel struct {
 	// it; false until then. P4b binds it, with the Legacy reader, into the
 	// Importers a Cutover func holds (Importers.AllowKeyRegen).
 	importerAllowRegen bool
+	// ident is the identity boot's state (identity_boot.go): nil unless the app
+	// declared Config.IdentityBoot and the boot got to P4b.
+	ident *identityBoot
+	// events is the App's one events bus (events.go), built at P5 for an app
+	// that declared the identity flip; nil otherwise.
+	events *kernelEvents
 	// cfgBoot is the layered config store: built at P0, loaded at P3, bound to
 	// the DB layer at P4b and attached at P4d. nil for Describe, which does no
 	// I/O and so has no boot.
@@ -548,6 +597,7 @@ func (k *Kernel) catalog(describe bool) error {
 	}
 	slices.SortFunc(k.entries, func(a, b *entry) int { return strings.Compare(string(a.man.ID), string(b.man.ID)) })
 	probs = append(probs, resetHookProblems(k.entries)...)
+	probs = append(probs, importedRoleProblems(k.entries)...)
 	// Every manifest's TaskLedger and DataMigrations, enabled or not: they stay
 	// known while the module is disabled (06 §6.4.2).
 	probs = append(probs, ledgerProblems(k.entries)...)
@@ -606,12 +656,13 @@ func (k *Kernel) register(ctx context.Context) error {
 			RequestRestart: k.lifecycle.RequestRestart, Storage: k.storageHandles(id), Secrets: k.secretsScope(id),
 			State: k.moduleState(ctx), SecretsKeyringExported: k.keyringExported(),
 			Config: k.configAccess(e.man)}
+		k.applyIdentityDeps(&deps, e.man)
 		r := module.NewRegistrar(module.RegistrarConfig{
-			Context:       regCtx,
-			Deps:          deps,
-			HTTP:          k.router.ModuleGroup(string(id)),
-			LegacyAuthGin: k.cfg.LegacyAuthGinUntil != "" && id == k.cfg.LegacyAuthGinUntil,
-			Settings:      declaredSettings(e.man, k.settingHandles),
+			Context:  regCtx,
+			Deps:     deps,
+			HTTP:     k.router.ModuleGroup(string(id)),
+			Settings: declaredSettings(e.man, k.settingHandles),
+			Compat:   k.compatFor(id),
 			// Err is read once, below: a call after Close (from a goroutine
 			// Register started, against 06 §6.4.1) would otherwise vanish.
 			AfterClose: func(p module.Problem) {
@@ -706,7 +757,7 @@ func (k *Kernel) consume() error {
 		}
 		// The admission Build applies to the mounts' manifests (05-http-api
 		// §8.2, SEC2-17): an OwnAuth route names a method this module
-		// registered. LegacyAuthGin is the Registrar's check (P6).
+		// registered. Legacy authentication mode is the Registrar's check (P6).
 		methods := make([]string, 0, len(e.rec.AuthMethods))
 		for _, spec := range e.rec.AuthMethods {
 			methods = append(methods, string(spec.Method))
@@ -769,7 +820,7 @@ func (k *Kernel) handlerPhase() error {
 		return err
 	}
 	k.handler = h
-	return nil
+	return k.fillDocuments()
 }
 
 // mountUI builds ui.Handler over Config.UI with Config.UIOptions merged in
@@ -827,7 +878,6 @@ func routerKinds() []struct {
 		{httpapi.ErrPrefixCollision, module.ProblemLegacyPrefixCollision},
 		{httpapi.ErrForeignScope, module.ProblemPermissionNamespace},
 		{httpapi.ErrUnknownScope, module.ProblemUndeclaredPermission},
-		{httpapi.ErrLegacyAuthGin, module.ProblemLegacyAuth},
 		{httpapi.ErrOwnAuthMethod, module.ProblemLegacyAuth},
 	}
 }

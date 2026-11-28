@@ -1,0 +1,3 @@
+### Added
+
+- Behind the identity boot switch (off in this build, so nothing changes for a running install yet): the boot's crash-matrix rows are bound to a real identity boot, including a restore boot over a staged revert; a restore boot now derives its restore from the staged source (the archive's manifest, a checkpoint's record) instead of refusing to serve; the health registry registers `core.auth` (`auth_disabled_remote`) and `core.backup`'s journal tokens (`revocation_journal_broken`, `_unwritable` and the queued-lines notice), all kept off the unauthenticated probes; and the restore hooks' own store commits carry crash-matrix labels.

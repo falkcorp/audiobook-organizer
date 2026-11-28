@@ -44,6 +44,9 @@ type invalidation struct {
 // invalidations collects one commit attempt's invalidations (commitInvalidating).
 type invalidations struct {
 	list []invalidation
+	// post are the lifecycle callbacks (Lifecycle) the attempt queued; they
+	// run after the commit, once the batch is closed (commitQueueingN).
+	post []func(ctx context.Context)
 }
 
 // user records that every credential of u is revoked.

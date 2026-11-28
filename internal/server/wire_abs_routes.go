@@ -7,9 +7,10 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -27,13 +28,13 @@ import (
 
 // Compile-time proof that the production store satisfies the Phase 6 capability the
 // block in wireABSRoutes asserts at runtime. Without this, a signature drift on
-// either side would turn into an os.Exit(1) at boot instead of a build failure —
+// either side would turn into a refused boot instead of a build failure —
 // and the failure mode it guards is the /api/me empty-list data loss of §1.8.1.
 var _ abshandler.ProgressListStore = (*database.PebbleStore)(nil)
 
 // Same proof for the Phase 6 write half. ProgressStore gained ClearUserPositions
 // (DELETE /api/me/progress/:id) and BookmarkStore is asserted at runtime below; a
-// signature drift on either would otherwise surface as an os.Exit(1) at boot — or,
+// signature drift on either would otherwise surface as a refused boot — or,
 // for ProgressStore, as a SILENTLY DISABLED write surface, since asProgressStore
 // answers nil on a failed assertion rather than exiting.
 var (
@@ -42,7 +43,7 @@ var (
 	// LibraryStore is resolved at boot with database.AsCapability, which looks
 	// through any decorator to the PebbleStore. Its methods beyond
 	// database.Store (SearchBooksFiltered, GetBookFilesForIDsCore, GetBooksByTag)
-	// would otherwise surface only as an os.Exit(1) there; this makes a missing
+	// would otherwise surface only as a refused boot there; this makes a missing
 	// or drifted method a build failure instead.
 	//
 	// Resolution lands on the bare *PebbleStore, never a Store-embedding
@@ -371,29 +372,48 @@ func absReservedPath(path string) bool {
 	return false
 }
 
-// wireABSRoutes builds and registers the Audiobookshelf-compatible router group.
-//
-// It is a NEW TOP-LEVEL GROUP, not a child of /api/v1 (spec §3.6), with its own
-// fail-closed identity middleware. Nothing about the existing auth paths changes: the
-// `abk_` API-key scheme, browser `sess:` sessions, OAuth, and the fail-open
-// Cloudflare-Access middleware on /api/v1 all keep working untouched.
-//
-// FAIL-CLOSED AT BOOT: if the ABS API is enabled but its configuration is invalid —
-// most importantly a missing or too-short ABS_JWT_SECRET — the process exits rather
-// than starting a partially-wired auth surface. Starting with a generated secret would
-// invalidate every client token on each restart; starting with the surface silently
-// disabled would be worse, because the operator would think it was live.
-//
-// When the flag is off (the default) this registers nothing and returns immediately.
-func (s *Server) wireABSRoutes() {
-	snap := config.Snapshot()
-	slog.Info("abs: Audiobookshelf-compatible surface", "enabled", snap.ABSAPIEnabled)
-	if !snap.ABSAPIEnabled {
-		return
-	}
+// errABSCFNeedsAccess is why a boot whose only ABS auth mode is cf is refused
+// without the Cloudflare Access team domain and AUD.
+var errABSCFNeedsAccess = errors.New("absauth: ABS_AUTH_MODES=cf requires CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD; " +
+	"without them no request could ever authenticate")
 
+// The refusals of wireABSRoutes that name a store or a built handler that cannot
+// serve the surface. Each is returned from NewServer, which never exits the
+// process: the boot stops with the reason, and the caller tears down what it
+// had built. They are sentinels so a test (and a caller) can tell one from the
+// next with errors.Is.
+var (
+	errABSNoSessionKeyspace = errors.New("abs: refusing to start: the configured store does not implement the ABS " +
+		"session keyspace (PebbleDB is the only supported backend)")
+	errABSNoIdentityResolver = errors.New("abs: refusing to start: the configured store cannot resolve ABS identities")
+	errABSNoBrowseStore      = errors.New("abs: refusing to start: the configured store cannot serve the library " +
+		"browse surface (PebbleDB is the only supported backend)")
+	errABSNoSyncKeyspaces = errors.New("abs: refusing to start: the configured store lacks the sync_item/sync_file " +
+		"keyspaces. Every client-visible id (libraryItemId, ino) must come from them: a raw Book ULID is 26 chars and " +
+		"Absorb splits ids at a fixed offset of 36, and a filesystem inode does not survive a file move")
+	errABSNoProgressList = errors.New("abs: refusing to start: the configured store cannot enumerate a user's " +
+		"listening positions, so /api/me could only ever report an EMPTY mediaProgress list. Clients DELETE local " +
+		"progress rows absent from that list, so serving it would destroy the owner's place in every book")
+	errABSNoBookmarkKeyspace = errors.New("abs: refusing to start: the configured store lacks the named-bookmark " +
+		"keyspace, so /api/me could only ever report an EMPTY bookmarks list")
+	errABSNoAliasUseKeyspace = errors.New("abs: refusing to start: the configured store lacks the sync_alias_use " +
+		"keyspace, so progress rows for merged books opened by an old item id could not be kept")
+	errABSUserDataNotWired = errors.New("abs: the media-progress provider was NOT wired: /api/me would report an " +
+		"EMPTY mediaProgress list, and clients DELETE local progress rows absent from it")
+	errABSBookmarkSurfaceMissing = errors.New("abs: the bookmark CRUD routes were NOT registered: creating or " +
+		"deleting a bookmark would 404")
+	errABSBrowseSurfaceMissing = errors.New("abs: the browse + playback routes were NOT registered: /api/libraries, " +
+		"/api/items and /public/session would answer 404")
+)
+
+// loadABSConfig validates the ABS settings of snap into the config the surface
+// is built from. It is pure (it reads snap and nothing else), so a caller that
+// can return an error checks it before building anything: books' Register does
+// (ValidateABSConfig), and wireABSRoutes returns the same error for every
+// other caller of NewServer. A snap that leaves the surface off is valid.
+func loadABSConfig(snap config.Config) (*absauth.Config, error) {
 	cfg, err := absauth.Load(absauth.Settings{
-		Enabled:          true,
+		Enabled:          snap.ABSAPIEnabled,
 		AuthModes:        snap.ABSAuthModes,
 		JWTSecret:        snap.ABSJWTSecret,
 		AccessTokenTTL:   snap.ABSAccessTokenTTL,
@@ -404,8 +424,51 @@ func (s *Server) wireABSRoutes() {
 		DefaultLibraryID: snap.ABSDefaultLibraryID,
 	})
 	if err != nil {
-		slog.Error("abs: refusing to start — the Audiobookshelf API is enabled but misconfigured", "err", err)
-		os.Exit(1)
+		return nil, err
+	}
+	if cfg.Enabled && cfg.Modes.CF && !cfg.Modes.JWT && (snap.CFAccessTeamDomain == "" || snap.CFAccessAUD == "") {
+		return nil, errABSCFNeedsAccess
+	}
+	return cfg, nil
+}
+
+// ValidateABSConfig is the error a boot with snap's ABS settings is refused
+// with in wireABSRoutes: a missing or short ABS_JWT_SECRET, an unparseable
+// duration, an unknown auth mode, or cf as the only mode without its Access
+// settings. nil when the surface is off or valid. books' Register calls it
+// before NewServer so that the refusal is checked ahead of any construction
+// and carries errABSMisconfigured; NewServer returns the same error if a caller
+// skips it.
+func ValidateABSConfig(snap config.Config) error {
+	_, err := loadABSConfig(snap)
+	return err
+}
+
+// wireABSRoutes builds and registers the Audiobookshelf-compatible router group.
+//
+// It is a NEW TOP-LEVEL GROUP, not a child of /api/v1 (spec §3.6), with its own
+// fail-closed identity middleware. Nothing about the existing auth paths changes: the
+// `abk_` API-key scheme, browser `sess:` sessions, OAuth, and the fail-open
+// Cloudflare-Access middleware on /api/v1 all keep working untouched.
+//
+// FAIL-CLOSED AT BOOT: if the ABS API is enabled but its configuration is invalid —
+// most importantly a missing or too-short ABS_JWT_SECRET — it returns an error, and
+// NewServer fails with it, rather than starting a partially-wired auth surface. Starting with a generated secret would
+// invalidate every client token on each restart; starting with the surface silently
+// disabled would be worse, because the operator would think it was live.
+//
+// When the flag is off (the default) this registers nothing and returns nil
+// immediately.
+func (s *Server) wireABSRoutes() error {
+	snap := config.Snapshot()
+	slog.Info("abs: Audiobookshelf-compatible surface", "enabled", snap.ABSAPIEnabled)
+	if !snap.ABSAPIEnabled {
+		return nil
+	}
+
+	cfg, err := loadABSConfig(snap)
+	if err != nil {
+		return fmt.Errorf("abs: refusing to start: the Audiobookshelf API is enabled but misconfigured: %w", err)
 	}
 	for _, w := range cfg.Warnings {
 		logger.New("abs").Warn("abs: %s", w)
@@ -424,16 +487,12 @@ func (s *Server) wireABSRoutes() {
 	})
 	if cfg.Modes.CF {
 		if snap.CFAccessTeamDomain == "" || snap.CFAccessAUD == "" {
-			// Not fatal when the JWT resolver can still serve requests, but it IS fatal
-			// when cf is the only enabled mode: nothing could ever authenticate.
-			if !cfg.Modes.JWT {
-				slog.Error("abs: refusing to start — ABS_AUTH_MODES=cf requires CF_ACCESS_TEAM_DOMAIN and CF_ACCESS_AUD; " +
-					"without them no request could ever authenticate")
-				os.Exit(1)
-			}
+			// Not fatal when the JWT resolver can still serve requests; it IS fatal
+			// when cf is the only enabled mode (nothing could ever authenticate), and
+			// loadABSConfig has already refused that.
 			slog.Warn("abs: Cloudflare Access mode is enabled but CF_ACCESS_TEAM_DOMAIN/CF_ACCESS_AUD are unset — " +
 				"assertions cannot be verified, so only the JWT resolver will authenticate")
-		} else if v, verr := cfaccess.NewCFAccessVerifier(context.Background(), snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {
+		} else if v, verr := s.absCFVerifier(snap.CFAccessTeamDomain, snap.CFAccessAUD); verr == nil {
 			verifier = v
 			if len(oauthCfg.AllowedEmails) == 0 {
 				// Fail-closed consequence worth shouting about: with an empty allowlist
@@ -443,8 +502,7 @@ func (s *Server) wireABSRoutes() {
 			}
 		} else {
 			if !cfg.Modes.JWT {
-				slog.Error("abs: refusing to start — Cloudflare Access verifier init failed and cf is the only enabled auth mode", "err", verr)
-				os.Exit(1)
+				return fmt.Errorf("abs: refusing to start: Cloudflare Access verifier init failed and cf is the only enabled auth mode: %w", verr)
 			}
 			slog.Error("abs: Cloudflare Access verifier init failed — only the JWT resolver will authenticate", "err", verr)
 		}
@@ -453,17 +511,14 @@ func (s *Server) wireABSRoutes() {
 	// Every capability below is resolved through database.AsCapability, never a
 	// bare assertion: a decorator on s.store (the indexedStore, from NewServer on,
 	// until 07-S3) embeds database.Store, so it carries none of these ABS keyspace
-	// methods itself. A bare assertion here is an os.Exit on a healthy server.
+	// methods itself. A bare assertion here is a refused boot on a healthy server.
 	absStore, ok := database.AsCapability[abshandler.Store](s.Ops())
 	if !ok {
-		slog.Error("abs: refusing to start — the configured store does not implement the ABS session keyspace " +
-			"(PebbleDB is the only supported backend)")
-		os.Exit(1)
+		return errABSNoSessionKeyspace
 	}
 	identityStore, ok := database.AsCapability[servermiddleware.ABSIdentityStore](s.Ops())
 	if !ok {
-		slog.Error("abs: refusing to start — the configured store cannot resolve ABS identities")
-		os.Exit(1)
+		return errABSNoIdentityResolver
 	}
 	backfillABSSessionExpiry(s.Ops(), cfg, time.Now())
 
@@ -474,20 +529,15 @@ func (s *Server) wireABSRoutes() {
 	//
 	// FAIL CLOSED on the two that gate the surface: without them the browse + playback
 	// routes would not be registered at all, so /api/libraries would answer a JSON 404
-	// while the startup log claimed the ABS API was up. Exiting is the honest outcome.
+	// while the startup log claimed the ABS API was up. Refusing the boot is the correct outcome.
 	libraryStore, ok := database.AsCapability[abshandler.LibraryStore](s.Ops())
 	if !ok {
-		slog.Error("abs: refusing to start — the configured store cannot serve the library browse surface " +
-			"(PebbleDB is the only supported backend)")
-		os.Exit(1)
+		return errABSNoBrowseStore
 	}
 	syncIdentity := database.AsSyncIdentityStore(s.Ops())
 	syncFiles := database.AsSyncFileStore(s.Ops())
 	if syncIdentity == nil || syncFiles == nil {
-		slog.Error("abs: refusing to start — the configured store lacks the sync_item/sync_file keyspaces. " +
-			"Every client-visible id (libraryItemId, ino) must come from them: a raw Book ULID is 26 chars and " +
-			"Absorb splits ids at a fixed offset of 36, and a filesystem inode does not survive a file move.")
-		os.Exit(1)
+		return errABSNoSyncKeyspaces
 	}
 
 	// Phase 6: the user-scoped payload of /api/me, /login and /auth/refresh.
@@ -496,22 +546,17 @@ func (s *Server) wireABSRoutes() {
 	// holds a single ABS progress record, a nil provider is not "not implemented yet"
 	// — it is active data destruction: /api/me would answer a 200 with an empty
 	// mediaProgress, and AudioBooth DELETES every local progress row absent from that
-	// list (§1.8.1). Exiting is the only honest outcome, and it is unreachable in
+	// list (§1.8.1). Refusing the boot is the only correct outcome, and it is unreachable in
 	// practice because PebbleDB (the only supported backend) satisfies both
 	// capabilities asserted here, as well as the sync-identity and library ones
 	// already asserted above.
 	progressList, ok := database.AsCapability[abshandler.ProgressListStore](s.Ops())
 	if !ok {
-		slog.Error("abs: refusing to start — the configured store cannot enumerate a user's listening positions, " +
-			"so /api/me could only ever report an EMPTY mediaProgress list. Clients DELETE local progress rows " +
-			"absent from that list, so serving it would destroy the owner's place in every book.")
-		os.Exit(1)
+		return errABSNoProgressList
 	}
 	bookmarkStore := database.AsBookmarkStore(s.Ops())
 	if bookmarkStore == nil {
-		slog.Error("abs: refusing to start — the configured store lacks the named-bookmark keyspace, so /api/me " +
-			"could only ever report an EMPTY bookmarks list.")
-		os.Exit(1)
+		return errABSNoBookmarkKeyspace
 	}
 	// Which merge-loser item ids each user's client has addressed. Required: the
 	// client-facing progress list carries a row for exactly those ids, and
@@ -519,9 +564,7 @@ func (s *Server) wireABSRoutes() {
 	// that book's progress row on its next refresh (abs/item_ref.go).
 	aliasUses := database.AsSyncAliasUseStore(s.Ops())
 	if aliasUses == nil {
-		logger.New("abs").Error("abs: refusing to start — the configured store lacks the sync_alias_use keyspace, so progress " +
-			"rows for merged books opened by an old item id could not be kept.")
-		os.Exit(1)
+		return errABSNoAliasUseKeyspace
 	}
 	// The upper bound of the one-time per-user alias seed (abs/userdata.go
 	// aliasSeedSince): the moment this server first ran with alias-use
@@ -533,8 +576,7 @@ func (s *Server) wireABSRoutes() {
 	// double count.
 	aliasSeedCutoff, err := aliasUses.SyncAliasUseSeedCutoff(time.Now())
 	if err != nil {
-		logger.New("abs").Error("abs: refusing to start — the alias seed cutoff could not be read or recorded: %v", err)
-		os.Exit(1)
+		return fmt.Errorf("abs: refusing to start: the alias seed cutoff could not be read or recorded: %w", err)
 	}
 	userData, err := abshandler.NewUserData(abshandler.UserDataOptions{
 		Progress:  progressList,
@@ -549,8 +591,7 @@ func (s *Server) wireABSRoutes() {
 		AliasSeedCutoff: aliasSeedCutoff,
 	})
 	if err != nil {
-		slog.Error("abs: refusing to start — the media-progress provider could not be built", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("abs: refusing to start: the media-progress provider could not be built: %w", err)
 	}
 
 	resolver := servermiddleware.NewABSIdentityResolver(cfg, verifier, oauthCfg, identityStore)
@@ -589,6 +630,9 @@ func (s *Server) wireABSRoutes() {
 		Bookmarks: bookmarkStore,
 		// The failure throttle's bucket is the tunnel visitor, not the connector.
 		ThrottleKey: loginThrottleKey,
+		// Under core identity the bucket is the visitor ClientBucket names; nil
+		// (HEAD's gin copy decides) on a server built without an identity.
+		IdentityThrottleKey: s.identityThrottleKey(),
 		// One throttle for both password logins (see s.loginThrottle).
 		Throttle:    s.loginThrottle(),
 		AliasUses:   aliasUses,
@@ -606,8 +650,7 @@ func (s *Server) wireABSRoutes() {
 		},
 	})
 	if err != nil {
-		slog.Error("abs: refusing to start — handler construction failed", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("abs: refusing to start: handler construction failed: %w", err)
 	}
 
 	// Warm the contributor cache in the background. Building it is a full-library
@@ -654,21 +697,17 @@ func (s *Server) wireABSRoutes() {
 	}, respondABSLoginError)) // ABS clients parse {"error": msg}, not the web envelope
 	handler.Register(absGroup)
 
+	// Each of the three is unreachable while the assertions and NewUserData
+	// above refuse the boot first; they stay as the belt for a handler change
+	// that stops registering what it was given.
 	if !handler.HasUserDataProvider() {
-		slog.Error("abs: the media-progress provider was NOT wired — /api/me would report an EMPTY mediaProgress " +
-			"list, and clients DELETE local progress rows absent from it. This should be unreachable: " +
-			"NewUserData above exits on failure.")
-		os.Exit(1)
+		return errABSUserDataNotWired
 	}
 	if !handler.HasBookmarkSurface() {
-		slog.Error("abs: the bookmark CRUD routes were NOT registered — creating or deleting a bookmark would 404. " +
-			"This should be unreachable: the bookmark-keyspace assertion above exits on failure.")
-		os.Exit(1)
+		return errABSBookmarkSurfaceMissing
 	}
 	if !handler.HasBrowseSurface() {
-		slog.Error("abs: the browse + playback routes were NOT registered — /api/libraries, /api/items and " +
-			"/public/session would answer 404. This should be unreachable: the store assertions above exit on failure.")
-		os.Exit(1)
+		return errABSBrowseSurfaceMissing
 	}
 	if asProgressStore(s.Ops()) == nil {
 		slog.Warn("abs: no listening-progress store is wired — every play session will report currentTime 0. " +
@@ -692,6 +731,7 @@ func (s *Server) wireABSRoutes() {
 	for _, route := range absRouteList() {
 		slog.Info("abs: route registered", "route", route)
 	}
+	return nil
 }
 
 // absIdentityAdapter joins the two independent sync keyspaces into the single
@@ -889,7 +929,7 @@ func asCollectionStore(s any) abshandler.CollectionStore {
 //
 // This also makes the ordering testable, which it previously was not. The old
 // shape could only be exercised through wireABSRoutes, which returns early
-// unless ABSAPIEnabled is set and calls os.Exit(1) on a misconfigured ABS
+// unless ABSAPIEnabled is set and refuses a misconfigured ABS
 // block -- so -race never entered this path at all, and the detector's silence
 // on the racy version was absence of coverage, not absence of a race.
 func spawnContributorWarm(store any, warm func(context.Context)) {
@@ -925,4 +965,37 @@ type warmupWaiter interface {
 // wiring order ever changes and a decorated store starts arriving instead.
 func resolveWarmupWaiter(s any) (warmupWaiter, bool) {
 	return database.AsCapability[warmupWaiter](s)
+}
+
+// errAccessVerifierUnbound is absCFVerifier's answer under core identity when
+// books bound no Access verifier (its own build failed): the ABS surface then
+// has no verifier, exactly as when its own build failed at HEAD.
+var errAccessVerifierUnbound = errors.New("abs: the Cloudflare Access verifier books wired under core identity is not bound")
+
+// absCFVerifier is the Cloudflare Access verifier of the ABS surface's resolver
+// step 1, for a team domain and AUD both set.
+//
+// Off identity it is HEAD's own: a network JWKS verifier built here, independent
+// of the /api/v1 passthrough's. Under core identity (WithIdentity) it is the
+// handle books built for the Access extension and WithAccessVerifier hands this
+// server: the same NewCFAccessVerifier over the same team domain and AUD, bound
+// before NewServer runs (identityFor), so a request is verified against the same
+// Cloudflare key set with the same issuer and audience checks, only through one
+// verifier instead of two. The handle is late (cfaccess.LateVerifier): a test
+// that boots the whole module rebinds it to a fake of its own, and nothing else
+// can, so production changes nothing but which of two identical verifiers answers.
+//
+// A handle that is absent or unbound is a build failure, as at HEAD (the caller
+// takes its verifier-init-failed branch: JWT only, or a refusal to start when cf
+// is the only mode). It is never handed on: an unbound handle would count as an
+// enabled verifier and answer 401 to every assertion where HEAD fell through to
+// the bearer.
+func (s *Server) absCFVerifier(teamDomain, aud string) (cfaccess.CFAssertionVerifier, error) {
+	if s.identity == nil {
+		return cfaccess.NewCFAccessVerifier(context.Background(), teamDomain, aud)
+	}
+	if b, ok := s.accessVerifier.(interface{ Bound() bool }); !ok || !b.Bound() {
+		return nil, errAccessVerifierUnbound
+	}
+	return s.accessVerifier, nil
 }

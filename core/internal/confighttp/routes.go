@@ -219,14 +219,14 @@ func (a *api) patch(w http.ResponseWriter, r *http.Request) {
 }
 
 // actorOf is config.Actor for p (05-config §1.3.3; 05-http-api's "filled from
-// the request's auth context"): Interactive is the method's
-// MayChangeCredentials, Owner is the owner assurance an OwnerVerifier proved,
+// the request's auth context"): Interactive is the principal's
+// MayChangeCredentials (its registered method classification), Owner is the owner assurance an OwnerVerifier proved,
 // and Can asks the principal's checker. A principal with no checker holds
 // nothing.
 func actorOf(p *auth.Principal, subject string) config.Actor {
 	return config.Actor{
 		Subject:     subject,
-		Interactive: p.Method.MayChangeCredentials(),
+		Interactive: p.MayChangeCredentials(),
 		Owner:       p.Assurance&auth.AssuranceOwner != 0,
 		Can: func(perm string) bool {
 			return p.Perms != nil && p.Perms.Has(rbac.Permission(perm))

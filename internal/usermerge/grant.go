@@ -10,8 +10,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
+
+	coreauth "github.com/falkcorp/mediacore/auth"
 )
 
 // GrantTTL is how long a minted grant stays redeemable. It spans enqueue to the
@@ -39,9 +42,35 @@ type Grant struct {
 	// JournalID names the journal (resume and undo only).
 	JournalID                string
 	AcknowledgeOwnerIdentity bool
+	// Principal is the signed-in admin's own principal, as the request that
+	// minted this grant held it (core's PrincipalFrom on the request ctx), and
+	// only for an apply under identity. It is what lets the background
+	// operation act as that admin: Apply re-validates it through core and core
+	// re-checks every rule against it. It lives in this process's memory for at
+	// most GrantTTL and never leaves it: the grant has no JSON form, and every
+	// formatting path below leaves the principal out (it names a credential).
+	Principal *coreauth.Principal
 
 	IssuedAt  time.Time
 	ExpiresAt time.Time
+}
+
+// String is the grant without its principal, for %v and %+v.
+func (g Grant) String() string {
+	return fmt.Sprintf("usermerge.Grant{actor=%s action=%s survivor=%s absorbed=%s journal=%s principal=%t expires=%s}",
+		g.ActorID, g.Action, g.SurvivorID, g.AbsorbedID, g.JournalID, g.Principal != nil, g.ExpiresAt.Format(time.RFC3339))
+}
+
+// GoString is String, for %#v.
+func (g Grant) GoString() string { return g.String() }
+
+// LogValue keeps the principal out of a structured log record.
+func (g Grant) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("actor", g.ActorID), slog.String("action", string(g.Action)),
+		slog.String("survivor", g.SurvivorID), slog.String("absorbed", g.AbsorbedID),
+		slog.String("journal", g.JournalID), slog.Bool("principal", g.Principal != nil),
+	)
 }
 
 // Action is what a grant permits.
@@ -85,6 +114,9 @@ func (g *Grants) Issue(gr Grant) (string, error) {
 		if gr.JournalID == "" {
 			return "", errors.New("usermerge: a resume or undo grant needs the journal id")
 		}
+	}
+	if gr.Principal != nil && (gr.Principal.User == nil || string(gr.Principal.User.ID) != gr.ActorID) {
+		return "", errors.New("usermerge: a grant's principal must be the actor's own")
 	}
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

@@ -1,0 +1,3 @@
+### Changed
+
+- Groundwork for moving sign-in to the shared identity service (nothing changes for users yet). The Audiobookshelf-compatible surface learns to check its tokens, keys and sessions against that service when the server is built to use it, instead of the app's own user records: a password change or an account being switched off there ends a session at once, and a key limited to the fingerprint worker is refused outside it. Single sign-on through Cloudflare Access is refused on that surface in that mode rather than creating accounts outside the service. The sign-in throttle will count each visitor by their own address behind the tunnel. All of it stays dormant until the switch-over.

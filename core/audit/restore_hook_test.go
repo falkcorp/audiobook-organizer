@@ -94,7 +94,7 @@ func newRestoreScenario(t *testing.T) *restoreScenario {
 
 func (sc *restoreScenario) run(t *testing.T, restoreSeq uint64) map[string]int {
 	t.Helper()
-	counts, err := RestoreHook(RestoreDeps{Store: sc.liveS, RestoreSeq: restoreSeq})(context.Background(), sc.rc)
+	counts, err := RestoreHook(RestoreDeps{Store: sc.liveS, RestoreSeq: restoreSeq, RunKey: fmt.Sprintf("restore:r-bane:seq:%d", restoreSeq)})(context.Background(), sc.rc)
 	if err != nil {
 		t.Fatalf("hook: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestAudit_RestoreCopiesForwardRecords(t *testing.T) {
 		t.Fatalf("restore records = %v, want stage, revoke, apply", actions(rr))
 	}
 	for _, r := range rr {
-		if r.Target.ID != "7" || r.Outcome != Success {
+		if r.Target.ID != "restore:r-bane:seq:7" || r.Outcome != Success {
 			t.Errorf("%s: target %v outcome %v", r.Action, r.Target, r.Outcome)
 		}
 		raw := fmt.Sprint(r.Details)
@@ -264,7 +264,7 @@ func TestAudit_RestorePreviousErrorAppendsNothing(t *testing.T) {
 	sc := newRestoreScenario(t)
 	boom := errors.New("pre-swap store unreadable")
 	sc.rc.Previous = func(storage.Owner) (storage.Reader, error) { return nil, boom }
-	_, err := RestoreHook(RestoreDeps{Store: sc.liveS, RestoreSeq: 7})(context.Background(), sc.rc)
+	_, err := RestoreHook(RestoreDeps{Store: sc.liveS, RestoreSeq: 7, RunKey: "restore:r-bane:seq:7"})(context.Background(), sc.rc)
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want it to wrap the reader error", err)
 	}
@@ -353,9 +353,10 @@ func TestRestoreHookRunKey_TwoRestoresWithoutALineBothWriteTheirRecords(t *testi
 	}
 }
 
-// TestRestoreHookRunKey_TheRunKeyOutranksTheLineSeq: with both set the records
-// are keyed on the run key, and the seq is only reported.
-func TestRestoreHookRunKey_TheRunKeyOutranksTheLineSeq(t *testing.T) {
+// TestRestoreHookRunKey_TheRunKeyIsTheOnlyKey: the records are keyed on the run key
+// and the seq is only reported: the same key under another seq is the same run, and
+// a seq with no key is no run at all.
+func TestRestoreHookRunKey_TheRunKeyIsTheOnlyKey(t *testing.T) {
 	sc := newRestoreScenario(t)
 	sc.runKeyed(t, 7, "run:robin")
 	if got := applyTargets(t, sc.liveS); !slices.Equal(got, []string{"run:robin"}) {
@@ -366,14 +367,39 @@ func TestRestoreHookRunKey_TheRunKeyOutranksTheLineSeq(t *testing.T) {
 	}
 }
 
-// TestRestoreHookRunKey_NothingToKeyOnWritesNothing: no restore line and no run
-// key means there is no telling this restore from another, so the hook fails
-// before it copies or appends anything.
+// TestRestoreHookRunKey_ASeqIsNotAKey: an archive taken after restore R1, restored
+// as R2 whose restore line got the same seq (journal seqs start again after a
+// reset or a host loss), is another restore. Keyed on the seq, R2 found R1's
+// records and wrote none of its own; keyed on the run key, it writes its own, and
+// a hook handed a seq and no key refuses before it writes anything.
+func TestRestoreHookRunKey_ASeqIsNotAKey(t *testing.T) {
+	sc := newRestoreScenario(t)
+	if got := sc.runKeyed(t, 11, "restore:r-one:seq:11")[CountRecordsAppended]; got != 3 {
+		t.Fatalf("R1 appended %d records, want 3", got)
+	}
+	if got := sc.runKeyed(t, 11, "restore:r-two:seq:11")[CountRecordsAppended]; got != 3 {
+		t.Errorf("R2, with the same line seq and another intent, appended %d records, want 3: its records were taken for R1's", got)
+	}
+	if got := applyTargets(t, sc.liveS); !slices.Equal(got, []string{"restore:r-one:seq:11", "restore:r-two:seq:11"}) {
+		t.Errorf("apply records name %v, want one per restore", got)
+	}
+	before := len(restoreRecords(t, sc.liveS))
+	if _, err := RestoreHook(RestoreDeps{Store: sc.liveS, RestoreSeq: 11})(context.Background(), sc.rc); err == nil {
+		t.Error("the hook ran with a restore line's seq and no run key")
+	}
+	if got := len(restoreRecords(t, sc.liveS)); got != before {
+		t.Errorf("%d restore records after a refused run, want %d", got, before)
+	}
+}
+
+// TestRestoreHookRunKey_NothingToKeyOnWritesNothing: no run key means there is no
+// telling this restore from another, so the hook fails before it copies or appends
+// anything.
 func TestRestoreHookRunKey_NothingToKeyOnWritesNothing(t *testing.T) {
 	sc := newRestoreScenario(t)
 	_, err := RestoreHook(RestoreDeps{Store: sc.liveS})(context.Background(), sc.rc)
 	if err == nil {
-		t.Fatal("the hook ran with no restore line and no run key")
+		t.Fatal("the hook ran with no run key")
 	}
 	if got := len(restoreRecords(t, sc.liveS)); got != 0 {
 		t.Errorf("%d restore records written, want 0", got)

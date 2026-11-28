@@ -6,6 +6,8 @@
 package books
 
 import (
+	"context"
+	"errors"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -13,13 +15,16 @@ import (
 	"testing"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m3"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/mediacore/app"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	coreconfig "github.com/falkcorp/mediacore/config"
 	"github.com/falkcorp/mediacore/coretest"
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 )
 
@@ -67,52 +72,116 @@ func TestManifest_FlipNeedsADatabase(t *testing.T) {
 	}
 }
 
-// TestManifest_FlipDeclaresM2M7M8 (F3-07 d): over a database, the manifest carries
-// books.level-1 at the pinned version raising books to level 1 with Spec.Level
-// to match, exactly M2 behind it, and M8 after M2.
+// TestManifest_FlipDeclaresM2M7M8 (F3-07 d, with F4-08's identity half since
+// B10g turned it on): over a database, the manifest carries books.level-1 at the
+// pinned version raising books to level 1, books.level-2 at the next version
+// raising it to BooksIdentityLevel with Spec.Level to match, exactly M2 behind
+// level-1 and M3 behind level-2 and M2, and M8 after both data steps.
 func TestManifest_FlipDeclaresM2M7M8(t *testing.T) {
 	man := flipOn().Manifest()
 	lvl, ok := versionOf(man.Storage.Migrations, cutover.BooksCutoverLevelStepID)
 	if !ok {
 		t.Fatalf("no %s in books' migrations", cutover.BooksCutoverLevelStepID)
 	}
-	if lvl.Version != booksLevelStepVersion || lvl.RaisesLevel != cutover.BooksCutoverLevel || lvl.Compat != storage.Breaking ||
-		man.Storage.Level != cutover.BooksCutoverLevel {
-		t.Errorf("level step = %+v, Spec.Level %d; want version %d raising to %d Breaking, Level %d",
-			lvl, man.Storage.Level, booksLevelStepVersion, cutover.BooksCutoverLevel, cutover.BooksCutoverLevel)
+	if lvl.Version != booksLevelStepVersion || lvl.RaisesLevel != cutover.BooksCutoverLevel || lvl.Compat != storage.Breaking {
+		t.Errorf("level-1 = %+v; want version %d raising to %d Breaking", lvl, booksLevelStepVersion, cutover.BooksCutoverLevel)
+	}
+	lvl2, ok := versionOf(man.Storage.Migrations, cutover.BooksIdentityLevelStepID)
+	if !ok {
+		t.Fatalf("no %s in books' migrations", cutover.BooksIdentityLevelStepID)
+	}
+	if lvl2.Version != booksLevelStepVersion+1 || lvl2.RaisesLevel != cutover.BooksIdentityLevel || lvl2.Compat != storage.Breaking ||
+		man.Storage.Level != cutover.BooksIdentityLevel {
+		t.Errorf("level-2 = %+v, Spec.Level %d; want version %d raising to %d Breaking, Level %d",
+			lvl2, man.Storage.Level, booksLevelStepVersion+1, cutover.BooksIdentityLevel, cutover.BooksIdentityLevel)
 	}
 	if man.Cutover == nil {
 		t.Fatal("no Manifest.Cutover")
 	}
-	data := man.Cutover(module.Importers{})
-	if len(data) != 1 || data[0].ID != cutover.ConfigCutoverID || data[0].Owner != cutover.BooksOwner ||
+	data := man.Cutover(shapeImporters())
+	if len(data) != 2 {
+		t.Fatalf("Manifest.Cutover = %d steps (%+v), want M2 then M3", len(data), data)
+	}
+	m2Ref := storage.StepRef{Owner: cutover.BooksOwner, DataMigration: cutover.ConfigCutoverID}
+	if data[0].ID != cutover.ConfigCutoverID || data[0].Owner != cutover.BooksOwner ||
 		!slices.Contains(data[0].After, cutover.BooksLevelStepRef(booksLevelStepVersion)) {
-		t.Errorf("Manifest.Cutover = %+v, want exactly M2 behind %s", data, cutover.BooksCutoverLevelStepID)
+		t.Errorf("Manifest.Cutover[0] = %+v, want M2 behind %s", data[0], cutover.BooksCutoverLevelStepID)
+	}
+	if data[1].ID != cutover.IdentityCutoverID || data[1].Owner != cutover.BooksOwner ||
+		!slices.Contains(data[1].After, cutover.BooksLevelStepRef(booksLevelStepVersion+1)) || !slices.Contains(data[1].After, m2Ref) {
+		t.Errorf("Manifest.Cutover[1] = %+v, want M3 behind %s and M2", data[1], cutover.BooksIdentityLevelStepID)
 	}
 	if man.Rewrite == nil || man.Rewrite.ID != cutover.RewriteID || man.Rewrite.Owner != cutover.BooksOwner ||
-		!slices.Contains(man.Rewrite.After, storage.StepRef{Owner: cutover.BooksOwner, DataMigration: cutover.ConfigCutoverID}) {
-		t.Errorf("Manifest.Rewrite = %+v, want %s after %s", man.Rewrite, cutover.RewriteID, cutover.ConfigCutoverID)
+		!slices.Contains(man.Rewrite.After, m2Ref) ||
+		!slices.Contains(man.Rewrite.After, storage.StepRef{Owner: cutover.BooksOwner, DataMigration: cutover.IdentityCutoverID}) {
+		t.Errorf("Manifest.Rewrite = %+v, want %s after %s and %s", man.Rewrite, cutover.RewriteID, cutover.ConfigCutoverID, cutover.IdentityCutoverID)
 	}
-	// M2 drains the four legacy secret rows, so exactly those claims retire; the
-	// blob stays read-write (M6 deletes it) and no other claim changes.
+	// M2 drains the four legacy secret rows and M3 the identity families and
+	// HEAD's two bootstrap rows, so exactly those claims retire; the blob stays
+	// read-write (M6 deletes it) and no other claim changes. The bootstrap rows
+	// had no claim at R1, so the flip adds them as exact retired keys.
+	r1 := map[string]storage.ClaimMode{}
+	for _, c := range database.BooksClaims() {
+		r1[c.Key+"\x00"+c.Prefix] = c.Mode
+	}
 	retired := map[string]bool{}
-	for i, c := range man.Storage.Claims {
+	for _, c := range man.Storage.Claims {
+		id := c.Key + "\x00" + c.Prefix
 		if c.Mode == storage.ClaimRetired {
-			retired[c.Key] = true
+			retired[c.Key+c.Prefix] = true
+			continue
 		}
-		if c.Mode != database.BooksClaims()[i].Mode && !retired[c.Key] {
-			t.Errorf("claim %q changed mode to %v", c.Key+c.Prefix, c.Mode)
+		if mode, ok := r1[id]; !ok || mode != c.Mode {
+			t.Errorf("claim %q is %v, R1 declares %v (present %t)", c.Key+c.Prefix, c.Mode, mode, ok)
 		}
 	}
 	wantRetired := map[string]bool{"setting:openai_api_key": true, "setting:google_books_api_key": true,
 		"setting:hardcover_api_token": true, "setting:basic_auth_password": true}
+	for _, p := range m3.SourcePrefixes() {
+		wantRetired[p] = true
+	}
+	for _, k := range m3.SourceKeys() {
+		wantRetired[k] = true
+	}
 	if !maps.Equal(retired, wantRetired) {
-		t.Errorf("retired claims = %v, want exactly the four legacy secret rows %v", retired, wantRetired)
+		t.Errorf("retired claims = %v, want exactly the four legacy secret rows and M3's Source %v", retired, wantRetired)
 	}
-	// The R1 steps are untouched and the level step comes after them.
-	if n := len(man.Storage.Migrations); man.Storage.Migrations[n-1].Name != cutover.BooksCutoverLevelStepID || n != len(database.BooksSpec(nil).Migrations)+1 {
-		t.Errorf("migrations = %d, last %q; want the R1 steps then %s", n, man.Storage.Migrations[n-1].Name, cutover.BooksCutoverLevelStepID)
+	// The R1 steps are untouched and the two level steps come after them.
+	n := len(man.Storage.Migrations)
+	if n != len(database.BooksSpec(nil).Migrations)+2 || man.Storage.Migrations[n-2].Name != cutover.BooksCutoverLevelStepID ||
+		man.Storage.Migrations[n-1].Name != cutover.BooksIdentityLevelStepID {
+		t.Errorf("migrations = %d, last %q; want the R1 steps then %s and %s", n, man.Storage.Migrations[n-1].Name,
+			cutover.BooksCutoverLevelStepID, cutover.BooksIdentityLevelStepID)
 	}
+}
+
+// shapeImporters are importers that carry what M3's config needs (an auth
+// importer that reads users, a role importer that reads roles, a legacy range)
+// and refuse every call: the manifest's Cutover func builds the step list over
+// them and does no work, so nothing here is called. module.Importers{} is not
+// enough since B10g: with the identity flip on, M3 refuses importers that cannot
+// stage it (errNoIdentityImporters), and the cutover func records that and
+// returns no steps.
+func shapeImporters() module.Importers {
+	return module.Importers{
+		Auth:   shapeAuthImporter{},
+		Roles:  shapeRoleImporter{},
+		Legacy: func(storage.Owner) storage.Reader { return nil },
+	}
+}
+
+var errShapeImporter = errors.New("the shape importers refuse every call")
+
+type shapeAuthImporter struct{ coreauth.Importer }
+
+func (shapeAuthImporter) GetUser(context.Context, coreauth.UserID) (*coreauth.User, error) {
+	return nil, errShapeImporter
+}
+
+type shapeRoleImporter struct{ rbac.Importer }
+
+func (shapeRoleImporter) GetRole(context.Context, rbac.RoleName) (*rbac.Role, error) {
+	return nil, errShapeImporter
 }
 
 // nextBooksVersion is the version the next versioned books step must take: one

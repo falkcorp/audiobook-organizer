@@ -168,6 +168,22 @@ const (
 	// LabelLocationCleanup: the removal of a temporary file whose write or
 	// rename failed.
 	LabelLocationCleanup = "journal.location.cleanup"
+	// LabelHookRunTmp: restore_hook_run.json's temporary file: created, written
+	// and fsynced.
+	LabelHookRunTmp = "journal.hookrun.tmp"
+	// LabelHookRunRename: the rename of the temporary file over
+	// restore_hook_run.json.
+	LabelHookRunRename = "journal.hookrun.rename"
+	// LabelHookRunDirSync: the state directory's fsync after that rename.
+	LabelHookRunDirSync = "journal.hookrun.dirsync"
+	// LabelHookRunCleanup: the removal of a temporary file whose write or rename
+	// failed.
+	LabelHookRunCleanup = "journal.hookrun.cleanup"
+	// LabelHookRunClear: the removal of restore_hook_run.json once its run ended
+	// (ClearHookRun).
+	LabelHookRunClear = "journal.hookrun.clear"
+	// LabelHookRunClearDirSync: the state directory's fsync after that removal.
+	LabelHookRunClearDirSync = "journal.hookrun.clear_dirsync"
 	// LabelMoveMkdir: MoveFile's creation of the destination directory.
 	LabelMoveMkdir = "journal.move.mkdir"
 	// LabelMoveClear: the removal of a crash's leftover temporary copy.
@@ -214,6 +230,7 @@ func FSLabels() []string {
 		LabelCreate, LabelHeader, LabelDirSync, LabelAppend, LabelRollback, LabelCut,
 		LabelBaseCreate, LabelBaseDirSync,
 		LabelLocationTmp, LabelLocationRename, LabelLocationDirSync, LabelLocationCleanup,
+		LabelHookRunTmp, LabelHookRunRename, LabelHookRunDirSync, LabelHookRunCleanup, LabelHookRunClear, LabelHookRunClearDirSync,
 		LabelMoveSource, LabelMoveMkdir, LabelMoveClear, LabelMoveCopy, LabelMoveRename, LabelMoveDirSync, LabelMoveCleanup,
 		LabelMoveRemoveSource,
 		LabelTrimClear, LabelTrimCopy, LabelTrimRename, LabelTrimDirSync, LabelTrimCleanup,

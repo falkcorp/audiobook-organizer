@@ -110,19 +110,25 @@ func TestFactoryResetIntentRejectedAfterRollback(t *testing.T) {
 	h.requireResetRejected(id)
 }
 
-// TestFactoryResetWithoutLocationFile (05-storage §5S.3.15; R10-6): ABO
-// keeps no backup.location.json at R1 (05-backup §5B.3.6 lands with F8), and
-// a factory reset staged without one sets the store aside and runs its hook
-// to the end; the swap writes no location file of its own.
-func TestFactoryResetWithoutLocationFile(t *testing.T) {
+// TestFactoryResetSavesTheLocationFile (05-storage §5S.3.15; 05-backup §5B.3.6;
+// R10-6). Until B10g ABO kept no backup.location.json (an R1 boot never writes it)
+// and this cell was TestFactoryResetWithoutLocationFile. Under core identity, on
+// since B10g, every serve boot's P4d advances served_boot and writes the file, so
+// the fixture's store has one when the reset is staged. The reset saves it into
+// restore/<id>/ before its first rename (swap.location.copy, so a rejected reset
+// can put it back), sets the store aside and runs its hook to the end, and the
+// boot that applied the reset writes the file again for the store it serves.
+func TestFactoryResetSavesTheLocationFile(t *testing.T) {
 	h := newOfflineABO(t)
 	location := filepath.Join(h.state, "backup.location.json")
-	require.False(t, exists(location), "the fixture keeps a location file")
+	require.True(t, exists(location), "the identity boot wrote no location file: the case proves nothing")
 	id := h.stageFactoryReset(nil)
 	h.boot()
 	recs := journalOf(t, h.state, id)
 	require.Equal(t, "hook_done", recs[len(recs)-1].Step, "journal %+v", recs)
 	require.False(t, h.slot().Busy(), "slot after the reset boot = %+v", h.slot())
 	assert.True(t, exists(restorejournal.SetAsideDest(h.state, h.path, id, h.path)), "the old store was not set aside")
-	assert.False(t, exists(location), "the reset invented a location file")
+	assert.True(t, exists(filepath.Join(restorejournal.JournalDir(h.state, id), "backup.location.json")),
+		"the reset did not save the location file into its journal before setting the store aside")
+	assert.True(t, exists(location), "the boot that applied the reset wrote no location file for the store it serves")
 }

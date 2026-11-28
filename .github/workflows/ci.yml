@@ -770,6 +770,13 @@ jobs:
       - name: Generated run-status table is fresh
         run: make ops-check
 
+      # web/src/generated/permissions.ts is generated from books.AtomTable()
+      # (cmd/permsgen). A permission added or renamed without regenerating
+      # leaves the SPA gating on a string the server no longer grants. Same make
+      # target `make ci` runs.
+      - name: Generated permission constants are fresh
+        run: make permissions-check
+
       # web/src/types/generated is generated from Go structs by tygo (tygo.yaml).
       # A renamed json tag without regenerating leaves the SPA compiling against
       # the old shape. Same make target `make ci` runs.

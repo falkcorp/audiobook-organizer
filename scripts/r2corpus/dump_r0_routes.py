@@ -3,25 +3,27 @@
 # version: 1.0.0
 # guid: 5a7e2c91-3b64-4d08-9f1a-8c0d6e4b2a57
 # last-edited: 2026-11-13
-"""Dump the R0 tag's gin route table into internal/books/rbacreach/routes.json (F4-07).
+"""Dump the R0 commit's gin route table into internal/books/rbacreach/routes.json (F4-07).
 
-R0 has no route-listing endpoint, and main's router is not R0's (R1 deleted
-``POST /system/reset`` and ``/system/factory-reset`` and rewired ten server
-files), so the dump is taken from the tag's own source: a detached worktree of the
-tag gets ``r0routes/dump_routes_test.go.txt`` as ``internal/server/r0_route_dump_test.go``
-and ``go test -run TestR0RouteDump`` writes the router's routes with the ABS
-surface off and on. ``record_r0_reach.py`` probes every dumped route against the
-running binary, so a route the source dump names and the binary does not serve
-shows up as a NoRoute answer in its ``uniform_not_found`` list.
+R0 here is main at the commit ``r0config/r0_reach_commit.txt`` pins (F4-08,
+2026-11-22; it was the v0.223.0 tag until then, see ``build_r0_reach.py``). The
+binary has no route-listing endpoint, so the dump is taken from that commit's own
+source: a detached worktree of the commit gets ``r0routes/dump_routes_test.go.txt``
+as ``internal/server/r0_route_dump_test.go`` and ``go test -run TestR0RouteDump``
+writes the router's routes with the ABS surface off and on. ``record_r0_reach.py``
+probes every dumped route against the running binary, so a route the source dump
+names and the binary does not serve shows up as a NoRoute answer in its
+``uniform_not_found`` list.
 
     python3 scripts/r2corpus/dump_r0_routes.py            # needs go and network-free git
-    python3 scripts/r2corpus/dump_r0_routes.py --src DIR  # a checkout of the tag already
+    python3 scripts/r2corpus/dump_r0_routes.py --src DIR  # a checkout of the commit already
 """
 
 from __future__ import annotations
 
 import argparse
 import datetime
+import importlib.util
 import json
 import os
 import pathlib
@@ -32,22 +34,28 @@ import tempfile
 
 _HERE = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = _HERE.parents[1]
-TAG_FILE = REPO_ROOT / "ci" / "r0_release.txt"
 OUT = REPO_ROOT / "internal" / "books" / "rbacreach" / "routes.json"
 TEST_SRC = _HERE / "r0routes" / "dump_routes_test.go.txt"
 GUID = "d41a8b7f-2c65-4e93-8f10-6b9e3a7c5d28"
 VERSION = "1.0.0"
 
 
-def read_tag() -> str:
-    lines = [
-        ln.strip()
-        for ln in TAG_FILE.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    if len(lines) != 1:
-        raise SystemExit(f"{TAG_FILE}: want exactly one tag line")
-    return lines[0]
+def _build_module():
+    """build_r0_reach.py, which owns the pinned commit (imported by path)."""
+    spec = importlib.util.spec_from_file_location("build_r0_reach", _HERE / "build_r0_reach.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def read_commit() -> str:
+    """The commit r0config/r0_reach_commit.txt pins."""
+    b = _build_module()
+    try:
+        return b.read_commit()
+    except b.BuildError as e:
+        raise SystemExit(str(e)) from e
 
 
 def run_dump(src: pathlib.Path, dst: pathlib.Path) -> None:
@@ -64,10 +72,10 @@ def run_dump(src: pathlib.Path, dst: pathlib.Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--src", help="a checkout of the R0 tag (default: a temporary worktree)")
+    ap.add_argument("--src", help="a checkout of the R0 commit (default: a temporary worktree)")
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args(argv)
-    tag = read_tag()
+    commit = read_commit()
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="r0routes-"))
     raw = tmp / "dump.json"
     worktree: pathlib.Path | None = None
@@ -77,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             worktree = tmp / "src"
             subprocess.run(
-                ["git", "worktree", "add", "--detach", str(worktree), tag],
+                ["git", "worktree", "add", "--detach", str(worktree), commit],
                 cwd=REPO_ROOT, check=True,
             )  # fmt: skip
             src = worktree
@@ -96,8 +104,8 @@ def main(argv: list[str] | None = None) -> int:
             "guid": GUID,
             "last-edited": datetime.date.today().isoformat(),
         },
-        "what": "the gin route table of the R0 tag's router (source dump, scripts/r2corpus/r0routes)",
-        "r0_tag": tag,
+        "what": "the gin route table of the R0 commit's router (source dump, scripts/r2corpus/r0routes)",
+        "r0_commit": commit,
         "route_count": len(dump["routes"]),
         "abs_off_count": dump["abs_off"],
         "abs_on_count": dump["abs_on"],

@@ -1083,6 +1083,18 @@ func (pl *planner) fold() {
 		// no information, so it is not quarantined on every install.
 		if f.role != "" && !headIsDefault("oauth_default_role", f.role) {
 			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_default_role"), Raw: marshalAt(f.role), Reason: reason})
+			// HEAD's Cloudflare Access sign-in gave a new user this role whether or
+			// not OAuth sign-in was on. Under the flip the role is the provider
+			// entry's default_role and an Access-only install has no entry, so a
+			// new Access user is "viewer": the narrowest role, so no access is
+			// widened, but the change is the operator's to know of. The note
+			// follows the Reported precedent for a value that moves with a changed
+			// meaning (perimeterRules, enable_rate_limit); it does not block the
+			// cutover, which the empty allow-list refusal does because that one
+			// locks everyone out (oauthBlocker).
+			pl.p.Reported = append(pl.p.Reported, fmt.Sprintf(
+				"oauth_default_role: %q was stored with no OAuth provider entry to carry it (%s), so new Cloudflare Access users get the viewer role after the flip: "+
+					"there is no Access-only default-role setting. The value is kept sealed in the quarantine", f.role, reason))
 		}
 		if f.emails != "" {
 			pl.p.Quarantines = append(pl.p.Quarantines, quarantined{Key: quarantineKey("oauth_allowed_emails"), Raw: marshalAt(f.emails), Reason: reason})

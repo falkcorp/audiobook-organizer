@@ -1,7 +1,7 @@
 // file: internal/server/handlers/repairs/handler.go
-// version: 1.16.3
+// version: 1.16.4
 // guid: 1d8e4c73-5a26-4b9f-8e03-7c2b9f6a1d58
-// last-edited: 2026-11-11
+// last-edited: 2026-11-21
 
 // Package repairs serves the Repairs lane of /review (/api/v1/repairs/*):
 // list the fixers, start a plan, page a stored plan's rows, and start an
@@ -63,6 +63,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	coreauth "github.com/falkcorp/mediacore/auth"
+
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
@@ -71,6 +73,7 @@ import (
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/internal/repairs"
 	"github.com/falkcorp/audiobook-organizer/internal/server/handlers/opaccess"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
 )
 
@@ -183,7 +186,37 @@ func (h *Handler) ownerWhyNot(c *gin.Context) string {
 	if h.ownerEmail != nil {
 		email = h.ownerEmail()
 	}
-	return auth.OwnerProofWhyNot(c.Request.Context(), email, cfaccess.OwnerPublicHost(c.Request))
+	ctx := c.Request.Context()
+	// Under core identity (F4-08 B10b2) the proof is the Access extension's
+	// principal carrying AssuranceOwner, the same decision the owner gate
+	// makes (cfaccess.OwnerProofWhyNotCore); the legacy context the gin
+	// Access binder filled does not exist there. Owner status and owner apply
+	// both ask this, so they cannot disagree.
+	if _, ok := legacyauth.IdentityFrom(ctx); ok {
+		p, _ := coreauth.PrincipalFrom(ctx)
+		return cfaccess.OwnerProofWhyNotCore(p, email, cfaccess.OwnerPublicHost(c.Request))
+	}
+	return auth.OwnerProofWhyNot(ctx, email, cfaccess.OwnerPublicHost(c.Request))
+}
+
+// ownerProven is the method and Access e-mail an owner grant records for a
+// request that ownerWhyNot accepted. At HEAD they are the legacy context's
+// (cf_access and the e-mail of the verified JWT). Under core identity the
+// principal carries neither the JWT's e-mail nor HEAD's method name: the
+// extension asserted the owner only because that e-mail passed
+// auth.IsOwnerEmail against owner_email, so the grant records cf_access and
+// the configured owner e-mail, which the redeeming apply re-checks with the
+// same comparison (repairs.OwnerGrants).
+func (h *Handler) ownerProven(c *gin.Context) (auth.Method, string) {
+	ctx := c.Request.Context()
+	if _, ok := legacyauth.IdentityFrom(ctx); ok {
+		email := ""
+		if h.ownerEmail != nil {
+			email = strings.TrimSpace(h.ownerEmail())
+		}
+		return auth.MethodCFAccess, email
+	}
+	return auth.MethodFromContext(ctx), auth.AccessEmailFromContext(ctx)
 }
 
 // OwnerStatus is GET /repairs/owner-status: whether this request may apply
@@ -551,7 +584,6 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	method := auth.MethodFromContext(ctx)
 	user, hasUser := auth.UserFromContext(ctx)
 	// The owner proof: a verified Cloudflare Access JWT for owner_email. It
 	// is checked before anything else, and the grant minted below records
@@ -566,6 +598,11 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 		httputil.RespondWithForbidden(c, "owner apply needs a signed-in user")
 		return
 	case !slices.Contains(user.Roles, auth.SeedRoleAdmin):
+		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
+		return
+	case legacyauth.AdminRefused(ctx):
+		// Under core identity (F4-08 B7) the caller must also hold core:admin;
+		// the role test above stays as HEAD's.
 		httputil.RespondWithForbidden(c, "owner apply needs the admin role")
 		return
 	}
@@ -615,8 +652,9 @@ func (h *Handler) OwnerApply(c *gin.Context) {
 	if grants == nil {
 		grants = repairs.DefaultOwnerGrants
 	}
+	method, accessEmail := h.ownerProven(c)
 	tok, err := grants.Issue(repairs.OwnerGrant{UserID: user.ID, AuthMethod: string(method),
-		AccessEmail: auth.AccessEmailFromContext(ctx),
+		AccessEmail: accessEmail,
 		FixerID:     f.ID(), PlanOpID: req.PlanOpID, RowIDs: []string{req.RowID}})
 	if err != nil {
 		httputil.InternalError(c, "owner grant", err)

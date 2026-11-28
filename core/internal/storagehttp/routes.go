@@ -177,7 +177,7 @@ func (a *api) factoryReset(w http.ResponseWriter, r *http.Request) {
 //
 // The auth-disabled principal has no user: Guards.Interactive refuses it (as
 // at stage 13, 05-authn §4.11), and a reset with no one to name is refused
-// 401 by the rule after Authorize all the same.
+// by the rule after Authorize all the same (httpapi.UserRequired).
 func (a *api) guard(p *auth.Principal) (string, error) {
 	d := httpapi.Authorize(httpapi.AuthzRequest{
 		Perm: rbac.Need(rbac.CoreAdmin), Guards: httpapi.Guards{Interactive: true, Owner: true}, Principal: p,
@@ -186,7 +186,7 @@ func (a *api) guard(p *auth.Principal) (string, error) {
 	case d.Refusal != nil:
 		return "", d.Refusal
 	case p.User == nil || p.User.ID == "":
-		return "", &httpapi.Error{Status: http.StatusUnauthorized, Code: "authentication_required", Detail: "authentication is required"}
+		return "", httpapi.UserRequired(p)
 	case a.stager == nil || a.audit == nil:
 		return "", httpapi.Unavailable("factory reset is not available", 5*time.Second)
 	}

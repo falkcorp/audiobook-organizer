@@ -1,0 +1,3 @@
+### Added
+
+- `POST /api/core/v1/users/{id}/review-admin` acknowledges one `core:admin` holder that a restore listed for review (`restore_admins_review`). It needs an interactive session holding `core:admin`; an API key, a session without the scope and an auth-disabled boot are refused. The acknowledgement removes the holder from the stored restore report and records `core.role.review_admin` (actor and holder, nothing else) in the same commit; the last one deletes the report, so the health token stops being raised, including after a restart. A holder that is not on the report, or was acknowledged already, is 404 and records nothing. This is reached only when the app declares identity.

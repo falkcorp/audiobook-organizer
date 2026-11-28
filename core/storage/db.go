@@ -29,6 +29,10 @@ import (
 // stripeCount is the size of the commit stripe table (§5S.3.2).
 const stripeCount = 4096
 
+// backupOwner is the owner of the revocation journal's head, c/backup/journal_head
+// (core/backup/journal); the checkpoint record's journal_seq reads it.
+const backupOwner Owner = "core/backup"
+
 // storageOwner is the owner of storage's own bookkeeping keyspace c/storage/.
 const storageOwner Owner = "core/storage"
 

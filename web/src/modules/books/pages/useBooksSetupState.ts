@@ -10,6 +10,8 @@ import * as api from '../../../services/api';
 import { STORAGE_KEYS } from '../../../lib/storageKeys';
 import { useToast } from '../../../components/toast/ToastProvider';
 import { installRecommendedTools } from './installRecommendedTools';
+import { useSignInRequiredForAction } from '../../../hooks/useSignInRequiredForAction';
+import { SIGN_IN_REQUIRED_MESSAGE } from '../../../utils/signInRequired';
 
 /**
  * All of the first-run wizard's books state: the library path, the OpenAI key, the iTunes library,
@@ -51,6 +53,8 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
     'recommended'
   );
   const { toast } = useToast();
+  // SEC5-8: under auth-off core refuses the import-path add and the tool install this wizard ends with.
+  const signInGate = useSignInRequiredForAction();
 
   useEffect(() => {
     if (!open) return;
@@ -192,13 +196,22 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
         setup_complete: true,
       });
 
-      // Step 2: Add import folders
-      for (const path of importFolders) {
+      // Step 2: Add import folders. Under auth-off core refuses the add (SEC5-8), so none is
+      // attempted and the user is told why instead of the refusal being logged per folder.
+      let signInRefused = signInGate.blocked && importFolders.length > 0;
+      for (const path of signInGate.blocked ? [] : importFolders) {
         try {
           await api.addImportPath(path, path.split('/').pop() || path);
         } catch (error) {
+          if (signInGate.refuse(error)) {
+            signInRefused = true;
+            break;
+          }
           console.error(`Failed to add import folder ${path}:`, error);
         }
+      }
+      if (signInRefused) {
+        toast(`${SIGN_IN_REQUIRED_MESSAGE}. Import folders can be added from Settings once sign-in is on.`, 'warning');
       }
 
       // Step 3: Trigger iTunes import if configured
@@ -243,7 +256,7 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
       // Last, and not awaited: the setup is already saved, and the install downloads for as long as
       // Ollama takes. It reports through toasts and never throws.
       if (toolInstallChoice === 'recommended') {
-        void installRecommendedTools(toast);
+        void installRecommendedTools(toast, signInGate.blocked);
       }
     } catch (error) {
       console.error('Failed to complete setup:', error);
@@ -298,6 +311,7 @@ export function useBooksSetupState({ open, onComplete }: { open: boolean; onComp
     setTestingMapping,
     toolInstallChoice,
     setToolInstallChoice,
+    signInGate,
     handleOpenLibraryBrowser,
     handleLibraryPathSelect,
     handleConfirmLibraryPath,

@@ -161,7 +161,10 @@ func TestCleanStopClaimWaitsForTheStoreLock(t *testing.T) {
 // the void Options reads from the slot keeps it from vouching. The control,
 // the same marker with nothing staged, is trusted.
 func TestSwapBootVoidsTheCleanStopClaim(t *testing.T) {
-	for name, staged := range map[string]bool{"nothing staged": false, "a staged restore": true} {
+	for name, staged := range map[string]bool{
+		"nothing staged":   false,
+		"a staged restore": true,
+	} {
 		t.Run(name, func(t *testing.T) {
 			h := newOfflineABO(t)
 			// The harness booted serve over this path, so the store carries the

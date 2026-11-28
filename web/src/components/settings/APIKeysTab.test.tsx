@@ -20,7 +20,6 @@ function key(overrides: Partial<api.APIKey>): api.APIKey {
     id: 'k1',
     user_id: 'u1',
     name: 'synthetic key',
-    description: '',
     scopes: ['library.view'],
     status: 'active',
     created_at: new Date(Date.now() - HOUR).toISOString(),
@@ -145,7 +144,6 @@ describe('APIKeysTab custom expiry date', () => {
     await waitFor(() => expect(api.createAPIKey).toHaveBeenCalledTimes(1));
     expect(api.createAPIKey).toHaveBeenCalledWith({
       name: 'Riddler',
-      description: '',
       scopes: [],
       expires_in_days: 1096,
     });
@@ -183,7 +181,6 @@ describe('APIKeysTab custom expiry date', () => {
     await waitFor(() => expect(api.createAPIKey).toHaveBeenCalledTimes(1));
     expect(vi.mocked(api.createAPIKey).mock.calls[0][0]).toEqual({
       name: 'Riddler',
-      description: '',
       scopes: [],
       expires_in_days: 90,
     });

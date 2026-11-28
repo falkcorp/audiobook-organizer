@@ -12,7 +12,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	"github.com/falkcorp/audiobook-organizer/internal/httputil"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	servermiddleware "github.com/falkcorp/audiobook-organizer/internal/server/middleware"
+	"github.com/falkcorp/mediacore/rbac"
 )
 
 // Admin-role routes and EnableAuth=false.
@@ -74,6 +77,12 @@ func (s *Server) recordAdminRoute(method, fullPath string, kind adminRouteKind) 
 // with it off (read once, at wiring, like s.perm). Only read-only introspection
 // belongs behind it; see the rule at the top of this file.
 func (s *Server) adminRole() gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateAdmin, Admin: adminRouteReadOnly})
+	}
+	if s.identity != nil {
+		return s.bridgedAdminGate(adminRouteReadOnly)
+	}
 	if !config.AppConfig.EnableAuth {
 		return func(c *gin.Context) { c.Next() }
 	}
@@ -82,6 +91,12 @@ func (s *Server) adminRole() gin.HandlerFunc {
 
 // adminGate returns the middleware for a route of the given kind.
 func (s *Server) adminGate(kind adminRouteKind) gin.HandlerFunc {
+	if gateTraceForTest != nil {
+		return gateTraceForTest(gateInfo{Kind: gateAdmin, Admin: kind})
+	}
+	if s.identity != nil {
+		return s.bridgedAdminGate(kind)
+	}
 	if kind == adminRouteReadOnly {
 		return s.adminRole()
 	}
@@ -103,4 +118,69 @@ func (s *Server) adminGroup(g *gin.RouterGroup, kind adminRouteKind, method, rel
 // adminRoute registers method rel on g behind the admin gate for kind.
 func (s *Server) adminRoute(g *gin.RouterGroup, kind adminRouteKind, method, rel string, h ...gin.HandlerFunc) {
 	s.adminGroup(g, kind, method, rel).Handle(method, rel, h...)
+}
+
+// adminManifestRequirements indexes the 05-rbac §6.2 requirement of every
+// manifest row by "METHOD gin-path", the key a request's own route gives
+// (c.Request.Method and c.FullPath()).
+var adminManifestRequirements = sync.OnceValue(func() map[string]rbac.Requirement {
+	rows := legacyManifestRows()
+	m := make(map[string]rbac.Requirement, len(rows))
+	for _, r := range rows {
+		m[r.method+" "+r.path] = r.perm.req()
+	}
+	return m
+})
+
+// adminManifestRequirement is the requirement the manifest holds for the
+// request's route, and false for a route that has no row.
+func adminManifestRequirement(method, fullPath string) (rbac.Requirement, bool) {
+	r, ok := adminManifestRequirements()[method+" "+fullPath]
+	return r, ok
+}
+
+// bridgedAdminGate is the admin gate of a route under core identity (WithIdentity,
+// F4-08 B7b): HEAD's role-name gate, adminRole or RequireAdmin by kind, with the
+// route's manifest requirement (05-rbac §6.2: books:admin.view, books:admin.debug,
+// core:admin or AllOf(core:users.manage, core:roles.view, books:admin.view)) enforced first through
+// the bridge. It is resolved per request from the matched route, so a group-level
+// gate (the master-list group, admindebug's reads) and a per-route one take the same
+// path, and a route with no manifest row is refused with 403, never opened.
+//
+// Since B10g the bridge's check is the whole gate: HEAD's RequireAdmin (its
+// role-name test and its API-key scope test) no longer runs after it, so a custom
+// role or a key holding exactly the route's requirement is admitted (owner ruling
+// 2026-11-22, B10rn STOP 1: an owner-approved widening, granted only by a holder of
+// the scope, TestReachRegisteredPath_RoleNameRowsScopeGateAdmits). The bridge's
+// check is the same requirement stage 13 already enforced. The auth-disabled principal is judged by its own
+// checker for a read-only route (HEAD's adminRole passed it) and refused with 403
+// for an always-authenticated one (HEAD's RequireAdmin answered 401 with auth off,
+// which would end a no-auth install's SPA session: F4-08 ruling G5(a);
+// core's auth-disabled checker would otherwise hold a requirement that is not
+// AuthRequired and open it).
+func (s *Server) bridgedAdminGate(kind adminRouteKind) gin.HandlerFunc {
+	b := s.identity.Bridge
+	return func(c *gin.Context) {
+		req, ok := adminManifestRequirement(c.Request.Method, c.FullPath())
+		if !ok {
+			httputil.RespondWithForbidden(c, "admin role required")
+			c.Abort()
+			return
+		}
+		if b.AuthOff(c.Request.Context()) {
+			if kind == adminRouteAlwaysAuthenticated {
+				// A 403, not HEAD's 401: a 401 would end a no-auth install's
+				// SPA session (F4-08 ruling G5(a)). The route stays refused.
+				legacyauth.RespondNoUser(c, "authentication required")
+				return
+			}
+			if b.CheckAdmin(c, req) {
+				c.Next()
+			}
+			return
+		}
+		if b.CheckAdmin(c, req) {
+			c.Next()
+		}
+	}
 }

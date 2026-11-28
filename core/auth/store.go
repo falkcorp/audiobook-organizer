@@ -1,7 +1,7 @@
 // file: core/auth/store.go
-// version: 1.0.0
+// version: 1.1.0
 // guid: c69ddd70-3f1b-4605-9604-d1be29ba81d9
-// last-edited: 2026-11-11
+// last-edited: 2026-11-21
 
 package auth
 
@@ -44,8 +44,27 @@ type Store interface {
 	APIKeyStore
 	OneTimeStore
 	IdentityStore
-	// StageMerge rewrites the owner of every record of plan (Admin.StageUserMerge).
-	StageMerge(b *storage.Batch, plan UserMergePlan) error
+	RestoreEpochStore
+	MergeStore
+}
+
+// MergeStore is the merge family of Store (Admin.PlanUserMerge and
+// Admin.StageUserMerge; the records a merge moves are the ones the store
+// holds, so reading and re-owning them is the store's, never core's or a
+// module's).
+type MergeStore interface {
+	// MergeRows reads every record a merge of source moves to another user, as
+	// the stored bytes (the Expect value StageMerge checks): each of source's
+	// API keys and linked sign-ins, and the allow-list row of source's e-mail
+	// address when one exists. The rows come back in a stable order, so two
+	// reads of unchanged records are equal. A record it cannot decode is an
+	// error (ErrUndecodableRecord): a merge must not leave it behind.
+	MergeRows(ctx context.Context, source UserID) ([]MergeRow, error)
+	// StageMerge rewrites the owner of every row from source to target. Each
+	// row's write is derived from the bytes in row.Seen and expects them, so a
+	// record changed since MergeRows read it fails the commit with
+	// storage.ErrConflict.
+	StageMerge(b *storage.Batch, source, target UserID, rows []MergeRow) error
 }
 
 // UserStore is the user family of Store.
@@ -120,6 +139,12 @@ type OneTimeStore interface {
 	// DeleteOneTime stages the deletion of the token of kind whose public ID
 	// is id, with an Expect on its stored bytes.
 	DeleteOneTime(b *storage.Batch, kind OneTimeKind, id string) error
+	// PutOneTime stages t over the stored token of kind t.Kind whose public ID
+	// is t.ID, keeping the token's stored secret hash, with an Expect on the
+	// bytes it read: a take or another rewrite that lands first fails the
+	// commit (storage.ErrConflict), so a rewrite can never bring back a token
+	// a racing accept spent. auth.ErrNotFound when there is no such token.
+	PutOneTime(b *storage.Batch, t *OneTimeToken) error
 }
 
 // IdentityStore is the external-identity and invite allow-list family of
@@ -130,6 +155,31 @@ type IdentityStore interface {
 	IdentityBySubject(ctx context.Context, provider, subject string) (*ExternalIdentity, error)
 	ScanIdentities(ctx context.Context, user UserID) iter.Seq2[*ExternalIdentity, error] // user "" = every identity
 	InviteAllowed(ctx context.Context, email string) (bool, error)
+}
+
+// RestoreEpochRun is the one record of RestoreEpochStore: what PostRestore's
+// step 3 did for one restore run, staged in the same batch as the sign-in
+// deletion and the credential-epoch bump it describes.
+type RestoreEpochRun struct {
+	// RunKey names the restore run (RestoreDeps.RunKey).
+	RunKey string
+	// Bumped and SignInsDeleted are the counts the run reported, so a re-run
+	// that finds its own key reports them again instead of 0.
+	Bumped, SignInsDeleted int
+}
+
+// RestoreEpochStore is the restore-run family of Store: the marker that makes
+// PostRestore's credential-epoch bump idempotent across a crash. A bump is a
+// read-modify-write (epoch+1), so a re-run cannot tell its own committed bump
+// from a stale one by looking at the users; the marker, committed with the
+// bump, can.
+type RestoreEpochStore interface {
+	// RestoreEpochRun is the marker of the last run that bumped the epochs;
+	// ok is false when no run has.
+	RestoreEpochRun(ctx context.Context) (run RestoreEpochRun, ok bool, err error)
+	// StageRestoreEpochRun stages r as the marker, replacing any earlier run's.
+	// A batch that stages it twice fails with an error.
+	StageRestoreEpochRun(b *storage.Batch, r RestoreEpochRun) error
 }
 
 // Importer is how an app's cutover step brings the identities it held before

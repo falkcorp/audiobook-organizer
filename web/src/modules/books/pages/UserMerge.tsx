@@ -39,11 +39,43 @@ import {
   resumeUserMerge,
   undoUserMerge,
   userMergePlanFromError,
+  type UserMergeCoreSummary,
   type UserMergeJournal,
   type UserMergePlan,
 } from '../../../services/api';
 import { IdentityList } from '../../../components/users/IdentityList';
+import { userMergeRefusalMessage } from './userMergeRefusal';
 import { errorText, familyLabel, type MergeableUser } from '../../../components/users/userAccountParts';
+
+/**
+ * What core says moves, under core identity. Core owns sign-ins and API keys, so
+ * books has no identity lists to show; core's masked summary names the providers
+ * of the sign-ins that move and counts the keys and allow-list rows. Key ids are
+ * not shown: the count is what the admin needs.
+ */
+function CoreMovesSummary({
+  core,
+  survivorName,
+}: {
+  core: UserMergeCoreSummary;
+  survivorName: string;
+}) {
+  const providers = core.identity_providers ?? [];
+  const keys = core.api_key_ids ?? [];
+  return (
+    <Paper variant="outlined" sx={{ p: 1.5 }}>
+      <Typography variant="body2">
+        Sign-ins that move to {survivorName}: {providers.length > 0 ? providers.join(', ') : 'none'}
+      </Typography>
+      <Typography variant="body2">API keys that move: {keys.length}</Typography>
+      {core.allow_list_rows > 0 && (
+        <Typography variant="body2">
+          Access allow-list entries that move: {core.allow_list_rows}
+        </Typography>
+      )}
+    </Paper>
+  );
+}
 
 /**
  * The merge dialog: pick the account that stays, read the preview (counts,
@@ -203,12 +235,14 @@ export function UserMergeDialog({
             {plan.owner_identity_ack_required && (
               <Alert severity="warning" sx={{ mb: 2 }}>
                 <Typography variant="body2">
-                  {plan.owner_identity_holder === 'both'
-                    ? 'Both accounts hold a sign-in for the owner address. '
-                    : plan.owner_identity_on_absorbed
-                      ? 'The account being merged away holds the owner’s sign-in. '
-                      : 'The account being merged away has a sign-in that cannot be checked against the owner address. '}
-                  After the merge its sign-ins belong to {plan.survivor.username}.
+                  {plan.core
+                    ? `A sign-in on the account being merged away moves to ${plan.survivor.username}, and this page cannot tell whether it is the owner’s. `
+                    : plan.owner_identity_holder === 'both'
+                      ? 'Both accounts hold a sign-in for the owner address. '
+                      : plan.owner_identity_on_absorbed
+                        ? 'The account being merged away holds the owner’s sign-in. '
+                        : 'The account being merged away has a sign-in that cannot be checked against the owner address. '}
+                  {plan.core ? '' : `After the merge its sign-ins belong to ${plan.survivor.username}.`}
                 </Typography>
                 <FormControlLabel
                   control={
@@ -222,18 +256,22 @@ export function UserMergeDialog({
               </Alert>
             )}
 
-            <Box
-              sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}
-            >
-              <Paper variant="outlined" sx={{ p: 1.5 }}>
-                <Typography variant="subtitle2">Stays: {plan.survivor.username}</Typography>
-                <IdentityList identities={plan.survivor_identities} />
-              </Paper>
-              <Paper variant="outlined" sx={{ p: 1.5 }}>
-                <Typography variant="subtitle2">Merged away: {plan.absorbed.username}</Typography>
-                <IdentityList identities={plan.absorbed_identities} />
-              </Paper>
-            </Box>
+            {plan.core ? (
+              <CoreMovesSummary core={plan.core} survivorName={plan.survivor.username} />
+            ) : (
+              <Box
+                sx={{ display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}
+              >
+                <Paper variant="outlined" sx={{ p: 1.5 }}>
+                  <Typography variant="subtitle2">Stays: {plan.survivor.username}</Typography>
+                  <IdentityList identities={plan.survivor_identities} />
+                </Paper>
+                <Paper variant="outlined" sx={{ p: 1.5 }}>
+                  <Typography variant="subtitle2">Merged away: {plan.absorbed.username}</Typography>
+                  <IdentityList identities={plan.absorbed_identities} />
+                </Paper>
+              </Box>
+            )}
 
             <Table size="small" sx={{ mt: 2 }}>
               <TableHead>
@@ -328,7 +366,8 @@ export function UserMergesPanel({
       onNotice(done);
       await load();
     } catch (err) {
-      setError(errorText(err, 'The request failed'));
+      // A refusal from the undo or resume routes carries a code; show it in words.
+      setError(userMergeRefusalMessage(err, 'The request failed'));
     }
   };
 
@@ -382,9 +421,15 @@ export function UserMergesPanel({
                     Stopped: see the operation log, then resume
                   </Typography>
                 )}
+                {j.sweep_pending && (
+                  <Typography variant="caption" color="warning.main" sx={{ display: 'block' }}>
+                    Still moving rows written while the merge ran: resume it to finish, then it can
+                    be undone
+                  </Typography>
+                )}
               </TableCell>
               <TableCell align="right">
-                {j.status === 'applying' && (
+                {(j.status === 'applying' || (j.status === 'applied' && j.sweep_pending)) && (
                   <Button
                     size="small"
                     onClick={() =>
@@ -395,9 +440,24 @@ export function UserMergesPanel({
                   </Button>
                 )}
                 {j.status !== 'undone' && (
-                  <Button size="small" color="warning" onClick={() => setConfirmUndo(j)}>
-                    Undo
-                  </Button>
+                  <Tooltip
+                    title={
+                      j.sweep_pending
+                        ? 'The merge has not finished moving every row. Resume it first, then undo.'
+                        : ''
+                    }
+                  >
+                    <span>
+                      <Button
+                        size="small"
+                        color="warning"
+                        disabled={!!j.sweep_pending}
+                        onClick={() => setConfirmUndo(j)}
+                      >
+                        Undo
+                      </Button>
+                    </span>
+                  </Tooltip>
                 )}
               </TableCell>
             </TableRow>
@@ -411,7 +471,8 @@ export function UserMergesPanel({
           <Typography variant="body2">
             The merged-away account gets its sign-ins, keys and data back. Anything either account
             changed since the merge is left as it is and reported. If sign-ins or keys move back,
-            the account that stayed is signed out of the web and Audiobookshelf clients.
+            the account that stayed is signed out of the web and Audiobookshelf clients. A guest's
+            Cloudflare access and phone key are not restored: reissue them afterwards.
           </Typography>
         </DialogContent>
         <DialogActions>

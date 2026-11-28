@@ -4,9 +4,10 @@
 // last-edited: 2026-10-23
 
 import { useOptionalAuth } from '../contexts/AuthContext';
+import { BOOKS_PERMISSIONS } from '../generated/permissions';
 
 /** The permission the server's library-organize routes (for example a retired-version restore) require. */
-export const LIBRARY_ORGANIZE_PERMISSION = 'library.organize';
+export const LIBRARY_ORGANIZE_PERMISSION = BOOKS_PERMISSIONS.ORGANIZE;
 
 /**
  * Whether the caller may run library-organize actions. Advisory (every route

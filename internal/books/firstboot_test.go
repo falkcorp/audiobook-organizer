@@ -277,9 +277,10 @@ func TestProjectionKeepsRecordIDOnABOsBoot(t *testing.T) {
 	require.NotNil(t, dvAfter.Value)
 	var version database.DatabaseVersion
 	require.NoError(t, json.Unmarshal([]byte(*dvAfter.Value), &version))
-	// The flip's level step is the version after HEAD's last (books.level-1).
-	assert.Equal(t, booksLevelStepVersion, version.Version)
-	assert.Equal(t, database.LatestMigrationVersion()+1, version.Version)
+	// The flip's level steps are the two versions after HEAD's last
+	// (books.level-1, then books.level-2 with the identity flip on since B10g).
+	assert.Equal(t, booksLevelStepVersion+1, version.Version)
+	assert.Equal(t, database.LatestMigrationVersion()+2, version.Version)
 	// The level step rewrites the stamp's value (version 2, asserted above) but
 	// never takes a new row ID for either bookkeeping row.
 	for _, k := range []string{"preference:storage_format", "preference:storage_migration"} {

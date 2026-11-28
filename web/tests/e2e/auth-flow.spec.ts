@@ -93,16 +93,17 @@ test.describe('Authentication — Real Server Smoke', () => {
     request,
   }) => {
     // Check live server auth status — no mocks used in this test.
-    const status = await request.get('/api/v1/auth/status');
+    const status = await request.get('/api/core/v1/auth/status');
     if (!status.ok()) {
       test.skip(true, 'Auth status endpoint unavailable — skipping real-server smoke test');
       return;
     }
-    const body = await status.json() as { requires_auth?: boolean; has_users?: boolean };
-    if (!body.requires_auth || body.has_users) {
+    const body = await status.json() as { auth_disabled?: boolean; has_users?: boolean };
+    const requiresAuth = !body.auth_disabled;
+    if (!requiresAuth || body.has_users) {
       test.skip(
         true,
-        `Server already bootstrapped (requires_auth=${body.requires_auth}, has_users=${body.has_users}) — skip to avoid state pollution`
+        `Server already bootstrapped (requires_auth=${requiresAuth}, has_users=${body.has_users}) — skip to avoid state pollution`
       );
       return;
     }

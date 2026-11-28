@@ -62,6 +62,8 @@ func coreActionTable() []actionRow {
 		{"core.integration.write_secret", UserScoped},
 		{"core.invite.accept", UserScoped},
 		{"core.invite.create", UserScoped},
+		{"core.invite.mark_delivered", UserScoped},
+		{"core.invite.rotate", UserScoped},
 		{"core.oidc_provider.create", UserScoped},
 		{"core.oidc_provider.delete", UserScoped},
 		{"core.oidc_provider.update", UserScoped},
@@ -85,6 +87,7 @@ func coreActionTable() []actionRow {
 		{"core.storage.cutover_blocker_delete", VisibleToAll},
 		{"core.storage.cutover_blocker_fix", VisibleToAll},
 		{"core.storage.cutover_step", VisibleToAll},
+		{"core.storage.journal_queue_clear", VisibleToAll},
 		{"core.storage.quarantine_purge", VisibleToAll},
 		{"core.system.factory_reset", VisibleToAll},
 		{"core.task.approve", VisibleToAll},
@@ -99,7 +102,9 @@ func coreActionTable() []actionRow {
 		{"core.user.disable", UserScoped},
 		{"core.user.enable", UserScoped},
 		{"core.user.reset_password", UserScoped},
+		{"core.user.set_email", UserScoped},
 		{"core.user.set_roles", UserScoped},
+		{"core.user.unmerge", UserScoped},
 	}
 }
 

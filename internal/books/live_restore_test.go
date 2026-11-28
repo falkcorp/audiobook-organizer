@@ -26,6 +26,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/telemetry"
 	"github.com/falkcorp/mediacore/app"
+	corebackup "github.com/falkcorp/mediacore/backup"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/storage/restorejournal"
 )
@@ -97,7 +98,9 @@ func TestLiveRestoreStagesAndExits75(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, id, in.ID)
 	assert.Equal(t, restorejournal.KindArchive, in.Kind)
-	assert.Equal(t, info.Checksum, in.ArchiveID)
+	assert.Equal(t, string(corebackup.LegacyArchiveID(info.Filename, info.Checksum)), in.ArchiveID)
+	assert.NotEmpty(t, in.Staging, "the intent names no staging directory (core's identity boot reads it)")
+	assert.NotEmpty(t, in.ManifestSHA256, "the intent names no manifest hash (core's identity boot reads it)")
 	assert.Equal(t, build, in.StagedByBuild)
 	assert.NotEmpty(t, in.InstallID)
 	assert.Equal(t, []restorejournal.Target{{From: filepath.Join(restorejournal.StagingDir(h.path, id), "db"), To: h.path}}, in.Targets)

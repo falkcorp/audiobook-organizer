@@ -1,0 +1,3 @@
+### Fixed
+
+- The admin account-merge preview no longer says "No linked sign-ins" on both sides of a merge that moves sign-ins when the server runs under core identity. Core owns sign-ins and API keys, so the two identity lists are empty there; when the preview carries core's summary the page now shows "Sign-ins that move to <account>" with the provider names (or "none"), "API keys that move" with a count, and "Access allow-list entries that move" when there are any. The owner-identity notice for a sign-in the plan cannot check now says a sign-in moves and the page cannot tell whether it is the owner's, and the acknowledgement is still required before the merge can start. The preview without core's summary renders as before.

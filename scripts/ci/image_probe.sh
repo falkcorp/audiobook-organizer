@@ -21,6 +21,16 @@
 #                        (TestBuildID_HeaderEqualsEmbeddedMeta). Off by default; R1-19
 #                        sets it to 1 in docker-image.yml.
 #
+#   PROBE_AUTH_OFF       1 requires the container to have been started with authentication
+#                        off (05-authn section 10, TestAuthOffDockerBoots): the authenticated
+#                        GET /api/v1/system/status must carry auth_disabled_remote in its
+#                        `degraded` list (read with no credentials, which is what auth off
+#                        means), and the unauthenticated /health must not carry that token
+#                        anywhere (05-health 5H.3.1: posture tokens travel the
+#                        authenticated route only). Off by default: the image only emits the
+#                        token once the identity flip (F4-08 B10) lands, and the job must
+#                        start a container with auth off to use it.
+#
 # Exit 0 when every enabled probe passes; otherwise exit 1 after one line on
 # stderr beginning "image_probe:" that names the failure. POSIX sh, curl and
 # docker only.
@@ -39,6 +49,18 @@ timeout=${READY_TIMEOUT:-300}
 case $timeout in
 '' | *[!0-9]*) fail "READY_TIMEOUT must be a number of seconds, got '$timeout'" ;;
 esac
+
+# degraded_tokens prints the entries of the top-level "degraded" array of the JSON
+# file $1, one per line and unquoted. It reads only that key: the tokens inside
+# "degraded_details" (a different key) are not entries of the list. The entries
+# are plain fixed tokens, so the array has no nested bracket and no comma inside
+# an entry.
+degraded_tokens() {
+	tr '\n\r\t' '   ' <"$1" |
+		sed -n 's/.*"degraded"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p' |
+		tr ',' '\n' |
+		sed 's/^[[:space:]]*"//; s/"[[:space:]]*$//'
+}
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -86,6 +108,19 @@ if [ "${PROBE_BUILD_ID:-0}" = "1" ]; then
 	[ -n "$meta" ] || fail "the served HTML has no <meta name=\"mediacore-build\" content=...>"
 	[ "$header" = "$meta" ] || fail "X-App-Build '$header' differs from the embedded mediacore-build meta '$meta'"
 	echo "image_probe: X-App-Build equals the embedded mediacore-build meta"
+fi
+
+# 4. Auth off: on only for a container started with authentication off.
+if [ "${PROBE_AUTH_OFF:-0}" = "1" ]; then
+	curl -fsS --max-time 10 "$base/api/v1/system/status" >"$tmp/status" 2>"$tmp/status.err" ||
+		fail "GET $base/api/v1/system/status failed (was the container started with auth off?): $(tr '\n' ' ' <"$tmp/status.err")"
+	degraded_tokens "$tmp/status" | grep -Fxq "auth_disabled_remote" ||
+		fail "the authenticated degraded list of $base/api/v1/system/status lacks auth_disabled_remote (got: $(degraded_tokens "$tmp/status" | tr '\n' ' '))"
+	curl -fsS --max-time 10 "$base/health" >"$tmp/health.unauth" ||
+		fail "GET $base/health failed"
+	! grep -Fq "auth_disabled_remote" "$tmp/health.unauth" ||
+		fail "the unauthenticated $base/health carries auth_disabled_remote, a token only the authenticated route may carry"
+	echo "image_probe: auth_disabled_remote is on the authenticated status and not on /health"
 fi
 
 echo "image_probe: ok"

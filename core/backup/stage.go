@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -49,6 +50,18 @@ func (s *Svc) actor(ctx context.Context) string {
 		}
 	}
 	return "unknown"
+}
+
+// outgoingSeq is the live store's committed journal head seq, which the intent
+// carries into the `staged` record's Seq (05-backup §5B.3.4 step 8, DATA2-25):
+// read through Markers, as Create reads its boundaries, before the intent exists,
+// so a failed read leaves nothing staged.
+func (s *Svc) outgoingSeq(ctx context.Context) (uint64, error) {
+	b, err := s.o.Markers.Read(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("backup: read the journal head for the staged record: %w", err)
+	}
+	return b.JournalSeq, nil
 }
 
 func (s *Svc) probe() restorejournal.Probe {
@@ -233,10 +246,15 @@ func (s *Svc) StageRestore(ctx context.Context, id ArchiveID, o RestoreOptions) 
 		install = s.o.Store.InstallID()
 	}
 	actor := s.actor(ctx)
+	outgoing, err := s.outgoingSeq(ctx)
+	if err != nil {
+		return PendingRestore{}, err
+	}
 	in := restorejournal.Intent{
 		ID: rid, Kind: restorejournal.KindArchive, DBPath: s.o.DBPath, Targets: targets,
 		StagedByBuild: s.o.BuildID, ExpiresAt: now.Add(ttl), RequestedBy: actor, RequestedAt: now,
 		ArchiveID: string(id), Staging: staging, InstallID: install, ManifestSHA256: manifestSHA,
+		OutgoingSeq: outgoing,
 	}
 	if s.o.Stager == nil {
 		return PendingRestore{}, errors.New("backup: restore needs a Stager")
@@ -507,14 +525,50 @@ func (s *Svc) extractLegacy(ctx context.Context, archive, staging, verified stri
 		ents = append(ents, Entry{Path: dbPrefix + "/" + w.Name, Size: w.Size, SHA256: w.SHA256, Class: SystemOfRecord})
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Path < ents[j].Path })
-	b, err := json.Marshal(legacyStaged{Format: FormatLegacyABO, Archive: info.SHA256, Codec: info.Codec, Entries: ents})
+	return WriteLegacyStaged(staging, info.SHA256, info.Codec, ents)
+}
+
+// WriteLegacyStaged writes the legacy manifest of a staged legacy-abo/0 restore
+// into stagingDir (the directory that holds the extracted store as db/, never
+// the store itself: the store directory is moved onto the live path) and
+// returns the manifest's SHA-256, the intent's manifest_sha256 that
+// ReadStagedManifest and Recheck check it against. It is the one encoder of
+// the format: core's own staging (extractLegacy) and a host that extracts a
+// legacy archive itself (ABO's restore stager) both write it here, so what
+// ReadStagedManifest decodes is what was written.
+//
+// archiveSHA256 is the SHA-256 of the archive's bytes, codec the compression
+// the archive was read with (gzip, zstd or none), and entries the extracted
+// files with the size and SHA-256 taken as each was written. Each entry's Path
+// is slash-separated and relative to stagingDir (db/CURRENT), the way Recheck
+// joins it. An entry whose path is not a relative path inside stagingDir, or
+// that has no digest, is refused: the manifest would name a file Recheck
+// cannot find, or one it cannot re-hash. The entries are written sorted by
+// path, and the directory is synced so the manifest survives a crash with the
+// intent that names it.
+func WriteLegacyStaged(stagingDir, archiveSHA256, codec string, entries []Entry) (manifestSHA string, err error) {
+	if stagingDir == "" || archiveSHA256 == "" {
+		return "", errors.New("backup: write legacy manifest: the staging directory and the archive digest are required")
+	}
+	ents := make([]Entry, len(entries))
+	copy(ents, entries)
+	for _, e := range ents {
+		if !fs.ValidPath(e.Path) || e.Path == "." {
+			return "", fmt.Errorf("backup: write legacy manifest: %q is not a path inside the staging directory", e.Path)
+		}
+		if e.SHA256 == "" {
+			return "", fmt.Errorf("backup: write legacy manifest: %q has no digest", e.Path)
+		}
+	}
+	sort.Slice(ents, func(i, j int) bool { return ents[i].Path < ents[j].Path })
+	b, err := json.Marshal(legacyStaged{Format: FormatLegacyABO, Archive: archiveSHA256, Codec: codec, Entries: ents})
 	if err != nil {
 		return "", err
 	}
-	if err := writeFileAtomic(filepath.Join(staging, legacyManifestName), b); err != nil {
+	if err := writeFileAtomic(filepath.Join(stagingDir, legacyManifestName), b); err != nil {
 		return "", err
 	}
-	if err := syncDir(staging); err != nil {
+	if err := syncDir(stagingDir); err != nil {
 		return "", err
 	}
 	return SumManifest(b), nil
@@ -741,10 +795,14 @@ func (s *Svc) RevertLastRestore(ctx context.Context, o RestoreOptions) (PendingR
 	if s.o.Store != nil {
 		install = s.o.Store.InstallID()
 	}
+	outgoing, err := s.outgoingSeq(ctx)
+	if err != nil {
+		return PendingRestore{}, err
+	}
 	in := restorejournal.Intent{
 		ID: rid, Kind: restorejournal.KindRevert, DBPath: s.o.DBPath, Targets: targets,
 		StagedByBuild: s.o.BuildID, ExpiresAt: now.Add(ttl), RequestedBy: s.actor(ctx), RequestedAt: now,
-		InstallID: install,
+		InstallID: install, OutgoingSeq: outgoing,
 	}
 	if s.o.Stager == nil {
 		return PendingRestore{}, errors.New("backup: restore needs a Stager")
@@ -812,6 +870,44 @@ func lastJournalStep(p string) string {
 	return r.Step
 }
 
+// ReadStagedManifest reads the manifest of the archive intent in staged into
+// in.Staging and checks it against in.ManifestSHA256, the one read both step
+// b's re-check (Recheck) and a restore boot's derivation of its source
+// (kernel P4d) make. m is the core manifest, nil for a legacy archive (legacy
+// true: HEAD's archive, which has no provenance, no journal sequence and no
+// audit high-water mark); entries are the files the staging directory must
+// hold either way. An intent that names no staging directory or manifest hash,
+// a manifest that is missing, or one whose bytes do not hash to the intent's
+// is an error: nothing about the source can be read from it.
+func ReadStagedManifest(in restorejournal.Intent) (m *Manifest, entries []Entry, legacy bool, err error) {
+	if in.Staging == "" || in.ManifestSHA256 == "" {
+		return nil, nil, false, errors.New("the intent names no staging directory or manifest hash")
+	}
+	raw, err := readBounded(filepath.Join(in.Staging, ManifestName), MaxManifestBytes)
+	if err == nil {
+		if SumManifest(raw) != in.ManifestSHA256 {
+			return nil, nil, false, errors.New("the staged manifest does not match the intent")
+		}
+		m, perr := ParseManifest(raw)
+		if perr != nil {
+			return nil, nil, false, perr
+		}
+		return m, m.Entries, false, nil
+	}
+	raw, lerr := readBounded(filepath.Join(in.Staging, legacyManifestName), MaxManifestBytes)
+	if lerr != nil {
+		return nil, nil, false, fmt.Errorf("no staged manifest: %w", err)
+	}
+	if SumManifest(raw) != in.ManifestSHA256 {
+		return nil, nil, false, errors.New("the staged manifest does not match the intent")
+	}
+	var ls legacyStaged
+	if json.Unmarshal(raw, &ls) != nil {
+		return nil, nil, false, errors.New("the staged legacy manifest does not decode")
+	}
+	return nil, ls.Entries, true, nil
+}
+
 // Recheck is step b's re-check of a staged archive restore (decision D4), for
 // restoreswap.Options.Recheck: the manifest in staging must hash to the
 // intent's manifest_sha256, and every listed file must exist with its recorded
@@ -829,34 +925,9 @@ func Recheck(rehash func() bool) func(ctx context.Context, in restorejournal.Int
 		if in.Kind != restorejournal.KindArchive {
 			return nil
 		}
-		if in.Staging == "" || in.ManifestSHA256 == "" {
-			return errors.New("the intent names no staging directory or manifest hash")
-		}
-		var (
-			raw     []byte
-			entries []Entry
-			err     error
-		)
-		if raw, err = readBounded(filepath.Join(in.Staging, ManifestName), MaxManifestBytes); err == nil {
-			if SumManifest(raw) != in.ManifestSHA256 {
-				return errors.New("the staged manifest does not match the intent")
-			}
-			m, perr := ParseManifest(raw)
-			if perr != nil {
-				return perr
-			}
-			entries = m.Entries
-		} else if raw, lerr := readBounded(filepath.Join(in.Staging, legacyManifestName), MaxManifestBytes); lerr == nil {
-			if SumManifest(raw) != in.ManifestSHA256 {
-				return errors.New("the staged manifest does not match the intent")
-			}
-			var ls legacyStaged
-			if json.Unmarshal(raw, &ls) != nil {
-				return errors.New("the staged legacy manifest does not decode")
-			}
-			entries = ls.Entries
-		} else {
-			return fmt.Errorf("no staged manifest: %w", err)
+		_, entries, _, err := ReadStagedManifest(in)
+		if err != nil {
+			return err
 		}
 		full := rehash != nil && rehash()
 		for _, e := range entries {

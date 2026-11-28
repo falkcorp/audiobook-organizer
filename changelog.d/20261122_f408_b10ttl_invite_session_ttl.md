@@ -1,0 +1,3 @@
+### Fixed
+
+- Under core identity, the session a user gets by accepting an invite lasts 30 days again, as it did before the identity change. Core had given it the remember-me lifetime (7 days by default), which cut an invited user's first session short. Core's auth options gain `InviteSessionTTL`; zero (the default, which hello and new apps keep) leaves the invite session at `core.auth.session.remember_ttl`, and audiobook-organizer sets 720 hours. It is compiled in with no operator setting, and `remember_ttl` keeps its 168-hour default for every app. A remember-me sign-in is still 7 days and a plain sign-in still 24 hours.
