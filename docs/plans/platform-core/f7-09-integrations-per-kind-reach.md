@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/f7-09-integrations-per-kind-reach.md -->
-<!-- version: 1.0.0 -->
+<!-- version: 1.1.0 -->
 <!-- guid: 7d3a9e41-5c82-4f06-b1d7-2e8a60c4f915 -->
 <!-- last-edited: 2026-11-28 -->
 
@@ -48,7 +48,7 @@ router and in the handler backstop.
 
 | Kind | HEAD route that reads / writes this kind's non-secret config (file:line) | HEAD requirement | HEAD interactive-only (credRoute)? | Core requirement | W6 co-requirement | Legacy route kept alive? | Pinning cell |
 |---|---|---|---|---|---|---|---|
-| ai | `GET`/`PUT /config` keys `openai_base_url` (`internal/books/cutover/rename_data.go:124`), `ai_endpoints` (`:130`); routes `internal/server/legacy_manifest.go:622-623`, `wire_system_routes.go:35-36` | `settings.manage` | No. A settings-atom API key wrote them (boot probe, below). Secret keys (`openai_api_key`) need an interactive `core:admin` (`internal/books/appconfig/write.go:371-382`), which is #5073's gate | instance requirement | none needed (same as HEAD) | `/config` stays (not part of this PR) | `TestReach_InstanceRoutesPerKind`, `TestReach_SettingsKeyWritesNonSecretConfigPerKind` |
+| ai | `GET`/`PUT /config` keys `openai_base_url` (`internal/books/cutover/rename_data.go:124`), `ai_endpoints` (`:130`); routes `internal/server/legacy_manifest.go:622-623`, `wire_system_routes.go:35-36` | `settings.manage` | No. A settings-atom API key wrote them (boot probe, below). Secret keys (`openai_api_key`) need an interactive `core:admin` (`internal/books/appconfig/write.go:371-382`), which is #5073's gate | instance requirement | none needed (same as HEAD) | `/config` stays (not part of this PR) | `TestReach_InstanceAndProbeRoutes`, `TestReach_SettingsKeyWritesNonSecretConfigPerKind` |
 | download | `PUT /config` key `deluge_web_url` (`rename_data.go:178`) | `settings.manage` | No (boot probe) | instance requirement | none needed | `/config` stays | same |
 | metadata | `PUT /config` key `metadata_sources` (`rename_data.go:119`) | `settings.manage` | No (boot probe) | instance requirement | none needed | `/config` stays | same |
 | notify | `PUT /config` key `plugins` (`rename_data.go:176`); `PUT /plugins/:id/settings` (`legacy_manifest.go:814`, `wire_media_routes.go:98` `credRoute`) writes an in-memory map only (`internal/server/handlers/plugins.go:163`) | `settings.manage` | `PUT /plugins/:id/settings` yes; `PUT /config {plugins}` **no** (boot probe: key 200) | instance requirement, no `Guards.Interactive` (see STOP 1) | none needed | `/config`, `/plugins/:id/settings` stay | same |
@@ -82,10 +82,10 @@ requirement), instance (404 if absent).
 
 | Kind | HEAD predecessor (file:line) | HEAD requirement | HEAD interactive-only? | Core requirement | W6 co-requirement | Legacy route kept alive? | Pinning cell |
 |---|---|---|---|---|---|---|---|
-| ai | `GET /ai/endpoints/status` (`legacy_manifest.go:433`, `wire_media_routes.go:88`) | `settings.manage` | No | instance requirement | none | stays (kept by the owner, `internal/server/wire_catalog_review_gone_test.go:29`) | `TestReach_HealthPerKind`, `TestBackstop_PerKindRequirement` |
-| download | `GET /deluge/status` (`legacy_manifest.go:666`, `deluge_integration.go:139-146`) | `integrations.manage` atom (`core:integrations.manage` + `books:integrations.manage`) | No | **not served: 404** for every principal, `core:admin` included, with a problem detail naming the legacy route | **needed**: a per-kind co-requirement (W6, #5086, lands after this PR) so the atom's `books:integrations.manage` can be asked of kind=download only; enabling is todo.d `f7-09-enable-core-download-health` | **yes, `GET /deluge/status` stays** | `TestReach_HealthPerKind` (download: 404 for all), `TestLegacyReach_PerKindPredecessorsStayAlive` (internal/books) |
-| metadata | `POST /metadata-sources/test` (probe, `legacy_manifest.go:731`) and `GET /metadata/providers/throttles` (hold read, `:747`, `library.view`) | `settings.manage` for the probe, `library.view` for the hold read | No | instance requirement | none | **`GET /metadata/providers/throttles` stays** (`library.view` is not expressible in core until books:view lands) | `TestReach_HealthPerKind`, `TestLegacyReach_PerKindPredecessorsStayAlive` |
-| notify | `GET /plugins/:id/health` (`legacy_manifest.go:813`, `handlers/plugins.go:144`) | `settings.manage` | No | instance requirement | none | stays | `TestReach_HealthPerKind` |
+| ai | `GET /ai/endpoints/status` (`legacy_manifest.go:433`, `wire_media_routes.go:88`) | `settings.manage` | No | instance requirement | none | stays (kept by the owner, `internal/server/wire_catalog_review_gone_test.go:29`) | `TestReach_HealthAndTestPerKind`, `TestReach_BackstopHoldsWhenTheRouteIsMountedWeaker` |
+| download | `GET /deluge/status` (`legacy_manifest.go:666`, `deluge_integration.go:139-146`) | `integrations.manage` atom (`core:integrations.manage` + `books:integrations.manage`) | No | **not served: 404** for every principal, `core:admin` included, with a problem detail naming the legacy route | **needed**: a per-kind co-requirement (W6, #5086, lands after this PR) so the atom's `books:integrations.manage` can be asked of kind=download only; enabling is todo.d `f7-09-enable-core-download-health` | **yes, `GET /deluge/status` stays** | `TestReach_HealthAndTestPerKind` (download: 404 for all), `TestLegacyReach_PerKindPredecessorsStayAlive` (internal/books) |
+| metadata | `POST /metadata-sources/test` (probe, `legacy_manifest.go:731`) and `GET /metadata/providers/throttles` (hold read, `:747`, `library.view`) | `settings.manage` for the probe, `library.view` for the hold read | No | instance requirement | none | **`GET /metadata/providers/throttles` stays** (`library.view` is `{books:view, core:tasks.view}` (books_test.go:194), not expressible in core until books:view lands) | `TestReach_HealthAndTestPerKind`, `TestLegacyReach_PerKindPredecessorsStayAlive` |
+| notify | `GET /plugins/:id/health` (`legacy_manifest.go:813`, `handlers/plugins.go:144`) | `settings.manage` | No | instance requirement | none | stays | `TestReach_HealthAndTestPerKind` |
 | indexer | none | n/a | n/a | **not served: 404** (no HEAD predecessor, no ruling) | n/a | n/a | `TestKindReach_EveryKindIsDecided` |
 
 Row delta recorded (not a STOP, flagged for the owner): a `key:admin:settings`
@@ -106,10 +106,10 @@ per-kind rule.
 
 | Kind | HEAD predecessor | HEAD requirement | Core requirement | Legacy route kept alive? | Pinning cell |
 |---|---|---|---|---|---|
-| ai | `POST /ai/test-connection` (`legacy_manifest.go:443`, `wire_media_routes.go:50`) | `library.edit_metadata` | instance requirement (no widening to the integrations atom; settings-atom keys already hold nothing of `edit_metadata` so they gain a test endpoint, recorded) | **yes, `/ai/test-connection` stays** for `edit_metadata` holders | `TestReach_TestPerKind`, `TestLegacyReach_PerKindPredecessorsStayAlive` |
-| download | `POST /deluge/test-connection` (`legacy_manifest.go:667`) | `integrations.manage` atom | **not served: 404** (the integrations atom would gain nothing it lacks, but the settings atom must not gain the atom's route) | **yes** | `TestReach_TestPerKind` |
-| metadata | `POST /metadata-sources/test` (`legacy_manifest.go:731`, `wire_media_routes.go:62`) | `settings.manage` | instance requirement | stays | `TestReach_TestPerKind` |
-| notify | none (HEAD has no webhook test route) | n/a | instance requirement (the integrations atom must not reach a new "send a request to a target" path; the settings atom's reach equals its notify config writes) | n/a | `TestReach_TestPerKind` (integrations atom refused, settings atom passes) |
+| ai | `POST /ai/test-connection` (`legacy_manifest.go:443`, `wire_media_routes.go:50`) | `library.edit_metadata` | instance requirement (no widening to the integrations atom; settings-atom keys already hold nothing of `edit_metadata` so they gain a test endpoint, recorded) | **yes, `/ai/test-connection` stays** for `edit_metadata` holders | `TestReach_HealthAndTestPerKind`, `TestLegacyReach_PerKindPredecessorsStayAlive` |
+| download | `POST /deluge/test-connection` (`legacy_manifest.go:667`) | `integrations.manage` atom | **not served: 404** (the integrations atom would gain nothing it lacks, but the settings atom must not gain the atom's route) | **yes** | `TestReach_HealthAndTestPerKind` |
+| metadata | `POST /metadata-sources/test` (`legacy_manifest.go:731`, `wire_media_routes.go:62`) | `settings.manage` | instance requirement | stays | `TestReach_HealthAndTestPerKind` |
+| notify | none (HEAD has no webhook test route) | n/a | instance requirement (the integrations atom must not reach a new "send a request to a target" path; the settings atom's reach equals its notify config writes) | n/a | `TestReach_HealthAndTestPerKind` (integrations atom refused, settings atom passes) |
 | indexer | none | n/a | **not served: 404** | n/a | `TestKindReach_EveryKindIsDecided` |
 
 The integrations atom gains no test endpoint it lacks at HEAD: it holds none
@@ -121,13 +121,13 @@ legacy route.
 
 | HEAD predecessor | HEAD requirement | Core requirement | Legacy kept alive? | Pinning cell |
 |---|---|---|---|---|
-| `GET /filesystem/browse` (`legacy_manifest.go:681`, `wire_library_routes.go:61`) | `settings.manage` (same verdict string as `/config`, `rbacreach/verdicts.json`) | `rbac.OperatorRequirement()` (was `AllOf(core:library.browse, core:settings.manage)`, which two-scope holders passed and the atom's holders do not all hold) | the route is not served by core at HEAD of this PR (dark) | `TestReach_BrowseAsksTheSettingsAtom` (libraryhttp) |
+| `GET /filesystem/browse` (`legacy_manifest.go:681`, `wire_library_routes.go:61`) | `settings.manage` (same verdict string as `/config`, `rbacreach/verdicts.json`) | `rbac.OperatorRequirement()` (was `AllOf(core:library.browse, core:settings.manage)`, which two-scope holders passed and the atom's holders do not all hold) | the route is not served by core at HEAD of this PR (dark) | `TestBrowse_ReachIsHEADsSettingsManageAtom` (libraryhttp) |
 
 ## Table 5: legacy routes that stay alive after the flip
 
 | Legacy route | Why it stays | Retired when | Guard cell |
 |---|---|---|---|
-| `GET /metadata/providers/throttles` (`legacy_manifest.go:747`) | `library.view` holders read it; core cannot express `books:view` | a core route can express `books:view` (todo.d `f7-09-retire-throttles-route`) | `TestLegacyReach_PerKindPredecessorsStayAlive` (a `library.view` key still gets it), `TestLegacyReach_RetirementListsKeepPerKindRoutes` |
+| `GET /metadata/providers/throttles` (`legacy_manifest.go:747`) | `library.view` holders read it; core cannot express `books:view` | a core route can express `books:view` (todo.d `f7-09-retire-throttles-route`) | `TestLegacyReach_PerKindPredecessorsStayAlive` (a `library.view` key still gets it), `TestKeptIntegrationPredecessors_AreInNoRetiredList`, `TestKeptIntegrationPredecessors_AreRegisteredAndNotGone` (internal/server) |
 | `POST /ai/test-connection` (`:443`) | `library.edit_metadata` holders | a core route can express it | same |
 | `GET /deluge/status`, `POST /deluge/test-connection` (`:666-667`) | the integrations atom's only reach to download health and test | W6 per-kind co-requirement lands (todo.d `f7-09-enable-core-download-health`) | same |
 
@@ -178,3 +178,22 @@ A caller refused by this surface sees one of three bodies:
 
 A client that reads only `required_permission` sees nothing for shape 3 and
 should fall back to `Detail`.
+
+## What this table does not yet pin: the verdicts.json oracle (S3)
+
+The per-kind cells are of two kinds. Core's own cells (`core/internal/integrationhttp`,
+`core/internal/libraryhttp`) drive each core route with the real authorizer
+(`core/internal/authz`) as principals holding HEAD's atoms and the key shapes of
+this PR (native two-scope role, settings-atom key, integrations-atom key,
+core:admin only, auth off). The books boot cells
+(`internal/books/identity_integrations_perkind_reach_boot_test.go`,
+`identity_integrations_legacy_reach_boot_test.go`) drive each predecessor route
+for real. What is not here is one cell that runs the 37 principals of
+`internal/books/rbacreach/verdicts.json` against the core routes and compares
+each with its predecessor's recorded letter. It cannot be written yet: the core
+routes are dark (not mounted in the booted app, so `internal/books` cannot send
+them a request), and the evaluator that would judge them offline,
+`core/internal/authz`, is internal to core and cannot be imported from the root
+module. The F4-07 hand evaluator that did this was retired in favour of
+registered-path cells for exactly that reason. It lands with the F7-09 mount, as
+a registered-path cell, or earlier if core exports an evaluator.
