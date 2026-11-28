@@ -144,7 +144,7 @@ jobs:
               while IFS= read -r f; do
                 case "$f" in
                   deploy/*|cmd/*|main.go|internal/backup/*|internal/updater/*|internal/server/server_lifecycle*.go|internal/books/cutover/*|core/kernel/*|core/internal/restoreswap/*) run=true ;;
-                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/testdata/r2corpus/*|internal/books/cutover_suite_test.go|internal/books/testdata/shared_families.golden) run=true ;;
+                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/shaped_generator_test.go|internal/books/testdata/r2corpus/*|internal/books/cutover_suite_test.go|internal/books/testdata/shared_families.golden) run=true ;;
                 esac
               done <<<"$files"
             else

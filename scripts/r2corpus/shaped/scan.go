@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/pebble/v2"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/mediacore/storage"
 )
 
 // family is one row of p1_counts.json: a key prefix and the owner's measured
@@ -117,6 +118,9 @@ type census struct {
 	// not parse: a generated row that no longer decodes as its template did.
 	brokenJSON map[string]int64
 	templates  map[string][]row
+	// escaped counts the rows of a family that are never templates because a
+	// clone of them would leave the drain range they are in (escapesAt).
+	escaped map[string]int64
 	// other counts the keys no counts family covers; they are never touched.
 	otherKeys int64
 }
@@ -124,14 +128,16 @@ type census struct {
 func newCensus() *census {
 	return &census{
 		keys: map[string]int64{}, keyBytes: map[string]int64{}, valueBytes: map[string]int64{}, brokenJSON: map[string]int64{},
-		templates: map[string][]row{},
+		templates: map[string][]row{}, escaped: map[string]int64{},
 	}
 }
 
 // scanPebble reads every key of the store at path read-only and counts it under
-// its family; wantTemplates keeps the first maxTemplates rows of each family
-// for the generator.
-func scanPebble(path string, cl *classifier, counted map[string]bool, wantTemplates bool) (*census, error) {
+// its family. With drains set (the generator's pass) it also keeps the first
+// maxTemplates rows of each family as templates, skipping every row a clone
+// of which would leave the drain range it is in (escapesAt): the cap counts
+// usable rows only. A nil drains keeps no templates (-mode scan).
+func scanPebble(path string, cl *classifier, counted map[string]bool, drains []storage.Range) (*census, error) {
 	db, err := pebble.Open(path, &pebble.Options{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
@@ -154,7 +160,12 @@ func scanPebble(path string, cl *classifier, counted map[string]bool, wantTempla
 		if v := it.Value(); len(v) > 0 && (v[0] == '{' || v[0] == '[') && !json.Valid(v) {
 			c.brokenJSON[fam]++
 		}
-		if wantTemplates && len(c.templates[fam]) < maxTemplates {
+		if drains == nil {
+			continue
+		}
+		if _, out := escapesAt(fam, it.Key(), drains); out {
+			c.escaped[fam]++
+		} else if len(c.templates[fam]) < maxTemplates {
 			c.templates[fam] = append(c.templates[fam], row{
 				key:   append([]byte(nil), it.Key()...),
 				value: append([]byte(nil), it.Value()...),
@@ -192,7 +203,7 @@ type scanReport struct {
 
 // scanStore is -mode scan: what a store holds, per counts family.
 func scanStore(path string, fams []family) (*scanReport, error) {
-	c, err := scanPebble(path, newClassifier(fams), countedSet(fams), false)
+	c, err := scanPebble(path, newClassifier(fams), countedSet(fams), nil)
 	if err != nil {
 		return nil, err
 	}

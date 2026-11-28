@@ -132,8 +132,8 @@ class Generator(unittest.TestCase):
         # the overlay store (opv2:row:), one with no template anywhere
         # (act:digest:) and one no registry knows (batcave:).
         cls.counts = {
-            "opv3:run:": (80, 80 * 36, 80 * 520),
-            "u:": (20, 20 * 30, 20 * 400),
+            "opv3:run:": (80, 80 * 36, 80 * 1500),
+            "u:": (20, 20 * 30, 20 * 900),
             "opv3:ix:done:": (70, 70 * 60, 0),
             "opv2:done:": (90, 90 * 57, 0),
             "opv2:row:": (30, 30 * 64, 30 * 1000),
@@ -203,7 +203,9 @@ class Generator(unittest.TestCase):
 
     def test_average_sizes_within_ten_percent(self):
         got = self.scan(self.out)
-        for prefix in ("opv3:run:", "u:", "opv3:ix:done:", "opv2:done:", "opv2:row:"):
+        # u: is not here: M3 reads every field of a user row, so its clones are
+        # never padded and keep their template's size (see the test below).
+        for prefix in ("opv3:run:", "opv3:ix:done:", "opv2:done:", "opv2:row:"):
             keys, kb, vb = self.counts[prefix]
             self.assertAlmostEqual(
                 got[prefix]["raw_key_bytes"] / keys, kb / keys, delta=0.1 * kb / keys, msg=prefix
@@ -217,6 +219,18 @@ class Generator(unittest.TestCase):
                 )
             else:
                 self.assertEqual(got[prefix]["raw_value_bytes"], 0, prefix)
+
+    def test_identity_rows_keep_their_template_size(self):
+        # The key bytes still follow the counts; the values are the templates'
+        # own size, and the report says so instead of forcing it.
+        got = self.scan(self.out)
+        keys, kb, vb = self.counts["u:"]
+        self.assertAlmostEqual(got["u:"]["raw_key_bytes"] / keys, kb / keys, delta=0.1 * kb / keys)
+        self.assertLess(got["u:"]["raw_value_bytes"], vb)
+        self.assertTrue(
+            any("keeps its own size" in n for n in self.report["u:"].get("notes", [])),
+            self.report["u:"],
+        )
 
     def test_unknown_families_are_reported_not_invented(self):
         got = self.scan(self.out)
@@ -373,6 +387,7 @@ class ShapedStoreJobTrigger(unittest.TestCase):
                         "scripts/ci/run_production_shaped_store.sh",
                         "scripts/tests/test_gen_production_shaped.py",
                         "internal/books/production_shaped_test.go",
+                        "internal/books/shaped_generator_test.go",
                         "internal/books/testdata/r2corpus/",
                         "internal/books/cutover_suite_test.go",
                         "internal/books/testdata/shared_families.golden",
