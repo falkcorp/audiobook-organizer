@@ -256,7 +256,10 @@ func (rc *RC) Deadline() time.Time { return rc.h.Deadline() }
 // ShouldYield is true when Deadline - now < YieldMargin (5T.3.6).
 func (rc *RC) ShouldYield() bool { return rc.h.ShouldYield() }
 
-// Enqueue starts a child run, parent-linked.
+// Enqueue starts a child run, parent-linked. The child is the parent's to the
+// end: canceling the parent cancels it (its context is canceled with a cause
+// wrapping ErrCanceled and its writer refuses), so a body that waits on a child
+// (Await) is released by its own context, not by the child's outcome.
 func (rc *RC) Enqueue(kind Kind, params any, opts ...StartOption) (RunRef, error) {
 	return rc.h.Enqueue(kind, params, opts...)
 }
