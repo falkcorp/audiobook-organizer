@@ -15,7 +15,8 @@
 #                         and promtool checks and unit-tests the rules
 #                         (TestPromRules_Promtool), never skipped (R1-10)
 #   boot-crash-matrix-abo ABO's boot crash matrix (TestBootCrashMatrix_ABO)
-#                         and its writer coverage check (R1-23)
+#                         and its writer coverage check (R1-23), and the
+#                         mid-M3 cells (TestMidM3_*, F4-08)
 #   production-shaped-store  the current build's boot on a store grown to the
 #                         owner's P1 counts and sizes (F2-14): the boot-time
 #                         measurement, boot_time.json uploaded as an artifact.
@@ -337,7 +338,10 @@ jobs:
   # rollback check that ran the R0 release binary over a store R1 wrote, is
   # gone: R0 opening an R1 store belongs to the pre-flip release, and identity
   # is constant after the flip (an R1 store's identity is core's, which R0
-  # cannot read), so this job no longer fetches the R0 binary.
+  # cannot read), so this job no longer fetches the R0 binary. F4-08's mid-M3
+  # cells (TestMidM3_*, internal/books/midm3_test.go) run here too: M3 killed
+  # between its chunks and failed between its families, the older build's
+  # refusal, this build's resume and the half store never served.
   boot-crash-matrix-abo:
     name: boot-crash-matrix-abo
     needs: changes
@@ -371,7 +375,7 @@ jobs:
       - name: Boot crash matrix (must not skip)
         run: |
           set -euo pipefail
-          tests='TestBootCrashMatrix_ABO TestBootCrashMatrix_ABOCoversEveryWriter'
+          tests='TestBootCrashMatrix_ABO TestBootCrashMatrix_ABOCoversEveryWriter TestMidM3_KillLeavesEachRecordInOnePlace TestMidM3_OlderBuildRefusesBeforeAnyWrite TestMidM3_ThisBuildResumesEveryRecordOnce TestMidM3_HalfStoreIsNeverServed'
           out="$(go test ./internal/books/ -run "^($(tr ' ' '|' <<<"$tests"))\$" -count=1 -v -timeout 25m 2>&1)" || { echo "$out"; exit 1; }
           grep -E -- '^(=== RUN|--- |PASS|FAIL|ok)|run\.go:[0-9]+: crashmatrix:' <<<"$out" || true
           for test in $tests; do
