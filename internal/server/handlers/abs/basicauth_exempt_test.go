@@ -12,9 +12,11 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	coreauth "github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/gin-gonic/gin"
@@ -39,6 +41,25 @@ var absUnauthenticatedRoutes = map[string]bool{
 	"GET /api/items/:id/cover":             true,
 	"HEAD /api/items/:id/cover":            true,
 	"GET /public/session/:id/track/:index": true,
+}
+
+// ownAuthOnly is stage 12 for a mount whose non-Public rows are all own-auth:
+// the router needs a service wired before it builds a LegacyAuthCore mount
+// with such rows (httpapi.ErrNoAuthService), but stages 12 and 13 never run on
+// an own-auth route, because its handler authenticates itself (ABSRequireAuth).
+// If a row ever reaches it, the request is refused 503 and the cell fails.
+type ownAuthOnly struct{}
+
+func (ownAuthOnly) Middleware() func(http.Handler) http.Handler {
+	return func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "stage 12 ran on a route that authenticates itself", http.StatusServiceUnavailable)
+		})
+	}
+}
+
+func (ownAuthOnly) SessionCookie(coreauth.ClientInfo, string, time.Time) *http.Cookie {
+	return &http.Cookie{Name: "hello_session", Path: "/", MaxAge: -1}
 }
 
 // enableBasicAuthForTest turns the global Basic Auth flag on and restores the
@@ -98,6 +119,9 @@ func newBasicAuthGatedABS(t *testing.T) (engine *gin.Engine, stack http.Handler,
 		}
 	}
 	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{})
+	if err := r.SetAuth(httpapi.AuthWiring{Service: ownAuthOnly{}}); err != nil {
+		t.Fatalf("SetAuth: %v", err)
+	}
 	for _, c := range slices.Sorted(func(yield func(string) bool) {
 		for c := range claims {
 			if !yield(c) {
