@@ -181,6 +181,47 @@ func TestEventsFlip_RelayIsRegisteredAndTheExecutorBound(t *testing.T) {
 	}
 }
 
+// An app on the identity flip with the tasks switch off and no outbox handler
+// builds no executor: the relay is registered only where the executor may exist
+// (the switch, or a module that recorded a handler), because core's executor owns
+// the audiobook_organizer.ops.* instruments that HEAD's own recorder owns until
+// the switch retires it. ABO on the F5-18 head failed to boot on exactly that
+// Prometheus family collision.
+func TestEventsFlip_NoRelayWithoutTheTasksSwitchOrAHandler(t *testing.T) {
+	bare := func(c *Config) {
+		c.Modules = []module.Module{storageMod("alfred", func(r *module.Registrar) error { return r.Err() }, seedStep(1, "cave"))}
+	}
+	hasRelay := func(k *Kernel) bool {
+		for _, d := range k.taskDefinitions() {
+			if d.Kind() == outbox.RelayKind {
+				return true
+			}
+		}
+		return false
+	}
+	t.Run("switch off, no handler: no relay, no executor", func(t *testing.T) {
+		k, _ := flipBoot(t, bare)
+		if hasRelay(k) {
+			t.Errorf("%s is registered with the switch off and no outbox handler", outbox.RelayKind)
+		}
+		if k.tasks != nil && k.tasks.exec != nil {
+			t.Error("the executor was built with the switch off, no kind and no handler: it would collide with HEAD's operations recorder")
+		}
+	})
+	t.Run("switch on, no handler: the relay runs", func(t *testing.T) {
+		k, _ := flipBoot(t, bare, func(c *Config) { c.TasksBoot = true })
+		if !hasRelay(k) || k.tasks == nil || k.tasks.exec == nil {
+			t.Error("the switch is on and the relay is not registered or the executor is not built")
+		}
+	})
+	t.Run("switch off, a module's handler: the relay runs", func(t *testing.T) {
+		k, _ := flipBoot(t)
+		if !hasRelay(k) || k.tasks == nil || k.tasks.exec == nil {
+			t.Error("a module recorded an outbox handler and the relay is not registered or the executor is not built")
+		}
+	})
+}
+
 // The module's consumer name is declared for every manifest, enabled or not, so
 // a disabled module's messages are retained; only the enabled module's handlers
 // register.
