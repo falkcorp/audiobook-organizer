@@ -1495,3 +1495,12 @@ func T6G4KindStarts(t *testing.T) map[tasks.Kind]rbac.Requirement {
 	}
 	return out
 }
+
+// ReportUpdate is Progress.Update: the position, then the status line when
+// there is one, recorded the way ReportProgress and Note record them.
+func (h *t6g4Host) ReportUpdate(done int64, total tasks.Total, msg string) {
+	h.ReportProgress(done, total)
+	if msg != "" {
+		h.Note(msg)
+	}
+}

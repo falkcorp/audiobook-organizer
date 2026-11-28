@@ -78,6 +78,8 @@ type attempt struct {
 	pCurrent string
 	pDirty   bool
 	pLast    time.Time
+	pTimer   *time.Timer // the trailing flush, nil when none is pending
+	pClosed  bool        // the attempt has ended: no flush is armed or run
 	pending  map[string][]byte
 	ckptLast time.Time
 
@@ -227,42 +229,74 @@ func unwrapCkpt(raw []byte) (data []byte, attemptOf int, wrapped bool) {
 }
 
 // ReportProgress records progress; the per-run writer persists it at most
-// once per ProgressInterval (the newest numbers win) and at attempt end.
+// once per ProgressInterval (the newest numbers win), by a trailing flush for
+// an update that lands inside the window, and at attempt end.
 func (a *attempt) ReportProgress(done int64, total tasks.Total) {
-	n, known := total.Value()
-	a.progress(int(done), func() int {
-		if known {
-			return int(n)
-		}
-		return 0
-	}(), "", false)
+	a.progress(done, total, "", false)
 }
 
-func (a *attempt) ItemsProgress(done, total int64, current string) {
-	a.progress(int(done), int(total), current, true)
-}
-
-func (a *attempt) progress(done, total int, current string, setCurrent bool) {
-	a.Touch()
-	if done > a.rec.Done {
-		a.progressed.Store(true) // past this attempt's starting point: ErrContinueInPlace's first proof
+// ReportUpdate sets done, total and the status line together and appends the
+// line to the log as Note does. The three reach the stream in one progress
+// write, so a status line is never published against the previous position
+// (a Set followed by a Note is not: the Set's due tick restarts the window and
+// the Note then waits for the trailing flush).
+func (a *attempt) ReportUpdate(done int64, total tasks.Total, msg string) {
+	if msg == "" {
+		a.progress(done, total, "", false)
+		return
 	}
-	now := a.e.now()
-	a.pmu.Lock()
-	a.pDone, a.pTotal, a.pDirty = done, total, true
-	if setCurrent {
-		a.pCurrent = current
-	}
-	due := a.tickDueLocked(now)
-	a.pmu.Unlock()
+	due := a.setProgress(done, total, msg, true)
+	a.appendNote(msg)
 	if due {
 		a.tick(a.ctx)
 	}
 }
 
+func (a *attempt) ItemsProgress(done, total int64, current string) {
+	n := tasks.Unknown()
+	if total > 0 {
+		n = tasks.Known(total)
+	}
+	a.progress(done, n, current, true)
+}
+
+func (a *attempt) progress(done int64, total tasks.Total, current string, setCurrent bool) {
+	if a.setProgress(done, total, current, setCurrent) {
+		a.tick(a.ctx)
+	}
+}
+
+// setProgress stores the newest numbers (and label, when setCurrent) and
+// reports whether a tick is due now. An update that is not due arms the
+// trailing flush, so it is published within one ProgressInterval of the last
+// write rather than waiting for a later call or the end of the attempt.
+func (a *attempt) setProgress(done int64, total tasks.Total, current string, setCurrent bool) (due bool) {
+	a.Touch()
+	if int(done) > a.rec.Done {
+		a.progressed.Store(true) // past this attempt's starting point: ErrContinueInPlace's first proof
+	}
+	n, known := total.Value()
+	if !known {
+		n = 0
+	}
+	now := a.e.now()
+	a.pmu.Lock()
+	defer a.pmu.Unlock()
+	a.pDone, a.pTotal, a.pDirty = int(done), int(n), true
+	if setCurrent {
+		a.pCurrent = current
+	}
+	if a.tickDueLocked(now) {
+		return true
+	}
+	a.armFlushLocked(now)
+	return false
+}
+
 // tickDueLocked reports whether a progress tick is due at now, and if so
-// restarts the throttle window. Progress and Note share it, so the two together
-// write at most one tick per ProgressInterval. a.pmu must be held.
+// restarts the throttle window. Progress, Note and the trailing flush share
+// the window, so together they write at most one tick per ProgressInterval.
+// a.pmu must be held.
 func (a *attempt) tickDueLocked(now time.Time) bool {
 	if now.Sub(a.pLast) < a.e.config().ProgressInterval {
 		return false
@@ -271,17 +305,73 @@ func (a *attempt) tickDueLocked(now time.Time) bool {
 	return true
 }
 
-// Note sets the run's current label and appends a log line. The new label is
-// published on run-changed by a tick that is due now, or else by the next tick
-// or the attempt's end, within the same throttle Progress uses: a run that only
-// calls Note (or calls Set and then Note, as ABO's items env does) therefore
-// shows its latest note, not the previous one.
+// armFlushLocked starts the trailing-edge timer at the end of the current
+// window unless one is pending, the attempt has ended or it is fenced. The
+// timer is one-shot (time.AfterFunc: no goroutine exists until it fires) and
+// stopFlush cancels it at the attempt's end. a.pmu must be held.
+func (a *attempt) armFlushLocked(now time.Time) {
+	if a.pTimer != nil || a.pClosed || a.fenced.Load() {
+		return
+	}
+	a.pTimer = time.AfterFunc(max(a.pLast.Add(a.e.config().ProgressInterval).Sub(now), 0), a.flushTrailing)
+}
+
+// flushTrailing publishes what an in-window update left dirty. It takes the
+// per-run writer first and checks pClosed under it, so a flush that races the
+// attempt's end either completes before finish's own tick or sees the attempt
+// closed and writes nothing: no progress write follows the final move.
+func (a *attempt) flushTrailing() {
+	a.wmu.Lock()
+	defer a.wmu.Unlock()
+	a.pmu.Lock()
+	a.pTimer = nil
+	if a.pClosed || !a.pDirty {
+		a.pmu.Unlock()
+		return
+	}
+	a.pLast = a.e.now() // the flush is this window's write
+	a.pmu.Unlock()
+	a.tickLocked(a.e.bgCtx)
+}
+
+// stopFlush closes the attempt to further flushes and cancels a pending one.
+// run defers it, so it covers finish, a yield or stop (both end in finish) and
+// a fenced attempt (finish returns early).
+func (a *attempt) stopFlush() {
+	a.pmu.Lock()
+	a.pClosed = true
+	if a.pTimer != nil {
+		a.pTimer.Stop()
+		a.pTimer = nil
+	}
+	a.pmu.Unlock()
+}
+
+// Note sets the run's status line and appends a log line. A due tick publishes
+// the new line at once; one inside the throttle window is published by the
+// trailing flush at the end of the window (at most one progress write per
+// ProgressInterval across Progress and Note). A run that only calls Note
+// therefore writes a progress row up to once per interval, which it did not
+// before; a Set followed by a Note publishes the position first and the note
+// at the window's end, so a caller that sets both should use Update.
 func (a *attempt) Note(msg string) {
 	a.Touch()
+	now := a.e.now()
 	a.pmu.Lock()
 	a.pCurrent, a.pDirty = msg, true
-	due := a.tickDueLocked(a.e.now())
+	due := a.tickDueLocked(now)
+	if !due {
+		a.armFlushLocked(now)
+	}
 	a.pmu.Unlock()
+	a.appendNote(msg)
+	if due {
+		a.tick(a.ctx)
+	}
+}
+
+// appendNote appends msg to the run's log and stages its log-appended event.
+func (a *attempt) appendNote(msg string) {
 	line := tasks.LogLine{At: a.e.now(), Level: "info", Message: msg}
 	if err := a.ledger(a.ctx, func(ctx context.Context, b *storage.Batch) error {
 		seq := a.nextSeq()
@@ -292,9 +382,6 @@ func (a *attempt) Note(msg string) {
 		return nil
 	}); err != nil && !errors.Is(err, tasks.ErrFenced) {
 		a.log.Warn("run log line not recorded", "err", err)
-	}
-	if due {
-		a.tick(a.ctx)
 	}
 }
 
@@ -573,6 +660,7 @@ func (a *attempt) strike(ctx context.Context, kind, detail string) {
 // would leave an uncooperative body to do all its work after the cancel.
 func (a *attempt) run(withBody bool) {
 	defer a.e.attemptExited(a)
+	defer a.stopFlush()
 	if !withBody {
 		a.finish(nil, context.Cause(a.ctx))
 		return
@@ -640,6 +728,7 @@ func (a *attempt) outcome(err error) (tasks.RunState, string) {
 // from running/stopping under this attempt and fence. A fenced attempt (its
 // grace ran out, or shutdown stamped it) writes nothing more.
 func (a *attempt) finish(res json.RawMessage, err error) {
+	a.stopFlush() // before the final move: no trailing flush may write after it
 	if a.fenced.Load() {
 		return
 	}

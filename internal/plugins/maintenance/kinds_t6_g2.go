@@ -668,10 +668,7 @@ func t6g2NativeEnvOf(rc *tasks.RC, deps t6g2Deps, par tasks.Parallelism, writes 
 			if total > 0 {
 				t = tasks.Known(int64(total))
 			}
-			rc.Progress().Set(int64(done), t)
-			if msg != "" {
-				rc.Progress().Note(msg)
-			}
+			rc.Progress().Update(int64(done), t, msg)
 		},
 		Touch:      rc.Progress().Tick,
 		Checkpoint: rc.Checkpoint,
@@ -720,8 +717,7 @@ func t6g2NativeItems(rc *tasks.RC, par tasks.Parallelism) t6g2Items {
 			if loop.ResumeFrom > 0 {
 				// Everything was done by the previous attempt: report the work as
 				// complete so the bar does not sit at a stale value.
-				rc.Progress().Set(int64(total), tasks.Known(int64(total)))
-				rc.Progress().Note("resumed: all items already complete")
+				rc.Progress().Update(int64(total), tasks.Known(int64(total)), "resumed: all items already complete")
 			}
 			return nil
 		}

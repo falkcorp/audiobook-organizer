@@ -93,10 +93,7 @@ func t7NativeEnv(rc *tasks.RC) t7Env {
 			if total > 0 {
 				t = tasks.Known(int64(total))
 			}
-			rc.Progress().Set(int64(current), t)
-			if msg != "" {
-				rc.Progress().Note(msg)
-			}
+			rc.Progress().Update(int64(current), t, msg)
 		},
 		Canceled: rc.Canceled,
 	}

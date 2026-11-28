@@ -162,6 +162,9 @@ type RunHost interface { //nolint:interfacebloat // one run handle: every RC met
 	// ReportProgress is a Task's Progress.Set; Note its status line; Touch
 	// stamps liveness without a number.
 	ReportProgress(done int64, total Total)
+	// ReportUpdate is Progress.Update: ReportProgress and Note in one call, so
+	// the position and the status line are published together.
+	ReportUpdate(done int64, total Total, msg string)
 	Note(msg string)
 	Touch()
 	Enqueue(kind Kind, params any, opts ...StartOption) (RunRef, error)
@@ -319,6 +322,15 @@ type Progress struct{ h RunHost }
 
 // Set reports a Task's position.
 func (p *Progress) Set(done int64, total Total) { p.h.ReportProgress(done, total) }
+
+// Update reports a Task's position and its status line together. An empty
+// msg is Set. Prefer it to Set followed by Note: the executor throttles
+// progress writes, and the two calls in a row are two updates, so within one
+// throttle window the note reaches the stream only at the window's end while
+// Update publishes the position and the line in the same write.
+func (p *Progress) Update(done int64, total Total, msg string) {
+	p.h.ReportUpdate(done, total, msg)
+}
 
 // Tick stamps liveness without a number.
 func (p *Progress) Tick() { p.h.Touch() }

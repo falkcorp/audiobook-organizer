@@ -256,8 +256,7 @@ func auxStoreCompactDefEvery(aux StoreOptimizer, sched *tasks.Schedule, interval
 				// The frame is the one call that stamps liveness. RunStep sends it
 				// from inside a compaction only when an engine counter moved.
 				Frame: func(current int, msg string) {
-					rc.Progress().Set(int64(current), tasks.Known(auxStoreCompactSteps))
-					rc.Progress().Note(msg)
+					rc.Progress().Update(int64(current), tasks.Known(auxStoreCompactSteps), msg)
 				},
 				First:    0,
 				Total:    auxStoreCompactSteps,

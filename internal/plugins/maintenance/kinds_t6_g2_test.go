@@ -2548,3 +2548,12 @@ type t6g2TouchReporter struct {
 }
 
 func (r *t6g2TouchReporter) TouchLiveness() { defer r.gt.enter()() }
+
+// ReportUpdate is Progress.Update: the position, then the status line when
+// there is one, recorded the way ReportProgress and Note record them.
+func (h *t6g2Host) ReportUpdate(done int64, total tasks.Total, msg string) {
+	h.ReportProgress(done, total)
+	if msg != "" {
+		h.Note(msg)
+	}
+}
