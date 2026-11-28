@@ -158,15 +158,17 @@ func IsTransient(err error) bool {
 		return true
 	}
 	// *url.Error implements net.Error for every failure, a bad scheme or a
-	// certificate refusal included, so the net layer is read directly: a
-	// dial, read or write error, a timeout, or a DNS failure that says retry.
-	var op *net.OpError
-	if errors.As(err, &op) {
-		return true
-	}
+	// certificate refusal included, so the net layer is read directly. A DNS
+	// failure is judged first, by what it says: a failed dial wraps it in a
+	// *net.OpError, so the OpError rule below would call an NXDOMAIN transient.
+	// Then a dial, read or write error or a timeout.
 	var dns *net.DNSError
 	if errors.As(err, &dns) {
 		return dns.IsTemporary || dns.IsTimeout
+	}
+	var op *net.OpError
+	if errors.As(err, &op) {
+		return true
 	}
 	var ne net.Error
 	return errors.As(err, &ne) && ne.Timeout()
@@ -421,10 +423,18 @@ func (c *Client) GetTorrent(torrentID string) (*TorrentStatus, error) {
 // when a book version is swapped or reorganized, the torrent's
 // storage path needs to follow.
 func (c *Client) MoveStorage(torrentIDs []string, destPath string) error {
-	if err := c.Login(); err != nil {
+	return c.MoveStorageContext(context.Background(), torrentIDs, destPath)
+}
+
+// MoveStorageContext is MoveStorage bound to ctx: the login and the move call
+// both abort when ctx is done, and the returned error then wraps ctx's error.
+// The client's own timeout (five minutes) is the longest a call without a
+// deadline of its own can hang, so a run that calls it passes the run's ctx.
+func (c *Client) MoveStorageContext(ctx context.Context, torrentIDs []string, destPath string) error {
+	if err := c.LoginContext(ctx); err != nil {
 		return err
 	}
-	_, err := c.callAuthed("core.move_storage", torrentIDs, destPath)
+	_, err := c.callAuthedCtx(ctx, "core.move_storage", torrentIDs, destPath)
 	return err
 }
 
