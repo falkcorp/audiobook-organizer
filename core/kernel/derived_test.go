@@ -540,7 +540,7 @@ func TestRunDerived_CrashCells(t *testing.T) {
 		state *storage.DerivedState
 	}{
 		{"a kill before the record is written", "storage.derived.record", nil},
-		{"a kill between the record and the enqueue", "kernel.derived.enqueue", ptr(storage.DerivedBuilding)},
+		{"a kill between the record and the enqueue", "kernel.derived.enqueue", new(storage.DerivedBuilding)},
 	}
 	for _, c := range cells {
 		for i, clone := range rec.at(t, c.label) {
@@ -591,8 +591,6 @@ func TestRunDerived_CrashCells(t *testing.T) {
 		}
 	})
 }
-
-func ptr[T any](v T) *T { return &v }
 
 func TestDerivedProblems(t *testing.T) {
 	ld := (&loader{}).hooks()
