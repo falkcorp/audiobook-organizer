@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 )
@@ -402,3 +403,80 @@ func TestOpenOfflineStore_AMigratedStoresUserListIsAnErrorNeverEmpty(t *testing.
 		}
 	}
 }
+
+// migrationState answers DataMigrationDone as configured and records the id.
+type migrationState struct {
+	done  bool
+	err   error
+	asked string
+}
+
+func (m *migrationState) DataMigrationDone(_ context.Context, id string) (bool, error) {
+	m.asked = id
+	return m.done, m.err
+}
+
+// The probe's own refusal of a store the identity cutover has not run on, the
+// check behind the offline guard: not done is errStoreUnmigrated (class
+// unmigrated), an unreadable state is that read's error, and done passes. The
+// guard refuses every such store first through app.OpenOffline (its pending
+// steps name the cutover), so this check is pinned here, below the open.
+func TestUserState_RequireIdentityCutoverRefusesNotDone(t *testing.T) {
+	m := &migrationState{}
+	if err := requireIdentityCutover(context.Background(), m); !errors.Is(err, errStoreUnmigrated) || userStateClass(err) != "unmigrated" {
+		t.Errorf("not done: %v (class %q), want errStoreUnmigrated (unmigrated)", err, userStateClass(err))
+	}
+	if m.asked != cutover.IdentityCutoverID {
+		t.Errorf("asked about %q, want the identity cutover", m.asked)
+	}
+	boom := errors.New("migration state unreadable")
+	if err := requireIdentityCutover(context.Background(), &migrationState{err: boom}); !errors.Is(err, boom) {
+		t.Errorf("unreadable: %v, want the read's error", err)
+	}
+	if err := requireIdentityCutover(context.Background(), &migrationState{done: true}); err != nil {
+		t.Errorf("done: %v", err)
+	}
+}
+
+// An error no class names falls to store_error, and its text, a key here,
+// never reaches the output: as a class, and through the probe's strict read.
+func TestUserState_AnUnnamedErrorIsStoreErrorWithoutItsText(t *testing.T) {
+	secret := fmt.Errorf("pebble said: %s is wedged", usSecretKeyInStrictEr)
+	if got := userStateClass(secret); got != "store_error" {
+		t.Errorf("userStateClass = %q, want store_error", got)
+	}
+
+	isolateCLIStore(t)
+	restoreRootFlags(t)
+	seedStarted(t, os.Getenv("ABO_CORE_STORAGE_PATH"))
+	orig := userStateOpen
+	t.Cleanup(func() { userStateOpen = orig })
+	userStateOpen = func(ctx context.Context) (userStateStore, func() error, error) {
+		st, closeFn, err := orig(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return plainErrStore{st.(*database.PebbleStore), secret}, closeFn, nil
+	}
+	var out bytes.Buffer
+	err := runUserState(context.Background(), "", &out)
+	if err == nil {
+		t.Fatalf("runUserState = nil, want a non-zero exit; out %q", out.String())
+	}
+	m := parseUserState(t, out.String())
+	if class, _ := m["users_strict_err"].(string); class != "store_error" {
+		t.Errorf("users_strict_err = %q, want store_error", class)
+	}
+	if strings.Contains(out.String()+err.Error(), "wedged") {
+		t.Errorf("the error's text reached the output: %q / %v", out.String(), err)
+	}
+	noIDsIn(t, out.String()+err.Error())
+}
+
+// plainErrStore fails ListUsersStrict with an error no class names.
+type plainErrStore struct {
+	*database.PebbleStore
+	err error
+}
+
+func (s plainErrStore) ListUsersStrict() ([]database.User, error) { return nil, s.err }
