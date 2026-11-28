@@ -2884,9 +2884,11 @@ func (s *Server) setupRoutes() error {
 	// because the shared authMiddleware is constructed later in this function
 	// (and routes registered before a router.Use() don't inherit it).
 	//
-	// cfMW runs FIRST and fail-open, exactly as it does on /api/v1: it binds the
-	// user resolved from a valid Cf-Access-Jwt-Assertion so the RequireAuth below
-	// short-circuits, and otherwise passes through untouched. Without it this
+	// cfMW runs FIRST and fail-open, exactly as it does on /api/v1: without core
+	// identity it binds the user resolved from a valid Cf-Access-Jwt-Assertion so
+	// the RequireAuth below short-circuits, and otherwise passes through
+	// untouched; under core identity it only verifies and marks the request
+	// (accessMiddleware) and core's principal authenticates. Without it this
 	// route was the one authenticated endpoint the Cloudflare Access passthrough
 	// never reached, because a browser under Access SSO has NO session cookie —
 	// identity arrives only in that header — so EventSource 401'd in a reconnect
@@ -2954,9 +2956,11 @@ func (s *Server) setupRoutes() error {
 	}
 
 	// API routes (auth + request-size limits; the rate limit is core's). The Cloudflare Access
-	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is
-	// present it binds the resolved user so the downstream RequireAuth skips its
-	// session check; otherwise it passes through. Harmless on public routes.
+	// middleware runs early and FAIL-OPEN: without core identity, when a valid
+	// Cf-Access-Jwt-Assertion is present it binds the resolved user so the
+	// downstream RequireAuth skips its session check; under core identity it only
+	// verifies and marks the request (accessMiddleware) and binds no one; otherwise
+	// it passes through. Harmless on public routes.
 	api := s.router.Group("/api/v1")
 	if cfMW != nil {
 		api.Use(bodyLimitMiddleware, cfMW)
