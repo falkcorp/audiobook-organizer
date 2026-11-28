@@ -232,10 +232,30 @@ func (l *moduleTaskRows) List(ctx context.Context, q tasks.RunQuery) iter.Seq2[t
 			return fail(fmt.Errorf("%w: kind %s", module.ErrTaskRowsForeign, k))
 		}
 	}
+	// An empty query means the module's own kinds. With none, it means nothing,
+	// and never reaches the store, where an empty Kinds is every kind of every
+	// module (RunQuery).
+	if len(b.own) == 0 {
+		return func(func(tasks.RunRecord, error) bool) {}
+	}
 	if len(q.Kinds) == 0 {
 		q.Kinds = b.own
 	}
-	return b.runs.List(ctx, q)
+	// The store's filter is not trusted: a record of a kind the module did not
+	// register ends the listing with a refusal, whatever the query said. Kinds
+	// compare exactly (a map lookup on the registered string; the store indexes
+	// by the same string), so a case or whitespace variant names no kind.
+	return func(yield func(tasks.RunRecord, error) bool) {
+		for rec, err := range b.runs.List(ctx, q) {
+			if err == nil && !b.kinds[rec.Kind] {
+				yield(tasks.RunRecord{}, fmt.Errorf("%w: run %s", module.ErrTaskRowsForeign, rec.ID))
+				return
+			}
+			if !yield(rec, err) || err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (l *moduleTaskRows) Rows(ctx context.Context, id tasks.RunID) iter.Seq2[tasks.Row, error] {

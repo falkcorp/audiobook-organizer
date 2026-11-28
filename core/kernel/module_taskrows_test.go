@@ -6,8 +6,10 @@
 package kernel
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"slices"
 	"testing"
 	"time"
@@ -224,5 +226,85 @@ func TestModuleTaskRows_NotBoundWithoutAnEngine(t *testing.T) {
 	}
 	if err := firstError(deps.TaskRows.List(t.Context(), tasks.RunQuery{})); !errors.Is(err, module.ErrTaskRowsNotBound) {
 		t.Fatalf("List = %v, want ErrTaskRowsNotBound", err)
+	}
+}
+
+// listStub is a run store whose List ignores the query's Kinds and returns the
+// records it holds, as a store with a broken filter would; calls counts List.
+type listStub struct {
+	tasks.RunStore
+	recs  []tasks.RunRecord
+	calls int
+}
+
+func (s *listStub) List(context.Context, tasks.RunQuery) iter.Seq2[tasks.RunRecord, error] {
+	s.calls++
+	return func(yield func(tasks.RunRecord, error) bool) {
+		for _, r := range s.recs {
+			if !yield(r, nil) {
+				return
+			}
+		}
+	}
+}
+
+func stubRun(id string, kind tasks.Kind) tasks.RunRecord {
+	return tasks.RunRecord{RunView: tasks.RunView{ID: tasks.RunID(id), Kind: kind}}
+}
+
+// A module that registered no kind lists nothing, and the store is not asked: an
+// empty query would be every kind of every module.
+func TestModuleTaskRows_ListWithNoKindsSeesNothing(t *testing.T) {
+	st := &listStub{recs: []tasks.RunRecord{stubRun("r1", signalKind), stubRun("r2", "core:tasks.sweep")}}
+	var l moduleTaskRows
+	l.bind(st, nil)
+	if got := yieldedIDs(t, l.List(t.Context(), tasks.RunQuery{})); len(got) != 0 {
+		t.Fatalf("a module with no kinds listed %v", got)
+	}
+	if err := firstError(l.List(t.Context(), tasks.RunQuery{Kinds: []tasks.Kind{patrolKind}})); !errors.Is(err, module.ErrTaskRowsForeign) {
+		t.Fatalf("a module with no kinds, naming one: %v, want ErrTaskRowsForeign", err)
+	}
+	if st.calls != 0 {
+		t.Fatalf("the store was asked %d times by a module with no kinds", st.calls)
+	}
+}
+
+// A store that ignores the Kinds filter leaks nothing: the own record is served,
+// and the first foreign record ends the listing with a refusal before it is
+// yielded.
+func TestModuleTaskRows_ListChecksEveryRecordsKind(t *testing.T) {
+	st := &listStub{recs: []tasks.RunRecord{stubRun("r1", patrolKind), stubRun("r2", signalKind), stubRun("r3", patrolKind)}}
+	var l moduleTaskRows
+	l.bind(st, []tasks.Kind{patrolKind})
+	var got []tasks.RunID
+	var gotErr error
+	for rec, err := range l.List(t.Context(), tasks.RunQuery{}) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+		got = append(got, rec.ID)
+	}
+	if !errors.Is(gotErr, module.ErrTaskRowsForeign) {
+		t.Fatalf("List over a store that ignores the filter = %v, want ErrTaskRowsForeign", gotErr)
+	}
+	if !slices.Equal(got, []tasks.RunID{"r1"}) {
+		t.Fatalf("served %v before the refusal, want only r1 (never robin's r2, nor r3 after it)", got)
+	}
+}
+
+// A kind that is not exactly one the module registered is refused, whatever its
+// spelling, and the store is not asked.
+func TestModuleTaskRows_ListRefusesAKindThatIsNotExactlyTheModules(t *testing.T) {
+	st := &listStub{recs: []tasks.RunRecord{stubRun("r1", patrolKind)}}
+	var l moduleTaskRows
+	l.bind(st, []tasks.Kind{patrolKind})
+	for _, k := range []tasks.Kind{signalKind, "GOTHAM.PATROL", "Gotham.patrol", "gotham.patrol ", " gotham.patrol", "gotham.patrol\x00", "gotham", "core:tasks.sweep"} {
+		if err := firstError(l.List(t.Context(), tasks.RunQuery{Kinds: []tasks.Kind{k}})); !errors.Is(err, module.ErrTaskRowsForeign) {
+			t.Errorf("List of kind %q = %v, want ErrTaskRowsForeign", k, err)
+		}
+	}
+	if st.calls != 0 {
+		t.Fatalf("the store was asked %d times for a refused kind", st.calls)
 	}
 }
