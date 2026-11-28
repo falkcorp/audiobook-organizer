@@ -105,6 +105,20 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 		return &booksWriter{src: in.Source, idx: in.Indexes, emb: in.Embeddings, eng: in.Engine,
 			gate: newBooksGate(w, rows)}
 	}
+	// The run's engine over its gated writer. A factory that hands back nothing, or
+	// a typed nil (a nil *dedup.Engine in a non-nil WriteEngine), is nil here, so
+	// the shells' "no engine" refusals fire instead of a nil dereference. With no
+	// NewEngine the groups' factories stay unset, which BooksTaskLists never builds
+	// kinds over (EngineKinds).
+	var engineOf func(tasks.Writer) WriteEngine
+	if isSet(in.NewEngine) {
+		engineOf = func(w tasks.Writer) WriteEngine {
+			if e := in.NewEngine(w); isSet(e) {
+				return e
+			}
+			return nil
+		}
+	}
 	newSplit := func(w tasks.Writer) splitBookKindWriter {
 		db := in.Embeddings.PebbleDB()
 		if db == nil {
@@ -113,10 +127,9 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 		return &booksSplitWriter{src: in.Source, cands: dedupengine.NewSplitBookStore(db),
 			gate: newBooksGate(w, rows)}
 	}
-	return KindDeps{
+	d := KindDeps{
 		Scoring: ScoringKindDeps{
 			Store:          reads,
-			NewEngine:      func(w tasks.Writer) scoringEngine { return in.NewEngine(w) },
 			NewWriter:      func(w tasks.Writer) scoringKindWriter { return newWriter(w) },
 			SplitReads:     reads,
 			NewSplitWriter: newSplit,
@@ -124,7 +137,6 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 		Embedding: EmbeddingKindDeps{
 			Store:          reads,
 			NewWriter:      func(w tasks.Writer) embeddingKindWriter { return newWriter(w) },
-			NewEngine:      func(w tasks.Writer) embeddingKindEngine { return in.NewEngine(w) },
 			EmbeddingModel: in.Engine.EmbeddingModel,
 		},
 		Labels: LabelKindDeps{
@@ -132,7 +144,6 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 			Scorer:    in.Engine,
 			Baseline:  in.Engine,
 			NewWriter: func(w tasks.Writer) labelKindWriter { return newWriter(w) },
-			NewEngine: func(w tasks.Writer) llmReviewEngine { return in.NewEngine(w) },
 		},
 		Index: IndexKindDeps{
 			Store:     reads,
@@ -145,7 +156,13 @@ func newBooksKindDeps(in BooksTaskInputs) (KindDeps, error) {
 				return in.Engine.Rescore(ctx, false)
 			},
 		},
-	}, nil
+	}
+	if engineOf != nil {
+		d.Scoring.NewEngine = func(w tasks.Writer) scoringEngine { return engineOf(w) }
+		d.Embedding.NewEngine = func(w tasks.Writer) embeddingKindEngine { return engineOf(w) }
+		d.Labels.NewEngine = func(w tasks.Writer) llmReviewEngine { return engineOf(w) }
+	}
+	return d, nil
 }
 
 // booksReads is every group's read store: the library store, the index

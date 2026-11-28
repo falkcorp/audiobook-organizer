@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"iter"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -134,12 +135,26 @@ func (listsAux) OLStoreCompactionStats() (database.CompactionStats, bool) {
 	return database.CompactionStats{}, false
 }
 
-// listsRuns is the run store the credits backfill reads; bookTaskLists only
-// builds the definitions, so no call reaches it.
-type listsRuns struct{}
+// listsRuns is the run store the books module holds: it lists and has no Get,
+// which is the shape of core's own-kinds view of the run store (module.TaskRows).
+// recs is what it lists; bookTaskLists only builds the definitions, so the zero
+// value is enough there.
+type listsRuns struct{ recs []tasks.RunRecord }
 
-func (listsRuns) List(context.Context, tasks.RunQuery) iter.Seq2[tasks.RunRecord, error] {
-	return func(func(tasks.RunRecord, error) bool) {}
+func (l listsRuns) List(_ context.Context, q tasks.RunQuery) iter.Seq2[tasks.RunRecord, error] {
+	return func(yield func(tasks.RunRecord, error) bool) {
+		for _, r := range l.recs {
+			if q.After != "" && r.ID <= q.After {
+				continue
+			}
+			if len(q.Kinds) > 0 && !slices.Contains(q.Kinds, r.Kind) {
+				continue
+			}
+			if !yield(r, nil) {
+				return
+			}
+		}
+	}
 }
 
 func (listsRuns) ReplaceRows(context.Context, tasks.RunID, string, int, func(int) (tasks.Row, error)) error {
@@ -150,9 +165,26 @@ func (listsRuns) Rows(context.Context, tasks.RunID) iter.Seq2[tasks.Row, error] 
 	return func(func(tasks.Row, error) bool) {}
 }
 
-// Get is the one read the authority-build apply makes of the run store.
-func (listsRuns) Get(context.Context, tasks.RunID) (tasks.RunRecord, error) {
-	return tasks.RunRecord{}, tasks.ErrRunNotFound
+// The module's run-store handle has no Get, so the authority-build apply reads
+// its plan through an adapter over List. This fixture is the handle's shape: if it
+// grew a Get the adapter would be unneeded, and if the adapter stopped accepting a
+// List-only store this stops compiling.
+var (
+	_ maintenance.AuthorityRunLister = listsRuns{}
+	_ maintenance.AuthorityRunReader = maintenance.NewAuthorityRunReader(listsRuns{})
+)
+
+// The reader made over the module's List-only handle finds a plan run among the
+// listed runs and answers ErrRunNotFound for one that is not there.
+func TestF5_AuthorityRunReaderOverTheModuleHandle(t *testing.T) {
+	const kind = tasks.Kind("books.maintenance.authority-build")
+	recs := []tasks.RunRecord{{ID: "run-1", Kind: kind}, {ID: "run-2", Kind: kind}}
+	r := maintenance.NewAuthorityRunReader(listsRuns{recs: recs})
+	got, err := r.Get(context.Background(), "run-2")
+	require.NoError(t, err)
+	require.Equal(t, tasks.RunID("run-2"), got.ID)
+	_, err = r.Get(context.Background(), "run-3")
+	require.ErrorIs(t, err, tasks.ErrRunNotFound)
 }
 
 type listsUpgrader struct{}
@@ -197,7 +229,6 @@ func listsFixture(t *testing.T) taskListInputs {
 			G5Host:    listsG5Host{s: store, root: root},
 			AuxStores: listsAux{},
 			G1: maintenance.G1Inputs{
-				PlanRuns:   listsRuns{},
 				FetchStore: store,
 				NewFetchService: func(gated svcmetafetch.Store) *svcmetafetch.Service {
 					return svcmetafetch.NewService(gated)
@@ -230,6 +261,7 @@ func listsFixture(t *testing.T) taskListInputs {
 			Plugin: &acoustid.Plugin{},
 			Source: store,
 		},
+		DedupEnabled: true,
 		Dedup: dedup.BooksTaskInputs{
 			Source:     store,
 			Indexes:    store,
@@ -444,6 +476,58 @@ func TestF5_RepairsListCarriesEveryFixer(t *testing.T) {
 	require.Equal(t, len(in.Repairs.Fixers), n)
 }
 
+// kindsOf is the set of kinds bookTaskLists builds over in.
+func kindsOf(t *testing.T, in taskListInputs) map[tasks.Kind]bool {
+	t.Helper()
+	defs, err := bookTaskLists(in)
+	require.NoError(t, err)
+	out := map[tasks.Kind]bool{}
+	for _, d := range defs {
+		out[d.Kind()] = true
+	}
+	return out
+}
+
+// A server with embedding disabled has no dedup engine and no embedding store, so
+// HEAD builds no dedup plugin and registers none of its operations. The flip says
+// so with DedupEnabled=false (never by leaving Dedup's fields nil): every
+// non-dedup kind is built, the dedup kinds are exactly absent, and the zero Dedup
+// inputs are not an error. Enabled with no NewEngine (until the gated engine) is
+// the dedup list less its engine kinds; enabled with one is the whole list.
+func TestF5_DedupListFollowsDedupEnabled(t *testing.T) {
+	full := kindsOf(t, listsFixture(t))
+
+	noEngine := listsFixture(t)
+	noEngine.Dedup.NewEngine = nil
+	withoutEngine := kindsOf(t, noEngine)
+
+	off := listsFixture(t)
+	off.DedupEnabled = false
+	off.Dedup = dedup.BooksTaskInputs{} // embedding disabled: none of these exist
+	disabled := kindsOf(t, off)
+
+	var dedupKinds []tasks.Kind
+	for k := range full {
+		if !disabled[k] {
+			dedupKinds = append(dedupKinds, k)
+		}
+	}
+	require.Len(t, dedupKinds, 31, "the dedup list is the kinds only DedupEnabled adds")
+	for k := range disabled {
+		require.True(t, full[k], "%s is built only when dedup is off", k)
+	}
+	require.Len(t, full, len(disabled)+31)
+
+	engine := map[tasks.Kind]bool{}
+	for _, k := range dedup.EngineKinds() {
+		engine[k] = true
+	}
+	for _, k := range dedupKinds {
+		require.Equal(t, !engine[k], withoutEngine[k], "%s with no NewEngine", k)
+	}
+	require.Len(t, withoutEngine, len(disabled)+20)
+}
+
 func TestF5_BookTaskListsBuild(t *testing.T) {
 	defs, err := bookTaskLists(listsFixture(t))
 	require.NoError(t, err)
@@ -456,39 +540,34 @@ func TestF5_BookTaskListsBuild(t *testing.T) {
 // package's inputs, so a nil hook refuses there too.
 func TestF5_MissingMaintenanceInputRefusesByName(t *testing.T) {
 	for name, mutate := range map[string]func(*taskListInputs){
-		"Jobs":                       func(in *taskListInputs) { in.Maintenance.Jobs = nil },
-		"G2Source":                   func(in *taskListInputs) { in.Maintenance.G2Source = nil },
-		"G2Host":                     func(in *taskListInputs) { in.Maintenance.G2Host = nil },
-		"RootDir":                    func(in *taskListInputs) { in.Maintenance.RootDir = nil },
-		"G3Source":                   func(in *taskListInputs) { in.Maintenance.G3Source = nil },
-		"G3Host":                     func(in *taskListInputs) { in.Maintenance.G3Host = nil },
-		"Runs":                       func(in *taskListInputs) { in.Maintenance.Runs = nil },
-		"Ops":                        func(in *taskListInputs) { in.Maintenance.Ops = nil },
-		"G4Host":                     func(in *taskListInputs) { in.Maintenance.G4Host = nil },
-		"AuxStores":                  func(in *taskListInputs) { in.Maintenance.AuxStores = nil },
-		"StandDownKey":               func(in *taskListInputs) { in.Maintenance.StandDownKey = "" },
-		"G5Host":                     func(in *taskListInputs) { in.Maintenance.G5Host = nil },
-		"G1.PlanRuns":                func(in *taskListInputs) { in.Maintenance.G1.PlanRuns = nil },
-		"G1.FetchStore":              func(in *taskListInputs) { in.Maintenance.G1.FetchStore = nil },
-		"G1.NewFetchService":         func(in *taskListInputs) { in.Maintenance.G1.NewFetchService = nil },
-		"G1.NewTranscriptionRunners": func(in *taskListInputs) { in.Maintenance.G1.NewTranscriptionRunners = nil },
-		"G1.ManualOnly.Files":        func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Files = nil },
-		"G1.ManualOnly.Series":       func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Series = nil },
-		"G1.ManualOnly.Authors":      func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Authors = nil },
-		"G1.ManualOnly.Tags":         func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Tags = nil },
-		"G1.AIJournalRetentionDays":  func(in *taskListInputs) { in.Maintenance.G1.AIJournalRetentionDays = nil },
-		"G1.InvalidateAuthorsCache":  func(in *taskListInputs) { in.Maintenance.G1.InvalidateAuthorsCache = nil },
-		"G1.InvalidateDedupCache":    func(in *taskListInputs) { in.Maintenance.G1.InvalidateDedupCache = nil },
-		"G7.Reads":                   func(in *taskListInputs) { in.Maintenance.G7.Reads = nil },
-		"G7.Writes":                  func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
-		"G7.InvalidateSeriesCache":   func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
-		"G7.SupportedExtensions":     func(in *taskListInputs) { in.Maintenance.G7.SupportedExtensions = nil },
-		"Dedup.Source":               func(in *taskListInputs) { in.Dedup.Source = nil },
-		"Dedup.Indexes":              func(in *taskListInputs) { in.Dedup.Indexes = nil },
-		"Dedup.Embeddings":           func(in *taskListInputs) { in.Dedup.Embeddings = nil },
-		"Dedup.NewEngine":            func(in *taskListInputs) { in.Dedup.NewEngine = nil },
-		"Dedup.Engine":               func(in *taskListInputs) { in.Dedup.Engine = nil },
-		"Schedules":                  func(in *taskListInputs) { in.Schedules = nil },
+		"Jobs":                      func(in *taskListInputs) { in.Maintenance.Jobs = nil },
+		"G2Source":                  func(in *taskListInputs) { in.Maintenance.G2Source = nil },
+		"G2Host":                    func(in *taskListInputs) { in.Maintenance.G2Host = nil },
+		"RootDir":                   func(in *taskListInputs) { in.Maintenance.RootDir = nil },
+		"G3Source":                  func(in *taskListInputs) { in.Maintenance.G3Source = nil },
+		"G3Host":                    func(in *taskListInputs) { in.Maintenance.G3Host = nil },
+		"Runs":                      func(in *taskListInputs) { in.Maintenance.Runs = nil },
+		"Ops":                       func(in *taskListInputs) { in.Maintenance.Ops = nil },
+		"G4Host":                    func(in *taskListInputs) { in.Maintenance.G4Host = nil },
+		"AuxStores":                 func(in *taskListInputs) { in.Maintenance.AuxStores = nil },
+		"StandDownKey":              func(in *taskListInputs) { in.Maintenance.StandDownKey = "" },
+		"G5Host":                    func(in *taskListInputs) { in.Maintenance.G5Host = nil },
+		"G1.ManualOnly.Files":       func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Files = nil },
+		"G1.ManualOnly.Series":      func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Series = nil },
+		"G1.ManualOnly.Authors":     func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Authors = nil },
+		"G1.ManualOnly.Tags":        func(in *taskListInputs) { in.Maintenance.G1.ManualOnly.Tags = nil },
+		"G1.AIJournalRetentionDays": func(in *taskListInputs) { in.Maintenance.G1.AIJournalRetentionDays = nil },
+		"G1.InvalidateAuthorsCache": func(in *taskListInputs) { in.Maintenance.G1.InvalidateAuthorsCache = nil },
+		"G1.InvalidateDedupCache":   func(in *taskListInputs) { in.Maintenance.G1.InvalidateDedupCache = nil },
+		"G7.Reads":                  func(in *taskListInputs) { in.Maintenance.G7.Reads = nil },
+		"G7.Writes":                 func(in *taskListInputs) { in.Maintenance.G7.Writes = nil },
+		"G7.InvalidateSeriesCache":  func(in *taskListInputs) { in.Maintenance.G7.InvalidateSeriesCache = nil },
+		"G7.SupportedExtensions":    func(in *taskListInputs) { in.Maintenance.G7.SupportedExtensions = nil },
+		"Dedup.Source":              func(in *taskListInputs) { in.Dedup.Source = nil },
+		"Dedup.Indexes":             func(in *taskListInputs) { in.Dedup.Indexes = nil },
+		"Dedup.Embeddings":          func(in *taskListInputs) { in.Dedup.Embeddings = nil },
+		"Dedup.Engine":              func(in *taskListInputs) { in.Dedup.Engine = nil },
+		"Schedules":                 func(in *taskListInputs) { in.Schedules = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			in := listsFixture(t)

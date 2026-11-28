@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/falkcorp/mediacore/tasks"
 
@@ -28,6 +29,11 @@ import (
 // writer. The engine writes candidates, labels and merges through its own stores
 // (seams.d/F5-04.md, "Engine writes are the engine's"), so the flip hands in
 // NewEngine, as it does for AcoustID's scan engine.
+//
+// NewEngine is optional, and until a gated engine exists (TODO-F5-18-GATED-ENGINE)
+// nothing hands one in: BooksTaskLists then leaves the engine kinds out
+// (EngineKinds) and builds the rest. The ungated engine must never be handed in
+// as NewEngine: its writes would go around the run's fence and its Effects.
 //
 // The receiver of Kinds is a zero Plugin: the native kinds read nothing from the
 // plugin (the HEAD shells' p.engine, p.store and p.embeddingStore are the
@@ -73,19 +79,25 @@ type BooksTaskInputs struct {
 	Indexes IndexSource
 	// Embeddings is the embedding store (dedup candidates, labeled examples and
 	// the emb:v: rows). HEAD registers none of the dedup operations without an
-	// engine; the flip omits this list for a server with embedding disabled.
+	// engine and an embedding store, which is a server with embedding disabled:
+	// the books module does not call BooksTaskLists for one (books.taskListInputs,
+	// DedupEnabled), so a nil Embeddings here is a wiring error, not that shape.
 	Embeddings *database.EmbeddingStore
 	// NewEngine builds the dedup engine over the run's gated writer (nil writer in
-	// a Preview run). Engine is the live engine's reads and its re-band.
+	// a Preview run). OPTIONAL: unset (nil, or a typed nil) leaves out exactly the
+	// EngineKinds. It is set only once a gated engine exists
+	// (TODO-F5-18-GATED-ENGINE); never hand it the ungated live engine.
 	NewEngine func(tasks.Writer) WriteEngine
-	Engine    LiveEngine
+	// Engine is the live engine's reads and its re-band.
+	Engine LiveEngine
 	// Schedules is books' schedule hook.
 	Schedules func(tasks.Kind) *tasks.Schedule
 }
 
 // BooksTaskLists returns every dedup kind with its schedule, over the books
-// module's own dependency values. A nil input makes it return an error naming
-// it: the kind would otherwise register and refuse at its first run.
+// module's own dependency values, except the EngineKinds when NewEngine is unset.
+// A nil input makes it return an error naming it: the kind would otherwise
+// register and refuse at its first run.
 func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	var missing []string
 	for _, c := range []struct {
@@ -95,7 +107,6 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 		{"Source", isSet(in.Source)},
 		{"Indexes", isSet(in.Indexes)},
 		{"Embeddings", in.Embeddings != nil},
-		{"NewEngine", in.NewEngine != nil},
 		{"Engine", isSet(in.Engine)},
 		{"Schedules", in.Schedules != nil},
 	} {
@@ -110,8 +121,34 @@ func BooksTaskLists(in BooksTaskInputs) ([]tasks.Definition, error) {
 	if err != nil {
 		return nil, err
 	}
-	return (&Plugin{}).Kinds(deps, in.Schedules), nil
+	defs := (&Plugin{}).Kinds(deps, in.Schedules)
+	if isSet(in.NewEngine) {
+		return defs, nil
+	}
+	return slices.DeleteFunc(defs, func(d tasks.Definition) bool {
+		return slices.Contains(engineKinds, d.Kind())
+	}), nil
 }
+
+// engineKinds are the kinds that run the dedup engine over the run's gated writer
+// (ScoringKindDeps.NewEngine, EmbeddingKindDeps.NewEngine and
+// LabelKindDeps.NewEngine: scoringEngineFor, embeddingEngineFor and the
+// llm-review shell). The ungated live engine writes candidates, labels and merges
+// through its own stores, around the run's fence and Effects, so they stay out of
+// BooksTaskLists until a gated engine exists (TODO-F5-18-GATED-ENGINE).
+var engineKinds = []tasks.Kind{
+	purgeStaleKind, autoResolveKind, fullScanKind, rescoreKind, bookSignatureScanKind, drainStaleKind,
+	embedScanKind, embedAsyncKind, reembedEmbeddingsKind, breakdownBackfillKind,
+	llmReviewKind,
+}
+
+// EngineKinds is the 11 kinds BooksTaskLists leaves out while NewEngine is unset:
+// purge-stale, auto-resolve, full-scan, rescore, book-signature-scan, drain-stale,
+// embed-scan, embed-async, reembed-embeddings, breakdown-backfill and llm-review.
+// They stay out until a gated engine exists (TODO-F5-18-GATED-ENGINE), and the
+// ungated live engine must never be handed in as NewEngine to bring them back.
+// The books module's held table references this list rather than retyping it.
+func EngineKinds() []tasks.Kind { return slices.Clone(engineKinds) }
 
 // isSet reports whether v is a usable interface value: not nil, and not a typed
 // nil held in a non-nil interface.

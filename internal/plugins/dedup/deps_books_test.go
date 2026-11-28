@@ -262,7 +262,6 @@ func TestBooksTaskLists_RefusesAMissingInputByName(t *testing.T) {
 		{"Source", "Source", func(in *BooksTaskInputs) { in.Source = nil }},
 		{"Indexes", "Indexes", func(in *BooksTaskInputs) { in.Indexes = nil }},
 		{"Embeddings", "Embeddings", func(in *BooksTaskInputs) { in.Embeddings = nil }},
-		{"NewEngine", "NewEngine", func(in *BooksTaskInputs) { in.NewEngine = nil }},
 		{"Engine", "Engine", func(in *BooksTaskInputs) { in.Engine = nil }},
 		{"Schedules", "Schedules", func(in *BooksTaskInputs) { in.Schedules = nil }},
 		// a typed nil in a non-nil interface is as missing as a nil one

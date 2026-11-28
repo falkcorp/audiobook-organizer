@@ -34,9 +34,18 @@ type taskListInputs struct {
 	Deluge      deluge.BooksTaskInputs
 	ITunes      itunes.BooksTaskInputs
 	Acoustid    acoustid.BooksTaskInputs
-	Dedup       dedup.BooksTaskInputs
-	Scheduler   scheduler.BooksTaskInputs
-	Repairs     repairs.BooksTaskInputs
+	// DedupEnabled is whether the server has a dedup plugin at all. HEAD builds
+	// it only when the dedup engine and the embedding store both exist
+	// (dedupplugin in plugins/dedup/register.go; ScheduleHooks.HasDedupPlugin in
+	// server_lifecycle.go), and a server with embedding disabled has neither, so
+	// it has none of the dedup operations. The flip sets it from that same
+	// condition, never from whether Dedup's fields are nil: false skips the dedup
+	// list and Dedup is not read, true builds it and a missing Dedup input is an
+	// error by name.
+	DedupEnabled bool
+	Dedup        dedup.BooksTaskInputs
+	Scheduler    scheduler.BooksTaskInputs
+	Repairs      repairs.BooksTaskInputs
 }
 
 // bookTaskLists is every task definition the books module registers through
@@ -97,13 +106,15 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 	}
 	out = append(out, l...)
 
-	dd := in.Dedup
-	dd.Schedules = in.Schedules
-	l, err = dedup.BooksTaskLists(dd)
-	if err != nil {
-		return nil, fmt.Errorf("books task lists: %w", err)
+	if in.DedupEnabled {
+		dd := in.Dedup
+		dd.Schedules = in.Schedules
+		l, err = dedup.BooksTaskLists(dd)
+		if err != nil {
+			return nil, fmt.Errorf("books task lists: %w", err)
+		}
+		out = append(out, l...)
 	}
-	out = append(out, l...)
 
 	sc := in.Scheduler
 	sc.Schedules = in.Schedules
