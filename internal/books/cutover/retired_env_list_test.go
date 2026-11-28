@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/falkcorp/mediacore/config"
 )
 
 // deploy/retired-env-names.txt is what `make deploy`'s deploy-env-check
@@ -64,6 +66,13 @@ func retiredEnvListText(t testing.TB, enforced bool) string {
 			byName[e.Name] = entry{string(e.Verdict), canon}
 		}
 	}
+	// The refused operator settings (RefusedOperatorPaths): a canonical env name
+	// the new binary no longer reads and refuses a host for setting. A `*` in the
+	// name stands for one or more characters (the metadata credentials family
+	// has any source id and any key). The replacement is the setting to use.
+	for _, r := range RefusedOperatorPaths() {
+		byName[r.EnvPattern()] = entry{string(VerdictRefuse), envInstead(r)}
+	}
 	names := make([]string, 0, len(byName))
 	for n := range byName {
 		names = append(names, n)
@@ -76,6 +85,8 @@ func retiredEnvListText(t testing.TB, enforced bool) string {
 	b.WriteString("# this file and refuses a deploy whose deploy/local.conf sets one of them: a binary\n")
 	b.WriteString("# that has the flip never reads it (verdict warn: ignored with a warning) or refuses\n")
 	b.WriteString("# to boot on it (verdict refuse).\n")
+	b.WriteString("# A name with a `*` is a pattern (one or more characters): the refused operator\n")
+	b.WriteString("# settings of RefusedOperatorPaths, whose canonical env names a host may still set.\n")
 	b.WriteString("# Regenerate: go test ./internal/books/cutover -run TestRetiredEnvList -update\n")
 	b.WriteString("#\n")
 	b.WriteString("# enforced says whether the app hands these names to core (F3-07). While it is\n")
@@ -203,4 +214,34 @@ func TestRetiredEnvList_HoldsTheNamesTheDeployFilesMustNotSet(t *testing.T) {
 	if !strings.Contains(text, "\nDATABASE_PATH\trefuse\tABO_CORE_STORAGE_PATH\n") {
 		t.Errorf("DATABASE_PATH is not listed with its verdict and replacement")
 	}
+}
+
+// TestRetiredEnvList_HoldsTheRefusedOperatorSettings pins the exact canonical
+// spellings the deploy pre-flight refuses (the F3-07 prod census names them):
+// the old openai path's env name and the metadata credentials family as a pattern.
+func TestRetiredEnvList_HoldsTheRefusedOperatorSettings(t *testing.T) {
+	text := retiredEnvListText(t, true)
+	for _, row := range []string{
+		"ABO_INTEGRATIONS_AI_OPENAI_BASE_URL\trefuse\tABO_INTEGRATIONS_AI_OPENAI_URL\n",
+		"ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*\trefuse\tthe credential as a stored secret",
+	} {
+		if !strings.Contains(text, "\n"+row) {
+			t.Errorf("the list lacks the row %q", row)
+		}
+	}
+	// The new canonical name is no retired name: a host may set it.
+	if strings.Contains(text, "\nABO_INTEGRATIONS_AI_OPENAI_URL\t") {
+		t.Error("ABO_INTEGRATIONS_AI_OPENAI_URL is listed as refused; it is the setting to use")
+	}
+}
+
+// envInstead is what the deploy check tells a host to set in place of a refused
+// operator setting: the canonical env name of Instead when that is a path, and
+// the phrase as it stands otherwise. Only the generated list needs it, so it is
+// test code and not production code.
+func envInstead(r RefusedOperatorPath) string {
+	if strings.ContainsAny(r.Instead, " \t") {
+		return r.Instead
+	}
+	return CanonicalEnv(config.Path(r.Instead))
 }

@@ -423,6 +423,80 @@ class RealList(unittest.TestCase):
         self.assertIn("WHISPER_REMOTE_URL", out + err)
 
 
+class RefusedOperatorSettings(Tmp):
+    """The refused operator settings (internal/books/cutover RefusedOperatorPaths):
+    the old openai path's canonical env name and the metadata credentials family,
+    read from the REAL generated list, because the point is that a host which
+    still sets one fails the deploy gate and not the boot. The refusal names the
+    key and the setting to use, and never the value."""
+
+    OPENAI_OLD = "ABO_INTEGRATIONS_AI_OPENAI_BASE_URL"
+    OPENAI_NEW = "ABO_INTEGRATIONS_AI_OPENAI_URL"
+    SENTINEL = "sentinel-gotham-7c1f.invalid"
+
+    def check(self, *names, unit=None):
+        conf = "[Service]\n" + "".join(f"Environment={n}=https://{self.SENTINEL}/v1\n" for n in names)
+        c = self.write("local.conf", conf)
+        argv = ["retired", "--local-conf", str(c), "--list", str(REPO / "deploy" / "retired-env-names.txt")]
+        if unit is not None:
+            argv += ["--unit-template", str(self.write("audiobook-organizer.service", unit))]
+        return run(argv)
+
+    def test_the_old_openai_env_name_is_refused_naming_the_new_one(self):
+        rc, out, err = self.check(self.OPENAI_OLD)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(self.OPENAI_OLD, err)
+        self.assertIn(self.OPENAI_NEW, err)
+        self.assertIn("refuses to boot", err)
+
+    def test_the_new_openai_env_name_passes(self):
+        rc, out, err = self.check(self.OPENAI_NEW)
+        self.assertEqual(rc, 0, out + err)
+
+    def test_the_value_is_never_printed(self):
+        for names in ((self.OPENAI_OLD,), ("ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN",)):
+            rc, out, err = self.check(*names)
+            self.assertEqual(rc, 1, out + err)
+            self.assertNotIn(self.SENTINEL, out + err)
+
+    def test_a_metadata_credential_is_refused_for_any_source_and_key(self):
+        for name in (
+            "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_CREDENTIALS_API_KEY",
+            "ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN",
+            "ABO_INTEGRATIONS_METADATA_AUDNEXUS_CREDENTIALS_X",
+        ):
+            rc, out, err = self.check(name)
+            self.assertEqual(rc, 1, f"{name}: {out}{err}")
+            self.assertIn(name, err)
+            self.assertIn("stored secret", err)
+            self.assertNotIn("became no setting", err)
+
+    def test_the_declared_four_segment_metadata_secrets_pass(self):
+        rc, out, err = self.check(
+            "ABO_INTEGRATIONS_METADATA_HARDCOVER_API_TOKEN",
+            "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_API_KEY",
+        )
+        self.assertEqual(rc, 0, out + err)
+
+    def test_a_refused_setting_in_the_unit_template_is_refused_too(self):
+        unit = f"[Service]\nEnvironment={self.OPENAI_OLD}=x\n"
+        rc, out, err = self.check("BATCAVE", unit=unit)
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("audiobook-organizer.service", err)
+
+    def test_a_pattern_row_needs_something_on_each_side_of_the_star(self):
+        rows = {"ABO_X_*_Y_*": ("refuse", "z")}
+        self.assertEqual(chk.listed("ABO_X_ONE_Y_TWO", rows), "ABO_X_*_Y_*")
+        self.assertIsNone(chk.listed("ABO_X__Y_", rows))
+        self.assertIsNone(chk.listed("ABO_X_Y_TWO", rows))
+        self.assertIsNone(chk.listed("PREFIX_ABO_X_ONE_Y_TWO", rows))
+
+    def test_the_real_list_holds_both_rows(self):
+        _, rows = chk.parse_list((REPO / "deploy" / "retired-env-names.txt").read_text())
+        self.assertEqual(rows[self.OPENAI_OLD], ("refuse", self.OPENAI_NEW))
+        self.assertEqual(rows["ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*"][0], "refuse")
+
+
 class PreflightRunsTheCheck(Tmp):
     """deploy-preflight.sh is the one thing a not-yet-synced Makefile.local
     still calls, so it must run the checker, in the caller's directory."""

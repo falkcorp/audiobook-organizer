@@ -1989,8 +1989,8 @@ retired env ENABLED_SORT_INDEXES -> modules.books.search.enabled_sort_indexes wa
 
 ## metadata_sources[].credentials.<k>
 top=false stored=blob class=s blob=metadata_sources admin=false fail-closed=false url=false
-target secret integrations.metadata.<source id>.credentials.<k> convert=- passthrough env=-
-note plaintext in the blob
+target secret integrations.metadata.<source id>.credentials.<k> convert=- env=-
+note plaintext in the blob; a stored secret only: the operator layer no longer supplies it (RefusedOperatorPaths)
 
 ## plugins.webhook
 top=false stored=blob class=i blob=plugins admin=false fail-closed=false url=false

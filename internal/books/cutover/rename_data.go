@@ -248,7 +248,7 @@ func tpassSecretCoined(path string) Target {
 // reflection over the frozen Config cannot walk: they name members M2
 // reads by path.
 var virtualRows = []subRow{
-	{head: "metadata_sources[].credentials.<k>", class: ClassSecret, targets: []Target{{Kind: TargetSecret, Path: "integrations.metadata.<source id>.credentials.<k>", Passthrough: true}}, note: "plaintext in the blob"},
+	{head: "metadata_sources[].credentials.<k>", class: ClassSecret, targets: []Target{{Kind: TargetSecret, Path: "integrations.metadata.<source id>.credentials.<k>"}}, note: "plaintext in the blob; a stored secret only: the operator layer no longer supplies it (RefusedOperatorPaths)"},
 	{head: "plugins.webhook", class: ClassInput, targets: []Target{tinst("notify/webhook-<n> instances")}, note: "enabled, settings.urls, settings.events"},
 	{head: "plugins.webhook.settings.secret", class: ClassSecret, targets: []Target{{Kind: TargetSecret, Path: "integrations.notify.webhook-<n>.secret", Passthrough: true}}, note: "plaintext; one record per instance n, the same value"},
 	{head: "plugins.<id>", class: ClassSecret, targets: []Target{{Kind: TargetSecret, Path: "modules.books.plugins.<id>.settings"}}, note: "any other plugins.<id>: internal/plugin is retired (02 N4); the free-form map may hold credentials, so M2 keeps it as one encrypted record and reports it"},

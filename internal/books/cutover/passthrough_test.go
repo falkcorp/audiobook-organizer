@@ -50,6 +50,12 @@ func TestConfigPassthrough(t *testing.T) {
 		"integrations.ai.openai.model",        // under a bound instance, not itself a table target
 		"integrations.notify.webhook-.secret", // a family hole needs a non-empty segment tail
 		"integrations.notify.webhook-bane.secret.extra",
+		// The refused operator settings (RefusedOperatorPaths): the operator
+		// layer no longer supplies either, so core must not place them. The
+		// books boot check refuses a host that still sets them.
+		"integrations.metadata.penguin.credentials.token",
+		"integrations.metadata.google-books.credentials.api_key",
+		"integrations.ai.openai.base_url",
 		"core.log.level",
 		"modules.books.scan.root",
 		"integrations",
@@ -59,7 +65,14 @@ func TestConfigPassthrough(t *testing.T) {
 			t.Errorf("%q is accepted", p)
 		}
 	}
-	if !ConfigPassthrough("integrations.notify.webhook-joker.secret") || !ConfigPassthrough("integrations.metadata.penguin.credentials.token") {
+	if !ConfigPassthrough("integrations.notify.webhook-joker.secret") {
 		t.Error("a family path with a concrete segment is refused")
+	}
+	// The 4-segment metadata secrets stay passthrough: they are the adapters'
+	// declared fields, not the credentials.<k> family.
+	for _, p := range []config.Path{"integrations.metadata.hardcover.api_token", "integrations.metadata.google-books.api_key"} {
+		if !ConfigPassthrough(p) {
+			t.Errorf("%s is refused though it is a declared passthrough secret", p)
+		}
 	}
 }

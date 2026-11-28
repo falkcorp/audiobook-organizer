@@ -19,7 +19,10 @@ import (
 	"github.com/falkcorp/mediacore/integrations"
 	"github.com/falkcorp/mediacore/integrations/ai/openai"
 	"github.com/falkcorp/mediacore/integrations/download/deluge"
+	"github.com/falkcorp/mediacore/integrations/notify/mail"
+	"github.com/falkcorp/mediacore/integrations/notify/webhook"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/adapters/metadata"
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover/m6"
 )
@@ -376,19 +379,64 @@ func jsonFields(t reflect.Type) map[string]string {
 	return out
 }
 
-// TestOperatorURLPaths_FieldsAreAdapterSettings pins the invariant the overlay
-// rests on: core keys an operator value by the path's last segment, so for every
-// integrations passthrough path the rename table and the env bindings name under
-// an instance whose adapter is in the binary, that segment is a json field of the
-// adapter's Settings; and the mapped URL paths are exactly the URL-typed
-// (schema format=uri) fields of those Settings, no more and no fewer. The old
-// base_url spelling fails the first check and is why openai's path is .url.
-func TestOperatorURLPaths_FieldsAreAdapterSettings(t *testing.T) {
-	settings := map[string]map[string]string{
-		openAIRef.String(): jsonFields(reflect.TypeFor[openai.Settings]()),
-		delugeRef.String(): jsonFields(reflect.TypeFor[deluge.Settings]()),
+// adapterFields is the json fields of every adapter Settings an integrations
+// passthrough path can name, by "<kind>/<instance>": the reflected Settings of the
+// openai, deluge, email and webhook adapters, and the schema properties of each
+// books metadata adapter's descriptor (read from the descriptors, so a new source
+// is a new row here and a renamed field is a failure).
+func adapterFields(t *testing.T) map[string]map[string]string {
+	t.Helper()
+	out := map[string]map[string]string{
+		openAIRef.String():   jsonFields(reflect.TypeFor[openai.Settings]()),
+		delugeRef.String():   jsonFields(reflect.TypeFor[deluge.Settings]()),
+		"notify/email":       jsonFields(reflect.TypeFor[mail.Settings]()),
+		"notify/webhook-<n>": jsonFields(reflect.TypeFor[webhook.Settings]()),
 	}
-	if !slices.Contains(slices.Collect(maps.Keys(settings[openAIRef.String()])), "url") || len(settings[delugeRef.String()]) != 3 {
+	ds, err := metadata.Descriptors(metadata.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range ds {
+		m := d.Meta()
+		id, ok := strings.CutPrefix(string(m.ID), "books.")
+		if !ok {
+			t.Fatalf("adapter %s is not a books adapter", m.ID)
+		}
+		var doc struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(m.Settings.JSON(), &doc); err != nil {
+			t.Fatalf("%s settings schema: %v", id, err)
+		}
+		fields := map[string]string{}
+		for name, prop := range doc.Properties {
+			fields[name] = ""
+			if f, _ := prop["format"].(string); f == "uri" {
+				fields[name] = "format=uri"
+			}
+		}
+		out["metadata/"+id] = fields
+	}
+	return out
+}
+
+// TestOperatorURLPaths_FieldsAreAdapterSettings pins the invariant the overlay
+// rests on: core keys an operator value by the path's last segment, so EVERY
+// integrations passthrough path the rename table and the env bindings name has a
+// last segment that is a json field of its adapter's Settings, and none is
+// skipped: a path whose adapter this test cannot resolve fails (an adapter that is
+// not written yet must declare the field before its path lands, which is what
+// stops a hardcover api_token with no Settings field being dropped silently); and
+// the mapped URL paths are exactly the URL-typed (schema format=uri) fields of the
+// openai and deluge Settings, no more and no fewer. The old base_url spelling
+// fails the first check and is why openai's path is .url.
+func TestOperatorURLPaths_FieldsAreAdapterSettings(t *testing.T) {
+	all := adapterFields(t)
+	settings := map[string]map[string]string{
+		openAIRef.String(): all[openAIRef.String()],
+		delugeRef.String(): all[delugeRef.String()],
+	}
+	if _, ok := settings[openAIRef.String()]["url"]; !ok || len(settings[delugeRef.String()]) != 3 {
 		t.Fatalf("the reflected Settings look wrong: %v", settings)
 	}
 	var paths []config.Path
@@ -404,12 +452,17 @@ func TestOperatorURLPaths_FieldsAreAdapterSettings(t *testing.T) {
 	}
 	checked := 0
 	for _, p := range paths {
+		if !strings.HasPrefix(string(p), "integrations.") {
+			continue
+		}
 		ref, field, ok := m6.OperatorField(p)
 		if !ok {
-			continue // a family path (metadata sources, webhook secrets): no single adapter
+			t.Errorf("%s is an integrations passthrough path that is not <kind>.<instance>.<field>: core cannot key it", p)
+			continue
 		}
-		fields, known := settings[ref]
+		fields, known := all[ref]
 		if !known {
+			t.Errorf("%s: no adapter Settings known for %s (add the adapter to adapterFields, or the path is one no adapter reads)", p, ref)
 			continue
 		}
 		checked++
@@ -417,7 +470,7 @@ func TestOperatorURLPaths_FieldsAreAdapterSettings(t *testing.T) {
 			t.Errorf("%s: %q is not a json field of %s's Settings %v", p, field, ref, slices.Sorted(maps.Keys(fields)))
 		}
 	}
-	if checked < 4 {
+	if checked < 12 {
 		t.Fatalf("only %d passthrough paths were checked against a Settings type: the walk found nothing", checked)
 	}
 	mapped := map[string]bool{}

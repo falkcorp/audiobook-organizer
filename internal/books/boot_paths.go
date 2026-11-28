@@ -78,6 +78,9 @@ func ResolveBootPaths(ctx context.Context, mod module.Module, boot BootInputs) (
 	if err := refuseHEADKeyedConfigFile(boot.ConfigFile); err != nil {
 		return "", "", err
 	}
+	if err := refuseRetiredOperatorSettings(boot.ConfigFile, os.Environ()); err != nil {
+		return "", "", err
+	}
 	dbPath, stateDir, err = app.ResolveStorage(ctx, bootOptions(boot), []module.Module{mod}, "")
 	if err != nil {
 		return "", "", err
