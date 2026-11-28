@@ -253,6 +253,8 @@ func (m *booksModule) Manifest() module.Manifest {
 		// No native route yet, so no public one (the gin mount's public
 		// routes are the legacy manifest's Public rows).
 	}
+	// Every kind the task lists carry, under the tasks flip (task_ledger.go).
+	mf.TaskLedger = taskLedgerForManifest()
 	if identityOn() {
 		// The scopes the atom table, the seed sets and the ambient list name,
 		// and books' one seed role (identity_declarations.go): declared only
@@ -371,6 +373,7 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		if err := opsmetrics.Retire(); err != nil {
 			return fmt.Errorf("books: retire HEAD's ops metrics for the tasks flip: %w", err)
 		}
+		registerTaskFlip(r, m)
 	}
 	if cerr := m.cutoverErr.Load(); cerr != nil {
 		// The cutover list could not be built (cutover.go): the store was opened

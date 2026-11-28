@@ -178,6 +178,9 @@ func Options(mod module.Module, in ServeInputs) (app.Options, error) {
 		FromRelease:           in.FromRelease,
 		ArchivePrefix:         archivePrefix,
 	}
+	// The kernel's tasks switch rides books' one predicate, so core's kinds and
+	// books' registrations cannot be on apart (tasks_flip.go).
+	ao.TasksBoot = tasksFlipOn()
 	if identityOn() {
 		if err := m.identityOptions(&ao); err != nil {
 			return app.Options{}, err
