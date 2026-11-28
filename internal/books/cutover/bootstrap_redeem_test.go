@@ -153,6 +153,30 @@ func TestBootstrapToken_RedeemsOnceAtCoreAndNotAtBooks(t *testing.T) {
 		t.Fatalf("GET /api/core/v1/me with the bootstrap key: %d %s", me.Status, me.excerpt())
 	}
 
+	// The lockout-recovery path ends here: the key is an administrator's, and on
+	// this post-M3 store it lists every account M3 moved into core, the same list
+	// the admin's session sees.
+	req = httptest.NewRequest(http.MethodGet, "/api/core/v1/users?limit=100", nil)
+	req.Header.Set("Authorization", "Bearer "+got.Key)
+	listed := h.Raw(req)
+	if listed.Status != http.StatusOK {
+		t.Fatalf("GET /api/core/v1/users with the bootstrap key: %d %s", listed.Status, listed.excerpt())
+	}
+	var byKey bsUserPage
+	if err := json.Unmarshal(listed.Body, &byKey); err != nil {
+		t.Fatal(err)
+	}
+	if len(byKey.Items) == 0 || len(byKey.Items) != len(usersBefore.Items) {
+		t.Errorf("the bootstrap key listed %d accounts, the admin's session %d", len(byKey.Items), len(usersBefore.Items))
+	}
+	sawRedeemer := false
+	for _, u := range byKey.Items {
+		sawRedeemer = sawRedeemer || u.ID == got.User.ID
+	}
+	if !sawRedeemer {
+		t.Errorf("the bootstrap key's list does not hold its own account %s", got.User.ID)
+	}
+
 	// The key's own record: name, scopes and lifetime as core mints them.
 	var keys struct {
 		Items []struct {
