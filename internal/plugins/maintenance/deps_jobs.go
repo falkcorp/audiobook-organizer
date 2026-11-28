@@ -487,8 +487,9 @@ func (w *booksJobsStore) IsBookAggregatesBackfillDone() bool {
 }
 
 // MarkBookAggregatesBackfillDone has an empty row (the sentinel is not a
-// resource a kind declares), so it runs unfenced and the job owns the mode: it
-// marks only after a live run, as it did.
+// resource a kind declares), so it carries no stamp and the job owns the mode:
+// it marks only after a live run, as it did. The gate still refuses it for a
+// run core has stopped (writer.Gate.Do).
 func (w *booksJobsStore) MarkBookAggregatesBackfillDone() error {
 	return w.gate.do(runless(), "MarkBookAggregatesBackfillDone", kindRef(ops.ResBooks), func(context.Context) error {
 		return w.caps.aggregates.MarkBookAggregatesBackfillDone()

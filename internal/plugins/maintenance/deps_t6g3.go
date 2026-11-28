@@ -289,10 +289,13 @@ func (s *booksT6G3Store) ScanPrefix(prefix string) ([]database.KVPair, error) {
 //     The native credits backfill no longer calls them (F5-18d): its class id
 //     lists are its own run rows (env.ClassLists) and its judgements ride in
 //     its result (env.Ledger), both in the tasks run store. They stay on the
-//     writer, unfenced, because t6g3Writer only gains methods (rule R10 item
-//     2); removing them is F5-18's call (seams.d/F5-18d.md).
-//     TestBooksT6G3Writer_EmptyRowMethodsStayUnfenced pins today's behaviour.
-//   - InvalidateAuthorsCache drops an in-memory cache: unfenced, as before.
+//     writer, with no stamp (the gate refuses them for a stopped run, see
+//     writer.Gate.Do), because t6g3Writer only gains methods (rule R10 item 2);
+//     removing them is F5-18's call (seams.d/F5-18d.md).
+//     TestBooksT6G3Writer_EmptyRowMethodsStayUnfenced pins that they carry no
+//     stamp; the stopped-run refusal is writer's TestGate_EmptyRowCancelTimeoutLease.
+//   - InvalidateAuthorsCache drops an in-memory cache: no stamp, as before, but
+//     not past a stopped run.
 type booksT6G3Writer struct {
 	src  t6g3Source
 	host t6g3BootHost

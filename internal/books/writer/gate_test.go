@@ -8,6 +8,7 @@ package writer_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"sync"
@@ -104,9 +105,10 @@ func TestGate_EveryRowIsFencedOnEveryResource(t *testing.T) {
 
 // A method with no row is refused (fail closed), as both ErrNoRow and
 // ErrOutsideEffects; a method whose row is empty writes no Effects resource and
-// runs fn with no fence, even in Preview (the caller owns the mode and the
-// permit, see Gate.Do; F5-18c decides what each group does about it); a
-// Preview of a stamped method records the intent and never calls fn.
+// runs fn with no Preview check and no intent, even in Preview (the caller owns
+// the mode, see Gate.Do), but not past a stopped run: a writer that says it may
+// not write refuses it (see TestGate_EmptyRowRefusesAStoppedRun); a Preview of a
+// stamped method records the intent and never calls fn.
 func TestGate_UnknownEmptyAndPreview(t *testing.T) {
 	rows := writer.Rows{"Known": {ops.ResBooks}, "Quiet": {}}
 	t.Run("unknown method", func(t *testing.T) {
@@ -118,7 +120,7 @@ func TestGate_UnknownEmptyAndPreview(t *testing.T) {
 		require.False(t, called)
 		require.Empty(t, w.Writes())
 	})
-	t.Run("empty row passes through unfenced", func(t *testing.T) {
+	t.Run("empty row passes through a writer with no liveness check", func(t *testing.T) {
 		w := writertest.ForSet("books.k", nil, tasks.ModeLive) // declares nothing
 		called := false
 		err := writer.New(w, rows).Do(t.Context(), "Quiet", subject, func(context.Context) ([]tasks.Change, error) { called = true; return nil, nil })
@@ -259,5 +261,44 @@ func TestMetafetchApplyRows_ModifyBookRulePinned(t *testing.T) {
 	withFile := append([]ops.Resource{ops.ResBookFiles}, modify...)
 	for _, m := range []string{"MarkNeedsRescan", "PatchBookFileFields"} {
 		require.ElementsMatch(t, withFile, local[m], "%s is a ModifyBook call and a file-row write", m)
+	}
+}
+
+// stopWriter is a tasks.WritableWriter whose run can be stopped.
+type stopWriter struct {
+	*writertest.Writer
+	stopped bool
+	asked   int
+}
+
+func (w *stopWriter) Writable() error {
+	w.asked++
+	if w.stopped {
+		return fmt.Errorf("%w: the run was stopped", tasks.ErrFenced)
+	}
+	return nil
+}
+
+// A method whose row is empty stamps no resource and so cannot go through
+// Writer.Do, but the gate still asks the run's writer whether the run may write
+// (F5-18 commit 1): a stopped run refuses it with tasks.ErrFenced and fn is not
+// called; a live one runs fn and records nothing (no intent, no epoch: those
+// stay row-only). The real executor's writer is covered by
+// TestGate_EmptyRowCancelTimeoutLease.
+func TestGate_EmptyRowRefusesAStoppedRun(t *testing.T) {
+	rows := writer.Rows{"Quiet": {}}
+	for _, stopped := range []bool{false, true} {
+		w := &stopWriter{Writer: writertest.ForSet("books.k", nil, tasks.ModeLive), stopped: stopped}
+		called := false
+		err := writer.New(w, rows).Do(t.Context(), "Quiet", subject, func(context.Context) ([]tasks.Change, error) { called = true; return nil, nil })
+		require.Equal(t, 1, w.asked, "the gate asks the writer once")
+		require.Empty(t, w.Writes(), "no intent is recorded")
+		if stopped {
+			require.ErrorIs(t, err, tasks.ErrFenced)
+			require.False(t, called, "a stopped run does not run the call")
+			continue
+		}
+		require.NoError(t, err)
+		require.True(t, called)
 	}
 }

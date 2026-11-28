@@ -88,6 +88,23 @@ func (w *writer) Do(ctx context.Context, wr tasks.Write, fn func(ctx context.Con
 	return nil
 }
 
+// Writable is the permit check Do makes before it writes, for a store call that
+// names no Effects resource and so cannot go through Do (tasks.WritableWriter):
+// ErrFenced once the run no longer holds its permit, or when its stand-down
+// hold lapsed. It records nothing.
+func (w *writer) Writable() error {
+	a := w.a
+	if err := a.writable(); err != nil {
+		return err
+	}
+	if err := a.e.renewHolds(a.ctx, a); err != nil {
+		return fmt.Errorf("%w: %v", tasks.ErrFenced, err)
+	}
+	return nil
+}
+
+var _ tasks.WritableWriter = (*writer)(nil)
+
 // MarkRowApplied records a Fixer row's evidence mark through the per-run
 // writer, under the closed-ledger rule (a stopping run still takes it).
 func (w *writer) MarkRowApplied(ctx context.Context, rowID string) {

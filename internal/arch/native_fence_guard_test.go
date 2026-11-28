@@ -75,9 +75,12 @@ var headOnlyFenceUsers = map[string][]string{
 	// native repairs kind and two native cores (version-group-primary-repair,
 	// asin-backfill) build it too. Its journal, evidence and previous-capture
 	// engine has no equivalent in core or in internal/books/writer, so the native
-	// path cannot leave it yet (F5-18 commit 1 STOP). Every native caller installs
-	// core's fence on it (or runs over a gated store); the writer's own HEAD fence
-	// is not read on a native path.
+	// path cannot leave it yet. The lead accepted dual use in the flip (F5-18
+	// commit 1 STOP 1, option a): moving opswriter's engine into
+	// internal/books/writer goes with the 4b type moves, tracked as
+	// ENGINE-DELETE-OWNER-05. Every native caller installs core's fence on it
+	// (or runs over a gated store); the writer's own HEAD fence is not read on a
+	// native path.
 	"internal/repairs/writer.go": {"opswriter.New"},
 }
 
