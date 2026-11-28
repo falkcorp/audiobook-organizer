@@ -24,7 +24,7 @@ func (sinkStub) Stands(context.Context, tasks.RunID, string) (bool, error) { ret
 // Close returns them in call order, cloned so a later call cannot reach the
 // kernel's copy (F5-18).
 func TestRegistrar_TasksFlipSurface(t *testing.T) {
-	r := newTestRegistrar(t, false)
+	r := newTestRegistrar(t)
 	sink := sinkStub{}
 	r.Lanes(tasks.Lane{ID: "gotham"}, tasks.Lane{ID: "metropolis"})
 	r.ChangeSink(sink)
@@ -69,7 +69,7 @@ func TestRegistrar_TasksFlipRefusals(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			r := newTestRegistrar(t, false)
+			r := newTestRegistrar(t)
 			tc.call(r)
 			if err := r.Err(); !errors.Is(err, tc.want) {
 				t.Fatalf("Err = %v, want %v", err, tc.want)
@@ -77,7 +77,7 @@ func TestRegistrar_TasksFlipRefusals(t *testing.T) {
 		})
 	}
 	// A refused change sink does not displace the first one.
-	r := newTestRegistrar(t, false)
+	r := newTestRegistrar(t)
 	first := sinkStub{}
 	r.ChangeSink(first)
 	r.ChangeSink(nil)
@@ -89,7 +89,7 @@ func TestRegistrar_TasksFlipRefusals(t *testing.T) {
 // TestRegistrar_TasksFlipAfterClose: the three new calls are record-only
 // like every other, so a call after Close is ProblemRegistrarClosed.
 func TestRegistrar_TasksFlipAfterClose(t *testing.T) {
-	r := newTestRegistrar(t, false)
+	r := newTestRegistrar(t)
 	r.Close()
 	r.Lanes(tasks.Lane{ID: "gotham"})
 	r.ChangeSink(sinkStub{})
