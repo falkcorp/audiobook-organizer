@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"github.com/stretchr/testify/require"
 
@@ -362,6 +363,26 @@ func registeredByTheRealModule(t *testing.T) {
 	for _, k := range taskLedger() {
 		require.Contains(t, reg, k, "%s is in the manifest ledger but Register did not register it", k)
 	}
+
+	// books.deluge.path-update by name (F6-03's boot check refuses a missing one),
+	// against HEAD's deluge.path-update (internal/plugins/deluge/path_update.go:35):
+	// event-driven with no schedule, the settings.manage atom by default, one run
+	// per book, and a writer of files only.
+	pu, ok := reg["books.deluge.path-update"]
+	require.True(t, ok, "books.deluge.path-update is not registered with the predicate on")
+	puc := tasks.CommonOf(pu)
+	require.Nil(t, puc.Schedule, "path-update is event-driven at HEAD and carries no schedule")
+	require.Equal(t, tasks.Key("books.deluge.path-update"), puc.ConcurrencyKey)
+	require.NotNil(t, puc.Dedupe.Key, "path-update folds a queued start for the same book")
+	require.Equal(t, []tasks.Resource{tasks.Res("books", "files")}, puc.Effects.WriteSet())
+	var settings []rbac.Permission
+	for _, a := range AtomTable() {
+		if a.Name == "settings.manage" {
+			settings = a.Scopes
+		}
+	}
+	require.NotEmpty(t, settings)
+	require.ElementsMatch(t, settings, puc.Perms.Start.Permissions(), "path-update starts under HEAD's settings.manage atom")
 
 	hook := NewSchedules(ScheduleDeps{})
 	for _, k := range ScheduledKinds() {
