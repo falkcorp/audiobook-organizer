@@ -1546,6 +1546,11 @@ func (m *MockStore) CreateBookWithRelocation(book *Book, originalID string) (*Bo
 	return m.CreateBook(book)
 }
 
+// RelocationOutboxInstalled is false: a mock has no outbox, so
+// CreateBookWithRelocation stages nothing (the single-book organize then takes
+// its direct Deluge arm).
+func (m *MockStore) RelocationOutboxInstalled() bool { return false }
+
 func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 	if m.UpdateBookFunc != nil {
 		return m.UpdateBookFunc(id, book)

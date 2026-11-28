@@ -10,7 +10,7 @@
 //   - getDelugeClient() — package-level shim for server-internal callers
 //   - HTTP handlers: handleDelugeTestConnection, handleDelugeListTorrents,
 //     handleDelugeStatus, registerDelugeRoutes
-//   - Package-level re-exports: NotifyDelugeMoveStorage,
+//   - Package-level re-exports: NotifyDelugeMoveStorage, NotifyDelugeAfterOrganize,
 //     NotifyDelugeAfterVersionSwap (for callers still
 //     referencing the server package — prefer deluge.* directly in new code)
 
@@ -38,6 +38,13 @@ func getDelugeClient() *deluge.Client {
 // within the server package that predate the extraction.
 func NotifyDelugeMoveStorage(torrentHash, newPath string) {
 	deluge.NotifyDelugeMoveStorage(torrentHash, newPath)
+}
+
+// NotifyDelugeAfterOrganize re-exports deluge.NotifyDelugeAfterOrganize.
+func NotifyDelugeAfterOrganize(store interface {
+	GetBookVersionsByBookID(bookID string) ([]database.BookVersion, error)
+}, bookID, newPath string) {
+	deluge.NotifyDelugeAfterOrganize(store, bookID, newPath)
 }
 
 // NotifyDelugeAfterVersionSwap re-exports deluge.NotifyDelugeAfterVersionSwap.

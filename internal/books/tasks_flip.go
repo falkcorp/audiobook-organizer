@@ -8,6 +8,8 @@ package books
 import (
 	"sync/atomic"
 
+	"github.com/falkcorp/mediacore/outbox"
+
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 )
 
@@ -70,4 +72,29 @@ func requireRelocationWiring(store any) error {
 		return nil
 	}
 	return audiobooks.RequireRelocationOutbox(store)
+}
+
+// relocationOutboxSetter is the one method installRelocationOutbox calls on the
+// store (*database.PebbleStore).
+type relocationOutboxSetter interface{ SetRelocationOutbox(outbox.Writer) }
+
+// installRelocationOutbox is Register's one install of the relocation outbox:
+// the organized copy of a single-book organize (CreateBookWithRelocation) stages
+// books.book.relocated.v1 in the batch that creates the copy, and no other write
+// stages it. It installs only while the consumer that delivers the message is
+// registered (relocationFollowUpOn): a message staged for no consumer would wait
+// for one, and the follow-up would not run.
+//
+// That makes "the store has a relocation outbox" the follow-up's predicate by
+// construction, and the organize request's two Deluge arms read it as such: the
+// request's direct NotifyDelugeAfterOrganize runs when this installed nothing
+// (the tasks switch is off), and does not run when it did
+// (organizer.Service.StagesRelocationFollowUp, which asks the store). It reports
+// whether it installed.
+func installRelocationOutbox(store relocationOutboxSetter, out outbox.Writer) bool {
+	if !relocationFollowUpOn() || out == (outbox.Writer{}) {
+		return false
+	}
+	store.SetRelocationOutbox(out)
+	return true
 }

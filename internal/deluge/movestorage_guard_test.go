@@ -73,6 +73,7 @@ func TestMoveStorageGuard_DisabledSendsNothing(t *testing.T) {
 		book:     &database.Book{ID: "b1", FilePath: "/library/example/book.m4b"},
 	}
 
+	NotifyDelugeAfterOrganize(st, "b1", "/library/example/book.m4b")
 	NotifyDelugeAfterVersionSwap(st, &alt, &active, "/library/example/book.m4b")
 
 	// ImportToLibraryWith with a DelugeHash row and a live client.
@@ -97,9 +98,10 @@ func TestMoveStorageGuard_EnabledControlSeesTheMove(t *testing.T) {
 	_, moves := newGuardClient(t)
 	setMoveEnabled(t, true)
 
-	active := database.BookVersion{ID: "v1", BookID: "b1", Status: database.BookVersionStatusActive, TorrentHash: guardTestHash}
-	st := &guardBookStore{book: &database.Book{ID: "b1", FilePath: "/library/example/book.m4b"}}
-	NotifyDelugeAfterVersionSwap(st, nil, &active, "/library/example/book.m4b")
+	st := &guardBookStore{versions: []database.BookVersion{
+		{ID: "v1", BookID: "b1", Status: database.BookVersionStatusActive, TorrentHash: guardTestHash},
+	}}
+	NotifyDelugeAfterOrganize(st, "b1", "/library/example/book.m4b")
 
 	if n := moves.Load(); n != 1 {
 		t.Fatalf("control: want 1 move_storage with the flag on, got %d", n)

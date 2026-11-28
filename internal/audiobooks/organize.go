@@ -71,7 +71,7 @@ var _ organizeServiceStore = (*database.PebbleStore)(nil)
 // not pass through it: the container wires the creator only when present.)
 func RequireRelocatingCopyCreator(store any) error {
 	if _, ok := store.(organizer.RelocatingCopyCreator); !ok {
-		return fmt.Errorf("audiobooks: the store %T does not implement organizer.RelocatingCopyCreator (CreateBookWithRelocation): the single-book organize copy could not stage its Deluge follow-up", store)
+		return fmt.Errorf("audiobooks: the store %T does not implement organizer.RelocatingCopyCreator (CreateBookWithRelocation, RelocationOutboxInstalled): the single-book organize copy could not stage its Deluge follow-up", store)
 	}
 	return nil
 }

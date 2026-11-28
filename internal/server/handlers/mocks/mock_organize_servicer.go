@@ -200,3 +200,47 @@ func (_c *MockOrganizeServicer_OrganizeOneBook_Call) RunAndReturn(run func(org *
 	_c.Call.Return(run)
 	return _c
 }
+
+// StagesRelocationFollowUp provides a mock function for the type MockOrganizeServicer
+func (_mock *MockOrganizeServicer) StagesRelocationFollowUp() bool {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for StagesRelocationFollowUp")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func() bool); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
+}
+
+// MockOrganizeServicer_StagesRelocationFollowUp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StagesRelocationFollowUp'
+type MockOrganizeServicer_StagesRelocationFollowUp_Call struct {
+	*mock.Call
+}
+
+// StagesRelocationFollowUp is a helper method to define mock.On call
+func (_e *MockOrganizeServicer_Expecter) StagesRelocationFollowUp() *MockOrganizeServicer_StagesRelocationFollowUp_Call {
+	return &MockOrganizeServicer_StagesRelocationFollowUp_Call{Call: _e.mock.On("StagesRelocationFollowUp")}
+}
+
+func (_c *MockOrganizeServicer_StagesRelocationFollowUp_Call) Run(run func()) *MockOrganizeServicer_StagesRelocationFollowUp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockOrganizeServicer_StagesRelocationFollowUp_Call) Return(b bool) *MockOrganizeServicer_StagesRelocationFollowUp_Call {
+	_c.Call.Return(b)
+	return _c
+}
+
+func (_c *MockOrganizeServicer_StagesRelocationFollowUp_Call) RunAndReturn(run func() bool) *MockOrganizeServicer_StagesRelocationFollowUp_Call {
+	_c.Call.Return(run)
+	return _c
+}

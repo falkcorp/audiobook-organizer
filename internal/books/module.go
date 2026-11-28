@@ -44,7 +44,6 @@ import (
 	"github.com/falkcorp/mediacore/auth"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/module"
-	"github.com/falkcorp/mediacore/outbox"
 	"github.com/falkcorp/mediacore/startprogress"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -432,15 +431,8 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 	}
 	database.SetGlobalStore(store)
-	if out := r.Deps().Outbox; relocationFollowUpOn() && out != (outbox.Writer{}) {
-		// Before anything writes through the store: the organized copy of a
-		// single-book organize (CreateBookWithRelocation) stages
-		// books.book.relocated.v1 in the batch that creates the copy. No other
-		// write stages it. Only while the consumer that delivers it is
-		// registered (relocationFollowUpOn): a message staged for no consumer
-		// would wait for one, and the follow-up would not run.
-		store.SetRelocationOutbox(out)
-	}
+	// Before anything writes through the store (installRelocationOutbox).
+	installRelocationOutbox(store, r.Deps().Outbox)
 	// Every committed book write publishes books.book.changed.v1 (the zero
 	// Deps.Events of a boot without the identity flip publishes nothing).
 	database.PublishBookChanges(r.Deps().Events)

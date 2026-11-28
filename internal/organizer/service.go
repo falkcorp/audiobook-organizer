@@ -70,6 +70,12 @@ type OrganizerBookWriter interface {
 // requires it of its store and hands it to Service.SetRelocatingCopyCreator.
 type RelocatingCopyCreator interface {
 	CreateBookWithRelocation(book *database.Book, originalID string) (*database.Book, error)
+	// RelocationOutboxInstalled reports whether CreateBookWithRelocation stages
+	// the follow-up: true exactly when the store has a relocation outbox, and
+	// the store stages if and only if it says so. It is how the single-book
+	// organize request knows which of its two Deluge arms applies
+	// (Service.StagesRelocationFollowUp).
+	RelocationOutboxInstalled() bool
 }
 
 // OrganizerBookFileStore is the per-file half: the organizer repoints file rows
@@ -2336,6 +2342,20 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 // CreateOrganizedVersion and move nothing, as they never did.
 func (orgSvc *Service) CreateOrganizedVersionFollowTorrents(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
 	return orgSvc.createOrganizedVersion(book, landing, operationID, log, true)
+}
+
+// StagesRelocationFollowUp reports whether CreateOrganizedVersionFollowTorrents
+// stages the durable relocation follow-up (books.book.relocated.v1) with the
+// copy. The single-book organize request reads it to choose its one Deluge arm:
+// staged, and books' outbox consumer moves the original's torrents; not staged
+// (the tasks switch is off and no relocation outbox is installed), and the
+// request calls the direct NotifyDelugeAfterOrganize, exactly as before the
+// events flip (F6-03). It is the store's own answer (RelocatingCopyCreator), not
+// a second predicate, so the staging and the direct call cannot both run or
+// both be skipped: a Service with no creator refuses the copy, so the answer
+// is moot there.
+func (orgSvc *Service) StagesRelocationFollowUp() bool {
+	return orgSvc.relocatingCopies != nil && orgSvc.relocatingCopies.RelocationOutboxInstalled()
 }
 
 // createOrganizedVersion is the body of both; followTorrents selects
