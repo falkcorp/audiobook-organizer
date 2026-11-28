@@ -1,5 +1,5 @@
 // file: internal/server/books_t7_door.go
-// version: 1.0.0
+// version: 1.0.1
 // guid: 3a7f6c52-1d0e-4b9b-8e4c-6f21b7d0a9e5
 // last-edited: 2026-11-28
 
@@ -124,7 +124,10 @@ func booksT7MissingFields(s *Server, methods []string) []string {
 	}
 	for _, m := range methods {
 		for _, field := range booksT7Needs[m] {
-			if !booksT7Present[field](s) && !slices.Contains(missing, field) {
+			// A field with no presence check is reported, never called: the
+			// tables cell fails on it, and the door must not panic meanwhile.
+			check := booksT7Present[field]
+			if (check == nil || !check(s)) && !slices.Contains(missing, field) {
 				missing = append(missing, field)
 			}
 		}
