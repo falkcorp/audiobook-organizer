@@ -211,10 +211,6 @@ func admin() context.Context {
 	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage, integrationstest.Admin)
 }
 
-func manager() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage)
-}
-
 // addFake registers a FakeDownloadClient as instance ref of adapter and
 // stores the instance (enabled, with priority).
 func (h *harness) addFake(ref integrations.Ref, adapter integrations.AdapterID, priority int) *coretest.FakeDownloadClient {

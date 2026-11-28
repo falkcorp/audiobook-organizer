@@ -123,7 +123,7 @@ func TestPut_PortChangeWithHostUnsetDropsSecrets(t *testing.T) {
 	ctx := context.Background()
 	e := newEnv(t)
 	r := e.registry(t, nil, nil)
-	mustPut(t, manager(), r, clocktower(9000), cred("alfred-1"))
+	mustPut(t, admin(), r, clocktower(9000), cred("alfred-1"))
 	if row, _ := e.stored(t, oracleRef); row.SecretsOrigin != "host=smtp://:9000" {
 		t.Fatalf("SecretsOrigin = %q", row.SecretsOrigin)
 	}
@@ -274,7 +274,7 @@ func TestPut_KeepsAWithheldSecretWithItsOrigin(t *testing.T) {
 		t.Errorf("a secret written for another destination was sent %d times", n)
 	}
 
-	mustPut(t, manager(), r, current(t, r, signalRef), cred("alfred-2"))
+	mustPut(t, admin(), r, current(t, r, signalRef), cred("alfred-2"))
 	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "url=http://192.0.2.20:80" {
 		t.Errorf("SecretsOrigin after a re-supply = %q", row.SecretsOrigin)
 	}
@@ -333,7 +333,7 @@ func TestPut_SaveDuringOperatorURLKeepsStoredSecret(t *testing.T) {
 	if err := r.SetOverlay(ctx, moved); err != nil {
 		t.Fatal(err)
 	}
-	mustPut(t, manager(), r, current(t, r, signalRef), cred("alfred-2"))
+	mustPut(t, admin(), r, current(t, r, signalRef), cred("alfred-2"))
 	if row, _ := e.stored(t, signalRef); row.SecretsOrigin != "url=http://192.0.2.99:80" {
 		t.Errorf("SecretsOrigin of a secret written beside the operator's URL = %q", row.SecretsOrigin)
 	}

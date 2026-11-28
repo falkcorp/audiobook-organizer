@@ -187,7 +187,7 @@ func TestPut_ResupplyAfterKeyMove(t *testing.T) {
 	mustPut(t, admin(), e.registry(t, nil, nil), perch(map[string]any{"url": origin}), cred("alfred-1"))
 	moveDestination(t, e, map[string]any{"alt_url": origin})
 	r := e.registry(t, nil, nil)
-	mustPut(t, manager(), r, current(t, r, perchRef), cred("alfred-2"))
+	mustPut(t, admin(), r, current(t, r, perchRef), cred("alfred-2"))
 	if row, _ := e.stored(t, perchRef); row.SecretsOrigin != "alt_url=http://192.0.2.20:80" {
 		t.Errorf("SecretsOrigin = %q, want the destination the new password was written for", row.SecretsOrigin)
 	}

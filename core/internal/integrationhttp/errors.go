@@ -64,11 +64,12 @@ func mapError(err error) error {
 }
 
 // forbidden is the 403 of a caller that lacks core:integrations.manage (or
-// core:admin for Local); cause is the Registry's refusal, nil for the route's
+// core:admin in an interactive session, for Local or for storing or clearing
+// a secret); cause is the Registry's refusal, nil for the route's
 // own backstop. The text is fixed.
 func forbidden(cause error) error {
 	return &httpapi.Error{Status: http.StatusForbidden, Code: "permission_denied",
-		Detail: "this needs core:integrations.manage, and setting Local needs core:admin in an interactive session", Err: cause}
+		Detail: "this needs core:integrations.manage, and setting Local or writing a secret needs core:admin in an interactive session", Err: cause}
 }
 
 // unauthenticated is the 401 a route answers when no principal reached it.

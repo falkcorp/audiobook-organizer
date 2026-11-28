@@ -189,7 +189,9 @@ var (
 	// ErrForbidden (403): the principal lacks core:integrations.manage, or a
 	// write needs the ProtectAdmin check (core:admin and an interactive
 	// principal) it does not pass: setting Local, keeping it across a
-	// destination change, or a Test with Local=true.
+	// destination change, a Test with Local=true, or a Put that stores or
+	// clears a secret field (as HEAD's config write, which takes every
+	// secret key from an interactive core:admin only).
 	ErrForbidden = errors.New("integrations: forbidden")
 	// ErrVersionConflict (409): the Put's Version is not the stored row's,
 	// or another writer committed first.

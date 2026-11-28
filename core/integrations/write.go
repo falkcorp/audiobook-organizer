@@ -168,6 +168,42 @@ func localFor(w writer, want bool, stored *StoredInstance, destChanged bool, new
 	return false, "", fmt.Errorf("%w: setting Local, or keeping it across a destination change, needs core:admin and an interactive principal", ErrForbidden)
 }
 
+// secretWritten reports the first secret field of fs that the write stores
+// or clears: a re-supplied value in secretsIn (an empty, echoed or
+// mask-shaped one is not a value, see resupplied), or an explicit null in
+// inst.Settings. Keeping a stored secret, by its own ref or an empty value,
+// is not a write. HEAD's config write counts the same two shapes
+// (appconfig/write.go: secretSets and secretClears).
+func secretWritten(ref Ref, fs fieldSet, inst InstanceConfig, secretsIn map[string]secrets.Value) (string, bool) {
+	for _, f := range fs.secrets {
+		if v, ok := secretsIn[f]; ok && resupplied(v, secretName(ref, f)) {
+			return f, true
+		}
+		if v, ok := inst.Settings[f]; ok && v == nil {
+			return f, true
+		}
+	}
+	return "", false
+}
+
+// secretsFor applies the secret rule Put shares with HEAD's config write
+// (appconfig/write.go: every secret key needs an interactive core:admin): a
+// write that stores or clears a secret field needs the ProtectAdmin check,
+// whatever core:integrations.manage grants. An API key, even one holding
+// core:admin, never passes it, and neither does a manager without core:admin.
+// A write that touches no secret is not held to it (SEC2-7: an API key may
+// still write a URL), and Test sends body secrets without storing them, so
+// it is not held to it either.
+func secretsFor(w writer, ref Ref, fs fieldSet, inst InstanceConfig, secretsIn map[string]secrets.Value) error {
+	if w.admin {
+		return nil
+	}
+	if f, ok := secretWritten(ref, fs, inst, secretsIn); ok {
+		return fmt.Errorf("%w: writing secret field %q of %s needs core:admin and an interactive principal", ErrForbidden, f, ref)
+	}
+	return nil
+}
+
 // keepRule is the stored-secret rule Put and Test share (M1.3 Put, M1.4
 // step 2). A write that moves a destination keeps no stored secret. One that
 // moves none keeps every stored secret it does not clear, with the
@@ -287,6 +323,9 @@ func (r *Registry) planPut(ctx context.Context, w writer, inst InstanceConfig, s
 	}
 	a, err := r.adapterFor(inst, stored)
 	if err != nil {
+		return putPlan{}, err
+	}
+	if err := secretsFor(w, ref, a.fs, inst, secretsIn); err != nil {
 		return putPlan{}, err
 	}
 	var expect uint64
