@@ -124,15 +124,15 @@ var wantRoutes = []struct {
 	expensive                bool
 }{
 	{http.MethodGet, "/api/core/v1/integrations/adapters", "listIntegrationAdapters", "core:integrations.read", false},
-	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances", "listIntegrationInstances", "all(core:integrations.manage,core:settings.manage)", false},
-	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances", "createIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
-	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}", "getIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
-	{http.MethodPut, "/api/core/v1/integrations/{kind}/instances/{id}", "updateIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
-	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}", "deleteIntegrationInstance", "all(core:integrations.manage,core:settings.manage)", false},
+	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances", "listIntegrationInstances", "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)", false},
+	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances", "createIntegrationInstance", "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)", false},
+	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}", "getIntegrationInstance", "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)", false},
+	{http.MethodPut, "/api/core/v1/integrations/{kind}/instances/{id}", "updateIntegrationInstance", "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)", false},
+	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}", "deleteIntegrationInstance", "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)", false},
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/test", "testIntegration", "core:integrations.manage", true},
 	{http.MethodPost, "/api/core/v1/integrations/{kind}/instances/{id}/test", "testIntegrationInstance", "core:integrations.manage", true},
 	{http.MethodGet, "/api/core/v1/integrations/{kind}/instances/{id}/health", "getIntegrationInstanceHealth", "core:integrations.manage", true},
-	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "all(core:integrations.manage,core:settings.manage)", false},
+	{http.MethodDelete, "/api/core/v1/integrations/{kind}/instances/{id}/hold", "releaseIntegrationInstanceHold", "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)", false},
 }
 
 func registered(t *testing.T) *httpapi.Router {
@@ -833,18 +833,18 @@ func TestIntegrationHTTP_HoldRouteChecksManage(t *testing.T) {
 	}
 
 	// The route's requirement is instancePerm (also pinned as text by the route
-	// table): a principal holding exactly its two scopes can write through the
+	// table): a principal holding exactly its seven scopes can write through the
 	// Registry and release a hold.
-	only := integrationstest.As(context.Background(), auth.MethodSession, integrations.ManagePerm, permSettingsManage)
+	only := integrationstest.As(context.Background(), auth.MethodSession, operatorScopes()...)
 	if _, err := e.update(only, kindNotify, roofID, func() IntegrationInstanceBody {
 		b := signalBody("", "http://192.0.2.20/", "")
 		b.Version = 1
 		return b
 	}()); err != nil {
-		t.Errorf("a principal holding instancePerm's scopes cannot write: %v", err)
+		t.Errorf("a principal holding exactly instancePerm's scopes cannot write: %v", err)
 	}
 	if _, err := e.api.releaseHold(only, in(only, instanceReq{Kind: kindNotify, ID: roofID})); err != nil {
-		t.Errorf("a principal holding instancePerm's scopes cannot release: %v", err)
+		t.Errorf("a principal holding exactly instancePerm's scopes cannot release: %v", err)
 	}
 }
 

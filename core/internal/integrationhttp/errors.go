@@ -94,14 +94,20 @@ func (a *api) guard(p *auth.Principal) error {
 	return nil
 }
 
-// guardPerm is guard plus a backstop for the route's own requirement: the
-// principal's checker must satisfy req, and a principal with no checker is
-// refused. The handlers pass the same requirement value Register gave the
-// route (instancePerm, managePerm), so a route mounted with a weaker Perm by
-// mistake still turns away a caller the route was meant to refuse. The router's
-// Perm is the check that matters; the routes that answer 404 for a missing
-// instance run this first, so a caller without the permission is turned away
-// before the answer can say whether an instance exists.
+// guardPerm is guard plus a backstop for the per-kind requirement the route
+// documents: the principal's checker must satisfy req, and a principal with no
+// checker is refused. The handlers pass the requirement their route documents
+// (instancePerm for the instance routes, probeReach(kind).req for health and
+// test), so the backstop equals that per-kind requirement even when the route
+// is mounted with a weaker Perm (the health and test routes always are: their
+// Perm is the floor, one value for every kind) and a caller the per-kind rule
+// refuses is still turned away. The router's Perm is the first check; the
+// routes that answer 404 for a missing instance run this before the lookup, so
+// a caller without the permission is turned away before the answer can say
+// whether an instance exists.
+//
+// The refusal is the third of the three 403 shapes (kindreach.go): code
+// permission_denied, no required_permission, Detail "this needs <requirement>".
 func (a *api) guardPerm(p *auth.Principal, req rbac.Requirement) error {
 	if err := a.guard(p); err != nil {
 		return err

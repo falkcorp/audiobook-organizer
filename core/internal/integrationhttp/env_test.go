@@ -29,6 +29,7 @@ import (
 	"github.com/falkcorp/mediacore/integrations/providerhttp"
 	"github.com/falkcorp/mediacore/internal/instancestore"
 	"github.com/falkcorp/mediacore/internal/statefs"
+	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/secrets"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -45,6 +46,12 @@ const (
 const (
 	batsignal integrations.AdapterID = "hello.batsignal" // notify: one URL, a required credential
 	oracle    integrations.AdapterID = "hello.oracle"    // metadata: host and port, an optional credential
+
+	// The adapters of the other three kinds, registered only when a test asks
+	// for them (newEnvKinds): the adapter list tests count the two above.
+	sage   integrations.AdapterID = "hello.sage"   // ai: host and port, an optional credential
+	seeder integrations.AdapterID = "hello.seeder" // download: host and port, an optional credential
+	finder integrations.AdapterID = "hello.finder" // indexer: host and port, an optional credential
 )
 
 // batsignalSettings is hello.batsignal's settings.
@@ -92,6 +99,9 @@ type env struct {
 	reg     *integrations.Registry
 	holds   *fakeHolds
 	api     *api
+	// allKinds registers an adapter of every kind (newEnvKinds), not just
+	// notify and metadata.
+	allKinds bool
 }
 
 // flakySecrets is the real secrets store with a switch that fails Meta, so
@@ -250,7 +260,12 @@ func (e *env) hold(scope string, extra time.Duration) integrations.Hold {
 		Until: e.clock.now().Add(time.Hour + extra), SetAt: e.clock.now()}
 }
 
-func newEnv(t testing.TB) *env {
+func newEnv(t testing.TB) *env { return newEnvKinds(t, false) }
+
+// newEnvKinds is newEnv with an adapter of every kind when allKinds is set, for
+// the per-kind reach cells. The default env has the two adapters the other tests
+// count.
+func newEnvKinds(t testing.TB, allKinds bool) *env {
 	t.Helper()
 	ctx := context.Background()
 	o, err := storage.Open(ctx, storage.OpenOptions{
@@ -305,7 +320,7 @@ func newEnv(t testing.TB) *env {
 	ks := keyspace(instancestore.Owner)
 	e := &env{
 		ks: ks, secrets: sec, sec: &flakySecrets{Store: sec}, audit: au, log: &recorder{inner: au},
-		out: &integrationstest.Outbound{}, fake: &integrationstest.Fake{}, clock: clk, holds: &fakeHolds{},
+		out: &integrationstest.Outbound{}, fake: &integrationstest.Fake{}, clock: clk, holds: &fakeHolds{}, allKinds: allKinds,
 	}
 	e.reg = e.registry(t)
 	e.api = &api{reg: e.reg, holds: e.holds, audit: e.log, base: "/api/core/v1"}
@@ -326,11 +341,22 @@ func (e *env) registry(t testing.TB) *integrations.Registry {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := r.Register("hello",
+	descs := []integrations.Descriptor{
 		e.fake.Descriptor(integrations.Meta{ID: batsignal, Kind: integrations.KindNotify, DisplayName: "Bat-Signal", Version: "1.0",
 			Settings: schemaOf[batsignalSettings](t), Limits: integrations.Limits{RPS: 2, Timeout: 5 * time.Second}}),
 		e.fake.Descriptor(integrations.Meta{ID: oracle, Kind: integrations.KindMetadata, DisplayName: "Oracle", Settings: schemaOf[oracleSettings](t)}),
-	); err != nil {
+	}
+	if e.allKinds {
+		for _, m := range []integrations.Meta{
+			{ID: sage, Kind: integrations.KindAI, DisplayName: "Sage"},
+			{ID: seeder, Kind: integrations.KindDownload, DisplayName: "Seeder"},
+			{ID: finder, Kind: integrations.KindIndexer, DisplayName: "Finder"},
+		} {
+			m.Settings = schemaOf[oracleSettings](t)
+			descs = append(descs, e.fake.Descriptor(m))
+		}
+	}
+	if err := r.Register("hello", descs...); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	if err := r.Load(context.Background(), nil); err != nil {
@@ -350,16 +376,24 @@ func (e *env) registry(t testing.TB) *integrations.Registry {
 
 // The principals the cases act as, bound into a context the way httpapi's
 // stage 12 does (auth.WithPrincipal).
+//
+// operatorScopes are the seven core scopes of HEAD's settings.manage atom, the
+// scopes instancePerm asks (rbac.OperatorRequirement); a principal that holds
+// fewer is not an operator of these routes.
+func operatorScopes() []rbac.Permission {
+	return slices.Clone(rbac.OperatorRequirement().Permissions())
+}
+
 func adminCtx() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage, permSettingsManage, integrationstest.Admin)
+	return integrationstest.As(context.Background(), auth.MethodSession, slices.Concat(operatorScopes(), []rbac.Permission{integrationstest.Admin})...)
 }
 
 func managerCtx() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodSession, integrationstest.Manage, permSettingsManage)
+	return integrationstest.As(context.Background(), auth.MethodSession, operatorScopes()...)
 }
 
 func apiKeyCtx() context.Context {
-	return integrationstest.As(context.Background(), auth.MethodAPIKey, integrationstest.Manage, permSettingsManage, integrationstest.Admin)
+	return integrationstest.As(context.Background(), auth.MethodAPIKey, slices.Concat(operatorScopes(), []rbac.Permission{integrationstest.Admin})...)
 }
 
 // in is the decoded request a handler receives: req with the principal ctx

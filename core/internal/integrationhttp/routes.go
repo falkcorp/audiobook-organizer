@@ -38,30 +38,33 @@ import (
 )
 
 // permRead is the permission the adapters list declares (05-rbac §7.1), the one
-// read route that stays on read. The manage routes declare
-// integrations.ManagePerm, the Registry's own constant; manage implies read in
-// the catalog.
+// route that asks it. The instance routes ask the instance requirement
+// (rbac.OperatorRequirement) and the health and test routes a floor of
+// integrations.ManagePerm, the Registry's own constant; the catalog lets manage
+// imply read, so every route's caller satisfies read as well.
 const permRead rbac.Permission = "core:integrations.read"
-
-// permSettingsManage is the second scope every instance route asks for. HEAD's
-// integrations.manage atom maps to core:integrations.manage and
-// books:integrations.manage only, and at HEAD such a principal never reached
-// instance CRUD or settings (PUT /config needs settings.manage). The
-// settings.manage atom maps to both core scopes (internal/books/atoms.go), so
-// its holder passes.
-const permSettingsManage rbac.Permission = "core:settings.manage"
 
 // instancePerm is the requirement of every instance route (list, get, create,
 // update, delete, release hold) and of those handlers' own backstop
-// (api.guardPerm). Register and the handlers both call it, so the route's Perm
-// and the backstop cannot drift apart.
-func instancePerm() rbac.Requirement {
-	return rbac.AllOf(integrations.ManagePerm, permSettingsManage)
-}
+// (api.guardPerm): rbac.OperatorRequirement, the seven core scopes HEAD's
+// settings.manage atom grants. HEAD's integrations.manage atom maps to
+// core:integrations.manage and books:integrations.manage only, and at HEAD such
+// a principal never reached an instance's config (PUT /config needs
+// settings.manage), so the single scope core:integrations.manage is wider than
+// HEAD and a settings.manage holder is the reach. It is the one shared
+// definition (core/rbac/operator.go), not a copy of the scope list. Register
+// and the handlers both call this, so the route's Perm and the backstop cannot
+// drift apart.
+func instancePerm() rbac.Requirement { return rbac.OperatorRequirement() }
 
-// managePerm is the requirement of the health and the two test routes, and of
-// their backstops.
-func managePerm() rbac.Requirement { return rbac.Need(integrations.ManagePerm) }
+// floorPerm is the Perm of the health and the two test routes. It is a floor,
+// not the rule: one route serves every kind and a route has one Perm, while the
+// rule differs per kind (probeReach). The floor is the Registry's own write
+// scope, which is what Registry.Test asks through writerOf; a caller below it
+// gets the router's 403, and a caller at or above it reaches the handler, which
+// answers the per-kind rule (a 404 for a kind core does not serve, a backstop 403
+// naming the instance requirement for the rest).
+func floorPerm() rbac.Requirement { return rbac.Need(integrations.ManagePerm) }
 
 // maxBody bounds a body: an instance's settings are a handful of fields, and
 // a secret is capped at maxSecretBytes by validation, so a request has no
@@ -89,24 +92,25 @@ type api struct {
 // batch that commits the change.
 func Register(g *httpapi.Group, reg *integrations.Registry, holds HoldReleaser, auditLog audit.Logger) {
 	a := &api{reg: reg, holds: holds, audit: auditLog, base: g.Base()}
-	// instance is every instance route's requirement, for every kind: both
-	// scopes, so the reach is HEAD's settings.manage atom and not the wider
-	// core:integrations.manage alone. The health read asks manage alone, and
-	// the adapters list and the two test routes are unchanged.
-	mount(g, a, routePerms{read: rbac.Need(permRead), instance: instancePerm(), manage: managePerm()})
+	// instance is every instance route's requirement, for every kind: the seven
+	// scopes of HEAD's settings.manage atom, not the wider core:integrations.manage
+	// alone. The health and test routes mount the floor and answer a per-kind
+	// rule in the handler (probeReach, kindreach.go).
+	mount(g, a, routePerms{read: rbac.Need(permRead), instance: instancePerm(), floor: floorPerm()})
 }
 
 // routePerms are the Perm each class of route is mounted with. Register passes
-// the requirements the handlers' backstop (api.guardPerm) checks; a test
+// the requirements the handlers' backstop (api.guardPerm) checks, except floor,
+// which the health and test routes mount below their per-kind rule; a test
 // passes a weaker one to prove the backstop holds without the router.
 type routePerms struct {
-	read, instance, manage rbac.Requirement
+	read, instance, floor rbac.Requirement
 }
 
 // mount registers the routes on g with the given Perms.
 func mount(g *httpapi.Group, a *api, p routePerms) {
 	tags := []string{"integrations"}
-	read, instance, manage := p.read, p.instance, p.manage
+	read, instance, floor := p.read, p.instance, p.floor
 
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/integrations/adapters", Name: "listIntegrationAdapters", Perm: read, Tags: tags,
@@ -133,18 +137,19 @@ func mount(g *httpapi.Group, a *api, p routePerms) {
 		Summary: "Delete an instance and its secrets",
 	}, a.deleteInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPost, Path: "/integrations/{kind}/test", Name: "testIntegration", Perm: manage, Tags: tags,
+		Method: http.MethodPost, Path: "/integrations/{kind}/test", Name: "testIntegration", Perm: floor, Tags: tags,
 		MaxBody: maxBody, RateClass: httpapi.RateExpensive, Summary: "Test an unsaved configuration",
-		Doc: "No stored instance is involved: only the body's secrets are sent. The answer is ok, class and status, never remote text.",
+		Doc: "No stored instance is involved: only the body's secrets are sent. The answer is ok, class and status, never remote text. Per kind: " + docFor(probeTest),
 	}, a.testNew)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodPost, Path: "/integrations/{kind}/instances/{id}/test", Name: "testIntegrationInstance", Perm: manage, Tags: tags,
+		Method: http.MethodPost, Path: "/integrations/{kind}/instances/{id}/test", Name: "testIntegrationInstance", Perm: floor, Tags: tags,
 		MaxBody: maxBody, RateClass: httpapi.RateExpensive, Summary: "Test an unsaved body for a stored instance",
-		Doc: "A secret the body omits is filled from the stored one only while no destination origin changes.",
+		Doc: "A secret the body omits is filled from the stored one only while no destination origin changes. Per kind: " + docFor(probeTest),
 	}, a.testInstance)
 	httpapi.Handle(g, httpapi.Route{
-		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}/health", Name: "getIntegrationInstanceHealth", Perm: manage, Tags: tags,
+		Method: http.MethodGet, Path: "/integrations/{kind}/instances/{id}/health", Name: "getIntegrationInstanceHealth", Perm: floor, Tags: tags,
 		RateClass: httpapi.RateExpensive, Summary: "Probe an instance and report its health",
+		Doc: "Per kind: " + docFor(probeHealth),
 	}, a.getHealth)
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodDelete, Path: "/integrations/{kind}/instances/{id}/hold", Name: "releaseIntegrationInstanceHold", Perm: instance, Tags: tags,
@@ -443,7 +448,7 @@ func (a *api) deleteInstance(ctx context.Context, in *httpapi.In[instanceReq]) (
 }
 
 func (a *api) getHealth(ctx context.Context, in *httpapi.In[instanceReq]) (IntegrationHealth, error) {
-	if err := a.guardPerm(in.Principal, managePerm()); err != nil {
+	if _, err := a.guardProbe(probeHealth, in.Principal, in.Req.Kind); err != nil {
 		return IntegrationHealth{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)
@@ -458,10 +463,7 @@ func (a *api) getHealth(ctx context.Context, in *httpapi.In[instanceReq]) (Integ
 }
 
 func (a *api) testNew(ctx context.Context, in *httpapi.In[testNewReq]) (IntegrationTestResult, error) {
-	if err := a.guard(in.Principal); err != nil {
-		return IntegrationTestResult{}, err
-	}
-	kind, err := kindRef(in.Req.Kind)
+	kind, err := a.guardProbe(probeTest, in.Principal, in.Req.Kind)
 	if err != nil {
 		return IntegrationTestResult{}, err
 	}
@@ -472,7 +474,7 @@ func (a *api) testNew(ctx context.Context, in *httpapi.In[testNewReq]) (Integrat
 
 func (a *api) testInstance(ctx context.Context, in *httpapi.In[testInstanceReq]) (IntegrationTestResult, error) {
 	// The permission comes before the existence check below (see updateInstance).
-	if err := a.guardPerm(in.Principal, managePerm()); err != nil {
+	if _, err := a.guardProbe(probeTest, in.Principal, in.Req.Kind); err != nil {
 		return IntegrationTestResult{}, err
 	}
 	ref, err := instanceRef(in.Req.Kind, in.Req.ID)

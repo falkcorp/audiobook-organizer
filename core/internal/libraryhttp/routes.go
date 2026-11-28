@@ -9,9 +9,15 @@
 // (Route) and the package is dark until the kernel's start rule mounts it:
 // nothing imports it yet.
 //
-// Every handler checks its route's permission itself (core:library.browse
-// against the caller's Principal.Perms), so a Route mounted bare enforces what
-// the table says.
+// Every handler checks its route's permission itself (rbac.OperatorRequirement,
+// the seven core scopes of HEAD's settings.manage atom, which include
+// core:library.browse, against the caller's Principal.Perms), so a Route
+// mounted bare enforces what the table says. HEAD's picker
+// (GET /api/v1/filesystem/browse) is behind that atom, so core:library.browse
+// alone would be wider than HEAD's reach; the row is table 4 of
+// docs/plans/platform-core/f7-09-integrations-per-kind-reach.md. A refusal here
+// carries "required" (the requirement string), one of three 403 shapes the
+// integration and library routes produce (see integrationhttp/kindreach.go).
 //
 // The route lists directories only, never files, and every filesystem access
 // goes through the library's confined RootFS, never a host path. Dot-prefixed
@@ -36,16 +42,6 @@ import (
 
 // BasePath is where the routes mount.
 const BasePath = "/api/core/v1/library"
-
-// scopeBrowse is the route's permission (05-rbac's fixed core:* catalog).
-const scopeBrowse rbac.Permission = "core:library.browse"
-
-// scopeSettings is the browse route's second scope. HEAD's picker is behind
-// settings.manage, an atom that maps to core:library.browse and
-// core:settings.manage among others (internal/books/atoms.go), so browse alone
-// is wider than HEAD's reach. The registered-roots confinement in browse.go is
-// unchanged.
-const scopeSettings rbac.Permission = "core:settings.manage"
 
 // Route is one native route. Path is relative to BasePath ("/browse"). Perm is
 // the route floor; Handler checks it too.
@@ -92,7 +88,7 @@ func New(d Deps) (*Server, error) {
 	r := Route{
 		Method: "GET", Path: "/browse", Name: "browseLibrary",
 		Summary: "List the library roots, or the directories under one root path",
-		Perm:    rbac.AllOf(scopeBrowse, scopeSettings),
+		Perm:    rbac.OperatorRequirement(),
 	}
 	r.Handler = s.guard(r, s.browse)
 	s.routes = []Route{r}

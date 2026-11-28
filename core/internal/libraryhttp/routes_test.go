@@ -251,7 +251,19 @@ func q(kv ...string) url.Values {
 	return v
 }
 
-var browser = session("lucius", scopeBrowse, scopeSettings)
+// scopeBrowse and scopeSettings are two of the seven scopes browseLibrary asks
+// (rbac.OperatorRequirement); the cells that name them hold fewer than seven.
+const (
+	scopeBrowse   rbac.Permission = "core:library.browse"
+	scopeSettings rbac.Permission = "core:settings.manage"
+)
+
+// operatorScopes are the seven scopes browseLibrary asks.
+func operatorScopes() []rbac.Permission {
+	return slices.Clone(rbac.OperatorRequirement().Permissions())
+}
+
+var browser = session("lucius", operatorScopes()...)
 
 func names(l listingResponse) []string {
 	var out []string
@@ -288,7 +300,7 @@ func TestRoutes_Table(t *testing.T) {
 	if rt.Method != "GET" || rt.Path != "/browse" || rt.Name != "browseLibrary" || rt.Handler == nil {
 		t.Errorf("route = %+v", rt)
 	}
-	if rt.Perm.Kind() != rbac.KindAllOf || rt.Perm.String() != "all(core:library.browse,core:settings.manage)" {
+	if rt.Perm.Kind() != rbac.KindAllOf || rt.Perm.String() != "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)" {
 		t.Errorf("floor = %v %q", rt.Perm.Kind(), rt.Perm.String())
 	}
 	if got, want := rt.Pattern(), "GET /api/core/v1/library/browse"; got != want {
@@ -321,7 +333,7 @@ func TestBrowse_WithoutPermission_403(t *testing.T) {
 				t.Fatalf("%s %v = %d %s", name, query, res.code, res.body)
 			}
 			pr := res.problem(t)
-			if pr.Code != "permission_denied" || pr.Required != "all(core:library.browse,core:settings.manage)" {
+			if pr.Code != "permission_denied" || pr.Required != "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)" {
 				t.Errorf("%s problem = %+v", name, pr)
 			}
 		}
@@ -690,14 +702,15 @@ func TestBrowse_RealCheckerDecides(t *testing.T) {
 		in   rbac.CompileInput
 		code int
 	}{
-		"key confined to a worker scope":      {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{"books:fingerprint.worker"}, RolePatterns: []rbac.Permission{"books:fingerprint.worker"}}, 403},
-		"key with an empty scope list":        {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{}, RolePatterns: []rbac.Permission{"core:*"}}, 403},
-		"key naming the scope, roles lack it": {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{scopeBrowse}, RolePatterns: []rbac.Permission{"core:tasks.view"}}, 403},
-		"key naming both scopes, roles grant": {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{scopeBrowse, scopeSettings}, RolePatterns: []rbac.Permission{"core:*"}}, 200},
-		"session without role patterns":       {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true}, 403},
-		"session with another scope":          {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{"core:tasks.view"}}, 403},
-		"session with core:*":                 {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{"core:*"}}, 200},
-		"session with both scopes":            {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{scopeBrowse, scopeSettings}}, 200},
+		"key confined to a worker scope":           {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{"books:fingerprint.worker"}, RolePatterns: []rbac.Permission{"books:fingerprint.worker"}}, 403},
+		"key with an empty scope list":             {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{}, RolePatterns: []rbac.Permission{"core:*"}}, 403},
+		"key naming the scope, roles lack it":      {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: []rbac.Permission{scopeBrowse}, RolePatterns: []rbac.Permission{"core:tasks.view"}}, 403},
+		"key naming all seven scopes, roles grant": {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Scopes: operatorScopes(), RolePatterns: []rbac.Permission{"core:*"}}, 200},
+		"session without role patterns":            {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true}, 403},
+		"session with another scope":               {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{"core:tasks.view"}}, 403},
+		"session with core:*":                      {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{"core:*"}}, 200},
+		"session with both scopes":                 {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: []rbac.Permission{scopeBrowse, scopeSettings}}, 403},
+		"session with all seven scopes":            {rbac.CompileInput{Roles: []rbac.RoleName{"g"}, Interactive: true, RolePatterns: operatorScopes()}, 200},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := &auth.Principal{User: &auth.User{ID: "lucius", Username: "lucius"}, Method: auth.MethodSession, CredentialID: "cred-lucius", Perms: authz.Compile(c.in, cat)}
