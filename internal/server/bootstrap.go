@@ -61,8 +61,14 @@ const (
 // dataDir must be the already-cleaned application data directory (caller is
 // responsible for sanitising the value — mirrors ConsumeBootstrapToken).
 func InitStartupReadOnlyKey(store startupKeyStore, dataDir string) error {
-	// Revoke any previously emitted startup read-only key so old tokens don't
-	// accumulate in the database.
+	// Forget the previous start's key id: this deletes the two settings rows
+	// (startup_readonly_key_id and its expiry) and nothing else. The previous
+	// key's apikey: row is NOT revoked or deleted; it stays "active" until its
+	// 24 h expiry, so every start adds one more such row. Under core identity
+	// this writer does not run (server_lifecycle.go gates it on
+	// s.identity == nil): core's auth.BootWrites revokes every non-revoked
+	// "Startup read-only key" by name (core/auth/bootwrites.go), which also
+	// clears the leftovers M3 imports.
 	if prev, err := store.GetSetting(readonlyKeyNameSetting); err == nil && prev != nil && prev.Value != "" {
 		_ = store.DeleteSetting(readonlyKeyNameSetting)
 		_ = store.DeleteSetting(readonlyKeyExpiresSetting)
