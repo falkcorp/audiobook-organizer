@@ -624,10 +624,18 @@ names included), so cardinality is bounded.
 
 | Route | Permission |
 |---|---|
-| `GET /api/core/v1/events/topics` (the catalog: topics, schemas, permissions, channels) | `core:system.view` |
-| `GET /api/core/v1/outbox/consumers` (lag, pending, dead count, intake backlog; disabled modules' consumers listed with their retained backlog) | `core:system.view` |
-| `GET /api/core/v1/outbox/dead`, `POST /dead/{consumer}/{seq}/retry`, `DELETE /dead/{consumer}/{seq}` | `core:system.manage` (audited: `core.outbox.dead_retry`, `core.outbox.dead_discard`; 05-rbac §7.1) |
-| `DELETE /api/core/v1/outbox/consumers/{consumer}/backlog` (explicit purge: advance that consumer's cursors to the head; the only way a disabled module's messages are discarded) | `core:system.manage` + interactive method (audited: `core.outbox.backlog_purge`; 05-rbac §7.1) |
+| `GET /api/core/v1/events/topics` (the catalog: topics, schemas, permissions, channels) | the operator requirement (`rbac.OperatorRequirement`: every core scope of HEAD's `settings.manage` atom, so not `core:system.manage` or `core:system.view` alone) |
+| `GET /api/core/v1/outbox/consumers` (lag, pending, dead count, intake backlog; disabled modules' consumers listed with their retained backlog) | the operator requirement |
+| `GET /api/core/v1/outbox/dead`, `POST /dead/{consumer}/{seq}/retry`, `DELETE /dead/{consumer}/{seq}` | the operator requirement (audited: `core.outbox.dead_retry`, `core.outbox.dead_discard`; 05-rbac §7.1) |
+| `DELETE /api/core/v1/outbox/consumers/{consumer}/backlog` (explicit purge: advance that consumer's cursors to the head; the only way a disabled module's messages are discarded) | the operator requirement + interactive method (audited: `core.outbox.backlog_purge`; 05-rbac §7.1) |
+
+All six routes, reads and writes alike, take the operator requirement: HEAD has no such surface, and its
+nearest routes (`GET /api/v1/system/status`, `POST /api/v1/operations/v2/:id/retry`, `DELETE
+/api/v1/operations/v2/:id/record`) sit behind `settings.manage`. A custom role holding `core:system.manage`
+alone, or `core:system.view` alone, is refused on every one. Authentication off: a checker with auth off
+judges an `AllOf` without its `AuthRequired` member (05-rbac §4.11), so the auth-disabled principal holds the
+other six scopes and is admitted, as it was on HEAD's `settings.manage` routes; the purge's interactive guard
+still refuses it.
 
 ## 5E.12 Tests
 
