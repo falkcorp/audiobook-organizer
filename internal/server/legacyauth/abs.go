@@ -42,7 +42,10 @@ type AccessResolver func(ctx context.Context, c AccessClaims) (*coreauth.User, e
 // ID, Username, Email, Status, CredentialEpoch and CreatedAt. Nothing else of
 // books' User is read on those paths (no hash, no roles). It is the one
 // mapping of a core user the ABS surface makes: the password login, the
-// refresh, the A7 callback and a resolved Access person all use it.
+// refresh, the A7 callback and a resolved Access person all use it. It is a
+// deliberate subset for that surface (it carries the epoch and no roles), not
+// an account-list mapping: every list of accounts under core identity uses
+// LegacyUserFromCore (user_record.go).
 func BooksUserFromCore(u *coreauth.User) *database.User {
 	return &database.User{
 		ID:              string(u.ID),
