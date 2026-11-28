@@ -22,8 +22,10 @@ import (
 
 // The journal's live tail (05-logging §5, "Live tail"): every record the
 // journal keeps is also published, already redacted, on the bus topic
-// core.log.recorded.v1, which realtime streams to a principal holding
-// core:system.manage. The topic is declared by this package (TailSpec) and
+// core.log.recorded.v1, which realtime streams to a principal holding the
+// operator requirement (rbac.OperatorRequirement: every scope of HEAD's
+// settings.manage atom, not core:system.manage alone, which a custom role can
+// hold by itself). The topic is declared by this package (TailSpec) and
 // registered by the kernel with the hub, which is F6-03's; until then nothing
 // calls StartTail and the SPA's log view polls the query route (05-logging
 // §5, "When the surface lands").
@@ -50,11 +52,6 @@ const (
 	// mediacore_log_dropped_total{sink="journal-tail"}.
 	TailTapName = "journal-tail"
 
-	// permSystemManage is the permission that opens the tail and the query
-	// route (05-logging §5). It is AuthRequired, so with authentication off
-	// nobody holds it and the tail delivers nothing (05-logging §5, "Auth-off
-	// reach": a deliberate tightening).
-	permSystemManage rbac.Permission = "core:system.manage"
 	// permUsersView lifts the other-user rule: it is the read side of user data
 	// (05-rbac §6.1, the successor of HEAD's users.manage gate).
 	permUsersView rbac.Permission = "core:users.view"
@@ -82,14 +79,14 @@ func TailTopic() events.Topic[RecordView] { return events.NewTopic[RecordView](T
 // TailSpec is the catalog entry of core.log.recorded.v1 for the kernel to
 // declare under owner "core" (F6-03). It is a bus topic with Realtime and never
 // Durable (05-events §5E.12 TestCatalog_RejectsRealtimeOnDurable), needs
-// core:system.manage, and carries the other-user rule: a subscriber without
+// rbac.OperatorRequirement, and carries the other-user rule: a subscriber without
 // core:users.view is not sent a record otherUser flags (Visible) and sees
 // user_id blank on every record it is sent (Redact). otherUser is the
 // module-registered predicate (Registrar.LogOtherUserData); nil means no module
 // registered one, so nothing is flagged and only the blanking applies.
 func TailSpec(otherUser log.OtherUserPredicate) events.TopicSpec {
 	return TailTopic().Spec(events.TopicSpec{
-		Permission: rbac.Need(permSystemManage),
+		Permission: rbac.OperatorRequirement(),
 		Visible:    tailVisible(otherUser),
 		Redact:     tailRedact,
 		Realtime:   &events.RealtimeMeta{},

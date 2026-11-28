@@ -65,11 +65,9 @@ import (
 	"github.com/falkcorp/mediacore/rbac"
 )
 
-// permView and permManage are the scopes of the routes (05-events §5E.11).
-const (
-	permView   rbac.Permission = "core:system.view"
-	permManage rbac.Permission = "core:system.manage"
-)
+// permManage is the scope the audit records name for the three audited routes.
+// Every route's own requirement is rbac.OperatorRequirement (Register).
+const permManage rbac.Permission = "core:system.manage"
 
 // The audit actions of the three audited routes (05-rbac §7.1, `core.outbox.*`).
 const (
@@ -137,7 +135,9 @@ type api struct {
 func Register(g *httpapi.Group, op Operator, cat events.Catalog, rec audit.Logger, opts ...Option) {
 	a := newAPI(g.Base(), op, cat, rec, opts...)
 	tags := []string{"outbox"}
-	manage, view := rbac.Need(permManage), rbac.Need(permView)
+	// Every route, reads and writes, takes the operator requirement (the scopes of
+	// HEAD's settings.manage atom), not core:system.manage or core:system.view alone.
+	manage, view := rbac.OperatorRequirement(), rbac.OperatorRequirement()
 	httpapi.Handle(g, httpapi.Route{
 		Method: http.MethodGet, Path: "/outbox/dead", Name: "listDeadLetters", Perm: manage, Tags: tags,
 		Summary: "List the outbox's dead letters",

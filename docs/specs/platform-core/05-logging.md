@@ -403,8 +403,10 @@ type Schedules struct { // section core.log.schedules
   **`core:system.manage`** — the journal holds file paths, user names and provider error text, and today's
   equivalent route needs `settings.manage`, which only admin holds (`wire_system_routes.go:28,31`). The seed
   roles `editor` and `viewer` do not reach it ([05-rbac](05-rbac.md), SEC-8).
-- Live tail: realtime topic `core.log.recorded.v1`, permission `core:system.manage`, delivered by
-  [05-realtime](05-realtime.md)'s permission filter.
+- Live tail: realtime topic `core.log.recorded.v1`, permission the operator requirement
+  (`rbac.OperatorRequirement`: every core scope of HEAD's `settings.manage` atom, which HEAD's nearest route,
+  `GET /api/v1/system/logs`, required; `core:system.manage` alone, which a custom role can hold by itself, does
+  not open it), delivered by [05-realtime](05-realtime.md)'s permission filter.
 - Retention: task `core.log.journal.prune`, `tasks.Parallelism` sequential with reason "single range-delete per
   day bucket", scheduled by `tasks.ScheduleFromConfig("core.log.schedules.journal_prune")`. The key is
   owner-declared with type `tasks.ScheduleConfig` and default
@@ -416,7 +418,10 @@ type Schedules struct { // section core.log.schedules
   `core.log.journal.prune_in_window` off closes the window alone (HEAD's `maintenance.purge_old_logs`, which M2
   carries into it).
 - Auth-off reach: `core:system.manage` is `AuthRequired` ([05-rbac](05-rbac.md)), so with auth off the query
-  route and the live tail answer 401. HEAD's `GET /api/v1/system/logs` is open with auth off, because `s.perm`
+  route answers 401. (The live tail takes the operator requirement, an `AllOf` of seven scopes: a checker with
+  auth off drops its `AuthRequired` member and holds the other six, so the tail is open to the auth-disabled
+  principal, as HEAD's route was. The tightening below therefore covers the query route only, until the query
+  route takes the same requirement.) HEAD's `GET /api/v1/system/logs` is open with auth off, because `s.perm`
   passes everything in that mode (`internal/server/wire_admin_role.go:18-22`, `wire_system_routes.go:31`).
   This is a **deliberate tightening**: the journal holds file paths, user names and provider error text, and
   with auth off any peer that reaches the port would read them. It is one of the auth-off tightenings the R2
