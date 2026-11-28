@@ -24,15 +24,15 @@ package server
 //	catalog.harvest-authors             CatalogReady, CatalogScope, NewHarvester,
 //	                                    RunHarvest, FinishHarvest
 //
-// The activity trio is FlushActivityOp, EmitActivityInfo and LogActivityBatch.
-// Every method refuses by name until it is built.
+// The activity trio (FlushActivityOp, EmitActivityInfo, LogActivityBatch) is in
+// books_t7_adapter.go: reconcile.scan (group A) and the dedup kinds (group B)
+// both write through it. Every method refuses by name until it is built.
 
 import (
 	"context"
 
 	"golang.org/x/time/rate"
 
-	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/catalog"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
@@ -98,10 +98,6 @@ func (a *booksT7Writer) CreateOperationResult(_ *database.OperationResult) error
 	return booksT7NotBuilt("CreateOperationResult")
 }
 
-func (a *booksT7Writer) EmitActivityInfo(_ string, _ string, _ string, _ string, _ ...string) {
-	panic(booksT7NotBuilt("EmitActivityInfo"))
-}
-
 func (a *booksT7Writer) FetchCandidate(_ context.Context, _ *rate.Limiter, _ string, _ string, _ bool, _ bool, _ *metabatch.FolderMemo, _ bool) CandidateResult {
 	panic(booksT7NotBuilt("FetchCandidate"))
 }
@@ -110,16 +106,8 @@ func (a *booksT7Writer) FinishHarvest(_ context.Context) {
 	panic(booksT7NotBuilt("FinishHarvest"))
 }
 
-func (a *booksT7Writer) FlushActivityOp(_ string) {
-	panic(booksT7NotBuilt("FlushActivityOp"))
-}
-
 func (a *booksT7Writer) InvalidateSeriesCache() {
 	panic(booksT7NotBuilt("InvalidateSeriesCache"))
-}
-
-func (a *booksT7Writer) LogActivityBatch(_ string, _ string, _ string, _ activity.BatchItem) {
-	panic(booksT7NotBuilt("LogActivityBatch"))
 }
 
 func (a *booksT7Writer) MarkIdentDirty(_ string, _ string) bool {

@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/activity"
 	"github.com/falkcorp/audiobook-organizer/internal/aiscan"
 	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
@@ -526,4 +527,19 @@ func (a *booksT7Writer) UpdateImportPath(_ int, _ *database.ImportPath) error {
 
 func (a *booksT7Writer) WriteBackBook(_ context.Context, _ string) (int, error) {
 	return 0, booksT7NotBuilt("WriteBackBook")
+}
+
+// The activity trio is shared: reconcile.scan (group A) and dedup.author-scan,
+// series-prune and series-normalize (group B) both flush and emit through it.
+
+func (a *booksT7Writer) EmitActivityInfo(_ string, _ string, _ string, _ string, _ ...string) {
+	panic(booksT7NotBuilt("EmitActivityInfo"))
+}
+
+func (a *booksT7Writer) FlushActivityOp(_ string) {
+	panic(booksT7NotBuilt("FlushActivityOp"))
+}
+
+func (a *booksT7Writer) LogActivityBatch(_ string, _ string, _ string, _ activity.BatchItem) {
+	panic(booksT7NotBuilt("LogActivityBatch"))
 }
