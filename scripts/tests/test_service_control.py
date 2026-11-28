@@ -14,11 +14,17 @@ Run with:
 
 from __future__ import annotations
 
+import contextlib
+import os
 import sys
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import service_control_offhost as scm  # noqa: E402
 from test_make_rollback import FakeHost, guard, out, unit_state  # noqa: E402
 
 UNIT = "audiobook-organizer.service"
@@ -26,9 +32,19 @@ STOP = f"sudo -n /usr/bin/systemctl stop {UNIT}"
 START = f"sudo -n /usr/bin/systemctl start {UNIT}"
 
 
+def timeout_rules(start: str = "5min", stop: str = "1min") -> list[dict]:
+    return [
+        {
+            "match": rf"^systemctl show -p {prop} ",
+            "responses": [{"stdout": f"{prop}={value}\n", "exit": 0}],
+        }
+        for prop, value in (("TimeoutStartUSec", start), ("TimeoutStopUSec", stop))
+    ]
+
+
 class ServiceTargets(unittest.TestCase):
     def host(self, *states: dict, rules=None) -> FakeHost:
-        host = FakeHost(self, stopped=list(states), rules=rules)
+        host = FakeHost(self, stopped=list(states), rules=[*(rules or []), *timeout_rules()])
         host.h["env"]["AORG_OH_POLL_SEC"] = "0"
         host.h["env"]["AORG_OH_WAIT_SEC"] = "1"
         return host
@@ -45,7 +61,9 @@ class ServiceTargets(unittest.TestCase):
         self.assertEqual(self.sudos(host), [STOP])
         self.assertIn(f"{UNIT} is inactive", p.stdout)
         self.assertEqual(
-            sum(1 for c in host.ssh() if c.startswith("systemctl show")), 3, "look, then wait twice"
+            sum(1 for c in host.ssh() if c.startswith("systemctl show -p ActiveState")),
+            3,
+            "look, then wait twice",
         )
 
     def test_start_runs_the_one_granted_command_and_waits_until_active(self) -> None:
@@ -138,10 +156,134 @@ class ServiceTargets(unittest.TestCase):
             self.assertNotEqual(p.returncode, 0, f"{label}\n{out(p)}")
             self.assertEqual(host.ssh(), [], label)
 
+    def test_the_wait_comes_from_the_units_own_timeout_plus_a_margin(self) -> None:
+        for target, prop, now, shown, seconds_ in (
+            ("service-start", "TimeoutStartUSec", "inactive", "5min", 360),
+            ("service-stop", "TimeoutStopUSec", "active", "1min", 120),
+            ("service-start", "TimeoutStartUSec", "inactive", "1min 30s", 150),
+        ):
+            host = self.host(
+                unit_state(now),
+                rules=timeout_rules(start=shown, stop=shown),
+            )
+            host.h["env"].pop("AORG_OH_WAIT_SEC")
+            p = host.make(target, DRY_RUN="1")
+            self.assertEqual(p.returncode, 0, out(p))
+            self.assertIn(f"({prop} {shown}, so it may take up to {seconds_} s)", p.stdout)
+            self.assertIn(f"wait up to {seconds_} s for", p.stdout)
+
+    def test_a_timeout_that_cannot_be_read_changes_nothing(self) -> None:
+        for target, prop in (
+            ("service-start", "TimeoutStartUSec"),
+            ("service-stop", "TimeoutStopUSec"),
+        ):
+            now = "inactive" if target == "service-start" else "active"
+            host = self.host(
+                unit_state(now),
+                rules=[{"match": rf"^systemctl show -p {prop} ", "responses": [{"exit": 1}]}],
+            )
+            p = host.make(target)
+            self.assertNotEqual(p.returncode, 0, out(p))
+            self.assertIn(f"cannot read {prop}", out(p))
+            self.assertEqual(self.sudos(host), [])
+
+    def test_an_infinite_timeout_uses_the_fallback(self) -> None:
+        host = self.host(unit_state("inactive"), rules=timeout_rules(start="infinity"))
+        host.h["env"].pop("AORG_OH_WAIT_SEC")
+        p = host.make("service-start", DRY_RUN="1")
+        self.assertEqual(p.returncode, 0, out(p))
+        self.assertIn(f"is infinity, so {scm.FALLBACK_SEC} s", p.stdout)
+        self.assertIn(f"wait up to {scm.FALLBACK_SEC + scm.MARGIN_SEC} s", p.stdout)
+
     def test_the_commands_are_the_guards_stop_and_start_keys(self) -> None:
         o = guard.Opts(host="h", db="", bin="", unit=UNIT)
         self.assertEqual(guard.commands(o)["stop"], STOP)
         self.assertEqual(guard.commands(o)["start"], START)
+
+
+class TimespanAndLimits(unittest.TestCase):
+    def test_systemd_timespans(self) -> None:
+        for text, want in (
+            ("5min", 300),
+            ("1min 30s", 90),
+            ("250ms", 0.25),
+            ("1h 2min 3.5s", 3723.5),
+            ("90s", 90),
+            ("infinity", None),
+        ):
+            self.assertEqual(scm.timespan_seconds(text), want, text)
+        for bad in ("", "soon", "5 min", "5minutes", "-1s", "1min,30s"):
+            with self.assertRaises(ValueError, msg=bad):
+                scm.timespan_seconds(bad)
+
+    def run_main(self, what: str, states: list[str], start: str = "5min", **extra: str):
+        """main() in this process, against a guard whose ssh is canned; returns
+        (exit status, the timeouts the commands were run with, the commands)."""
+        calls: list[tuple[str, float | None]] = []
+        states = list(states)
+
+        def run_remote(host, cmd, timeout=120, stream=False):
+            calls.append((cmd, timeout))
+            if cmd.startswith("systemctl show -p ActiveState"):
+                state = states.pop(0) if len(states) > 1 else states[0]
+                return types.SimpleNamespace(rc=0, stdout=f"ActiveState={state}\n", stderr="")
+            if cmd.startswith("systemctl show -p Timeout"):
+                prop = cmd.split()[3]
+                return types.SimpleNamespace(rc=0, stdout=f"{prop}={start}\n", stderr="")
+            return types.SimpleNamespace(rc=0, stdout="", stderr="")
+
+        real = guard
+        proxy = types.SimpleNamespace(
+            Opts=real.Opts,
+            _validate=real._validate,
+            commands=real.commands,
+            clean=real.clean,
+            run_remote=run_remote,
+        )
+        env = {"AORG_OH_WHAT": what, "AORG_OH_HOST": "alfred@batcave", "AORG_OH_POLL_SEC": "0"}
+        env.update(extra)
+        keep = {k: v for k, v in os.environ.items() if not k.startswith("AORG_OH_")}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {**keep, **env}, clear=True))
+            stack.enter_context(mock.patch.object(scm, "load_guard", return_value=proxy))
+            stack.enter_context(mock.patch.object(scm.time, "sleep"))
+            rc = scm.main()
+        return rc, calls
+
+    def test_the_command_is_given_the_units_timeout_plus_the_margin(self) -> None:
+        for what, states, shown, want in (
+            ("start", ["inactive", "active"], "5min", 300 + scm.MARGIN_SEC),
+            ("stop", ["active", "inactive"], "40s", 40 + scm.MARGIN_SEC),
+        ):
+            rc, calls = self.run_main(what, states, start=shown)
+            self.assertEqual(rc, 0, what)
+            (change,) = [t for c, t in calls if c.startswith("sudo")]
+            self.assertEqual(change, want, what)
+
+    def test_the_wait_after_the_command_is_derived_unless_given(self) -> None:
+        # The unit never gets there: the wait ends after limit + margin seconds of
+        # polling, which is counted here by the monotonic clock being advanced.
+        clock = {"now": 0.0}
+
+        def monotonic() -> float:
+            clock["now"] += 1.0
+            return clock["now"]
+
+        with mock.patch.object(scm.time, "monotonic", monotonic):
+            rc, calls = self.run_main("start", ["inactive", "activating"], start="2min")
+        self.assertEqual(rc, 1)
+        looks = sum(1 for c, _ in calls if c.startswith("systemctl show -p ActiveState"))
+        # 120 + 60 clock ticks (one per loop pass, plus the deadline setup) of polling.
+        self.assertGreater(looks, 150)
+        self.assertLess(looks, 200)
+        clock["now"] = 0.0
+        with mock.patch.object(scm.time, "monotonic", monotonic):
+            rc, calls = self.run_main(
+                "start", ["inactive", "activating"], start="2min", AORG_OH_WAIT_SEC="5"
+            )
+        self.assertEqual(rc, 1)
+        looks = sum(1 for c, _ in calls if c.startswith("systemctl show -p ActiveState"))
+        self.assertLess(looks, 12)
 
 
 if __name__ == "__main__":
