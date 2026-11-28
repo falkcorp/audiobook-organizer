@@ -323,8 +323,9 @@ func (k *Kernel) services(ctx context.Context, describe bool) error {
 		return fmt.Errorf("kernel: http metrics scope: %w", err)
 	}
 	k.router = httpapi.NewRouter(httpapi.Options{
-		ServerName: serviceName,
-		OpenAPI:    httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.openAPICookieName()},
+		ServerName:     serviceName,
+		OpenAPI:        httpapi.OpenAPIOptions{Version: version.Version, CookieName: k.openAPICookieName()},
+		CoRequirements: k.cfg.RouteCoRequirements,
 	}, httpapi.Deps{Log: k.coreLog("http"), Metrics: httpScope, MeterProvider: p.MeterProvider(),
 		TracerProvider: p.TracerProvider(), Propagator: p.Propagator(), Redactor: k.redactor})
 	// Core's group claims /api/core/ now, before any module registers, so a

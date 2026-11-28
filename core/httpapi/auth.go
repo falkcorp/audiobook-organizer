@@ -105,11 +105,14 @@ func (r *Router) SetAuth(w AuthWiring) error {
 // inside stages 10 and 11 (chain.Route wraps the result) and outside the
 // handler, so a refused request never reaches it. ownerWhenSet is a legacy
 // route's LegacyRoute.OwnerWhenSet; every native, raw and Infra route passes
-// false.
-func (r *Router) authWrap(perm rbac.Requirement, guards Guards, ownerWhenSet bool, route string, h http.Handler) http.Handler {
+// false. cos are the route's co-requirements (routeEntry.coRules; nil for a
+// legacy route): stage 13 judges each that applies to a request beside perm,
+// never merged into it (AuthzRequest.CoPerms).
+func (r *Router) authWrap(perm rbac.Requirement, cos []coRule, guards Guards, ownerWhenSet bool, route string, h http.Handler) http.Handler {
 	o := r.auth.opts
 	o.Route = route
 	o.ownerWhenSet = ownerWhenSet
+	o.coRules = cos
 	s13, err := Stage13(perm, guards, o)
 	if err != nil {
 		// Unreachable: SetAuth always sets ClearCookie. Refuse everything

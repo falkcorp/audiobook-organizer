@@ -265,7 +265,15 @@ func (k *Kernel) describeIdentity() error {
 	if err != nil {
 		return fmt.Errorf("kernel: describe: the admin review: %w", err)
 	}
-	if err := k.router.SetAuth(httpapi.AuthWiring{Service: inertAuthenticator{}, ResolveAtom: k.cfg.ResolveAtom}); err != nil {
+	// The catalog is core's scopes and the declared permissions of every
+	// manifest (earlyCatalog, as the real boot's importer reads it): Build
+	// checks the co-requirements' scopes against it, and a Describe that
+	// skipped the check could generate a document for a boot that would refuse.
+	cat, err := earlyCatalog(k.identityModules())
+	if err != nil {
+		return fmt.Errorf("kernel: describe: %w", err)
+	}
+	if err := k.router.SetAuth(httpapi.AuthWiring{Service: inertAuthenticator{}, ResolveAtom: k.cfg.ResolveAtom, Catalog: cat}); err != nil {
 		return fmt.Errorf("kernel: describe: stages 12 and 13: %w", err)
 	}
 	return mountIdentityRoutes(k.router, identityRoutes{

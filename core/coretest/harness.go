@@ -27,6 +27,7 @@ import (
 
 	"github.com/falkcorp/mediacore/app"
 	"github.com/falkcorp/mediacore/coretest/logcapture"
+	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/internal/bootseam"
 	"github.com/falkcorp/mediacore/kernel"
 	"github.com/falkcorp/mediacore/module"
@@ -76,7 +77,8 @@ type settings struct {
 	disabled []module.ID
 	config   map[string]any
 	users    map[string][]rbac.Permission
-	runs     []bootseam.TaskRunSeed // WithRuns
+	runs     []bootseam.TaskRunSeed  // WithRuns
+	coReqs   []httpapi.CoRequirement // WithRouteCoRequirements
 }
 
 // WithModules adds modules to the App, in order. With none, the harness boots
@@ -106,6 +108,16 @@ func WithConfig(kv map[string]any) Option {
 		}
 		maps.Copy(s.config, kv)
 	}
+}
+
+// WithRouteCoRequirements is app.Options.RouteCoRequirements: requirements the
+// router ANDs onto a core route's own, route-wide or for one value of a path
+// wildcard (narrowing only). It
+// reaches the App through the same kernel path an app's map takes, so a boot
+// that refuses an entry fails the test, and a later call replaces an earlier
+// one. The scopes it names must be declared by a module passed to WithModules.
+func WithRouteCoRequirements(c []httpapi.CoRequirement) Option {
+	return func(s *settings) { s.coReqs = slices.Clone(c) }
 }
 
 // WithUser pre-seeds a principal named name holding exactly perms: a stored
@@ -244,7 +256,8 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 		// needs core's store and a declared identity boot makes the kernel
 		// want one (kernel.Config.WantsStore), so an App of zero or
 		// storage-less modules gets the in-memory store too.
-		IdentityBoot: true,
+		IdentityBoot:        true,
+		RouteCoRequirements: s.coReqs,
 	}
 	// TaskRuns (WithRuns): the kernel inserts them at P4c, before the tasks
 	// start rule looks for stored runs. Built hands the harness the kernel,

@@ -168,6 +168,18 @@ type routeEntry struct {
 	route   Route
 	handler http.Handler
 	errs    []error // registration errors found at Handle time
+	// co is the app's co-requirement for this route (Options.CoRequirements),
+	// set by Build and kept apart from info.Perm so checkPerm (R6) keeps
+	// judging the route's own requirement. Stage 13 judges info.Perm and co
+	// one after the other; perm() is the two ANDed, for display only. It is
+	// written under Router.mu, so a reader outside the lock reads perm()
+	// from routeSnapshot, never e.co.
+	co rbac.Requirement
+	// coBy are the per-value co-requirements (CoRequirement.Param/Value):
+	// each applies only to the requests whose path wildcard has its value, and
+	// is judged beside co, after the route's own requirement. Written by Build
+	// under Router.mu like co; Routes reads a copy taken under it.
+	coBy []coRule
 
 	// native routes only
 	binding   *binding

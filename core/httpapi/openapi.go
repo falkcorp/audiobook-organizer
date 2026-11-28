@@ -41,7 +41,8 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 		types[name], schemas[name] = t, s
 	}
 	var ops []openapi.Operation
-	for _, e := range r.routeSnapshot() {
+	for _, snap := range r.routeSnapshot() {
+		e := snap.entry
 		if e.info.Owner != owner || (e.info.Kind != RouteKindNative && e.info.Kind != RouteKindRaw) || len(e.errs) > 0 {
 			continue
 		}
@@ -52,10 +53,13 @@ func (r *Router) OpenAPI(owner string) (*openapi.Document, error) {
 			Summary:       e.route.Summary,
 			Description:   e.route.Doc,
 			Tags:          e.route.Tags,
-			Permission:    e.info.Perm.String(),
+			Permission:    snap.perm.String(),
 			Public:        e.info.Perm.Kind() == rbac.KindPublic,
 			Guards:        guardNames(e.info.Guards),
 			SuccessStatus: e.status,
+		}
+		for _, c := range snap.coBy {
+			op.CoRequirements = append(op.CoRequirements, openapi.CoRequirement{Param: c.param, Value: c.value, Permission: c.need.String()})
 		}
 		params := e.rawParams
 		if e.binding != nil {
