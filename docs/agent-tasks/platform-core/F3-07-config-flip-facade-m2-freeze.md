@@ -225,7 +225,8 @@ grep -rn 'ConfigUpdate\|configupdate' internal/serviceregistry/keys.go internal/
   (`DATABASE_PATH` or HEAD's flat file key), the kernel's P2 refuses to create a store and nothing is written (14 K15).
 - `TestCutoverRefusedByOlderBuilds`: R0's binary and the pre-freeze release's binary each refuse an R2 store and a store
   killed after M7, exit 78, nothing written; the test asserts that **both** owners' stamps (`books` and `core`) are
-  raised to this build's levels (F4-08 adds the mid-M3 cell).
+  raised to this build's levels (F4-08's mid-M3 cell is
+  `TestMidM3_OlderBuildRefusesBeforeAnyWrite` in `internal/books/midm3_test.go`).
 - `TestAuthSwitch_MoreRestrictiveWins` (05-authn §10, with 05-config): stored `required` + operator `disabled` → auth on,
   warned and reported in health; stored `disabled` + operator `required` → auth on; the same for the Basic gate's
   `enabled`; a set retired `ENABLE_AUTH` or `BASIC_AUTH_ENABLED` refuses boot naming the canonical variable.
