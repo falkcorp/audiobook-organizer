@@ -505,7 +505,7 @@ func (r *Router) buildLegacy(mux *http.ServeMux) []error {
 			// The members share Perm, Guards and OwnAuth (sameRequirements),
 			// so the first speaks for all. An OwnAuth route authenticates
 			// itself and never meets stages 12 and 13.
-			mh = r.authWrap(first.Perm, first.Guards, first.OwnerWhenSet, first.Method+" "+reg.pat.path(), mh)
+			mh = r.authWrap(first.Perm, rbac.Requirement{}, first.Guards, first.OwnerWhenSet, first.Method+" "+reg.pat.path(), mh)
 		}
 		h := gateRoute{Handler: r.legacyHandler(reg.pat.String(), reg.admits, mh, spec), facts: legacyGateFacts(reg, m)}
 		if err := register(mux, reg.pat.String(), h); err != nil {

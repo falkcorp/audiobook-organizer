@@ -189,10 +189,12 @@ type RouteInfo struct {
 	OwnAuth    bool      // legacy route authenticated by its own (ABS) authenticator (§8.2)
 	AuthMethod string    // the auth method an OwnAuth route names (§8.2)
 	// CoPerm is the app-declared co-requirement (Options.CoRequirements) that
-	// Routes ANDs into Perm: Perm is then AllOf(the route's own permissions plus
-	// CoPerm's), the requirement stage 13 judges and OpenAPI documents. The zero
-	// Requirement when the route has none, and always zero in the RouteInfo
-	// Handle recorded and R6's checkPerm judges.
+	// Routes ANDs into Perm for display: Perm is then AllOf(the route's own
+	// permissions plus CoPerm's), what OpenAPI documents. Stage 13 does not
+	// judge that AllOf: it judges the route's own requirement and CoPerm one
+	// after the other, so the AND never widens access (AuthzRequest.CoPerm).
+	// The zero Requirement when the route has none, and always zero in the
+	// RouteInfo Handle recorded and R6's checkPerm judges.
 	CoPerm rbac.Requirement
 }
 
@@ -673,11 +675,24 @@ func (r *Router) Routes() iter.Seq[RouteInfo] {
 	}
 }
 
-// routeSnapshot is the registered routes at the time of the call.
-func (r *Router) routeSnapshot() []*routeEntry {
+// routeSnap is one registered route and the requirement it displays, both
+// read under r.mu.
+type routeSnap struct {
+	entry *routeEntry
+	perm  rbac.Requirement // entry.perm(), captured with the lock held (entry.co is written by Build)
+}
+
+// routeSnapshot is the registered routes at the time of the call, each with
+// its displayed requirement captured under r.mu so a concurrent Build cannot
+// race a reader of the co-requirement.
+func (r *Router) routeSnapshot() []routeSnap {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return slices.Clone(r.routes)
+	out := make([]routeSnap, len(r.routes))
+	for i, e := range r.routes {
+		out[i] = routeSnap{entry: e, perm: e.perm()}
+	}
+	return out
 }
 
 // Build validates every registration (05-http-api §5 step 3), registers the
@@ -903,7 +918,7 @@ func register(mux *http.ServeMux, pattern string, h http.Handler) (err error) {
 func (r *Router) wrapRoute(e *routeEntry) http.Handler {
 	h := e.handler
 	if r.authRuns(e) {
-		h = r.authWrap(e.perm(), e.info.Guards, false, routeLabel(e.info), h)
+		h = r.authWrap(e.info.Perm, e.co, e.info.Guards, false, routeLabel(e.info), h)
 	}
 	return r.chain.Route(httpmw.RouteSpec{
 		Pattern: e.info.Pattern,

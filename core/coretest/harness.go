@@ -76,7 +76,8 @@ type settings struct {
 	disabled []module.ID
 	config   map[string]any
 	users    map[string][]rbac.Permission
-	runs     []bootseam.TaskRunSeed // WithRuns
+	runs     []bootseam.TaskRunSeed      // WithRuns
+	coReqs   map[string]rbac.Requirement // WithRouteCoRequirements
 }
 
 // WithModules adds modules to the App, in order. With none, the harness boots
@@ -106,6 +107,15 @@ func WithConfig(kv map[string]any) Option {
 		}
 		maps.Copy(s.config, kv)
 	}
+}
+
+// WithRouteCoRequirements is app.Options.RouteCoRequirements: core route name
+// to a requirement the router ANDs onto the route's own (narrowing only). It
+// reaches the App through the same kernel path an app's map takes, so a boot
+// that refuses an entry fails the test, and a later call replaces an earlier
+// one. The scopes it names must be declared by a module passed to WithModules.
+func WithRouteCoRequirements(m map[string]rbac.Requirement) Option {
+	return func(s *settings) { s.coReqs = maps.Clone(m) }
 }
 
 // WithUser pre-seeds a principal named name holding exactly perms: a stored
@@ -244,7 +254,8 @@ func boot(t testing.TB, fs *storage.FS, stateDir string, opts []Option) (*Harnes
 		// needs core's store and a declared identity boot makes the kernel
 		// want one (kernel.Config.WantsStore), so an App of zero or
 		// storage-less modules gets the in-memory store too.
-		IdentityBoot: true,
+		IdentityBoot:        true,
+		RouteCoRequirements: s.coReqs,
 	}
 	// TaskRuns (WithRuns): the kernel inserts them at P4c, before the tasks
 	// start rule looks for stored runs. Built hands the harness the kernel,

@@ -506,3 +506,179 @@ func TestCoRequirement_AuditEventsAreNotWidened(t *testing.T) {
 		t.Fatalf("audit = %+v, want one core.permission.deny of %s", evs, cqBooks)
 	}
 }
+
+// cqCatalog is s13Catalog plus extra specs (an AuthRequired books scope, a
+// Sensitive one, ...), for cells that need a flag the shared catalog sets on
+// no books scope.
+func cqCatalog(t *testing.T, extra ...rbac.PermissionSpec) *rbac.Catalog {
+	t.Helper()
+	specs := rbac.CoreScopes()
+	for _, n := range []string{"view", "integrations.manage", "settings.manage", "admin.view"} {
+		specs = append(specs, rbac.PermissionSpec{Name: rbac.Permission("books:" + n), Title: n, Description: "books " + n})
+	}
+	cat, err := rbac.NewCatalog(append(specs, extra...)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cat
+}
+
+// doAs sends one request carrying p as the principal stage 12 bound.
+func (rg *cqRig) doAs(method, path string, p *auth.Principal) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, "/api/core/v1"+path, nil)
+	req.RemoteAddr = "192.0.2.10:4000"
+	req = req.WithContext(auth.WithPrincipal(req.Context(), p))
+	rec := httptest.NewRecorder()
+	rg.h.ServeHTTP(rec, req)
+	return rec
+}
+
+// cqAnswer is a response reduced to what must not change when a map is added:
+// status, problem code and detail, without the per-request id.
+func cqAnswer(rec *httptest.ResponseRecorder) string {
+	return rec.Result().Status + " " + cqNoRequestID(rec.Body.String())
+}
+
+// TestCoRequirement_AuthDisabledIsNotWidened is the blocker of review round 1.
+// The auth-disabled checker drops the AuthRequired members of an AllOf and
+// refuses one made only of them (05-rbac 4.11). A route whose own requirement
+// is entirely AuthRequired therefore refuses auth-off today; stage 13 judging
+// ONE merged AllOf(own + co) would drop the AuthRequired members, keep the
+// co-scope, and admit it. Judged apart (AuthzRequest.CoPerm) the answer is the
+// one the route gave with no map. Every route here is refused 403
+// interactive_required with and without a co-requirement, and the handler is
+// never reached.
+func TestCoRequirement_AuthDisabledIsNotWidened(t *testing.T) {
+	cat := cqCatalog(t, rbac.PermissionSpec{Name: "books:audit.export", Title: "x", Description: "x", AuthRequired: true})
+	off := s13AuthOff(cat)
+	for _, c := range []struct {
+		name string
+		own  rbac.Requirement
+	}{
+		{"audit.view alone (audithttp listAudit and exportAudit)", rbac.Need("core:audit.view")},
+		{"system.manage alone (loghttp)", rbac.Need("core:system.manage")},
+		{"two AuthRequired scopes", rbac.AllOf("core:audit.view", "core:system.manage")},
+		{"core:admin alone", rbac.Need(rbac.CoreAdmin)},
+	} {
+		for _, co := range []rbac.Requirement{rbac.Need(cqBooks), rbac.AllOf(cqBooks, "books:view")} {
+			t.Run(c.name+" with co "+co.String(), func(t *testing.T) {
+				build := func(m map[string]rbac.Requirement) *cqRig {
+					rg, err := cqBuildWith(t, m, false, cat, func(rg *cqRig, r *Router) {
+						Handle(r.CoreGroup(), Route{Method: http.MethodPost, Path: "/strict", Name: "strictThing", Perm: c.own},
+							func(context.Context, *In[struct{}]) (raOut, error) { rg.reached.Add(1); return raOut{OK: true}, nil })
+					})
+					if err != nil {
+						t.Fatalf("Build: %v", err)
+					}
+					return rg
+				}
+				without, with := build(nil), build(cqCoReq("strictThing", co))
+				want, got := without.doAs(http.MethodPost, "/strict", off), with.doAs(http.MethodPost, "/strict", off)
+				if want.Code != http.StatusForbidden {
+					t.Fatalf("with no map the auth-disabled principal got %d, want 403 (the premise of the cell)", want.Code)
+				}
+				if cqAnswer(got) != cqAnswer(want) {
+					t.Errorf("auth-disabled with the co-requirement: %s, want the no-map answer %s", cqAnswer(got), cqAnswer(want))
+				}
+				if p := s13Problem(t, got); p.Code != "interactive_required" {
+					t.Errorf("problem code %q, want interactive_required (AuthOffRefusal)", p.Code)
+				}
+				if with.reached.Load() != 0 || without.reached.Load() != 0 {
+					t.Error("the handler was reached by the auth-disabled principal")
+				}
+			})
+		}
+	}
+}
+
+// TestCoRequirement_AuthDisabledOnTheB3aShape: the route B3-a will narrow (own
+// Need(core:integrations.manage), co a books scope) answers the auth-disabled
+// principal exactly as it does with no map: the own scope is not AuthRequired,
+// the principal holds both scopes, and the co-requirement adds nothing here.
+// An AuthRequired-only co-requirement, by contrast, refuses it: stricter,
+// which is the direction a co-requirement may move.
+func TestCoRequirement_AuthDisabledOnTheB3aShape(t *testing.T) {
+	cat := cqCatalog(t, rbac.PermissionSpec{Name: "books:audit.export", Title: "x", Description: "x", AuthRequired: true})
+	off := s13AuthOff(cat)
+	build := func(m map[string]rbac.Requirement) *cqRig {
+		rg, err := cqBuildWith(t, m, false, cat)
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		return rg
+	}
+	base := build(nil)
+	want := base.doAs(http.MethodPost, "/manage", off)
+	if want.Code != http.StatusOK {
+		t.Fatalf("with no map the auth-disabled principal got %d on the B3-a shape, want 200", want.Code)
+	}
+	if got := build(cqCoReq("manageThing", rbac.Need(cqBooks))).doAs(http.MethodPost, "/manage", off); cqAnswer(got) != cqAnswer(want) {
+		t.Errorf("B3-a shape, auth-disabled: %s, want the no-map answer %s", cqAnswer(got), cqAnswer(want))
+	}
+	strict := build(cqCoReq("manageThing", rbac.Need("books:audit.export")))
+	got := strict.doAs(http.MethodPost, "/manage", off)
+	if got.Code != http.StatusForbidden || s13Problem(t, got).Code != "interactive_required" {
+		t.Errorf("an AuthRequired-only co-scope: auth-disabled got %d %s, want 403 interactive_required", got.Code, got.Body)
+	}
+	if strict.reached.Load() != 0 {
+		t.Error("the handler was reached")
+	}
+}
+
+// TestAuthorize_CoPerm pins the Authorize contract of AuthzRequest.CoPerm
+// apart from the router: judged after Perm, never merged into it, never
+// resolved as an atom, and never read as Public.
+func TestAuthorize_CoPerm(t *testing.T) {
+	cat := cqCatalog(t, rbac.PermissionSpec{Name: "books:audit.export", Title: "x", Description: "x", AuthRequired: true})
+	opts := AuthzOptions{Catalog: cat, ResolveAtom: s13Resolver}
+	both, coreOnly := s13Session(cat, cqCore, cqBooks), s13Session(cat, cqCore)
+	own := rbac.Need(cqCore)
+	for _, c := range []struct {
+		name string
+		req  AuthzRequest
+		want s13Want
+	}{
+		{"both admitted", AuthzRequest{Perm: own, CoPerm: rbac.Need(cqBooks), Principal: both}, s13Want{0, "", "", false}},
+		{"the co scope is named when only it is missing", AuthzRequest{Perm: own, CoPerm: rbac.Need(cqBooks), Principal: coreOnly}, s13Want{403, "permission_denied", string(cqBooks), false}},
+		{"Perm is judged first: its scope is named when both are missing", AuthzRequest{Perm: own, CoPerm: rbac.Need(cqBooks), Principal: s13Session(cat, "core:users.view")}, s13Want{403, "permission_denied", string(cqCore), false}},
+		{"no co-requirement is the old behaviour", AuthzRequest{Perm: own, Principal: coreOnly}, s13Want{0, "", "", false}},
+		{"a Public Perm with a CoPerm needs a principal", AuthzRequest{Perm: rbac.Public, CoPerm: rbac.Need(cqBooks)}, s13Want{401, "authentication_required", "", false}},
+		{"a Public Perm with a CoPerm still judges it", AuthzRequest{Perm: rbac.Public, CoPerm: rbac.Need(cqBooks), Principal: coreOnly}, s13Want{403, "permission_denied", string(cqBooks), false}},
+		{"a CoPerm that is not AllOf is refused", AuthzRequest{Perm: own, CoPerm: rbac.AnyOf(cqBooks, "books:view"), Principal: both}, s13Want{403, "permission_denied", "", false}},
+		{"a CoPerm atom is not resolved", AuthzRequest{Perm: own, CoPerm: rbac.LegacyAtom("users.manage"), Principal: both}, s13Want{403, "permission_denied", "", false}},
+		{"a CoPerm of AnyAuthenticated is refused", AuthzRequest{Perm: own, CoPerm: rbac.AnyAuthenticated, Principal: both}, s13Want{403, "permission_denied", "", false}},
+		{"auth-off, AuthRequired Perm, plain CoPerm: refused", AuthzRequest{Perm: rbac.Need("core:audit.view"), CoPerm: rbac.Need(cqBooks), Principal: s13AuthOff(cat)}, s13Want{403, "interactive_required", "", false}},
+		{"auth-off, plain Perm, plain CoPerm: admitted", AuthzRequest{Perm: own, CoPerm: rbac.Need(cqBooks), Principal: s13AuthOff(cat)}, s13Want{0, "", "", false}},
+		{"auth-off, plain Perm, AuthRequired CoPerm: refused", AuthzRequest{Perm: own, CoPerm: rbac.Need("books:audit.export"), Principal: s13AuthOff(cat)}, s13Want{403, "interactive_required", "", false}},
+	} {
+		t.Run(c.name, func(t *testing.T) { s13Check(t, Authorize(c.req, opts), c.want) })
+	}
+}
+
+// TestCoRequirement_OpenAPIAndBuildDoNotRace: Build writes each entry's
+// co-requirement under r.mu and OpenAPI reads its displayed requirement from
+// routeSnapshot's locked capture, not from the entry after the lock is gone.
+// Run with -race: reading e.co outside the lock is a reported data race.
+func TestCoRequirement_OpenAPIAndBuildDoNotRace(t *testing.T) {
+	rg, err := cqBuild(t, cqCoReq("manageThing", rbac.Need(cqBooks)))
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			if _, err := rg.r.Build(); err != nil {
+				t.Errorf("Build: %v", err)
+				return
+			}
+		}
+	}()
+	for range 50 {
+		if _, err := rg.r.OpenAPI("core"); err != nil {
+			t.Errorf("OpenAPI: %v", err)
+			break
+		}
+	}
+	<-done
+}

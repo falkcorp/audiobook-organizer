@@ -20,9 +20,16 @@ import (
 // so core cannot say "and the app's books:integrations.manage too". The app
 // says it: Options.CoRequirements maps a core route's Name to a requirement
 // the router ANDs onto the route's own. The effect is one rule, narrowing
-// only:
+// only: a request is admitted when the route's own requirement admits it AND
+// the co-requirement does, each judged on its own by stage 13
+// (AuthzRequest.CoPerm after Perm).
 //
-//	effective(route) = AllOf(route's own permissions ∪ the co-requirement's)
+// The two are judged SEPARATELY, never as one merged AllOf. The auth-disabled
+// checker drops the AuthRequired members of an AllOf before judging it
+// (05-rbac §4.11) and refuses one made only of them, so a merged AllOf of an
+// AuthRequired-only own requirement and a co-scope that is not AuthRequired
+// would admit the auth-disabled principal the own requirement refuses: the
+// co-requirement would widen. Judged apart, it cannot.
 //
 // It is never an OR and never a replacement, so it can only refuse a request
 // the route alone would have admitted. R6 is untouched: checkPerm still judges
@@ -51,10 +58,12 @@ var (
 	ErrCoRequirementUnregistered = errors.New("httpapi: route co-requirement names a scope the catalog has not registered")
 )
 
-// perm is the requirement stage 13 judges, OpenAPI documents and Routes
-// reports for e: its own, ANDed with the app's co-requirement when it has
-// one. checkPerm and every other reader of the route's own requirement keep
-// e.info.Perm.
+// perm is the requirement OpenAPI documents and Routes reports for e: its
+// own, ANDed with the app's co-requirement when it has one. It is DISPLAY
+// only. Stage 13 never judges it: it judges e.info.Perm and e.co one after
+// the other (AuthzRequest.CoPerm), because one merged AllOf would widen
+// access for the auth-disabled principal. checkPerm and every other reader of
+// the route's own requirement keep e.info.Perm.
 func (e *routeEntry) perm() rbac.Requirement {
 	if e.co.IsZero() {
 		return e.info.Perm
@@ -62,9 +71,9 @@ func (e *routeEntry) perm() rbac.Requirement {
 	return combineRequirements(e.info.Perm, e.co)
 }
 
-// combineRequirements is AllOf(own ∪ co) for two AllOf requirements. For any
-// other input it returns the zero Requirement, which stage 13 refuses
-// (resolve): a pair this cannot AND fails closed, never open.
+// combineRequirements is AllOf(own ∪ co) for two AllOf requirements, for
+// display only (perm). For any other input it returns the zero Requirement,
+// which no reader judges: a pair this cannot AND displays as nothing.
 func combineRequirements(own, co rbac.Requirement) rbac.Requirement {
 	if own.Kind() != rbac.KindAllOf || co.Kind() != rbac.KindAllOf {
 		return rbac.Requirement{}
@@ -78,10 +87,11 @@ func isCoreRoute(e *routeEntry) bool {
 	return e.info.Owner == "core" && (e.info.Kind == RouteKindNative || e.info.Kind == RouteKindRaw)
 }
 
-// applyCoRequirements resets every route's co-requirement and sets it from
-// Options.CoRequirements, returning one error per problem found (a Build that
-// ran before leaves nothing behind). The catalog is the one SetAuth gave
-// stage 13; r.mu is held.
+// applyCoRequirements sets each route's co-requirement from
+// Options.CoRequirements (cloned at NewRouter, so it cannot change between
+// Builds and a second Build sets the same ones), returning one error per
+// problem found; a bad entry is never attached. The catalog is the one
+// SetAuth gave stage 13; r.mu is held.
 //
 // A co-requirement attaches to EVERY route entry carrying the name, not the
 // first one found: the router has no second mount of a route (a core route
@@ -89,9 +99,6 @@ func isCoreRoute(e *routeEntry) bool {
 // future alias or versioned mount ever carry the name, it gets the
 // co-requirement too instead of becoming the way around it.
 func (r *Router) applyCoRequirements() []error {
-	for _, e := range r.routes {
-		e.co = rbac.Requirement{}
-	}
 	if len(r.opts.CoRequirements) == 0 {
 		return nil
 	}
