@@ -35,6 +35,14 @@ import (
 // one place every secret write passes; this mount deliberately adds no
 // kernel-side gate so the follow-up is that one edit.
 func mountIntegrationRoutes(g *httpapi.Group, s *integrationsServices) {
+	holds, rec := s.routeCollaborators()
+	integrationhttp.Register(g, s.registry, holds, rec)
+}
+
+// routeCollaborators are the hold releaser and audit logger the integration
+// routes take, each an untyped nil when its service is absent (a nil pointer
+// inside the interface would pass the route package's nil check).
+func (s *integrationsServices) routeCollaborators() (integrationhttp.HoldReleaser, audit.Logger) {
 	var holds integrationhttp.HoldReleaser
 	if !isNil(s.providerhttp) {
 		holds = s.providerhttp
@@ -43,7 +51,7 @@ func mountIntegrationRoutes(g *httpapi.Group, s *integrationsServices) {
 	if !isNil(s.in.Audit) {
 		rec = s.in.Audit
 	}
-	integrationhttp.Register(g, s.registry, holds, rec)
+	return holds, rec
 }
 
 // mountLibraryRoutes registers GET /api/core/v1/library/browse through
