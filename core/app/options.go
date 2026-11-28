@@ -168,15 +168,17 @@ type Options struct {
 	ResolveAtom httpapi.AtomResolver
 
 	// RouteCoRequirements maps the Name of a core route to a requirement the
-	// router ANDs onto the route's own: the effective requirement is
-	// AllOf(the route's own permissions plus the co-requirement's), so it can
-	// only narrow access, never widen or replace it. It is how an app asks of a
+	// router ANDs onto the route's own: a request is admitted only when the
+	// route's own requirement admits it and then the co-requirement does, each
+	// judged on its own, so it can only narrow access, never widen or replace
+	// it. It is how an app asks of a
 	// core route a scope of its own namespace, which core's R6 does not let a
 	// core route name (ABO: books:integrations.manage on the integrations manage
 	// routes, 05-rbac §6.1). Boot is refused, with an httpapi.ErrCoRequirement*
 	// error, for an entry that names no core route, is not AllOf or Need, names
-	// Public, AnyAuthenticated, core:admin or a core-namespace scope, or names a
-	// scope the rbac catalog has not registered. Read by an identity boot
+	// Public, AnyAuthenticated, core:admin or a core-namespace scope, names a
+	// scope the catalog flags Sensitive or Confining, or names a scope the rbac
+	// catalog has not registered. Read by an identity boot
 	// (IdentityBoot) and by Describe; nil, the default, changes nothing.
 	RouteCoRequirements map[string]rbac.Requirement
 

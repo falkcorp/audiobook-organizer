@@ -52,6 +52,15 @@ var (
 	// AnyAuthenticated, core:admin or a scope of a namespace core owns. A
 	// co-requirement is the app's to add; core's own scopes are the route's.
 	ErrCoRequirementScope = errors.New("httpapi: route co-requirement names a scope core owns")
+	// ErrCoRequirementRestricted is a co-scope the catalog flags Sensitive or
+	// Confining. A Sensitive scope is held by no API key without an
+	// interactive method (05-rbac 4.4), so a co-requirement on one would
+	// refuse an administrator's key on a route its own requirement admits;
+	// a Confining scope is held only by a principal that holds nothing else.
+	// Refused to keep the feature narrow and predictable: a co-requirement
+	// is an ordinary app scope. (AuthRequired is allowed: it only narrows the
+	// auth-disabled principal.)
+	ErrCoRequirementRestricted = errors.New("httpapi: route co-requirement names a Sensitive or Confining scope")
 	// ErrCoRequirementUnregistered is a scope the rbac catalog does not
 	// declare, or a boot with no catalog to check against: a scope nobody can
 	// hold would lock the route for everyone, and a typo would pass silently.
@@ -139,8 +148,8 @@ func (r *Router) applyCoRequirements() []error {
 }
 
 // checkCoRequirement reports why co cannot be the co-requirement of the route
-// name: it must be AllOf or Need over scopes that are the app's (not core's)
-// and that cat declares.
+// name: it must be AllOf or Need over scopes that are the app's (not core's),
+// that cat declares, and that cat does not flag Sensitive or Confining.
 func checkCoRequirement(name string, co rbac.Requirement, cat *rbac.Catalog) []error {
 	switch co.Kind() {
 	case rbac.KindAllOf:
@@ -159,9 +168,22 @@ func checkCoRequirement(name string, co rbac.Requirement, cat *rbac.Catalog) []e
 		if cat == nil {
 			errs = append(errs, fmt.Errorf("%w: %w: %q requires %s and the router has no catalog to check it against",
 				ErrCoRequirementUnregistered, ErrUnknownScope, name, p))
-		} else if _, ok := cat.Lookup(p); !ok {
+		} else if spec, ok := cat.Lookup(p); !ok {
 			errs = append(errs, fmt.Errorf("%w: %w: %q requires %s", ErrCoRequirementUnregistered, ErrUnknownScope, name, p))
+		} else if spec.Sensitive || spec.Confining {
+			errs = append(errs, fmt.Errorf("%w: %q requires %s, which the catalog marks %s", ErrCoRequirementRestricted, name, p, restrictedFlags(spec)))
 		}
 	}
 	return errs
+}
+
+// restrictedFlags names the refused flags of spec for the error.
+func restrictedFlags(spec rbac.PermissionSpec) string {
+	switch {
+	case spec.Sensitive && spec.Confining:
+		return "Sensitive and Confining"
+	case spec.Sensitive:
+		return "Sensitive"
+	}
+	return "Confining"
 }

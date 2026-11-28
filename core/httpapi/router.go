@@ -100,14 +100,16 @@ type Options struct {
 	// metrics.Options.ServiceName (ABO: "audiobook-organizer"; default: AppID).
 	ServerName string
 	// CoRequirements maps the Name of a core route to a requirement the router
-	// ANDs onto the route's own: the effective requirement is AllOf(the route's
-	// own permissions plus the co-requirement's). It is how an app narrows a
-	// core route to its own scopes, which core's R6 forbids a core route to name
+	// ANDs onto the route's own: a request is admitted only when the route's
+	// own requirement admits it and then the co-requirement does, each judged
+	// on its own (AuthzRequest.CoPerm). It is how an app narrows a core route
+	// to its own scopes, which core's R6 forbids a core route to name
 	// (app.Options.RouteCoRequirements). Build refuses an entry that names no
 	// core route, is not AllOf or Need, names Public, AnyAuthenticated,
-	// core:admin or a core-namespace scope, or names a scope the catalog SetAuth
-	// was given does not declare (ErrCoRequirement*). nil or empty changes
-	// nothing. Read at Build; SetPerimeter ignores it.
+	// core:admin or a core-namespace scope, names a scope the catalog flags
+	// Sensitive or Confining, or names a scope the catalog SetAuth was given
+	// does not declare (ErrCoRequirement*). nil or empty changes nothing.
+	// Read at Build; SetPerimeter ignores it.
 	CoRequirements map[string]rbac.Requirement
 }
 

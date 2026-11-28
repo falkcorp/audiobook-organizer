@@ -682,3 +682,47 @@ func TestCoRequirement_OpenAPIAndBuildDoNotRace(t *testing.T) {
 	}
 	<-done
 }
+
+// TestCoRequirement_RefusesRiskyCoScopes: boot refuses a co-scope the catalog
+// flags Sensitive or Confining, with ErrCoRequirementRestricted. A Sensitive
+// co-scope would refuse an administrator's API key on a route the own
+// requirement admits; a Confining one is held only by a principal that holds
+// nothing else. The shared test catalog sets neither flag on any books scope
+// beyond the one Confining worker, so these cells use their own. An
+// AuthRequired-only co-scope is allowed (it narrows auth-off, see
+// TestCoRequirement_AuthDisabledOnTheB3aShape), and so is an unflagged one.
+func TestCoRequirement_RefusesRiskyCoScopes(t *testing.T) {
+	cat := cqCatalog(t,
+		rbac.PermissionSpec{Name: "books:vault.open", Title: "v", Description: "v", Sensitive: true},
+		rbac.PermissionSpec{Name: "books:fingerprint.worker", Title: "w", Description: "w", Confining: true},
+		rbac.PermissionSpec{Name: "books:audit.export", Title: "x", Description: "x", AuthRequired: true},
+	)
+	for _, c := range []struct {
+		name string
+		co   rbac.Requirement
+		ok   bool
+	}{
+		{"Sensitive", rbac.Need("books:vault.open"), false},
+		{"Confining", rbac.Need("books:fingerprint.worker"), false},
+		{"Sensitive beside an ordinary scope", rbac.AllOf(cqBooks, "books:vault.open"), false},
+		{"Confining beside an ordinary scope", rbac.AllOf(cqBooks, "books:fingerprint.worker"), false},
+		{"AuthRequired only", rbac.Need("books:audit.export"), true},
+		{"an ordinary scope", rbac.Need(cqBooks), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rg, err := cqBuildWith(t, cqCoReq("manageThing", c.co), false, cat)
+			if c.ok {
+				if err != nil {
+					t.Fatalf("Build refused %s: %v", c.co, err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrCoRequirementRestricted) {
+				t.Fatalf("Build: err = %v, want ErrCoRequirementRestricted", err)
+			}
+			if rg.h != nil {
+				t.Error("Build returned a handler with its error")
+			}
+		})
+	}
+}
