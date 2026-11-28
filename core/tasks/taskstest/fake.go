@@ -189,6 +189,9 @@ func (f *FakeRun) Restore(name string, v any) (bool, error) {
 // ReportProgress records nothing beyond liveness.
 func (f *FakeRun) ReportProgress(int64, tasks.Total) {}
 
+// ReportUpdate records nothing beyond liveness.
+func (f *FakeRun) ReportUpdate(int64, tasks.Total, string) {}
+
 // Note does nothing.
 func (f *FakeRun) Note(string) {}
 

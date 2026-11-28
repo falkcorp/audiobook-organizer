@@ -729,3 +729,12 @@ func TestT6G6Optimize_InFlightChildIsWaitedOnBeforeANewlyEnabledOne(t *testing.T
 	require.Equal(t, []tasks.Kind{"books.acoustid.fingerprint-rescan", "books.acoustid.scan"}, h.kinds(),
 		"the in-flight child is not launched again")
 }
+
+// ReportUpdate is Progress.Update: the position, then the status line when
+// there is one, recorded the way ReportProgress and Note record them.
+func (h *t6g6OptimizeHost) ReportUpdate(done int64, total tasks.Total, msg string) {
+	h.ReportProgress(done, total)
+	if msg != "" {
+		h.Note(msg)
+	}
+}

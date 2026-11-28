@@ -716,10 +716,7 @@ func t6g4NativeBase(rc *tasks.RC, deps t6g4Deps, needsWriter bool) (t6g4Base, er
 			if total > 0 {
 				t = tasks.Known(int64(total))
 			}
-			rc.Progress().Set(int64(done), t)
-			if msg != "" {
-				rc.Progress().Note(msg)
-			}
+			rc.Progress().Update(int64(done), t, msg)
 		},
 		SetItem:        func(label string) { rc.Progress().Note(label) },
 		Canceled:       rc.Canceled,

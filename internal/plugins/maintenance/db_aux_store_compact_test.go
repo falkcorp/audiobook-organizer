@@ -395,3 +395,12 @@ func TestAuxStoreCompact_CoreOutcomeCountsStoresAndFailures(t *testing.T) {
 	require.Len(t, bad.Errs, 1)
 	assert.Contains(t, bad.Errs[0].Error(), "OpenLibrary cache")
 }
+
+// ReportUpdate is Progress.Update: the position, then the status line when
+// there is one, recorded the way ReportProgress and Note record them.
+func (h *auxHost) ReportUpdate(done int64, total tasks.Total, msg string) {
+	h.ReportProgress(done, total)
+	if msg != "" {
+		h.Note(msg)
+	}
+}

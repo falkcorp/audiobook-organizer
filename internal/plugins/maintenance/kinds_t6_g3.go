@@ -647,10 +647,7 @@ func t6g3NativeBase(kind tasks.Kind, rc *tasks.RC, deps t6g3Deps, writes bool) (
 			if total > 0 {
 				n = tasks.Known(int64(total))
 			}
-			rc.Progress().Set(int64(done), n)
-			if msg != "" {
-				rc.Progress().Note(msg)
-			}
+			rc.Progress().Update(int64(done), n, msg)
 		},
 		OpID:  string(rc.RunID()),
 		Store: deps.Store,
