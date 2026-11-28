@@ -50,13 +50,12 @@ var resolvedFpcalcPath string
 
 // SetResolvedFpcalcPath is called once during server startup with the path
 // returned by ToolRegistry.Resolve("fpcalc"). An empty string resets to PATH lookup.
-func SetResolvedFpcalcPath(path string) {
-	resolvedFpcalcPath = path
+// It returns the path it replaced, so a test that changes it can put back what it
+// found; startup ignores the return.
+func SetResolvedFpcalcPath(path string) (previous string) {
+	previous, resolvedFpcalcPath = resolvedFpcalcPath, path
+	return previous
 }
-
-// ResolvedFpcalcPath is the path SetResolvedFpcalcPath last set ("" = PATH lookup).
-// A test that changes it reads this first so its cleanup puts back what it found.
-func ResolvedFpcalcPath() string { return resolvedFpcalcPath }
 
 // lookupFpcalc returns the path to fpcalc, preferring the ToolRegistry-injected
 // path when set, then falling back to exec.LookPath. Returns ("", error) when
