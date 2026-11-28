@@ -78,6 +78,11 @@ func (p *PebbleStore) SetRelocationOutbox(w outbox.Writer) {
 	p.relocation.Store(&fn)
 }
 
+// RelocationOutboxInstalled reports whether SetRelocationOutbox has run: whether
+// CreateBookWithRelocation stages the relocation follow-up. The boot check
+// audiobooks.RequireRelocationOutbox reads it.
+func (p *PebbleStore) RelocationOutboxInstalled() bool { return p.relocation.Load() != nil }
+
 // stageBookRelocated stages the relocation of book originalID's torrents to
 // book targetID's path into batch, the batch that creates targetID. It stages
 // nothing when no outbox is installed or originalID is empty (the write is not

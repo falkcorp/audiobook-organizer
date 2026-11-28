@@ -5,7 +5,11 @@
 
 package books
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+)
 
 // ABO's tasks flip (F5-18) is ONE decision, tasksFlipOn, and everything the flip
 // changes in this package reads it: the manifest (books.level-3, M4 and M5 in
@@ -45,4 +49,25 @@ func tasksFlipOn() bool { return tasksFlip.Load() }
 func SetTasksFlipForTest(on bool) (restore func()) {
 	prev := tasksFlip.Swap(on)
 	return func() { tasksFlip.Store(prev) }
+}
+
+// relocationFollowUpOn reports whether books runs the durable relocation
+// follow-up (F6-03): the outbox consumer that starts books.deluge.path-update
+// and the staging that feeds it. The consumer starts a task run, so it exists
+// only where that kind is registered, which is the tasks flip; the identity flip
+// supplies the outbox and the catalog topic. One predicate gates the manifest's
+// consumer name, the consumer's registration and the store's staging, so none
+// can be wired without the others (a message staged for no consumer waits for
+// one, and a consumer without its kind dead-letters every message).
+func relocationFollowUpOn() bool { return identityOn() && tasksFlipOn() }
+
+// requireRelocationWiring is Register's boot check for the follow-up: with it
+// wired (relocationFollowUpOn) the store must have the relocation outbox
+// installed, or an organized copy would stage nothing and its torrents would
+// never move (audiobooks.RequireRelocationOutbox). Unwired, nothing is asked.
+func requireRelocationWiring(store any) error {
+	if !relocationFollowUpOn() {
+		return nil
+	}
+	return audiobooks.RequireRelocationOutbox(store)
 }
