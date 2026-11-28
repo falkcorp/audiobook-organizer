@@ -127,7 +127,13 @@ type flipFixture struct {
 // rows) and yaml (when non-empty) as config.yaml beside the store.
 func newFlipFixture(t *testing.T, seed func(*database.PebbleStore), yaml string) *flipFixture {
 	t.Helper()
-	root := tempDir(t)
+	return newFlipFixtureAt(t, tempDir(t), seed, yaml)
+}
+
+// newFlipFixtureAt is newFlipFixture under root, a directory the caller owns
+// (the mid-M3 cells keep one for the whole process).
+func newFlipFixtureAt(t *testing.T, root string, seed func(*database.PebbleStore), yaml string) *flipFixture {
+	t.Helper()
 	fx := &flipFixture{
 		root: root, stateDir: filepath.Join(root, "state"), dbDir: filepath.Join(root, "db"),
 		key: bytes.Repeat([]byte{7}, 32),
