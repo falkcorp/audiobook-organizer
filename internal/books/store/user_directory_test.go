@@ -58,11 +58,14 @@ func TestUserDirectory_UnderCoreIdentityListsTheDirectoryNeverTheDrainedFamily(t
 }
 
 // retireUsers is a standalone spec transform that retires the u: claim, as the
-// identity flip's spec does (cutover.Flip.Spec over m3.SourcePrefixes).
+// identity flip's spec does (cutover.Flip.Spec over m3.SourcePrefixes). It names
+// the family by its literal, not by userKeyPrefix, so a wrong constant in the
+// constructor's check (one naming a family the flip does not retire alone) is
+// caught here instead of being retired along with it.
 func retireUsers(s storage.Spec) storage.Spec {
 	s.Claims = append([]storage.Claim(nil), s.Claims...)
 	for i := range s.Claims {
-		if s.Claims[i].Prefix == userKeyPrefix {
+		if s.Claims[i].Prefix == "u:" {
 			s.Claims[i].Mode = storage.ClaimRetired
 		}
 	}
