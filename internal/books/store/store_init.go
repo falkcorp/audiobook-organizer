@@ -7,6 +7,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -48,6 +49,16 @@ func InitializeStoreWith(dbType, path string, o StandaloneOptions) (Store, error
 	s, err := OpenStandalone(path, o)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize PebbleDB store: %w", err)
+	}
+	// The caller's own say on whether this process may run over this store
+	// comes before anything writes to it (StandaloneOptions.Admit).
+	if o.Admit != nil {
+		if err := o.Admit(s); err != nil {
+			if cerr := s.Close(); cerr != nil {
+				err = errors.Join(err, fmt.Errorf("close the store that was refused: %w", cerr))
+			}
+			return nil, fmt.Errorf("store refused at open: %w", err)
+		}
 	}
 	SetGlobalStore(s)
 	// Every open, not only when migration 065 runs: rebuild the opv3 records

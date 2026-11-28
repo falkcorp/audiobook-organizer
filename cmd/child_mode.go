@@ -46,22 +46,15 @@ var errChildOverIdentityStore = errors.New("child mode: this store's identity cu
 	"run it under books' own authentication gates, which read the drained user tables as an install with no " +
 	"accounts. Run the operation in the serving process (Isolate: false)")
 
-// identityCutoverReader is what the child reads of its store to learn whether
-// the identity cutover is done (database.PebbleStore.DataMigrationDone).
-type identityCutoverReader interface {
-	DataMigrationDone(ctx context.Context, id string) (bool, error)
-}
-
 // refuseChildOverIdentityStore fails closed: a store whose identity cutover is
 // done, one that cannot say, and a read that fails all refuse. Only a store the
 // cutover has not run on (HEAD's own tables hold the accounts) proceeds, which
 // is the one store HEAD's gates are correct for.
-func refuseChildOverIdentityStore(ctx context.Context, store database.Store) error {
-	r, ok := store.(identityCutoverReader)
-	if !ok {
+func refuseChildOverIdentityStore(ctx context.Context, store database.MigrationReader) error {
+	if store == nil {
 		return errors.New("child mode: the store cannot report whether its identity cutover is done; refusing to run")
 	}
-	done, err := r.DataMigrationDone(ctx, cutover.IdentityCutoverID)
+	done, err := store.DataMigrationDone(ctx, cutover.IdentityCutoverID)
 	if err != nil {
 		return fmt.Errorf("child mode: read the identity cutover's state: %w", err)
 	}
@@ -140,18 +133,21 @@ func RunOperationRunner() {
 		os.Exit(2)
 	}
 	snap := config.Snapshot()
+	// The identity cutover is checked as the store opens, before the opener's
+	// opv3 reconcile writes to it and before it becomes the global store: see
+	// errChildOverIdentityStore. newServer below is built without
+	// server.WithIdentity, so this refusal (database.StandaloneOptions.Admit) is
+	// what keeps it off a migrated store. A refusal comes back as the opener's
+	// error, which closes the store.
 	store, err := initializeChildStore(snap.DatabaseType, dbPath,
-		books.StandaloneOptions(database.StandaloneOptions{StateDir: stateDir}))
+		books.StandaloneOptions(database.StandaloneOptions{
+			StateDir: stateDir,
+			Admit: func(s database.MigrationReader) error {
+				return refuseChildOverIdentityStore(context.Background(), s)
+			},
+		}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
-		os.Exit(2)
-	}
-	// The identity cutover is checked before anything else runs over the store:
-	// see errChildOverIdentityStore. newServer below is built without
-	// server.WithIdentity, so this refusal is what keeps it off a migrated store.
-	if err := refuseChildOverIdentityStore(context.Background(), store); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		_ = store.Close()
 		os.Exit(2)
 	}
 	// HEAD loaded the stored settings here (config.LoadConfigFromDatabase);
