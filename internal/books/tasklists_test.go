@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/metabatch"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
@@ -340,6 +341,23 @@ func TestF5_EveryKindTakesTheHook(t *testing.T) {
 		}
 	}
 	require.Empty(t, unscheduled, "kinds that did not take the schedule hook")
+}
+
+// Every books kind states taskmanage.Requirement as its Perms.Manage (owner
+// ruling 2026-11-22): the eight-scope AllOf of HEAD's settings.manage, which
+// gated every operations control route. A kind added to a list without it is
+// refused at registration (tasks.Problems), and one that names something
+// narrower or wider shows here.
+func TestF5_EveryBuiltKindStatesTheBooksManage(t *testing.T) {
+	defs, err := bookTaskLists(listsFixture(t))
+	require.NoError(t, err)
+	require.NotEmpty(t, defs)
+	want := taskmanage.Requirement()
+	for _, d := range defs {
+		got := tasks.CommonOf(d).Perms.Manage
+		require.Equal(t, want.Kind(), got.Kind(), "%s: Perms.Manage kind", d.Kind())
+		require.Equal(t, want.Permissions(), got.Permissions(), "%s: Perms.Manage scopes", d.Kind())
+	}
 }
 
 // Every list bookTaskLists is meant to carry is in it. The schedule check cannot

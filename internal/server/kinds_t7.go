@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/entity"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -794,7 +795,7 @@ func t7Common(head opsregistry.OperationDef, sched func(tasks.Kind) *tasks.Sched
 	c := tasks.Common{
 		Title:    head.DisplayName,
 		Help:     head.Description,
-		Perms:    tasks.Permissions{Start: t7StartRequirement(head.Permissions)},
+		Perms:    tasks.Permissions{Start: t7StartRequirement(head.Permissions), Manage: taskmanage.Requirement()},
 		Resume:   t7Resume(head.ResumePolicy, false),
 		Priority: t7Priority(head.DefaultPriority),
 		// Clamped: the kernel refuses a Timeout over tasks.MaxTimeout (24h) and

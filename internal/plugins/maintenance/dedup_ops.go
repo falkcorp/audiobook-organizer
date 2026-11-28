@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/ai"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -216,7 +217,7 @@ func (p *Plugin) aiDedupBatchKind(deps t6g4Deps, sched *tasks.Schedule) tasks.De
 		// author review queue the batch's results land in. Listed under
 		// "Review decisions" in the PR.
 		Effects:        tasks.Writes(t6g4Res(ops.ResReviewItems)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:         tasks.ResumeContinue,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.ai-dedup-batch"),

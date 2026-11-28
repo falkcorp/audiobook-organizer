@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 
@@ -395,7 +396,7 @@ func t6g7KindFor(headID string) tasks.Kind { return tasks.Kind(t6g7KindPrefix + 
 // per-definition fields (Title, Help, Effects, Resume, Priority, Timeout...).
 func t6g7Common(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	c := tasks.Common{
-		Perms: tasks.Permissions{Start: t6g7StartRequirement()},
+		Perms: tasks.Permissions{Start: t6g7StartRequirement(), Manage: taskmanage.Requirement()},
 		Ready: []tasks.ReadySignal{t6g7SignalMemDB},
 	}
 	if sched != nil {

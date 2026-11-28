@@ -19,6 +19,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/maintenance"
 	"github.com/falkcorp/audiobook-organizer/internal/operations"
 	opsregistry "github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -273,7 +274,7 @@ func kindFor(job maintenance.MaintenanceJob, deps KindDeps, sched func(tasks.Kin
 		Title:    job.Name(),
 		Help:     job.Description(),
 		Effects:  fx,
-		Perms:    tasks.Permissions{Start: startRequirement(job)},
+		Perms:    tasks.Permissions{Start: startRequirement(job), Manage: taskmanage.Requirement()},
 		Resume:   resumeForJob(id, pol.ResumePolicy),
 		Priority: tasks.PriorityNormal,
 		Timeout:  pol.Timeout,

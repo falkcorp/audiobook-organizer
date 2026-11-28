@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
@@ -388,7 +389,7 @@ func t6g1NativeEnv(rc *tasks.RC) t6g1Env {
 // per-definition fields (Title, Help, Effects, Resume, Priority, Timeout...).
 func t6g1Common(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	c := tasks.Common{
-		Perms: tasks.Permissions{Start: t6g1StartRequirement()},
+		Perms: tasks.Permissions{Start: t6g1StartRequirement(), Manage: taskmanage.Requirement()},
 		Ready: []tasks.ReadySignal{t6g1SignalMemDB},
 	}
 	if sched != nil {

@@ -640,8 +640,21 @@ func Uninterruptible(reason string, budget time.Duration) CancelContract // list
 // so "zero" below means "field omitted, default applied by tasks").
 type Permissions struct {
 	Start   rbac.Requirement // required; own-namespace or core scopes only (05-rbac §4 R3 rule)
-	Cancel  rbac.Requirement // omitted = Start. The run's own actor may always cancel it.
-	Approve rbac.Requirement // required iff Approval != nil (always for Fixer)
+
+	// Manage is the standing right over the kind's existing runs. REQUIRED of
+	// every kind (registration fails without it, naming the kind): a scoped
+	// requirement (AllOf, AnyOf or Need; Public and AnyAuthenticated are refused)
+	// of own-namespace or core scopes. It is ANDed with the operation's own
+	// requirement for cancel and discard (Cancel) and for decide and approve
+	// (Approve; decide with no Approve falls back to Start). It gates no start.
+	// Owner ruling 2026-11-22: HEAD gated every operations control route behind
+	// settings.manage, so a kind states its own equivalent. A core kind states
+	// rbac.Need("core:tasks.manage"); a books kind states the eight-scope AllOf
+	// of settings.manage (05-rbac §6.1).
+	Manage rbac.Requirement
+
+	Cancel  rbac.Requirement // omitted = Start; ANDed with Manage. The run's own actor has NO standing to cancel (owner ruling 2026-11-22)
+	Approve rbac.Requirement // required iff Approval != nil (always for Fixer); ANDed with Manage
 	View    rbac.Requirement // omitted = rbac.Need("core:tasks.view")
 
 	// StartableByViewers is a reviewed reason allowing Start to be satisfied by
@@ -667,8 +680,8 @@ type Approval struct {
 |---|---|---|
 | list/get defs and runs | `Perms.View` per def; rows/results of runs the caller may not view are omitted (current per-viewer filter, `internal/diagnostics/service.go:138-150`, `sysinfo` `OperationReadCheck`) | closed |
 | start | `Perms.Start`, plus the route floor `rbac.AnyAuthenticated` as 05-rbac defines it (a non-`Confining` scope; a confined credential reaches a definition only when `Perms.Start` names its scope explicitly, SEC-3). `Perms.Start` may not be satisfiable by a view-class scope unless the definition sets `StartableByViewers` (SEC-9: today's `scan.trigger` floor exists because a viewer could otherwise start a `library.view`-only def, `opsv3/handler.go:236-246`; `bulk-apply-preview` is one, 4 h timeout, `internal/server/bulk_apply_preview.go:269,278`). A converted ABO kind's `Perms.Start` is the native scope requirement that 05-rbac's atom table (§6) maps HEAD's def permission to, so the identity cutover's reach oracle (allow and deny before = after, 05-rbac §12) covers op starts too; the auth-disabled principal is decided by 05-rbac §4.11. A HEAD def that declares only `library.view` converts to `rbac.AllOf(books:scan, books:view)`, which keeps the scan floor | closed |
-| cancel | the run's actor, or `Perms.Cancel`, or `core:tasks.manage` | closed |
-| approve / decide (`awaiting_decision`) | `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope; the identity cutover gives a migrated all-atom or admin key each such scope explicitly, so its HEAD approval reach is kept, 05-rbac §6). Refused: a delegated session (`MethodSessionDelegated`) and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
+| cancel, discard | `Perms.Manage` **and** `Perms.Cancel` (omitted: `Perms.Start`). Neither the run's own actor nor a holder of `core:tasks.manage` alone passes without `Perms.Manage` (owner ruling 2026-11-22: HEAD's operations control routes sat behind `settings.manage`, and `Manage` is the per-kind equivalent). A run whose kind has no definition is refused to any caller with a checker. A caller with no identity is the kernel's own (no `Principal`) and is not checked | closed |
+| approve / decide (`awaiting_decision`) | `Perms.Manage` **and** `Perms.Approve` (decide on a run interrupted under ResumeAsk: `Perms.Approve` if set, else `Perms.Start`) **and** a verified method, the same rule as 05-rbac §4.10 (SEC-24): an interactive session, a sign-in through an app-level authenticator extension whose `MethodSpec.Interactive` is true (only `app.Options.Authenticators` may set it, 06 §6.4.5, SEC2-16; ABO's Cloudflare Access is one; a module's `Registrar.AuthMethod` never is), or an API key whose scopes **name** the required scope explicitly (not via `core:admin` or another implying scope; the identity cutover gives a migrated all-atom or admin key each such scope explicitly, so its HEAD approval reach is kept, 05-rbac §6). Refused: a delegated session (`MethodSessionDelegated`) and a forwarded header, which is never identity (current rule, `opsv3/runs.go:395-410`) | closed |
 | pause/resume executor, edit schedules | `core:tasks.manage` | closed |
 
 The `core:tasks.view` and `core:tasks.manage` scopes are in the fixed `core:*` catalog that F2 declares, whichever
@@ -1195,10 +1208,10 @@ type Executor interface {
 | `GET /definitions`, `GET /definitions/{kind}` | `GET /api/v3/ops/defs[/:id]`, `/api/v1/op-defs[/:id]` | `AnyAuthenticated` + per-def `View` filter |
 | `POST /definitions/{kind}/runs` | `POST /api/v3/ops/defs/:id/runs`, `POST /api/v3/ops/runs`, `POST /api/v1/operations/v2`, `POST /api/v1/tasks/:name/run`, `POST /api/v1/maintenance-window/run` (a start of `core.window.nightly`) | per-def `Start`. An `Idempotency-Key` header is copied into `StartRequest.IdempotencyKey`; a duplicate within `core.tasks.idempotency_ttl` returns `200` with the existing `RunView` and `Idempotent-Replayed: true` (the only idempotency store on this route; httpapi keeps none, SIMP2-8) |
 | `GET /runs`, `GET /runs/{id}`, `/runs/{id}/rows`, `/runs/{id}/items`, `/runs/{id}/log` | v3 `runs`; `GET /api/v1/operations/v2/:id`, `…/v2/:id/logs/download` | per-def `View`; each `RunView` passes `RedactRunView` |
-| `POST /runs/{id}/cancel` | v3 cancel; `DELETE /api/v1/operations/v2/:id` | actor or `Cancel` |
-| `DELETE /runs/{id}` (`Client.Discard`) | `DELETE /api/v1/operations/v2/:id/record` | actor or `Cancel`; 409 while active |
-| `POST /runs/{id}/approve` | v3 approve | `Approve` + verified method |
-| `POST /runs/{id}/decide` `{resume\|finish\|drop}` | `POST /api/v1/operations/v2/:id/retry` and `…/finish` (`raw/08` §7 finish-without-resuming) | `Approve`/`Start` + verified method |
+| `POST /runs/{id}/cancel` | v3 cancel; `DELETE /api/v1/operations/v2/:id` | `Manage` AND `Cancel` (omitted: `Start`); no run's-own-actor arm (owner ruling 2026-11-22) |
+| `DELETE /runs/{id}` (`Client.Discard`) | `DELETE /api/v1/operations/v2/:id/record` | `Manage` AND `Cancel` (omitted: `Start`); 409 while active |
+| `POST /runs/{id}/approve` | v3 approve | `Manage` AND `Approve` + verified method |
+| `POST /runs/{id}/decide` `{resume\|finish\|drop}` | `POST /api/v1/operations/v2/:id/retry` and `…/finish` (`raw/08` §7 finish-without-resuming) | `Manage` AND (`Approve`, omitted: `Start`) + verified method |
 | `GET /counts`, `GET /timeline` | v3 counts/timeline; `GET /api/v1/operations/timeline` | `core:tasks.view` |
 | `GET /schedules`, `PATCH /schedules/{kind}` | `/api/v1/tasks`, `PUT /tasks/:name`; `GET /api/v1/maintenance-window/status` (the `core.window.nightly` row) | view / `core:tasks.manage`; PATCH writes the kind's `ScheduleConfig` key through `config` (DB override layer; a key locked by an operator-set layer is refused with 409). The window's hours are the `core.tasks.windows.nightly.*` keys, written through 05-config's settings routes (they replace `PUT /api/v1/maintenance-window/config`) |
 | `GET /pause`, `POST /pause`, `POST /unpause` | `GET\|POST /api/v1/operations/pause`, `POST /api/v1/operations/resume` | `core:tasks.view` (GET) / `core:tasks.manage` |
@@ -2284,8 +2297,9 @@ gin's included; no tasks route changes that.
    depends on the answer (measured on the production-shaped store of 09 §9.3).
 6. (Closed: 06 has `Registrar.ChangeSink`, `Manifest.TaskLedger`, `Manifest.TaskStarts` checked at P7,
    and `Deps.Tasks` typed `tasks.Client`.)
-7. (Closed by 05-rbac v1.4 §6.1 and its Tasks row: `core:tasks.manage` exists, may cancel any run and
-   edit schedules, and the approval-method rule of 5T.3.7 (SEC-24) is stated there; SEC-9 and SEC-3 use
+7. (Closed by 05-rbac v1.4 §6.1 and its Tasks row: `core:tasks.manage` exists and edits schedules and
+   pauses the executor; since the owner ruling of 2026-11-22 it no longer cancels a run by itself, a core
+   kind's `Perms.Manage` is `core:tasks.manage` ANDed with the operation's own requirement, and the approval-method rule of 5T.3.7 (SEC-24) is stated there; SEC-9 and SEC-3 use
    its `PermissionSpec.Class` and `Confining`.)
 8. (Closed by D10: rows 9, 11, 12, 13a and 13 of 05-storage §5S.9.1 are moved into `c/tasks/` by books'
    tasks cutover step and deleted (5T.8.3); `core/tasks` still has no grant over them, because books

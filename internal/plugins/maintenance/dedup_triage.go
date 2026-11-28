@@ -15,6 +15,7 @@ import (
 	"time"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/dedup/unified"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -385,7 +386,7 @@ func (p *Plugin) dedupExactTriageKind(deps t6g4Deps, sched *tasks.Schedule) task
 		// Dismissing a candidate is a status update on a dedup candidate row,
 		// which lives in the embedding store.
 		Effects:        tasks.Writes(t6g4Res(ops.ResEmbeddings)...),
-		Perms:          tasks.Permissions{Start: t6g4StartRequirement()},
+		Perms:          tasks.Permissions{Start: t6g4StartRequirement(), Manage: taskmanage.Requirement()},
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		ConcurrencyKey: tasks.Key("books.maintenance.dedup-exact-triage"),

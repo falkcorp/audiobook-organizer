@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/taskmanage"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/tasks"
 	"golang.org/x/sync/errgroup"
@@ -294,7 +295,7 @@ func t6g6KindFor(headID string) tasks.Kind { return tasks.Kind(t6g6KindPrefix + 
 // per-definition fields (Title, Help, Effects, Resume, Priority, Timeout...).
 func t6g6Common(kind tasks.Kind, sched func(tasks.Kind) *tasks.Schedule) tasks.Common {
 	c := tasks.Common{
-		Perms: tasks.Permissions{Start: t6g6StartRequirement()},
+		Perms: tasks.Permissions{Start: t6g6StartRequirement(), Manage: taskmanage.Requirement()},
 		Ready: []tasks.ReadySignal{t6g6SignalMemDB},
 	}
 	if sched != nil {
