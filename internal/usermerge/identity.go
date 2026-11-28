@@ -49,6 +49,15 @@ const MergeBatchCap int64 = 256 << 20
 // was staged or written.
 var ErrMergeTooLarge = errors.New("usermerge: " + ProblemMergeTooLarge + ": this merge is too large to apply as one batch")
 
+// batchTooLarge maps storage's commit-time refusal of an oversized batch to
+// ErrMergeTooLarge, the same 409 merge_too_large the estimate answers. The cap
+// is an estimate and equals core storage's default batch limit (256 MiB), so a
+// merge estimated just under it can still be refused when the batch is
+// committed. The commit is atomic: nothing was written.
+func batchTooLarge(err error) error {
+	return fmt.Errorf("%w (the store refused the batch at commit: %w)", ErrMergeTooLarge, err)
+}
+
 // ErrNoPrincipal: an apply under identity needs the signed-in admin's own
 // principal (core re-checks it on every call) and the request carried none, or
 // carried one for another user, or one that no longer stands. It wraps
@@ -778,6 +787,8 @@ func (s *Service) mapApplyError(err error, plan *Plan) error {
 	switch {
 	case errors.Is(err, coreauth.ErrMergeConflict), errors.Is(err, storage.ErrConflict), errors.Is(err, database.ErrUserMergeConflict):
 		return fmt.Errorf("%w (%w)", ErrDigestMismatch, err)
+	case errors.Is(err, storage.ErrBatchTooLarge):
+		return batchTooLarge(err)
 	}
 	if code, text, ok := refusalOf(err); ok {
 		refused := *plan
