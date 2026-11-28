@@ -721,7 +721,7 @@ func (mfs *Service) ensureLibraryCopy(book *database.Book) *database.Book {
 // rather than injected because every metafetch store already satisfies
 // organizer.Store (Store embeds it), and a second wiring path would be one more
 // place for the two to disagree. ApplyOrganizedFileMetadata and
-// ComputeITunesPath match what audiobooks.NewOrganizeService installs on the
+// ComputeITunesPath match what the audiobooks organize service installs on the
 // production organize service, so a copy made here is indistinguishable from
 // one made by "Organize Library". It has no VersionGroupLocker:
 // ensureLibraryCopy calls CreateOrganizedVersion already holding the

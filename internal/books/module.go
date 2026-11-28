@@ -32,10 +32,12 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/opsmetrics"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
@@ -261,6 +263,12 @@ func (m *booksModule) Manifest() module.Manifest {
 		// when the flip is, so a boot without it declares nothing to rbac.
 		mf.Permissions, mf.Roles, mf.ImportedRoleIDs = booksPermissions(), booksRoles(), booksImportedRoleIDs()
 	}
+	if relocationFollowUpOn() {
+		// The outbox consumers books registers (Register's OutboxHandler), listed
+		// so the kernel declares them for a disabled books too and keeps the
+		// messages staged for them (TestDisabledModuleOutboxRetained).
+		mf.OutboxConsumers = []string{deluge.RelocationConsumerName}
+	}
 	return mf
 }
 
@@ -356,6 +364,15 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	// changes no behaviour until then. It comes before the no-storage return:
 	// the declaration does not depend on a store.
 	r.Resources(taskResourceKinds()...)
+	if identityOn() {
+		// The events flip (F6-03): books' two catalog topics and the durable
+		// relocation follow-up. The consumer starts a task run, so it is the one
+		// kind of handler a module may register (ConsumeIntoTask).
+		r.Topics(database.BookChangedTopicSpec(), database.BookRelocatedTopicSpec())
+	}
+	if relocationFollowUpOn() {
+		r.OutboxHandler(deluge.RelocationConsumer())
+	}
 	legacy := r.Deps().Storage.Legacy
 	if legacy == (storage.LegacyRange{}) {
 		return nil
@@ -414,6 +431,11 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		}
 	}
 	database.SetGlobalStore(store)
+	// Before anything writes through the store (installRelocationOutbox).
+	installRelocationOutbox(store, r.Deps().Outbox)
+	// Every committed book write publishes books.book.changed.v1 (the zero
+	// Deps.Events of a boot without the identity flip publishes nothing).
+	database.PublishBookChanges(r.Deps().Events)
 	// With the core config boot on, the Facade is bound before the settings
 	// boot and the server read AppConfig (config_wire.go); without it Deps.Config
 	// is nil and HEAD's loaders below stay the source.
@@ -476,6 +498,20 @@ func (m *booksModule) Register(r *module.Registrar) error {
 			// The guest policy's keep rule reads the same key the admission policy
 			// does, with the same semantics (identityPolicyFrom).
 			server.WithAccessAllowList(func() (string, error) { return cfaccessAllowedEmails(deps.Config) }))
+	}
+	// The one store the server is built over is database.NewBooksStore's concrete
+	// *PebbleStore, handed to NewServer unwrapped (no cache, metrics or tx wrapper
+	// sits between them). The single-book organize copy needs its
+	// CreateBookWithRelocation, which database.Store does not carry, so a store
+	// that lost it stops the boot here rather than every Deluge move silently.
+	if err := audiobooks.RequireRelocatingCopyCreator(store); err != nil {
+		return err
+	}
+	// And with the follow-up wired, a store that stages nothing (no outbox was
+	// installed: the boot has no core outbox, or the install above was skipped)
+	// would copy the book and never move its torrents: refuse the boot.
+	if err := requireRelocationWiring(store); err != nil {
+		return err
 	}
 	// A refusal comes back as an error, and NewServer has released whatever it
 	// had begun to build, so there is no server for Release to tear down: the
@@ -624,6 +660,7 @@ func (m *booksModule) closeStore() error {
 		return nil
 	}
 	database.SetGlobalStore(nil)
+	database.SetBookChangeObserver(nil)
 	m.releaseAppConfig()
 	if err := store.Close(); err != nil {
 		return fmt.Errorf("books: close the store: %w", err)

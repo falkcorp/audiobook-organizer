@@ -175,7 +175,7 @@ type metafetchNarratorStore interface {
 //
 // Exported, unlike most consumer-side interfaces here, because a caller that
 // forwards its own store into NewService has to be able to name this
-// requirement -- see audiobooks.NewOrganizeService, which composes it with
+// requirement -- see the audiobooks organize service, which composes it with
 // organizer.Store. organizer.Store is exported for the same reason.
 type Store interface {
 	forwardedStores

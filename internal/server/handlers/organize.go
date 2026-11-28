@@ -52,7 +52,15 @@ type OrganizePreviewServicer interface {
 // them was wrong for multi-row books whose file_path names a file.
 type OrganizeServicer interface {
 	OrganizeOneBook(org *organizer.Organizer, book *database.Book, log logger.Logger) (*organizer.Landing, error)
-	CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error)
+	// CreateOrganizedVersionFollowTorrents makes the copy and stages, in the
+	// copy row's own batch, the follow-up that moves the original's torrents
+	// to it (the events flip, F6-03).
+	CreateOrganizedVersionFollowTorrents(book *database.Book, landing *organizer.Landing, operationID string, log logger.Logger) (*database.Book, error)
+	// StagesRelocationFollowUp reports whether that call stages the follow-up.
+	// It picks the request's one Deluge arm: staged, the outbox consumer moves
+	// the original's torrents; not staged, the request calls
+	// deluge.NotifyDelugeAfterOrganize itself, as before the events flip.
+	StagesRelocationFollowUp() bool
 }
 
 // OrganizeStore is what OrganizeHandler actually needs, measured by emptying it
@@ -407,7 +415,7 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		return
 	}
 
-	createdBook, createErr := h.organizeSvc.CreateOrganizedVersion(book, landing, opID, log2)
+	createdBook, createErr := h.organizeSvc.CreateOrganizedVersionFollowTorrents(book, landing, opID, log2)
 	if createErr != nil {
 		r.internal("failed to create organized version", createErr)
 		return
@@ -422,10 +430,26 @@ func (h *OrganizeHandler) organizeBookCore(ctx context.Context, r organizeRespon
 		slog.Warn("organize failed to stamp organized book", "createdBook", createdBook.ID, "updateErr", updateErr)
 	}
 
-	// Notify Deluge that the file moved so the torrent client keeps seeding
-	// from the new library path. Best-effort — errors are logged inside
-	// NotifyDelugeAfterOrganize; the organize operation already succeeded.
-	deluge.NotifyDelugeAfterOrganize(h.store, book.ID, newPath)
+	// Exactly one arm moves the original's torrents with the copy.
+	//
+	// Staged: CreateOrganizedVersionFollowTorrents committed books.book.relocated.v1
+	// in the copy row's own batch, and books' outbox consumer starts the
+	// path-update run for the original (F6-03). That is wired only while the tasks
+	// switch is on (books' relocationFollowUpOn), and StagesRelocationFollowUp is
+	// the store's own answer to whether it staged.
+	//
+	// Not staged (the tasks switch is off, which is production before the F5-18
+	// switch commit): the direct call below, as before the events flip. Same
+	// arguments, same place, after the copy succeeded. Best-effort — errors are
+	// logged inside NotifyDelugeAfterOrganize; the organize operation already
+	// succeeded. It is deleted in the tasks switch commit
+	// (internal/books/relocation_fallback_removal_test.go).
+	//
+	// The in-place branch above made no Deluge call before the flip and makes none
+	// now (todo 9351f44a5 asks whether it should).
+	if !h.organizeSvc.StagesRelocationFollowUp() {
+		deluge.NotifyDelugeAfterOrganize(h.store, book.ID, newPath)
+	}
 
 	if h.publisher != nil {
 		h.publisher.Publish(ctx, plugin.NewEvent(plugin.EventFileOrganized, createdBook.ID, map[string]any{

@@ -80,7 +80,7 @@ const absGateName = "internal/server/middleware.ABSRequireAuth.func1"
 
 // nonGateElements are the names of chain elements that are in no route's
 // requirement: the perimeter shims, the body limits, the rate and login limits,
-// a feature flag's guard, the /api redirect (setupRoutes.func5, pinned by
+// a feature flag's guard, the /api redirect (setupRoutes.func4, pinned by
 // number: a closure added above it renumbers it and fails the census, which
 // is the point, so an inline gate in setupRoutes cannot pass as it), the event
 // stream's shutdown hook. A chain element in neither this list nor absGateName
@@ -90,7 +90,7 @@ var nonGateElements = []string{
 	"internal/server.perimeterSeen.func1",
 	"internal/server.captureRawResponseController.func1",
 	"internal/server.legacyMatchCheck.func1",
-	"internal/server.(*Server).setupRoutes.func5",
+	"internal/server.(*Server).setupRoutes.func4",
 	"internal/server/middleware.MaxRequestBodySize.func1",
 	"internal/server/middleware.(*IPRateLimiter).Middleware.func1",
 	"internal/server.loginCeilingMiddleware.func1",

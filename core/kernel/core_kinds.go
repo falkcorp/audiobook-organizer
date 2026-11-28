@@ -76,41 +76,46 @@ func (k *Kernel) taskEntries() []*entry {
 // failing here is better than a switch that silently does nothing (fail closed).
 // Describe opens no store and does not call it (boot runs it at P6 only for a real boot).
 func (k *Kernel) registerCoreKinds(ctx context.Context) error {
-	if !k.tasksFlipOn() {
+	events := k.eventsTaskDefinitions()
+	if !k.tasksFlipOn() && len(events) == 0 {
 		return nil
 	}
 	if k.tasks == nil || k.store == nil || k.store.db == nil {
-		return fmt.Errorf("kernel: the tasks switch is on and no store is open (core.storage.path is not set: kernel.Config.StoragePath)")
+		return fmt.Errorf("kernel: the tasks switch or the events flip is on and no store is open (core.storage.path is not set: kernel.Config.StoragePath)")
 	}
-	cfg, err := k.coreConfig()
-	if err != nil {
-		return err
-	}
-	sks, ok := k.store.db.Keyspace(storageKeyspaceOwner)
-	if !ok {
-		return fmt.Errorf("kernel: tasks: the store has no %s keyspace", storageKeyspaceOwner)
-	}
-	lks, ok := k.store.db.Keyspace(logjournal.Owner)
-	if !ok {
-		return fmt.Errorf("kernel: tasks: the store has no %s keyspace", logjournal.Owner)
-	}
-	now := bootClock(ctx)
-	admin := k.store.db.Admin()
-	defs := []tasks.Definition{
-		storagetasks.CompactTask(admin, storagetasks.Options{Now: now}),
-		storagetasks.CensusTask(admin, storagetasks.NewCensusStore(sks), storagetasks.Options{Now: now}),
-		executor.PruneDefinition(k.tasks.stores.Runs, func() time.Duration { return cfg.tasks.Get().HistoryRetention.Std() }, now),
-		logjournal.PruneDefinition(logjournal.New(lks), func() logjournal.Settings { return *cfg.journal.Get() }, now),
-	}
-	defs = append(defs, k.windowDefinitions(cfg)...)
-	if b := k.cfg.Interim.Holds; b != nil {
-		defs = append(defs, providerhttp.ReleaseHoldsTask(b))
-	}
-	if b := k.cfg.Interim.Poll; b != nil {
-		defs = append(defs, ai.BatchPollTask(b))
-	}
-	if b := k.cfg.Interim.Export; b != nil {
-		defs = append(defs, diagnostics.ExportTask(b))
+	// The events flip's kinds come first (the relay), then the tasks switch's.
+	defs := events
+	if k.tasksFlipOn() {
+		cfg, err := k.coreConfig()
+		if err != nil {
+			return err
+		}
+		sks, ok := k.store.db.Keyspace(storageKeyspaceOwner)
+		if !ok {
+			return fmt.Errorf("kernel: tasks: the store has no %s keyspace", storageKeyspaceOwner)
+		}
+		lks, ok := k.store.db.Keyspace(logjournal.Owner)
+		if !ok {
+			return fmt.Errorf("kernel: tasks: the store has no %s keyspace", logjournal.Owner)
+		}
+		now := bootClock(ctx)
+		admin := k.store.db.Admin()
+		defs = append(defs,
+			storagetasks.CompactTask(admin, storagetasks.Options{Now: now}),
+			storagetasks.CensusTask(admin, storagetasks.NewCensusStore(sks), storagetasks.Options{Now: now}),
+			executor.PruneDefinition(k.tasks.stores.Runs, func() time.Duration { return cfg.tasks.Get().HistoryRetention.Std() }, now),
+			logjournal.PruneDefinition(logjournal.New(lks), func() logjournal.Settings { return *cfg.journal.Get() }, now),
+		)
+		defs = append(defs, k.windowDefinitions(cfg)...)
+		if b := k.cfg.Interim.Holds; b != nil {
+			defs = append(defs, providerhttp.ReleaseHoldsTask(b))
+		}
+		if b := k.cfg.Interim.Poll; b != nil {
+			defs = append(defs, ai.BatchPollTask(b))
+		}
+		if b := k.cfg.Interim.Export; b != nil {
+			defs = append(defs, diagnostics.ExportTask(b))
+		}
 	}
 
 	r := module.NewRegistrar(module.RegistrarConfig{Context: ctx, Deps: module.Deps{Module: coreModuleID}})

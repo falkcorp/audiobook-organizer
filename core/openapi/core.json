@@ -837,6 +837,111 @@
         "x-mediacore-permission": "public"
       }
     },
+    "/api/core/v1/events": {
+      "get": {
+        "operationId": "core_streamEvents",
+        "summary": "Stream events (server-sent events)",
+        "description": "The one realtime stream. topic is repeatable and is an exact topic name, a module wildcard (module.*) or * (the default); exclude removes topics with the same grammar; key narrows to one entity; last_event_id (or the Last-Event-ID header, which wins) resumes after an event id inside the server's bounded window. An exact topic you may not see is 403 topic_not_permitted and an unknown one is 400 unknown_topic; a wildcard silently leaves out topics you may not see. Over the stream limits the answer is 429 (per user and credential class) or 503, with Retry-After. Every refusal is a problem+json status before the stream starts. The stream carries unnamed frames: id: <bootNonce>-<seq> and data: {topic, ts, key, data}, a comment line per heartbeat, and the id-less control frames core.stream.opened.v1, core.stream.reset.v1 (restart, gap or overflow: refetch over REST) and core.stream.closed.v1 (shutdown, credential_revoked or permission_revoked: reconnect). Each event is filtered for you at send time, replays included.",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "topic",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "last_event_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "authenticated"
+      }
+    },
+    "/api/core/v1/events/topics": {
+      "get": {
+        "operationId": "core_listEventTopics",
+        "summary": "List the topic catalog",
+        "description": "Every declared topic, by name: the permission that observes it, its payload JSON Schema, whether it is durable (an outbox topic, with its partitions) and its notification and realtime metadata. The catalog is the same for every caller of the route.",
+        "tags": [
+          "events"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Page_EventTopic"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
+      }
+    },
     "/api/core/v1/me": {
       "get": {
         "operationId": "core_getMe",
@@ -1283,6 +1388,238 @@
         },
         "security": [],
         "x-mediacore-permission": "public"
+      }
+    },
+    "/api/core/v1/outbox/consumers": {
+      "get": {
+        "operationId": "core_listOutboxConsumers",
+        "summary": "List the outbox's consumers",
+        "description": "Every declared consumer, enabled or not, with its lag, pending, retrying and dead counts and its topic's intake backlog. A disabled module's consumer is listed with the backlog the store keeps for it (retained_backlog). A count marked capped is a floor: the store counts at most 1000 per partition. What the relay will not work on until an operator acts (a topic, a pair, a family of stored keys) is listed under stopped, beside the page and whole on every page, each with a closed cause token.",
+        "tags": [
+          "outbox"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.OutboxConsumerPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
+      }
+    },
+    "/api/core/v1/outbox/consumers/{consumer}/backlog": {
+      "delete": {
+        "operationId": "core_purgeConsumerBacklog",
+        "summary": "Purge a consumer's backlog",
+        "description": "Advances every cursor of the consumer to the head of its topic and clears its retries, discarding the messages it has not taken over; answers how many it skipped. Dead letters stay, and messages sequenced after the purge are delivered normally. It is the only way a disabled module's retained messages are discarded. Needs an interactive sign-in (not an API key). Audited as core.outbox.backlog_purge before the purge runs: when the record cannot be written the answer is 503 and nothing was purged; the purge then records how many messages it skipped, or the failure it ended in. The purge runs to its end even if the client hangs up. 404 when the consumer is unknown or has no backlog (it never ran); 409 when the topic is not available to this build or its partition count changed.",
+        "tags": [
+          "outbox"
+        ],
+        "parameters": [
+          {
+            "name": "consumer",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.OutboxPurgeResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)",
+        "x-mediacore-guards": [
+          "interactive"
+        ]
+      }
+    },
+    "/api/core/v1/outbox/dead": {
+      "get": {
+        "operationId": "core_listDeadLetters",
+        "summary": "List the outbox's dead letters",
+        "description": "Dead letters in (consumer, topic, seq) order, at most 500 per page; follow next_cursor until there is none (a page that ends exactly at the last letter still carries one, and the next page is empty). A letter shows its consumer, topic, seq, partition, attempts, the token that says why it died, and its idempotency key; never its payload or its key. A dead letter stays until an operator retries or discards it.",
+        "tags": [
+          "outbox"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.CursorPage_OutboxDeadLetter"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
+      }
+    },
+    "/api/core/v1/outbox/dead/{consumer}/{seq}": {
+      "delete": {
+        "operationId": "core_discardDeadLetter",
+        "summary": "Discard one dead letter",
+        "description": "Deletes the dead letter for good. Audited as core.outbox.dead_discard before the delete runs: when the record cannot be written the answer is 503 and nothing was discarded; a discard that then fails is recorded as the failure it was. 404 and 409 as for a retry.",
+        "tags": [
+          "outbox"
+        ],
+        "parameters": [
+          {
+            "name": "consumer",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
+      }
+    },
+    "/api/core/v1/outbox/dead/{consumer}/{seq}/retry": {
+      "post": {
+        "operationId": "core_retryDeadLetter",
+        "summary": "Retry one dead letter",
+        "description": "Hands the message back to its consumer alone, at the end of the stream under a new seq, and deletes the dead letter. Audited as core.outbox.dead_retry before the retry runs: when the record cannot be written the answer is 503 and nothing was retried; a retry that then fails is recorded as the failure it was. 404 when the consumer is unknown or has no dead letter at seq; 409 when the letter changed under the operation (list it again).",
+        "tags": [
+          "outbox"
+        ],
+        "parameters": [
+          {
+            "name": "consumer",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "seq",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "Problem",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/core.Problem"
+                }
+              }
+            }
+          }
+        },
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
       }
     },
     "/api/core/v1/roles": {
@@ -2874,6 +3211,74 @@
         ],
         "additionalProperties": false
       },
+      "core.CursorPage_OutboxDeadLetter": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "consumer": {
+                  "type": "string"
+                },
+                "topic": {
+                  "type": "string"
+                },
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "partition": {
+                  "type": "integer"
+                },
+                "attempts": {
+                  "type": "integer"
+                },
+                "error": {
+                  "type": "string"
+                },
+                "idempotency_key": {
+                  "type": "string"
+                },
+                "producer": {
+                  "type": "string"
+                },
+                "staged_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "dead_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "consumer",
+                "topic",
+                "seq",
+                "partition",
+                "attempts",
+                "error",
+                "idempotency_key",
+                "staged_at",
+                "dead_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
       "core.FactoryResetResponse": {
         "type": "object",
         "properties": {
@@ -3475,6 +3880,140 @@
         ],
         "additionalProperties": false
       },
+      "core.OutboxConsumerPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "module": {
+                  "type": "string"
+                },
+                "topic": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "declared": {
+                  "type": "boolean"
+                },
+                "pending": {
+                  "type": "integer"
+                },
+                "pending_capped": {
+                  "type": "boolean"
+                },
+                "retrying": {
+                  "type": "integer"
+                },
+                "lag_ms": {
+                  "type": "integer"
+                },
+                "dead": {
+                  "type": "integer"
+                },
+                "intake_backlog": {
+                  "type": "integer"
+                },
+                "intake_capped": {
+                  "type": "boolean"
+                },
+                "retained_backlog": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "module",
+                "topic",
+                "enabled",
+                "declared",
+                "pending",
+                "pending_capped",
+                "retrying",
+                "lag_ms",
+                "dead",
+                "intake_backlog",
+                "intake_capped",
+                "retained_backlog"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "stopped": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "cause": {
+                  "type": "string"
+                },
+                "topic": {
+                  "type": "string"
+                },
+                "consumer": {
+                  "type": "string"
+                },
+                "partition": {
+                  "type": [
+                    "null",
+                    "integer"
+                  ]
+                }
+              },
+              "required": [
+                "cause"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total",
+          "stopped"
+        ],
+        "additionalProperties": false
+      },
+      "core.OutboxPurgeResult": {
+        "type": "object",
+        "properties": {
+          "skipped": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "skipped"
+        ],
+        "additionalProperties": false
+      },
       "core.Page_APIKey": {
         "type": "object",
         "properties": {
@@ -3557,6 +4096,103 @@
                 "created_at",
                 "use_count",
                 "imported"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "count",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "core.Page_EventTopic": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "permission": {
+                  "type": "string"
+                },
+                "schema": true,
+                "durable": {
+                  "type": [
+                    "null",
+                    "object"
+                  ],
+                  "properties": {
+                    "partitions": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "partitions"
+                  ],
+                  "additionalProperties": false
+                },
+                "notify": {
+                  "type": [
+                    "null",
+                    "object"
+                  ],
+                  "properties": {
+                    "title": {
+                      "type": "string"
+                    },
+                    "default_severity": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title",
+                    "default_severity"
+                  ],
+                  "additionalProperties": false
+                },
+                "realtime": {
+                  "type": [
+                    "null",
+                    "object"
+                  ],
+                  "properties": {
+                    "coalesce_ms": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "coalesce_ms"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "name",
+                "permission"
               ],
               "additionalProperties": false
             }

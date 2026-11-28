@@ -93,11 +93,17 @@ func TestJournal_RequiresSystemManage(t *testing.T) {
 	t.Run("event_half", func(t *testing.T) {
 		rig := newTailRig(t, nil)
 		rig.sign("u-dick", "core:system.view")
-		rig.sign("u-bruce", permManage)
+		rig.sign("u-alfred", permManage)
+		rig.sign("u-bruce", operatorPerms...)
 		const topic = "/?topic=" + logjournal.TailTopicName
 
 		if _, status, code := rig.open("u-dick", topic); status != http.StatusForbidden || code != "topic_not_permitted" {
 			t.Errorf("system.view-only on topic=%s: %d %q, want 403 topic_not_permitted before the stream", logjournal.TailTopicName, status, code)
+		}
+		// core:system.manage alone is not the operator requirement (core.log.recorded.v1
+		// needs all seven scopes of HEAD's settings.manage atom).
+		if _, status, code := rig.open("u-alfred", topic); status != http.StatusForbidden || code != "topic_not_permitted" {
+			t.Errorf("system.manage-only on topic=%s: %d %q, want 403 topic_not_permitted before the stream", logjournal.TailTopicName, status, code)
 		}
 		dick, _, _ := rig.open("u-dick", "/?topic=*")
 		bruce, _, _ := rig.open("u-bruce", "/?topic=*")
@@ -456,6 +462,13 @@ func newTailRig(t *testing.T, pred log.OtherUserPredicate) *tailRig {
 	return r
 }
 
+// operatorPerms are the scopes the live tail requires (rbac.OperatorRequirement),
+// spelled out here rather than read from the package under test.
+var operatorPerms = []rbac.Permission{
+	"core:settings.manage", "core:tasks.manage", "core:system.view", "core:system.manage",
+	"core:library.manage", "core:library.browse", "core:integrations.manage",
+}
+
 func (r *tailRig) sign(id string, perms ...rbac.Permission) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -583,7 +596,7 @@ func (s *tailStream) quiet(t testing.TB, d time.Duration) {
 // a boolean, a duration, a repeated key).
 func TestJournalTail_SameViewAsQuery(t *testing.T) {
 	rig := newTailRig(t, nil)
-	rig.sign("u-bruce", permManage, permUsers)
+	rig.sign("u-bruce", append(slices.Clone(operatorPerms), permUsers)...)
 	s, status, code := rig.open("u-bruce", "/?topic="+logjournal.TailTopicName)
 	if s == nil {
 		t.Fatalf("open: %d %s", status, code)
@@ -665,7 +678,7 @@ func TestJournalTail_PredicateSeesSameRecordAsQuery(t *testing.T) {
 		return false
 	}
 	rig := newTailRig(t, pred)
-	rig.sign("u-bruce", permManage) // no users.view: the predicate runs on both surfaces
+	rig.sign("u-bruce", operatorPerms...) // no users.view: the predicate runs on both surfaces
 	s, status, code := rig.open("u-bruce", "/?topic="+logjournal.TailTopicName)
 	if s == nil {
 		t.Fatalf("open: %d %s", status, code)

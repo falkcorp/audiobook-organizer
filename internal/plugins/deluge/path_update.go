@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
+	delugeclient "github.com/falkcorp/audiobook-organizer/internal/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/opmode"
 	"github.com/falkcorp/audiobook-organizer/pkg/plugin/sdk"
 )
@@ -52,13 +55,6 @@ func (p *Plugin) pathUpdateDef() sdk.OperationDef {
 			sdk.CapFilesWrite,
 			sdk.CapNetworkGeneric,
 		},
-		// Event-triggered: fires on book.relocated events.
-		Triggers: []sdk.EventSubscription{
-			{
-				EventName: "book.relocated",
-				Handler:   p.handleBookRelocated,
-			},
-		},
 	}
 }
 
@@ -73,32 +69,6 @@ type pathUpdateParams struct {
 	DryRunCamel *bool `json:"dryRun,omitempty"`
 }
 
-func (p *Plugin) handleBookRelocated(ctx context.Context, payload any) error {
-	// payload is expected to be a string (book ID) from the event bus.
-	bookID, ok := payload.(string)
-	if !ok {
-		return fmt.Errorf("book.relocated payload is not a string")
-	}
-
-	// Placeholder; nothing enqueues this today. The params below are built
-	// and discarded (see the end of this function), and nothing in the repo
-	// publishes book.relocated. DryRun is set live so that whoever wires this
-	// up does not inherit the op's preview default by accident: a relocation
-	// event wants the move made, and an omitted dry_run would queue a run that
-	// moves nothing.
-	params := pathUpdateParams{BookID: bookID, DryRun: opmode.Live()}
-	paramsBytes, err := json.Marshal(params)
-	if err != nil {
-		return fmt.Errorf("marshal params: %w", err)
-	}
-
-	// The event handler doesn't have access to the registry for re-enqueueing,
-	// so this is a placeholder. In practice, the event bus will call RunOperation
-	// directly with these params.
-	_ = paramsBytes
-	return nil
-}
-
 // pathUpdateStore is the reads the core takes.
 type pathUpdateStore interface {
 	GetBookByID(id string) (*database.Book, error)
@@ -108,13 +78,20 @@ type pathUpdateStore interface {
 // storageMover is the one Deluge call the core makes: core.move_storage. It is
 // not a store write; it stays in the core (F5-05 brief).
 type storageMover interface {
-	MoveStorage(torrentIDs []string, destPath string) error
+	// MoveStorage is bound to ctx, so a Deluge call that hangs cannot outlive
+	// the run that made it.
+	MoveStorage(ctx context.Context, torrentIDs []string, destPath string) error
 }
 
 // pathUpdateCoreParams is the core's params: HEAD's pathUpdateParams without
 // the mode switch (the mode is the env's Live).
 type pathUpdateCoreParams struct {
 	BookID string `json:"book_id"`
+	// TargetBookID, when set, is the book whose stored path the torrents of
+	// BookID move to: the organized copy of a copy-organize, where the original's
+	// own path does not change (F6-03). The path is read when the run runs,
+	// never taken from the message that started it. Empty: BookID's own path.
+	TargetBookID string `json:"target_book_id,omitempty"`
 }
 
 // pathUpdateEnv is what the core takes from its shell. Mover is nil when Deluge
@@ -125,6 +102,58 @@ type pathUpdateEnv struct {
 	Cfg   *config.Config
 	Store pathUpdateStore
 	Mover storageMover
+	// Sleep waits d between two attempts of one torrent's move and returns the
+	// context's error as soon as ctx is done. Nil is ctxSleep. A test sets it
+	// to record the delays without waiting.
+	Sleep func(ctx context.Context, d time.Duration) error
+}
+
+// moveAttempts bounds one torrent's MoveStorage calls in a run, the first
+// included; moveBackoff is the wait before the second and the third. The retry
+// is inside the run because an outbox delivery is acked when the run is staged
+// (outbox ConsumeIntoTask), so nothing redelivers a run that ends failed.
+const (
+	moveAttempts = 3
+	moveBackoff  = time.Second
+)
+
+// ctxSleep waits d, or until ctx is done (then it returns ctx's error).
+func ctxSleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// moveWithRetry calls MoveStorage up to moveAttempts times for one torrent. It
+// retries only an error delugeclient.IsTransient accepts, waiting moveBackoff
+// and then twice that between attempts; a permanent refusal (an unknown
+// torrent, a refused path) is returned at once. A done ctx stops it with the
+// context's error, not the last move error.
+func moveWithRetry(ctx context.Context, env pathUpdateEnv, hash, dir string) error {
+	sleep := env.Sleep
+	if sleep == nil {
+		sleep = ctxSleep
+	}
+	var err error
+	for attempt := 1; attempt <= moveAttempts; attempt++ {
+		if err = env.Mover.MoveStorage(ctx, []string{hash}, dir); err == nil {
+			return nil
+		}
+		if !delugeclient.IsTransient(err) || attempt == moveAttempts {
+			return err
+		}
+		env.Logger.Warn("move_storage failed, retrying",
+			"hash", hash, "path", dir, "attempt", attempt, "error", err)
+		if serr := sleep(ctx, moveBackoff<<(attempt-1)); serr != nil {
+			return serr
+		}
+	}
+	return err
 }
 
 // pathUpdateResult is the native run's result. HEAD stored none.
@@ -162,6 +191,25 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 		return pathUpdateResult{}, fmt.Errorf("book not found")
 	}
 
+	// The path the torrents follow is the target's, when there is a target.
+	pathBook := book
+	if args.TargetBookID != "" {
+		target, err := env.Store.GetBookByID(args.TargetBookID)
+		if err != nil {
+			return pathUpdateResult{}, fmt.Errorf("load target book: %w", err)
+		}
+		if target == nil || target.FilePath == "" {
+			// The copy was rolled back, deleted or retired since the follow-up
+			// was staged: no path is left to follow, now or on any retry, so the
+			// run ends successfully having moved nothing.
+			env.Logger.Warn("deluge path-update: the target book is gone or has no path, nothing moved",
+				"book_id", bookID, "target_book_id", args.TargetBookID)
+			newProgress(env.kindEnv, 0).Done("target book gone: nothing moved")
+			return pathUpdateResult{BookID: bookID, DryRun: dryRun}, nil
+		}
+		pathBook = target
+	}
+
 	versions, err := env.Store.GetBookVersionsByBookID(bookID)
 	if err != nil {
 		return pathUpdateResult{}, fmt.Errorf("load versions: %w", err)
@@ -182,9 +230,11 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 			activeCount++
 		}
 	}
-	primaryDir := filepath.Dir(book.FilePath)
+	primaryDir := filepath.Dir(pathBook.FilePath)
 
 	var updated, planned atomic.Int64
+	var failMu sync.Mutex
+	var failed []string // hashes of the torrents whose move failed for good
 
 	// runitems:sequential one book's versions (a handful); sequential by design
 	if err := env.Items(ctx, pathUpdateParallelism(), len(versions), kindItemsOptions{Collect: true}, func(ctx context.Context, i int) error {
@@ -193,8 +243,11 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 			return nil // skip non-Deluge or inactive versions
 		}
 
+		// With a target, every torrent of the original follows the copy's
+		// directory, as the base's NotifyDelugeAfterOrganize sent each one to
+		// Dir(newPath): a version folder is for a book organized in place.
 		var dir string
-		if activeCount == 1 {
+		if activeCount == 1 || args.TargetBookID != "" {
 			dir = primaryDir
 		} else {
 			dir = filepath.Join(primaryDir, ".versions", v.ID)
@@ -207,10 +260,16 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 				planned.Add(1)
 				return nil
 			}
-			if err := env.Mover.MoveStorage([]string{v.TorrentHash}, dir); err != nil {
+			if err := moveWithRetry(ctx, env, v.TorrentHash, dir); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err() // canceled or timed out: not this torrent's failure
+				}
 				env.Logger.Error("move_storage failed",
 					"hash", v.TorrentHash, "path", dir, "error", err)
-				return nil // non-fatal: log but continue
+				failMu.Lock()
+				failed = append(failed, v.TorrentHash)
+				failMu.Unlock()
+				return nil // the other versions are still tried; the run reports the failures below
 			}
 			env.Logger.Info("move_storage succeeded",
 				"hash", v.TorrentHash, "path", dir)
@@ -228,7 +287,14 @@ func pathUpdateCore(ctx context.Context, args pathUpdateCoreParams, env pathUpda
 		mode = "DRY RUN"
 	}
 	progress.Done(fmt.Sprintf("%s: %d move_storage planned, %d updated", mode, planned.Load(), updated.Load()))
-	return pathUpdateResult{BookID: bookID, DryRun: dryRun, Planned: planned.Load(), Updated: updated.Load()}, nil
+	res := pathUpdateResult{BookID: bookID, DryRun: dryRun, Planned: planned.Load(), Updated: updated.Load()}
+	if len(failed) > 0 {
+		// The run ends failed and visible instead of reporting success for a
+		// torrent that never followed its book; a fresh run starts from zero
+		// (ResumeFromZero) and moves it. Hashes only, never paths.
+		return res, fmt.Errorf("move_storage failed for %d torrent(s): %s", len(failed), strings.Join(failed, ", "))
+	}
+	return res, nil
 }
 
 // runPathUpdate is the v2 shell: HEAD's Run (params, the dry_run/dryRun

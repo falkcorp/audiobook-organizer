@@ -33,7 +33,6 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/merge"
 	"github.com/falkcorp/audiobook-organizer/internal/metrics"
 	"github.com/falkcorp/audiobook-organizer/internal/opscatalog"
-	"github.com/falkcorp/audiobook-organizer/internal/realtime"
 	"github.com/falkcorp/audiobook-organizer/internal/remux"
 	"github.com/falkcorp/audiobook-organizer/internal/scanner"
 	"github.com/falkcorp/audiobook-organizer/internal/scheduler"
@@ -864,47 +863,36 @@ func (s *Server) afterListen() {
 		return
 	}
 
-	// Heartbeat: push periodic system.status events via SSE (every 5s) while running
+	// Heartbeat: refresh the process and library gauges every 5 s while running.
+	// (It also pushed a system.status frame to hub A's /api/events; nothing read
+	// it, and its successor, core.system.status-changed.v1, is F8-04a's.)
 	ticker := time.NewTicker(5 * time.Second)
-	libraryCountTick, bookCount, folderCount := 0, 0, 0 // the counts are re-read once a minute, re-sent every tick
+	libraryCountTick := 0 // the library counts are re-read once a minute
 	backgroundWG.Go(func() {
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				if s.hub != nil {
-					// Gather lightweight metrics
-					var alloc runtime.MemStats
-					runtime.ReadMemStats(&alloc)
-					// The library counts walk every book row (CountPrimaryBooks
-					// is a full Pebble scan when the memdb is not serving it):
-					// 27% of all CPU on prod 2026-10-03 at the old 5 s cadence,
-					// so they refresh once a minute; the process gauges stay at 5 s.
-					if libraryCountTick%12 == 0 && s.Ops() != nil {
-						if bc, err := s.Ops().CountPrimaryBooks(); err == nil {
-							bookCount = bc
-							metrics.SetBooks(bc)
-						}
-						if folders, err := s.Ops().GetAllImportPaths(); err == nil {
-							folderCount = len(folders)
-							metrics.SetFolders(folderCount)
-						}
+				var alloc runtime.MemStats
+				runtime.ReadMemStats(&alloc)
+				// The library counts walk every book row (CountPrimaryBooks
+				// is a full Pebble scan when the memdb is not serving it):
+				// 27% of all CPU on prod 2026-10-03 at the old 5 s cadence,
+				// so they refresh once a minute; the process gauges stay at 5 s.
+				if libraryCountTick%12 == 0 && s.Ops() != nil {
+					if bc, err := s.Ops().CountPrimaryBooks(); err == nil {
+						metrics.SetBooks(bc)
 					}
-					libraryCountTick++
-
-					// Update Prometheus metrics
-					metrics.SetMemoryAlloc(alloc.Alloc)
-					metrics.SetGoroutines(runtime.NumGoroutine())
-					s.updateSearchIndexMetrics()
-
-					s.hub.SendSystemStatus(map[string]any{
-						"books":        bookCount,
-						"folders":      folderCount,
-						"memory_alloc": alloc.Alloc,
-						"goroutines":   runtime.NumGoroutine(),
-						"timestamp":    time.Now().Unix(),
-					})
+					if folders, err := s.Ops().GetAllImportPaths(); err == nil {
+						metrics.SetFolders(len(folders))
+					}
 				}
+				libraryCountTick++
+
+				// Update Prometheus metrics
+				metrics.SetMemoryAlloc(alloc.Alloc)
+				metrics.SetGoroutines(runtime.NumGoroutine())
+				s.updateSearchIndexMetrics()
 			case <-shutdown:
 				return
 			}
@@ -937,12 +925,6 @@ func (s *Server) afterListen() {
 		// per event.
 		cb := func(path string) {
 			watchLog.Info("Auto-scan triggered for: %s", path)
-			if s.hub != nil {
-				s.hub.Broadcast(&realtime.Event{
-					Type: "scan.auto_triggered",
-					Data: map[string]any{"path": path},
-				})
-			}
 			if s.scanService != nil && s.opRegistry != nil {
 				go func() {
 					scanPath := path
@@ -998,10 +980,10 @@ func (s *Server) afterListen() {
 }
 
 // beforeDrain is the stop's first steps, which R1Listener.Shutdown runs before
-// the HTTP drain (HEAD's order): stop the scheduler, tickers and watchers,
-// tell the connected clients, and end the long-lived event streams so the
-// drain does not wait on them for its whole budget (/api/events, the ops v2
-// and v3 event streams). STOPPING=1 is the kernel's: it sends it at the first
+// the HTTP drain (HEAD's order): stop the scheduler, tickers and watchers, and
+// end the long-lived event streams so the
+// drain does not wait on them for its whole budget (the ops v2 and v3 event
+// streams). STOPPING=1 is the kernel's: it sends it at the first
 // stop step, before the listener drains and so before this runs.
 func (s *Server) beforeDrain() {
 	if s.life.shutdown != nil {
@@ -1010,17 +992,9 @@ func (s *Server) beforeDrain() {
 
 	slog.Info("Shutting down server...")
 
-	// Broadcast shutdown event to all connected clients FIRST
-	if s.hub != nil {
-		s.hub.Broadcast(&realtime.Event{
-			Type: "system.shutdown",
-			Data: map[string]any{
-				"message": "Server is shutting down",
-			},
-		})
-		// Give clients a moment to receive the event
-		time.Sleep(500 * time.Millisecond)
-	}
+	// The shutdown frame the SPA's backdrop and a backup restore wait for is
+	// core.stream.closed.v1{reason: shutdown}, sent by core's realtime hub when
+	// the listener begins to drain (httpapi.ListenOptions.OnShutdown).
 
 	// End the event streams, or the graceful HTTP shutdown waits on them for
 	// its whole timeout.
@@ -1037,9 +1011,9 @@ func (s *Server) closeStreams() {
 }
 
 // endStreamsOnShutdown is the middleware of a long-lived event-stream route
-// whose handler ends only when its request context does (/api/events, the ops
-// v2 events): the request context is cancelled when closeStreams runs, before
-// the listener drains (R1-15).
+// whose handler ends only when its request context does (the ops v2 events):
+// the request context is cancelled when closeStreams runs, before the listener
+// drains (R1-15).
 func (s *Server) endStreamsOnShutdown() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx, cancel := context.WithCancel(c.Request.Context())
@@ -1519,6 +1493,10 @@ type R1Listener struct {
 	tls       bool
 	cfg       ServerConfig
 	afterDone chan struct{} // closed when afterListen has run (Serve starts it)
+	// onShutdown runs ListenOptions.OnShutdown once, however many paths ask: the
+	// stdlib server's own RegisterOnShutdown hook and Shutdown's explicit call
+	// ahead of HTTP/3. nil when the options carry no hook.
+	onShutdown func()
 }
 
 // R1Listen returns books' app.Options.R1Listen for cfg (HEAD's --http3-port,
@@ -1613,6 +1591,23 @@ func (s *Server) listenR1(cfg ServerConfig, o httpapi.ListenOptions, inner http.
 		WriteTimeout:      cfg.WriteTimeout,
 		IdleTimeout:       cfg.IdleTimeout,
 		MaxHeaderBytes:    1 << 20, // 1MB
+	}
+	// o.OnShutdown is the realtime hub's Close, which ends the open
+	// /api/core/v1/events streams with closed{shutdown} so the drain is not held
+	// open by them (httpapi.ListenOptions.OnShutdown). R1Listener.Shutdown runs
+	// it BEFORE it closes HTTP/3, so an HTTP/3 client receives the frame; the
+	// stdlib server's hook covers a Shutdown that reaches it first, and the Once
+	// makes the second call a wait on the first.
+	if len(o.OnShutdown) > 0 {
+		hooks := slices.Clone(o.OnShutdown)
+		l.onShutdown = sync.OnceFunc(func() {
+			var wg sync.WaitGroup
+			for _, f := range hooks {
+				wg.Go(f)
+			}
+			wg.Wait()
+		})
+		s.httpServer.RegisterOnShutdown(l.onShutdown)
 	}
 	if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
 		ln, err := s.bindMainListener()
@@ -1762,13 +1757,25 @@ func (l *R1Listener) Shutdown(ctx context.Context) error {
 	// afterListen after this point would race the whole stop.
 	s.life.afterGate.seal(ctx)
 	s.beforeDrain()
+	// The shutdown hooks first (the hub's closed{shutdown} frame), then HTTP/3:
+	// a QUIC server closed before them drops the frame on its way to the
+	// client. HTTP/3 then drains gracefully (GOAWAY, then the requests in
+	// flight) beside the main server, both bounded by ctx.
+	if l.onShutdown != nil {
+		l.onShutdown()
+	}
 	lifecycleLog.Info("Stopping HTTP servers...")
+	var h3Done chan error
 	if s.http3Server != nil {
-		if err := s.http3Server.Close(); err != nil {
-			lifecycleLog.Warn("HTTP/3 server close error: %v", err)
-		}
+		h3Done = make(chan error, 1)
+		go func() { h3Done <- s.http3Server.Shutdown(ctx) }()
 	}
 	err := s.httpServer.Shutdown(ctx)
+	if h3Done != nil {
+		if herr := <-h3Done; herr != nil {
+			lifecycleLog.Warn("HTTP/3 server shutdown error: %v", herr)
+		}
+	}
 	if s.httpRedirectServer != nil {
 		if rerr := s.httpRedirectServer.Shutdown(ctx); rerr != nil {
 			lifecycleLog.Warn("HTTP->HTTPS redirect server forced shutdown: %v", rerr)
@@ -2765,7 +2772,6 @@ func legacyAPIRedirect(method, path string) (string, bool) {
 		// v1 path missing its prefix.
 		!strings.HasPrefix(path, "/api/v3/") &&
 		!strings.HasPrefix(path, "/api/health") &&
-		!strings.HasPrefix(path, "/api/events") &&
 		!strings.HasPrefix(path, "/api/metrics") &&
 		!absReservedPath(path) &&
 		// Gated on the flag, unlike every other exclusion here: these paths
@@ -2808,8 +2814,8 @@ func (s *Server) setupRoutes() error {
 	// configured). Built FIRST, ahead of every route registration below, because
 	// gin binds a route's middleware chain at registration time: a top-level
 	// route can only inherit cfMW if cfMW already exists when that route is
-	// registered, and a later router.Use() cannot retrofit it. Both /metrics and
-	// /api/events depend on that. buildOAuthWiring is a pure constructor (it
+	// registered, and a later router.Use() cannot retrofit it. /metrics depends
+	// on that. buildOAuthWiring is a pure constructor (it
 	// reads config and builds handlers/verifiers; it registers no routes), so
 	// hoisting it is safe, and it is still called exactly once.
 	oauthH, cfMW, cfRecoveryMW := s.buildOAuthWiring()
@@ -2852,27 +2858,9 @@ func (s *Server) setupRoutes() error {
 	// before the /api/* redirect below so it keeps its /api/v1 path.
 	s.router.POST(cspReportPath, defaultCSPReporter.handle)
 
-	// Real-time events (SSE). Same pre-middleware-ordering rationale as /health.
-	// Gated behind auth (pen-test finding MED-2): the stream carries library
-	// events (imports, scan progress, metadata updates) that anonymous clients
-	// must not see. Anonymous clients get 401. When auth is disabled (local
-	// single-user mode) this is a no-op, like the rest of the API. Built inline
-	// because the shared authMiddleware is constructed later in this function
-	// (and routes registered before a router.Use() don't inherit it).
-	//
-	// cfMW runs FIRST and fail-open, exactly as it does on /api/v1: it binds the
-	// user resolved from a valid Cf-Access-Jwt-Assertion so the RequireAuth below
-	// short-circuits, and otherwise passes through untouched. Without it this
-	// route was the one authenticated endpoint the Cloudflare Access passthrough
-	// never reached, because a browser under Access SSO has NO session cookie —
-	// identity arrives only in that header — so EventSource 401'd in a reconnect
-	// loop and the UI showed a permanent "Connection lost" banner while every
-	// /api/v1 call succeeded.
-	eventsAuth := s.requireAuth()
-	// endStreamsOnShutdown first: the stream ends when the stop closes the
-	// event streams, before the listener drains (R1-15).
-	s.router.GET("/api/events", append([]gin.HandlerFunc{s.endStreamsOnShutdown()},
-		buildTopLevelAuthChain(cfMW, eventsAuth, func(c *gin.Context) { s.systemHandler.HandleEvents(c) })...)...)
+	// GET /api/events (hub A's SSE) is gone: the stream is core's
+	// /api/core/v1/events (F6-03), mounted by the kernel's router, so this engine
+	// registers no route for it.
 
 	// Public temp-login consumer at the root so URLs are short and
 	// browser-friendly. Validates the token, deletes it (single-use),
@@ -2917,7 +2905,7 @@ func (s *Server) setupRoutes() error {
 		slog.Warn("rate limiting is disabled (enable_rate_limit=false) despite api_rate_limit_per_minute being set — the API is vulnerable to abuse. Set enable_rate_limit=true in config.yaml for production deployments")
 	}
 
-	// oauthH and cfMW were built earlier, before the /api/events route that also
+	// oauthH and cfMW were built earlier, before the /metrics route that
 	// needs cfMW — see the comment at that call site.
 
 	// Audiobookshelf-compatible surface. A separate TOP-LEVEL group, not a child of

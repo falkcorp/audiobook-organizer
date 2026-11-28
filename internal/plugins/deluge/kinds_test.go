@@ -105,7 +105,7 @@ func delugeRows() []kindRow {
 		},
 		{
 			HeadID: "deluge.path-update", Title: "Update Deluge torrent path",
-			HeadResume: sdk.ResumeDrop, Resume: tasks.ResumeDrop,
+			HeadResume: sdk.ResumeDrop, Resume: tasks.ResumeFromZero,
 			Priority: tasks.PriorityNormal, Timeout: time.Minute,
 			HeadKey: "deluge.path-update",
 			Writes:  []ops.Resource{ops.ResFiles},
@@ -420,7 +420,7 @@ func (c *fakeClient) ListTorrentDetailsByLabel(label string) ([]delugeclient.Tor
 	return slices.Clone(c.torrents), nil
 }
 
-func (c *fakeClient) MoveStorage(ids []string, dest string) error {
+func (c *fakeClient) MoveStorage(_ context.Context, ids []string, dest string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, id := range ids {

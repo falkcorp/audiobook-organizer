@@ -274,7 +274,7 @@ them.
 | `core.task.run-changed.v1` | 05-tasks | `AnyAuthenticated` + `Visible` = definition `View` | run view with progress, workers, current item; the topic's own `TopicSpec.Redact` = `tasks.RedactRunView`, declared by `tasks`, blanks `RunView.Current` (every worker's current-item label) and any run error text unless the subscriber holds `core:users.view` — the same function runs in the `GET /api/core/v1/tasks/runs[/{id}]` serializer, so REST and stream agree (COR2-2) | stream C `run`, stream B `op.created/updated/current_item/terminal`, stream A `operation.progress/status` |
 | `core.task.log-appended.v1` | 05-tasks | as above | log line | stream A `operation.log`, B `op.log` |
 | `core.system.status-changed.v1` | 05-health | `core:system.status` (seeded to `editor`/`viewer`, 05-rbac §4.8) | readiness and maintenance tokens only | stream A's `system.status` (readiness part) |
-| `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, `Coalesce: 250ms` | stream A `books.changed` (`book_changes.go:18-32`) |
+| `books.book.changed.v1` | books | `books:view` | `{kind: created|updated|deleted, id}`, `Key` = book ID, no `Coalesce` (the SPA batches per 250 ms; a core fold keeps only the latest frame per key, which would turn a `created` followed by an `updated` into an `updated` and lose the book from the new-books count) | stream A `books.changed` (`book_changes.go:18-32`) |
 
 **Successor scope of HEAD's gate (COR2-2).** HEAD withholds run error text and current-item labels
 from callers without `users.manage`, because a label can name a user (`opsv3/events.go:609-616`,
@@ -386,7 +386,7 @@ and the client relies on:
 
 | Key | Type | Default | Hot-reload | Protection |
 |---|---|---|---|---|
-| `core.realtime.ring_size` | int | 4096 | no | none |
+| `core.realtime.ring_size` | int | 1024 | no | none |
 | `core.realtime.client_buffer` | int | 128 | no | none |
 | `core.realtime.max_clients` | int | 256 | yes (new streams) | none |
 | `core.realtime.max_per_bucket` | int | 16 | yes | none |
@@ -451,7 +451,7 @@ exist before shell adoption (07 §7.19 step 4: F9, else R3), so F6 imports nothi
 
 | ABO today | Becomes | Deleted by |
 |---|---|---|
-| `internal/realtime/events.go` (hub A) + `book_changes.go` | `core/realtime` hub + books' `books.book.changed.v1` catalog topic (`Realtime{Coalesce: 250ms}`); hub A's `system.status` frame → `core.system.status-changed.v1` for readiness; HEAD's 5-second library counts in that frame (`internal/server/server_lifecycle.go:404-441`) get no topic here; if the shell wants them live, books declares its own topic (07 decides) | the events and realtime flip (F6) |
+| `internal/realtime/events.go` (hub A) + `book_changes.go` | `core/realtime` hub + books' `books.book.changed.v1` catalog topic (a `Realtime` declaration with no `Coalesce`, see §11's row); hub A's `system.status` frame → `core.system.status-changed.v1` for readiness; HEAD's 5-second library counts in that frame (`internal/server/server_lifecycle.go:404-441`) get no topic here; if the shell wants them live, books declares its own topic (07 decides) | the events and realtime flip (F6) |
 | `internal/operations/registry/bus.go` + `handlers/operations_v2.go:1063-1110` (stream B) | `core.task.run-changed.v1` / `core.task.log-appended.v1`, published by `core/tasks` | the tasks flip (F5), with HEAD's engine |
 | `internal/server/handlers/opsv3/events.go` broker (stream C) | its algorithm becomes `core/internal/sse` | the tasks flip (F5) |
 | `opaccess.Repairs.ForStream`/`StreamOpen` | the catalog `Visible` of the repairs topics (books) + `auth.Service.Revalidate` | F5 |

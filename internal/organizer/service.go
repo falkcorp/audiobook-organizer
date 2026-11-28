@@ -61,6 +61,23 @@ type OrganizerBookWriter interface {
 	DeleteBook(id string) error
 }
 
+// RelocatingCopyCreator is CreateBook for the organized copy of the book
+// originalID, with the follow-up that moves the original's torrents staged in
+// the new row's own batch (database.PebbleStore.CreateBookWithRelocation). It is
+// its own interface, not part of Store, because Store is what every organize
+// caller hands in and database.Store may not grow (TestStoreFlattenedWidth):
+// only the single-book organize request needs it, and the audiobooks KeyOrganize
+// ServiceDef hands it to Service.SetRelocatingCopyCreator when its store has it.
+type RelocatingCopyCreator interface {
+	CreateBookWithRelocation(book *database.Book, originalID string) (*database.Book, error)
+	// RelocationOutboxInstalled reports whether CreateBookWithRelocation stages
+	// the follow-up: true exactly when the store has a relocation outbox, and
+	// the store stages if and only if it says so. It is how the single-book
+	// organize request knows which of its two Deluge arms applies
+	// (Service.StagesRelocationFollowUp).
+	RelocationOutboxInstalled() bool
+}
+
 // OrganizerBookFileStore is the per-file half: the organizer repoints file rows
 // at their new paths as it moves them.
 type OrganizerBookFileStore interface {
@@ -156,6 +173,10 @@ var ErrFetchSkippedRetired = errors.New("organize: metadata fetch skipped, book 
 type Service struct {
 	db            Store
 	organizeHooks OrganizeHooks
+	// relocatingCopies creates the copy CreateOrganizedVersionFollowTorrents
+	// makes. Nil until SetRelocatingCopyCreator, and that method then fails
+	// rather than creating a copy that moves no torrent.
+	relocatingCopies RelocatingCopyCreator
 	// ScanEnqueuer enqueues a background library scan. Wired by the server
 	// package after construction to avoid a circular import.
 	ScanEnqueuer func(ctx context.Context) error
@@ -253,6 +274,16 @@ func NewService(db Store) *Service {
 		FetchMetadataForBook:       func(_ context.Context, _ string) (any, error) { return nil, nil },
 	}
 }
+
+// SetRelocatingCopyCreator wires the writer CreateOrganizedVersionFollowTorrents
+// uses for the copy's row. the audiobooks KeyOrganize ServiceDef sets it, from the
+// store when the store has the method (the production *database.PebbleStore does).
+func (orgSvc *Service) SetRelocatingCopyCreator(c RelocatingCopyCreator) { orgSvc.relocatingCopies = c }
+
+// ErrRelocatingCopyCreatorNotWired is what CreateOrganizedVersionFollowTorrents
+// returns on a Service nobody gave a RelocatingCopyCreator: the copy is not
+// created, so no file is left without its torrent follow-up.
+var ErrRelocatingCopyCreatorNotWired = errors.New("organize: no relocating copy creator wired (Service.SetRelocatingCopyCreator)")
 
 // Request describes an organize operation request.
 type Request struct {
@@ -2299,6 +2330,38 @@ func RemoveCreated(landing *Landing, owner string, log logger.Logger) {
 // Nothing is locked under the key (ApplyOrganizedFileMetadata and
 // ComputeITunesPath take none).
 func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
+	return orgSvc.createOrganizedVersion(book, landing, operationID, log, false)
+}
+
+// CreateOrganizedVersionFollowTorrents is CreateOrganizedVersion for the
+// single-book organize request, the one organize flow that moved the original's
+// torrents (NotifyDelugeAfterOrganize; with the tasks switch on the staged
+// follow-up replaces it, F6-03): the copy's row commits together with the staged
+// follow-up that starts the run moving the original book's Active torrents to
+// the copy's stored path. The
+// bulk organize, library clone and metadata-apply callers use
+// CreateOrganizedVersion and move nothing, as they never did.
+func (orgSvc *Service) CreateOrganizedVersionFollowTorrents(book *database.Book, landing *Landing, operationID string, log logger.Logger) (*database.Book, error) {
+	return orgSvc.createOrganizedVersion(book, landing, operationID, log, true)
+}
+
+// StagesRelocationFollowUp reports whether CreateOrganizedVersionFollowTorrents
+// stages the durable relocation follow-up (books.book.relocated.v1) with the
+// copy. The single-book organize request reads it to choose its one Deluge arm:
+// staged, and books' outbox consumer moves the original's torrents; not staged
+// (the tasks switch is off and no relocation outbox is installed), and the
+// request calls the direct NotifyDelugeAfterOrganize, exactly as before the
+// events flip (F6-03). It is the store's own answer (RelocatingCopyCreator), not
+// a second predicate, so the staging and the direct call cannot both run or
+// both be skipped: a Service with no creator refuses the copy, so the answer
+// is moot there.
+func (orgSvc *Service) StagesRelocationFollowUp() bool {
+	return orgSvc.relocatingCopies != nil && orgSvc.relocatingCopies.RelocationOutboxInstalled()
+}
+
+// createOrganizedVersion is the body of both; followTorrents selects
+// CreateBookWithRelocation for the copy's row.
+func (orgSvc *Service) createOrganizedVersion(book *database.Book, landing *Landing, operationID string, log logger.Logger, followTorrents bool) (*database.Book, error) {
 	if landing == nil || landing.Path == "" {
 		return nil, fmt.Errorf("organize: no landing for %s (%s) — refusing to create an organized version from nothing", book.Title, book.ID)
 	}
@@ -2526,7 +2589,17 @@ func (orgSvc *Service) CreateOrganizedVersion(book *database.Book, landing *Land
 		}
 	}
 
-	createdBook, err := orgSvc.db.CreateBook(&newBook)
+	var createdBook *database.Book
+	var err error
+	if followTorrents {
+		if orgSvc.relocatingCopies == nil {
+			err = ErrRelocatingCopyCreatorNotWired
+		} else {
+			createdBook, err = orgSvc.relocatingCopies.CreateBookWithRelocation(&newBook, book.ID)
+		}
+	} else {
+		createdBook, err = orgSvc.db.CreateBook(&newBook)
+	}
 	if err != nil {
 		log.Error("Failed to create organized book record for %s: %v — removing the %d file(s) this organize wrote", book.Title, err, len(landing.Created))
 		// No row exists yet, so only the on-disk half of the rollback applies.

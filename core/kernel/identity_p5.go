@@ -22,6 +22,7 @@ import (
 	"github.com/falkcorp/mediacore/module"
 	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
+	"github.com/falkcorp/mediacore/tasks"
 )
 
 // This file is the identity boot's P5, P6 and P7 (06 §6.5.1): the events bus,
@@ -82,6 +83,9 @@ func (k *Kernel) buildIdentityServices(ctx context.Context) error {
 	}
 	id.svc = svc
 	if err := k.registerAuthHealth(); err != nil {
+		return err
+	}
+	if err := k.buildEventsFlip(); err != nil {
 		return err
 	}
 	return k.bindAccountResolver(ctx)
@@ -300,6 +304,7 @@ func (k *Kernel) applyIdentityDeps(d *module.Deps, man module.Manifest) {
 	}
 	d.Audit = newModuleAudit(id, k.audit, k.coreLog("audit"))
 	d.Events = k.events.scope(id)
+	d.Outbox = k.outboxWriter(id)
 }
 
 // identityConsume is the identity boot's P7, after consume checked the
@@ -315,7 +320,7 @@ func (k *Kernel) identityConsume(ctx context.Context) error {
 		return errors.New("kernel: identity: P7 needs the services P5 built")
 	}
 	var probs []module.Problem
-	probs = append(probs, k.events.declareCore(coreTopics())...)
+	probs = append(probs, k.events.declareCore(tasks.WithViewRule(coreTopics(), k.taskViewRule()))...)
 	for _, e := range k.entries {
 		if e.enabled {
 			probs = append(probs, k.events.declare(e.man.ID, e.rec.Topics)...)
@@ -323,16 +328,22 @@ func (k *Kernel) identityConsume(ctx context.Context) error {
 			k.events.declareDisabled(e.man.ID)
 		}
 	}
+	probs = append(probs, k.declareTail()...)
 	for _, e := range k.entries {
 		if e.enabled {
 			probs = append(probs, k.events.subscribe(e.man.ID, e.rec.Subscriptions)...)
 		}
 	}
+	probs = append(probs, k.hubSubscriptions()...)
+	probs = append(probs, k.outboxConsume()...)
 	probs = append(probs, k.registerCompat()...)
 	if len(probs) > 0 {
 		return joined(probs)
 	}
 	k.events.freeze()
+	if probs = k.freezeOutbox(); len(probs) > 0 {
+		return joined(probs)
+	}
 	if err := id.svc.RBAC.CommitSeeds(ctx); err != nil {
 		return fmt.Errorf("kernel: identity: seed roles: %w", err)
 	}
@@ -373,7 +384,14 @@ func (k *Kernel) openEvents() error {
 	if k.events == nil {
 		return nil
 	}
-	return k.events.open()
+	if err := k.events.open(); err != nil {
+		return err
+	}
+	if err := k.startTail(); err != nil {
+		return err
+	}
+	k.startRealtime()
+	return nil
 }
 
 // closeEvents drains the bus within what remains of deadline and
@@ -386,5 +404,9 @@ func (k *Kernel) closeEvents(ctx context.Context, deadline time.Time) error {
 	}
 	ctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), atLeastFloor(deadline))
 	defer cancel()
-	return k.events.close(ctx)
+	// The tail stops offering and the hub closes its streams before the bus
+	// drains: both are bus consumers, and a stream still open must not meet a
+	// closed bus.
+	k.stopTail()
+	return errors.Join(k.stopRealtime(ctx), k.events.close(ctx))
 }

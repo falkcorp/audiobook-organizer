@@ -94,13 +94,18 @@ type organizeSvcSpy struct {
 	err         error
 	createCalls int
 	created     *database.Book
+	// stages scripts StagesRelocationFollowUp: the copy stages its follow-up
+	// and the handler makes no direct Deluge call.
+	stages bool
 }
+
+func (s *organizeSvcSpy) StagesRelocationFollowUp() bool { return s.stages }
 
 func (s *organizeSvcSpy) OrganizeOneBook(_ *organizer.Organizer, _ *database.Book, _ logger.Logger) (*organizer.Landing, error) {
 	return s.landing, s.err
 }
 
-func (s *organizeSvcSpy) CreateOrganizedVersion(book *database.Book, landing *organizer.Landing, opID string, _ logger.Logger) (*database.Book, error) {
+func (s *organizeSvcSpy) CreateOrganizedVersionFollowTorrents(book *database.Book, landing *organizer.Landing, opID string, _ logger.Logger) (*database.Book, error) {
 	s.createCalls++
 	s.created = &database.Book{ID: "v2-" + book.ID, FilePath: landing.Path}
 	return s.created, nil

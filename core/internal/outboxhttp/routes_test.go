@@ -301,17 +301,28 @@ func toJSON(t testing.TB, v any) string {
 
 // ---- the route table --------------------------------------------------------
 
+// operatorPerm is the requirement of every route, spelled out (not read from the
+// package under test): all seven core scopes of HEAD's settings.manage atom, reads
+// and writes alike. core:system.manage and core:system.view alone are not enough.
+const operatorPerm = "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
+
+// operatorScopes is operatorPerm as the scopes a caller holds.
+var operatorScopes = []rbac.Permission{
+	"core:settings.manage", "core:tasks.manage", "core:system.view", "core:system.manage",
+	"core:library.manage", "core:library.browse", "core:integrations.manage",
+}
+
 var wantRoutes = []struct {
 	method, path, name string
 	perm               string
 	interactive        bool
 }{
-	{http.MethodGet, "/api/core/v1/outbox/dead", "listDeadLetters", "core:system.manage", false},
-	{http.MethodPost, "/api/core/v1/outbox/dead/{consumer}/{seq}/retry", "retryDeadLetter", "core:system.manage", false},
-	{http.MethodDelete, "/api/core/v1/outbox/dead/{consumer}/{seq}", "discardDeadLetter", "core:system.manage", false},
-	{http.MethodDelete, "/api/core/v1/outbox/consumers/{consumer}/backlog", "purgeConsumerBacklog", "core:system.manage", true},
-	{http.MethodGet, "/api/core/v1/outbox/consumers", "listOutboxConsumers", "core:system.view", false},
-	{http.MethodGet, "/api/core/v1/events/topics", "listEventTopics", "core:system.view", false},
+	{http.MethodGet, "/api/core/v1/outbox/dead", "listDeadLetters", operatorPerm, false},
+	{http.MethodPost, "/api/core/v1/outbox/dead/{consumer}/{seq}/retry", "retryDeadLetter", operatorPerm, false},
+	{http.MethodDelete, "/api/core/v1/outbox/dead/{consumer}/{seq}", "discardDeadLetter", operatorPerm, false},
+	{http.MethodDelete, "/api/core/v1/outbox/consumers/{consumer}/backlog", "purgeConsumerBacklog", operatorPerm, true},
+	{http.MethodGet, "/api/core/v1/outbox/consumers", "listOutboxConsumers", operatorPerm, false},
+	{http.MethodGet, "/api/core/v1/events/topics", "listEventTopics", operatorPerm, false},
 }
 
 func registered(t testing.TB) *httpapi.Router {
@@ -547,25 +558,57 @@ func (c stage13Caller) principal() *auth.Principal {
 
 var (
 	noCaller   = stage13Caller{name: "no principal", anonymous: true}
-	viewer     = stage13Caller{name: "view only", method: auth.MethodSession, scopes: []rbac.Permission{permView}}
-	manager    = stage13Caller{name: "manage", method: auth.MethodSession, scopes: []rbac.Permission{permManage}}
-	managerKey = stage13Caller{name: "manage by api key", method: auth.MethodAPIKey, scopes: []rbac.Permission{permManage}}
-	managerABS = stage13Caller{name: "manage by delegated session", method: auth.MethodSessionDelegated, scopes: []rbac.Permission{permManage}}
-	managerOff = stage13Caller{name: "manage with auth off", method: auth.MethodAuthDisabled, scopes: []rbac.Permission{permManage}}
+	viewer     = stage13Caller{name: "view only", method: auth.MethodSession, scopes: []rbac.Permission{"core:system.view"}}
+	manager    = stage13Caller{name: "manage", method: auth.MethodSession, scopes: operatorScopes}
+	managerKey = stage13Caller{name: "manage by api key", method: auth.MethodAPIKey, scopes: operatorScopes}
+	managerABS = stage13Caller{name: "manage by delegated session", method: auth.MethodSessionDelegated, scopes: operatorScopes}
+	managerOff = stage13Caller{name: "manage with auth off", method: auth.MethodAuthDisabled, scopes: operatorScopes}
+	// systemManageOnly is a custom role holding core:system.manage and nothing else,
+	// and nearlyOperator one holding six of the seven operator scopes: neither is an
+	// operator, so every route refuses both, reads included.
+	systemManageOnly = stage13Caller{name: "system.manage alone", method: auth.MethodSession, scopes: []rbac.Permission{"core:system.manage"}}
+	nearlyOperator   = stage13Caller{name: "six of the seven operator scopes", method: auth.MethodSession, scopes: slices.DeleteFunc(slices.Clone(operatorScopes), func(p rbac.Permission) bool { return p == "core:library.browse" })}
 )
 
 // letThrough is the want of a cell the route lets through: neither 401 nor 403,
 // whatever the handler then answers (these cells name consumers that need not exist).
 const letThrough = 0
 
+// stage13Authn is stage 12 for these cells: the principal a cell binds on the
+// request context is the one stage 13 judges. It authenticates nothing itself, so a
+// request with no principal reaches stage 13 as anonymous (401).
+type stage13Authn struct{}
+
+func (stage13Authn) Middleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler { return next }
+}
+
+func (stage13Authn) SessionCookie(auth.ClientInfo, string, time.Time) *http.Cookie {
+	return &http.Cookie{Name: "hello_session", Path: "/", MaxAge: -1}
+}
+
 // stage13Do serves one request to the real routes, built into a router over a
-// live outbox, as caller. It is the body of every stage-13 cell: Build refuses
-// non-Public routes until F4-08 brings the auth service, so no cell reaches it
-// before then, and a cell that is un-skipped before then fails here, on Build.
+// live outbox with stage 13 installed (httpapi.Router.SetAuth), as caller. It is
+// the body of every stage-13 cell. Stage 12 is stage13Authn: the cell's principal
+// is bound on the request, so what is under test is the route's own permission and
+// guards, not credential resolution.
 func stage13Do(t *testing.T, method, path string, c stage13Caller) *httptest.ResponseRecorder {
 	t.Helper()
 	e := newEnv(t)
+	cat, err := rbac.NewCatalog(rbac.CoreScopes()...)
+	if err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
 	r := httpapi.NewRouter(httpapi.Options{}, httpapi.Deps{Log: discardLogger()})
+	if err := r.SetAuth(httpapi.AuthWiring{
+		Service:       stage13Authn{},
+		OwnerRequired: func() bool { return true },
+		ResolveAtom:   func(string, bool) (rbac.Requirement, bool) { return rbac.Requirement{}, false },
+		Catalog:       cat,
+		Log:           discardLogger(),
+	}); err != nil {
+		t.Fatalf("SetAuth: %v", err)
+	}
 	Register(r.CoreGroup(), e.ob, e.cat, e.aud, WithLogger(discardLogger()))
 	h, err := r.Build()
 	if err != nil {
@@ -590,14 +633,13 @@ func wantStage13(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 	}
 }
 
-// TestOutboxHTTP_DeadLetterRoutesNeedSystemManage: the dead-letter list and both
-// dead-letter writes answer 401 with no principal, 403 to a holder of
-// core:system.view alone, and let a holder of core:system.manage through; the
+// TestOutboxHTTP_DeadLetterRoutesNeedTheOperatorRequirement: the dead-letter list
+// and both dead-letter writes answer 401 with no principal, 403 to a holder of
+// core:system.view alone, of core:system.manage alone, or of six of the seven
+// operator scopes, and let the operator requirement's holder through; the
 // purge's own table (it also has the interactive guard) is
-// TestOutboxHTTP_PurgeNeedsInteractive. Route permission (stage 13) arrives at
-// F4-08, so each cell skips; F6-03, which mounts the package, un-skips them with
-// no other change (the bodies are written).
-func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
+// TestOutboxHTTP_PurgeNeedsInteractive. The cells run through stage 13 (stage13Do).
+func TestOutboxHTTP_DeadLetterRoutesNeedTheOperatorRequirement(t *testing.T) {
 	for _, c := range []struct {
 		name, method, path string
 	}{
@@ -606,13 +648,14 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 		{"discard", http.MethodDelete, "/outbox/dead/core.notify.deliver/1"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			for _, cell := range []struct {
 				caller stage13Caller
 				want   int
 			}{
 				{noCaller, http.StatusUnauthorized},
 				{viewer, http.StatusForbidden},
+				{systemManageOnly, http.StatusForbidden},
+				{nearlyOperator, http.StatusForbidden},
 				{manager, letThrough},
 			} {
 				t.Run(cell.caller.name, func(t *testing.T) {
@@ -625,10 +668,10 @@ func TestOutboxHTTP_DeadLetterRoutesNeedSystemManage(t *testing.T) {
 
 // TestOutboxHTTP_PurgeNeedsInteractive: the purge answers 401 with no principal,
 // 403 to a holder of core:system.view alone, 403 to a holder of
-// core:system.manage whose credential is not an interactive one (an API key, a
-// delegated session, the auth-off principal: Guards.Interactive), and lets an
-// interactive session holding core:system.manage through. Skipped until stage 13
-// (F4-08).
+// core:system.manage whose credential cannot change credentials (an API key, the
+// auth-off principal: Guards.Interactive), and lets a session or a delegated
+// session holding core:system.manage through (a delegated session may change
+// credentials; only Guards.Session would refuse it).
 func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 	const path = "/outbox/consumers/core.notify.deliver/backlog"
 	for _, cell := range []struct {
@@ -637,36 +680,43 @@ func TestOutboxHTTP_PurgeNeedsInteractive(t *testing.T) {
 	}{
 		{noCaller, http.StatusUnauthorized},
 		{viewer, http.StatusForbidden},
+		{systemManageOnly, http.StatusForbidden},
 		{managerKey, http.StatusForbidden},
-		{managerABS, http.StatusForbidden},
+		// Guards.Interactive is HEAD's credGuard (auth.Principal.MayChangeCredentials), which
+		// admits a delegated session (the reset-password flow); only Guards.Session refuses it.
+		// The route table pins Interactive, so the delegated session is let through.
+		{managerABS, letThrough},
 		{managerOff, http.StatusForbidden},
 		{manager, letThrough},
 	} {
 		t.Run(cell.caller.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			wantStage13(t, stage13Do(t, http.MethodDelete, path, cell.caller), cell.want)
 		})
 	}
 }
 
-// TestOutboxHTTP_ConsumersAndTopicsNeedSystemView: both read routes answer 401
-// with no principal, 403 to a caller holding neither scope, and let a holder of
-// core:system.view through. Skipped until stage 13 (F4-08).
-func TestOutboxHTTP_ConsumersAndTopicsNeedSystemView(t *testing.T) {
+// TestOutboxHTTP_ConsumersAndTopicsNeedTheOperatorRequirement: both read routes
+// answer 401 with no principal and 403 to a caller holding no scope, core:system.view
+// alone (the reads are not opened to viewers: they list what an operator may then
+// retry, discard or purge), core:system.manage alone, or six of the seven operator
+// scopes, and let an operator through.
+func TestOutboxHTTP_ConsumersAndTopicsNeedTheOperatorRequirement(t *testing.T) {
 	nothing := stage13Caller{name: "no scope", method: auth.MethodSession}
 	for _, c := range []struct{ name, path string }{
 		{"consumers", "/outbox/consumers"},
 		{"topics", "/events/topics"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			t.Skip("needs stage 13: F4-08")
 			for _, cell := range []struct {
 				caller stage13Caller
 				want   int
 			}{
 				{noCaller, http.StatusUnauthorized},
 				{nothing, http.StatusForbidden},
-				{viewer, letThrough},
+				{viewer, http.StatusForbidden},
+				{systemManageOnly, http.StatusForbidden},
+				{nearlyOperator, http.StatusForbidden},
+				{manager, letThrough},
 			} {
 				t.Run(cell.caller.name, func(t *testing.T) {
 					wantStage13(t, stage13Do(t, http.MethodGet, c.path, cell.caller), cell.want)

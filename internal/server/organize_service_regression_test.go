@@ -12,7 +12,6 @@ import (
 	"sync"
 	"testing"
 
-	audiobookspkg "github.com/falkcorp/audiobook-organizer/internal/audiobooks"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
@@ -48,7 +47,7 @@ func TestOrganizeDirectoryBook_AllSourceFilesMissing(t *testing.T) {
 		FileNamingPattern:    "{title}",
 	}
 	org := organizer.NewOrganizer(cfg)
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	book := &database.Book{
@@ -87,7 +86,7 @@ func TestOrganizeDirectoryBook_NoBookFiles(t *testing.T) {
 		FileNamingPattern:    "{title}",
 	}
 	org := organizer.NewOrganizer(cfg)
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	book := &database.Book{
@@ -121,7 +120,7 @@ func TestOrganizeDirectoryBook_AllBookFilesMarkedMissing(t *testing.T) {
 		FileNamingPattern:    "{title}",
 	}
 	org := organizer.NewOrganizer(cfg)
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	book := &database.Book{
@@ -161,7 +160,7 @@ func TestOrganizeDirectoryBook_SuccessWithRealFiles(t *testing.T) {
 		FileNamingPattern:    "{title}",
 	}
 	org := organizer.NewOrganizer(cfg)
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	book := &database.Book{
@@ -211,7 +210,7 @@ func TestOrganizeDirectoryBook_PartialMissing(t *testing.T) {
 		FileNamingPattern:    "{title}",
 	}
 	org := organizer.NewOrganizer(cfg)
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	book := &database.Book{
@@ -303,7 +302,7 @@ func TestCreateOrganizedVersion_RecomputesITunesPath(t *testing.T) {
 		},
 	}
 
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	organizedPath := filepath.Join(rootDir, "Author", "Book Title")
@@ -359,7 +358,7 @@ func TestFilterBooksNeedingOrganization_SkipsSoftDeleted(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	// Every fixture book carries a resolved author: the organize author-gate
@@ -409,7 +408,7 @@ func TestFilterBooksNeedingOrganization_SkipsNonPrimaryWithPrimary(t *testing.T)
 			}, nil
 		},
 	}
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	books := []database.Book{
@@ -438,7 +437,7 @@ func TestFilterBooksNeedingOrganization_AllowsNonPrimaryWithoutPrimary(t *testin
 			}, nil
 		},
 	}
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	// Resolved author required — the organize author-gate (#2457) defers
@@ -459,7 +458,7 @@ func TestFilterBooksNeedingOrganization_AllowsNonPrimaryWithoutPrimary(t *testin
 
 func TestFilterBooksNeedingOrganization_SkipsEmptyFilePath(t *testing.T) {
 	mockDB := &database.MockStore{}
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	books := []database.Book{
@@ -483,7 +482,7 @@ func TestFilterBooksNeedingOrganization_SkipsAllMissingBookFiles(t *testing.T) {
 			}, nil
 		},
 	}
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	books := []database.Book{
@@ -530,7 +529,7 @@ func TestCreateOrganizedVersion_CopiesAllBookFiles(t *testing.T) {
 		},
 	}
 
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	targetDir := filepath.Join(rootDir, "Author", "Book")
@@ -594,7 +593,7 @@ func TestCreateOrganizedVersion_SetsCorrectStates(t *testing.T) {
 		CreateBookFileFunc:  func(file *database.BookFile) error { return nil },
 	}
 
-	svc := audiobookspkg.NewOrganizeService(mockDB)
+	svc := newOrganizeServiceForTest(t, mockDB)
 	testLog := logger.New("test")
 
 	book := &database.Book{

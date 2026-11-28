@@ -26,7 +26,7 @@ type OrganizeService = organizer.Service
 type OrganizeRequest = organizer.Request
 type OrganizeStats = organizer.Stats
 
-// organizeServiceStore is what this wrapper forwards its store into: the
+// organizeServiceBase is what this wrapper forwards its store into: the
 // organizer service it constructs, and the metafetch service the
 // FetchMetadataForBook callback builds per call. Naming both rather than
 // inlining their methods keeps this at two entries and means it re-narrows on
@@ -35,15 +35,77 @@ type OrganizeStats = organizer.Stats
 // database.Store until 2026-08-19, and it could not have been narrowed sooner:
 // metafetch.NewService still took the union until the four-layer forwarding
 // chain beneath it was narrowed first.
-type organizeServiceStore interface {
+//
+// It is what a store in the container's "store" slot is guaranteed to be: that
+// slot holds whatever database.Store NewServer was given (a wrapper that embeds
+// the interface, a generated mock), which does not have
+// CreateBookWithRelocation, so the registry's Build cannot require it.
+type organizeServiceBase interface {
 	organizer.Store
 	metafetch.Store
 }
 
-// NewOrganizeService creates a new organizer.Service and wires up
-// server-specific callbacks (isProtectedPath, iTunes discovery, etc.).
-func NewOrganizeService(db organizeServiceStore) *OrganizeService {
+// organizeServiceStore is organizeServiceBase plus organizer.RelocatingCopyCreator,
+// which is on it and not on database.Store (which may not grow:
+// TestStoreFlattenedWidth). The production store
+// is books' *database.PebbleStore (database.NewBooksStore returns the concrete
+// type, so the assertion below is the proof); a container built over a store
+// without it (a test's wrapper or mock) wires no creator, and the single-book
+// organize copy then refuses (organizer.ErrRelocatingCopyCreatorNotWired)
+// instead of creating a copy that moves no torrent.
+type organizeServiceStore interface {
+	organizeServiceBase
+	organizer.RelocatingCopyCreator
+}
+
+// Compile-time proof that the production store satisfies it.
+var _ organizeServiceStore = (*database.PebbleStore)(nil)
+
+// RequireRelocatingCopyCreator is the production boot check: it fails, naming
+// organizer.RelocatingCopyCreator, the method and the store's dynamic type, when
+// store cannot create the single-book organize's copy together with its Deluge
+// follow-up. Books' module Register calls it with the store it hands NewServer,
+// so a wrapper that dropped the method would stop the boot instead of silently
+// losing every Deluge move. (Tests build servers over mocks and wrappers and do
+// not pass through it: the container wires the creator only when present.)
+func RequireRelocatingCopyCreator(store any) error {
+	if _, ok := store.(organizer.RelocatingCopyCreator); !ok {
+		return fmt.Errorf("audiobooks: the store %T does not implement organizer.RelocatingCopyCreator (CreateBookWithRelocation, RelocationOutboxInstalled): the single-book organize copy could not stage its Deluge follow-up", store)
+	}
+	return nil
+}
+
+// relocationOutboxProbe is what RequireRelocationOutbox asks the store.
+type relocationOutboxProbe interface{ RelocationOutboxInstalled() bool }
+
+// RequireRelocationOutbox is the boot check for the durable follow-up (F6-03):
+// it fails when store cannot say that a relocation outbox is installed, or says
+// none is. Books' module Register calls it, with the follow-up wired, after
+// RequireRelocatingCopyCreator: a store that implements the copy write but has
+// no outbox creates the organized copy and stages nothing, so no torrent ever
+// moves, and nothing fails until someone notices the Deluge paths.
+func RequireRelocationOutbox(store any) error {
+	p, ok := store.(relocationOutboxProbe)
+	if !ok {
+		return fmt.Errorf("audiobooks: the store %T cannot report whether a relocation outbox is installed (RelocationOutboxInstalled)", store)
+	}
+	if !p.RelocationOutboxInstalled() {
+		return fmt.Errorf("audiobooks: the relocation follow-up is wired but the store %T has no relocation outbox installed: an organized copy would stage nothing and its torrents would never move", store)
+	}
+	return nil
+}
+
+// newOrganizeService creates a new organizer.Service and wires up
+// server-specific callbacks (isProtectedPath, iTunes discovery, etc.). It is
+// called only by the KeyOrganize ServiceDef in register.go. creator is the writer
+// of the single-book organize copy's row; it may be nil (a store without
+// CreateBookWithRelocation, see organizeServiceBase), in which case that copy
+// refuses with organizer.ErrRelocatingCopyCreatorNotWired.
+func newOrganizeService(db organizeServiceBase, creator organizer.RelocatingCopyCreator) *OrganizeService {
 	svc := organizer.NewService(db)
+	if creator != nil {
+		svc.SetRelocatingCopyCreator(creator)
+	}
 
 	// Wire server-specific callbacks. iTunes callbacks are set later in
 	// Server.New() after itunesSvc is constructed (see server.go).

@@ -333,10 +333,23 @@ func (p *Plugin) centralizeNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	})
 }
 
+// outboxSystemStartReason is the reviewed reason path-update sets
+// Permissions.OutboxSystemStart: the relocation consumer's start is the books
+// system acting on a staged message its own committed write produced.
+const outboxSystemStartReason = "started by the books module's own relocation consumer from a committed books.book.relocated.v1 message; the books system actor cannot hold the settings.manage expansion (core:system.manage is AuthRequired), and a person's start keeps it"
+
 // pathUpdateNative is the native deluge.path-update kind. Preview is HEAD's dry
 // run (dry_run defaulted to true there, and a native run that names no mode
 // resolves to Preview for a writer kind, so the default carries over).
 func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Schedule) tasks.Definition {
+	return p.pathUpdateWith(d, sched, nil)
+}
+
+// pathUpdateWith is pathUpdateNative with edit applied to the definition's
+// Common last. Production passes none; a test that boots the real definition
+// on core uses it for the one thing registration needs that this package does
+// not decide (see relocation_follow_up_durable_test.go).
+func (p *Plugin) pathUpdateWith(d KindDeps, sched func(tasks.Kind) *tasks.Schedule, edit func(*tasks.Common)) tasks.Definition {
 	c := kindCommon(pathUpdateKind, sched)
 	c.Title = "Update Deluge torrent path"
 	c.Help = pathUpdateHelp
@@ -348,8 +361,11 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// for a start that named no mode.
 	c.Effects = tasks.Writes(res(ops.ResFiles)...)
 	// HEAD Drop: the body keeps no checkpoint and the event that would fire it
-	// again is not carried.
-	c.Resume = tasks.ResumeDrop
+	// again is not carried. Under the flip the event is carried (the relocation
+	// consumer's outbox message), and a torrent move is idempotent, so a run a
+	// restart cut short starts again from zero instead of being dropped: a
+	// dropped run would leave the torrent where the book no longer is (F6-03 m1).
+	c.Resume = tasks.ResumeFromZero
 	c.Priority = tasks.PriorityNormal
 	c.ConcurrencyKey = tasks.Key("books.deluge.path-update")
 	// Fold a start only into a QUEUED run of the same book (F6-01 obligation
@@ -359,9 +375,22 @@ func (p *Plugin) pathUpdateNative(d KindDeps, sched func(tasks.Kind) *tasks.Sche
 	// behind it, and reads the path as stored when it runs.
 	c.Dedupe = tasks.DedupePolicy{Key: func(raw json.RawMessage) (string, error) {
 		params, err := decodeNativeParams[pathUpdateCoreParams](pathUpdateKind, raw)
+		if params.TargetBookID != "" {
+			// A start for another copy is another move, not a repeat of this one.
+			return params.BookID + "->" + params.TargetBookID, err
+		}
 		return params.BookID, err
 	}}
 	c.Timeout = 1 * time.Minute
+	// A person starts this kind under settings.manage, whose expansion includes
+	// core:system.manage, a scope no module system actor can hold. The relocation
+	// consumer starts it with the books system actor, so without this reason every
+	// follow-up of a committed relocation would be refused and dead-letter. Hand
+	// starts keep Start as it is (core/tasks Permissions.OutboxSystemStart).
+	c.Perms.OutboxSystemStart = outboxSystemStartReason
+	if edit != nil {
+		edit(&c)
+	}
 	return tasks.Task(pathUpdateKind, tasks.TaskSpec[json.RawMessage, pathUpdateResult]{
 		Common: c,
 		Run: func(rc *tasks.RC, raw json.RawMessage) (pathUpdateResult, error) {

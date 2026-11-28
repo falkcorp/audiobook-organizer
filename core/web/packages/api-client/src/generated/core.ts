@@ -307,6 +307,46 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/core/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream events (server-sent events)
+         * @description The one realtime stream. topic is repeatable and is an exact topic name, a module wildcard (module.*) or * (the default); exclude removes topics with the same grammar; key narrows to one entity; last_event_id (or the Last-Event-ID header, which wins) resumes after an event id inside the server's bounded window. An exact topic you may not see is 403 topic_not_permitted and an unknown one is 400 unknown_topic; a wildcard silently leaves out topics you may not see. Over the stream limits the answer is 429 (per user and credential class) or 503, with Retry-After. Every refusal is a problem+json status before the stream starts. The stream carries unnamed frames: id: <bootNonce>-<seq> and data: {topic, ts, key, data}, a comment line per heartbeat, and the id-less control frames core.stream.opened.v1, core.stream.reset.v1 (restart, gap or overflow: refetch over REST) and core.stream.closed.v1 (shutdown, credential_revoked or permission_revoked: reconnect). Each event is filtered for you at send time, replays included.
+         */
+        get: operations["core_streamEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/events/topics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the topic catalog
+         * @description Every declared topic, by name: the permission that observes it, its payload JSON Schema, whether it is durable (an outbox topic, with its partitions) and its notification and realtime metadata. The catalog is the same for every caller of the route.
+         */
+        get: operations["core_listEventTopics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/core/v1/me": {
         parameters: {
             query?: never;
@@ -464,6 +504,106 @@ export type paths = {
         get: operations["core_getOpenAPIDocument"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/outbox/consumers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the outbox's consumers
+         * @description Every declared consumer, enabled or not, with its lag, pending, retrying and dead counts and its topic's intake backlog. A disabled module's consumer is listed with the backlog the store keeps for it (retained_backlog). A count marked capped is a floor: the store counts at most 1000 per partition. What the relay will not work on until an operator acts (a topic, a pair, a family of stored keys) is listed under stopped, beside the page and whole on every page, each with a closed cause token.
+         */
+        get: operations["core_listOutboxConsumers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/outbox/consumers/{consumer}/backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Purge a consumer's backlog
+         * @description Advances every cursor of the consumer to the head of its topic and clears its retries, discarding the messages it has not taken over; answers how many it skipped. Dead letters stay, and messages sequenced after the purge are delivered normally. It is the only way a disabled module's retained messages are discarded. Needs an interactive sign-in (not an API key). Audited as core.outbox.backlog_purge before the purge runs: when the record cannot be written the answer is 503 and nothing was purged; the purge then records how many messages it skipped, or the failure it ended in. The purge runs to its end even if the client hangs up. 404 when the consumer is unknown or has no backlog (it never ran); 409 when the topic is not available to this build or its partition count changed.
+         */
+        delete: operations["core_purgeConsumerBacklog"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/outbox/dead": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the outbox's dead letters
+         * @description Dead letters in (consumer, topic, seq) order, at most 500 per page; follow next_cursor until there is none (a page that ends exactly at the last letter still carries one, and the next page is empty). A letter shows its consumer, topic, seq, partition, attempts, the token that says why it died, and its idempotency key; never its payload or its key. A dead letter stays until an operator retries or discards it.
+         */
+        get: operations["core_listDeadLetters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/outbox/dead/{consumer}/{seq}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Discard one dead letter
+         * @description Deletes the dead letter for good. Audited as core.outbox.dead_discard before the delete runs: when the record cannot be written the answer is 503 and nothing was discarded; a discard that then fails is recorded as the failure it was. 404 and 409 as for a retry.
+         */
+        delete: operations["core_discardDeadLetter"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/core/v1/outbox/dead/{consumer}/{seq}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry one dead letter
+         * @description Hands the message back to its consumer alone, at the end of the stream under a new seq, and deletes the dead letter. Audited as core.outbox.dead_retry before the retry runs: when the record cannot be written the answer is 503 and nothing was retried; a retry that then fails is recorded as the failure it was. 404 when the consumer is unknown or has no dead letter at seq; 409 when the letter changed under the operation (list it again).
+         */
+        post: operations["core_retryDeadLetter"];
         delete?: never;
         options?: never;
         head?: never;
@@ -977,6 +1117,23 @@ export type components = {
             }[];
             next_cursor?: string;
         };
+        "core.CursorPage_OutboxDeadLetter": {
+            items: null | {
+                attempts: number;
+                consumer: string;
+                /** Format: date-time */
+                dead_at: string;
+                error: string;
+                idempotency_key: string;
+                partition: number;
+                producer?: string;
+                seq: number;
+                /** Format: date-time */
+                staged_at: string;
+                topic: string;
+            }[];
+            next_cursor?: string;
+        };
         "core.FactoryResetResponse": {
             library_file_count?: null | number;
             library_root?: string;
@@ -1112,6 +1269,36 @@ export type components = {
             }[];
             restart_required: boolean;
         };
+        "core.OutboxConsumerPage": {
+            count: number;
+            items: null | {
+                dead: number;
+                declared: boolean;
+                enabled: boolean;
+                intake_backlog: number;
+                intake_capped: boolean;
+                lag_ms: number;
+                module: string;
+                name: string;
+                pending: number;
+                pending_capped: boolean;
+                retained_backlog: number;
+                retrying: number;
+                topic: string;
+            }[];
+            limit: number;
+            offset: number;
+            stopped: null | {
+                cause: string;
+                consumer?: string;
+                partition?: null | number;
+                topic?: string;
+            }[];
+            total: number;
+        };
+        "core.OutboxPurgeResult": {
+            skipped: number;
+        };
         "core.Page_APIKey": {
             count: number;
             items: null | {
@@ -1133,6 +1320,27 @@ export type components = {
                 scopes: null | string[];
                 status: string;
                 use_count: number;
+            }[];
+            limit: number;
+            offset: number;
+            total: number;
+        };
+        "core.Page_EventTopic": {
+            count: number;
+            items: null | {
+                durable?: null | {
+                    partitions: number;
+                };
+                name: string;
+                notify?: null | {
+                    default_severity: string;
+                    title: string;
+                };
+                permission: string;
+                realtime?: null | {
+                    coalesce_ms: number;
+                };
+                schema?: unknown;
             }[];
             limit: number;
             offset: number;
@@ -1944,6 +2152,70 @@ export interface operations {
             };
         };
     };
+    core_streamEvents: {
+        parameters: {
+            query?: {
+                exclude?: string;
+                key?: string;
+                last_event_id?: string;
+                topic?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listEventTopics: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.Page_EventTopic"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
     core_getMe: {
         parameters: {
             query?: never;
@@ -2269,6 +2541,161 @@ export interface operations {
         responses: {
             /** @description OK */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listOutboxConsumers: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.OutboxConsumerPage"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_purgeConsumerBacklog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                consumer: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.OutboxPurgeResult"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_listDeadLetters: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["core.CursorPage_OutboxDeadLetter"];
+                };
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_discardDeadLetter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                consumer: string;
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Problem */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["core.Problem"];
+                };
+            };
+        };
+    };
+    core_retryDeadLetter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                consumer: string;
+                seq: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };

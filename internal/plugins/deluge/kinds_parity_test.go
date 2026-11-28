@@ -423,8 +423,8 @@ type failingMover struct {
 	fail map[string]bool
 }
 
-func (m *failingMover) MoveStorage(ids []string, dest string) error {
-	err := m.fakeClient.MoveStorage(ids, dest)
+func (m *failingMover) MoveStorage(ctx context.Context, ids []string, dest string) error {
+	err := m.fakeClient.MoveStorage(ctx, ids, dest)
 	for _, id := range ids {
 		if m.fail[id] {
 			return errors.New("move failed")
@@ -463,12 +463,13 @@ func TestDelugeCores_PathUpdateParity(t *testing.T) {
 			wantFinal: "APPLY: 0 move_storage planned, 1 updated (100%)"},
 		{name: "dry run plans and moves nothing", fx: newPUFixture, client: true, moveEnabled: true, dryRun: true, bookID: "b1",
 			wantFinal: "DRY RUN: 2 move_storage planned, 0 updated (100%)"},
-		{name: "a failed move is non-fatal and not counted", fx: newPUFixture, client: true, moveEnabled: true, bookID: "b1",
+		{name: "a refused move does not stop the other versions, is not counted, and fails the run (F6-03 m1)", fx: newPUFixture, client: true, moveEnabled: true, bookID: "b1",
 			failing: map[string]bool{h1: true},
 			wantMoves: []string{
 				h1 + " -> /library/Frank Miller/Dark Knight Returns/.versions/v-active-1",
 				h2 + " -> /library/Frank Miller/Dark Knight Returns/.versions/v-active-2",
 			},
+			wantErr:   "move_storage failed for 1 torrent(s): " + h1,
 			wantFinal: "APPLY: 0 move_storage planned, 1 updated (100%)"},
 		{name: "deluge_move_enabled off does nothing", fx: newPUFixture, client: true, moveEnabled: false, bookID: "b1",
 			wantFinal: "APPLY: 0 move_storage planned, 0 updated (100%)"},

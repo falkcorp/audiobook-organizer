@@ -14,38 +14,46 @@ import (
 )
 
 // RelocationConsumerName is the outbox consumer that turns each
-// books.book.relocated.v1 message into a books.deluge.path-update run. The
-// events flip (F6-03) lists it in books' Manifest.OutboxConsumers and
-// registers RelocationConsumer through Registrar.OutboxHandler; until then
-// nothing registers it.
+// books.book.relocated.v1 message into a books.deluge.path-update run. Books
+// lists it in Manifest.OutboxConsumers and registers RelocationConsumer through
+// Registrar.OutboxHandler (the events flip, F6-03).
 const RelocationConsumerName = "books.deluge.book-relocated"
 
-// RelocationConsumer is the durable relocation follow-up (05-events §5E.13,
-// the OperationDef.Triggers row): each committed book move starts one Live
-// books.deluge.path-update run, staged in the batch that advances the
-// consumer's cursor, so the hand-off is effectively once. Live, because a move
-// that is already committed wants the torrent to follow it; the kind's
-// Preview default must never apply to an outbox start (COR2-5).
+// RelocationConsumer is the durable copy-organize follow-up (05-events 5E.13,
+// the OperationDef.Triggers row): each organized copy of a book starts one Live
+// books.deluge.path-update run that moves the original book's Active torrents to
+// the copy's stored path, staged in the batch that advances the consumer's
+// cursor, so the hand-off is effectively once. Live, because a copy that is
+// already committed wants the torrent to follow it; the kind's Preview default
+// must never apply to an outbox start (COR2-5).
 //
-// It replaces only NotifyDelugeAfterOrganize, which the flip deletes in the
-// same PR that registers this consumer, so an organize move never triggers
-// Deluge twice. The version-swap and import moves are not replaced and stay
-// in-process until the flip designs their events: a swap moves the
-// from-version to .versions/<id>, which path-update skips (it acts on the
-// Active version only), and a same-path swap writes no book row so stages
-// nothing; an import writes a book_file row and its DelugeHash, never
-// Book.FilePath.
+// With the tasks switch on it replaces NotifyDelugeAfterOrganize, which ran
+// after the single-book organize request's copy only (the request still calls
+// it directly while the switch is off, and the F5-18 switch commit deletes that
+// call). The bulk organize, library clone and
+// metadata-apply copies, every in-place organize and every other write of a
+// book's path moved no torrent before the events flip and move none now: only
+// CreateBookWithRelocation stages the topic. The version-swap and import moves
+// are not replaced and stay in-process: a swap moves the from-version to
+// .versions/<id>, which path-update skips (it acts on the Active version only);
+// an import writes a book_file row and its DelugeHash, never Book.FilePath.
 func RelocationConsumer() outbox.Handler {
 	return outbox.ConsumeIntoTask(database.BookRelocatedTopic(), RelocationConsumerName, pathUpdateKind,
 		relocationRunParams, outbox.Live())
 }
 
-// relocationRunParams is the run's params: the book ID only. The run reads the
-// book's path as stored when it runs, so a run started for an older move of a
-// book that has moved again still sends the torrent to where the book is now.
+// relocationRunParams is the run's params: the original and the target book
+// IDs. The run reads the target's path as stored when it runs, so a run started
+// for a copy that has moved again still sends the torrent to where the copy is
+// now, and no path from the message is ever used. A message missing either id is
+// a permanent condition (a retry cannot supply it): it is refused to the dead
+// letters, where it is visible, and starts no run.
 func relocationRunParams(m outbox.Message[database.BookRelocatedV1]) (any, error) {
 	if m.Payload.BookID == "" {
 		return nil, fmt.Errorf("%w: %s message %q names no book", outbox.ErrPermanent, database.BookRelocatedTopicName, m.IdempotencyKey)
 	}
-	return pathUpdateCoreParams{BookID: m.Payload.BookID}, nil
+	if m.Payload.TargetBookID == "" {
+		return nil, fmt.Errorf("%w: %s message %q names no target book", outbox.ErrPermanent, database.BookRelocatedTopicName, m.IdempotencyKey)
+	}
+	return pathUpdateCoreParams{BookID: m.Payload.BookID, TargetBookID: m.Payload.TargetBookID}, nil
 }

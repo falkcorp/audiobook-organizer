@@ -5,7 +5,13 @@
 
 package books
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/falkcorp/mediacore/outbox"
+
+	"github.com/falkcorp/audiobook-organizer/internal/audiobooks"
+)
 
 // ABO's tasks flip (F5-18) is ONE decision, tasksFlipOn, and everything the flip
 // changes in this package reads it: the manifest (books.level-3, M4 and M5 in
@@ -45,4 +51,50 @@ func tasksFlipOn() bool { return tasksFlip.Load() }
 func SetTasksFlipForTest(on bool) (restore func()) {
 	prev := tasksFlip.Swap(on)
 	return func() { tasksFlip.Store(prev) }
+}
+
+// relocationFollowUpOn reports whether books runs the durable relocation
+// follow-up (F6-03): the outbox consumer that starts books.deluge.path-update
+// and the staging that feeds it. The consumer starts a task run, so it exists
+// only where that kind is registered, which is the tasks flip; the identity flip
+// supplies the outbox and the catalog topic. One predicate gates the manifest's
+// consumer name, the consumer's registration and the store's staging, so none
+// can be wired without the others (a message staged for no consumer waits for
+// one, and a consumer without its kind dead-letters every message).
+func relocationFollowUpOn() bool { return identityOn() && tasksFlipOn() }
+
+// requireRelocationWiring is Register's boot check for the follow-up: with it
+// wired (relocationFollowUpOn) the store must have the relocation outbox
+// installed, or an organized copy would stage nothing and its torrents would
+// never move (audiobooks.RequireRelocationOutbox). Unwired, nothing is asked.
+func requireRelocationWiring(store any) error {
+	if !relocationFollowUpOn() {
+		return nil
+	}
+	return audiobooks.RequireRelocationOutbox(store)
+}
+
+// relocationOutboxSetter is the one method installRelocationOutbox calls on the
+// store (*database.PebbleStore).
+type relocationOutboxSetter interface{ SetRelocationOutbox(outbox.Writer) }
+
+// installRelocationOutbox is Register's one install of the relocation outbox:
+// the organized copy of a single-book organize (CreateBookWithRelocation) stages
+// books.book.relocated.v1 in the batch that creates the copy, and no other write
+// stages it. It installs only while the consumer that delivers the message is
+// registered (relocationFollowUpOn): a message staged for no consumer would wait
+// for one, and the follow-up would not run.
+//
+// That makes "the store has a relocation outbox" the follow-up's predicate by
+// construction, and the organize request's two Deluge arms read it as such: the
+// request's direct NotifyDelugeAfterOrganize runs when this installed nothing
+// (the tasks switch is off), and does not run when it did
+// (organizer.Service.StagesRelocationFollowUp, which asks the store). It reports
+// whether it installed.
+func installRelocationOutbox(store relocationOutboxSetter, out outbox.Writer) bool {
+	if !relocationFollowUpOn() || out == (outbox.Writer{}) {
+		return false
+	}
+	store.SetRelocationOutbox(out)
+	return true
 }

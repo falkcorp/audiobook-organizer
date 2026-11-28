@@ -648,20 +648,6 @@ func TestHandler_CountAuthors_StoreError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-// =============== handleEvents (SSE hub nil check) ===============
-
-func TestHandler_HandleEvents_NoHub(t *testing.T) {
-	srv, _, router := setupHandlerTest(t)
-
-	router.GET("/events", newSystemHandler(srv).HandleEvents)
-
-	req := httptest.NewRequest("GET", "/events", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-}
-
 // =============== renameAuthor ===============
 
 func TestHandler_RenameAuthor_Success(t *testing.T) {

@@ -387,6 +387,27 @@ func (o *Outbox) ConsumerNames() []string {
 	return out
 }
 
+// TaskConsumer is one registered ConsumeIntoTask[Raw] consumer: the consumer
+// name, the module that registered it and the kind each of its messages starts.
+type TaskConsumer struct {
+	Name  string
+	Owner string
+	Kind  tasks.Kind
+}
+
+// TaskConsumers lists the registered consumers that start a run, sorted by
+// name. The kernel checks each one's start at boot (P7), so a kind its owner
+// cannot start is refused there and never dead-letters its messages.
+func (o *Outbox) TaskConsumers() []TaskConsumer {
+	var out []TaskConsumer
+	for _, c := range o.consumers() {
+		if c.form == formTask {
+			out = append(out, TaskConsumer{Name: c.name, Owner: c.owner, Kind: c.kind})
+		}
+	}
+	return out
+}
+
 // consumers is the registered consumers sorted by name.
 func (o *Outbox) consumers() []*consumerReg {
 	o.mu.Lock()

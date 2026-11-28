@@ -117,6 +117,7 @@ type MockStore struct {
 	GetFolderDuplicatesCoreFunc          func() ([][]BookCore, error)
 	GetDuplicateBooksByMetadataFunc      func(threshold float64) ([][]BookCore, error)
 	CreateBookFunc                       func(book *Book) (*Book, error)
+	CreateBookWithRelocationFunc         func(book *Book, originalID string) (*Book, error)
 	UpdateBookFunc                       func(id string, book *Book) (*Book, error)
 	ModifyBookFunc                       func(id string, fn func(*Book) error) (*Book, error)
 	FillBookMediaInfoFunc                func(id string, patch BookMediaInfoPatch) (*Book, error)
@@ -1535,6 +1536,20 @@ func (m *MockStore) CreateBook(book *Book) (*Book, error) {
 	}
 	return nil, nil
 }
+
+// CreateBookWithRelocation uses CreateBookWithRelocationFunc, else CreateBookFunc
+// (the relocation follow-up is the real store's batch, which a mock has none of).
+func (m *MockStore) CreateBookWithRelocation(book *Book, originalID string) (*Book, error) {
+	if m.CreateBookWithRelocationFunc != nil {
+		return m.CreateBookWithRelocationFunc(book, originalID)
+	}
+	return m.CreateBook(book)
+}
+
+// RelocationOutboxInstalled is false: a mock has no outbox, so
+// CreateBookWithRelocation stages nothing (the single-book organize then takes
+// its direct Deluge arm).
+func (m *MockStore) RelocationOutboxInstalled() bool { return false }
 
 func (m *MockStore) UpdateBook(id string, book *Book) (*Book, error) {
 	if m.UpdateBookFunc != nil {
