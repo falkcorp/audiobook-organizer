@@ -541,7 +541,11 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15, as a stopgap (2026-11-28): the vitest suite took 8-15 minutes on
+    # hosted runners that day and was cancelled at 15 with every file passing. The
+    # fix is todo FRONTEND-VITEST-SHARDS (2 shards plus an aggregator under this
+    # name); that change puts this back to 15.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
