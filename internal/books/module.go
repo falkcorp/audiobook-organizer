@@ -36,6 +36,7 @@ import (
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/logger"
 	"github.com/falkcorp/audiobook-organizer/internal/server"
+	"github.com/falkcorp/audiobook-organizer/internal/server/legacyauth"
 	"github.com/falkcorp/audiobook-organizer/internal/startup"
 	"github.com/falkcorp/audiobook-organizer/pkg/ops"
 	"github.com/falkcorp/mediacore/auth"
@@ -381,6 +382,16 @@ func (m *booksModule) Register(r *module.Registrar) error {
 	if err != nil {
 		return fmt.Errorf("books: %w", err)
 	}
+	// Under core identity the accounts are core's and M3 drained u:, so the
+	// store's account list must never answer from that family: marked here,
+	// before anything reads through the store, it refuses (ErrNoUserDirectory)
+	// until the directory over core's Identities is installed below. Every
+	// per-user fan-out (a merge carrying progress, a "keep the book if anyone
+	// has state" gate before a hard delete) lists users through it, and an
+	// empty list there deletes progress (store/user_directory.go).
+	if identityOn() {
+		store.RequireUserDirectory()
+	}
 	// The HNSW clean-stop marker beside the store, before anything writes
 	// through it; the server's snapshot import asks the store for it. Here,
 	// not in Options: the kernel has opened the store and holds its lock, so
@@ -459,6 +470,10 @@ func (m *booksModule) Register(r *module.Registrar) error {
 		return err
 	}
 	if identity != nil {
+		// The account list of every holder of this store, from core's directory
+		// (store/user_directory.go). newLegacyIdentity has already refused a
+		// boot without deps.Auth.
+		store.SetUserDirectory(legacyauth.UserDirectory(deps.Auth))
 		srvOpts = append(srvOpts, server.WithIdentity(identity), server.WithAccessVerifier(m.idw.verifier),
 			// The guest policy's keep rule reads the same key the admission policy
 			// does, with the same semantics (identityPolicyFrom).
