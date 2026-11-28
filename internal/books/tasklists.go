@@ -14,6 +14,7 @@ import (
 
 	"github.com/falkcorp/audiobook-organizer/internal/auth"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/acoustid"
+	"github.com/falkcorp/audiobook-organizer/internal/plugins/dedup"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/deluge"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/itunes"
 	"github.com/falkcorp/audiobook-organizer/internal/plugins/maintenance"
@@ -33,8 +34,18 @@ type taskListInputs struct {
 	Deluge      deluge.BooksTaskInputs
 	ITunes      itunes.BooksTaskInputs
 	Acoustid    acoustid.BooksTaskInputs
-	Scheduler   scheduler.BooksTaskInputs
-	Repairs     repairs.BooksTaskInputs
+	// DedupEnabled is whether the server has a dedup plugin at all. HEAD builds
+	// it only when the dedup engine and the embedding store both exist
+	// (dedupplugin in plugins/dedup/register.go; ScheduleHooks.HasDedupPlugin in
+	// server_lifecycle.go), and a server with embedding disabled has neither, so
+	// it has none of the dedup operations. The flip sets it from that same
+	// condition, never from whether Dedup's fields are nil: false skips the dedup
+	// list and Dedup is not read, true builds it and a missing Dedup input is an
+	// error by name.
+	DedupEnabled bool
+	Dedup        dedup.BooksTaskInputs
+	Scheduler    scheduler.BooksTaskInputs
+	Repairs      repairs.BooksTaskInputs
 }
 
 // bookTaskLists is every task definition the books module registers through
@@ -45,11 +56,6 @@ type taskListInputs struct {
 // Not built yet (F5-18 A6 carries them, each its own slice of work, named in
 // notYetBuilt in tasklists_test.go with the kinds it will bring):
 //
-//   - TODO-F5-18-A6-MAINT-G15: maintenance groups 1 and 5 deps builders
-//     (t6g1Deps, t6g5Deps; #5003 has merged, so Inputs.Runs
-//     is the store their run-plan reads can take)
-//     and their entries in maintenance.BooksTaskLists.
-//   - TODO-F5-18-A6-DEDUP: the dedup plugin's KindDeps builder (five groups).
 //   - TODO-F5-18-A6-SERVER-T7: internal/server's t7Deps builder, in a new file.
 //
 // Left out on purpose: the 14 group-6 maintenance kinds. They hold a
@@ -99,6 +105,16 @@ func bookTaskLists(in taskListInputs) ([]tasks.Definition, error) {
 		return nil, fmt.Errorf("books task lists: %w", err)
 	}
 	out = append(out, l...)
+
+	if in.DedupEnabled {
+		dd := in.Dedup
+		dd.Schedules = in.Schedules
+		l, err = dedup.BooksTaskLists(dd)
+		if err != nil {
+			return nil, fmt.Errorf("books task lists: %w", err)
+		}
+		out = append(out, l...)
+	}
 
 	sc := in.Scheduler
 	sc.Schedules = in.Schedules

@@ -701,6 +701,13 @@ func (s t6g1HeadStore) CanMergeDelete() bool {
 	return ok
 }
 
+// CanModifyBookCredits is whether the plugin's store commits a book's credits and
+// row together.
+func (s t6g1HeadStore) CanModifyBookCredits() bool {
+	_, ok := database.AsCapability[database.BookCreditsModifier](s.OpsStore)
+	return ok
+}
+
 // VerifyAuthorUnlinked is the shared pre-delete link check.
 func (s t6g1HeadStore) VerifyAuthorUnlinked(authorID int) error {
 	return database.VerifyAuthorUnlinked(s.OpsStore, authorID)

@@ -314,7 +314,7 @@ func (p *Plugin) runAuthorSplitScan(ctx context.Context, raw json.RawMessage, re
 	// A nil OpsStore stays a nil interface in env.Store, which the core reports
 	// as "database not initialized".
 	if store := p.deps.OpsStore(); store != nil {
-		env.Store, env.Writer = store, t6g1HeadWriter{store}
+		env.Store, env.Writer = t6g1HeadStore{store}, t6g1HeadWriter{store}
 	}
 	return authorSplitScanCore(ctx, env)
 }
@@ -328,6 +328,10 @@ type authorSplitStore interface {
 	GetAllAuthors() ([]database.Author, error)
 	GetAuthorByName(name string) (*database.Author, error)
 	GetBooksByAuthorIDForRelinkCore(authorID int) ([]database.BookCore, error)
+	// CanModifyBookCredits reports whether the store commits a book's credits and
+	// row together (database.BookCreditsModifier). The apply asks once, before it
+	// writes anything: it is a probe, not a write, so it sits on the reads.
+	CanModifyBookCredits() bool
 }
 
 // authorSplitWriter is the writes the op makes: the parts it creates, the ONE
@@ -461,8 +465,11 @@ func authorSplitScanCore(ctx context.Context, env authorSplitEnv) (retErr error)
 	// store's: the writer's ModifyBookCredits delegates to this same store
 	// (t6g1HeadWriter), and a probe method on the writer interface is not an
 	// option because that interface lists writes only
-	// (TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod).
-	if _, ok := database.AsCapability[database.BookCreditsModifier](store); !ok {
+	// (TestT6G1Kinds_WriterResourceMapCoversEveryWriterMethod). The probe is
+	// CanModifyBookCredits on the reads, as CanMergeDelete is for the merge: a
+	// store that is only reads (the one the native kind is given) has no write
+	// to resolve the capability from.
+	if !store.CanModifyBookCredits() {
 		return fmt.Errorf("author-split-scan apply refused before writing anything: %w: store is %T", database.ErrBookCreditsUnsupported, store)
 	}
 

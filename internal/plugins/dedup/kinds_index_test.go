@@ -196,7 +196,7 @@ func indexRows() []kindRow {
 			HeadID: "dedup.build-candidate-status-index", Title: "Build candidate status secondary index",
 			HeadResume: sdk.ResumeRequeue, Resume: tasks.ResumeFromZero,
 			Priority: tasks.PriorityLow, Timeout: 60 * time.Minute,
-			Writes: []ops.Resource{ops.ResEmbeddings},
+			Writes: []ops.Resource{ops.ResEmbeddings, ops.ResSettings},
 			Par:    []string{"cpu"}, ParGot: []tasks.Parallelism{tasks.CPU()},
 			HeadKey: "dedup.build-candidate-status-index",
 		},

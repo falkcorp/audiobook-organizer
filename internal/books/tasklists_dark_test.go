@@ -55,12 +55,14 @@ var darkNames = []darkName{
 	{name: "BooksHeldTaskLists"},
 	{name: "newBooksKindDeps", allowed: []string{
 		"internal/plugins/acoustid/books_tasklists.go",
+		"internal/plugins/dedup/books_tasklists.go",
 		"internal/plugins/deluge/books_tasklists.go",
 		"internal/plugins/metafetch/books_tasklists.go",
 	}},
 	{name: "newT6G7Deps", allowed: []string{"internal/plugins/maintenance/books_tasklists.go"}},
 	{name: "ForRun", qualifier: "writer", allowed: []string{
 		"internal/plugins/acoustid/books_tasklists.go",
+		"internal/plugins/dedup/books_tasklists.go",
 		"internal/plugins/deluge/books_tasklists.go",
 		"internal/plugins/metafetch/books_tasklists.go",
 		"internal/plugins/maintenance/deps_gate.go",
