@@ -178,12 +178,17 @@ func (k *Kernel) moduleTaskProblems(e *entry) []module.Problem {
 			if ns, _, _ := strings.Cut(string(p), ":"); ns != string(id) && ns != "core" {
 				bad(module.ProblemPermissionNamespace, "task kind %q starts under %q, outside module %s's namespace and core's", kind, p, id)
 			}
-			// SEC-9: a view-class scope starts nothing unless the definition
-			// gives a reviewed reason. Only core's scopes are in the catalog at
-			// F2; a module's PermissionSpec.Class arrives with its manifest's
-			// permissions (F4).
-			if spec, ok := k.rbacCat.Lookup(p); ok && spec.Class == rbac.ClassView && c.Perms.StartableByViewers == "" {
+		}
+		// SEC-9: a view-class scope starts nothing unless the definition gives a
+		// reviewed reason. Only core's scopes are in the catalog at F2; a module's
+		// PermissionSpec.Class arrives with its manifest's permissions (F4).
+		if c.Perms.StartableByViewers == "" {
+			scopes, open := k.viewStartScopes(c.Perms.Start)
+			for _, p := range scopes {
 				bad(module.ProblemInvalidRegistration, "task kind %q starts under the view-class scope %q (Permissions.StartableByViewers is empty, SEC-9)", kind, p)
+			}
+			if open {
+				bad(module.ProblemInvalidRegistration, "task kind %q starts under %s, which every signed-in viewer satisfies (Permissions.StartableByViewers is empty, SEC-9)", kind, c.Perms.Start)
 			}
 		}
 		for _, r := range c.Effects.ReadSet() {
@@ -201,6 +206,58 @@ func (k *Kernel) moduleTaskProblems(e *entry) []module.Problem {
 		}
 	}
 	return probs
+}
+
+// viewerHolds is the question SEC-9 asks of one scope: could a principal that
+// holds only what a viewer can hold have it? It is true for every view-class
+// scope, for every scope a seed viewer is granted by default (core:self is
+// action-class and the built-in viewer role holds it), and for a scope the
+// catalog does not hold (a module's own scope: its class is not known at P7, so
+// the answer fails closed). The class and the grants are core's catalog, not a
+// list kept here.
+func (k *Kernel) viewerHolds(p rbac.Permission) bool {
+	spec, ok := k.rbacCat.Lookup(p)
+	return !ok || spec.Class == rbac.ClassView || slices.Contains(spec.DefaultGrants, rbac.RoleViewer)
+}
+
+// viewerSatisfies reports whether a principal holding every scope viewerHolds
+// accepts and no other satisfies req: an AllOf needs every one of its scopes
+// held, an AnyOf one of them, and Public and AnyAuthenticated need nothing a
+// viewer lacks. Delegated, the legacy kinds and the zero Requirement are not
+// scope checks and are false here, as they are for core's checker.
+func (k *Kernel) viewerSatisfies(req rbac.Requirement) bool {
+	switch req.Kind() {
+	case rbac.KindPublic, rbac.KindAuthenticated:
+		return true
+	case rbac.KindAllOf:
+		ps := req.Permissions()
+		return len(ps) > 0 && !slices.ContainsFunc(ps, func(p rbac.Permission) bool { return !k.viewerHolds(p) })
+	case rbac.KindAnyOf:
+		return slices.ContainsFunc(req.Permissions(), k.viewerHolds)
+	}
+	return false
+}
+
+// viewStartScopes is SEC-9's finding for one Start requirement: whether a viewer
+// alone could start the kind (viewerSatisfies), and then which view-class scopes
+// of req let it. open is true for Public and AnyAuthenticated, which name no
+// scope and are satisfied by everyone. A requirement a viewer cannot satisfy,
+// such as the AllOf of core:system.view and an action-class scope the settings
+// atoms list, needs no reviewed reason: the view scope in it widens nothing.
+func (k *Kernel) viewStartScopes(req rbac.Requirement) (scopes []rbac.Permission, open bool) {
+	if !k.viewerSatisfies(req) {
+		return nil, false
+	}
+	switch req.Kind() {
+	case rbac.KindPublic, rbac.KindAuthenticated:
+		return nil, true
+	}
+	for _, p := range req.Permissions() {
+		if spec, ok := k.rbacCat.Lookup(p); ok && spec.Class == rbac.ClassView {
+			scopes = append(scopes, p)
+		}
+	}
+	return scopes, false
 }
 
 // laneProblems is P7's check of Registrar.Lanes (05-tasks 5T.3.9): a lane is
