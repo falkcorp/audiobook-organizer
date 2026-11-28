@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -506,5 +507,36 @@ func TestDecodeRun_RowWithoutFinishOnly(t *testing.T) {
 	}
 	if again, err := decodeRun(raw); err != nil || !again.FinishOnly {
 		t.Fatalf("a marked row decodes as %+v, %v", again, err)
+	}
+}
+
+// TestDecodeRun_CancelReach (F5-18 C6): the cancel's verdict is an additive field of
+// the version 1 value, so a run row written before it existed decodes with NO
+// verdict (nil: nothing cascades from it without a live caller), never with an
+// "all" one, and a stored verdict survives the codec exactly.
+func TestDecodeRun_CancelReach(t *testing.T) {
+	old := []byte(`j{"v":1,"ID":"01BEFORECANCELREACH","Kind":"gotham.patrol","State":"canceled","Reason":"cancel","Attempt":1,"FenceEpoch":1}`)
+	got, err := decodeRun(old)
+	if err != nil {
+		t.Fatalf("decode a row written before CancelReach: %v", err)
+	}
+	if got.CancelReach != nil || got.State != StateCanceled || got.Attempt != 1 {
+		t.Fatalf("decoded %+v, want the stored fields and no verdict", got)
+	}
+	for _, want := range []*CancelReach{
+		{All: true, Actor: Actor{UserID: "gordon", AuthMethod: "session"}},
+		{Kinds: []Kind{"gotham.annex", "gotham.yard"}, Actor: Actor{System: "scheduler", AuthMethod: "system"}},
+		{},
+	} {
+		marked := batRun("01AFTERCANCELREACH", StateCanceled)
+		marked.CancelReach = want
+		raw, err := encodeValue(marked)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := decodeRun(raw)
+		if err != nil || !reflect.DeepEqual(again.CancelReach, want) {
+			t.Fatalf("a stored verdict %+v decodes as %+v, %v", want, again.CancelReach, err)
+		}
 	}
 }

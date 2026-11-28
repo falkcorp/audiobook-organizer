@@ -227,7 +227,31 @@ func (e *executor) cancel(ctx context.Context, id tasks.RunID, by tasks.Actor, w
 	if e.held(rec.Kind) {
 		return fmt.Errorf("%w: %s", ErrHeld, id)
 	}
-	return e.stop(ctx, id, by, who, reasonCancel, tasks.ErrCanceled)
+	return e.stop(ctx, id, by, e.reachOf(rec, by, who), reasonCancel, tasks.ErrCanceled)
+}
+
+// reachOf is the verdict a cancel records on the run it cancels: which kinds of
+// descendant its caller may cancel, by the rule a direct cancel of such a run
+// applies (mayCancel), evaluated once per registered kind against the canceled
+// run's own actor (the actor every descendant inherits). A kernel-internal cancel
+// (who nil) is limited by no checker and records All. The verdict is stored with
+// the cancel, not recomputed later, because the dispatch guard and the boot pass
+// have no caller to ask.
+func (e *executor) reachOf(rec tasks.RunRecord, by tasks.Actor, who rbac.Checker) *tasks.CancelReach {
+	r := &tasks.CancelReach{Actor: rec.Actor}
+	if who == nil {
+		r.All = true
+		return r
+	}
+	for k := range e.defs {
+		probe := tasks.RunRecord{}
+		probe.Kind, probe.Actor = k, rec.Actor
+		if e.mayCancel(probe, by, who) {
+			r.Kinds = append(r.Kinds, k)
+		}
+	}
+	slices.Sort(r.Kinds)
+	return r
 }
 
 // stop is cancel's core, shared with the watchdog (reason watchdog). A cancel
@@ -245,30 +269,42 @@ func (e *executor) cancel(ctx context.Context, id tasks.RunID, by tasks.Actor, w
 // cancel already ended (stopOne answers "not found", which is still the answer
 // when the cascade has nothing to report, HEAD's repeat-cancel rule). A run that
 // ended any other way (the watchdog, its timeout) is not cascaded from.
-func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, who rbac.Checker, reason string, cause error) error {
-	err := e.stopOne(ctx, id, by, reason, cause)
+func (e *executor) stop(ctx context.Context, id tasks.RunID, by tasks.Actor, reach *tasks.CancelReach, reason string, cause error) error {
+	err := e.stopOne(ctx, id, by, reach, reason, cause)
 	if reason != reasonCancel {
 		return err
 	}
-	if err != nil {
-		if !errors.Is(err, tasks.ErrRunNotFound) {
-			return err
-		}
-		if rec, gerr := e.runs.Get(ctx, id); gerr != nil || !canceledByCancel(rec) {
-			return err
-		}
-		if cerr := e.cancelDescendants(context.WithoutCancel(ctx), id, by, who); cerr != nil {
-			return cerr
-		}
+	if err != nil && !errors.Is(err, tasks.ErrRunNotFound) {
 		return err
 	}
-	return e.cancelDescendants(context.WithoutCancel(ctx), id, by, who)
+	ctx = context.WithoutCancel(ctx) // the stop committed: a caller that gave up must not lose the cascade
+	rec, gerr := e.runs.Get(ctx, id)
+	if gerr != nil {
+		if err != nil {
+			return err // the run is gone: HEAD's answer
+		}
+		return gerr
+	}
+	if err != nil && !canceledByCancel(rec) {
+		return err
+	}
+	// The cascade is limited by the verdict stored with the cancel, so a repeat
+	// that finishes it, or the guard and the boot pass later, judge the same set.
+	// A run with none (a record from before the field) falls back to the caller's
+	// own, which this call just computed.
+	if rec.CancelReach != nil {
+		reach = rec.CancelReach
+	}
+	if cerr := e.cancelDescendants(ctx, id, by, reach); cerr != nil {
+		return cerr
+	}
+	return err
 }
 
 // stopOne is stop for one run: the in-process attempt is looked up inside the
 // move, from the same fresh read the CAS is staged against, so a run that goes
 // live between Cancel's call and its write is still stopped (attemptFor).
-func (e *executor) stopOne(ctx context.Context, id tasks.RunID, by tasks.Actor, reason string, cause error) error {
+func (e *executor) stopOne(ctx context.Context, id tasks.RunID, by tasks.Actor, reach *tasks.CancelReach, reason string, cause error) error {
 	actor := &by
 	if by == (tasks.Actor{}) {
 		actor = nil
@@ -280,6 +316,9 @@ func (e *executor) stopOne(ctx context.Context, id tasks.RunID, by tasks.Actor, 
 			return cur, tasks.RunEvent{}, fmt.Errorf("%w: %s is %s", tasks.ErrRunNotFound, id, cur.State)
 		}
 		next := cur
+		if reach != nil {
+			next.CancelReach = reach
+		}
 		ev := tasks.RunEvent{Event: "cancel", Reason: reason, Actor: actor}
 		if cur.State == tasks.StateStopping {
 			// A cancel is final: it overrides a stop that would resume the

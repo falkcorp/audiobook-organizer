@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -429,7 +430,7 @@ func TestCancelCascade_ARepeatCancelRetriesTheCascade(t *testing.T) {
 		defer close(release)
 		parent := h.start(string(chainKind("rc", 0)), tasks.StartRequest{})
 		child := <-started
-		if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, reasonCancel, tasks.ErrCanceled); err != nil {
+		if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, h.allReach(parent), reasonCancel, tasks.ErrCanceled); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Second)
@@ -494,7 +495,7 @@ func TestCancelCascade_RestartMidCancelLeavesNoChildRunning(t *testing.T) {
 			child := h.childOf(parent)
 			grand := h.childOf(child)
 			// The cancel's first half: the parent is stopped, nothing below it is.
-			if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, reasonCancel, tasks.ErrCanceled); err != nil {
+			if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, h.allReach(parent), reasonCancel, tasks.ErrCanceled); err != nil {
 				t.Fatal(err)
 			}
 			if c.parentEnds {
@@ -750,7 +751,7 @@ func TestCancelCascade_ARepeatCancelOfAnEndedParentFinishesTheCascade(t *testing
 				h := newHarness(t, chainDefs("re", 2, started, nil, nil), cascadeOpts(t, time.Second))
 				parent := h.start(string(chainKind("re", 0)), tasks.StartRequest{})
 				child := <-started
-				if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, c.reason, tasks.ErrCanceled); err != nil {
+				if err := h.e.stopOne(context.Background(), parent, tasks.Actor{UserID: "gordon"}, h.allReach(parent), c.reason, tasks.ErrCanceled); err != nil {
 					t.Fatal(err)
 				}
 				time.Sleep(5 * time.Second)
@@ -875,7 +876,7 @@ func TestCancelCascade_ARestartAfterAWatchdogStopResumesTheChild(t *testing.T) {
 	parent := h.start(string(chainKind("wd", 0)), tasks.StartRequest{})
 	<-leafStarts
 	child := h.childOf(parent)
-	if err := h.e.stopOne(context.Background(), parent, tasks.Actor{}, reasonWatchdog, tasks.ErrCanceled); err != nil {
+	if err := h.e.stopOne(context.Background(), parent, tasks.Actor{}, nil, reasonWatchdog, tasks.ErrCanceled); err != nil {
 		t.Fatal(err)
 	}
 	if r := h.waitState(parent, tasks.StateCanceled); r.Reason != reasonWatchdog {
@@ -1210,4 +1211,295 @@ func TestCancelCascade_TheReachIsTheCallers(t *testing.T) {
 			}
 		})
 	}
+}
+
+// allReach is the verdict a kernel-internal cancel of parent stores (All, for the
+// parent's own actor): the tests that stage the first half of a cancel with
+// stopOne pass it where Cancel would.
+func (h *harness) allReach(parent tasks.RunID) *tasks.CancelReach {
+	h.t.Helper()
+	return &tasks.CancelReach{All: true, Actor: h.get(parent).Actor}
+}
+
+// The verdict a cancel stores (tasks.CancelReach) is what the dispatch guard and the
+// boot pass read: they have no caller to ask. The fixtures: gotham.watch (started by
+// gordon) enqueues gotham.yard and gotham.armory; gotham.yard enqueues gotham.annex.
+// gotham.armory and gotham.safe are cancelable only with gotham:vault; harley holds
+// gotham:run and cancels as a stranger. gotham.lockdown (also gordon's) holds the
+// armory's resource, so the watch's armory is still queued when the cancel comes.
+
+type verdictRig struct {
+	h                                    *harness
+	defs                                 []tasks.Definition
+	opts                                 func(*Options)
+	watch, lockdown, yard, armory, annex tasks.RunID
+}
+
+func newVerdictRig(t *testing.T) *verdictRig {
+	t.Helper()
+	park := func(rc *tasks.RC, _ noParams) (string, error) {
+		<-rc.Context().Done()
+		return "", context.Cause(rc.Context())
+	}
+	enqueueThenPark := func(kinds ...tasks.Kind) func(*tasks.RC, noParams) (string, error) {
+		return func(rc *tasks.RC, p noParams) (string, error) {
+			for _, k := range kinds {
+				if _, err := rc.Enqueue(k, noParams{}); err != nil {
+					return "", err
+				}
+			}
+			return park(rc, p)
+		}
+	}
+	res := func(name string) func(*tasks.Common) {
+		return func(c *tasks.Common) {
+			c.Effects = tasks.Writes(tasks.Res("gotham", name))
+			c.Cancel = tasks.Cooperative(time.Second)
+		}
+	}
+	vault := func(name string) func(*tasks.Common) {
+		return func(c *tasks.Common) {
+			res(name)(c)
+			c.Perms.Cancel = rbac.Need(scopeVault)
+		}
+	}
+	r := &verdictRig{}
+	r.defs = []tasks.Definition{
+		taskDef("gotham.watch", enqueueThenPark("gotham.yard", "gotham.armory"), res("watch")),
+		taskDef("gotham.yard", enqueueThenPark("gotham.annex"), res("yard")),
+		taskDef("gotham.annex", park, res("annex")),
+		taskDef("gotham.armory", park, vault("armory")),
+		taskDef("gotham.safe", park, vault("safe")),
+		taskDef("gotham.lockdown", park, func(c *tasks.Common) { res("armory")(c) }),
+	}
+	r.opts = func(o *Options) {
+		cascadeOpts(t, 10*time.Millisecond)(o)
+		o.Catalog = catalogWith(t, scopeGothamRun, scopeVault)
+		withPrincipal(o)
+	}
+	r.h = newHarness(t, r.defs, r.opts)
+	start := func(kind string) tasks.RunID {
+		ref, err := r.h.x.Start(asUser("gordon", scopeGothamRun), tasks.Kind(kind), tasks.StartRequest{Mode: tasks.ModeRequestLive})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ref.ID
+	}
+	r.lockdown = r.h.waitState(start("gotham.lockdown"), tasks.StateRunning).ID
+	r.watch = start("gotham.watch")
+	r.yard = r.child(r.watch, "gotham.yard")
+	r.armory = r.child(r.watch, "gotham.armory")
+	r.annex = r.child(r.yard, "gotham.annex")
+	r.h.waitState(r.yard, tasks.StateRunning)
+	r.h.waitState(r.annex, tasks.StateRunning)
+	r.h.stays(r.armory, tasks.StateQueued, 50*time.Millisecond) // behind the lockdown
+	return r
+}
+
+// child is the child of parent of the given kind; it waits for it to exist.
+func (r *verdictRig) child(parent tasks.RunID, kind tasks.Kind) tasks.RunID {
+	r.h.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		for _, id := range r.h.children(parent) {
+			if r.h.get(id).Kind == kind {
+				return id
+			}
+		}
+		if time.Now().After(deadline) {
+			r.h.t.Fatalf("%s has no %s child", parent, kind)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// late stages a child of parent after its cancel: the state the race between a
+// parent's Enqueue and its cancel leaves. by names the actor it carries.
+func (r *verdictRig) late(h *harness, parent tasks.RunID, kind tasks.Kind, by string) tasks.RunID {
+	h.t.Helper()
+	ref, err := h.x.Start(asUser(by, scopeGothamRun), kind, tasks.StartRequest{
+		Mode: tasks.ModeRequestLive, Parent: parent, Trigger: tasks.TriggerParent})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return ref.ID
+}
+
+// harleyCancels is a live cancel by someone who holds gotham:run only.
+func (r *verdictRig) harleyCancels() {
+	r.h.t.Helper()
+	if err := r.h.x.Cancel(asUser("harley", scopeGothamRun), r.watch); err != nil {
+		r.h.t.Fatal(err)
+	}
+	r.h.waitState(r.watch, tasks.StateCanceled)
+	r.h.waitState(r.yard, tasks.StateCanceled)
+	r.h.waitState(r.annex, tasks.StateCanceled)
+}
+
+// releaseArmory lets the queued armory through the gate: the lockdown ends.
+func (r *verdictRig) releaseArmory() {
+	r.h.t.Helper()
+	if err := r.h.x.CancelAs(context.Background(), r.lockdown, tasks.Actor{UserID: "gordon"}); err != nil {
+		r.h.t.Fatal(err)
+	}
+	r.h.waitState(r.lockdown, tasks.StateCanceled)
+}
+
+// TestCancelCascade_TheVerdictIsStoredAndCopied: a cancel by a caller who holds
+// gotham:run stores the kinds it may cancel on the canceled run (not the vault's
+// two), for the run's own actor, and every run the cascade ends carries the same
+// copy. A kernel-internal cancel stores All.
+func TestCancelCascade_TheVerdictIsStoredAndCopied(t *testing.T) {
+	r := newVerdictRig(t)
+	r.harleyCancels()
+	for name, id := range map[string]tasks.RunID{"the canceled run": r.watch, "its child": r.yard, "its grandchild": r.annex} {
+		got := r.h.get(id).CancelReach
+		if got == nil || got.All || got.Actor != r.h.get(r.watch).Actor {
+			t.Fatalf("%s carries %+v, want a verdict that is not All, for gordon's actor", name, got)
+		}
+		for _, k := range []tasks.Kind{"gotham.watch", "gotham.yard", "gotham.annex", "gotham.lockdown"} {
+			if _, ok := slices.BinarySearch(got.Kinds, k); !ok {
+				t.Errorf("%s: %s is not in the verdict %v, though harley may cancel it", name, k, got.Kinds)
+			}
+		}
+		for _, k := range []tasks.Kind{"gotham.armory", "gotham.safe"} {
+			if _, ok := slices.BinarySearch(got.Kinds, k); ok {
+				t.Errorf("%s: %s is in the verdict %v, though harley may not cancel it", name, k, got.Kinds)
+			}
+		}
+	}
+	k := newVerdictRig(t)
+	if err := k.h.x.CancelAs(context.Background(), k.watch, tasks.Actor{UserID: "harley"}); err != nil {
+		t.Fatal(err)
+	}
+	k.h.waitState(k.watch, tasks.StateCanceled)
+	if got := k.h.get(k.watch).CancelReach; got == nil || !got.All {
+		t.Fatalf("a kernel-internal cancel stored %+v, want All", got)
+	}
+}
+
+// TestCancelCascade_TheDispatchGuardAppliesTheStoredVerdict (c1, c3, c4, c6, c7): a
+// child of a canceled run that the verdict covers is canceled at dispatch, and one
+// it does not cover is dispatched as on HEAD.
+func TestCancelCascade_TheDispatchGuardAppliesTheStoredVerdict(t *testing.T) {
+	t.Run("c1 a skipped child still queued is not canceled", func(t *testing.T) {
+		r := newVerdictRig(t)
+		r.harleyCancels()
+		r.releaseArmory()
+		r.h.waitState(r.armory, tasks.StateRunning)
+		r.h.stays(r.armory, tasks.StateRunning, 200*time.Millisecond)
+	})
+	t.Run("c3 a late child of a kind in the set is canceled", func(t *testing.T) {
+		r := newVerdictRig(t)
+		r.harleyCancels()
+		late := r.late(r.h, r.watch, "gotham.yard", "gordon")
+		if got := r.h.waitState(late, tasks.StateCanceled); got.Reason != reasonCancel {
+			t.Errorf("late child %s/%q, want canceled/cancel", got.State, got.Reason)
+		}
+	})
+	t.Run("c3 a late child under a cascaded child is judged by the original verdict", func(t *testing.T) {
+		r := newVerdictRig(t)
+		r.harleyCancels()
+		in := r.late(r.h, r.yard, "gotham.annex", "gordon")
+		out := r.late(r.h, r.yard, "gotham.safe", "gordon")
+		r.h.waitState(in, tasks.StateCanceled)
+		r.h.waitState(out, tasks.StateRunning)
+		r.h.stays(out, tasks.StateRunning, 200*time.Millisecond)
+	})
+	t.Run("c4 a late child of a kind outside the set is left alone", func(t *testing.T) {
+		r := newVerdictRig(t)
+		r.harleyCancels()
+		late := r.late(r.h, r.watch, "gotham.safe", "gordon")
+		r.h.waitState(late, tasks.StateRunning)
+		r.h.stays(late, tasks.StateRunning, 200*time.Millisecond)
+	})
+	t.Run("c6 a kernel-internal cancel cascades fully through the guard", func(t *testing.T) {
+		r := newVerdictRig(t)
+		if err := r.h.x.CancelAs(context.Background(), r.watch, tasks.Actor{UserID: "harley"}); err != nil {
+			t.Fatal(err)
+		}
+		r.h.waitState(r.watch, tasks.StateCanceled)
+		r.h.waitState(r.yard, tasks.StateCanceled)
+		r.h.waitState(r.armory, tasks.StateCanceled) // queued, taken by the cascade itself
+		r.releaseArmory()                            // a late armory is gated behind the lockdown until then
+		for _, kind := range []tasks.Kind{"gotham.safe", "gotham.armory", "gotham.yard"} {
+			late := r.late(r.h, r.watch, kind, "gordon")
+			if got := r.h.waitState(late, tasks.StateCanceled); got.Reason != reasonCancel {
+				t.Errorf("late %s %s/%q, want canceled/cancel", kind, got.State, got.Reason)
+			}
+		}
+	})
+	t.Run("c7 a child carrying another actor is left alone", func(t *testing.T) {
+		r := newVerdictRig(t)
+		r.harleyCancels()
+		late := r.late(r.h, r.watch, "gotham.yard", "joker")
+		r.h.waitState(late, tasks.StateRunning)
+		r.h.stays(late, tasks.StateRunning, 200*time.Millisecond)
+	})
+}
+
+// TestCancelCascade_TheBootPassAppliesTheStoredVerdict (c2, c5, c6, c7): the first
+// half of a cancel is staged and the process dies before the cascade. At the next
+// boot a child the stored verdict covers is ended canceled, with the grandchildren
+// below it (judged by the ROOT's verdict, not the child's own), and one it does not
+// cover is resumed as on HEAD.
+func TestCancelCascade_TheBootPassAppliesTheStoredVerdict(t *testing.T) {
+	harley := tasks.Actor{UserID: "harley", AuthMethod: "session"}
+	half := func(r *verdictRig, reach *tasks.CancelReach) {
+		t.Helper()
+		if err := r.h.e.stopOne(context.Background(), r.watch, harley, reach, reasonCancel, tasks.ErrCanceled); err != nil {
+			t.Fatal(err)
+		}
+		r.h.waitState(r.watch, tasks.StateCanceled)
+	}
+	t.Run("c2 a skipped child unfinished at restart is not ended", func(t *testing.T) {
+		r := newVerdictRig(t)
+		half(r, r.h.e.reachOf(r.h.get(r.watch), harley, grants{scopeGothamRun: true}))
+		second := r.h.crashBoot(r.defs, r.opts)
+		for name, id := range map[string]tasks.RunID{"the child": r.yard, "the grandchild": r.annex} {
+			if got := second.waitState(id, tasks.StateCanceled); got.Reason != reasonCancel {
+				t.Errorf("%s after the restart: %s/%q, want canceled/cancel", name, got.State, got.Reason)
+			}
+		}
+		second.stays(r.armory, tasks.StateQueued, 200*time.Millisecond) // behind the resumed lockdown, not canceled
+	})
+	t.Run("c5 a parent with no stored verdict leaves its orphans alone", func(t *testing.T) {
+		r := newVerdictRig(t)
+		half(r, nil)
+		second := r.h.crashBoot(r.defs, r.opts)
+		for name, id := range map[string]tasks.RunID{"the yard": r.yard, "the armory": r.armory, "the annex": r.annex} {
+			if got := second.get(id); got.State == tasks.StateCanceled {
+				t.Errorf("%s was ended canceled at boot with no verdict stored", name)
+			}
+		}
+		second.waitState(r.yard, tasks.StateRunning)
+		second.stays(r.yard, tasks.StateRunning, 200*time.Millisecond)
+	})
+	t.Run("c6 a kernel-internal cancel ends every orphan", func(t *testing.T) {
+		r := newVerdictRig(t)
+		half(r, r.h.allReach(r.watch))
+		second := r.h.crashBoot(r.defs, r.opts)
+		for name, id := range map[string]tasks.RunID{"the yard": r.yard, "the armory": r.armory, "the annex": r.annex} {
+			if got := second.waitState(id, tasks.StateCanceled); got.Reason != reasonCancel {
+				t.Errorf("%s: %s/%q, want canceled/cancel", name, got.State, got.Reason)
+			}
+		}
+		// An orphan the boot pass ended keeps the verdict: a child staged under it
+		// later is judged by the original cancel.
+		late := r.late(second, r.annex, "gotham.safe", "gordon")
+		if got := second.waitState(late, tasks.StateCanceled); got.Reason != reasonCancel {
+			t.Errorf("a late child of an orphan ended at boot: %s/%q, want canceled/cancel", got.State, got.Reason)
+		}
+	})
+	t.Run("c7 an orphan carrying another actor is not ended", func(t *testing.T) {
+		r := newVerdictRig(t)
+		odd := r.late(r.h, r.yard, "gotham.safe", "joker") // a child of the yard, not enqueued by the run
+		half(r, r.h.allReach(r.watch))
+		second := r.h.crashBoot(r.defs, r.opts)
+		second.waitState(r.annex, tasks.StateCanceled)
+		second.waitState(r.yard, tasks.StateCanceled)
+		if got := second.get(odd); got.State == tasks.StateCanceled {
+			t.Errorf("the joker's child of the yard was ended at boot (%s/%q)", got.State, got.Reason)
+		}
+	})
 }

@@ -74,8 +74,8 @@ func (e *executor) resumeSweep(ctx context.Context) error {
 	orphans := e.orphansAtBoot(ctx, recs)
 	for _, rec := range recs {
 		resume := e.resumeOne
-		if parent, ok := orphans[rec.ID]; ok {
-			resume = func(ctx context.Context, rec tasks.RunRecord) error { return e.cancelAtBoot(ctx, rec, parent) }
+		if orphan, ok := orphans[rec.ID]; ok {
+			resume = func(ctx context.Context, rec tasks.RunRecord) error { return e.cancelAtBoot(ctx, rec, orphan) }
 		} else if superseded[rec.ID] {
 			resume = func(ctx context.Context, rec tasks.RunRecord) error {
 				return e.toState(ctx, rec, tasks.StateInterruptedDropped, reasonSuperseded)

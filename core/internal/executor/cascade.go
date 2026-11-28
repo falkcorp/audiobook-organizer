@@ -10,9 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 
-	"github.com/falkcorp/mediacore/rbac"
 	"github.com/falkcorp/mediacore/storage"
 	"github.com/falkcorp/mediacore/tasks"
 )
@@ -43,16 +43,30 @@ import (
 // Reason "cancel" is what the dispatch guard and the boot pass read, so a child
 // canceled with its parent passes the cancel on to its own children the same way.
 
-// The cascade's reach is the canceling caller's own: cancelDescendants skips a
-// descendant the caller may not cancel (mayCancel, the rule a direct cancel
-// applies) and the runs beneath it. The dispatch guard and the boot pass apply NO
-// such check yet: they hold only the parent's stored cancel event, which carries
-// the canceling Actor's identity and no rbac.Checker, and a checker cannot be
-// rebuilt from an identity without a resolver the executor does not have
-// (Options.Principal resolves from a live request context only). Until the lead
-// rules on where that verdict comes from, a skipped child that is still queued is
-// ended by cancelOrphan at its next dispatch, and one still unfinished at a
-// restart is ended by orphansAtBoot.
+// The cascade's reach is the canceling caller's own. Cancel evaluates mayCancel
+// (the rule a direct cancel of a run applies) once per registered kind, against
+// the canceled run's actor, and stores the result on the run (tasks.CancelReach,
+// written in the same move as the cancel; All for a kernel-internal cancel). Every
+// run the cascade ends carries a copy, so the walk, the dispatch guard and the
+// boot pass all read one stored verdict and cannot diverge, and a child enqueued
+// after the plan is judged by the kind it is. A run is out of reach when the
+// verdict is missing (a record from before the field, a cancel that stored none),
+// its kind is not in the set, or its Actor is not the one the verdict was made
+// for: the live walk skips it and the runs beneath it, and the guard and the boot
+// pass leave it alone, as before any cascade existed. They never fall back to
+// "allowed".
+
+// reachCovers reports whether a stored verdict lets the cascade end c.
+func reachCovers(r *tasks.CancelReach, c tasks.RunRecord) bool {
+	if r == nil || c.Actor != r.Actor {
+		return false
+	}
+	if r.All {
+		return true
+	}
+	_, found := slices.BinarySearch(r.Kinds, c.Kind)
+	return found
+}
 
 // canceledByCancel reports a run a cancel ended or is ending. The watchdog's
 // canceled state carries Reason "watchdog", so it does not match.
@@ -78,16 +92,16 @@ func parentCancelCause(parent tasks.RunID) error {
 // skip the others; the errors are joined, the caller's cancel reports them, and a
 // repeat cancel retries (stop).
 //
-// who is the caller's checker (nil: a kernel-internal cancel, which no checker
-// limits). A descendant who may not cancel it, by the very rule a direct cancel
-// of that run applies (mayCancel: the run's own actor, core:tasks.manage, the
-// kind's Perms.Cancel), is skipped: it keeps running, as it did before any
+// reach is the verdict stored with the cancel (see above). A descendant it does
+// not cover, which is one the caller may not cancel by the very rule a direct
+// cancel of that run applies (mayCancel: the run's own actor, core:tasks.manage,
+// the kind's Perms.Cancel), is skipped: it keeps running, as it did before any
 // cascade existed, and the runs beneath it are not walked, because the caller
 // could not have reached them through it. Each skip is written to the parent's
 // run log and handed to the cancel's CancelReport (the HTTP route records it in
 // the core.task.cancel audit record). The cancel still succeeds for the run and
 // every descendant the caller may cancel.
-func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by tasks.Actor, who rbac.Checker) error {
+func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by tasks.Actor, reach *tasks.CancelReach) error {
 	kids := map[tasks.RunID][]tasks.RunRecord{}
 	for rec, err := range e.runs.Unfinished(ctx) {
 		if err != nil {
@@ -111,7 +125,7 @@ func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by t
 				continue
 			}
 			seen[c.ID] = true
-			if who != nil && !e.mayCancel(c, by, who) {
+			if !reachCovers(reach, c) {
 				skipped = append(skipped, skippedRun{parent: parent, id: c.ID, kind: c.Kind})
 				continue // not queued: its own descendants are out of reach too
 			}
@@ -119,7 +133,7 @@ func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by t
 			if e.held(c.Kind) {
 				continue
 			}
-			err := e.stopOne(ctx, c.ID, by, reasonCancel, parentCancelCause(parent))
+			err := e.stopOne(ctx, c.ID, by, reach, reasonCancel, parentCancelCause(parent))
 			if err != nil && !errors.Is(err, tasks.ErrRunNotFound) {
 				errs = append(errs, fmt.Errorf("executor: cancel %s, a child of %s: %w", c.ID, parent, err))
 				continue
@@ -130,7 +144,7 @@ func (e *executor) cancelDescendants(ctx context.Context, root tasks.RunID, by t
 		}
 	}
 	if len(skipped) > 0 {
-		if err := e.recordSkips(ctx, root, by, skipped); err != nil {
+		if err := e.recordSkips(ctx, root, skipped); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -151,7 +165,7 @@ type skippedRun struct {
 // stageNotifyFailed's), where the attempt's own lines, which count up from 1,
 // cannot collide with them. The report is filled first, so an audit record never
 // misses a skip because the log write failed.
-func (e *executor) recordSkips(ctx context.Context, root tasks.RunID, by tasks.Actor, skipped []skippedRun) error {
+func (e *executor) recordSkips(ctx context.Context, root tasks.RunID, skipped []skippedRun) error {
 	if rep, ok := ctx.Value(cancelReportKey{}).(*CancelReport); ok {
 		for _, s := range skipped {
 			rep.add(s.id)
@@ -165,7 +179,7 @@ func (e *executor) recordSkips(ctx context.Context, root tasks.RunID, by tasks.A
 	err = e.write(ctx, func(ctx context.Context, b *storage.Batch) error {
 		for i, s := range skipped {
 			line := tasks.LogLine{At: now, Level: "warn", Message: fmt.Sprintf(
-				"the cancel did not reach run %s (%s): %s may not cancel it, so it keeps running", s.id, s.kind, actorName(by))}
+				"the cancel did not reach run %s (%s): the caller may not cancel it, so it keeps running", s.id, s.kind)}
 			seq := uint64(rec.Attempt)<<32 | (math.MaxUint32 - 1 - uint64(i))
 			if err := e.runs.AppendLog(ctx, b, root, seq, line); err != nil {
 				return err
@@ -181,18 +195,6 @@ func (e *executor) recordSkips(ctx context.Context, root tasks.RunID, by tasks.A
 		e.log.Warn("cancel did not reach a descendant its caller may not cancel", "run", string(s.id), "kind", string(s.kind), "parent", string(s.parent), "root", string(root))
 	}
 	return nil
-}
-
-// actorName is an actor as a log line names it.
-func actorName(a tasks.Actor) string {
-	switch {
-	case a.UserID != "":
-		return "user " + a.UserID
-	case a.System != "":
-		return "system actor " + a.System
-	default:
-		return "the caller"
-	}
 }
 
 // CancelReport collects what one cancel's cascade left running: the descendants
@@ -229,9 +231,10 @@ func (r *CancelReport) Skipped() []tasks.RunID {
 }
 
 // cancelOrphan is the dispatcher's guard before a claim: a queued run whose
-// parent was canceled is canceled itself, never started. It reports whether the
-// run was an orphan (the caller skips the claim either way: a run whose stop
-// failed is not started, and the next pass tries again).
+// parent was canceled is canceled itself, never started, when the parent's stored
+// verdict covers it (reachCovers). A run out of reach is dispatched as on HEAD. It
+// reports whether the run was an orphan (the caller skips the claim either way: a
+// run whose stop failed is not started, and the next pass tries again).
 func (e *executor) cancelOrphan(ctx context.Context, rec tasks.RunRecord) bool {
 	if rec.Parent == "" {
 		return false
@@ -240,68 +243,90 @@ func (e *executor) cancelOrphan(ctx context.Context, rec tasks.RunRecord) bool {
 	if err != nil || !canceledByCancel(p) {
 		return false // a parent that is gone (pruned) or unreadable does not hold its child back
 	}
-	if err := e.stop(ctx, rec.ID, tasks.Actor{}, nil, reasonCancel, parentCancelCause(p.ID)); err != nil && !errors.Is(err, tasks.ErrRunNotFound) && ctx.Err() == nil {
+	if !reachCovers(p.CancelReach, rec) {
+		return false // out of the cancel's reach (or no verdict stored): dispatched as on HEAD
+	}
+	if err := e.stop(ctx, rec.ID, tasks.Actor{}, p.CancelReach, reasonCancel, parentCancelCause(p.ID)); err != nil && !errors.Is(err, tasks.ErrRunNotFound) && ctx.Err() == nil {
 		e.log.Warn("child of a canceled run not canceled at dispatch; it is tried again next pass", "run", string(rec.ID), "parent", string(p.ID), "err", err)
 	}
 	return true
 }
 
+// bootOrphan is a run the boot pass ends: the ancestor whose cancel orphans it
+// and the verdict of that cancel (the root's, carried down through orphans of
+// orphans, never the child's own).
+type bootOrphan struct {
+	parent tasks.RunID
+	reach  *tasks.CancelReach
+}
+
 // orphansAtBoot picks, from the unfinished runs the resume sweep read, those that
-// hang from a canceled run: the child of a run a cancel ended, of one still
-// stopping for a cancel (the sweep ends it canceled), or of another such orphan.
-// The value is the ancestor whose cancel orphans it. A run of a disabled module is
-// never picked (the sweep leaves it untouched).
-func (e *executor) orphansAtBoot(ctx context.Context, recs []tasks.RunRecord) map[tasks.RunID]tasks.RunID {
+// hang from a canceled run and that its stored verdict covers: the child of a run
+// a cancel ended, of one still stopping for a cancel (the sweep ends it canceled),
+// or of another such orphan. A child the verdict does not cover is left alone, and
+// so are the runs beneath it (nothing canceled reaches them through it). A run of
+// a disabled module is never picked (the sweep leaves it untouched).
+func (e *executor) orphansAtBoot(ctx context.Context, recs []tasks.RunRecord) map[tasks.RunID]bootOrphan {
 	byID := make(map[tasks.RunID]tasks.RunRecord, len(recs))
 	for _, r := range recs {
 		byID[r.ID] = r
 	}
-	via := map[tasks.RunID]tasks.RunID{} // decided runs: "" = not an orphan
-	var orphanOf func(r tasks.RunRecord) tasks.RunID
-	orphanOf = func(r tasks.RunRecord) tasks.RunID {
+	via := map[tasks.RunID]bootOrphan{} // decided runs: the zero value = not an orphan
+	var orphanOf func(r tasks.RunRecord) bootOrphan
+	orphanOf = func(r tasks.RunRecord) bootOrphan {
 		if v, ok := via[r.ID]; ok {
 			return v
 		}
-		via[r.ID] = "" // a cycle (impossible: a parent exists before its child) reads as not an orphan
-		var out tasks.RunID
-		switch p, ok := byID[r.Parent]; {
-		case r.Parent == "":
-		case ok:
-			if canceledByCancel(p) || orphanOf(p) != "" {
-				out = p.ID
+		via[r.ID] = bootOrphan{} // a cycle (impossible: a parent exists before its child) reads as not an orphan
+		var out bootOrphan
+		p, unfinished := byID[r.Parent] // a parent the sweep read can pass a cancel down to its own children
+		if r.Parent != "" && !unfinished {
+			if got, err := e.runs.Get(ctx, r.Parent); err == nil {
+				p = got
 			}
-		default:
-			if p, err := e.runs.Get(ctx, r.Parent); err == nil && canceledByCancel(p) {
-				out = p.ID
+		}
+		switch {
+		case p.ID == "":
+		case canceledByCancel(p):
+			out = bootOrphan{parent: p.ID, reach: p.CancelReach}
+		case unfinished:
+			if up := orphanOf(p); up.parent != "" {
+				out = bootOrphan{parent: p.ID, reach: up.reach}
 			}
+		}
+		if out.parent != "" && !reachCovers(out.reach, r) {
+			out = bootOrphan{}
 		}
 		via[r.ID] = out
 		return out
 	}
-	out := map[tasks.RunID]tasks.RunID{}
+	out := map[tasks.RunID]bootOrphan{}
 	for _, r := range recs {
 		if e.held(r.Kind) {
 			continue
 		}
-		if p := orphanOf(r); p != "" {
-			out[r.ID] = p
+		if o := orphanOf(r); o.parent != "" {
+			out[r.ID] = o
 		}
 	}
 	return out
 }
 
-// cancelAtBoot ends one orphan canceled, from the state the sweep read it in.
-func (e *executor) cancelAtBoot(ctx context.Context, rec tasks.RunRecord, parent tasks.RunID) error {
+// cancelAtBoot ends one orphan canceled, from the state the sweep read it in. The
+// orphan keeps the verdict that ended it, so a child enqueued under it later is
+// judged by the original caller's authority.
+func (e *executor) cancelAtBoot(ctx context.Context, rec tasks.RunRecord, o bootOrphan) error {
 	_, err := e.move(ctx, rec.ID, func(cur tasks.RunRecord) (tasks.RunRecord, tasks.RunEvent, error) {
 		if cur.State != rec.State || cur.Attempt != rec.Attempt || cur.FenceEpoch != rec.FenceEpoch {
 			return cur, tasks.RunEvent{}, errStale(cur, "cancel with parent")
 		}
 		next := cur
 		next.State, next.Reason, next.Finished = tasks.StateCanceled, reasonCancel, e.now()
+		next.CancelReach = o.reach
 		return next, tasks.RunEvent{Event: "resume", Reason: reasonCancel}, nil
 	}, nil)
 	if err == nil {
-		e.log.Info("child of a canceled run ended canceled at boot", "run", string(rec.ID), "kind", string(rec.Kind), "parent", string(parent))
+		e.log.Info("child of a canceled run ended canceled at boot", "run", string(rec.ID), "kind", string(rec.Kind), "parent", string(o.parent))
 	}
 	return err
 }
