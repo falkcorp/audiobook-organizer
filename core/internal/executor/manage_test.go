@@ -250,3 +250,26 @@ func TestApprove_NeedsManageAndTheApproveRequirement(t *testing.T) {
 		h.waitState(h.onlyApplyRun(plan).ID, tasks.StateSucceeded)
 	}
 }
+
+// TestInternalCaller_ControlIsUnchanged pins the path the Manage rule does not
+// touch (the dark half of the owner's 2026-11-22 ruling): a call whose context
+// carries no identity is the kernel's own, so Cancel and Discard are admitted
+// for any kind, Manage or not, exactly as before. Decide and Approve refuse such
+// a caller before and after this change (approve_test.go's "no identity" cells).
+// A caller who carries an identity is the one Manage binds.
+func TestInternalCaller_ControlIsUnchanged(t *testing.T) {
+	started := make(chan tasks.RunID, 2)
+	h := newHarness(t, blockingKinds(started), withManageCatalog(t))
+	ref := h.startAs(asUser(runOwner, scopeGothamGo), "gotham.stakeout", tasks.StartRequest{})
+	<-started
+	if err := h.x.Cancel(context.Background(), ref.ID); err != nil {
+		t.Fatalf("internal Cancel: %v, want admitted", err)
+	}
+	h.waitState(ref.ID, tasks.StateCanceled)
+	if err := h.x.Discard(context.Background(), ref.ID); err != nil {
+		t.Fatalf("internal Discard: %v, want admitted", err)
+	}
+	if _, err := h.stores.Runs.Get(context.Background(), ref.ID); err == nil {
+		t.Fatal("the discarded run is still stored")
+	}
+}
