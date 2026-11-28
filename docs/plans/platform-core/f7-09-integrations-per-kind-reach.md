@@ -1,5 +1,5 @@
 <!-- file: docs/plans/platform-core/f7-09-integrations-per-kind-reach.md -->
-<!-- version: 1.1.0 -->
+<!-- version: 1.2.0 -->
 <!-- guid: 7d3a9e41-5c82-4f06-b1d7-2e8a60c4f915 -->
 <!-- last-edited: 2026-11-28 -->
 
@@ -84,17 +84,22 @@ requirement), instance (404 if absent).
 |---|---|---|---|---|---|---|---|
 | ai | `GET /ai/endpoints/status` (`legacy_manifest.go:433`, `wire_media_routes.go:88`) | `settings.manage` | No | instance requirement | none | stays (kept by the owner, `internal/server/wire_catalog_review_gone_test.go:29`) | `TestReach_HealthAndTestPerKind`, `TestReach_BackstopHoldsWhenTheRouteIsMountedWeaker` |
 | download | `GET /deluge/status` (`legacy_manifest.go:666`, `deluge_integration.go:139-146`) | `integrations.manage` atom (`core:integrations.manage` + `books:integrations.manage`) | No | **not served: 404** for every principal, `core:admin` included, with a problem detail naming the legacy route | **needed**: a per-kind co-requirement (W6, #5086, lands after this PR) so the atom's `books:integrations.manage` can be asked of kind=download only; enabling is todo.d `f7-09-enable-core-download-health` | **yes, `GET /deluge/status` stays** | `TestReach_HealthAndTestPerKind` (download: 404 for all), `TestLegacyReach_PerKindPredecessorsStayAlive` (internal/books) |
-| metadata | `POST /metadata-sources/test` (probe, `legacy_manifest.go:731`) and `GET /metadata/providers/throttles` (hold read, `:747`, `library.view`) | `settings.manage` for the probe, `library.view` for the hold read | No | instance requirement | none | **`GET /metadata/providers/throttles` stays** (`library.view` is `{books:view, core:tasks.view}` (books_test.go:194), not expressible in core until books:view lands) | `TestReach_HealthAndTestPerKind`, `TestLegacyReach_PerKindPredecessorsStayAlive` |
+| metadata | `POST /metadata-sources/test` (probe, `legacy_manifest.go:731`) and `GET /metadata/providers/throttles` (hold read, `:747`, `library.view`) | `settings.manage` for the probe, `library.view` for the hold read | No | **health: not served, 404** (names the legacy throttles route; its payload carries the hold, which a settings-atom key could not read at HEAD). **test: instance requirement** | none for the test; health waits for a core route that can express `library.view` (todo.d `f7-09-retire-throttles-route`) | **`GET /metadata/providers/throttles` stays** (`library.view` is `{books:view, core:tasks.view}` (books_test.go:194), not expressible in core until books:view lands) | `TestReach_HealthAndTestPerKind`, `TestLegacyReach_PerKindPredecessorsStayAlive` |
 | notify | `GET /plugins/:id/health` (`legacy_manifest.go:813`, `handlers/plugins.go:144`) | `settings.manage` | No | instance requirement | none | stays | `TestReach_HealthAndTestPerKind` |
 | indexer | none | n/a | n/a | **not served: 404** (no HEAD predecessor, no ruling) | n/a | n/a | `TestKindReach_EveryKindIsDecided` |
 
-Row delta recorded (not a STOP, flagged for the owner): a `key:admin:settings`
-principal (settings atom only) is D on `GET /metadata/providers/throttles` at
-HEAD (`internal/books/rbacreach/verdicts.json`, 9th principal) and is allowed
-by the instance requirement on core metadata health, which also carries the hold
-read. The same principal is A on `POST /metadata-sources/test`, which sends the
-credentialed probe, so the probe is not new; only the hold state in the answer
-is. `library.view`-only principals lose nothing: the legacy route stays.
+Row delta, resolved by not serving it: a `key:admin:settings` principal
+(settings atom only) is D on `GET /metadata/providers/throttles` at HEAD
+(`internal/books/rbacreach/verdicts.json`, 9th principal), and core metadata
+health carries the same hold state. Serving it under the instance requirement
+would widen that principal's reach, no ruling covers that, so metadata health is
+404 for every principal that passes the floor (the download pattern) and names
+`GET /metadata/providers/throttles`, which stays. Metadata test is unaffected
+(`POST /metadata-sources/test` is `settings.manage` at HEAD).
+
+"404 for every principal" means every principal that reaches the handler: a
+caller without `core:integrations.manage` is refused earlier by the router's
+stage 13 (403 `permission_denied` naming the floor), for every kind.
 
 ## Table 3: test (`POST /integrations/{kind}/test`, `POST .../instances/{id}/test`)
 
@@ -145,19 +150,27 @@ The only places that listed these routes as retired were prose in
    interactive-only through `credRoute` `PUT /plugins/:id/settings`. At HEAD a
    settings-atom API key also writes notify's non-secret config through
    `PUT /config {plugins}` (200 in the boot probe), and
-   `PUT /plugins/:id/settings` only sets an in-memory map. Mirroring HEAD means
-   no `Guards.Interactive`; the ruling's premise and its own "where a key could
-   write it, keep it" clause collide. Coded as no guard; flagged. Secret fields
-   remain #5073's gate.
-2. **Metadata health** serves the instance requirement; the delta above is a
-   settings-atom-only key reading the hold state. Flagged, not a STOP: the same
-   key already sends the credentialed probe through `/metadata-sources/test`.
+   `PUT /plugins/:id/settings` only sets an in-memory map. The two HEAD
+   paths disagree for the same kind, so the owner picks which one core
+   mirrors. The code mirrors `PUT /config`: no `Guards.Interactive` on create or
+   update for any kind, notify included, pinned by
+   `TestReach_SettingsKeyWritesNonSecretConfigPerKind` (a settings-atom API key
+   creates and replaces an instance of every kind, and the route carries no
+   guard) with mutant M7. Mirroring `PUT /plugins/:id/settings` for notify
+   instead needs a per-kind interactive check in the handler, which the owner
+   would have to rule on. Secret fields remain #5073's gate.
+2. **Metadata health** was a widening for a settings-atom-only key (it reads
+   the hold state, which `GET /metadata/providers/throttles` refuses it at
+   HEAD). Not coded: it is 404 until a core route can express `library.view`,
+   and the legacy route stays. Owner may rule that the settings atom may read
+   the hold, which would serve it under the instance requirement.
 3. **Indexer** has no HEAD surface and no ruling: instance routes ask the
    instance requirement (nothing existed to widen), health and test are not
    served (404).
 4. **Notify test** is new capability for settings-atom holders (HEAD has no
-   webhook test route). Coordinator's clarification: ask the instance
-   requirement, never the integrations atom. Flagged for owner confirmation.
+   webhook test route). Coordinator's clarification (peer message to this lane):
+   ask the instance requirement, never the integrations atom. Flagged for
+   owner confirmation.
 5. **Release hold** has one HEAD predecessor, the throttle-reset op
    (`internal/plugins/maintenance/throttle_reset.go`, op default
    `settings.manage`), for metadata only. Core asks the instance requirement
