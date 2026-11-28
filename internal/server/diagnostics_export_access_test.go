@@ -46,7 +46,7 @@ func seedCompletedExport(t *testing.T, store database.Store, id, def string, act
 
 // narrowedFor is the scope an export built for the account id would record now.
 func narrowedFor(srv *Server, id string) *[]string {
-	held := srv.opActorPermissions(&database.OperationV2Row{ActorUserID: &id})
+	held := srv.opActorPermissions(context.Background(), &database.OperationV2Row{ActorUserID: &id})
 	out := srv.exportNarrowedTo(func(p auth.Permission) bool { return held[p] })
 	return &out
 }
@@ -341,14 +341,14 @@ func TestOpActorPermissions_CapAtTheRequestsScopeAndRefuseDisabledAccounts(t *te
 		return &database.OperationV2Row{ID: "x", ActorUserID: &id, ActorPermissions: perms}
 	}
 
-	full := f.srv.opActorPermissions(rowOf(nil))
+	full := f.srv.opActorPermissions(context.Background(), rowOf(nil))
 	assert.True(t, full[auth.PermUsersManage], "no stamped set: the account's roles")
 
 	// A recorded empty set is a request that held nothing: the job holds
 	// nothing, not the account's roles that a nil (never recorded) set falls to.
-	assert.Empty(t, f.srv.opActorPermissions(rowOf([]string{})), "a recorded empty set caps the job at nothing")
+	assert.Empty(t, f.srv.opActorPermissions(context.Background(), rowOf([]string{})), "a recorded empty set caps the job at nothing")
 
-	scoped := f.srv.opActorPermissions(rowOf([]string{string(auth.PermSettingsManage)}))
+	scoped := f.srv.opActorPermissions(context.Background(), rowOf([]string{string(auth.PermSettingsManage)}))
 	assert.True(t, scoped[auth.PermSettingsManage])
 	assert.False(t, scoped[auth.PermUsersManage], "a key scoped to settings.manage does not reach users.manage through its account")
 
@@ -359,7 +359,7 @@ func TestOpActorPermissions_CapAtTheRequestsScopeAndRefuseDisabledAccounts(t *te
 
 	_, err = store.SetUserStatus(admin.ID, "disabled")
 	require.NoError(t, err)
-	assert.Empty(t, f.srv.opActorPermissions(rowOf(nil)), "a disabled account holds nothing")
+	assert.Empty(t, f.srv.opActorPermissions(context.Background(), rowOf(nil)), "a disabled account holds nothing")
 }
 
 // TestOperationRow_KeepsAnEmptyActorPermissionSetApartFromNone: the stored op

@@ -6,6 +6,8 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -79,14 +81,19 @@ func (s *Server) permCheck() func(*gin.Context, auth.Permission) bool {
 // a refusal itself (the Repairs lane, which lists a fixer the caller may not
 // use without its last runs, and refuses a read with its own 403).
 func (s *Server) permHolds() repairshandler.PermissionCheck {
+	// Under core identity (F4-08 B7) auth off is the auth-disabled principal,
+	// not books' EnableAuth, and the atom is judged through the principal stage
+	// 12 bound; there is no first-run bypass. A context the identity's Bind did
+	// not mark holds nothing there: HEAD's chain would count books' user rows,
+	// which M3 drains, and take its first-run bypass on every migrated install.
+	if s.identity != nil {
+		return func(c *gin.Context, p auth.Permission) bool {
+			held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p))
+			return bridged && held
+		}
+	}
 	head := s.permHoldsHead()
 	return func(c *gin.Context, p auth.Permission) bool {
-		// Under core identity (F4-08 B7) auth off is the auth-disabled
-		// principal, not books' EnableAuth, and the atom is judged through the
-		// principal stage 12 bound; there is no first-run bypass.
-		if held, bridged := legacyauth.HeldOrAuthOff(c.Request.Context(), string(p)); bridged {
-			return held
-		}
 		return head(c, p)
 	}
 }
@@ -271,9 +278,16 @@ func (s *Server) newRepairsOpAccess(holds func(c *gin.Context, p auth.Permission
 // the roles alone; a stamped empty set (non-nil, empty) is a request that held
 // nothing, and caps the job at nothing. An op with no actor, an actor that no
 // longer exists or is not active, or a store failure, holds nothing.
-func (s *Server) opActorPermissions(row *database.OperationV2Row) map[auth.Permission]bool {
+func (s *Server) opActorPermissions(ctx context.Context, row *database.OperationV2Row) map[auth.Permission]bool {
 	held := map[auth.Permission]bool{}
 	if row == nil || row.ActorUserID == nil {
+		return held
+	}
+	if s.identity != nil {
+		held, err := s.opActorPermissionsCore(ctx, row)
+		if err != nil {
+			return map[auth.Permission]bool{}
+		}
 		return held
 	}
 	store := s.storeForWiring()
@@ -299,6 +313,67 @@ func (s *Server) opActorPermissions(row *database.OperationV2Row) map[auth.Permi
 	return held
 }
 
+// errNoExportActor and errExportActorNotStanding are why a job that runs
+// after its request cannot be built for anyone under core identity. Each fails
+// the job with a message the user sees: a job narrowed to nothing would finish
+// "successfully" with an empty result, which reads as data that is not there.
+var (
+	errNoExportActor = errors.New("this operation was started without a signed-in account, so there is no account " +
+		"to build it for; sign in and start it again")
+	errExportActorNotStanding = errors.New("the account that started this operation is not active, or no longer " +
+		"exists; start it again from an active account")
+)
+
+// opActorPermissionsCore is opActorPermissions under core identity, where the
+// account record is core's (books' user and role rows are drained by M3): the
+// actor is read through core's identity view and must be active, and what its
+// current roles hold is the checker core compiles for it (Compat.PrincipalFor,
+// with no scope narrowing: the role permissions, at its current credential
+// epoch), turned into atoms as stage 12 does (Bridge.AtomsSatisfied). That is
+// capped at the stamped set exactly as HEAD caps it. Compat's method is not
+// interactive, so a Sensitive scope (05-rbac §4.4) is never held through this
+// path: the job is narrowed by it, never widened.
+//
+// An op with no actor is errNoExportActor; an actor core does not hold, holds
+// as not active, or refuses a principal for is errExportActorNotStanding; a
+// read failure is returned as it is. The map is empty whenever err is set.
+func (s *Server) opActorPermissionsCore(ctx context.Context, row *database.OperationV2Row) (map[auth.Permission]bool, error) {
+	held := map[auth.Permission]bool{}
+	if row == nil || row.ActorUserID == nil {
+		return held, errNoExportActor
+	}
+	id := s.identity
+	if id == nil || id.Users == nil || id.Compat == nil || id.Bridge == nil {
+		return held, errNoCoreUserView
+	}
+	u, err := id.Users.User(ctx, coreauth.UserID(*row.ActorUserID))
+	switch {
+	case errors.Is(err, coreauth.ErrNotFound), err == nil && u == nil:
+		return held, errExportActorNotStanding
+	case err != nil:
+		return held, fmt.Errorf("read the account that started operation %s: %w", row.ID, err)
+	case u.Status != coreauth.StatusActive:
+		return held, errExportActorNotStanding
+	}
+	p, err := id.Compat.PrincipalFor(ctx, u, nil, u.CredentialEpoch, coreauth.ClientInfo{})
+	if err != nil || p == nil || p.Perms == nil {
+		return held, errExportActorNotStanding
+	}
+	var scoped map[string]bool
+	if row.ActorPermissions != nil {
+		scoped = make(map[string]bool, len(row.ActorPermissions))
+		for _, perm := range row.ActorPermissions {
+			scoped[perm] = true
+		}
+	}
+	for _, perm := range id.Bridge.AtomsSatisfied(p.Perms) {
+		if scoped == nil || scoped[string(perm)] {
+			held[perm] = true
+		}
+	}
+	return held, nil
+}
+
 // opActorHolds is a snapshot of what the account that queued operation opID
 // may do, for a job that runs after its request is gone: the permissions
 // opActorPermissions resolves, read once, from the actor stamped on the op row,
@@ -308,21 +383,40 @@ func (s *Server) opActorPermissions(row *database.OperationV2Row) map[auth.Permi
 // exists, holds no role or is disabled, or a store failure, holds nothing, so
 // every Repairs op and every user-data result is refused. Auth disabled, and a
 // first run with no users yet, hold everything, as permHolds does.
-func (s *Server) opActorHolds(opID string) func(auth.Permission) bool {
-	all := func(auth.Permission) bool { return true }
-	if !config.Snapshot().EnableAuth {
-		return all
-	}
+//
+// Under core identity neither bypass applies. There is no first run (HEAD's
+// read books' user count, which M3 drains, so it held on every migrated
+// install), and books' EnableAuth is not core's mode. The actor is resolved
+// through core (opActorPermissionsCore), and a job it cannot be resolved for
+// (no actor: with core's auth off a request binds no user; or an actor that
+// does not stand) is an error, so the job fails visibly instead of finishing
+// with an empty result. Off core identity the error is always nil.
+func (s *Server) opActorHolds(ctx context.Context, opID string) (func(auth.Permission) bool, error) {
 	store := s.storeForWiring()
-	if n, err := store.CountUsers(); err == nil && n == 0 {
-		return all
+	if s.identity == nil {
+		all := func(auth.Permission) bool { return true }
+		if !config.Snapshot().EnableAuth {
+			return all, nil
+		}
+		if n, err := store.CountUsers(); err == nil && n == 0 {
+			return all, nil
+		}
+		row, err := store.GetOperationV2(opID)
+		if err != nil {
+			row = nil
+		}
+		held := s.opActorPermissions(ctx, row)
+		return func(p auth.Permission) bool { return held[p] }, nil
 	}
 	row, err := store.GetOperationV2(opID)
 	if err != nil {
-		row = nil
+		return nil, fmt.Errorf("read operation %s: %w", opID, err)
 	}
-	held := s.opActorPermissions(row)
-	return func(p auth.Permission) bool { return held[p] }
+	held, err := s.opActorPermissionsCore(ctx, row)
+	if err != nil {
+		return nil, err
+	}
+	return func(p auth.Permission) bool { return held[p] }, nil
 }
 
 // holdsAccess is the opaccess reader for a fixed permission set.
@@ -390,6 +484,11 @@ func (s *Server) exportNarrowedTo(holds func(auth.Permission) bool) []string {
 // account exists, there is no scope to compare and the download is allowed.
 func (s *Server) diagnosticsDownloadCheck() handlers.ExportDownloadCheck {
 	holds := s.permHolds()
+	if id := s.identity; id != nil {
+		return func(c *gin.Context, row *database.OperationV2Row, res diagnostics.ExportResult) (string, error) {
+			return diagnosticsDownloadCheckCore(c, id, holds, row, res)
+		}
+	}
 	return func(c *gin.Context, row *database.OperationV2Row, res diagnostics.ExportResult) (string, error) {
 		if !config.Snapshot().EnableAuth {
 			return "", nil
@@ -425,6 +524,50 @@ func (s *Server) diagnosticsDownloadCheck() handlers.ExportDownloadCheck {
 		return "", nil
 	}
 }
+
+// diagnosticsDownloadCheckCore is diagnosticsDownloadCheck under core identity.
+// Auth off is core's auth-disabled principal (not books' EnableAuth), there is
+// no first-run allowance (HEAD's read books' user count, which M3 drains, and
+// allowed every download on a migrated install), and the account the export
+// was built for is read through core's identity view. Everything else is
+// HEAD's rule: no recorded set is served to nobody, an account that is gone or
+// not active is served to nobody, a read failure is an error (500), and the
+// caller must hold every permission in the recorded set.
+func diagnosticsDownloadCheckCore(c *gin.Context, id *legacyauth.Identity, holds repairshandler.PermissionCheck,
+	row *database.OperationV2Row, res diagnostics.ExportResult) (string, error) {
+	ctx := c.Request.Context()
+	if id.Bridge.AuthOff(ctx) {
+		return "", nil
+	}
+	if res.NarrowedTo == nil {
+		return "this export records no scope it was built for; start a new export", nil
+	}
+	if row.ActorUserID != nil {
+		if id.Users == nil {
+			return "", fmt.Errorf("read the account export %s was built for: %w", row.ID, errNoCoreUserView)
+		}
+		u, err := id.Users.User(ctx, coreauth.UserID(*row.ActorUserID))
+		switch {
+		case errors.Is(err, coreauth.ErrNotFound), err == nil && u == nil:
+			return "the account this export was built for cannot be read; start a new export", nil
+		case err != nil:
+			return "", fmt.Errorf("read the account export %s was built for: %w", row.ID, err)
+		case u.Status != coreauth.StatusActive:
+			return "the account this export was built for is not active; start a new export", nil
+		}
+	}
+	for _, p := range *res.NarrowedTo {
+		if !holds(c, auth.Permission(p)) {
+			return "this export was built for an account that holds more than you do; start your own export", nil
+		}
+	}
+	return "", nil
+}
+
+// errNoCoreUserView is a server under core identity that was given no read of
+// core's accounts (Identity.Users is optional): the account an export names
+// cannot be checked, so nothing is served.
+var errNoCoreUserView = errors.New("this server was given no read of core's accounts")
 
 // othersUserDataAccess reports whether the request's caller may read other
 // users' own data -- their listening state and positions -- where a

@@ -32,7 +32,16 @@ func (s *Server) wireAuthRoutes(
 	authGroup := api.Group("/auth")
 	{
 		authGroup.GET("/status", authH.GetStatus)
-		authGroup.POST("/setup", authH.SetupInitialAdmin)
+		if s.identity != nil {
+			// Under core identity the first account is core's to create (POST
+			// /api/core/v1/auth/setup, with the bootstrap token core writes at
+			// start); HEAD's handler guards on books' user count, which M3
+			// drains, so it would serve every migrated install as a fresh one.
+			// It answers 410 and reads nothing.
+			authGroup.POST("/setup", gone("core's POST /api/core/v1/auth/setup"))
+		} else {
+			authGroup.POST("/setup", authH.SetupInitialAdmin)
+		}
 		authGroup.POST("/login", s.loginCeilingMiddleware(nil, respondWebLoginError), authH.Login)
 		if s.identity != nil {
 			// Under core identity an invite is core's record: accepting and looking

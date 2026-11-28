@@ -1,7 +1,7 @@
 // file: internal/books/identity_status_boot_test.go
-// version: 0.1.0
+// version: 0.2.0
 // guid: 8a4d1c73-2f95-4b60-9e18-c6b07d3a52e4
-// last-edited: 2026-11-27
+// last-edited: 2026-11-28
 
 package books
 
@@ -114,35 +114,70 @@ func TestIdentityBoot_LegacyStatusAndUserListAreCores(t *testing.T) {
 	}
 }
 
-// TestIdentityBoot_NoLegacySeedWarnings (rehearsal check f408_c2_no_p4d_failure):
-// a boot over a migrated store logs neither "seed system user" nor "seed roles"
-// at WARN (both seeds wrote into claims M3 retired, and were refused on every
-// start), no P4d failure, and no line at all naming a write refused "in a
-// retired claim of" books (rehearsal check f408_no_retired_claim_write). The capture is shown to see the server's start
-// output: the bootstrap-key line seedRolesAndTokens logs right after the seeds
-// is in it, and the cell waits for it, since the server seeds after its
-// listener is up.
+// TestIdentityBoot_NoLegacySeedWarnings (rehearsal checks f408_c2_no_p4d_failure
+// and f408_no_retired_claim_write): a boot over a HEAD store, the one M3 runs
+// in, and a second boot of the store M3 left, each log neither "seed system
+// user" nor "seed roles" at WARN (both seeds wrote into claims M3 retired and
+// were refused on every start), no P4d failure, and no line at all naming a
+// write refused "in a retired claim of" books, from any start-up writer: the
+// seeds, the API-key expiry stamp, or anything the second boot runs before M3
+// is skipped. (HEAD's startup read-only key writer is pinned by the server
+// cell TestSeedRolesAndTokens_WritesNoRetiredRowUnderCoreIdentity: the flag
+// that drives it is core's after M6, so no composed boot turns it on.) Each capture is taken once the server logs "start-up credentials
+// settled", the line after the last of those writers, so a writer the capture
+// missed cannot pass the cell by running late.
+//
+// The same boots answer the two count-gated public routes as core identity
+// does on a migrated install: POST /api/v1/auth/setup is gone (410, core's
+// POST /api/core/v1/auth/setup creates the first account), and a protected route refuses an
+// anonymous caller (401) rather than taking HEAD's no-users bypass.
 func TestIdentityBoot_NoLegacySeedWarnings(t *testing.T) {
 	var keys headKeys
 	var head headUsersAt
 	fx := newFlipFixture(t, seedHEADWithSystemUser(t, &keys, &head), "")
 	r := bootOverHEADStore(t, fx)
-	// The server seeds (and logs the key lifetime line) after the listener is
-	// up, so "ready" can come first: wait for the line the seeds are followed by.
+	assertCleanStart(t, "the boot M3 ran in", r)
+	assertCountGatesClosed(t, r)
+	require.NoError(t, r.stop())
+
+	r = bootOverHEADStore(t, fx)
+	assertCleanStart(t, "the second boot of the migrated store", r)
+	assertCountGatesClosed(t, r)
+}
+
+// assertCleanStart waits for the server's last start-up writer and asserts the
+// captured start output holds no legacy seed WARN, no P4d failure and no write
+// refused in a retired claim.
+func assertCleanStart(t *testing.T, boot string, r *runningApp) {
+	t.Helper()
 	var logged string
-	require.Eventually(t, func() bool {
+	require.Eventuallyf(t, func() bool {
 		logged = r.newLog.String()
-		return strings.Contains(logged, "bootstrap key lifetime")
-	}, time.Minute, 50*time.Millisecond, "the capture never held the server's start output: the cell would be blind")
+		return strings.Contains(logged, "start-up credentials settled")
+	}, time.Minute, 50*time.Millisecond, "%s: the capture never held the server's start output: the cell would be blind", boot)
 	for _, line := range strings.Split(logged, "\n") {
 		warn := strings.Contains(line, "level=WARN") || strings.Contains(line, "level=ERROR") ||
 			strings.Contains(line, `"level":"WARN"`) || strings.Contains(line, `"level":"ERROR"`)
 		for _, msg := range []string{"seed system user", "seed roles"} {
-			assert.Falsef(t, warn && strings.Contains(line, msg), "a legacy seed was attempted under core identity: %s", line)
+			assert.Falsef(t, warn && strings.Contains(line, msg), "%s: a legacy seed was attempted under core identity: %s", boot, line)
 		}
-		assert.NotContains(t, line, "kernel: P4d identity restore steps failed")
-		// Rehearsal check f408_no_retired_claim_write: no writer at all, a seed
-		// or a backfill, at any level, writes into a claim M3 retired.
-		assert.NotContainsf(t, line, "in a retired claim of", "a start-up write into a retired claim: %s", line)
+		assert.NotContainsf(t, line, "kernel: P4d identity restore steps failed", "%s", boot)
+		assert.NotContainsf(t, line, "in a retired claim of", "%s: a start-up write into a retired claim: %s", boot, line)
 	}
+}
+
+// assertCountGatesClosed: the public setup route is gone and an anonymous
+// caller is refused on a protected route.
+func assertCountGatesClosed(t *testing.T, r *runningApp) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/setup",
+		strings.NewReader(`{"username":"joker","password":"hahahahaha","email":"joker@example.test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:41000"
+	rec := httptest.NewRecorder()
+	r.app.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusGone, rec.Code, "POST /api/v1/auth/setup: %s", bodyOf(rec))
+
+	rec = legacyGet(r, "/api/v1/users", "")
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "anonymous GET /api/v1/users: %s", bodyOf(rec))
 }
