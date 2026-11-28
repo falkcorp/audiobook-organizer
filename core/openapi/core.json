@@ -939,7 +939,7 @@
             }
           }
         },
-        "x-mediacore-permission": "core:system.view"
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
       }
     },
     "/api/core/v1/me": {
@@ -1436,7 +1436,7 @@
             }
           }
         },
-        "x-mediacore-permission": "core:system.view"
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
       }
     },
     "/api/core/v1/outbox/consumers/{consumer}/backlog": {
@@ -1479,7 +1479,7 @@
             }
           }
         },
-        "x-mediacore-permission": "core:system.manage",
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)",
         "x-mediacore-guards": [
           "interactive"
         ]
@@ -1531,7 +1531,7 @@
             }
           }
         },
-        "x-mediacore-permission": "core:system.manage"
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
       }
     },
     "/api/core/v1/outbox/dead/{consumer}/{seq}": {
@@ -1575,7 +1575,7 @@
             }
           }
         },
-        "x-mediacore-permission": "core:system.manage"
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
       }
     },
     "/api/core/v1/outbox/dead/{consumer}/{seq}/retry": {
@@ -1619,7 +1619,7 @@
             }
           }
         },
-        "x-mediacore-permission": "core:system.manage"
+        "x-mediacore-permission": "all(core:settings.manage,core:tasks.manage,core:system.view,core:system.manage,core:library.manage,core:library.browse,core:integrations.manage)"
       }
     },
     "/api/core/v1/roles": {

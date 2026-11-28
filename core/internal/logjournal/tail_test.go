@@ -48,6 +48,16 @@ const (
 	permView   = rbac.Permission("core:system.view")
 )
 
+// operator is the scopes of HEAD's settings.manage atom that core names, spelled
+// out (not read from the package under test), plus extra: what the tail needs
+// of a subscriber. core:system.manage is one of the seven, not the requirement.
+func operator(extra ...rbac.Permission) []rbac.Permission {
+	return append([]rbac.Permission{
+		"core:settings.manage", "core:tasks.manage", permView, permManage,
+		"core:library.manage", "core:library.browse", "core:integrations.manage",
+	}, extra...)
+}
+
 // checkerOf is the compiled checker of a session principal holding exactly perms.
 func checkerOf(t testing.TB, perms ...rbac.Permission) rbac.Checker {
 	t.Helper()
@@ -316,27 +326,38 @@ func logCast(l *log.Logging) {
 	lg.Info("no user at all", slog.Int("status", 204))
 }
 
-// TestJournal_RequiresSystemManage's event half lives in loghttp's
+// TestJournal_RequiresSystemManage's event half (now the operator requirement) lives in loghttp's
 // permissions_test.go (F5-19 owns the test); this is the same cells at the
 // package that owns the topic.
-func TestJournalTail_TopicNeedsSystemManage(t *testing.T) {
+func TestJournalTail_TopicNeedsTheOperatorRequirement(t *testing.T) {
 	r := newRig(t, nil)
-	r.sign("bruce", person(t, "u-bruce", permManage))
+	r.sign("bruce", person(t, "u-bruce", operator()...))
 	r.sign("dick", person(t, "u-dick", permView))
+	// A custom role holding core:system.manage alone, and one holding six of the
+	// seven operator scopes: neither is an operator (HEAD's settings.manage atom
+	// grants the seven together), so neither may read the log.
+	r.sign("alfred", person(t, "u-alfred", permManage))
+	r.sign("barbara", person(t, "u-barbara", slices.DeleteFunc(operator(), func(p rbac.Permission) bool { return p == "core:library.browse" })...))
 
-	if _, status, code := r.open("dick", "/?topic="+logjournal.TailTopicName); status != http.StatusForbidden || code != "topic_not_permitted" {
-		t.Errorf("system.view-only on the topic: %d %q, want 403 topic_not_permitted", status, code)
+	for _, who := range []string{"dick", "alfred", "barbara"} {
+		if _, status, code := r.open(who, "/?topic="+logjournal.TailTopicName); status != http.StatusForbidden || code != "topic_not_permitted" {
+			t.Errorf("%s on the topic: %d %q, want 403 topic_not_permitted", who, status, code)
+		}
 	}
 	bruce := r.mustOpen("bruce", "/?topic=*")
 	dick := r.mustOpen("dick", "/?topic=*")
-	if !slices.Equal(bruce.opened, []string{logjournal.TailTopicName}) || len(dick.opened) != 0 {
-		t.Fatalf("opened topics: bruce %v, dick %v", bruce.opened, dick.opened)
+	alfred := r.mustOpen("alfred", "/?topic=*")
+	barbara := r.mustOpen("barbara", "/?topic=*")
+	if !slices.Equal(bruce.opened, []string{logjournal.TailTopicName}) || len(dick.opened)+len(alfred.opened)+len(barbara.opened) != 0 {
+		t.Fatalf("opened topics: bruce %v, dick %v, alfred %v, barbara %v", bruce.opened, dick.opened, alfred.opened, barbara.opened)
 	}
 	r.l.Module("core").Info("the signal is lit")
 	if got := bruce.messages(1); !slices.Equal(got, []string{"the signal is lit"}) {
-		t.Errorf("system.manage subscriber got %v", got)
+		t.Errorf("operator subscriber got %v", got)
 	}
 	dick.quiet(300 * time.Millisecond)
+	alfred.quiet(300 * time.Millisecond)
+	barbara.quiet(300 * time.Millisecond)
 }
 
 // TestJournalTail_OtherUsersLinesNeedUsersView is the live-tail twin of
@@ -346,9 +367,9 @@ func TestJournalTail_TopicNeedsSystemManage(t *testing.T) {
 // same way.
 func TestJournalTail_OtherUsersLinesNeedUsersView(t *testing.T) {
 	r := newRig(t, namesSelina)
-	r.sign("bruce", person(t, "u-bruce", permManage))
-	r.sign("lucius", person(t, "u-lucius", permManage, permUsers))
-	r.sign("selina", person(t, "u-selina", permManage))
+	r.sign("bruce", person(t, "u-bruce", operator()...))
+	r.sign("lucius", person(t, "u-lucius", operator(permUsers)...))
+	r.sign("selina", person(t, "u-selina", operator()...))
 	const topic = "/?topic=" + logjournal.TailTopicName
 
 	bruce := r.mustOpen("bruce", topic)
@@ -446,21 +467,26 @@ func TestJournalTail_OtherUsersLinesNeedUsersView(t *testing.T) {
 	})
 }
 
-// TestJournalTail_AuthOffDeliversNothing: core:system.manage is AuthRequired,
-// so with authentication off the topic is refused by name and a wildcard
-// stream leaves it out and carries nothing (05-logging §5, "Auth-off reach").
-func TestJournalTail_AuthOffDeliversNothing(t *testing.T) {
+// TestJournalTail_AuthOffReachIsTheOperatorRequirements: with authentication off
+// the principal holds every scope that is neither AuthRequired nor Sensitive, and
+// a checker with authentication off judges an AllOf without its AuthRequired
+// members (authz.checker.Satisfies). The operator requirement is the seven scopes
+// of HEAD's settings.manage atom, six of which that principal holds, so the tail is
+// open to it, as every settings.manage surface was at HEAD with authentication
+// off. (The F6-03 flip's first cut required core:system.manage alone, which the
+// auth-off principal never holds, and refused it: a tightening HEAD never had,
+// dropped with the requirement it came from; 05-logging §5, "Auth-off reach".)
+func TestJournalTail_AuthOffReachIsTheOperatorRequirements(t *testing.T) {
 	r := newRig(t, nil)
 	r.sign("off", authOff(t))
-	if _, status, code := r.open("off", "/?topic="+logjournal.TailTopicName); status != http.StatusForbidden || code != "topic_not_permitted" {
-		t.Errorf("auth-off on the topic: %d %q, want 403 topic_not_permitted", status, code)
-	}
-	s := r.mustOpen("off", "/?topic=*")
-	if len(s.opened) != 0 {
-		t.Errorf("auth-off wildcard stream opened with %v", s.opened)
+	s := r.mustOpen("off", "/?topic="+logjournal.TailTopicName)
+	if !slices.Equal(s.opened, []string{logjournal.TailTopicName}) {
+		t.Fatalf("auth-off stream opened %v, want the tail", s.opened)
 	}
 	r.l.Module("core").Error("the Batcave alarm rang")
-	s.quiet(300 * time.Millisecond)
+	if got := s.messages(1); !slices.Equal(got, []string{"the Batcave alarm rang"}) {
+		t.Errorf("auth-off subscriber got %v", got)
+	}
 }
 
 // TestJournalTail_WireMembers pins the payload's member names to the query
@@ -724,8 +750,8 @@ func TestJournalTail_FollowsJournalLevel(t *testing.T) {
 // holds nothing.
 func TestJournalTail_FiltersFailClosed(t *testing.T) {
 	spec := logjournal.TailSpec(namesSelina)
-	manage := checkerOf(t, permManage)
-	ctx := auth.WithPrincipal(context.Background(), person(t, "u-bruce", permManage))
+	manage := checkerOf(t, operator()...)
+	ctx := auth.WithPrincipal(context.Background(), person(t, "u-bruce", operator()...))
 	good, err := json.Marshal(logjournal.RecordView{Time: time.Unix(1, 0).UTC(), Level: "info", Message: "scan finished", Attrs: map[string]string{"user_id": "u-bruce"}})
 	if err != nil {
 		t.Fatal(err)
@@ -766,10 +792,10 @@ func TestJournalTail_FiltersFailClosed(t *testing.T) {
 	if out := spec.Redact(holdsButUnsatisfied{manage}, good); string(out) == string(good) {
 		t.Error("a checker that has users.view but does not satisfy it was treated as reading user data")
 	}
-	if out := spec.Redact(checkerOf(t, permManage, permUsers), good); string(out) != string(good) {
+	if out := spec.Redact(checkerOf(t, operator(permUsers)...), good); string(out) != string(good) {
 		t.Errorf("Redact for users.view changed the payload: %s", out)
 	}
-	if spec.Realtime == nil || spec.Durable != nil || spec.Permission.String() != rbac.Need(permManage).String() {
+	if spec.Realtime == nil || spec.Durable != nil || spec.Permission.String() != rbac.AllOf(operator()...).String() {
 		t.Errorf("TailSpec = realtime %v durable %v permission %s", spec.Realtime, spec.Durable, spec.Permission)
 	}
 }
@@ -834,8 +860,8 @@ func TestJournalTail_PredicateReadsModuleSubsystemAndLevel(t *testing.T) {
 		return rec.Subsystem == "users" || rec.Module == "vault" || rec.Level >= slog.LevelError
 	}
 	r := newRig(t, pred)
-	r.sign("bruce", person(t, "u-bruce", permManage))
-	r.sign("lucius", person(t, "u-lucius", permManage, permUsers))
+	r.sign("bruce", person(t, "u-bruce", operator()...))
+	r.sign("lucius", person(t, "u-lucius", operator(permUsers)...))
 	const topic = "/?topic=" + logjournal.TailTopicName
 	bruce, lucius := r.mustOpen("bruce", topic), r.mustOpen("lucius", topic)
 
