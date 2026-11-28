@@ -128,6 +128,24 @@ type StandaloneOptions struct {
 	// (core/levels) once the cutover is declared, whose level a flipped store
 	// carries and an open that registers no owner for refuses as newer.
 	ExtraOwners []storage.OwnerSpec
+	// Admit, when set, is asked of the opened store by InitializeStoreWith
+	// before it does anything else to it: before the opv3 reconcile (which
+	// writes) and before the store becomes the process's global one. A refusal
+	// closes the store and is returned, wrapped, so the caller sees the reason
+	// and the store is left as the open found it. It exists for a process that
+	// must not run over a store it cannot serve correctly (the operation child
+	// over a store whose identity cutover is done). The open itself, which
+	// runs books' migrations as core steps, is not ahead of it: the check has
+	// to ask the opened store, and on a store the parent already migrated that
+	// open writes nothing. OpenStandalone does not call it.
+	Admit func(MigrationReader) error
+}
+
+// MigrationReader is the part of the opened store an Admit check is given: it
+// can ask whether a data migration has committed, and nothing else, so a check
+// cannot reach for (or come to depend on) the wide Store.
+type MigrationReader interface {
+	DataMigrationDone(ctx context.Context, id string) (bool, error)
 }
 
 // owners are the storage owners an open registers.
@@ -450,6 +468,15 @@ func newCoreStore(r storage.LegacyRange, closeStore func() error, warm warmMode,
 	fail := func(err error) (*PebbleStore, error) {
 		closingCancel()
 		return nil, err
+	}
+	// A store whose u: family is retired (the identity flip's spec, M3's
+	// Source) is under core identity: its account list must never answer from
+	// that drained family, so it refuses (ErrNoUserDirectory) until a directory
+	// over core's accounts is installed. Marked here, in the one constructor
+	// every opener goes through (the served store, the offline and standalone
+	// openers, a migration step's store), before anything can read through it.
+	if mode, ok := r.ClaimMode([]byte(userKeyPrefix)); ok && mode == storage.ClaimRetired {
+		store.RequireUserDirectory()
 	}
 	store.seedWorksGeneration()
 	store.bootExtend = extend

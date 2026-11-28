@@ -38,14 +38,25 @@ import (
 const ProblemMergeTooLarge = "merge_too_large"
 
 // MergeBatchCap is the largest estimated batch, in bytes, an identity merge
-// stages. PROVISIONAL: it is a guess at what one core batch should carry, not a
-// measurement. A measurement of real per-user footprints is pending; until it
-// lands this is the one number to change.
-const MergeBatchCap int64 = 64 << 20
+// stages (apply, preview and undo all compare against it through
+// Service.mergeBatchCap). PROVISIONAL: the owner set it to 256 MiB on
+// 2026-11-27 after the F4-08 prod-copy rehearsal measured a real per-user
+// footprint of 127.65 MB, twice the earlier 64 MiB guess. It is still the one
+// number to change if a larger footprint is measured.
+const MergeBatchCap int64 = 256 << 20
 
 // ErrMergeTooLarge: the merge's estimated batch is over MergeBatchCap. Nothing
 // was staged or written.
 var ErrMergeTooLarge = errors.New("usermerge: " + ProblemMergeTooLarge + ": this merge is too large to apply as one batch")
+
+// batchTooLarge maps storage's commit-time refusal of an oversized batch to
+// ErrMergeTooLarge, the same 409 merge_too_large the estimate answers. The cap
+// is an estimate and equals core storage's default batch limit (256 MiB), so a
+// merge estimated just under it can still be refused when the batch is
+// committed. The commit is atomic: nothing was written.
+func batchTooLarge(err error) error {
+	return fmt.Errorf("%w (the store refused the batch at commit: %w)", ErrMergeTooLarge, err)
+}
 
 // ErrNoPrincipal: an apply under identity needs the signed-in admin's own
 // principal (core re-checks it on every call) and the request carried none, or
@@ -776,6 +787,8 @@ func (s *Service) mapApplyError(err error, plan *Plan) error {
 	switch {
 	case errors.Is(err, coreauth.ErrMergeConflict), errors.Is(err, storage.ErrConflict), errors.Is(err, database.ErrUserMergeConflict):
 		return fmt.Errorf("%w (%w)", ErrDigestMismatch, err)
+	case errors.Is(err, storage.ErrBatchTooLarge):
+		return batchTooLarge(err)
 	}
 	if code, text, ok := refusalOf(err); ok {
 		refused := *plan

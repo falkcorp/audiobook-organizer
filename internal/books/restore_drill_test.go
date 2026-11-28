@@ -490,19 +490,21 @@ func testCutoverSelftest(t *testing.T) {
 	for _, c := range cs {
 		t.Run(c.name, func(t *testing.T) {
 			pristine := copyCorpus(t, c)
+			fake := c // the fake step's view of the cases (selftestQuarantineCases)
+			fake.quarantineCases = selftestQuarantineCases(c.quarantineCases)
 			for _, fc := range fakeCases {
 				if fc.mut == "drop-prefreeze" && c.wrote == nil {
 					continue
 				}
 				t.Run(fc.name, func(t *testing.T) {
 					work := copyCorpus(t, corpus{dir: pristine})
-					step, referenced := moveUsers(t, storeDB(work), fc.mut, c)
+					step, referenced := moveUsers(t, storeDB(work), fc.mut, fake)
 					spec := scanSpec{steps: []cutoverStep{step}, shared: shared, keepRows: true}
 					before, after := scanStore(t, storeDB(pristine), spec), scanStore(t, storeDB(work), spec)
 					steps := []cutoverStep{step}
 					got := map[string][]string{
 						"counts":      countProblems(steps, before, after),
-						"quarantine":  quarantineProblems(steps, c.quarantineCases, after.Quarantine),
+						"quarantine":  quarantineProblems(steps, fake.quarantineCases, after.Quarantine),
 						"ids":         idProblems(before, after),
 						"refs":        refProblems(t, storeDB(work), steps, before, after),
 						"bytes":       byteProblems(before, after),
@@ -527,6 +529,9 @@ func testCutoverSelftest(t *testing.T) {
 	t.Run("residual", testResidualSelftest)
 	t.Run("completion", testCompletionSelftest)
 	t.Run("surviving-cases", testSurvivingCasesSelftest)
+	t.Run("holders", testHoldersSelftest)
+	t.Run("identity-ids", testIdentityIDsSelftest)
+	t.Run("m3-writes", testM3WritesSelftest)
 }
 
 // testSurvivingCasesSelftest proves casesSurvivingWrites resolves an overlay
@@ -591,7 +596,8 @@ type fakeDataMigration struct {
 
 // testManifestSelftest proves cutoverStepsOf sees a step wherever a manifest
 // can register one, and only a cutover one: the flip's manifest yields
-// exactly F3's list (M7's books half, M2, M8) with M2's Source and Residual,
+// exactly its list (M7's books half, the identity level, M2, M3, M8) with M2's
+// Source and Residual,
 // a module.Manifest's Cutover step without the Cutover flag is refused, and a
 // manifest of any other shape that populates a step field fails rather than
 // passing unseen.
@@ -610,7 +616,7 @@ func testManifestSelftest(t *testing.T) {
 			"data " + cutover.IdentityCutoverID,
 			"rewrite " + cutover.RewriteID,
 		}, got)
-		level, m2 := steps[0], steps[1]
+		level, m2 := steps[0], steps[2]
 		require.Equal(t, booksLevelStepVersion, level.Version)
 		require.Equal(t, cutover.BooksCutoverLevel, level.Level)
 		for _, k := range []string{"setting:openai_api_key", "setting:google_books_api_key", "setting:hardcover_api_token", "setting:basic_auth_password"} {
@@ -787,21 +793,30 @@ func testCompletionSelftest(t *testing.T) {
 		require.NoError(t, err)
 		return raw
 	}
-	var level cutoverStep
+	// The flip enumerates two level steps (M7's books half, then the identity
+	// level ahead of M3): a completed flip leaves a ledger row for each and the
+	// stamp at the higher level.
+	var levels []cutoverStep
 	for _, st := range all {
 		if st.Kind == stepLevel {
-			level = st
+			levels = append(levels, st)
 		}
 	}
-	ledger := fmt.Sprintf("preference:migration_%d", level.Version)
+	require.Len(t, levels, 2, "the flip's level steps")
+	ledgerOf := func(st cutoverStep) string { return fmt.Sprintf("preference:migration_%d", st.Version) }
+	first, level := levels[0], levels[len(levels)-1]
+	ledger := ledgerOf(level)
 	done := storage.DataMigrationRecord{State: storage.DataMigrationDone}
 	before := map[string][]byte{storageFormatRow: pref("storage_format", `{"version":1}`)}
 	clean := func() map[string][]byte {
 		after := map[string][]byte{
-			storageFormatRow: pref("storage_format", fmt.Sprintf(`{"version":%d}`, selftestProjection())),
-			ledger: pref(strings.TrimPrefix(ledger, "preference:"),
-				fmt.Sprintf(`{"version":%d,"description":%q,"compat":"breaking","raises_level":%d}`, level.Version, level.ID, level.Level)),
+			storageFormatRow:             pref("storage_format", fmt.Sprintf(`{"version":%d}`, selftestProjection())),
 			levelStampKey(selftestOwner): enc(levelStamp{Level: level.Level}),
+		}
+		for _, st := range levels {
+			k := ledgerOf(st)
+			after[k] = pref(strings.TrimPrefix(k, "preference:"),
+				fmt.Sprintf(`{"version":%d,"description":%q,"compat":"breaking","raises_level":%d}`, st.Version, st.ID, st.Level))
 		}
 		for _, st := range all {
 			if st.Kind == stepLevel {
@@ -817,7 +832,7 @@ func testCompletionSelftest(t *testing.T) {
 	without := func(kind stepKind) []cutoverStep {
 		return slices.DeleteFunc(slices.Clone(all), func(s cutoverStep) bool { return s.Kind == kind })
 	}
-	m2 := cutover.ConfigCutoverID
+	m2, m3 := cutover.ConfigCutoverID, cutover.IdentityCutoverID
 	for name, tc := range map[string]struct {
 		steps  []cutoverStep
 		other  map[string]bool
@@ -833,6 +848,10 @@ func testCompletionSelftest(t *testing.T) {
 		}, bites: []string{"completion"}},
 		"m8-never-ran":        {mutate: func(a map[string][]byte) { delete(a, dmStateKey(cutover.RewriteID)) }, bites: []string{"completion"}},
 		"m2-stored-no-report": {mutate: func(a map[string][]byte) { delete(a, dmReportKey(m2)) }, bites: []string{"completion"}},
+		"m3-not-done": {mutate: func(a map[string][]byte) {
+			a[dmStateKey(m3)] = enc(storage.DataMigrationRecord{State: "running"})
+		}, bites: []string{"completion"}},
+		"m3-stored-no-report": {mutate: func(a map[string][]byte) { delete(a, dmReportKey(m3)) }, bites: []string{"completion"}},
 		"an-undeclared-books-migration-completed": {mutate: func(a map[string][]byte) {
 			a[dmStateKey("books.batcave-index")] = enc(done)
 		}, bites: []string{"completion"}},
@@ -848,6 +867,10 @@ func testCompletionSelftest(t *testing.T) {
 		}, bites: []string{"level"}},
 		"the-level-not-raised": {mutate: func(a map[string][]byte) { delete(a, levelStampKey(selftestOwner)) }, bites: []string{"level"}},
 		"no-ledger-row":        {mutate: func(a map[string][]byte) { delete(a, ledger) }, bites: []string{"level"}},
+		"no-first-ledger-row":  {mutate: func(a map[string][]byte) { delete(a, ledgerOf(first)) }, bites: []string{"level"}},
+		"the-level-stamp-at-the-first-level": {mutate: func(a map[string][]byte) {
+			a[levelStampKey(selftestOwner)] = enc(levelStamp{Level: first.Level})
+		}, bites: []string{"level"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			steps := tc.steps

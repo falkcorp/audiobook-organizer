@@ -356,17 +356,25 @@ func TestFirstBootRefusesForeignKeys(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "a refused first boot wrote a checkpoint pointer: %v", err)
 }
 
-// TestR1BootRepairsOpsAndEmails (05-storage §5S.10, §5S.9.3; COR5-7,
-// XFILE-10): on books' boot of a store holding an opv3 record an older binary
-// left stale and a user row it wrote without an email source, books' repairs
-// start hook repairs both before books serves: app.New (books' constructor)
-// leaves them as they were, and when Run opens the listener the record matches
-// its opv2 row and the row is stamped. The store is the frozen one R2 leaves
-// (testdata/r2store), which the rows are written into.
+// TestR1BootRepairsOpsAndEmails (05-storage §5S.10, §5S.9.3; COR5-7): on
+// books' boot of a store holding an opv3 record an older binary left stale,
+// books' repairs start hook repairs it before books serves: app.New (books'
+// constructor) leaves it as it was, and when Run opens the listener the record
+// matches its opv2 row. The store is the frozen one R2 leaves
+// (testdata/r2store), which the row is written into.
+//
+// The cell's other half, a HEAD user row written without an email source and
+// stamped by the start hook (XFILE-10), cannot be set up on this store: M3 has
+// drained the u: family and retired its claim, so the seed's write is refused
+// ("in a retired claim of"), as every writer's is once identity is core's. What
+// becomes of such a row is M3's mapping, and it is pinned there: a row with no
+// source imports unproven (cutover/m3 TestMapUser, case "no source"), and
+// through a real flipped boot two HEAD rows seeded with no email_source are
+// core accounts with EmailVerified false (TestIdentityAccessSameEmail_Boot,
+// edward.nygma and riddler).
 func TestR1BootRepairsOpsAndEmails(t *testing.T) {
 	work := copyR2Store(t)
 	const runID = "01JBATCAVE0000000000000001"
-	var userID string
 	r2StoreSeed(t, work, func(s *database.PebbleStore) {
 		now := time.Now().UTC().Truncate(time.Second)
 		require.NoError(t, s.InsertOperationV2(database.OperationV2Row{ID: runID, DefID: "test.rollback", Plugin: "test", Status: "queued", QueuedAt: now, Params: `{}`}))
@@ -378,21 +386,6 @@ func TestR1BootRepairsOpsAndEmails(t *testing.T) {
 		raw, err := json.Marshal(row)
 		require.NoError(t, err)
 		require.NoError(t, s.DB().Set([]byte("opv2:op:"+runID), raw, pebble.Sync))
-
-		// And rewrote a user row, dropping the email source it does not know.
-		u, err := s.CreateUser("nightwing", "nightwing@example.invalid", "argon2id", "x", []string{"viewer"}, "active")
-		require.NoError(t, err)
-		userID = u.ID
-		key := []byte("u:" + u.ID)
-		cur, closer, err := s.DB().Get(key)
-		require.NoError(t, err)
-		var fields map[string]any
-		require.NoError(t, json.Unmarshal(cur, &fields))
-		require.NoError(t, closer.Close())
-		delete(fields, "email_source")
-		raw, err = json.Marshal(fields)
-		require.NoError(t, err)
-		require.NoError(t, s.DB().Set(key, raw, pebble.Sync))
 	})
 
 	stale := func(c *composed) {
@@ -400,9 +393,6 @@ func TestR1BootRepairsOpsAndEmails(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, rec)
 		assert.NotEqual(t, state.V3Succeeded, rec.State, "the opv3 record was repaired before the start hooks")
-		u, err := c.store.GetUserByID(userID)
-		require.NoError(t, err)
-		assert.Empty(t, u.EmailSource, "the email row was stamped before the start hooks")
 	}
 	edit, boot := r2StoreBootConfig(t, work)
 	r := runComposedIn(t, r2StoreState(work), edit, nil, boot, stale)
@@ -411,8 +401,5 @@ func TestR1BootRepairsOpsAndEmails(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	assert.Equal(t, state.V3Succeeded, rec.State, "books' start hook left the opv3 record stale")
-	u, err := r.store.GetUserByID(userID)
-	require.NoError(t, err)
-	assert.NotEmpty(t, u.EmailSource, "books' start hook left the email row unstamped")
 	require.NoError(t, r.stop())
 }

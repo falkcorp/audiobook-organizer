@@ -16,7 +16,11 @@ package cutover_test
 //	TestReachRegisteredPath_HiddenHandlerChecks  F4-07-HIDDEN-HANDLER-CHECKS (32 routes)
 //	TestReachRegisteredPath_PinnedCells          the 11 cells reachHandlerAdmin hides
 //	TestReachRegisteredPath_CustomCoreAdmin      a role holding core:admin that is not
-//	                                             named admin, on the admin-gated routes
+//	                                             named admin, on the admin-gated routes:
+//	                                             refused where a handler check still names
+//	                                             the admin role, admitted on the three
+//	                                             ROLE-NAME-GATE rows it was sent to (owner
+//	                                             ruling 11-22, B10rn STOP 1)
 //
 // HEAD's verdict is the recorded one: verdicts.json (every route, and every task
 // definition and the approval, with the real ids R0 used) and the R0 tables of
@@ -1109,25 +1113,41 @@ func TestReachRegisteredPath_PinnedCells(t *testing.T) {
 
 // ---- 4. a role holding core:admin that is not named admin ----
 
-// rhrAdminGated are the requests whose HEAD gate is the admin role by name. A
-// custom role that holds core:admin has no HEAD counterpart; the flip keeps the
-// role-name requirement beside core:admin so the role is refused where HEAD's
-// owner-role check refuses every account that is not the admin role. Each row has
-// a positive control: the admin session is admitted, so the refusal is the check's.
+// rhrAdminGated are the requests whose HEAD gate is the admin role by name and whose
+// flipped gate still is: a handler check that names the admin role. A custom role
+// that holds core:admin has no HEAD counterpart; the flip keeps the role-name
+// requirement beside core:admin so the role is refused where HEAD's owner-role check
+// refuses every account that is not the admin role. Each row has a positive control:
+// the admin session is admitted, so the refusal is the check's.
 func rhrAdminGated(ids rhrIDs) []rhrCell {
 	return []rhrCell{
 		{route: "GET /api/v1/users/merges", method: "GET", path: "/api/v1/users/merges"},
 		{route: "GET /api/v1/users/:id/footprint", method: "GET", path: "/api/v1/users/" + ids.target + "/footprint"},
 		{route: "PUT /api/v1/users/:id/email", method: "PUT", path: "/api/v1/users/" + ids.target + "/email",
 			body: map[string]any{"email": "selina.kyle@example.test"}},
-		{route: "GET /api/v1/admin/debug/edits", method: "GET", path: "/api/v1/admin/debug/edits"},
-		{route: "GET /api/v1/admin/guest-service-tokens", method: "GET", path: "/api/v1/admin/guest-service-tokens"},
-		{route: "GET /api/v1/cache/stats/keys", method: "GET", path: "/api/v1/cache/stats/keys"},
 		{route: "PUT /api/v1/config", method: "PUT", path: "/api/v1/config",
 			body: map[string]any{"set": map[string]any{"activity_backend": "pebble"}},
 			note: "an admin: true key: HEAD's configCan(core:admin) is the admin role by name (B10y item 5)"},
 		{route: "POST /api/v1/repairs/:fixer/owner-apply", method: "POST", path: "/api/v1/repairs/" + ids.fixer + "/owner-apply",
 			body: map[string]any{"plan_op_id": "r2reach-missing", "row_id": "r2reach-missing"}},
+	}
+}
+
+// rhrScopeGated are the three requests of this test that are ROLE-NAME-GATE rows
+// (rnRows; the 19 entries of internal/server's B10mg allow-list, whose entries for
+// these three cited this test). HEAD's gate was gin's RequireAdmin, the admin role by
+// name. Since B10g bridgedAdminGate enforces only the manifest requirement
+// (internal/server/wire_admin_role.go), so a custom role holding core:admin, which
+// implies every scope (05-rbac §4.3), is admitted: the owner-approved widening of
+// 2026-11-22 (B10rn STOP 1, option 1: permissions only), the same ruling
+// TestReachRegisteredPath_RoleNameRowsScopeGateAdmits asserts per scope class. Each
+// is asserted admitted end to end, and gin's role-name refusal behind stage 13 fails
+// it by name.
+func rhrScopeGated() []rhrCell {
+	return []rhrCell{
+		{route: "GET /api/v1/admin/debug/edits", method: "GET", path: "/api/v1/admin/debug/edits"},
+		{route: "GET /api/v1/admin/guest-service-tokens", method: "GET", path: "/api/v1/admin/guest-service-tokens"},
+		{route: "GET /api/v1/cache/stats/keys", method: "GET", path: "/api/v1/cache/stats/keys"},
 	}
 }
 
@@ -1138,8 +1158,23 @@ func TestReachRegisteredPath_CustomCoreAdmin(t *testing.T) {
 	warden := rhrWarden(t, h)
 	adm := h.Principal("session:admin")
 
+	for _, c := range rhrScopeGated() {
+		t.Run(c.route, func(t *testing.T) {
+			if !slices.ContainsFunc(rnRows, func(r rnRow) bool { return r.route == c.route }) {
+				t.Fatalf("%s is admitted by permission alone here but is not one of the 19 ROLE-NAME-GATE rows (rnRows): no ruling covers it", c.route)
+			}
+			res, err := rhrRun(t, h, warden, c)
+			if err != nil {
+				t.Fatalf("%v (a finding, not a skip)", err)
+			}
+			rnAdmittedEndToEnd(t, warden, res, rnNameRefusal)
+		})
+	}
 	for _, c := range rhrAdminGated(ids) {
 		t.Run(c.route, func(t *testing.T) {
+			if slices.ContainsFunc(rnRows, func(r rnRow) bool { return r.route == c.route }) {
+				t.Fatalf("%s is a ROLE-NAME-GATE row: the 11-22 ruling gates it by permission alone, so it belongs in rhrScopeGated", c.route)
+			}
 			res, err := rhrRun(t, h, warden, c)
 			if err != nil {
 				t.Fatalf("%v (a finding, not a skip)", err)

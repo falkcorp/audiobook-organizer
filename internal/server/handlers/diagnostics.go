@@ -356,9 +356,12 @@ func (h *DiagnosticsHandler) StartExport(c *gin.Context) {
 	// account may read (server.diagnosticsExportOptionsFor), re-read from the op
 	// row rather than taken from params, which a generic start can set.
 	opts := servermiddleware.ActorOptions(c)
+	// A start the definition refuses (no account to build the export for) is a
+	// 409 with its reason, made by the registry for every route that starts the
+	// export, not here.
 	opID, enqErr := h.registry.EnqueueOp(c.Request.Context(), DiagnosticsExportDefID, params, opts...)
 	if enqErr != nil {
-		httputil.InternalError(c, "failed to enqueue diagnostics export", enqErr)
+		servermiddleware.RespondEnqueueError(c, "failed to enqueue diagnostics export", enqErr)
 		return
 	}
 

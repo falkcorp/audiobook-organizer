@@ -17,10 +17,15 @@ import (
 )
 
 // TestOldLinkFormsNotServed pins the identity flip's one-way link change. The
-// old temp-login consumer is absent, the old invite path reaches only the SPA
-// document (whose router has no /invite/:token page), and gin's old invite
-// lookup and acceptance endpoints are retired. None redirects, starts a
-// session, or exposes its bearer token in the access log.
+// old temp-login consumer is absent, the old invite path reaches only the
+// build's page fallback, and gin's old invite lookup and acceptance endpoints
+// are retired (410). None starts a session, carries its token into a redirect,
+// or exposes its bearer token in the access log.
+//
+// The page fallback is the build's own (oldInviteFallbackStatus): the SPA
+// document with the embedded frontend, whose router has no /invite/:token page,
+// and without it (how CI runs) the placeholder's 302 to "/". Either way the old
+// link opens no invite; only the bare root may be a Location.
 func TestOldLinkFormsNotServed(t *testing.T) {
 	c := bootComposed(t, false, func(cfg *config.Config) { cfg.EnableAuth = true }, nil)
 
@@ -36,20 +41,26 @@ func TestOldLinkFormsNotServed(t *testing.T) {
 		method string
 		path   string
 		want   int
+		// location is the one Location the answer may carry: "" for none.
+		location string
 	}{
-		{"temp-login query link", http.MethodGet, "/auth/temp-login?token=" + token, http.StatusNotFound},
-		// The server returns the SPA document for navigation paths. App.tsx
-		// deliberately routes /invite but not /invite/:token, so the old form
-		// lands on the client-side not-found page instead of opening an invite.
-		{"invite path link", http.MethodGet, "/invite/" + token, http.StatusOK},
-		{"legacy invite lookup", http.MethodGet, "/api/v1/auth/invite/" + token, http.StatusGone},
-		{"legacy invite acceptance", http.MethodPost, "/api/v1/auth/accept-invite", http.StatusGone},
+		{"temp-login query link", http.MethodGet, "/auth/temp-login?token=" + token, http.StatusNotFound, ""},
+		// The server answers a navigation path with its page fallback. App.tsx
+		// deliberately routes /invite but not /invite/:token, so with the SPA
+		// embedded the old form lands on the client-side not-found page instead
+		// of opening an invite; without it, on the placeholder home page.
+		{"invite path link", http.MethodGet, "/invite/" + token, oldInviteFallbackStatus, oldInviteFallbackLocation},
+		{"legacy invite lookup", http.MethodGet, "/api/v1/auth/invite/" + token, http.StatusGone, ""},
+		{"legacy invite acceptance", http.MethodPost, "/api/v1/auth/accept-invite", http.StatusGone, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := c.serve(tc.method, tc.path, nil)
 			require.Equal(t, tc.want, rec.Code, rec.Body.String())
-			require.Empty(t, rec.Header().Get("Location"), "an old link must not redirect into a compatibility window")
+			loc := rec.Header().Get("Location")
+			require.Equal(t, tc.location, loc, "an old link must not redirect into a compatibility window")
+			require.NotContains(t, loc, token, "a redirect carried the old link's token")
+			require.NotContains(t, loc, "invite", "a redirect led to an invite page")
 			require.Empty(t, rec.Result().Cookies(), "an old link must not start a session")
 		})
 	}

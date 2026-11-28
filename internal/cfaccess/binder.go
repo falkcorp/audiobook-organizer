@@ -48,9 +48,9 @@ func MarkCFAccessVerified(c *gin.Context) { c.Set(cfAccessVerifiedKey, true) }
 // Cloudflare Access is configured; otherwise the middleware is a pass-through.
 type CFAccessAuthenticator struct {
 	// verifier is the CFAssertionVerifier the ABS surface also takes, so a
-	// test can drive the middleware without Cloudflare's keys. nil (never a
-	// typed nil: NewCFAccessAuthenticator maps a nil pointer to nil) makes
-	// the middleware a pass-through.
+	// test can drive the middleware without Cloudflare's keys. nil makes the
+	// middleware a pass-through; its one caller passes a verifier only when one
+	// was built (internal/server wire_oauth.go), never a typed nil.
 	verifier CFAssertionVerifier
 	cfg      *legacyoauth.Config
 	store    legacyoauth.UserStore
@@ -88,21 +88,82 @@ func (h Hooks) complete() bool {
 	return h.KeyPresented != nil && h.BindUser != nil && h.Permissions != nil
 }
 
-// NewCFAccessAuthenticator wires the verifier, config, and store. Any nil → the
-// middleware becomes a no-op pass-through.
-func NewCFAccessAuthenticator(verifier *CFAccessVerifier, cfg *legacyoauth.Config, store legacyoauth.UserStore, hooks Hooks) *CFAccessAuthenticator {
-	a := &CFAccessAuthenticator{cfg: cfg, store: store, hooks: hooks}
-	if verifier != nil {
-		a.verifier = verifier
-	}
-	return a
-}
-
-// NewCFAccessAuthenticatorWithVerifier is NewCFAccessAuthenticator for any
-// CFAssertionVerifier (a test's fake). A nil verifier makes the middleware a
-// pass-through.
+// NewCFAccessAuthenticatorWithVerifier wires HEAD's binder over any
+// CFAssertionVerifier (the real one, or a test's fake), with the config, the
+// store and the hooks. A nil verifier makes the middleware a pass-through; pass
+// an untyped nil, not a nil *CFAccessVerifier, which is a non-nil interface.
 func NewCFAccessAuthenticatorWithVerifier(verifier CFAssertionVerifier, cfg *legacyoauth.Config, store legacyoauth.UserStore, hooks Hooks) *CFAccessAuthenticator {
 	return &CFAccessAuthenticator{verifier: verifier, cfg: cfg, store: store, hooks: hooks}
+}
+
+// verifyAssertion is the half of the binder that core identity keeps
+// (CloudflareAccessVerifyOnly). It reads c's Access assertion (the
+// Cf-Access-Jwt-Assertion header, else the CF_Authorization cookie), verifies
+// it, and sets the verified marker (CFAccessVerified) when it verifies or is a
+// service token, a valid assertion that names no person. It returns the
+// verified claims, or nil when the request presents an API key (the key
+// authenticates it, never an assertion riding along with it), carries no
+// assertion, or carries one that did not verify or names no person. A failure
+// logs a rate-limited class line and nothing else. The caller has checked that
+// a.verifier and a.hooks.KeyPresented are set.
+func (a *CFAccessAuthenticator) verifyAssertion(c *gin.Context) *legacyoauth.IdentityClaims {
+	if a.hooks.KeyPresented(c.Request) {
+		return nil
+	}
+	// Prefer the Cf-Access-Jwt-Assertion header; fall back to the CF_Authorization
+	// cookie (browser flows may deliver only the cookie — Cloudflare says the header
+	// is "not guaranteed to be passed" in some setups).
+	raw := c.GetHeader(CFAccessHeader)
+	if raw == "" {
+		if ck, err := c.Cookie("CF_Authorization"); err == nil {
+			raw = ck
+		}
+	}
+	if raw == "" {
+		return nil
+	}
+	claims, err := a.verifier.Verify(c.Request.Context(), raw)
+	// Verify reports a service-token assertion (valid signature, issuer,
+	// expiry and AUD, but no email claim) as ErrNonIdentityAssertion. That
+	// token is still proof the request passed Cloudflare Access, so it
+	// sets the verified marker; it just resolves no user.
+	if err == nil || errors.Is(err, ErrNonIdentityAssertion) {
+		MarkCFAccessVerified(c)
+	}
+	if err != nil {
+		// Diagnostic: a JWT was present but did not verify (aud/issuer/keyset/expiry).
+		// Rate limited, class only (the library's text can quote the token's
+		// claims); falls through to normal auth.
+		if errors.Is(err, ErrKeysUnavailable) {
+			a.warn("Access JWT present but the signing keys are unavailable")
+		} else {
+			a.warn("Access JWT present but verification failed")
+		}
+		return nil
+	}
+	return claims
+}
+
+// CloudflareAccessVerifyOnly is CloudflareAccessAuth without the binding: the
+// gin chain's Access stage under core identity (F4-08). There core's Access
+// extension (Extension) authenticates the request at stage 12, and M3 retired
+// the families legacyoauth.ResolveUser reads and writes (oauthid:, u: and
+// their indexes), so resolving the identity here would bind no one and only
+// attempt a write the store refuses, on every Access request. Core does not set
+// the verified marker, which trustedClientIP reads (CFAccessVerified) to believe
+// CF-Connecting-IP from this host, so this middleware still verifies the
+// assertion and marks the request. It binds no user, sets no context value,
+// touches no store and never refuses a request. A nil verifier or keyPresented
+// makes it a pass-through.
+func CloudflareAccessVerifyOnly(verifier CFAssertionVerifier, keyPresented func(*http.Request) bool) gin.HandlerFunc {
+	if verifier == nil || keyPresented == nil {
+		return func(c *gin.Context) { c.Next() }
+	}
+	a := &CFAccessAuthenticator{verifier: verifier, hooks: Hooks{KeyPresented: keyPresented}}
+	return func(c *gin.Context) {
+		a.verifyAssertion(c)
+		c.Next()
+	}
 }
 
 // CloudflareAccessAuth returns a middleware that, when a valid Cf-Access-Jwt-Assertion
@@ -117,42 +178,8 @@ func CloudflareAccessAuth(a *CFAccessAuthenticator) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		// A request that presents an API key is authenticated by the key
-		// (RequireAuth), never by an Access assertion riding along with it.
-		if a.hooks.KeyPresented(c.Request) {
-			c.Next()
-			return
-		}
-		// Prefer the Cf-Access-Jwt-Assertion header; fall back to the CF_Authorization
-		// cookie (browser flows may deliver only the cookie — Cloudflare says the header
-		// is "not guaranteed to be passed" in some setups).
-		raw := c.GetHeader(CFAccessHeader)
-		if raw == "" {
-			if ck, err := c.Cookie("CF_Authorization"); err == nil {
-				raw = ck
-			}
-		}
-		if raw == "" {
-			c.Next()
-			return
-		}
-		claims, err := a.verifier.Verify(c.Request.Context(), raw)
-		// Verify reports a service-token assertion (valid signature, issuer,
-		// expiry and AUD, but no email claim) as ErrNonIdentityAssertion. That
-		// token is still proof the request passed Cloudflare Access, so it
-		// sets the verified marker; it just resolves no user.
-		if err == nil || errors.Is(err, ErrNonIdentityAssertion) {
-			MarkCFAccessVerified(c)
-		}
-		if err != nil {
-			// Diagnostic: a JWT was present but did not verify (aud/issuer/keyset/expiry).
-			// Rate limited, class only (the library's text can quote the token's
-			// claims); falls through to normal auth.
-			if errors.Is(err, ErrKeysUnavailable) {
-				a.warn("Access JWT present but the signing keys are unavailable")
-			} else {
-				a.warn("Access JWT present but verification failed")
-			}
+		claims := a.verifyAssertion(c)
+		if claims == nil {
 			c.Next()
 			return
 		}

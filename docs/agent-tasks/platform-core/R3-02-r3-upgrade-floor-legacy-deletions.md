@@ -3,7 +3,7 @@
 <!-- guid: c967232d-f699-4787-8455-5badc8f3fca6 -->
 <!-- last-edited: 2026-11-17 -->
 
-# R3-02 — The R3 floor: UpgradeFloor{InstallFirst: <R2 tag>}, books' legacy steps 1..66 and the code only they call, the HEAD-format readers, internal/books/cutover and TestR0OpensR1Store deleted, and together tools/cmd/opsgen, web/src/generated/ops.ts and internal/operations/state
+# R3-02 — The R3 floor: UpgradeFloor{InstallFirst: <R2 tag>}, books' legacy steps 1..66 and the code only they call, the HEAD-format readers and internal/books/cutover deleted (TestR0OpensR1Store went in F4-08; TestR0RefusesPostFlipStore stays), and together tools/cmd/opsgen, web/src/generated/ops.ts and internal/operations/state
 
 | Field | Value |
 |---|---|
@@ -43,8 +43,13 @@ R2 is refused before anything reads it with deleted code (09 §9.2.2; 05-storage
    record, not from `main`'s newest RC.
 2. Delete books' legacy steps 1..`LegacyCap` (66 at `748fd787a`) and every store method only they call (including
    `MigrateOpsV2ToV3`), the HEAD-format readers (the read-only decoders books kept for its cutover steps), the
-   whole of `internal/books/cutover` (M2–M6, the M7 and M8 step definitions, `m4legacy`), and `TestR0OpensR1Store`
-   (09 §9.4 R3; 05-storage §5S.9.3).
+   whole of `internal/books/cutover` (M2–M6, the M7 and M8 step definitions, `m4legacy`) (09 §9.4 R3; 05-storage
+   §5S.9.3). `TestR0OpensR1Store` is already gone: F4-08 deleted it (R0 opening a store this build wrote is void
+   after the flip, D-S9) and put `TestR0RefusesPostFlipStore` in its place, which runs the R0 release binary over
+   a flipped store and requires R0 to refuse it and write nothing. Keep that cell: R0 must refuse an R3 store
+   too. It builds its store with `flipBootOn` over the R0 corpus, which the R3 floor refuses; point it at a copy of
+   `internal/books/testdata/r2store` (the store R2 leaves) booted by this build instead, keep its assertions, and
+   keep it in `boot-crash-matrix-abo`'s must-PASS list.
 3. In core storage delete `storage.LegacyMigration`, `Spec.Legacy`, the runner's legacy phase and
    `TestNoNewLegacyMigrations`; `UpgradeFloor` and books' version-source adapter stay (05-storage §5S.3.5
    "Atomicity", SIMP7-7).
@@ -113,8 +118,8 @@ grep -rn 'UpgradeFloor{' --include='*.go' internal/books/ | grep -v _test.go    
 # 4. The legacy track. Expected: storage.LegacyMigration, Spec.Legacy and TestNoNewLegacyMigrations each found.
 grep -rn 'type LegacyMigration struct\|Legacy  *\[\]LegacyMigration\|func TestNoNewLegacyMigrations' --include='*.go' core/ internal/
 
-# 5. TestR0OpensR1Store. Expected: exactly 1 definition.
-grep -rn 'func TestR0OpensR1Store' --include='*.go' .
+# 5. R0's refusal cell. Expected: exactly 1 definition of TestR0RefusesPostFlipStore, 0 of TestR0OpensR1Store.
+grep -rn 'func TestR0RefusesPostFlipStore\|func TestR0OpensR1Store' --include='*.go' .
 
 # 6. opsgen inputs and consumers. Expected: internal/operations/state imported only by internal/books/cutover
 #    (05-tasks §5T.8.1), by tools/cmd/opsgen and by its own tests. [evidence checkout: 47 importing files, before F5-18]
@@ -132,7 +137,7 @@ grep -rn 'Requires' core/storage/*.go | grep -i -E 'fresh|install|floor'
 ```
 
 STOP and report if: grep 2 finds an importer outside `internal/books/`; grep 3 finds `LegacyCap` defined more than
-once or `UpgradeFloor`/`ErrUpgradeFloor` absent from core; grep 5 finds 0 or more than 1 definition; grep 6 finds a
+once or `UpgradeFloor`/`ErrUpgradeFloor` absent from core; grep 5 finds other than exactly one `func TestR0RefusesPostFlipStore` and no `func TestR0OpensR1Store`; grep 6 finds a
 Go importer of `internal/operations/state` other than `internal/books/cutover`, `tools/cmd/opsgen` and its own
 tests; grep 7's `XPC_SERVICE_NAME` or `RestartPreventExitStatus=78` is absent (those are R1's, not this row's).
 
@@ -161,7 +166,8 @@ tests; grep 7's `XPC_SERVICE_NAME` or `RestartPreventExitStatus=78` is absent (t
    cutover-suite tests and the restore drill (`TestCutoverOnR0Corpus`, `TestCutoverPreservesIDsAndReferences`,
    `TestCutoverLeavesOtherFamiliesByteIdentical`, `TestRollbackRestoreBootsPreviousBuild`) and the cutover
    scenarios of `TestBootCrashMatrix_ABO`, because they exercise deleted code; keep `internal/books/testdata/r2corpus/`
-   (it is the pre-R2 store fixture of the new tests). Delete `TestR0OpensR1Store`.
+   (it is the pre-R2 store fixture of the new tests). Keep `TestR0RefusesPostFlipStore`, retargeted as in Scope 2.
+   Before M3 (`books.identity-cutover`) leaves the manifest, close todo **M3-RETIREMENT-GUARD** (`todo.d/2026-11-28-m3-retirement-guard.md`): P4d/P5 must refuse, before any write, a store not yet at the identity level.
 5. **opsgen, ops.ts, state, together** (07 §7.8): move `operationPolling` (wherever it lives at your base) and its
    remaining books importers from `ops.ts`'s enums onto the generated `TaskRunView` states (the shell's Activity
    page did the same at F5); drop the `ops.ts` re-export from `services/api`; delete `web/src/generated/ops.ts`,
@@ -218,9 +224,10 @@ ls -d internal/books/cutover internal/operations/state tools/cmd/opsgen web/src/
 grep -rl --include='*.go' -e "\"$M/internal/books/cutover" -e "\"$M/internal/operations/state\"" . | wc -l
 grep -rln 'generated/ops' web/src | wc -l                       # expected: 0
 
-# The legacy track is gone and the floor is declared. Expected: 0, 0, 1
+# The legacy track is gone, R0's refusal cell stays and the floor is declared. Expected: 0, 0, 1, 1
 grep -rn 'type LegacyMigration struct' --include='*.go' core/ | wc -l
 grep -rn 'func TestNoNewLegacyMigrations\|func TestR0OpensR1Store' --include='*.go' . | wc -l
+grep -rn 'func TestR0RefusesPostFlipStore' --include='*.go' . | wc -l
 grep -rn 'UpgradeFloor{' --include='*.go' internal/books/ | grep -v _test.go | wc -l
 
 # Builds. Expected: exit 0

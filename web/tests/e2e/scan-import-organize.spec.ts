@@ -13,6 +13,7 @@ import {
   waitForTagPanel,
 } from './utils/test-helpers';
 import { libraryPath, paths, settingsPath } from './utils/paths';
+import { BOOKS_PERMISSIONS } from '../../src/generated/permissions';
 
 type ScanMockOptions = {
   scanBooks: Array<Record<string, unknown>>;
@@ -21,7 +22,7 @@ type ScanMockOptions = {
 };
 
 const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
-  await page.addInitScript(({ scanBooks, scanError, scanErrors }) => {
+  await page.addInitScript(({ scanBooks, scanError, scanErrors, permissions }) => {
     // Persist state across page navigations using sessionStorage
     const STORAGE_KEY = '__scanWorkflowState';
     const savedState = sessionStorage.getItem(STORAGE_KEY);
@@ -78,9 +79,36 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
       // auth check fails, and every page renders the LOGIN screen — which is
       // why these tests timed out looking for buttons that were never going to
       // be there. api.getAuthStatus() reads body.data, so the envelope matters.
+      //
+      // Signed in as an admin, with authentication on: adding an import path is one of
+      // the actions core refuses under auth-off (SEC5-8), so the SPA disables the Add
+      // Path button for an anonymous caller.
       if (pathname === '/api/core/v1/auth/status') {
         return Promise.resolve(
-          jsonResponse({ has_users: true, auth_disabled: true, setup_required: false })
+          jsonResponse({ has_users: true, auth_disabled: false, setup_required: false })
+        );
+      }
+      if (pathname === '/api/core/v1/me') {
+        const stamp = '2026-11-27T00:00:00Z';
+        return Promise.resolve(
+          jsonResponse({
+            user: {
+              id: 'user-admin',
+              username: 'admin',
+              email: 'admin@example.test',
+              roles: ['admin'],
+              status: 'active',
+              created_at: stamp,
+              updated_at: stamp,
+              email_verified: false,
+              has_password: true,
+              password_reset_required: false,
+              sign_in_restricted: false,
+            },
+            permissions,
+            method: 'session',
+            owner_verified: false,
+          })
         );
       }
 
@@ -311,7 +339,7 @@ const setupScanWorkflow = async (page: Page, options: ScanMockOptions) => {
 
       return originalFetch(input, init);
     };
-  }, options);
+  }, { ...options, permissions: Object.values(BOOKS_PERMISSIONS) });
 };
 
 

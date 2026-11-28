@@ -52,8 +52,12 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 		// one account's export must never be handed to another: a wider caller
 		// would download a narrowed archive, a narrower one a refusal.
 		DedupeSameActorOnly: true,
-		Permissions:         []auth.Permission{auth.PermSettingsManage},
-		Capabilities:        []opsregistry.Capability{opsregistry.CapLibraryRead},
+		// Under core identity an export needs an account to be built for; the
+		// refusal lives here so every route to EnqueueOp makes it
+		// (diagnosticsStartPrecondition).
+		StartPrecondition: s.diagnosticsStartPrecondition(),
+		Permissions:       []auth.Permission{auth.PermSettingsManage},
+		Capabilities:      []opsregistry.Capability{opsregistry.CapLibraryRead},
 		Run: func(ctx context.Context, rawParams json.RawMessage, reporter opsregistry.Reporter) error {
 			var p diagnosticsExportOpParams
 			if len(rawParams) > 0 {
@@ -69,7 +73,13 @@ func (s *Server) RegisterDiagnosticsExportOp(reg *opsregistry.Registry) error {
 			// What the account holds is read once, here, and both the narrowing
 			// and the set recorded on the result come from that one reading, so
 			// the record is exactly what the archive was narrowed to.
-			holds := s.opActorHolds(opsregistry.ReporterOpID(reporter))
+			// Under core identity an export no account can be resolved for fails
+			// here with a message the user sees, never a "successful" empty
+			// archive (opActorHolds).
+			holds, err := s.opActorHolds(ctx, opsregistry.ReporterOpID(reporter))
+			if err != nil {
+				return fmt.Errorf("diagnostics.export: %w", err)
+			}
 			// Forwards straight to the reporter rather than through sdk.Progress:
 			// GenerateExport counts its own phases (which vary by category) and
 			// reports real (current, total) pairs, so wrapping it in a second

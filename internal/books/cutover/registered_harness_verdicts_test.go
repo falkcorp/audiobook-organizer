@@ -26,7 +26,9 @@ import (
 //	             TestRegisteredHarness_R0DriftIsInTheRouteTable. None since F4-08
 //	             re-recorded R0 at main f6698f9bf: the reconcile row (ed8d80f4b) and
 //	             the reset pair's rows (623da76d3) are R0's own answers now.
-//	classKnown   an accepted narrowing, with the ruling that accepted it.
+//	classKnown   an accepted narrowing, with the ruling that accepted it; and the one
+//	             accepted R0-D, flip-A row, the retired rotate stub's 410 (the oracle's
+//	             registeredRetiredRotate), which reaches nothing.
 //	classB10y    refused by the flipped build where R0 and HEAD admit; not accepted. The
 //	             parity assertion for these is in the last commits of the stack (red
 //	             until slice B10y lands).
@@ -42,6 +44,11 @@ import (
 //
 // A core-native key (corekey:...) is held to its abk_ twin's verdict: it mismatches
 // exactly where its twin does, and the row lists the twin only.
+//
+// The routes the flip deletes (registeredDeletedAtFlip) are not swept: no pattern
+// matches them, so a 404 would read as the letter A and compare nothing. They are
+// held to "not registered, 404 to every principal" by
+// TestRegisteredHarness_DeletedRoutesAreNotRegistered.
 
 type verdictClass int
 
@@ -134,6 +141,15 @@ var verdictRows = []verdictRow{
 		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
 	{Method: "POST", Route: "/api/v1/admin/debug/edits/:edit_id/undo", Class: classKnown, Principals: []string{"key:admin:empty", "key:admin:every"},
 		Why: "ruled (05-rbac 6.2, 4.4 rule 1; 09-abo-on-core 9.2.6; F4-07 golden): books:admin.debug is Sensitive, so an admin's API key, the bootstrap key included, is refused 403 interactive_required on the three debug edit routes; the oracle's registeredRuledNarrowings holds the same cells"},
+	{Method: "GET", Route: "/api/v1/auth/invite/:token", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 404)"},
+	{Method: "POST", Route: "/api/v1/auth/accept-invite", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 400)"},
+	{Method: "POST", Route: "/api/v1/auth/setup", Class: classKnown, Principals: append(slices.Clone(recordedPrincipals), Authoff), Why: goneUnderIdentityWhy + " (R0: 400)"},
+	{Method: "POST", Route: "/api/v1/auth/logout", Class: classKnown, Principals: append(slices.Clone(logoutAnswers200), Authoff), Why: goneUnderIdentityWhy + " (R0: 200)"},
+	{Method: "GET", Route: "/api/v1/auth/sessions", Class: classKnown, Principals: slices.Clone(logoutAnswers200), Why: goneUnderIdentityWhy + " (R0: 200; the auth-disabled principal is refused as at R0)"},
+	{Method: "POST", Route: "/api/v1/auth/api-keys/:id/rotate", Class: classKnown, Principals: registeredRetiredRotate.rows[0].who,
+		Why: "retired stub: 410 to every caller once the credential guard is gone (approved reach contract 11-22; R0's 403 was HEAD's credential guard in front of the 410; nothing is minted); the oracle's registeredRetiredRotate holds the same 35 cells"},
+	{Method: "POST", Route: "/api/v1/update/apply", Class: classKnown, Principals: []string{"session:admin"}, Why: updateApplyStateWhy},
+	{Method: "POST", Route: "/api/v1/diagnostics/export", Class: classKnown, Principals: []string{Authoff}, Why: authOffExportRefusedWhy},
 }
 
 // authOffTightening is a route that R0 recorded as open to the auth-off principal and
@@ -151,7 +167,7 @@ type authOffTightening struct {
 }
 
 // authOffTightenings flattens the oracle's registeredAuthOffTightening table
-// (registered_reach_eval_test.go: the one source of the 12 cells, each row with its
+// (registered_reach_eval_test.go: the one source of the 10 cells, each row with its
 // citation) into the route-and-code pairs the sweep and the exact-refusal test read.
 func authOffTightenings() []authOffTightening {
 	var out []authOffTightening
@@ -170,6 +186,15 @@ type recordedRoute struct {
 	Path      string `json:"path"`
 	ProbePath string `json:"probe_path"`
 	Verdict   string `json:"verdict"`
+	Status    []int  `json:"status"`
+}
+
+// differsFromR0 reports whether an answer is not R0's for principal i of r: its
+// letter is not the recorded one, or its status is in another class (StatusClass)
+// than the recorded status. The class is what sees a route that moved from 200 to
+// 410 with the letter A twice.
+func (r recordedRoute) differsFromR0(i int, res Result) bool {
+	return res.Verdict() != r.Verdict[i] || StatusClass(r.Status[i]) != res.Class()
 }
 
 // recordedVerdicts reads R0's recorded routes and the principal order of their
@@ -202,19 +227,20 @@ func recordedRequest(r recordedRoute, p *Principal) (path string, body any) {
 }
 
 // bootAsRecorded boots the registered path over the corpus as R0 recorded it: the
-// stored settings blob has deluge_discovery_enabled on, as the oracle's boots do
-// (seedDelugeDiscovery). With it off, GET /deluge/discover and its import answer 403
+// stored settings blob has deluge_discovery_enabled and fingerprint_remote_workers_enabled
+// on, as the oracle's boots do (seedRecordedFlags). With discovery off, GET /deluge/discover and its import answer 403
 // "deluge discovery is disabled" to every principal from inside the handler, so a
 // cell would compare a setting, not reach.
 func bootAsRecorded(t *testing.T, authOff bool) *Registered {
 	t.Helper()
-	return bootRegistered(t, registeredConfig{AuthOff: authOff, Seed: seedDelugeDiscovery})
+	recordedEnvironment(t)
+	return bootRegistered(t, registeredConfig{AuthOff: authOff, Seed: seedRecordedFlags})
 }
 
 // sweepCells runs every recorded route as every principal of the boot that has a
-// recorded name (a core key under its twin's) and calls cell with the answer and R0's
-// letter. The session-ending routes go last: logging out is what they do.
-func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell func(r recordedRoute, p *Principal, res Result, r0 byte)) {
+// recorded name (a core key under its twin's) and calls cell with the answer and
+// whether it differs from R0's (differsFromR0). The session-ending routes go last: logging out is what they do.
+func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell func(r recordedRoute, p *Principal, res Result, differs bool)) {
 	t.Helper()
 	principals, routes := recordedVerdicts(t)
 	ends := func(path string) bool {
@@ -222,7 +248,7 @@ func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell fu
 	}
 	for pass := 0; pass < 2; pass++ {
 		for _, r := range routes {
-			if ends(r.Path) != (pass == 1) {
+			if ends(r.Path) != (pass == 1) || deletedAtFlip(r.Method, r.Path) {
 				continue
 			}
 			for _, p := range h.Principals {
@@ -240,19 +266,19 @@ func sweepCells(t *testing.T, h *Registered, only func(*Principal) bool, cell fu
 					}
 					t.Fatalf("%s %s as %s: %v", r.Method, r.Path, p.Name, err)
 				}
-				cell(r, p, res, r.Verdict[i])
+				cell(r, p, res, r.differsFromR0(i, res))
 			}
 		}
 	}
 }
 
-// sweepMismatches lists the cells of a boot whose verdict is not R0's, keyed
+// sweepMismatches lists the cells of a boot whose verdict or status class is not R0's, keyed
 // "METHOD route|principal" with a core key under its own name.
 func sweepMismatches(t *testing.T, h *Registered, only func(*Principal) bool) map[string]Result {
 	t.Helper()
 	got := map[string]Result{}
-	sweepCells(t, h, only, func(r recordedRoute, p *Principal, res Result, r0 byte) {
-		if res.Verdict() != r0 {
+	sweepCells(t, h, only, func(r recordedRoute, p *Principal, res Result, differs bool) {
+		if differs {
 			got[r.Method+" "+r.Path+"|"+p.Name] = res
 		}
 	})
@@ -315,6 +341,63 @@ func TestRegisteredHarness_EveryVerdictIsR0sOrNamed(t *testing.T) {
 		h := bootAsRecorded(t, true)
 		check(t, h, func(p *Principal) bool { return p != nil && p.Kind == "authoff" })
 	})
+}
+
+// deletedAtFlip reports whether R0's route is one the flip deletes
+// (registeredDeletedAtFlip).
+func deletedAtFlip(method, route string) bool {
+	return slices.ContainsFunc(registeredDeletedAtFlip, func(d unregisteredRoute) bool {
+		return d.route == method+" "+route
+	})
+}
+
+// TestRegisteredHarness_DeletedRoutesAreNotRegistered holds the routes the sweep
+// skips (registeredDeletedAtFlip) to what the flip does with them: no registered
+// pattern matches them on either boot, and every principal of the boot is answered
+// 404 with no session cookie. A route re-mounted under identity fails here by name,
+// without the oracle's full sweep.
+func TestRegisteredHarness_DeletedRoutesAreNotRegistered(t *testing.T) {
+	if len(registeredDeletedAtFlip) != 2 {
+		t.Fatalf("%d deleted routes listed, want the 2 of spec step 3", len(registeredDeletedAtFlip))
+	}
+	for _, boot := range []struct {
+		name    string
+		authOff bool
+	}{{"auth on", false}, {"auth off", true}} {
+		t.Run(boot.name, func(t *testing.T) {
+			h := bootRegistered(t, registeredConfig{AuthOff: boot.authOff})
+			for _, d := range registeredDeletedAtFlip {
+				method, route, _ := strings.Cut(d.route, " ")
+				path := probePathFor(t, method, route)
+				if ri := h.match(method, strings.SplitN(path, "?", 2)[0]); ri != nil {
+					t.Errorf("%s is registered under identity as %s %s (%s)", d.route, ri.Method, ri.Pattern, d.why)
+					continue
+				}
+				asked := 0
+				for _, p := range h.Principals {
+					if p == nil || (p.Kind == "authoff") != boot.authOff {
+						continue
+					}
+					_, body := recordedRequest(recordedRoute{Method: method, Path: route, ProbePath: path}, p)
+					res, err := h.Do(p, method, path, body)
+					if err != nil {
+						t.Errorf("%s as %s: %v", d.route, p.Name, err)
+						continue
+					}
+					asked++
+					if res.Status != d.status {
+						t.Errorf("%s as %s: %d %s, want %d (%s)", d.route, p.Name, res.Status, res.excerpt(), d.status, d.why)
+					}
+					if ck := res.Header.Values("Set-Cookie"); len(ck) > 0 {
+						t.Errorf("%s as %s: the deleted route set a cookie %v", d.route, p.Name, ck)
+					}
+				}
+				if asked == 0 {
+					t.Errorf("%s: no principal was asked", d.route)
+				}
+			}
+		})
+	}
 }
 
 // TestRegisteredHarness_R0DriftIsInTheRouteTable ties the classDrift rows to the

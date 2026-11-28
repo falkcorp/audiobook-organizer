@@ -248,8 +248,19 @@ func (s *Service) UserByUsername(ctx context.Context, name string) (*User, error
 // Users lists the users f admits, in the store's order. An undecodable
 // record is yielded as ErrUndecodableRecord for that record only.
 func (s *Service) Users(ctx context.Context, f UserFilter) iter.Seq2[*User, error] {
+	return FilterUsers(s.d.Store.ScanUsers(ctx), f)
+}
+
+// FilterUsers is the one account-list rule: the stored users scan yields,
+// those f selects (an empty filter selects every account, every status and
+// the system user included). A row's error is passed on and the list goes on,
+// so a caller sees every failure and decides. Service.Users and the offline
+// open's account read (kernel.Offline.Users) both list through it, so a
+// diagnostic run with the service stopped lists exactly what the service
+// would.
+func FilterUsers(scan iter.Seq2[*User, error], f UserFilter) iter.Seq2[*User, error] {
 	return func(yield func(*User, error) bool) {
-		for u, err := range s.d.Store.ScanUsers(ctx) {
+		for u, err := range scan {
 			if err != nil {
 				if !yield(nil, err) {
 					return

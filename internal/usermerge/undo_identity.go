@@ -127,6 +127,9 @@ func undoRecord(j *Journal) (coreauth.UnmergeRecord, error) {
 // becomes an UndoRefusal with its code (the wording says undo, not merge);
 // anything else is returned as it is.
 func undoError(err error) error {
+	if errors.Is(err, storage.ErrBatchTooLarge) {
+		return batchTooLarge(err)
+	}
 	code, text, ok := refusalOf(err)
 	if !ok {
 		return err

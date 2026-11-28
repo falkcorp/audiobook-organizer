@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
+	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
 	"github.com/falkcorp/mediacore/httpapi"
 	"github.com/falkcorp/mediacore/storage"
 )
@@ -38,7 +40,10 @@ import (
 // for the same route and principal (internal/books/rbacreach/verdicts.json).
 //
 // A cell where the flip admits and R0 refused is a widening and fails the test
-// with no way to list it. A cell where the flip refuses and R0 admitted is a
+// with no way to list it, with one exception: a retired stub that answers 410 Gone
+// to every caller (registeredRetiredRotate). Its letter A is the stub's 410, not
+// reach: nothing behind it runs. checkDiffs refuses a table row that lists any
+// other R0-D, flip-A cell. A cell where the flip refuses and R0 admitted is a
 // narrowing: it must be on a named row of registeredNarrowings with the exact
 // number of cells the row claims, so a change in either direction fails.
 //
@@ -80,6 +85,7 @@ type r0Recording struct {
 type r0Task struct {
 	ID      string `json:"id"`
 	Verdict string `json:"verdict"`
+	Status  []int  `json:"status"`
 }
 
 // r0Approval is R0's recording of approving one run awaiting a decision. The
@@ -89,6 +95,7 @@ type r0Approval struct {
 	RunID   string         `json:"run_id"`
 	Run     map[string]any `json:"run"`
 	Verdict string         `json:"verdict"`
+	Status  []int          `json:"status"`
 }
 
 func loadR0Recording(t testing.TB) r0Recording {
@@ -245,6 +252,46 @@ func (h *Registered) probeOnce(p *Principal, method, path string, body any, ri *
 	return res, nil
 }
 
+// coreLogoutRoute is core's logout, which ends the caller's own session.
+const coreLogoutRoute = "/api/core/v1/auth/logout"
+
+// coreLogoutRefuses are the session principals core's logout refuses: the
+// fp-worker session holds only the worker grants, not core:self. Every other
+// session principal must be signed out by it.
+var coreLogoutRefuses = []string{"session:fp-worker"}
+
+// coreLogout is the session killer after HEAD's logout route was probed as p, a
+// session principal. HEAD's route answers 410 under core identity and changes no
+// state, so p's session must still answer its canary as before; core's logout
+// then ends it, and the canary must answer 401. A principal of coreLogoutRefuses
+// must be refused (401 or 403) and is left as it is; any other principal core's
+// logout refuses is a failure, so a core logout that refused everyone fails here.
+// Either way it fails is recorded in pass.logoutLeftSession. The caller signs p
+// in again.
+func (h *Registered) coreLogout(p *Principal, canaryBefore int, pass *oraclePass) {
+	h.t.Helper()
+	if got := h.canaryFor(p); got != canaryBefore {
+		pass.logoutLeftSession = append(pass.logoutLeftSession,
+			fmt.Sprintf("%s: HEAD's logout route changed the session: canary %d before, %d after", p.Name, canaryBefore, got))
+	}
+	res, err := h.probeOnce(p, http.MethodPost, coreLogoutRoute, nil, nil)
+	if slices.Contains(coreLogoutRefuses, p.Name) {
+		if err != nil || (res.Status != http.StatusUnauthorized && res.Status != http.StatusForbidden) {
+			pass.logoutLeftSession = append(pass.logoutLeftSession,
+				fmt.Sprintf("%s: core's logout answered %d (%v), want the refusal of a principal without core:self", p.Name, res.Status, err))
+		}
+		return
+	}
+	if err != nil || res.Status >= 300 {
+		pass.logoutLeftSession = append(pass.logoutLeftSession, fmt.Sprintf("%s: core's logout answered %d (%v)", p.Name, res.Status, err))
+		return
+	}
+	if got := h.canaryFor(p); got != http.StatusUnauthorized {
+		pass.logoutLeftSession = append(pass.logoutLeftSession,
+			fmt.Sprintf("%s: core's logout left the session live: canary answers %d", p.Name, got))
+	}
+}
+
 // ---- one principal's pass ----
 
 // oracleCell is one answered probe.
@@ -308,6 +355,10 @@ type oraclePass struct {
 	canary map[string]int
 	// canaryDrift lists principals whose canary changed over their pass.
 	canaryDrift []string
+	// logoutLeftSession lists session principals whose session HEAD's logout
+	// route ended (it answers 410 under core identity and must change nothing),
+	// or whose session core's logout, sent right after it, did not end.
+	logoutLeftSession []string
 }
 
 // frontedBy is whether stage 13 stands in front of ri: an anonymous request to it is
@@ -392,6 +443,7 @@ func (h *Registered) runOracle(r0 r0Recording) *oraclePass {
 			}
 			pass.cells[key][p.Name] = cellOf(res.Verdict(), res)
 			if key == "POST "+logoutPath && p.cookie != nil {
+				h.coreLogout(p, before, pass)
 				p.peer = h.nextPeer()
 				p.cookie = h.login(p, passwordFor(p.User))
 			}
@@ -430,11 +482,11 @@ const (
 func taskRoutes(r0 r0Recording) []r0Route {
 	var out []r0Route
 	for _, t := range r0.Tasks {
-		out = append(out, r0Route{Method: "TASK-START", Path: t.ID, Verdict: t.Verdict})
+		out = append(out, r0Route{Method: "TASK-START", Path: t.ID, Verdict: t.Verdict, Status: t.Status})
 	}
 	for _, a := range r0.Approvals {
 		def, _ := a.Run["def_id"].(string)
-		out = append(out, r0Route{Method: "TASK-APPROVE", Path: def, Verdict: a.Verdict})
+		out = append(out, r0Route{Method: "TASK-APPROVE", Path: def, Verdict: a.Verdict, Status: a.Status})
 	}
 	return out
 }
@@ -499,10 +551,14 @@ func (h *Registered) recordTaskCell(pass *oraclePass, key string, p *Principal, 
 
 // ---- comparing with R0 ----
 
-// oracleDiff is one cell where the flip and R0 disagree.
+// oracleDiff is one cell where the flip and R0 disagree: in the letter, or in the class
+// of the status (StatusClass) with the letter the same. r0Status is the status R0
+// recorded, 0 where the recording holds none; r0Class is its class.
 type oracleDiff struct {
 	route, principal string
 	r0, flip         byte
+	r0Status         int
+	r0Class          string
 	status           int
 	res              Result // the flip's refusal (a D cell)
 }
@@ -510,10 +566,17 @@ type oracleDiff struct {
 func (d oracleDiff) cell() string { return d.route + " / " + d.principal }
 
 func (d oracleDiff) String() string {
-	return fmt.Sprintf("%s: R0 %c, flip %c (%d)", d.cell(), d.r0, d.flip, d.status)
+	if d.r0 == d.flip {
+		return fmt.Sprintf("%s: letter %c both, but R0 answered %d (%s) and the flip %d (%s)", d.cell(), d.r0, d.r0Status, d.r0Class, d.status, StatusClass(d.status))
+	}
+	return fmt.Sprintf("%s: R0 %c (%d, %s), flip %c (%d, %s)", d.cell(), d.r0, d.r0Status, d.r0Class, d.flip, d.status, StatusClass(d.status))
 }
 
-// compareToR0 lists every differing cell and how many cells it compared.
+// compareToR0 lists every differing cell and how many cells it compared. A cell
+// differs when the letters differ, and also when they agree but the class of the
+// status does not (StatusClass): a route that answered 200 at R0 and 410 on the flip
+// is the letter A twice, and only the class shows it. A cell whose R0 status the
+// recording lacks is compared by letter alone.
 func compareToR0(r0 r0Recording, pass *oraclePass) (diffs []oracleDiff, compared int) {
 	idx := map[string]int{}
 	for i, n := range r0.Principals {
@@ -529,8 +592,13 @@ func compareToR0(r0 r0Recording, pass *oraclePass) (diffs []oracleDiff, compared
 				continue // no reach information
 			}
 			compared++
-			if want := r.Verdict[idx[rec]]; want != c.letter {
-				diffs = append(diffs, oracleDiff{route: r.key(), principal: n, r0: want, flip: c.letter, status: c.status, res: c.res})
+			want := r.Verdict[idx[rec]]
+			var r0St int
+			if idx[rec] < len(r.Status) {
+				r0St = r.Status[idx[rec]]
+			}
+			if want != c.letter || (r0St > 0 && StatusClass(r0St) != StatusClass(c.status)) {
+				diffs = append(diffs, oracleDiff{route: r.key(), principal: n, r0: want, flip: c.letter, r0Status: r0St, r0Class: StatusClass(r0St), status: c.status, res: c.res})
 			}
 		}
 	}
@@ -556,6 +624,11 @@ type diffRow struct {
 	// code, when set, is the flip's problem code, exactly (stage 13's); a row that
 	// leaves it empty does not assert one.
 	code string
+	// r0Class, when set, is the StatusClass of R0's recorded status for every cell of
+	// the row. A row whose letters agree (r0 == flip) lists a change of class alone and
+	// must set it: it is what the row accepts, and the cell fails if R0's class is
+	// anything else.
+	r0Class string
 }
 
 // diffTable is a named set of rows with the exact number of cells it claims. A
@@ -694,17 +767,40 @@ func (h *Registered) checkR2OnlyLetters(t *testing.T, r0 r0Recording, authOff bo
 // claims.
 func (h *Registered) checkDiffs(t *testing.T, diffs []oracleDiff, tables []diffTable) {
 	t.Helper()
+	for _, problem := range h.diffProblems(diffs, tables, h.Refused) {
+		t.Error(problem)
+	}
+}
+
+// diffProblems is checkDiffs's judgement as data: one line per problem. refused is
+// h.Refused for a real boot; a synthetic set (the class cells of
+// reach_status_class_test.go) passes a stub, since it has no answer to read.
+func (h *Registered) diffProblems(diffs []oracleDiff, tables []diffTable, refused func(Result, int, string) bool) []string {
+	var out []string
+	problemf := func(format string, args ...any) { out = append(out, fmt.Sprintf(format, args...)) }
 	expect := map[string]diffRow{}
 	for _, tb := range tables {
 		cells := tb.expand()
 		twin := h.twins(cells)
 		if len(cells) != tb.want || len(twin) != tb.wantTwin {
-			t.Errorf("table %q expands to %d cells and %d core-key twin cells, claims %d and %d", tb.name, len(cells), len(twin), tb.want, tb.wantTwin)
+			problemf("table %q expands to %d cells and %d core-key twin cells, claims %d and %d", tb.name, len(cells), len(twin), tb.want, tb.wantTwin)
+		}
+		for _, row := range tb.rows {
+			// A widening cannot be listed. The one R0-D, flip-A row a table may
+			// hold is a retired stub's 410 Gone, which reaches nothing.
+			if row.r0 == 'D' && row.flip == 'A' && row.status != http.StatusGone {
+				problemf("table %q lists a widening (R0 D, flip A with %d) for %v: only a retired stub's 410 may be listed", tb.name, row.status, row.routes)
+			}
+			// A row whose letters agree accepts a change of class and nothing else:
+			// it names the class R0 answered, and the class the flip answers differs.
+			if row.r0 == row.flip && (row.r0Class == "" || row.r0Class == StatusClass(row.status)) {
+				problemf("table %q lists a same-letter row for %v that names no change of class (R0 class %q, flip status %d)", tb.name, row.routes, row.r0Class, row.status)
+			}
 		}
 		for _, m := range []map[string]diffRow{cells, twin} {
 			for k, row := range m {
 				if _, dup := expect[k]; dup {
-					t.Errorf("cell %s is in two tables", k)
+					problemf("cell %s is in two tables", k)
 				}
 				expect[k] = row
 			}
@@ -715,26 +811,31 @@ func (h *Registered) checkDiffs(t *testing.T, diffs []oracleDiff, tables []diffT
 		row, ok := expect[d.cell()]
 		switch {
 		case !ok && d.r0 == 'D':
-			t.Errorf("WIDENING: the flip admits where HEAD refused: %s", d)
+			problemf("WIDENING: the flip admits where HEAD refused: %s", d)
+		case !ok && d.r0 == d.flip:
+			problemf("unlisted change of status class: %s", d)
 		case !ok:
-			t.Errorf("unlisted narrowing: %s", d)
+			problemf("unlisted narrowing: %s", d)
 		case row.r0 != d.r0 || row.flip != d.flip:
-			t.Errorf("%s: the table says R0 %c, flip %c (%d)", d, row.r0, row.flip, row.status)
+			problemf("%s: the table says R0 %c, flip %c (%d)", d, row.r0, row.flip, row.status)
+		case row.r0Class != "" && row.r0Class != d.r0Class:
+			problemf("%s: the table says R0 answered class %s", d, row.r0Class)
 		case row.flip == 'A' && row.status != d.status:
-			t.Errorf("%s: the table says the flip admits with %d", d, row.status)
-		case row.flip == 'D' && !h.Refused(d.res, row.status, row.code):
+			problemf("%s: the table says the flip admits with %d", d, row.status)
+		case row.flip == 'D' && !refused(d.res, row.status, row.code):
 			// Refused reported the status or code that differs.
 		case row.handler && d.res.Stage13 == Stage13Refused:
-			t.Errorf("%s: the table says the handler refuses behind an admit, stage 13 refused", d)
+			problemf("%s: the table says the handler refuses behind an admit, stage 13 refused", d)
 		default:
 			seen[d.cell()] = true
 		}
 	}
 	for k := range expect {
 		if !seen[k] {
-			t.Errorf("listed difference no longer differs: %s", k)
+			problemf("listed difference no longer differs: %s", k)
 		}
 	}
+	return out
 }
 
 var (
@@ -839,7 +940,7 @@ var (
 	}
 )
 
-// registeredAuthOffTightening: the 12 cells of the auth-disabled principal that HEAD
+// registeredAuthOffTightening: the 10 cells of the auth-disabled principal that HEAD
 // admitted and the flip refuses on purpose. Ruled by the coordinator (2026-11-22): these
 // are RECORDED TIGHTENINGS, not defects. 05-rbac.md section 4.11, "Auth-off tightenings
 // (SEC2-21, SEC5-8)" (a): every Guards.Interactive route refuses the auth-disabled
@@ -852,14 +953,19 @@ var (
 // credential, key, session, audit and backup routes only; the user-management, import-path,
 // tool-install, update-apply and plugin-settings routes below are Interactive by the
 // manifest and covered by (a)'s "every Guards.Interactive route", but not by the note's words.
+//
+// Two cells left the table at the flip (F4-08 r13): POST /api/v1/auth/temp-tokens is
+// deleted (registeredDeletedAtFlip), so no boot judges it; and POST
+// /api/v1/auth/api-keys/:id/rotate answers the auth-disabled principal 410 as HEAD
+// did, now that the credential guard in front of the retired stub is gone.
 var registeredAuthOffTightening = diffTable{
 	name: "auth-off tightening: Guards.Interactive refuses the auth-disabled principal (05-rbac 4.11(a), 05-authn 4.11, SEC5-8)",
-	want: 12,
+	want: 10,
 	rows: []diffRow{
 		{
-			routes: []string{"POST /api/v1/auth/temp-tokens", "POST /api/v1/backup/restore"},
+			routes: []string{"POST /api/v1/backup/restore"},
 			who:    []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "interactive_required",
-			why: "05-rbac 4.11(a), 05-authn 4.11 (SEC5-8): temp-login and backup restore are Interactive; the release note names them (credential, backup routes)",
+			why: "05-rbac 4.11(a), 05-authn 4.11 (SEC5-8): backup restore is Interactive; the release note names it (backup routes)",
 		},
 		{
 			routes: []string{
@@ -870,23 +976,194 @@ var registeredAuthOffTightening = diffTable{
 			who: []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "interactive_required",
 			why: "05-rbac 4.11(a), 05-authn 4.11 (SEC5-8): Interactive by the manifest; the release note's wording does not name this route family",
 		},
-		{
-			routes: []string{"POST /api/v1/auth/api-keys/:id/rotate"},
-			who:    []string{Authoff}, r0: 'A', flip: 'D', status: 403, code: "FORBIDDEN", handler: true,
-			why: "05-authn 4.11 (SEC5-8), in-handler form: the credential guard's 403 FORBIDDEN (\"API keys cannot change ...\") refuses the auth-disabled principal; HEAD retired the route (410 for every principal) and the SPA never calls it",
-		},
 	},
+}
+
+// registeredRetiredRotate: POST /api/v1/auth/api-keys/:id/rotate, the stub HEAD
+// retired (01-P81k), answers 410 Gone to every caller once the gin credential guard
+// in front of it is gone (F4-08 B10g; approved reach contract, owner and coordinator
+// rulings 2026-11-22). R0 recorded D for these keys: HEAD's guard refused an API key
+// with 403 before the stub. The flip's letter A is the stub's 410, and nothing is
+// minted. The sessions and the auth-disabled principal got the 410 at R0 too; the
+// fp-worker principals, key:admin:worker and the anonymous caller are refused on the
+// flip as at R0, so they are not differences.
+// 21 recorded keys and their 14 core-native twins: the 35 cells of the contract.
+var registeredRetiredRotate = diffTable{
+	name:     "retired stub: 410 to every caller once the credential guard is gone",
+	want:     21,
+	wantTwin: 14,
+	rows: []diffRow{{
+		routes: []string{"POST /api/v1/auth/api-keys/:id/rotate"},
+		who: []string{
+			"key:admin:view", "key:admin:settings", "key:admin:users", "key:admin:every", "key:admin:empty",
+			"key:editor:view", "key:editor:settings", "key:editor:users", "key:editor:worker", "key:editor:every", "key:editor:empty",
+			"key:viewer:view", "key:viewer:settings", "key:viewer:users", "key:viewer:worker", "key:viewer:every", "key:viewer:empty",
+			"key:custom-all:every", "key:custom-all:empty", "key:custom-subset:outside", "key:custom-subset:empty",
+		},
+		r0: 'D', flip: 'A', status: http.StatusGone,
+		why: "retired stub: 410 to every caller once the credential guard is gone",
+	}},
+}
+
+// recordedPrincipals are the principals verdicts.json records on the auth-on boot, in
+// its order: everyone but the auth-disabled one (TestRecordedPrincipalsAreTheRecording
+// holds the list to the file). The tables that name "every principal" are built from it.
+var recordedPrincipals = []string{
+	"session:admin", "session:editor", "session:viewer", "session:fp-worker", "session:custom-all", "session:custom-subset", "session:custom-unknown",
+	"key:admin:view", "key:admin:settings", "key:admin:users", "key:admin:worker", "key:admin:every", "key:admin:empty",
+	"key:editor:view", "key:editor:settings", "key:editor:users", "key:editor:worker", "key:editor:every", "key:editor:empty",
+	"key:viewer:view", "key:viewer:settings", "key:viewer:users", "key:viewer:worker", "key:viewer:every", "key:viewer:empty",
+	"key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users", "key:fp-worker:worker", "key:fp-worker:every", "key:fp-worker:empty",
+	"key:custom-all:every", "key:custom-all:empty", "key:custom-subset:outside", "key:custom-subset:empty", Anonymous,
+}
+
+// except is names without the ones in drop.
+func except(names []string, drop ...string) []string {
+	return slices.DeleteFunc(slices.Clone(names), func(n string) bool { return slices.Contains(drop, n) })
+}
+
+// goneUnderIdentityWhy is why each route below answers 410 on the flip.
+const goneUnderIdentityWhy = "core owns the account under identity, so HEAD's route refuses with 410 Gone and names core's replacement (internal/server/wire_auth_routes.go: gone()); ruled by the coordinator 2026-11-28 as the designed refusal of a retired route, no access change"
+
+// logoutAnswers200: the principals that R0 answered POST /auth/logout 200 and the flip
+// answers 410. R0 answered GET /auth/sessions the same way to every one of them
+// (TestRecordedPrincipalsAreTheRecording holds the two recordings equal), and that
+// route answers them 410 too. Left out: the five that stage 13 refuses at R0 and on the flip (the
+// fp-worker session, the fp-worker keys that hold the worker atom alone, and
+// key:admin:worker), the anonymous caller (401 on both), and the three fp-worker keys
+// that R0 admitted and the flip refuses (registeredFPWorkerNarrowing: a letter change,
+// not a class one).
+var logoutAnswers200 = except(recordedPrincipals,
+	"session:fp-worker", "key:admin:worker", "key:fp-worker:worker", "key:fp-worker:every", "key:fp-worker:empty",
+	"key:fp-worker:view", "key:fp-worker:settings", "key:fp-worker:users", Anonymous)
+
+// goneUnderIdentity builds the table of the five routes that answer 410 under core
+// identity where R0 answered an ordinary status with the same letter A: every row is a
+// change of class alone (R0 class, then 410), one per route and transition, so the
+// letters stay A on both sides and the cells are named by class, not by letter. who is
+// the principals the table claims on the boot it belongs to; a route it claims no
+// principal of on that boot has no row there.
+func goneUnderIdentity(name string, who func(route string) []string, want, wantTwin int) diffTable {
+	row := func(route, r0Class string) diffRow {
+		return diffRow{
+			routes: []string{route}, who: who(route),
+			r0: 'A', flip: 'A', status: http.StatusGone, r0Class: r0Class,
+			why: goneUnderIdentityWhy,
+		}
+	}
+	var rows []diffRow
+	for _, r := range []diffRow{
+		row("GET /api/v1/auth/invite/:token", "404"),
+		row("POST /api/v1/auth/accept-invite", "4xx"),
+		row("POST /api/v1/auth/setup", "4xx"),
+		row("POST /api/v1/auth/logout", "2xx"),
+		row("GET /api/v1/auth/sessions", "2xx"),
+	} {
+		if len(r.who) > 0 {
+			rows = append(rows, r)
+		}
+	}
+	return diffTable{name: name, want: want, wantTwin: wantTwin, rows: rows}
+}
+
+// registeredGoneUnderIdentity: auth-on. 36 principals on each of invite, accept-invite
+// and setup, 27 on each of logout and the sessions list (logoutAnswers200); the
+// core-native twins of 18 and 14 of them.
+var registeredGoneUnderIdentity = goneUnderIdentity(
+	"retired identity routes answer 410 under core identity (a change of class, letter A on both sides)",
+	func(route string) []string {
+		if route == "POST /api/v1/auth/logout" || route == "GET /api/v1/auth/sessions" {
+			return logoutAnswers200
+		}
+		return recordedPrincipals
+	},
+	3*36+2*27, 3*18+2*14,
+)
+
+// updateApplyStateWhy names the one cell the hermetic updater (hermeticOutbound) moved:
+// R0 answered session:admin's POST /update/apply 500 where every other principal got
+// 400, an answer that depends on the updater's state and on the live GitHub's reply,
+// which scripts/r2corpus/record_r0_reach.py:209-210 records as "answered 400 and then
+// 500 for one principal". Against the stubbed release lookup the cell answers 400, as
+// the other principals' cells do. Neither is a success, so the set of principals the
+// route lets through is the same.
+const updateApplyStateWhy = "hermetic updater: R0's 500 for this one cell was the updater's state against the live GitHub (record_r0_reach.py:209-210); the stubbed release gives the 400 every other principal got; no principal gains a 2xx"
+
+// registeredUpdateApplyState: auth-on, one cell, no twin.
+var registeredUpdateApplyState = diffTable{
+	name:     "update/apply: R0's one 5xx cell is the 400 of its siblings (a change of class, letter A on both sides)",
+	want:     1,
+	wantTwin: 0,
+	rows: []diffRow{{
+		routes: []string{"POST /api/v1/update/apply"}, who: []string{"session:admin"},
+		r0: 'A', flip: 'A', status: http.StatusBadRequest, r0Class: "5xx",
+		why: updateApplyStateWhy,
+	}},
+}
+
+// registeredGoneUnderIdentityAuthOff: four of the routes for the auth-disabled
+// principal, whose R0 answers were 404, 400, 400 and 200. The sessions list is not
+// one: R0 refused the auth-disabled principal there (401, HEAD's handler finds no
+// user), and the flip refuses it still (goneToAUser keeps that refusal), so the cell
+// is R0's letter and in no table (TestReachRegisteredPath_HandlerRefusals holds it).
+var registeredGoneUnderIdentityAuthOff = goneUnderIdentity(
+	"retired identity routes answer 410 to the auth-disabled principal (a change of class, letter A on both sides)",
+	func(route string) []string {
+		if route == "GET /api/v1/auth/sessions" {
+			return nil
+		}
+		return []string{Authoff}
+	},
+	4, 0,
+)
+
+// authOffExportRefusedWhy names the one auth-off cell the diagnostics export's start
+// precondition moved (todo AUTH-OFF-EXPORT; internal/server/diagnostics_export_start.go).
+// R0 queued an export for the auth-disabled principal (202). Under core identity an
+// export is narrowed to the account that asked for it, and with authentication off no
+// account exists, so the start is refused (409) before anything is queued. The letter
+// stays A, the cell's class moves from 2xx to 4xx, and the principal loses a success:
+// the set of principals the route lets through shrinks.
+const authOffExportRefusedWhy = "AUTH-OFF-EXPORT: under core identity an export is built for the account that asked, and the auth-disabled principal has none, so the start precondition refuses it 409 before anything is queued (R0: 202); a lost success, not a gained one"
+
+// registeredAuthOffExportRefused: auth-off, one cell, no twin.
+var registeredAuthOffExportRefused = diffTable{
+	name:     "diagnostics export: the auth-disabled principal's start is refused (a change of class, letter A on both sides)",
+	want:     1,
+	wantTwin: 0,
+	rows: []diffRow{{
+		routes: []string{"POST /api/v1/diagnostics/export"}, who: []string{Authoff},
+		r0: 'A', flip: 'A', status: http.StatusConflict, r0Class: "2xx",
+		why: authOffExportRefusedWhy,
+	}},
+}
+
+// registeredDeletedAtFlip are R0's routes the identity flip deletes (F4-08 spec step
+// 3; internal/server routesDeletedAtTheFlip): no pattern matches them and they answer
+// 404 to every principal. Core's POST /api/core/v1/users/{id}/temp-login and POST
+// /api/core/v1/auth/temp-login/consume replace them. No boot judges them, so the
+// verdict sweep does not send them (TestRegisteredHarness_DeletedRoutesAreNotRegistered
+// holds them to 404 instead) and the oracle pins them in registeredUnregistered.
+var registeredDeletedAtFlip = []unregisteredRoute{
+	{"GET /auth/temp-login", http.StatusNotFound, deletedAtFlipWhy},
+	{"POST /api/v1/auth/temp-tokens", http.StatusNotFound, deletedAtFlipWhy},
+}
+
+const deletedAtFlipWhy = "route deleted at the flip, replaced by core's native route (spec step 3)"
+
+// unregisteredRoute is an R0 route no registered pattern matches, with the status the
+// flip answers every principal and why.
+type unregisteredRoute struct {
+	route  string
+	status int
+	why    string
 }
 
 // registeredUnregistered are R0 routes no registered pattern matches, with what
 // the flip answers every principal. Pinned so a change either way shows.
-var registeredUnregistered = []struct {
-	route  string
-	status int
-	why    string
-}{
+var registeredUnregistered = append([]unregisteredRoute{
 	{"GET /", http.StatusOK, "the SPA index: served by the static handler, public, so no route carries a requirement"},
-}
+}, registeredDeletedAtFlip...)
 
 // registeredCanaryNarrowing: the principals whose canary (GET /auth/me) answers
 // differently on the flip. The known difference of the 11-22 ruling.
@@ -900,13 +1177,13 @@ var registeredCanaryNarrowing = map[string][2]int{
 
 const (
 	registeredR0Routes     = 574
-	registeredProbed       = 505
+	registeredProbed       = 503 // 505 until the flip deleted GET /auth/temp-login and POST /api/v1/auth/temp-tokens (registeredDeletedAtFlip)
 	registeredDelegated    = 68
 	registeredPrincipals   = 36 // the recorded abk_ keys, sessions and the anonymous caller
 	registeredCoreKeys     = 18 // core-native mck_ twins, held to their imported twin's recording
 	registeredNoCoreTwin   = 10
 	registeredAuthOnCells  = registeredProbed * registeredPrincipals
-	registeredAuthOffCells = 505 // one principal over the probed routes
+	registeredAuthOffCells = registeredProbed // one principal over the probed routes
 )
 
 // The recorded task starts and approvals, as pseudo-routes.
@@ -915,12 +1192,136 @@ const (
 	registeredApprovals = 1
 )
 
-// seedDelugeDiscovery turns deluge_discovery_enabled on in the stored settings blob
-// (the row HEAD wrote: a database.Setting whose value is the blob's JSON). R0 was
-// recorded with discovery on: GET /deluge/discover and its import answer 403 "deluge
-// discovery is disabled" to every principal while the setting is off, so a corpus with
-// it off compares a setting, not reach.
-func seedDelugeDiscovery(ctx context.Context, lr storage.LegacyRange) error {
+// noFingerprintBackend puts the boot where R0's recording was made: with no fpcalc and
+// no ffmpeg on PATH. POST /dedup/fingerprint-rescan answers 503 "no fingerprint backend"
+// after validating its body (internal/server/fingerprint_rescan.go) and before it
+// enqueues anything, so R0's runner recorded 503; on a host that has either tool the
+// same handler answers 202 and starts a real operation, so the cell would compare the
+// host's tools, not reach, and the oracle would pass or fail by where it runs.
+func noFingerprintBackend(t testing.TB) {
+	t.Helper()
+	t.Setenv("PATH", t.TempDir())
+	// The resolved path is a package global the boot itself also sets (server.go,
+	// from the tool registry): put back what this test found, not "".
+	prev := fingerprint.SetResolvedFpcalcPath("")
+	t.Cleanup(func() { fingerprint.SetResolvedFpcalcPath(prev) })
+	if fingerprint.Available() {
+		t.Fatal("a fingerprint backend is still found with an empty PATH")
+	}
+}
+
+// stubGitHubHost and stubRelease are the one outbound endpoint the oracle's boots serve:
+// the releases API the updater asks (POST /update/check and /update/apply). R0's
+// recording asked the live GitHub, so its update/check cells answered 200 and its
+// update/apply cell 500 ("no release asset to apply") or 400, by the run's luck; the
+// flip asking it too made the oracle depend on the network and, with 500 or so
+// admitted probes a run, on GitHub's unauthenticated rate limit (60 an hour).
+const (
+	stubGitHubHost    = "api.github.com"
+	stubReleasePath   = "/repos/falkcorp/audiobook-organizer/releases/latest"
+	stubReleaseAnswer = `{"tag_name":"v99.0.0","html_url":"https://example.test/releases/v99.0.0","body":"Gotham release notes","draft":false,"prerelease":false,"published_at":"2026-01-01T00:00:00Z","assets":[]}`
+)
+
+// serveStubbedRelease answers the one release lookup the harness serves and reports
+// whether r was it. Both of the harness's local servers (the outbound one below and
+// the Access app, which owner boots install as the default transport instead) call
+// it, so the updater sees the same release in every boot.
+func serveStubbedRelease(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet || r.Host != stubGitHubHost || r.URL.Path != stubReleasePath {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, stubReleaseAnswer)
+	return true
+}
+
+// backgroundHosts are the hosts a boot reaches for from background work, never from a
+// request's answer: operations an admitted probe enqueues (an AI scan's embeddings
+// and file uploads, the Open Library dump fetch) and the jobs a boot starts. The
+// harness refuses them with a 404 and nothing leaves the machine; no probe's status
+// waits for one, which the oracle's own cell comparison would show (a probe that
+// answered differently with the lookup refused would be a diff). Any other host is a
+// failure of the test.
+var backgroundHosts = map[string]string{
+	"api.openai.com":  "AI scan and embedding operations",
+	"openlibrary.org": "the Open Library dump fetch",
+	"archive.org":     "the Open Library dump's mirror",
+}
+
+// outboundApp is the harness's stand-in for the network outside it: a local TLS server
+// that serves the stubbed release lookup and refuses every other request, recording it.
+// A host that is neither the release lookup nor a named background host fails the test
+// that installed it, at its end: a real network call from a boot is never a silent pass
+// or a flake.
+type outboundApp struct {
+	srv *httptest.Server
+	mu  sync.Mutex
+	// refused is every request the server refused, as "METHOD host/path".
+	refused []string
+	// strayHosts are the hosts of refused that backgroundHosts does not name.
+	strayHosts []string
+}
+
+func (o *outboundApp) serve(w http.ResponseWriter, r *http.Request) {
+	if serveStubbedRelease(w, r) {
+		return
+	}
+	host := strings.ToLower(r.Host)
+	o.mu.Lock()
+	o.refused = append(o.refused, r.Method+" "+host+r.URL.Path)
+	if _, ok := backgroundHosts[host]; !ok {
+		o.strayHosts = append(o.strayHosts, host)
+	}
+	o.mu.Unlock()
+	http.Error(w, "the harness serves no such host", http.StatusNotFound)
+}
+
+// hermeticOutbound installs an outboundApp as http.DefaultTransport for the test and
+// restores it at its end. The updater's client has no transport of its own, so it goes
+// through the default one, as core's own clients do; dialTo keeps it an
+// *http.Transport, which those clients clone. The Access transport swap of the owner
+// boots is the precedent, and nests inside this one.
+func hermeticOutbound(t testing.TB) *outboundApp {
+	t.Helper()
+	o := &outboundApp{}
+	o.srv = httptest.NewTLSServer(http.HandlerFunc(o.serve))
+	orig := http.DefaultTransport
+	http.DefaultTransport = dialTo(o.srv)
+	t.Cleanup(func() {
+		http.DefaultTransport = orig
+		o.srv.Close()
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		if len(o.strayHosts) > 0 {
+			t.Errorf("the boot reached for %d outbound requests to hosts the harness neither serves nor names as background work: %v", len(o.strayHosts), slices.Compact(slices.Sorted(slices.Values(o.strayHosts))))
+		}
+		t.Logf("outbound: %d requests to background hosts refused locally", len(o.refused)-len(o.strayHosts))
+	})
+	return o
+}
+
+// recordedEnvironment puts a boot where R0's recording was made, minus what made it
+// flake: no fingerprint backend (noFingerprintBackend) and no network but the one
+// stubbed release lookup (hermeticOutbound).
+func recordedEnvironment(t testing.TB) {
+	t.Helper()
+	noFingerprintBackend(t)
+	hermeticOutbound(t)
+}
+
+// seedRecordedFlags turns on, in the stored settings blob, the two settings R0 was
+// recorded with (the row HEAD wrote: a database.Setting whose value is the blob's
+// JSON; record_r0_reach.py's BOOT_FLAGS, both boots):
+//
+//   - deluge_discovery_enabled: GET /deluge/discover and its import answer 403
+//     "deluge discovery is disabled" to every principal while it is off, so a corpus
+//     with it off compares a setting, not reach.
+//   - fingerprint_remote_workers_enabled: the fingerprint worker routes answer 404
+//     ahead of the handler while it is off, so a corpus with it off answers every
+//     principal stage 13 admits 404 where R0 answered 503 or 400 (its hub is not
+//     running, or the empty body is refused), and compares a setting, not reach.
+//     The boot's config.Config sets it, but the stored blob wins at boot.
+func seedRecordedFlags(ctx context.Context, lr storage.LegacyRange) error {
 	blob, err := lr.Get(ctx, []byte("setting:config_blob"))
 	if err != nil {
 		return fmt.Errorf("read the settings blob: %w", err)
@@ -938,6 +1339,7 @@ func seedDelugeDiscovery(ctx context.Context, lr storage.LegacyRange) error {
 		return fmt.Errorf("decode the settings blob: %w", err)
 	}
 	fields["deluge_discovery_enabled"] = json.RawMessage("true")
+	fields["fingerprint_remote_workers_enabled"] = json.RawMessage("true")
 	nv, err := json.Marshal(fields)
 	if err != nil {
 		return err
@@ -961,7 +1363,8 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 	}
 
 	t.Run("auth-on", func(t *testing.T) {
-		h := bootRegistered(t, registeredConfig{Seed: seedDelugeDiscovery})
+		recordedEnvironment(t)
+		h := bootRegistered(t, registeredConfig{Seed: seedRecordedFlags})
 		var core int
 		for _, p := range h.Principals {
 			if p.Core {
@@ -1018,6 +1421,9 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 		if len(pass.canaryDrift) > 0 {
 			t.Errorf("a credential changed over its pass, so its D cells prove nothing: %v", pass.canaryDrift)
 		}
+		if len(pass.logoutLeftSession) > 0 {
+			t.Errorf("logout: %v", pass.logoutLeftSession)
+		}
 		for name, got := range pass.canary {
 			rec := pass.recorded[name]
 			wantR0, wantFlip := r0.Canary[rec], r0.Canary[rec]
@@ -1037,7 +1443,7 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 			t.Errorf("R0 recorded %d task starts and %d approvals, the oracle pins %d and %d", len(r0.Tasks), len(r0.Approvals), registeredTasks, registeredApprovals)
 		}
 		t.Logf("compared %d cells (%d route cells pinned)", compared, registeredAuthOnCells)
-		tables := []diffTable{registeredFPWorkerNarrowing, registeredRuledNarrowings, registeredBootstrapRefused}
+		tables := []diffTable{registeredFPWorkerNarrowing, registeredRuledNarrowings, registeredBootstrapRefused, registeredRetiredRotate, registeredGoneUnderIdentity, registeredUpdateApplyState}
 		h.checkDiffs(t, diffs, tables)
 		h.checkR2OnlyLetters(t, r0, false)
 		hc, hcStage13 := h.checkHandlerCells(t, pass, false)
@@ -1053,13 +1459,14 @@ func TestRegisteredReach_Oracle(t *testing.T) {
 	})
 
 	t.Run("auth-off", func(t *testing.T) {
-		h := bootRegistered(t, registeredConfig{AuthOff: true, Seed: seedDelugeDiscovery}) // fails unless auth_disabled is true
+		recordedEnvironment(t)
+		h := bootRegistered(t, registeredConfig{AuthOff: true, Seed: seedRecordedFlags}) // fails unless auth_disabled is true
 		pass := h.runOracle(r0)
 		if len(pass.noVerdict) > 0 || len(pass.canaryDrift) > 0 {
 			t.Fatalf("no verdict: %v; canary drift: %v", pass.noVerdict, pass.canaryDrift)
 		}
 		diffs, compared := compareToR0(r0, pass)
-		h.checkDiffs(t, diffs, []diffTable{registeredAuthOffTightening, registeredBootstrapRefusedAuthOff})
+		h.checkDiffs(t, diffs, []diffTable{registeredAuthOffTightening, registeredBootstrapRefusedAuthOff, registeredGoneUnderIdentityAuthOff, registeredAuthOffExportRefused})
 		if compared != registeredAuthOffCells {
 			t.Errorf("auth-off compared %d cells, pinned %d", compared, registeredAuthOffCells)
 		}

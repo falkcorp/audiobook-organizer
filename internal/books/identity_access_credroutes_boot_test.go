@@ -68,10 +68,12 @@ func TestAccessBoot_CredentialRoutesAdmitTheAccessAdminAsHEADDid(t *testing.T) {
 	// Books' credential routes, from legacy_manifest.go's fInteractive rows
 	// (as the router reports them, "{param}"):
 	// the cell set must cover them, or a route lost its guard flag and this
-	// test would pass by not asking.
+	// test would pass by not asking. HEAD's POST /api/v1/auth/temp-tokens is
+	// deleted at the flip (spec step 3); core's temp-login mint replaces it
+	// and is held here in its place.
 	for _, want := range []string{
 		"PUT /api/v1/auth/me/password", "PATCH /api/v1/auth/me", "PATCH /api/v1/auth/api-keys/{id}",
-		"POST /api/v1/auth/phone-key/claim", "POST /api/v1/auth/temp-tokens", "POST /api/v1/users/invite",
+		"POST /api/v1/auth/phone-key/claim", "POST /api/core/v1/users/{id}/temp-login", "POST /api/v1/users/invite",
 		"POST /api/v1/users/{id}/reset-password", "PUT /api/v1/users/{id}/email", "POST /api/v1/users/{id}/deactivate",
 		"POST /api/v1/users/{id}/reactivate", "POST /api/v1/users/invites/{id}/resend", "POST /api/v1/import-paths",
 		"PUT /api/v1/plugins/{id}/settings", "POST /api/v1/tools/{name}/install", "POST /api/v1/update/apply",

@@ -314,10 +314,14 @@ func (s *Server) configAtomsFor(perm string) []string {
 }
 
 // configFirstRun reports the first-run window: no user exists and setup is not
-// complete. A store that cannot count users is not the window.
+// complete. A store that cannot count users is not the window. Under core
+// identity there is no window: core's bootstrap creates the first account and
+// the setup wizard writes as that signed-in admin (configCanBridged grants
+// FirstRunPerm to nobody), and HEAD's count reads books' user rows, which M3
+// drains, so it would open the window on every migrated install.
 func (s *Server) configFirstRun() bool {
 	store := s.storeForWiring()
-	if store == nil || config.Snapshot().SetupComplete {
+	if s.identity != nil || store == nil || config.Snapshot().SetupComplete {
 		return false
 	}
 	n, err := store.CountUsers()
@@ -2102,14 +2106,19 @@ func (s *Server) seedRolesAndTokens() {
 	// Seed / refresh the multi-user roles (spec 3.7). Idempotent: if
 	// the permission set in auth.SeedRoles has grown since last boot,
 	// existing roles pick up the new entries automatically.
-	if created, updated, err := auth.SeedRoles(s.storeForWiring()); err != nil {
-		slog.Warn("seed roles", "err", err)
-	} else if created > 0 || updated > 0 {
-		slog.Info("seed roles created, updated", "created", created, "updated", updated)
-	}
-	// Core boot has already seeded its system user. The legacy user claim is
-	// retired under core identity, so this startup path must not write to it.
+	//
+	// Under core identity neither seed runs: core owns the roles and its boot
+	// has already seeded its system user, and the role: and u: claims are
+	// retired (M3 drained them), so either write would be refused and logged
+	// as a WARN on every start (the 2026-11-24 rehearsal's "seed roles" and
+	// "seed system user" lines). TestIdentityBoot_NoLegacySeedWarnings pins it.
 	if s.identity == nil {
+		if created, updated, err := auth.SeedRoles(s.storeForWiring()); err != nil {
+			slog.Warn("seed roles", "err", err)
+		} else if created > 0 || updated > 0 {
+			slog.Info("seed roles created, updated", "created", created, "updated", updated)
+		}
+
 		if err := auth.SeedSystemUser(s.storeForWiring()); err != nil {
 			slog.Warn("seed system user", "err", err)
 		}
@@ -2118,13 +2127,22 @@ func (s *Server) seedRolesAndTokens() {
 	// Every API key expires since 2026-10-07. Keys created before that with
 	// no expiry are listed and given one (now + 30 days), once; see
 	// stampNeverExpiringAPIKeys. Non-fatal: a failure retries next start.
-	if _, err := stampNeverExpiringAPIKeys(s.storeForWiring(), time.Now()); err != nil {
-		slog.Error("api key expiry stamp failed; will retry next start", "err", err)
+	//
+	// Under core identity neither runs: keys and passwords are core's records
+	// (M3 imported every key with its expiry and every password hash), books'
+	// k: and u: rows are drained and their claims retired, so the stamp would
+	// write into a retired claim and the count would report 0 forever.
+	if s.identity == nil {
+		if _, err := stampNeverExpiringAPIKeys(s.storeForWiring(), time.Now()); err != nil {
+			slog.Error("api key expiry stamp failed; will retry next start", "err", err)
+		}
 	}
 	logBootstrapKeyTTLConfig()
 	// How many legacy bcrypt passwords remain (a count, no names), so the owner
 	// can see when bcrypt verification can be dropped.
-	logLegacyBcryptPasswordCount(s.storeForWiring())
+	if s.identity == nil {
+		logLegacyBcryptPasswordCount(s.storeForWiring())
+	}
 
 	// Initialize the one-time bootstrap token and startup read-only key.
 	//
@@ -2155,11 +2173,17 @@ func (s *Server) seedRolesAndTokens() {
 				slog.Info("Failed to init bootstrap token", "err", err)
 			}
 		}
-		if s.life.startConfig.writeStartupReadOnlyKey {
+		// Under core identity the startup read-only key is core's too: M6 renames
+		// write_startup_readonly_key to core.auth.bootstrap.readonly_key.enabled
+		// and auth.BootWrites mints it (label auth.readonly_key). HEAD's writer
+		// would add a books k: row, a claim M3 retires, so the write would be
+		// refused on every start.
+		if s.identity == nil && s.life.startConfig.writeStartupReadOnlyKey {
 			if err := InitStartupReadOnlyKey(s.storeForWiring(), dataDir); err != nil {
 				slog.Info("Failed to init startup read-only key", "err", err)
 			}
 		}
+		slog.Info("start-up credentials settled")
 	}
 }
 
@@ -2860,9 +2884,11 @@ func (s *Server) setupRoutes() error {
 	// because the shared authMiddleware is constructed later in this function
 	// (and routes registered before a router.Use() don't inherit it).
 	//
-	// cfMW runs FIRST and fail-open, exactly as it does on /api/v1: it binds the
-	// user resolved from a valid Cf-Access-Jwt-Assertion so the RequireAuth below
-	// short-circuits, and otherwise passes through untouched. Without it this
+	// cfMW runs FIRST and fail-open, exactly as it does on /api/v1: without core
+	// identity it binds the user resolved from a valid Cf-Access-Jwt-Assertion so
+	// the RequireAuth below short-circuits, and otherwise passes through
+	// untouched; under core identity it only verifies and marks the request
+	// (accessMiddleware) and core's principal authenticates. Without it this
 	// route was the one authenticated endpoint the Cloudflare Access passthrough
 	// never reached, because a browser under Access SSO has NO session cookie —
 	// identity arrives only in that header — so EventSource 401'd in a reconnect
@@ -2930,9 +2956,11 @@ func (s *Server) setupRoutes() error {
 	}
 
 	// API routes (auth + request-size limits; the rate limit is core's). The Cloudflare Access
-	// middleware runs early and FAIL-OPEN: when a valid Cf-Access-Jwt-Assertion is
-	// present it binds the resolved user so the downstream RequireAuth skips its
-	// session check; otherwise it passes through. Harmless on public routes.
+	// middleware runs early and FAIL-OPEN: without core identity, when a valid
+	// Cf-Access-Jwt-Assertion is present it binds the resolved user so the
+	// downstream RequireAuth skips its session check; under core identity it only
+	// verifies and marks the request (accessMiddleware) and binds no one; otherwise
+	// it passes through. Harmless on public routes.
 	api := s.router.Group("/api/v1")
 	if cfMW != nil {
 		api.Use(bodyLimitMiddleware, cfMW)

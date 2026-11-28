@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -406,6 +407,33 @@ func TestUndoIdentity_TooLargeAnswersBeforeAnythingIsStaged(t *testing.T) {
 		if before[k] != v {
 			t.Errorf("changed %q", k)
 		}
+	}
+}
+
+// An undo whose inverse batch the store refuses at commit answers
+// ErrMergeTooLarge (409 merge_too_large), like the estimate, and leaves the
+// books rows, the journal and core's marker as they were.
+func TestUndoIdentity_CommitTimeBatchTooLargeIsMergeTooLarge(t *testing.T) {
+	f := newIDFixture(t)
+	j := f.mergedAndArmed()
+	before := f.snapshot()
+	journalBefore := f.journalRows()[0].Value
+	real := f.svc.idMerger
+	f.svc.idMerger = decorated{IdentityUserMerger: real, apply: func([]database.UserMergeOp, string, []byte, func(*storage.Batch) error) error {
+		return fmt.Errorf("storage: batch of %d bytes (limit %d): %w", 300<<20, 256<<20, storage.ErrBatchTooLarge)
+	}}
+	_, err := f.svc.Undo(context.Background(), f.undoReq(j), nil)
+	if !errors.Is(err, ErrMergeTooLarge) || !errors.Is(err, storage.ErrBatchTooLarge) {
+		t.Fatalf("Undo = %v, want ErrMergeTooLarge wrapping storage.ErrBatchTooLarge", err)
+	}
+	if d := diff(before, f.snapshot()); len(d) != 0 {
+		t.Errorf("a refused undo changed books rows: %v", d)
+	}
+	if !bytes.Equal(f.journalRows()[0].Value, journalBefore) {
+		t.Error("a refused undo rewrote the journal")
+	}
+	if got := f.core.user(f.b.ID); got.MergedInto == "" {
+		t.Error("core's marker was removed by a refused undo")
 	}
 }
 

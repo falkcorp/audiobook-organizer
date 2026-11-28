@@ -32,7 +32,16 @@ func (s *Server) wireAuthRoutes(
 	authGroup := api.Group("/auth")
 	{
 		authGroup.GET("/status", authH.GetStatus)
-		authGroup.POST("/setup", authH.SetupInitialAdmin)
+		if s.identity != nil {
+			// Under core identity the first account is core's to create (POST
+			// /api/core/v1/auth/setup, with the bootstrap token core writes at
+			// start); HEAD's handler guards on books' user count, which M3
+			// drains, so it would serve every migrated install as a fresh one.
+			// It answers 410 and reads nothing.
+			authGroup.POST("/setup", gone("core's POST /api/core/v1/auth/setup"))
+		} else {
+			authGroup.POST("/setup", authH.SetupInitialAdmin)
+		}
 		authGroup.POST("/login", s.loginCeilingMiddleware(nil, respondWebLoginError), authH.Login)
 		if s.identity != nil {
 			// Under core identity an invite is core's record: accepting and looking
@@ -74,9 +83,29 @@ func (s *Server) wireAuthRoutes(
 		// Email is an identity: oauth.ResolveUser links an SSO login to the
 		// user whose email it verifies.
 		s.credRoute(authProtected, http.MethodPatch, "/me", authH.UpdateMe)
-		authProtected.POST("/logout", authH.Logout)
+		if s.identity != nil {
+			// Under core identity the session is core's: HEAD's Logout revoked a
+			// books session from the family M3 drained, cleared the cookie and
+			// answered 200 "logged out" while core's session stayed valid. The
+			// route answers 410 instead, changes no state and clears no cookie,
+			// and names core's logout, which ends the session (the SPA already
+			// calls it). Never a "logged out" that left the session live.
+			authProtected.POST("/logout", gone("POST /api/core/v1/auth/logout"))
+		} else {
+			authProtected.POST("/logout", authH.Logout)
+		}
 		// The sessions list returns revoke handles, never session IDs (the ID is the bearer token; 05-authn §11.1 item 1); DELETE /sessions/:id takes a handle.
-		authProtected.GET("/sessions", authH.ListMySessions)
+		if s.identity != nil {
+			// Under core identity the sessions are core's: HEAD's list read the
+			// books session family M3 drained and answered 200 with an empty
+			// list while the caller's core sessions were live. The route
+			// answers 410 instead and names core's list. A caller with no user
+			// (the auth-disabled principal) is refused 401 first, as HEAD's
+			// handler refused it.
+			authProtected.GET("/sessions", goneToAUser("GET /api/core/v1/me/sessions"))
+		} else {
+			authProtected.GET("/sessions", authH.ListMySessions)
+		}
 		authProtected.DELETE("/sessions/:id", authH.RevokeMySession)
 		s.credRoute(authProtected, http.MethodPut, "/me/password", authH.ChangePassword)
 		// The guest's one-time phone-app key under core identity: the page calls it
@@ -102,9 +131,11 @@ func (s *Server) wireAuthRoutes(
 		authProtected.DELETE("/api-keys/:id", apiKeyH.Revoke)
 		// POST /api-keys/:id/rotate was retired by 01-P81k: it answers 410 Gone
 		// for one release (owner decision D9) and is then removed. Create a new
-		// key and revoke the old one instead. The route keeps its credential
-		// guard, so the auth middleware and the refusal of an API key rotating
-		// another user's key still run before the 410.
+		// key and revoke the old one instead. Under core identity the
+		// conditional credential guard is a pass-through (credGuardMiddleware,
+		// since B10g), so the stub answers 410 to every caller and mints
+		// nothing; apiKeyOwnedByAnotherUser is consulted only by the pre-identity
+		// guard.
 		s.credRouteWhen(authProtected, http.MethodPost, "/api-keys/:id/rotate", s.apiKeyOwnedByAnotherUser,
 			gone("POST /api/v1/auth/api-keys (create a new key), then DELETE /api/v1/auth/api-keys/:id (revoke the old one)"))
 	}

@@ -21,11 +21,14 @@ import (
 // stage 0 does not cover: a request whose peer is this host (a cloudflared on
 // the same machine) and that carries an Access assertion which verifies.
 //
-// Until the switch (F4-08 B10) the gin copy stays authoritative and nothing
-// calls this: the gin binder has already verified the assertion
-// (CFAccessVerified), and verifying it twice per request would buy nothing.
-// After the switch the gin binder is gone, so the rule has to verify the
-// assertion itself, which is why it holds a verifier.
+// Without core identity the gin copy is authoritative and nothing calls this:
+// the gin binder has already verified the assertion (CFAccessVerified). Under
+// core identity the gin stage still runs on the routes it is mounted on, but
+// only verifies and marks (CloudflareAccessVerifyOnly), and the gin copy still
+// reads its marker there; this rule is what the ABS throttle uses
+// (identityThrottleKey), which is not behind that stage, so it verifies the
+// assertion itself and holds a verifier. Moving trustedClientIP onto this rule
+// and deleting the gin stage is ACCESS-ONE-VERIFIER.
 type ClientAddrTrust struct {
 	// Verifier checks the Access JWT (signature, issuer, expiry, AUD). A
 	// service-token assertion (ErrNonIdentityAssertion) counts as verified, as

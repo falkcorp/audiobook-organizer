@@ -19,8 +19,10 @@ import (
 // a server built without an identity, where HEAD's gin copy (loginThrottleKey)
 // stays authoritative.
 //
-// The gin binder that copy reads does not run under LegacyAuthCore, so the bucket
-// is the one cfaccess.ClientAddrTrust.ClientBucket names: the client address core's
+// The ABS surface is not behind the gin Access stage whose marker that copy
+// reads (under LegacyAuthCore that stage only verifies and marks,
+// cfaccess.CloudflareAccessVerifyOnly, and only on the routes it is mounted on),
+// so the bucket is the one cfaccess.ClientAddrTrust.ClientBucket names: the client address core's
 // stage 0 attributed through a configured connector, else a verified Access
 // assertion's CF-Connecting-IP from this host, else the TCP peer whatever headers
 // the caller sends. A server given no Access verifier believes no assertion and

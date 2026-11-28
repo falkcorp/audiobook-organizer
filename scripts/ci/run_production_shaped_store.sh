@@ -31,6 +31,21 @@ mkdir -p "$R2_SHAPED_OUT"
 
 df -h "$work" || true
 
+# The generator's own check first: a small store it grows runs through the
+# cutover suite's checks in about a minute, so a generator that breaks them
+# fails here, not half an hour later on the full-size store.
+rc=0
+out="$(R2_SHAPED_GENERATOR_CELL=1 go test ./internal/books/ -run '^TestShapedGenerator_StorePassesTheCutoverSuite$' -count=1 -v -timeout 10m 2>&1)" || rc=$?
+grep -E -- '^\s*(--- |PASS|FAIL|ok)|_test\.go:[0-9]+: ' <<<"$out" || true
+if [ "$rc" -ne 0 ]; then
+  echo "$out"
+  exit "$rc"
+fi
+if ! grep -q -- '--- PASS: TestShapedGenerator_StorePassesTheCutoverSuite ' <<<"$out"; then
+  echo "::error::TestShapedGenerator_StorePassesTheCutoverSuite did not run and pass (skipped, renamed or removed?)"
+  exit 1
+fi
+
 python3 scripts/r2corpus/gen_production_shaped.py \
   --out "$R2_SHAPED_STORE" \
   --report "${R2_SHAPED_OUT}/generator_report.json"

@@ -92,14 +92,12 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 	// discovery timeout context above.
 	var cfMW, cfRecoveryMW gin.HandlerFunc
 	if cfAccessVerifierOverride != nil {
-		cfMW = cfaccess.CloudflareAccessAuth(
-			cfaccess.NewCFAccessAuthenticatorWithVerifier(cfAccessVerifierOverride, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
+		cfMW = s.accessMiddleware(cfAccessVerifierOverride, cfg)
 		cfRecoveryMW = newCFRecoveryMiddleware(cfAccessVerifierOverride)
 		s.loginCeilingExempt = newAccessExemption(cfAccessVerifierOverride, cfg)
 	} else if cfg.CFAccessTeamDomain != "" && cfg.CFAccessAUD != "" {
 		if v, verr := cfaccess.NewCFAccessVerifier(context.Background(), cfg.CFAccessTeamDomain, cfg.CFAccessAUD); verr == nil {
-			cfMW = cfaccess.CloudflareAccessAuth(
-				cfaccess.NewCFAccessAuthenticator(v, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
+			cfMW = s.accessMiddleware(v, cfg)
 			cfRecoveryMW = newCFRecoveryMiddleware(v)
 			s.loginCeilingExempt = newAccessExemption(v, cfg)
 			slog.Info("oauth: Cloudflare Access identity passthrough enabled", "team", cfg.CFAccessTeamDomain)
@@ -109,4 +107,22 @@ func (s *Server) buildOAuthWiring() (*handlers.OAuthHandler, gin.HandlerFunc, gi
 	}
 
 	return oauthH, cfMW, cfRecoveryMW
+}
+
+// accessMiddleware is the gin chain's Cloudflare Access stage over v (cfMW).
+// Without core identity it is HEAD's binder: a verified, allow-listed identity
+// is resolved to a books user (linked or created) and bound for RequireAuth.
+// Under core identity it is the verification alone
+// (cfaccess.CloudflareAccessVerifyOnly): core's Access extension authenticates
+// the request at stage 12 and the bridge (requireAuth) reads only the principal
+// it bound, and the families HEAD's resolver reads and writes are retired, so
+// the binder could only attempt a refused write. The verified marker, which
+// core does not set and trustedClientIP reads, is still set. Neither form
+// refuses a request; the auth stage after it does.
+func (s *Server) accessMiddleware(v cfaccess.CFAssertionVerifier, cfg *legacyoauth.Config) gin.HandlerFunc {
+	if s.identity != nil {
+		return cfaccess.CloudflareAccessVerifyOnly(v, servermiddleware.KeyPresented)
+	}
+	return cfaccess.CloudflareAccessAuth(
+		cfaccess.NewCFAccessAuthenticatorWithVerifier(v, cfg, s.storeForWiring(), servermiddleware.CFAccessHooks(s.storeForWiring())))
 }

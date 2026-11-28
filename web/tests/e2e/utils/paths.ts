@@ -31,6 +31,11 @@ export const paths = {
   // Old addresses that redirect into the Duplicates lane.
   authorsDedup: '/authors/dedup',
   booksDedup: '/books/dedup',
+  // One-time-token link pages: the token rides in the fragment (F4-08).
+  invite: '/invite',
+  tempLogin: '/login/temp',
+  // The retired query-string form of the temp-login link (deleted at the F4-08 flip).
+  legacyTempLogin: '/auth/temp-login',
 } as const;
 
 /** `path` plus `?query` when there is one. `query` has no leading `?`. */
@@ -71,6 +76,26 @@ export function dedupPath(query?: string): string {
 /** One collection's page. */
 export function collectionPath(id: string): string {
   return `${paths.collections}/${id}`;
+}
+
+/** An invite link as minted after the flip: the token in the fragment, never in the path or query. */
+export function inviteLinkPath(token: string): string {
+  return `${paths.invite}#token=${token}`;
+}
+
+/** The retired path-form invite link, `/invite/<token>`; it opens no invite. */
+export function legacyInviteLinkPath(token: string): string {
+  return `${paths.invite}/${token}`;
+}
+
+/** A temp-login link as minted after the flip: the token in the fragment. */
+export function tempLoginLinkPath(token: string): string {
+  return `${paths.tempLogin}#token=${token}`;
+}
+
+/** The retired query-string temp-login link, `/auth/temp-login?token=`; it signs nobody in. */
+export function legacyTempLoginLinkPath(token: string): string {
+  return `${paths.legacyTempLogin}?token=${token}`;
 }
 
 /** Escape `text` for use inside a RegExp source. */

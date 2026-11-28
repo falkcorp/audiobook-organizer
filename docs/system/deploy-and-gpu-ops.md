@@ -306,8 +306,13 @@ installs the `Type=simple` drop-in itself when `.prev` is older.
 ### `make rollback-restore`: when a binary swap is refused
 
 After a release that raised a store level (R2), `make rollback` refuses: the
-store is in a shape `.prev` cannot read. The rollback is then an offline
-restore plus the previous binary (05-storage §5S.3.12, 09 §9.2.1):
+store is in a shape `.prev` cannot read. Do not swap the binary by hand
+either: R0 (the HEAD-format release) refuses the store with "storage format N
+... is newer than this build supports (1); refusing to open" and exit 1, which
+`RestartPreventExitStatus=78` does not cover, so the unit restarts it in a
+loop that logs the refusal every cycle and writes nothing to the store. The
+rollback is an offline restore plus the previous binary (05-storage
+§5S.3.12, 09 §9.2.1):
 
 ```bash
 make rollback-restore                                  # the latest pre-upgrade checkpoint

@@ -228,6 +228,20 @@ func (b *Bridge) FromCorePrincipal(ctx context.Context) (context.Context, error)
 		// legacy record that disagrees with core's standing refuses too.
 		return ctx, fmt.Errorf("%w: legacy user record is not active", ErrUnauthenticated)
 	}
+	perms := b.AtomsSatisfied(c)
+	ctx = auth.WithUser(ctx, u)
+	ctx = auth.WithPermissions(ctx, perms)
+	return auth.WithMethod(ctx, method), nil
+}
+
+// AtomsSatisfied is every atom whose table route requirement c satisfies: the
+// permission set FromCorePrincipal binds for a principal with checker c. It
+// asks with Satisfies, so it audits nothing (a question about every atom, not
+// a refusal). A nil checker satisfies none.
+func (b *Bridge) AtomsSatisfied(c rbac.Checker) []auth.Permission {
+	if c == nil {
+		return nil
+	}
 	var perms []auth.Permission
 	for _, atom := range b.atoms.Atoms() {
 		r, err := b.resolve(atom, false)
@@ -235,9 +249,7 @@ func (b *Bridge) FromCorePrincipal(ctx context.Context) (context.Context, error)
 			perms = append(perms, atom)
 		}
 	}
-	ctx = auth.WithUser(ctx, u)
-	ctx = auth.WithPermissions(ctx, perms)
-	return auth.WithMethod(ctx, method), nil
+	return perms
 }
 
 // Check is the in-handler check of a legacy atom (05-http-api §8.3 in-handler

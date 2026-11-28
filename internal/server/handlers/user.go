@@ -9,6 +9,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -148,11 +149,30 @@ func generateToken() string {
 }
 
 // ListUsers handles GET /api/v1/users — returns all users (admin only).
+//
+// Under core identity the accounts are core's (after M3 books' store holds no
+// user row and this list would be empty): the list is core's every account,
+// _system included as HEAD's list included its system user, read through
+// Identity.Users as core's own GET /api/core/v1/users reads it. The route's
+// permission is already judged at stage 13 (users.manage), so an API key that
+// holds it is answered, as at HEAD. With no Users handle the route refuses; it
+// never falls back to books' store.
 func (h *UserHandler) ListUsers(c *gin.Context) {
-	users, err := h.store.ListUsers()
-	if err != nil {
-		httputil.InternalError(c, "failed to list users", err)
-		return
+	var users []database.User
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		got, err := listUsersUnderIdentity(c.Request.Context(), id)
+		if err != nil {
+			httputil.InternalError(c, "failed to list users", err)
+			return
+		}
+		users = got
+	} else {
+		got, err := h.store.ListUsers()
+		if err != nil {
+			httputil.InternalError(c, "failed to list users", err)
+			return
+		}
+		users = got
 	}
 	safe := make([]gin.H, 0, len(users))
 	for _, u := range users {
@@ -166,6 +186,27 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 		})
 	}
 	httputil.RespondWithOK(c, gin.H{"users": safe, "count": len(safe)})
+}
+
+// listUsersUnderIdentity is every account core holds, in core's order, as
+// HEAD's user record (legacyauth.LegacyUserFromCore, the mapping the store's
+// account list uses too, so the page and the store agree on every word). Any
+// read error fails the list: a list that silently left an account out would
+// read as that account being gone.
+func listUsersUnderIdentity(ctx context.Context, id *legacyauth.Identity) ([]database.User, error) {
+	if id.Users == nil {
+		return nil, errNoIdentityUsers
+	}
+	var out []database.User
+	for u, err := range id.Users.Users(ctx, coreauth.UserFilter{}) {
+		if err != nil {
+			return nil, err
+		}
+		if u != nil {
+			out = append(out, legacyauth.LegacyUserFromCore(u))
+		}
+	}
+	return out, nil
 }
 
 // CreateInvite handles POST /api/v1/users/invite — generates an invite token.

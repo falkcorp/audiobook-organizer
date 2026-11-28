@@ -15,8 +15,10 @@
 #                         and promtool checks and unit-tests the rules
 #                         (TestPromRules_Promtool), never skipped (R1-10)
 #   boot-crash-matrix-abo ABO's boot crash matrix (TestBootCrashMatrix_ABO)
-#                         and the R1 rollback check TestR0OpensR1Store, which
-#                         runs the R0 release binary (R1-23)
+#                         and its writer coverage check (R1-23), the
+#                         mid-M3 cells (TestMidM3_*, F4-08) and
+#                         TestR0RefusesPostFlipStore, which runs the R0
+#                         release binary over a store this build flipped
 #   production-shaped-store  the current build's boot on a store grown to the
 #                         owner's P1 counts and sizes (F2-14): the boot-time
 #                         measurement, boot_time.json uploaded as an artifact.
@@ -142,7 +144,7 @@ jobs:
               while IFS= read -r f; do
                 case "$f" in
                   deploy/*|cmd/*|main.go|internal/backup/*|internal/updater/*|internal/server/server_lifecycle*.go|internal/books/cutover/*|core/kernel/*|core/internal/restoreswap/*) run=true ;;
-                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/testdata/r2corpus/*|internal/books/cutover_suite_test.go|internal/books/testdata/shared_families.golden) run=true ;;
+                  .github/workflows/extraction-gates.yml|.github/workflows/nightly.yml|scripts/r2corpus/gen_production_shaped.py|scripts/r2corpus/shaped/*|scripts/ci/run_production_shaped_store.sh|scripts/tests/test_gen_production_shaped.py|internal/books/production_shaped_test.go|internal/books/shaped_generator_test.go|internal/books/testdata/r2corpus/*|internal/books/cutover_suite_test.go|internal/books/testdata/shared_families.golden) run=true ;;
                 esac
               done <<<"$files"
             else
@@ -332,14 +334,19 @@ jobs:
           grep -q -- '--- PASS: TestPromRules_Promtool' <<<"$out"
 
   # R1-23 (05-storage §5S.10; 09 §9.4 R1 Verification, §9.10): ABO's boot
-  # crash matrix over books' storage boot, and TestR0OpensR1Store, which runs
-  # the R0 release binary over a store R1 wrote. Both skip under -short, so
+  # crash matrix over books' storage boot, and TestR0RefusesPostFlipStore,
+  # which runs the R0 release binary over a store this build flipped and
+  # requires R0 to refuse it, writing nothing (a binary-swap rollback is void
+  # after the flip: 05-storage D-S9). Both skip under -short, so
   # this job is where every PR runs them; it fails unless each test's PASS
   # line appears (a renamed test would make -run match nothing). The R0
   # archive is downloaded (scripts/ci/fetch_r0.sh) from the R0 release and checked against the
   # checksum pinned in internal/books/r0store_test.go; it is cached here under
   # that checksum, so a GitHub release-CDN outage (2026-11-08, see
   # dashboard-reference) costs only the first run after a cache eviction.
+  # F4-08's mid-M3 cells (TestMidM3_*, internal/books/midm3_test.go) run here
+  # too: M3 killed between its chunks and failed between its families, the
+  # older build's refusal, this build's resume and the half store never served.
   boot-crash-matrix-abo:
     name: boot-crash-matrix-abo
     needs: changes
@@ -403,7 +410,7 @@ jobs:
       - name: Boot crash matrix and R0 rollback (must not skip)
         run: |
           set -euo pipefail
-          tests='TestBootCrashMatrix_ABO TestBootCrashMatrix_ABOCoversEveryWriter TestR0OpensR1Store'
+          tests='TestBootCrashMatrix_ABO TestBootCrashMatrix_ABOCoversEveryWriter TestR0RefusesPostFlipStore TestMidM3_KillLeavesEachRecordInOnePlace TestMidM3_OlderBuildRefusesBeforeAnyWrite TestMidM3_ThisBuildResumesEveryRecordOnce TestMidM3_HalfStoreIsNeverServed'
           out="$(go test ./internal/books/ -run "^($(tr ' ' '|' <<<"$tests"))\$" -count=1 -v -timeout 25m 2>&1)" || { echo "$out"; exit 1; }
           grep -E -- '^(=== RUN|--- |PASS|FAIL|ok)|run\.go:[0-9]+: crashmatrix:' <<<"$out" || true
           for test in $tests; do

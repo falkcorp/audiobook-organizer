@@ -7,41 +7,34 @@ package books
 
 import (
 	"archive/tar"
-	"bufio"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
-	"github.com/falkcorp/mediacore/module"
+	"github.com/falkcorp/mediacore/app"
 )
 
 // r0Tag is release R0, the production release OWNER-02 cut and kept
 // (docs/plans/platform-core/STATE.md, W03's OWNER-02 row). R1's rollback is
-// to this binary. R3-02 deletes this test with the HEAD-format readers.
+// to this binary until the flip; after it, R0 must refuse the store
+// (TestR0RefusesPostFlipStore).
 const r0Tag = "v0.223.0"
-
-// r0LastMigration is the highest migration version R0's binary carries
-// (internal/books/store/migrations.go at r0Tag). R0's RunMigrations applies
-// only migrations above the stored db_version, so a store R1 left at a
-// higher version opens on R0 with nothing pending.
-const r0LastMigration = 66
 
 // r0ArchiveSHA256 pins each R0 release archive to the checksum the release's
 // checksums.txt lists, so a moved or re-uploaded asset fails the test instead
@@ -209,118 +202,115 @@ func extractTarEntry(t *testing.T, archive, name, dst string) {
 	}
 }
 
+// r0StorageFormat is the storage format R0 reads and writes
+// (internal/database/storage_format.go at r0Tag: SupportedStorageFormat). R0's
+// guarded open refuses a store whose stamp or sidecar names a higher one.
+const r0StorageFormat = 1
+
+// r0RefusalExit is R0's exit status when a command returns an error, a refused
+// store open included: main prints the error to stderr and returns 1
+// (main.go at r0Tag). R0 has no exit-78 path; 78 (kernel.ExitConfig) is what
+// this tree's own pre-flip build answers, which TestCutoverRefusedByOlderBuilds
+// pins.
+const r0RefusalExit = 1
+
+// r0Refusal is the error R0's guarded open returns for a store newer than it
+// (StorageFormatTooNewError at r0Tag), from the stamp row or the sidecar.
+var r0Refusal = regexp.MustCompile(`storage format (\d+) \((stamp|sidecar)\) in \S+audiobooks\.pebble is newer than this build supports \(1\); refusing to open`)
+
 // runR0 runs the R0 binary with args against nothing of this machine's own:
 // HOME, the state directory and the working directory are temp dirs, so R0
-// reads no config file but the flags.
-func runR0(t *testing.T, bin string, args ...string) string {
+// reads no config file but the flags. It returns R0's combined output and exit
+// status, and fails the test if R0 is still running at the deadline: a build
+// that serves where it should refuse.
+func runR0(t *testing.T, bin string, deadline time.Duration, args ...string) (string, int) {
 	t.Helper()
 	home := t.TempDir()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), deadline)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = home
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "TMPDIR=" + os.TempDir(), "ABK_STATE_DIR=" + filepath.Join(home, "state")}
 	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "R0 %v failed:\n%s", args, out)
-	return string(out)
-}
-
-// r0RawRows parses R0's `diagnostics query --raw` output: each key with its
-// value's length.
-func r0RawRows(t *testing.T, out string) map[string]int {
-	t.Helper()
-	rows := map[string]int{}
-	var key string
-	sc := bufio.NewScanner(strings.NewReader(out))
-	sc.Buffer(make([]byte, 1<<20), 1<<24)
-	for sc.Scan() {
-		line := sc.Text()
-		if k, ok := strings.CutPrefix(line, "Key: "); ok {
-			key = k
-			continue
-		}
-		if n, ok := strings.CutPrefix(line, "Value length: "); ok && key != "" {
-			v, err := strconv.Atoi(strings.TrimSuffix(n, " bytes"))
-			require.NoError(t, err, "R0 output line %q", line)
-			rows[key] = v
-			key = ""
-		}
+	require.NoError(t, ctx.Err(), "R0 %v was still running after %s: it did not refuse the store\n%s", args, deadline, out)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return string(out), exit.ExitCode()
 	}
-	require.NoError(t, sc.Err())
-	return rows
+	require.NoError(t, err, "R0 %v did not run:\n%s", args, out)
+	return string(out), 0
 }
 
-// TestR0OpensR1Store (05-storage; 09 §9.10, §9.4 R1 Rollback): the R0
-// release binary opens a store release R1 wrote and reads every row. The
-// store is a HEAD store upgraded by ABO's R1 boot (the first-boot
-// checkpoint, core's rows, books' R1 migrations, the settings load's
-// writes, the boot repairs) with a book R1 wrote while serving. R0 reads
-// every key and value through Pebble, opens the store through its own
-// guarded open and lists every book, and after that open every row R1
-// left is still there: `make rollback` to R0 loses nothing.
+// TestR0RefusesPostFlipStore (05-storage D-S9, 5S.3.7; 09 §9.10): after the
+// flip, the R0 release binary, swapped in over a store this build has
+// migrated, refuses it: `audiobook-organizer serve` exits with R0's error
+// status, names the reason (the store's storage format is newer than R0
+// supports), and leaves every row and every file beside the store as the flip
+// left them. The flip's level step raises books' level, which projects the
+// legacy storage-format stamp and sidecar R0 reads to legacyMaxFormat+1. R0
+// opening a store this build wrote was R1's rollback promise, void after the
+// flip by design: the rollback is the pre-upgrade checkpoint plus the old
+// binary (`make rollback-restore`), and a binary swap is refused. This cell is
+// that refusal proved with R0's own binary, so the answer to "a refusal or a
+// damaged store?" is measured, not assumed.
 //
-// R1 is the build that predates the flip (preFlip): this tree's composed boot
-// declares F3's cutover whenever a database is named, and the cutover's level
-// step raises books and core so that R0 refuses the store (09 §9.2.2, row M7).
-// That refusal is TestCutoverRefusedByOlderBuilds'; this test keeps R1's own
-// rollback promise, which holds until R3 deletes it.
+// Pebble's own files (tables, manifest, WAL, OPTIONS, LOCK) are not required
+// byte-identical: R0's guarded open is pebble.Open first and the stamp check
+// after it (openPebbleChecked at r0Tag), and pebble.Open may rewrite its own
+// files without changing a row. Every row is compared through rawKVs, every
+// other file under the store's directory through dirImage, and the Pebble files
+// that did change are logged. R0 is run twice (a unit restarting it after the
+// refusal), and this build then boots the store R0 refused: a refusal, not a
+// damaged store.
 //
 // It needs the R0 binary: downloaded from the R0 release (network), or
 // $AORG_TEST_R0_BINARY. Not run under -short.
-func TestR0OpensR1Store(t *testing.T) {
+func TestR0RefusesPostFlipStore(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the R0 release binary; not under -short")
 	}
 	bin := r0Binary(t)
 
-	path := filepath.Join(tempDir(t), "gotham.pebble")
-	seed := headStoreAt(t, path, nil)
-	edit, disk := onDisk(path)
-	r := runComposedWith(t, edit, nil, disk, nil, func(m module.Module) module.Module { return preFlip{m} })
-	served, err := r.store.CreateBook(&database.Book{Title: "The Long Halloween", FilePath: filepath.Join(filepath.Dir(path), "library", "The Long Halloween.m4b")})
+	work := copyCorpus(t, r0Corpus(t))
+	require.NoError(t, flipBootOn(t, work, false), "this build's flipped boot over the R0 corpus")
+	flipLevel := flipOn().Manifest().Storage.Level
+	require.Equal(t, itoa(flipLevel), levelsAt(t, work)["books"], "the flip did not raise books' level: the store is not post-flip and the cell proves nothing")
+	require.True(t, r2StoreDone(t, storeDB(work), "books.identity-cutover")["books.identity-cutover"],
+		"the flip did not record M3: the store's accounts are not core's and the cell proves nothing")
+	sidecar, err := os.ReadFile(storeDB(work) + database.StorageFormatSidecarSuffix)
 	require.NoError(t, err)
-	require.NoError(t, r.stop())
+	require.Greater(t, atoi(t, strings.TrimSpace(string(sidecar))), r0StorageFormat,
+		"the flipped store's storage-format sidecar is not above R0's format: R0 would open it")
 
-	r1 := rawKVs(t, path)
-	require.NotEmpty(t, keysWithPrefix(r1, "c/"), "the R1 boot wrote no core row: the test proves nothing")
-	want := map[string]int{}
-	for k, v := range r1 {
-		want[k] = len(v)
+	beforeRows, beforeFiles, beforePebble := rawKVs(t, storeDB(work)), dirImage(t, work), pebbleFileSums(t, storeDB(work))
+	for run := 1; run <= 2; run++ {
+		out, code := runR0(t, bin, 2*time.Minute, "serve", "--db", storeDB(work), "--dir", work, "--host", "127.0.0.1", "--port", "0")
+		t.Logf("R0 serve, run %d, exited %d:\n%s", run, code, out)
+		require.Equal(t, r0RefusalExit, code, "run %d: R0 did not refuse the post-flip store with its error status", run)
+		m := r0Refusal.FindStringSubmatch(out)
+		require.NotNil(t, m, "run %d: R0's output does not name the refusal (a store newer than R0 supports)", run)
+		require.Greater(t, atoi(t, m[1]), r0StorageFormat, "run %d: R0 refused for a format it supports: %s", run, m[0])
+		require.Equal(t, beforeRows, rawKVs(t, storeDB(work)), "run %d: R0's refused open changed the store's rows", run)
+		require.Empty(t, imageDiff(beforeFiles, dirImage(t, work)), "run %d: R0's refused open wrote files beside the store", run)
 	}
+	t.Logf("Pebble files R0's refused opens changed (rows unchanged): %v", imageDiff(beforePebble, pebbleFileSums(t, storeDB(work))))
 
-	raw := runR0(t, bin, "diagnostics", "query", "--raw", "--prefix=", "--limit", strconv.Itoa(len(r1)+1000), "--db", path)
-	assert.Equal(t, want, r0RawRows(t, raw), "R0 does not read the rows R1 left")
+	// This build still serves the store R0 refused.
+	require.NoError(t, bootAt(t, work, func(o *app.Options) { o.Env = bootEnv(absEnv()...) }),
+		"this build does not boot the store R0 refused")
+}
 
-	listed := runR0(t, bin, "diagnostics", "query", "--limit", "1000", "--db", path)
-	for _, id := range []string{seed.bookID, served.ID} {
-		assert.Contains(t, listed, "ID: "+id, "R0's store open does not list book %s", id)
-	}
-
-	after := rawKVs(t, path)
-	for k := range r1 {
-		_, ok := after[k]
-		assert.True(t, ok, "R0's open lost row %q", k)
-	}
-
-	// R1 left db_version above R0's last migration; R0's migration runner
-	// finds nothing pending and must leave the row and the applied-migration
-	// records exactly as R1 wrote them, not rewind or re-run anything.
-	const dbVersionKey = "preference:db_version"
-	require.Contains(t, r1, dbVersionKey, "R1 left no db_version row: the asserts below prove nothing")
-	var dv database.UserPreference
-	require.NoError(t, json.Unmarshal([]byte(r1[dbVersionKey]), &dv))
-	require.NotNil(t, dv.Value)
-	var version database.DatabaseVersion
-	require.NoError(t, json.Unmarshal([]byte(*dv.Value), &version))
-	assert.Greater(t, version.Version, r0LastMigration, "R1's db_version is not past R0's last migration: R0's tolerance of a newer store is not exercised")
-	assert.Equal(t, r1[dbVersionKey], after[dbVersionKey], "R0's open changed db_version")
-	// Every applied-migration record after R0's open is one R1 left, with
-	// R1's value: R0 neither wrote a new one nor rewrote one (the loop over
-	// r1 above already proved none was lost).
-	for _, k := range keysWithPrefix(after, "preference:migration_") {
-		v, ok := r1[k]
-		if assert.True(t, ok, "R0's open wrote migration record %q", k) {
-			assert.Equal(t, v, after[k], "R0's open rewrote migration record %q", k)
+// pebbleFileSums is the SHA-256 of every file in the Pebble directory at path,
+// by name.
+func pebbleFileSums(t *testing.T, path string) map[string]string {
+	t.Helper()
+	entries, err := os.ReadDir(path)
+	require.NoError(t, err)
+	out := map[string]string{}
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			out[e.Name()] = sha256File(t, filepath.Join(path, e.Name()))
 		}
 	}
+	return out
 }

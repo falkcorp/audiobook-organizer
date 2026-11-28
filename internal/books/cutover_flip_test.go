@@ -107,9 +107,17 @@ func TestManifest_FlipDeclaresM2M7M8(t *testing.T) {
 		!slices.Contains(data[0].After, cutover.BooksLevelStepRef(booksLevelStepVersion)) {
 		t.Errorf("Manifest.Cutover[0] = %+v, want M2 behind %s", data[0], cutover.BooksCutoverLevelStepID)
 	}
+	// M3-RETIREMENT-GUARD (todo.d/2026-11-28-m3-retirement-guard.md): if you
+	// are editing this to retire M3, stop. Removing books.identity-cutover from
+	// the manifest needs, first, the kernel's identity boot (P4d/P5) refusing,
+	// before any write, a store not yet at the identity level, pinned by a
+	// killed-before-M3 cell. Today the P2 DAG check is the only guard, and a
+	// manifest without M3 seeds core's _system over HEAD's, blocking the next
+	// correct boot (TestMidM3_HalfStoreIsNeverServed, lost-m3-attach-refused).
 	if data[1].ID != cutover.IdentityCutoverID || data[1].Owner != cutover.BooksOwner ||
 		!slices.Contains(data[1].After, cutover.BooksLevelStepRef(booksLevelStepVersion+1)) || !slices.Contains(data[1].After, m2Ref) {
-		t.Errorf("Manifest.Cutover[1] = %+v, want M3 behind %s and M2", data[1], cutover.BooksIdentityLevelStepID)
+		t.Errorf("Manifest.Cutover[1] = %+v, want M3 behind %s and M2. M3-RETIREMENT-GUARD: retiring M3 first needs P4d/P5 to refuse, "+
+			"before any write, a store not yet at the identity level, pinned by a killed-before-M3 cell", data[1], cutover.BooksIdentityLevelStepID)
 	}
 	if man.Rewrite == nil || man.Rewrite.ID != cutover.RewriteID || man.Rewrite.Owner != cutover.BooksOwner ||
 		!slices.Contains(man.Rewrite.After, m2Ref) ||

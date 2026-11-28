@@ -37,6 +37,8 @@ import (
 type fx struct {
 	t  testing.TB
 	st *authstore.Store
+	// authKS is the auth store's keyspace, for a test that plants a raw row.
+	authKS storage.Keyspace
 	// holders is rbac's role-holder view over st; a test sets afterRead to
 	// run a write between a role edit's holder read and its commit.
 	holders *holders
@@ -150,6 +152,7 @@ func newFxOwners(t testing.TB, wrap func(rbac.Store) rbac.Store, extra ...storag
 		hasher: password.New(password.Options{Time: 1, MemoryKiB: 64, BcryptCost: bcrypt.MinCost})}
 	aks, _ := db.Keyspace(authstore.Owner)
 	rks, _ := db.Keyspace(rbacstore.Owner)
+	f.authKS = aks
 	if f.st, err = authstore.New(aks, authstore.Options{Now: f.clock}); err != nil {
 		t.Fatal(err)
 	}

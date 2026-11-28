@@ -541,7 +541,11 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15, as a stopgap (2026-11-28): the vitest suite took 8-15 minutes on
+    # hosted runners that day and was cancelled at 15 with every file passing. The
+    # fix is todo FRONTEND-VITEST-SHARDS (2 shards plus an aggregator under this
+    # name); that change puts this back to 15.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
@@ -1500,7 +1504,7 @@ jobs:
           path: ~/apt-debs-fixture-system-deps
           key: apt-debs-fixture-system-deps-${{ hashFiles('scripts/ci/apt_cached_install.sh', 'scripts/ci/apt_install.sh', 'scripts/ci/apt_watchdog.py') }}-${{ steps.aptkey.outputs.suffix }}-${{ steps.aptkey.outputs.image }}
 
-      # internal/books' TestR0OpensR1Store runs the R0 release binary. Restore
+      # internal/books' TestR0RefusesPostFlipStore runs the R0 release binary. Restore
       # its archive from cache and fetch it here (gh, retrying, checksum
       # pinned) so the test never downloads in CI: a runner proxy 504 failed it
       # on every in-test retry. Keep the key in step with r0store_test.go.

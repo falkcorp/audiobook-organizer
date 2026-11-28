@@ -6,10 +6,13 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"github.com/falkcorp/audiobook-organizer/internal/books"
 	"os"
 
+	"github.com/falkcorp/audiobook-organizer/internal/books/cutover"
 	database "github.com/falkcorp/audiobook-organizer/internal/books/store"
 	"github.com/falkcorp/audiobook-organizer/internal/config"
 	"github.com/falkcorp/audiobook-organizer/internal/operations/registry"
@@ -29,6 +32,37 @@ import (
 // TestRunOperationRunner_ResolvesTheStateDirectory). A var so a test can stub
 // it.
 var initializeChildStore = database.InitializeStoreWith
+
+// errChildOverIdentityStore is the child's refusal to run over a store whose
+// identity cutover (M3) is done. Under core identity the parent builds its
+// server with server.WithIdentity over handles only core's boot makes (its auth
+// service, its identity view, the bridge); the child is a fresh process that
+// opens the store standalone and has none of them. Its server would run HEAD's
+// own gates, including the user-count first-run bypass, over a store whose user,
+// role, session and API-key rows are drained (empty), so every one of those
+// gates would read "no accounts yet" and open. It refuses instead.
+var errChildOverIdentityStore = errors.New("child mode: this store's identity cutover is done, so its accounts, " +
+	"roles, sessions and API keys are core's, and an operation child cannot be given core's identity; refusing to " +
+	"run it under books' own authentication gates, which read the drained user tables as an install with no " +
+	"accounts. Run the operation in the serving process (Isolate: false)")
+
+// refuseChildOverIdentityStore fails closed: a store whose identity cutover is
+// done, one that cannot say, and a read that fails all refuse. Only a store the
+// cutover has not run on (HEAD's own tables hold the accounts) proceeds, which
+// is the one store HEAD's gates are correct for.
+func refuseChildOverIdentityStore(ctx context.Context, store database.MigrationReader) error {
+	if store == nil {
+		return errors.New("child mode: the store cannot report whether its identity cutover is done; refusing to run")
+	}
+	done, err := store.DataMigrationDone(ctx, cutover.IdentityCutoverID)
+	if err != nil {
+		return fmt.Errorf("child mode: read the identity cutover's state: %w", err)
+	}
+	if done {
+		return errChildOverIdentityStore
+	}
+	return nil
+}
 
 // init registers the parent-side environment provider for
 // registry.runSubprocess. When the parent re-execs the binary as a child,
@@ -99,8 +133,19 @@ func RunOperationRunner() {
 		os.Exit(2)
 	}
 	snap := config.Snapshot()
+	// The identity cutover is checked as the store opens, before the opener's
+	// opv3 reconcile writes to it and before it becomes the global store: see
+	// errChildOverIdentityStore. newServer below is built without
+	// server.WithIdentity, so this refusal (database.StandaloneOptions.Admit) is
+	// what keeps it off a migrated store. A refusal comes back as the opener's
+	// error, which closes the store.
 	store, err := initializeChildStore(snap.DatabaseType, dbPath,
-		books.StandaloneOptions(database.StandaloneOptions{StateDir: stateDir}))
+		books.StandaloneOptions(database.StandaloneOptions{
+			StateDir: stateDir,
+			Admit: func(s database.MigrationReader) error {
+				return refuseChildOverIdentityStore(context.Background(), s)
+			},
+		}))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "child mode: initializeChildStore: %v\n", err)
 		os.Exit(2)

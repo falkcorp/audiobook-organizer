@@ -168,6 +168,10 @@ type PebbleStore struct {
 	memPtr atomic.Pointer[MemStore]
 	// changeObs is the search-cache change observer (change_observer.go).
 	changeObs atomic.Pointer[changeObserverBox]
+	// users is where ListUsers and ListUsersStrict read the accounts from once
+	// they live outside this store (user_directory.go): core's directory under
+	// core identity, after M3 has drained u:.
+	users userDirectorySeam
 	// deepCoverageBusy admits one deep signal-coverage scan at a time; see
 	// GetBookFileSignalCoverage.
 	deepCoverageBusy atomic.Bool

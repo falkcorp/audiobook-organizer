@@ -1,9 +1,8 @@
 {
   "command": "go test -count=1 -tags regen_r2fixture -run TestRegenerateR2Fixture ./internal/books/",
   "build_dir": "/tmp/r2store-generator",
-  "books_version": 69,
+  "books_version": 70,
   "topped_up": [
-    "books.identity-cutover",
     "books.tasks-cutover",
     "books.log-cutover",
     "books.integrations-cutover"
@@ -15,19 +14,19 @@
     },
     {
       "path": "db/audiobooks.pebble.storage-levels",
-      "sha256": "a375dea80fd410e925da836240cf89ca64866d187581d7f41a6d3f842a439ae6"
+      "sha256": "5fdf9eb3c462a63fc96c465788cbfcdc0237de93462f55d58d8b7d11bfcac0e0"
     },
     {
       "path": "db/audiobooks.pebble/000016.sst",
-      "sha256": "5db01c6e0bb14a30ff69867721b5347ae8960d11c060bd8c706fd1c23865a2f8"
+      "sha256": "6c39da872352d702493c97cb00c94d88d535dcc484e592fe7248ca83d6324480"
     },
     {
       "path": "db/audiobooks.pebble/000018.sst",
-      "sha256": "5f15aded329482b868d9155b29d8f070a952a1cf4c3d73d2908ed3e6accb2cee"
+      "sha256": "050d2003a4a2584ff75ec2de5013df14b0262a08474cacdc3734158b015c9d1e"
     },
     {
       "path": "db/audiobooks.pebble/000020.log",
-      "sha256": "1a6cbebc1b6aa601b4d8c12ee7ef19a7f6e35054f76d65fddb69b03956c0bef2"
+      "sha256": "9c4bd75941c8943617460b4114042bd6a650d553398736069138847289317a8e"
     },
     {
       "path": "db/audiobooks.pebble/LOCK",
@@ -35,11 +34,11 @@
     },
     {
       "path": "db/audiobooks.pebble/MANIFEST-000013",
-      "sha256": "d42f985d9458a223b08c5dec9c91b6038bf826952818a0b100965a9788ba21ad"
+      "sha256": "80aacaed356942aeb01393e71085577dbc85d80b6b974790a6c59038eb083fca"
     },
     {
       "path": "db/audiobooks.pebble/MANIFEST-000019",
-      "sha256": "b3f50915f117e8599cc61bbe4c9e2e89e56329fa498c5f45637364edb92b041c"
+      "sha256": "5ef47f6227a2f0a4ec7a7a1dafc008d2778e577b76527c098884933c4536cd9a"
     },
     {
       "path": "db/audiobooks.pebble/OPTIONS-000021",
@@ -83,7 +82,7 @@
     },
     {
       "path": "state/secrets.keyring",
-      "sha256": "f8ace8732dc9d829bf2ee056b487fd13ceab1b86c08c2e33262d786d206efb6d"
+      "sha256": "06395c3a48d266155f123791f93bedbfcfd6a4efc4f594d8ee8a819214919398"
     }
   ]
 }

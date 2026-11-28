@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,14 +121,31 @@ func TestLiveRestoreStagesAndExits75(t *testing.T) {
 	assert.NotContains(t, steps, "rejected", "journal %v", steps)
 }
 
-// liveRestoreChild serves ABO over the parent's store, posts the restore,
-// records the answer and waits for the kernel's restart to exit the
-// process. Returning, or a failure, means no restart came.
+// liveRestoreChild serves ABO over the parent's store with sign-in required,
+// signs in as the first administrator (core's bootstrap token, then core's
+// login), posts the restore in that session, records the answer and waits for
+// the kernel's restart to exit the process. Returning, or a failure, means no
+// restart came. A restore is core:backup.restore, which only a signed-in
+// session holds: an anonymous post is refused before the restore is staged.
 func liveRestoreChild(t *testing.T, a liveRestoreArgs) {
-	edit := func(c *config.Config) { c.DatabasePath, c.RootDir = a.Path, a.Root }
+	edit := func(c *config.Config) {
+		c.DatabasePath, c.RootDir = a.Path, a.Root
+		c.EnableAuth = true
+	}
 	disk := func(o *app.Options) { o.StorageFS = storage.FS{} }
+	// The parent's offline boot left auth off by naming it in the environment
+	// (composedOptions), which the child inherits: name it on here, as an
+	// operator turning sign-in on does.
+	t.Setenv("ABO_CORE_AUTH_MODE", "required")
 	r := runComposedIn(t, a.State, edit, nil, disk, nil)
-	w := r.serve(http.MethodPost, "/api/v1/backup/restore", []byte(fmt.Sprintf(`{"backup_filename":%q,"verify":true}`, a.File)))
+	user, pass := redeemBootstrap(t, r.composed)
+	admin := loginCoreAdmin(t, r, user, pass)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/backup/restore", strings.NewReader(fmt.Sprintf(`{"backup_filename":%q,"verify":true}`, a.File)))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.10:41000"
+	req.AddCookie(admin.cookie)
+	w := httptest.NewRecorder()
+	r.app.Handler().ServeHTTP(w, req)
 	var resp struct {
 		Data struct {
 			RestartRequired bool   `json:"restart_required"`

@@ -4,7 +4,7 @@
 # guid: 2f6b8d41-9c3a-4e75-a1d0-7b4e5c8a3f92
 # last-edited: 2026-11-09
 #
-# Put the R0 release binary where internal/books' TestR0OpensR1Store finds it,
+# Put the R0 release binary where internal/books' TestR0RefusesPostFlipStore finds it,
 # without that test touching the network. The archive is restored from
 # actions/cache (the calling job's step), else fetched here with `gh release
 # download` (GITHUB_TOKEN, bounded retry), checked against the SHA-256 pinned

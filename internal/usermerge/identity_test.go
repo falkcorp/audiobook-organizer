@@ -507,10 +507,10 @@ func TestMergeIdentityPlan_EveryCoreRefusalIsAPlanRefusalWithItsCode(t *testing.
 func TestMergeIdentity_TooLargeAnswersBeforeAnythingIsStagedOrWritten(t *testing.T) {
 	f := newIDFixture(t)
 	p := f.plan()
-	if MergeBatchCap != 64<<20 {
+	if MergeBatchCap != 256<<20 {
 		t.Fatalf("MergeBatchCap = %d", MergeBatchCap)
 	}
-	f.svc.batchCap = 1 // lowered through the test hook: no 64 MiB fixture
+	f.svc.batchCap = 1 // lowered through the test hook: no 256 MiB fixture
 	before := f.snapshot()
 	if _, err := f.svc.BuildPlan(f.ctx(), f.planReq()); !errors.Is(err, ErrMergeTooLarge) {
 		t.Errorf("BuildPlan = %v, want ErrMergeTooLarge", err)
@@ -521,6 +521,28 @@ func TestMergeIdentity_TooLargeAnswersBeforeAnythingIsStagedOrWritten(t *testing
 	f.unchanged(before)
 	if f.core.staged.Load() != 0 || f.core.after.Load() != 0 || len(f.journalRows()) != 0 {
 		t.Errorf("staged %d, after %d, journals %d for a merge over the cap", f.core.staged.Load(), f.core.after.Load(), len(f.journalRows()))
+	}
+}
+
+// A merge estimated under MergeBatchCap whose batch the store still refuses at
+// commit (the cap is an estimate and equals storage's 256 MiB batch limit)
+// answers the same ErrMergeTooLarge (409 merge_too_large), not a raw storage
+// error. The commit is atomic: nothing was written.
+func TestMergeIdentityApply_CommitTimeBatchTooLargeIsMergeTooLarge(t *testing.T) {
+	f := newIDFixture(t)
+	p := f.plan()
+	real := f.svc.idMerger
+	f.svc.idMerger = decorated{IdentityUserMerger: real, apply: func([]database.UserMergeOp, string, []byte, func(*storage.Batch) error) error {
+		return fmt.Errorf("storage: batch of %d bytes (limit %d): %w", 300<<20, 256<<20, storage.ErrBatchTooLarge)
+	}}
+	before := f.snapshot()
+	_, err := f.svc.Apply(context.Background(), f.applyReq(p), nil)
+	if !errors.Is(err, ErrMergeTooLarge) || !errors.Is(err, storage.ErrBatchTooLarge) {
+		t.Fatalf("Apply = %v, want ErrMergeTooLarge wrapping storage.ErrBatchTooLarge", err)
+	}
+	f.unchanged(before)
+	if f.core.after.Load() != 0 || len(f.journalRows()) != 0 {
+		t.Errorf("after %d, journals %d for a batch the store refused", f.core.after.Load(), len(f.journalRows()))
 	}
 }
 

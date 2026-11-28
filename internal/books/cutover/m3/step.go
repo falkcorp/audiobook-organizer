@@ -91,12 +91,12 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 		if err := m.carryInviteAccept(w, key, kv.Value); err != nil {
 			return err
 		}
-		w.Count(OutcomeDeleted)
+		m.sourceRow(w, OutcomeDeleted)
 		return w.Delete(kv.Key)
 	case strings.HasPrefix(key, prefixSession), key == bootstrapHashKey, key == bootstrapExpiresKey:
 		// Deleted by rule (ownership table rows 6 and 8): a web user signs in once,
 		// and core auth mints its own bootstrap token.
-		w.Count(OutcomeDeleted)
+		m.sourceRow(w, OutcomeDeleted)
 		return w.Delete(kv.Key)
 	case strings.HasPrefix(key, prefixUser), strings.HasPrefix(key, prefixRole):
 		// begin pulled every one of them into this chunk, with its delete
@@ -111,7 +111,7 @@ func (m *Migration) Step(ctx context.Context, kv storage.KV, w *datamigrate.Step
 	}
 	for _, p := range []string{idxUser, idxRoleName, idxKey, idxInvite, idxOAuth, idxSessByUser} {
 		if strings.HasPrefix(key, p) {
-			w.Count(OutcomeIndex)
+			m.sourceRow(w, OutcomeIndex)
 			return w.Delete(kv.Key)
 		}
 	}
@@ -144,6 +144,27 @@ func (m *Migration) begin(ctx context.Context, w *datamigrate.StepWriter) error 
 		return err
 	}
 	m.chunk = w
+	return nil
+}
+
+// sourceRow counts one Source row this boot handled, with the outcome it
+// counts beside the runner's metric: read always, imported when it was.
+func (m *Migration) sourceRow(w *datamigrate.StepWriter, outcome string) {
+	m.read.Add(1)
+	if outcome == OutcomeImported {
+		m.imported.Add(1)
+	}
+	w.Count(outcome)
+}
+
+// quarantine quarantines one Source row (roles and the invite allow-list are
+// quarantine-and-continue) and counts it read and quarantined.
+func (m *Migration) quarantine(w *datamigrate.StepWriter, key, raw []byte, reason string) error {
+	if err := w.Quarantine(key, raw, reason); err != nil {
+		return err
+	}
+	m.read.Add(1)
+	m.quarantined.Add(1)
 	return nil
 }
 
@@ -217,7 +238,7 @@ func (m *Migration) pullRoles(ctx context.Context, w *datamigrate.StepWriter) (m
 		h, derr := decodeRole(key, kv.Value)
 		if derr != nil {
 			m.log.Warn("m3: a role row does not decode and is quarantined", "step", m.cfg.StepID, "key", key, "reason", derr.Error())
-			if err := w.Quarantine(kv.Key, kv.Value, "the role row does not decode: "+derr.Error()); err != nil {
+			if err := m.quarantine(w, kv.Key, kv.Value, "the role row does not decode: "+derr.Error()); err != nil {
 				return nil, err
 			}
 			continue
@@ -229,13 +250,13 @@ func (m *Migration) pullRoles(ctx context.Context, w *datamigrate.StepWriter) (m
 		}
 		switch v.kind {
 		case verdictSeed:
-			w.Count(OutcomeDeleted)
+			m.sourceRow(w, OutcomeDeleted)
 			if err := w.Delete(kv.Key); err != nil {
 				return nil, err
 			}
 		case verdictQuarantine:
 			m.log.Warn("m3: a role is quarantined", "step", m.cfg.StepID, "role", h.ID, "reason", v.reason)
-			if err := w.Quarantine(kv.Key, kv.Value, v.reason); err != nil {
+			if err := m.quarantine(w, kv.Key, kv.Value, v.reason); err != nil {
 				return nil, err
 			}
 		default:
@@ -243,7 +264,7 @@ func (m *Migration) pullRoles(ctx context.Context, w *datamigrate.StepWriter) (m
 			case errors.Is(err, rbac.ErrImportRejected):
 				v = roleVerdict{kind: verdictQuarantine, name: v.name, reason: "rbac refuses the role"}
 				m.log.Warn("m3: a role is quarantined", "step", m.cfg.StepID, "role", h.ID, "reason", v.reason)
-				if err := w.Quarantine(kv.Key, kv.Value, v.reason); err != nil {
+				if err := m.quarantine(w, kv.Key, kv.Value, v.reason); err != nil {
 					return nil, err
 				}
 			case err != nil:
@@ -253,7 +274,7 @@ func (m *Migration) pullRoles(ctx context.Context, w *datamigrate.StepWriter) (m
 					return nil, err
 				}
 				m.chunkRoles[v.name] = v.perms
-				w.Count(OutcomeImported)
+				m.sourceRow(w, OutcomeImported)
 				if err := w.Delete(kv.Key); err != nil {
 					return nil, err
 				}
@@ -342,7 +363,7 @@ func (m *Migration) pullUsers(ctx context.Context, w *datamigrate.StepWriter, ou
 		if err := w.Delete([]byte(key)); err != nil {
 			return err
 		}
-		w.Count(OutcomeImported)
+		m.sourceRow(w, OutcomeImported)
 		m.chunkUsers[u.ID] = roles
 		m.chunkNames[fold] = h.ID
 		if reported != "" {
@@ -479,7 +500,7 @@ func (m *Migration) importKey(ctx context.Context, kv storage.KV, w *datamigrate
 	if err := w.Delete(kv.Key); err != nil {
 		return err
 	}
-	w.Count(OutcomeImported)
+	m.sourceRow(w, OutcomeImported)
 	m.reportKey(w, h.ID, notes)
 	return nil
 }
@@ -533,7 +554,7 @@ func (m *Migration) importIdentity(ctx context.Context, kv storage.KV, w *datami
 	if err := w.Delete(kv.Key); err != nil {
 		return err
 	}
-	w.Count(OutcomeImported)
+	m.sourceRow(w, OutcomeImported)
 	return nil
 }
 
@@ -545,13 +566,13 @@ func (m *Migration) stepInviteAllow(ctx context.Context, kv storage.KV, w *datam
 	grant, derr := decodeInviteGrant(kv.Value)
 	if derr != nil {
 		m.log.Warn("m3: an invite allow-list row does not decode and is quarantined", "step", m.cfg.StepID, "reason", derr.Error())
-		return w.Quarantine(kv.Key, kv.Value, "the allow-list row does not decode: "+derr.Error())
+		return m.quarantine(w, kv.Key, kv.Value, "the allow-list row does not decode: "+derr.Error())
 	}
 	email := strings.TrimPrefix(key, prefixInviteAllow)
 	switch err := m.cfg.Auth.ImportInviteAllow(w.Batch(), email); {
 	case errors.Is(err, auth.ErrImportRejected):
 		m.log.Warn("m3: an invite allow-list row is refused by the importer and quarantined", "step", m.cfg.StepID)
-		return w.Quarantine(kv.Key, kv.Value, "the importer rejects the allow-list row")
+		return m.quarantine(w, kv.Key, kv.Value, "the importer rejects the allow-list row")
 	case err != nil:
 		return err
 	}
@@ -561,7 +582,7 @@ func (m *Migration) stepInviteAllow(ctx context.Context, kv storage.KV, w *datam
 	if err := w.Delete(kv.Key); err != nil {
 		return err
 	}
-	w.Count(OutcomeImported)
+	m.sourceRow(w, OutcomeImported)
 	return nil
 }
 
@@ -604,6 +625,10 @@ func (m *Migration) rewriteOutside(ctx context.Context, w *datamigrate.StepWrite
 	if err := w.Delete([]byte(expiryDoneKey)); err != nil {
 		return err
 	}
+	// Counted as an item, never as a Source row: the flag is outside Source,
+	// and a Read that counted it would exceed the Source by one (the corpus'
+	// 143 rows read against 142 in Source, before Verify's counts were the
+	// step's own).
 	w.Count(OutcomeDeleted)
 	return nil
 }

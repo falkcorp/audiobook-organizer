@@ -105,3 +105,54 @@ describe('first-run wizard gate (F9-04 slice 5)', () => {
     expect(screen.queryByText(WIZARD)).toBeNull();
   });
 });
+
+// F4-08: the sign-in gate comes before the wizard. When the server requires sign-in and no
+// session exists, the wizard is never shown and the config is never read (an anonymous PUT
+// /api/v1/config is refused 401 under core identity: there is no first-run config window); the
+// page offers Setup (no account yet) or Login instead, and Setup creates the first administrator
+// through core's own route.
+describe('the sign-in gate comes before the wizard (F4-08)', () => {
+  it('requires sign-in with no account yet: Setup is shown, not the wizard, and the config is never read', async () => {
+    vi.mocked(api.getAuthStatus).mockResolvedValue({ has_users: false, requires_auth: true, bootstrap_ready: true } as never);
+    vi.mocked(api.getMe).mockResolvedValue(null as never);
+    vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '', setup_complete: false } as never);
+    renderApp();
+    expect(await screen.findByText('Create Admin Account')).toBeInTheDocument();
+    expect(screen.queryByText(WIZARD)).toBeNull();
+    expect(configCalls()).toBe(0);
+  });
+
+  it('requires sign-in with accounts: Login is shown, not the wizard, and the config is never read', async () => {
+    vi.mocked(api.getAuthStatus).mockResolvedValue({ has_users: true, requires_auth: true, bootstrap_ready: false } as never);
+    vi.mocked(api.getMe).mockResolvedValue(null as never);
+    vi.mocked(api.getConfig).mockResolvedValue({ root_dir: '', setup_complete: false } as never);
+    renderApp();
+    expect(await screen.findByText('Sign in to access audiobook organizer.')).toBeInTheDocument();
+    expect(screen.queryByText(WIZARD)).toBeNull();
+    expect(configCalls()).toBe(0);
+  });
+
+  it("Setup creates the first administrator through core's POST /api/core/v1/auth/setup, with the bootstrap token", async () => {
+    const actual = await vi.importActual<typeof import('./services/api')>('./services/api');
+    const seen: { method: string; path: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const req = input instanceof Request ? input : new Request(new URL(String(input), 'http://localhost'), init);
+        seen.push({ method: req.method, path: new URL(req.url).pathname, body: JSON.parse(await req.clone().text()) });
+        return new Response(JSON.stringify({ id: '01M72KQHXM3TJDMDBTC8G90416', username: 'bruce.wayne', roles: ['admin'] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }),
+    );
+    await actual.setupAdmin({ username: 'bruce.wayne', password: 'correct-horse-batman-staple-9', bootstrap_token: ' gotham-token \n' });
+    expect(seen).toEqual([
+      {
+        method: 'POST',
+        path: '/api/core/v1/auth/setup',
+        body: { username: 'bruce.wayne', password: 'correct-horse-batman-staple-9', bootstrap_token: 'gotham-token' },
+      },
+    ]);
+  });
+});

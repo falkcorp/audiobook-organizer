@@ -6,6 +6,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -266,19 +267,70 @@ func clearSessionCookie(c *gin.Context) {
 }
 
 // GetStatus handles GET /auth/status.
+//
+// Under core identity the accounts are core's: after M3 books' store holds no
+// user row, so HEAD's CountUsers would answer 0 on every migrated install and
+// the route would report a fresh install (has_users false, bootstrap_ready
+// true, requires_auth false). There the count is whether core holds an account
+// other than _system (identityHasUsers), core's own has_users rule (05-authn
+// §4.2 item 1): _system is seeded by every core boot and is never a person, so
+// a store holding only _system still needs its first admin. The three formulas
+// are HEAD's over that answer.
 func (h *AuthHandler) GetStatus(c *gin.Context) {
-	count, err := h.store.CountUsers()
-	if err != nil {
-		httputil.RespondWithInternalError(c, "failed to read auth status")
-		return
+	var hasUsers bool
+	if id, ok := legacyauth.IdentityFrom(c.Request.Context()); ok {
+		has, err := identityHasUsers(c.Request.Context(), id)
+		if err != nil {
+			httputil.RespondWithInternalError(c, "failed to read auth status")
+			return
+		}
+		hasUsers = has
+	} else {
+		count, err := h.store.CountUsers()
+		if err != nil {
+			httputil.RespondWithInternalError(c, "failed to read auth status")
+			return
+		}
+		hasUsers = count > 0
 	}
-	requiresAuth := h.enableAuth && count > 0
+	h.respondStatus(c, hasUsers)
+}
+
+// respondStatus is GET /auth/status's body for whether any account exists.
+func (h *AuthHandler) respondStatus(c *gin.Context, hasUsers bool) {
 	httputil.RespondWithOK(c, gin.H{
-		"has_users":       count > 0,
+		"has_users":       hasUsers,
 		"auth_enabled":    h.enableAuth,
-		"requires_auth":   requiresAuth,
-		"bootstrap_ready": h.enableAuth && count == 0,
+		"requires_auth":   h.enableAuth && hasUsers,
+		"bootstrap_ready": h.enableAuth && !hasUsers,
 	})
+}
+
+// errNoIdentityUsers: the server runs under core identity but was given no
+// read of core's accounts (Identity.Users). The routes that need it refuse;
+// they never fall back to books' store, which holds no account after M3.
+var errNoIdentityUsers = errors.New("this server was given no read of core's accounts")
+
+// identityHasUsers reports whether core holds an account other than _system,
+// stopping at the first one. A record core cannot decode counts as an account:
+// it is a stored row, which HEAD's CountUsers counted too, and counting it
+// keeps the answer on the side that requires sign-in. Any other read error is
+// returned.
+func identityHasUsers(ctx context.Context, id *legacyauth.Identity) (bool, error) {
+	if id.Users == nil {
+		return false, errNoIdentityUsers
+	}
+	for u, err := range id.Users.Users(ctx, coreauth.UserFilter{}) {
+		switch {
+		case errors.Is(err, coreauth.ErrUndecodableRecord):
+			return true, nil
+		case err != nil:
+			return false, err
+		case u != nil && u.Status != coreauth.StatusSystem:
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // SetupInitialAdmin handles POST /auth/setup.

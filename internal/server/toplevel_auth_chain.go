@@ -15,7 +15,7 @@ import "github.com/gin-gonic/gin"
 // none of the /api/v1 group's middleware and have to assemble an equivalent
 // chain by hand. The ordering mirrors /api/v1 exactly:
 //
-//	cfMW (fail-open identity binding)  →  authGuard (RequireAuth)  →  handler
+//	cfMW (fail-open Access stage)  →  authGuard (RequireAuth)  →  handler
 //
 // cfMW is optional and is nil whenever Cloudflare Access is not configured
 // (CF_ACCESS_TEAM_DOMAIN / CF_ACCESS_AUD unset), so it is appended only when
@@ -23,10 +23,14 @@ import "github.com/gin-gonic/gin"
 //
 // Why cfMW has to be here at all: under Cloudflare Access SSO the browser holds
 // no application session cookie. Identity arrives solely as a verified
-// Cf-Access-Jwt-Assertion header, and cfMW is the only stage that reads it and
-// binds the resolved user. Without cfMW the authGuard sees an anonymous request
-// and 401s, so EventSource enters a permanent reconnect loop and the UI shows
-// "Connection lost" even though every /api/v1 request succeeds.
+// Cf-Access-Jwt-Assertion header. Without core identity cfMW is the only stage
+// that reads it and binds the resolved user; without cfMW the authGuard sees an
+// anonymous request and 401s, so EventSource enters a permanent reconnect loop
+// and the UI shows "Connection lost" even though every /api/v1 request
+// succeeds. Under core identity core's Access extension authenticates the
+// header at stage 12 and the authGuard reads that principal; cfMW only verifies
+// the assertion and sets the marker trustedClientIP reads
+// (cfaccess.CloudflareAccessVerifyOnly) and binds no one.
 func buildTopLevelAuthChain(cfMW, authGuard, handler gin.HandlerFunc) []gin.HandlerFunc {
 	chain := make([]gin.HandlerFunc, 0, 3)
 	if cfMW != nil {
