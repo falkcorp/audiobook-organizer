@@ -267,7 +267,9 @@ func (r *integRig) buildLoaded(in integrationsInputs) *integrationsServices {
 	s := r.build(in)
 	if err := s.registerAdapters("gotham", ai.Adapter(integrations.Meta{
 		ID: integJokerAdapter, DisplayName: "Bat-AI", Version: "1.0.0", Settings: integSchema[integJokerSettings](r.t),
-	}, func(context.Context, integrations.Env, integrations.InstanceConfig) (ai.Backend, error) { return integJoker{}, nil })); err != nil {
+	}, func(context.Context, integrations.Env, integrations.InstanceConfig) (ai.Backend, error) {
+		return integJoker{}, nil
+	})); err != nil {
 		r.t.Fatalf("registerAdapters: %v", err)
 	}
 	if err := s.load(context.Background(), nil); err != nil {

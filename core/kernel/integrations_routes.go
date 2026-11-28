@@ -93,7 +93,7 @@ func mountLibraryBrowse(g *httpapi.Group, lib libraryhttp.Library, log *slog.Log
 type emptyLibrary struct{}
 
 func (emptyLibrary) Root(library.RootID) (*library.Root, error) { return nil, library.ErrUnknownRoot }
-func (emptyLibrary) Roots(library.RootFilter) []*library.Root    { return nil }
+func (emptyLibrary) Roots(library.RootFilter) []*library.Root   { return nil }
 
 // describeIntegrationRoutes is Describe's counterpart of the two mounts: the
 // same routes over inputs that cannot serve, so the OpenAPI document carries
