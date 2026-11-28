@@ -10,6 +10,13 @@
 # to boot on it (verdict refuse).
 # A name with a `*` is a pattern (one or more characters): the refused operator
 # settings of RefusedOperatorPaths, whose canonical env names a host may still set.
+# A name's <NAME>_FILE form is the name: core reads any env name from the file a
+# <NAME>_FILE variable names (core/config/env.go), so the refused operator settings
+# are refused in both spellings (the books boot refusal and config check), and
+# scripts/deploy_env_check.py and the F3-07 rehearsal read NAME_FILE as NAME for
+# every row. Core's own retired list is exact-name, so for the other rows this
+# errs toward refusing a deploy file that sets a form no binary reads. Names are
+# matched in capitals only, as core reads them.
 # Regenerate: go test ./internal/books/cutover -run TestRetiredEnvList -update
 #
 # enforced says whether the app hands these names to core (F3-07). While it is

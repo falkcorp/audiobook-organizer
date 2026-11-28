@@ -211,6 +211,81 @@ func TestRetiredOperatorSettings_MetadataCredentialsFamily(t *testing.T) {
 	}
 }
 
+// valueFile writes v to a file and returns its path: what a <NAME>_FILE variable
+// names.
+func valueFile(t *testing.T, v string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "credential")
+	if err := os.WriteFile(p, []byte(v+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestRetiredOperatorSettings_FileSpelling: core reads any env name as
+// <NAME>_FILE=<path> (core/config/env.go), and on main the retired openai name
+// given that way was projected into the OpenAI base URL. It must be refused like
+// the plain spelling, for the openai path and for the credentials family, naming
+// the variable as set and never the path's contents. Mutant: EnvForms without
+// the _FILE form (the round-1 F1 finding).
+func TestRetiredOperatorSettings_FileSpelling(t *testing.T) {
+	for _, name := range []string{
+		oldOpenAIEnv,
+		"ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN",
+		"ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_CREDENTIALS_API_KEY",
+		"ABO_INTEGRATIONS_METADATA_BATGIRL_CREDENTIALS_API_KEY",
+	} {
+		t.Run(name+"_FILE", func(t *testing.T) {
+			_, err := bootWith(t, envSet(name+"_FILE", valueFile(t, sentinelKey)))
+			requireRefused(t, err, name+"_FILE")
+		})
+	}
+	t.Run("the new openai name as a file is accepted and effective", func(t *testing.T) {
+		got, err := bootWith(t, envSet(newOpenAIEnv+"_FILE", valueFile(t, sentinelNew)))
+		if err != nil || got != sentinelNew {
+			t.Errorf("%s_FILE gave %q, %v; want %q and no error", newOpenAIEnv, got, err, sentinelNew)
+		}
+	})
+	t.Run("an empty _FILE variable is unset", func(t *testing.T) {
+		if _, err := bootWith(t, envSet(oldOpenAIEnv+"_FILE", "")); err != nil {
+			t.Fatalf("an empty %s_FILE was refused: %v", oldOpenAIEnv, err)
+		}
+	})
+}
+
+// TestRetiredOperatorSettings_NullIsUnsetOnlyForTheDirectSpelling: core reads a
+// literal null as unset (05-config section 1.3.5), so NAME=null supplies nothing
+// and is not refused (mutant: drop the null exemption). For NAME_FILE the value
+// is a path and the literal is tested against the file's contents, so
+// NAME_FILE=null is a file core tries to read and is refused (mutant: apply the
+// exemption to _FILE too). Python's deploy check reads no value, so it refuses a
+// listed name whatever it is set to: it errs toward refusing.
+func TestRetiredOperatorSettings_NullIsUnsetOnlyForTheDirectSpelling(t *testing.T) {
+	for _, name := range []string{oldOpenAIEnv, "ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN"} {
+		t.Run(name+"=null", func(t *testing.T) {
+			if _, err := bootWith(t, envSet(name, "null")); err != nil {
+				t.Fatalf("%s=null was refused: %v", name, err)
+			}
+		})
+		t.Run(name+"_FILE=null", func(t *testing.T) {
+			_, err := bootWith(t, envSet(name+"_FILE", "null"))
+			requireRefused(t, err, name+"_FILE")
+		})
+	}
+}
+
+// TestRetiredOperatorSettings_AnEnvUserIsToldTheEnvSpelling (N4): a host that set
+// the old openai name by env is told the env spelling of the replacement as well as
+// the path, at boot (both entry points name it).
+func TestRetiredOperatorSettings_AnEnvUserIsToldTheEnvSpelling(t *testing.T) {
+	_, err := bootWith(t, envSet(oldOpenAIEnv, sentinelOld))
+	requireRefused(t, err, newOpenAIEnv, "integrations.ai.openai.url")
+	operatorEnv(t)
+	t.Setenv(oldOpenAIEnv, sentinelOld)
+	_, _, err = ResolveBootPaths(t.Context(), Module(), BootInputs{})
+	requireRefused(t, err, newOpenAIEnv, "integrations.ai.openai.url")
+}
+
 // TestRetiredOperatorSettings_ServePathRefuses: serve resolves its paths first
 // (ResolveBootPaths), so a host that still sets an old name never gets as far as
 // opening a store.

@@ -98,11 +98,46 @@ func (r RefusedOperatorPath) EnvPattern() string {
 	return CanonicalEnv(config.Path(strings.Join(segs, ".")))
 }
 
-// MatchesEnv reports whether the env name is this one's canonical spelling. The
-// name is matched exactly and in capitals, as core's env resolver reads it.
-func (r RefusedOperatorPath) MatchesEnv(name string) bool {
-	return envGlob(r.EnvPattern()).MatchString(name)
+// envFileSuffix is core's "<NAME>_FILE" rule (core/config/env.go fileSuffix, read
+// in resolve and readWanted): any env name can be given as the path of a file
+// that holds the value.
+const envFileSuffix = "_FILE"
+
+// EnvForms reports how the env name is this one's canonical spelling: direct is
+// the spelling itself (matched exactly and in capitals, as core's env resolver
+// reads it), viaFile its <NAME>_FILE form. Core reads both onto the same path,
+// so a host that sets either is setting the retired path: the boot refusal and
+// the deploy check treat the two alike (the F1 finding of round 1 of #5080).
+func (r RefusedOperatorPath) EnvForms(name string) (direct, viaFile bool) {
+	g := envGlob(r.EnvPattern())
+	direct = g.MatchString(name)
+	if base, ok := strings.CutSuffix(name, envFileSuffix); ok && base != "" {
+		viaFile = g.MatchString(base)
+	}
+	return direct, viaFile
 }
+
+// EnvInstead is what a host that sets this path by an environment variable is
+// told to set in place of it: the canonical env name of Instead when that is a
+// path, and the phrase as it stands otherwise (a setting that has no env name).
+// The generated deploy list and the boot refusal both use it.
+func (r RefusedOperatorPath) EnvInstead() string {
+	if r.insteadIsPhrase() {
+		return r.Instead
+	}
+	return CanonicalEnv(config.Path(r.Instead))
+}
+
+// EnvMessage is Message for a host that set this path by an environment variable:
+// Message, and the env spelling of the setting to use when there is one.
+func (r RefusedOperatorPath) EnvMessage() string {
+	if r.insteadIsPhrase() {
+		return r.Message
+	}
+	return r.Message + "; as an environment variable, set " + r.EnvInstead()
+}
+
+func (r RefusedOperatorPath) insteadIsPhrase() bool { return strings.ContainsAny(r.Instead, " \t") }
 
 // envGlob compiles an EnvPattern: `*` is one or more characters, anything else
 // is literal.

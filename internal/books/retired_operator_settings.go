@@ -43,13 +43,23 @@ func refuseRetiredOperatorSettings(configFile string, environ []string) error {
 	rules := cutover.RefusedOperatorPaths()
 	for _, kv := range environ {
 		name, value, ok := strings.Cut(kv, "=")
-		if !ok || value == "" || value == "null" {
+		if !ok || value == "" {
 			continue // unset, as core reads it (05-config section 1.3.5)
 		}
 		for _, r := range rules {
-			if r.MatchesEnv(name) {
-				uses = append(uses, use{"the environment variable " + name + " (" + r.Path + ")", r.Message})
+			direct, viaFile := r.EnvForms(name)
+			if !direct && !viaFile {
+				continue
 			}
+			// A literal null is unset for the variable itself. For <NAME>_FILE
+			// the value is a file path, and the literal is tested against the
+			// file's contents, so a path "null" is a file core tries to read: that
+			// is refused, never skipped. (Python's check names variables and reads
+			// no value, so it errs toward refusing the same.)
+			if value == "null" && !viaFile {
+				continue
+			}
+			uses = append(uses, use{"the environment variable " + name + " (" + r.Path + ")", r.EnvMessage()})
 		}
 	}
 	for _, p := range operatorFileSettings(configFile) {

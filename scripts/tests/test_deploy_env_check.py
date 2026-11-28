@@ -497,6 +497,92 @@ class RefusedOperatorSettings(Tmp):
         self.assertEqual(rows["ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*"][0], "refuse")
 
 
+    def test_the_file_spelling_of_a_refused_setting_is_refused(self):
+        # core reads NAME_FILE as NAME (core/config/env.go), so a deploy file that
+        # sets the retired openai name that way reached the retired path on main.
+        for name in (
+            self.OPENAI_OLD + "_FILE",
+            "ABO_INTEGRATIONS_METADATA_HARDCOVER_CREDENTIALS_API_TOKEN_FILE",
+            "ABO_INTEGRATIONS_METADATA_GOOGLE_BOOKS_CREDENTIALS_API_KEY_FILE",
+        ):
+            rc, out, err = self.check(name)
+            self.assertEqual(rc, 1, f"{name}: {out}{err}")
+            self.assertIn(name, err)
+            self.assertNotIn(self.SENTINEL, out + err)
+
+    def test_the_new_openai_name_as_a_file_passes(self):
+        rc, out, err = self.check(self.OPENAI_NEW + "_FILE")
+        self.assertEqual(rc, 0, out + err)
+
+    def test_the_file_rule_applies_to_every_row_of_a_list(self):
+        rows = {"ABO_OLD_NAME": ("refuse", "ABO_NEW_NAME"), "ABO_X_*_Y_*": ("refuse", "z")}
+        self.assertEqual(chk.listed("ABO_OLD_NAME_FILE", rows), "ABO_OLD_NAME")
+        self.assertEqual(chk.listed("ABO_X_ONE_Y_TWO_FILE", rows), "ABO_X_*_Y_*")
+        self.assertIsNone(chk.listed("_FILE", rows))
+        self.assertIsNone(chk.listed("ABO_OLD_NAME_FILEX", rows))
+        self.assertIsNone(chk.listed("ABO_OLD_NAME_FOO", rows))
+        self.assertIsNone(chk.listed("ABO_NEW_NAME_FILE", rows))
+
+
+class RefusedEnvCells(unittest.TestCase):
+    """The table shared with the Go test (cutover.TestRefusedOperatorPaths_EnvCells):
+    the same spellings, run through this checker over the real generated list, so
+    the Go matcher and this one cannot drift apart."""
+
+    CELLS = REPO / "internal" / "books" / "cutover" / "testdata" / "refused_env_cells.json"
+
+    def test_every_cell_agrees_with_the_real_list(self):
+        import json
+
+        cells = json.loads(self.CELLS.read_text())["cells"]
+        self.assertGreater(len(cells), 0)
+        _, rows = chk.parse_list((REPO / "deploy" / "retired-env-names.txt").read_text())
+        for c in cells:
+            key = chk.listed(c["name"], rows)
+            got = key is not None and rows[key][0] == "refuse"
+            self.assertEqual(got, c["refused"], f"{c['name']}: {c['why']}")
+
+
+class OneSourceOfTruth(unittest.TestCase):
+    """The refused list lives once: cutover.RefusedOperatorPaths, generated into
+    deploy/retired-env-names.txt (TestRetiredEnvList_InSync fails when they
+    differ). This checker reads that file and carries no copy of any name."""
+
+    LIST = REPO / "deploy" / "retired-env-names.txt"
+
+    def test_the_default_list_is_the_generated_file(self):
+        self.assertEqual(chk.LIST_PATH.resolve(), self.LIST.resolve())
+
+    def test_the_effective_list_is_exactly_the_file(self):
+        # An independent read of the file, not parse_list: every row of the file,
+        # and nothing else, is in the effective list.
+        want = {}
+        for line in self.LIST.read_text().splitlines():
+            if line and not line.startswith("#"):
+                name, verdict, replacement = line.split("\t")
+                want[name] = (verdict, replacement)
+        _, got = chk.parse_list(self.LIST.read_text())
+        self.assertEqual(got, want)
+        self.assertIn("ABO_INTEGRATIONS_AI_OPENAI_BASE_URL", got)
+        self.assertIn("ABO_INTEGRATIONS_METADATA_*_CREDENTIALS_*", got)
+
+    def test_every_row_is_reached_in_both_spellings(self):
+        _, rows = chk.parse_list(self.LIST.read_text())
+        for key in rows:
+            concrete = key.replace("*", "BATMAN")
+            self.assertEqual(chk.listed(concrete, rows), key, key)
+            self.assertEqual(chk.listed(concrete + "_FILE", rows), key, key + "_FILE")
+
+    def test_the_header_states_the_file_rule(self):
+        head = "\n".join(ln for ln in self.LIST.read_text().splitlines() if ln.startswith("#"))
+        self.assertIn("_FILE", head)
+
+    def test_the_script_holds_no_copy_of_a_refused_name(self):
+        text = (SCRIPTS / "deploy_env_check.py").read_text()
+        for needle in ("ABO_INTEGRATIONS", "CREDENTIALS_", "OPENAI"):
+            self.assertNotIn(needle, text, f"scripts/deploy_env_check.py carries {needle}: the list is the file's")
+
+
 class PreflightRunsTheCheck(Tmp):
     """deploy-preflight.sh is the one thing a not-yet-synced Makefile.local
     still calls, so it must run the checker, in the caller's directory."""

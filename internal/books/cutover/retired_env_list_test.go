@@ -16,8 +16,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/falkcorp/mediacore/config"
 )
 
 // deploy/retired-env-names.txt is what `make deploy`'s deploy-env-check
@@ -71,7 +69,7 @@ func retiredEnvListText(t testing.TB, enforced bool) string {
 	// name stands for one or more characters (the metadata credentials family
 	// has any source id and any key). The replacement is the setting to use.
 	for _, r := range RefusedOperatorPaths() {
-		byName[r.EnvPattern()] = entry{string(VerdictRefuse), envInstead(r)}
+		byName[r.EnvPattern()] = entry{string(VerdictRefuse), r.EnvInstead()}
 	}
 	names := make([]string, 0, len(byName))
 	for n := range byName {
@@ -87,6 +85,13 @@ func retiredEnvListText(t testing.TB, enforced bool) string {
 	b.WriteString("# to boot on it (verdict refuse).\n")
 	b.WriteString("# A name with a `*` is a pattern (one or more characters): the refused operator\n")
 	b.WriteString("# settings of RefusedOperatorPaths, whose canonical env names a host may still set.\n")
+	b.WriteString("# A name's <NAME>_FILE form is the name: core reads any env name from the file a\n")
+	b.WriteString("# <NAME>_FILE variable names (core/config/env.go), so the refused operator settings\n")
+	b.WriteString("# are refused in both spellings (the books boot refusal and config check), and\n")
+	b.WriteString("# scripts/deploy_env_check.py and the F3-07 rehearsal read NAME_FILE as NAME for\n")
+	b.WriteString("# every row. Core's own retired list is exact-name, so for the other rows this\n")
+	b.WriteString("# errs toward refusing a deploy file that sets a form no binary reads. Names are\n")
+	b.WriteString("# matched in capitals only, as core reads them.\n")
 	b.WriteString("# Regenerate: go test ./internal/books/cutover -run TestRetiredEnvList -update\n")
 	b.WriteString("#\n")
 	b.WriteString("# enforced says whether the app hands these names to core (F3-07). While it is\n")
@@ -233,15 +238,4 @@ func TestRetiredEnvList_HoldsTheRefusedOperatorSettings(t *testing.T) {
 	if strings.Contains(text, "\nABO_INTEGRATIONS_AI_OPENAI_URL\t") {
 		t.Error("ABO_INTEGRATIONS_AI_OPENAI_URL is listed as refused; it is the setting to use")
 	}
-}
-
-// envInstead is what the deploy check tells a host to set in place of a refused
-// operator setting: the canonical env name of Instead when that is a path, and
-// the phrase as it stands otherwise. Only the generated list needs it, so it is
-// test code and not production code.
-func envInstead(r RefusedOperatorPath) string {
-	if strings.ContainsAny(r.Instead, " \t") {
-		return r.Instead
-	}
-	return CanonicalEnv(config.Path(r.Instead))
 }

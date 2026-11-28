@@ -153,15 +153,26 @@ def _glob(pattern: str) -> "re.Pattern[str]":
     return re.compile("^" + ".+".join(re.escape(p) for p in pattern.split("*")) + "$")
 
 
+FILE_SUFFIX = "_FILE"
+
+
 def listed(name: str, rows: dict[str, tuple[str, str]]) -> str | None:
     """The list key `name` is retired under: the name itself, or the `*` pattern
     it matches (the refused operator settings, e.g. the metadata credentials
-    family, whose names carry any source id). None when it is not retired."""
-    if name in rows:
-        return name
-    for key in rows:
-        if "*" in key and _glob(key).match(name):
-            return key
+    family, whose names carry any source id). A name's <NAME>_FILE form is the
+    name: core reads any env name from the file a <NAME>_FILE variable names
+    (core/config/env.go), so `X_FILE` sets what `X` sets. None when it is not
+    retired. The rule is the list header's, and the F3-07 rehearsal applies the
+    same one to the same file."""
+    candidates = [name]
+    if name.endswith(FILE_SUFFIX) and len(name) > len(FILE_SUFFIX):
+        candidates.append(name[: -len(FILE_SUFFIX)])
+    for cand in candidates:
+        if cand in rows:
+            return cand
+        for key in rows:
+            if "*" in key and _glob(key).match(cand):
+                return key
     return None
 
 
