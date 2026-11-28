@@ -307,6 +307,8 @@ func resetAllCore(ctx context.Context, env resetAllEnv) (resetAllResult, error) 
 				return resetAllResult{}, derr
 			}
 		}
+	} else {
+		log.Info("acoustid reset-all: dedup candidates not dropped, no candidate store (embedding is disabled or the dedup candidate store is not wired)")
 	}
 
 	log.Info("acoustid reset-all: complete",

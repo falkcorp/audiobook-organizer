@@ -118,6 +118,8 @@ func scanCore(ctx context.Context, env scanEnv) (scanResult, error) {
 		if _, total, listErr := env.Candidates.ListCandidates(filter); listErr == nil {
 			pendingCount = total
 		}
+	} else {
+		env.Logger.Info("AcoustID scan: pending candidates not counted, no candidate store (embedding is disabled or the dedup candidate store is not wired)")
 	}
 	env.Progress(1, 1,
 		fmt.Sprintf("AcoustID scan complete — %d pending candidate(s)", pendingCount))
