@@ -7,6 +7,7 @@ package books
 
 import (
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,10 +25,10 @@ import (
 // books:integrations.manage). A principal holding only HEAD's integrations.manage
 // atom reaches every one of them, and a key holding no integrations scope does not.
 //
-// "Reaches" is judged on the answer's own words: stage 13's refusal is the
-// permission_denied problem, and a handler may still answer 400 or a 403 of its
-// own (deluge discovery disabled, a credential guard); those are not the
-// route permission.
+// "Reaches" means the handler ran: no 401 and no 403, except the one 403 two
+// handlers give on their own, deluge discovery being off (its text is pinned
+// below). Any other 403, whatever stage 13's code for it (permission_denied,
+// interactive_required, owner_required), is a refusal.
 
 // legacyIntegrationsRoutes are the twelve rows of the manifest whose atom is
 // integrations.manage, as the manifest lists them.
@@ -46,10 +47,21 @@ var legacyIntegrationsRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/api/v1/openlibrary/upload"},
 }
 
-// refusedByRoutePermission reports stage 13's 403 permission_denied, as opposed
-// to any answer the handler gives.
-func refusedByRoutePermission(code int, body string) bool {
-	return code == http.StatusForbidden && strings.Contains(body, "permission_denied")
+// handlerOwn403 is what deluge discover and its import answer 403 from inside
+// the handler while deluge_discovery_enabled is off (internal/server/deluge_discovery.go).
+const handlerOwn403 = "deluge discovery is disabled"
+
+// refusedByRoutePermission reports stage 13's refusal of a request that
+// the holder's key must have passed: 401, or a 403 that is not the handler's own.
+func refusedByRoutePermission(path string, code int, body string) bool {
+	if code == http.StatusUnauthorized {
+		return true
+	}
+	if code != http.StatusForbidden {
+		return false
+	}
+	own := strings.HasPrefix(path, "/api/v1/deluge/discover") && strings.Contains(body, handlerOwn403)
+	return !own
 }
 
 func TestLegacyIntegrationsReachBoot_IntegrationsAtomHolderReachesEveryRoute(t *testing.T) {
@@ -58,9 +70,25 @@ func TestLegacyIntegrationsReachBoot_IntegrationsAtomHolderReachesEveryRoute(t *
 	holder, _ := admin.mintKey("batman-bat-signal", []string{"core:integrations.manage", "books:integrations.manage"})
 	other, _ := admin.mintKey("batman-gotham-gazette", []string{"books:view"})
 
-	// The cell's own check that it can tell the two apart: the manifest's
-	// twelve rows are exactly these, and a key without the scopes is refused
-	// on each by the route permission.
+	// The list above is the booted app's: every books route that asks the
+	// integrations.manage atom's scopes is in it, and nothing else is.
+	var served []string
+	for ri := range r.app.Routes() {
+		if ri.Owner == "books" && ri.Perm.String() == "all(core:integrations.manage,books:integrations.manage)" {
+			served = append(served, ri.Method+" "+ri.Pattern)
+		}
+	}
+	var listed []string
+	for _, c := range legacyIntegrationsRoutes {
+		listed = append(listed, c.method+" "+c.path)
+	}
+	slices.Sort(served)
+	slices.Sort(listed)
+	require.Equal(t, listed, served, "the routes that ask HEAD's integrations.manage atom changed: add or drop a cell")
+
+	// Each route is tried twice: a key without the scopes must be refused by
+	// the route permission (so the cell can tell the two apart), and the atom's
+	// holder must not.
 	for i, c := range legacyIntegrationsRoutes {
 		body := ""
 		if c.method == http.MethodPost {
@@ -69,13 +97,13 @@ func TestLegacyIntegrationsReachBoot_IntegrationsAtomHolderReachesEveryRoute(t *
 		addr := "192.0.2." + strconv.Itoa(40+i) + ":41000"
 		rec := invitesReq(t, r, c.method, c.path, body, other, nil, addr)
 		t.Logf("cell %s %s key:books:view: %d", c.method, c.path, rec.Code)
-		if !refusedByRoutePermission(rec.Code, rec.Body.String()) {
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "permission_denied") {
 			t.Errorf("%s %s with a key holding no integrations scope: %d %s, want 403 permission_denied", c.method, c.path, rec.Code, credExcerpt(rec))
 		}
 
 		rec = invitesReq(t, r, c.method, c.path, body, holder, nil, addr)
 		t.Logf("cell %s %s key:integrations.manage atom: %d", c.method, c.path, rec.Code)
-		if rec.Code == http.StatusUnauthorized || refusedByRoutePermission(rec.Code, rec.Body.String()) {
+		if refusedByRoutePermission(c.path, rec.Code, rec.Body.String()) {
 			t.Errorf("%s %s with a key holding HEAD's integrations.manage atom: %d %s; HEAD admitted it", c.method, c.path, rec.Code, credExcerpt(rec))
 		}
 	}
