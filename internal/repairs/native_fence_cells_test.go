@@ -73,6 +73,9 @@ func (f *stopFixer) Apply(ctx context.Context, w *Writer, fresh Row) error {
 		return err
 	default: // "lease"
 		err := f.trimFixer.Apply(ctx, w, fresh)
+		f.mu.Lock()
+		f.obs[fresh.RowID] = applyObs{err: err, cause: context.Cause(ctx), headFenceNil: opswriter.FenceFromContext(ctx).Check() == nil}
+		f.mu.Unlock()
 		time.Sleep(f.lapse)
 		return err
 	}
@@ -184,7 +187,8 @@ func requireRefusedAfterStop(t *testing.T, s *memStore, f *stopFixer, row string
 	require.Error(t, o.err, "the write after the stop is refused")
 	require.ErrorIs(t, o.err, tasks.ErrFenced, "refused by core's fence")
 	require.False(t, errors.Is(o.err, opswriter.ErrFenced), "not by HEAD's")
-	require.Equal(t, map[string]string{"b1": " One ", "b2": " Two "}[row], s.title(row), "no partial row: the title is as planned")
+	require.Equal(t, " One ", s.title("b1"), "no row was written after the stop: b1 is as planned")
+	require.Equal(t, " Two ", s.title("b2"), "no row was written after the stop: b2 is as planned")
 }
 
 func TestNativeFence_RepairsApply_CancelRefusesTheNextWrite(t *testing.T) {
@@ -221,11 +225,16 @@ func TestNativeFence_RepairsApply_TimeoutRefusesTheNextWrite(t *testing.T) {
 }
 
 // Lease loss, at the base: the hold lapses (the lease runs out with no write
-// renewing it) and core refuses the NEXT row at its start with ErrHoldLost,
-// which is a tasks.ErrFenced; the fixer is not called for it and the row is not
-// written. A lapse does not end the run's context at the base, so a write made
-// inside a row's own Apply after the lapse is not stopped here (see the
-// skipped cell below, for #5062).
+// renewing it) and core refuses the NEXT row at its item start (RenewHold,
+// which fails the item with the executor's ErrHoldLost before its fixer is
+// called); the fixer is not called for it and the row is not written. The
+// kit does not expose a collected item's error, so the cell pins the refusal by
+// its effect and by its control: the same run, with the same 900ms outlasting
+// the same fixer, but the default 2 minute lease, applies both rows. A lapse
+// does not end the run's context at the base, and the repairs writer's own
+// writes do not pass through core's Writer.Do, so a write made inside a row's
+// own Apply after the lapse is not stopped here (see the skipped cell below,
+// for #5062).
 func TestNativeFence_RepairsApply_LeaseLossRefusesTheNextRow(t *testing.T) {
 	s := newMemStore()
 	seed(s)
@@ -240,6 +249,24 @@ func TestNativeFence_RepairsApply_LeaseLossRefusesTheNextRow(t *testing.T) {
 	require.Equal(t, "One", s.title("b1"))
 	require.Equal(t, 0, f.applyCalls("b2"), "the second row's start was refused: the fixer is not called")
 	require.Equal(t, " Two ", s.title("b2"), "no partial row")
+	o, ok := f.observed("b1")
+	require.True(t, ok)
+	require.True(t, o.headFenceNil, "the defect's precondition: no HEAD fence on the context a native run gives its work")
+}
+
+// The control of the cell above: the same fixer and the same wait, with the
+// default lease. Both rows apply, so the refusal above is the lapse and nothing
+// else (not the wait, not the harness, not the standDownLeaseOpt plumbing).
+func TestNativeFence_RepairsApply_LeaseLossControlAppliesBothRowsUnderALiveHold(t *testing.T) {
+	s := newMemStore()
+	seed(s)
+	f := newStopFixer(s, "lease")
+	f.lapse = 900 * time.Millisecond
+	k, apply := nativeApply(t, s, f, 0)
+	r := k.WaitState(apply, tasks.StateFailed, tasks.StateSucceeded, tasks.StateCanceled, tasks.StateTimedOut)
+	require.JSONEq(t, `{"applied":2}`, string(r.Result))
+	require.Equal(t, "One", s.title("b1"))
+	require.Equal(t, "Two", s.title("b2"))
 }
 
 // The in-row case of lease loss: a write made inside an Apply after the lease

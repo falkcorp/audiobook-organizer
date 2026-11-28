@@ -17,17 +17,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/falkcorp/audiobook-organizer/internal/fingerprint"
-	"github.com/falkcorp/audiobook-organizer/internal/operations/opswriter"
 )
 
 // The native window-index-build kind, run by core's real executor (the parity
 // kit boots it, over a real store), and stopped while a file's write is next.
-// Core never puts a HEAD fence on the run's context, so the cells also pin that
-// precondition: opswriter.FenceFromContext of the context a native run gives its
-// work answers nil ("always writable"). What stops the write is core's fence
-// (nativeFence): the writer here is the spy itself, NOT core's gated
-// tasks.Writer, because the owner's writer builder (IndexKindDeps.NewWriter) is
-// not this package's to vouch for; the next write must still be refused.
+// Core never puts a HEAD fence on the run's context, so HEAD's check
+// (opswriter.FenceFromContext) answers nil, "always writable", for the run's
+// work; the store methods here take no context, so the cells cannot read it
+// from inside, and the precondition is pinned by the mutant that installs it:
+// with HEAD's check as the env's Fence both writes go through and the cancel and
+// timeout cells fail (the mutant table of the F5-18 commit 1 hand-back, M2b).
+// What stops the write is core's fence (nativeFence): the writer here is the
+// spy itself, NOT core's gated tasks.Writer, because the owner's writer builder
+// (IndexKindDeps.NewWriter) is not this package's to vouch for; the next write
+// must still be refused.
 //
 // The lease-loss cell does not exist for this kind, on purpose: it takes no
 // scan stand-down hold (no rc.StandDown), so no lease can lapse under it. What
@@ -101,9 +104,6 @@ func requireNothingWritten(t *testing.T, spy *windowSpy) {
 }
 
 func TestNativeFence_WindowIndexBuild_CancelRefusesTheNextWrite(t *testing.T) {
-	// The precondition: nothing of HEAD's rides a run core starts.
-	require.NoError(t, opswriter.FenceFromContext(context.Background()).Check(), "a context with no HEAD fence is always writable: the defect's precondition")
-
 	spy := newWindowSpy(t)
 	k, id := startParked(t, spy, time.Hour)
 	require.NoError(t, k.X.CancelAs(context.Background(), id, tasks.Actor{UserID: "alfred"}))
