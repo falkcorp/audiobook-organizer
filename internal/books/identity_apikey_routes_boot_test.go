@@ -361,14 +361,33 @@ func TestAPIKeyRoutes_UnderIdentity(t *testing.T) {
 		require.Equal(t, http.StatusOK, coreDo(t, r, http.MethodGet, "/api/v1/auth/me", nil, nil, h.limited.raw).Code, "the same key by Bearer")
 	})
 
-	t.Run("rotate answers 410 for a key's own key and refuses another user's", func(t *testing.T) {
+	t.Run("rotate answers 410 to every caller and mints nothing", func(t *testing.T) {
+		// The retired stub (01-P81k) has no credential guard in front of it under
+		// identity (B10g), so a key naming another user's key gets the same 410 as
+		// its own: the approved reach contract (11-22). HEAD's guard answered that
+		// cell 403 before the stub; nothing is minted either way.
 		own := mustCreate(t, r, map[string]any{"name": "rotor", "scopes": []string{"library.view"}}, lucius, "")
-		rec := coreDo(t, r, http.MethodPost, "/api/v1/auth/api-keys/"+own.ID+"/rotate", nil, nil, own.Token)
-		require.Equal(t, http.StatusGone, rec.Code, rec.Body.String())
-		rec = coreDo(t, r, http.MethodPost, "/api/v1/auth/api-keys/"+h.limited.id+"/rotate", nil, nil, own.Token)
-		require.Equal(t, http.StatusForbidden, rec.Code, rec.Body.String())
-		rec = coreDo(t, r, http.MethodPost, "/api/v1/auth/api-keys/"+own.ID+"/rotate", nil, lucius.cookie, "")
-		require.Equal(t, http.StatusGone, rec.Code, rec.Body.String())
+		luciusBefore := v1Keys(t, r, "/api/v1/auth/api-keys", lucius)
+		bruceBefore := v1Keys(t, r, "/api/v1/auth/api-keys", bruce)
+		for _, c := range []struct {
+			name, keyID string
+			cookie      *http.Cookie
+			bearer      string
+		}{
+			{"a key, its own key", own.ID, nil, own.Token},
+			{"a key, another user's key", h.limited.id, nil, own.Token},
+			{"a session, its own key", own.ID, lucius.cookie, ""},
+			{"a session, another user's key", h.limited.id, lucius.cookie, ""},
+		} {
+			rec := coreDo(t, r, http.MethodPost, "/api/v1/auth/api-keys/"+c.keyID+"/rotate", nil, c.cookie, c.bearer)
+			require.Equalf(t, http.StatusGone, rec.Code, "%s: %s", c.name, rec.Body.String())
+			require.Containsf(t, rec.Body.String(), `"gone"`, "%s", c.name)
+			require.NotContainsf(t, rec.Body.String(), "mck_", "%s: the stub answered a key", c.name)
+		}
+		require.Equal(t, luciusBefore, v1Keys(t, r, "/api/v1/auth/api-keys", lucius), "rotate changed the caller's keys")
+		require.Equal(t, bruceBefore, v1Keys(t, r, "/api/v1/auth/api-keys", bruce), "rotate changed another user's keys")
+		require.Equal(t, http.StatusOK, coreDo(t, r, http.MethodGet, "/api/v1/auth/me", nil, nil, own.Token).Code, "the caller's key stopped working")
+		require.Equal(t, http.StatusOK, coreDo(t, r, http.MethodGet, "/api/v1/auth/me", nil, nil, h.limited.raw).Code, "the other user's key stopped working")
 	})
 }
 
@@ -465,15 +484,17 @@ func TestAPIKeyRoutes_OwnerSubset(t *testing.T) {
 }
 
 // TestAPIKeyRoutes_AuthOff pins the seven key routes with authentication off
-// (no user yet). Every one refuses the auth-disabled principal with 403, never
-// 401, so a no-auth install's SPA is not signed out (F4-08 ruling G5(a);
+// (no user yet). Six refuse the auth-disabled principal with 403, never 401, so
+// a no-auth install's SPA is not signed out (F4-08 ruling G5(a);
 // 09-abo-on-core §9.2.6). The four reads and DELETE reach the handler, whose
 // no-user refusal (legacyauth.RespondNoUser) answers 403 FORBIDDEN with
 // "turn authentication on to use this route" byte for byte; HEAD answered 401
-// there. POST /api-keys, PATCH /api-keys/:id and POST /api-keys/:id/rotate
-// are refused with 403 before the handler: auth-off tightening, SEC5-8
-// (05-rbac §4.11(a), 05-authn §4.11, the R2 release note) — HEAD answered 401,
-// 401 and 410 there. None of the seven codes ends the shell's session.
+// there. POST /api-keys and PATCH /api-keys/:id are refused with 403 before the
+// handler: auth-off tightening, SEC5-8 (05-rbac §4.11(a), 05-authn §4.11, the R2
+// release note); HEAD answered 401 there. POST /api-keys/:id/rotate is the
+// retired stub, and with no credential guard in front of it under identity it
+// answers 410 gone, as HEAD did (approved reach contract, 11-22). None of the
+// seven codes ends the shell's session.
 func TestAPIKeyRoutes_AuthOff(t *testing.T) {
 	r := runComposedWith(t, nil, nil, nil, nil)
 	// G5(a): the handler's no-user refusal of the auth-disabled principal; HEAD
@@ -493,8 +514,8 @@ func TestAPIKeyRoutes_AuthOff(t *testing.T) {
 		{http.MethodPost, "/api/v1/auth/api-keys", map[string]any{"name": "x", "scopes": []string{"library.view"}}, http.StatusForbidden, "", "FORBIDDEN"},
 		// auth-off tightening, SEC5-8: HEAD 401.
 		{http.MethodPatch, "/api/v1/auth/api-keys/01JBATCAVE0000000000000000", map[string]any{"status": "inactive"}, http.StatusForbidden, "", "interactive_required"},
-		// auth-off tightening, SEC5-8: HEAD 410.
-		{http.MethodPost, "/api/v1/auth/api-keys/01JBATCAVE0000000000000000/rotate", nil, http.StatusForbidden, "", "FORBIDDEN"},
+		// the retired stub: 410 to every caller, as HEAD answered.
+		{http.MethodPost, "/api/v1/auth/api-keys/01JBATCAVE0000000000000000/rotate", nil, http.StatusGone, "", "gone"},
 	} {
 		t.Run(c.method+" "+c.path, func(t *testing.T) {
 			rec := coreDo(t, r, c.method, c.path, c.body, nil, "")
