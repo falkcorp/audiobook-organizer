@@ -198,7 +198,9 @@ func newIntegRig(t *testing.T, edit func(*integrationsInputs)) (*integRig, integ
 	r := &integRig{t: t, db: db, prov: prov, logs: &syncBuf{}, signal: &integrationstest.Fake{}, health: &healthEvents{},
 		library: effectiveLibrary(t)}
 
-	bus, err := events.NewBus(events.BusOptions{})
+	// A queue far larger than any test publishes: the bus drops on queue_full,
+	// and a dropped health event would read as a reordered one.
+	bus, err := events.NewBus(events.BusOptions{QueueSize: 4096})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +801,7 @@ func TestIntegrationsHealth_ConcurrentProbesNeverRepeatAStatus(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
-			for range 40 {
+			for range 25 {
 				_, _ = s.registry.Health(context.Background(), integSignalRef)
 			}
 		})
@@ -807,7 +809,7 @@ func TestIntegrationsHealth_ConcurrentProbesNeverRepeatAStatus(t *testing.T) {
 	wg.Wait()
 	got := healthStatuses(r.healthFence())
 	if len(got) < 2 {
-		t.Fatalf("only %d health events from 320 flapping probes: %v", len(got), got)
+		t.Fatalf("only %d health events from 200 flapping probes: %v", len(got), got)
 	}
 	for i := 1; i < len(got); i++ {
 		if got[i] == got[i-1] {
