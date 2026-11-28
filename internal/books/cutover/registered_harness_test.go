@@ -540,6 +540,9 @@ func newAccessApp(t testing.TB) *accessApp {
 }
 
 func (a *accessApp) serve(w http.ResponseWriter, r *http.Request) {
+	if serveStubbedRelease(w, r) {
+		return
+	}
 	if r.Host != accessTeam || r.URL.Path != "/cdn-cgi/access/certs" {
 		a.mu.Lock()
 		a.refused = append(a.refused, r.Host+r.URL.Path)
@@ -554,11 +557,15 @@ func (a *accessApp) serve(w http.ResponseWriter, r *http.Request) {
 
 // transport is the default transport's clone that sends every request to the
 // harness's server and trusts only its certificate.
-func (a *accessApp) transport() *http.Transport {
+func (a *accessApp) transport() *http.Transport { return dialTo(a.srv) }
+
+// dialTo is the default transport's clone that sends every request to srv and trusts
+// only its certificate.
+func dialTo(srv *httptest.Server) *http.Transport {
 	pool := x509.NewCertPool()
-	pool.AddCert(a.srv.Certificate())
+	pool.AddCert(srv.Certificate())
 	tr := http.DefaultTransport.(*http.Transport).Clone()
-	addr := a.srv.Listener.Addr().String()
+	addr := srv.Listener.Addr().String()
 	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
 	}
@@ -1122,6 +1129,36 @@ func (r Result) Verdict() byte {
 	}
 	return 'A'
 }
+
+// StatusClass is the class of an answer's status, the finer half of what the oracle
+// compares with R0: Verdict() says only whether stage 13 refused (401 or 403), so a
+// route moving from 200 to 410 (a retired route) or from 404 to 200 kept its letter
+// and went unseen. The classes are "2xx", "3xx", "denied" (401, 403), "404", "410",
+// "4xx" (any other client error) and "5xx"; a status outside 200-599 is "other".
+// A change of class is a difference even when the letters agree (compareToR0); a
+// change within one (200 to 204, 400 to 422, 401 to 403) is not.
+func StatusClass(status int) string {
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return "denied"
+	case status == http.StatusNotFound:
+		return "404"
+	case status == http.StatusGone:
+		return "410"
+	case status >= 200 && status < 300:
+		return "2xx"
+	case status >= 300 && status < 400:
+		return "3xx"
+	case status >= 400 && status < 500:
+		return "4xx"
+	case status >= 500 && status < 600:
+		return "5xx"
+	}
+	return "other"
+}
+
+// Class is StatusClass of the answer.
+func (r Result) Class() string { return StatusClass(r.Status) }
 
 // problemCode is the code the answer names: the code of a problem document, else the
 // last segment of its type, else the message of a plain {"error": ...} answer (the ABS

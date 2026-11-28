@@ -23,8 +23,8 @@ import (
 // first.
 
 // parityMisses runs the cells rows name on h, each as the request R0's recorder sent
-// (recordedRequest), and returns, one line each, those whose verdict is not the one
-// R0 recorded for the principal. A principal not on h (the
+// (recordedRequest), and returns, one line each, those whose verdict or status class is not
+// the one R0 recorded for the principal. A principal not on h (the
 // auth-off one on the auth-on boot, and the reverse) is skipped by only. A core key is
 // held to its abk_ twin's verdict, as the sweep does.
 func parityMisses(t *testing.T, h *Registered, rows []verdictRow, only func(*Principal) bool) []string {
@@ -55,8 +55,8 @@ func parityMisses(t *testing.T, h *Registered, rows []verdictRow, only func(*Pri
 				if err != nil {
 					t.Fatalf("%s %s as %s: %v", rec.Method, rec.Path, p.Name, err)
 				}
-				if got, want := res.Verdict(), rec.Verdict[pi]; got != want {
-					out = append(out, fmt.Sprintf("%s %s as %s: R0 %c, now %d %s", rec.Method, rec.Path, p.Name, want, res.Status, res.Code))
+				if rec.differsFromR0(pi, res) {
+					out = append(out, fmt.Sprintf("%s %s as %s: R0 %c (%d), now %d %s", rec.Method, rec.Path, p.Name, rec.Verdict[pi], rec.Status[pi], res.Status, res.Code))
 				}
 			}
 		}
