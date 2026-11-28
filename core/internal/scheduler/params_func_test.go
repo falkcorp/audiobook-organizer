@@ -32,7 +32,7 @@ type lookupParams struct {
 func lookupTask(s *tasks.Schedule) tasks.Definition {
 	return tasks.Task(lookup, tasks.TaskSpec[lookupParams, struct{}]{
 		Title: string(lookup), Effects: tasks.ReadOnly(), Resume: tasks.ResumeDrop,
-		Perms: tasks.Permissions{Start: rbac.Need("gotham:run")}, Schedule: s,
+		Perms: tasks.Permissions{Start: rbac.Need("gotham:run"), Manage: rbac.Need("gotham:manage")}, Schedule: s,
 		Run: func(*tasks.RC, lookupParams) (struct{}, error) { return struct{}{}, nil },
 	})
 }

@@ -515,7 +515,7 @@ func (rs *responder) def() tasks.Definition {
 	return tasks.Task(runKind, tasks.TaskSpec[respondParams, string]{
 		Title:   "Respond to a signal",
 		Effects: tasks.Writes(tasks.Res("gotham", "cases")),
-		Perms:   tasks.Permissions{Start: rbac.Need("gotham:run")},
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:run"), Manage: rbac.Need("gotham:manage")},
 		Resume:  tasks.ResumeFromZero,
 		Run: func(_ *tasks.RC, p respondParams) (string, error) {
 			rs.add(p)
@@ -530,7 +530,7 @@ func (rs *responder) blockingDef(release <-chan struct{}) tasks.Definition {
 	return tasks.Task(runKind, tasks.TaskSpec[respondParams, string]{
 		Title:   "Respond to a signal, slowly",
 		Effects: tasks.Writes(tasks.Res("gotham", "cases")),
-		Perms:   tasks.Permissions{Start: rbac.Need("gotham:run")},
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:run"), Manage: rbac.Need("gotham:manage")},
 		Resume:  tasks.ResumeFromZero,
 		Run: func(rc *tasks.RC, p respondParams) (string, error) {
 			rs.add(p)

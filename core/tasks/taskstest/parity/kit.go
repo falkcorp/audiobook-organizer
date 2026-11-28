@@ -837,7 +837,7 @@ func baseCommon(kind tasks.Kind, edits []DefOpt) tasks.Common {
 	c := tasks.Common{
 		Title:   "Batcave " + string(kind),
 		Effects: tasks.Writes(resourceOf(kind)),
-		Perms:   tasks.Permissions{Start: rbac.Need(rbac.Permission(m + ":run"))},
+		Perms:   tasks.Permissions{Start: rbac.Need(rbac.Permission(m + ":run")), Manage: rbac.Need(rbac.Permission(m + ":manage"))},
 		Resume:  tasks.ResumeContinue,
 	}
 	for _, e := range edits {

@@ -20,7 +20,7 @@ func validCommon() tasks.Common {
 		Title:   "Review the case files",
 		Help:    "Reads every open case. Read-only.",
 		Effects: tasks.ReadOnly(tasks.Res("gotham", "cases")),
-		Perms:   tasks.Permissions{Start: rbac.Need("gotham:cases.view")},
+		Perms:   tasks.Permissions{Start: rbac.Need("gotham:cases.view"), Manage: rbac.Need("gotham:cases.admin")},
 		Resume:  tasks.ResumeFromZero,
 	}
 }

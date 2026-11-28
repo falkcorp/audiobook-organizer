@@ -911,6 +911,7 @@ type DerivedBuildSpec struct {
 	Title       string
 	Reads       []entity.Ref      // module resources the rebuild reads (Effects: ReadOnly over them)
 	PermStart   string            // the module permission that may start a rebuild by hand
+	Manage      rbac.Requirement  // required: who may cancel, discard, decide or approve a rebuild run (tasks.Permissions.Manage, owner ruling 2026-11-22)
 	Timeout     time.Duration     // 0 = 24h (library-scale, as Batch)
 	Run         func(rc *tasks.RC) error // its library-scale loops declare their tasks.Parallelism (R7)
 }

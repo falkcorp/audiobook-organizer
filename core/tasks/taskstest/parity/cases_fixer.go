@@ -21,6 +21,7 @@ const (
 	relocateKind = "arkham.relocate"
 	scopeRun     = rbac.Permission("arkham:run")
 	scopeApprove = rbac.Permission("arkham:approve")
+	scopeManage  = rbac.Permission("arkham:manage") // baseCommon's Perms.Manage for an arkham kind
 )
 
 // inmates are the 20 rows of the fixer case.
@@ -118,7 +119,7 @@ func fixerCase() Case {
 				t.Fatalf("plan: %v", err)
 			}
 			k.WaitState(ref.ID, tasks.StateSucceeded)
-			if err := k.X.Approve(AsUser("gordon", scopeRun, scopeApprove), ref.ID, tasks.ApproveRequest{Rows: inmates()}); err != nil {
+			if err := k.X.Approve(AsUser("gordon", scopeRun, scopeApprove, scopeManage), ref.ID, tasks.ApproveRequest{Rows: inmates()}); err != nil {
 				t.Fatalf("approve: %v", err)
 			}
 			var apply tasks.RunID

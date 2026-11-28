@@ -42,7 +42,7 @@ func (o *Outbox) RelayDefinition() tasks.Definition {
 		Title:          "Outbox relay",
 		Help:           "Sequences staged outbox messages in commit order and delivers them to their consumers, retrying and dead-lettering. It runs for about an hour, then a new run takes over.",
 		Effects:        tasks.Writes(tasks.Res("core", "outbox")),
-		Perms:          tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
+		Perms:          tasks.Permissions{Start: rbac.Need("core:tasks.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:         tasks.ResumeFromZero,
 		ConcurrencyKey: tasks.Key(RelayKind),
 		Priority:       tasks.PrioritySystem,

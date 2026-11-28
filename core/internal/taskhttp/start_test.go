@@ -316,7 +316,7 @@ func TestStart_OwnerRouteOnlyKindRefusedOnTheGenericRoute(t *testing.T) {
 	noop := func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil }
 	signal := tasks.Task(kindSignal, tasks.TaskSpec[struct{}, struct{}]{
 		Title: "Light the signal", Effects: tasks.Writes(tasks.Res("batcave", "signal")),
-		Perms:  tasks.Permissions{Start: rbac.Need(scopeRun), OwnerRouteOnly: "the signal's own route needs a session"},
+		Perms:  tasks.Permissions{Start: rbac.Need(scopeRun), Manage: rbac.Need(scopeBatcaveManage), OwnerRouteOnly: "the signal's own route needs a session"},
 		Resume: tasks.ResumeDrop, Run: noop})
 	g := newRig(t, func(d *Deps) { d.Definitions = append(defs(), signal) })
 	start := func(as *auth.Principal) *httptest.ResponseRecorder {

@@ -159,7 +159,7 @@ func StageRestoreTask(s *Svc) tasks.Definition {
 	}
 	return tasks.Task(KindStageRestore, tasks.TaskSpec[StageParams, StageResult]{
 		Title: "Stage a restore", Help: "Verifies an archive and stages it for the next start. The live data is not touched until the service restarts.",
-		Effects: tasks.Writes(Resource()), Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore"), OwnerRouteOnly: stageRouteReason}, Resume: tasks.ResumeDrop,
+		Effects: tasks.Writes(Resource()), Perms: tasks.Permissions{Start: rbac.Need("core:backup.restore"), Manage: rbac.Need("core:tasks.manage"), OwnerRouteOnly: stageRouteReason}, Resume: tasks.ResumeDrop,
 		ConcurrencyKey: taskKey, Timeout: 6 * time.Hour,
 		Run: run,
 	})
@@ -175,7 +175,7 @@ const stageRouteReason = "a restore needs the restore route's interactive owner 
 // manageBackups is the permission the create, verify and prune tasks start
 // with.
 func manageBackups() tasks.Permissions {
-	return tasks.Permissions{Start: rbac.Need("core:system.manage")}
+	return tasks.Permissions{Start: rbac.Need("core:system.manage"), Manage: rbac.Need("core:tasks.manage")}
 }
 
 func (s *Svc) taskCreate(rc *tasks.RC, p CreateParams) (CreateResult, error) {

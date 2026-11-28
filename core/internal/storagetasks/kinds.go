@@ -127,7 +127,7 @@ func CompactTask(s Surface, o Options) tasks.Definition {
 		// AuthRequired scope (core:system.manage among them) from a system
 		// actor's set (SEC2-15), so a kind that needed it would never fire
 		// on its schedule. Same choice as core.outbox.relay.
-		Perms:          tasks.Permissions{Start: rbac.Need("core:tasks.manage")},
+		Perms:          tasks.Permissions{Start: rbac.Need("core:tasks.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:         tasks.ResumeDrop,
 		Priority:       tasks.PriorityLow,
 		Timeout:        CompactTimeout,
@@ -200,7 +200,7 @@ func CensusTask(s Surface, sink CensusSink, o Options) tasks.Definition {
 		Effects: tasks.Writes(tasks.Res("core", "storage")),
 		// Operator-run only (no Schedule), so it takes the storage
 		// administration scope; a system actor never starts it.
-		Perms:           tasks.Permissions{Start: rbac.Need("core:system.manage")},
+		Perms:           tasks.Permissions{Start: rbac.Need("core:system.manage"), Manage: rbac.Need("core:tasks.manage")},
 		Resume:          tasks.ResumeFromZero,
 		Timeout:         CensusTimeout,
 		ProgressTimeout: CensusTimeout,

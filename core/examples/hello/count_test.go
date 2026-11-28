@@ -73,6 +73,9 @@ func TestHelloCount_DeclaresItself(t *testing.T) {
 	if got := c.Perms.Start.Permissions(); len(got) != 1 || got[0] != PermAdmin {
 		t.Fatalf("Perms.Start = %v, want only %s", got, PermAdmin)
 	}
+	if got := c.Perms.Manage.Permissions(); len(got) != 1 || got[0] != PermAdmin {
+		t.Fatalf("Perms.Manage = %v, want only %s", got, PermAdmin)
+	}
 }
 
 // runCount executes the definition's body over a FakeRun, the way the

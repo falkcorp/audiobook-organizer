@@ -101,6 +101,9 @@ const (
 	relocate    = "arkham.relocate"
 	scopeRun    = rbac.Permission("arkham:run")
 	scopeApprov = rbac.Permission("arkham:approve")
+	// scopeArkManage is manage("arkham.*"): the fixture kinds' Perms.Manage, held
+	// next to the operation's own scope (owner ruling 2026-11-22).
+	scopeArkManage = rbac.Permission("arkham:manage")
 )
 
 var inmates = []string{"joker", "penguin", "riddler"}
@@ -233,12 +236,18 @@ func TestApprove_RefusesCallerWithoutApprovePermission(t *testing.T) {
 	}{
 		{name: "start scope only", ctx: asUser("harley", scopeRun), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
 		{name: "view scope only", ctx: asUser("vicki", scopeTasksView), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
-		{name: "approve scope without start", ctx: asUser("gordon", scopeApprov), approveErr: ErrNotPermitted,
+		// A reject is the approver's call and needs no start scope, but it is
+		// still an approve operation: Manage ANDs into it (owner ruling 2026-11-22).
+		{name: "approve and manage without start", ctx: asUser("gordon", scopeApprov, scopeArkManage), approveErr: ErrNotPermitted,
 			wantActor: tasks.Actor{UserID: "gordon", AuthMethod: "session"}},
-		{name: "approve and start", ctx: asUser("gordon", scopeApprov, scopeRun),
+		{name: "approve scope without start or manage", ctx: asUser("gordon", scopeApprov), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
+		{name: "approve and start without manage", ctx: asUser("gordon", scopeApprov, scopeRun), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
+		{name: "manage and start without approve", ctx: asUser("gordon", scopeRun, scopeArkManage), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
+		{name: "core:tasks.manage alone", ctx: asUser("gordon", scopeApprov, scopeRun, scopeTasksManage), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
+		{name: "approve and start", ctx: asUser("gordon", scopeApprov, scopeRun, scopeArkManage),
 			wantActor: tasks.Actor{UserID: "gordon", AuthMethod: "session"}},
 		{name: "no identity", ctx: context.Background(), approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
-		{name: "executor without a Principal", ctx: asUser("gordon", scopeApprov, scopeRun), noPrincipal: true,
+		{name: "executor without a Principal", ctx: asUser("gordon", scopeApprov, scopeRun, scopeArkManage), noPrincipal: true,
 			approveErr: ErrNotPermitted, rejectErr: ErrNotPermitted},
 	}
 	for _, c := range cells {
@@ -318,7 +327,7 @@ func TestStart_PlanRefOnlyThroughApprove(t *testing.T) {
 		o.Manifests = []Manifest{{Module: "gotham", Enabled: true, TaskStarts: []tasks.Kind{relocate}}}
 	})
 	plan := h.plan()
-	both := asUser("gordon", scopeApprov, scopeRun)
+	both := asUser("gordon", scopeApprov, scopeRun, scopeArkManage)
 
 	for _, mode := range []tasks.ModeRequest{tasks.ModeRequestLive, tasks.ModeRequestPreview} {
 		if _, err := h.x.Start(both, relocate, tasks.StartRequest{Mode: mode, PlanRef: plan}); !isErr(err, ErrApprovalRequired) {
@@ -355,7 +364,7 @@ func TestStart_PlanRefOnlyThroughApprove(t *testing.T) {
 // decide-once rule, TestApprove_DecidesAPlanOnce; an apply run whose plan
 // carries a reject applies nothing, TestFixer_ApplyFailsClosedWithoutApproval.)
 func TestApprove_RejectedPlanRefused(t *testing.T) {
-	gordon := asUser("gordon", scopeApprov, scopeRun)
+	gordon := asUser("gordon", scopeApprov, scopeRun, scopeArkManage)
 	t.Run("approve after reject", func(t *testing.T) {
 		log := &applyLog{}
 		h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
@@ -489,7 +498,7 @@ func TestFixer_ApplyFailsClosedWithoutApproval(t *testing.T) {
 		}
 		h := newHarness(t, []tasks.Definition{fixerDef(first, fromZero, blocking)}, withPrincipal)
 		plan := h.plan()
-		if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun), plan, tasks.ApproveRequest{Rows: []string{"joker"}}); err != nil {
+		if err := h.x.Approve(asUser("gordon", scopeApprov, scopeRun, scopeArkManage), plan, tasks.ApproveRequest{Rows: []string{"joker"}}); err != nil {
 			t.Fatalf("approve: %v", err)
 		}
 		if got := <-applying; got != "joker" {
@@ -521,7 +530,7 @@ func TestFixer_PlanRefAgeAndRowsOnly(t *testing.T) {
 		withPrincipal(o)
 		o.Now = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
 	})
-	gordon := asUser("gordon", scopeApprov, scopeRun)
+	gordon := asUser("gordon", scopeApprov, scopeRun, scopeArkManage)
 
 	plan := h.plan()
 	if err := h.x.Approve(gordon, plan, tasks.ApproveRequest{Rows: []string{"bane"}}); !isErr(err, ErrRowNotInPlan) {
@@ -573,7 +582,7 @@ func TestStoredName_ReservedCheckpointNames(t *testing.T) {
 // after an approve and a second reject are refused, and approves of one
 // plan made at the same time start exactly one apply run.
 func TestApprove_DecidesAPlanOnce(t *testing.T) {
-	gordon := asUser("gordon", scopeApprov, scopeRun)
+	gordon := asUser("gordon", scopeApprov, scopeRun, scopeArkManage)
 	t.Run("approve then approve or reject", func(t *testing.T) {
 		log := &applyLog{}
 		h := newHarness(t, []tasks.Definition{fixerDef(log)}, withPrincipal)
@@ -699,6 +708,8 @@ const (
 	lockdown      = "gotham.lockdown"
 	scopeGothamGo = rbac.Permission("gotham:run")
 	scopeGothamOK = rbac.Permission("gotham:approve")
+	// scopeGothamManage is manage("gotham.*"), the lockdown kind's Perms.Manage.
+	scopeGothamManage = rbac.Permission("gotham:manage")
 )
 
 func lockdownDef() tasks.Definition { return lockdownDefWith(okBody) }
@@ -713,8 +724,10 @@ func lockdownDefWith(body func(rc *tasks.RC, p noParams) (string, error)) tasks.
 	})
 }
 
-// commissioner holds the lockdown kind's start and approve scopes.
-func commissioner() context.Context { return asUser("gordon", scopeGothamGo, scopeGothamOK) }
+// commissioner holds the lockdown kind's start, approve and manage scopes.
+func commissioner() context.Context {
+	return asUser("gordon", scopeGothamGo, scopeGothamOK, scopeGothamManage)
+}
 
 // startAs starts kind as ctx's caller and returns the run reference.
 func (h *harness) startAs(ctx context.Context, kind string, req tasks.StartRequest) tasks.RunRef {
@@ -817,7 +830,7 @@ func TestApprove_NeverFoldsIntoAnotherRun(t *testing.T) {
 		folding := func(s *tasks.FixerSpec[noParams, string]) { s.Dedupe = tasks.DedupePolicy{AnyParams: true} }
 		defs := []tasks.Definition{fixerDef(log, folding)}
 		h, plans := planned(t, defs, planner(), relocate, 2)
-		gordon := asUser("gordon", scopeApprov, scopeRun)
+		gordon := asUser("gordon", scopeApprov, scopeRun, scopeArkManage)
 		if err := h.x.Approve(gordon, plans[0], tasks.ApproveRequest{Rows: []string{"joker"}}); err != nil {
 			t.Fatalf("approve P1: %v", err)
 		}
@@ -857,7 +870,7 @@ func TestDecide_NeedsACallerWhoMayDecide(t *testing.T) {
 		{name: "executor without a principal", ctx: asUser("gordon", "gotham:run")},
 		{name: "context with no identity", principal: true, ctx: context.Background()},
 		{name: "caller without the scope", principal: true, ctx: asUser("joker", "arkham:run")},
-		{name: "caller with the scope", principal: true, ctx: asUser("gordon", "gotham:run"), allowed: true},
+		{name: "caller with the scope", principal: true, ctx: asUser("gordon", "gotham:run", "gotham:manage"), allowed: true},
 	}
 	for _, c := range cells {
 		t.Run(c.name, func(t *testing.T) {

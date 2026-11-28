@@ -21,7 +21,7 @@ import (
 func gothamTask(kind tasks.Kind, s *tasks.Schedule) tasks.Definition {
 	return tasks.Task(kind, tasks.TaskSpec[struct{}, struct{}]{
 		Title: string(kind), Effects: tasks.ReadOnly(), Resume: tasks.ResumeDrop,
-		Perms: tasks.Permissions{Start: rbac.Need("gotham:run")}, Schedule: s,
+		Perms: tasks.Permissions{Start: rbac.Need("gotham:run"), Manage: rbac.Need("gotham:manage")}, Schedule: s,
 		Run: func(*tasks.RC, struct{}) (struct{}, error) { return struct{}{}, nil },
 	})
 }
