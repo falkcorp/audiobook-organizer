@@ -835,9 +835,13 @@ func TestRepairsKinds_ApplyErrorsAreMapped(t *testing.T) {
 	changed := mapApplyError(fmt.Errorf("row: %w", ErrChangedSincePlan))
 	require.ErrorIs(t, changed, tasks.ErrChangedSincePlan)
 	require.ErrorIs(t, changed, ErrChangedSincePlan, "the fixer's own sentinel stays in the chain")
-	fenced := mapApplyError(fmt.Errorf("step 2 of 3 written: %w", opswriter.ErrFenced))
+	fenced := mapApplyError(fmt.Errorf("step 2 of 3 written: %w", tasks.ErrFenced))
 	require.ErrorIs(t, fenced, tasks.ErrFenced)
-	require.ErrorIs(t, fenced, opswriter.ErrFenced)
+	// The native path classifies a stop by core's sentinel alone: a HEAD
+	// sentinel is not a native run's fence (F5-18 commit 1), so it is not
+	// re-labelled here.
+	require.False(t, errors.Is(mapApplyError(opswriter.ErrFenced), tasks.ErrFenced),
+		"opswriter.ErrFenced is HEAD's; the native mapping answers to tasks.ErrFenced only")
 	require.ErrorIs(t, mapApplyError(tasks.ErrPreview), tasks.ErrPreview)
 	other := errors.New("disk on fire")
 	require.Equal(t, other, mapApplyError(other))
@@ -876,7 +880,7 @@ func TestRepairsKinds_FencedRunWritesNothingMore(t *testing.T) {
 }
 
 // The inner writer's own fence refuses once the run's context is done, and the
-// refusal is both a tasks.ErrFenced and an opswriter.ErrFenced.
+// refusal is tasks.ErrFenced and nothing of HEAD's.
 func TestRepairsKinds_WriterFenceFollowsTheRunContext(t *testing.T) {
 	s := newMemStore()
 	seed(s)
@@ -894,7 +898,7 @@ func TestRepairsKinds_WriterFenceFollowsTheRunContext(t *testing.T) {
 	_, err = rs.writer.Modify("b2", func(b *database.Book) error { b.Title = "Edited"; return nil })
 	require.Error(t, err)
 	require.ErrorIs(t, err, tasks.ErrFenced)
-	require.ErrorIs(t, err, opswriter.ErrFenced)
+	require.False(t, errors.Is(err, opswriter.ErrFenced), "the native fence is core's, not HEAD's")
 	require.Equal(t, " Two ", s.title("b2"))
 	require.Eventually(t, func() bool { _, ok := kt.k.runs.Load(rc.RunID()); return !ok }, 2*time.Second, 5*time.Millisecond,
 		"the run's state is released when its context ends")

@@ -212,6 +212,24 @@ func nativeEnv(rc *tasks.RC) kindEnv {
 	return e
 }
 
+// nativeFence is a native shell's write fence: core's. The attempt context ends,
+// with a cause, exactly when the executor stops the run (canceled, timed out,
+// shut down, quiesced, abandoned), and the refusal is tasks.ErrFenced. It is
+// checked right before a write a core makes, so a run core has stopped makes no
+// further write even through a writer that is not core's gated one. HEAD's
+// opswriter.FenceFromContext cannot stand in for it: core's executor never puts
+// a HEAD fence on the context, and without one that check answers "always
+// writable" (F5-18 commit 1).
+func nativeFence(rc *tasks.RC) func(context.Context) error {
+	runCtx := rc.Context()
+	return func(context.Context) error {
+		if err := runCtx.Err(); err != nil {
+			return fmt.Errorf("%w: the run was stopped (%v)", tasks.ErrFenced, context.Cause(runCtx))
+		}
+		return nil
+	}
+}
+
 // reporterSink is the sdk.Reporter a native shell hands the shared helpers
 // that take one (sdk.NewProgress). Every method is backed by the run's own
 // hooks or, where the run has none, is a plain no-op or a refusal, so a helper

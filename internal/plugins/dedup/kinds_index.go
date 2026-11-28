@@ -260,7 +260,7 @@ func (p *Plugin) windowIndexBuildNative(d IndexKindDeps, sched func(tasks.Kind) 
 			if err := errNeed(windowIndexBuildKind, "Index.Store", d.Store != nil); err != nil {
 				return windowIndexBuildResult{}, err
 			}
-			env := windowIndexBuildEnv{kindEnv: nativeEnv(rc), Store: d.Store}
+			env := windowIndexBuildEnv{kindEnv: nativeEnv(rc), Store: d.Store, Fence: nativeFence(rc)}
 			if env.Live {
 				w, err := indexWriterFor(windowIndexBuildKind, d, rc)
 				if err != nil {
