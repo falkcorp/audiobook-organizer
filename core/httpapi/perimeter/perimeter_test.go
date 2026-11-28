@@ -120,12 +120,17 @@ func newFixture(t *testing.T, opts ...fixtureOpt) *fixture {
 	if err := r.Claim("gcpd", "/api/v1/"); err != nil {
 		t.Fatal(err)
 	}
+	// A LegacyAuthCore mount with a non-Public route is refused until the app
+	// wires stages 12 and 13 (ErrNoAuthService). These cells test stages 0 to
+	// 11 (client address, CSRF, rate class, compression, access log, spans),
+	// none of which reads the route's permission, so the routes are declared
+	// Public instead of standing up an auth service this fixture never calls.
 	routes := []httpapi.LegacyRoute{
-		{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateDefault},
-		{Method: http.MethodPost, GinPath: "/api/v1/cases", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateDefault},
+		{Method: http.MethodGet, GinPath: "/api/v1/cases/:id", Perm: rbac.Public, Public: true, RateClass: httpapi.RateDefault},
+		{Method: http.MethodPost, GinPath: "/api/v1/cases", Perm: rbac.Public, Public: true, RateClass: httpapi.RateDefault},
 		{Method: http.MethodGet, GinPath: "/api/v1/health", Perm: rbac.Public, Public: true, RateClass: httpapi.RateExempt},
-		{Method: http.MethodGet, GinPath: "/api/v1/logs/:id", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateDefault, NoCompress: true},
-		{Method: http.MethodGet, GinPath: "/api/v1/events", Perm: rbac.AnyAuthenticated, RateClass: httpapi.RateExempt},
+		{Method: http.MethodGet, GinPath: "/api/v1/logs/:id", Perm: rbac.Public, Public: true, RateClass: httpapi.RateDefault, NoCompress: true},
+		{Method: http.MethodGet, GinPath: "/api/v1/events", Perm: rbac.Public, Public: true, RateClass: httpapi.RateExempt},
 	}
 	if err := r.MountLegacy(httpapi.LegacyMount{
 		Owner: "gcpd", Handler: gotham{}, Auth: httpapi.LegacyAuthCore, ServesSPA: true,
