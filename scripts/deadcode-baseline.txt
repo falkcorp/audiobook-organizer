@@ -1181,6 +1181,7 @@ internal/books/cutover/m6.mapCaps
 internal/books/cutover/m6.metadataLimits
 internal/books/cutover/m6.newMigration
 internal/books/cutover/m6.nonEmpty
+internal/books/cutover/m6.operatorField
 internal/books/cutover/m6.originOf
 internal/books/cutover/m6.pending.cleanURL
 internal/books/cutover/m6.pending.finish
